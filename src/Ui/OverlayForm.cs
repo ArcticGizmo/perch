@@ -1050,7 +1050,12 @@ internal sealed class OverlayForm : Form, IDenseHost
         }
 
         if (session.Mode != PermissionMode.Normal)
-            Glyphs.DrawModeBadge(g, session.Mode, statusX - thermoWidth - badgeWidth, nameMidY, 4, 5);
+        {
+            // Idle sessions dim the badge so the permission colour stops drawing the eye when nothing's
+            // happening; active/awaiting/attention rows keep it at full strength.
+            int badgeAlpha = session.Status == SessionStatus.Idle ? 110 : 255;
+            Glyphs.DrawModeBadge(g, session.Mode, statusX - thermoWidth - badgeWidth, nameMidY, 4, 5, badgeAlpha);
+        }
 
         if (twoLine)
         {

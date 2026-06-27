@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.3] - 2026-06-27
+
+### Overlay
+
+- Permission-mode badges dim on idle sessions (they were shouting into an empty room).
+
+---
+
 ## [v0.1.2] - 2026-06-27
 
 ### Overlay
