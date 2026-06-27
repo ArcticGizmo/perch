@@ -321,17 +321,35 @@ internal sealed class TranscriptParser
 }
 
 /// <summary>One selectable session in the viewer's dropdown: a transcript file on disk, its project,
-/// when it last changed, and whether its process is currently alive.</summary>
+/// when it last changed, whether its process is currently alive, and how big it is (so the viewer can
+/// warn before loading a multi-megabyte transcript).</summary>
 internal sealed record HistoryEntry(
     string SessionId,
     string ProjectName,
     string Cwd,
     string Path,
     DateTime LastUpdated,
-    bool IsActive
+    bool IsActive,
+    long SizeBytes = 0
 )
 {
     public string RelativeTime => SessionHistory.Relative(LastUpdated);
+
+    /// <summary>Human-readable transcript size (e.g. "1.4 MB"), shown in the dropdown.</summary>
+    public string SizeLabel => SessionHistory.FormatSize(SizeBytes);
+
+    /// <summary>True for transcripts big enough to lag or risk exhausting memory; the viewer gates
+    /// these behind an explicit "load anyway" confirmation rather than rendering them on selection.</summary>
+    public bool IsLarge => SizeBytes >= SessionHistory.LargeTranscriptBytes;
+
+    /// <summary>True for the synthetic "(none)" row that heads the dropdown — selecting it shows the
+    /// empty placeholder rather than loading a transcript.</summary>
+    public bool IsPlaceholder { get; init; }
+
+    /// <summary>The synthetic "(none)" entry the viewer prepends to the dropdown so a user can open the
+    /// window without loading anything and deliberately clear the current selection.</summary>
+    public static HistoryEntry Placeholder { get; } =
+        new("", "(none — select a session)", "", "", DateTime.MinValue, false) { IsPlaceholder = true };
 }
 
 /// <summary>
@@ -346,6 +364,11 @@ internal static class SessionHistory
     private static readonly Dictionary<string, string> _projectNameCache = new();
     private static readonly object _cacheLock = new();
 
+    /// <summary>Transcripts at or above this size are flagged "large": the viewer shows their size in an
+    /// alert colour and asks before loading them, since parsing/rendering a multi-megabyte transcript can
+    /// lag badly or run the UI out of memory.</summary>
+    public const long LargeTranscriptBytes = 10L * 1024 * 1024; // 10 MB
+
     /// <summary>Lists every session transcript across all projects, active first, then newest-first.</summary>
     public static List<HistoryEntry> ListAll(IReadOnlySet<string> activeSessionIds)
     {
@@ -354,6 +377,7 @@ internal static class SessionHistory
         {
             try
             {
+                var fi = new FileInfo(file);
                 var sessionId = System.IO.Path.GetFileNameWithoutExtension(file);
                 var (project, cwd) = ResolveProject(file, System.IO.Path.GetDirectoryName(file) ?? "");
                 entries.Add(new HistoryEntry(
@@ -361,8 +385,9 @@ internal static class SessionHistory
                     project,
                     cwd,
                     file,
-                    File.GetLastWriteTime(file),
-                    activeSessionIds.Contains(sessionId)));
+                    fi.LastWriteTime,
+                    activeSessionIds.Contains(sessionId),
+                    fi.Length));
             }
             catch { }
         }
@@ -411,6 +436,17 @@ internal static class SessionHistory
         lock (_cacheLock)
             _projectNameCache[file] = project;
         return (project, cwd);
+    }
+
+    /// <summary>Formats a byte count as a short, human-readable size (e.g. "812 KB", "1.4 MB").</summary>
+    public static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        double kb = bytes / 1024.0;
+        if (kb < 1024) return $"{kb:0} KB";
+        double mb = kb / 1024.0;
+        if (mb < 1024) return $"{mb:0.0} MB";
+        return $"{mb / 1024.0:0.0} GB";
     }
 
     public static string Relative(DateTime t)

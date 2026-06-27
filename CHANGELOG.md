@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.1] - 2026-06-27
+
+### History
+
+- Large transcripts (10 MB+) no longer crash the viewer; they load in the background and ask first.
+- Session sizes shown in the dropdown (lag, telegraphed).
+- History opens to a "pick a session" prompt, with a "(none)" option for the indecisive.
+
+---
+
 ## [v0.1.0] - 2026-06-27
 
 The first release worth giving a round number. Everything before this was a

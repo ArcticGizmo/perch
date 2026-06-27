@@ -240,8 +240,9 @@ internal sealed class HistoryViewerForm : Form
         }
     }
 
-    /// <summary>Selects the given session in the dropdown (or the most recent one if not found). If the
-    /// list is still loading, the request is remembered and applied once it's ready.</summary>
+    /// <summary>Selects the given session in the dropdown. A null id (the tray menu) — or an id that
+    /// isn't found — lands on the empty "(none)" placeholder rather than auto-opening a transcript. If
+    /// the list is still loading, the request is remembered and applied once it's ready.</summary>
     public void SelectSession(string? sessionId)
     {
         _pendingSelect = sessionId;
@@ -254,8 +255,10 @@ internal sealed class HistoryViewerForm : Form
         if (!_pendingSelectSet) return;
         _pendingSelectSet = false;
 
-        if (_entries.Count == 0) { ShowMessage("No session history found."); return; }
+        if (_entries.Count == 0) { ShowEmpty(); return; }
 
+        // A null request (the tray menu) or an unknown session lands on row 0 — the "(none)" placeholder,
+        // i.e. the empty view — rather than auto-opening a transcript.
         int idx = _pendingSelect == null ? 0 : _entries.FindIndex(e => e.SessionId == _pendingSelect);
         if (idx < 0) idx = 0;
 
@@ -270,7 +273,10 @@ internal sealed class HistoryViewerForm : Form
         if (_loading) { _reloadQueued = true; return; }
 
         _loading = true;
-        var keep = _loadedSessionId;
+        // Preserve whatever row is *selected* (not merely what's rendered) so a background re-list never
+        // yanks the user off an empty/large-warning placeholder they're sitting on. CurrentEntry returns
+        // the "(none)" placeholder's empty id when it's selected, which re-resolves to row 0 below.
+        var keep = CurrentEntry()?.SessionId;
         var ids = new HashSet<string>(_activeIds);  // snapshot for the background thread
 
         // The first scan opens 300+ transcripts to read project names; do it off the UI thread so the
@@ -286,6 +292,9 @@ internal sealed class HistoryViewerForm : Form
 
     private void PopulateDropdown(List<HistoryEntry> list, string? keep)
     {
+        // Row 0 is always the "(none)" placeholder, so the window can open (and be returned to) without
+        // any transcript loaded. The placeholder's empty SessionId means keep == "" round-trips to it.
+        list.Insert(0, HistoryEntry.Placeholder);
         _entries = list;
 
         _suppressSelect = true;
@@ -302,9 +311,11 @@ internal sealed class HistoryViewerForm : Form
 
         if (_pendingSelectSet)
             ApplySelection();
-        else if (_loadedSessionId == null && _entries.Count > 0)
+        else if (_dropdown.SelectedIndex < 0)
         {
-            // No explicit request outstanding and nothing shown yet — default to the most recent.
+            // First population with nothing selected and no request outstanding — rest on the empty
+            // placeholder. (A re-list that preserved a selection keeps it, so a large-file warning or a
+            // loaded transcript the user is sitting on isn't reset out from under them.)
             _pendingSelect = null;
             _pendingSelectSet = true;
             ApplySelection();
@@ -325,19 +336,66 @@ internal sealed class HistoryViewerForm : Form
         if (_suppressSelect) return;
         var entry = CurrentEntry();
         if (entry == null) return;
+        if (entry.IsPlaceholder) { ShowEmpty(); return; }
         if (entry.SessionId == _loadedSessionId) return; // already showing this one
 
+        // Big transcripts can take seconds to parse/render and may exhaust memory; don't load one just
+        // because it got selected — show its size and let the user opt in explicitly.
+        if (entry.IsLarge) { ShowLargeWarning(entry); return; }
+
+        BeginLoad(entry);
+    }
+
+    // Parses the transcript off the UI thread (a multi-megabyte file would otherwise freeze the window),
+    // then renders on the way back. Robust to failure: a fault during parse or render leaves a message
+    // rather than tearing down the app.
+    private void BeginLoad(HistoryEntry entry)
+    {
+        StopTailing();
         _loadedSessionId = entry.SessionId;
-        _parser = new TranscriptParser(entry.Path);
-        _parser.Ingest();
         _expanded.Clear();
         _follow = entry.IsActive;
         UpdateFollowButton();
+        SetBodyMessage("Loading session…");
 
-        RenderFull();
-        if (entry.IsActive) ScrollToBottom();
+        string path = entry.Path;
+        string sid = entry.SessionId;
+        bool active = entry.IsActive;
 
-        SetupWatcher(entry.Path);
+        UiDispatch.RunThenPost(this,
+            () => { var p = new TranscriptParser(path); p.Ingest(); return (TranscriptParser?)p; },
+            parser => OnLoaded(sid, parser, active, path),
+            null);
+    }
+
+    private void OnLoaded(string sid, TranscriptParser? parser, bool active, string path)
+    {
+        if (!IsHandleCreated || IsDisposed) return;
+        if (sid != _loadedSessionId) return; // the selection moved on while this was parsing — stale
+
+        if (parser == null)
+        {
+            _parser = null;
+            SetBodyMessage("Couldn't load this session — the transcript may be too large or unreadable.");
+            return;
+        }
+
+        _parser = parser;
+        try
+        {
+            RenderFull();
+            if (active) ScrollToBottom();
+            SetupWatcher(path);
+        }
+        catch (Exception ex) when (
+            ex is OutOfMemoryException or InvalidOperationException or ArgumentException)
+        {
+            // Rendering a huge transcript can still blow up inside the RichTextBox even though parsing
+            // succeeded; recover with a message instead of letting it crash the window.
+            _parser = null;
+            StopTailing();
+            SetBodyMessage("This session is too large to display.");
+        }
     }
 
     // ── Live tailing ─────────────────────────────────────────────────────────────
@@ -925,12 +983,73 @@ internal sealed class HistoryViewerForm : Form
     {
         _parser = null;
         _loadedSessionId = null;
+        SetBodyMessage(msg);
+    }
+
+    // Writes a muted placeholder line into the body, optionally followed by a single clickable link span
+    // (used for the large-transcript "load anyway" affordance). Unlike ShowMessage it leaves the data
+    // fields alone, so the in-flight load bookkeeping (_loadedSessionId, _parser) stays intact.
+    // When prominent, the message is centered, ~50% larger, and pushed down from the top so the empty
+    // state really stands out (otherwise it reads flat from the top-left like ordinary content).
+    private void SetBodyMessage(string msg, (string text, Action onClick)? link = null, bool prominent = false)
+    {
+        if (!IsHandleCreated) return;
         BeginUpdate();
         _body.Clear();
         _toolRanges.Clear();
+        _linkRanges.Clear();
         _renderedCount = 0;
-        Append(msg + "\n", Theme.Muted, _uiFont);
+
+        var msgFont = prominent ? GetFont(14.5f, FontStyle.Regular) : _uiFont; // ~50% over the 9.5pt body
+        _body.SelectionAlignment = prominent ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+        if (prominent) Append("\n\n\n", msgFont); // top padding so it sits clear of the toolbar
+
+        Append(msg, Theme.Muted, msgFont);
+        if (link is { } lk)
+        {
+            Append(prominent ? "\n\n" : "  ", msgFont);
+            int start = _body.TextLength;
+            Emit(lk.text, FontFor(DefaultStyle with { Link = true, Size = prominent ? 14.5f : 9.5f }), Theme.Accent);
+            _linkRanges.Add((start, _body.TextLength, lk.onClick));
+        }
+        Append("\n", msgFont);
+
+        _body.SelectionAlignment = HorizontalAlignment.Left; // reset the trailing caret so later renders aren't centered
         EndUpdate();
+    }
+
+    // The empty state shown when the "(none)" row is selected (and the default the tray menu opens to).
+    // Rendered prominently so a user who opens the window from the tray isn't left wondering what to do.
+    private void ShowEmpty()
+    {
+        StopTailing();
+        _parser = null;
+        _loadedSessionId = null;
+        _follow = false;
+        UpdateFollowButton();
+        SetBodyMessage("Select a session from the dropdown above to view its history.", prominent: true);
+    }
+
+    // Shown when a large transcript is selected: surface its size and gate the actual load behind a click
+    // so picking it from the list can never freeze or crash the window unexpectedly.
+    private void ShowLargeWarning(HistoryEntry entry)
+    {
+        StopTailing();
+        _parser = null;
+        _loadedSessionId = null;
+        _follow = false;
+        UpdateFollowButton();
+        SetBodyMessage(
+            $"“{entry.ProjectName}” is a large session ({entry.SizeLabel}). " +
+            "Loading it may take a few seconds and use a lot of memory.",
+            ("Load it anyway", () => BeginLoad(entry)));
+    }
+
+    // Stops live-tailing the current file (used whenever the body leaves a loaded transcript).
+    private void StopTailing()
+    {
+        try { _watcher.EnableRaisingEvents = false; } catch { }
+        _refreshTimer.Stop();
     }
 
     // ── Expand / collapse a tool call ────────────────────────────────────────────
@@ -1098,6 +1217,16 @@ internal sealed class HistoryViewerForm : Form
             g.FillRectangle(bg, e.Bounds);
 
         int x = e.Bounds.Left + 8;
+
+        // The "(none)" placeholder is a single muted label with no size/active decoration.
+        if (entry.IsPlaceholder)
+        {
+            TextRenderer.DrawText(g, entry.ProjectName, _uiFont,
+                new Rectangle(x, e.Bounds.Top, e.Bounds.Right - x - 8, e.Bounds.Height),
+                Theme.Muted, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            return;
+        }
+
         int midY = e.Bounds.Top + e.Bounds.Height / 2;
 
         if (entry.IsActive)
@@ -1107,16 +1236,31 @@ internal sealed class HistoryViewerForm : Form
             x += 14;
         }
 
-        string label = $"{entry.ProjectName}    ·    {entry.RelativeTime}";
-        int rightReserve = entry.IsActive ? 64 : 8;
-        TextRenderer.DrawText(g, label, _uiFont,
-            new Rectangle(x, e.Bounds.Top, e.Bounds.Right - x - rightReserve, e.Bounds.Height),
-            Theme.Fg, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        // Right edge inward: the transcript size (alert-coloured when large, so a user knows to expect
+        // lag), then the "active" tag for running sessions. Whatever's left holds the project label.
+        int right = e.Bounds.Right - 8;
+
+        string sizeText = entry.SizeLabel;
+        int sizeW = TextRenderer.MeasureText(g, sizeText, _smallFont).Width;
+        TextRenderer.DrawText(g, sizeText, _smallFont,
+            new Rectangle(right - sizeW, e.Bounds.Top, sizeW, e.Bounds.Height),
+            entry.IsLarge ? Theme.Orange : Theme.Muted,
+            TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+        right -= sizeW + 10;
 
         if (entry.IsActive)
+        {
+            const int tagW = 48;
             TextRenderer.DrawText(g, "active", _uiFont,
-                new Rectangle(e.Bounds.Right - 60, e.Bounds.Top, 54, e.Bounds.Height),
+                new Rectangle(right - tagW, e.Bounds.Top, tagW, e.Bounds.Height),
                 Theme.Green, TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+            right -= tagW + 8;
+        }
+
+        string label = $"{entry.ProjectName}    ·    {entry.RelativeTime}";
+        TextRenderer.DrawText(g, label, _uiFont,
+            new Rectangle(x, e.Bounds.Top, Math.Max(0, right - x), e.Bounds.Height),
+            Theme.Fg, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
     }
 
     // ── Manual edge-grip resize (borderless but resizable) ───────────────────────

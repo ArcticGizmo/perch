@@ -86,9 +86,12 @@ In `CHANGELOG.md`:
   Perch. Mention implementation details only when they genuinely matter to the user
   (e.g. "existing settings carry over"). Internal refactors, file moves, and plumbing don't
   get a bullet at all.
-- **Keep bullets snappy.** A few words, not a sentence. Cut "now", "the ability to", "you can
-  now". Prefer "Configurable quick links" over "Quick Links are now configurable so you can
-  add, edit, remove, or hide them".
+- **Keep bullets snappy — this is the rule that gets ignored most, so enforce it hard.** Aim
+  for a short phrase, roughly ten words or fewer; one line, never two. Cut "now", "the ability
+  to", "you can now". Drop the trailing "so you can…" / "so you know…" rationale — the change
+  speaks for itself; keep an aside only when it earns the dry humour. Prefer "Configurable
+  quick links" over "Quick Links are now configurable so you can add, edit, remove, or hide
+  them". After drafting, reread every bullet and shorten any that runs long.
 - **Describe the cumulative change, not the commit trail.** A version's section is the net
   difference from the previous version — the end state, not the journey. If a feature was
   added, then fixed, then tweaked across several commits, that's *one* bullet describing the
