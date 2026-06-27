@@ -27,6 +27,7 @@ internal sealed class StatsForm : Form
     private readonly Panel _scroll;
     private readonly ContentPanel _content;
     private readonly Dictionary<Scope, Button> _scopeButtons = new();
+    private readonly Button _wrappedButton;
 
     private readonly Font _bigFont    = new("Segoe UI Semibold", 21f, FontStyle.Regular, GraphicsUnit.Point);
     private readonly Font _h1Font     = new("Segoe UI", 15f, FontStyle.Bold, GraphicsUnit.Point);
@@ -70,6 +71,19 @@ internal sealed class StatsForm : Form
         AddScopeButton("7 days", Scope.Week);
         AddScopeButton("30 days", Scope.Month);
         AddScopeButton("All time", Scope.AllTime);
+
+        // The fun bit: generates a shareable "Wrapped" poster from the current scope. Sits at the far
+        // right of the toolbar, wearing the poster's own gradient so it draws the eye; enabled only
+        // once a report with sessions has loaded.
+        _wrappedButton = new GradientButton("✨", "Wrapped")
+        {
+            Height  = 28,
+            Width   = 112,
+            Enabled = false,
+        };
+        _wrappedButton.Click += (_, _) => OpenWrapped();
+        _toolbar.Controls.Add(_wrappedButton);
+
         _toolbar.Resize += (_, _) => LayoutToolbar();
         Controls.Add(_toolbar);
 
@@ -96,6 +110,7 @@ internal sealed class StatsForm : Form
     {
         _loading = true;
         UpdateScopeButtons();
+        UpdateWrappedButton();
         Relayout();
 
         var today = DateOnly.FromDateTime(DateTime.Now);
@@ -107,6 +122,7 @@ internal sealed class StatsForm : Form
                 _report = result.report;
                 _range = result.range;
                 _loading = false;
+                UpdateWrappedButton();
                 Relayout();
             },
             (StatsReport.Empty(today), null));
@@ -166,12 +182,48 @@ internal sealed class StatsForm : Form
             b.SetBounds(x, y, b.Width, 28);
             x += b.Width + gap;
         }
+        _wrappedButton.SetBounds(_toolbar.Width - pad - _wrappedButton.Width, y, _wrappedButton.Width, 28);
     }
 
     private void UpdateScopeButtons()
     {
         foreach (var (scope, b) in _scopeButtons)
             ThemedControls.StyleToggle(b, scope == _scope);
+    }
+
+    private void UpdateWrappedButton() =>
+        _wrappedButton.Enabled = !_loading && (_report?.SessionCount ?? 0) > 0;
+
+    // Builds a Wrapped poster from the current scope's report and shows it in a reveal card. Guarded so
+    // an accidental click while loading (or with no sessions) is a no-op.
+    private void OpenWrapped()
+    {
+        if (_loading || _report is not { SessionCount: > 0 } report)
+            return;
+        var summary = WrappedSummary.Build(report, _range, ScopeTitle(), Subtitle(), _settings.ShowEstimatedCost);
+        var poster = WrappedRenderer.Render(summary, _icon);   // WrappedForm takes ownership of the bitmap
+        using var dlg = new WrappedForm(poster, SuggestedFileName());
+        dlg.ShowDialog(this);
+    }
+
+    private string ScopeTitle() => _scope switch
+    {
+        Scope.Week    => "This Week",
+        Scope.Month   => "This Month",
+        Scope.AllTime => "All Time",
+        _             => "Today",
+    };
+
+    private string SuggestedFileName()
+    {
+        string scope = _scope switch
+        {
+            Scope.Week    => "week",
+            Scope.Month   => "month",
+            Scope.AllTime => "all-time",
+            _             => "today",
+        };
+        return $"perch-wrapped-{scope}-{DateTime.Now:yyyy-MM-dd}";
     }
 
     // ── Layout ───────────────────────────────────────────────────────────────────

@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.4] - 2026-06-27
+
+### Stats
+
+- **Perch Wrapped**: turn any scope's stats into a shareable poster (the gradient button is hard to miss).
+- A data-derived persona on each poster — Night Owl, Agent Wrangler, Token Titan, and friends.
+- Playful equivalences ("≈ 333 novels of text", "≈ 48 movies of focus") and a highlight reel.
+- Copy your Wrapped to the clipboard or save it as a PNG, then go flex.
+
+---
+
 ## [v0.1.3] - 2026-06-27
 
 ### Overlay
