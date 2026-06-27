@@ -95,6 +95,14 @@ internal sealed class OverlayForm : Form, IDenseHost
     private bool _inUsageStrip;
     private readonly UsageTooltipForm _usageTooltip = new();
 
+    // Context-pressure thermometer hover: the painted hit-rect of each session row's thermometer
+    // (rebuilt every paint, keyed by row index), the row currently under the cursor (-1 = none),
+    // a 150ms dwell timer, and the little "Context at NN%" tooltip it pops.
+    private readonly Dictionary<int, Rectangle> _thermoRects = new();
+    private int _hoveredThermoRow = -1;
+    private readonly System.Windows.Forms.Timer _thermoHoverTimer;
+    private readonly HintTooltipForm _thermoTooltip = new();
+
     // Enabled quick links and their pre-rendered icons, index-aligned. Both are pushed in from the
     // owning context via SetQuickLinks, which is the source of truth; icons are loaded once per
     // update (an exe-extracted or embedded bitmap, or null to fall back to drawn initials).
@@ -187,6 +195,16 @@ internal sealed class OverlayForm : Form, IDenseHost
             _usageHoverTimer.Stop();
             if (_inUsageStrip && !_dragging)
                 ShowUsageTooltip();
+        };
+
+        // One-shot dwell timer: pops the context-pressure tooltip 150ms after the cursor settles
+        // over a row's thermometer glyph.
+        _thermoHoverTimer = new System.Windows.Forms.Timer { Interval = 150 };
+        _thermoHoverTimer.Tick += (_, _) =>
+        {
+            _thermoHoverTimer.Stop();
+            if (_hoveredThermoRow >= 0 && !_dragging)
+                ShowThermoTooltip(_hoveredThermoRow);
         };
 
         // Repaints the auto-close countdown bar while it's active. Stops itself once the deadline
@@ -488,6 +506,9 @@ internal sealed class OverlayForm : Form, IDenseHost
                 DrawUsageBars(g);
             if (HasQuickLinksRow)
                 DrawQuickLinksRow(g);
+            // Thermometer hit-rects are rebuilt from scratch each paint; DrawSessionRow repopulates
+            // them for any row that actually shows the glyph.
+            _thermoRects.Clear();
             for (int i = 0; i < _rows.Count; i++)
                 DrawRow(g, i);
         }
@@ -1020,9 +1041,13 @@ internal sealed class OverlayForm : Form, IDenseHost
         g.DrawString(statusText, statusFont, statusBrush,
             statusX, nameMidY - statusSz.Height / 2);
 
-        // Thermometer: to the right of the mode badge (between badge and status text).
+        // Thermometer: to the right of the mode badge (between badge and status text). Remember a
+        // generous hit-rect so a hover can pop the "Context at NN%" tooltip.
         if (thermoWidth > 0)
+        {
             DrawThermoIcon(g, ctxFill, statusX - thermoWidth, nameMidY);
+            _thermoRects[rowIdx] = new Rectangle(statusX - thermoWidth, nameMidY - 9, thermoWidth, 18);
+        }
 
         if (session.Mode != PermissionMode.Normal)
             Glyphs.DrawModeBadge(g, session.Mode, statusX - thermoWidth - badgeWidth, nameMidY, 4, 5);
@@ -1197,6 +1222,18 @@ internal sealed class OverlayForm : Form, IDenseHost
                 Cursor = artHover >= 0 ? Cursors.Hand : Cursors.Default;
                 Invalidate();
             }
+
+            // Context-pressure thermometer dwell. Not clickable, so it leaves the cursor alone; a
+            // 150ms settle pops the tooltip, and moving to a different (or no) thermometer restarts.
+            int thermoHover = ShowFullPanel ? HitTestThermoIcon(e.Location) : -1;
+            if (thermoHover != _hoveredThermoRow)
+            {
+                _hoveredThermoRow = thermoHover;
+                _thermoHoverTimer.Stop();
+                HideThermoTooltip();
+                if (thermoHover >= 0)
+                    _thermoHoverTimer.Start();
+            }
         }
 
         base.OnMouseMove(e);
@@ -1281,6 +1318,9 @@ internal sealed class OverlayForm : Form, IDenseHost
         _inUsageStrip = false;
         _usageHoverTimer.Stop();
         HideUsageTooltip();
+        _hoveredThermoRow = -1;
+        _thermoHoverTimer.Stop();
+        HideThermoTooltip();
         if (_hoveredQuickLink >= 0) { _hoveredQuickLink = -1; Cursor = Cursors.Default; }
         if (_hoveredArtifactRow >= 0) { _hoveredArtifactRow = -1; Cursor = Cursors.Default; }
 
@@ -1304,6 +1344,34 @@ internal sealed class OverlayForm : Form, IDenseHost
     {
         if (_usageTooltip.Visible)
             _usageTooltip.Hide();
+    }
+
+    // ── Context-pressure tooltip ────────────────────────────────────────────────
+    // Returns the row whose thermometer hit-rect contains p, or -1. Reads the rects captured at
+    // paint time, so it tracks exactly where each glyph was drawn.
+    private int HitTestThermoIcon(Point p)
+    {
+        foreach (var (row, rect) in _thermoRects)
+            if (rect.Contains(p))
+                return row;
+        return -1;
+    }
+
+    private void ShowThermoTooltip(int rowIdx)
+    {
+        if (rowIdx < 0 || rowIdx >= _rows.Count) return;
+        float fill = _rows[rowIdx].Session.ContextFill ?? 0f;
+        int pct = (int)Math.Round(fill * 100f);
+
+        // Anchor just below the glyph; HintTooltipForm clamps it onto the screen.
+        var anchor = PointToScreen(new Point(_thermoRects[rowIdx].Left, _thermoRects[rowIdx].Bottom + 4));
+        _thermoTooltip.ShowText($"Context at {pct}%", anchor);
+    }
+
+    private void HideThermoTooltip()
+    {
+        if (_thermoTooltip.Visible)
+            _thermoTooltip.Hide();
     }
 
     private int HitTestRow(Point p)
@@ -1525,8 +1593,10 @@ internal sealed class OverlayForm : Form, IDenseHost
             _flashStopTimer.Dispose();
             _tickTimer.Dispose();
             _usageHoverTimer.Dispose();
+            _thermoHoverTimer.Dispose();
             _autoCloseBarTimer.Dispose();
             _usageTooltip.Dispose();
+            _thermoTooltip.Dispose();
             _popover?.Dispose();
             _qrForm?.Dispose();
             _icon?.Dispose();

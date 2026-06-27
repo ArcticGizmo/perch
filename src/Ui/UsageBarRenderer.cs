@@ -66,11 +66,16 @@ internal static class UsageBarRenderer
             textColor = capColor;
         }
 
-        // Expected-rate marker: thin vertical bar at the elapsed-time position.
+        // Expected-rate marker: thin vertical bar at the elapsed-time position. It turns red once
+        // actual usage has pulled ahead of the expected pace — but only once the window is at least
+        // 5% elapsed, so it doesn't flip red on the first sip of usage while the expected line still
+        // sits near zero (where any reading trivially "exceeds" it).
         if (expectedPct is { } ep && trackW > 0)
         {
             int markerX = trackLeft + (int)Math.Round(trackW * ep / 100.0);
-            Color markerColor = stale ? Theme.Blend(expectedMark, bgBlend, 0.5f) : expectedMark;
+            bool overRate  = ep >= 5 && percent is { } actual && actual > ep;
+            Color baseMark = overRate ? Theme.Red : expectedMark;
+            Color markerColor = stale ? Theme.Blend(baseMark, bgBlend, 0.5f) : baseMark;
             using var markerBrush = new SolidBrush(markerColor);
             g.FillRectangle(markerBrush, markerX - 1, trackY - 1, 2, trackH + 2);
         }

@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.2] - 2026-06-27
+
+### Overlay
+
+- Session and Weekly markers turn red when usage outpaces the clock (held back until 5% in, to spare your nerves early).
+- Hover the context thermometer for a "Context at NN%" readout.
+
+---
+
 ## [v0.1.1] - 2026-06-27
 
 ### History
