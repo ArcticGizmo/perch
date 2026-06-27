@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2025-03-12T12:00:20Z","message":{"role":"user","content":"go"}}
+{"type":"assistant","timestamp":"2025-03-12T12:00:30Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"x1","name":"Bash","input":{"command":"sleep 99"}}]}}

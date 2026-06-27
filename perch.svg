@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="96"
+   height="96"
+   viewBox="0 0 96 96"
+   fill="none"
+   version="1.1"
+   id="svg5"
+   sodipodi:docname="perch.svg"
+   inkscape:version="1.4.4 (dcaf3e7, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs5" />
+  <sodipodi:namedview
+     id="namedview5"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="4.203125"
+     inkscape:cx="1.3085502"
+     inkscape:cy="65.070632"
+     inkscape:window-width="1920"
+     inkscape:window-height="1009"
+     inkscape:window-x="1912"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="g6" />
+  <!-- glow -->
+  <!-- perch bar -->
+  <!-- bird body -->
+  <!-- wing -->
+  <!-- tail -->
+  <!-- head -->
+  <!-- eye -->
+  <rect
+     x="4.5724897"
+     y="87.928581"
+     width="88.543732"
+     height="4.271553"
+     rx="2.1442521"
+     fill="#6c63ff"
+     id="rect1-9"
+     style="fill:#ff442d;fill-opacity:1;stroke-width:1.20611" />
+  <g
+     id="g6"
+     transform="matrix(1.2625617,0,0,1.2625617,-9.4721814,-12.526585)">
+    <ellipse
+       fill="#e8e8f8"
+       id="ellipse1"
+       style="fill:#dd9e8e;fill-opacity:1;stroke-width:1.95231"
+       ry="18.920242"
+       rx="21.75688"
+       cy="58.989143"
+       cx="41.455078" />
+    <path
+       d="m 34.398443,73.236766 c -12.241768,5.506357 -19.337456,4.430647 -21.287062,-3.227129 3.024626,-0.85349 6.027109,-1.854212 8.716241,-3.523969 10.7119,-6.651313 10.62831,2.673359 12.570821,6.751098 z"
+       fill="#e8e8f8"
+       id="path1"
+       style="fill:#dd9e8e;fill-opacity:1;stroke-width:2.04886"
+       sodipodi:nodetypes="ccsc" />
+    <path
+       d="m 50.021973,54.850186 c -6.52449,11.894079 -17.390696,13.570018 -23.474132,8.646556 -1.329425,-4.684117 5.895876,-6.716031 8.843978,-7.845514 10.290567,-3.942546 10.668329,-2.869043 14.630154,-0.801042 z"
+       fill="#e8e8f8"
+       id="path1-2"
+       style="fill:#ff442d;fill-opacity:1;stroke-width:2.04886"
+       sodipodi:nodetypes="ccsc" />
+    <path
+       d="m 56.433768,34.42611 9.182932,2.513151 -1.605642,0.898784 -7.57729,4.241508 z"
+       fill="#f4a261"
+       id="path3"
+       style="fill:#ff442d;fill-opacity:1;stroke-width:2.50091"
+       sodipodi:nodetypes="ccccc" />
+    <ellipse
+       cx="43.660282"
+       cy="37.487728"
+       fill="#e8e8f8"
+       id="circle1"
+       rx="13.977884"
+       ry="12.134576"
+       style="fill:#dd9e8e;fill-opacity:1;stroke-width:1.86053" />
+    <ellipse
+       cx="48.577785"
+       cy="36.640396"
+       fill="#1a1a2e"
+       id="circle2"
+       rx="3.5943129"
+       ry="3.7840486"
+       style="stroke-width:2.04886" />
+    <ellipse
+       cx="50.02784"
+       cy="35.732712"
+       fill="#ffffff"
+       id="circle3"
+       rx="1.1981044"
+       ry="1.2613494"
+       style="stroke-width:2.04886" />
+  </g>
+  <!-- beak -->
+  <!-- feet -->
+  <!-- pulse dot -->
+  <g
+     id="g5"
+     style="display:inline"
+     transform="matrix(1.8537505,0,0,1.8867778,-47.017261,-39.535062)">
+    <circle
+       cx="68"
+       cy="30"
+       r="5"
+       fill="#ff6b6b"
+       opacity="0.9"
+       id="circle4" />
+    <circle
+       cx="68"
+       cy="30"
+       r="8"
+       fill="#ff6b6b"
+       opacity="0.2"
+       id="circle5" />
+  </g>
+</svg>

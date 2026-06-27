@@ -1,0 +1,4 @@
+{"type":"user","timestamp":"2025-03-10T13:00:00Z","cwd":"C:\\fixtures\\proj","gitBranch":"main","message":{"role":"user","content":"Quick question"}}
+{"type":"assistant","timestamp":"2025-03-10T13:00:30Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-haiku-4-5-20251001","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"tk1","name":"Task","input":{"description":"explore code","subagent_type":"Explore"}}]}}
+{"type":"assistant","timestamp":"2025-03-10T13:01:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-haiku-4-5-20251001","usage":{"input_tokens":8,"output_tokens":4},"content":[{"type":"tool_use","id":"tk2","name":"Task","input":{"description":"summarize","subagent_type":"general-purpose"}}]}}
+{"type":"user","timestamp":"2025-03-10T13:02:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tk2","content":"done"}]}}

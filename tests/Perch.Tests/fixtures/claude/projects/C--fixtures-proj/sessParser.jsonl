@@ -1,0 +1,4 @@
+{"type":"user","timestamp":"2025-03-08T12:00:00Z","cwd":"C:\\fixtures\\proj","gitBranch":"main","message":{"role":"user","content":"render this"}}
+{"type":"assistant","timestamp":"2025-03-08T12:00:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"thinking","thinking":"let me think"},{"type":"text","text":"Here is **bold** text"}]}}
+{"type":"assistant","isSidechain":true,"timestamp":"2025-03-08T12:00:06Z","message":{"role":"assistant","content":[{"type":"text","text":"sub-agent says hi"}]}}
+{"type":"user","timestamp":"2025-03-08T12:00:07Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}}

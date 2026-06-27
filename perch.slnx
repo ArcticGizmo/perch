@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Perch.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Perch.Tests/Perch.Tests.csproj" />
+  </Folder>
+</Solution>
