@@ -1,0 +1,9 @@
+{"type":"user","timestamp":"2025-03-10T12:00:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":"Build it"}}
+{"type":"assistant","timestamp":"2025-03-10T12:01:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"e1","name":"Bash","input":{"command":"dotnet build"}}]}}
+{"type":"user","timestamp":"2025-03-10T12:01:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"e1","is_error":true,"content":"error CS1002"}]}}
+{"type":"assistant","timestamp":"2025-03-10T12:02:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"e2","name":"Bash","input":{"command":"dotnet build"}}]}}
+{"type":"user","timestamp":"2025-03-10T12:02:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"e2","is_error":true,"content":"error CS1002"}]}}
+{"type":"assistant","timestamp":"2025-03-10T12:03:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"e3","name":"Bash","input":{"command":"dotnet build"}}]}}
+{"type":"user","timestamp":"2025-03-10T12:03:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"e3","is_error":true,"content":"error CS1002"}]}}
+{"type":"assistant","timestamp":"2025-03-10T12:04:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"e4","name":"Bash","input":{"command":"dotnet build"}}]}}
+{"type":"user","timestamp":"2025-03-10T12:04:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"e4","is_error":true,"content":"error CS1002"}]}}

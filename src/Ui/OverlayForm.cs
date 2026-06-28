@@ -27,6 +27,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private const int MailIconWidth     = 16;  // width reserved for the external-notify (mail) glyph
     private const int ArtifactIconWidth = 16;  // width reserved for the clickable artifact glyph in a row
     private const int ThermoIconWidth   = 12;  // width reserved for the context-pressure thermometer
+    private const int WarnIconWidth     = 14;  // width reserved for the stuck-detection warning glyph
     private const int QuickLinksRowHeight = 24; // height of the quick-links icon strip below the usage bars
 
     // Default vertical gap below the top of the working area for the floating panel. Sized to
@@ -54,6 +55,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private static readonly Color RemoteColor    = Color.FromArgb(96,  165, 250);
     private static readonly Color MailColor      = Color.FromArgb(94,  234, 212);
     private static readonly Color ArtifactColor  = Color.FromArgb(251, 191, 36);   // amber — the clickable artifact glyph
+    private static readonly Color WarnColor      = Color.FromArgb(245, 158, 11);   // deep amber — the "possibly stuck" warning glyph
     private static readonly Color TreeLineColor  = Color.FromArgb(55,  55,  72);
     private static readonly Color UsageRedColor  = Color.FromArgb(239, 68,  68);
     private static readonly Color UsageTrackColor= Color.FromArgb(38,  38,  52);
@@ -102,6 +104,16 @@ internal sealed class OverlayForm : Form, IDenseHost
     private int _hoveredThermoRow = -1;
     private readonly System.Windows.Forms.Timer _thermoHoverTimer;
     private readonly HintTooltipForm _thermoTooltip = new();
+
+    // Stuck-detection warning glyph: drawn when detection is on and a session is flagged. Hover plumbing
+    // mirrors the thermometer's — a per-row hit-rect rebuilt each paint, a 150ms dwell timer, and a
+    // little tooltip giving the reason. _showStuckWarnings only gates the *display*; the monitor decides
+    // whether a session is actually flagged.
+    private bool _showStuckWarnings = true;
+    private readonly Dictionary<int, Rectangle> _warnRects = new();
+    private int _hoveredWarnRow = -1;
+    private readonly System.Windows.Forms.Timer _warnHoverTimer;
+    private readonly HintTooltipForm _warnTooltip = new();
 
     // Enabled quick links and their pre-rendered icons, index-aligned. Both are pushed in from the
     // owning context via SetQuickLinks, which is the source of truth; icons are loaded once per
@@ -205,6 +217,15 @@ internal sealed class OverlayForm : Form, IDenseHost
             _thermoHoverTimer.Stop();
             if (_hoveredThermoRow >= 0 && !_dragging)
                 ShowThermoTooltip(_hoveredThermoRow);
+        };
+
+        // One-shot dwell timer for the stuck-warning glyph, twin to the thermometer's above.
+        _warnHoverTimer = new System.Windows.Forms.Timer { Interval = 150 };
+        _warnHoverTimer.Tick += (_, _) =>
+        {
+            _warnHoverTimer.Stop();
+            if (_hoveredWarnRow >= 0 && !_dragging)
+                ShowWarnTooltip(_hoveredWarnRow);
         };
 
         // Repaints the auto-close countdown bar while it's active. Stops itself once the deadline
@@ -311,6 +332,21 @@ internal sealed class OverlayForm : Form, IDenseHost
     {
         if (_showContextPressure == show) return;
         _showContextPressure = show;
+        Invalidate();
+    }
+
+    /// <summary>Shows or hides the stuck-detection warning glyph. Display only — when off (or when the
+    /// monitor isn't flagging anything) no glyph is drawn. Hides any open tooltip on the way out.</summary>
+    public void SetStuckDetectionEnabled(bool enabled)
+    {
+        if (_showStuckWarnings == enabled) return;
+        _showStuckWarnings = enabled;
+        if (!enabled)
+        {
+            _hoveredWarnRow = -1;
+            _warnHoverTimer.Stop();
+            HideWarnTooltip();
+        }
         Invalidate();
     }
 
@@ -506,9 +542,10 @@ internal sealed class OverlayForm : Form, IDenseHost
                 DrawUsageBars(g);
             if (HasQuickLinksRow)
                 DrawQuickLinksRow(g);
-            // Thermometer hit-rects are rebuilt from scratch each paint; DrawSessionRow repopulates
-            // them for any row that actually shows the glyph.
+            // Thermometer and warning hit-rects are rebuilt from scratch each paint; DrawSessionRow
+            // repopulates them for any row that actually shows the glyph.
             _thermoRects.Clear();
+            _warnRects.Clear();
             for (int i = 0; i < _rows.Count; i++)
                 DrawRow(g, i);
         }
@@ -1017,25 +1054,32 @@ internal sealed class OverlayForm : Form, IDenseHost
         int mailWidth    = mail ? MailIconWidth : 0;
         int badgeWidth   = session.Mode != PermissionMode.Normal ? 16 : 0;
         int rcWidth      = session.RemoteControlled ? RcIconWidth : 0;
+        bool stuck       = _showStuckWarnings && session.IsStuck;
+        int warnWidth    = stuck ? WarnIconWidth : 0;
         float ctxFill    = session.ContextFill ?? 0f;
         int thermoWidth  = _showContextPressure && ctxFill >= _ctxYellow ? ThermoIconWidth + 2 : 0;  // icon + 2 px gap right
         var statusSz     = g.MeasureString(statusText, statusFont);
-        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - mailWidth - artWidth - thermoWidth;
+        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - mailWidth - artWidth - warnWidth - thermoWidth;
         var nameTrunc    = TruncateString(g, session.DisplayName, nameFont, nameMaxWidth);
         var nameSz       = g.MeasureString(nameTrunc, nameFont);
 
-        // Glyphs sit just right of the status dot and push the name across: the artifact glyph first
-        // (closest to the dot, and clickable to open/pick a published artifact), then the mail glyph
-        // (external notifications opted in), then the remote-control broadcast glyph.
+        // Glyphs sit just right of the status dot and push the name across: the warning glyph first
+        // (the loudest — this session may be stuck), then the artifact glyph (clickable to open/pick a
+        // published artifact), then mail (external notifications), then the remote-control glyph.
+        if (stuck)
+        {
+            DrawWarnIcon(g, HorizPad + 14, nameMidY);
+            _warnRects[rowIdx] = new Rectangle(HorizPad + 14, nameMidY - 9, WarnIconWidth, 18);
+        }
         if (hasArtifacts)
-            DrawArtifactIcon(g, HorizPad + 14, nameMidY, rowIdx == _hoveredArtifactRow);
+            DrawArtifactIcon(g, HorizPad + 14 + warnWidth, nameMidY, rowIdx == _hoveredArtifactRow);
         if (mail)
-            DrawMailIcon(g, HorizPad + 14 + artWidth, nameMidY);
+            DrawMailIcon(g, HorizPad + 14 + warnWidth + artWidth, nameMidY);
         if (session.RemoteControlled)
-            DrawRemoteIcon(g, HorizPad + 16 + artWidth + mailWidth, nameMidY);
+            DrawRemoteIcon(g, HorizPad + 16 + warnWidth + artWidth + mailWidth, nameMidY);
 
         g.DrawString(nameTrunc, nameFont, fgBrush,
-            HorizPad + 14 + artWidth + mailWidth + rcWidth, nameMidY - nameSz.Height / 2);
+            HorizPad + 14 + warnWidth + artWidth + mailWidth + rcWidth, nameMidY - nameSz.Height / 2);
 
         int statusX = ClientSize.Width - HorizPad - (int)statusSz.Width;
         g.DrawString(statusText, statusFont, statusBrush,
@@ -1084,6 +1128,36 @@ internal sealed class OverlayForm : Form, IDenseHost
         }
     }
 
+
+    // Stuck-detection warning: a small amber triangle with an exclamation mark, drawn at the left of
+    // a flagged row. x is the left edge of the reserved WarnIconWidth area; midY is the row centre.
+    private void DrawWarnIcon(Graphics g, int x, int midY)
+    {
+        var old = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        const int w = 12, h = 11;
+        int top = midY - h / 2;
+        int cx  = x + w / 2;
+
+        var triangle = new[]
+        {
+            new Point(cx,        top),         // apex
+            new Point(x,         top + h),     // bottom-left
+            new Point(x + w,     top + h),     // bottom-right
+        };
+
+        using var fill = new SolidBrush(WarnColor);
+        g.FillPolygon(fill, triangle);
+
+        // Exclamation mark punched in the panel background so it reads at small sizes: a short stem
+        // above a square dot, both centred on the triangle.
+        using var mark = new SolidBrush(BgColor);
+        g.FillRectangle(mark, cx - 1, top + 3, 2, 4);   // stem
+        g.FillRectangle(mark, cx - 1, top + 8, 2, 2);   // dot
+
+        g.SmoothingMode = old;
+    }
 
     // Context-pressure thermometer: tube (4 px wide, 9 px tall) + bulb (8 px diameter), with mercury
     // rising from the bottom. Only drawn at/above the yellow threshold; colour shifts yellow → orange
@@ -1239,6 +1313,17 @@ internal sealed class OverlayForm : Form, IDenseHost
                 if (thermoHover >= 0)
                     _thermoHoverTimer.Start();
             }
+
+            // Stuck-warning glyph dwell — twin to the thermometer's above.
+            int warnHover = ShowFullPanel ? HitTestWarnIcon(e.Location) : -1;
+            if (warnHover != _hoveredWarnRow)
+            {
+                _hoveredWarnRow = warnHover;
+                _warnHoverTimer.Stop();
+                HideWarnTooltip();
+                if (warnHover >= 0)
+                    _warnHoverTimer.Start();
+            }
         }
 
         base.OnMouseMove(e);
@@ -1326,6 +1411,9 @@ internal sealed class OverlayForm : Form, IDenseHost
         _hoveredThermoRow = -1;
         _thermoHoverTimer.Stop();
         HideThermoTooltip();
+        _hoveredWarnRow = -1;
+        _warnHoverTimer.Stop();
+        HideWarnTooltip();
         if (_hoveredQuickLink >= 0) { _hoveredQuickLink = -1; Cursor = Cursors.Default; }
         if (_hoveredArtifactRow >= 0) { _hoveredArtifactRow = -1; Cursor = Cursors.Default; }
 
@@ -1377,6 +1465,32 @@ internal sealed class OverlayForm : Form, IDenseHost
     {
         if (_thermoTooltip.Visible)
             _thermoTooltip.Hide();
+    }
+
+    // ── Stuck-warning tooltip ───────────────────────────────────────────────────
+    // Returns the row whose warning hit-rect contains p, or -1 (rects captured at paint time).
+    private int HitTestWarnIcon(Point p)
+    {
+        foreach (var (row, rect) in _warnRects)
+            if (rect.Contains(p))
+                return row;
+        return -1;
+    }
+
+    private void ShowWarnTooltip(int rowIdx)
+    {
+        if (rowIdx < 0 || rowIdx >= _rows.Count) return;
+        if (_rows[rowIdx].Session.Stuck is not { } stuck) return;
+
+        // Anchor just below the glyph; HintTooltipForm clamps it onto the screen.
+        var anchor = PointToScreen(new Point(_warnRects[rowIdx].Left, _warnRects[rowIdx].Bottom + 4));
+        _warnTooltip.ShowText(stuck.Reason, anchor);
+    }
+
+    private void HideWarnTooltip()
+    {
+        if (_warnTooltip.Visible)
+            _warnTooltip.Hide();
     }
 
     private int HitTestRow(Point p)
@@ -1599,9 +1713,11 @@ internal sealed class OverlayForm : Form, IDenseHost
             _tickTimer.Dispose();
             _usageHoverTimer.Dispose();
             _thermoHoverTimer.Dispose();
+            _warnHoverTimer.Dispose();
             _autoCloseBarTimer.Dispose();
             _usageTooltip.Dispose();
             _thermoTooltip.Dispose();
+            _warnTooltip.Dispose();
             _popover?.Dispose();
             _qrForm?.Dispose();
             _icon?.Dispose();

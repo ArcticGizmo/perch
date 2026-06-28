@@ -62,7 +62,8 @@ public record ClaudeSession(
     string? Title = null,
     float? ContextFill = null,
     int ContextWindow = ModelContext.DefaultWindow,
-    IReadOnlyList<Artifact>? Artifacts = null
+    IReadOnlyList<Artifact>? Artifacts = null,
+    StuckSignal? Stuck = null
 )
 {
     /// <summary>Running sub-agents under this session; never null.</summary>
@@ -74,6 +75,14 @@ public record ClaudeSession(
 
     /// <summary>True when this session has at least one published Artifact to open.</summary>
     public bool HasArtifacts => Artifacts.Count > 0;
+
+    /// <summary>An advisory "this session may be stuck/spinning" signal (repeated failures or a
+    /// failing loop) derived from the transcript tail, or null when nothing looks wrong. Only ever
+    /// set while the session is Running and detection is enabled. See <see cref="StuckSignal"/>.</summary>
+    public StuckSignal? Stuck { get; init; } = Stuck;
+
+    /// <summary>True when this session has been flagged as possibly stuck.</summary>
+    public bool IsStuck => Stuck != null;
 
     /// <summary>
     /// The explicit session name set by Claude Code's built-in <c>/rename</c> command (a

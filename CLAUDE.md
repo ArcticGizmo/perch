@@ -1,18 +1,36 @@
 # Perch
 
 A Windows system-tray app (.NET 10 / WinForms, C#) that monitors active Claude Code sessions and
-surfaces their status as desktop overlays, notifications, and stats. Source lives in `src/`; a
-companion Claude Code plugin lives in `plugins/perch/`.
+surfaces their status as desktop overlays, notifications, and stats.
+
+## Layout
+
+- `src/` — the app (`perch.slnx` is the solution). Organized into:
+  - `App/` — entry point and orchestration: `Program`, `OverlayApplicationContext` (the wiring shell),
+    and the notification / plugin / path-registration services.
+  - `Data/` — the `~/.claude` data layer: file readers, parsers, models, and `AppSettings`. No UI.
+  - `Ui/` — WinForms windows (overlay, settings, history, stats) and the owner-drawn rendering helpers.
+- `tests/Perch.Tests/` — xUnit tests (see Testing below).
+- `plugins/perch/` — the companion Claude Code plugin (`commands/`, `hooks/`, `scripts/`).
+- `tools/IconGen` — regenerates the raster icons from `perch.svg` (`tools/gen-icons.ps1`/`.cmd`).
 
 ## Build & run
 
-- Build: `dotnet build src/Perch.csproj`
+- Build: `dotnet build src/Perch.csproj` (or the whole solution: `dotnet build perch.slnx`).
 - Run (dev): `dotnet run --project src`
 - Release artifacts are produced via Velopack (`vpk`) / `publish.bat` — see `README.md`.
 
-Target is `net10.0-windows`, `Nullable` and `ImplicitUsings` enabled. There is no test project; verify
-logic-heavy changes with a quick throwaway script against real data in `~/.claude/` before relying on
-the UI, since the UI itself can only be eyeballed by running the tray app.
+Target is `net10.0-windows`, `Nullable` and `ImplicitUsings` enabled.
+
+## Testing
+
+There **is** a test project: `tests/Perch.Tests/` (xUnit). Run it with
+`dotnet test tests/Perch.Tests/Perch.Tests.csproj`. It points the data layer at a synthetic `~/.claude`
+fixture tree via `CLAUDE_CONFIG_DIR` (set in `TestEnvironment.cs`; fixtures live under
+`tests/Perch.Tests/fixtures/claude/` and `FixtureCwd` is `C:\fixtures\proj`). Prefer adding a fixture +
+an xUnit test alongside the existing `*Tests.cs` files when changing logic-heavy data-layer code
+(transcript parsing, stats, detection) — it's faster and more durable than a throwaway script. The UI
+itself can only be eyeballed by running the tray app, so it has no automated coverage.
 
 ## Conventions & gotchas
 

@@ -26,6 +26,7 @@ internal static class ToolSummary
             case "NotebookEdit":
                 return "Editing " + FileLabel(Str("notebook_path"));
             case "Bash":
+            case "PowerShell":
                 return "Running: " + Clip(Str("command") ?? "command");
             case "Grep":
                 return "Searching: " + Clip(Str("pattern") ?? "");

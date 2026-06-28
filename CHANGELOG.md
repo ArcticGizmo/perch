@@ -9,6 +9,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.5] - 2026-06-28
+
+### Detection
+
+- Stuck-session warnings: an amber ⚠ on a session that's spinning — tool calls failing in a row, or the same failing action on loop.
+- Hover the warning for why Perch is worried.
+- New Detection settings page to switch it off — or just the half that's crying wolf.
+
+### Overlay
+
+- Live activity now describes PowerShell commands, not just Bash (PowerShell was getting the silent treatment).
+
+---
+
 ## [v0.1.4] - 2026-06-27
 
 ### Stats

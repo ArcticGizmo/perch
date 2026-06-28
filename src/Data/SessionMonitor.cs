@@ -9,6 +9,24 @@ internal sealed class SessionMonitor : IDisposable
     private const int NeedsAttentionMinutes = 5;
     private const int DebounceMs = 150;
 
+    // Stuck/runaway detection thresholds. Tuned against a corpus of real transcripts so healthy work
+    // almost never trips them: across ~114 transcripts a trailing error streak of 4+ flagged only a
+    // handful, and a single command repeated 3+ times in the last 10 calls with 2+ failures was rarer
+    // still. See StuckMetrics / TranscriptReader.GetStuckMetrics.
+    private const int ErrorStreakThreshold = 4;
+    private const int LoopRepeatThreshold  = 3;
+    private const int LoopErrorThreshold   = 2;
+
+    /// <summary>Master switch for stuck/runaway detection. Off by construction; the owning context
+    /// sets it (and the two sub-switches) from settings and re-scans when the user toggles them.</summary>
+    public bool StuckDetectionEnabled { get; set; }
+
+    /// <summary>Flag a session when several tool calls in a row fail ("commands coming up empty").</summary>
+    public bool DetectErrorStreaks { get; set; } = true;
+
+    /// <summary>Flag a session when it keeps repeating the same action and it keeps failing.</summary>
+    public bool DetectFailingLoops { get; set; } = true;
+
     private readonly string _sessionsDir = ClaudePaths.SessionsDir;
 
     private readonly Dictionary<string, string> _lastRawStatus = new();
@@ -334,6 +352,12 @@ internal sealed class SessionMonitor : IDisposable
                 ? _transcripts.GetActivity(sessionId, cwd)
                 : null;
 
+            // Stuck/runaway: also only meaningful while the session is actively working. Gated by the
+            // settings switches so a user drowning in false positives can turn it (or either half) off.
+            var stuck = StuckDetectionEnabled && status == SessionStatus.Running
+                ? DetectStuck(sessionId, cwd)
+                : null;
+
             var (contextFill, contextWindow) = _transcripts.GetContextFill(sessionId, cwd);
 
             // Web Artifacts published to claude.ai over the session's lifetime. Read from the transcript
@@ -356,7 +380,8 @@ internal sealed class SessionMonitor : IDisposable
                 title,
                 contextFill,
                 contextWindow,
-                artifacts
+                artifacts,
+                stuck
             );
 
             if (status == SessionStatus.NeedsAttention && (prevRaw == "busy" || subsJustFinished))
@@ -395,6 +420,29 @@ internal sealed class SessionMonitor : IDisposable
             if (!string.IsNullOrEmpty(sessionId))
                 OpenHistoryRequested?.Invoke(sessionId);
         }
+    }
+
+    // Turns the transcript's raw stuck measurements into a signal, applying the sub-switches and
+    // tuned thresholds. The error-streak check wins when both fire (it's the more direct "everything
+    // is failing" signal). Returns null when nothing crosses a threshold — the common case.
+    private StuckSignal? DetectStuck(string sessionId, string cwd)
+    {
+        var m = _transcripts.GetStuckMetrics(sessionId, cwd);
+
+        if (DetectErrorStreaks && m.TrailingErrorStreak >= ErrorStreakThreshold)
+            return new StuckSignal(StuckKind.ErrorStreak,
+                $"{m.TrailingErrorStreak} tool calls in a row have failed — the session may be stuck.");
+
+        if (DetectFailingLoops
+            && m.LoopRepeat >= LoopRepeatThreshold
+            && m.LoopErrors >= LoopErrorThreshold)
+        {
+            var what = string.IsNullOrEmpty(m.LoopLabel) ? "the same action" : m.LoopLabel;
+            return new StuckSignal(StuckKind.FailingLoop,
+                $"Repeating a failing action: {what} (×{m.LoopRepeat}, {m.LoopErrors} failed).");
+        }
+
+        return null;
     }
 
     private static PermissionMode ReadPermissionMode(string path)

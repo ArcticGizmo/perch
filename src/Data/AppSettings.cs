@@ -30,6 +30,14 @@ internal sealed class AppSettings
     public int ContextPressureOrangePercent { get; set; } = 65;
     public int ContextPressureRedPercent    { get; set; } = 80;
 
+    // Stuck/runaway detection. When on, a session that's spinning — several tool calls failing in a
+    // row, or the same action repeated and failing — gets an amber warning glyph in the overlay. The
+    // two sub-switches scope which heuristics run, so a user plagued by false positives on one can
+    // keep the other. On by default; a missing key in an older settings file keeps it on.
+    public bool StuckDetectionEnabled { get; set; } = true;
+    public bool DetectErrorStreaks   { get; set; } = true;
+    public bool DetectFailingLoops   { get; set; } = true;
+
     // Master switch for Windows desktop (toast/balloon) notifications and chimes. When off, no
     // session balloon is ever shown and no chime is played; the overlay's own attention flash is
     // unaffected. The per-type switches below only take effect while this is on.

@@ -167,6 +167,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _settings.ContextPressureYellowPercent,
             _settings.ContextPressureOrangePercent,
             _settings.ContextPressureRedPercent);
+        ApplyStuckDetectionSettings();
         _overlay.SetExternalNotificationsAvailable(_settings.ExternalNotificationsEnabled);
         // Warm the (slow, one-off) Start Menu app lookup off the UI thread so the first quick-link
         // icon load and the Add/Edit dialog don't stall on it.
@@ -222,6 +223,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.ExpectedRateChanged    += SetExpectedRateEnabled;
                 f.ContextPressureChanged += SetContextPressureEnabled;
                 f.ContextThresholdsChanged += SetContextThresholds;
+                f.StuckDetectionChanged += SetStuckDetection;
                 f.CheckForUpdatesRequested += (_, _) => CheckForUpdates();
                 f.TestNotificationRequested += _notifications.ShowTest;
                 f.ExternalNotificationsEnabledChanged += SetExternalNotificationsEnabled;
@@ -304,6 +306,28 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _settings.ContextPressureRedPercent    = red;
         _settings.Save();
         _overlay.SetContextThresholds(yellow, orange, red);
+    }
+
+    // Pushes the three stuck-detection settings onto the monitor (which computes the signal) and the
+    // overlay (which draws the glyph). Shared by startup and the live settings change below.
+    private void ApplyStuckDetectionSettings()
+    {
+        _monitor.StuckDetectionEnabled = _settings.StuckDetectionEnabled;
+        _monitor.DetectErrorStreaks    = _settings.DetectErrorStreaks;
+        _monitor.DetectFailingLoops    = _settings.DetectFailingLoops;
+        _overlay.SetStuckDetectionEnabled(_settings.StuckDetectionEnabled);
+    }
+
+    private void SetStuckDetection(bool enabled, bool errorStreaks, bool failingLoops)
+    {
+        _settings.StuckDetectionEnabled = enabled;
+        _settings.DetectErrorStreaks    = errorStreaks;
+        _settings.DetectFailingLoops    = failingLoops;
+        _settings.Save();
+        ApplyStuckDetectionSettings();
+        // Re-scan so the change takes effect at once: signals recompute (or clear) without waiting
+        // for the next transcript write or reconciliation tick.
+        RequestScan();
     }
 
     // Fetches usage off the UI thread, then pushes the result back onto it for rendering in both

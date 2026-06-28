@@ -80,6 +80,15 @@ internal sealed class SettingsForm : Form
     private ToggleSwitch _autoStartToggle = null!;
     private ToggleSwitch _autoCloseToggle = null!;
 
+    // Detection section. A master toggle gating two heuristic sub-rows (repeated failures / failing
+    // loops); all three states are read off the toggles and raised together via StuckDetectionChanged,
+    // and the sub-rows dim while the master is off.
+    private ToggleSwitch _stuckMasterToggle = null!;
+    private ToggleSwitch _stuckErrorToggle  = null!;
+    private ToggleSwitch _stuckLoopToggle   = null!;
+    private Label        _stuckErrorLabel   = null!;
+    private Label        _stuckLoopLabel    = null!;
+
     // Quick links section. The working list is an editable copy of the saved links; every mutation
     // (add/edit/remove/toggle) rewrites the visible rows and raises QuickLinksChanged. _quickLinksList
     // is the (manually height-managed) container the rows are rebuilt into.
@@ -101,6 +110,10 @@ internal sealed class SettingsForm : Form
     /// <summary>Raised when the user adjusts the context-pressure thresholds (whole percentages,
     /// ordered yellow &lt; orange &lt; red).</summary>
     public event Action<int, int, int>? ContextThresholdsChanged;
+
+    /// <summary>Raised when any stuck-detection switch changes. Carries the current state of all
+    /// three: (master enabled, detect error streaks, detect failing loops).</summary>
+    public event Action<bool, bool, bool>? StuckDetectionChanged;
 
     /// <summary>Raised when the user clicks "Check for Updates".</summary>
     public event EventHandler? CheckForUpdatesRequested;
@@ -180,6 +193,7 @@ internal sealed class SettingsForm : Form
         AddPage("plugin",       "Plugin Control",  BuildPluginPage);
         AddPage("usage",        "Usage Limits",    BuildUsagePage);
         AddPage("context",      "Context",         BuildContextPage);
+        AddPage("detection",    "Detection",       BuildDetectionPage);
         AddPage("stats",        "Session Stats",   BuildStatsPage);
         AddPage("notify",       "Notifications",   BuildNotificationsPage);
         AddPage("auto",         "Automation",      BuildAutomationPage);
@@ -623,6 +637,78 @@ internal sealed class SettingsForm : Form
         _fluidWidth.Add((slider, 0));
         page.Controls.Add(slider);
     }
+
+    // ── Detection ───────────────────────────────────────────────────────────────────
+    private void BuildDetectionPage(FlowLayoutPanel page)
+    {
+        _stuckMasterToggle = MakeToggle();
+        _stuckMasterToggle.Checked = _settings.StuckDetectionEnabled;
+        _stuckMasterToggle.CheckedChanged += (_, _) =>
+        {
+            ApplyStuckEnabled();
+            RaiseStuckChanged();
+        };
+        page.Controls.Add(TitleRow("Stuck detection", _stuckMasterToggle));
+
+        page.Controls.Add(BodyText(
+            "Watches each running session's recent tool calls and flags one that looks stuck — an " +
+            "amber warning appears next to it in the overlay, with a hover tip explaining why."));
+        page.Controls.Add(BodyText(
+            "It's a heuristic, not a verdict: a session retrying a genuinely flaky step can trip it. " +
+            "If you find it crying wolf, switch off whichever check is too eager — or the whole feature."));
+
+        page.Controls.Add(Separator());
+
+        page.Controls.Add(SectionTitle("What to watch for"));
+
+        page.Controls.Add(BuildStuckSubRow(
+            "Repeated failures — several tool calls fail in a row",
+            _settings.DetectErrorStreaks, out _stuckErrorToggle, out _stuckErrorLabel));
+
+        page.Controls.Add(BuildStuckSubRow(
+            "Failing loops — the same action repeats and keeps failing",
+            _settings.DetectFailingLoops, out _stuckLoopToggle, out _stuckLoopLabel));
+
+        ApplyStuckEnabled();
+    }
+
+    // An indented detection sub-row: a label on the left, a right-aligned toggle. Any change raises
+    // the combined StuckDetectionChanged so the owning context persists it and updates the monitor.
+    private Panel BuildStuckSubRow(string text, bool initial, out ToggleSwitch toggle, out Label label)
+    {
+        var row = new Panel { Height = 30, Margin = new Padding(0, 2, 0, 4) };
+
+        label = new Label
+        {
+            Text      = text,
+            AutoSize  = true,
+            ForeColor = Theme.Fg,
+            Location  = new Point(16, 7),
+        };
+
+        toggle = MakeToggle();
+        toggle.Checked = initial;
+        toggle.CheckedChanged += (_, _) => RaiseStuckChanged();
+
+        row.Controls.Add(label);
+        row.Controls.Add(toggle);
+        RegisterRightAlignedRow(row, toggle);
+        return row;
+    }
+
+    // Dims both detection sub-rows whenever the master switch is off.
+    private void ApplyStuckEnabled()
+    {
+        bool on = _stuckMasterToggle.Checked;
+        _stuckErrorToggle.Enabled  = on;
+        _stuckLoopToggle.Enabled   = on;
+        _stuckErrorLabel.ForeColor = on ? Theme.Fg : Theme.Muted;
+        _stuckLoopLabel.ForeColor  = on ? Theme.Fg : Theme.Muted;
+    }
+
+    private void RaiseStuckChanged() =>
+        StuckDetectionChanged?.Invoke(
+            _stuckMasterToggle.Checked, _stuckErrorToggle.Checked, _stuckLoopToggle.Checked);
 
     // ── Session Stats ────────────────────────────────────────────────────────────────
     private void BuildStatsPage(FlowLayoutPanel page)

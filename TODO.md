@@ -25,7 +25,6 @@
 - smaller touches:
   - last-action peek on hover ("last did: edited SessionMonitor.cs") via the existing tooltip pattern / Activity field
   - per-project notification routing — different chime/priority, or mute a noisy project
-  - weekly "your week in Claude Code" card rendered as a shareable image (reuse the owner-drawn dashboard)
   - focus window / DND to batch notifications during a meeting
 
 

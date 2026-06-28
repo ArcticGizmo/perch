@@ -26,6 +26,13 @@ internal sealed class TranscriptReader
     private readonly MtimeCache<(float? Fill, int Window)> _contextFill = new();
     private readonly MtimeCache<bool> _bareCommand = new();
     private readonly MtimeCache<IReadOnlyList<Artifact>> _artifacts = new();
+    private readonly MtimeCache<StuckMetrics> _stuck = new();
+
+    // How many of the most recent tool calls the failing-loop heuristic looks across. Tuned against
+    // real transcripts (see the throwaway analysis behind this feature): with proper per-command
+    // fingerprinting a window of 10 cleanly separates a genuine retry-the-same-failing-thing loop
+    // from healthy iterative work (e.g. ten different edits to the same file).
+    private const int LoopWindow = 10;
 
     /// <summary>
     /// Returns a friendly phrase describing the latest tool call in the session's transcript,
@@ -105,6 +112,21 @@ internal sealed class TranscriptReader
             return [];
         var path = TranscriptLocator.Resolve(sessionId, cwd);
         return path == null ? [] : _artifacts.GetOrCompute(path, ParseArtifacts, []);
+    }
+
+    /// <summary>
+    /// Reads raw "is this session spinning?" measurements from the transcript tail: the current
+    /// trailing run of failed tool calls, and how repetitive (and how failing) the last
+    /// <see cref="LoopWindow"/> calls are. Threshold-free — the caller decides what counts as stuck —
+    /// so this stays memoised by (length, last-write) while sensitivity settings change freely.
+    /// Returns <c>default</c> (all zeroes) when the transcript can't be located/read. Never throws.
+    /// </summary>
+    public StuckMetrics GetStuckMetrics(string sessionId, string cwd)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return default;
+        var path = TranscriptLocator.Resolve(sessionId, cwd);
+        return path == null ? default : _stuck.GetOrCompute(path, ParseStuck, default);
     }
 
     private static IReadOnlyList<Artifact> ParseArtifacts(string path)
@@ -307,6 +329,114 @@ internal sealed class TranscriptReader
         }
 
         return latest;
+    }
+
+    private static StuckMetrics ParseStuck(string path)
+    {
+        // Walk the tail collecting every tool_use (id + a fingerprint + a friendly label) and every
+        // tool_result's pass/fail keyed by tool_use_id. Records are chronological, and tool_use lives
+        // in assistant records while tool_result lives in the following user records, so the two
+        // streams interleave naturally as we go.
+        var uses = new List<(string Id, string Fingerprint, string Label)>();
+        var errorById = new Dictionary<string, bool>();
+        int trailingErrors = 0;   // consecutive failed results ending at the latest result
+
+        foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
+        {
+            // Cheap pre-filter: only lines that could carry a tool call or its result are worth parsing.
+            if (!line.Contains("tool_use") && !line.Contains("tool_result"))
+                continue;
+
+            try
+            {
+                if (TranscriptJson.ContentArray(JsonNode.Parse(line)) is not { } content)
+                    continue;
+
+                foreach (var block in content)
+                {
+                    var type = TranscriptJson.BlockType(block);
+                    if (type == "tool_use")
+                    {
+                        var name = block!["name"]?.GetValue<string>();
+                        var id = block["id"]?.GetValue<string>();
+                        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(id))
+                            continue;
+                        var input = block["input"];
+                        uses.Add((id, Fingerprint(name, input), ToolSummary.Describe(name, input)));
+                    }
+                    else if (type == "tool_result")
+                    {
+                        bool isError = block!["is_error"]?.GetValue<bool>() == true;
+                        var rid = block["tool_use_id"]?.GetValue<string>();
+                        if (rid != null)
+                            errorById[rid] = isError;
+                        // A success anywhere breaks the trailing streak; a failure extends it.
+                        trailingErrors = isError ? trailingErrors + 1 : 0;
+                    }
+                }
+            }
+            catch
+            {
+                // Malformed/partial line (transcripts are appended live) — skip it.
+            }
+        }
+
+        // Loop signal: over the last LoopWindow calls, find the single most-repeated fingerprint and
+        // count how many of its occurrences errored. "Same thing, over and over, and failing" scores
+        // high on both; healthy iterative work (distinct edits to one file) does not, because each
+        // edit's content makes a distinct fingerprint.
+        int loopRepeat = 0, loopErrors = 0;
+        string? loopLabel = null;
+        if (uses.Count > 0)
+        {
+            int from = Math.Max(0, uses.Count - LoopWindow);
+            var best = uses.GetRange(from, uses.Count - from)
+                .GroupBy(u => u.Fingerprint)
+                .OrderByDescending(g => g.Count())
+                .First();
+            loopRepeat = best.Count();
+            loopErrors = best.Count(u => errorById.TryGetValue(u.Id, out var e) && e);
+            loopLabel = best.First().Label;
+        }
+
+        return new StuckMetrics(trailingErrors, loopRepeat, loopErrors, loopLabel);
+    }
+
+    // A coarse fingerprint of a tool call for loop detection: the same fingerprint twice means "the
+    // same action". The discriminator is per-tool — for shell commands it's the command text; for
+    // edits/writes it's the file plus the actual change (so re-applying the identical edit looks like
+    // a loop but editing the same file differently does not); for reads/searches it's the target.
+    private static string Fingerprint(string name, JsonNode? input)
+    {
+        string? Str(string key)
+        {
+            try { return input?[key]?.GetValue<string>(); }
+            catch { return null; }
+        }
+
+        switch (name)
+        {
+            case "Bash":
+            case "PowerShell":
+                return $"{name}|{Str("command")}";
+            case "Edit":
+            case "MultiEdit":
+                return $"{name}|{Str("file_path")}|{Str("old_string")}";
+            case "Write":
+                return $"Write|{Str("file_path")}|{Str("content")}";
+            case "Read":
+                return $"Read|{Str("file_path")}";
+            case "Grep":
+            case "Glob":
+                return $"{name}|{Str("pattern")}";
+            case "WebFetch":
+                return $"WebFetch|{Str("url")}";
+            case "WebSearch":
+                return $"WebSearch|{Str("query")}";
+            default:
+                // Anything else (Task/Agent, MCP tools, …): the whole input distinguishes calls.
+                return $"{name}|{input?.ToJsonString()}";
+        }
     }
 
     private static bool ParseBareCommand(string path)
