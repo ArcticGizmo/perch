@@ -30,6 +30,11 @@ internal sealed class AppSettings
     public int ContextPressureOrangePercent { get; set; } = 65;
     public int ContextPressureRedPercent    { get; set; } = 80;
 
+    // Whether to draw the permission-mode badge (Plan / Accept edits / Auto / Bypass) next to a
+    // session in the overlay. Off hides the badge and lets the session name reclaim its width; the
+    // mode itself is still tracked, just not shown. Defaults to true; a missing key keeps it on.
+    public bool ShowPermissionModeBadges { get; set; } = true;
+
     // Stuck/runaway detection. When on, a session that's spinning — several tool calls failing in a
     // row, or the same action repeated and failing — gets an amber warning glyph in the overlay. The
     // two sub-switches scope which heuristics run, so a user plagued by false positives on one can

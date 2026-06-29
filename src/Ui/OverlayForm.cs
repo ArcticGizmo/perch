@@ -91,6 +91,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private bool _usageEnabled = true;
     private bool _showExpectedRate = true;
     private bool _showContextPressure = true;
+    private bool _showModeBadges = true;
     // Context-pressure thresholds as fractions of the window: hidden below yellow, then yellow ->
     // orange -> red. Defaults match the original hard-coded bands; overridden from settings.
     private float _ctxYellow = 0.50f, _ctxOrange = 0.65f, _ctxRed = 0.80f;
@@ -357,6 +358,15 @@ internal sealed class OverlayForm : Form, IDenseHost
     {
         if (_showContextPressure == show) return;
         _showContextPressure = show;
+        Invalidate();
+    }
+
+    /// <summary>Shows or hides the permission-mode badge. Display only — when off no badge is drawn and
+    /// the session name reclaims the freed width; the session's mode is still tracked.</summary>
+    public void SetShowModeBadges(bool show)
+    {
+        if (_showModeBadges == show) return;
+        _showModeBadges = show;
         Invalidate();
     }
 
@@ -1162,7 +1172,7 @@ internal sealed class OverlayForm : Form, IDenseHost
         int artWidth     = hasArtifacts ? ArtifactIconWidth : 0;
         bool mail        = ExternalNotifyEnabled(session);
         int mailWidth    = mail ? MailIconWidth : 0;
-        int badgeWidth   = session.Mode != PermissionMode.Normal ? 16 : 0;
+        int badgeWidth   = session.Mode != PermissionMode.Normal && _showModeBadges ? 16 : 0;
         int rcWidth      = session.RemoteControlled ? RcIconWidth : 0;
         bool stuck       = _showStuckWarnings && session.IsStuck;
         int warnWidth    = stuck ? WarnIconWidth : 0;
@@ -1208,7 +1218,7 @@ internal sealed class OverlayForm : Form, IDenseHost
             _thermoRects[rowIdx] = new Rectangle(statusX - thermoWidth, nameMidY - 9, thermoWidth, 18);
         }
 
-        if (session.Mode != PermissionMode.Normal)
+        if (session.Mode != PermissionMode.Normal && _showModeBadges)
         {
             // Idle sessions dim the badge so the permission colour stops drawing the eye when nothing's
             // happening; active/awaiting/attention rows keep it at full strength.
