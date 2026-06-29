@@ -46,6 +46,28 @@ public record Artifact(
     string Title   // the artifact's title, shown in the picker when a session has several
 );
 
+/// <summary>The lifecycle state of a task in a session's checklist. Mirrors the vocabulary of
+/// Claude Code's <c>TaskUpdate</c> tool (<c>pending</c> / <c>in_progress</c> / <c>completed</c>).</summary>
+public enum TaskState
+{
+    Pending = 0,
+    InProgress = 1,
+    Completed = 2,
+}
+
+/// <summary>
+/// One entry in a session's task list — the native checklist Claude Code builds with the
+/// <c>TaskCreate</c> tool and advances with <c>TaskUpdate</c>. Current Claude Code keeps no durable
+/// on-disk task file (the <c>~/.claude/tasks/{id}/</c> dir holds only a lock + id counter), so the
+/// list is reconstructed by replaying those tool calls from the transcript in creation order.
+/// See <see cref="TranscriptReader.GetTasks"/>.
+/// </summary>
+public record TaskItem(
+    string Subject,     // the task's headline, e.g. "Phase 1 — Slash commands for instance CRUD"
+    string ActiveForm,  // present-tense label Claude shows while it's the active task ("Building slash commands…")
+    TaskState State
+);
+
 public record ClaudeSession(
     string Pid,
     string SessionId,
@@ -63,7 +85,8 @@ public record ClaudeSession(
     float? ContextFill = null,
     int ContextWindow = ModelContext.DefaultWindow,
     IReadOnlyList<Artifact>? Artifacts = null,
-    StuckSignal? Stuck = null
+    StuckSignal? Stuck = null,
+    IReadOnlyList<TaskItem>? Tasks = null
 )
 {
     /// <summary>Running sub-agents under this session; never null.</summary>
@@ -75,6 +98,21 @@ public record ClaudeSession(
 
     /// <summary>True when this session has at least one published Artifact to open.</summary>
     public bool HasArtifacts => Artifacts.Count > 0;
+
+    /// <summary>The native task checklist Claude is working through (<c>TaskCreate</c>/<c>TaskUpdate</c>),
+    /// in creation order; never null. See <see cref="TranscriptReader.GetTasks"/>.</summary>
+    public IReadOnlyList<TaskItem> Tasks { get; init; } = Tasks ?? [];
+
+    /// <summary>True when this session has a task checklist at all.</summary>
+    public bool HasTasks => Tasks.Count > 0;
+
+    /// <summary>How many tasks in the checklist are completed.</summary>
+    public int CompletedTaskCount => Tasks.Count(t => t.State == TaskState.Completed);
+
+    /// <summary>The task currently being worked (first <see cref="TaskState.InProgress"/>), or null.
+    /// Its <see cref="TaskItem.ActiveForm"/> is the "chipping away at the list" phrase the overlay
+    /// shows on a running row.</summary>
+    public TaskItem? CurrentTask => Tasks.FirstOrDefault(t => t.State == TaskState.InProgress);
 
     /// <summary>An advisory "this session may be stuck/spinning" signal (repeated failures or a
     /// failing loop) derived from the transcript tail, or null when nothing looks wrong. Only ever

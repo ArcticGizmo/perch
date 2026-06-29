@@ -26,6 +26,7 @@ internal sealed class TranscriptReader
     private readonly MtimeCache<(float? Fill, int Window)> _contextFill = new();
     private readonly MtimeCache<bool> _bareCommand = new();
     private readonly MtimeCache<IReadOnlyList<Artifact>> _artifacts = new();
+    private readonly MtimeCache<IReadOnlyList<TaskItem>> _tasks = new();
     private readonly MtimeCache<StuckMetrics> _stuck = new();
 
     // How many of the most recent tool calls the failing-loop heuristic looks across. Tuned against
@@ -127,6 +128,89 @@ internal sealed class TranscriptReader
             return default;
         var path = TranscriptLocator.Resolve(sessionId, cwd);
         return path == null ? default : _stuck.GetOrCompute(path, ParseStuck, default);
+    }
+
+    /// <summary>
+    /// Returns the session's native task checklist — the list Claude builds with <c>TaskCreate</c> and
+    /// advances with <c>TaskUpdate</c> — in creation order, with each task's current status. Empty when
+    /// the transcript can't be located/read or the session created no tasks. Best-effort; never throws.
+    /// </summary>
+    public IReadOnlyList<TaskItem> GetTasks(string sessionId, string cwd)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return [];
+        var path = TranscriptLocator.Resolve(sessionId, cwd);
+        return path == null ? [] : _tasks.GetOrCompute(path, ParseTasks, []);
+    }
+
+    private static IReadOnlyList<TaskItem> ParseTasks(string path)
+    {
+        // Claude Code builds its checklist with the TaskCreate tool and advances it with TaskUpdate;
+        // there is no durable task file on disk, so we reconstruct the list by replaying those calls.
+        // TaskCreate doesn't carry an id in its input — ids are assigned sequentially (#1, #2, …) in
+        // creation order, which is exactly what TaskUpdate.taskId then references — so creation order
+        // is the key. A task can be created early in a long session, so we read the whole file; it's
+        // cheap (substring pre-filter skips almost every line; the result is cached by length+mtime).
+        var tasks = new List<(string Subject, string ActiveForm, TaskState State)>();  // index 0 == task #1
+
+        foreach (var line in TranscriptScan.ReadLines(path))
+        {
+            // Cheap pre-filter: only the two task tool calls matter.
+            if (!line.Contains("TaskCreate") && !line.Contains("TaskUpdate"))
+                continue;
+
+            try
+            {
+                if (TranscriptJson.ContentArray(JsonNode.Parse(line)) is not { } content)
+                    continue;
+
+                foreach (var block in content)
+                {
+                    if (TranscriptJson.BlockType(block) != "tool_use")
+                        continue;
+                    var name = block!["name"]?.GetValue<string>();
+                    var input = block["input"];
+
+                    if (name == "TaskCreate")
+                    {
+                        var subject = input?["subject"]?.GetValue<string>()?.Trim() ?? "";
+                        var activeForm = input?["activeForm"]?.GetValue<string>()?.Trim() ?? "";
+                        tasks.Add((subject, activeForm, TaskState.Pending));
+                    }
+                    else if (name == "TaskUpdate")
+                    {
+                        // taskId/status come through as JSON strings; ToString() is robust whether the
+                        // id is encoded as a string ("1") or a bare number, where GetValue<string> throws.
+                        var idStr = input?["taskId"]?.ToString();
+                        var status = input?["status"]?.ToString();
+                        if (int.TryParse(idStr, out int id) && id >= 1 && id <= tasks.Count)
+                        {
+                            TaskState? state = status switch
+                            {
+                                "in_progress" => TaskState.InProgress,
+                                "completed"   => TaskState.Completed,
+                                "pending"     => TaskState.Pending,
+                                _             => null,
+                            };
+                            if (state is { } s)
+                            {
+                                var t = tasks[id - 1];
+                                tasks[id - 1] = (t.Subject, t.ActiveForm, s);
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Malformed/partial line (transcripts are appended live) — skip it.
+            }
+        }
+
+        if (tasks.Count == 0)
+            return [];
+
+        return tasks.Select(t => new TaskItem(t.Subject, t.ActiveForm, t.State)).ToList();
     }
 
     private static IReadOnlyList<Artifact> ParseArtifacts(string path)

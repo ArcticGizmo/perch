@@ -70,4 +70,46 @@ public class TranscriptReaderTests
         var reader = new TranscriptReader();
         Assert.Empty(reader.GetArtifacts("sessB", Cwd));
     }
+
+    [Fact]
+    public void GetTasks_ReconstructsListInCreationOrderWithLatestStatus()
+    {
+        var reader = new TranscriptReader();
+        var tasks = reader.GetTasks("sessTasks", Cwd);
+
+        Assert.Equal(3, tasks.Count);
+
+        // Creation order is the id order; the latest TaskUpdate per id wins.
+        Assert.Equal("Phase 0 — Scaffold", tasks[0].Subject);
+        Assert.Equal(TaskState.Completed, tasks[0].State);
+
+        Assert.Equal("Phase 1 — Slash commands", tasks[1].Subject);
+        Assert.Equal("Building slash commands", tasks[1].ActiveForm);
+        Assert.Equal(TaskState.InProgress, tasks[1].State);
+
+        // Never updated → stays pending. (Records a malformed trailing line + an out-of-range
+        // taskId, both of which must be tolerated without affecting the result.)
+        Assert.Equal(TaskState.Pending, tasks[2].State);
+    }
+
+    [Fact]
+    public void GetTasks_CompletedCountAndCurrentTaskReflectProgress()
+    {
+        var reader = new TranscriptReader();
+        var session = new ClaudeSession(
+            "1", "sessTasks", SessionStatus.Running, Cwd, "proj", DateTime.Now,
+            Tasks: reader.GetTasks("sessTasks", Cwd));
+
+        Assert.Equal(1, session.CompletedTaskCount);
+        Assert.Equal(3, session.Tasks.Count);
+        Assert.NotNull(session.CurrentTask);
+        Assert.Equal("Building slash commands", session.CurrentTask!.ActiveForm);
+    }
+
+    [Fact]
+    public void GetTasks_EmptyWhenSessionHasNoTasks()
+    {
+        var reader = new TranscriptReader();
+        Assert.Empty(reader.GetTasks("sessB", Cwd));
+    }
 }
