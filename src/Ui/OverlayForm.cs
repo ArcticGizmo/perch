@@ -294,7 +294,13 @@ internal sealed class OverlayForm : Form, IDenseHost
         foreach (var session in sessions.OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase))
         {
             rows.Add(new DisplayRow(session, null));
-            foreach (var sub in session.SubAgents)
+            // Teammates (the persistent roster) lead, grouped and sorted by name so they read as a team;
+            // transient sub-agents follow. Working teammates sort above idle ones within the roster.
+            var ordered = session.SubAgents
+                .OrderByDescending(s => s.IsTeammate)
+                .ThenBy(s => s.IsTeammate && s.IsIdle)
+                .ThenBy(s => s.Name ?? s.Description, StringComparer.OrdinalIgnoreCase);
+            foreach (var sub in ordered)
                 rows.Add(new DisplayRow(session, sub));
         }
         _rows = rows;
@@ -961,15 +967,25 @@ internal sealed class OverlayForm : Form, IDenseHost
             g.FillRectangle(hoverBrush, 1, top, ClientSize.Width - 2, SubRowHeight);
         }
 
-        // Tree connector: a stub dropping from the parent row down to this child's dot.
+        // Tree connector: a stub dropping from the parent row down to this child's marker.
         int branchX = HorizPad + 4;            // aligns under the parent status dot
-        int dotX    = HorizPad + SubIndent;
+        int markerX = HorizPad + SubIndent;
         using (var treePen = new Pen(TreeLineColor, 1f))
         {
             g.DrawLine(treePen, branchX, top - SubRowHeight / 2, branchX, midY);
-            g.DrawLine(treePen, branchX, midY, dotX - 2, midY);
+            g.DrawLine(treePen, branchX, midY, markerX - 2, midY);
         }
 
+        // Teammates (Agent Teams) get a person glyph, an @name in their assigned colour, and dim while
+        // idle; ordinary sub-agents keep the purple dot + type/description.
+        if (sub.IsTeammate)
+            DrawTeammateRow(g, sub, markerX, midY);
+        else
+            DrawPlainSubAgentRow(g, sub, markerX, midY);
+    }
+
+    private void DrawPlainSubAgentRow(Graphics g, SubAgent sub, int dotX, int midY)
+    {
         using var dotBrush = new SolidBrush(SubAgentColor);
         g.FillEllipse(dotBrush, dotX, midY - 3, 6, 6);
 
@@ -1009,6 +1025,76 @@ internal sealed class OverlayForm : Form, IDenseHost
 
         int statusX = ClientSize.Width - HorizPad - (int)statusSz.Width;
         g.DrawString(statusText, statusFont, subBrush, statusX, midY - statusSz.Height / 2);
+    }
+
+    // A teammate row: [person glyph] @name   <activity>            <state>
+    // The name + glyph take the member's Claude-assigned colour; an idle teammate (waiting on the lead)
+    // is dimmed toward the background so the working members stand out, and shows "idle" instead of an
+    // activity phrase.
+    private void DrawTeammateRow(Graphics g, SubAgent sub, int glyphX, int midY)
+    {
+        bool idle      = sub.IsIdle;
+        Color teamColor = Theme.TeamColor(sub.Color);
+        // Dim everything ~55% toward the background while idle; full strength while working.
+        Color nameColor = idle ? Theme.Blend(teamColor, BgColor, 0.55f) : teamColor;
+        Color textColor = idle ? Theme.Blend(FgColor, BgColor, 0.55f)   : FgColor;
+
+        DrawTeammateGlyph(g, glyphX, midY, nameColor);
+
+        using var nameFont   = new Font("Segoe UI", 8f, GraphicsUnit.Point) ;
+        using var statusFont = new Font("Segoe UI", 7f, GraphicsUnit.Point);
+        using var nameBrush  = new SolidBrush(nameColor);
+        using var textBrush  = new SolidBrush(textColor);
+
+        // Right-aligned state word: "idle" (muted) or "working" (member colour).
+        string stateText = idle ? "idle" : "working";
+        var stateSz   = g.MeasureString(stateText, statusFont);
+        int labelX    = glyphX + 16;                 // clear of the person glyph
+        int labelMaxW = ClientSize.Width - labelX - HorizPad - (int)stateSz.Width - 6;
+
+        // "@name" in the member colour leads the row.
+        string handle = "@" + (string.IsNullOrWhiteSpace(sub.Name) ? "teammate" : sub.Name!.Trim());
+        var handleTrunc = TruncateString(g, handle, nameFont, labelMaxW);
+        var handleSz    = g.MeasureString(handleTrunc, nameFont);
+        g.DrawString(handleTrunc, nameFont, nameBrush, labelX, midY - handleSz.Height / 2);
+        int x = labelX + (int)handleSz.Width + 8;
+
+        // Then what it's doing now (muted), only while working and only if it fits.
+        string activity = idle ? "" : (sub.Activity?.Trim() ?? "");
+        if (activity.Length > 0)
+        {
+            int remaining = labelMaxW - (x - labelX);
+            if (remaining > 24)
+            {
+                var actTrunc = TruncateString(g, activity, nameFont, remaining);
+                var actSz    = g.MeasureString(actTrunc, nameFont);
+                g.DrawString(actTrunc, nameFont, textBrush, x, midY - actSz.Height / 2);
+            }
+        }
+
+        int stateX = ClientSize.Width - HorizPad - (int)stateSz.Width;
+        g.DrawString(stateText, statusFont, idle ? textBrush : nameBrush, stateX, midY - stateSz.Height / 2);
+    }
+
+    // A small "person" mark — a head circle above a shoulders arc — in the given colour, centred on
+    // (x, midY). Pure GDI so it themes and DPI-scales like the overlay's other glyphs.
+    private static void DrawTeammateGlyph(Graphics g, int x, int midY, Color color)
+    {
+        var oldSmoothing = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        using var brush = new SolidBrush(color);
+        // Head: a 5px circle sitting just above centre.
+        const int headD = 5;
+        g.FillEllipse(brush, x, midY - 5, headD, headD);
+        // Shoulders: a half-disc below the head, clipped to its top half so it reads as a torso.
+        var shoulders = new Rectangle(x - 1, midY + 1, headD + 3, headD + 2);
+        using var path = new System.Drawing.Drawing2D.GraphicsPath();
+        path.AddArc(shoulders, 180, 180);
+        path.CloseFigure();
+        g.FillPath(brush, path);
+
+        g.SmoothingMode = oldSmoothing;
     }
 
     private void DrawSessionRow(Graphics g, int rowIdx)

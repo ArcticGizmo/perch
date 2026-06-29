@@ -21,8 +21,12 @@ internal sealed class SubAgentReader
 {
     // Legacy parent-transcript scan, memoised by the parent transcript's (length, last-write).
     private readonly MtimeCache<IReadOnlyList<SubAgent>> _legacy = new();
-    // 2.1+ per-agent "is this sub-agent still running" check, memoised by each agent file's mtime.
-    private readonly MtimeCache<bool> _agentRunning = new();
+    // 2.1+ per-agent turn classification (working/idle + current activity), memoised by each agent
+    // file's mtime — the expensive transcript parse only re-runs when that agent's file grows.
+    private readonly MtimeCache<Classification> _agentState = new();
+    // Per-agent meta sidecar, cached by path: a .meta.json is written once and never changes, so
+    // re-reading it every poll (now for idle teammates too, not just running agents) is wasted IO.
+    private readonly Dictionary<string, AgentMeta> _meta = new();
 
     /// <summary>
     /// Returns the sub-agents currently working under the given session, or an empty list if the
@@ -60,68 +64,107 @@ internal sealed class SubAgentReader
         return _legacy.GetOrCompute(path, Parse, []);
     }
 
-    // The sub-agents under {sessionId}/subagents/ whose own transcript shows an in-progress turn,
-    // each described from its sibling agent-{id}.meta.json. The running check is cached per agent
-    // file by (length, last-write) so an unchanged transcript costs a stat, not a parse.
+    // The sub-agents under {sessionId}/subagents/ to surface for the parent session, each described
+    // from its sibling agent-{id}.meta.json. Two lifecycles share this directory:
+    //   • ordinary sub-agents (Task/Agent) are transient — surfaced only while actively working;
+    //   • teammates (Agent Teams) are persistent — surfaced whenever alive, idle or working, so the
+    //     roster doesn't flicker as members go quiet between messages from the lead.
+    // The turn classification is cached per agent file by (length, last-write) so an unchanged
+    // transcript costs a stat, not a parse.
     private IReadOnlyList<SubAgent> ScanBackground(string dir)
     {
-        var running = new List<SubAgent>();
+        var result = new List<SubAgent>();
         foreach (var file in Directory.EnumerateFiles(dir, "agent-*.jsonl"))
         {
             try
             {
-                if (!IsAgentRunning(file))
-                    continue;
+                var meta = ReadAgentMeta(Path.ChangeExtension(file, null) + ".meta.json");
+                var state = _agentState.GetOrCompute(file, Classify, default);
 
-                // agent-{id}.jsonl -> {id}; its description/type live in agent-{id}.meta.json.
-                var id = Path.GetFileNameWithoutExtension(file);
-                if (id.StartsWith("agent-", StringComparison.Ordinal))
-                    id = id["agent-".Length..];
-
-                var (desc, type) = ReadAgentMeta(Path.ChangeExtension(file, null) + ".meta.json");
-                running.Add(new SubAgent(id, desc, type));
+                if (meta.IsTeammate)
+                {
+                    // Persistent: idle teammates stay on the roster, just marked waiting.
+                    bool idle = !state.Working;
+                    result.Add(new SubAgent(
+                        AgentIdFromFile(file), meta.Description, meta.AgentType,
+                        IsTeammate: true,
+                        Name: meta.Name,
+                        TeamName: meta.TeamName,
+                        Color: meta.Color,
+                        Activity: idle ? null : state.Activity,
+                        IsIdle: idle));
+                }
+                else if (state.Working)
+                {
+                    // Transient: an ordinary sub-agent only matters while it's still working.
+                    result.Add(new SubAgent(AgentIdFromFile(file), meta.Description, meta.AgentType));
+                }
             }
             catch
             {
                 // Skip an agent transcript/meta that vanished or couldn't be read mid-scan.
             }
         }
-        return running;
+        return result;
     }
 
-    // Reads description/agentType from an agent's tiny meta sidecar; blanks if it's missing or bad.
-    private static (string Desc, string Type) ReadAgentMeta(string metaPath)
+    // agent-{id}.jsonl -> {id} (the teammate's agentId, or the plain sub-agent's hash).
+    private static string AgentIdFromFile(string file)
     {
+        var id = Path.GetFileNameWithoutExtension(file);
+        return id.StartsWith("agent-", StringComparison.Ordinal) ? id["agent-".Length..] : id;
+    }
+
+    // What a sub-agent's meta sidecar tells us. A teammate's meta carries taskKind ==
+    // "in_process_teammate" plus a human name/team/colour; an ordinary sub-agent's does not.
+    private readonly record struct AgentMeta(
+        string Description, string AgentType, bool IsTeammate, string? Name, string? TeamName, string? Color);
+
+    // Reads (and caches) an agent's tiny meta sidecar; blank/non-teammate if it's missing or bad.
+    private AgentMeta ReadAgentMeta(string metaPath)
+    {
+        if (_meta.TryGetValue(metaPath, out var cached))
+            return cached;
         try
         {
             if (!File.Exists(metaPath))
-                return ("", "");
+                return default; // not cached: the sidecar may still be written by Claude Code
+
             var node = JsonNode.Parse(File.ReadAllText(metaPath));
-            return (
-                node?["description"]?.GetValue<string>() ?? "",
-                node?["agentType"]?.GetValue<string>() ?? ""
-            );
+            bool isTeammate = node?["taskKind"]?.GetValue<string>() == "in_process_teammate";
+            var meta = new AgentMeta(
+                Description: node?["description"]?.GetValue<string>() ?? "",
+                AgentType: node?["agentType"]?.GetValue<string>() ?? "",
+                IsTeammate: isTeammate,
+                Name: node?["name"]?.GetValue<string>(),
+                TeamName: node?["teamName"]?.GetValue<string>(),
+                Color: node?["color"]?.GetValue<string>());
+            _meta[metaPath] = meta; // immutable once written — safe to cache forever
+            return meta;
         }
         catch
         {
-            return ("", "");
+            return default;
         }
     }
 
-    private bool IsAgentRunning(string path) =>
-        _agentRunning.GetOrCompute(path, ClassifyRunning, false);
+    // A sub-agent's turn state, parsed from the tail of its own transcript.
+    private readonly record struct Classification(bool Working, string? Activity);
 
-    // A sub-agent's own transcript ends in a completed assistant turn — a final assistant message
-    // with no pending tool call — only while it is idle, waiting for its next instruction. While it
-    // is working, the tail is either an assistant tool_use awaiting its result, or a freshly-injected
-    // user/tool_result record with no assistant reply yet. We classify off the last assistant/user
-    // record (ignoring trailing "system" bookkeeping records), which also keeps a long, silent shell
-    // command correctly pegged as running rather than guessing from file mtime.
-    private static bool ClassifyRunning(string path)
+    // A sub-agent's transcript ends in a completed assistant turn — a final assistant message with no
+    // pending tool call — only while it is idle, waiting for its next instruction. While it is working,
+    // the tail is either an assistant tool_use awaiting its result, or a freshly-injected user/tool_result
+    // record with no assistant reply yet. We classify off the last assistant/user record (ignoring
+    // trailing "system" bookkeeping), which also keeps a long, silent shell command correctly pegged as
+    // working rather than guessing from file mtime. When working, the most recent tool_use also yields a
+    // present-tense activity phrase ("Reading Foo.cs") for the teammate row.
+    private static Classification Classify(string path)
     {
         bool sawTurn = false;
         bool lastWasUser = false;
         bool lastAssistantHadToolUse = false;
+        string? lastToolName = null;
+        JsonNode? lastToolInput = null;
 
         foreach (var line in TranscriptScan.ReadLines(path))
         {
@@ -152,7 +195,8 @@ internal sealed class SubAgentReader
                         if (TranscriptJson.BlockType(block) == "tool_use")
                         {
                             lastAssistantHadToolUse = true;
-                            break;
+                            lastToolName = block!["name"]?.GetValue<string>();
+                            lastToolInput = block["input"];
                         }
                     }
                 }
@@ -160,10 +204,13 @@ internal sealed class SubAgentReader
         }
 
         if (!sawTurn)
-            return false;            // nothing yet / just spawned — no work to surface
-        if (lastWasUser)
-            return true;             // an injected prompt or a tool_result awaiting the next step
-        return lastAssistantHadToolUse; // assistant ended on a tool_use -> awaiting its result
+            return default;                  // nothing yet / just spawned — idle, no work to surface
+        bool working = lastWasUser           // an injected prompt or a tool_result awaiting the next step
+            || lastAssistantHadToolUse;      // assistant ended on a tool_use -> awaiting its result
+        string? activity = working && !string.IsNullOrEmpty(lastToolName)
+            ? ToolSummary.Describe(lastToolName!, lastToolInput)
+            : null;
+        return new Classification(working, activity);
     }
 
     private static IReadOnlyList<SubAgent> Parse(string path)

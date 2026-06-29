@@ -281,10 +281,13 @@ internal sealed class SessionMonitor : IDisposable
                     status = SessionStatus.Idle;
             }
 
-            // Sub-agents (Task tool) run inside this session's process and have no session file
-            // of their own; surface them from the transcript and roll their activity up.
+            // Sub-agents (Task tool) and teammates (Agent Teams) run inside this session's process and
+            // have no session file of their own; surface them from their transcripts and roll their
+            // activity up. The full list (including idle teammates) is shown on the overlay, but only an
+            // actively-working child means the parent loop is blocked — an idle teammate sitting waiting
+            // for the lead must not keep the parent pegged as Running.
             var subAgents = _subAgents.GetRunning(sessionId, cwd);
-            bool hasRunningSubs = subAgents.Count > 0;
+            bool hasRunningSubs = subAgents.Any(s => !s.IsIdle);
             bool hadRunningSubs = _hadRunningSubs.Contains(pid);
             bool subsJustFinished = hadRunningSubs && !hasRunningSubs;
 

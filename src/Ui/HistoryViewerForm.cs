@@ -92,6 +92,9 @@ internal sealed class HistoryViewerForm : Form
 
     private TranscriptParser? _parser;
     private string? _loadedSessionId;
+    // The Agent-Teams roster of the loaded session (read from its subagents/ metas), shown as a banner at
+    // the top of the readable transcript; empty for sessions that ran no team.
+    private IReadOnlyList<TeamReader.Teammate> _teamRoster = [];
     private bool _raw;
     private bool _follow;
 
@@ -353,6 +356,7 @@ internal sealed class HistoryViewerForm : Form
     {
         StopTailing();
         _loadedSessionId = entry.SessionId;
+        _teamRoster = [];
         _expanded.Clear();
         _follow = entry.IsActive;
         UpdateFollowButton();
@@ -381,6 +385,8 @@ internal sealed class HistoryViewerForm : Form
         }
 
         _parser = parser;
+        // Cheap: reads a handful of tiny .meta.json sidecars. Drives the roster banner in RenderFull.
+        _teamRoster = TeamReader.GetTeammates(path);
         try
         {
             RenderFull();
@@ -471,11 +477,25 @@ internal sealed class HistoryViewerForm : Form
             return;
         }
 
+        RenderTeamBanner();
         AppendEvents(0);
         EndUpdate();
 
         if (_follow && !keepScroll) ScrollToBottom();
         else RestoreScroll(firstVisible);
+    }
+
+    // A one-line roster at the very top of the readable transcript naming the Agent-Teams members that
+    // ran in this session, each tinted with its Claude-assigned colour. Skipped in raw view (it isn't a
+    // transcript record) and for sessions that ran no team.
+    private void RenderTeamBanner()
+    {
+        if (_raw || _teamRoster.Count == 0) return;
+
+        Append("Team  ", Theme.Muted, _boldFont);
+        foreach (var tm in _teamRoster)
+            Append("@" + tm.Name + "  ", Theme.TeamColor(tm.Color), _boldFont);
+        Append("\n", _uiFont);
     }
 
     private void AppendEvents(int from)

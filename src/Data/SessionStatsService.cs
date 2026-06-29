@@ -49,7 +49,9 @@ internal sealed record StatsReport(
     int Prompts,
     int ToolCalls,
     int SubAgents,
+    int Teammates,                // distinct Agent-Teams members that ran in this window
     TokenTotals Tokens,
+    TokenTotals TeammateTokens,   // tokens those teammates burned (reported separately, not in Tokens)
     decimal EstimatedCost,        // sum of the per-model costs we could price
     bool CostComplete,            // false when some tokens used a model we have no price for
     IReadOnlyList<ProjectStat> Projects,
@@ -59,7 +61,7 @@ internal sealed record StatsReport(
     int[] HourlyActiveSeconds)    // 24 bins, local hour -> estimated active seconds
 {
     public static StatsReport Empty(DateOnly day) => new(
-        day, 0, TimeSpan.Zero, 0, 0, 0, TokenTotals.Zero, 0m, true,
+        day, 0, TimeSpan.Zero, 0, 0, 0, 0, TokenTotals.Zero, TokenTotals.Zero, 0m, true,
         [], [], [], [], new int[24]);
 }
 
@@ -264,6 +266,15 @@ internal static class SessionStatsService
                 var bucket = map.TryGetValue(day, out var b) ? b : (map[day] = new DayBucket());
                 FoldSession(bucket, sessionId, sdd);
             }
+
+            // Agent-Teams teammates run in their own transcripts under {sessionId}/subagents/, which the
+            // session scan above never sees. Roll their counts/tokens into the same day-buckets.
+            foreach (var (day, td) in TeamReader.ParseContributions(file, from, to))
+            {
+                var bucket = map.TryGetValue(day, out var b) ? b : (map[day] = new DayBucket());
+                bucket.Teammates += td.Teammates;
+                bucket.TeammateTokens += td.Tokens;
+            }
         }
         return map;
     }
@@ -407,8 +418,9 @@ internal static class SessionStatsService
     {
         var sessions = new HashSet<string>();
         var active = TimeSpan.Zero;
-        int prompts = 0, toolCalls = 0, subAgents = 0;
+        int prompts = 0, toolCalls = 0, subAgents = 0, teammates = 0;
         var tokens = TokenTotals.Zero;
+        var teammateTokens = TokenTotals.Zero;
         var hourly = new int[24];
         var toolCounts = new Dictionary<string, int>();
         var modelTokens = new Dictionary<string, TokenTotals>();
@@ -422,7 +434,9 @@ internal static class SessionStatsService
             prompts += bk.Prompts;
             toolCalls += bk.ToolCalls;
             subAgents += bk.SubAgents;
+            teammates += bk.Teammates;
             tokens += bk.Tokens;
+            teammateTokens += bk.TeammateTokens;
             for (int h = 0; h < 24; h++)
                 hourly[h] += bk.Hourly[h];
             foreach (var (k, v) in bk.ToolCounts)
@@ -450,8 +464,8 @@ internal static class SessionStatsService
             .OrderByDescending(t => t.Count)
             .ToList();
 
-        return new StatsReport(day, sessions.Count, active, prompts, toolCalls, subAgents,
-            tokens, totalCost, costComplete, ToStats(projects), toolStats, models, ToStats(branches), hourly);
+        return new StatsReport(day, sessions.Count, active, prompts, toolCalls, subAgents, teammates,
+            tokens, teammateTokens, totalCost, costComplete, ToStats(projects), toolStats, models, ToStats(branches), hourly);
     }
 
     private static void MergeGroups(
@@ -564,7 +578,9 @@ internal static class SessionStatsService
         public int Prompts;
         public int ToolCalls;
         public int SubAgents;
+        public int Teammates;                         // Agent-Teams members that ran this day
         public TokenTotals Tokens = TokenTotals.Zero;
+        public TokenTotals TeammateTokens = TokenTotals.Zero;  // tokens those teammates burned (kept separate)
         public readonly Dictionary<string, int> ToolCounts = new();
         public readonly Dictionary<string, TokenTotals> Models = new();
         public readonly Dictionary<string, (int sessions, TimeSpan active, long tokens)> Projects = new();

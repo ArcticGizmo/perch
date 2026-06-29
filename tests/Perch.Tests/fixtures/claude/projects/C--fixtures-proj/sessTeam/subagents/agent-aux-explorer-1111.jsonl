@@ -1,0 +1,2 @@
+{"type":"user","isSidechain":true,"timestamp":"2025-03-12T13:00:20Z","message":{"role":"user","content":"<teammate-message teammate_id=\"team-lead\" summary=\"UX analysis of Perch\">Review the UX.</teammate-message>"}}
+{"type":"assistant","isSidechain":true,"timestamp":"2025-03-12T13:00:30Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":30,"cache_read_input_tokens":0},"content":[{"type":"tool_use","id":"u1","name":"Grep","input":{"pattern":"OverlayForm"}}]}}

@@ -26,14 +26,28 @@ public enum PermissionMode
 }
 
 /// <summary>
-/// A Claude Code sub-agent (Task tool) currently running under a parent session.
-/// Sub-agents have no session file of their own — they execute in the parent's
-/// process and are surfaced only via the parent's transcript (see SubAgentReader).
+/// A Claude Code sub-agent running under a parent session — either an ordinary Task/Agent
+/// invocation, or a persistent <em>teammate</em> (Agent Teams). Neither has a session file of its
+/// own: they execute in the parent's process and are surfaced from their per-agent transcript and
+/// <c>.meta.json</c> sidecar under <c>{sessionId}/subagents/</c> (see <see cref="SubAgentReader"/>).
+///
+/// Teammates differ from ordinary sub-agents in two ways that matter here: their meta carries
+/// <c>taskKind == "in_process_teammate"</c> plus a human <see cref="Name"/>/<see cref="Color"/>, and
+/// they are <em>persistent</em> — a teammate stays alive and idle (waiting for the lead to message it)
+/// rather than disappearing when a task finishes. So a teammate is surfaced whenever its transcript
+/// exists, with <see cref="IsIdle"/> telling working from waiting; an ordinary sub-agent is only ever
+/// surfaced while it is actively working.
 /// </summary>
 public record SubAgent(
-    string AgentId,      // tool_use id of the Task that launched it (stable per invocation)
-    string Description,  // the Task's short description, used as the row label
-    string AgentType     // subagent_type, e.g. "general-purpose", "Explore"
+    string AgentId,             // tool_use id (ordinary) or agentId (teammate) — stable per invocation
+    string Description,         // the Task's short description, used as the row label for sub-agents
+    string AgentType,           // subagent_type, e.g. "general-purpose", "Explore"
+    bool IsTeammate = false,    // true when meta.taskKind == "in_process_teammate"
+    string? Name = null,        // teammate's name (the "@arch-explorer" label); null for plain sub-agents
+    string? TeamName = null,    // the team this member belongs to, e.g. "session-a0a997f1"
+    string? Color = null,       // Claude-assigned member colour ("green"/"yellow"/"blue"/…); null if none
+    string? Activity = null,    // present-tense phrase for what it's doing now ("Reading Foo.cs"); null when idle
+    bool IsIdle = false         // teammate is alive but waiting (tail is a finished assistant turn)
 );
 
 /// <summary>

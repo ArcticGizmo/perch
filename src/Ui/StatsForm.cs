@@ -325,10 +325,15 @@ internal sealed class StatsForm : Form
             }
         }
         y += cardH + 18;
-        if (report.SubAgents > 0)
+        if (report.SubAgents > 0 || report.Teammates > 0)
         {
-            Draw(g, $"includes {report.SubAgents} sub-agent {(report.SubAgents == 1 ? "run" : "runs")}",
-                _labelFont, Theme.Muted, x, y);
+            // e.g. "includes 4 sub-agent runs · 3 teammates" — either clause is dropped when its count is 0.
+            var parts = new List<string>();
+            if (report.SubAgents > 0)
+                parts.Add($"{report.SubAgents} sub-agent {(report.SubAgents == 1 ? "run" : "runs")}");
+            if (report.Teammates > 0)
+                parts.Add($"{report.Teammates} teammate{(report.Teammates == 1 ? "" : "s")}");
+            Draw(g, "includes " + string.Join(" · ", parts), _labelFont, Theme.Muted, x, y);
             y += 22;
         }
 
@@ -344,6 +349,10 @@ internal sealed class StatsForm : Form
         y = KeyValueRow(g, "Cache write", StatsFormat.Tokens(tk.CacheWrite), x, y, innerW);
         y = KeyValueRow(g, "Cache read",  StatsFormat.Tokens(tk.CacheRead),  x, y, innerW);
         y = KeyValueRow(g, "Total",       StatsFormat.Tokens(tk.Total),      x, y, innerW, bold: true);
+        // Teammate tokens run in their own transcripts, so they are NOT part of the totals above; surface
+        // them as a separate line so the headline figures stay comparable to non-team sessions.
+        if (report.TeammateTokens.Total > 0)
+            y = KeyValueRow(g, "Teammate tokens", StatsFormat.Tokens(report.TeammateTokens.Total), x, y, innerW);
         if (_settings.ShowEstimatedCost)
         {
             y += 6;
