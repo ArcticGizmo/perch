@@ -9,6 +9,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.7] - 2026-06-29
+
+### Settings
+
+- New Indicators tab corrals the overlay glyph toggles in one place.
+- Toggle to show or hide artifacts on the overlay.
+- Toggle for the permission-mode badge.
+- New Experimental tab for early features (Agent Teams, currently lurking).
+- Settings pages no longer clip their last row when scrolled.
+
+### Detection
+
+- Idle sessions now time out after a stretch of inactivity.
+
+---
+
 ## [v0.1.6] - 2026-06-29
 
 ### Overlay

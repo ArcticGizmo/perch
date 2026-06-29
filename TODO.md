@@ -1,7 +1,5 @@
 # TODO
-- figure out how the visualize tasks better (this is turning out to be a bit flakey)
-    - we might need to mark it as experimental and figure out how to resolve the PID
-    - Maybe hooks can help?
+
 
 ## Bigger ideas (brainstorm)
 - turn the watcher into a controller — push past read-only monitoring

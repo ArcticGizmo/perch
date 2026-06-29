@@ -44,6 +44,25 @@ internal static class Theme
         _    => Red,
     };
 
+    // A neutral accent for teammates with no (or an unknown) colour — matches the overlay's sub-agent purple.
+    public static readonly Color TeamDefault = Color.FromArgb(168, 85, 247);
+
+    // Maps an Agent-Teams member colour name (the .meta.json "color" field, e.g. "green"/"blue") onto the
+    // shared palette, so the overlay — and later stats/history — tint a given teammate the same way.
+    // Unknown or missing names fall back to the neutral team accent.
+    public static Color TeamColor(string? name) => name?.Trim().ToLowerInvariant() switch
+    {
+        "green"                        => Green,
+        "yellow"                       => Yellow,
+        "orange"                       => Orange,
+        "red"                          => Red,
+        "blue"                         => Accent,
+        "cyan" or "teal"               => Color.FromArgb(94, 234, 212),
+        "magenta" or "pink" or "purple"=> Color.FromArgb(168, 85, 247),
+        "gray" or "grey"               => Color.FromArgb(148, 163, 184),
+        _                              => TeamDefault,
+    };
+
     public static Color Blend(Color a, Color b, float t) => Color.FromArgb(
         (int)(a.R * (1 - t) + b.R * t),
         (int)(a.G * (1 - t) + b.G * t),

@@ -1,0 +1,2 @@
+{"type":"user","isSidechain":true,"timestamp":"2025-03-12T13:00:20Z","message":{"role":"user","content":"explore"}}
+{"type":"assistant","isSidechain":true,"timestamp":"2025-03-12T13:00:35Z","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"p1","name":"Read","input":{"file_path":"C:\\fixtures\\proj\\Program.cs"}}]}}

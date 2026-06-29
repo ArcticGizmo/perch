@@ -74,6 +74,9 @@ internal sealed class SettingsForm : Form
     private ToggleSwitch _lockNotifyToggle = null!;
     private Label        _lockNotifyLabel  = null!;
 
+    // Indicators section. The permission-mode-badge display toggle; its legend dims while off.
+    private ToggleSwitch _modeBadgesToggle = null!;
+
     // Automation section. Two independent toggles persisted straight to settings: the SessionStart
     // hook reads auto-start from settings.json, and the owning context reads auto-close live, so
     // neither needs an event back to the owner.
@@ -106,6 +109,15 @@ internal sealed class SettingsForm : Form
 
     /// <summary>Raised when the user toggles "Show context pressure" (true = enabled).</summary>
     public event Action<bool>? ContextPressureChanged;
+
+    /// <summary>Raised when the user toggles "Permission mode badges" (true = shown in the overlay).</summary>
+    public event Action<bool>? PermissionModeBadgesChanged;
+
+    /// <summary>Raised when the user toggles "Task progress" (true = the n/m count is shown in the overlay).</summary>
+    public event Action<bool>? TaskProgressChanged;
+
+    /// <summary>Raised when the user toggles "Artifacts" (true = the clickable artifact glyph is shown).</summary>
+    public event Action<bool>? ArtifactsChanged;
 
     /// <summary>Raised when the user adjusts the context-pressure thresholds (whole percentages,
     /// ordered yellow &lt; orange &lt; red).</summary>
@@ -192,12 +204,11 @@ internal sealed class SettingsForm : Form
         AddPage("start",        "Getting started", BuildGettingStartedPage);
         AddPage("plugin",       "Plugin Control",  BuildPluginPage);
         AddPage("usage",        "Usage Limits",    BuildUsagePage);
-        AddPage("context",      "Context",         BuildContextPage);
-        AddPage("detection",    "Detection",       BuildDetectionPage);
+        AddPage("indicators",   "Indicators",      BuildIndicatorsPage);
         AddPage("stats",        "Session Stats",   BuildStatsPage);
         AddPage("notify",       "Notifications",   BuildNotificationsPage);
-        AddPage("auto",         "Automation",      BuildAutomationPage);
         AddPage("quicklinks",   "Quick Links",      BuildQuickLinksPage);
+        AddPage("experimental", "Experimental",    BuildExperimentalPage);
         AddPage("about",        "About",           BuildAboutPage);
         AddPage("changelog",    "Changelog",       BuildChangelogPage);
 
@@ -226,6 +237,12 @@ internal sealed class SettingsForm : Form
             Visible       = false,
         };
         build(page);
+        // WinForms' AutoScroll sizes the scroll range to the bottom edge of the last child and omits
+        // the panel's bottom Padding, so the final control sits flush against the clip edge and the
+        // intended bottom gap (and the control's own bottom margin) can't be scrolled into view. A
+        // trailing spacer the height of the page padding keeps that gap inside the scrollable region
+        // on every page, so a shrunk window can still reach the last element.
+        page.Controls.Add(new Panel { Width = 1, Height = PagePad, Margin = new Padding(0) });
         _pages[key] = page;
         _contentHost.Controls.Add(page);
         AddNavItem(key, title);
@@ -359,13 +376,37 @@ internal sealed class SettingsForm : Form
 
         page.Controls.Add(Separator());
 
-        page.Controls.Add(SectionTitle("Permission mode badges"));
+        // Automation lives here rather than on its own tab: two independent toggles persisted straight
+        // to settings (the SessionStart hook reads auto-start; the owning context reads auto-close).
+        _autoStartToggle = MakeToggle();
+        _autoStartToggle.Checked = _settings.AutoStartOnFirstSession;
+        _autoStartToggle.CheckedChanged += (_, _) =>
+        {
+            _settings.AutoStartOnFirstSession = _autoStartToggle.Checked;
+            _settings.Save();
+        };
+        page.Controls.Add(TitleRow("Start automatically", _autoStartToggle));
+
         page.Controls.Add(BodyText(
-            "When the Claude Code plugin is installed, each session's live permission mode is shown " +
-            "as a coloured badge next to that session in the overlay:"));
-        var legend = new ModeLegend { Margin = new Padding(0, 2, 0, 8) };
-        _fluidWidth.Add((legend, 0));
-        page.Controls.Add(legend);
+            "Launch Perch in the background when a Claude Code session opens and it isn't " +
+            "already running. Requires the installed app — the plugin starts it via the " +
+            "\"perch\" command on your PATH, so sessions run from a dev build (dotnet run) " +
+            "won't trigger it."));
+
+        page.Controls.Add(Separator());
+
+        _autoCloseToggle = MakeToggle();
+        _autoCloseToggle.Checked = _settings.AutoCloseAfterLastSession;
+        _autoCloseToggle.CheckedChanged += (_, _) =>
+        {
+            _settings.AutoCloseAfterLastSession = _autoCloseToggle.Checked;
+            _settings.Save();
+        };
+        page.Controls.Add(TitleRow("Close automatically", _autoCloseToggle));
+
+        page.Controls.Add(BodyText(
+            "Exit Perch a short while after the last Claude Code session ends — but only when " +
+            "it was started automatically by the option above. A window you opened yourself stays open."));
     }
 
     // Centred app banner: the logo, the app name, and the tagline, all horizontally centred and
@@ -599,8 +640,81 @@ internal sealed class SettingsForm : Form
         page.Controls.Add(row);
     }
 
-    // ── Context ───────────────────────────────────────────────────────────────────────
-    private void BuildContextPage(FlowLayoutPanel page)
+    // ── Indicators ──────────────────────────────────────────────────────────────────
+    // Everything controlling the glyphs/badges shown next to a session in the overlay, in five
+    // sections: permission-mode badges, task-list progress count, artifact glyph, context-pressure
+    // thermometer (+ its threshold slider), and stuck-detection. Reuses the existing
+    // ContextPressure*/StuckDetection* events; the badge, task-progress and artifact toggles are new.
+    private void BuildIndicatorsPage(FlowLayoutPanel page)
+    {
+        BuildModeBadgeSection(page);
+        page.Controls.Add(Separator());
+        BuildTaskProgressSection(page);
+        page.Controls.Add(Separator());
+        BuildArtifactsSection(page);
+        page.Controls.Add(Separator());
+        BuildContextPressureSection(page);
+        page.Controls.Add(Separator());
+        BuildDetectionSection(page);
+    }
+
+    // Artifacts: a display toggle (default on). Raises ArtifactsChanged so the overlay redraws and
+    // reclaims the freed width on the session name.
+    private void BuildArtifactsSection(FlowLayoutPanel page)
+    {
+        var toggle = MakeToggle();
+        toggle.Checked = _settings.ShowArtifacts;
+        toggle.CheckedChanged += (_, _) => ArtifactsChanged?.Invoke(toggle.Checked);
+        page.Controls.Add(TitleRow("Artifacts", toggle));
+
+        page.Controls.Add(BodyText(
+            "Shows a clickable amber glyph next to a session that has published one or more web " +
+            "artifacts. Click it in the overlay to open the artifact (or pick from a list when there " +
+            "are several)."));
+    }
+
+    // Task-list progress: a display toggle (default on). Raises TaskProgressChanged so the overlay
+    // redraws and reclaims the freed width on the session name.
+    private void BuildTaskProgressSection(FlowLayoutPanel page)
+    {
+        var toggle = MakeToggle();
+        toggle.Checked = _settings.ShowTaskProgress;
+        toggle.CheckedChanged += (_, _) => TaskProgressChanged?.Invoke(toggle.Checked);
+        page.Controls.Add(TitleRow("Task progress", toggle));
+
+        page.Controls.Add(BodyText(
+            "Shows a small \"done/total\" count next to a session that's working through a task list " +
+            "(the native checklist Claude Code builds as it plans). It turns green when every task is " +
+            "complete; hover it in the overlay for the full list."));
+    }
+
+    // Permission-mode badges: a display toggle (default on) plus the colour legend, which dims when
+    // the toggle is off. The toggle raises PermissionModeBadgesChanged so the overlay redraws.
+    private void BuildModeBadgeSection(FlowLayoutPanel page)
+    {
+        var legend = new ModeLegend { Margin = new Padding(0, 2, 0, 8) };
+
+        _modeBadgesToggle = MakeToggle();
+        _modeBadgesToggle.Checked = _settings.ShowPermissionModeBadges;
+        _modeBadgesToggle.CheckedChanged += (_, _) =>
+        {
+            PermissionModeBadgesChanged?.Invoke(_modeBadgesToggle.Checked);
+            legend.Enabled = _modeBadgesToggle.Checked;
+        };
+        page.Controls.Add(TitleRow("Permission mode badges", _modeBadgesToggle));
+
+        page.Controls.Add(BodyText(
+            "When the Claude Code plugin is installed, each session's live permission mode is shown " +
+            "as a coloured badge next to that session in the overlay:"));
+
+        legend.Enabled = _settings.ShowPermissionModeBadges;
+        _fluidWidth.Add((legend, 0));
+        page.Controls.Add(legend);
+    }
+
+    // Context-pressure thermometer + threshold slider. The slider's painted bands double as the
+    // explainer, so it sits directly under the description with no separate "Thresholds" copy.
+    private void BuildContextPressureSection(FlowLayoutPanel page)
     {
         var slider = new ContextThresholdSlider { Margin = new Padding(0, 4, 0, 8) };
 
@@ -616,17 +730,11 @@ internal sealed class SettingsForm : Form
         page.Controls.Add(BodyText(
             "Warns when a session is filling up its context window. A small thermometer appears next " +
             "to the session in the overlay once it crosses the first threshold, filling up and warming " +
-            "from yellow to orange to red as the window approaches full."));
+            "from yellow to orange to red as the window approaches full. Drag the handles to set where " +
+            "it first appears and where it turns orange and red."));
         page.Controls.Add(BodyText(
             "The window size is read from the model the session is running — the 1M-token beta is " +
             "recognised as such — so the gauge reflects the real headroom, not a fixed limit."));
-
-        page.Controls.Add(Separator());
-
-        page.Controls.Add(SectionTitle("Thresholds"));
-        page.Controls.Add(BodyText(
-            "Drag the handles to choose where the thermometer first appears and where it turns orange " +
-            "and red. Everything left of the first handle stays hidden."));
 
         slider.SetValues(
             _settings.ContextPressureYellowPercent,
@@ -638,8 +746,9 @@ internal sealed class SettingsForm : Form
         page.Controls.Add(slider);
     }
 
-    // ── Detection ───────────────────────────────────────────────────────────────────
-    private void BuildDetectionPage(FlowLayoutPanel page)
+    // Stuck-detection: a master toggle and the two heuristic sub-rows, with the prose trimmed to a
+    // single line now that it shares the tab.
+    private void BuildDetectionSection(FlowLayoutPanel page)
     {
         _stuckMasterToggle = MakeToggle();
         _stuckMasterToggle.Checked = _settings.StuckDetectionEnabled;
@@ -651,15 +760,8 @@ internal sealed class SettingsForm : Form
         page.Controls.Add(TitleRow("Stuck detection", _stuckMasterToggle));
 
         page.Controls.Add(BodyText(
-            "Watches each running session's recent tool calls and flags one that looks stuck — an " +
-            "amber warning appears next to it in the overlay, with a hover tip explaining why."));
-        page.Controls.Add(BodyText(
-            "It's a heuristic, not a verdict: a session retrying a genuinely flaky step can trip it. " +
-            "If you find it crying wolf, switch off whichever check is too eager — or the whole feature."));
-
-        page.Controls.Add(Separator());
-
-        page.Controls.Add(SectionTitle("What to watch for"));
+            "Flags a running session that looks stuck with an amber warning glyph in the overlay. " +
+            "It's a heuristic — switch off whichever check is too eager, or the whole feature."));
 
         page.Controls.Add(BuildStuckSubRow(
             "Repeated failures — several tool calls fail in a row",
@@ -1133,40 +1235,6 @@ internal sealed class SettingsForm : Form
         _topicQrForm.Activate();
     }
 
-    // ── Automation ────────────────────────────────────────────────────────────────
-    private void BuildAutomationPage(FlowLayoutPanel page)
-    {
-        _autoStartToggle = MakeToggle();
-        _autoStartToggle.Checked = _settings.AutoStartOnFirstSession;
-        _autoStartToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.AutoStartOnFirstSession = _autoStartToggle.Checked;
-            _settings.Save();
-        };
-        page.Controls.Add(TitleRow("Start automatically", _autoStartToggle));
-
-        page.Controls.Add(BodyText(
-            "Launch Perch in the background when a Claude Code session opens and it isn't " +
-            "already running. Requires the installed app — the plugin starts it via the " +
-            "\"perch\" command on your PATH, so sessions run from a dev build (dotnet run) " +
-            "won't trigger it."));
-
-        page.Controls.Add(Separator());
-
-        _autoCloseToggle = MakeToggle();
-        _autoCloseToggle.Checked = _settings.AutoCloseAfterLastSession;
-        _autoCloseToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.AutoCloseAfterLastSession = _autoCloseToggle.Checked;
-            _settings.Save();
-        };
-        page.Controls.Add(TitleRow("Close automatically", _autoCloseToggle));
-
-        page.Controls.Add(BodyText(
-            "Exit Perch a short while after the last Claude Code session ends — but only when " +
-            "it was started automatically by the option above. A window you opened yourself stays open."));
-    }
-
     // ── Quick links ───────────────────────────────────────────────────────────────
     private void BuildQuickLinksPage(FlowLayoutPanel page)
     {
@@ -1384,6 +1452,34 @@ internal sealed class SettingsForm : Form
     private void RaiseQuickLinksChanged() =>
         QuickLinksChanged?.Invoke(_quickLinks.Select(l => l.Clone()).ToList());
 
+    // ── Experimental ────────────────────────────────────────────────────────────────
+    // Opt-in switches for in-development features. A single toggle enables Claude Code's experimental
+    // Agent Teams (an env var written into ~/.claude/settings.json that CC reads on launch); Perch then
+    // surfaces any teammates it finds automatically.
+    private void BuildExperimentalPage(FlowLayoutPanel page)
+    {
+        page.Controls.Add(SectionTitle("Experimental"));
+        page.Controls.Add(BodyText(
+            "Opt-in switches for features still in development. They may change or break between updates."));
+
+        page.Controls.Add(Separator());
+
+        // 1. Claude Code's experimental Agent Teams feature. The toggle reads/writes the env var
+        //    straight in ~/.claude/settings.json; it isn't part of Perch's own settings.
+        var teamsEnvToggle = MakeToggle();
+        teamsEnvToggle.Checked = ClaudeUserSettings.IsAgentTeamsEnabled();
+        teamsEnvToggle.CheckedChanged += (_, _) =>
+            ClaudeUserSettings.SetAgentTeamsEnabled(teamsEnvToggle.Checked);
+        page.Controls.Add(TitleRow("Enable Agent Teams in Claude Code", teamsEnvToggle));
+        page.Controls.Add(BodyText(
+            "Sets the CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS environment variable in your user settings " +
+            "(~/.claude/settings.json). Claude Code reads it on launch, so restart any open sessions " +
+            "for it to take effect."));
+        page.Controls.Add(BodyText(
+            "Once enabled, Perch surfaces teammates automatically as distinct, named rows in the overlay — " +
+            "kept on the roster while they're alive, even when idle between messages from the lead."));
+    }
+
     // ── About ─────────────────────────────────────────────────────────────────────
     private void BuildAboutPage(FlowLayoutPanel page)
     {
@@ -1422,8 +1518,7 @@ internal sealed class SettingsForm : Form
         page.Controls.Add(SectionTitle("Updates"));
         page.Controls.Add(BodyText($"Currently running v{AppInfo.Version}."));
 
-        var row = ButtonRow();
-        row.Margin = new Padding(0, 0, 0, 24);  // breathing room at the bottom of the page
+        var row = ButtonRow();  // the page's trailing spacer (see AddPage) handles the bottom gap
         var checkBtn = MakeButton("Check for Updates");
         checkBtn.Click += (_, _) => CheckForUpdatesRequested?.Invoke(this, EventArgs.Empty);
         row.Controls.Add(checkBtn);

@@ -163,6 +163,9 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _overlay.SetUsageEnabled(_settings.ShowUsage);
         _overlay.SetShowExpectedRate(_settings.ShowExpectedUsageRate);
         _overlay.SetShowContextPressure(_settings.ShowContextPressure);
+        _overlay.SetShowModeBadges(_settings.ShowPermissionModeBadges);
+        _overlay.SetShowTaskProgress(_settings.ShowTaskProgress);
+        _overlay.SetShowArtifacts(_settings.ShowArtifacts);
         _overlay.SetContextThresholds(
             _settings.ContextPressureYellowPercent,
             _settings.ContextPressureOrangePercent,
@@ -222,6 +225,9 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.UsageEnabledChanged    += SetUsageEnabled;
                 f.ExpectedRateChanged    += SetExpectedRateEnabled;
                 f.ContextPressureChanged += SetContextPressureEnabled;
+                f.PermissionModeBadgesChanged += SetPermissionModeBadgesEnabled;
+                f.TaskProgressChanged += SetTaskProgressEnabled;
+                f.ArtifactsChanged += SetArtifactsEnabled;
                 f.ContextThresholdsChanged += SetContextThresholds;
                 f.StuckDetectionChanged += SetStuckDetection;
                 f.CheckForUpdatesRequested += (_, _) => CheckForUpdates();
@@ -297,6 +303,30 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _settings.ShowContextPressure = enabled;
         _settings.Save();
         _overlay.SetShowContextPressure(enabled);
+    }
+
+    private void SetPermissionModeBadgesEnabled(bool enabled)
+    {
+        if (_settings.ShowPermissionModeBadges == enabled) return;
+        _settings.ShowPermissionModeBadges = enabled;
+        _settings.Save();
+        _overlay.SetShowModeBadges(enabled);
+    }
+
+    private void SetTaskProgressEnabled(bool enabled)
+    {
+        if (_settings.ShowTaskProgress == enabled) return;
+        _settings.ShowTaskProgress = enabled;
+        _settings.Save();
+        _overlay.SetShowTaskProgress(enabled);
+    }
+
+    private void SetArtifactsEnabled(bool enabled)
+    {
+        if (_settings.ShowArtifacts == enabled) return;
+        _settings.ShowArtifacts = enabled;
+        _settings.Save();
+        _overlay.SetShowArtifacts(enabled);
     }
 
     private void SetContextThresholds(int yellow, int orange, int red)

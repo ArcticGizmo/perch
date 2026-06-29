@@ -1,0 +1,2 @@
+{"type":"user","isSidechain":true,"timestamp":"2025-03-12T13:00:20Z","message":{"role":"user","content":"explore"}}
+{"type":"assistant","isSidechain":true,"timestamp":"2025-03-12T13:00:45Z","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"Done exploring; here is the summary."}]}}

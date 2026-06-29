@@ -79,6 +79,9 @@ internal sealed class OverlayForm : Form, IDenseHost
     // The row index whose artifact glyph the cursor is currently over, or -1. Drives the hand cursor
     // and a brighter glyph; the glyph is clickable independently of the row's focus-terminal click.
     private int   _hoveredArtifactRow = -1;
+    // Display-only gate for the clickable artifact glyph; when off no glyph is drawn and the row's
+    // click falls through to focusing the terminal. The session still tracks its artifacts.
+    private bool  _showArtifacts = true;
     private bool  _attentionFlash;
 
     // Dense mode: an alternate, out-of-the-way presentation (a slim strip hugging a screen edge that
@@ -91,6 +94,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private bool _usageEnabled = true;
     private bool _showExpectedRate = true;
     private bool _showContextPressure = true;
+    private bool _showModeBadges = true;
     // Context-pressure thresholds as fractions of the window: hidden below yellow, then yellow ->
     // orange -> red. Defaults match the original hard-coded bands; overridden from settings.
     private float _ctxYellow = 0.50f, _ctxOrange = 0.65f, _ctxRed = 0.80f;
@@ -119,6 +123,8 @@ internal sealed class OverlayForm : Form, IDenseHost
     // (TaskCreate/TaskUpdate). Hover plumbing mirrors the thermometer/warning glyphs — a per-row
     // hit-rect rebuilt each paint, a 150ms dwell timer, and a multi-line tooltip listing every task
     // with its status.
+    // _showTaskProgress gates only the *display* of the count; the session still tracks its tasks.
+    private bool _showTaskProgress = true;
     private readonly Dictionary<int, Rectangle> _taskRects = new();
     private int _hoveredTaskRow = -1;
     private readonly System.Windows.Forms.Timer _taskHoverTimer;
@@ -294,7 +300,13 @@ internal sealed class OverlayForm : Form, IDenseHost
         foreach (var session in sessions.OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase))
         {
             rows.Add(new DisplayRow(session, null));
-            foreach (var sub in session.SubAgents)
+            // Teammates (the persistent roster) lead, grouped and sorted by name so they read as a team;
+            // transient sub-agents follow. Working teammates sort above idle ones within the roster.
+            var ordered = session.SubAgents
+                .OrderByDescending(s => s.IsTeammate)
+                .ThenBy(s => s.IsTeammate && s.IsIdle)
+                .ThenBy(s => s.Name ?? s.Description, StringComparer.OrdinalIgnoreCase);
+            foreach (var sub in ordered)
                 rows.Add(new DisplayRow(session, sub));
         }
         _rows = rows;
@@ -354,6 +366,15 @@ internal sealed class OverlayForm : Form, IDenseHost
         Invalidate();
     }
 
+    /// <summary>Shows or hides the permission-mode badge. Display only — when off no badge is drawn and
+    /// the session name reclaims the freed width; the session's mode is still tracked.</summary>
+    public void SetShowModeBadges(bool show)
+    {
+        if (_showModeBadges == show) return;
+        _showModeBadges = show;
+        Invalidate();
+    }
+
     /// <summary>Shows or hides the stuck-detection warning glyph. Display only — when off (or when the
     /// monitor isn't flagging anything) no glyph is drawn. Hides any open tooltip on the way out.</summary>
     public void SetStuckDetectionEnabled(bool enabled)
@@ -365,6 +386,37 @@ internal sealed class OverlayForm : Form, IDenseHost
             _hoveredWarnRow = -1;
             _warnHoverTimer.Stop();
             HideWarnTooltip();
+        }
+        Invalidate();
+    }
+
+    /// <summary>Shows or hides the task-list "n/m" progress count. Display only — when off no count is
+    /// drawn and the session name reclaims the freed width; the session's checklist is still tracked.
+    /// Hides any open tooltip on the way out.</summary>
+    public void SetShowTaskProgress(bool show)
+    {
+        if (_showTaskProgress == show) return;
+        _showTaskProgress = show;
+        if (!show)
+        {
+            _hoveredTaskRow = -1;
+            _taskHoverTimer.Stop();
+            HideTaskTooltip();
+        }
+        Invalidate();
+    }
+
+    /// <summary>Shows or hides the clickable artifact glyph. Display only — when off no glyph is drawn,
+    /// the row's click focuses the terminal as usual, and the session name reclaims the freed width;
+    /// the session's artifacts are still tracked.</summary>
+    public void SetShowArtifacts(bool show)
+    {
+        if (_showArtifacts == show) return;
+        _showArtifacts = show;
+        if (!show && _hoveredArtifactRow >= 0)
+        {
+            _hoveredArtifactRow = -1;
+            Cursor = Cursors.Default;
         }
         Invalidate();
     }
@@ -961,15 +1013,25 @@ internal sealed class OverlayForm : Form, IDenseHost
             g.FillRectangle(hoverBrush, 1, top, ClientSize.Width - 2, SubRowHeight);
         }
 
-        // Tree connector: a stub dropping from the parent row down to this child's dot.
+        // Tree connector: a stub dropping from the parent row down to this child's marker.
         int branchX = HorizPad + 4;            // aligns under the parent status dot
-        int dotX    = HorizPad + SubIndent;
+        int markerX = HorizPad + SubIndent;
         using (var treePen = new Pen(TreeLineColor, 1f))
         {
             g.DrawLine(treePen, branchX, top - SubRowHeight / 2, branchX, midY);
-            g.DrawLine(treePen, branchX, midY, dotX - 2, midY);
+            g.DrawLine(treePen, branchX, midY, markerX - 2, midY);
         }
 
+        // Teammates (Agent Teams) get a person glyph, an @name in their assigned colour, and dim while
+        // idle; ordinary sub-agents keep the purple dot + type/description.
+        if (sub.IsTeammate)
+            DrawTeammateRow(g, sub, markerX, midY);
+        else
+            DrawPlainSubAgentRow(g, sub, markerX, midY);
+    }
+
+    private void DrawPlainSubAgentRow(Graphics g, SubAgent sub, int dotX, int midY)
+    {
         using var dotBrush = new SolidBrush(SubAgentColor);
         g.FillEllipse(dotBrush, dotX, midY - 3, 6, 6);
 
@@ -1009,6 +1071,76 @@ internal sealed class OverlayForm : Form, IDenseHost
 
         int statusX = ClientSize.Width - HorizPad - (int)statusSz.Width;
         g.DrawString(statusText, statusFont, subBrush, statusX, midY - statusSz.Height / 2);
+    }
+
+    // A teammate row: [person glyph] @name   <activity>            <state>
+    // The name + glyph take the member's Claude-assigned colour; an idle teammate (waiting on the lead)
+    // is dimmed toward the background so the working members stand out, and shows "idle" instead of an
+    // activity phrase.
+    private void DrawTeammateRow(Graphics g, SubAgent sub, int glyphX, int midY)
+    {
+        bool idle      = sub.IsIdle;
+        Color teamColor = Theme.TeamColor(sub.Color);
+        // Dim everything ~55% toward the background while idle; full strength while working.
+        Color nameColor = idle ? Theme.Blend(teamColor, BgColor, 0.55f) : teamColor;
+        Color textColor = idle ? Theme.Blend(FgColor, BgColor, 0.55f)   : FgColor;
+
+        DrawTeammateGlyph(g, glyphX, midY, nameColor);
+
+        using var nameFont   = new Font("Segoe UI", 8f, GraphicsUnit.Point) ;
+        using var statusFont = new Font("Segoe UI", 7f, GraphicsUnit.Point);
+        using var nameBrush  = new SolidBrush(nameColor);
+        using var textBrush  = new SolidBrush(textColor);
+
+        // Right-aligned state word: "idle" (muted) or "working" (member colour).
+        string stateText = idle ? "idle" : "working";
+        var stateSz   = g.MeasureString(stateText, statusFont);
+        int labelX    = glyphX + 16;                 // clear of the person glyph
+        int labelMaxW = ClientSize.Width - labelX - HorizPad - (int)stateSz.Width - 6;
+
+        // "@name" in the member colour leads the row.
+        string handle = "@" + (string.IsNullOrWhiteSpace(sub.Name) ? "teammate" : sub.Name!.Trim());
+        var handleTrunc = TruncateString(g, handle, nameFont, labelMaxW);
+        var handleSz    = g.MeasureString(handleTrunc, nameFont);
+        g.DrawString(handleTrunc, nameFont, nameBrush, labelX, midY - handleSz.Height / 2);
+        int x = labelX + (int)handleSz.Width + 8;
+
+        // Then what it's doing now (muted), only while working and only if it fits.
+        string activity = idle ? "" : (sub.Activity?.Trim() ?? "");
+        if (activity.Length > 0)
+        {
+            int remaining = labelMaxW - (x - labelX);
+            if (remaining > 24)
+            {
+                var actTrunc = TruncateString(g, activity, nameFont, remaining);
+                var actSz    = g.MeasureString(actTrunc, nameFont);
+                g.DrawString(actTrunc, nameFont, textBrush, x, midY - actSz.Height / 2);
+            }
+        }
+
+        int stateX = ClientSize.Width - HorizPad - (int)stateSz.Width;
+        g.DrawString(stateText, statusFont, idle ? textBrush : nameBrush, stateX, midY - stateSz.Height / 2);
+    }
+
+    // A small "person" mark — a head circle above a shoulders arc — in the given colour, centred on
+    // (x, midY). Pure GDI so it themes and DPI-scales like the overlay's other glyphs.
+    private static void DrawTeammateGlyph(Graphics g, int x, int midY, Color color)
+    {
+        var oldSmoothing = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        using var brush = new SolidBrush(color);
+        // Head: a 5px circle sitting just above centre.
+        const int headD = 5;
+        g.FillEllipse(brush, x, midY - 5, headD, headD);
+        // Shoulders: a half-disc below the head, clipped to its top half so it reads as a torso.
+        var shoulders = new Rectangle(x - 1, midY + 1, headD + 3, headD + 2);
+        using var path = new System.Drawing.Drawing2D.GraphicsPath();
+        path.AddArc(shoulders, 180, 180);
+        path.CloseFigure();
+        g.FillPath(brush, path);
+
+        g.SmoothingMode = oldSmoothing;
     }
 
     private void DrawSessionRow(Graphics g, int rowIdx)
@@ -1072,18 +1204,18 @@ internal sealed class OverlayForm : Form, IDenseHost
             _                            => mutedBrush,
         };
 
-        bool hasArtifacts= session.HasArtifacts;
+        bool hasArtifacts= _showArtifacts && session.HasArtifacts;
         int artWidth     = hasArtifacts ? ArtifactIconWidth : 0;
         bool mail        = ExternalNotifyEnabled(session);
         int mailWidth    = mail ? MailIconWidth : 0;
-        int badgeWidth   = session.Mode != PermissionMode.Normal ? 16 : 0;
+        int badgeWidth   = session.Mode != PermissionMode.Normal && _showModeBadges ? 16 : 0;
         int rcWidth      = session.RemoteControlled ? RcIconWidth : 0;
         bool stuck       = _showStuckWarnings && session.IsStuck;
         int warnWidth    = stuck ? WarnIconWidth : 0;
         float ctxFill    = session.ContextFill ?? 0f;
         int thermoWidth  = _showContextPressure && ctxFill >= _ctxYellow ? ThermoIconWidth + 2 : 0;  // icon + 2 px gap right
         // Task checklist progress: a dim "completed/total" count on the name line, hover for the list.
-        bool hasTasks    = session.HasTasks;
+        bool hasTasks    = _showTaskProgress && session.HasTasks;
         string taskLabel = hasTasks ? $"{session.CompletedTaskCount}/{session.Tasks.Count}" : "";
         var taskSz       = hasTasks ? g.MeasureString(taskLabel, statusFont) : SizeF.Empty;
         int taskWidth    = hasTasks ? (int)taskSz.Width + 8 : 0;  // count + gap to the badge/status on its right
@@ -1122,7 +1254,7 @@ internal sealed class OverlayForm : Form, IDenseHost
             _thermoRects[rowIdx] = new Rectangle(statusX - thermoWidth, nameMidY - 9, thermoWidth, 18);
         }
 
-        if (session.Mode != PermissionMode.Normal)
+        if (session.Mode != PermissionMode.Normal && _showModeBadges)
         {
             // Idle sessions dim the badge so the permission colour stops drawing the eye when nothing's
             // happening; active/awaiting/attention rows keep it at full strength.
@@ -1623,7 +1755,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private Rectangle ArtifactIconRect(int rowIdx)
     {
         var row = _rows[rowIdx];
-        if (row.IsSubAgent || !row.Session.HasArtifacts)
+        if (row.IsSubAgent || !_showArtifacts || !row.Session.HasArtifacts)
             return Rectangle.Empty;
 
         int top  = RowTop(rowIdx);

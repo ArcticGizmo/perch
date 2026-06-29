@@ -21,6 +21,8 @@ internal static class TestEnvironment
     public const string FixtureCwd = @"C:\fixtures\proj";
 
     [ModuleInitializer]
-    public static void Init() =>
+    public static void Init()
+    {
         Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", FixtureConfigDir);
+    }
 }
