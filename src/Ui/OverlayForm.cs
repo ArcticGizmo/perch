@@ -120,6 +120,8 @@ internal sealed class OverlayForm : Form, IDenseHost
     // (TaskCreate/TaskUpdate). Hover plumbing mirrors the thermometer/warning glyphs — a per-row
     // hit-rect rebuilt each paint, a 150ms dwell timer, and a multi-line tooltip listing every task
     // with its status.
+    // _showTaskProgress gates only the *display* of the count; the session still tracks its tasks.
+    private bool _showTaskProgress = true;
     private readonly Dictionary<int, Rectangle> _taskRects = new();
     private int _hoveredTaskRow = -1;
     private readonly System.Windows.Forms.Timer _taskHoverTimer;
@@ -381,6 +383,22 @@ internal sealed class OverlayForm : Form, IDenseHost
             _hoveredWarnRow = -1;
             _warnHoverTimer.Stop();
             HideWarnTooltip();
+        }
+        Invalidate();
+    }
+
+    /// <summary>Shows or hides the task-list "n/m" progress count. Display only — when off no count is
+    /// drawn and the session name reclaims the freed width; the session's checklist is still tracked.
+    /// Hides any open tooltip on the way out.</summary>
+    public void SetShowTaskProgress(bool show)
+    {
+        if (_showTaskProgress == show) return;
+        _showTaskProgress = show;
+        if (!show)
+        {
+            _hoveredTaskRow = -1;
+            _taskHoverTimer.Stop();
+            HideTaskTooltip();
         }
         Invalidate();
     }
@@ -1179,7 +1197,7 @@ internal sealed class OverlayForm : Form, IDenseHost
         float ctxFill    = session.ContextFill ?? 0f;
         int thermoWidth  = _showContextPressure && ctxFill >= _ctxYellow ? ThermoIconWidth + 2 : 0;  // icon + 2 px gap right
         // Task checklist progress: a dim "completed/total" count on the name line, hover for the list.
-        bool hasTasks    = session.HasTasks;
+        bool hasTasks    = _showTaskProgress && session.HasTasks;
         string taskLabel = hasTasks ? $"{session.CompletedTaskCount}/{session.Tasks.Count}" : "";
         var taskSz       = hasTasks ? g.MeasureString(taskLabel, statusFont) : SizeF.Empty;
         int taskWidth    = hasTasks ? (int)taskSz.Width + 8 : 0;  // count + gap to the badge/status on its right

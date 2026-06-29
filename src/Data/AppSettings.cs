@@ -35,6 +35,11 @@ internal sealed class AppSettings
     // mode itself is still tracked, just not shown. Defaults to true; a missing key keeps it on.
     public bool ShowPermissionModeBadges { get; set; } = true;
 
+    // Whether to draw the task-list "n/m" progress count (from a session's native TaskCreate/TaskUpdate
+    // checklist) next to a session in the overlay. Off hides the count and lets the session name reclaim
+    // its width; the checklist is still tracked, just not shown. Defaults to true; a missing key keeps it on.
+    public bool ShowTaskProgress { get; set; } = true;
+
     // Stuck/runaway detection. When on, a session that's spinning — several tool calls failing in a
     // row, or the same action repeated and failing — gets an amber warning glyph in the overlay. The
     // two sub-switches scope which heuristics run, so a user plagued by false positives on one can

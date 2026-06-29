@@ -74,7 +74,7 @@ internal sealed class SettingsForm : Form
     private ToggleSwitch _lockNotifyToggle = null!;
     private Label        _lockNotifyLabel  = null!;
 
-    // Iconography section. The permission-mode-badge display toggle; its legend dims while off.
+    // Indicators section. The permission-mode-badge display toggle; its legend dims while off.
     private ToggleSwitch _modeBadgesToggle = null!;
 
     // Automation section. Two independent toggles persisted straight to settings: the SessionStart
@@ -112,6 +112,9 @@ internal sealed class SettingsForm : Form
 
     /// <summary>Raised when the user toggles "Permission mode badges" (true = shown in the overlay).</summary>
     public event Action<bool>? PermissionModeBadgesChanged;
+
+    /// <summary>Raised when the user toggles "Task progress" (true = the n/m count is shown in the overlay).</summary>
+    public event Action<bool>? TaskProgressChanged;
 
     /// <summary>Raised when the user adjusts the context-pressure thresholds (whole percentages,
     /// ordered yellow &lt; orange &lt; red).</summary>
@@ -198,7 +201,7 @@ internal sealed class SettingsForm : Form
         AddPage("start",        "Getting started", BuildGettingStartedPage);
         AddPage("plugin",       "Plugin Control",  BuildPluginPage);
         AddPage("usage",        "Usage Limits",    BuildUsagePage);
-        AddPage("iconography",  "Iconography",     BuildIconographyPage);
+        AddPage("indicators",   "Indicators",      BuildIndicatorsPage);
         AddPage("stats",        "Session Stats",   BuildStatsPage);
         AddPage("notify",       "Notifications",   BuildNotificationsPage);
         AddPage("quicklinks",   "Quick Links",      BuildQuickLinksPage);
@@ -634,18 +637,35 @@ internal sealed class SettingsForm : Form
         page.Controls.Add(row);
     }
 
-    // ── Iconography ─────────────────────────────────────────────────────────────────
-    // Everything controlling the glyphs/badges shown next to a session in the overlay, in three
-    // sections: permission-mode badges, context-pressure thermometer (+ its threshold slider), and
-    // stuck-detection. Reuses the existing ContextPressure*/StuckDetection* events; only the badge
-    // toggle is new.
-    private void BuildIconographyPage(FlowLayoutPanel page)
+    // ── Indicators ──────────────────────────────────────────────────────────────────
+    // Everything controlling the glyphs/badges shown next to a session in the overlay, in four
+    // sections: permission-mode badges, task-list progress count, context-pressure thermometer (+ its
+    // threshold slider), and stuck-detection. Reuses the existing ContextPressure*/StuckDetection*
+    // events; the badge and task-progress toggles are new.
+    private void BuildIndicatorsPage(FlowLayoutPanel page)
     {
         BuildModeBadgeSection(page);
+        page.Controls.Add(Separator());
+        BuildTaskProgressSection(page);
         page.Controls.Add(Separator());
         BuildContextPressureSection(page);
         page.Controls.Add(Separator());
         BuildDetectionSection(page);
+    }
+
+    // Task-list progress: a display toggle (default on). Raises TaskProgressChanged so the overlay
+    // redraws and reclaims the freed width on the session name.
+    private void BuildTaskProgressSection(FlowLayoutPanel page)
+    {
+        var toggle = MakeToggle();
+        toggle.Checked = _settings.ShowTaskProgress;
+        toggle.CheckedChanged += (_, _) => TaskProgressChanged?.Invoke(toggle.Checked);
+        page.Controls.Add(TitleRow("Task progress", toggle));
+
+        page.Controls.Add(BodyText(
+            "Shows a small \"done/total\" count next to a session that's working through a task list " +
+            "(the native checklist Claude Code builds as it plans). It turns green when every task is " +
+            "complete; hover it in the overlay for the full list."));
     }
 
     // Permission-mode badges: a display toggle (default on) plus the colour legend, which dims when
