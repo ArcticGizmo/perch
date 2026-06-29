@@ -234,6 +234,12 @@ internal sealed class SettingsForm : Form
             Visible       = false,
         };
         build(page);
+        // WinForms' AutoScroll sizes the scroll range to the bottom edge of the last child and omits
+        // the panel's bottom Padding, so the final control sits flush against the clip edge and the
+        // intended bottom gap (and the control's own bottom margin) can't be scrolled into view. A
+        // trailing spacer the height of the page padding keeps that gap inside the scrollable region
+        // on every page, so a shrunk window can still reach the last element.
+        page.Controls.Add(new Panel { Width = 1, Height = PagePad, Margin = new Padding(0) });
         _pages[key] = page;
         _contentHost.Controls.Add(page);
         AddNavItem(key, title);
@@ -1487,8 +1493,7 @@ internal sealed class SettingsForm : Form
         page.Controls.Add(SectionTitle("Updates"));
         page.Controls.Add(BodyText($"Currently running v{AppInfo.Version}."));
 
-        var row = ButtonRow();
-        row.Margin = new Padding(0, 0, 0, 24);  // breathing room at the bottom of the page
+        var row = ButtonRow();  // the page's trailing spacer (see AddPage) handles the bottom gap
         var checkBtn = MakeButton("Check for Updates");
         checkBtn.Click += (_, _) => CheckForUpdatesRequested?.Invoke(this, EventArgs.Empty);
         row.Controls.Add(checkBtn);
