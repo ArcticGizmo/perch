@@ -288,6 +288,10 @@ internal sealed class SessionMonitor : IDisposable
             // for the lead must not keep the parent pegged as Running.
             var subAgents = _subAgents.GetRunning(sessionId, cwd);
             bool hasRunningSubs = subAgents.Any(s => !s.IsIdle);
+            // A teammate frozen mid-turn by an interrupt eventually goes stale and flips to idle, which
+            // is what drops hasRunningSubs here. That's a deliberate stop, not a completion — so when a
+            // stale teammate is present we let the parent fall back to plain Idle without the "done" alert.
+            bool subsWentStale = subAgents.Any(s => s.IsStale);
             bool hadRunningSubs = _hadRunningSubs.Contains(pid);
             bool subsJustFinished = hadRunningSubs && !hasRunningSubs;
 
@@ -306,8 +310,9 @@ internal sealed class SessionMonitor : IDisposable
             {
                 _hadRunningSubs.Remove(pid);
                 // Sub-agents finished and the parent picked nothing else up: surface it like any
-                // other busy->idle completion so the "done" alert still fires.
-                if (subsJustFinished && status == SessionStatus.Idle)
+                // other busy->idle completion so the "done" alert still fires — unless they went stale
+                // (the team was interrupted), in which case the user already stopped on purpose.
+                if (subsJustFinished && !subsWentStale && status == SessionStatus.Idle)
                 {
                     _idleSince[pid] = now;
                     status = SessionStatus.NeedsAttention;

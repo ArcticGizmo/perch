@@ -5,6 +5,8 @@
 - Support experimental teams features
   - ensure that the flag is checked before even trying to do something with it
   - figure out a good UI to say what each team member is doing at any given time
+- consolidate iconographhy into a single settings panel
+- make /clear actually reset the session name
 
 ## Bigger ideas (brainstorm)
 - turn the watcher into a controller — push past read-only monitoring

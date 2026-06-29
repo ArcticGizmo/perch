@@ -47,7 +47,8 @@ public record SubAgent(
     string? TeamName = null,    // the team this member belongs to, e.g. "session-a0a997f1"
     string? Color = null,       // Claude-assigned member colour ("green"/"yellow"/"blue"/…); null if none
     string? Activity = null,    // present-tense phrase for what it's doing now ("Reading Foo.cs"); null when idle
-    bool IsIdle = false         // teammate is alive but waiting (tail is a finished assistant turn)
+    bool IsIdle = false,        // teammate is alive but waiting (tail is a finished assistant turn)
+    bool IsStale = false        // classified working but the transcript went silent (interrupted/frozen mid-turn)
 );
 
 /// <summary>

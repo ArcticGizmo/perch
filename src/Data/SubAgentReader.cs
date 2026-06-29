@@ -19,6 +19,18 @@ namespace Perch.Data;
 /// </summary>
 internal sealed class SubAgentReader
 {
+    // A teammate (or its sub-agents) whose own transcript classifies as mid-turn "working" but hasn't
+    // been written to for this long is treated as quiesced rather than working. An interrupt leaves a
+    // teammate frozen mid-turn — a dangling tool_use, or a tool_result the lead never answered — which
+    // is, record-for-record, indistinguishable from one genuinely in flight; the only tell is that a
+    // live agent keeps appending and a frozen one goes silent. The window is generous enough that a
+    // teammate streaming tokens never trips it, yet short enough that an interrupted team stops pegging
+    // its parent session as Running within a minute or two. Self-healing: if the file grows again the
+    // agent flips straight back to working.
+    private static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromSeconds(90);
+
+    private readonly TimeSpan _staleAfter;
+
     // Legacy parent-transcript scan, memoised by the parent transcript's (length, last-write).
     private readonly MtimeCache<IReadOnlyList<SubAgent>> _legacy = new();
     // 2.1+ per-agent turn classification (working/idle + current activity), memoised by each agent
@@ -27,6 +39,10 @@ internal sealed class SubAgentReader
     // Per-agent meta sidecar, cached by path: a .meta.json is written once and never changes, so
     // re-reading it every poll (now for idle teammates too, not just running agents) is wasted IO.
     private readonly Dictionary<string, AgentMeta> _meta = new();
+
+    /// <param name="staleAfter">How long an agent's transcript may sit untouched before a "working"
+    /// classification is treated as a frozen/interrupted turn. Defaults to 90s; tests override it.</param>
+    public SubAgentReader(TimeSpan? staleAfter = null) => _staleAfter = staleAfter ?? DefaultStaleAfter;
 
     /// <summary>
     /// Returns the sub-agents currently working under the given session, or an empty list if the
@@ -74,6 +90,7 @@ internal sealed class SubAgentReader
     private IReadOnlyList<SubAgent> ScanBackground(string dir)
     {
         var result = new List<SubAgent>();
+        var nowUtc = DateTime.UtcNow;
         foreach (var file in Directory.EnumerateFiles(dir, "agent-*.jsonl"))
         {
             try
@@ -81,10 +98,18 @@ internal sealed class SubAgentReader
                 var meta = ReadAgentMeta(Path.ChangeExtension(file, null) + ".meta.json");
                 var state = _agentState.GetOrCompute(file, Classify, default);
 
+                // A "working" classification only holds while the transcript is still advancing: an agent
+                // left frozen mid-turn by an interrupt keeps that tail forever, so demote it to not-working
+                // once its file has gone silent past the staleness window (see DefaultStaleAfter).
+                bool stale = state.Working && IsStale(file, nowUtc);
+                bool working = state.Working && !stale;
+
                 if (meta.IsTeammate)
                 {
-                    // Persistent: idle teammates stay on the roster, just marked waiting.
-                    bool idle = !state.Working;
+                    // Persistent: idle (and stale/interrupted) teammates stay on the roster, just marked
+                    // waiting. The stale flag lets SessionMonitor tell an interrupted team from a clean
+                    // completion and skip the "done" alert in that case.
+                    bool idle = !working;
                     result.Add(new SubAgent(
                         AgentIdFromFile(file), meta.Description, meta.AgentType,
                         IsTeammate: true,
@@ -92,11 +117,13 @@ internal sealed class SubAgentReader
                         TeamName: meta.TeamName,
                         Color: meta.Color,
                         Activity: idle ? null : state.Activity,
-                        IsIdle: idle));
+                        IsIdle: idle,
+                        IsStale: stale));
                 }
-                else if (state.Working)
+                else if (working)
                 {
-                    // Transient: an ordinary sub-agent only matters while it's still working.
+                    // Transient: an ordinary sub-agent only matters while it's still working; a stale one
+                    // drops off the roster like any finished one.
                     result.Add(new SubAgent(AgentIdFromFile(file), meta.Description, meta.AgentType));
                 }
             }
@@ -106,6 +133,15 @@ internal sealed class SubAgentReader
             }
         }
         return result;
+    }
+
+    // True when an agent's transcript hasn't been written to within the staleness window — the signal
+    // that a "working" tail is actually frozen (interrupted) rather than in flight. If the file can't be
+    // stat'd we don't force it idle; the transcript's own verdict stands.
+    private bool IsStale(string file, DateTime nowUtc)
+    {
+        try { return nowUtc - File.GetLastWriteTimeUtc(file) > _staleAfter; }
+        catch { return false; }
     }
 
     // agent-{id}.jsonl -> {id} (the teammate's agentId, or the plain sub-agent's hash).
