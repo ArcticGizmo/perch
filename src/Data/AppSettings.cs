@@ -40,6 +40,11 @@ internal sealed class AppSettings
     // its width; the checklist is still tracked, just not shown. Defaults to true; a missing key keeps it on.
     public bool ShowTaskProgress { get; set; } = true;
 
+    // Whether to draw the clickable artifact glyph next to a session that has published one or more web
+    // artifacts. Off hides the glyph (the row click just focuses the terminal) and lets the session name
+    // reclaim its width; the artifacts are still tracked. Defaults to true; a missing key keeps it on.
+    public bool ShowArtifacts { get; set; } = true;
+
     // Stuck/runaway detection. When on, a session that's spinning — several tool calls failing in a
     // row, or the same action repeated and failing — gets an amber warning glyph in the overlay. The
     // two sub-switches scope which heuristics run, so a user plagued by false positives on one can

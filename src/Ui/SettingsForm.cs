@@ -116,6 +116,9 @@ internal sealed class SettingsForm : Form
     /// <summary>Raised when the user toggles "Task progress" (true = the n/m count is shown in the overlay).</summary>
     public event Action<bool>? TaskProgressChanged;
 
+    /// <summary>Raised when the user toggles "Artifacts" (true = the clickable artifact glyph is shown).</summary>
+    public event Action<bool>? ArtifactsChanged;
+
     /// <summary>Raised when the user adjusts the context-pressure thresholds (whole percentages,
     /// ordered yellow &lt; orange &lt; red).</summary>
     public event Action<int, int, int>? ContextThresholdsChanged;
@@ -638,19 +641,36 @@ internal sealed class SettingsForm : Form
     }
 
     // ── Indicators ──────────────────────────────────────────────────────────────────
-    // Everything controlling the glyphs/badges shown next to a session in the overlay, in four
-    // sections: permission-mode badges, task-list progress count, context-pressure thermometer (+ its
-    // threshold slider), and stuck-detection. Reuses the existing ContextPressure*/StuckDetection*
-    // events; the badge and task-progress toggles are new.
+    // Everything controlling the glyphs/badges shown next to a session in the overlay, in five
+    // sections: permission-mode badges, task-list progress count, artifact glyph, context-pressure
+    // thermometer (+ its threshold slider), and stuck-detection. Reuses the existing
+    // ContextPressure*/StuckDetection* events; the badge, task-progress and artifact toggles are new.
     private void BuildIndicatorsPage(FlowLayoutPanel page)
     {
         BuildModeBadgeSection(page);
         page.Controls.Add(Separator());
         BuildTaskProgressSection(page);
         page.Controls.Add(Separator());
+        BuildArtifactsSection(page);
+        page.Controls.Add(Separator());
         BuildContextPressureSection(page);
         page.Controls.Add(Separator());
         BuildDetectionSection(page);
+    }
+
+    // Artifacts: a display toggle (default on). Raises ArtifactsChanged so the overlay redraws and
+    // reclaims the freed width on the session name.
+    private void BuildArtifactsSection(FlowLayoutPanel page)
+    {
+        var toggle = MakeToggle();
+        toggle.Checked = _settings.ShowArtifacts;
+        toggle.CheckedChanged += (_, _) => ArtifactsChanged?.Invoke(toggle.Checked);
+        page.Controls.Add(TitleRow("Artifacts", toggle));
+
+        page.Controls.Add(BodyText(
+            "Shows a clickable amber glyph next to a session that has published one or more web " +
+            "artifacts. Click it in the overlay to open the artifact (or pick from a list when there " +
+            "are several)."));
     }
 
     // Task-list progress: a display toggle (default on). Raises TaskProgressChanged so the overlay

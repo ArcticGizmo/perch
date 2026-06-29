@@ -79,6 +79,9 @@ internal sealed class OverlayForm : Form, IDenseHost
     // The row index whose artifact glyph the cursor is currently over, or -1. Drives the hand cursor
     // and a brighter glyph; the glyph is clickable independently of the row's focus-terminal click.
     private int   _hoveredArtifactRow = -1;
+    // Display-only gate for the clickable artifact glyph; when off no glyph is drawn and the row's
+    // click falls through to focusing the terminal. The session still tracks its artifacts.
+    private bool  _showArtifacts = true;
     private bool  _attentionFlash;
 
     // Dense mode: an alternate, out-of-the-way presentation (a slim strip hugging a screen edge that
@@ -399,6 +402,21 @@ internal sealed class OverlayForm : Form, IDenseHost
             _hoveredTaskRow = -1;
             _taskHoverTimer.Stop();
             HideTaskTooltip();
+        }
+        Invalidate();
+    }
+
+    /// <summary>Shows or hides the clickable artifact glyph. Display only — when off no glyph is drawn,
+    /// the row's click focuses the terminal as usual, and the session name reclaims the freed width;
+    /// the session's artifacts are still tracked.</summary>
+    public void SetShowArtifacts(bool show)
+    {
+        if (_showArtifacts == show) return;
+        _showArtifacts = show;
+        if (!show && _hoveredArtifactRow >= 0)
+        {
+            _hoveredArtifactRow = -1;
+            Cursor = Cursors.Default;
         }
         Invalidate();
     }
@@ -1186,7 +1204,7 @@ internal sealed class OverlayForm : Form, IDenseHost
             _                            => mutedBrush,
         };
 
-        bool hasArtifacts= session.HasArtifacts;
+        bool hasArtifacts= _showArtifacts && session.HasArtifacts;
         int artWidth     = hasArtifacts ? ArtifactIconWidth : 0;
         bool mail        = ExternalNotifyEnabled(session);
         int mailWidth    = mail ? MailIconWidth : 0;
@@ -1737,7 +1755,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private Rectangle ArtifactIconRect(int rowIdx)
     {
         var row = _rows[rowIdx];
-        if (row.IsSubAgent || !row.Session.HasArtifacts)
+        if (row.IsSubAgent || !_showArtifacts || !row.Session.HasArtifacts)
             return Rectangle.Empty;
 
         int top  = RowTop(rowIdx);
