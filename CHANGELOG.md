@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.6] - 2026-06-29
+
+### Overlay
+
+- Task-list progress on a running session: an *n/m* count that climbs as Claude works the list.
+- Hover the count for the full checklist — ✓ done, ▸ doing, ○ waiting.
+- The list bows out when you move on, and a fresh plan starts at 0 (no lingering "5/5").
+
+---
+
 ## [v0.1.5] - 2026-06-28
 
 ### Detection

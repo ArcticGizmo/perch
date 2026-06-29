@@ -364,6 +364,10 @@ internal sealed class SessionMonitor : IDisposable
             // and cached by mtime, so an unchanged transcript costs a stat, not a parse.
             var artifacts = _transcripts.GetArtifacts(sessionId, cwd);
 
+            // The native task checklist Claude works through (TaskCreate/TaskUpdate), reconstructed from
+            // the transcript and cached by mtime. Surfaced as a progress count + hover list in the overlay.
+            var tasks = _transcripts.GetTasks(sessionId, cwd);
+
             var session = new ClaudeSession(
                 pid,
                 sessionId,
@@ -381,7 +385,8 @@ internal sealed class SessionMonitor : IDisposable
                 contextFill,
                 contextWindow,
                 artifacts,
-                stuck
+                stuck,
+                tasks
             );
 
             if (status == SessionStatus.NeedsAttention && (prevRaw == "busy" || subsJustFinished))

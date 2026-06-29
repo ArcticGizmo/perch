@@ -26,6 +26,7 @@ internal sealed class TranscriptReader
     private readonly MtimeCache<(float? Fill, int Window)> _contextFill = new();
     private readonly MtimeCache<bool> _bareCommand = new();
     private readonly MtimeCache<IReadOnlyList<Artifact>> _artifacts = new();
+    private readonly MtimeCache<IReadOnlyList<TaskItem>> _tasks = new();
     private readonly MtimeCache<StuckMetrics> _stuck = new();
 
     // How many of the most recent tool calls the failing-loop heuristic looks across. Tuned against
@@ -127,6 +128,174 @@ internal sealed class TranscriptReader
             return default;
         var path = TranscriptLocator.Resolve(sessionId, cwd);
         return path == null ? default : _stuck.GetOrCompute(path, ParseStuck, default);
+    }
+
+    /// <summary>
+    /// Returns the <em>freshest batch</em> of the session's native task checklist — the run of tasks
+    /// Claude built with <c>TaskCreate</c>/<c>TaskUpdate</c> since the most recent user prompt — with
+    /// each task's current status, in creation order. Returns empty when the transcript can't be
+    /// located/read, the session created no tasks, or the list is stale: the user has prompted again
+    /// since the last task touch, so the checklist belongs to a unit of work that's been superseded.
+    /// Best-effort; never throws.
+    /// </summary>
+    public IReadOnlyList<TaskItem> GetTasks(string sessionId, string cwd)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return [];
+        var path = TranscriptLocator.Resolve(sessionId, cwd);
+        return path == null ? [] : _tasks.GetOrCompute(path, ParseTasks, []);
+    }
+
+    private static IReadOnlyList<TaskItem> ParseTasks(string path)
+    {
+        // Claude Code builds its checklist with the TaskCreate tool and advances it with TaskUpdate;
+        // there is no durable task file on disk, so we reconstruct the list by replaying those calls.
+        // Two refinements keep the overlay honest:
+        //   • Freshest batch — a task list belongs to the prompt that spawned it. When a genuine user
+        //     prompt is followed by a new TaskCreate, that starts a new batch and we drop the previous
+        //     one, so a brand-new plan reads as a fresh list rather than appending to old, done work.
+        //   • Staleness — if the user has prompted *since* the last task touch (with no new tasks), the
+        //     checklist has been abandoned, and we surface nothing rather than a lingering "5/5".
+        // Ids are session-monotonic: TaskCreate carries no id, but the k-th create has id k and that's
+        // what TaskUpdate.taskId references, so we key by a running counter (which keeps advancing
+        // across batches) rather than list position — otherwise a second batch's ids wouldn't resolve.
+        // A task can be created early in a long session, so we read the whole file; it's cheap (the
+        // substring pre-filter skips almost every line, and the result is cached by length+mtime).
+        var byId = new Dictionary<int, (string Subject, string ActiveForm, TaskState State)>();
+        var batchIds = new List<int>();         // ids of the current batch, in creation order
+        int nextId = 1;                         // session-monotonic id counter (never reset)
+        bool promptSinceTask = false;           // a genuine user prompt has arrived since the last create
+        DateTime? lastTaskTs = null, lastPromptTs = null;
+
+        foreach (var line in TranscriptScan.ReadLines(path))
+        {
+            // Cheap pre-filter: the task tool calls, plus genuine user prompts (a user record that
+            // isn't a tool result or an assistant tool_use line) — those drive batching and staleness.
+            bool maybeTask   = line.Contains("TaskCreate") || line.Contains("TaskUpdate");
+            bool maybePrompt = line.Contains("\"type\":\"user\"") && !line.Contains("tool_result") && !line.Contains("tool_use");
+            if (!maybeTask && !maybePrompt)
+                continue;
+
+            try
+            {
+                var node = JsonNode.Parse(line);
+                DateTime? ts = null;
+                try { ts = TranscriptJson.ParseTimestamp(node?["timestamp"]?.GetValue<string>()); }
+                catch { }
+
+                if (maybePrompt && IsGenuineUserPrompt(node))
+                {
+                    promptSinceTask = true;
+                    if (ts is { } pt && (lastPromptTs is null || pt > lastPromptTs))
+                        lastPromptTs = pt;
+                    continue;
+                }
+
+                if (TranscriptJson.ContentArray(node) is not { } content)
+                    continue;
+
+                foreach (var block in content)
+                {
+                    if (TranscriptJson.BlockType(block) != "tool_use")
+                        continue;
+                    var name = block!["name"]?.GetValue<string>();
+                    var input = block["input"];
+
+                    if (name == "TaskCreate")
+                    {
+                        int id = nextId++;
+                        // A create after a fresh prompt opens a new batch — drop the previous one.
+                        if (promptSinceTask)
+                        {
+                            batchIds.Clear();
+                            byId.Clear();
+                            promptSinceTask = false;
+                        }
+                        var subject = input?["subject"]?.GetValue<string>()?.Trim() ?? "";
+                        var activeForm = input?["activeForm"]?.GetValue<string>()?.Trim() ?? "";
+                        byId[id] = (subject, activeForm, TaskState.Pending);
+                        batchIds.Add(id);
+                        if (ts is { } ct) lastTaskTs = ct;
+                    }
+                    else if (name == "TaskUpdate")
+                    {
+                        // taskId/status come through as JSON strings; ToString() is robust whether the
+                        // id is encoded as a string ("1") or a bare number, where GetValue<string> throws.
+                        var idStr = input?["taskId"]?.ToString();
+                        var status = input?["status"]?.ToString();
+                        // Only updates to a task in the current batch matter; ids from a dropped batch
+                        // are absent from byId and harmlessly ignored.
+                        if (int.TryParse(idStr, out int id) && byId.TryGetValue(id, out var cur))
+                        {
+                            TaskState? state = status switch
+                            {
+                                "in_progress" => TaskState.InProgress,
+                                "completed"   => TaskState.Completed,
+                                "pending"     => TaskState.Pending,
+                                _             => null,
+                            };
+                            if (state is { } s)
+                                byId[id] = (cur.Subject, cur.ActiveForm, s);
+                        }
+                        if (ts is { } ut) lastTaskTs = ut;
+                    }
+                }
+            }
+            catch
+            {
+                // Malformed/partial line (transcripts are appended live) — skip it.
+            }
+        }
+
+        if (batchIds.Count == 0)
+            return [];
+
+        // Stale: the user moved on after the batch's last task touch, so the checklist is abandoned.
+        if (lastPromptTs is { } p && (lastTaskTs is null || p > lastTaskTs))
+            return [];
+
+        return batchIds.Select(id => byId[id])
+                       .Select(t => new TaskItem(t.Subject, t.ActiveForm, t.State))
+                       .ToList();
+    }
+
+    // True for a real typed user prompt: a "user" record whose message content is plain text — not a
+    // tool result, not a slash-command echo (<command-name>) or its stdout (<local-command-stdout>).
+    // These mark the boundary between units of work (and thus task batches).
+    private static bool IsGenuineUserPrompt(JsonNode? node)
+    {
+        if (node?["type"]?.GetValue<string>() != "user")
+            return false;
+
+        var content = node["message"]?["content"];
+        if (content is JsonValue value)
+        {
+            try
+            {
+                var s = value.GetValue<string>();
+                return !string.IsNullOrEmpty(s)
+                    && !s.StartsWith("<command-name>")
+                    && !s.StartsWith("<local-command-stdout>");
+            }
+            catch { return false; }
+        }
+
+        // Array content: a genuine prompt carries a text block; a tool-result turn carries tool_result.
+        if (content is JsonArray arr)
+        {
+            bool hasText = false;
+            foreach (var b in arr)
+            {
+                var bt = TranscriptJson.BlockType(b);
+                if (bt == "tool_result")
+                    return false;
+                if (bt == "text")
+                    hasText = true;
+            }
+            return hasText;
+        }
+
+        return false;
     }
 
     private static IReadOnlyList<Artifact> ParseArtifacts(string path)

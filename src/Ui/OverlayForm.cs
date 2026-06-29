@@ -115,6 +115,15 @@ internal sealed class OverlayForm : Form, IDenseHost
     private readonly System.Windows.Forms.Timer _warnHoverTimer;
     private readonly HintTooltipForm _warnTooltip = new();
 
+    // Task-list progress: the "n/m" count drawn on a session row that has a native checklist
+    // (TaskCreate/TaskUpdate). Hover plumbing mirrors the thermometer/warning glyphs — a per-row
+    // hit-rect rebuilt each paint, a 150ms dwell timer, and a multi-line tooltip listing every task
+    // with its status.
+    private readonly Dictionary<int, Rectangle> _taskRects = new();
+    private int _hoveredTaskRow = -1;
+    private readonly System.Windows.Forms.Timer _taskHoverTimer;
+    private readonly HintTooltipForm _taskTooltip = new();
+
     // Enabled quick links and their pre-rendered icons, index-aligned. Both are pushed in from the
     // owning context via SetQuickLinks, which is the source of truth; icons are loaded once per
     // update (an exe-extracted or embedded bitmap, or null to fall back to drawn initials).
@@ -226,6 +235,16 @@ internal sealed class OverlayForm : Form, IDenseHost
             _warnHoverTimer.Stop();
             if (_hoveredWarnRow >= 0 && !_dragging)
                 ShowWarnTooltip(_hoveredWarnRow);
+        };
+
+        // One-shot dwell timer for the task-count badge, twin to the warning glyph's above; pops the
+        // full checklist tooltip.
+        _taskHoverTimer = new System.Windows.Forms.Timer { Interval = 150 };
+        _taskHoverTimer.Tick += (_, _) =>
+        {
+            _taskHoverTimer.Stop();
+            if (_hoveredTaskRow >= 0 && !_dragging)
+                ShowTaskTooltip(_hoveredTaskRow);
         };
 
         // Repaints the auto-close countdown bar while it's active. Stops itself once the deadline
@@ -546,6 +565,7 @@ internal sealed class OverlayForm : Form, IDenseHost
             // repopulates them for any row that actually shows the glyph.
             _thermoRects.Clear();
             _warnRects.Clear();
+            _taskRects.Clear();
             for (int i = 0; i < _rows.Count; i++)
                 DrawRow(g, i);
         }
@@ -1009,7 +1029,11 @@ internal sealed class OverlayForm : Form, IDenseHost
         // A running session gets a second, dimmer line: the parsed tool call on the left and the
         // elapsed run time on the right. Without either the project name stays vertically centred.
         bool running   = session.Status == SessionStatus.Running;
-        var activity   = running ? session.Activity : null;
+        // While working a checklist, the active task's gerund ("Building slash commands…") is more
+        // telling than the raw tool phrase, so it wins for the activity line; fall back to the tool.
+        var activity   = running
+            ? (session.CurrentTask?.ActiveForm is { Length: > 0 } af ? af : session.Activity)
+            : null;
         var elapsed    = running ? session.RunningElapsedLabel() : null;
         bool twoLine   = !string.IsNullOrEmpty(activity) || !string.IsNullOrEmpty(elapsed);
         int nameMidY   = twoLine ? top + RowHeight / 2 - 8 : midY;
@@ -1058,8 +1082,13 @@ internal sealed class OverlayForm : Form, IDenseHost
         int warnWidth    = stuck ? WarnIconWidth : 0;
         float ctxFill    = session.ContextFill ?? 0f;
         int thermoWidth  = _showContextPressure && ctxFill >= _ctxYellow ? ThermoIconWidth + 2 : 0;  // icon + 2 px gap right
+        // Task checklist progress: a dim "completed/total" count on the name line, hover for the list.
+        bool hasTasks    = session.HasTasks;
+        string taskLabel = hasTasks ? $"{session.CompletedTaskCount}/{session.Tasks.Count}" : "";
+        var taskSz       = hasTasks ? g.MeasureString(taskLabel, statusFont) : SizeF.Empty;
+        int taskWidth    = hasTasks ? (int)taskSz.Width + 8 : 0;  // count + gap to the badge/status on its right
         var statusSz     = g.MeasureString(statusText, statusFont);
-        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - mailWidth - artWidth - warnWidth - thermoWidth;
+        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - mailWidth - artWidth - warnWidth - thermoWidth - taskWidth;
         var nameTrunc    = TruncateString(g, session.DisplayName, nameFont, nameMaxWidth);
         var nameSz       = g.MeasureString(nameTrunc, nameFont);
 
@@ -1099,6 +1128,17 @@ internal sealed class OverlayForm : Form, IDenseHost
             // happening; active/awaiting/attention rows keep it at full strength.
             int badgeAlpha = session.Status == SessionStatus.Idle ? 110 : 255;
             Glyphs.DrawModeBadge(g, session.Mode, statusX - thermoWidth - badgeWidth, nameMidY, 4, 5, badgeAlpha);
+        }
+
+        // Task-list progress count, just left of the mode badge. A finished list (all tasks done) is
+        // tinted the running-green so it reads as "completed" at a glance; otherwise it's dim like status.
+        if (hasTasks)
+        {
+            int taskX = statusX - thermoWidth - badgeWidth - taskWidth;
+            bool allDone = session.CompletedTaskCount == session.Tasks.Count;
+            using var taskBrush = new SolidBrush(allDone ? RunningColor : MutedColor);
+            g.DrawString(taskLabel, statusFont, taskBrush, taskX, nameMidY - taskSz.Height / 2);
+            _taskRects[rowIdx] = new Rectangle(taskX - 2, nameMidY - 9, (int)taskSz.Width + 6, 18);
         }
 
         if (twoLine)
@@ -1324,6 +1364,17 @@ internal sealed class OverlayForm : Form, IDenseHost
                 if (warnHover >= 0)
                     _warnHoverTimer.Start();
             }
+
+            // Task-count badge dwell — twin to the thermometer/warning above; pops the full checklist.
+            int taskHover = ShowFullPanel ? HitTestTaskCount(e.Location) : -1;
+            if (taskHover != _hoveredTaskRow)
+            {
+                _hoveredTaskRow = taskHover;
+                _taskHoverTimer.Stop();
+                HideTaskTooltip();
+                if (taskHover >= 0)
+                    _taskHoverTimer.Start();
+            }
         }
 
         base.OnMouseMove(e);
@@ -1414,6 +1465,9 @@ internal sealed class OverlayForm : Form, IDenseHost
         _hoveredWarnRow = -1;
         _warnHoverTimer.Stop();
         HideWarnTooltip();
+        _hoveredTaskRow = -1;
+        _taskHoverTimer.Stop();
+        HideTaskTooltip();
         if (_hoveredQuickLink >= 0) { _hoveredQuickLink = -1; Cursor = Cursors.Default; }
         if (_hoveredArtifactRow >= 0) { _hoveredArtifactRow = -1; Cursor = Cursors.Default; }
 
@@ -1491,6 +1545,53 @@ internal sealed class OverlayForm : Form, IDenseHost
     {
         if (_warnTooltip.Visible)
             _warnTooltip.Hide();
+    }
+
+    // ── Task-list tooltip ───────────────────────────────────────────────────────
+    // Returns the row whose task-count hit-rect contains p, or -1 (rects captured at paint time).
+    private int HitTestTaskCount(Point p)
+    {
+        foreach (var (row, rect) in _taskRects)
+            if (rect.Contains(p))
+                return row;
+        return -1;
+    }
+
+    private void ShowTaskTooltip(int rowIdx)
+    {
+        if (rowIdx < 0 || rowIdx >= _rows.Count) return;
+        var tasks = _rows[rowIdx].Session.Tasks;
+        if (tasks.Count == 0) return;
+
+        // One line per task, prefixed by a status glyph: ✓ done, ▸ in progress, ○ pending. The active
+        // task reads better as its gerund ("Building …"); the rest by subject. Long labels are clipped
+        // so the (single-line-measured) tooltip can't run off the screen edge.
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < tasks.Count; i++)
+        {
+            if (i > 0) sb.Append('\n');
+            var t = tasks[i];
+            char glyph = t.State switch
+            {
+                TaskState.Completed  => '✓',
+                TaskState.InProgress => '▸',
+                _                    => '○',
+            };
+            string label = t.State == TaskState.InProgress && t.ActiveForm.Length > 0 ? t.ActiveForm : t.Subject;
+            if (label.Length > 64)
+                label = label[..63].TrimEnd() + "…";
+            sb.Append(glyph).Append(' ').Append(label);
+        }
+
+        // Anchor just below the badge; HintTooltipForm clamps it onto the screen.
+        var anchor = PointToScreen(new Point(_taskRects[rowIdx].Left, _taskRects[rowIdx].Bottom + 4));
+        _taskTooltip.ShowText(sb.ToString(), anchor);
+    }
+
+    private void HideTaskTooltip()
+    {
+        if (_taskTooltip.Visible)
+            _taskTooltip.Hide();
     }
 
     private int HitTestRow(Point p)
@@ -1714,10 +1815,12 @@ internal sealed class OverlayForm : Form, IDenseHost
             _usageHoverTimer.Dispose();
             _thermoHoverTimer.Dispose();
             _warnHoverTimer.Dispose();
+            _taskHoverTimer.Dispose();
             _autoCloseBarTimer.Dispose();
             _usageTooltip.Dispose();
             _thermoTooltip.Dispose();
             _warnTooltip.Dispose();
+            _taskTooltip.Dispose();
             _popover?.Dispose();
             _qrForm?.Dispose();
             _icon?.Dispose();
