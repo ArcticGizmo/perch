@@ -112,4 +112,29 @@ public class TranscriptReaderTests
         var reader = new TranscriptReader();
         Assert.Empty(reader.GetTasks("sessB", Cwd));
     }
+
+    [Fact]
+    public void GetTasks_EmptyWhenListIsStaleAfterANewerPrompt()
+    {
+        var reader = new TranscriptReader();
+        // The one task completes, then the user prompts again with no new tasks — the checklist has
+        // been superseded, so nothing should surface (rather than a lingering "1/1").
+        Assert.Empty(reader.GetTasks("sessTasksStale", Cwd));
+    }
+
+    [Fact]
+    public void GetTasks_ReturnsOnlyTheFreshestBatch()
+    {
+        var reader = new TranscriptReader();
+        // Batch one (3 tasks, all completed) is followed by a new prompt and batch two (2 tasks). Only
+        // the second batch surfaces — and its TaskUpdate references the session-monotonic id #4, which
+        // must still resolve even though batch one was dropped.
+        var tasks = reader.GetTasks("sessTasksBatches", Cwd);
+
+        Assert.Equal(2, tasks.Count);
+        Assert.Equal("B2 one", tasks[0].Subject);
+        Assert.Equal(TaskState.InProgress, tasks[0].State);
+        Assert.Equal("B2 two", tasks[1].Subject);
+        Assert.Equal(TaskState.Pending, tasks[1].State);
+    }
 }

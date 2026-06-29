@@ -1,0 +1,5 @@
+{"type":"user","timestamp":"2025-03-10T12:00:00Z","cwd":"C:\\fixtures\\proj","gitBranch":"main","message":{"role":"user","content":"Do a quick one-item plan"}}
+{"type":"assistant","timestamp":"2025-03-10T12:01:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"c1","name":"TaskCreate","input":{"subject":"The only task","description":"x","activeForm":"Doing the only task"}}]}}
+{"type":"assistant","timestamp":"2025-03-10T12:02:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"u1","name":"TaskUpdate","input":{"taskId":"1","status":"completed"}}]}}
+{"type":"user","timestamp":"2025-03-10T12:30:00Z","cwd":"C:\\fixtures\\proj","gitBranch":"main","message":{"role":"user","content":"Thanks — now tell me a joke instead"}}
+{"type":"assistant","timestamp":"2025-03-10T12:30:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"Why did the chicken..."}]}}
