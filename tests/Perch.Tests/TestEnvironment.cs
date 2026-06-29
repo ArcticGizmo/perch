@@ -24,8 +24,5 @@ internal static class TestEnvironment
     public static void Init()
     {
         Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", FixtureConfigDir);
-        // Agent Teams capture is off by default in the product (an opt-in experimental flag); the
-        // teammate tests assert the feature's behaviour, so turn it on for the whole test run.
-        SubAgentReader.TeamsEnabled = true;
     }
 }

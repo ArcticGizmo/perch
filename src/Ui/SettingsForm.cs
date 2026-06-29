@@ -113,9 +113,6 @@ internal sealed class SettingsForm : Form
     /// <summary>Raised when the user toggles "Permission mode badges" (true = shown in the overlay).</summary>
     public event Action<bool>? PermissionModeBadgesChanged;
 
-    /// <summary>Raised when the user toggles "Show Agent Teams in Perch" (true = teammates surfaced).</summary>
-    public event Action<bool>? TeamsDisplayChanged;
-
     /// <summary>Raised when the user adjusts the context-pressure thresholds (whole percentages,
     /// ordered yellow &lt; orange &lt; red).</summary>
     public event Action<int, int, int>? ContextThresholdsChanged;
@@ -1416,10 +1413,9 @@ internal sealed class SettingsForm : Form
         QuickLinksChanged?.Invoke(_quickLinks.Select(l => l.Clone()).ToList());
 
     // ── Experimental ────────────────────────────────────────────────────────────────
-    // Opt-in switches for in-development features. Two independent toggles: enabling Claude Code's
-    // experimental Agent Teams (an env var written into ~/.claude/settings.json that CC reads on
-    // launch), and whether Perch surfaces teammates at all (off by default, so teammates otherwise
-    // render as ordinary sub-agent rows).
+    // Opt-in switches for in-development features. A single toggle enables Claude Code's experimental
+    // Agent Teams (an env var written into ~/.claude/settings.json that CC reads on launch); Perch then
+    // surfaces any teammates it finds automatically.
     private void BuildExperimentalPage(FlowLayoutPanel page)
     {
         page.Controls.Add(SectionTitle("Experimental"));
@@ -1439,20 +1435,9 @@ internal sealed class SettingsForm : Form
             "Sets the CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS environment variable in your user settings " +
             "(~/.claude/settings.json). Claude Code reads it on launch, so restart any open sessions " +
             "for it to take effect."));
-
-        page.Controls.Add(Separator());
-
-        // 2. Perch's own teams capture/rendering. Routed through the owner so it can flip the reader's
-        //    static switch and trigger a re-scan immediately.
-        var teamsDisplayToggle = MakeToggle();
-        teamsDisplayToggle.Checked = _settings.ShowAgentTeams;
-        teamsDisplayToggle.CheckedChanged += (_, _) =>
-            TeamsDisplayChanged?.Invoke(teamsDisplayToggle.Checked);
-        page.Controls.Add(TitleRow("Show Agent Teams in Perch", teamsDisplayToggle));
         page.Controls.Add(BodyText(
-            "Surface teammates as distinct, named rows in the overlay — kept on the roster while they're " +
-            "alive, even when idle between messages from the lead. Off by default; while off, teammates " +
-            "appear as ordinary sub-agent rows, shown only while actively working."));
+            "Once enabled, Perch surfaces teammates automatically as distinct, named rows in the overlay — " +
+            "kept on the roster while they're alive, even when idle between messages from the lead."));
     }
 
     // ── About ─────────────────────────────────────────────────────────────────────
