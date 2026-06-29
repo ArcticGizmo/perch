@@ -98,11 +98,18 @@ internal sealed class SubAgentReader
                 var meta = ReadAgentMeta(Path.ChangeExtension(file, null) + ".meta.json");
                 var state = _agentState.GetOrCompute(file, Classify, default);
 
+                // An explicit SubagentStop / TeammateIdle hook marker (written by the perch plugin)
+                // retires a "working"-looking tail the instant the turn really ended, instead of waiting
+                // out the staleness window — the precise event that replaces the timer guess. It denotes a
+                // clean turn-end, not an interrupt, so it idles the agent rather than flagging it stale.
+                bool ended = state.Working && HasFreshEndMarker(file);
+
                 // A "working" classification only holds while the transcript is still advancing: an agent
                 // left frozen mid-turn by an interrupt keeps that tail forever, so demote it to not-working
-                // once its file has gone silent past the staleness window (see DefaultStaleAfter).
-                bool stale = state.Working && IsStale(file, nowUtc);
-                bool working = state.Working && !stale;
+                // once its file has gone silent past the staleness window (see DefaultStaleAfter). The
+                // explicit marker above wins, so a cleanly-stopped agent never has to wait for this.
+                bool stale = state.Working && !ended && IsStale(file, nowUtc);
+                bool working = state.Working && !ended && !stale;
 
                 if (meta.IsTeammate)
                 {
@@ -143,6 +150,33 @@ internal sealed class SubAgentReader
         try { return nowUtc - File.GetLastWriteTimeUtc(file) > _staleAfter; }
         catch { return false; }
     }
+
+    // True when an authoritative "turn ended" marker sits beside this agent's transcript and is at
+    // least as new as it. The perch plugin's hooks drop one when Claude Code fires the matching event:
+    //   • agent-{id}.stopped — SubagentStop (a sub-agent finished, or a teammate ended its turn)
+    //   • agent-{id}.idle    — TeammateIdle  (a teammate went idle, waiting for the lead)
+    // The reader treats both identically: the agent has stopped working as of the marker's timestamp.
+    // We compare timestamps rather than just existence so a re-tasked teammate self-heals — the lead's
+    // new prompt appends to the transcript, pushing its mtime past the (now stale) marker, and the
+    // agent flips straight back to working. Best-effort: any IO error just defers to the tail/timer.
+    private static bool HasFreshEndMarker(string agentFile)
+    {
+        try
+        {
+            var basePath = Path.ChangeExtension(agentFile, null); // …/agent-{id}
+            var fileTime = File.GetLastWriteTimeUtc(agentFile);
+            foreach (var ext in MarkerExtensions)
+            {
+                var marker = basePath + ext;
+                if (File.Exists(marker) && File.GetLastWriteTimeUtc(marker) >= fileTime)
+                    return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    private static readonly string[] MarkerExtensions = [".stopped", ".idle"];
 
     // agent-{id}.jsonl -> {id} (the teammate's agentId, or the plain sub-agent's hash).
     private static string AgentIdFromFile(string file)

@@ -13,11 +13,33 @@
 #
 # `mode` events only touch {sid}.mode and return immediately, keeping the per-tool-call hot path
 # cheap. Everything no-ops gracefully when the sessions dir is missing.
+#
+# Per-agent turn markers, dropped beside an agent's transcript in
+# {projects}/{enc-cwd}/{session}/subagents/ (not in the sessions dir above):
+#   agent-{id}.stopped — SubagentStop: a sub-agent finished, or a teammate ended a turn.
+#   agent-{id}.idle    — TeammateIdle: a teammate went idle waiting for the lead.
+# The tray reads the marker's mtime to retire the row immediately, rather than waiting out its
+# staleness window. Contents are just a timestamp; no tool-call data is recorded. SessionEnd sweeps
+# them. A later transcript write (a re-tasked teammate) ages the marker out, so the row self-heals.
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$HandleArgs)
 $ErrorActionPreference = 'SilentlyContinue'
 
 $action = if ($HandleArgs.Count -ge 1) { $HandleArgs[0] } else { '' }
 $dir = Join-Path $env:USERPROFILE '.claude\sessions'
+
+# A session's per-agent transcripts (and the markers we drop beside them) live at
+# {projects}/{enc-cwd}/{session}/subagents/. The parent transcript_path the hooks receive is
+# {projects}/{enc-cwd}/{session}.jsonl, so the subagents dir is that path minus its extension plus
+# /subagents — exactly the directory SubAgentReader scans. Returns $null if we can't derive it.
+# NB: avoid [Path]::ChangeExtension($p, $null) here — Windows PowerShell coerces $null to "" and leaves
+# a trailing dot, which corrupts marker filenames. Strip the extension with GetFileNameWithoutExtension.
+function Get-SubagentsDir([string]$transcriptPath) {
+  if (-not $transcriptPath) { return $null }
+  $d = [System.IO.Path]::GetDirectoryName($transcriptPath)
+  $n = [System.IO.Path]::GetFileNameWithoutExtension($transcriptPath)  # {session}
+  if (-not $n) { return $null }
+  return Join-Path (Join-Path $d $n) 'subagents'
+}
 
 # Read this hook's own stdin as UTF-8, independent of the console input encoding.
 $reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)
@@ -26,6 +48,48 @@ $reader.Dispose()
 
 try { $j = $payload | ConvertFrom-Json } catch { exit 0 }
 $sid = $j.session_id
+
+# SubagentStop: a sub-agent finished, or a teammate ended a turn. Drop a marker beside that agent's
+# transcript so the tray retires the row at once instead of waiting out its staleness window. We use
+# the marker's mtime as the event time (the reader compares it to the transcript's), so the body is
+# just a timestamp — no tool-call data is read or recorded. Handled before the .mode write below so a
+# sub-agent's permission_mode never overwrites the parent session's mode sidecar.
+if ($action -eq 'agentstop') {
+  $atp = $j.agent_transcript_path
+  if (-not $atp) {
+    # Older builds may omit it: rebuild …/subagents/agent-{id}.jsonl from the parent path + agent_id.
+    $subdir = Get-SubagentsDir $j.transcript_path
+    if ($subdir -and $j.agent_id) { $atp = Join-Path $subdir ("agent-" + $j.agent_id + ".jsonl") }
+  }
+  if ($atp) {
+    $d = [System.IO.Path]::GetDirectoryName($atp)
+    $n = [System.IO.Path]::GetFileNameWithoutExtension($atp)  # agent-{id}
+    if ($n) {
+      Set-Content -Path (Join-Path $d "$n.stopped") -Value ((Get-Date).ToUniversalTime().ToString('o')) -NoNewline -Encoding ASCII
+    }
+  }
+  exit 0
+}
+
+# TeammateIdle: a teammate went idle waiting for the lead. It carries teammate_name (== the agent's
+# type) but no agent_id, so resolve the transcript by matching the meta sidecars in the subagents dir,
+# then drop an .idle marker beside it. Belt-and-braces alongside agentstop (which usually fires first).
+if ($action -eq 'teammateidle') {
+  $name = $j.teammate_name
+  $subdir = Get-SubagentsDir $j.transcript_path
+  if ($name -and $subdir -and (Test-Path $subdir)) {
+    foreach ($meta in Get-ChildItem -Path $subdir -Filter 'agent-*.meta.json' -ErrorAction SilentlyContinue) {
+      try {
+        $m = Get-Content -Raw -Path $meta.FullName | ConvertFrom-Json
+        if ($m.agentType -eq $name -or $m.name -eq $name) {
+          $base = $meta.FullName.Substring(0, $meta.FullName.Length - '.meta.json'.Length)
+          Set-Content -Path "$base.idle" -Value ((Get-Date).ToUniversalTime().ToString('o')) -NoNewline -Encoding ASCII
+        }
+      } catch { }
+    }
+  }
+  exit 0
+}
 
 # Permission mode: read just the two fields we need and write the sidecar. Nothing else from the
 # payload is touched, so tool-call inputs/outputs are never recorded.
@@ -61,13 +125,19 @@ if ($action -eq 'start') {
   exit 0
 }
 
-# SessionEnd: remove this session's sidecars.
+# SessionEnd: remove this session's sidecars, and sweep any agent stop/idle markers it left behind
+# (a hard kill can end the session before an in-flight sub-agent ever fires SubagentStop).
 if ($action -eq 'cleanup') {
   if ($sid) {
     Remove-Item (Join-Path $dir "$sid.mode")    -Force -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $dir "$sid.notify")  -Force -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $dir "$sid.history") -Force -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $dir "$sid.afk")     -Force -ErrorAction SilentlyContinue  # legacy marker
+  }
+  $subdir = Get-SubagentsDir $j.transcript_path
+  if ($subdir -and (Test-Path $subdir)) {
+    Remove-Item (Join-Path $subdir 'agent-*.stopped') -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $subdir 'agent-*.idle')    -Force -ErrorAction SilentlyContinue
   }
   exit 0
 }

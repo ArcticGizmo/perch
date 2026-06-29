@@ -170,4 +170,97 @@ public class SubAgentReaderTests
         var strict = new SubAgentReader(TimeSpan.FromMinutes(1));
         Assert.True(Assert.Single(strict.GetRunning("sessTeam", Cwd), s => s.Name == "ux-explorer").IsStale);
     }
+
+    // ----- Hook-driven turn markers (SubagentStop / TeammateIdle) -----------------------------
+    //
+    // The plugin drops agent-{id}.stopped / .idle beside an agent's transcript when Claude Code fires
+    // the matching hook. The reader treats a marker as authoritative — provided it's at least as new as
+    // the transcript — so a "working"-looking tail is retired immediately rather than after the 90s
+    // staleness window. A later transcript write (a re-tasked teammate) ages the marker out.
+
+    private static string FixtureSubagentPath(string session, string agentFile) => Path.Combine(
+        TestEnvironment.FixtureConfigDir, "projects", "C--fixtures-proj", session, "subagents", agentFile);
+
+    private static void WriteMarker(string session, string agentFile, string ext, TimeSpan age)
+    {
+        var marker = Path.ChangeExtension(FixtureSubagentPath(session, agentFile), null) + ext;
+        File.WriteAllText(marker, DateTime.UtcNow.ToString("o"));
+        File.SetLastWriteTimeUtc(marker, DateTime.UtcNow - age);
+    }
+
+    private static void DeleteMarker(string session, string agentFile, string ext)
+    {
+        var marker = Path.ChangeExtension(FixtureSubagentPath(session, agentFile), null) + ext;
+        if (File.Exists(marker))
+            File.Delete(marker);
+    }
+
+    [Theory]
+    [InlineData(".stopped")]
+    [InlineData(".idle")]
+    public void GetRunning_WorkingTeammate_WithFreshMarker_IsIdleNotStale(string ext)
+    {
+        // ux-explorer's tail is an unfinished tool_use (working). A marker newer than the transcript is
+        // an explicit "turn ended" — the teammate goes idle at once, flagged clean (not stale) so the
+        // monitor still treats it as a completion rather than an interrupt.
+        StampFixtureAge(Path.Combine("sessTeam", "subagents", "agent-aux-explorer-1111.jsonl"),
+            TimeSpan.FromMinutes(1));
+        WriteMarker("sessTeam", "agent-aux-explorer-1111.jsonl", ext, TimeSpan.Zero);
+        try
+        {
+            var reader = new SubAgentReader();
+            var ux = Assert.Single(reader.GetRunning("sessTeam", Cwd), s => s.Name == "ux-explorer");
+
+            Assert.True(ux.IsTeammate);
+            Assert.True(ux.IsIdle);
+            Assert.False(ux.IsStale);
+            Assert.Null(ux.Activity);
+        }
+        finally
+        {
+            DeleteMarker("sessTeam", "agent-aux-explorer-1111.jsonl", ext);
+        }
+    }
+
+    [Fact]
+    public void GetRunning_MarkerOlderThanTranscript_IsIgnored_RetaskedTeammateWorksAgain()
+    {
+        // A re-tasked teammate: the lead's new prompt appends to the transcript after the old .stopped
+        // marker, so the marker is stale and the row flips straight back to working.
+        WriteMarker("sessTeam", "agent-aux-explorer-1111.jsonl", ".stopped", TimeSpan.FromMinutes(5));
+        StampFixtureAge(Path.Combine("sessTeam", "subagents", "agent-aux-explorer-1111.jsonl"),
+            TimeSpan.Zero);
+        try
+        {
+            var reader = new SubAgentReader();
+            var ux = Assert.Single(reader.GetRunning("sessTeam", Cwd), s => s.Name == "ux-explorer");
+
+            Assert.False(ux.IsIdle);
+            Assert.False(ux.IsStale);
+            Assert.Equal("Searching: OverlayForm", ux.Activity);
+        }
+        finally
+        {
+            DeleteMarker("sessTeam", "agent-aux-explorer-1111.jsonl", ".stopped");
+        }
+    }
+
+    [Fact]
+    public void GetRunning_WorkingPlainSubAgent_WithFreshStopMarker_IsDropped()
+    {
+        // A transient sub-agent with an explicit stop drops off the roster immediately, the same as one
+        // that finished cleanly — no waiting for the staleness window.
+        StampFixtureAge(Path.Combine("sessTeam", "subagents", "agent-plainwork3333.jsonl"),
+            TimeSpan.FromMinutes(1));
+        WriteMarker("sessTeam", "agent-plainwork3333.jsonl", ".stopped", TimeSpan.Zero);
+        try
+        {
+            var reader = new SubAgentReader();
+            Assert.DoesNotContain(reader.GetRunning("sessTeam", Cwd), s => s.AgentId == "plainwork3333");
+        }
+        finally
+        {
+            DeleteMarker("sessTeam", "agent-plainwork3333.jsonl", ".stopped");
+        }
+    }
 }

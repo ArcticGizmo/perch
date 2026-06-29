@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.8] - 2026-06-29
+
+### Detection
+
+- Sub-agents and teammates retire the instant they finish, not a staleness window later.
+- Driven by Claude Code's `SubagentStop`/`TeammateIdle` hooks; the old timer still backs it up.
+- A re-tasked teammate springs back to life on its own (it never really left).
+
+---
+
 ## [v0.1.7] - 2026-06-29
 
 ### Settings
