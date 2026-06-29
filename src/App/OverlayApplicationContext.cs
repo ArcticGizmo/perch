@@ -163,6 +163,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _overlay.SetUsageEnabled(_settings.ShowUsage);
         _overlay.SetShowExpectedRate(_settings.ShowExpectedUsageRate);
         _overlay.SetShowContextPressure(_settings.ShowContextPressure);
+        _overlay.SetShowModeBadges(_settings.ShowPermissionModeBadges);
         _overlay.SetContextThresholds(
             _settings.ContextPressureYellowPercent,
             _settings.ContextPressureOrangePercent,
@@ -222,6 +223,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.UsageEnabledChanged    += SetUsageEnabled;
                 f.ExpectedRateChanged    += SetExpectedRateEnabled;
                 f.ContextPressureChanged += SetContextPressureEnabled;
+                f.PermissionModeBadgesChanged += SetPermissionModeBadgesEnabled;
                 f.ContextThresholdsChanged += SetContextThresholds;
                 f.StuckDetectionChanged += SetStuckDetection;
                 f.CheckForUpdatesRequested += (_, _) => CheckForUpdates();
@@ -297,6 +299,14 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _settings.ShowContextPressure = enabled;
         _settings.Save();
         _overlay.SetShowContextPressure(enabled);
+    }
+
+    private void SetPermissionModeBadgesEnabled(bool enabled)
+    {
+        if (_settings.ShowPermissionModeBadges == enabled) return;
+        _settings.ShowPermissionModeBadges = enabled;
+        _settings.Save();
+        _overlay.SetShowModeBadges(enabled);
     }
 
     private void SetContextThresholds(int yellow, int orange, int red)
