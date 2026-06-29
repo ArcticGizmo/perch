@@ -97,6 +97,12 @@ internal sealed class AppSettings
     public bool ShowEstimatedCost    { get; set; } = true;
     public int  StatsActiveIdleMinutes { get; set; } = 5;
 
+    // Experimental: whether Perch surfaces Agent Teams teammates at all. Off by default — while off,
+    // teammates render as ordinary sub-agent rows (shown only while actively working), with no distinct
+    // teammate label, colour, or persistent idle roster. Applied to SubAgentReader.TeamsEnabled.
+    // Independent of Claude Code's own CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS env flag (see ClaudeUserSettings).
+    public bool ShowAgentTeams { get; set; }
+
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
     // MigrateQuickLinks) with the well-known presets, honouring the legacy switches below. An empty

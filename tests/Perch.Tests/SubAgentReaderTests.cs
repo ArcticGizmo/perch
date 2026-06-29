@@ -127,6 +127,37 @@ public class SubAgentReaderTests
     }
 
     [Fact]
+    public void GetRunning_TeamsDisabled_TreatsTeammatesAsOrdinarySubAgents()
+    {
+        // With the experimental teams switch off, teammates lose their distinct lifecycle: a working
+        // teammate is surfaced as a plain sub-agent (no IsTeammate/name/colour) and an idle teammate is
+        // dropped entirely, exactly like an ordinary transient sub-agent.
+        SubAgentReader.TeamsEnabled = false;
+        try
+        {
+            StampFixtureAge(Path.Combine("sessTeam", "subagents", "agent-aux-explorer-1111.jsonl"), TimeSpan.Zero);
+            StampFixtureAge(Path.Combine("sessTeam", "subagents", "agent-plainwork3333.jsonl"), TimeSpan.Zero);
+            var reader = new SubAgentReader();
+            var running = reader.GetRunning("sessTeam", Cwd);
+
+            // No teammate rows at all; the idle teammate is gone, the working one is now plain.
+            Assert.DoesNotContain(running, s => s.IsTeammate);
+            Assert.DoesNotContain(running, s => s.Name == "devils-advocate");
+
+            var ux = Assert.Single(running, s => s.AgentId == "aux-explorer-1111");
+            Assert.False(ux.IsTeammate);
+            Assert.Null(ux.Name);
+
+            // The two working agents remain (teammate-as-plain + plain sub-agent); both idle ones dropped.
+            Assert.Equal(2, running.Count);
+        }
+        finally
+        {
+            SubAgentReader.TeamsEnabled = true;   // restore the test-run default (see TestEnvironment)
+        }
+    }
+
+    [Fact]
     public void GetRunning_StaleWorkingTeammate_IsDemotedToIdleButStaysOnRoster()
     {
         // A teammate left frozen mid-turn by an interrupt keeps a "working" tail forever. Once its

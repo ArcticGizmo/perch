@@ -29,6 +29,14 @@ internal sealed class SubAgentReader
     // agent flips straight back to working.
     private static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromSeconds(90);
 
+    /// <summary>
+    /// Master switch for Agent Teams support (set from <see cref="AppSettings.ShowAgentTeams"/>). When
+    /// false — the product default — teammates are treated as ordinary sub-agents: surfaced only while
+    /// actively working, with no distinct name/colour or persistent idle roster. Flipping it takes
+    /// effect on the next scan.
+    /// </summary>
+    public static bool TeamsEnabled { get; set; }
+
     private readonly TimeSpan _staleAfter;
 
     // Legacy parent-transcript scan, memoised by the parent transcript's (length, last-write).
@@ -104,7 +112,7 @@ internal sealed class SubAgentReader
                 bool stale = state.Working && IsStale(file, nowUtc);
                 bool working = state.Working && !stale;
 
-                if (meta.IsTeammate)
+                if (meta.IsTeammate && TeamsEnabled)
                 {
                     // Persistent: idle (and stale/interrupted) teammates stay on the roster, just marked
                     // waiting. The stale flag lets SessionMonitor tell an interrupted team from a clean

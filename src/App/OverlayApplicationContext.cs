@@ -71,6 +71,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _settings = AppSettings.Load();
         // Apply the saved active-time idle threshold to the (otherwise static) stats engine.
         SessionStatsService.IdleThreshold = TimeSpan.FromMinutes(Math.Clamp(_settings.StatsActiveIdleMinutes, 1, 30));
+        // Apply the saved Agent Teams display switch to the (static) sub-agent reader.
+        SubAgentReader.TeamsEnabled = _settings.ShowAgentTeams;
 
         _overlay = new OverlayForm();
         _overlay.FormClosed     += (_, _) => ExitThread();
@@ -224,6 +226,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.ExpectedRateChanged    += SetExpectedRateEnabled;
                 f.ContextPressureChanged += SetContextPressureEnabled;
                 f.PermissionModeBadgesChanged += SetPermissionModeBadgesEnabled;
+                f.TeamsDisplayChanged += SetTeamsDisplayEnabled;
                 f.ContextThresholdsChanged += SetContextThresholds;
                 f.StuckDetectionChanged += SetStuckDetection;
                 f.CheckForUpdatesRequested += (_, _) => CheckForUpdates();
@@ -307,6 +310,16 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _settings.ShowPermissionModeBadges = enabled;
         _settings.Save();
         _overlay.SetShowModeBadges(enabled);
+    }
+
+    private void SetTeamsDisplayEnabled(bool enabled)
+    {
+        if (_settings.ShowAgentTeams == enabled) return;
+        _settings.ShowAgentTeams = enabled;
+        _settings.Save();
+        SubAgentReader.TeamsEnabled = enabled;
+        // Re-scan so teammates appear/disappear at once rather than on the next transcript write.
+        RequestScan();
     }
 
     private void SetContextThresholds(int yellow, int orange, int red)
