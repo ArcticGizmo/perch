@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.10] - 2026-06-30
+
+### Notifications
+
+- No more duplicate "done" when a sub-agent finishes and the session keeps working (one was plenty).
+- The completion alert now waits a beat to see whether the parent picks the work back up.
+
+---
+
 ## [v0.1.9] - 2026-06-30
 
 ### Plugin

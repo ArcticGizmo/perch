@@ -9,6 +9,13 @@ internal sealed class SessionMonitor : IDisposable
     private const int NeedsAttentionMinutes = 5;
     private const int DebounceMs = 150;
 
+    // Grace window after a session's sub-agents finish (while the parent still reads as idle) before
+    // we raise a synthetic "done". Long enough for the parent to flip to busy as it resumes to process
+    // the sub-agent's result — that transition cancels the synthetic done so the parent's own
+    // busy->idle fires the single notification — yet short enough that a session that genuinely stops
+    // on the sub-agent's return still alerts promptly. See _subsFinishedIdleAt.
+    private const int SubsCompletionGraceMs = 3000;
+
     // Stuck/runaway detection thresholds. Tuned against a corpus of real transcripts so healthy work
     // almost never trips them: across ~114 transcripts a trailing error streak of 4+ flagged only a
     // handful, and a single command repeated 3+ times in the last 10 calls with 2+ failures was rarer
@@ -37,6 +44,12 @@ internal sealed class SessionMonitor : IDisposable
     // PIDs that had at least one running sub-agent on the previous scan, so we can detect the
     // moment they all finish and treat it like a busy->idle completion.
     private readonly HashSet<string> _hadRunningSubs = new();
+    // When a session's sub-agents all finished while the parent was still reported idle, keyed by PID.
+    // A sub-agent returning control is not the session completing — the parent almost always resumes to
+    // analyse the result (flipping to busy, which clears this entry) and then raises its own busy->idle
+    // "done". Firing here as well is a double-notification, so we defer: the synthetic "done" is raised
+    // only if the parent is still idle once SubsCompletionGraceMs elapses, i.e. it picked nothing up.
+    private readonly Dictionary<string, DateTime> _subsFinishedIdleAt = new();
 
     private readonly SubAgentReader _subAgents = new();
     private readonly TranscriptReader _transcripts = new();
@@ -120,6 +133,7 @@ internal sealed class SessionMonitor : IDisposable
             _runningSince.Remove(key);
             _awaitingInputPids.Remove(key);
             _hadRunningSubs.Remove(key);
+            _subsFinishedIdleAt.Remove(key);
         }
 
         SyncProcessSubscriptions(activePids);
@@ -170,6 +184,16 @@ internal sealed class SessionMonitor : IDisposable
                 continue;
 
             var deadline = idleAt.AddMinutes(NeedsAttentionMinutes);
+            if (earliest == null || deadline < earliest)
+                earliest = deadline;
+        }
+
+        // Also wake at the end of any pending sub-agent-completion grace window, so a session that
+        // stopped on its sub-agents' return (with no later file event to trigger a scan) still fires
+        // its deferred "done" on time instead of waiting out the 30s reconcile poll.
+        foreach (var finishedAt in _subsFinishedIdleAt.Values)
+        {
+            var deadline = finishedAt.AddMilliseconds(SubsCompletionGraceMs);
             if (earliest == null || deadline < earliest)
                 earliest = deadline;
         }
@@ -294,10 +318,15 @@ internal sealed class SessionMonitor : IDisposable
             bool subsWentStale = subAgents.Any(s => s.IsStale);
             bool hadRunningSubs = _hadRunningSubs.Contains(pid);
             bool subsJustFinished = hadRunningSubs && !hasRunningSubs;
+            // Set when the deferred sub-agent completion below actually fires this scan, so the
+            // notification at the end is raised even though this is not a parent busy->idle edge.
+            bool fireSubsCompletion = false;
 
             if (hasRunningSubs)
             {
                 _hadRunningSubs.Add(pid);
+                // Fresh sub-agent activity supersedes any pending completion watch from a prior batch.
+                _subsFinishedIdleAt.Remove(pid);
                 // A live sub-agent means the session is working even when Claude Code reports the
                 // parent as idle (the parent loop is simply blocked waiting on the child).
                 if (status is SessionStatus.Idle or SessionStatus.NeedsAttention)
@@ -309,15 +338,36 @@ internal sealed class SessionMonitor : IDisposable
             else
             {
                 _hadRunningSubs.Remove(pid);
-                // Sub-agents finished and the parent picked nothing else up: surface it like any
-                // other busy->idle completion so the "done" alert still fires — unless they went stale
-                // (the team was interrupted), in which case the user already stopped on purpose.
-                if (subsJustFinished && !subsWentStale && status == SessionStatus.Idle)
+
+                // Sub-agents finished and the parent reads as idle. Do NOT fire "done" here yet: a
+                // sub-agent returning control is not the session completing — the parent almost always
+                // resumes to analyse the result (flipping to busy) and then raises its own busy->idle
+                // "done". Firing now as well is the double-notification users see. Instead arm a short
+                // grace window — unless the subs went stale (the team was interrupted on purpose), in
+                // which case there's no completion to report.
+                if (subsJustFinished && !subsWentStale && status == SessionStatus.Idle
+                    && !_subsFinishedIdleAt.ContainsKey(pid))
+                    _subsFinishedIdleAt[pid] = now;
+
+                // Still idle once the grace window has elapsed: the parent never picked the work back
+                // up (a busy transition would have cleared the entry below), so the sub-agents' return
+                // really was the end of the session's work. Surface it like a busy->idle completion.
+                if (status == SessionStatus.Idle
+                    && _subsFinishedIdleAt.TryGetValue(pid, out var finishedAt)
+                    && (now - finishedAt).TotalMilliseconds >= SubsCompletionGraceMs)
                 {
+                    _subsFinishedIdleAt.Remove(pid);
                     _idleSince[pid] = now;
                     status = SessionStatus.NeedsAttention;
+                    fireSubsCompletion = true;
                 }
             }
+
+            // The parent picked the work back up (resumed to busy, or hit a permission prompt): the
+            // forthcoming busy->idle / awaiting-input alert is now its to raise, so drop the deferred
+            // completion watch to avoid an extra "done".
+            if (status is SessionStatus.Running or SessionStatus.AwaitingInput)
+                _subsFinishedIdleAt.Remove(pid);
 
             var projectName = string.IsNullOrEmpty(cwd)
                 ? sessionId[..Math.Min(8, sessionId.Length)]
@@ -397,7 +447,7 @@ internal sealed class SessionMonitor : IDisposable
                 tasks
             );
 
-            if (status == SessionStatus.NeedsAttention && (prevRaw == "busy" || subsJustFinished))
+            if (status == SessionStatus.NeedsAttention && (prevRaw == "busy" || fireSubsCompletion))
                 NeedsAttention?.Invoke(session);
 
             if (status == SessionStatus.AwaitingInput && _awaitingInputPids.Add(pid))
