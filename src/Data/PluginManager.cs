@@ -183,7 +183,7 @@ internal sealed class PluginManager
 
         await RunClaudeAsync($"plugin marketplace update {MarketplaceName}");
 
-        var update = await RunClaudeAsync($"plugin update {PluginName}");
+        var update = await RunClaudeAsync($"plugin update {PluginId}");
         if (update.exitCode != 0)
             return (false, $"Update failed: {FirstLine(update.output)}");
 

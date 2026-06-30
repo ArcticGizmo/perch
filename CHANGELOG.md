@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.9] - 2026-06-30
+
+### Plugin
+
+- Fixed the Claude Code plugin "Update" button, which had only ever produced errors (it asked for the plugin by the wrong name).
+
+---
+
 ## [v0.1.8] - 2026-06-29
 
 ### Detection
