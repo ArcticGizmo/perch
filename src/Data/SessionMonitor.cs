@@ -6,7 +6,6 @@ namespace Perch.Data;
 
 internal sealed class SessionMonitor : IDisposable
 {
-    private const int NeedsAttentionMinutes = 5;
     private const int DebounceMs = 150;
 
     // Grace window after a session's sub-agents finish (while the parent still reads as idle) before
@@ -80,9 +79,10 @@ internal sealed class SessionMonitor : IDisposable
     public event Action? ChangeDetected;
 
     /// <summary>
-    /// The earliest instant at which a session currently in <see cref="SessionStatus.NeedsAttention"/>
-    /// will lapse back to <see cref="SessionStatus.Idle"/>. Null when no session is in that window.
-    /// Recomputed at the end of every <see cref="Scan"/>.
+    /// The earliest instant at which a deferred sub-agent-completion grace window elapses and must be
+    /// re-scanned (so the synthetic "done" fires on time without a later file event). Null when none is
+    /// pending. The "done" / <see cref="SessionStatus.NeedsAttention"/> badge itself no longer lapses on
+    /// a timer, so it never contributes a deadline. Recomputed at the end of every <see cref="Scan"/>.
     /// </summary>
     public DateTime? NextNeedsAttentionDeadline { get; private set; }
 
@@ -137,7 +137,7 @@ internal sealed class SessionMonitor : IDisposable
         }
 
         SyncProcessSubscriptions(activePids);
-        NextNeedsAttentionDeadline = ComputeNextDeadline(sessions);
+        NextNeedsAttentionDeadline = ComputeNextDeadline();
 
         SessionsChanged?.Invoke(sessions);
 
@@ -173,22 +173,11 @@ internal sealed class SessionMonitor : IDisposable
         }
     }
 
-    private DateTime? ComputeNextDeadline(IReadOnlyList<ClaudeSession> sessions)
+    private DateTime? ComputeNextDeadline()
     {
         DateTime? earliest = null;
-        foreach (var session in sessions)
-        {
-            if (session.Status != SessionStatus.NeedsAttention)
-                continue;
-            if (!_idleSince.TryGetValue(session.Pid, out var idleAt))
-                continue;
 
-            var deadline = idleAt.AddMinutes(NeedsAttentionMinutes);
-            if (earliest == null || deadline < earliest)
-                earliest = deadline;
-        }
-
-        // Also wake at the end of any pending sub-agent-completion grace window, so a session that
+        // Wake at the end of any pending sub-agent-completion grace window, so a session that
         // stopped on its sub-agents' return (with no later file event to trigger a scan) still fires
         // its deferred "done" on time instead of waiting out the 30s reconcile poll.
         foreach (var finishedAt in _subsFinishedIdleAt.Values)
@@ -296,10 +285,10 @@ internal sealed class SessionMonitor : IDisposable
                     _idleSince.Remove(pid);
                     status = SessionStatus.Idle;
                 }
-                else if (
-                    _idleSince.TryGetValue(pid, out var idleAt)
-                    && (now - idleAt).TotalMinutes < NeedsAttentionMinutes
-                )
+                else if (_idleSince.ContainsKey(pid))
+                    // A completed session keeps its "done" badge until the user acknowledges it (focuses
+                    // the terminal / clicks the alert, via Acknowledge) or it resumes work (busy clears
+                    // _idleSince above). It is never cleared on a timer.
                     status = SessionStatus.NeedsAttention;
                 else
                     status = SessionStatus.Idle;

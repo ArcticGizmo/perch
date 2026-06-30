@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.11] - 2026-06-30
+
+### Notifications
+
+- The "done" badge now sticks until you look at it, instead of vanishing after five minutes.
+
+---
+
 ## [v0.1.10] - 2026-06-30
 
 ### Notifications
