@@ -123,6 +123,10 @@ internal sealed class SettingsForm : Form
     /// <summary>Raised when the user toggles "Artifacts" (true = the clickable artifact glyph is shown).</summary>
     public event Action<bool>? ArtifactsChanged;
 
+    /// <summary>Raised when the user toggles "Hide inactive members" (true = idle teammates are dropped
+    /// from the overlay roster).</summary>
+    public event Action<bool>? HideInactiveTeamMembersChanged;
+
     /// <summary>Raised when the user adjusts the context-pressure thresholds (whole percentages,
     /// ordered yellow &lt; orange &lt; red).</summary>
     public event Action<int, int, int>? ContextThresholdsChanged;
@@ -1525,6 +1529,19 @@ internal sealed class SettingsForm : Form
         page.Controls.Add(BodyText(
             "Once enabled, Perch surfaces teammates automatically as distinct, named rows in the overlay — " +
             "kept on the roster while they're alive, even when idle between messages from the lead."));
+
+        page.Controls.Add(Separator());
+
+        // 2. Trim the roster down to teammates that are actually working. Display-only; raises the
+        //    event so the overlay re-filters live. Off by default (show the full roster).
+        var hideInactiveToggle = MakeToggle();
+        hideInactiveToggle.Checked = _settings.HideInactiveTeamMembers;
+        hideInactiveToggle.CheckedChanged += (_, _) =>
+            HideInactiveTeamMembersChanged?.Invoke(hideInactiveToggle.Checked);
+        page.Controls.Add(TitleRow("Hide inactive members", hideInactiveToggle));
+        page.Controls.Add(BodyText(
+            "Drops idle teammates — those waiting for the lead — from the overlay, so only teammates " +
+            "actively working are shown. A hidden teammate reappears the moment it starts working again."));
     }
 
     // ── About ─────────────────────────────────────────────────────────────────────

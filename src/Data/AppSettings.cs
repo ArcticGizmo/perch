@@ -113,6 +113,12 @@ internal sealed class AppSettings
     public bool ShowEstimatedCost    { get; set; } = true;
     public int  StatsActiveIdleMinutes { get; set; } = 5;
 
+    // Experimental. When on, idle (waiting-for-the-lead) teammates are dropped from the overlay roster
+    // instead of lingering as greyed rows — only teammates actively working are shown. Purely a display
+    // filter: the teammates are still tracked, and a hidden one reappears the moment it starts working
+    // again. Defaults to false (show the full roster); a missing key keeps the roster complete.
+    public bool HideInactiveTeamMembers { get; set; }
+
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
     // MigrateQuickLinks) with the well-known presets, honouring the legacy switches below. An empty

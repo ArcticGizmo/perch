@@ -167,6 +167,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _overlay.SetShowModeBadges(_settings.ShowPermissionModeBadges);
         _overlay.SetShowTaskProgress(_settings.ShowTaskProgress);
         _overlay.SetShowArtifacts(_settings.ShowArtifacts);
+        _overlay.SetHideInactiveTeamMembers(_settings.HideInactiveTeamMembers);
         _overlay.SetContextThresholds(
             _settings.ContextPressureYellowPercent,
             _settings.ContextPressureOrangePercent,
@@ -230,6 +231,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.PermissionModeBadgesChanged += SetPermissionModeBadgesEnabled;
                 f.TaskProgressChanged += SetTaskProgressEnabled;
                 f.ArtifactsChanged += SetArtifactsEnabled;
+                f.HideInactiveTeamMembersChanged += SetHideInactiveTeamMembers;
                 f.ContextThresholdsChanged += SetContextThresholds;
                 f.StuckDetectionChanged += SetStuckDetection;
                 f.CheckForUpdatesRequested += (_, _) => CheckForUpdates();
@@ -337,6 +339,14 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _settings.ShowArtifacts = enabled;
         _settings.Save();
         _overlay.SetShowArtifacts(enabled);
+    }
+
+    private void SetHideInactiveTeamMembers(bool enabled)
+    {
+        if (_settings.HideInactiveTeamMembers == enabled) return;
+        _settings.HideInactiveTeamMembers = enabled;
+        _settings.Save();
+        _overlay.SetHideInactiveTeamMembers(enabled);
     }
 
     private void SetContextThresholds(int yellow, int orange, int red)

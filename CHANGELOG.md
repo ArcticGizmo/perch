@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.14] - 2026-07-01
+
+### Experimental
+
+- "Hide inactive members" toggle for Agent Teams — idle teammates drop off the roster (they reappear the moment they do something).
+
+---
+
 ## [v0.1.13] - 2026-07-01
 
 ### Context pressure

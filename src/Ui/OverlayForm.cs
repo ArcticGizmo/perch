@@ -82,6 +82,10 @@ internal sealed class OverlayForm : Form, IDenseHost
     // Display-only gate for the clickable artifact glyph; when off no glyph is drawn and the row's
     // click falls through to focusing the terminal. The session still tracks its artifacts.
     private bool  _showArtifacts = true;
+    // Display-only gate for idle teammates: when on, teammates waiting for the lead are dropped from
+    // the roster and only working ones are shown. The teammates are still tracked; a hidden one
+    // reappears the moment it starts working again. See SetHideInactiveTeamMembers.
+    private bool  _hideInactiveTeamMembers;
     private bool  _attentionFlash;
 
     // Dense mode: an alternate, out-of-the-way presentation (a slim strip hugging a screen edge that
@@ -304,6 +308,9 @@ internal sealed class OverlayForm : Form, IDenseHost
             // Teammates (the persistent roster) lead, grouped and sorted by name so they read as a team;
             // transient sub-agents follow. Working teammates sort above idle ones within the roster.
             var ordered = session.SubAgents
+                // When on, drop idle teammates from the roster — only working ones are shown. Transient
+                // sub-agents are already working by definition, so this only ever hides idle teammates.
+                .Where(s => !_hideInactiveTeamMembers || !(s.IsTeammate && s.IsIdle))
                 .OrderByDescending(s => s.IsTeammate)
                 .ThenBy(s => s.IsTeammate && s.IsIdle)
                 .ThenBy(s => s.Name ?? s.Description, StringComparer.OrdinalIgnoreCase);
@@ -430,6 +437,16 @@ internal sealed class OverlayForm : Form, IDenseHost
             Cursor = Cursors.Default;
         }
         Invalidate();
+    }
+
+    /// <summary>Shows or hides idle teammates. Display only — when on, teammates waiting for the lead
+    /// drop off the roster and only working ones remain; a hidden teammate reappears the moment it
+    /// starts working again. Rebuilds the row list from the current sessions so the change is immediate.</summary>
+    public void SetHideInactiveTeamMembers(bool hide)
+    {
+        if (_hideInactiveTeamMembers == hide) return;
+        _hideInactiveTeamMembers = hide;
+        UpdateSessions(_sessions);   // re-run the roster build (which owns the filter) and relayout
     }
 
     // Toggles the upside-down quick-link icons. Repaint only — layout is unaffected.
