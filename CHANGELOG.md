@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.16] - 2026-07-01
+
+### Fixed
+
+- Stopped reading an open `/workflows` menu as "awaiting input" (it was just a menu).
+
+---
+
 ## [v0.1.15] - 2026-07-01
 
 ### Monitoring

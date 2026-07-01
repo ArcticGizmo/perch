@@ -249,11 +249,7 @@ internal sealed class SessionMonitor : IDisposable
                 (bareCommand ??= _transcripts.LastTurnWasBareCommand(sessionId, cwd)) == true;
 
             SessionStatus status;
-            // Claude Code reports a dedicated "waiting" status (with a "waitingFor" hint such as
-            // "permission prompt") while it is blocked on user input. Some flows may also surface
-            // a non-empty waitingFor without flipping the status, so treat either as awaiting input.
-            bool awaitingInput =
-                rawStatus == "waiting" || !string.IsNullOrWhiteSpace(waitingFor);
+            bool awaitingInput = IsAwaitingInput(rawStatus, waitingFor);
             if (awaitingInput && IsBareCommand())
             {
                 // An interactive built-in (e.g. the /model picker) is open. The user typed the
@@ -523,6 +519,28 @@ internal sealed class SessionMonitor : IDisposable
         {
             return PermissionMode.Normal;
         }
+    }
+
+    /// <summary>
+    /// Whether a raw session status of <paramref name="rawStatus"/> with hint
+    /// <paramref name="waitingFor"/> means the model is genuinely blocked on user input (a
+    /// permission prompt and the like). Claude Code reports a dedicated "waiting" status (with a
+    /// "waitingFor" hint such as "permission prompt") while blocked; some flows also surface a
+    /// non-empty waitingFor without flipping the status, so either normally counts.
+    /// <para>
+    /// The exception is <c>"dialog open"</c>: that is a passive client-side overlay (e.g.
+    /// <c>/workflows</c>, <c>/model</c>, <c>/config</c>) — the user opened a CLI menu and is already
+    /// at the keyboard, not being asked to respond to the model. Claude Code still reports status
+    /// "waiting" the whole time it's open, so treating it as awaiting-input pegs the session as
+    /// "awaiting input" for as long as the menu is up (notably while watching <c>/workflows</c>
+    /// during a live run). It is not a prompt, so it must not count.
+    /// </para>
+    /// </summary>
+    internal static bool IsAwaitingInput(string rawStatus, string? waitingFor)
+    {
+        if (string.Equals(waitingFor, "dialog open", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return rawStatus == "waiting" || !string.IsNullOrWhiteSpace(waitingFor);
     }
 
     private static bool IsProcessRunning(string pid)
