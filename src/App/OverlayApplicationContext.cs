@@ -21,6 +21,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
 
     private readonly OverlayForm _overlay;
     private readonly SessionMonitor _monitor;
+    private readonly MetricsMonitor _metricsMonitor = new();
     private readonly UsageMonitor _usageMonitor = new();
     private readonly System.Windows.Forms.Timer _reconcileTimer;
     private readonly System.Windows.Forms.Timer _deadlineTimer;
@@ -134,6 +135,9 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         // Fires on a thread-pool thread (watcher / process-exit callbacks); marshal to the UI thread.
         _monitor.ChangeDetected  += RequestScan;
 
+        // Resource sampler: fires on its own timer thread; marshal the reading onto the UI thread.
+        _metricsMonitor.Updated += OnMetricsUpdated;
+
         // One-shot timer that fires the moment a "needs attention" window lapses back to idle —
         // a purely time-based transition with no corresponding file change to drive it.
         _deadlineTimer = new System.Windows.Forms.Timer();
@@ -173,6 +177,9 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _settings.ContextPressureOrangePercent,
             _settings.ContextPressureRedPercent);
         ApplyStuckDetectionSettings();
+        _overlay.SetShowSystemMetrics(_settings.ShowSystemMetrics);
+        _overlay.SetShowSessionMetrics(_settings.ShowSessionMetrics);
+        ApplyMonitoringSettings();
         _overlay.SetExternalNotificationsAvailable(_settings.ExternalNotificationsEnabled);
         // Warm the (slow, one-off) Start Menu app lookup off the UI thread so the first quick-link
         // icon load and the Add/Edit dialog don't stall on it.
@@ -234,6 +241,9 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.HideInactiveTeamMembersChanged += SetHideInactiveTeamMembers;
                 f.ContextThresholdsChanged += SetContextThresholds;
                 f.StuckDetectionChanged += SetStuckDetection;
+                f.SystemMetricsChanged += SetSystemMetricsEnabled;
+                f.SessionMetricsChanged += SetSessionMetricsEnabled;
+                f.SubprocessMetricsChanged += SetSubprocessMetricsEnabled;
                 f.CheckForUpdatesRequested += (_, _) => CheckForUpdates();
                 f.TestNotificationRequested += _notifications.ShowTest;
                 f.ExternalNotificationsEnabledChanged += SetExternalNotificationsEnabled;
@@ -380,6 +390,50 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         RequestScan();
     }
 
+    // ── Resource monitoring ───────────────────────────────────────────────────────
+    // Marshals a metrics sample onto the UI thread and pushes it into the overlay. Fires on the
+    // MetricsMonitor's own timer thread.
+    private void OnMetricsUpdated(SystemMetrics system, IReadOnlyDictionary<string, SessionMetrics> sessions)
+        => UiDispatch.Post(_overlay, () =>
+        {
+            _overlay.UpdateSystemMetrics(system);
+            _overlay.UpdateSessionMetrics(sessions);
+        });
+
+    // Configures the sampler from the current settings — sampling runs only while system or per-session
+    // metrics are on. Shared by startup and the live setting changes below.
+    private void ApplyMonitoringSettings()
+        => _metricsMonitor.Configure(
+            _settings.ShowSystemMetrics,
+            _settings.ShowSessionMetrics,
+            _settings.IncludeSubprocessMetrics);
+
+    private void SetSystemMetricsEnabled(bool enabled)
+    {
+        if (_settings.ShowSystemMetrics == enabled) return;
+        _settings.ShowSystemMetrics = enabled;
+        _settings.Save();
+        _overlay.SetShowSystemMetrics(enabled);
+        ApplyMonitoringSettings();
+    }
+
+    private void SetSessionMetricsEnabled(bool enabled)
+    {
+        if (_settings.ShowSessionMetrics == enabled) return;
+        _settings.ShowSessionMetrics = enabled;
+        _settings.Save();
+        _overlay.SetShowSessionMetrics(enabled);
+        ApplyMonitoringSettings();
+    }
+
+    private void SetSubprocessMetricsEnabled(bool enabled)
+    {
+        if (_settings.IncludeSubprocessMetrics == enabled) return;
+        _settings.IncludeSubprocessMetrics = enabled;
+        _settings.Save();
+        ApplyMonitoringSettings();
+    }
+
     // Fetches usage off the UI thread, then pushes the result back onto it for rendering in both
     // the overlay and (if open) the settings window. Caches the latest reading for new windows.
     private async void RefreshUsage()
@@ -418,6 +472,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     {
         _sessions = sessions;
         _overlay.UpdateSessions(sessions);
+        // Tell the resource sampler which session processes to measure this round.
+        _metricsMonitor.SetSessionPids(sessions.Select(s => s.Pid));
         if (_historyForm is { IsDisposed: false })
             _historyForm.SetActiveSessions(sessions);
         // Refresh the overlay's mail glyphs from the per-session opt-in marker files just read.
@@ -661,6 +717,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _usageTimer.Dispose();
             _autoCloseTimer.Dispose();
             _monitor.Dispose();
+            _metricsMonitor.Dispose();
             _lockMonitor.Dispose();
             _notifyIcon.Icon?.Dispose();
             _notifyIcon.Dispose();

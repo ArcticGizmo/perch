@@ -113,6 +113,17 @@ internal sealed class AppSettings
     public bool ShowEstimatedCost    { get; set; } = true;
     public int  StatsActiveIdleMinutes { get; set; } = 5;
 
+    // Monitoring. System resource metrics surfaced in the overlay:
+    //  • ShowSystemMetrics    — the whole-machine CPU + RAM strip at the top of the panel.
+    //  • ShowSessionMetrics   — a per-session CPU/RAM mini-bar on each session row (hover for numbers).
+    //  • IncludeSubprocessMetrics — roll a session's number up over its whole process tree (the MCP
+    //    servers, shells and tools its claude process spawns) rather than the claude process alone.
+    // All off by default — monitoring is opt-in, so no counters are sampled until the user turns one on
+    // (sampling runs only while system or per-session is enabled). A missing key keeps these defaults.
+    public bool ShowSystemMetrics        { get; set; }
+    public bool ShowSessionMetrics       { get; set; }
+    public bool IncludeSubprocessMetrics { get; set; }
+
     // Experimental. When on, idle (waiting-for-the-lead) teammates are dropped from the overlay roster
     // instead of lingering as greyed rows — only teammates actively working are shown. Purely a display
     // filter: the teammates are still tracked, and a hidden one reappears the moment it starts working

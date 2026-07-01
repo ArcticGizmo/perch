@@ -18,6 +18,8 @@ internal sealed class OverlayForm : Form, IDenseHost
     private const int HeaderHeight    = 44;
     private const int BarRowHeight    = 18;
     private const int UsageStripHeight= 50;  // two usage bars + padding, shown only when expanded
+    private const int SysMetricsStripHeight = 50;  // system CPU + RAM bars + padding, shown only when expanded
+    private const int MetricsBarWidth = 28;  // width reserved for a session row's CPU/RAM mini-bars
     private const int RowHeight        = 46;
     private const int SubRowHeight      = 24;
     private const int SubIndent         = 22;
@@ -94,6 +96,21 @@ internal sealed class OverlayForm : Form, IDenseHost
     // form just forwards paint/mouse/relayout to it. Created in the constructor (after _icon exists).
     private readonly DenseModeController _denseMode;
 
+    // Resource monitoring. The whole-machine strip at the top of the panel, and a per-session CPU/RAM
+    // mini-bar on each session row. Both are pushed in from the owning context (settings + the metrics
+    // monitor's samples); _sessionMetrics is keyed by session pid. See DrawSystemMetricsStrip /
+    // DrawMetricsBars and the metrics hover plumbing below.
+    private bool _showSystemMetrics;
+    private bool _showSessionMetrics;
+    private SystemMetrics _sysMetrics = SystemMetrics.Empty;
+    private IReadOnlyDictionary<string, SessionMetrics> _sessionMetrics = new Dictionary<string, SessionMetrics>();
+    // Metrics mini-bar hover: a per-row hit-rect rebuilt each paint, a dwell timer and a tooltip giving
+    // the fine-grained CPU%/RAM numbers — twin to the thermometer/warning/task glyphs' plumbing.
+    private readonly Dictionary<int, Rectangle> _metricsRects = new();
+    private int _hoveredMetricsRow = -1;
+    private readonly System.Windows.Forms.Timer _metricsHoverTimer;
+    private readonly HintTooltipForm _metricsTooltip = new();
+
     private UsageInfo _usage = UsageInfo.Empty;
     private bool _usageEnabled = true;
     private bool _showExpectedRate = true;
@@ -147,8 +164,12 @@ internal sealed class OverlayForm : Form, IDenseHost
 
     private bool HasQuickLinksRow => _quickLinks.Count > 0;
 
-    // Top of the session rows when expanded: header, plus the usage strip and optional quick-links row.
-    private int RowsTop => HeaderHeight + (_usageEnabled ? UsageStripHeight : 0) + (HasQuickLinksRow ? QuickLinksRowHeight : 0);
+    // The stacked strips below the header, in order: system-metrics, usage, quick-links, then rows.
+    // Each strip's top is the previous one's bottom, so the layout stays consistent whether or not a
+    // given strip is shown.
+    private int UsageStripTop => HeaderHeight + (_showSystemMetrics ? SysMetricsStripHeight : 0);
+    private int QuickLinksTop => UsageStripTop + (_usageEnabled ? UsageStripHeight : 0);
+    private int RowsTop       => QuickLinksTop + (HasQuickLinksRow ? QuickLinksRowHeight : 0);
 
     private readonly System.Windows.Forms.Timer _flashTimer;
     private readonly System.Windows.Forms.Timer _flashStopTimer;
@@ -258,6 +279,16 @@ internal sealed class OverlayForm : Form, IDenseHost
                 ShowTaskTooltip(_hoveredTaskRow);
         };
 
+        // One-shot dwell timer for the per-session metrics mini-bar, twin to the task badge's above;
+        // pops the fine-grained CPU%/RAM tooltip.
+        _metricsHoverTimer = new System.Windows.Forms.Timer { Interval = 150 };
+        _metricsHoverTimer.Tick += (_, _) =>
+        {
+            _metricsHoverTimer.Stop();
+            if (_hoveredMetricsRow >= 0 && !_dragging)
+                ShowMetricsTooltip(_hoveredMetricsRow);
+        };
+
         // Repaints the auto-close countdown bar while it's active. Stops itself once the deadline
         // passes (the context's grace timer fires Exit at that point and tears the window down).
         _autoCloseBarTimer = new System.Windows.Forms.Timer { Interval = 50 };
@@ -365,6 +396,53 @@ internal sealed class OverlayForm : Form, IDenseHost
         if (_showExpectedRate == show) return;
         _showExpectedRate = show;
         Invalidate();
+    }
+
+    // ── Resource monitoring ─────────────────────────────────────────────────────
+    // Shows or hides the whole-machine CPU/RAM strip at the top of the panel. Reserves (or frees) the
+    // strip's height, so it relayouts.
+    public void SetShowSystemMetrics(bool show)
+    {
+        if (_showSystemMetrics == show) return;
+        _showSystemMetrics = show;
+        RelayoutWindow();
+        Invalidate();
+    }
+
+    // Shows or hides the per-session CPU/RAM mini-bar on each session row. Display only — the row
+    // simply reclaims the freed width when off; the samples keep arriving regardless.
+    public void SetShowSessionMetrics(bool show)
+    {
+        if (_showSessionMetrics == show) return;
+        _showSessionMetrics = show;
+        if (!show)
+        {
+            _hoveredMetricsRow = -1;
+            _metricsHoverTimer.Stop();
+            HideMetricsTooltip();
+        }
+        Invalidate();
+    }
+
+    // Latest whole-machine reading, drawn in the top strip.
+    public void UpdateSystemMetrics(SystemMetrics metrics)
+    {
+        _sysMetrics = metrics;
+        if (_showSystemMetrics)
+            Invalidate();
+    }
+
+    // Latest per-session readings, keyed by session pid, drawn as each row's mini-bar. Refreshes the
+    // metrics tooltip in place if it's currently open.
+    public void UpdateSessionMetrics(IReadOnlyDictionary<string, SessionMetrics> metrics)
+    {
+        _sessionMetrics = metrics;
+        if (_showSessionMetrics)
+        {
+            if (_hoveredMetricsRow >= 0 && _metricsTooltip.Visible)
+                ShowMetricsTooltip(_hoveredMetricsRow);
+            Invalidate();
+        }
     }
 
     public void SetShowContextPressure(bool show)
@@ -596,6 +674,8 @@ internal sealed class OverlayForm : Form, IDenseHost
         int h = HeaderHeight;
         if (_rows.Count > 0)
         {
+            if (_showSystemMetrics)
+                h += SysMetricsStripHeight;  // system CPU/RAM strip sits just under the header
             if (_usageEnabled)
                 h += UsageStripHeight;  // usage bars sit between the header and the rows
             if (HasQuickLinksRow)
@@ -637,6 +717,8 @@ internal sealed class OverlayForm : Form, IDenseHost
 
         if (ShowFullPanel)
         {
+            if (_showSystemMetrics)
+                DrawSystemMetricsStrip(g);
             if (_usageEnabled)
                 DrawUsageBars(g);
             if (HasQuickLinksRow)
@@ -646,6 +728,7 @@ internal sealed class OverlayForm : Form, IDenseHost
             _thermoRects.Clear();
             _warnRects.Clear();
             _taskRects.Clear();
+            _metricsRects.Clear();
             for (int i = 0; i < _rows.Count; i++)
                 DrawRow(g, i);
         }
@@ -872,6 +955,38 @@ internal sealed class OverlayForm : Form, IDenseHost
         g.SmoothingMode = oldSmoothing;
     }
 
+    // ── System metrics strip ────────────────────────────────────────────────────
+    // Two bars at the top of the panel (just under the header): whole-machine CPU and physical-RAM
+    // load, drawn with the same shared renderer as the usage bars so the two strips read alike. The
+    // percentage doubles as the bar fill and is coloured by load (green → red). Shows em-dashes until
+    // the first real sample lands (CPU needs two samples to produce a reading).
+    private void DrawSystemMetricsStrip(Graphics g)
+    {
+        using var capFont = new Font("Segoe UI", 7.5f, FontStyle.Regular, GraphicsUnit.Point);
+        using var pctFont = new Font("Segoe UI", 7.5f, FontStyle.Bold,    GraphicsUnit.Point);
+
+        bool has = _sysMetrics.HasData;
+        int top = HeaderHeight + 2;
+        DrawSysBar(g, top,                "CPU", has ? _sysMetrics.CpuPercent : null, capFont, pctFont);
+        DrawSysBar(g, top + BarRowHeight, "RAM", has ? _sysMetrics.RamPercent : null, capFont, pctFont);
+
+        // A thin grey rule separating the system strip from the usage strip below it — only drawn when
+        // the usage strip is actually there to divide from. Floated a few px above the strip boundary
+        // so the clearance to the bars above and the usage bars below reads evenly, not cramped.
+        if (_usageEnabled)
+        {
+            int sepY = UsageStripTop - 4;
+            using var sepPen = new Pen(SepColor, 1f);
+            g.DrawLine(sepPen, HorizPad, sepY, ClientSize.Width - HorizPad, sepY);
+        }
+    }
+
+    private void DrawSysBar(Graphics g, int rowTop, string caption, double? percent, Font capFont, Font pctFont) =>
+        UsageBarRenderer.Draw(g, HorizPad, ClientSize.Width - HorizPad, rowTop + BarRowHeight / 2,
+            caption, percent, expectedPct: null, stale: false, capFont, pctFont,
+            MutedColor, UsageTrackColor, Color.FromArgb(180, 180, 195), BgColor,
+            captionW: 46, pctW: 34, trackH: 7);
+
     // ── Usage bars ─────────────────────────────────────────────────────────────
     // Two always-visible bars below the banner: the 5-hour ("Session") and 7-day ("Weekly")
     // rate-limit windows. Dimmed when the data is stale/unavailable.
@@ -882,7 +997,7 @@ internal sealed class OverlayForm : Form, IDenseHost
         using var capFont = new Font("Segoe UI", 7.5f, FontStyle.Regular, GraphicsUnit.Point);
         using var pctFont = new Font("Segoe UI", 7.5f, FontStyle.Bold,    GraphicsUnit.Point);
 
-        int top = HeaderHeight + 2;
+        int top = UsageStripTop + 2;
         double? sessionExpected = _showExpectedRate ? UsageBarRenderer.ElapsedPercent(_usage.FiveHourResetsAt, TimeSpan.FromHours(5)) : null;
         double? weeklyExpected  = _showExpectedRate ? UsageBarRenderer.ElapsedPercent(_usage.SevenDayResetsAt, TimeSpan.FromDays(7))  : null;
         DrawUsageBar(g, top,                "Session", _usage.FiveHourPercent, sessionExpected, stale, capFont, pctFont);
@@ -907,7 +1022,7 @@ internal sealed class OverlayForm : Form, IDenseHost
         const int IconGap  = 14;
         const int HitPad   = 4;
 
-        int rowTop  = HeaderHeight + (_usageEnabled ? UsageStripHeight : 0);
+        int rowTop  = QuickLinksTop;
         int centerY = rowTop + QuickLinksRowHeight / 2;
 
         int count  = _quickLinks.Count;
@@ -963,7 +1078,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private int HitTestQuickLink(Point p)
     {
         if (!HasQuickLinksRow) return -1;
-        int rowTop = HeaderHeight + (_usageEnabled ? UsageStripHeight : 0);
+        int rowTop = QuickLinksTop;
         if (p.Y < rowTop || p.Y >= rowTop + QuickLinksRowHeight) return -1;
 
         const int IconSize = 16;
@@ -1252,8 +1367,14 @@ internal sealed class OverlayForm : Form, IDenseHost
         string taskLabel = hasTasks ? $"{session.CompletedTaskCount}/{session.Tasks.Count}" : "";
         var taskSz       = hasTasks ? g.MeasureString(taskLabel, statusFont) : SizeF.Empty;
         int taskWidth    = hasTasks ? (int)taskSz.Width + 8 : 0;  // count + gap to the badge/status on its right
+        // Per-session resource mini-bars: shown when enabled and a sample exists for this session's pid
+        // (ProcessCount 0 means "no reading yet"). Sub-agent rows never show them — a sub-agent shares
+        // its parent's OS process, so its usage isn't separable and folds into the parent row's total.
+        _sessionMetrics.TryGetValue(session.Pid, out var metrics);
+        bool showMetrics = _showSessionMetrics && metrics.ProcessCount > 0;
+        int metricsWidth = showMetrics ? MetricsBarWidth : 0;
         var statusSz     = g.MeasureString(statusText, statusFont);
-        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - mailWidth - artWidth - warnWidth - thermoWidth - taskWidth;
+        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - mailWidth - artWidth - warnWidth - thermoWidth - taskWidth - metricsWidth;
         var nameTrunc    = TruncateString(g, session.DisplayName, nameFont, nameMaxWidth);
         var nameSz       = g.MeasureString(nameTrunc, nameFont);
 
@@ -1304,6 +1425,15 @@ internal sealed class OverlayForm : Form, IDenseHost
             using var taskBrush = new SolidBrush(allDone ? RunningColor : MutedColor);
             g.DrawString(taskLabel, statusFont, taskBrush, taskX, nameMidY - taskSz.Height / 2);
             _taskRects[rowIdx] = new Rectangle(taskX - 2, nameMidY - 9, (int)taskSz.Width + 6, 18);
+        }
+
+        // Resource mini-bars, just left of the task count. Remember a generous hit-rect so a hover can
+        // pop the fine-grained CPU%/RAM tooltip.
+        if (showMetrics)
+        {
+            int metricsX = statusX - thermoWidth - badgeWidth - taskWidth - metricsWidth;
+            DrawMetricsBars(g, metrics, metricsX, nameMidY);
+            _metricsRects[rowIdx] = new Rectangle(metricsX, nameMidY - 9, metricsWidth, 18);
         }
 
         if (twoLine)
@@ -1413,6 +1543,38 @@ internal sealed class OverlayForm : Form, IDenseHost
         g.SmoothingMode = old;
     }
 
+    // A session's rolled-up resource use as two stacked micro-bars — CPU on top, RAM below — each
+    // filled proportionally and coloured by load (green → red via Theme.UsageColor). CPU is a
+    // percentage of the whole machine; RAM is drawn against total physical RAM (the same denominator
+    // as the top strip's RAM bar), so a row's bars are directly comparable to the machine total. x is
+    // the left edge of the reserved MetricsBarWidth; midY is the row's name-line centre.
+    private void DrawMetricsBars(Graphics g, SessionMetrics m, int x, int midY)
+    {
+        const int barH = 3, gap = 2;
+        int barW = MetricsBarWidth - 4;      // small inset within the reserved width
+        int cpuY = midY - gap / 2 - barH;    // top bar sits just above centre
+        int ramY = midY + (gap + 1) / 2;     // bottom bar just below
+
+        double cpuPct = Math.Clamp(m.CpuPercent, 0, 100);
+        double ramPct = _sysMetrics.TotalRamBytes > 0
+            ? Math.Clamp(100.0 * m.RamBytes / _sysMetrics.TotalRamBytes, 0, 100)
+            : 0;
+
+        DrawMiniBar(g, x, cpuY, barW, barH, cpuPct);
+        DrawMiniBar(g, x, ramY, barW, barH, ramPct);
+    }
+
+    private static void DrawMiniBar(Graphics g, int x, int y, int w, int h, double pct)
+    {
+        using (var track = new SolidBrush(UsageTrackColor))
+            PaintKit.FillRoundedBar(g, track, x, y, w, h);
+
+        int fillW = (int)Math.Round(w * pct / 100.0);
+        if (fillW > 0)
+            using (var fill = new SolidBrush(Theme.UsageColor(pct)))
+                PaintKit.FillRoundedBar(g, fill, x, y, fillW, h);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
     private static string TruncateString(Graphics g, string text, Font font, int maxWidth)
     {
@@ -1471,8 +1633,8 @@ internal sealed class OverlayForm : Form, IDenseHost
             }
 
             // Dwell over the usage strip (only the two bar rows, not the quick-links row below them).
-            int usageStripEnd = HeaderHeight + (_usageEnabled ? UsageStripHeight : 0);
-            bool inStrip = ShowFullPanel && _usageEnabled && e.Y >= HeaderHeight && e.Y < usageStripEnd;
+            int usageStripTop = UsageStripTop;
+            bool inStrip = ShowFullPanel && _usageEnabled && e.Y >= usageStripTop && e.Y < usageStripTop + UsageStripHeight;
             if (inStrip != _inUsageStrip)
             {
                 _inUsageStrip = inStrip;
@@ -1540,6 +1702,17 @@ internal sealed class OverlayForm : Form, IDenseHost
                 HideTaskTooltip();
                 if (taskHover >= 0)
                     _taskHoverTimer.Start();
+            }
+
+            // Metrics mini-bar dwell — twin to the badges above; pops the CPU%/RAM numbers.
+            int metricsHover = ShowFullPanel ? HitTestMetrics(e.Location) : -1;
+            if (metricsHover != _hoveredMetricsRow)
+            {
+                _hoveredMetricsRow = metricsHover;
+                _metricsHoverTimer.Stop();
+                HideMetricsTooltip();
+                if (metricsHover >= 0)
+                    _metricsHoverTimer.Start();
             }
         }
 
@@ -1634,6 +1807,9 @@ internal sealed class OverlayForm : Form, IDenseHost
         _hoveredTaskRow = -1;
         _taskHoverTimer.Stop();
         HideTaskTooltip();
+        _hoveredMetricsRow = -1;
+        _metricsHoverTimer.Stop();
+        HideMetricsTooltip();
         if (_hoveredQuickLink >= 0) { _hoveredQuickLink = -1; Cursor = Cursors.Default; }
         if (_hoveredArtifactRow >= 0) { _hoveredArtifactRow = -1; Cursor = Cursors.Default; }
 
@@ -1649,7 +1825,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     // ── Usage tooltip ──────────────────────────────────────────────────────────
     private void ShowUsageTooltip()
     {
-        var stripScreen = RectangleToScreen(new Rectangle(0, HeaderHeight, ClientSize.Width, UsageStripHeight));
+        var stripScreen = RectangleToScreen(new Rectangle(0, UsageStripTop, ClientSize.Width, UsageStripHeight));
         _usageTooltip.ShowFor(_usage, stripScreen);
     }
 
@@ -1768,6 +1944,46 @@ internal sealed class OverlayForm : Form, IDenseHost
     {
         if (_taskTooltip.Visible)
             _taskTooltip.Hide();
+    }
+
+    // ── Metrics tooltip ─────────────────────────────────────────────────────────
+    // Returns the row whose metrics-bar hit-rect contains p, or -1 (rects captured at paint time).
+    private int HitTestMetrics(Point p)
+    {
+        foreach (var (row, rect) in _metricsRects)
+            if (rect.Contains(p))
+                return row;
+        return -1;
+    }
+
+    private void ShowMetricsTooltip(int rowIdx)
+    {
+        if (rowIdx < 0 || rowIdx >= _rows.Count) return;
+        if (!_sessionMetrics.TryGetValue(_rows[rowIdx].Session.Pid, out var m)) return;
+
+        // "CPU 34%  ·  RAM 512 MB" — plus the process count when the tree was rolled up (subprocess
+        // metrics on), which is what makes the number more than just the bare claude process.
+        string text = $"CPU {m.CpuPercent:0}%   ·   RAM {FormatBytes(m.RamBytes)}";
+        if (m.ProcessCount > 1)
+            text += $"   ·   {m.ProcessCount} procs";
+
+        var anchor = PointToScreen(new Point(_metricsRects[rowIdx].Left, _metricsRects[rowIdx].Bottom + 4));
+        _metricsTooltip.ShowText(text, anchor);
+    }
+
+    private void HideMetricsTooltip()
+    {
+        if (_metricsTooltip.Visible)
+            _metricsTooltip.Hide();
+    }
+
+    // Compact byte count for the metrics tooltip: 536870912 -> "512 MB", 1610612736 -> "1.5 GB".
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes >= 1L << 30) return $"{bytes / (double)(1L << 30):0.0} GB";
+        if (bytes >= 1L << 20) return $"{bytes / (double)(1L << 20):0} MB";
+        if (bytes >= 1L << 10) return $"{bytes / (double)(1L << 10):0} KB";
+        return $"{bytes} B";
     }
 
     private int HitTestRow(Point p)
@@ -1992,11 +2208,13 @@ internal sealed class OverlayForm : Form, IDenseHost
             _thermoHoverTimer.Dispose();
             _warnHoverTimer.Dispose();
             _taskHoverTimer.Dispose();
+            _metricsHoverTimer.Dispose();
             _autoCloseBarTimer.Dispose();
             _usageTooltip.Dispose();
             _thermoTooltip.Dispose();
             _warnTooltip.Dispose();
             _taskTooltip.Dispose();
+            _metricsTooltip.Dispose();
             _popover?.Dispose();
             _qrForm?.Dispose();
             _icon?.Dispose();

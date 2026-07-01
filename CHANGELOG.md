@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.15] - 2026-07-01
+
+### Monitoring
+
+- New "Monitoring" page — live CPU and RAM in the overlay (off by default; nothing is sampled until you opt in).
+- Whole-machine CPU + RAM strip across the top of the panel.
+- Per-session CPU/RAM mini-bars, coloured by load; hover for the exact numbers.
+- Optional whole-process-tree roll-up per session — the MCP servers, shells and tools it spawns, not just the `claude` process.
+- Sub-agents fold into their session's bar (they share one process; there's no prising them apart).
+
+---
+
 ## [v0.1.14] - 2026-07-01
 
 ### Experimental

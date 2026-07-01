@@ -157,6 +157,18 @@ internal sealed class SettingsForm : Form
     /// <summary>Raised when the user clicks "Open session stats", to open the stats window.</summary>
     public event Action? OpenStatsRequested;
 
+    /// <summary>Raised when the user toggles "System metrics" (true = the whole-machine CPU/RAM strip
+    /// is shown at the top of the overlay).</summary>
+    public event Action<bool>? SystemMetricsChanged;
+
+    /// <summary>Raised when the user toggles "Per-session metrics" (true = each session row shows its
+    /// CPU/RAM mini-bar).</summary>
+    public event Action<bool>? SessionMetricsChanged;
+
+    /// <summary>Raised when the user toggles "Include subprocesses" (true = a session's number is
+    /// rolled up over its whole process tree, not just its own claude process).</summary>
+    public event Action<bool>? SubprocessMetricsChanged;
+
     public SettingsForm(AppSettings settings, UsageMonitor usageMonitor, UsageInfo currentUsage)
     {
         _settings     = settings;
@@ -213,6 +225,7 @@ internal sealed class SettingsForm : Form
         AddPage("plugin",       "Plugin Control",  BuildPluginPage);
         AddPage("usage",        "Usage Limits",    BuildUsagePage);
         AddPage("indicators",   "Indicators",      BuildIndicatorsPage);
+        AddPage("monitoring",   "Monitoring",      BuildMonitoringPage);
         AddPage("stats",        "Session Stats",   BuildStatsPage);
         AddPage("notify",       "Notifications",   BuildNotificationsPage);
         AddPage("quicklinks",   "Quick Links",      BuildQuickLinksPage);
@@ -664,6 +677,85 @@ internal sealed class SettingsForm : Form
         BuildContextPressureSection(page);
         page.Controls.Add(Separator());
         BuildDetectionSection(page);
+    }
+
+    // ── Monitoring ─────────────────────────────────────────────────────────────────
+    // Three switches for the resource metrics surfaced in the overlay: the whole-machine strip, the
+    // per-session mini-bars, and whether a session's number rolls up over its process tree. The
+    // subprocess sub-row dims while per-session metrics are off (it has nothing to roll up then).
+    private void BuildMonitoringPage(FlowLayoutPanel page)
+    {
+        page.Controls.Add(SectionTitle("Monitoring"));
+        page.Controls.Add(BodyText(
+            "Surface live CPU and memory use right in the overlay. Sampling only runs while one of " +
+            "these is on and reads standard Windows performance counters — nothing leaves your machine."));
+
+        page.Controls.Add(Separator());
+
+        // System metrics — the whole-machine strip at the top of the panel.
+        var systemToggle = MakeToggle();
+        systemToggle.Checked = _settings.ShowSystemMetrics;
+        systemToggle.CheckedChanged += (_, _) => SystemMetricsChanged?.Invoke(systemToggle.Checked);
+        page.Controls.Add(TitleRow("System metrics", systemToggle));
+        page.Controls.Add(BodyText(
+            "A whole-machine CPU and physical-RAM strip at the top of the overlay, above the sessions."));
+
+        page.Controls.Add(Separator());
+
+        // Per-session metrics — the row mini-bars — with the subprocess roll-up as an indented sub-row.
+        var subRow = BuildMonitorSubRow(
+            "Include subprocesses — roll a session up over its whole process tree",
+            _settings.IncludeSubprocessMetrics, out var subToggle, out var subLabel);
+
+        void ApplyEnabled(bool on)
+        {
+            subToggle.Enabled  = on;
+            subLabel.ForeColor = on ? Theme.Fg : Theme.Muted;
+        }
+
+        var sessionToggle = MakeToggle();
+        sessionToggle.Checked = _settings.ShowSessionMetrics;
+        sessionToggle.CheckedChanged += (_, _) =>
+        {
+            SessionMetricsChanged?.Invoke(sessionToggle.Checked);
+            ApplyEnabled(sessionToggle.Checked);
+        };
+        page.Controls.Add(TitleRow("Per-session metrics", sessionToggle));
+        page.Controls.Add(BodyText(
+            "A small CPU (top) and RAM (bottom) bar on each session row, coloured by load. Hover it in " +
+            "the overlay for the exact figures. Sub-agents share their session's process, so their use " +
+            "rolls up into the session's own bar rather than showing on their row."));
+
+        subToggle.CheckedChanged += (_, _) => SubprocessMetricsChanged?.Invoke(subToggle.Checked);
+        page.Controls.Add(subRow);
+        page.Controls.Add(BodyText(
+            "On, a session's figure includes the MCP servers, shells and tools its claude process " +
+            "spawns — the true cost of the session. Off, only the claude process itself is measured."));
+
+        ApplyEnabled(_settings.ShowSessionMetrics);
+    }
+
+    // An indented monitoring sub-row: a label on the left, a right-aligned toggle. The caller wires the
+    // toggle's CheckedChanged; this just lays it out (twin to BuildStuckSubRow, minus the shared event).
+    private Panel BuildMonitorSubRow(string text, bool initial, out ToggleSwitch toggle, out Label label)
+    {
+        var row = new Panel { Height = 30, Margin = new Padding(0, 2, 0, 4) };
+
+        label = new Label
+        {
+            Text      = text,
+            AutoSize  = true,
+            ForeColor = Theme.Fg,
+            Location  = new Point(16, 7),
+        };
+
+        toggle = MakeToggle();
+        toggle.Checked = initial;
+
+        row.Controls.Add(label);
+        row.Controls.Add(toggle);
+        RegisterRightAlignedRow(row, toggle);
+        return row;
     }
 
     // Artifacts: a display toggle (default on). Raises ArtifactsChanged so the overlay redraws and
