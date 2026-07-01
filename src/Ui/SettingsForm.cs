@@ -110,6 +110,10 @@ internal sealed class SettingsForm : Form
     /// <summary>Raised when the user toggles "Show context pressure" (true = enabled).</summary>
     public event Action<bool>? ContextPressureChanged;
 
+    /// <summary>Raised when the user toggles the green "first segment" indicator (true = the
+    /// below-yellow band is drawn green instead of left blank).</summary>
+    public event Action<bool>? ContextGreenSegmentChanged;
+
     /// <summary>Raised when the user toggles "Permission mode badges" (true = shown in the overlay).</summary>
     public event Action<bool>? PermissionModeBadgesChanged;
 
@@ -716,14 +720,26 @@ internal sealed class SettingsForm : Form
     // explainer, so it sits directly under the description with no separate "Thresholds" copy.
     private void BuildContextPressureSection(FlowLayoutPanel page)
     {
-        var slider = new ContextThresholdSlider { Margin = new Padding(0, 4, 0, 8) };
+        var slider = new ContextThresholdSlider
+        {
+            Margin           = new Padding(0, 4, 0, 8),
+            ShowGreenSegment = _settings.ShowContextGreenSegment,
+        };
+        var greenRow = BuildGreenSegmentSubRow(out var greenToggle, out var greenLabel);
+
+        void ApplyEnabled(bool on)
+        {
+            slider.Enabled       = on;
+            greenToggle.Enabled  = on;
+            greenLabel.ForeColor = on ? Theme.Fg : Theme.Muted;
+        }
 
         var toggle = MakeToggle();
         toggle.Checked = _settings.ShowContextPressure;
         toggle.CheckedChanged += (_, _) =>
         {
             ContextPressureChanged?.Invoke(toggle.Checked);
-            slider.Enabled = toggle.Checked;
+            ApplyEnabled(toggle.Checked);
         };
         page.Controls.Add(TitleRow("Context pressure", toggle));
 
@@ -740,10 +756,41 @@ internal sealed class SettingsForm : Form
             _settings.ContextPressureYellowPercent,
             _settings.ContextPressureOrangePercent,
             _settings.ContextPressureRedPercent);
-        slider.Enabled = _settings.ShowContextPressure;
         slider.RangeChanged += (y, o, r) => ContextThresholdsChanged?.Invoke(y, o, r);
         _fluidWidth.Add((slider, 0));
         page.Controls.Add(slider);
+
+        greenToggle.CheckedChanged += (_, _) =>
+        {
+            ContextGreenSegmentChanged?.Invoke(greenToggle.Checked);
+            slider.ShowGreenSegment = greenToggle.Checked;
+        };
+        page.Controls.Add(greenRow);
+
+        ApplyEnabled(_settings.ShowContextPressure);
+    }
+
+    // Indented sub-row for the green "first segment" indicator: label + right-aligned toggle. Dimmed
+    // with the slider whenever the context-pressure master toggle is off.
+    private Panel BuildGreenSegmentSubRow(out ToggleSwitch toggle, out Label label)
+    {
+        var row = new Panel { Height = 30, Margin = new Padding(0, 2, 0, 4) };
+
+        label = new Label
+        {
+            Text      = "Show a green indicator below the first threshold instead of leaving it blank",
+            AutoSize  = true,
+            ForeColor = Theme.Fg,
+            Location  = new Point(16, 7),
+        };
+
+        toggle = MakeToggle();
+        toggle.Checked = _settings.ShowContextGreenSegment;
+
+        row.Controls.Add(label);
+        row.Controls.Add(toggle);
+        RegisterRightAlignedRow(row, toggle);
+        return row;
     }
 
     // Stuck-detection: a master toggle and the two heuristic sub-rows, with the prose trimmed to a

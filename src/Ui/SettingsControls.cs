@@ -362,6 +362,18 @@ internal sealed class ContextThresholdSlider : Control
 
     private int _yellow = 50, _orange = 65, _red = 80;
     private int _drag = -1;                   // handle being dragged: 0=Yellow, 1=Orange, 2=Red, -1=none
+    private bool _showGreenSegment;           // when true the below-Yellow band is drawn full green
+
+    /// <summary>When true, the below-Yellow "first segment" is drawn in full green rather than the
+    /// muted resting tone — mirroring the green thermometer the overlay shows there when the option is
+    /// on. Purely cosmetic; does not affect the thresholds.</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(
+        System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShowGreenSegment
+    {
+        get => _showGreenSegment;
+        set { if (_showGreenSegment == value) return; _showGreenSegment = value; Invalidate(); }
+    }
 
     /// <summary>Fired when the user commits a change (drag release). Carries the ordered
     /// (Yellow, Orange, Red) thresholds as whole percentages.</summary>
@@ -465,8 +477,10 @@ internal sealed class ContextThresholdSlider : Control
 
         int left = TrackLeft, right = TrackRight;
 
-        // Band colours. The "hidden" zone below Yellow is a muted green — healthy, nothing shown.
-        Color hidden = Theme.Blend(Theme.Green, Theme.FormBg, 0.55f);
+        // Band colours. The "hidden" zone below Yellow is normally a muted green — healthy, nothing
+        // shown. With the green first-segment indicator on it goes full green, matching what the
+        // overlay actually draws there.
+        Color hidden = _showGreenSegment ? Theme.Green : Theme.Blend(Theme.Green, Theme.FormBg, 0.55f);
         Color yellow = Theme.Yellow, orange = Theme.Orange, red = Theme.Red;
         if (!Enabled)
         {

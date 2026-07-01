@@ -94,6 +94,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private bool _usageEnabled = true;
     private bool _showExpectedRate = true;
     private bool _showContextPressure = true;
+    private bool _showContextGreenSegment = false;
     private bool _showModeBadges = true;
     // Context-pressure thresholds as fractions of the window: hidden below yellow, then yellow ->
     // orange -> red. Defaults match the original hard-coded bands; overridden from settings.
@@ -363,6 +364,16 @@ internal sealed class OverlayForm : Form, IDenseHost
     {
         if (_showContextPressure == show) return;
         _showContextPressure = show;
+        Invalidate();
+    }
+
+    /// <summary>Shows or hides the green "first segment" indicator — the below-yellow band. When on, the
+    /// thermometer appears (green) as soon as a session's context fill is known, instead of staying
+    /// blank until it crosses the yellow threshold.</summary>
+    public void SetShowContextGreenSegment(bool show)
+    {
+        if (_showContextGreenSegment == show) return;
+        _showContextGreenSegment = show;
         Invalidate();
     }
 
@@ -1213,7 +1224,12 @@ internal sealed class OverlayForm : Form, IDenseHost
         bool stuck       = _showStuckWarnings && session.IsStuck;
         int warnWidth    = stuck ? WarnIconWidth : 0;
         float ctxFill    = session.ContextFill ?? 0f;
-        int thermoWidth  = _showContextPressure && ctxFill >= _ctxYellow ? ThermoIconWidth + 2 : 0;  // icon + 2 px gap right
+        // Normally the thermometer only appears once fill crosses yellow. With the green "first
+        // segment" indicator on, it also shows below yellow (green) whenever a fill is actually known,
+        // so a low-but-nonzero context is visible instead of blank.
+        bool showThermo  = _showContextPressure
+                        && (ctxFill >= _ctxYellow || (_showContextGreenSegment && session.ContextFill.HasValue));
+        int thermoWidth  = showThermo ? ThermoIconWidth + 2 : 0;  // icon + 2 px gap right
         // Task checklist progress: a dim "completed/total" count on the name line, hover for the list.
         bool hasTasks    = _showTaskProgress && session.HasTasks;
         string taskLabel = hasTasks ? $"{session.CompletedTaskCount}/{session.Tasks.Count}" : "";
@@ -1332,19 +1348,20 @@ internal sealed class OverlayForm : Form, IDenseHost
     }
 
     // Context-pressure thermometer: tube (4 px wide, 9 px tall) + bulb (8 px diameter), with mercury
-    // rising from the bottom. Only drawn at/above the yellow threshold; colour shifts yellow → orange
-    // → red at the configured thresholds. x is the left edge of the reserved ThermoIconWidth area;
-    // midY is the vertical row centre.
+    // rising from the bottom. Drawn at/above the yellow threshold; colour shifts yellow → orange → red
+    // at the configured thresholds. With the green "first segment" indicator on it also draws below
+    // yellow, in green. x is the left edge of the reserved ThermoIconWidth area; midY is the row centre.
     private void DrawThermoIcon(Graphics g, float fill, int x, int midY)
     {
-        if (fill < _ctxYellow) return;
+        if (fill < _ctxYellow && !_showContextGreenSegment) return;
 
         var old = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
         Color col = fill >= _ctxRed    ? Color.FromArgb(239, 68,  68)   // red
                   : fill >= _ctxOrange ? Color.FromArgb(249, 115, 22)   // orange
-                                       : Color.FromArgb(234, 179,  8);  // yellow
+                  : fill >= _ctxYellow ? Color.FromArgb(234, 179,  8)   // yellow
+                                       : Color.FromArgb(34,  197, 94);  // green (below-yellow first segment)
 
         // Tube: 4 px wide, top at midY-7, bottom at midY+2 (9 px).
         // Bulb: 8 px diameter circle whose top edge overlaps the tube bottom by 2 px.
@@ -1639,13 +1656,23 @@ internal sealed class OverlayForm : Form, IDenseHost
     private void ShowThermoTooltip(int rowIdx)
     {
         if (rowIdx < 0 || rowIdx >= _rows.Count) return;
-        float fill = _rows[rowIdx].Session.ContextFill ?? 0f;
+        var session = _rows[rowIdx].Session;
+        float fill = session.ContextFill ?? 0f;
         int pct = (int)Math.Round(fill * 100f);
+        // Reconstruct the token count from the fill and the resolved window (fill = used / window).
+        long window = session.ContextWindow;
+        long used   = (long)Math.Round(fill * window);
 
         // Anchor just below the glyph; HintTooltipForm clamps it onto the screen.
         var anchor = PointToScreen(new Point(_thermoRects[rowIdx].Left, _thermoRects[rowIdx].Bottom + 4));
-        _thermoTooltip.ShowText($"Context at {pct}%", anchor);
+        _thermoTooltip.ShowText($"{FormatTokens(used)}/{FormatTokens(window)} ({pct}%)", anchor);
     }
+
+    // Compact token count for the thermometer tooltip: 34631 -> "34.6k", 200000 -> "200k", 1000000 -> "1M".
+    private static string FormatTokens(long n) =>
+        n >= 1_000_000 ? $"{n / 1_000_000.0:0.##}M"
+      : n >= 1_000     ? $"{n / 1_000.0:0.#}k"
+                       : n.ToString();
 
     private void HideThermoTooltip()
     {

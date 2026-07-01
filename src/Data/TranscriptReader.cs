@@ -386,7 +386,15 @@ internal sealed class TranscriptReader
                     var usage = JsonNode.Parse(line)?["message"]?["usage"];
                     if (usage != null)
                     {
-                        long total = TranscriptJson.AsLong(usage["input_tokens"]) + TranscriptJson.AsLong(usage["cache_read_input_tokens"]);
+                        // The prompt's true size is all three input buckets summed. Omitting
+                        // cache_creation badly under-counts right after a /model switch (or any
+                        // cache-invalidating event): the switch resets the prompt cache, so
+                        // cache_read collapses to 0 and the whole live context lands in
+                        // cache_creation. Steady-state turns keep cache_creation small, so this
+                        // only mattered visibly once model switches entered the picture.
+                        long total = TranscriptJson.AsLong(usage["input_tokens"])
+                                   + TranscriptJson.AsLong(usage["cache_read_input_tokens"])
+                                   + TranscriptJson.AsLong(usage["cache_creation_input_tokens"]);
                         if (total > 0)
                             latestUsed = total;
                     }

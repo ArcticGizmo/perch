@@ -30,6 +30,12 @@ internal sealed class AppSettings
     public int ContextPressureOrangePercent { get; set; } = 65;
     public int ContextPressureRedPercent    { get; set; } = 80;
 
+    // Whether to draw a green thermometer for the "first segment" — the below-yellow band that is
+    // normally left blank. On makes the glyph appear as soon as any context is known (green until it
+    // reaches Yellow), so low-but-nonzero fill is visible instead of hidden. Handy for confirming the
+    // fill is being read at all. Defaults to false; a missing key keeps it off.
+    public bool ShowContextGreenSegment { get; set; } = false;
+
     // Whether to draw the permission-mode badge (Plan / Accept edits / Auto / Bypass) next to a
     // session in the overlay. Off hides the badge and lets the session name reclaim its width; the
     // mode itself is still tracked, just not shown. Defaults to true; a missing key keeps it on.

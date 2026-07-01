@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.12] - 2026-07-01
+
+### Context pressure
+
+- New option: a green thermometer below the first threshold instead of blank. Off by default.
+- Thermometer hover shows the numbers now — "34.6k/200k (17%)" — not just the percent.
+
+---
+
 ## [v0.1.11] - 2026-06-30
 
 ### Notifications
@@ -64,7 +73,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Overlay
 
-- Task-list progress on a running session: an *n/m* count that climbs as Claude works the list.
+- Task-list progress on a running session: an _n/m_ count that climbs as Claude works the list.
 - Hover the count for the full checklist — ✓ done, ▸ doing, ○ waiting.
 - The list bows out when you move on, and a fresh plan starts at 0 (no lingering "5/5").
 

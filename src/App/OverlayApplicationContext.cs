@@ -163,6 +163,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _overlay.SetUsageEnabled(_settings.ShowUsage);
         _overlay.SetShowExpectedRate(_settings.ShowExpectedUsageRate);
         _overlay.SetShowContextPressure(_settings.ShowContextPressure);
+        _overlay.SetShowContextGreenSegment(_settings.ShowContextGreenSegment);
         _overlay.SetShowModeBadges(_settings.ShowPermissionModeBadges);
         _overlay.SetShowTaskProgress(_settings.ShowTaskProgress);
         _overlay.SetShowArtifacts(_settings.ShowArtifacts);
@@ -225,6 +226,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.UsageEnabledChanged    += SetUsageEnabled;
                 f.ExpectedRateChanged    += SetExpectedRateEnabled;
                 f.ContextPressureChanged += SetContextPressureEnabled;
+                f.ContextGreenSegmentChanged += SetContextGreenSegmentEnabled;
                 f.PermissionModeBadgesChanged += SetPermissionModeBadgesEnabled;
                 f.TaskProgressChanged += SetTaskProgressEnabled;
                 f.ArtifactsChanged += SetArtifactsEnabled;
@@ -303,6 +305,14 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _settings.ShowContextPressure = enabled;
         _settings.Save();
         _overlay.SetShowContextPressure(enabled);
+    }
+
+    private void SetContextGreenSegmentEnabled(bool enabled)
+    {
+        if (_settings.ShowContextGreenSegment == enabled) return;
+        _settings.ShowContextGreenSegment = enabled;
+        _settings.Save();
+        _overlay.SetShowContextGreenSegment(enabled);
     }
 
     private void SetPermissionModeBadgesEnabled(bool enabled)

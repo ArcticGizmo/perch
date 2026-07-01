@@ -41,6 +41,20 @@ public class TranscriptReaderTests
     }
 
     [Fact]
+    public void GetContextFill_CountsCacheCreationAfterModelSwitch()
+    {
+        var reader = new TranscriptReader();
+        // A /model switch resets the prompt cache: the final turn has cache_read 0 with the whole
+        // context in cache_creation (34621) + input (10). All three input buckets must be summed, or
+        // the fill collapses to ~0 and the pressure glyph under-reports badly.
+        var (fill, window) = reader.GetContextFill("sessCtxSwitch", Cwd);
+        Assert.Equal(ModelContext.DefaultWindow, window);          // "Haiku 4.5" → 200k
+        Assert.NotNull(fill);
+        // (10 + 0 + 34621) / 200000 = 0.173105
+        Assert.Equal(0.1731, (double)fill!.Value, 3);
+    }
+
+    [Fact]
     public void LastTurnWasBareCommand_TrueWhenLastTurnIsASlashCommand()
     {
         var reader = new TranscriptReader();
