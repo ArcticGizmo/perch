@@ -25,12 +25,15 @@ internal static class ModelContext
     /// <summary>Extended (1M-token beta) context window, advertised by the "(1M context)" suffix.</summary>
     public const int ExtendedWindow = 1_000_000;
 
-    // Models that are 1M *without* the "(1M context)" display suffix. Keyed case-insensitively on the
-    // display name. Currently empty — every 1M selection observed in the wild carries the suffix, which
-    // the resolver already handles. (Unsuffixed "Opus 4.8" is deliberately absent: an unsuffixed
-    // selection is the 200k variant and must fall through to DefaultWindow.)
+    // Models that are 1M *without* carrying the "(1M context)" display suffix — their plain name is
+    // already the 1M variant, so the suffix check never fires and they'd otherwise fall through to the
+    // 200k default. Keyed case-insensitively on the display name.
+    //   • "Sonnet 5" ships with a 1M window by default in Claude Code (confirmed live).
+    // (Unsuffixed "Opus 4.8" / "Haiku 4.5" are deliberately absent: Opus's 1M is an opt-in that carries
+    // the marker / "[1m]" id suffix, and Haiku 4.5 is 200k-only — both must fall through to DefaultWindow.)
     private static readonly Dictionary<string, int> Overrides = new(StringComparer.OrdinalIgnoreCase)
     {
+        ["Sonnet 5"] = ExtendedWindow,
     };
 
     // Matches the human display name between the ANSI bold-on (ESC[1m) and bold-off (ESC[22m) markers.
@@ -93,17 +96,28 @@ internal static class ModelContext
     /// <c>"opus[1m]"</c>) or a full id (<c>"claude-opus-4-8[1m]"</c>) — to its context window. This is
     /// the fallback when a session never ran <c>/model</c>: it started on the configured default, whose
     /// transcript <c>message.model</c> field can't tell the 200k and 1M variants apart. The
-    /// <c>[1m]</c> suffix is the authoritative 1M signal; everything else (including an unsuffixed id)
-    /// is the 200k standard window. Null/blank resolves to <see cref="DefaultWindow"/>.
+    /// <c>[1m]</c> suffix is the authoritative 1M signal, and Sonnet 5 defaults to 1M with no suffix;
+    /// everything else (including an unsuffixed Opus id) is the 200k standard window. Null/blank
+    /// resolves to <see cref="DefaultWindow"/>.
     /// </summary>
     public static int WindowForConfiguredModel(string? model)
     {
         if (string.IsNullOrWhiteSpace(model))
             return DefaultWindow;
 
-        return model.Contains("[1m]", StringComparison.OrdinalIgnoreCase)
-            ? ExtendedWindow
-            : DefaultWindow;
+        var m = model.Trim();
+
+        // "[1m]" suffix is the authoritative 1M opt-in (e.g. "opus[1m]", "claude-opus-4-8[1m]").
+        if (m.Contains("[1m]", StringComparison.OrdinalIgnoreCase))
+            return ExtendedWindow;
+
+        // Sonnet 5 is 1M by default. Matches the full id ("claude-sonnet-5") and the bare "sonnet"
+        // alias, which Claude Code resolves to the current Sonnet (Sonnet 5).
+        if (m.Contains("sonnet-5", StringComparison.OrdinalIgnoreCase) ||
+            m.Equals("sonnet", StringComparison.OrdinalIgnoreCase))
+            return ExtendedWindow;
+
+        return DefaultWindow;
     }
 
     // Strips ANSI SGR escape sequences (ESC[…m) and trims whitespace.

@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.13] - 2026-07-01
+
+### Context pressure
+
+- Sonnet 5 reads as a 1M window, not 200k (it was quietly shrinking everyone's headroom).
+
+---
+
 ## [v0.1.12] - 2026-07-01
 
 ### Context pressure
