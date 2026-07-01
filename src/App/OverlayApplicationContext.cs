@@ -19,6 +19,10 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     // session restart/compact (or opening the next session) doesn't tear the tray down and back up.
     private const int AutoCloseGraceMs = 20_000;
 
+    // How often to poll GitHub for a newer release. Checked once on startup, then on this interval.
+    // Checking is cheap (a metadata fetch) and downloads nothing until the user asks.
+    private const int UpdateCheckIntervalMs = 3_600_000; // hourly
+
     private readonly OverlayForm _overlay;
     private readonly SessionMonitor _monitor;
     private readonly MetricsMonitor _metricsMonitor = new();
@@ -26,6 +30,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _reconcileTimer;
     private readonly System.Windows.Forms.Timer _deadlineTimer;
     private readonly System.Windows.Forms.Timer _usageTimer;
+    private readonly System.Windows.Forms.Timer _updateCheckTimer;
 
     // One-shot grace timer for "auto-close after last session" (see AutoCloseGraceMs).
     private readonly System.Windows.Forms.Timer _autoCloseTimer;
@@ -38,6 +43,11 @@ internal sealed class OverlayApplicationContext : ApplicationContext
 
     // The tray menu's "Today: N sessions · Hh Mm active" info line, refreshed each time the menu opens.
     private readonly ToolStripMenuItem _statsItem;
+
+    // The tray menu's update entry. Reads "Check for Updates…" normally; flips to a bold "Update
+    // available" once an update is detected (see SetTrayUpdateAvailable). Clicking it checks, or —
+    // when an update is pending — performs the update.
+    private readonly ToolStripMenuItem _updateItem;
 
     // Tracks workstation lock state so the AFK override can push any session's alert while locked.
     private readonly LockMonitor _lockMonitor = new();
@@ -63,8 +73,9 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     // session so a balloon click can focus its terminal. Created once the tray icon exists (see ctor).
     private readonly NotificationService _notifications;
 
-    // Latched while a check/download/apply is in flight so a second click (the menu and the settings
-    // window both reach CheckForUpdates) can't kick off a parallel run and race two installs.
+    // Latched while a download/apply is in flight so a second click (the overlay badge, the tray menu
+    // and the settings window all reach PerformUpdate) can't kick off a parallel run and race two
+    // installs. Also blocks a background check from starting mid-apply.
     private bool _updateInProgress;
 
     public OverlayApplicationContext()
@@ -79,6 +90,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _overlay.SessionFocused += AcknowledgeSession;
         _overlay.ExternalNotifyToggleRequested += OnToggleExternalNotify;
         _overlay.HistoryRequested += OpenHistoryViewer;
+        _overlay.UpdateRequested += (_, _) => PerformUpdate();
 
         _notifyIcon = new NotifyIcon
         {
@@ -107,8 +119,15 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         historyItem.Click += (_, _) => OpenHistoryViewer(null);
         var statsItem2 = new ToolStripMenuItem("Session stats…");
         statsItem2.Click += (_, _) => OpenStats();
-        var updateItem = new ToolStripMenuItem("Check for Updates…");
-        updateItem.Click += (_, _) => CheckForUpdates();
+        _updateItem = new ToolStripMenuItem("Check for Updates…");
+        // Route by state: perform the pending update, or run a manual (user-initiated) check.
+        _updateItem.Click += (_, _) =>
+        {
+            if (!string.IsNullOrEmpty(_settings.PendingUpdateVersion))
+                PerformUpdate();
+            else
+                ManualCheckForUpdates();
+        };
         var exitItem = new ToolStripMenuItem("Exit Perch");
         exitItem.Click += (_, _) => Exit();
 
@@ -118,7 +137,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         trayMenu.Items.Add(settingsItem);
         trayMenu.Items.Add(historyItem);
         trayMenu.Items.Add(statsItem2);
-        trayMenu.Items.Add(updateItem);
+        trayMenu.Items.Add(_updateItem);
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add(exitItem);
         // Recompute today's stats just before the menu shows; the scan runs off the UI thread and the
@@ -152,6 +171,12 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         // the feature is enabled — when off, no OAuth query is ever made.
         _usageTimer = new System.Windows.Forms.Timer { Interval = UsageIntervalMs };
         _usageTimer.Tick += (_, _) => RefreshUsage();
+
+        // Hourly background check for a newer release. Started unconditionally (checking downloads
+        // nothing); the initial startup check is kicked off below once the overlay handle exists.
+        _updateCheckTimer = new System.Windows.Forms.Timer { Interval = UpdateCheckIntervalMs };
+        _updateCheckTimer.Tick += (_, _) => AutoCheckForUpdates();
+        _updateCheckTimer.Start();
 
         // Fires once, AutoCloseGraceMs after the last session ends. If still no sessions by then,
         // an auto-started tray exits. Armed/cancelled from OnSessionsChanged.
@@ -193,6 +218,15 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _usageTimer.Start();
             RefreshUsage();
         }
+
+        // Restore the "update available" UI from a pending record persisted in a previous session, so
+        // the badge / tray text survive a restart without re-notifying. Then run the startup check.
+        if (!string.IsNullOrEmpty(_settings.PendingUpdateVersion))
+        {
+            _overlay.SetUpdateAvailable(true);
+            SetTrayUpdateAvailable(true);
+        }
+        AutoCheckForUpdates();
 
         // First launch after an install: add the marketplace and install the Claude Code plugin in
         // the background so the user doesn't have to. Failures are silently skipped (treated as ok).
@@ -244,14 +278,18 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.SystemMetricsChanged += SetSystemMetricsEnabled;
                 f.SessionMetricsChanged += SetSessionMetricsEnabled;
                 f.SubprocessMetricsChanged += SetSubprocessMetricsEnabled;
-                f.CheckForUpdatesRequested += (_, _) => CheckForUpdates();
+                f.CheckForUpdatesRequested += (_, _) => ManualCheckForUpdates();
+                f.UpdateNowRequested += (_, _) => PerformUpdate();
                 f.TestNotificationRequested += _notifications.ShowTest;
                 f.ExternalNotificationsEnabledChanged += SetExternalNotificationsEnabled;
                 f.TestExternalNotificationRequested   += () => _ = _notifications.SendExternalTestAsync();
                 f.QuickLinksChanged       += SetQuickLinks;
                 f.UpsideDownQuickLinksChanged += SetUpsideDownQuickLinks;
                 f.OpenStatsRequested      += OpenStats;
-            });
+            },
+            // Sync the About "update available" highlight/button on every open (runs on both paths).
+            refresh: f => f.SetUpdateAvailable(
+                !string.IsNullOrEmpty(_settings.PendingUpdateVersion), _settings.PendingUpdateVersion));
     }
 
     // Opens (or re-focuses) the history viewer and points it at the given session. A null sessionId
@@ -640,31 +678,144 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         return new Icon(stream, SystemInformation.SmallIconSize);
     }
 
-    private async void CheckForUpdates()
+    // ── Update checking ──────────────────────────────────────────────────────────
+    // The outcome of a single check, marshalled back from the thread-pool worker below.
+    private enum UpdateCheckOutcome { UpToDate, Available, Error }
+    private readonly record struct UpdateCheckResult(UpdateCheckOutcome Outcome, string? Version, string? Error);
+
+    // Queries GitHub for a newer release. Runs on the thread pool (Velopack's check is a synchronous-
+    // over-async metadata fetch); all failures — including "not installed" in a dev run — collapse to
+    // an Error result the callers decide whether to surface.
+    private static UpdateCheckResult RunUpdateCheck()
+    {
+        try
+        {
+            var mgr = new UpdateManager(new GithubSource(AppInfo.RepoUrl, null, false));
+            var update = mgr.CheckForUpdatesAsync().GetAwaiter().GetResult();
+            return update == null
+                ? new UpdateCheckResult(UpdateCheckOutcome.UpToDate, null, null)
+                : new UpdateCheckResult(UpdateCheckOutcome.Available, update.TargetFullRelease.Version.ToString(), null);
+        }
+        catch (Exception ex)
+        {
+            return new UpdateCheckResult(UpdateCheckOutcome.Error, null, ex.Message);
+        }
+    }
+
+    // Startup + hourly background check. Silent: errors and "up to date" produce no balloon, and an
+    // available update notifies only the first time it's surfaced (see MarkUpdateAvailable).
+    private void AutoCheckForUpdates()
+    {
+        if (_updateInProgress) return;  // don't check while an apply is under way
+        UiDispatch.RunThenPost(_overlay, RunUpdateCheck, r =>
+        {
+            if (r.Outcome == UpdateCheckOutcome.Available && r.Version is { } v)
+            {
+                bool firstTime = string.IsNullOrEmpty(_settings.PendingUpdateVersion);
+                MarkUpdateAvailable(v, notify: firstTime);
+            }
+        }, new UpdateCheckResult(UpdateCheckOutcome.Error, null, null));
+    }
+
+    // The tray "Check for Updates…" item / settings "Check for Updates" button: user-initiated, so it
+    // always gives explicit feedback (checking → up-to-date / available / failed).
+    private void ManualCheckForUpdates()
+    {
+        if (_updateInProgress) return;
+        _notifications.ShowInfo("Perch", "Checking for updates…", ToolTipIcon.Info, 3000);
+        UiDispatch.RunThenPost(_overlay, RunUpdateCheck, r =>
+        {
+            switch (r.Outcome)
+            {
+                case UpdateCheckOutcome.Available when r.Version is { } v:
+                    MarkUpdateAvailable(v, notify: true);
+                    break;
+                case UpdateCheckOutcome.UpToDate:
+                    _notifications.ShowInfo("Perch", "You're on the latest version.", ToolTipIcon.Info, 4000);
+                    break;
+                default:
+                    _notifications.ShowInfo("Perch — Update check failed",
+                        r.Error ?? "Could not check for updates.", ToolTipIcon.Error, 6000);
+                    break;
+            }
+        }, new UpdateCheckResult(UpdateCheckOutcome.Error, null, "Could not check for updates."));
+    }
+
+    // Records a pending update and lights up every surface (overlay badge, tray item, About highlight).
+    // The persisted version is what suppresses re-notifying and restores the UI across restarts, so it
+    // is always (re)written; the balloon fires only when asked (the first surfacing — not for a newer
+    // version found on a later background check).
+    private void MarkUpdateAvailable(string version, bool notify)
+    {
+        _settings.PendingUpdateVersion = version;
+        _settings.Save();
+
+        _overlay.SetUpdateAvailable(true);
+        SetTrayUpdateAvailable(true);
+        if (_settingsForm is { IsDisposed: false })
+            _settingsForm.SetUpdateAvailable(true, version);
+
+        if (notify)
+            _notifications.ShowInfo("Perch — Update available",
+                $"Version {version} is ready to install. Use the update button to update.",
+                ToolTipIcon.Info, 8000);
+    }
+
+    // Clears a pending update and returns every surface to its default state. Used both after applying
+    // an update and to self-heal when a check finds the pending update is no longer actually available.
+    private void ClearPendingUpdate()
+    {
+        _settings.PendingUpdateVersion = null;
+        _settings.Save();
+
+        _overlay.SetUpdateAvailable(false);
+        SetTrayUpdateAvailable(false);
+        if (_settingsForm is { IsDisposed: false })
+            _settingsForm.SetUpdateAvailable(false, null);
+    }
+
+    // Flips the tray menu's update entry between the neutral "Check for Updates…" and a bold, brand-
+    // coloured "Update available" call to action.
+    private void SetTrayUpdateAvailable(bool available)
+    {
+        _updateItem.Text = available ? "Update available" : "Check for Updates…";
+        var baseFont = _updateItem.Font ?? SystemFonts.MenuFont!;
+        _updateItem.Font = new Font(baseFont, available ? FontStyle.Bold : FontStyle.Regular);
+        _updateItem.ForeColor = available ? Theme.Brand : SystemColors.ControlText;
+    }
+
+    // Downloads and applies the pending update, then restarts. Triggered by any "update" affordance
+    // (overlay badge, tray item, About button). Clears the persisted record before applying so a stale
+    // entry can't stick and the post-restart startup check re-detects any further drift.
+    private async void PerformUpdate()
     {
         // A run is already in flight — the window has likely already closed, so just ignore the click.
         if (_updateInProgress)
             return;
         _updateInProgress = true;
 
-        // Update balloons aren't tied to a session (ShowInfo clears the last-notified pid so a click
-        // can't focus a stale terminal).
         try
         {
-            // Querying GitHub can take a few seconds; show an immediate balloon so the click feels
-            // acknowledged rather than dead until the check resolves.
-            _notifications.ShowInfo("Perch", "Checking for updates…", ToolTipIcon.Info, 3000);
+            _notifications.ShowInfo("Perch — Updating", "Preparing update…", ToolTipIcon.Info, 5000);
 
-            var mgr = new UpdateManager(new GithubSource("https://github.com/ArcticGizmo/perch", null, false));
+            var mgr = new UpdateManager(new GithubSource(AppInfo.RepoUrl, null, false));
             var update = await mgr.CheckForUpdatesAsync();
             if (update == null)
             {
-                _notifications.ShowInfo("Perch", "You're on the latest version.", ToolTipIcon.Info, 4000);
+                // Drift: the update was applied elsewhere or the release was pulled. Self-heal the UI
+                // instead of leaving a stuck "update available" state.
+                ClearPendingUpdate();
+                _notifications.ShowInfo("Perch", "You're already on the latest version.", ToolTipIcon.Info, 4000);
                 return;
             }
 
             _notifications.ShowInfo("Perch — Updating",
                 $"Downloading v{update.TargetFullRelease.Version}…", ToolTipIcon.Info, 5000);
+
+            // Clear the persisted record up front: the process is about to be replaced, and we want a
+            // clean slate so the next startup re-detects any version drift from scratch.
+            _settings.PendingUpdateVersion = null;
+            _settings.Save();
 
             // Close the open windows up front: the closing window is the visible signal that the
             // update is under way, and it stops the button being clicked again mid-download. The
@@ -686,8 +837,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         }
         finally
         {
-            // ApplyUpdatesAndRestart exits the process, so this only runs on the "up to date" or
-            // failure paths — both of which should allow another check later.
+            // ApplyUpdatesAndRestart exits the process, so this only runs on the drift or failure
+            // paths — both of which should allow another attempt later.
             _updateInProgress = false;
         }
     }
@@ -697,6 +848,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _reconcileTimer.Stop();
         _deadlineTimer.Stop();
         _usageTimer.Stop();
+        _updateCheckTimer.Stop();
         _autoCloseTimer.Stop();
         _notifyIcon.Visible = false;
         if (_settingsForm is { IsDisposed: false })
@@ -715,6 +867,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _reconcileTimer.Dispose();
             _deadlineTimer.Dispose();
             _usageTimer.Dispose();
+            _updateCheckTimer.Dispose();
             _autoCloseTimer.Dispose();
             _monitor.Dispose();
             _metricsMonitor.Dispose();

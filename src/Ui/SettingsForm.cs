@@ -99,6 +99,16 @@ internal sealed class SettingsForm : Form
     private FlowLayoutPanel _quickLinksList = null!;
     private FlowLayoutPanel _quickLinkPresets = null!;
 
+    // About / updates section. When an update is pending, the About nav item gains an "Update
+    // available" subtext and an orange label, the status line changes, and the action button switches
+    // from "Check for Updates" to "Update to vX now". These refs are captured while the page is built
+    // so SetUpdateAvailable can mutate them later. _updateAvailable/_pendingVersion mirror the state.
+    private Button _updateActionBtn = null!;
+    private Label  _updateStatusLabel = null!;
+    private Label? _aboutNavSubtext;
+    private bool   _updateAvailable;
+    private string? _pendingVersion;
+
     private UsageInfo _usage;
 
     /// <summary>Raised when the user toggles "Show usage limits" (true = enabled).</summary>
@@ -135,8 +145,12 @@ internal sealed class SettingsForm : Form
     /// three: (master enabled, detect error streaks, detect failing loops).</summary>
     public event Action<bool, bool, bool>? StuckDetectionChanged;
 
-    /// <summary>Raised when the user clicks "Check for Updates".</summary>
+    /// <summary>Raised when the user clicks "Check for Updates" (no update currently pending).</summary>
     public event EventHandler? CheckForUpdatesRequested;
+
+    /// <summary>Raised when the user clicks the About action button while an update is pending, asking
+    /// the owning context to download and apply it.</summary>
+    public event EventHandler? UpdateNowRequested;
 
     /// <summary>Raised when the user clicks a per-type "Test" button, to preview that notification.</summary>
     public event Action<NotificationKind>? TestNotificationRequested;
@@ -292,6 +306,29 @@ internal sealed class SettingsForm : Form
             BackColor = NavBg,
             Font      = new Font("Segoe UI", 10f, FontStyle.Regular, GraphicsUnit.Point),
         };
+        // The About item carries a hidden "Update available" subtext line, shown (in brand orange) only
+        // while an update is pending. Docked to the bottom so the main label centres in the space above
+        // it; a Transparent background lets the panel's hover/selection fill show through. Invisible
+        // controls are excluded from WinForms layout, so it reserves no space until shown.
+        if (key == "about")
+        {
+            _aboutNavSubtext = new Label
+            {
+                Text      = "Update available",
+                Dock      = DockStyle.Bottom,
+                Height    = 15,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding   = new Padding(16, 0, 8, 0),
+                ForeColor = Theme.Brand,
+                BackColor = Color.Transparent,
+                Font      = new Font("Segoe UI", 7.5f, FontStyle.Bold, GraphicsUnit.Point),
+                Visible   = false,
+            };
+            // Clicking the subtext should behave like clicking the row.
+            _aboutNavSubtext.Click += (_, _) => SelectPage(key);
+            item.Controls.Add(_aboutNavSubtext);
+        }
+
         item.Controls.Add(label);
         item.Controls.Add(accent);
 
@@ -336,7 +373,9 @@ internal sealed class SettingsForm : Form
             accent.Visible  = sel;
             item.BackColor  = sel ? Theme.ButtonBg : NavBg;
             label.BackColor = sel ? Theme.ButtonBg : NavBg;
-            label.ForeColor = sel ? Theme.Title    : Theme.Muted;
+            // A pending update tints the (unselected) About label brand-orange to draw the eye.
+            label.ForeColor = sel ? Theme.Title
+                : (k == "about" && _updateAvailable ? Theme.Brand : Theme.Muted);
         }
 
         ApplyFluidWidth();
@@ -1672,13 +1711,60 @@ internal sealed class SettingsForm : Form
         page.Controls.Add(Separator());
 
         page.Controls.Add(SectionTitle("Updates"));
-        page.Controls.Add(BodyText($"Currently running v{AppInfo.Version}."));
+        _updateStatusLabel = BodyText($"Currently running v{AppInfo.Version}.");
+        page.Controls.Add(_updateStatusLabel);
 
         var row = ButtonRow();  // the page's trailing spacer (see AddPage) handles the bottom gap
-        var checkBtn = MakeButton("Check for Updates");
-        checkBtn.Click += (_, _) => CheckForUpdatesRequested?.Invoke(this, EventArgs.Empty);
-        row.Controls.Add(checkBtn);
+        _updateActionBtn = MakeButton("Check for Updates");
+        // One handler that routes by the current state: perform the pending update, or (when none is
+        // pending) kick off a manual check. The context wires both events.
+        _updateActionBtn.Click += (_, _) =>
+        {
+            if (_updateAvailable)
+                UpdateNowRequested?.Invoke(this, EventArgs.Empty);
+            else
+                CheckForUpdatesRequested?.Invoke(this, EventArgs.Empty);
+        };
+        row.Controls.Add(_updateActionBtn);
         page.Controls.Add(row);
+
+        // Reflect any state already known at build time (e.g. a pending update restored on startup).
+        ApplyUpdateState();
+    }
+
+    /// <summary>Sets whether an update is pending, updating the About page's status line and action
+    /// button and the nav rail's "update available" highlight. Safe to call before or after the About
+    /// page is shown; the owning context calls it on open and whenever the pending state changes.</summary>
+    public void SetUpdateAvailable(bool available, string? version)
+    {
+        _updateAvailable = available;
+        _pendingVersion  = version;
+        ApplyUpdateState();
+    }
+
+    // Pushes _updateAvailable/_pendingVersion into the About page controls and the nav highlight. A
+    // no-op for any control not yet built.
+    private void ApplyUpdateState()
+    {
+        if (_updateActionBtn != null)
+            _updateActionBtn.Text = _updateAvailable ? $"Update to v{_pendingVersion} now" : "Check for Updates";
+        if (_updateStatusLabel != null)
+            _updateStatusLabel.Text = _updateAvailable
+                ? $"Version {_pendingVersion} is available to install — you're on v{AppInfo.Version}."
+                : $"Currently running v{AppInfo.Version}.";
+        if (_aboutNavSubtext != null)
+            _aboutNavSubtext.Visible = _updateAvailable;
+        RestyleAboutNav();
+    }
+
+    // Recolours the About nav label to the brand orange while an update is pending (unless About is the
+    // selected page, which owns its own highlight colour). Twin to the colour logic in SelectPage.
+    private void RestyleAboutNav()
+    {
+        foreach (var (k, _, label, _) in _navItems)
+            if (k == "about")
+                label.ForeColor = _currentKey == "about" ? Theme.Title
+                    : (_updateAvailable ? Theme.Brand : Theme.Muted);
     }
 
     // ── Changelog ────────────────────────────────────────────────────────────────

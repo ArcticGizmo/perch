@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.17] - 2026-07-01
+
+### Added
+
+- Automatic update checks on startup and hourly (checks only — nothing downloads uninvited).
+- An orange update badge, top-right of the panel, when a new version is waiting.
+- "Check for Updates…" in the tray menu becomes "Update available" once there is one.
+- An "update available" flag on **About** in Settings, for good measure.
+- Clicking any of them installs the update; you're notified once, not every hour.
+
+---
+
 ## [v0.1.16] - 2026-07-01
 
 ### Fixed

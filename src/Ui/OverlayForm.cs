@@ -61,6 +61,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private static readonly Color TreeLineColor  = Color.FromArgb(55,  55,  72);
     private static readonly Color UsageRedColor  = Color.FromArgb(239, 68,  68);
     private static readonly Color UsageTrackColor= Color.FromArgb(38,  38,  52);
+    private static readonly Color UpdateColor    = Color.FromArgb(255, 68,  45);   // perch-logo red-orange — the update badge
 
     // ── State ─────────────────────────────────────────────────────────────────
     // A flat render list of parent-session rows interleaved with their running sub-agent
@@ -89,6 +90,14 @@ internal sealed class OverlayForm : Form, IDenseHost
     // reappears the moment it starts working again. See SetHideInactiveTeamMembers.
     private bool  _hideInactiveTeamMembers;
     private bool  _attentionFlash;
+
+    // Update-available affordance: an orange (perch-logo coloured) download badge in the header's
+    // right-side glyph cluster, shown only while an update is pending. _updateIconRect is its painted
+    // hit-box, rebuilt each header paint (Rectangle.Empty while hidden); _hoveredUpdateIcon drives the
+    // hand cursor. Clicking it raises UpdateRequested for the owning context to perform the update.
+    private bool _updateAvailable;
+    private Rectangle _updateIconRect = Rectangle.Empty;
+    private bool _hoveredUpdateIcon;
 
     // Dense mode: an alternate, out-of-the-way presentation (a slim strip hugging a screen edge that
     // expands on hover). The whole state machine — on/off, the hover popup, the docked edge/monitor,
@@ -208,6 +217,10 @@ internal sealed class OverlayForm : Form, IDenseHost
     /// <summary>Raised when the user picks "Enable/Disable external notifications" for a session;
     /// carries that session's id for the context to flip its opt-in state.</summary>
     public event Action<string>? ExternalNotifyToggleRequested;
+
+    /// <summary>Raised when the user clicks the header's update badge, asking the owning context to
+    /// download and apply the pending update.</summary>
+    public event EventHandler? UpdateRequested;
 
     // ── Construction ──────────────────────────────────────────────────────────
     public OverlayForm()
@@ -527,6 +540,20 @@ internal sealed class OverlayForm : Form, IDenseHost
         UpdateSessions(_sessions);   // re-run the roster build (which owns the filter) and relayout
     }
 
+    /// <summary>Shows or hides the header's update badge. Repaint only — the badge lives in the
+    /// header's right-side glyph cluster and reserves no separate layout.</summary>
+    public void SetUpdateAvailable(bool available)
+    {
+        if (_updateAvailable == available) return;
+        _updateAvailable = available;
+        if (!available)
+        {
+            _hoveredUpdateIcon = false;
+            _updateIconRect = Rectangle.Empty;
+        }
+        Invalidate();
+    }
+
     // Toggles the upside-down quick-link icons. Repaint only — layout is unaffected.
     public void SetUpsideDownQuickLinks(bool upsideDown)
     {
@@ -804,10 +831,14 @@ internal sealed class OverlayForm : Form, IDenseHost
                 DrawStatusPill(g, x, midY, idle, IdleColor, IdleColor, countFont);
         }
 
+        // Right-side header glyph cluster, laid out right-to-left: [dense toggle] [expand chevron]
+        // [update badge]. clusterLeft tracks the left edge as each glyph is placed.
+        //
         // Dense toggle icon (always present). The glyph points along the docked edge: floating mode
         // shows the arrow collapsing toward that edge, dense mode shows it expanding inward. Clicking
         // it enters dense from floating, or leaves dense from the open popup.
         DrawSideCollapseIcon(g, SideIconRect(), reversed: _denseMode.IsDense ^ (_denseMode.Side == DenseSide.Left));
+        int clusterLeft = ClientSize.Width - HorizPad - IconBoxW;
 
         // Expand chevron — floating mode only (hidden in dense), and only when there's something to
         // expand. Sits just to the left of the dense toggle icon.
@@ -815,10 +846,49 @@ internal sealed class OverlayForm : Form, IDenseHost
         {
             var chevron = _expanded ? "▲" : "▼";
             var chSz    = g.MeasureString(chevron, chevFont);
-            g.DrawString(chevron, chevFont, muted,
-                ClientSize.Width - HorizPad - IconBoxW - IconGap - chSz.Width,
-                midY - chSz.Height / 2);
+            float chevX = clusterLeft - IconGap - chSz.Width;
+            g.DrawString(chevron, chevFont, muted, chevX, midY - chSz.Height / 2);
+            clusterLeft = (int)chevX;
         }
+
+        // Update badge — only while an update is pending. Drawn in the perch-logo colour so it stands
+        // out from the muted line-art glyphs; clicking it (see OnMouseUp) performs the update.
+        if (_updateAvailable)
+        {
+            int ux = clusterLeft - IconGap - IconBoxW;
+            int uy = (HeaderHeight - IconBoxH) / 2;
+            _updateIconRect = new Rectangle(ux, uy, IconBoxW, IconBoxH);
+            DrawUpdateIcon(g, _updateIconRect, _hoveredUpdateIcon);
+        }
+        else
+        {
+            _updateIconRect = Rectangle.Empty;
+        }
+    }
+
+    // The update badge: a filled perch-orange disc with a white "download" arrow (a down arrow over a
+    // short tray line). Pure GDI so it themes and scales with the rest of the header. Brightens a touch
+    // while hovered.
+    private static void DrawUpdateIcon(Graphics g, Rectangle r, bool hovered)
+    {
+        var oldSmoothing = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        var disc = hovered ? Color.FromArgb(255, 104, 84) : UpdateColor;
+        using (var fill = new SolidBrush(disc))
+            g.FillEllipse(fill, r);
+
+        using var pen = new Pen(Color.White, 1.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        int cx  = r.Left + r.Width / 2;
+        int midY = r.Top + r.Height / 2;
+        int top  = midY - 4;
+        int bot  = midY + 2;
+        g.DrawLine(pen, cx, top, cx, bot);                 // arrow shaft
+        g.DrawLine(pen, cx - 3, bot - 3, cx, bot);         // arrowhead
+        g.DrawLine(pen, cx + 3, bot - 3, cx, bot);
+        g.DrawLine(pen, cx - 3, midY + 4, cx + 3, midY + 4); // tray line
+
+        g.SmoothingMode = oldSmoothing;
     }
 
     // Hit-box for the dense toggle glyph. It always takes the rightmost slot in the header; in
@@ -1632,6 +1702,16 @@ internal sealed class OverlayForm : Form, IDenseHost
                 Invalidate();
             }
 
+            // Update badge hover: hand cursor + a brighter disc. Change-detected so it doesn't fight
+            // the quick-link/artifact cursor handlers below (they only touch the cursor on transition).
+            bool overUpdate = _updateAvailable && !_denseMode.IsClosedStrip && _updateIconRect.Contains(e.Location);
+            if (overUpdate != _hoveredUpdateIcon)
+            {
+                _hoveredUpdateIcon = overUpdate;
+                Cursor = overUpdate ? Cursors.Hand : Cursors.Default;
+                Invalidate();
+            }
+
             // Dwell over the usage strip (only the two bar rows, not the quick-links row below them).
             int usageStripTop = UsageStripTop;
             bool inStrip = ShowFullPanel && _usageEnabled && e.Y >= usageStripTop && e.Y < usageStripTop + UsageStripHeight;
@@ -1743,7 +1823,12 @@ internal sealed class OverlayForm : Form, IDenseHost
         {
             bool headerVisible = !_denseMode.IsClosedStrip;
 
-            if (headerVisible && SideIconRect().Contains(e.Location))
+            if (headerVisible && _updateAvailable && _updateIconRect.Contains(e.Location))
+            {
+                // The update badge: ask the owning context to download and apply the pending update.
+                UpdateRequested?.Invoke(this, EventArgs.Empty);
+            }
+            else if (headerVisible && SideIconRect().Contains(e.Location))
             {
                 // The dense toggle: enter dense from floating, or leave it from the open popup.
                 _denseMode.Toggle();
@@ -1812,6 +1897,7 @@ internal sealed class OverlayForm : Form, IDenseHost
         HideMetricsTooltip();
         if (_hoveredQuickLink >= 0) { _hoveredQuickLink = -1; Cursor = Cursors.Default; }
         if (_hoveredArtifactRow >= 0) { _hoveredArtifactRow = -1; Cursor = Cursors.Default; }
+        if (_hoveredUpdateIcon) { _hoveredUpdateIcon = false; Cursor = Cursors.Default; }
 
         // Start the countdown to collapse the dense popup back to the strip — but not mid-drag,
         // where the cursor legitimately roams to another monitor's drop lane.

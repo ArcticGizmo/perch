@@ -19,6 +19,10 @@ internal static class Theme
     public static readonly Color ButtonHover = Color.FromArgb(60, 60, 80);
     public static readonly Color Danger      = Color.FromArgb(248, 113, 113);
 
+    // The perch-logo red-orange (#ff442d), used to draw attention to the update affordances (the
+    // overlay's update badge and the About "update available" highlight) so they read as one accent.
+    public static readonly Color Brand       = Color.FromArgb(255, 68, 45);
+
     // Usage bar / status palette (same thresholds the overlay uses).
     public static readonly Color Green  = Color.FromArgb(34, 197, 94);
     public static readonly Color Yellow = Color.FromArgb(250, 204, 21);

@@ -140,6 +140,15 @@ internal sealed class AppSettings
     // already, so this leans in. Off by default.
     public bool UpsideDownQuickLinks { get; set; }
 
+    // Update checking. The version string of an update that has been detected and surfaced to the user
+    // (via the "update available" notification, overlay button, tray menu and About highlight). Null
+    // means no update is currently pending. Its presence is what suppresses re-notifying on subsequent
+    // checks (even if a still-newer version appears) and what restores the "update available" UI across
+    // restarts. Cleared the moment an update is actually applied, so a stale entry can't stick and any
+    // drift is re-caught by the post-update startup check. See OverlayApplicationContext's update flow.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PendingUpdateVersion { get; set; }
+
     // Legacy quick-link switches (pre-configurable links). Kept only so an older settings file can be
     // migrated into QuickLinks on load; nullable to tell "absent" from "false", and cleared once
     // folded in so they're not re-written. See MigrateQuickLinks.
