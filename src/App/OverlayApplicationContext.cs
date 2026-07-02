@@ -223,6 +223,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _settings.ContextPressureOrangePercent,
             _settings.ContextPressureRedPercent);
         ApplyStuckDetectionSettings();
+        ApplyGitStatsSettings();
         _overlay.SetShowSystemMetrics(_settings.ShowSystemMetrics);
         _overlay.SetShowSessionMetrics(_settings.ShowSessionMetrics);
         ApplyMonitoringSettings();
@@ -293,6 +294,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.PermissionModeBadgesChanged += SetPermissionModeBadgesEnabled;
                 f.TaskProgressChanged += SetTaskProgressEnabled;
                 f.BurnRateChanged += SetBurnRateEnabled;
+                f.GitStatsChanged += SetGitStatsEnabled;
                 f.WaitingTimerChanged += SetWaitingTimerEnabled;
                 f.WaitingTimerRedMinutesChanged += SetWaitingTimerRedMinutes;
                 f.ArtifactsChanged += SetArtifactsEnabled;
@@ -425,6 +427,25 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _settings.ShowBurnRate = enabled;
         _settings.Save();
         _overlay.SetShowBurnRate(enabled);
+    }
+
+    // Pushes the git-stats setting onto the monitor (which fetches — or, when off, doesn't) and the
+    // overlay (which draws the chip). Shared by startup and the live settings change below.
+    private void ApplyGitStatsSettings()
+    {
+        _monitor.GitStatsEnabled = _settings.ShowGitStats;
+        _overlay.SetShowGitStats(_settings.ShowGitStats);
+    }
+
+    private void SetGitStatsEnabled(bool enabled)
+    {
+        if (_settings.ShowGitStats == enabled) return;
+        _settings.ShowGitStats = enabled;
+        _settings.Save();
+        ApplyGitStatsSettings();
+        // Re-scan so the change takes effect at once: enabling kicks off the first git fetch (which
+        // repaints when it lands), disabling clears the chip without waiting for the next file event.
+        RequestScan();
     }
 
     private void SetWaitingTimerEnabled(bool enabled)

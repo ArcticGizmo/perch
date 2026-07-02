@@ -145,6 +145,12 @@ internal sealed class AppSettings
     // again. Defaults to false (show the full roster); a missing key keeps the roster complete.
     public bool HideInactiveTeamMembers { get; set; }
 
+    // Whether to draw the per-session unstaged git line-churn chip (+added / -deleted) next to a session
+    // in the overlay, read from `git diff --numstat` in the session's working directory. Off by default
+    // (experimental) and, importantly, load-bearing: while off no git process is ever launched, so the
+    // feature costs nothing when disabled. A missing key keeps it off.
+    public bool ShowGitStats { get; set; }
+
     // Ambient screen-edge glow. When on, a soft coloured glow pulses around the edge of the screen the
     // overlay lives on while any session needs attention or is awaiting input — a peripheral cue you
     // can catch without watching the overlay. The window is click-through and never activates, so it

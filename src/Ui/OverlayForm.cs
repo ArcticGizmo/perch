@@ -58,6 +58,8 @@ internal sealed class OverlayForm : Form, IDenseHost
     private static readonly Color ArtifactColor  = Color.FromArgb(251, 191, 36);   // amber — the clickable artifact glyph
     private static readonly Color WarnColor      = Color.FromArgb(245, 158, 11);   // deep amber — the "possibly stuck" warning glyph
     private static readonly Color BurnColor      = Color.FromArgb(125, 185, 232);  // soft blue — the live token burn-rate label
+    private static readonly Color GitAddColor    = Color.FromArgb(34,  197, 94);   // green — unstaged lines added
+    private static readonly Color GitDelColor    = Color.FromArgb(239, 68,  68);   // red — unstaged lines deleted
     private static readonly Color TreeLineColor  = Color.FromArgb(55,  55,  72);
     private static readonly Color UsageRedColor  = Color.FromArgb(239, 68,  68);
     private static readonly Color UsageTrackColor= Color.FromArgb(38,  38,  52);
@@ -168,6 +170,10 @@ internal sealed class OverlayForm : Form, IDenseHost
     // computed regardless, just not drawn when off. Off by default — an opt-in indicator. No hover
     // plumbing: the label already shows the number, unlike the glyph/bar indicators around it.
     private bool _showBurnRate;
+    // Unstaged git line-churn chip ("+142 -37") drawn on a session row. Display-only gate; the numbers
+    // are computed (and, when off, not even fetched) in the data layer. Off by default — an opt-in
+    // experimental indicator, like the burn rate beside it.
+    private bool _showGitStats;
     // "Waiting on you" timer drawn on an awaiting-input row's second line, warming from yellow toward
     // red as it grows. Display-only gate; the blocked duration is tracked regardless. On by default.
     private bool _showWaitingTimer = true;
@@ -564,6 +570,16 @@ internal sealed class OverlayForm : Form, IDenseHost
     {
         if (_showBurnRate == show) return;
         _showBurnRate = show;
+        Invalidate();
+    }
+
+    /// <summary>Shows or hides the unstaged git line-churn chip ("+142 -37"). Display only — when off no
+    /// chip is drawn and the session name reclaims the freed width. The data layer stops fetching
+    /// entirely when the feature is disabled; this switch just governs whether the chip is painted.</summary>
+    public void SetShowGitStats(bool show)
+    {
+        if (_showGitStats == show) return;
+        _showGitStats = show;
         Invalidate();
     }
 
@@ -1638,8 +1654,18 @@ internal sealed class OverlayForm : Form, IDenseHost
         string burnLabel = showBurn ? StatsFormat.Tokens((long)session.BurnRate!.Value) + "/m" : "";
         var burnSz       = showBurn ? g.MeasureString(burnLabel, statusFont) : SizeF.Empty;
         int burnWidth    = showBurn ? (int)burnSz.Width + 8 : 0;  // rate + gap to whatever's on its right
+        // Unstaged git line churn ("+142 -37"): the "+added" half in green, the "-deleted" half in red.
+        // Only shown when there's actual churn (a clean tree is hidden, like the burn rate when idle).
+        var gitStats     = _showGitStats ? session.GitStats : null;
+        bool showGit     = gitStats is { IsEmpty: false };
+        string gitAdd    = showGit ? $"+{gitStats!.Value.Added}" : "";
+        string gitDel    = showGit ? $"-{gitStats!.Value.Deleted}" : "";
+        var gitAddSz     = showGit ? g.MeasureString(gitAdd, statusFont) : SizeF.Empty;
+        var gitDelSz     = showGit ? g.MeasureString(gitDel, statusFont) : SizeF.Empty;
+        const int GitGap = 4;                                    // between the +added and -deleted halves
+        int gitWidth     = showGit ? (int)gitAddSz.Width + GitGap + (int)gitDelSz.Width + 8 : 0;
         var statusSz     = g.MeasureString(statusText, statusFont);
-        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - mailWidth - artWidth - warnWidth - thermoWidth - taskWidth - metricsWidth - burnWidth;
+        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - mailWidth - artWidth - warnWidth - thermoWidth - taskWidth - metricsWidth - burnWidth - gitWidth;
         var nameTrunc    = TruncateString(g, session.DisplayName, nameFont, nameMaxWidth);
         var nameSz       = g.MeasureString(nameTrunc, nameFont);
 
@@ -1658,8 +1684,21 @@ internal sealed class OverlayForm : Form, IDenseHost
         if (session.RemoteControlled)
             DrawRemoteIcon(g, HorizPad + 16 + warnWidth + artWidth + mailWidth, nameMidY);
 
-        g.DrawString(nameTrunc, nameFont, fgBrush,
-            HorizPad + 14 + warnWidth + artWidth + mailWidth + rcWidth, nameMidY - nameSz.Height / 2);
+        int nameX = HorizPad + 14 + warnWidth + artWidth + mailWidth + rcWidth;
+        g.DrawString(nameTrunc, nameFont, fgBrush, nameX, nameMidY - nameSz.Height / 2);
+
+        // Unstaged git line churn, immediately right of the name: "+added" in green, "-deleted" in red,
+        // so the split reads at a glance like a diff stat. Space for it is reserved in nameMaxWidth above,
+        // so a long name truncates to leave room rather than colliding with the chip.
+        if (showGit)
+        {
+            int gitX = nameX + (int)nameSz.Width + 6;
+            using var addBrush = new SolidBrush(GitAddColor);
+            using var delBrush = new SolidBrush(GitDelColor);
+            g.DrawString(gitAdd, statusFont, addBrush, gitX, nameMidY - gitAddSz.Height / 2);
+            g.DrawString(gitDel, statusFont, delBrush,
+                gitX + (int)gitAddSz.Width + GitGap, nameMidY - gitDelSz.Height / 2);
+        }
 
         int statusX = ClientSize.Width - HorizPad - (int)statusSz.Width;
         g.DrawString(statusText, statusFont, statusBrush,

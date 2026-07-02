@@ -136,6 +136,10 @@ internal sealed class SettingsForm : Form
     /// <summary>Raised when the user toggles "Token burn rate" (true = the tokens/min label is shown).</summary>
     public event Action<bool>? BurnRateChanged;
 
+    /// <summary>Raised when the user toggles "Git line changes" (true = the +added/-deleted chip is shown,
+    /// and the data layer starts fetching git stats; false stops it fetching entirely).</summary>
+    public event Action<bool>? GitStatsChanged;
+
     /// <summary>Raised when the user toggles "Waiting timer" (true = the "waiting on you" elapsed timer
     /// is shown on awaiting-input rows).</summary>
     public event Action<bool>? WaitingTimerChanged;
@@ -1803,6 +1807,21 @@ internal sealed class SettingsForm : Form
             "over its most recent burst of turns. It counts the fresh tokens each turn adds (new input and " +
             "generated output) and ignores the context re-read every turn. The rate can still swing quite a " +
             "bit between turns, so it's here in Experimental while that settles. Off by default."));
+
+        page.Controls.Add(Separator());
+
+        // 6. Unstaged git line churn on session rows. Display + data gate: raises the event so the owning
+        //    context both repaints and (crucially) starts/stops the background git scanning. Off by default
+        //    — while off, no git process is ever launched.
+        var gitToggle = MakeToggle();
+        gitToggle.Checked = _settings.ShowGitStats;
+        gitToggle.CheckedChanged += (_, _) => GitStatsChanged?.Invoke(gitToggle.Checked);
+        page.Controls.Add(TitleRow("Git line changes", gitToggle));
+        page.Controls.Add(BodyText(
+            "Shows a \"+142 -37\" chip next to a session — the lines added (green) and deleted (red) in its " +
+            "working directory that haven't been staged yet, read from git. While this is off, Perch never " +
+            "runs git at all, so it costs nothing; while on, it runs a lightweight \"git diff\" per session " +
+            "on a background thread, cached for a few seconds. Off by default."));
     }
 
     // ── About ─────────────────────────────────────────────────────────────────────

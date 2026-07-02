@@ -25,6 +25,7 @@
   - per-project notification routing — different chime/priority, or mute a noisy project
   - focus window / DND to batch notifications during a meeting
 - add git information (-+ lines of code)
+- add right click to toggle system usage/weekly stats on or off
 
 ## More ideas (2026-07)
 

@@ -103,7 +103,8 @@ public record ClaudeSession(
     StuckSignal? Stuck = null,
     IReadOnlyList<TaskItem>? Tasks = null,
     double? BurnRate = null,
-    DateTime? AwaitingSince = null
+    DateTime? AwaitingSince = null,
+    GitLineStats? GitStats = null
 )
 {
     /// <summary>Running sub-agents under this session; never null.</summary>
@@ -129,6 +130,13 @@ public record ClaudeSession(
     /// activity to compute a rate. See <see cref="TranscriptReader.GetBurnRate"/>.
     /// </summary>
     public double? BurnRate { get; init; } = BurnRate;
+
+    /// <summary>
+    /// Unstaged git line churn for this session's working directory (<see cref="Cwd"/>): lines added /
+    /// deleted in the working tree relative to the index. Null when the git-stats feature is off, the
+    /// value isn't known yet, or <see cref="Cwd"/> isn't a git repo. See <see cref="GitStatsService"/>.
+    /// </summary>
+    public GitLineStats? GitStats { get; init; } = GitStats;
 
     /// <summary>How many tasks in the checklist are completed.</summary>
     public int CompletedTaskCount => Tasks.Count(t => t.State == TaskState.Completed);

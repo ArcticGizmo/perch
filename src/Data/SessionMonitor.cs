@@ -44,6 +44,15 @@ internal sealed class SessionMonitor : IDisposable
     /// <summary>Flag a session when it keeps repeating the same action and it keeps failing.</summary>
     public bool DetectFailingLoops { get; set; } = true;
 
+    /// <summary>Master switch for the per-session unstaged git line-churn chip (+added / -deleted). Off
+    /// by construction; the owning context sets it from settings and re-scans when the user toggles it.
+    /// While off no git process is ever launched — the whole point is that it costs nothing when off.</summary>
+    public bool GitStatsEnabled
+    {
+        get => _gitStats.Enabled;
+        set => _gitStats.Enabled = value;
+    }
+
     private readonly string _sessionsDir = ClaudePaths.SessionsDir;
 
     private readonly Dictionary<string, string> _lastRawStatus = new();
@@ -71,6 +80,7 @@ internal sealed class SessionMonitor : IDisposable
 
     private readonly SubAgentReader _subAgents = new();
     private readonly TranscriptReader _transcripts = new();
+    private readonly GitStatsService _gitStats = new();
 
     // PIDs we have an exit subscription for, keyed by the same string PID used everywhere else.
     private readonly Dictionary<string, Process> _trackedProcesses = new();
@@ -109,6 +119,9 @@ internal sealed class SessionMonitor : IDisposable
     public SessionMonitor()
     {
         _debounceTimer = new System.Threading.Timer(_ => ChangeDetected?.Invoke());
+        // A background git refresh landing with new numbers should repaint the overlay — treat it like
+        // any other change trigger. The rescan re-reads the (now-fresh) cache, so it settles at once.
+        _gitStats.StatsUpdated += () => ChangeDetected?.Invoke();
         EnsureWatcher();
     }
 
@@ -527,6 +540,12 @@ internal sealed class SessionMonitor : IDisposable
             // the transcript and cached by mtime. Surfaced as a progress count + hover list in the overlay.
             var tasks = _transcripts.GetTasks(sessionId, cwd);
 
+            // Unstaged git line churn (+added / -deleted) for this session's working tree. Fully gated
+            // inside the service: while the experimental toggle is off this returns null without ever
+            // launching git. Non-blocking — a stale/missing value schedules a background refresh that
+            // triggers a repaint when it lands.
+            var gitStats = _gitStats.Get(cwd);
+
             var session = new ClaudeSession(
                 pid,
                 sessionId,
@@ -547,7 +566,8 @@ internal sealed class SessionMonitor : IDisposable
                 stuck,
                 tasks,
                 burnRate,
-                awaitingSince
+                awaitingSince,
+                gitStats
             );
 
             if (status == SessionStatus.NeedsAttention
@@ -800,6 +820,7 @@ internal sealed class SessionMonitor : IDisposable
         _disposed = true;
 
         _debounceTimer.Dispose();
+        _gitStats.Dispose();
 
         if (_watcher != null)
         {

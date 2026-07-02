@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.24] - 2026-07-02
+
+### Added
+
+- Git line changes — a "+142 -37" chip beside each session's name (green added, red deleted) for unstaged work.
+- Toggle under Settings → Experimental, off by default (off means it never even thinks of running git).
+
+---
+
 ## [v0.1.23] - 2026-07-02
 
 ### Fixed
