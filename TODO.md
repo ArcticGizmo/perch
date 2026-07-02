@@ -24,8 +24,6 @@
   - last-action peek on hover ("last did: edited SessionMonitor.cs") via the existing tooltip pattern / Activity field
   - per-project notification routing — different chime/priority, or mute a noisy project
   - focus window / DND to batch notifications during a meeting
-- add git information (-+ lines of code)
-- add right click to toggle system usage/weekly stats on or off
 
 ## More ideas (2026-07)
 
@@ -42,6 +40,5 @@
 - silly (but on-brand for a thing called Perch):
   - voice / TTS announcements — optionally speak the session name ("the auth refactor is done")
     instead of a generic chime, for when you're heads-down elsewhere
-  - confetti / sound pack when a task list hits n/n — gamification beyond Wrapped
 
 

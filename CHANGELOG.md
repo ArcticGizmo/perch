@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.26] - 2026-07-02
+
+### Added
+
+- Right-click the overlay header to show or hide the system metrics and usage strips.
+- Right-click either strip to hide it on the spot.
+
+### Fixed
+
+- Menu glyphs now render properly (the party popper had been showing up as a tofu box).
+
+---
+
 ## [v0.1.25] - 2026-07-02
 
 ### Added

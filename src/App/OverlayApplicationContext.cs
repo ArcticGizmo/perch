@@ -107,6 +107,10 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _overlay.ExternalNotifyToggleRequested += OnToggleExternalNotify;
         _overlay.HistoryRequested += OpenHistoryViewer;
         _overlay.UpdateRequested += (_, _) => PerformUpdate();
+        // Right-click toggles on the overlay's header / metric strips — reuse the same handlers the
+        // settings window drives, so they persist and reconfigure sampling identically.
+        _overlay.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
+        _overlay.UsageToggleRequested += SetUsageEnabled;
         // When the overlay is dragged to another monitor, follow it with the ambient glow.
         _overlay.DragCompleted += (_, _) => UpdateGlow();
 

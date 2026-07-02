@@ -261,6 +261,16 @@ internal sealed class OverlayForm : Form, IDenseHost
     /// download and apply the pending update.</summary>
     public event EventHandler? UpdateRequested;
 
+    /// <summary>Raised when the user toggles the system-resource (whole-machine CPU/RAM) strip from the
+    /// overlay's right-click menu — either the header menu or a right-click on the strip itself. Carries
+    /// the desired new enabled state for the owning context to persist and apply.</summary>
+    public event Action<bool>? SystemMetricsToggleRequested;
+
+    /// <summary>Raised when the user toggles the account-usage strip from the overlay's right-click menu —
+    /// either the header menu or a right-click on the strip itself. Carries the desired new enabled
+    /// state for the owning context to persist and apply.</summary>
+    public event Action<bool>? UsageToggleRequested;
+
     /// <summary>Raised when the user finishes dragging the overlay (mouse released after a real drag),
     /// so the owning context can re-evaluate anything tied to the overlay's screen — chiefly moving the
     /// ambient screen-edge glow onto the monitor the overlay now sits on.</summary>
@@ -2560,10 +2570,32 @@ internal sealed class OverlayForm : Form, IDenseHost
             items.Add(new PopoverItem(label, () => ToggleConfetti(s.SessionId), DrawPartyIcon));
         }
 
+        // Right-clicking a strip toggles just that strip off. Only offered when the strip is actually
+        // showing (it's the thing under the cursor); the header menu below can turn either back on.
+        bool overSystemStrip = ShowFullPanel && _showSystemMetrics
+            && clientPt.Y >= HeaderHeight && clientPt.Y < HeaderHeight + SysMetricsStripHeight;
+        bool overUsageStrip = ShowFullPanel && _usageEnabled
+            && clientPt.Y >= UsageStripTop && clientPt.Y < UsageStripTop + UsageStripHeight;
+
+        if (overSystemStrip)
+            items.Add(("Hide system metrics", () => SystemMetricsToggleRequested?.Invoke(false)));
+        if (overUsageStrip)
+            items.Add(("Hide usage", () => UsageToggleRequested?.Invoke(false)));
+
         bool headerVisible = !_denseMode.IsClosedStrip;
         bool overHeader = headerVisible && clientPt.Y >= 0 && clientPt.Y < HeaderHeight;
         if (overHeader)
+        {
+            // Both strip toggles, regardless of their current state, so the header is the one place that
+            // can bring a hidden strip back. Wording flips with the current state.
+            bool sysTarget = !_showSystemMetrics;
+            items.Add((_showSystemMetrics ? "Hide system metrics" : "Show system metrics",
+                () => SystemMetricsToggleRequested?.Invoke(sysTarget)));
+            bool usageTarget = !_usageEnabled;
+            items.Add((_usageEnabled ? "Hide usage" : "Show usage",
+                () => UsageToggleRequested?.Invoke(usageTarget)));
             items.Add(("Exit Perch", () => ExitRequested?.Invoke(this, EventArgs.Empty)));
+        }
 
         if (items.Count == 0) return;
 
