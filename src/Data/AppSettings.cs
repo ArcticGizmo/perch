@@ -51,6 +51,16 @@ internal sealed class AppSettings
     // leaning on the plan's token limits. Off by default (opt-in); a missing key keeps it off.
     public bool ShowBurnRate { get; set; } = false;
 
+    // Whether to draw the "waiting on you" timer next to a session that's blocked awaiting input —
+    // how long it's been waiting, warming from yellow toward red as it grows. Off hides it; the session
+    // still shows its "input ↩" status. Defaults to true; a missing key keeps it on.
+    public bool ShowWaitingTimer { get; set; } = true;
+
+    // How many minutes a session must sit blocked before the "waiting on you" timer reaches full red;
+    // the colour ramps yellow -> red linearly over this span. Clamped to a sane floor when applied.
+    // Defaults to 10; a missing key keeps that.
+    public int WaitingTimerRedMinutes { get; set; } = 10;
+
     // Whether to draw the clickable artifact glyph next to a session that has published one or more web
     // artifacts. Off hides the glyph (the row click just focuses the terminal) and lets the session name
     // reclaim its width; the artifacts are still tracked. Defaults to true; a missing key keeps it on.

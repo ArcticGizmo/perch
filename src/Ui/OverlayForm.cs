@@ -168,6 +168,11 @@ internal sealed class OverlayForm : Form, IDenseHost
     // computed regardless, just not drawn when off. Off by default — an opt-in indicator. No hover
     // plumbing: the label already shows the number, unlike the glyph/bar indicators around it.
     private bool _showBurnRate;
+    // "Waiting on you" timer drawn on an awaiting-input row's second line, warming from yellow toward
+    // red as it grows. Display-only gate; the blocked duration is tracked regardless. On by default.
+    private bool _showWaitingTimer = true;
+    // How many minutes a blocked session takes to warm the waiting timer fully to red. User-tunable.
+    private int _waitingTimerRedMinutes = 10;
     private readonly Dictionary<int, Rectangle> _taskRects = new();
     private int _hoveredTaskRow = -1;
     private readonly System.Windows.Forms.Timer _taskHoverTimer;
@@ -544,6 +549,26 @@ internal sealed class OverlayForm : Form, IDenseHost
         Invalidate();
     }
 
+    /// <summary>Shows or hides the "waiting on you" timer on awaiting-input rows. Display only — when
+    /// off the row still shows its "input ↩" status, just without the elapsed-wait line.</summary>
+    public void SetShowWaitingTimer(bool show)
+    {
+        if (_showWaitingTimer == show) return;
+        _showWaitingTimer = show;
+        UpdateTickTimer();   // an awaiting row now needs (or no longer needs) the per-second repaint
+        Invalidate();
+    }
+
+    /// <summary>Sets how many minutes a blocked session takes to warm the waiting timer fully to red.
+    /// Floored at 1 minute so the ramp is always meaningful.</summary>
+    public void SetWaitingTimerRedMinutes(int minutes)
+    {
+        minutes = Math.Max(1, minutes);
+        if (_waitingTimerRedMinutes == minutes) return;
+        _waitingTimerRedMinutes = minutes;
+        Invalidate();
+    }
+
     /// <summary>Shows or hides the clickable artifact glyph. Display only — when off no glyph is drawn,
     /// the row's click focuses the terminal as usual, and the session name reclaims the freed width;
     /// the session's artifacts are still tracked.</summary>
@@ -640,10 +665,13 @@ internal sealed class OverlayForm : Form, IDenseHost
     private bool ExternalNotifyEnabled(ClaudeSession session) =>
         _externalNotifyAvailable && _externalNotifySessions.Contains(session.SessionId);
 
-    // The run-time labels only need a per-second repaint when they're actually on screen.
+    // The run-time labels only need a per-second repaint when they're actually on screen: a running
+    // session's elapsed run time, or a blocked session's "waiting on you" timer (when it's enabled).
     private void UpdateTickTimer()
     {
-        bool need = ShowFullPanel && _sessions.Any(s => s.Status == SessionStatus.Running);
+        bool need = ShowFullPanel && _sessions.Any(s =>
+            s.Status == SessionStatus.Running
+            || (_showWaitingTimer && s.Status == SessionStatus.AwaitingInput));
         if (need && !_tickTimer.Enabled)
             _tickTimer.Start();
         else if (!need && _tickTimer.Enabled)
@@ -1506,14 +1534,25 @@ internal sealed class OverlayForm : Form, IDenseHost
         // A running session gets a second, dimmer line: the parsed tool call on the left and the
         // elapsed run time on the right. Without either the project name stays vertically centred.
         bool running   = session.Status == SessionStatus.Running;
+        // An awaiting-input row shows a "waiting on you" timer on its second line instead of activity.
+        bool awaiting  = session.Status == SessionStatus.AwaitingInput && _showWaitingTimer;
         // While working a checklist, the active task's gerund ("Building slash commands…") is more
         // telling than the raw tool phrase, so it wins for the activity line; fall back to the tool.
         var activity   = running
             ? (session.CurrentTask?.ActiveForm is { Length: > 0 } af ? af : session.Activity)
+            : awaiting ? "waiting on you"
             : null;
-        var elapsed    = running ? session.RunningElapsedLabel() : null;
+        var elapsed    = running  ? session.RunningElapsedLabel()
+                       : awaiting ? session.AwaitingElapsedLabel()
+                       : null;
         bool twoLine   = !string.IsNullOrEmpty(activity) || !string.IsNullOrEmpty(elapsed);
         int nameMidY   = twoLine ? top + RowHeight / 2 - 8 : midY;
+
+        // The second line is dim for a running row; for a blocked row it warms from the awaiting-yellow
+        // toward alarm-red the longer the session has been waiting, so a stale block draws the eye.
+        Color secondLineColor = awaiting
+            ? WarmWaitingColor(session.AwaitingElapsed() ?? TimeSpan.Zero)
+            : MutedColor;
 
         var dotColor = session.Status switch
         {
@@ -1531,6 +1570,7 @@ internal sealed class OverlayForm : Form, IDenseHost
         using var activityFont = new Font("Segoe UI", 7.5f, GraphicsUnit.Point);
         using var fgBrush      = new SolidBrush(FgColor);
         using var mutedBrush   = new SolidBrush(MutedColor);
+        using var secondLineBrush = new SolidBrush(secondLineColor);
         using var attnBrush    = new SolidBrush(AttentionColor);
         using var awaitBrush   = new SolidBrush(AwaitingColor);
 
@@ -1657,28 +1697,44 @@ internal sealed class OverlayForm : Form, IDenseHost
             int activityMidY = top + RowHeight / 2 + 9;
             int lineLeft     = HorizPad + 14;
 
-            // Elapsed run time, right-aligned and dim.
+            // Elapsed time, right-aligned. Dim for a running row; warming for a blocked one.
             int elapsedW = 0;
             if (!string.IsNullOrEmpty(elapsed))
             {
                 var elapsedSz = g.MeasureString(elapsed, activityFont);
                 elapsedW = (int)elapsedSz.Width;
-                g.DrawString(elapsed, activityFont, mutedBrush,
+                g.DrawString(elapsed, activityFont, secondLineBrush,
                     ClientSize.Width - HorizPad - elapsedW, activityMidY - elapsedSz.Height / 2);
             }
 
-            // Activity phrase fills the remaining width to the left of the elapsed time.
+            // Activity phrase (or "waiting on you") fills the remaining width left of the elapsed time.
             if (!string.IsNullOrEmpty(activity))
             {
                 int activityMaxW  = ClientSize.Width - lineLeft - HorizPad - (elapsedW > 0 ? elapsedW + 6 : 0);
                 var activityTrunc = TruncateString(g, activity, activityFont, activityMaxW);
                 var activitySz    = g.MeasureString(activityTrunc, activityFont);
-                g.DrawString(activityTrunc, activityFont, mutedBrush,
+                g.DrawString(activityTrunc, activityFont, secondLineBrush,
                     lineLeft, activityMidY - activitySz.Height / 2);
             }
         }
     }
 
+
+    // "Waiting on you" timer colour: interpolates from the awaiting-yellow at 0 to alarm-red at the
+    // top of the ramp, so a session that's been blocked a while visibly heats up. Linear in each
+    // channel; clamped so it never overshoots red once the wait is long enough. The ramp length is
+    // user-tunable via _waitingTimerRedMinutes.
+    private Color WarmWaitingColor(TimeSpan waited)
+    {
+        double fullMinutes = Math.Max(1, _waitingTimerRedMinutes);   // fully red once blocked this long
+        double t = Math.Clamp(waited.TotalMinutes / fullMinutes, 0.0, 1.0);
+        var to   = Color.FromArgb(239, 68, 68);   // alarm-red
+        int Lerp(int a, int b) => (int)Math.Round(a + (b - a) * t);
+        return Color.FromArgb(
+            Lerp(AwaitingColor.R, to.R),
+            Lerp(AwaitingColor.G, to.G),
+            Lerp(AwaitingColor.B, to.B));
+    }
 
     // Stuck-detection warning: a small amber triangle with an exclamation mark, drawn at the left of
     // a flagged row. x is the left edge of the reserved WarnIconWidth area; midY is the row centre.
@@ -2239,10 +2295,12 @@ internal sealed class OverlayForm : Form, IDenseHost
     // The vertical centre of a session row's name line — shifted up when the row shows a second
     // (activity/elapsed) line. Mirrors the layout in DrawSessionRow so the artifact glyph's hit
     // rectangle lines up with where it's painted.
-    private static int NameMidY(ClaudeSession s, int top)
+    private int NameMidY(ClaudeSession s, int top)
     {
-        bool running = s.Status == SessionStatus.Running;
-        bool twoLine = running && (!string.IsNullOrEmpty(s.Activity) || !string.IsNullOrEmpty(s.RunningElapsedLabel()));
+        bool running  = s.Status == SessionStatus.Running;
+        bool awaiting = s.Status == SessionStatus.AwaitingInput && _showWaitingTimer;
+        bool twoLine  = (running && (!string.IsNullOrEmpty(s.Activity) || !string.IsNullOrEmpty(s.RunningElapsedLabel())))
+                     || (awaiting && !string.IsNullOrEmpty(s.AwaitingElapsedLabel()));
         return twoLine ? top + RowHeight / 2 - 8 : top + RowHeight / 2;
     }
 

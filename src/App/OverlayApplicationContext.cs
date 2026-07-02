@@ -201,6 +201,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _overlay.SetShowModeBadges(_settings.ShowPermissionModeBadges);
         _overlay.SetShowTaskProgress(_settings.ShowTaskProgress);
         _overlay.SetShowBurnRate(_settings.ShowBurnRate);
+        _overlay.SetShowWaitingTimer(_settings.ShowWaitingTimer);
+        _overlay.SetWaitingTimerRedMinutes(_settings.WaitingTimerRedMinutes);
         _overlay.SetShowArtifacts(_settings.ShowArtifacts);
         _overlay.SetHideInactiveTeamMembers(_settings.HideInactiveTeamMembers);
         _overlay.SetContextThresholds(
@@ -278,6 +280,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.PermissionModeBadgesChanged += SetPermissionModeBadgesEnabled;
                 f.TaskProgressChanged += SetTaskProgressEnabled;
                 f.BurnRateChanged += SetBurnRateEnabled;
+                f.WaitingTimerChanged += SetWaitingTimerEnabled;
+                f.WaitingTimerRedMinutesChanged += SetWaitingTimerRedMinutes;
                 f.ArtifactsChanged += SetArtifactsEnabled;
                 f.HideInactiveTeamMembersChanged += SetHideInactiveTeamMembers;
                 f.ScreenEdgeGlowChanged += SetScreenEdgeGlow;
@@ -395,6 +399,23 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _settings.ShowBurnRate = enabled;
         _settings.Save();
         _overlay.SetShowBurnRate(enabled);
+    }
+
+    private void SetWaitingTimerEnabled(bool enabled)
+    {
+        if (_settings.ShowWaitingTimer == enabled) return;
+        _settings.ShowWaitingTimer = enabled;
+        _settings.Save();
+        _overlay.SetShowWaitingTimer(enabled);
+    }
+
+    private void SetWaitingTimerRedMinutes(int minutes)
+    {
+        minutes = Math.Max(1, minutes);
+        if (_settings.WaitingTimerRedMinutes == minutes) return;
+        _settings.WaitingTimerRedMinutes = minutes;
+        _settings.Save();
+        _overlay.SetWaitingTimerRedMinutes(minutes);
     }
 
     private void SetArtifactsEnabled(bool enabled)

@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.20] - 2026-07-02
+
+### Overlay
+
+- "Waiting on you" timer on blocked rows — warms yellow to red the longer you ignore it (configurable, default 10 minutes).
+
+---
+
 ## [v0.1.19] - 2026-07-02
 
 ### Experimental

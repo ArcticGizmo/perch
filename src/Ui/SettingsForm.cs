@@ -136,6 +136,13 @@ internal sealed class SettingsForm : Form
     /// <summary>Raised when the user toggles "Token burn rate" (true = the tokens/min label is shown).</summary>
     public event Action<bool>? BurnRateChanged;
 
+    /// <summary>Raised when the user toggles "Waiting timer" (true = the "waiting on you" elapsed timer
+    /// is shown on awaiting-input rows).</summary>
+    public event Action<bool>? WaitingTimerChanged;
+
+    /// <summary>Raised when the user edits how many minutes the waiting timer takes to warm fully to red.</summary>
+    public event Action<int>? WaitingTimerRedMinutesChanged;
+
     /// <summary>Raised when the user toggles "Hide inactive members" (true = idle teammates are dropped
     /// from the overlay roster).</summary>
     public event Action<bool>? HideInactiveTeamMembersChanged;
@@ -717,6 +724,8 @@ internal sealed class SettingsForm : Form
         page.Controls.Add(Separator());
         BuildTaskProgressSection(page);
         page.Controls.Add(Separator());
+        BuildWaitingTimerSection(page);
+        page.Controls.Add(Separator());
         BuildArtifactsSection(page);
         page.Controls.Add(Separator());
         BuildContextPressureSection(page);
@@ -831,6 +840,65 @@ internal sealed class SettingsForm : Form
             "Shows a small \"done/total\" count next to a session that's working through a task list " +
             "(the native checklist Claude Code builds as it plans). It turns green when every task is " +
             "complete; hover it in the overlay for the full list."));
+    }
+
+    // "Waiting on you" timer: a display toggle (default on). Raises WaitingTimerChanged so the overlay
+    // redraws and (re)starts its per-second tick for the elapsed-wait label.
+    private void BuildWaitingTimerSection(FlowLayoutPanel page)
+    {
+        var toggle = MakeToggle();
+        toggle.Checked = _settings.ShowWaitingTimer;
+        toggle.CheckedChanged += (_, _) => WaitingTimerChanged?.Invoke(toggle.Checked);
+        page.Controls.Add(TitleRow("Waiting timer", toggle));
+
+        page.Controls.Add(BodyText(
+            "Shows how long a session has been blocked waiting on you once it hits a prompt or permission " +
+            "request — a \"waiting on you\" line with the elapsed time. It warms from yellow toward red the " +
+            "longer it sits unanswered, so a session you've left hanging is easy to spot."));
+
+        // How long the warm-up takes: a small numeric box + "minutes" suffix. Committed (and clamped)
+        // on Leave/Enter rather than per-keystroke so a half-typed value never reaches the overlay.
+        page.Controls.Add(FieldCaption("Minutes until fully red"));
+
+        var minutesRow = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents  = false,
+            AutoSize      = true,
+            AutoSizeMode  = AutoSizeMode.GrowAndShrink,
+            Margin        = new Padding(0, 0, 0, 8),
+        };
+
+        var minutesBox = MakeTextBox(_settings.WaitingTimerRedMinutes.ToString());
+        minutesBox.Width  = 64;
+        minutesBox.Margin = new Padding(0, 0, 8, 0);
+
+        void CommitMinutes()
+        {
+            int minutes = int.TryParse(minutesBox.Text.Trim(), out var m)
+                ? Math.Clamp(m, 1, 240)
+                : _settings.WaitingTimerRedMinutes;
+            minutesBox.Text = minutes.ToString();   // normalise the display to what we actually applied
+            WaitingTimerRedMinutesChanged?.Invoke(minutes);
+        }
+
+        minutesBox.Leave += (_, _) => CommitMinutes();
+        minutesBox.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter) { CommitMinutes(); e.SuppressKeyPress = true; }
+        };
+
+        var suffix = new Label
+        {
+            Text      = "minutes",
+            AutoSize  = true,
+            ForeColor = Theme.Muted,
+            Margin    = new Padding(0, 6, 0, 0),
+        };
+
+        minutesRow.Controls.Add(minutesBox);
+        minutesRow.Controls.Add(suffix);
+        page.Controls.Add(minutesRow);
     }
 
     // Permission-mode badges: a display toggle (default on) plus the colour legend, which dims when

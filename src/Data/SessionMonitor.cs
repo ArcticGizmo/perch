@@ -39,6 +39,9 @@ internal sealed class SessionMonitor : IDisposable
     private readonly Dictionary<string, DateTime> _idleSince = new();
     // When each PID last entered a continuous Running stretch, so we can show elapsed run time.
     private readonly Dictionary<string, DateTime> _runningSince = new();
+    // When each PID last entered a continuous AwaitingInput stretch, so we can show a "waiting on you"
+    // timer. Distinct from _awaitingInputPids, which is the one-shot notification-dedup set.
+    private readonly Dictionary<string, DateTime> _awaitingSince = new();
     private readonly HashSet<string> _awaitingInputPids = new();
     // PIDs that had at least one running sub-agent on the previous scan, so we can detect the
     // moment they all finish and treat it like a busy->idle completion.
@@ -131,6 +134,7 @@ internal sealed class SessionMonitor : IDisposable
             _lastRawStatus.Remove(key);
             _idleSince.Remove(key);
             _runningSince.Remove(key);
+            _awaitingSince.Remove(key);
             _awaitingInputPids.Remove(key);
             _hadRunningSubs.Remove(key);
             _subsFinishedIdleAt.Remove(key);
@@ -390,6 +394,24 @@ internal sealed class SessionMonitor : IDisposable
                 runningSince = null;
             }
 
+            // Likewise track the start of the current continuous AwaitingInput stretch, so the overlay
+            // can show how long the session has been blocked on the user; reset once it stops waiting.
+            DateTime? awaitingSince;
+            if (status == SessionStatus.AwaitingInput)
+            {
+                if (!_awaitingSince.TryGetValue(pid, out var since))
+                {
+                    since = now;
+                    _awaitingSince[pid] = since;
+                }
+                awaitingSince = since;
+            }
+            else
+            {
+                _awaitingSince.Remove(pid);
+                awaitingSince = null;
+            }
+
             // Live activity: only worth reading the transcript tail while the session is working.
             var activity = status == SessionStatus.Running
                 ? _transcripts.GetActivity(sessionId, cwd)
@@ -436,7 +458,8 @@ internal sealed class SessionMonitor : IDisposable
                 artifacts,
                 stuck,
                 tasks,
-                burnRate
+                burnRate,
+                awaitingSince
             );
 
             if (status == SessionStatus.NeedsAttention && (prevRaw == "busy" || fireSubsCompletion))

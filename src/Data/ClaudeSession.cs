@@ -102,7 +102,8 @@ public record ClaudeSession(
     IReadOnlyList<Artifact>? Artifacts = null,
     StuckSignal? Stuck = null,
     IReadOnlyList<TaskItem>? Tasks = null,
-    double? BurnRate = null
+    double? BurnRate = null,
+    DateTime? AwaitingSince = null
 )
 {
     /// <summary>Running sub-agents under this session; never null.</summary>
@@ -176,22 +177,39 @@ public record ClaudeSession(
     public bool ExternalNotify { get; init; } = ExternalNotify;
 
     /// <summary>
+    /// When this session most recently entered the current continuous <see cref="SessionStatus.AwaitingInput"/>
+    /// stretch — i.e. when it started blocking on the user — so the overlay can show a "waiting on you"
+    /// timer. Null unless the session is awaiting input.
+    /// </summary>
+    public DateTime? AwaitingSince { get; init; } = AwaitingSince;
+
+    /// <summary>
     /// How long this session has been continuously running, as a compact label showing only the
     /// most significant unit ("8s", "3m", "2h"). Null when the session isn't running.
     /// </summary>
-    public string? RunningElapsedLabel()
+    public string? RunningElapsedLabel() =>
+        RunningSince is { } start ? FormatElapsed(DateTime.Now - start) : null;
+
+    /// <summary>How long this session has been blocked awaiting input, as the same compact label
+    /// (<see cref="RunningElapsedLabel"/>). Null when the session isn't awaiting input.</summary>
+    public string? AwaitingElapsedLabel() =>
+        AwaitingSince is { } start ? FormatElapsed(DateTime.Now - start) : null;
+
+    /// <summary>The continuous time this session has been blocked awaiting input, or null when it
+    /// isn't. Lets the overlay warm the "waiting on you" timer from yellow toward red as it grows.</summary>
+    public TimeSpan? AwaitingElapsed() =>
+        AwaitingSince is { } start ? Max(DateTime.Now - start, TimeSpan.Zero) : null;
+
+    // Compact "most significant unit" label ("8s", "3m", "2h"); clamps negatives to zero.
+    private static string FormatElapsed(TimeSpan elapsed)
     {
-        if (RunningSince is not { } start)
-            return null;
-
-        var elapsed = DateTime.Now - start;
-        if (elapsed < TimeSpan.Zero)
-            elapsed = TimeSpan.Zero;
-
+        elapsed = Max(elapsed, TimeSpan.Zero);
         if (elapsed.TotalHours >= 1)
             return $"{(int)elapsed.TotalHours}h";
         if (elapsed.TotalMinutes >= 1)
             return $"{(int)elapsed.TotalMinutes}m";
         return $"{(int)elapsed.TotalSeconds}s";
     }
+
+    private static TimeSpan Max(TimeSpan a, TimeSpan b) => a < b ? b : a;
 }

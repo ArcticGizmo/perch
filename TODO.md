@@ -31,8 +31,6 @@
 - surface data we already parse but don't show, on the overlay row:
   - live cost / burn — current model as a small badge + a token/min or $/hr rate on running
     sessions (usage.* and message.model are already read for stats; not shown live per session)
-  - "waiting on you" timer — awaiting-input rows show how long they've been blocked, colour
-    warming to red as it grows (the cheap, always-visible front-half of human-latency analytics)
   - git branch + dirty badge — gitBranch/cwd are captured for stats only; show "main" (or ⚠ if the
     tree is dirty) on the row so you can tell which branch/worktree each agent is on at a glance
 - new views:
