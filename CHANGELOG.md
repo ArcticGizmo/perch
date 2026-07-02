@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.22] - 2026-07-02
+
+### Added
+
+- Perch reacts — the tray and overlay bird wears your sessions' mood.
+- Dozes when idle, alert while working, flags a "!" when you're needed, and panics (sweat and all) on a stuck session.
+- Toggle under Settings → Experimental (on by default).
+
+---
+
 ## [v0.1.21] - 2026-07-02
 
 ### Added

@@ -162,6 +162,12 @@ internal sealed class AppSettings
     // already, so this leans in. Off by default.
     public bool UpsideDownQuickLinks { get; set; }
 
+    // "Perch reacts": the tray and overlay bird wears the aggregate session mood — dozing (faded, a
+    // trail of z's) when nothing's running, plainly alert while sessions work, a "!" badge when one
+    // needs you, and visibly panicking (red bang + flying sweat) when a session looks stuck. Pure
+    // whimsy layered over the existing status cues. On by default; a missing key keeps it on.
+    public bool PerchReacts { get; set; } = true;
+
     // Update checking. The version string of an update that has been detected and surfaced to the user
     // (via the "update available" notification, overlay button, tray menu and About highlight). Null
     // means no update is currently pending. Its presence is what suppresses re-notifying on subsequent

@@ -42,10 +42,6 @@
   - session notes & pins — jot a short note against a session and pin important ones to the top of
     the overlay; stored in a sidecar, in keeping with the file-based model
 - silly (but on-brand for a thing called Perch):
-  - the perch reacts — the tray/overlay bird shifts with the aggregate state: dozing when idle,
-    alert when running, visibly panicking on a stuck session
-  - ambient screen-edge glow — a thin monitor-border pulse when a session needs you; catches the
-    eye without a toast, handy on a second monitor
   - voice / TTS announcements — optionally speak the session name ("the auth refactor is done")
     instead of a generic chime, for when you're heads-down elsewhere
   - confetti / sound pack when a task list hits n/n — gamification beyond Wrapped

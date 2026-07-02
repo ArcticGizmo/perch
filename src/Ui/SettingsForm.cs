@@ -150,6 +150,9 @@ internal sealed class SettingsForm : Form
     /// <summary>Raised when the user toggles the ambient screen-edge glow (true = enabled).</summary>
     public event Action<bool>? ScreenEdgeGlowChanged;
 
+    /// <summary>Raised when the user toggles "Perch reacts" — the mood bird (true = enabled).</summary>
+    public event Action<bool>? PerchReactsChanged;
+
     /// <summary>Raised when the user adjusts the context-pressure thresholds (whole percentages,
     /// ordered yellow &lt; orange &lt; red).</summary>
     public event Action<int, int, int>? ContextThresholdsChanged;
@@ -1774,7 +1777,22 @@ internal sealed class SettingsForm : Form
 
         page.Controls.Add(Separator());
 
-        // 4. Live token burn rate on running rows. Display-only; raises the event so the overlay
+        // 4. "Perch reacts": the mood bird. Display-only; raises the event so the owning context
+        //    re-renders the tray/overlay logo live. On by default (it's the whole point of the name).
+        var reactsToggle = MakeToggle();
+        reactsToggle.Checked = _settings.PerchReacts;
+        reactsToggle.CheckedChanged += (_, _) =>
+            PerchReactsChanged?.Invoke(reactsToggle.Checked);
+        page.Controls.Add(TitleRow("Perch reacts", reactsToggle));
+        page.Controls.Add(BodyText(
+            "Lets the tray and overlay bird wear the mood of your sessions: it dozes (faded, with a " +
+            "trail of z's) when nothing's running, perks up while sessions work, flags a \"!\" when one " +
+            "needs you, and visibly panics — red bang and flying sweat — when a session looks stuck. " +
+            "Pure whimsy on top of the usual status cues. On by default."));
+
+        page.Controls.Add(Separator());
+
+        // 5. Live token burn rate on running rows. Display-only; raises the event so the overlay
         //    redraws live. Experimental for now — the tokens/min figure can be jumpy turn to turn.
         var burnToggle = MakeToggle();
         burnToggle.Checked = _settings.ShowBurnRate;

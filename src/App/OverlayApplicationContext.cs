@@ -44,6 +44,13 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     private readonly NotifyIcon _notifyIcon;
     private readonly AppSettings _settings;
 
+    // "Perch reacts": renders the mood-bird tray icons / overlay logos and caches them. The plain
+    // startup icon is kept separately so toggling the feature off can restore it without a rebuild.
+    private readonly BirdMoodArt _moodArt = new();
+    private readonly Icon _baseTrayIcon = LoadTrayIcon();
+    // Last mood pushed to the surfaces, so a scan that doesn't change the mood repaints nothing.
+    private BirdMood? _birdMood;
+
     // The tray menu's "Today: N sessions · Hh Mm active" info line, refreshed each time the menu opens.
     private readonly ToolStripMenuItem _statsItem;
 
@@ -104,7 +111,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         {
             Visible = true,
             Text    = "Perch",
-            Icon    = LoadTrayIcon(),
+            Icon    = _baseTrayIcon,
         };
         // Left-click opens the first-class settings window; right-click shows the slim menu below.
         _notifyIcon.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) OpenSettings(); };
@@ -291,6 +298,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.ArtifactsChanged += SetArtifactsEnabled;
                 f.HideInactiveTeamMembersChanged += SetHideInactiveTeamMembers;
                 f.ScreenEdgeGlowChanged += SetScreenEdgeGlow;
+                f.PerchReactsChanged += SetPerchReacts;
                 f.ContextThresholdsChanged += SetContextThresholds;
                 f.StuckDetectionChanged += SetStuckDetection;
                 f.SystemMetricsChanged += SetSystemMetricsEnabled;
@@ -481,6 +489,37 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _glow.HideGlow();
     }
 
+    // "Perch reacts": pushes the current aggregate mood onto the tray icon and the overlay logo. When
+    // the feature is off, restores the plain bird. Called after every scan (so the mood tracks sessions
+    // as they come and go) and when the setting is toggled; a no-op when the mood hasn't changed.
+    private void ApplyBirdMood()
+    {
+        if (!_settings.PerchReacts)
+        {
+            if (_birdMood == null) return;  // already showing the plain bird
+            _birdMood = null;
+            _notifyIcon.Icon = _baseTrayIcon;
+            _overlay.SetBirdMood(null);
+            return;
+        }
+
+        var mood = BirdMoodArt.MoodFor(_sessions);
+        if (_birdMood == mood) return;
+        _birdMood = mood;
+        _notifyIcon.Icon = _moodArt.TrayIcon(mood);
+        _overlay.SetBirdMood(_moodArt.OverlayBitmap(mood));
+    }
+
+    // Toggles "perch reacts". Re-applies at once so the bird's expression appears (or the plain logo
+    // returns) without waiting for the next scan.
+    private void SetPerchReacts(bool enabled)
+    {
+        if (_settings.PerchReacts == enabled) return;
+        _settings.PerchReacts = enabled;
+        _settings.Save();
+        ApplyBirdMood();
+    }
+
     // The bounds of the screen the overlay currently sits on (falls back to the primary screen), so
     // the glow lights up the monitor the user is most likely watching.
     private Rectangle ScreenForOverlay()
@@ -616,6 +655,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         PushExternalNotifyGlyphs();
         ArmDeadlineTimer();
         UpdateGlow();
+        ApplyBirdMood();
 
         _notifyIcon.Text = sessions.Count switch
         {
@@ -977,8 +1017,12 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _monitor.Dispose();
             _metricsMonitor.Dispose();
             _lockMonitor.Dispose();
-            _notifyIcon.Icon?.Dispose();
+            // Detach before disposing the icon owners: the current icon may be an art-owned mood icon
+            // (the base and the mood cache both dispose below), so don't let NotifyIcon touch it.
+            _notifyIcon.Icon = null;
             _notifyIcon.Dispose();
+            _baseTrayIcon.Dispose();
+            _moodArt.Dispose();
             _settingsForm?.Dispose();
             _historyForm?.Dispose();
             _statsForm?.Dispose();

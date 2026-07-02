@@ -214,6 +214,14 @@ internal sealed class OverlayForm : Form, IDenseHost
     // The perch icon, shown atop the dense strip purely for flair. Null if unavailable.
     private readonly Bitmap? _icon = EmbeddedResources.LoadBitmap("Perch.icon.png");
 
+    // The "perch reacts" mood bird — swapped in from the owning context so the header/dense-strip logo
+    // wears the aggregate session mood. Null when the feature is off, falling back to the plain _icon.
+    // The bitmap is owned by the context's BirdMoodArt cache, so we only hold the reference.
+    private Bitmap? _moodIcon;
+
+    // The logo actually painted: the mood bird when one is set, else the plain perch icon.
+    private Bitmap? BrandIcon => _moodIcon ?? _icon;
+
     // Is the full session body (usage bars + rows) currently on screen? In floating mode that's
     // the expanded state; in dense mode it's the hover-opened popup.
     private bool ShowFullPanel => _denseMode.IsDense ? _denseMode.IsOpen : _expanded;
@@ -359,13 +367,23 @@ internal sealed class OverlayForm : Form, IDenseHost
     int IDenseHost.FullPanelWidth => FormWidth;
     int IDenseHost.FullPanelHeight() => FullPanelHeight();
     IReadOnlyList<ClaudeSession> IDenseHost.Sessions => _sessions;
-    Bitmap? IDenseHost.Icon => _icon;
+    Bitmap? IDenseHost.Icon => BrandIcon;
     void IDenseHost.RelayoutWindow() => RelayoutWindow();
     void IDenseHost.UpdateTickTimer() => UpdateTickTimer();
     void IDenseHost.ClearRowHover() => _hoveredRow = -1;
     void IDenseHost.HideUsageTooltip() => HideUsageTooltip();
 
     // ── Public API ────────────────────────────────────────────────────────────
+    /// <summary>Sets the "perch reacts" mood bird shown as the header / dense-strip logo, or null to
+    /// fall back to the plain perch icon. The bitmap is owned by the caller's mood-art cache; the
+    /// overlay only paints it. Repaints when the image actually changes.</summary>
+    public void SetBirdMood(Bitmap? moodIcon)
+    {
+        if (ReferenceEquals(_moodIcon, moodIcon)) return;
+        _moodIcon = moodIcon;
+        Invalidate();  // one repaint covers both the floating header and the dense strip (same window)
+    }
+
     public void UpdateSessions(IReadOnlyList<ClaudeSession> sessions)
     {
         _sessions = sessions;
@@ -953,7 +971,7 @@ internal sealed class OverlayForm : Form, IDenseHost
 
         // Perch icon (mirrors the dense strip's logo)
         int brandRight = HorizPad;
-        if (_icon is { } icon)
+        if (BrandIcon is { } icon)
         {
             const int IconSize = 18;
             int iconY = midY - IconSize / 2;
