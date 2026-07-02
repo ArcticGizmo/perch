@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.18] - 2026-07-02
+
+### Overlay
+
+- The attention border is now a travelling neon glow, not a hard orange flash.
+
+### Experimental
+
+- Ambient screen-edge glow — a soft pulse around your screen when a session needs you (off by default).
+- The glow follows the overlay to whichever monitor you drag it onto.
+
+---
+
 ## [v0.1.17] - 2026-07-01
 
 ### Added

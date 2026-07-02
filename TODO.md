@@ -26,3 +26,35 @@
   - focus window / DND to batch notifications during a meeting
 
 
+## More ideas (2026-07)
+
+- surface data we already parse but don't show, on the overlay row:
+  - live cost / burn — current model as a small badge + a token/min or $/hr rate on running
+    sessions (usage.* and message.model are already read for stats; not shown live per session)
+  - "waiting on you" timer — awaiting-input rows show how long they've been blocked, colour
+    warming to red as it grows (the cheap, always-visible front-half of human-latency analytics)
+  - git branch + dirty badge — gitBranch/cwd are captured for stats only; show "main" (or ⚠ if the
+    tree is dirty) on the row so you can tell which branch/worktree each agent is on at a glance
+- new views:
+  - daily "flight path" timeline — a horizontal Gantt of the day, one lane per session coloured by
+    state (running/idle/waiting/stuck) across the hours; a visual sibling to Stats/Wrapped, built
+    from the same transcript gaps active-time already uses
+  - activity / notification log window — a scrollable, timestamped feed of past done/waiting/stuck
+    events, so you can catch up on what happened while AFK (pairs with the lock-override push)
+- interaction / flow:
+  - global hotkey to cycle-focus sessions — an "Alt-Tab for Claude Code sessions", plus a hotkey
+    that jumps straight to whichever one needs attention (reuses the existing terminal-focus logic)
+  - quiet hours / DND schedule — scheduled do-not-disturb, or a one-click "mute for 30 min"; the
+    scheduled sibling of the DND / focus-window idea above
+  - session notes & pins — jot a short note against a session and pin important ones to the top of
+    the overlay; stored in a sidecar, in keeping with the file-based model
+- silly (but on-brand for a thing called Perch):
+  - the perch reacts — the tray/overlay bird shifts with the aggregate state: dozing when idle,
+    alert when running, visibly panicking on a stuck session
+  - ambient screen-edge glow — a thin monitor-border pulse when a session needs you; catches the
+    eye without a toast, handy on a second monitor
+  - voice / TTS announcements — optionally speak the session name ("the auth refactor is done")
+    instead of a generic chime, for when you're heads-down elsewhere
+  - confetti / sound pack when a task list hits n/n — gamification beyond Wrapped
+
+

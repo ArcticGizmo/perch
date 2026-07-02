@@ -154,6 +154,73 @@ internal static class NativeMethods
     private const int SW_RESTORE = 9;
     private const uint TH32CS_SNAPPROCESS = 0x00000002;
 
+    // ── Per-pixel-alpha layered window (the ambient screen-edge glow) ─────────────
+    // A layered window whose content is pushed as a premultiplied 32bpp bitmap via
+    // UpdateLayeredWindow, giving a soft anti-aliased glow the 1-bit TransparencyKey path can't. The
+    // pulse re-blits with a varying SourceConstantAlpha, so only the opacity changes — no re-render.
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UpdateLayeredWindow(
+        IntPtr hwnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize,
+        IntPtr hdcSrc, ref POINT pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    internal static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    internal static extern IntPtr CreateCompatibleDC(IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    internal static extern IntPtr SelectObject(IntPtr hDC, IntPtr hObject);
+
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DeleteDC(IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DeleteObject(IntPtr hObject);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct POINT
+    {
+        public int X;
+        public int Y;
+        public POINT(int x, int y) { X = x; Y = y; }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct SIZE
+    {
+        public int Cx;
+        public int Cy;
+        public SIZE(int cx, int cy) { Cx = cx; Cy = cy; }
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    internal struct BLENDFUNCTION
+    {
+        public byte BlendOp;
+        public byte BlendFlags;
+        public byte SourceConstantAlpha;
+        public byte AlphaFormat;
+    }
+
+    internal const int  ULW_ALPHA        = 0x02;
+    internal const byte AC_SRC_OVER      = 0x00;
+    internal const byte AC_SRC_ALPHA     = 0x01;
+
+    // Extended styles for a click-through, non-activating, always-on-top layered overlay.
+    internal const int WS_EX_LAYERED     = 0x00080000;
+    internal const int WS_EX_TRANSPARENT = 0x00000020;
+    internal const int WS_EX_TOOLWINDOW  = 0x00000080;
+    internal const int WS_EX_NOACTIVATE  = 0x08000000;
+    internal const int WS_EX_TOPMOST     = 0x00000008;
+
     // Brings a window to the foreground for a tray/notification click. Only SW_RESTOREs when the
     // window is actually minimized — an unconditional SW_RESTORE on a non-minimized window
     // (a maximized IDE, or an Electron window like GitKraken) triggers an unwanted un-maximize /

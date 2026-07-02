@@ -44,7 +44,6 @@ internal sealed class OverlayForm : Form, IDenseHost
     // ── Palette ───────────────────────────────────────────────────────────────
     private static readonly Color BgColor        = Color.FromArgb(15,  15,  20);
     private static readonly Color BorderNormal   = Color.FromArgb(45,  45,  60);
-    private static readonly Color BorderAttention= Color.FromArgb(251, 146, 60);
     private static readonly Color RunningColor      = Color.FromArgb(34,  197, 94);
     private static readonly Color AttentionColor   = Color.FromArgb(251, 146, 60);
     private static readonly Color AwaitingColor    = Color.FromArgb(250, 204, 21);
@@ -89,7 +88,15 @@ internal sealed class OverlayForm : Form, IDenseHost
     // the roster and only working ones are shown. The teammates are still tracked; a hidden one
     // reappears the moment it starts working again. See SetHideInactiveTeamMembers.
     private bool  _hideInactiveTeamMembers;
-    private bool  _attentionFlash;
+    // Attention state: while true, the panel border becomes an animated neon "chase" (a bright comet
+    // travelling the perimeter over a soft inward glow) instead of the static grey outline.
+    // _chasePhase is the head's position around the loop (0..1, wrapping), advanced by _flashTimer.
+    private bool   _attentionFlash;
+    private double _chasePhase;
+
+    // How far the chase head advances per animation tick. At the timer's ~33ms interval this sends the
+    // comet around the whole border roughly every 1.6s.
+    private const double ChaseStep = 0.02;
 
     // Update-available affordance: an orange (perch-logo coloured) download badge in the header's
     // right-side glyph cluster, shown only while an update is pending. _updateIconRect is its painted
@@ -222,6 +229,11 @@ internal sealed class OverlayForm : Form, IDenseHost
     /// download and apply the pending update.</summary>
     public event EventHandler? UpdateRequested;
 
+    /// <summary>Raised when the user finishes dragging the overlay (mouse released after a real drag),
+    /// so the owning context can re-evaluate anything tied to the overlay's screen — chiefly moving the
+    /// ambient screen-edge glow onto the monitor the overlay now sits on.</summary>
+    public event EventHandler? DragCompleted;
+
     // ── Construction ──────────────────────────────────────────────────────────
     public OverlayForm()
     {
@@ -238,8 +250,11 @@ internal sealed class OverlayForm : Form, IDenseHost
         Location   = new Point(screen.Right - FormWidth - 16, screen.Top + FloatTopGap);
         ClientSize = new Size(FormWidth, HeaderHeight);
 
-        _flashTimer = new System.Windows.Forms.Timer { Interval = 500 };
-        _flashTimer.Tick += (_, _) => { _attentionFlash = !_attentionFlash; Invalidate(); };
+        // Drives the animated chase border: advance the comet's head and repaint. Runs only while
+        // attention is active (started in TriggerAttention, stopped by the flash-stop timer below or
+        // when nothing needs attention), so it costs nothing at rest.
+        _flashTimer = new System.Windows.Forms.Timer { Interval = 33 };
+        _flashTimer.Tick += (_, _) => { _chasePhase += ChaseStep; Invalidate(); };
 
         _flashStopTimer = new System.Windows.Forms.Timer { Interval = 10_000 };
         _flashStopTimer.Tick += (_, _) =>
@@ -727,9 +742,11 @@ internal sealed class OverlayForm : Form, IDenseHost
         using (var bg = new SolidBrush(BgColor))
             g.FillPath(bg, path);
 
-        var borderColor = _attentionFlash ? BorderAttention : BorderNormal;
-        using (var pen = new Pen(borderColor, 1.5f))
-            g.DrawPath(pen, path);
+        if (_attentionFlash)
+            DrawChaseBorder(g, path, AttentionColor);
+        else
+            using (var pen = new Pen(BorderNormal, 1.5f))
+                g.DrawPath(pen, path);
 
         if (_denseMode.IsClosedStrip)
         {
@@ -759,6 +776,107 @@ internal sealed class OverlayForm : Form, IDenseHost
             for (int i = 0; i < _rows.Count; i++)
                 DrawRow(g, i);
         }
+    }
+
+    // Draws the attention border as an animated neon "chase": a bright comet head with a trailing tail
+    // travels the rounded-rect perimeter over a faintly-lit base outline, with a few progressively
+    // wider/fainter passes for a soft glow. Everything is clipped to the panel so the bloom only spills
+    // inward — the crisp outer edge stays the filled rounded-rect boundary, which also keeps the soft
+    // colour off the form's black transparency key (where it would otherwise show as a hard halo).
+    private void DrawChaseBorder(Graphics g, GraphicsPath path, Color color)
+    {
+        // Flatten the outline into a polyline. Flatten only subdivides curves, so a straight side stays
+        // one long segment while a corner becomes many short ones — drawing per raw segment would light
+        // a whole side at once. So we resample the loop into uniform, tiny arc-length steps below, which
+        // makes the comet glide at a constant rate everywhere (corners and sides alike).
+        using var flat = (GraphicsPath)path.Clone();
+        flat.Flatten(null, 0.25f);
+        var raw = flat.PathPoints;
+        int m = raw.Length;
+        if (m < 2)
+        {
+            using var fallback = new Pen(color, 1.5f);
+            g.DrawPath(fallback, path);
+            return;
+        }
+
+        // Cumulative arc length around the closed loop (raw[m-1] → raw[0] closes it).
+        var cum = new float[m + 1];
+        for (int i = 0; i < m; i++)
+        {
+            var a = raw[i];
+            var b = raw[(i + 1) % m];
+            cum[i + 1] = cum[i] + MathF.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
+        }
+        float total = cum[m];
+        if (total <= 0)
+        {
+            using var fallback = new Pen(color, 1.5f);
+            g.DrawPath(fallback, path);
+            return;
+        }
+
+        // Resample to evenly-spaced points (~3px apart) by walking the cumulative lengths. Uniform
+        // spacing is what makes the motion constant-rate — each sample is the same distance along.
+        int samples = Math.Clamp((int)(total / 3f), 96, 1024);
+        var pts = new PointF[samples];
+        int seg = 0;
+        for (int k = 0; k < samples; k++)
+        {
+            float target = total * k / samples;
+            while (seg < m && cum[seg + 1] < target) seg++;
+            var a = raw[seg % m];
+            var b = raw[(seg + 1) % m];
+            float segLen = cum[seg + 1] - cum[seg];
+            float t = segLen > 0 ? (target - cum[seg]) / segLen : 0;
+            pts[k] = new PointF(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
+        }
+
+        double head = _chasePhase - Math.Floor(_chasePhase);   // 0..1 travelling comet head
+        const double TailLen = 0.55;                           // comet tail, as a fraction of the loop
+        const double BaseA   = 42;                             // faint always-lit outline
+        const double PeakA   = 213;                            // extra brightness at the head
+
+        // Comet intensity at an arc fraction p: brightest at the head, fading along the tail behind it.
+        double Intensity(double p)
+        {
+            double dd = head - p;
+            dd -= Math.Floor(dd);           // distance behind the head, 0..1 (wrapped)
+            double t = 1 - dd / TailLen;    // 1 at the head → 0 at the tail's end
+            return t <= 0 ? 0 : t * t;
+        }
+
+        // Clip to the panel so the wide bloom passes glow inward only. Intersect (not replace) so the
+        // invalidated-region clip is preserved.
+        var oldClip = g.Clip;
+        g.SetClip(path, CombineMode.Intersect);
+
+        using var pen = new Pen(color, 1.5f)
+        {
+            StartCap = LineCap.Round,
+            EndCap   = LineCap.Round,
+            LineJoin = LineJoin.Round,
+        };
+
+        // Widest & faintest first so a bright, near-white core sits on a soft coloured halo.
+        (float w, float aMul)[] passes = { (7f, 0.10f), (4f, 0.22f), (2.2f, 0.5f), (1.4f, 1f) };
+        foreach (var (w, aMul) in passes)
+        {
+            pen.Width = w;
+            for (int k = 0; k < samples; k++)
+            {
+                double inten = Intensity((k + 0.5) / samples);
+                int a = (int)Math.Clamp((BaseA + inten * PeakA) * aMul, 0, 255);
+                if (a <= 1) continue;
+                // Heat the colour toward white near the head for the neon "hot core" look.
+                Color c = inten > 0.05 ? Theme.Blend(color, Color.White, (float)(inten * 0.5)) : color;
+                pen.Color = Color.FromArgb(a, c);
+                g.DrawLine(pen, pts[k], pts[(k + 1) % samples]);
+            }
+        }
+
+        g.Clip = oldClip;
+        oldClip.Dispose();
     }
 
     // A thin bar hugging the top edge that shrinks from full to empty over the auto-close grace
@@ -1811,6 +1929,10 @@ internal sealed class OverlayForm : Form, IDenseHost
         if (wasDrag && _denseMode.IsDense)
             _denseMode.PinToActiveDropZone();
         _denseMode.HideDropZones();
+
+        // Let the owner move the ambient glow to whatever screen we landed on.
+        if (wasDrag)
+            DragCompleted?.Invoke(this, EventArgs.Empty);
 
         if (e.Button == MouseButtons.Right)
         {

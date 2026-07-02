@@ -137,6 +137,9 @@ internal sealed class SettingsForm : Form
     /// from the overlay roster).</summary>
     public event Action<bool>? HideInactiveTeamMembersChanged;
 
+    /// <summary>Raised when the user toggles the ambient screen-edge glow (true = enabled).</summary>
+    public event Action<bool>? ScreenEdgeGlowChanged;
+
     /// <summary>Raised when the user adjusts the context-pressure thresholds (whole percentages,
     /// ordered yellow &lt; orange &lt; red).</summary>
     public event Action<int, int, int>? ContextThresholdsChanged;
@@ -1673,6 +1676,21 @@ internal sealed class SettingsForm : Form
         page.Controls.Add(BodyText(
             "Drops idle teammates — those waiting for the lead — from the overlay, so only teammates " +
             "actively working are shown. A hidden teammate reappears the moment it starts working again."));
+
+        page.Controls.Add(Separator());
+
+        // 3. Ambient screen-edge glow. Display-only; raises the event so the owning context lights it
+        //    up (or fades it out) live. Off by default.
+        var glowToggle = MakeToggle();
+        glowToggle.Checked = _settings.ScreenEdgeGlow;
+        glowToggle.CheckedChanged += (_, _) =>
+            ScreenEdgeGlowChanged?.Invoke(glowToggle.Checked);
+        page.Controls.Add(TitleRow("Ambient screen-edge glow", glowToggle));
+        page.Controls.Add(BodyText(
+            "Softly pulses a glow around the edge of the screen while a session needs you or is waiting " +
+            "on input — a peripheral nudge you can catch without watching the overlay. It's click-through " +
+            "and never takes focus, so it stays out of your way, and it fades out the moment you've dealt " +
+            "with the session. Handy on a second monitor."));
     }
 
     // ── About ─────────────────────────────────────────────────────────────────────

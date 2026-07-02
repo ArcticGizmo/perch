@@ -130,6 +130,13 @@ internal sealed class AppSettings
     // again. Defaults to false (show the full roster); a missing key keeps the roster complete.
     public bool HideInactiveTeamMembers { get; set; }
 
+    // Ambient screen-edge glow. When on, a soft coloured glow pulses around the edge of the screen the
+    // overlay lives on while any session needs attention or is awaiting input — a peripheral cue you
+    // can catch without watching the overlay. The window is click-through and never activates, so it
+    // can't get in the way, and it fades out the moment the session is dealt with. Off by default
+    // (experimental); a missing key keeps it off.
+    public bool ScreenEdgeGlow { get; set; }
+
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
     // MigrateQuickLinks) with the well-known presets, honouring the legacy switches below. An empty

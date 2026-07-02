@@ -24,6 +24,9 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     private const int UpdateCheckIntervalMs = 3_600_000; // hourly
 
     private readonly OverlayForm _overlay;
+    // Ambient screen-edge glow, driven from session state (see UpdateGlow). Created up front but never
+    // shown until a session needs attention and the (experimental, off-by-default) setting is on.
+    private readonly GlowForm _glow = new();
     private readonly SessionMonitor _monitor;
     private readonly MetricsMonitor _metricsMonitor = new();
     private readonly UsageMonitor _usageMonitor = new();
@@ -91,6 +94,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _overlay.ExternalNotifyToggleRequested += OnToggleExternalNotify;
         _overlay.HistoryRequested += OpenHistoryViewer;
         _overlay.UpdateRequested += (_, _) => PerformUpdate();
+        // When the overlay is dragged to another monitor, follow it with the ambient glow.
+        _overlay.DragCompleted += (_, _) => UpdateGlow();
 
         _notifyIcon = new NotifyIcon
         {
@@ -273,6 +278,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.TaskProgressChanged += SetTaskProgressEnabled;
                 f.ArtifactsChanged += SetArtifactsEnabled;
                 f.HideInactiveTeamMembersChanged += SetHideInactiveTeamMembers;
+                f.ScreenEdgeGlowChanged += SetScreenEdgeGlow;
                 f.ContextThresholdsChanged += SetContextThresholds;
                 f.StuckDetectionChanged += SetStuckDetection;
                 f.SystemMetricsChanged += SetSystemMetricsEnabled;
@@ -397,6 +403,49 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _overlay.SetHideInactiveTeamMembers(enabled);
     }
 
+    private void SetScreenEdgeGlow(bool enabled)
+    {
+        if (_settings.ScreenEdgeGlow == enabled) return;
+        _settings.ScreenEdgeGlow = enabled;
+        _settings.Save();
+        // Re-evaluate at once: light up (if something already needs you) or fade out immediately.
+        UpdateGlow();
+    }
+
+    // Shows or hides the ambient screen-edge glow from the current session state. Lit while any session
+    // needs attention or is awaiting input (and the setting is on), around the screen the overlay is on,
+    // in the overlay's attention orange; hidden otherwise. Called after every scan, so it self-corrects
+    // as sessions come and go and as the needs-attention window lapses.
+    private void UpdateGlow()
+    {
+        if (!_settings.ScreenEdgeGlow)
+        {
+            _glow.HideGlow();
+            return;
+        }
+
+        bool needs = _sessions.Any(
+            s => s.Status is SessionStatus.NeedsAttention or SessionStatus.AwaitingInput);
+        if (needs)
+            _glow.ShowGlow(ScreenForOverlay(), Theme.Orange);
+        else
+            _glow.HideGlow();
+    }
+
+    // The bounds of the screen the overlay currently sits on (falls back to the primary screen), so
+    // the glow lights up the monitor the user is most likely watching.
+    private Rectangle ScreenForOverlay()
+    {
+        try
+        {
+            if (_overlay.IsHandleCreated && !_overlay.IsDisposed)
+                return Screen.FromControl(_overlay).Bounds;
+        }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+        return Screen.PrimaryScreen!.Bounds;
+    }
+
     private void SetContextThresholds(int yellow, int orange, int red)
     {
         _settings.ContextPressureYellowPercent = yellow;
@@ -517,6 +566,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         // Refresh the overlay's mail glyphs from the per-session opt-in marker files just read.
         PushExternalNotifyGlyphs();
         ArmDeadlineTimer();
+        UpdateGlow();
 
         _notifyIcon.Text = sessions.Count switch
         {
@@ -857,6 +907,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _historyForm.Close();
         if (_statsForm is { IsDisposed: false })
             _statsForm.Close();
+        _glow.HideGlow();
+        _glow.Close();
         _overlay.Close();
     }
 
@@ -877,6 +929,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _settingsForm?.Dispose();
             _historyForm?.Dispose();
             _statsForm?.Dispose();
+            _glow.Dispose();
             _overlay.Dispose();
         }
         base.Dispose(disposing);
