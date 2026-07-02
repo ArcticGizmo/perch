@@ -24,6 +24,7 @@ internal sealed class TranscriptReader
     private readonly MtimeCache<string?> _activity = new();
     private readonly MtimeCache<string?> _title = new();
     private readonly MtimeCache<(float? Fill, int Window)> _contextFill = new();
+    private readonly MtimeCache<double?> _burnRate = new();
     private readonly MtimeCache<bool> _bareCommand = new();
     private readonly MtimeCache<IReadOnlyList<Artifact>> _artifacts = new();
     private readonly MtimeCache<IReadOnlyList<TaskItem>> _tasks = new();
@@ -100,6 +101,22 @@ internal sealed class TranscriptReader
         if (path == null)
             return (null, ModelContext.DefaultWindow);
         return _contextFill.GetOrCompute(path, p => ParseContextFill(p, cwd), (null, ModelContext.DefaultWindow));
+    }
+
+    /// <summary>
+    /// Returns the session's current token burn rate in tokens per minute — measured over the most
+    /// recent continuous burst of assistant turns in the transcript tail — or null when there isn't
+    /// enough recent activity to compute one (fewer than two turns, or a long idle gap before the
+    /// latest turn). Each turn counts only its fresh tokens (new input + freshly cached input +
+    /// output); the cache re-read is excluded so a long-context session's rate isn't dominated by the
+    /// whole context being re-billed each turn. Best-effort; never throws.
+    /// </summary>
+    public double? GetBurnRate(string sessionId, string cwd)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return null;
+        var path = TranscriptLocator.Resolve(sessionId, cwd);
+        return path == null ? null : _burnRate.GetOrCompute(path, ParseBurnRate, null);
     }
 
     /// <summary>
@@ -415,6 +432,80 @@ internal sealed class TranscriptReader
             return (null, window);
 
         return (Math.Clamp((float)latestUsed / window, 0f, 1f), window);
+    }
+
+    // How far apart two assistant turns can be and still count as one continuous burst of work.
+    // A larger gap (a pause, a permission wait, the user stepping away) starts a fresh burst, so the
+    // rate reflects the session's *current* pace rather than being diluted by idle time between turns.
+    private static readonly TimeSpan BurstGap = TimeSpan.FromMinutes(2);
+
+    private static double? ParseBurnRate(string path)
+    {
+        // Each assistant turn's usage record carries the tokens that turn cost (all input buckets +
+        // output) and a timestamp. Only recent activity is relevant, so we read the tail, collect
+        // (timestamp, tokens) for every turn in it, then measure the rate over the most recent
+        // continuous burst — the run of turns ending at the latest one with no BurstGap-sized gap.
+        var turns = new List<(DateTime Ts, long Tokens)>();
+
+        foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
+        {
+            // Cheap pre-filter: only assistant usage records carry the per-turn token counts.
+            if (!line.Contains("\"usage\""))
+                continue;
+
+            try
+            {
+                var node = JsonNode.Parse(line);
+                var usage = node?["message"]?["usage"];
+                if (usage == null)
+                    continue;
+
+                var ts = TranscriptJson.ParseTimestamp(node?["timestamp"]?.GetValue<string>());
+                if (ts is not { } t)
+                    continue;
+
+                // Fresh tokens only — the cache re-read (cache_read_input_tokens) is deliberately
+                // excluded: on a long-context session it dwarfs everything else and makes the rate
+                // read absurdly high, so we count what the turn actually adds (new input, freshly
+                // cached input, and generated output) rather than the whole context re-billed each turn.
+                long tokens = TranscriptJson.AsLong(usage["input_tokens"])
+                            + TranscriptJson.AsLong(usage["output_tokens"])
+                            + TranscriptJson.AsLong(usage["cache_creation_input_tokens"]);
+                if (tokens > 0)
+                    turns.Add((t, tokens));
+            }
+            catch
+            {
+                // Malformed/partial line (transcripts are appended live) — skip it.
+            }
+        }
+
+        if (turns.Count < 2)
+            return null;
+
+        // Records are chronological in the file, but don't rely on it — the rate maths needs order.
+        turns.Sort((a, b) => a.Ts.CompareTo(b.Ts));
+
+        // Walk back from the newest turn, extending the burst while consecutive turns stay close.
+        int start = turns.Count - 1;
+        while (start > 0 && turns[start].Ts - turns[start - 1].Ts <= BurstGap)
+            start--;
+
+        // The newest turn stands alone (a long gap precedes it): no live pace to report yet.
+        if (start == turns.Count - 1)
+            return null;
+
+        double minutes = (turns[^1].Ts - turns[start].Ts).TotalMinutes;
+        if (minutes <= 0)
+            return null;
+
+        // Tokens consumed across the burst's span: every turn after the first (each turn's cost is
+        // attributed to the interval ending at its timestamp), divided by the elapsed minutes.
+        long tokensInSpan = 0;
+        for (int i = start + 1; i < turns.Count; i++)
+            tokensInSpan += turns[i].Tokens;
+
+        return tokensInSpan / minutes;
     }
 
     private static readonly JsonDocumentOptions JsonLeniency = new()

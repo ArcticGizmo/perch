@@ -55,6 +55,35 @@ public class TranscriptReaderTests
     }
 
     [Fact]
+    public void GetBurnRate_MeasuresRateOverMostRecentBurst()
+    {
+        var reader = new TranscriptReader();
+        // Turns at 10:05:00 / 10:05:30 / 10:06:00 form one burst (a 5-min gap isolates the 10:00:00
+        // turn, which must be excluded). The rate is the fresh tokens (input + output + cache_creation,
+        // excluding the cache re-read) of every turn after the burst's first, divided by the burst
+        // span: ((5000+1000+4000) + (5000+1000+4000)) / 1 minute = 20000 tokens/min.
+        var rate = reader.GetBurnRate("sessBurn", Cwd);
+        Assert.NotNull(rate);
+        Assert.Equal(20000.0, rate!.Value, 3);
+    }
+
+    [Fact]
+    public void GetBurnRate_NullWhenLatestTurnFollowsALongGap()
+    {
+        var reader = new TranscriptReader();
+        // Two turns 5 minutes apart: the newest stands alone (a BurstGap-sized gap precedes it), so
+        // there's no continuous recent burst to measure a live pace from.
+        Assert.Null(reader.GetBurnRate("sessBurnIdle", Cwd));
+    }
+
+    [Fact]
+    public void GetBurnRate_NullWhenSessionMissing()
+    {
+        var reader = new TranscriptReader();
+        Assert.Null(reader.GetBurnRate("nope-no-such-session", Cwd));
+    }
+
+    [Fact]
     public void LastTurnWasBareCommand_TrueWhenLastTurnIsASlashCommand()
     {
         var reader = new TranscriptReader();

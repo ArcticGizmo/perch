@@ -57,6 +57,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private static readonly Color MailColor      = Color.FromArgb(94,  234, 212);
     private static readonly Color ArtifactColor  = Color.FromArgb(251, 191, 36);   // amber — the clickable artifact glyph
     private static readonly Color WarnColor      = Color.FromArgb(245, 158, 11);   // deep amber — the "possibly stuck" warning glyph
+    private static readonly Color BurnColor      = Color.FromArgb(125, 185, 232);  // soft blue — the live token burn-rate label
     private static readonly Color TreeLineColor  = Color.FromArgb(55,  55,  72);
     private static readonly Color UsageRedColor  = Color.FromArgb(239, 68,  68);
     private static readonly Color UsageTrackColor= Color.FromArgb(38,  38,  52);
@@ -163,6 +164,10 @@ internal sealed class OverlayForm : Form, IDenseHost
     // with its status.
     // _showTaskProgress gates only the *display* of the count; the session still tracks its tasks.
     private bool _showTaskProgress = true;
+    // Live token burn rate ("12.3k/m") drawn on a running session row. Display-only gate; the rate is
+    // computed regardless, just not drawn when off. Off by default — an opt-in indicator. No hover
+    // plumbing: the label already shows the number, unlike the glyph/bar indicators around it.
+    private bool _showBurnRate;
     private readonly Dictionary<int, Rectangle> _taskRects = new();
     private int _hoveredTaskRow = -1;
     private readonly System.Windows.Forms.Timer _taskHoverTimer;
@@ -527,6 +532,15 @@ internal sealed class OverlayForm : Form, IDenseHost
             _taskHoverTimer.Stop();
             HideTaskTooltip();
         }
+        Invalidate();
+    }
+
+    /// <summary>Shows or hides the live token burn-rate label. Display only — when off no label is drawn
+    /// and the session name reclaims the freed width; the rate is still computed.</summary>
+    public void SetShowBurnRate(bool show)
+    {
+        if (_showBurnRate == show) return;
+        _showBurnRate = show;
         Invalidate();
     }
 
@@ -1561,8 +1575,13 @@ internal sealed class OverlayForm : Form, IDenseHost
         _sessionMetrics.TryGetValue(session.Pid, out var metrics);
         bool showMetrics = _showSessionMetrics && metrics.ProcessCount > 0;
         int metricsWidth = showMetrics ? MetricsBarWidth : 0;
+        // Live token burn rate ("12.3k/m"), on running rows only — a rate is only meaningful while working.
+        bool showBurn    = _showBurnRate && running && session.BurnRate is > 0;
+        string burnLabel = showBurn ? StatsFormat.Tokens((long)session.BurnRate!.Value) + "/m" : "";
+        var burnSz       = showBurn ? g.MeasureString(burnLabel, statusFont) : SizeF.Empty;
+        int burnWidth    = showBurn ? (int)burnSz.Width + 8 : 0;  // rate + gap to whatever's on its right
         var statusSz     = g.MeasureString(statusText, statusFont);
-        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - mailWidth - artWidth - warnWidth - thermoWidth - taskWidth - metricsWidth;
+        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - mailWidth - artWidth - warnWidth - thermoWidth - taskWidth - metricsWidth - burnWidth;
         var nameTrunc    = TruncateString(g, session.DisplayName, nameFont, nameMaxWidth);
         var nameSz       = g.MeasureString(nameTrunc, nameFont);
 
@@ -1622,6 +1641,15 @@ internal sealed class OverlayForm : Form, IDenseHost
             int metricsX = statusX - thermoWidth - badgeWidth - taskWidth - metricsWidth;
             DrawMetricsBars(g, metrics, metricsX, nameMidY);
             _metricsRects[rowIdx] = new Rectangle(metricsX, nameMidY - 9, metricsWidth, 18);
+        }
+
+        // Live token burn rate, just left of the metrics bars. Drawn in a soft blue so it reads as a
+        // live figure distinct from the dim task count, without competing with the status colours.
+        if (showBurn)
+        {
+            int burnX = statusX - thermoWidth - badgeWidth - taskWidth - metricsWidth - burnWidth;
+            using var burnBrush = new SolidBrush(BurnColor);
+            g.DrawString(burnLabel, statusFont, burnBrush, burnX, nameMidY - burnSz.Height / 2);
         }
 
         if (twoLine)

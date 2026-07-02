@@ -101,7 +101,8 @@ public record ClaudeSession(
     int ContextWindow = ModelContext.DefaultWindow,
     IReadOnlyList<Artifact>? Artifacts = null,
     StuckSignal? Stuck = null,
-    IReadOnlyList<TaskItem>? Tasks = null
+    IReadOnlyList<TaskItem>? Tasks = null,
+    double? BurnRate = null
 )
 {
     /// <summary>Running sub-agents under this session; never null.</summary>
@@ -120,6 +121,13 @@ public record ClaudeSession(
 
     /// <summary>True when this session has a task checklist at all.</summary>
     public bool HasTasks => Tasks.Count > 0;
+
+    /// <summary>
+    /// The session's current token burn rate in tokens per minute, measured over the most recent
+    /// continuous burst of assistant turns; null when it isn't running or there's too little recent
+    /// activity to compute a rate. See <see cref="TranscriptReader.GetBurnRate"/>.
+    /// </summary>
+    public double? BurnRate { get; init; } = BurnRate;
 
     /// <summary>How many tasks in the checklist are completed.</summary>
     public int CompletedTaskCount => Tasks.Count(t => t.State == TaskState.Completed);

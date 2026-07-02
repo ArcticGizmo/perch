@@ -46,6 +46,11 @@ internal sealed class AppSettings
     // its width; the checklist is still tracked, just not shown. Defaults to true; a missing key keeps it on.
     public bool ShowTaskProgress { get; set; } = true;
 
+    // Whether to draw the live token burn rate (tokens/min) next to a running session in the overlay —
+    // measured over its most recent burst of assistant turns. A glanceable read on how hard a session is
+    // leaning on the plan's token limits. Off by default (opt-in); a missing key keeps it off.
+    public bool ShowBurnRate { get; set; } = false;
+
     // Whether to draw the clickable artifact glyph next to a session that has published one or more web
     // artifacts. Off hides the glyph (the row click just focuses the terminal) and lets the session name
     // reclaim its width; the artifacts are still tracked. Defaults to true; a missing key keeps it on.

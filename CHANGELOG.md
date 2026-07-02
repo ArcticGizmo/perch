@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.19] - 2026-07-02
+
+### Experimental
+
+- Live token burn rate (tokens/min) beside a running session — off by default.
+- It measures fresh tokens only; counting the context re-read pushed it into the millions and helped no one.
+
+---
+
 ## [v0.1.18] - 2026-07-02
 
 ### Overlay

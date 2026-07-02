@@ -133,6 +133,9 @@ internal sealed class SettingsForm : Form
     /// <summary>Raised when the user toggles "Artifacts" (true = the clickable artifact glyph is shown).</summary>
     public event Action<bool>? ArtifactsChanged;
 
+    /// <summary>Raised when the user toggles "Token burn rate" (true = the tokens/min label is shown).</summary>
+    public event Action<bool>? BurnRateChanged;
+
     /// <summary>Raised when the user toggles "Hide inactive members" (true = idle teammates are dropped
     /// from the overlay roster).</summary>
     public event Action<bool>? HideInactiveTeamMembersChanged;
@@ -1691,6 +1694,20 @@ internal sealed class SettingsForm : Form
             "on input — a peripheral nudge you can catch without watching the overlay. It's click-through " +
             "and never takes focus, so it stays out of your way, and it fades out the moment you've dealt " +
             "with the session. Handy on a second monitor."));
+
+        page.Controls.Add(Separator());
+
+        // 4. Live token burn rate on running rows. Display-only; raises the event so the overlay
+        //    redraws live. Experimental for now — the tokens/min figure can be jumpy turn to turn.
+        var burnToggle = MakeToggle();
+        burnToggle.Checked = _settings.ShowBurnRate;
+        burnToggle.CheckedChanged += (_, _) => BurnRateChanged?.Invoke(burnToggle.Checked);
+        page.Controls.Add(TitleRow("Token burn rate", burnToggle));
+        page.Controls.Add(BodyText(
+            "Shows a live tokens-per-minute figure (e.g. \"12.3k/m\") next to a running session, measured " +
+            "over its most recent burst of turns. It counts the fresh tokens each turn adds (new input and " +
+            "generated output) and ignores the context re-read every turn. The rate can still swing quite a " +
+            "bit between turns, so it's here in Experimental while that settles. Off by default."));
     }
 
     // ── About ─────────────────────────────────────────────────────────────────────

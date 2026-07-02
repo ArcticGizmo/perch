@@ -200,6 +200,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _overlay.SetShowContextGreenSegment(_settings.ShowContextGreenSegment);
         _overlay.SetShowModeBadges(_settings.ShowPermissionModeBadges);
         _overlay.SetShowTaskProgress(_settings.ShowTaskProgress);
+        _overlay.SetShowBurnRate(_settings.ShowBurnRate);
         _overlay.SetShowArtifacts(_settings.ShowArtifacts);
         _overlay.SetHideInactiveTeamMembers(_settings.HideInactiveTeamMembers);
         _overlay.SetContextThresholds(
@@ -276,6 +277,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.ContextGreenSegmentChanged += SetContextGreenSegmentEnabled;
                 f.PermissionModeBadgesChanged += SetPermissionModeBadgesEnabled;
                 f.TaskProgressChanged += SetTaskProgressEnabled;
+                f.BurnRateChanged += SetBurnRateEnabled;
                 f.ArtifactsChanged += SetArtifactsEnabled;
                 f.HideInactiveTeamMembersChanged += SetHideInactiveTeamMembers;
                 f.ScreenEdgeGlowChanged += SetScreenEdgeGlow;
@@ -385,6 +387,14 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _settings.ShowTaskProgress = enabled;
         _settings.Save();
         _overlay.SetShowTaskProgress(enabled);
+    }
+
+    private void SetBurnRateEnabled(bool enabled)
+    {
+        if (_settings.ShowBurnRate == enabled) return;
+        _settings.ShowBurnRate = enabled;
+        _settings.Save();
+        _overlay.SetShowBurnRate(enabled);
     }
 
     private void SetArtifactsEnabled(bool enabled)

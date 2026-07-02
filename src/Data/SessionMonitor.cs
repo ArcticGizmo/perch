@@ -403,6 +403,12 @@ internal sealed class SessionMonitor : IDisposable
 
             var (contextFill, contextWindow) = _transcripts.GetContextFill(sessionId, cwd);
 
+            // Live token burn rate (tokens/min): only meaningful while the session is actively working,
+            // where recent assistant turns give a current pace. Cached by mtime like the other readers.
+            var burnRate = status == SessionStatus.Running
+                ? _transcripts.GetBurnRate(sessionId, cwd)
+                : null;
+
             // Web Artifacts published to claude.ai over the session's lifetime. Read from the transcript
             // and cached by mtime, so an unchanged transcript costs a stat, not a parse.
             var artifacts = _transcripts.GetArtifacts(sessionId, cwd);
@@ -429,7 +435,8 @@ internal sealed class SessionMonitor : IDisposable
                 contextWindow,
                 artifacts,
                 stuck,
-                tasks
+                tasks,
+                burnRate
             );
 
             if (status == SessionStatus.NeedsAttention && (prevRaw == "busy" || fireSubsCompletion))
