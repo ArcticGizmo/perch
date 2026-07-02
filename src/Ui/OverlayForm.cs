@@ -30,6 +30,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private const int ArtifactIconWidth = 16;  // width reserved for the clickable artifact glyph in a row
     private const int ThermoIconWidth   = 12;  // width reserved for the context-pressure thermometer
     private const int WarnIconWidth     = 14;  // width reserved for the stuck-detection warning glyph
+    private const int PartyIconWidth    = 16;  // width reserved for the "confetti finish" party-popper glyph
     private const int QuickLinksRowHeight = 24; // height of the quick-links icon strip below the usage bars
 
     // Default vertical gap below the top of the working area for the floating panel. Sized to
@@ -237,6 +238,13 @@ internal sealed class OverlayForm : Form, IDenseHost
     // session ids opted in. Both are pushed in from the owning context, which is the source of truth.
     private bool _externalNotifyAvailable;
     private HashSet<string> _externalNotifySessions = new();
+
+    // "Confetti finish" (experimental). _confettiAvailable mirrors the global setting and gates both the
+    // party-popper glyph and the right-click toggle; _confettiSessions holds the session ids currently
+    // armed. Deliberately in-memory only — arming is never persisted, so a celebration can't fire by
+    // surprise after a restart. A session's arming is spent (removed) the moment it next finishes.
+    private bool _confettiAvailable;
+    private readonly HashSet<string> _confettiSessions = new();
 
     public event EventHandler? ExitRequested;
     public event Action<string>? SessionFocused;
@@ -698,6 +706,39 @@ internal sealed class OverlayForm : Form, IDenseHost
     // session has opted in.
     private bool ExternalNotifyEnabled(ClaudeSession session) =>
         _externalNotifyAvailable && _externalNotifySessions.Contains(session.SessionId);
+
+    // Whether the (experimental) "confetti finish" feature is switched on globally. Controls whether the
+    // party-popper glyph and the right-click arm/disarm item appear at all. Turning it off clears every
+    // armed session so nothing is left primed to fire behind the scenes.
+    public void SetConfettiFinishAvailable(bool available)
+    {
+        if (_confettiAvailable == available) return;
+        _confettiAvailable = available;
+        if (!available) _confettiSessions.Clear();
+        Invalidate();
+    }
+
+    // True when this session is armed for a confetti finish (and the feature is on).
+    private bool ConfettiArmed(ClaudeSession session) =>
+        _confettiAvailable && _confettiSessions.Contains(session.SessionId);
+
+    // Flips a session's confetti arming from the right-click menu. In-memory only; repaints so the
+    // party-popper glyph appears/disappears at once.
+    private void ToggleConfetti(string sessionId)
+    {
+        if (!_confettiSessions.Remove(sessionId))
+            _confettiSessions.Add(sessionId);
+        Invalidate();
+    }
+
+    // If the given session was armed, disarm it and report true so the owning context can set off the
+    // confetti. Arming is one-shot: a finish spends it. Returns false (and does nothing) otherwise.
+    public bool ConsumeConfetti(string sessionId)
+    {
+        if (!_confettiAvailable || !_confettiSessions.Remove(sessionId)) return false;
+        Invalidate();
+        return true;
+    }
 
     // The run-time labels only need a per-second repaint when they're actually on screen: a running
     // session's elapsed run time, or a blocked session's "waiting on you" timer (when it's enabled).
@@ -1166,6 +1207,40 @@ internal sealed class OverlayForm : Form, IDenseHost
 
     // The external-notify indicator: a small envelope with a "send" arrow rising from it, drawn when
     // a session is opted in to ntfy pushes. Pure GDI so it themes and scales like the other glyphs.
+    // The "confetti finish" indicator: a little party popper — a gold cone spraying a fan of coloured
+    // confetti up and to the right — drawn on a session that's armed to celebrate when it next finishes.
+    // Hand-drawn GDI like the other row glyphs (a font emoji would render monochrome under GDI+), so it
+    // stays colourful, themes, and scales. x is the left edge, midY the row centre.
+    private static void DrawPartyIcon(Graphics g, int x, int midY)
+    {
+        var oldSmoothing = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        // Cone: a narrow gold triangle, apex at the bottom-left, mouth opening toward the upper-right.
+        var apex   = new PointF(x + 2,  midY + 6);
+        var mouthT = new PointF(x + 11, midY - 4);
+        var mouthB = new PointF(x + 6,  midY + 3);
+        using (var cone = new SolidBrush(Color.FromArgb(255, 190, 70)))
+            g.FillPolygon(cone, new[] { apex, mouthT, mouthB });
+
+        // Confetti: a few small dots sprayed out from the cone's mouth, each a different festive colour.
+        (float dx, float dy, float r, Color c)[] bits =
+        {
+            (13f, -6f, 1.8f, Color.FromArgb(255, 92, 92)),    // red
+            (11f, -2f, 1.5f, Color.FromArgb(94, 234, 212)),   // teal
+            (14f, -1f, 1.6f, Color.FromArgb(178, 120, 255)),  // purple
+            (10f, -7f, 1.4f, Color.FromArgb(255, 236, 92)),   // yellow
+            (13f, -9f, 1.5f, Color.FromArgb(92, 214, 122)),   // green
+        };
+        foreach (var (dx, dy, r, c) in bits)
+        {
+            using var b = new SolidBrush(c);
+            g.FillEllipse(b, x + dx - r, midY + dy - r, r * 2, r * 2);
+        }
+
+        g.SmoothingMode = oldSmoothing;
+    }
+
     private static void DrawMailIcon(Graphics g, int x, int midY)
     {
         var oldSmoothing = g.SmoothingMode;
@@ -1629,6 +1704,8 @@ internal sealed class OverlayForm : Form, IDenseHost
         int mailWidth    = mail ? MailIconWidth : 0;
         int badgeWidth   = session.Mode != PermissionMode.Normal && _showModeBadges ? 16 : 0;
         int rcWidth      = session.RemoteControlled ? RcIconWidth : 0;
+        bool party       = ConfettiArmed(session);
+        int partyWidth   = party ? PartyIconWidth : 0;
         bool stuck       = _showStuckWarnings && session.IsStuck;
         int warnWidth    = stuck ? WarnIconWidth : 0;
         float ctxFill    = session.ContextFill ?? 0f;
@@ -1665,7 +1742,7 @@ internal sealed class OverlayForm : Form, IDenseHost
         const int GitGap = 4;                                    // between the +added and -deleted halves
         int gitWidth     = showGit ? (int)gitAddSz.Width + GitGap + (int)gitDelSz.Width + 8 : 0;
         var statusSz     = g.MeasureString(statusText, statusFont);
-        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - mailWidth - artWidth - warnWidth - thermoWidth - taskWidth - metricsWidth - burnWidth - gitWidth;
+        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - partyWidth - mailWidth - artWidth - warnWidth - thermoWidth - taskWidth - metricsWidth - burnWidth - gitWidth;
         var nameTrunc    = TruncateString(g, session.DisplayName, nameFont, nameMaxWidth);
         var nameSz       = g.MeasureString(nameTrunc, nameFont);
 
@@ -1683,8 +1760,10 @@ internal sealed class OverlayForm : Form, IDenseHost
             DrawMailIcon(g, HorizPad + 14 + warnWidth + artWidth, nameMidY);
         if (session.RemoteControlled)
             DrawRemoteIcon(g, HorizPad + 16 + warnWidth + artWidth + mailWidth, nameMidY);
+        if (party)
+            DrawPartyIcon(g, HorizPad + 14 + warnWidth + artWidth + mailWidth + rcWidth, nameMidY);
 
-        int nameX = HorizPad + 14 + warnWidth + artWidth + mailWidth + rcWidth;
+        int nameX = HorizPad + 14 + warnWidth + artWidth + mailWidth + rcWidth + partyWidth;
         g.DrawString(nameTrunc, nameFont, fgBrush, nameX, nameMidY - nameSz.Height / 2);
 
         // Unstaged git line churn, immediately right of the name: "+added" in green, "-deleted" in red,
@@ -2470,6 +2549,15 @@ internal sealed class OverlayForm : Form, IDenseHost
                 ? "Disable external notifications"
                 : "Enable external notifications";
             items.Add((label, () => ExternalNotifyToggleRequested?.Invoke(s.SessionId)));
+        }
+
+        // Confetti finish (experimental): arm/disarm a one-shot celebration for when this session next
+        // finishes. Real session rows only, and only while the feature is switched on globally.
+        if (row >= 0 && !_rows[row].IsSubAgent && _confettiAvailable)
+        {
+            var s = _rows[row].Session;
+            string label = ConfettiArmed(s) ? "Cancel confetti finish 🎉" : "Confetti finish 🎉";
+            items.Add((label, () => ToggleConfetti(s.SessionId)));
         }
 
         bool headerVisible = !_denseMode.IsClosedStrip;

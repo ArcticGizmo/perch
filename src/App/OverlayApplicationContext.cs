@@ -27,6 +27,9 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     // Ambient screen-edge glow, driven from session state (see UpdateGlow). Created up front but never
     // shown until a session needs attention and the (experimental, off-by-default) setting is on.
     private readonly GlowForm _glow = new();
+    // Full-screen confetti burst for the (experimental, opt-in) "confetti finish". Created up front but
+    // never shown until an armed session finishes (see OnNeedsAttention).
+    private readonly ConfettiForm _confetti = new();
     private readonly SessionMonitor _monitor;
     private readonly MetricsMonitor _metricsMonitor = new();
     private readonly UsageMonitor _usageMonitor = new();
@@ -218,6 +221,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _overlay.SetWaitingTimerRedMinutes(_settings.WaitingTimerRedMinutes);
         _overlay.SetShowArtifacts(_settings.ShowArtifacts);
         _overlay.SetHideInactiveTeamMembers(_settings.HideInactiveTeamMembers);
+        _overlay.SetConfettiFinishAvailable(_settings.ConfettiFinish);
         _overlay.SetContextThresholds(
             _settings.ContextPressureYellowPercent,
             _settings.ContextPressureOrangePercent,
@@ -301,6 +305,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.HideInactiveTeamMembersChanged += SetHideInactiveTeamMembers;
                 f.ScreenEdgeGlowChanged += SetScreenEdgeGlow;
                 f.PerchReactsChanged += SetPerchReacts;
+                f.ConfettiFinishChanged += SetConfettiFinish;
                 f.ContextThresholdsChanged += SetContextThresholds;
                 f.StuckDetectionChanged += SetStuckDetection;
                 f.SystemMetricsChanged += SetSystemMetricsEnabled;
@@ -479,6 +484,17 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _settings.HideInactiveTeamMembers = enabled;
         _settings.Save();
         _overlay.SetHideInactiveTeamMembers(enabled);
+    }
+
+    // Mirrors the (experimental) confetti-finish master switch into the overlay — it gates the
+    // party-popper glyph and the right-click arm/disarm item — and persists it. The per-session arming
+    // lives only in the overlay's memory and is never saved.
+    private void SetConfettiFinish(bool enabled)
+    {
+        if (_settings.ConfettiFinish == enabled) return;
+        _settings.ConfettiFinish = enabled;
+        _settings.Save();
+        _overlay.SetConfettiFinishAvailable(enabled);
     }
 
     private void SetScreenEdgeGlow(bool enabled)
@@ -768,6 +784,11 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         // (per their settings) inside the notification service.
         _overlay.TriggerAttention();
         _notifications.Notify(NotificationKind.Done, session);
+
+        // If this session was armed for a confetti finish, spend the arming and set off the celebration
+        // on the screen the overlay lives on. Fires exactly once — ConsumeConfetti disarms it.
+        if (_overlay.ConsumeConfetti(session.SessionId))
+            _confetti.Launch(ScreenForOverlay());
     }
 
     private void OnAwaitingInput(ClaudeSession session)
@@ -1023,6 +1044,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _flightForm.Close();
         _glow.HideGlow();
         _glow.Close();
+        _confetti.Close();
         _overlay.Close();
     }
 
@@ -1049,6 +1071,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _statsForm?.Dispose();
             _flightForm?.Dispose();
             _glow.Dispose();
+            _confetti.Dispose();
             _overlay.Dispose();
         }
         base.Dispose(disposing);

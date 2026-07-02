@@ -157,6 +157,10 @@ internal sealed class SettingsForm : Form
     /// <summary>Raised when the user toggles "Perch reacts" — the mood bird (true = enabled).</summary>
     public event Action<bool>? PerchReactsChanged;
 
+    /// <summary>Raised when the user toggles "Confetti finish" — the experimental per-session celebration
+    /// (true = the feature and its right-click toggle are available).</summary>
+    public event Action<bool>? ConfettiFinishChanged;
+
     /// <summary>Raised when the user adjusts the context-pressure thresholds (whole percentages,
     /// ordered yellow &lt; orange &lt; red).</summary>
     public event Action<int, int, int>? ContextThresholdsChanged;
@@ -1822,6 +1826,21 @@ internal sealed class SettingsForm : Form
             "working directory that haven't been staged yet, read from git. While this is off, Perch never " +
             "runs git at all, so it costs nothing; while on, it runs a lightweight \"git diff\" per session " +
             "on a background thread, cached for a few seconds. Off by default."));
+
+        page.Controls.Add(Separator());
+
+        // 7. Confetti finish. Display-only master switch; raises the event so the overlay shows (or hides)
+        //    the per-session right-click toggle. The arming itself is in-memory only. Off by default.
+        var confettiToggle = MakeToggle();
+        confettiToggle.Checked = _settings.ConfettiFinish;
+        confettiToggle.CheckedChanged += (_, _) => ConfettiFinishChanged?.Invoke(confettiToggle.Checked);
+        page.Controls.Add(TitleRow("Confetti finish 🎉", confettiToggle));
+        page.Controls.Add(BodyText(
+            "Adds a \"Confetti finish 🎉\" item to a session's right-click menu. Arm a session and a " +
+            "party-popper icon appears on its row; the instant it next finishes, confetti erupts across " +
+            "the screen and the arming is spent (it fires exactly once). Purely for the joy of it. The " +
+            "arming is never saved — it always starts a session unarmed after a restart — so a " +
+            "celebration can't go off by surprise. Off by default."));
     }
 
     // ── About ─────────────────────────────────────────────────────────────────────

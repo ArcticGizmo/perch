@@ -174,6 +174,13 @@ internal sealed class AppSettings
     // whimsy layered over the existing status cues. On by default; a missing key keeps it on.
     public bool PerchReacts { get; set; } = true;
 
+    // "Confetti finish": when on, a session's right-click menu gains a "Confetti finish 🎉" toggle.
+    // Arm a session and, the instant it next finishes, a burst of confetti erupts across the screen — then
+    // the arming is spent (it fires exactly once, and disarms itself). Only this master switch is
+    // persisted; the per-session arming is deliberately in-memory only, so a celebration can never go off
+    // by surprise after a restart. Off by default (experimental); a missing key keeps it off.
+    public bool ConfettiFinish { get; set; }
+
     // Update checking. The version string of an update that has been detected and surfaced to the user
     // (via the "update available" notification, overlay button, tray menu and About highlight). Null
     // means no update is currently pending. Its presence is what suppresses re-notifying on subsequent

@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.25] - 2026-07-02
+
+### Added
+
+- Confetti finish — a session erupts with confetti the moment it next completes.
+- Right-click a session to arm it (experimental, off by default); a party popper marks the armed row.
+- Fires exactly once, then disarms itself.
+- Never saved, so it can't ambush you after a restart (you're welcome).
+
+---
+
 ## [v0.1.24] - 2026-07-02
 
 ### Added
