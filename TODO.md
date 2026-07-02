@@ -29,9 +29,6 @@
 
 ## More ideas (2026-07)
 
-- surface data we already parse but don't show, on the overlay row:
-  - git branch + dirty badge — gitBranch/cwd are captured for stats only; show "main" (or ⚠ if the
-    tree is dirty) on the row so you can tell which branch/worktree each agent is on at a glance
 - new views:
   - activity / notification log window — a scrollable, timestamped feed of past done/waiting/stuck
     events, so you can catch up on what happened while AFK (pairs with the lock-override push)

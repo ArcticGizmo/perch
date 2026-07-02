@@ -5,6 +5,17 @@ using Perch.Ui;
 namespace Perch.Ui;
 
 /// <summary>
+/// A single popover row: a label, the action to run when clicked, and an optional hand-drawn glyph
+/// painted after the text. The glyph is a GDI painter (Graphics, x-left, row-centre-Y) — not a font
+/// emoji, which would render as a tofu box under GDI+ (see <c>OverlayForm.DrawPartyIcon</c>). An
+/// implicit conversion from a plain <c>(Label, OnClick)</c> tuple keeps icon-less call sites terse.
+/// </summary>
+internal readonly record struct PopoverItem(string Label, Action OnClick, Action<Graphics, int, int>? Icon = null)
+{
+    public static implicit operator PopoverItem((string Label, Action OnClick) t) => new(t.Label, t.OnClick);
+}
+
+/// <summary>
 /// A small, self-contained context popover: a borderless, top-most, dark-themed list of clickable
 /// items. Used instead of a WinForms ContextMenuStrip, which wouldn't reliably display from the
 /// transparent, top-most tool window that hosts the overlay. Dismissed by clicking an item, clicking
@@ -22,11 +33,13 @@ internal sealed class PopoverMenu : Form
     private const int PadX   = 14;
     private const int PadY   = 6;
     private const int MinW   = 150;
+    private const int IconW  = 18;  // horizontal space reserved for an item's trailing glyph
+    private const int IconGap = 6;  // gap between the label text and its glyph
 
-    private readonly (string Label, Action OnClick)[] _items;
+    private readonly PopoverItem[] _items;
     private int _hover = -1;
 
-    public PopoverMenu(IReadOnlyList<(string Label, Action OnClick)> items)
+    public PopoverMenu(IReadOnlyList<PopoverItem> items)
     {
         _items = items.ToArray();
 
@@ -42,8 +55,12 @@ internal sealed class PopoverMenu : Form
         using (var bmp = new Bitmap(1, 1))
         using (var g = Graphics.FromImage(bmp))
         using (var font = MenuFont())
-            foreach (var (label, _) in _items)
-                w = Math.Max(w, PadX * 2 + (int)Math.Ceiling(g.MeasureString(label, font).Width));
+            foreach (var item in _items)
+            {
+                int itemW = PadX * 2 + (int)Math.Ceiling(g.MeasureString(item.Label, font).Width);
+                if (item.Icon != null) itemW += IconGap + IconW;
+                w = Math.Max(w, itemW);
+            }
 
         ClientSize = new Size(w, PadY * 2 + _items.Length * ItemH);
     }
@@ -93,6 +110,13 @@ internal sealed class PopoverMenu : Form
             }
             g.DrawString(_items[i].Label, font, fg,
                 new RectangleF(r.X + PadX, r.Y, r.Width - PadX * 2, r.Height), fmt);
+
+            // Trailing glyph, hand-drawn just past the label text (a font emoji would tofu-box here).
+            if (_items[i].Icon is { } icon)
+            {
+                int labelW = (int)Math.Ceiling(g.MeasureString(_items[i].Label, font).Width);
+                icon(g, r.X + PadX + labelW + IconGap, r.Y + r.Height / 2);
+            }
         }
     }
 

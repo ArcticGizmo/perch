@@ -2481,7 +2481,7 @@ internal sealed class OverlayForm : Form, IDenseHost
         // Several artifacts: present them in the same lightweight popover the context menu uses,
         // each item opening that artifact. Anchored just under the glyph that was clicked.
         var items = artifacts
-            .Select(a => (a.Title, (Action)(() => OpenArtifact(a))))
+            .Select(a => new PopoverItem(a.Title, () => OpenArtifact(a)))
             .ToList();
 
         _popover?.Close();
@@ -2508,7 +2508,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     // applies, no menu is shown.
     private void ShowContextMenuAt(Point clientPt)
     {
-        var items = new List<(string Label, Action OnClick)>();
+        var items = new List<PopoverItem>();
 
         int row = HitTestRow(clientPt);
 
@@ -2556,8 +2556,8 @@ internal sealed class OverlayForm : Form, IDenseHost
         if (row >= 0 && !_rows[row].IsSubAgent && _confettiAvailable)
         {
             var s = _rows[row].Session;
-            string label = ConfettiArmed(s) ? "Cancel confetti finish 🎉" : "Confetti finish 🎉";
-            items.Add((label, () => ToggleConfetti(s.SessionId)));
+            string label = ConfettiArmed(s) ? "Cancel confetti finish" : "Confetti finish";
+            items.Add(new PopoverItem(label, () => ToggleConfetti(s.SessionId), DrawPartyIcon));
         }
 
         bool headerVisible = !_denseMode.IsClosedStrip;
