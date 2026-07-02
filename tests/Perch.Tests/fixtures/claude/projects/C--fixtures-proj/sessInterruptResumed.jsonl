@@ -1,0 +1,5 @@
+{"type":"user","timestamp":"2025-03-05T12:00:00Z","cwd":"C:\\fixtures\\proj","gitBranch":"main","message":{"role":"user","content":"do a big refactor"}}
+{"type":"assistant","timestamp":"2025-03-05T12:00:10Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":4},"content":[{"type":"text","text":"Starting on it"}]}}
+{"type":"user","timestamp":"2025-03-05T12:00:20Z","cwd":"C:\\fixtures\\proj","interruptedMessageId":"msg_abc","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}
+{"type":"user","timestamp":"2025-03-05T12:01:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":"actually, do this smaller thing instead"}}
+{"type":"assistant","timestamp":"2025-03-05T12:01:10Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":12,"output_tokens":6},"content":[{"type":"text","text":"Done"}]}}

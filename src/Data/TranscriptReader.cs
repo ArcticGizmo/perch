@@ -26,6 +26,7 @@ internal sealed class TranscriptReader
     private readonly MtimeCache<(float? Fill, int Window)> _contextFill = new();
     private readonly MtimeCache<double?> _burnRate = new();
     private readonly MtimeCache<bool> _bareCommand = new();
+    private readonly MtimeCache<bool> _interrupted = new();
     private readonly MtimeCache<IReadOnlyList<Artifact>> _artifacts = new();
     private readonly MtimeCache<IReadOnlyList<TaskItem>> _tasks = new();
     private readonly MtimeCache<StuckMetrics> _stuck = new();
@@ -69,6 +70,28 @@ internal sealed class TranscriptReader
             return false;
         var path = TranscriptLocator.Resolve(sessionId, cwd);
         return path != null && _bareCommand.GetOrCompute(path, ParseBareCommand, false);
+    }
+
+    /// <summary>
+    /// True when the session's latest meaningful turn ended because the user cancelled it (Esc /
+    /// Ctrl+C) rather than because the model finished. Claude Code appends a synthetic user record —
+    /// <c>[Request interrupted by user]</c> or <c>[Request interrupted by user for tool use]</c> — when
+    /// a turn is interrupted; a normal turn ends with an assistant record instead. This is the
+    /// discriminator that keeps a deliberate cancel from raising a "done" alert: on the busy->idle edge
+    /// the caller stays plain idle when this is true.
+    ///
+    /// If the user resumed afterwards (any assistant record was appended after the marker) it is no
+    /// longer the latest turn and this returns false. Cached by (length, last-write) like the other
+    /// readers. Best-effort; never throws (returns false on any failure). The transcript format is
+    /// undocumented and may change between Claude Code releases, so a miss simply falls back to the
+    /// existing "done" behaviour.
+    /// </summary>
+    public bool LastTurnWasInterrupted(string sessionId, string cwd)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return false;
+        var path = TranscriptLocator.Resolve(sessionId, cwd);
+        return path != null && _interrupted.GetOrCompute(path, ParseInterrupted, false);
     }
 
     /// <summary>
@@ -748,6 +771,81 @@ internal sealed class TranscriptReader
         }
 
         return lastWasCommand;
+    }
+
+    // Marker text Claude Code writes into a synthetic user record when a turn is cancelled. Matches
+    // both variants ("[Request interrupted by user]" and "…for tool use]") via the common prefix.
+    private const string InterruptMarker = "[Request interrupted by user";
+
+    private static bool ParseInterrupted(string path)
+    {
+        // Walk chronologically and remember only which of the two kinds came last: an assistant turn
+        // (the model finished / did work) or the interrupt marker (the user cancelled). Everything
+        // else — plain prompts, tool results, metadata trailers — is skipped. A normal completion ends
+        // with an assistant turn; a cancelled one ends with the marker. If any assistant record follows
+        // the marker the user resumed, so it's no longer the latest turn. (Same tail-window reasoning as
+        // ParseBareCommand: a marker older than the window necessarily has an assistant turn after it.)
+        bool lastWasInterrupt = false;
+
+        foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
+        {
+            bool maybeAssistant = line.Contains("\"type\":\"assistant\"");
+            bool maybeInterrupt = line.Contains("Request interrupted by user");
+            if (!maybeAssistant && !maybeInterrupt)
+                continue;
+
+            try
+            {
+                var node = JsonNode.Parse(line);
+                var type = node?["type"]?.GetValue<string>();
+                if (type == "assistant")
+                {
+                    lastWasInterrupt = false;
+                    continue;
+                }
+
+                // Confirm the marker sits in a user record's message content — not, say, an assistant
+                // block that merely quotes the phrase. Requiring type=="user" plus the marker text keeps
+                // the cheap substring pre-filter from producing false positives.
+                if (type == "user" && MessageTextContains(node, InterruptMarker))
+                    lastWasInterrupt = true;
+            }
+            catch
+            {
+                // Malformed/partial line (transcripts are appended live) — skip it.
+            }
+        }
+
+        return lastWasInterrupt;
+    }
+
+    // True when a user record's message content contains the given text, in either shape we see:
+    // a plain string content, or an array of blocks whose "text" field carries it (the interrupt
+    // marker lands in a text block). Best-effort; false on any absent/typed-wrong field.
+    private static bool MessageTextContains(JsonNode? node, string needle)
+    {
+        var content = node?["message"]?["content"];
+        if (content is JsonValue direct)
+        {
+            try { return direct.GetValue<string>().Contains(needle, StringComparison.Ordinal); }
+            catch { return false; }
+        }
+        if (content is JsonArray blocks)
+        {
+            foreach (var block in blocks)
+            {
+                if (block?["text"] is JsonValue text)
+                {
+                    try
+                    {
+                        if (text.GetValue<string>().Contains(needle, StringComparison.Ordinal))
+                            return true;
+                    }
+                    catch { }
+                }
+            }
+        }
+        return false;
     }
 
     // Pulls a record's textual content out of either shape we see for command invocations:

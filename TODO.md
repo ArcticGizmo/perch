@@ -24,7 +24,7 @@
   - last-action peek on hover ("last did: edited SessionMonitor.cs") via the existing tooltip pattern / Activity field
   - per-project notification routing — different chime/priority, or mute a noisy project
   - focus window / DND to batch notifications during a meeting
-
+- add git information (-+ lines of code)
 
 ## More ideas (2026-07)
 

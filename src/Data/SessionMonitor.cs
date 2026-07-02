@@ -15,6 +15,17 @@ internal sealed class SessionMonitor : IDisposable
     // on the sub-agent's return still alerts promptly. See _subsFinishedIdleAt.
     private const int SubsCompletionGraceMs = 3000;
 
+    // Settle window applied to a plain busy->idle "done" before it's raised. A user cancelling the turn
+    // (Esc/Ctrl+C) flips the session busy->idle exactly like a real completion; the only on-disk tell
+    // apart is the "[Request interrupted by user]" marker Claude Code appends to the transcript — and
+    // the transcript is NOT watched, so that marker often lands a beat after the session-status flip
+    // that triggers the scan. Committing to "done" on that single edge scan therefore races the marker
+    // and fires a false alert on a deliberate cancel. Instead we hold plain idle for this window, then
+    // re-read the transcript: a marker that has since landed suppresses the alert; otherwise the
+    // completion fires (a real completion never grows a marker, so it just costs this small delay).
+    // See _completionSettleAt.
+    private const int CompletionSettleMs = 1000;
+
     // Stuck/runaway detection thresholds. Tuned against a corpus of real transcripts so healthy work
     // almost never trips them: across ~114 transcripts a trailing error streak of 4+ flagged only a
     // handful, and a single command repeated 3+ times in the last 10 calls with 2+ failures was rarer
@@ -52,6 +63,11 @@ internal sealed class SessionMonitor : IDisposable
     // "done". Firing here as well is a double-notification, so we defer: the synthetic "done" is raised
     // only if the parent is still idle once SubsCompletionGraceMs elapses, i.e. it picked nothing up.
     private readonly Dictionary<string, DateTime> _subsFinishedIdleAt = new();
+    // When a plain busy->idle "done" was seen but is being held for CompletionSettleMs, keyed by PID,
+    // so a not-yet-flushed cancel marker can still appear before we commit to the alert. Cleared when
+    // the marker lands (suppress for good), the window elapses (fire the deferred "done"), or the
+    // session resumes work / disappears. See CompletionSettleMs.
+    private readonly Dictionary<string, DateTime> _completionSettleAt = new();
 
     private readonly SubAgentReader _subAgents = new();
     private readonly TranscriptReader _transcripts = new();
@@ -82,10 +98,11 @@ internal sealed class SessionMonitor : IDisposable
     public event Action? ChangeDetected;
 
     /// <summary>
-    /// The earliest instant at which a deferred sub-agent-completion grace window elapses and must be
-    /// re-scanned (so the synthetic "done" fires on time without a later file event). Null when none is
-    /// pending. The "done" / <see cref="SessionStatus.NeedsAttention"/> badge itself no longer lapses on
-    /// a timer, so it never contributes a deadline. Recomputed at the end of every <see cref="Scan"/>.
+    /// The earliest instant at which a deferred completion window elapses and must be re-scanned — either
+    /// a sub-agent-completion grace or a busy->idle completion settle — so the "done" fires on time
+    /// without a later file event. Null when none is pending. The "done" /
+    /// <see cref="SessionStatus.NeedsAttention"/> badge itself no longer lapses on a timer, so it never
+    /// contributes a deadline. Recomputed at the end of every <see cref="Scan"/>.
     /// </summary>
     public DateTime? NextNeedsAttentionDeadline { get; private set; }
 
@@ -138,6 +155,7 @@ internal sealed class SessionMonitor : IDisposable
             _awaitingInputPids.Remove(key);
             _hadRunningSubs.Remove(key);
             _subsFinishedIdleAt.Remove(key);
+            _completionSettleAt.Remove(key);
         }
 
         SyncProcessSubscriptions(activePids);
@@ -187,6 +205,14 @@ internal sealed class SessionMonitor : IDisposable
         foreach (var finishedAt in _subsFinishedIdleAt.Values)
         {
             var deadline = finishedAt.AddMilliseconds(SubsCompletionGraceMs);
+            if (earliest == null || deadline < earliest)
+                earliest = deadline;
+        }
+        // Likewise wake at the end of any pending busy->idle completion settle, so the deferred "done"
+        // fires on time (and a landed cancel marker is re-checked) without waiting out the 30s reconcile.
+        foreach (var settleAt in _completionSettleAt.Values)
+        {
+            var deadline = settleAt.AddMilliseconds(CompletionSettleMs);
             if (earliest == null || deadline < earliest)
                 earliest = deadline;
         }
@@ -252,7 +278,18 @@ internal sealed class SessionMonitor : IDisposable
             bool IsBareCommand() =>
                 (bareCommand ??= _transcripts.LastTurnWasBareCommand(sessionId, cwd)) == true;
 
+            // Same lazy, cached-by-mtime read as IsBareCommand: only consulted at the busy->idle edge
+            // where we'd otherwise raise "done". A user cancelling the turn (Esc/Ctrl+C) flips the
+            // session busy->idle exactly like a normal completion — the only on-disk tell apart is the
+            // interrupt marker Claude Code leaves in the transcript — so ask for it there and stay idle.
+            bool? interrupted = null;
+            bool IsInterrupted() =>
+                (interrupted ??= _transcripts.LastTurnWasInterrupted(sessionId, cwd)) == true;
+
             SessionStatus status;
+            // Set when a deferred busy->idle completion settle elapses this scan (below), so the "done"
+            // notification is raised even though this is no longer a busy->idle edge.
+            bool fireCompletionSettled = false;
             bool awaitingInput = IsAwaitingInput(rawStatus, waitingFor);
             if (awaitingInput && IsBareCommand())
             {
@@ -266,24 +303,67 @@ internal sealed class SessionMonitor : IDisposable
             else if (awaitingInput)
             {
                 _idleSince.Remove(pid);
+                _completionSettleAt.Remove(pid);
                 status = SessionStatus.AwaitingInput;
             }
             else if (rawStatus == "busy")
             {
                 _idleSince.Remove(pid);
+                _completionSettleAt.Remove(pid);
                 status = SessionStatus.Running;
                 _awaitingInputPids.Remove(pid);
             }
             else
             {
                 _awaitingInputPids.Remove(pid);
-                if (prevRaw == "busy" && IsBareCommand())
+                if (prevRaw == "busy" && (IsBareCommand() || IsInterrupted()))
                 {
-                    // A fast built-in (e.g. /clear, /doctor) just finished; no model work happened,
-                    // so it shouldn't count as a completion. Drop the idle timestamp set above and
-                    // stay plain idle — no NeedsAttention glyph, no "done" alert.
+                    // Not a real completion, so it shouldn't raise "done": either a fast built-in
+                    // (e.g. /clear, /doctor) just finished without the model doing any work, or the user
+                    // cancelled the turn (Esc/Ctrl+C) with the interrupt marker already on disk. Drop the
+                    // idle timestamp set above and stay plain idle — no NeedsAttention glyph, no "done"
+                    // alert. Removing _idleSince also makes the suppression stick: the next scan sees
+                    // prevRaw=="idle" and no badge to restore.
                     _idleSince.Remove(pid);
+                    _completionSettleAt.Remove(pid);
                     status = SessionStatus.Idle;
+                }
+                else if (prevRaw == "busy")
+                {
+                    // A busy->idle edge that looks like a real completion — but a user cancel flips
+                    // busy->idle the same way, and Claude Code may not have flushed its interrupt marker to
+                    // the (unwatched) transcript yet, so we can't tell them apart on this single edge scan.
+                    // Don't commit to "done": hold plain idle and open a settle window. When it elapses we
+                    // re-read the transcript below — a marker that has since landed suppresses the alert,
+                    // otherwise the deferred completion fires. Drop _idleSince (set above) so no badge or
+                    // glow shows while we wait.
+                    _idleSince.Remove(pid);
+                    _completionSettleAt[pid] = now;
+                    status = SessionStatus.Idle;
+                }
+                else if (_completionSettleAt.TryGetValue(pid, out var settleAt))
+                {
+                    // Mid-settle from a prior scan (prevRaw is now "idle", still idle). Re-evaluate.
+                    if (IsInterrupted() || IsBareCommand())
+                    {
+                        // The cancel marker landed inside the window — it was a deliberate stop, so
+                        // suppress the "done" for good.
+                        _completionSettleAt.Remove(pid);
+                        _idleSince.Remove(pid);
+                        status = SessionStatus.Idle;
+                    }
+                    else if ((now - settleAt).TotalMilliseconds >= CompletionSettleMs)
+                    {
+                        // Window elapsed with no marker: it really was a completion. Raise it now, and
+                        // flag it so the notification below fires even though this isn't a busy->idle edge.
+                        _completionSettleAt.Remove(pid);
+                        _idleSince[pid] = now;
+                        status = SessionStatus.NeedsAttention;
+                        fireCompletionSettled = true;
+                    }
+                    else
+                        // Still within the window — keep waiting silently.
+                        status = SessionStatus.Idle;
                 }
                 else if (_idleSince.ContainsKey(pid))
                     // A completed session keeps its "done" badge until the user acknowledges it (focuses
@@ -316,6 +396,9 @@ internal sealed class SessionMonitor : IDisposable
                 _hadRunningSubs.Add(pid);
                 // Fresh sub-agent activity supersedes any pending completion watch from a prior batch.
                 _subsFinishedIdleAt.Remove(pid);
+                // A live sub-agent means the session is working, not completing, so any pending busy->idle
+                // settle from this scan (or an earlier one) is void.
+                _completionSettleAt.Remove(pid);
                 // A live sub-agent means the session is working even when Claude Code reports the
                 // parent as idle (the parent loop is simply blocked waiting on the child).
                 if (status is SessionStatus.Idle or SessionStatus.NeedsAttention)
@@ -334,8 +417,10 @@ internal sealed class SessionMonitor : IDisposable
                 // "done". Firing now as well is the double-notification users see. Instead arm a short
                 // grace window — unless the subs went stale (the team was interrupted on purpose), in
                 // which case there's no completion to report.
+                // Guard against a pending busy->idle completion settle owning the same edge: let that one
+                // path raise the single "done" rather than arming a second (overlapping) window here.
                 if (subsJustFinished && !subsWentStale && status == SessionStatus.Idle
-                    && !_subsFinishedIdleAt.ContainsKey(pid))
+                    && !_subsFinishedIdleAt.ContainsKey(pid) && !_completionSettleAt.ContainsKey(pid))
                     _subsFinishedIdleAt[pid] = now;
 
                 // Still idle once the grace window has elapsed: the parent never picked the work back
@@ -356,7 +441,10 @@ internal sealed class SessionMonitor : IDisposable
             // forthcoming busy->idle / awaiting-input alert is now its to raise, so drop the deferred
             // completion watch to avoid an extra "done".
             if (status is SessionStatus.Running or SessionStatus.AwaitingInput)
+            {
                 _subsFinishedIdleAt.Remove(pid);
+                _completionSettleAt.Remove(pid);
+            }
 
             var projectName = string.IsNullOrEmpty(cwd)
                 ? sessionId[..Math.Min(8, sessionId.Length)]
@@ -462,7 +550,8 @@ internal sealed class SessionMonitor : IDisposable
                 awaitingSince
             );
 
-            if (status == SessionStatus.NeedsAttention && (prevRaw == "busy" || fireSubsCompletion))
+            if (status == SessionStatus.NeedsAttention
+                && (fireSubsCompletion || fireCompletionSettled))
                 NeedsAttention?.Invoke(session);
 
             if (status == SessionStatus.AwaitingInput && _awaitingInputPids.Add(pid))

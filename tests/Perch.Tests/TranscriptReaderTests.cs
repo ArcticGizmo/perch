@@ -98,6 +98,48 @@ public class TranscriptReaderTests
     }
 
     [Fact]
+    public void LastTurnWasInterrupted_TrueWhenLastTurnIsAUserCancel()
+    {
+        var reader = new TranscriptReader();
+        // The turn ends with the synthetic "[Request interrupted by user]" user record — a deliberate
+        // Esc/Ctrl+C, not a completion, so it must not raise "done".
+        Assert.True(reader.LastTurnWasInterrupted("sessInterrupted", Cwd));
+    }
+
+    [Fact]
+    public void LastTurnWasInterrupted_TrueForToolUseInterruptVariant()
+    {
+        var reader = new TranscriptReader();
+        // Cancelling mid-tool-call leaves the "[Request interrupted by user for tool use]" marker; the
+        // common prefix means the same detection covers it.
+        Assert.True(reader.LastTurnWasInterrupted("sessInterruptedToolUse", Cwd));
+    }
+
+    [Fact]
+    public void LastTurnWasInterrupted_FalseWhenUserResumedAfterCancel()
+    {
+        var reader = new TranscriptReader();
+        // The user interrupted, then prompted again and the model produced a fresh assistant turn — the
+        // interrupt is no longer the latest turn, so a later busy->idle really is a completion.
+        Assert.False(reader.LastTurnWasInterrupted("sessInterruptResumed", Cwd));
+    }
+
+    [Fact]
+    public void LastTurnWasInterrupted_FalseForNormalCompletion()
+    {
+        var reader = new TranscriptReader();
+        // sessA ends with real model work (a tool call), not a cancel.
+        Assert.False(reader.LastTurnWasInterrupted("sessA", Cwd));
+    }
+
+    [Fact]
+    public void LastTurnWasInterrupted_FalseWhenSessionMissing()
+    {
+        var reader = new TranscriptReader();
+        Assert.False(reader.LastTurnWasInterrupted("nope-no-such-session", Cwd));
+    }
+
+    [Fact]
     public void GetArtifacts_ReturnsPublishedArtifact()
     {
         var reader = new TranscriptReader();

@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.23] - 2026-07-02
+
+### Fixed
+
+- Cancelling a turn (Esc / Ctrl+C) no longer fires a phantom "done" alert.
+
+---
+
 ## [v0.1.22] - 2026-07-02
 
 ### Added
