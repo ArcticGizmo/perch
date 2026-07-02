@@ -29,14 +29,9 @@
 ## More ideas (2026-07)
 
 - surface data we already parse but don't show, on the overlay row:
-  - live cost / burn — current model as a small badge + a token/min or $/hr rate on running
-    sessions (usage.* and message.model are already read for stats; not shown live per session)
   - git branch + dirty badge — gitBranch/cwd are captured for stats only; show "main" (or ⚠ if the
     tree is dirty) on the row so you can tell which branch/worktree each agent is on at a glance
 - new views:
-  - daily "flight path" timeline — a horizontal Gantt of the day, one lane per session coloured by
-    state (running/idle/waiting/stuck) across the hours; a visual sibling to Stats/Wrapped, built
-    from the same transcript gaps active-time already uses
   - activity / notification log window — a scrollable, timestamped feed of past done/waiting/stuck
     events, so you can catch up on what happened while AFK (pairs with the lock-override push)
 - interaction / flow:

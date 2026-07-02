@@ -64,6 +64,9 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     // The stats window, lazily created on first open and reused while it stays open.
     private StatsForm? _statsForm;
 
+    // The flight-path window (daily session timeline), lazily created on first open and reused.
+    private FlightPathForm? _flightForm;
+
     // The most recent set of live sessions, so a freshly-opened history viewer knows which sessions
     // are active without waiting for the next scan.
     private IReadOnlyList<ClaudeSession> _sessions = [];
@@ -124,6 +127,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         historyItem.Click += (_, _) => OpenHistoryViewer(null);
         var statsItem2 = new ToolStripMenuItem("Session stats…");
         statsItem2.Click += (_, _) => OpenStats();
+        var flightItem = new ToolStripMenuItem("Flight path…");
+        flightItem.Click += (_, _) => OpenFlightPath();
         _updateItem = new ToolStripMenuItem("Check for Updates…");
         // Route by state: perform the pending update, or run a manual (user-initiated) check.
         _updateItem.Click += (_, _) =>
@@ -142,6 +147,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         trayMenu.Items.Add(settingsItem);
         trayMenu.Items.Add(historyItem);
         trayMenu.Items.Add(statsItem2);
+        trayMenu.Items.Add(flightItem);
         trayMenu.Items.Add(_updateItem);
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add(exitItem);
@@ -298,6 +304,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 f.QuickLinksChanged       += SetQuickLinks;
                 f.UpsideDownQuickLinksChanged += SetUpsideDownQuickLinks;
                 f.OpenStatsRequested      += OpenStats;
+                f.OpenFlightPathRequested += OpenFlightPath;
             },
             // Sync the About "update available" highlight/button on every open (runs on both paths).
             refresh: f => f.SetUpdateAvailable(
@@ -329,6 +336,17 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             () => new StatsForm(_settings),
             () => _statsForm = null,
             refresh: f => f.RefreshStats());
+    }
+
+    // Opens (or re-focuses) the flight-path window and refreshes the day's timeline. A single reused
+    // instance, like the settings / history / stats windows; refresh runs on both paths, so it also
+    // kicks the first load on open.
+    private void OpenFlightPath()
+    {
+        _flightForm = WindowHost.ShowOrFocus(_flightForm,
+            () => new FlightPathForm(),
+            () => _flightForm = null,
+            refresh: f => f.RefreshPath());
     }
 
     // Toggles the usage bars. Disabling stops all polling so no OAuth query ever goes out;
@@ -908,6 +926,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
                 _historyForm.Close();
             if (_statsForm is { IsDisposed: false })
                 _statsForm.Close();
+            if (_flightForm is { IsDisposed: false })
+                _flightForm.Close();
 
             await mgr.DownloadUpdatesAsync(update);
             mgr.ApplyUpdatesAndRestart(update);
@@ -938,6 +958,8 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _historyForm.Close();
         if (_statsForm is { IsDisposed: false })
             _statsForm.Close();
+        if (_flightForm is { IsDisposed: false })
+            _flightForm.Close();
         _glow.HideGlow();
         _glow.Close();
         _overlay.Close();
@@ -960,6 +982,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
             _settingsForm?.Dispose();
             _historyForm?.Dispose();
             _statsForm?.Dispose();
+            _flightForm?.Dispose();
             _glow.Dispose();
             _overlay.Dispose();
         }

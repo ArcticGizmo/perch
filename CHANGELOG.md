@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.21] - 2026-07-02
+
+### Added
+
+- Flight path — a daily timeline of your sessions, one lane each, coloured by what they were up to.
+- Lanes mark engaged, waiting-on-you, and stuck stretches; blank means you'd wandered off.
+- Step through earlier days with ‹ / › or the arrow keys.
+
+---
+
 ## [v0.1.20] - 2026-07-02
 
 ### Overlay

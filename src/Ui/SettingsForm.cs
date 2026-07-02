@@ -184,6 +184,9 @@ internal sealed class SettingsForm : Form
     /// <summary>Raised when the user clicks "Open session stats", to open the stats window.</summary>
     public event Action? OpenStatsRequested;
 
+    /// <summary>Raised when the user clicks "Open flight path", to open the daily timeline window.</summary>
+    public event Action? OpenFlightPathRequested;
+
     /// <summary>Raised when the user toggles "System metrics" (true = the whole-machine CPU/RAM strip
     /// is shown at the top of the overlay).</summary>
     public event Action<bool>? SystemMetricsChanged;
@@ -1080,7 +1083,13 @@ internal sealed class SettingsForm : Form
         var openBtn = MakeButton("Open session stats…");
         openBtn.Click += (_, _) => OpenStatsRequested?.Invoke();
         openRow.Controls.Add(openBtn);
+        var flightBtn = MakeButton("Open flight path…");
+        flightBtn.Click += (_, _) => OpenFlightPathRequested?.Invoke();
+        openRow.Controls.Add(flightBtn);
         page.Controls.Add(openRow);
+        page.Controls.Add(BodyText(
+            "The flight path is a timeline of a day — one lane per session, coloured by state (active, " +
+            "waiting on you, or stuck) across the hours."));
 
         var trayToggle = MakeToggle();
         trayToggle.Checked = _settings.ShowTodayStatsInTray;
