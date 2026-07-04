@@ -46,4 +46,38 @@ public class ClaudeSessionTests
         Assert.Null(Running(null).RunningElapsedLabel());
         Assert.Equal("4m", Running(DateTime.Now.AddMinutes(-4)).RunningElapsedLabel());
     }
+
+    private static ClaudeSession WithEntrypoint(string? entrypoint) =>
+        new("1234", "sess", SessionStatus.Running, "C:\\proj", "proj", DateTime.Now,
+            Entrypoint: entrypoint);
+
+    [Theory]
+    [InlineData("sdk-ts")]
+    [InlineData("sdk-py")]
+    [InlineData("SDK-TS")]   // some other non-cli entrypoint — still not interactive
+    public void IsBackground_TrueForSdkEntrypoints(string entrypoint)
+    {
+        Assert.True(WithEntrypoint(entrypoint).IsBackground);
+    }
+
+    [Theory]
+    [InlineData("cli")]
+    [InlineData("CLI")]   // case-insensitive: an interactive terminal, however cased
+    public void IsBackground_FalseForCli(string entrypoint)
+    {
+        Assert.False(WithEntrypoint(entrypoint).IsBackground);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void IsBackground_FalseWhenAbsent(string? entrypoint)
+    {
+        // A missing/blank entrypoint is treated as interactive (the safe default): only an explicit
+        // non-cli value flips the background marker on. Blank normalises to null.
+        var session = WithEntrypoint(entrypoint);
+        Assert.Null(session.Entrypoint);
+        Assert.False(session.IsBackground);
+    }
 }

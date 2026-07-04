@@ -261,6 +261,11 @@ internal sealed class SessionMonitor : IDisposable
             var cwd = node["cwd"]?.GetValue<string>() ?? "";
             var updatedAtMs = node["updatedAt"]?.GetValue<long>() ?? 0;
 
+            // How the session was launched: "cli" for an interactive terminal, "sdk-ts"/"sdk-py" for a
+            // background / SDK-driven run. The only on-disk tell that a session has no human at the
+            // keyboard, so the overlay can mark it distinctly. See ClaudeSession.IsBackground.
+            var entrypoint = node["entrypoint"]?.GetValue<string>();
+
             // Remote Control marker: Claude Code adds a "bridgeSessionId" to the session file only
             // while the session is connected to claude.ai/the mobile app via /remote-control. There is
             // no other on-disk signal (the session URL/QR and client count never touch disk), so this
@@ -567,7 +572,8 @@ internal sealed class SessionMonitor : IDisposable
                 tasks,
                 burnRate,
                 awaitingSince,
-                gitStats
+                gitStats,
+                entrypoint
             );
 
             if (status == SessionStatus.NeedsAttention

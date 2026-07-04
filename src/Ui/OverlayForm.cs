@@ -22,10 +22,12 @@ internal sealed class OverlayForm : Form, IDenseHost
     private const int MetricsBarWidth = 28;  // width reserved for a session row's CPU/RAM mini-bars
     private const int RowHeight        = 46;
     private const int SubRowHeight      = 24;
+    private const int SectionRowHeight  = 26;  // the collapsible "Autonomous" section-header row
     private const int SubIndent         = 22;
     private const int HorizPad          = 12;
     private const int Corner            = 10;
     private const int RcIconWidth       = 14;  // width reserved for the remote-control glyph in a row
+    private const int BotIconWidth      = 16;  // width reserved for the background / SDK-session robot glyph
     private const int MailIconWidth     = 16;  // width reserved for the external-notify (mail) glyph
     private const int ArtifactIconWidth = 16;  // width reserved for the clickable artifact glyph in a row
     private const int ThermoIconWidth   = 12;  // width reserved for the context-pressure thermometer
@@ -55,6 +57,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private static readonly Color RowHoverColor  = Color.FromArgb(25,  25,  38);
     private static readonly Color SubAgentColor  = Color.FromArgb(168, 85,  247);
     private static readonly Color RemoteColor    = Color.FromArgb(96,  165, 250);
+    private static readonly Color BotColor       = Color.FromArgb(148, 163, 184);  // slate — the background / SDK-session robot glyph
     private static readonly Color MailColor      = Color.FromArgb(94,  234, 212);
     private static readonly Color ArtifactColor  = Color.FromArgb(251, 191, 36);   // amber — the clickable artifact glyph
     private static readonly Color WarnColor      = Color.FromArgb(245, 158, 11);   // deep amber — the "possibly stuck" warning glyph
@@ -68,15 +71,22 @@ internal sealed class OverlayForm : Form, IDenseHost
 
     // ── State ─────────────────────────────────────────────────────────────────
     // A flat render list of parent-session rows interleaved with their running sub-agent
-    // child rows, in draw order. Built from the sessions on each update.
-    private readonly record struct DisplayRow(ClaudeSession Session, SubAgent? Sub)
+    // child rows, in draw order. Built from the sessions on each update. One special row — the
+    // collapsible "Autonomous" section header — carries no session, only a count; it separates the
+    // interactive sessions above from the background / SDK-driven ones below.
+    private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1)
     {
         public bool IsSubAgent => Sub != null;
+        // The "Autonomous" divider row: no session, just a count of the background sessions it groups.
+        public bool IsSectionHeader => SectionCount >= 0;
     }
 
     private IReadOnlyList<ClaudeSession> _sessions = [];
     private List<DisplayRow> _rows = [];
     private bool  _expanded = true;
+    // Whether the "Autonomous" section (background / SDK-driven sessions) is expanded. Collapsed by
+    // default so background runs stay tucked under a single count until the user opens them.
+    private bool  _autonomousExpanded;
     private bool  _dragging;
     private Point _dragStartScreen;
     private Point _formStartLoc;
@@ -412,22 +422,35 @@ internal sealed class OverlayForm : Form, IDenseHost
     {
         _sessions = sessions;
 
+        // Interactive (terminal) sessions render at the top; background / SDK-driven ones are grouped
+        // below under the collapsible "Autonomous" section. Each partition is sorted by display name.
+        var interactive = sessions
+            .Where(s => !s.IsBackground)
+            .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase);
+        var background = sessions
+            .Where(s => s.IsBackground)
+            .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         var rows = new List<DisplayRow>();
-        foreach (var session in sessions.OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase))
+        foreach (var session in interactive)
+            AddSessionRows(rows, session);
+
+        // The "Autonomous" section: a single count-bearing header row, and — only while expanded — the
+        // background session rows beneath it. Omitted entirely when there are no background sessions.
+        if (background.Count > 0)
         {
-            rows.Add(new DisplayRow(session, null));
-            // Teammates (the persistent roster) lead, grouped and sorted by name so they read as a team;
-            // transient sub-agents follow. Working teammates sort above idle ones within the roster.
-            var ordered = session.SubAgents
-                // When on, drop idle teammates from the roster — only working ones are shown. Transient
-                // sub-agents are already working by definition, so this only ever hides idle teammates.
-                .Where(s => !_hideInactiveTeamMembers || !(s.IsTeammate && s.IsIdle))
-                .OrderByDescending(s => s.IsTeammate)
-                .ThenBy(s => s.IsTeammate && s.IsIdle)
-                .ThenBy(s => s.Name ?? s.Description, StringComparer.OrdinalIgnoreCase);
-            foreach (var sub in ordered)
-                rows.Add(new DisplayRow(session, sub));
+            rows.Add(new DisplayRow(null, null, background.Count));
+            if (_autonomousExpanded)
+                foreach (var session in background)
+                    AddSessionRows(rows, session);
         }
+        else
+        {
+            // No autonomous sessions to expand — don't leave the flag stuck open for the next batch.
+            _autonomousExpanded = false;
+        }
+
         _rows = rows;
 
         // Auto-collapse when all sessions disappear
@@ -445,6 +468,24 @@ internal sealed class OverlayForm : Form, IDenseHost
         RelayoutWindow();
         UpdateTickTimer();
         Invalidate();
+    }
+
+    // Appends a session's row plus its running sub-agent / teammate child rows to the render list, in
+    // draw order. Shared by the interactive list and the "Autonomous" section so both lay out identically.
+    private void AddSessionRows(List<DisplayRow> rows, ClaudeSession session)
+    {
+        rows.Add(new DisplayRow(session, null));
+        // Teammates (the persistent roster) lead, grouped and sorted by name so they read as a team;
+        // transient sub-agents follow. Working teammates sort above idle ones within the roster.
+        var ordered = session.SubAgents
+            // When on, drop idle teammates from the roster — only working ones are shown. Transient
+            // sub-agents are already working by definition, so this only ever hides idle teammates.
+            .Where(s => !_hideInactiveTeamMembers || !(s.IsTeammate && s.IsIdle))
+            .OrderByDescending(s => s.IsTeammate)
+            .ThenBy(s => s.IsTeammate && s.IsIdle)
+            .ThenBy(s => s.Name ?? s.Description, StringComparer.OrdinalIgnoreCase);
+        foreach (var sub in ordered)
+            rows.Add(new DisplayRow(session, sub));
     }
 
     // Latest account-wide rate-limit usage, rendered as the two bars under the banner.
@@ -808,7 +849,8 @@ internal sealed class OverlayForm : Form, IDenseHost
 
     // ── Layout ────────────────────────────────────────────────────────────────
     // Pixel height of a single render row (sub-agent rows are shorter than session rows).
-    private static int HeightOf(DisplayRow row) => row.IsSubAgent ? SubRowHeight : RowHeight;
+    private static int HeightOf(DisplayRow row) =>
+        row.IsSectionHeader ? SectionRowHeight : row.IsSubAgent ? SubRowHeight : RowHeight;
 
     // Y offset (from the top of the form) of the row at the given index.
     private int RowTop(int index)
@@ -1251,6 +1293,39 @@ internal sealed class OverlayForm : Form, IDenseHost
         g.SmoothingMode = oldSmoothing;
     }
 
+    // The background-session indicator: a little robot head — a rounded square face with two dot eyes
+    // and a short antenna — drawn when a session is SDK-driven rather than an interactive CLI session
+    // (see ClaudeSession.IsBackground). "No human at the keyboard" reads clearly as a bot at row size.
+    // Pure GDI so it themes and scales like the other row glyphs. x is the left edge, midY the centre.
+    private static void DrawBotIcon(Graphics g, int x, int midY)
+    {
+        var oldSmoothing = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        using var pen   = new Pen(BotColor, 1.3f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        using var brush = new SolidBrush(BotColor);
+
+        const int w = 11, h = 9;
+        int left = x;
+        int top  = midY - h / 2 + 1;                             // +1 leaves room for the antenna above
+
+        // Antenna: a short stalk rising from the head's top-centre, capped with a dot.
+        int cx = left + w / 2;
+        g.DrawLine(pen, cx, top - 3, cx, top);
+        g.FillEllipse(brush, cx - 1.5f, top - 5f, 3f, 3f);
+
+        // Head: a rounded square face.
+        var face = new Rectangle(left, top, w, h);
+        using (var path = PaintKit.RoundedRect(face, 2))
+            g.DrawPath(pen, path);
+
+        // Two dot eyes.
+        g.FillEllipse(brush, left + 2.5f,     top + 3f, 2f, 2f);
+        g.FillEllipse(brush, left + w - 4.5f, top + 3f, 2f, 2f);
+
+        g.SmoothingMode = oldSmoothing;
+    }
+
     private static void DrawMailIcon(Graphics g, int x, int midY)
     {
         var oldSmoothing = g.SmoothingMode;
@@ -1487,10 +1562,66 @@ internal sealed class OverlayForm : Form, IDenseHost
 
     private void DrawRow(Graphics g, int rowIdx)
     {
-        if (_rows[rowIdx].IsSubAgent)
+        if (_rows[rowIdx].IsSectionHeader)
+            DrawSectionHeaderRow(g, rowIdx);
+        else if (_rows[rowIdx].IsSubAgent)
             DrawSubAgentRow(g, rowIdx);
         else
             DrawSessionRow(g, rowIdx);
+    }
+
+    // The "Autonomous" section divider: a chevron (collapsed/expanded), the label, a count badge, and a
+    // hairline rule running to the right edge. Clicking anywhere on the row toggles the section (see
+    // OnMouseUp). Styled from the muted palette so it reads as a quiet grouping, not another session.
+    private void DrawSectionHeaderRow(Graphics g, int rowIdx)
+    {
+        var row  = _rows[rowIdx];
+        int top  = RowTop(rowIdx);
+        int midY = top + SectionRowHeight / 2;
+
+        if (rowIdx == _hoveredRow)
+        {
+            using var hoverBrush = new SolidBrush(RowHoverColor);
+            g.FillRectangle(hoverBrush, 1, top, ClientSize.Width - 2, SectionRowHeight);
+        }
+
+        using var labelFont = new Font("Segoe UI", 7.5f, FontStyle.Regular, GraphicsUnit.Point);
+        using var chevFont  = new Font("Segoe UI", 6.5f, GraphicsUnit.Point);
+        using var muted     = new SolidBrush(MutedColor);
+
+        // Collapse chevron: ▸ when collapsed, ▾ when expanded — matches the affordance users know.
+        string chevron = _autonomousExpanded ? "▾" : "▸";
+        var chSz = g.MeasureString(chevron, chevFont);
+        int x = HorizPad;
+        g.DrawString(chevron, chevFont, muted, x, midY - chSz.Height / 2);
+        x += (int)chSz.Width + 4;
+
+        // A small robot glyph echoes the per-row marker so the section reads as "the automated ones".
+        DrawBotIcon(g, x, midY);
+        x += BotIconWidth;
+
+        const string label = "Autonomous";
+        var labelSz = g.MeasureString(label, labelFont);
+        g.DrawString(label, labelFont, muted, x, midY - labelSz.Height / 2);
+        x += (int)labelSz.Width + 6;
+
+        // Count badge: a dim pill giving the number of grouped sessions, so the collapsed row still
+        // tells you how many autonomous runs are hiding beneath it.
+        string count = row.SectionCount.ToString();
+        var countSz  = g.MeasureString(count, labelFont);
+        int badgeW   = (int)countSz.Width + 10;
+        int badgeH   = (int)labelSz.Height + 2;
+        var badge    = new Rectangle(x, midY - badgeH / 2, badgeW, badgeH);
+        using (var badgeBrush = new SolidBrush(Color.FromArgb(38, 38, 52)))
+        using (var badgePath  = PaintKit.RoundedRect(badge, badgeH / 2))
+            g.FillPath(badgeBrush, badgePath);
+        g.DrawString(count, labelFont, muted, x + 5, midY - countSz.Height / 2);
+        x += badgeW + 8;
+
+        // Hairline rule filling the rest of the row, so the divider reads as a section break.
+        if (x < ClientSize.Width - HorizPad)
+            using (var pen = new Pen(SepColor, 1f))
+                g.DrawLine(pen, x, midY, ClientSize.Width - HorizPad, midY);
     }
 
     private void DrawSubAgentRow(Graphics g, int rowIdx)
@@ -1637,7 +1768,7 @@ internal sealed class OverlayForm : Form, IDenseHost
 
     private void DrawSessionRow(Graphics g, int rowIdx)
     {
-        var session = _rows[rowIdx].Session;
+        var session = _rows[rowIdx].Session!;
         int top     = RowTop(rowIdx);
         int midY    = top + RowHeight / 2;
 
@@ -1714,6 +1845,8 @@ internal sealed class OverlayForm : Form, IDenseHost
         int mailWidth    = mail ? MailIconWidth : 0;
         int badgeWidth   = session.Mode != PermissionMode.Normal && _showModeBadges ? 16 : 0;
         int rcWidth      = session.RemoteControlled ? RcIconWidth : 0;
+        bool isBackground= session.IsBackground;
+        int botWidth     = isBackground ? BotIconWidth : 0;
         bool party       = ConfettiArmed(session);
         int partyWidth   = party ? PartyIconWidth : 0;
         bool stuck       = _showStuckWarnings && session.IsStuck;
@@ -1752,7 +1885,7 @@ internal sealed class OverlayForm : Form, IDenseHost
         const int GitGap = 4;                                    // between the +added and -deleted halves
         int gitWidth     = showGit ? (int)gitAddSz.Width + GitGap + (int)gitDelSz.Width + 8 : 0;
         var statusSz     = g.MeasureString(statusText, statusFont);
-        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - partyWidth - mailWidth - artWidth - warnWidth - thermoWidth - taskWidth - metricsWidth - burnWidth - gitWidth;
+        int nameMaxWidth = ClientSize.Width - HorizPad * 3 - 8 - (int)statusSz.Width - badgeWidth - rcWidth - botWidth - partyWidth - mailWidth - artWidth - warnWidth - thermoWidth - taskWidth - metricsWidth - burnWidth - gitWidth;
         var nameTrunc    = TruncateString(g, session.DisplayName, nameFont, nameMaxWidth);
         var nameSz       = g.MeasureString(nameTrunc, nameFont);
 
@@ -1772,8 +1905,10 @@ internal sealed class OverlayForm : Form, IDenseHost
             DrawRemoteIcon(g, HorizPad + 16 + warnWidth + artWidth + mailWidth, nameMidY);
         if (party)
             DrawPartyIcon(g, HorizPad + 14 + warnWidth + artWidth + mailWidth + rcWidth, nameMidY);
+        if (isBackground)
+            DrawBotIcon(g, HorizPad + 14 + warnWidth + artWidth + mailWidth + rcWidth + partyWidth, nameMidY);
 
-        int nameX = HorizPad + 14 + warnWidth + artWidth + mailWidth + rcWidth + partyWidth;
+        int nameX = HorizPad + 14 + warnWidth + artWidth + mailWidth + rcWidth + partyWidth + botWidth;
         g.DrawString(nameTrunc, nameFont, fgBrush, nameX, nameMidY - nameSz.Height / 2);
 
         // Unstaged git line churn, immediately right of the name: "+added" in green, "-deleted" in red,
@@ -2194,14 +2329,20 @@ internal sealed class OverlayForm : Form, IDenseHost
             else
             {
                 int row = HitTestRow(e.Location);
-                if (row >= 0)
+                if (row >= 0 && _rows[row].IsSectionHeader)
+                {
+                    // The "Autonomous" divider: toggle the section open/closed and relayout.
+                    _autonomousExpanded = !_autonomousExpanded;
+                    UpdateSessions(_sessions);
+                }
+                else if (row >= 0)
                 {
                     // Sub-agent rows resolve to their parent session — the sub-agent runs in the
                     // parent's process, so focusing means focusing the parent terminal.
-                    var pid = _rows[row].Session.Pid;
+                    var pid = _rows[row].Session!.Pid;
                     SessionFocused?.Invoke(pid);
                     if (int.TryParse(pid, out int pidInt))
-                        NativeMethods.FocusTerminalForProcess(pidInt, _rows[row].Session.ProjectName);
+                        NativeMethods.FocusTerminalForProcess(pidInt, _rows[row].Session!.ProjectName);
                 }
                 else if (HitTestQuickLink(e.Location) is var ql && ql >= 0)
                 {
@@ -2287,7 +2428,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private void ShowThermoTooltip(int rowIdx)
     {
         if (rowIdx < 0 || rowIdx >= _rows.Count) return;
-        var session = _rows[rowIdx].Session;
+        var session = _rows[rowIdx].Session!;
         float fill = session.ContextFill ?? 0f;
         int pct = (int)Math.Round(fill * 100f);
         // Reconstruct the token count from the fill and the resolved window (fill = used / window).
@@ -2324,7 +2465,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private void ShowWarnTooltip(int rowIdx)
     {
         if (rowIdx < 0 || rowIdx >= _rows.Count) return;
-        if (_rows[rowIdx].Session.Stuck is not { } stuck) return;
+        if (_rows[rowIdx].Session!.Stuck is not { } stuck) return;
 
         // Anchor just below the glyph; HintTooltipForm clamps it onto the screen.
         var anchor = PointToScreen(new Point(_warnRects[rowIdx].Left, _warnRects[rowIdx].Bottom + 4));
@@ -2350,7 +2491,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private void ShowTaskTooltip(int rowIdx)
     {
         if (rowIdx < 0 || rowIdx >= _rows.Count) return;
-        var tasks = _rows[rowIdx].Session.Tasks;
+        var tasks = _rows[rowIdx].Session!.Tasks;
         if (tasks.Count == 0) return;
 
         // One line per task, prefixed by a status glyph: ✓ done, ▸ in progress, ○ pending. The active
@@ -2397,7 +2538,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     private void ShowMetricsTooltip(int rowIdx)
     {
         if (rowIdx < 0 || rowIdx >= _rows.Count) return;
-        if (!_sessionMetrics.TryGetValue(_rows[rowIdx].Session.Pid, out var m)) return;
+        if (!_sessionMetrics.TryGetValue(_rows[rowIdx].Session!.Pid, out var m)) return;
 
         // "CPU 34%  ·  RAM 512 MB" — plus the process count when the tree was rolled up (subprocess
         // metrics on), which is what makes the number more than just the bare claude process.
@@ -2455,11 +2596,11 @@ internal sealed class OverlayForm : Form, IDenseHost
     private Rectangle ArtifactIconRect(int rowIdx)
     {
         var row = _rows[rowIdx];
-        if (row.IsSubAgent || !_showArtifacts || !row.Session.HasArtifacts)
+        if (row.IsSectionHeader || row.IsSubAgent || !_showArtifacts || !row.Session!.HasArtifacts)
             return Rectangle.Empty;
 
         int top  = RowTop(rowIdx);
-        int midY = NameMidY(row.Session, top);
+        int midY = NameMidY(row.Session!, top);
         return new Rectangle(HorizPad + 12, midY - 9, ArtifactIconWidth, 18);
     }
 
@@ -2478,7 +2619,7 @@ internal sealed class OverlayForm : Form, IDenseHost
     // several. No-op if the row somehow has none.
     private void OpenArtifactsForRow(int rowIdx)
     {
-        var artifacts = _rows[rowIdx].Session.Artifacts;
+        var artifacts = _rows[rowIdx].Session!.Artifacts;
         if (artifacts.Count == 0)
             return;
 
@@ -2521,24 +2662,26 @@ internal sealed class OverlayForm : Form, IDenseHost
         var items = new List<PopoverItem>();
 
         int row = HitTestRow(clientPt);
+        // The "Autonomous" divider carries no session, so none of the per-session items apply to it.
+        bool sessionRow = row >= 0 && !_rows[row].IsSectionHeader;
 
         // View history — on any session row (sub-agent rows resolve to their parent session, which
         // owns the transcript). Listed first so it's the primary per-session action.
-        if (row >= 0)
+        if (sessionRow)
         {
-            var historySession = _rows[row].Session;
+            var historySession = _rows[row].Session!;
             items.Add(("View history", () => HistoryRequested?.Invoke(historySession.SessionId)));
         }
 
-        if (row >= 0)
+        if (sessionRow)
         {
-            var idSession = _rows[row].Session;
+            var idSession = _rows[row].Session!;
             items.Add(("Copy session ID", () => Clipboard.SetText(idSession.SessionId)));
         }
 
-        if (row >= 0)
+        if (sessionRow)
         {
-            var txSession = _rows[row].Session;
+            var txSession = _rows[row].Session!;
             items.Add(("Open transcript in VS Code", () =>
             {
                 var path = TranscriptLocator.Resolve(txSession.SessionId, txSession.Cwd);
@@ -2547,14 +2690,14 @@ internal sealed class OverlayForm : Form, IDenseHost
             }));
         }
 
-        if (row >= 0 && _rows[row].Session is { RemoteControlled: true } rc)
+        if (sessionRow && _rows[row].Session is { RemoteControlled: true } rc)
             items.Add(("Show QR code", () => ShowQrCode(rc)));
 
         // Per-session external-notify toggle — only on a real session row, and only while the feature
         // is switched on globally. Sub-agent rows share the parent session, so skip them.
-        if (row >= 0 && !_rows[row].IsSubAgent && _externalNotifyAvailable)
+        if (sessionRow && !_rows[row].IsSubAgent && _externalNotifyAvailable)
         {
-            var s = _rows[row].Session;
+            var s = _rows[row].Session!;
             string label = ExternalNotifyEnabled(s)
                 ? "Disable external notifications"
                 : "Enable external notifications";
@@ -2563,9 +2706,9 @@ internal sealed class OverlayForm : Form, IDenseHost
 
         // Confetti finish (experimental): arm/disarm a one-shot celebration for when this session next
         // finishes. Real session rows only, and only while the feature is switched on globally.
-        if (row >= 0 && !_rows[row].IsSubAgent && _confettiAvailable)
+        if (sessionRow && !_rows[row].IsSubAgent && _confettiAvailable)
         {
-            var s = _rows[row].Session;
+            var s = _rows[row].Session!;
             string label = ConfettiArmed(s) ? "Cancel confetti finish" : "Confetti finish";
             items.Add(new PopoverItem(label, () => ToggleConfetti(s.SessionId), DrawPartyIcon));
         }

@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.1.27] - 2026-07-04
+
+### Added
+
+- Autonomous section — background (SDK-driven) sessions collapse under one counted header, below the real ones.
+- A little robot marks each background session (nobody's at the keyboard).
+
+---
+
 ## [v0.1.26] - 2026-07-02
 
 ### Added

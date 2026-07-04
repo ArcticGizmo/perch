@@ -104,7 +104,8 @@ public record ClaudeSession(
     IReadOnlyList<TaskItem>? Tasks = null,
     double? BurnRate = null,
     DateTime? AwaitingSince = null,
-    GitLineStats? GitStats = null
+    GitLineStats? GitStats = null,
+    string? Entrypoint = null
 )
 {
     /// <summary>Running sub-agents under this session; never null.</summary>
@@ -176,6 +177,24 @@ public record ClaudeSession(
     /// encoded into the QR code (https://claude.ai/code/{BridgeSessionId}).
     /// </summary>
     public bool RemoteControlled => !string.IsNullOrEmpty(BridgeSessionId);
+
+    /// <summary>
+    /// How the session was launched, from the session file's <c>entrypoint</c> field: <c>"cli"</c> for
+    /// an ordinary interactive terminal session, or <c>"sdk-ts"</c>/<c>"sdk-py"</c> for one driven by
+    /// the Claude Agent SDK (a background / programmatic run). Null when the field is absent.
+    /// </summary>
+    public string? Entrypoint { get; init; } = string.IsNullOrWhiteSpace(Entrypoint) ? null : Entrypoint.Trim();
+
+    /// <summary>
+    /// True when this session is a background / SDK-driven run rather than an interactive terminal
+    /// session — i.e. its <see cref="Entrypoint"/> is anything other than <c>"cli"</c> (typically
+    /// <c>"sdk-ts"</c> or <c>"sdk-py"</c>). Such sessions have no human at the keyboard, so the overlay
+    /// marks them with a distinct glyph. A missing entrypoint is treated as interactive (the safe
+    /// default), so only an explicit non-cli value flips this on.
+    /// </summary>
+    public bool IsBackground =>
+        !string.IsNullOrEmpty(Entrypoint)
+        && !string.Equals(Entrypoint, "cli", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// True when this session has opted in to external (ntfy) notifications — i.e. its session file
