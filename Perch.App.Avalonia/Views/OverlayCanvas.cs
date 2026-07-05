@@ -26,7 +26,7 @@ namespace Perch.Avalonia.Views;
 /// attention chase-border (4.14); the auto-close countdown (4.15); window drag/behaviors (4.16); and the
 /// display-toggle gates driven from settings (4.17).
 /// </summary>
-public sealed class OverlayCanvas : Control
+public sealed class OverlayCanvas : Control, IDenseHost
 {
     // ── Layout (mirrors OverlayForm's constants) ──────────────────────────────
     private const double FormWidth        = 280;
@@ -105,10 +105,97 @@ public sealed class OverlayCanvas : Control
     // Brand mark (the app icon), loaded once.
     private static readonly Bitmap? Brand = LoadBrand();
 
-    public OverlayCanvas() =>
+    // Owns dense mode (the slim edge strip that expands on hover) and its geometry/painting.
+    private readonly DenseController _denseCtl;
+
+    public OverlayCanvas()
+    {
         // The brand mark and quick-link icons are 256px sources drawn at ~16–18px; the default sampler
         // aliases them badly. HighQuality makes Skia mipmap the downscale so they stay crisp at any DPI.
         RenderOptions.SetBitmapInterpolationMode(this, BitmapInterpolationMode.HighQuality);
+        _denseCtl = new DenseController(this, RunningColor, AwaitingColor, AttentionColor, IdleColor);
+    }
+
+    // Whether the full session body is currently on screen: the floating expand state, or — in dense
+    // mode — whether the hover popup is open. Everything panel-related keys off this, not raw _expanded.
+    private bool ShowFullPanel => _denseCtl.IsDense ? _denseCtl.IsOpen : _expanded;
+
+    // ── Dense mode: public surface for the app (tray / hotkey / screen changes) ──
+    public bool IsDense => _denseCtl.IsDense;
+    public void ToggleDense() => _denseCtl.Toggle();
+    public void OnScreensChanged() => _denseCtl.OnScreensChanged();
+    public void DisposeDense() => _denseCtl.Dispose();
+
+    // ── IDenseHost (geometry lives on the window) ──
+    // The owning window, set by LiveOverlayWindow. VisualRoot resolves to an internal TopLevelHost (not
+    // the Window), so we can't reach Position / Screens / BeginMoveDrag through it — hold a direct ref.
+    internal Window? OwnerWindow { get; set; }
+    private Window? HostWindow => OwnerWindow;
+
+    Screens? IDenseHost.Screens => HostWindow?.Screens;
+
+    PixelPoint IDenseHost.WindowPosition
+    {
+        get => HostWindow?.Position ?? default;
+        set { if (HostWindow is { } w) w.Position = value; }
+    }
+
+    double IDenseHost.WindowScaling => HostWindow?.RenderScaling ?? 1.0;
+
+    void IDenseHost.PlaceWindow(PixelPoint position, double dipWidth, double dipHeight)
+    {
+        if (HostWindow is not { } w) return;
+        w.SizeToContent = SizeToContent.Manual;
+        w.Width = dipWidth;
+        w.Height = dipHeight;
+        w.Position = position;
+    }
+
+    void IDenseHost.RestoreFloating(PixelPoint position)
+    {
+        if (HostWindow is not { } w) return;
+        w.Width = FormWidth;
+        w.SizeToContent = SizeToContent.Height; // recomputes height from content, keeps the 280 width
+        w.Position = position;
+    }
+
+    double IDenseHost.FullPanelWidthDip => FormWidth;
+    double IDenseHost.FullPanelHeightDip => FullPanelHeight();
+    IReadOnlyList<ClaudeSession> IDenseHost.Sessions => _sessions;
+    Bitmap? IDenseHost.Icon => Brand;
+    void IDenseHost.RelayoutWindow() => RelayoutWindow();
+    void IDenseHost.UpdateTickTimer() => UpdateTickTimer();
+    void IDenseHost.ClearRowHover() => _hoveredRow = -1;
+    void IDenseHost.HideTooltips() { _dwellTimer?.Stop(); _tooltip?.HideTip(); _tipKind = TipKind.None; _tipRow = -1; }
+    void IDenseHost.Invalidate() { InvalidateMeasure(); InvalidateVisual(); }
+
+    // Owns the window's size/position. Floating auto-sizes to content at a fixed 280 width; in dense mode
+    // the controller docks the strip/popup to its remembered edge and Y. Mirrors OverlayForm.RelayoutWindow.
+    private void RelayoutWindow()
+    {
+        if (HostWindow is not { } w) return;
+        if (_denseCtl.IsDense) _denseCtl.ApplyGeometry();
+        else { w.Width = FormWidth; w.SizeToContent = SizeToContent.Height; }
+        InvalidateMeasure();
+        InvalidateVisual();
+    }
+
+    // Height of the full panel (header + optional strips + all session rows), computed as if expanded —
+    // the size the dense popup and the floating expanded panel both use. Kept in lockstep with Draw's
+    // showRows branch so the measured window height and the painted layout can't drift.
+    private double FullPanelHeight()
+    {
+        double h = HeaderHeight;
+        if (_rows.Count > 0)
+        {
+            if (_showSystemMetrics) h += SysMetricsStripHeight;
+            if (_usageEnabled) h += UsageStripHeight;
+            if (HasQuickLinksRow) h += QuickLinksRowHeight;
+            foreach (var r in _rows) h += HeightOf(r);
+            h += 2;
+        }
+        return h;
+    }
 
     // "Waiting on you" ramp length (minutes to fully red); user-tunable later (SetWaitingTimerRedMinutes).
     private int _waitingTimerRedMinutes = 3;
@@ -535,15 +622,39 @@ public sealed class OverlayCanvas : Control
     private static double HeightOf(DisplayRow row) =>
         row.IsSectionHeader ? SectionRowHeight : row.IsSubAgent ? SubRowHeight : RowHeight;
 
+    // The closed dense strip: the rounded panel + border (or attention chase), then the controller's
+    // icon-and-status-dots strip. Mirrors the OverlayForm.OnPaint closed-strip branch.
+    private double DrawStrip(DrawingContext? ctx, double width)
+    {
+        double h = ctx != null ? Bounds.Height : _denseCtl.StripHeightDip();
+        if (ctx != null)
+        {
+            var pr = new Rect(0.5, 0.5, width - 1, h - 1);
+            if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, Corner); DrawChaseBorder(ctx, pr, AttentionColor); }
+            else OverlayDraw.Panel(ctx, pr, BgBrush, BorderPen, Corner);
+            _denseCtl.PaintStrip(ctx, width);
+        }
+        return h;
+    }
+
     protected override Size MeasureOverride(Size availableSize)
-        => new(FormWidth, Draw(null, FormWidth));
+    {
+        // In dense mode the window's size is set explicitly (SizeToContent off), so the content is
+        // measured to the window client size the controller placed — return that. Floating auto-sizes.
+        if (_denseCtl.IsDense && double.IsFinite(availableSize.Width) && double.IsFinite(availableSize.Height)
+            && availableSize is { Width: > 0, Height: > 0 })
+            return availableSize;
+        return new(FormWidth, Draw(null, FormWidth));
+    }
 
     public override void Render(DrawingContext ctx) => Draw(ctx, Bounds.Width);
 
     // Measure-or-paint: returns the content height; paints only when ctx is non-null.
     private double Draw(DrawingContext? ctx, double width)
     {
-        bool showRows = _expanded && _rows.Count > 0;
+        if (_denseCtl.IsClosedStrip) return DrawStrip(ctx, width);
+
+        bool showRows = ShowFullPanel && _rows.Count > 0;
         bool showSys = showRows && _showSystemMetrics;        // machine CPU/RAM strip, just under the header
         bool showUsage = showRows && _usageEnabled;           // rate-limit bars, below the metrics strip
         bool showQuickLinks = showRows && HasQuickLinksRow;   // app icon strip, below the usage bars
@@ -642,11 +753,13 @@ public sealed class OverlayCanvas : Control
                 DrawStatusPill(ctx, x, midY, idle, IdleColor, IdleColor);
         }
 
-        // Right cluster: dense toggle (drawn; click wiring 4.12) + expand chevron. Update badge is 4.14.
-        DrawSideCollapseIcon(ctx, SideIconRect(width), reversed: false);
+        // Right cluster: the dense toggle glyph + (floating only) the expand chevron. The glyph points
+        // along the docked edge: floating shows the arrow collapsing toward the edge, dense shows it
+        // expanding inward. Clicking it enters dense from floating, or leaves it from the open popup.
+        DrawSideCollapseIcon(ctx, SideIconRect(width), reversed: _denseCtl.IsDense ^ (_denseCtl.Side == DenseSide.Left));
         double clusterLeft = width - HorizPad - IconBoxW;
 
-        if (_sessions.Count > 0)
+        if (!_denseCtl.IsDense && _sessions.Count > 0)
         {
             var chevron = OverlayDraw.Text(_expanded ? "▲" : "▼", 9, MutedBrush);
             double chevX = clusterLeft - IconGap - chevron.Width;
@@ -804,7 +917,7 @@ public sealed class OverlayCanvas : Control
     // Returns the index into _quickLinks under point p, or -1 if none (or the strip isn't shown).
     private int HitTestQuickLink(Point p)
     {
-        if (!(_expanded && _rows.Count > 0 && HasQuickLinksRow)) return -1;
+        if (!(ShowFullPanel && _rows.Count > 0 && HasQuickLinksRow)) return -1;
         double rowTop = QuickLinksTop;
         if (p.Y < rowTop || p.Y >= rowTop + QuickLinksRowHeight) return -1;
 
@@ -824,7 +937,7 @@ public sealed class OverlayCanvas : Control
     // Returns the display-row index under p, or -1 (only while the panel is expanded with rows).
     private int HitTestRow(Point p)
     {
-        if (!(_expanded && _rows.Count > 0) || p.Y < RowsTop) return -1;
+        if (!(ShowFullPanel && _rows.Count > 0) || p.Y < RowsTop) return -1;
         double y = RowsTop;
         for (int i = 0; i < _rows.Count; i++)
         {
@@ -1389,12 +1502,35 @@ public sealed class OverlayCanvas : Control
     private Point _headerPressPoint;
     private PointerPressedEventArgs? _headerPressArgs;
 
+    // Dense-mode drag is manual (constrained to the docked edge, vertical, with drop lanes) — the OS move
+    // loop can't do that, so it can't use BeginMoveDrag. The closed strip drags from anywhere; the open
+    // popup drags from its header.
+    private bool _denseArmed;
+    private bool _denseWasDrag;
+    private PixelPoint _denseDragStartScreen;
+    private int _denseStartY;
+
     /// <summary>Raised once when a drag finishes, so the app can follow with the screen-edge glow.</summary>
     public event Action? DragCompleted;
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         var p = e.GetPosition(this);
+
+        // Dense drag: manual, constrained to the docked edge (vertical), with drop lanes for re-docking.
+        if (_denseArmed)
+        {
+            var cur = this.PointToScreen(p);
+            int dx = cur.X - _denseDragStartScreen.X, dy = cur.Y - _denseDragStartScreen.Y;
+            if (!_denseWasDrag && (Math.Abs(dx) > 4 || Math.Abs(dy) > 4))
+            {
+                _denseWasDrag = true;
+                _denseCtl.ShowDropZones();
+            }
+            if (_denseWasDrag) _denseCtl.DragVertical(_denseStartY + dy, cur);
+            base.OnPointerMoved(e);
+            return;
+        }
 
         // Header press waiting to become a drag: once past the threshold, hand off to the OS move loop.
         // A borderless window can't use the title bar, so BeginMoveDrag is the cross-platform way to move
@@ -1406,7 +1542,7 @@ public sealed class OverlayCanvas : Control
                 _headerDragged = true;
                 _headerArmed = false;
                 e.Pointer.Capture(null); // release our capture so the OS can drive the move
-                if (VisualRoot is Window w && _headerPressArgs is { } pa)
+                if (OwnerWindow is { } w && _headerPressArgs is { } pa)
                 {
                     w.BeginMoveDrag(pa);     // OS-native move (blocks on Windows until the button is released)
                     DragCompleted?.Invoke(); // re-home the screen-edge glow onto the overlay's new monitor
@@ -1471,7 +1607,7 @@ public sealed class OverlayCanvas : Control
     }
 
     private bool InUsageStrip(Point p) =>
-        _expanded && _rows.Count > 0 && _usageEnabled
+        ShowFullPanel && _rows.Count > 0 && _usageEnabled
         && p.Y >= UsageStripTop && p.Y < UsageStripTop + UsageStripHeight;
 
     protected override void OnPointerExited(PointerEventArgs e)
@@ -1484,6 +1620,12 @@ public sealed class OverlayCanvas : Control
         _dwellTimer?.Stop();
         _tooltip?.HideTip();
         if (changed) InvalidateVisual();
+
+        // Leaving the open dense popup starts the countdown to collapse it back to the strip — but not
+        // mid-drag, where the pointer legitimately roams to another monitor's drop lane.
+        if (_denseCtl.IsDense && _denseCtl.IsOpen && !_denseWasDrag)
+            _denseCtl.SchedulePopupClose();
+
         base.OnPointerExited(e);
     }
 
@@ -1503,11 +1645,29 @@ public sealed class OverlayCanvas : Control
         _headerArmed = false;
         _headerDragged = false;
         _headerPressArgs = null;
+        _denseArmed = false;
+        _denseWasDrag = false;
 
-        // The header is the drag handle: arm a potential OS move (started in OnPointerMoved once the
-        // pointer actually moves). Keep the press args — BeginMoveDrag needs them. A press that never
-        // moves falls through to RouteClick on release (header toggle).
-        if (p.Y < HeaderHeight && VisualRoot is Window)
+        if (_denseCtl.IsDense)
+        {
+            // The closed strip is a drag handle anywhere; the open popup drags from its header. Dense drag
+            // is manual (see OnPointerMoved) — arm it here, recording the window's start Y in physical px.
+            if ((_denseCtl.IsClosedStrip || p.Y < HeaderHeight) && HostWindow is { } dw)
+            {
+                _denseArmed = true;
+                _denseDragStartScreen = this.PointToScreen(p);
+                _denseStartY = dw.Position.Y;
+            }
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            base.OnPointerPressed(e);
+            return;
+        }
+
+        // Floating: the header is the drag handle — arm a potential OS move (started in OnPointerMoved
+        // once the pointer actually moves). Keep the press args — BeginMoveDrag needs them. A press that
+        // never moves falls through to RouteClick on release (header toggle).
+        if (p.Y < HeaderHeight && OwnerWindow is not null)
         {
             _headerArmed = true;
             _headerPressPoint = p;
@@ -1519,11 +1679,34 @@ public sealed class OverlayCanvas : Control
         base.OnPointerPressed(e);
     }
 
+    // Entering the overlay while dense pops the full panel open (any re-entry also cancels a pending
+    // auto-close inside the controller).
+    protected override void OnPointerEntered(PointerEventArgs e)
+    {
+        if (_denseCtl.IsDense) _denseCtl.OnPointerEntered();
+        base.OnPointerEntered(e);
+    }
+
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         if (!_leftPressed) { base.OnPointerReleased(e); return; }
         _leftPressed = false;
         e.Pointer.Capture(null);
+
+        // Dense drag: released over another monitor's drop lane re-pins the strip there; a plain click
+        // (no move) falls through to RouteClick (the dense toggle glyph, or rows in the open popup).
+        if (_denseArmed)
+        {
+            bool wasDrag = _denseWasDrag;
+            _denseArmed = false;
+            _denseWasDrag = false;
+            if (wasDrag) _denseCtl.PinToActiveDropZone(this.PointToScreen(e.GetPosition(this)));
+            _denseCtl.HideDropZones();
+            if (wasDrag) DragCompleted?.Invoke();
+            else RouteClick(e.GetPosition(this));
+            base.OnPointerReleased(e);
+            return;
+        }
 
         bool dragged = _headerDragged;
         _headerArmed = false;
@@ -1540,6 +1723,14 @@ public sealed class OverlayCanvas : Control
     // expand/collapse). Mirrors the WinForms MouseUp click chain.
     private void RouteClick(Point p)
     {
+        // The dense toggle glyph in the header (visible whenever the header shows, i.e. not the closed
+        // strip): enter dense from floating, or leave it from the open popup.
+        if (!_denseCtl.IsClosedStrip && p.Y < HeaderHeight && SideIconRect(Bounds.Width).Contains(p))
+        {
+            _denseCtl.Toggle();
+            return;
+        }
+
         int art = HitTestArtifactIcon(p);
         if (art >= 0 && _rows[art].Session is { } artSession)
         {
@@ -1573,9 +1764,9 @@ public sealed class OverlayCanvas : Control
             return;
         }
 
-        if (p.Y < HeaderHeight && _sessions.Count > 0)
+        if (!_denseCtl.IsDense && p.Y < HeaderHeight && _sessions.Count > 0)
         {
-            // Header click toggles expand/collapse; SizeToContent resizes the window to match.
+            // Header click toggles expand/collapse (floating only); SizeToContent resizes to match.
             _expanded = !_expanded;
             UpdateTickTimer();
             InvalidateMeasure();
@@ -1623,7 +1814,7 @@ public sealed class OverlayCanvas : Control
 
         // Right-clicking a strip toggles just that strip off (only when it's actually showing); the
         // header menu below can turn either back on.
-        bool showRows = _expanded && _rows.Count > 0;
+        bool showRows = ShowFullPanel && _rows.Count > 0;
         bool overSystemStrip = showRows && _showSystemMetrics && p.Y >= HeaderHeight && p.Y < UsageStripTop;
         if (overSystemStrip)
             items.Add(MenuItem("Hide system metrics", () => SystemMetricsToggleRequested?.Invoke(false)));
@@ -1695,7 +1886,10 @@ public sealed class OverlayCanvas : Control
     /// flash self-stops after ~10s, or as soon as nothing needs attention (see <see cref="Update"/>).</summary>
     public void TriggerAttention()
     {
-        if (!_expanded && _rows.Count > 0)
+        // Surface the session that needs attention: in dense mode pop the hover panel open; floating,
+        // expand if collapsed.
+        if (_denseCtl.IsDense) _denseCtl.OpenPopup();
+        else if (!_expanded && _rows.Count > 0)
         {
             _expanded = true;
             UpdateTickTimer();
@@ -1798,7 +1992,7 @@ public sealed class OverlayCanvas : Control
     // time or a blocked session's "waiting on you" timer, and only while the panel is expanded.
     private void UpdateTickTimer()
     {
-        bool need = _expanded && _sessions.Any(s =>
+        bool need = ShowFullPanel && _sessions.Any(s =>
             s.Status == SessionStatus.Running
             || (_showWaitingTimer && s.Status == SessionStatus.AwaitingInput));
         _tickTimer ??= CreateTickTimer();

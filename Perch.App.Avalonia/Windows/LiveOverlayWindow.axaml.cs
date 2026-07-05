@@ -25,6 +25,7 @@ public partial class LiveOverlayWindow : Window
     {
         InitializeComponent();
         Canvas = canvas;
+        Canvas.OwnerWindow = this; // the canvas reaches Position / Screens / BeginMoveDrag through this
         Content = canvas;
 
         // Borderless, transparent, manually-placed chrome. (In Avalonia 12 the decorations enum is

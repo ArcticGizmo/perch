@@ -54,6 +54,7 @@ public partial class App : Application
                 _usageHost?.Dispose();
                 _metricsHost?.Dispose();
                 _hotkey?.Dispose();
+                _overlay?.Canvas.DisposeDense();
             };
 
             SetUpTray(desktop);
@@ -125,11 +126,15 @@ public partial class App : Application
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
             LoadQuickLinks(settings);
 
-            // Global hotkey (Alt+Shift+W): toggle the overlay's visibility from anywhere. The callback
-            // fires on the hotkey's own thread, so hop to the UI thread. A refused binding is ignored.
+            // Global hotkey (Alt+Shift+W): toggle dense mode from anywhere (dense replaces the old
+            // show/hide). The callback fires on the hotkey's own thread, so hop to the UI thread.
             _hotkey = PlatformServices.CreateGlobalHotkey();
             _hotkey.Register(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 'W',
-                () => Dispatcher.UIThread.Post(ToggleOverlay));
+                () => Dispatcher.UIThread.Post(ToggleDense));
+
+            // Re-dock the dense strip when monitors are added/removed (the controller self-heals to primary).
+            if (_overlay.Screens is { } screens)
+                screens.Changed += (_, _) => _overlay?.Canvas.OnScreensChanged();
         }
         base.OnFrameworkInitializationCompleted();
     }
@@ -348,8 +353,8 @@ public partial class App : Application
     {
         var icon = new WindowIcon(AssetLoader.Open(new Uri("avares://perch-avalonia/Assets/icon.ico")));
 
-        var overlayItem = new NativeMenuItem("Show / hide overlay");
-        overlayItem.Click += (_, _) => ToggleOverlay();
+        var overlayItem = new NativeMenuItem("Toggle dense mode");
+        overlayItem.Click += (_, _) => ToggleDense();
 
         var settingsItem = new NativeMenuItem("Settings…");
         settingsItem.Click += (_, _) => OpenSettings();
@@ -382,17 +387,14 @@ public partial class App : Application
                 exitItem,
             },
         };
-        tray.Clicked += (_, _) => ToggleOverlay();
+        tray.Clicked += (_, _) => ToggleDense();
 
         TrayIcon.SetIcons(this, new TrayIcons { tray });
     }
 
-    private void ToggleOverlay()
-    {
-        if (_overlay is null) return;
-        if (_overlay.IsVisible) _overlay.Hide();
-        else { _overlay.Show(); _overlay.Activate(); }
-    }
+    // Dense mode replaces the old show/hide: the overlay is always on screen, shrinking to a slim
+    // edge strip (that expands on hover) rather than hiding entirely.
+    private void ToggleDense() => _overlay?.Canvas.ToggleDense();
 
     // Lazily create-or-focus the single Settings window instance.
     private void OpenSettings()
