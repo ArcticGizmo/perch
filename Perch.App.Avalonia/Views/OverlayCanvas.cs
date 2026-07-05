@@ -37,6 +37,9 @@ public sealed class OverlayCanvas : Control
     private const double RcIconWidth      = 14;
     private const double MailIconWidth    = 16;
     private const double ModeBadgeWidth   = 16;
+    private const double WarnIconWidth    = 14;
+    private const double ThermoIconWidth  = 12;
+    private const double ArtifactIconWidth = 16;
     private const double RowsTop          = HeaderHeight; // usage/metrics/quick-links strips inserted here later
 
     // Font sizes (px ~= the WinForms point sizes).
@@ -71,6 +74,15 @@ public sealed class OverlayCanvas : Control
     private static readonly IBrush MailBrush      = new SolidColorBrush(MailColor);
     private static readonly Color  RemoteColor    = Color.FromRgb(96, 165, 250);
     private static readonly IBrush RemoteBrush    = new SolidColorBrush(RemoteColor);
+    private static readonly Color  WarnColor      = Color.FromRgb(245, 158, 11);
+    private static readonly IBrush WarnBrush      = new SolidColorBrush(WarnColor);
+    private static readonly IBrush BgFillBrush    = new SolidColorBrush(BgColor);
+    private static readonly IBrush BurnBrush      = new SolidColorBrush(Color.FromRgb(125, 185, 232));
+    private static readonly IBrush GitAddBrush    = new SolidColorBrush(Color.FromRgb(34, 197, 94));
+    private static readonly IBrush GitDelBrush    = new SolidColorBrush(Color.FromRgb(239, 68, 68));
+    private static readonly IBrush RunningBrush   = new SolidColorBrush(RunningColor);
+    private static readonly IBrush ThermoGlassFill = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
+    private static readonly IPen   ThermoOutline  = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
 
     // Brand mark (the app icon), loaded once.
     private static readonly Bitmap? Brand = LoadBrand();
@@ -78,15 +90,31 @@ public sealed class OverlayCanvas : Control
     // "Waiting on you" ramp length (minutes to fully red); user-tunable later (SetWaitingTimerRedMinutes).
     private int _waitingTimerRedMinutes = 3;
 
-    // Display gates (wired to Settings in 4.17).
+    // Display gates + context thresholds (wired to Settings in 4.17; defaults mirror the WinForms app).
     private bool _hideInactiveTeamMembers;
     private bool _showModeBadges = true;
+    private bool _showContextPressure = true;
+    private bool _showContextGreenSegment;
+    private bool _showTaskProgress = true;
+    private bool _showBurnRate = true;
+    private bool _showGitStats = true;
+    private bool _showStuckWarnings = true;
+    private float _ctxYellow = 0.60f, _ctxOrange = 0.75f, _ctxRed = 0.90f;
 
     /// <summary>Show/hide the permission-mode badge on session rows.</summary>
     public void SetShowModeBadges(bool show)
     {
         if (_showModeBadges == show) return;
         _showModeBadges = show;
+        InvalidateVisual();
+    }
+
+    /// <summary>When on, the context thermometer also shows below the yellow threshold (in green), so a
+    /// low-but-known context is visible instead of blank.</summary>
+    public void SetShowContextGreenSegment(bool show)
+    {
+        if (_showContextGreenSegment == show) return;
+        _showContextGreenSegment = show;
         InvalidateVisual();
     }
 
@@ -293,7 +321,10 @@ public sealed class OverlayCanvas : Control
         bool running  = session.Status == SessionStatus.Running;
         bool awaiting = session.Status == SessionStatus.AwaitingInput;
 
-        string? activity = running ? session.Activity : awaiting ? "waiting on you" : null;
+        // While working a checklist, the active task's gerund is more telling than the raw tool phrase.
+        string? activity = running
+            ? (session.CurrentTask?.ActiveForm is { Length: > 0 } af ? af : session.Activity)
+            : awaiting ? "waiting on you" : null;
         string? elapsed  = running ? session.RunningElapsedLabel()
                          : awaiting ? session.AwaitingElapsedLabel() : null;
         bool twoLine = !string.IsNullOrEmpty(activity) || !string.IsNullOrEmpty(elapsed);
@@ -328,19 +359,51 @@ public sealed class OverlayCanvas : Control
 
         double statusW = OverlayDraw.MeasureWidth(statusText, StatusSize);
 
-        // Left-of-name glyph cluster (warn/artifact/party slots are reserved 0-width until 4.6/4.7).
-        const double warnW = 0, artW = 0, partyW = 0;
+        // Left-of-name glyph cluster. (artifact/party slots stay 0-width until 4.7/confetti; metrics
+        // until 4.9.)
+        bool stuck = _showStuckWarnings && session.IsStuck;
+        double warnW = stuck ? WarnIconWidth : 0;
+        const double artW = 0, partyW = 0;
         double mailW = session.ExternalNotify ? MailIconWidth : 0;
         double rcW   = session.RemoteControlled ? RcIconWidth : 0;
         double botW  = session.IsBackground ? BotIconWidth : 0;
 
-        // Right side: the permission-mode badge, just left of the status text.
+        // Right-side cluster (right→left from the status text): thermometer, mode badge, task count,
+        // metrics bars (4.9), burn rate.
         bool showBadge = session.Mode != PermissionMode.Normal && _showModeBadges;
         double badgeW = showBadge ? ModeBadgeWidth : 0;
 
-        double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - botW - mailW;
-        string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
+        float ctxFill = session.ContextFill ?? 0f;
+        bool showThermo = _showContextPressure
+            && (ctxFill >= _ctxYellow || (_showContextGreenSegment && session.ContextFill.HasValue));
+        double thermoW = showThermo ? ThermoIconWidth + 2 : 0;
 
+        bool hasTasks = _showTaskProgress && session.HasTasks;
+        string taskLabel = hasTasks ? $"{session.CompletedTaskCount}/{session.Tasks.Count}" : "";
+        double taskW = hasTasks ? OverlayDraw.MeasureWidth(taskLabel, StatusSize) + 8 : 0;
+
+        const double metricsW = 0; // 4.9
+
+        bool showBurn = _showBurnRate && running && session.BurnRate is > 0;
+        string burnLabel = showBurn ? StatsFormat.Tokens((long)session.BurnRate!.Value) + "/m" : "";
+        double burnW = showBurn ? OverlayDraw.MeasureWidth(burnLabel, StatusSize) + 8 : 0;
+
+        var gitStats = _showGitStats ? session.GitStats : null;
+        bool showGit = gitStats is { IsEmpty: false };
+        string gitAdd = showGit ? $"+{gitStats!.Value.Added}" : "";
+        string gitDel = showGit ? $"-{gitStats!.Value.Deleted}" : "";
+        double gitAddW = showGit ? OverlayDraw.MeasureWidth(gitAdd, StatusSize) : 0;
+        double gitDelW = showGit ? OverlayDraw.MeasureWidth(gitDel, StatusSize) : 0;
+        const double GitGap = 4;
+        double gitW = showGit ? gitAddW + GitGap + gitDelW + 8 : 0;
+
+        double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - botW - partyW - mailW
+                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW;
+        string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
+        double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
+
+        // Left glyphs, in draw order.
+        if (stuck)     DrawWarnIcon(ctx, HorizPad + 14, nameMidY);
         if (mailW > 0) DrawMailIcon(ctx, HorizPad + 14 + warnW + artW, nameMidY);
         if (rcW > 0)   DrawRemoteIcon(ctx, HorizPad + 16 + warnW + artW + mailW, nameMidY);
         if (botW > 0)  DrawBotIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW + partyW, nameMidY);
@@ -348,13 +411,36 @@ public sealed class OverlayCanvas : Control
         double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
+        // Git churn immediately right of the name: "+added" green, "-deleted" red.
+        if (showGit)
+        {
+            double gitX = nameX + nameW + 6;
+            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(gitAdd, StatusSize, GitAddBrush), gitX, nameMidY);
+            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(gitDel, StatusSize, GitDelBrush),
+                gitX + gitAddW + GitGap, nameMidY);
+        }
+
         double statusX = width - HorizPad - statusW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(statusText, StatusSize, statusBrush), statusX, nameMidY);
 
+        if (showThermo)
+            DrawThermoIcon(ctx, ctxFill, statusX - thermoW, nameMidY);
         if (showBadge)
         {
             int alpha = session.Status == SessionStatus.Idle ? 110 : 255;
-            DrawModeBadge(ctx, session.Mode, statusX - badgeW, nameMidY, alpha);
+            DrawModeBadge(ctx, session.Mode, statusX - thermoW - badgeW, nameMidY, alpha);
+        }
+        if (hasTasks)
+        {
+            double taskX = statusX - thermoW - badgeW - taskW;
+            bool allDone = session.CompletedTaskCount == session.Tasks.Count;
+            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(taskLabel, StatusSize, allDone ? RunningBrush : MutedBrush),
+                taskX, nameMidY);
+        }
+        if (showBurn)
+        {
+            double burnX = statusX - thermoW - badgeW - taskW - metricsW - burnW;
+            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(burnLabel, StatusSize, BurnBrush), burnX, nameMidY);
         }
 
         if (twoLine)
@@ -561,6 +647,62 @@ public sealed class OverlayCanvas : Control
             gc.EndFigure(false);
         }
         ctx.DrawGeometry(null, pen, flap);
+    }
+
+    // Stuck-detection warning: an amber triangle with an exclamation mark punched out of the panel bg.
+    private static void DrawWarnIcon(DrawingContext ctx, double x, double midY)
+    {
+        const double w = 12, h = 11;
+        double top = midY - h / 2;
+        double cx = x + w / 2;
+
+        var tri = new StreamGeometry();
+        using (var gc = tri.Open())
+        {
+            gc.BeginFigure(new Point(cx, top), isFilled: true);
+            gc.LineTo(new Point(x, top + h));
+            gc.LineTo(new Point(x + w, top + h));
+            gc.EndFigure(true);
+        }
+        ctx.DrawGeometry(WarnBrush, null, tri);
+
+        // Exclamation: a short stem above a square dot, in the panel background colour.
+        ctx.DrawRectangle(BgFillBrush, null, new Rect(cx - 1, top + 3, 2, 4));
+        ctx.DrawRectangle(BgFillBrush, null, new Rect(cx - 1, top + 8, 2, 2));
+    }
+
+    // Context-pressure thermometer: glass tube + bulb with mercury rising; colour steps green→yellow→
+    // orange→red at the configured thresholds.
+    private void DrawThermoIcon(DrawingContext ctx, float fill, double x, double midY)
+    {
+        Color col = fill >= _ctxRed    ? Color.FromRgb(239, 68, 68)
+                  : fill >= _ctxOrange ? Color.FromRgb(249, 115, 22)
+                  : fill >= _ctxYellow ? Color.FromRgb(234, 179, 8)
+                                       : Color.FromRgb(34, 197, 94);
+        var colBrush = new SolidColorBrush(col);
+
+        double cx = x + 5;
+        var tube = new Rect(cx - 2, midY - 7, 4, 9);
+        var bulb = new Rect(cx - 4, midY, 8, 8);
+
+        // Glass background.
+        ctx.DrawRectangle(ThermoGlassFill, null, new RoundedRect(tube, 2));
+        ctx.DrawEllipse(ThermoGlassFill, null, bulb.Center, bulb.Width / 2, bulb.Height / 2);
+
+        // Mercury rising in the tube.
+        double innerH = tube.Height - 2;
+        double fillPx = Math.Clamp(fill * innerH, 0, innerH);
+        if (fillPx > 0)
+            ctx.DrawRectangle(colBrush, null,
+                new Rect(tube.X + 1, tube.Bottom - 1 - fillPx, tube.Width - 2, fillPx));
+
+        // Bulb is always full when visible.
+        var innerBulb = new Rect(bulb.X + 1, bulb.Y + 1, bulb.Width - 2, bulb.Height - 2);
+        ctx.DrawEllipse(colBrush, null, innerBulb.Center, innerBulb.Width / 2, innerBulb.Height / 2);
+
+        // Glass outline.
+        ctx.DrawRectangle(null, ThermoOutline, new RoundedRect(tube, 2));
+        ctx.DrawEllipse(null, ThermoOutline, bulb.Center, bulb.Width / 2, bulb.Height / 2);
     }
 
     // The permission-mode badge: two fast-forward chevrons in the mode's colour, faded when idle.

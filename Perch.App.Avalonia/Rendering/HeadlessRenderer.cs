@@ -64,11 +64,18 @@ internal static class HeadlessRenderer
         return
         [
             new ClaudeSession("1234", "s1", SessionStatus.Running, @"C:\src\perch", "perch", now,
-                Activity: "Editing OverlayForm.cs", SubAgents: subs, Mode: PermissionMode.AcceptEdits),
+                Activity: "Editing OverlayForm.cs", SubAgents: subs, Mode: PermissionMode.AcceptEdits,
+                ContextFill: 0.82f, BurnRate: 12300, GitStats: new GitLineStats(142, 37),
+                Tasks: new List<TaskItem>
+                {
+                    new("Extract core", "extracting core", TaskState.Completed),
+                    new("Port overlay", "porting overlay", TaskState.Pending),
+                    new("Cutover", "cutting over", TaskState.Pending),
+                }),
             new ClaudeSession("5678", "s2", SessionStatus.AwaitingInput, @"C:\src\api", "api", now,
                 ExternalNotify: true),
             new ClaudeSession("9012", "s3", SessionStatus.NeedsAttention, @"C:\src\docs", "docs-site", now,
-                BridgeSessionId: "bridge-xyz"),
+                BridgeSessionId: "bridge-xyz", Stuck: new StuckSignal(StuckKind.FailingLoop, "repeating build")),
             new ClaudeSession("3456", "s4", SessionStatus.Idle, @"C:\src\scratch", "scratch", now),
             // A background/SDK session (Entrypoint != "cli") -> grouped under the Autonomous section.
             new ClaudeSession("7788", "s5", SessionStatus.Running, @"C:\src\bot", "nightly-bot", now,
