@@ -216,3 +216,23 @@ Phases 0–2 are low-risk and independently valuable (cleaner architecture even 
 there). The real commitment starts at Phase 3. Recommend a **go/no-go checkpoint after Phase 0**:
 if the click-through/transparent-overlay spike reveals a blocker, we learn it for a day's cost, not
 a month's.
+
+---
+
+## 8. Progress log
+
+- **Phase 0 — DONE.** Avalonia 12 spike under `spike/AvaloniaSpike` proved all three unknowns on
+  Windows: transparent/borderless/topmost/no-taskbar drag window, `TrayIcon`+`NativeMenu`, and a
+  custom `DrawingContext` `StatCard`. Headless-Skia PNG renders at 1× and 1.5× confirmed
+  owner-drawing ports cleanly and line-height sizing stays crisp (no glyph clipping) across DPI.
+  **Verdict: GO.** (Spike is throwaway; delete when `Perch.App.Avalonia` is created in Phase 3.)
+- **Phase 1 — DONE.** `Perch.Core` (net10.0, UI-free) now holds the whole data layer; the WinForms
+  app and tests consume it as a library. Tests no longer depend on the WinForms app. `LockMonitor`
+  stayed in the app (Windows-only API) pending its interface. Build clean, 144 tests green.
+- **Phase 2 — DONE (reusable set).** `Perch.Platform.Windows` (net10.0-windows, no WinForms) with
+  `IWindowActivator`, `IPathInstaller`, `IAudioCue`, `ISessionLock` — all resolved through a
+  `PlatformServices` composition root; no UI code touches Win32 directly anymore. Deferred to the
+  phase that grounds them: `IAppIconProvider` (needs a UI-neutral image contract → Phase 3),
+  `IGlobalHotkey` / `IAmbientGlow` / tray / toasts (UI-toolkit-bound → Avalonia phases),
+  `ISystemMetrics` (only matters off-Windows → Phase 7). Build clean, 144 tests green.
+- **Phase 3 — in progress.**
