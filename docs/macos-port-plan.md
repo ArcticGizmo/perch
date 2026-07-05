@@ -109,8 +109,11 @@ needs on-device verification on a Mac** (the native calls only resolve at runtim
   `NSWindow` via `[nsView window]`, then sets `level` (NSStatusWindowLevel), `collectionBehavior`
   (all-Spaces | stationary | ignores-cycle | fullscreen-aux) and, for the click-through overlays,
   `setIgnoresMouseEvents:`. The `ObjC` helper is the foundation the remaining objc-based impls build on.
-- **`IAppIconProvider`** — `NSWorkspace.iconForFile`/`iconForContentType`, materialised to a PNG cache
-  (same on-disk contract); launch via `NSWorkspace.launchApplication` / `open -a`.
+- **`IAppIconProvider`** — DONE (unverified): shell-based to dodge the fragile `NSImage → PNG` objc chain.
+  Launch via `open -a <name>`; icon by locating the `.app` bundle (pinned/resolved path or Spotlight
+  `mdfind`), finding its `.icns` (`CFBundleIconFile` via `defaults read`, else first `*.icns`), and
+  converting to a cached PNG with `sips -Z <size>`. Null on any failure → strip draws initials. Future
+  refinement: `NSWorkspace.iconForFile` for pixel-exact icons.
 - **`IWindowActivator`** — hardest. Raise the session's terminal (Terminal.app / iTerm2 / VS Code
   integrated terminal). Walk parent pids via `libproc`, then raise the owning app via Accessibility API
   (`AXUIElement`) or scoped AppleScript. Expect this to be best-effort per terminal, like the Windows
