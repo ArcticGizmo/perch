@@ -81,6 +81,8 @@ public sealed class OverlayCanvas : Control
     private static readonly IBrush GitAddBrush    = new SolidColorBrush(Color.FromRgb(34, 197, 94));
     private static readonly IBrush GitDelBrush    = new SolidColorBrush(Color.FromRgb(239, 68, 68));
     private static readonly IBrush RunningBrush   = new SolidColorBrush(RunningColor);
+    private static readonly IBrush ArtifactBrush  = new SolidColorBrush(Color.FromRgb(251, 191, 36));
+    private static readonly IBrush ArtifactHover  = new SolidColorBrush(Color.FromRgb(255, 224, 140));
     private static readonly IBrush ThermoGlassFill = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
     private static readonly IPen   ThermoOutline  = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
 
@@ -99,7 +101,16 @@ public sealed class OverlayCanvas : Control
     private bool _showBurnRate = true;
     private bool _showGitStats = true;
     private bool _showStuckWarnings = true;
+    private bool _showArtifacts = true;
     private float _ctxYellow = 0.60f, _ctxOrange = 0.75f, _ctxRed = 0.90f;
+
+    /// <summary>Show/hide the clickable artifact glyph (the session still tracks its artifacts).</summary>
+    public void SetShowArtifacts(bool show)
+    {
+        if (_showArtifacts == show) return;
+        _showArtifacts = show;
+        InvalidateVisual();
+    }
 
     /// <summary>Show/hide the permission-mode badge on session rows.</summary>
     public void SetShowModeBadges(bool show)
@@ -363,7 +374,9 @@ public sealed class OverlayCanvas : Control
         // until 4.9.)
         bool stuck = _showStuckWarnings && session.IsStuck;
         double warnW = stuck ? WarnIconWidth : 0;
-        const double artW = 0, partyW = 0;
+        bool hasArtifacts = _showArtifacts && session.HasArtifacts;
+        double artW = hasArtifacts ? ArtifactIconWidth : 0;
+        const double partyW = 0;
         double mailW = session.ExternalNotify ? MailIconWidth : 0;
         double rcW   = session.RemoteControlled ? RcIconWidth : 0;
         double botW  = session.IsBackground ? BotIconWidth : 0;
@@ -403,8 +416,9 @@ public sealed class OverlayCanvas : Control
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
 
         // Left glyphs, in draw order.
-        if (stuck)     DrawWarnIcon(ctx, HorizPad + 14, nameMidY);
-        if (mailW > 0) DrawMailIcon(ctx, HorizPad + 14 + warnW + artW, nameMidY);
+        if (stuck)        DrawWarnIcon(ctx, HorizPad + 14, nameMidY);
+        if (hasArtifacts) DrawArtifactIcon(ctx, HorizPad + 14 + warnW, nameMidY, hovered: false);
+        if (mailW > 0)    DrawMailIcon(ctx, HorizPad + 14 + warnW + artW, nameMidY);
         if (rcW > 0)   DrawRemoteIcon(ctx, HorizPad + 16 + warnW + artW + mailW, nameMidY);
         if (botW > 0)  DrawBotIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW + partyW, nameMidY);
 
@@ -647,6 +661,17 @@ public sealed class OverlayCanvas : Control
             gc.EndFigure(false);
         }
         ctx.DrawGeometry(null, pen, flap);
+    }
+
+    // The artifact glyph: two staggered rounded-square outlines in amber (brighter when hovered).
+    // Clickable — hit-testing + hover wiring land in 4.11.
+    private static void DrawArtifactIcon(DrawingContext ctx, double x, double midY, bool hovered)
+    {
+        var pen = new Pen(hovered ? ArtifactHover : ArtifactBrush, 1.4, null, PenLineCap.Flat, PenLineJoin.Round);
+        const double side = 8, offset = 3, radius = 2;
+        double top = midY - (side + offset) / 2;
+        ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(x, top, side, side), radius));
+        ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(x + offset, top + offset, side, side), radius));
     }
 
     // Stuck-detection warning: an amber triangle with an exclamation mark punched out of the panel bg.
