@@ -137,18 +137,27 @@ to need tuning are the objc-heavy ones: `WindowChrome` (does Avalonia fight the 
 `WindowActivator` (which ancestor is the terminal; does focus land right), and `GlobalHotkey` (Carbon
 handler wiring + keycode map).
 
-### Phase 4 — Port the plugin to macOS
-- Add `plugins/perch/scripts/invoke.sh` mirroring `invoke.ps1`: write the same sidecars
-  (`{sid}.mode/.notify/.history`, `agent-*.stopped/.idle`), same `/afk` + `/history` prompt handling,
-  same JSON-on-stdin protocol.
-- Make `hooks.json` dispatch per-OS (a small cross-platform launcher, or OS-conditional command entries)
-  so Windows keeps `powershell.exe` and macOS runs `sh`/`bash`.
-- **Match the settings path exactly:** the `start` and `/afk`/`/history` branches read/gate on the app's
-  settings file, which on macOS is `~/.config/Perch/settings.json` (Phase 1 finding), not
-  `~/Library/Application Support`. Get this wrong and auto-start/`/afk` silently no-op.
-- Replace `Get-Process perch` (running check) with `pgrep -x perch`, and `Start-Process perch` with the
-  launcher on PATH (or `open -a Perch --args --autostarted`). Confirm the process name the checks look
-  for matches the bundle's executable name.
+### Phase 4 — Replace the plugin with self-managed hooks (direction changed)
+Rather than port `invoke.ps1` to a per-OS `invoke.sh` under the marketplace plugin, Perch drops the
+plugin/marketplace entirely (its separate release cadence made changes painful) and self-manages hooks in
+the user's `~/.claude/settings.json`, calling our own cross-platform binary. This also deletes the per-OS
+script problem — one code path, both OSes. The `/afk` + `/history` commands are dropped (unused; their
+functions already live in the tray). See the discussion decision recorded in project memory.
+- **`perch-hook` helper — DONE (Windows-verified; commit pending).** A tiny NativeAOT console app
+  (`src/Perch.Hook/`) ported 1:1 from `invoke.ps1` minus the commands: events `mode` (write `{sid}.mode`),
+  `agentstop`/`teammateidle` (drop `agent-{id}.stopped`/`.idle`), `start` (seed mode + auto-launch the
+  tray when opted in), `cleanup` (remove sidecars + sweep markers). Reflection-free (`Utf8JsonReader`),
+  honours `CLAUDE_CONFIG_DIR` and `PERCH_DEV` like the app, always exits 0, never emits a block decision.
+  Perf-validated (~2.8× faster than `powershell invoke.ps1`, and that was the R2R upper bound). In the
+  solution; builds AOT-clean (0 warnings). Functionally verified via a hermetic temp-config harness.
+- **Still TODO (part of #3):** the self-wiring — write/reconcile Perch's hook block in
+  `~/.claude/settings.json` on launch (idempotent, tagged with a `_perch`/`managed` marker; always exit 0
+  so a stale entry can't wedge Claude Code), self-heal (remove own entries when Perch is gone), remove on
+  uninstall, and a migration that removes the old marketplace plugin. Reuse `ClaudeUserSettings.cs` (it
+  already does a tolerant merge of `~/.claude/settings.json`).
+- **Packaging note:** the AOT helper is built per-RID (`dotnet publish -r <rid> -p:PublishAot=true`); the
+  release pipeline gains a `perch-hook` publish step alongside `perch` (Phase 5). NativeAOT needs the VS
+  "Desktop development with C++" workload — present on the GitHub `windows-latest` runner.
 
 ### Phase 5 — Packaging & distribution
 - Velopack macOS lane: `vpk pack` for `osx-arm64` (and `osx-x64` if we support Intel) producing a `.app`
