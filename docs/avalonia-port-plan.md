@@ -259,9 +259,14 @@ a month's.
     notification "Test" plays the real chime via `IAudioCue`, "Send test" does a real ntfy POST, About
     shows version/links (the updater is Phase 6). Verified via headless renders + a full-window frame
     capture across pages. `IAppIconProvider` was already grounded in Phase 5.
-  - *Still to do in Phase 3:* desktop notification **delivery** (`INotifier` + a toast library) — the
-    Settings page configures it and the chime/ntfy paths work, but the local balloon pipeline that fires
-    on session events is not yet wired.
+  - *Desktop notification delivery — DONE.* A finishing/blocking session now fires a desktop toast +
+    chime + external ntfy push, each gated by its setting. New `INotifier` seam + a toolkit-neutral
+    `NotificationService` in Core (ported from the WinForms one; `NtfyNotifier` moved to Core and shared),
+    with an owner-drawn `AvaloniaToastNotifier`/`ToastHostWindow` — a transparent, non-activating toast
+    stack at the overlay screen's corner, click-to-focus+acknowledge. No packaging/AUMID; cross-platform
+    by construction (a native-toast `INotifier` can slot in per-OS later).
+  - **Phase 3 is now complete** — the Avalonia head is at Windows parity; next is the Phase-6 cutover
+    (packaging + the deferred update flow), then Phase 7 cross-platform.
 - **Phase 4 — DONE.** The floating overlay is ported to a single owner-drawn `OverlayCanvas` at full
   parity with `OverlayForm` across 17 steps (see [avalonia-phase4-overlay.md](avalonia-phase4-overlay.md)):
   panel/header/rows/sub-agents, every info glyph + bar strip, hit-testing + hover + dwell tooltips,
@@ -277,6 +282,6 @@ a month's.
   thread; and the multi-artifact picker + external-notify wiring. This retired every overlay Phase-5
   stub (history/QR/confetti/glow/external-notify). The remaining transient surfaces (hint tooltips,
   popovers) are covered by `OverlayTooltip` + `MenuFlyout`. Build clean, 144 tests green; verified via
-  headless renders + live launch. **Of the Phase-3 remainder, the full Settings UI and quick-links
-  dialog are now done (see Phase 3 above); only desktop notification delivery (`INotifier` toast
-  pipeline) stands between here and the Phase-6 cutover.**
+  headless renders + live launch. **The Phase-3 remainder (Settings UI, quick-links dialog, and desktop
+  notification delivery) is now complete — see the Phase 3 progress entry — so the Avalonia head is at
+  Windows parity and the Phase-6 cutover is the next milestone.**
