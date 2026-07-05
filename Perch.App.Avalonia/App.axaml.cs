@@ -58,6 +58,11 @@ public partial class App : Application
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
             });
 
+            // A session finishing or blocking flashes the overlay's attention chase-border (and expands
+            // it if collapsed). The balloon/chime/external push are Phase-5 notification concerns.
+            _monitorHost.NeedsAttention += _ => _overlay!.Canvas.TriggerAttention();
+            _monitorHost.AwaitingInput += _ => _overlay!.Canvas.TriggerAttention();
+
             // Row click focuses the session's terminal; artifact click opens the artifact(s).
             _overlay.Canvas.SessionActivated += FocusSession;
             _overlay.Canvas.ArtifactActivated += OpenArtifacts;

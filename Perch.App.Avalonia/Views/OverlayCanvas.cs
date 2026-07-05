@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
@@ -413,6 +414,11 @@ public sealed class OverlayCanvas : Control
         _rows = rows;
         if (sessions.Count == 0) _expanded = false;
 
+        // Stop the attention flash once nothing needs attention or is awaiting input anymore.
+        if (_attentionFlash && sessions.All(s =>
+                s.Status != SessionStatus.NeedsAttention && s.Status != SessionStatus.AwaitingInput))
+            StopAttention();
+
         InvalidateMeasure();
         InvalidateVisual();
     }
@@ -457,7 +463,18 @@ public sealed class OverlayCanvas : Control
 
         if (ctx != null)
         {
-            OverlayDraw.Panel(ctx, new Rect(0.5, 0.5, width - 1, height - 1), BgBrush, BorderPen, Corner);
+            // While attention is flashing, the 1px border is replaced by the animated chase (drawn under
+            // the content, so the header/rows paint over its inward bloom).
+            var panelRect = new Rect(0.5, 0.5, width - 1, height - 1);
+            if (_attentionFlash)
+            {
+                OverlayDraw.Panel(ctx, panelRect, BgBrush, null, Corner);
+                DrawChaseBorder(ctx, panelRect, AttentionColor);
+            }
+            else
+            {
+                OverlayDraw.Panel(ctx, panelRect, BgBrush, BorderPen, Corner);
+            }
             DrawHeader(ctx, width);
 
             if (showSys) DrawSystemMetricsStrip(ctx, width);
@@ -1469,6 +1486,195 @@ public sealed class OverlayCanvas : Control
                 new System.Diagnostics.ProcessStartInfo("code", $"\"{path}\"") { UseShellExecute = true });
         }
         catch { /* best-effort — VS Code may not be on PATH */ }
+    }
+
+    // ── Attention chase-border animation (4.14) ───────────────────────────────
+    // While active, the panel's 1px border is replaced by an animated neon "chase": a bright comet head
+    // with a fading tail travels the rounded-rect perimeter over a faint always-lit outline, clipped to
+    // the panel so the bloom only spills inward. _chasePhase is the head's position (0..1, wrapping),
+    // advanced ~30×/s by _chaseTimer; _chaseStopTimer ends the flash after 10s.
+    private bool _attentionFlash;
+    private double _chasePhase;
+    private const double ChaseStep = 0.02; // head advance per tick → ~1.7s per lap at 33ms
+    private DispatcherTimer? _chaseTimer;
+    private DispatcherTimer? _chaseStopTimer;
+
+    /// <summary>Flashes the attention chase-border and, if collapsed, expands the panel so the session
+    /// that needs attention is visible. Called on the UI thread when a session finishes or blocks. The
+    /// flash self-stops after ~10s, or as soon as nothing needs attention (see <see cref="Update"/>).</summary>
+    public void TriggerAttention()
+    {
+        if (!_expanded && _rows.Count > 0)
+        {
+            _expanded = true;
+            InvalidateMeasure();
+        }
+
+        _attentionFlash = true;
+
+        (_chaseTimer ??= CreateChaseTimer()).Start();
+
+        _chaseStopTimer ??= CreateChaseStopTimer();
+        _chaseStopTimer.Stop();
+        _chaseStopTimer.Start();
+
+        InvalidateVisual();
+    }
+
+    private DispatcherTimer CreateChaseTimer()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+        t.Tick += (_, _) => { _chasePhase += ChaseStep; InvalidateVisual(); };
+        return t;
+    }
+
+    private DispatcherTimer CreateChaseStopTimer()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+        t.Tick += (_, _) => StopAttention();
+        return t;
+    }
+
+    private void StopAttention()
+    {
+        _chaseTimer?.Stop();
+        _chaseStopTimer?.Stop();
+        if (!_attentionFlash) return;
+        _attentionFlash = false;
+        InvalidateVisual();
+    }
+
+    // Stop the animation timers if the canvas leaves the visual tree (belt-and-braces; the overlay
+    // normally lives for the whole app session).
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        _chaseTimer?.Stop();
+        _chaseStopTimer?.Stop();
+        _dwellTimer?.Stop();
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    // Draws the attention border as an animated neon "chase": a bright comet head with a trailing tail
+    // travels the rounded-rect perimeter over a faintly-lit base outline, with a few progressively wider/
+    // fainter passes for a soft glow. Everything is clipped to the panel so the bloom only spills inward —
+    // the crisp outer edge stays the filled rounded-rect boundary. Mirrors the WinForms DrawChaseBorder.
+    private void DrawChaseBorder(DrawingContext ctx, Rect rect, Color color)
+    {
+        double radius = Math.Min(Corner, Math.Min(rect.Width, rect.Height) / 2);
+        var pts = RoundedRectSamples(rect, radius, out var clip);
+        int samples = pts.Length;
+        if (samples < 2)
+        {
+            ctx.DrawRectangle(null, new Pen(new ImmutableSolidColorBrush(color), 1.5), new RoundedRect(rect, radius));
+            return;
+        }
+
+        double head = _chasePhase - Math.Floor(_chasePhase); // 0..1 travelling comet head
+        const double TailLen = 0.55;                         // comet tail, as a fraction of the loop
+        const double BaseA   = 42;                           // faint always-lit outline
+        const double PeakA   = 213;                          // extra brightness at the head
+
+        // Comet intensity at an arc fraction p: brightest at the head, fading along the tail behind it.
+        double Intensity(double p)
+        {
+            double dd = head - p;
+            dd -= Math.Floor(dd);        // distance behind the head, 0..1 (wrapped)
+            double t = 1 - dd / TailLen; // 1 at the head → 0 at the tail's end
+            return t <= 0 ? 0 : t * t;
+        }
+
+        // Clip to the panel so the wide bloom passes glow inward only.
+        using (ctx.PushGeometryClip(clip))
+        {
+            // Widest & faintest first so a bright, near-white core sits on a soft coloured halo.
+            (double w, double aMul)[] passes = { (7, 0.10), (4, 0.22), (2.2, 0.5), (1.4, 1.0) };
+            foreach (var (w, aMul) in passes)
+            {
+                for (int k = 0; k < samples; k++)
+                {
+                    double inten = Intensity((k + 0.5) / samples);
+                    int a = (int)Math.Clamp((BaseA + inten * PeakA) * aMul, 0, 255);
+                    if (a <= 1) continue;
+                    // Heat the colour toward white near the head for the neon "hot core" look.
+                    Color c = inten > 0.05 ? Palette.Blend(color, Colors.White, (float)(inten * 0.5)) : color;
+                    var pen = new Pen(new ImmutableSolidColorBrush(Color.FromArgb((byte)a, c.R, c.G, c.B)), w,
+                        lineCap: PenLineCap.Round, lineJoin: PenLineJoin.Round);
+                    ctx.DrawLine(pen, pts[k], pts[(k + 1) % samples]);
+                }
+            }
+        }
+    }
+
+    // Resamples the rounded-rect perimeter into evenly-spaced points (constant-rate motion everywhere,
+    // corners and sides alike) and hands back a closed geometry of the same outline for clipping. Builds
+    // a dense polyline (straight edges + ~1px-resolution corner arcs), then walks its cumulative arc
+    // length to place uniform samples — the DrawingContext analogue of WinForms' Flatten + resample.
+    private static Point[] RoundedRectSamples(Rect r, double radius, out Geometry clip)
+    {
+        double x = r.X, y = r.Y, w = r.Width, h = r.Height, rad = radius;
+        var dense = new List<Point>();
+
+        void Arc(double cx, double cy, double startDeg, double endDeg)
+        {
+            int steps = Math.Max(2, (int)Math.Ceiling(rad));
+            for (int i = 0; i <= steps; i++)
+            {
+                double deg = startDeg + (endDeg - startDeg) * i / steps;
+                double a = deg * Math.PI / 180.0;
+                dense.Add(new Point(cx + rad * Math.Cos(a), cy + rad * Math.Sin(a)));
+            }
+        }
+
+        // Clockwise from the top edge (y-down screen space): top → TR → right → BR → bottom → BL → left → TL.
+        dense.Add(new Point(x + rad, y));
+        dense.Add(new Point(x + w - rad, y));
+        Arc(x + w - rad, y + rad, -90, 0);
+        dense.Add(new Point(x + w, y + rad));
+        dense.Add(new Point(x + w, y + h - rad));
+        Arc(x + w - rad, y + h - rad, 0, 90);
+        dense.Add(new Point(x + w - rad, y + h));
+        dense.Add(new Point(x + rad, y + h));
+        Arc(x + rad, y + h - rad, 90, 180);
+        dense.Add(new Point(x, y + h - rad));
+        dense.Add(new Point(x, y + rad));
+        Arc(x + rad, y + rad, 180, 270);
+
+        // Closed geometry over the same outline, for clipping.
+        var geo = new StreamGeometry();
+        using (var gc = geo.Open())
+        {
+            gc.BeginFigure(dense[0], isFilled: true);
+            for (int i = 1; i < dense.Count; i++) gc.LineTo(dense[i]);
+            gc.EndFigure(true);
+        }
+        clip = geo;
+
+        int m = dense.Count;
+        var cum = new double[m + 1];
+        for (int i = 0; i < m; i++)
+        {
+            var a = dense[i];
+            var b = dense[(i + 1) % m];
+            double dx = b.X - a.X, dy = b.Y - a.Y;
+            cum[i + 1] = cum[i] + Math.Sqrt(dx * dx + dy * dy);
+        }
+        double total = cum[m];
+        if (total <= 0) return [];
+
+        int samples = Math.Clamp((int)(total / 3.0), 96, 1024);
+        var pts = new Point[samples];
+        int seg = 0;
+        for (int k = 0; k < samples; k++)
+        {
+            double target = total * k / samples;
+            while (seg < m && cum[seg + 1] < target) seg++;
+            var a = dense[seg % m];
+            var b = dense[(seg + 1) % m];
+            double segLen = cum[seg + 1] - cum[seg];
+            double t = segLen > 0 ? (target - cum[seg]) / segLen : 0;
+            pts[k] = new Point(a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t);
+        }
+        return pts;
     }
 
     // ── Tooltip content ────────────────────────────────────────────────────────

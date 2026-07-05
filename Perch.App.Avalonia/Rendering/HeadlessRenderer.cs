@@ -44,6 +44,13 @@ internal static class HeadlessRenderer
 
         RenderControl(canvas, Path.Combine(outDir, "overlay_1x.png"), 96);
         RenderControl(canvas, Path.Combine(outDir, "overlay_1.5x.png"), 144);
+
+        // Attention flash: the sample already carries a NeedsAttention session, so trigger the chase
+        // border and render one frame of it (the animation timer doesn't tick in headless, so this
+        // captures the comet at phase 0 over its faint inward-glow base outline).
+        canvas.TriggerAttention();
+        RenderControl(canvas, Path.Combine(outDir, "overlay_attention_1x.png"), 96);
+
         Console.WriteLine($"Rendered overlay PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }
