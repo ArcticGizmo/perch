@@ -16,9 +16,11 @@ internal static class Program
     /// to auto-install the Claude Code plugin once, without the user having to think about it.</summary>
     public static bool IsFirstRun { get; private set; }
 
-    // Per-user-session name: only one tray runs per desktop login. (The port's side-by-side
+    // Per-user-session name: only one tray runs per desktop login. The Windows "Local\" session
+    // namespace prefix isn't valid off Windows, so use a plain name there. (The port's side-by-side
     // "_Avalonia" mutex is gone now that Avalonia is the one and only Perch.)
-    private const string SingleInstanceMutexName = @"Local\Perch_SingleInstance";
+    private static readonly string SingleInstanceMutexName =
+        OperatingSystem.IsWindows() ? @"Local\Perch_SingleInstance" : "Perch_SingleInstance";
     private static Mutex? _instanceMutex;
 
     // STA for shell/clipboard/COM interop parity with the WinForms app.
@@ -39,11 +41,17 @@ internal static class Program
         // Velopack install/update/uninstall lifecycle. The fast callbacks keep the per-user PATH entry
         // in sync so the plugin (and the user) can invoke `perch` from any terminal; the first-run hook
         // flags the launch so the running app installs the Claude Code plugin with a visible tray.
-        VelopackApp
-            .Build()
+        var velopack = VelopackApp.Build();
+#if WINDOWS
+        // The install/update/uninstall fast callbacks are Velopack's Windows-only installer surface; they
+        // keep the per-user PATH entry in sync so `perch` resolves in any terminal. macOS packaging
+        // (Phase 5) wires the equivalent PATH symlink through the .app/.pkg install instead.
+        velopack
             .OnAfterInstallFastCallback(_ => PlatformServices.PathInstaller.Register())
             .OnAfterUpdateFastCallback(_ => PlatformServices.PathInstaller.Register())
-            .OnBeforeUninstallFastCallback(_ => PlatformServices.PathInstaller.Unregister())
+            .OnBeforeUninstallFastCallback(_ => PlatformServices.PathInstaller.Unregister());
+#endif
+        velopack
             .OnFirstRun(_ => IsFirstRun = true)
             .Run();
 

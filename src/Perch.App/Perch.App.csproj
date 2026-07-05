@@ -1,19 +1,31 @@
 <Project Sdk="Microsoft.NET.Sdk">
      <PropertyGroup>
-          <OutputType>WinExe</OutputType>
-          <!-- Windows-10 TFM so the UWP notifications compat shim (real Action Center toasts) can project the
-         Windows.UI.Notifications APIs for this unpackaged Win32 app. Phase 7 splits a per-OS head. -->
-          <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+          <!-- Two heads from one project. The Windows head (net10.0-windows) uses real Action Center
+         toasts via the UWP notifications compat shim, so it needs the Windows-10 TFM. The cross-platform
+         head (plain net10.0) serves macOS/Linux and reaches native APIs through Perch.Platform.Mac's
+         P/Invoke. The item groups below fork the OutputType, manifest/icon, packages and platform
+         project reference per TFM; PlatformServices selects the implementation set with #if WINDOWS. -->
+          <TargetFrameworks>net10.0-windows10.0.19041.0;net10.0</TargetFrameworks>
           <Nullable>enable</Nullable>
           <ImplicitUsings>enable</ImplicitUsings>
           <RootNamespace>Perch.Avalonia</RootNamespace>
           <AssemblyName>perch</AssemblyName>
           <Product>Perch</Product>
           <Version>0.2.0</Version>
+          <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+     </PropertyGroup>
+
+     <!-- Windows head only: windowed subsystem, app manifest + icon, and COM interop for shell/clipboard. -->
+     <PropertyGroup Condition="$(TargetFramework.Contains('-windows'))">
+          <OutputType>WinExe</OutputType>
           <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
           <ApplicationManifest>app.manifest</ApplicationManifest>
-          <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
           <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+     </PropertyGroup>
+
+     <!-- Cross-platform head: a plain executable (macOS GUI/agent behaviour comes from the .app bundle). -->
+     <PropertyGroup Condition="!$(TargetFramework.Contains('-windows'))">
+          <OutputType>Exe</OutputType>
      </PropertyGroup>
 
      <ItemGroup>
@@ -32,7 +44,6 @@
           <PackageReference Include="Velopack" Version="1.2.0" />
           <PackageReference Include="QRCoder" Version="1.8.0" />
           <PackageReference Include="Markdig" Version="1.3.2" />
-          <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" />
           <PackageReference Include="Avalonia.Headless" Version="12.0.5" />
           <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3">
                <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
@@ -40,8 +51,20 @@
           </PackageReference>
      </ItemGroup>
 
+     <!-- Windows head: UWP Action Center toasts + the Win32 platform implementations. -->
+     <ItemGroup Condition="$(TargetFramework.Contains('-windows'))">
+          <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" />
+          <ProjectReference Include="..\Perch.Platform.Windows\Perch.Platform.Windows.csproj" />
+     </ItemGroup>
+
+     <!-- Cross-platform head: the macOS platform implementations. The Windows-only Action Center notifier
+          is compiled out (AvaloniaToastNotifier is the notifier off Windows). -->
+     <ItemGroup Condition="!$(TargetFramework.Contains('-windows'))">
+          <ProjectReference Include="..\Perch.Platform.Mac\Perch.Platform.Mac.csproj" />
+          <Compile Remove="Notifications\WindowsToastNotifier.cs" />
+     </ItemGroup>
+
      <ItemGroup>
           <ProjectReference Include="..\Perch.Core\Perch.Core.csproj" />
-          <ProjectReference Include="..\Perch.Platform.Windows\Perch.Platform.Windows.csproj" />
      </ItemGroup>
 </Project>

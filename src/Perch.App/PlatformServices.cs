@@ -1,22 +1,33 @@
 using Perch.Platform;
-using Win = Perch.Platform.Windows;
+#if WINDOWS
+using Impl = Perch.Platform.Windows;
+#else
+using Impl = Perch.Platform.Mac;
+#endif
 
 namespace Perch.Avalonia;
 
 /// <summary>
-/// The Avalonia app's composition root for platform services — the counterpart of the WinForms app's
-/// PlatformServices. Constructs the Windows implementations of Perch.Core's platform interfaces so no
-/// UI code references the concrete Win32 types directly. Phase 7 will choose the implementation per OS.
+/// The app's composition root for platform services: constructs the per-OS implementations of
+/// Perch.Core's platform interfaces so no UI code references a concrete Win32/AppKit type directly. The
+/// implementation set is chosen at compile time by the target framework — the <c>net10.0-windows</c> head
+/// binds <see cref="Perch.Platform.Windows"/>, the cross-platform <c>net10.0</c> head binds
+/// <see cref="Perch.Platform.Mac"/> — so a Windows-only dependency never even compiles into the mac head.
 /// </summary>
 internal static class PlatformServices
 {
-    public static IWindowActivator WindowActivator { get; } = new Win.WindowActivator();
-    public static IPathInstaller PathInstaller { get; } = new Win.PathInstaller();
-    public static IAudioCue AudioCue { get; } = new Win.AudioCue();
-    public static ISystemMetrics SystemMetrics { get; } = new Win.WindowsSystemMetrics();
-    public static IAppIconProvider AppIconProvider { get; } = new Win.WindowsAppIconProvider();
-    public static IWindowChrome WindowChrome { get; } = new Win.WindowChrome();
+    public static IWindowActivator WindowActivator { get; } = new Impl.WindowActivator();
+    public static IPathInstaller PathInstaller { get; } = new Impl.PathInstaller();
+    public static IAudioCue AudioCue { get; } = new Impl.AudioCue();
+    public static IWindowChrome WindowChrome { get; } = new Impl.WindowChrome();
+#if WINDOWS
+    public static IAppIconProvider AppIconProvider { get; } = new Impl.WindowsAppIconProvider();
+    public static ISystemMetrics SystemMetrics { get; } = new Impl.WindowsSystemMetrics();
+#else
+    public static IAppIconProvider AppIconProvider { get; } = new Impl.AppIconProvider();
+    public static ISystemMetrics SystemMetrics { get; } = new Impl.SystemMetrics();
+#endif
 
-    public static ISessionLock CreateSessionLock() => new Win.SessionLock();
-    public static IGlobalHotkey CreateGlobalHotkey() => new Win.GlobalHotkey();
+    public static ISessionLock CreateSessionLock() => new Impl.SessionLock();
+    public static IGlobalHotkey CreateGlobalHotkey() => new Impl.GlobalHotkey();
 }

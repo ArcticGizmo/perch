@@ -52,7 +52,10 @@ throwaway all-no-op platform layer (or the `render` mode, which needs no platfor
 overlay renders, `~/.claude` file-watching fires, and DPI/Retina scaling looks right via `render <out>` at
 1× and 1.5×. Small, fast, tells us whether anything in Avalonia 12 misbehaves on macOS before we commit.
 
-### Phase 1 — Close the `OverlayNativeChrome` leak (do this regardless)
+> **Status: Phases 1 and 2 are done** (branch `cross-platform`). The app compiles as two heads and the
+> macOS head builds against no-op platform stubs. Phase 3 (real `Perch.Platform.Mac` interop) is next.
+
+### Phase 1 — Close the `OverlayNativeChrome` leak (do this regardless) — DONE
 Introduce a Core seam, e.g. `IWindowChrome` with `MakeToolWindowNoActivate(...)` and
 `MakeClickThroughNoActivate(...)` taking the neutral window handle (the five call sites already have an
 Avalonia `Window` + `TryGetPlatformHandle()`). Move the Win32 body into a `WindowChrome : IWindowChrome`
@@ -61,25 +64,32 @@ in `Perch.Platform.Windows`, register it in `PlatformServices`, and replace the 
 (the seam itself no-ops off its platform). This is pure refactor, testable on Windows today, and removes
 the last direct dependency of UI code on `Perch.Platform.Windows`.
 
-### Phase 2 — Make the head build per-OS
+### Phase 2 — Make the head build per-OS — DONE
 Multi-target the existing `Perch.App` rather than forking a second head project (fewer moving parts; the
-composition root already switches on OS):
-- `<TargetFrameworks>net10.0-windows10.0.19041.0;net10.0-macos</TargetFrameworks>`.
-- Condition the Windows-only bits to the windows TFM: `OutputType=WinExe`, `ApplicationManifest`,
+composition root already switches on OS). **Key correction to the original sketch:** the cross-platform
+head is plain **`net10.0`**, not `net10.0-macos`. Avalonia is not MAUI — a desktop Avalonia app is a
+normal .NET app that runs on macOS via Avalonia's own native backend, and `Perch.Platform.Mac` reaches
+AppKit/libSystem through P/Invoke. So no `macios` workload and no Mac are needed to *build* the mac head —
+it compiles on Windows/CI, the native entry points only resolving at runtime on macOS.
+- `<TargetFrameworks>net10.0-windows10.0.19041.0;net10.0</TargetFrameworks>`.
+- Condition the Windows-only bits to the `-windows` TFM: `OutputType=WinExe`, `ApplicationManifest`,
   `ApplicationIcon`, `BuiltInComInteropSupport`, the `Microsoft.Toolkit.Uwp.Notifications` package, and
-  the `Perch.Platform.Windows` project reference. Add `Perch.Platform.Mac` under the macos TFM.
-- Teach `PlatformServices` to pick the implementation set by `OperatingSystem.Is…()` (Windows impls vs
-  Mac impls vs no-op defaults).
-- Fix the portable-mutex name (drop the `Local\` prefix on non-Windows) and confirm single-instance
-  behaviour on macOS.
-- Keep `WindowsToastNotifier` behind its existing `OperatingSystem.IsWindows()` gate; macOS falls to
-  `AvaloniaToastNotifier`.
+  the `Perch.Platform.Windows` project reference. The `net10.0` TFM references `Perch.Platform.Mac`,
+  compiles `WindowsToastNotifier.cs` out, and uses `OutputType=Exe`.
+- `PlatformServices` picks the implementation set with `#if WINDOWS` (the SDK auto-defines `WINDOWS` for
+  the `-windows` TFM); the same guard wraps the `WindowsToastNotifier` instantiation in `App`.
+- Portable-mutex name (drop the `Local\` prefix off Windows) done; Velopack's Windows-only install
+  fast-callbacks are `#if WINDOWS`-guarded (macOS install hooks come with Phase 5 packaging).
+- `publish.bat` / `release.yml` gained `-f net10.0-windows10.0.19041.0` so the Windows publish still
+  resolves a single TFM. Dev run/render now need `-f net10.0-windows10.0.19041.0` too (see CLAUDE.md).
 
-At the end of Phase 2 the app should launch on macOS against no-op platform services — overlay + toasts +
-detection working, everything else degrading quietly.
+The app builds as both heads; the macOS head links against no-op platform stubs (overlay + toasts +
+file-based detection work, everything else degrades quietly) until Phase 3 fills the interop in.
 
 ### Phase 3 — Implement `Perch.Platform.Mac`
-New `net10.0-macos` project, one interface at a time, easiest first so the app is usable early:
+The `net10.0` project now exists with no-op stubs (Phase 2). Fill in the real interop via P/Invoke
+(`objc_msgSend` into AppKit/CoreGraphics, plus `libSystem`/`libproc`), one interface at a time, easiest
+first so the app is usable early:
 - **`IAudioCue`** — `NSSound`/system sounds (or `afplay`). Trivial.
 - **`ISessionLock`** — screen-lock state via `CGSessionCopyCurrentDictionary`
   (`kCGSSessionOnConsoleKey`) or the `com.apple.screenIsLocked`/`Unlocked` distributed notifications.

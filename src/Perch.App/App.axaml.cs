@@ -132,10 +132,16 @@ public partial class App : Application
             // dispatcher gates toast/chime/external per settings. A toast click focuses that terminal and
             // acknowledges it.
             _sessionLock = PlatformServices.CreateSessionLock();
+            Func<Screen?> toastScreen =
+                () => _overlay is null ? null : _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
+#if WINDOWS
+            // The UWP Action Center notifier only exists in the Windows head; off Windows it isn't compiled.
             _notifier = OperatingSystem.IsWindows()
                 ? new Notifications.WindowsToastNotifier()
-                : new Notifications.AvaloniaToastNotifier(
-                    () => _overlay is null ? null : _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary);
+                : new Notifications.AvaloniaToastNotifier(toastScreen);
+#else
+            _notifier = new Notifications.AvaloniaToastNotifier(toastScreen);
+#endif
             _notifier.SessionActivated += OnToastActivated;
             _notifications = new NotificationService(_notifier, settings, _sessionLock, PlatformServices.AudioCue);
 

@@ -3,11 +3,11 @@
 A Windows system-tray app (.NET 10 / [Avalonia UI](https://avaloniaui.net/), C#) that monitors active
 Claude Code sessions and surfaces their status as desktop overlays, notifications, and stats. The UI is
 Avalonia (owner-drawn overlay + dashboards, XAML-ish code-built windows); the codebase is structured so
-macOS/Linux heads can follow (see `docs/avalonia-port-plan.md`).
+macOS/Linux heads can follow — a macOS port is in progress (see `docs/macos-port-plan.md`).
 
 ## Layout
 
-Multi-project solution (`perch.slnx`); the three projects live under `src/`:
+Multi-project solution (`perch.slnx`); the projects live under `src/`:
 
 - `src/Perch.Core/` — the UI-free core (plain `net10.0`). The `~/.claude` data layer (`Data/`: file readers,
   parsers, models, `AppSettings`, stats/flight/history services, `NotificationService`, `PluginManager`,
@@ -15,6 +15,9 @@ Multi-project solution (`perch.slnx`); the three projects live under `src/`:
   `IWindowActivator`, `IPathInstaller`, `IAudioCue`, `IAppIconProvider`, `ISystemMetrics`, `ISessionLock`,
   `IGlobalHotkey`, …). No UI, no `System.Drawing`.
 - `src/Perch.Platform.Windows/` — Win32 implementations of the Core interfaces (`net10.0-windows`).
+- `src/Perch.Platform.Mac/` — macOS implementations of the same Core interfaces (plain `net10.0`, reaching
+  AppKit/libSystem via P/Invoke — no `net10.0-macos` workload, so it builds on any host). Currently no-op
+  stubs being filled in per the port plan.
 - `src/Perch.App/` — the app head (assembly/exe name **`perch`**). `Program` (Velopack bootstrap +
   single-instance), `App.axaml(.cs)` (the tray/overlay/window wiring shell — the counterpart of the old
   `OverlayApplicationContext`), `PlatformServices` (composition root), `Views/` (owner-drawn controls:
@@ -30,16 +33,21 @@ Multi-project solution (`perch.slnx`); the three projects live under `src/`:
 ## Build & run
 
 - Build: `dotnet build perch.slnx` (or just the head: `dotnet build src/Perch.App/Perch.App.csproj`).
-- Run (dev): `dotnet run --project src/Perch.App`
-- **Headless render (UI verification):** `dotnet run --project src/Perch.App -- render <outDir>` dumps
+  The head multi-targets, so a build compiles **both** heads: the Windows head
+  (`net10.0-windows10.0.19041.0`) and the cross-platform head (plain `net10.0`, used for macOS).
+- Run (dev): `dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0` — the `-f` is required
+  now that the head multi-targets (Windows is the head to run on Windows).
+- **Headless render (UI verification):** `dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0 -- render <outDir>` dumps
   every owner-drawn surface to PNG at 1× and 1.5× via `HeadlessRenderer` — the standing way to eyeball UI
   changes without a display. Use it when touching any owner-drawn control.
 - Release artifacts: Velopack (`vpk`) via `publish.bat`, or the `v*`-tag GitHub Actions workflow
   (`.github/workflows/release.yml`) — see `README.md`. Bump `<Version>` in
   `src/Perch.App/Perch.App.csproj`.
 
-`Perch.Core` targets `net10.0`; the Windows platform + app heads target `net10.0-windows*`. `Nullable` and
-`ImplicitUsings` enabled everywhere.
+`Perch.Core` and `Perch.Platform.Mac` target plain `net10.0`; `Perch.Platform.Windows` targets
+`net10.0-windows`; the app head multi-targets `net10.0-windows10.0.19041.0` (real Action Center toasts via
+the UWP shim) **and** plain `net10.0` (the macOS/Linux head). `PlatformServices` picks the implementation
+set at compile time with `#if WINDOWS`. `Nullable` and `ImplicitUsings` enabled everywhere.
 
 ## Testing
 
