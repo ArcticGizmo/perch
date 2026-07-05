@@ -101,10 +101,9 @@ public partial class App : Application
             _monitorHost.AwaitingInput += OnAwaitingInput;
             _monitorHost.OpenHistoryRequested += OpenHistory; // the plugin's jump-to-session
 
-            // Row click focuses the session's terminal; artifact click opens the artifact (or, for
-            // several, the picker's chosen one).
+            // Row click focuses the session's terminal; the artifact glyph always pops a picker list, and
+            // the chosen artifact is opened here.
             _overlay.Canvas.SessionActivated += FocusSession;
-            _overlay.Canvas.ArtifactActivated += OpenArtifacts;
             _overlay.Canvas.ArtifactChosen += OpenArtifact;
 
             // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
@@ -169,13 +168,7 @@ public partial class App : Application
         _monitorHost?.Acknowledge(session.Pid);
     }
 
-    // Opens a single-artifact row's artifact in the browser. (Multi-artifact rows pop the canvas picker,
-    // which routes the chosen one to OpenArtifact.)
-    private static void OpenArtifacts(ClaudeSession session)
-    {
-        if (session.Artifacts.Count > 0) OpenArtifact(session.Artifacts[0]);
-    }
-
+    // Opens the artifact the user picked from the overlay's artifact-glyph list.
     private static void OpenArtifact(Artifact artifact)
     {
         if (string.IsNullOrWhiteSpace(artifact.Url)) return;

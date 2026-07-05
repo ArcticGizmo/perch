@@ -469,11 +469,8 @@ public sealed class OverlayCanvas : Control, IDenseHost
     /// a Core-internal type.</summary>
     internal event Action<ClaudeSession>? SessionActivated;
 
-    /// <summary>Raised when a row's artifact glyph is clicked and the session has exactly one artifact;
-    /// the app opens it.</summary>
-    internal event Action<ClaudeSession>? ArtifactActivated;
-
-    /// <summary>Raised when the user picks one artifact from the multi-artifact popover; the app opens it.</summary>
+    /// <summary>Raised when the user picks an artifact from the artifact glyph's popover list; the app
+    /// opens it. The list is always shown (even for a single artifact), so this is the only artifact path.</summary>
     internal event Action<Artifact>? ArtifactChosen;
 
     // ── Right-click context menu (4.13) ───────────────────────────────────────
@@ -1734,10 +1731,10 @@ public sealed class OverlayCanvas : Control, IDenseHost
         int art = HitTestArtifactIcon(p);
         if (art >= 0 && _rows[art].Session is { } artSession)
         {
-            // One artifact opens directly; several pop a picker (the WinForms PopoverMenu → a MenuFlyout).
+            // Always pop the picker list — even for a single artifact — so the interaction is consistent
+            // (a click never silently opens a link; you always see and choose from the list).
             var arts = artSession.Artifacts;
-            if (arts.Count <= 1) ArtifactActivated?.Invoke(artSession);
-            else ShowArtifactPicker(arts);
+            if (arts.Count > 0) ShowArtifactPicker(arts);
             return;
         }
 
@@ -1845,8 +1842,8 @@ public sealed class OverlayCanvas : Control, IDenseHost
         return item;
     }
 
-    // Pops a small menu of a session's artifacts at the cursor; picking one opens it. Only shown when a
-    // session has more than one artifact (a single artifact opens on click without a menu).
+    // Pops a small menu of a session's artifacts at the cursor; picking one opens it. Always used for the
+    // artifact glyph (a single artifact shows as a one-item list), so the click behaviour is consistent.
     private void ShowArtifactPicker(IReadOnlyList<Artifact> artifacts)
     {
         var items = new List<Control>(artifacts.Count);
