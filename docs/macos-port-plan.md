@@ -112,8 +112,9 @@ needs on-device verification on a Mac** (the native calls only resolve at runtim
   ConPTY caveat. **Needs the Accessibility permission** (Phase 6).
 - **`IGlobalHotkey`** — Carbon `RegisterEventHotKey` (works without focus) or an `NSEvent` global
   monitor. **Needs Accessibility/Input-Monitoring permission** for the monitor route.
-- **`IPathInstaller`** — symlink the launcher into `/usr/local/bin` (or `~/.local/bin`) so `perch`
-  resolves in any shell; undo on uninstall. No `SendMessageTimeout` equivalent needed.
+- **`IPathInstaller`** — DONE (pure managed, low-risk): symlinks `Environment.ProcessPath` into
+  `~/.local/bin/perch` (user-writable, no sudo) and removes it on uninstall. Phase 5 may relocate to
+  `/usr/local/bin` via a privileged installer step. Still needs wiring into the mac install hooks (Phase 5).
 - **`INotifier` (optional native)** — `UNUserNotificationCenter` for real Notification Center toasts;
   skip initially since `AvaloniaToastNotifier` already covers it.
 
