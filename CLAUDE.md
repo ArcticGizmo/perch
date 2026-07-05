@@ -15,7 +15,7 @@ Multi-project solution (`perch.slnx`); the three projects live under `src/`:
   `IWindowActivator`, `IPathInstaller`, `IAudioCue`, `IAppIconProvider`, `ISystemMetrics`, `ISessionLock`,
   `IGlobalHotkey`, …). No UI, no `System.Drawing`.
 - `src/Perch.Platform.Windows/` — Win32 implementations of the Core interfaces (`net10.0-windows`).
-- `src/Perch.App.Avalonia/` — the app head (assembly/exe name **`perch`**). `Program` (Velopack bootstrap +
+- `src/Perch.App/` — the app head (assembly/exe name **`perch`**). `Program` (Velopack bootstrap +
   single-instance), `App.axaml(.cs)` (the tray/overlay/window wiring shell — the counterpart of the old
   `OverlayApplicationContext`), `PlatformServices` (composition root), `Views/` (owner-drawn controls:
   `OverlayCanvas`, `StatsDashboard`, `FlightPathTimeline`, …), `Windows/` (Settings, History, Stats, QR,
@@ -25,18 +25,18 @@ Multi-project solution (`perch.slnx`); the three projects live under `src/`:
 - `plugins/perch/` — the companion Claude Code plugin (`commands/`, `hooks/`, `scripts/`). Its hooks
   launch/detect the tray by the process name **`perch`**.
 - `tools/IconGen` — regenerates the raster icons from `perch.svg` (`tools/gen-icons.ps1`/`.cmd`), writing
-  `src/Perch.App.Avalonia/Assets/icon.{png,ico}` and `landing-icon.png`.
+  `src/Perch.App/Assets/icon.{png,ico}` and `landing-icon.png`.
 
 ## Build & run
 
-- Build: `dotnet build perch.slnx` (or just the head: `dotnet build src/Perch.App.Avalonia/Perch.App.Avalonia.csproj`).
-- Run (dev): `dotnet run --project src/Perch.App.Avalonia`
-- **Headless render (UI verification):** `dotnet run --project src/Perch.App.Avalonia -- render <outDir>` dumps
+- Build: `dotnet build perch.slnx` (or just the head: `dotnet build src/Perch.App/Perch.App.csproj`).
+- Run (dev): `dotnet run --project src/Perch.App`
+- **Headless render (UI verification):** `dotnet run --project src/Perch.App -- render <outDir>` dumps
   every owner-drawn surface to PNG at 1× and 1.5× via `HeadlessRenderer` — the standing way to eyeball UI
   changes without a display. Use it when touching any owner-drawn control.
 - Release artifacts: Velopack (`vpk`) via `publish.bat`, or the `v*`-tag GitHub Actions workflow
   (`.github/workflows/release.yml`) — see `README.md`. Bump `<Version>` in
-  `src/Perch.App.Avalonia/Perch.App.Avalonia.csproj`.
+  `src/Perch.App/Perch.App.csproj`.
 
 `Perch.Core` targets `net10.0`; the Windows platform + app heads target `net10.0-windows*`. `Nullable` and
 `ImplicitUsings` enabled everywhere.

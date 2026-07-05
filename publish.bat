@@ -5,7 +5,7 @@ setlocal
 if not "%~1"=="" (
     set VERSION=%~1
 ) else (
-    for /f "tokens=*" %%i in ('powershell -NoProfile -Command "(Select-Xml -Path src\Perch.App.Avalonia\Perch.App.Avalonia.csproj -XPath \"//Version\").Node.InnerText"') do set VERSION=%%i
+    for /f "tokens=*" %%i in ('powershell -NoProfile -Command "(Select-Xml -Path src\Perch.App\Perch.App.csproj -XPath \"//Version\").Node.InnerText"') do set VERSION=%%i
 )
 
 if "%VERSION%"=="" (
@@ -15,7 +15,7 @@ if "%VERSION%"=="" (
 
 echo Building Perch v%VERSION%...
 
-dotnet publish src\Perch.App.Avalonia\Perch.App.Avalonia.csproj -c Release -r win-x64 --self-contained true ^
+dotnet publish src\Perch.App\Perch.App.csproj -c Release -r win-x64 --self-contained true ^
     -p:PublishSingleFile=true ^
     -p:EnableCompressionInSingleFile=true ^
     -p:DebugType=embedded ^

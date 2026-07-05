@@ -125,7 +125,7 @@ Releases are created by pushing a version tag. GitHub Actions handles the build 
 
 **Steps:**
 
-1. Bump `<Version>` in `src/Perch.App.Avalonia/Perch.App.Avalonia.csproj` to the new version (e.g. `0.2.0`)
+1. Bump `<Version>` in `src/Perch.App/Perch.App.csproj` to the new version (e.g. `0.2.0`)
 2. Commit the change
 3. Push a matching tag:
    ```
@@ -157,14 +157,14 @@ Artifacts land in `releases/`. Upload them manually to a GitHub Release tagged t
 Requirements: .NET 10 SDK
 
 ```
-dotnet run --project src/Perch.App.Avalonia
+dotnet run --project src/Perch.App
 ```
 
 The UI is [Avalonia](https://avaloniaui.net/). To eyeball owner-drawn surfaces without launching the tray,
 render them to PNG (1× and 1.5×):
 
 ```
-dotnet run --project src/Perch.App.Avalonia -- render out
+dotnet run --project src/Perch.App -- render out
 ```
 
 ### Icons
@@ -181,5 +181,5 @@ tools\gen-icons.cmd              # cmd
 # or directly: dotnet run --project tools/IconGen
 ```
 
-This writes `src/Perch.App.Avalonia/Assets/icon.png` (256×256), `src/Perch.App.Avalonia/Assets/icon.ico`
+This writes `src/Perch.App/Assets/icon.png` (256×256), `src/Perch.App/Assets/icon.ico`
 (multi-resolution), and `landing-icon.png` (512×512).
