@@ -1,15 +1,10 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:vm="using:Perch.Avalonia.ViewModels"
-        xmlns:views="using:Perch.Avalonia.Views"
         x:Class="Perch.Avalonia.Windows.LiveOverlayWindow"
-        x:DataType="vm:OverlayViewModel"
         Title="Perch"
         Width="280" SizeToContent="Height"
         CanResize="False" ShowInTaskbar="False" Topmost="True"
         Background="Transparent">
-
-    <!-- Chrome (borderless/transparent/manual-position) is set in code-behind; the body is the
-         reusable OverlayView, bound to the same OverlayViewModel set as this window's DataContext. -->
-    <views:OverlayView />
+    <!-- Content is the owner-drawn OverlayCanvas, set in code-behind. Chrome (borderless/transparent/
+         manual position) is also set in code-behind. -->
 </Window>

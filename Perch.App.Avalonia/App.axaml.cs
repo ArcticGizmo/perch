@@ -4,7 +4,6 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform;
 using Perch.Avalonia.Services;
-using Perch.Avalonia.ViewModels;
 using Perch.Avalonia.Windows;
 
 namespace Perch.Avalonia;
@@ -17,7 +16,6 @@ namespace Perch.Avalonia;
 /// </summary>
 public partial class App : Application
 {
-    private readonly OverlayViewModel _overlayVm = new();
     private SessionMonitorHost? _monitorHost;
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
@@ -33,9 +31,10 @@ public partial class App : Application
 
             SetUpTray(desktop);
 
-            // Live overlay + the data pipeline that feeds it.
-            _overlay = new LiveOverlayWindow(_overlayVm);
-            _monitorHost = new SessionMonitorHost(_overlayVm);
+            // Live overlay + the data pipeline that feeds it. The host marshals scans to the UI thread,
+            // so feeding the owner-drawn canvas from its callback is UI-thread-safe.
+            _overlay = new LiveOverlayWindow();
+            _monitorHost = new SessionMonitorHost(_overlay.Canvas.Update);
             _overlay.Show();
             _monitorHost.Start(); // initial scan (we're on the UI thread here)
         }
