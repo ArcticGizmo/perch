@@ -15,6 +15,8 @@
   <ItemGroup>
     <!-- The data layer now lives in Perch.Core (UI-free); the app consumes it as a library. -->
     <ProjectReference Include="..\Perch.Core\Perch.Core.csproj" />
+    <!-- Windows implementations of Core's platform-service interfaces (window activation, etc.). -->
+    <ProjectReference Include="..\Perch.Platform.Windows\Perch.Platform.Windows.csproj" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="icon.ico" />

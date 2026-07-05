@@ -849,7 +849,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         if (pid == null) return;
 
         if (int.TryParse(pid, out int pidInt))
-            NativeMethods.FocusTerminalForProcess(pidInt, _notifications.LastNotifiedProject);
+            PlatformServices.WindowActivator.FocusTerminalForProcess(pidInt, _notifications.LastNotifiedProject);
 
         AcknowledgeSession(pid);
     }

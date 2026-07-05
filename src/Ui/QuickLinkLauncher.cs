@@ -84,7 +84,7 @@ internal static class QuickLinkLauncher
             {
                 if (p.MainWindowHandle != IntPtr.Zero)
                 {
-                    NativeMethods.FocusWindow(p.MainWindowHandle);
+                    Perch.App.PlatformServices.WindowActivator.FocusProcessMainWindow(p.Id);
                     return;
                 }
             }

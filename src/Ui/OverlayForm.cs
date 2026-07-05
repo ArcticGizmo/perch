@@ -2342,7 +2342,7 @@ internal sealed class OverlayForm : Form, IDenseHost
                     var pid = _rows[row].Session!.Pid;
                     SessionFocused?.Invoke(pid);
                     if (int.TryParse(pid, out int pidInt))
-                        NativeMethods.FocusTerminalForProcess(pidInt, _rows[row].Session!.ProjectName);
+                        Perch.App.PlatformServices.WindowActivator.FocusTerminalForProcess(pidInt, _rows[row].Session!.ProjectName);
                 }
                 else if (HitTestQuickLink(e.Location) is var ql && ql >= 0)
                 {
