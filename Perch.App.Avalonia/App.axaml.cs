@@ -17,6 +17,7 @@ namespace Perch.Avalonia;
 public partial class App : Application
 {
     private SessionMonitorHost? _monitorHost;
+    private UsageMonitorHost? _usageHost;
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
 
@@ -27,16 +28,18 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown; // tray app — outlives its windows
-            desktop.ShutdownRequested += (_, _) => _monitorHost?.Dispose();
+            desktop.ShutdownRequested += (_, _) => { _monitorHost?.Dispose(); _usageHost?.Dispose(); };
 
             SetUpTray(desktop);
 
-            // Live overlay + the data pipeline that feeds it. The host marshals scans to the UI thread,
-            // so feeding the owner-drawn canvas from its callback is UI-thread-safe.
+            // Live overlay + the data pipelines that feed it. Both hosts deliver on the UI thread, so
+            // feeding the owner-drawn canvas from their callbacks is UI-thread-safe.
             _overlay = new LiveOverlayWindow();
             _monitorHost = new SessionMonitorHost(_overlay.Canvas.Update);
+            _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage);
             _overlay.Show();
             _monitorHost.Start(); // initial scan (we're on the UI thread here)
+            _usageHost.Start();   // initial usage fetch (polls every 5 min thereafter)
         }
         base.OnFrameworkInitializationCompleted();
     }
