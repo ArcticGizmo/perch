@@ -92,9 +92,11 @@ public partial class App : Application
             _monitorHost.AwaitingInput += _ => _overlay!.Canvas.TriggerAttention();
             _monitorHost.OpenHistoryRequested += OpenHistory; // the plugin's jump-to-session
 
-            // Row click focuses the session's terminal; artifact click opens the artifact(s).
+            // Row click focuses the session's terminal; artifact click opens the artifact (or, for
+            // several, the picker's chosen one).
             _overlay.Canvas.SessionActivated += FocusSession;
             _overlay.Canvas.ArtifactActivated += OpenArtifacts;
+            _overlay.Canvas.ArtifactChosen += OpenArtifact;
 
             // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
             // down. History / QR / external-notify / confetti are Phase-5 concerns — their triggers are
@@ -139,18 +141,18 @@ public partial class App : Application
             PlatformServices.WindowActivator.FocusTerminalForProcess(pid, session.ProjectName);
     }
 
-    // Opens a clicked row's artifact(s) in the browser. Single artifact opens directly; the multi-artifact
-    // picker popover is a Phase-5 UI concern, so for now the first is opened.
+    // Opens a single-artifact row's artifact in the browser. (Multi-artifact rows pop the canvas picker,
+    // which routes the chosen one to OpenArtifact.)
     private static void OpenArtifacts(ClaudeSession session)
     {
-        var artifacts = session.Artifacts;
-        if (artifacts.Count == 0) return;
-        var url = artifacts[0].Url;
-        if (!string.IsNullOrWhiteSpace(url))
-        {
-            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
-            catch { /* best-effort */ }
-        }
+        if (session.Artifacts.Count > 0) OpenArtifact(session.Artifacts[0]);
+    }
+
+    private static void OpenArtifact(Artifact artifact)
+    {
+        if (string.IsNullOrWhiteSpace(artifact.Url)) return;
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(artifact.Url) { UseShellExecute = true }); }
+        catch { /* best-effort */ }
     }
 
     // Auto-close: only an --autostarted tray with the setting on ever closes itself, so a manually
@@ -321,12 +323,11 @@ public partial class App : Application
         _qrWindow.Activate();
     }
 
-    // "Enable/Disable external notifications" — the ntfy pipeline isn't ported yet (no NotificationService
-    // on the Avalonia head), so the menu item stays hidden (availability defaults off). Stub the trigger.
-    private static void OnToggleExternalNotify(string sessionId)
-    {
-        // TODO(phase5): toggle the session's external-notify marker file, then rescan.
-    }
+    // "Enable/Disable external notifications" — flips the session's marker file (the same source of truth
+    // the plugin's /afk toggles) and rescans so the mail glyph + menu wording refresh. Whether external
+    // pushes actually fire on this marker is the Phase-3 notification pipeline's job; the opt-in itself
+    // is just this file, so the toggle is wired now.
+    private void OnToggleExternalNotify(string sessionId) => _monitorHost?.ToggleExternalNotify(sessionId);
 
     // Resolves the enabled links' icons off the UI thread (the first shell lookup enumerates the Start
     // Menu, ~1s), then applies them on the UI thread. Icons come back as PNG file paths from the seam.

@@ -49,6 +49,14 @@ internal sealed class SessionMonitorHost : IDisposable
     /// <summary>Reads the initial session state. Call on the UI thread (Scan raises SessionsChanged).</summary>
     public void Start() => _monitor.Scan();
 
+    /// <summary>Flips a session's external-notify opt-in (writes/deletes its marker file) and rescans so
+    /// the overlay's mail glyph + menu wording refresh. Call on the UI thread.</summary>
+    public void ToggleExternalNotify(string sessionId)
+    {
+        _monitor.ToggleExternalNotify(sessionId);
+        _monitor.Scan();
+    }
+
     private void OnSessionsChanged(IReadOnlyList<ClaudeSession> sessions) => _onSessions(sessions);
 
     public void Dispose()
