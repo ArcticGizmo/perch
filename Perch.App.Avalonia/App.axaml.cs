@@ -85,8 +85,9 @@ public partial class App : Application
             };
 
             // A session finishing or blocking flashes the overlay's attention chase-border (and expands
-            // it if collapsed). The balloon/chime/external push are Phase-5 notification concerns.
-            _monitorHost.NeedsAttention += _ => _overlay!.Canvas.TriggerAttention();
+            // it if collapsed). A finish also spends any armed confetti. The balloon/chime/external push
+            // are Phase-5 notification concerns.
+            _monitorHost.NeedsAttention += OnNeedsAttention;
             _monitorHost.AwaitingInput += _ => _overlay!.Canvas.TriggerAttention();
 
             // Row click focuses the session's terminal; artifact click opens the artifact(s).
@@ -220,6 +221,24 @@ public partial class App : Application
             _monitorHost.GitStatsEnabled = s.ShowGitStats;
             _monitorHost.StuckDetectionEnabled = s.StuckDetectionEnabled;
         }
+    }
+
+    // A session finished (NeedsAttention): flash the overlay, and if it was armed for a confetti finish,
+    // spend the arming and set off the celebration on the overlay's current screen.
+    private ConfettiWindow? _confetti;
+    private void OnNeedsAttention(ClaudeSession session)
+    {
+        _overlay!.Canvas.TriggerAttention();
+        if (_overlay.Canvas.ConsumeConfetti(session.SessionId))
+            LaunchConfetti();
+    }
+
+    private void LaunchConfetti()
+    {
+        if (_overlay is null) return;
+        var screen = _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
+        if (screen is null) return;
+        (_confetti ??= new ConfettiWindow()).Launch(screen);
     }
 
     // The overlay was dragged to a (possibly different) monitor. The ambient screen-edge glow is a
