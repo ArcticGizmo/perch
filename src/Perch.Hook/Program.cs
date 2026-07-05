@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 // perch-hook <event>
 //
@@ -29,6 +30,11 @@ try
         "agent_id", "teammate_name", "source");
 
     string sessionsDir = Path.Combine(ResolveClaudeDir(), "sessions");
+
+    // If Perch was removed without running its uninstaller, our hook entries would linger. Detect that
+    // on the infrequent session-lifecycle events (never the per-tool-call `mode` hot path) and strip
+    // our own managed entries so a dead command never accumulates.
+    if (action is "start" or "cleanup") MaybeSelfHeal();
 
     switch (action)
     {
@@ -193,6 +199,65 @@ static string ProfileFolder()
     bool dev = !string.IsNullOrEmpty(env)
         && !(env == "0" || env.Equals("false", StringComparison.OrdinalIgnoreCase));
     return dev ? "Perch (Dev)" : "Perch";
+}
+
+// Self-heal: the installer records the tray executable's path in <bin>/perch.path (HookInstaller). If
+// that file is gone, Perch was uninstalled without its cleanup running — strip our managed hook block so
+// settings.json doesn't keep pointing at a dead binary. Fail-open: no breadcrumb → leave hooks alone.
+static void MaybeSelfHeal()
+{
+    try
+    {
+        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        string marker = Path.Combine(appData, ProfileFolder(), "bin", "perch.path");
+        if (!File.Exists(marker)) return;
+
+        string trayPath = File.ReadAllText(marker).Trim();
+        if (string.IsNullOrEmpty(trayPath) || File.Exists(trayPath)) return; // Perch still installed
+
+        StripManagedHooks(Path.Combine(ResolveClaudeDir(), "settings.json"));
+    }
+    catch { /* best-effort */ }
+}
+
+// Removes every Perch-managed hook object (tagged _perch.managed) from settings.json, dropping any
+// entry/event left empty, and preserving the user's own hooks. Mirrors ClaudeUserSettings.StripManaged;
+// duplicated here so perch-hook stays a standalone AOT binary with no dependency on Perch.Core.
+static void StripManagedHooks(string settingsPath)
+{
+    if (!File.Exists(settingsPath)) return;
+
+    var opts = new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip };
+    if (JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: opts) is not JsonObject root ||
+        root["hooks"] is not JsonObject hooks)
+        return;
+
+    bool changed = false;
+    foreach (var evt in hooks.Select(kv => kv.Key).ToList())
+    {
+        if (hooks[evt] is not JsonArray entries) continue;
+
+        for (int i = entries.Count - 1; i >= 0; i--)
+        {
+            if (entries[i] is not JsonObject entry || entry["hooks"] is not JsonArray list) continue;
+
+            for (int j = list.Count - 1; j >= 0; j--)
+                if (list[j] is JsonObject h && h["_perch"] is JsonObject p &&
+                    p["managed"]?.GetValueKind() == JsonValueKind.True)
+                {
+                    list.RemoveAt(j);
+                    changed = true;
+                }
+
+            if (list.Count == 0) entries.RemoveAt(i);
+        }
+
+        if (entries.Count == 0) hooks.Remove(evt);
+    }
+
+    if (!changed) return;
+    if (hooks.Count == 0) root.Remove("hooks");
+    File.WriteAllText(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
 }
 
 static bool IsPerchRunning()
