@@ -90,6 +90,7 @@ public partial class App : Application
             // are Phase-5 notification concerns.
             _monitorHost.NeedsAttention += OnNeedsAttention;
             _monitorHost.AwaitingInput += _ => _overlay!.Canvas.TriggerAttention();
+            _monitorHost.OpenHistoryRequested += OpenHistory; // the plugin's jump-to-session
 
             // Row click focuses the session's terminal; artifact click opens the artifact(s).
             _overlay.Canvas.SessionActivated += FocusSession;
