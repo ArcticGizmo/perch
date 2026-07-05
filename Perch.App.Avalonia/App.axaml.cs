@@ -396,7 +396,9 @@ public partial class App : Application
                 exitItem,
             },
         };
-        tray.Clicked += (_, _) => ToggleDense();
+        // Left-clicking the tray icon opens Settings (matching the WinForms tray); dense mode is toggled
+        // from the menu item above (and the global hotkey).
+        tray.Clicked += (_, _) => OpenSettings();
 
         TrayIcon.SetIcons(this, new TrayIcons { tray });
     }

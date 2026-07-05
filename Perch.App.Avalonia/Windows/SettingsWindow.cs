@@ -157,6 +157,7 @@ internal sealed class SettingsWindow : Window
             Content = title,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Left,
+            VerticalContentAlignment = VerticalAlignment.Center,
             Background = NavBg, Foreground = Palette.MutedBrush,
             BorderThickness = new Thickness(3, 0, 0, 0), BorderBrush = Brushes.Transparent,
             CornerRadius = new CornerRadius(0), Padding = new Thickness(13, 0, 8, 0),

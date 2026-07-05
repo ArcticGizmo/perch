@@ -88,7 +88,12 @@ public sealed class GlowWindow : Window, IAmbientGlow
         {
             _phase += PulseStep;
             double s = (Math.Sin(_phase) + 1) / 2;              // 0..1
-            Opacity = PulseMin + s * (PulseMax - PulseMin);
+            // Breathe the *content* opacity, not the window's. Avalonia implements Window.Opacity on
+            // Windows by toggling WS_EX_LAYERED and rewriting the window's extended styles every time it
+            // changes — which strips the WS_EX_TRANSPARENT (click-through) bit we set, so the glow starts
+            // eating clicks. The content image's opacity is a compositor-level blend that never touches
+            // the HWND styles, so click-through survives.
+            _image.Opacity = PulseMin + s * (PulseMax - PulseMin);
         };
         return t;
     }
