@@ -30,6 +30,9 @@
     <!-- QR generation for the remote-control card (QrWindow). Only the pure QRCodeGenerator/
          ModuleMatrix are used; the matrix is rendered via DrawingContext, no System.Drawing renderer. -->
     <PackageReference Include="QRCoder" Version="1.8.0" />
+    <!-- Markdown parsing for the readable transcript view (HistoryWindow) — AST only; rendered to
+         Avalonia inlines by MarkdownRender. -->
+    <PackageReference Include="Markdig" Version="1.3.2" />
     <!-- Headless + Skia: the `render` mode dumps views to PNG for visual verification without a
          display. A standing harness reused across the UI-port phases. -->
     <PackageReference Include="Avalonia.Headless" Version="12.0.5" />

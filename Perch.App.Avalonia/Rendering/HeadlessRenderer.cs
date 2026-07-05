@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Headless;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -81,6 +82,20 @@ internal static class HeadlessRenderer
         var flight = new Views.FlightPathTimeline();
         flight.SetReport(SampleFlightReport());
         RenderControl(flight, Path.Combine(outDir, "flightpath_1x.png"), 96);
+
+        // Markdown transcript rendering (5.7b): headings, emphasis, inline code, code block, list, link.
+        var md = new SelectableTextBlock { Width = 520, Margin = new Thickness(16), TextWrapping = TextWrapping.Wrap, FontSize = 13 };
+        var mdInlines = new InlineCollection();
+        MarkdownRender.Append(mdInlines,
+            "## Plan\nHere's the **bold** and *italic* and `inline code`, plus a [link](https://x).\n\n"
+            + "- first item\n- second item with `code`\n\n```\nvar x = 42;\nreturn x;\n```\n",
+            new SolidColorBrush(Theming.Palette.Fg), new SolidColorBrush(Theming.Palette.Muted),
+            new SolidColorBrush(Color.FromRgb(56, 189, 248)), new SolidColorBrush(Theming.Palette.Accent),
+            new SolidColorBrush(Theming.Palette.Title));
+        md.Inlines = mdInlines;
+        var mdPanel = new Panel { Width = 520, Background = new SolidColorBrush(Color.FromRgb(18, 18, 24)) };
+        mdPanel.Children.Add(md);
+        RenderControl(mdPanel, Path.Combine(outDir, "markdown_1x.png"), 96);
 
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
