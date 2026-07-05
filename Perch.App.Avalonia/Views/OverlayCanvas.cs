@@ -19,9 +19,12 @@ namespace Perch.Avalonia.Views;
 /// content height when given a null context) and paints (when given a real one), so the measured height
 /// and painted layout can never drift — the same measure-or-paint discipline the WinForms dashboards use.
 ///
-/// Built up over Phase 4. Done so far: rounded panel (4.1); header/collapsed bar (4.2); expanded session
-/// rows (4.3); sub-agents, teammates, and the collapsible "Autonomous" section (4.4). Per-row glyphs,
-/// bars, and interaction follow.
+/// Built up over Phase 4 to full parity with <c>OverlayForm</c>: rounded panel (4.1); header/collapsed
+/// bar (4.2); expanded session rows (4.3); sub-agents, teammates, and the collapsible "Autonomous"
+/// section (4.4); per-row identity/health glyphs (4.5–4.7); usage, system-metrics, and quick-link strips
+/// (4.8–4.10); hit-testing, hover, and dwell tooltips (4.11–4.12); the right-click menu (4.13); the
+/// attention chase-border (4.14); the auto-close countdown (4.15); window drag/behaviors (4.16); and the
+/// display-toggle gates driven from settings (4.17).
 /// </summary>
 public sealed class OverlayCanvas : Control
 {
@@ -115,6 +118,7 @@ public sealed class OverlayCanvas : Control
     private bool _showGitStats = true;
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
+    private bool _showWaitingTimer = true;
     private float _ctxYellow = 0.60f, _ctxOrange = 0.75f, _ctxRed = 0.90f;
 
     // Rate-limit usage strip (5-hour + weekly bars), shown between the header and the rows when expanded.
@@ -266,6 +270,89 @@ public sealed class OverlayCanvas : Control
         if (_showContextGreenSegment == show) return;
         _showContextGreenSegment = show;
         InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the context-pressure thermometer. Display only; the fill is still tracked.</summary>
+    public void SetShowContextPressure(bool show)
+    {
+        if (_showContextPressure == show) return;
+        _showContextPressure = show;
+        if (!show) HideActiveTip();
+        InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the stuck-detection warning glyph. Display only — when off (or when nothing is
+    /// flagged) no glyph is drawn; hides any open tooltip on the way out.</summary>
+    public void SetStuckDetectionEnabled(bool enabled)
+    {
+        if (_showStuckWarnings == enabled) return;
+        _showStuckWarnings = enabled;
+        if (!enabled) HideActiveTip();
+        InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the task-list "n/m" progress count. Display only — the checklist is still
+    /// tracked; the name reclaims the freed width. Hides any open tooltip on the way out.</summary>
+    public void SetShowTaskProgress(bool show)
+    {
+        if (_showTaskProgress == show) return;
+        _showTaskProgress = show;
+        if (!show) HideActiveTip();
+        InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the live token burn-rate label. Display only; the rate is still computed.</summary>
+    public void SetShowBurnRate(bool show)
+    {
+        if (_showBurnRate == show) return;
+        _showBurnRate = show;
+        InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the unstaged git line-churn chip ("+142 -37"). Display only.</summary>
+    public void SetShowGitStats(bool show)
+    {
+        if (_showGitStats == show) return;
+        _showGitStats = show;
+        InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the "waiting on you" timer on awaiting-input rows. Display only — the row still
+    /// shows its "input ↩" status, just without the elapsed-wait line.</summary>
+    public void SetShowWaitingTimer(bool show)
+    {
+        if (_showWaitingTimer == show) return;
+        _showWaitingTimer = show;
+        UpdateTickTimer(); // an awaiting row now needs (or no longer needs) the per-second repaint
+        InvalidateVisual();
+    }
+
+    /// <summary>How many minutes a blocked session takes to warm the waiting timer fully to red (min 1).</summary>
+    public void SetWaitingTimerRedMinutes(int minutes)
+    {
+        minutes = Math.Max(1, minutes);
+        if (_waitingTimerRedMinutes == minutes) return;
+        _waitingTimerRedMinutes = minutes;
+        InvalidateVisual();
+    }
+
+    /// <summary>Sets the context-pressure colour thresholds (whole percentages). The thermometer is
+    /// hidden below <paramref name="yellow"/>, then warms yellow → orange → red.</summary>
+    public void SetContextThresholds(int yellow, int orange, int red)
+    {
+        _ctxYellow = yellow / 100f;
+        _ctxOrange = orange / 100f;
+        _ctxRed    = red    / 100f;
+        InvalidateVisual();
+    }
+
+    // Hides whatever dwell tooltip is showing (used when a gate that owns a tooltip target turns off).
+    private void HideActiveTip()
+    {
+        _tipKind = TipKind.None;
+        _tipRow = -1;
+        _dwellTimer?.Stop();
+        _tooltip?.HideTip();
     }
 
     private IReadOnlyList<ClaudeSession> _sessions = [];
@@ -802,7 +889,9 @@ public sealed class OverlayCanvas : Control
 
         double midY = top + RowHeight / 2;
         bool running  = session.Status == SessionStatus.Running;
-        bool awaiting = session.Status == SessionStatus.AwaitingInput;
+        // When the waiting timer is off, an awaiting row keeps its "input ↩" status (from the switch
+        // below) but drops the "waiting on you" activity + elapsed line, so it renders single-line.
+        bool awaiting = session.Status == SessionStatus.AwaitingInput && _showWaitingTimer;
 
         // While working a checklist, the active task's gerund is more telling than the raw tool phrase.
         string? activity = running
@@ -1680,7 +1769,8 @@ public sealed class OverlayCanvas : Control
     private void UpdateTickTimer()
     {
         bool need = _expanded && _sessions.Any(s =>
-            s.Status == SessionStatus.Running || s.Status == SessionStatus.AwaitingInput);
+            s.Status == SessionStatus.Running
+            || (_showWaitingTimer && s.Status == SessionStatus.AwaitingInput));
         _tickTimer ??= CreateTickTimer();
         if (need && !_tickTimer.IsEnabled) _tickTimer.Start();
         else if (!need && _tickTimer.IsEnabled) _tickTimer.Stop();

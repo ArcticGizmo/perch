@@ -103,14 +103,15 @@ public partial class App : Application
             _appSettings = settings;
             _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider);
             _overlay.Canvas.QuickLinkActivated += _quickLinkLauncher.LaunchOrFocus;
-            _overlay.Canvas.SetUpsideDownQuickLinks(settings.UpsideDownQuickLinks);
+
+            // Drive every overlay display gate + the monitor's data-layer toggles from persisted settings
+            // (the Phase-3 Settings UI will edit these; this reads whatever's on disk, defaults included).
+            ApplyDisplaySettings(settings);
 
             _overlay.Show();
-            // Sampling defaults for the port (4.17 drives these from Settings): both strips on, rolled
-            // up over each session's process tree.
-            _metricsHost.Configure(system: true, perSession: true, subprocess: true);
+            _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: true);
             _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
-            _usageHost.Start();   // initial usage fetch (polls every 5 min thereafter)
+            if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
             LoadQuickLinks(settings);
 
             // Global hotkey (Alt+Shift+W): toggle the overlay's visibility from anywhere. The callback
@@ -177,6 +178,42 @@ public partial class App : Application
 
         _autoCloseTimer.Start();
         _overlay.Canvas.StartAutoCloseCountdown(AutoCloseGraceMs);
+    }
+
+    // Applies every persisted overlay display gate to the canvas and the monitor's data-layer toggles,
+    // so the overlay honours the user's settings from the first frame. Mirrors the block the WinForms
+    // OverlayApplicationContext runs at startup; the Phase-3 Settings UI drives the same setters live.
+    private void ApplyDisplaySettings(AppSettings s)
+    {
+        if (_overlay is null) return;
+        var c = _overlay.Canvas;
+
+        c.SetShowUsage(s.ShowUsage);
+        c.SetShowExpectedRate(s.ShowExpectedUsageRate);
+        c.SetShowSystemMetrics(s.ShowSystemMetrics);
+        c.SetShowSessionMetrics(s.ShowSessionMetrics);
+        c.SetShowContextPressure(s.ShowContextPressure);
+        c.SetShowContextGreenSegment(s.ShowContextGreenSegment);
+        c.SetContextThresholds(s.ContextPressureYellowPercent, s.ContextPressureOrangePercent, s.ContextPressureRedPercent);
+        c.SetShowModeBadges(s.ShowPermissionModeBadges);
+        c.SetShowTaskProgress(s.ShowTaskProgress);
+        c.SetShowBurnRate(s.ShowBurnRate);
+        c.SetShowGitStats(s.ShowGitStats);
+        c.SetStuckDetectionEnabled(s.StuckDetectionEnabled);
+        c.SetShowWaitingTimer(s.ShowWaitingTimer);
+        c.SetWaitingTimerRedMinutes(s.WaitingTimerRedMinutes);
+        c.SetShowArtifacts(s.ShowArtifacts);
+        c.SetHideInactiveTeamMembers(s.HideInactiveTeamMembers);
+        c.SetUpsideDownQuickLinks(s.UpsideDownQuickLinks);
+        c.SetConfettiFinishAvailable(s.ConfettiFinish);
+        c.SetExternalNotificationsAvailable(s.ExternalNotificationsEnabled);
+
+        // Data-layer sources for the git chip / stuck glyph (off in the monitor unless enabled here).
+        if (_monitorHost is not null)
+        {
+            _monitorHost.GitStatsEnabled = s.ShowGitStats;
+            _monitorHost.StuckDetectionEnabled = s.StuckDetectionEnabled;
+        }
     }
 
     // The overlay was dragged to a (possibly different) monitor. The ambient screen-edge glow is a

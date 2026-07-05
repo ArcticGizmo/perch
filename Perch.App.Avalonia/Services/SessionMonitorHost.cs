@@ -34,6 +34,14 @@ internal sealed class SessionMonitorHost : IDisposable
         _monitor.ChangeDetected += () => Dispatcher.UIThread.Post(() => _monitor.Scan());
     }
 
+    /// <summary>Whether the monitor flags stuck sessions (feeds the overlay's warning glyph). Off by
+    /// default in the monitor; the app sets it from settings.</summary>
+    public bool StuckDetectionEnabled { set => _monitor.StuckDetectionEnabled = value; }
+
+    /// <summary>Whether the monitor fetches unstaged git line-churn (feeds the overlay's git chip). Off
+    /// by default in the monitor; the app sets it from settings.</summary>
+    public bool GitStatsEnabled { set => _monitor.GitStatsEnabled = value; }
+
     /// <summary>Reads the initial session state. Call on the UI thread (Scan raises SessionsChanged).</summary>
     public void Start() => _monitor.Scan();
 
