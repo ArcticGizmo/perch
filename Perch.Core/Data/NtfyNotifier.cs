@@ -1,4 +1,4 @@
-namespace Perch.App;
+namespace Perch.Data;
 
 using System.Text;
 

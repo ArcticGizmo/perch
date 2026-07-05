@@ -31,6 +31,12 @@ public partial class App : Application
     private AppSettings? _appSettings;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
 
+    // Notifications: the owner-drawn toast notifier + the toolkit-neutral dispatcher over it, plus the
+    // session-lock seam the dispatcher reads for the AFK-lock external override.
+    private Notifications.AvaloniaToastNotifier? _notifier;
+    private NotificationService? _notifications;
+    private ISessionLock? _sessionLock;
+
     // Auto-close after the last session ends (only for an --autostarted tray with the setting on). The
     // overlay shows a depleting bar for this grace period; if still no sessions when it elapses, exit.
     private const int AutoCloseGraceMs = 20_000;
@@ -54,6 +60,7 @@ public partial class App : Application
                 _usageHost?.Dispose();
                 _metricsHost?.Dispose();
                 _hotkey?.Dispose();
+                _sessionLock?.Dispose();
                 _overlay?.Canvas.DisposeDense();
             };
 
@@ -87,10 +94,10 @@ public partial class App : Application
             };
 
             // A session finishing or blocking flashes the overlay's attention chase-border (and expands
-            // it if collapsed). A finish also spends any armed confetti. The balloon/chime/external push
-            // are Phase-5 notification concerns.
+            // it if collapsed). A finish also spends any armed confetti. Both fire the desktop
+            // toast + chime + external push (gated per settings) via the notification dispatcher.
             _monitorHost.NeedsAttention += OnNeedsAttention;
-            _monitorHost.AwaitingInput += _ => _overlay!.Canvas.TriggerAttention();
+            _monitorHost.AwaitingInput += OnAwaitingInput;
             _monitorHost.OpenHistoryRequested += OpenHistory; // the plugin's jump-to-session
 
             // Row click focuses the session's terminal; artifact click opens the artifact (or, for
@@ -115,6 +122,14 @@ public partial class App : Application
             _appSettings = settings;
             _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider);
             _overlay.Canvas.QuickLinkActivated += _quickLinkLauncher.LaunchOrFocus;
+
+            // Notifications: the toast notifier shows on the overlay's current screen; the dispatcher gates
+            // toast/chime/external per settings. A toast click focuses that terminal and acknowledges it.
+            _sessionLock = PlatformServices.CreateSessionLock();
+            _notifier = new Notifications.AvaloniaToastNotifier(
+                () => _overlay is null ? null : _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary);
+            _notifier.SessionActivated += OnToastActivated;
+            _notifications = new NotificationService(_notifier, settings, _sessionLock, PlatformServices.AudioCue);
 
             // Drive every overlay display gate + the monitor's data-layer toggles from persisted settings
             // (the Phase-3 Settings UI will edit these; this reads whatever's on disk, defaults included).
@@ -236,14 +251,32 @@ public partial class App : Application
         }
     }
 
-    // A session finished (NeedsAttention): flash the overlay, and if it was armed for a confetti finish,
-    // spend the arming and set off the celebration on the overlay's current screen.
+    // A session finished (NeedsAttention): flash the overlay, fire the notification (toast/chime/external,
+    // gated per settings), and if it was armed for a confetti finish, spend the arming and set off the
+    // celebration on the overlay's current screen.
     private ConfettiWindow? _confetti;
     private void OnNeedsAttention(ClaudeSession session)
     {
         _overlay!.Canvas.TriggerAttention();
+        _notifications?.Notify(NotificationKind.Done, session);
         if (_overlay.Canvas.ConsumeConfetti(session.SessionId))
             LaunchConfetti();
+    }
+
+    // A session blocked awaiting input: flash the overlay and fire the "waiting for input" notification.
+    private void OnAwaitingInput(ClaudeSession session)
+    {
+        _overlay!.Canvas.TriggerAttention();
+        _notifications?.Notify(NotificationKind.WaitingForInput, session);
+    }
+
+    // A toast was clicked: focus the session's terminal and acknowledge it (clears the "done" badge) —
+    // the Avalonia counterpart of the WinForms balloon-click handler.
+    private void OnToastActivated(string pid, string? project)
+    {
+        if (int.TryParse(pid, out int p))
+            PlatformServices.WindowActivator.FocusTerminalForProcess(p, project);
+        _monitorHost?.Acknowledge(pid);
     }
 
     private void LaunchConfetti()
@@ -430,8 +463,8 @@ public partial class App : Application
                 settings.ShowSystemMetrics, settings.ShowSessionMetrics, settings.IncludeSubprocessMetrics),
             QuickLinksChanged = () => ReloadQuickLinks(settings),
             GlowChanged = UpdateGlow,
-            TestNotification = kind => PlatformServices.AudioCue.Play(kind),
-            TestExternalNotification = () => _ = SendExternalTestAsync(settings),
+            TestNotification = kind => _notifications?.ShowTest(kind),
+            TestExternalNotification = () => { if (_notifications is { } n) _ = n.SendExternalTestAsync(); },
             OpenStats = OpenStats,
             OpenFlightPath = OpenFlightPath,
         };
@@ -439,32 +472,5 @@ public partial class App : Application
         _settings.Closed += (_, _) => _settings = null;
         _settings.Show();
         _settings.Activate();
-    }
-
-    // Sends a one-off test push through the configured ntfy channel (the Settings "Send test
-    // notification" button). A plain HTTP POST to {host}/{topic}; failures are swallowed (best-effort,
-    // like the WinForms NtfyNotifier), so a dead host can't wedge the UI.
-    private static readonly System.Net.Http.HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
-    private static async Task SendExternalTestAsync(AppSettings settings)
-    {
-        var host = settings.NtfyHost?.Trim();
-        var topic = settings.NtfyTopic?.Trim();
-        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(topic)) return;
-        try
-        {
-            var baseUrl = host.TrimEnd('/');
-            if (!baseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-                !baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                baseUrl = "https://" + baseUrl;
-            var url = $"{baseUrl}/{Uri.EscapeDataString(topic)}";
-            using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, url)
-            {
-                Content = new System.Net.Http.StringContent("This is a test notification from Perch."),
-            };
-            req.Headers.TryAddWithoutValidation("Title", "Perch");
-            req.Headers.TryAddWithoutValidation("Tags", "bell");
-            using var _ = await _http.SendAsync(req);
-        }
-        catch { /* best-effort */ }
     }
 }
