@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
+using Perch.Platform;
 
 namespace Perch.Data;
 
@@ -105,6 +105,10 @@ internal sealed class MetricsMonitor : IDisposable
 {
     private const int SampleIntervalMs = 2000;
 
+    // The platform seam for whole-machine CPU/RAM reads and the parent-pid map; the delta maths and
+    // process-tree roll-up below stay platform-neutral.
+    private readonly ISystemMetrics _platform;
+
     private readonly System.Threading.Timer _timer;
     private bool _running;
     private bool _disposed;
@@ -133,7 +137,11 @@ internal sealed class MetricsMonitor : IDisposable
     /// reading and a per-session-pid map. The owner marshals this onto the UI thread.</summary>
     public event Action<SystemMetrics, IReadOnlyDictionary<string, SessionMetrics>>? Updated;
 
-    public MetricsMonitor() => _timer = new System.Threading.Timer(_ => Sample());
+    public MetricsMonitor(ISystemMetrics platform)
+    {
+        _platform = platform;
+        _timer = new System.Threading.Timer(_ => Sample());
+    }
 
     /// <summary>Applies the three monitoring switches and starts or stops sampling to match. Sampling
     /// runs only while <paramref name="system"/> or <paramref name="perSession"/> is on.</summary>
@@ -217,12 +225,11 @@ internal sealed class MetricsMonitor : IDisposable
     private SystemMetrics SampleSystem(bool includeCpu)
     {
         double cpu = 0;
-        if (includeCpu && GetSystemTimes(out var idle, out var kernel, out var user))
+        if (includeCpu && _platform.ReadCpuTimes() is { } cur)
         {
-            var cur = (ToTicks(idle), ToTicks(kernel), ToTicks(user));
             if (_prevSystemTimes is { } prev)
                 cpu = MetricsMath.SystemCpuPercent(
-                    cur.Item1 - prev.idle, cur.Item2 - prev.kernel, cur.Item3 - prev.user);
+                    cur.idle - prev.idle, cur.kernel - prev.kernel, cur.user - prev.user);
             _prevSystemTimes = cur;
         }
         else if (!includeCpu)
@@ -230,14 +237,7 @@ internal sealed class MetricsMonitor : IDisposable
             _prevSystemTimes = null;
         }
 
-        long used = 0, total = 0;
-        var mem = new MEMORYSTATUSEX();
-        if (GlobalMemoryStatusEx(mem))
-        {
-            total = (long)mem.ullTotalPhys;
-            used  = (long)(mem.ullTotalPhys - mem.ullAvailPhys);
-        }
-
+        var (used, total) = _platform.ReadMemory();
         return new SystemMetrics(cpu, used, total);
     }
 
@@ -253,7 +253,7 @@ internal sealed class MetricsMonitor : IDisposable
         // A single fresh CPU-time reading per process this tick, reused across sessions that might
         // share a descendant, and carried into _prevCpu for next tick's delta.
         var curCpu = new Dictionary<int, TimeSpan>();
-        var parentByPid = IncludeSubprocesses ? BuildParentMap() : null;
+        var parentByPid = IncludeSubprocesses ? _platform.ReadParentMap() : null;
         int cores = Environment.ProcessorCount;
 
         var result = new Dictionary<string, SessionMetrics>(pids.Length);
@@ -307,95 +307,10 @@ internal sealed class MetricsMonitor : IDisposable
         }
     }
 
-    // A pid → parent-pid map of every process on the machine, via a Toolhelp snapshot. Best-effort:
-    // an empty map (snapshot failed) just means the tree collapses to the root pid this tick.
-    private static Dictionary<int, int> BuildParentMap()
-    {
-        var map = new Dictionary<int, int>();
-        var snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (snapshot == IntPtr.Zero || snapshot == INVALID_HANDLE_VALUE)
-            return map;
-        try
-        {
-            var entry = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
-            if (!Process32First(snapshot, ref entry)) return map;
-            do
-            {
-                map[(int)entry.th32ProcessID] = (int)entry.th32ParentProcessID;
-            }
-            while (Process32Next(snapshot, ref entry));
-        }
-        catch { }
-        finally
-        {
-            CloseHandle(snapshot);
-        }
-        return map;
-    }
-
-    private static ulong ToTicks(FILETIME ft) => ((ulong)ft.High << 32) | ft.Low;
-
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         _timer.Dispose();
     }
-
-    // ── P/Invoke ──────────────────────────────────────────────────────────────────
-    [StructLayout(LayoutKind.Sequential)]
-    private struct FILETIME { public uint Low; public uint High; }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetSystemTimes(out FILETIME idleTime, out FILETIME kernelTime, out FILETIME userTime);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private sealed class MEMORYSTATUSEX
-    {
-        public uint dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>();
-        public uint dwMemoryLoad;
-        public ulong ullTotalPhys;
-        public ulong ullAvailPhys;
-        public ulong ullTotalPageFile;
-        public ulong ullAvailPageFile;
-        public ulong ullTotalVirtual;
-        public ulong ullAvailVirtual;
-        public ulong ullAvailExtendedVirtual;
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX lpBuffer);
-
-    private const uint TH32CS_SNAPPROCESS = 0x00000002;
-    private static readonly IntPtr INVALID_HANDLE_VALUE = new(-1);
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-    private struct PROCESSENTRY32
-    {
-        public uint dwSize;
-        public uint cntUsage;
-        public uint th32ProcessID;
-        public IntPtr th32DefaultHeapID;
-        public uint th32ModuleID;
-        public uint cntThreads;
-        public uint th32ParentProcessID;
-        public int pcPriClassBase;
-        public uint dwFlags;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-        public string szExeFile;
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
-
-    [DllImport("kernel32.dll")]
-    private static extern bool Process32First(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
-
-    [DllImport("kernel32.dll")]
-    private static extern bool Process32Next(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
-
-    [DllImport("kernel32.dll")]
-    private static extern bool CloseHandle(IntPtr hObject);
 }

@@ -32,7 +32,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     // never shown until an armed session finishes (see OnNeedsAttention).
     private readonly ConfettiForm _confetti = new();
     private readonly SessionMonitor _monitor;
-    private readonly MetricsMonitor _metricsMonitor = new();
+    private readonly MetricsMonitor _metricsMonitor = new(PlatformServices.SystemMetrics);
     private readonly UsageMonitor _usageMonitor = new();
     private readonly System.Windows.Forms.Timer _reconcileTimer;
     private readonly System.Windows.Forms.Timer _deadlineTimer;

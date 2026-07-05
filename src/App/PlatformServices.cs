@@ -15,6 +15,7 @@ internal static class PlatformServices
     public static IWindowActivator WindowActivator { get; } = new Win.WindowActivator();
     public static IPathInstaller PathInstaller { get; } = new Win.PathInstaller();
     public static IAudioCue AudioCue { get; } = new Win.AudioCue();
+    public static ISystemMetrics SystemMetrics { get; } = new Win.WindowsSystemMetrics();
 
     /// <summary>Creates a fresh session-lock monitor. The caller owns it (it's disposable) — the tray
     /// context holds one for the app's lifetime.</summary>
