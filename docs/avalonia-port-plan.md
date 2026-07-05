@@ -236,3 +236,13 @@ a month's.
   `IGlobalHotkey` / `IAmbientGlow` / tray / toasts (UI-toolkit-bound → Avalonia phases),
   `ISystemMetrics` (only matters off-Windows → Phase 7). Build clean, 144 tests green.
 - **Phase 3 — in progress.**
+  - *Shell scaffold — DONE.* `Perch.App.Avalonia` boots with a dark Fluent theme, system tray + menu,
+    the single-reused-window idiom, and the `Theming/Palette` port of the WinForms `Theme`. Runs as a
+    second exe beside WinForms (distinct single-instance mutex); Velopack deferred to Phase 6.
+  - *Thin live vertical — DONE.* The overlay shows **live** sessions end-to-end: `SessionMonitorHost`
+    drives `SessionMonitor` (UI-thread-marshalled scans) into an `OverlayViewModel`; `OverlayView`
+    (reusable body) renders status-coloured rows in a transparent/topmost/borderless window; row-click
+    focuses the terminal via `IWindowActivator`. A headless-Skia `render` mode (`HeadlessRenderer`)
+    dumps views to PNG for verification. Verified against real `~/.claude` data + synthetic render.
+  - *Still to do in Phase 3:* full Settings UI (view-model over Core), desktop notifications
+    (`INotifier` + `Avalonia.Labs.Notifications`), `IAppIconProvider`, quick-links dialog.
