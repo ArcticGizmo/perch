@@ -1,4 +1,7 @@
 using Avalonia;
+using Avalonia.Headless;
+using Avalonia.Media.Imaging;
+using Perch.Avalonia.Rendering;
 
 namespace Perch.Avalonia;
 
@@ -14,12 +17,16 @@ internal static class Program
 
     // STA for shell/clipboard/COM interop parity with the WinForms app.
     [STAThread]
-    public static void Main(string[] args)
+    public static int Main(string[] args)
     {
+        // `perch-avalonia render <outDir>` dumps views to PNG (headless) for visual verification.
+        if (args.Length > 0 && args[0] == "render")
+            return HeadlessRenderer.RenderAll(args.Length > 1 ? args[1] : ".");
+
         // A stale older plugin might still invoke `perch handle <event>` — short-circuit to a no-op
         // so it never launches a second tray. (Matches the WinForms entry point.)
         if (args.Length > 0 && string.Equals(args[0], "handle", StringComparison.OrdinalIgnoreCase))
-            return;
+            return 0;
 
         AutoStarted = args.Any(a => string.Equals(a, "--autostarted", StringComparison.OrdinalIgnoreCase));
 
@@ -28,11 +35,12 @@ internal static class Program
 
         _instanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out bool createdNew);
         if (!createdNew)
-            return; // another Avalonia tray instance already owns the mutex
+            return 0; // another Avalonia tray instance already owns the mutex
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
 
         GC.KeepAlive(_instanceMutex);
+        return 0;
     }
 
     public static AppBuilder BuildAvaloniaApp()

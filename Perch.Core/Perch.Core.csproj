@@ -15,8 +15,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- The WinForms app (assembly name "perch") and the test project exercise Core's internals. -->
+    <!-- The app heads (WinForms "perch", Avalonia "perch-avalonia") and the test project exercise
+         Core's internals (the monitors/readers are internal-with-friends, not a public API). -->
     <InternalsVisibleTo Include="perch" />
+    <InternalsVisibleTo Include="perch-avalonia" />
     <InternalsVisibleTo Include="Perch.Tests" />
   </ItemGroup>
 </Project>
