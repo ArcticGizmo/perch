@@ -6,12 +6,16 @@ using Perch.Avalonia.Views;
 namespace Perch.Avalonia.Windows;
 
 /// <summary>
-/// The live floating overlay: a transparent, borderless, always-on-top, no-taskbar window hosting the
-/// owner-drawn <see cref="OverlayCanvas"/>. The window supplies chrome + position; the canvas supplies
-/// all painting. Feed sessions via <see cref="Canvas"/>.<c>Update(...)</c>.
+/// The live floating overlay: a transparent, borderless, always-on-top, no-taskbar, no-Alt+Tab,
+/// no-activate window hosting the owner-drawn <see cref="OverlayCanvas"/>. The window supplies chrome +
+/// position; the canvas supplies all painting. Feed sessions via <see cref="Canvas"/>.<c>Update(...)</c>.
 /// </summary>
 public partial class LiveOverlayWindow : Window
 {
+    // The overlay floats this far below the work-area top when auto-positioned (mirrors OverlayForm).
+    private const int FloatTopGap = 32;
+    private const int RightMargin = 16;
+
     public OverlayCanvas Canvas { get; }
 
     // Design-time / XAML-loader ctor. The app uses the canvas-taking overload below.
@@ -28,8 +32,46 @@ public partial class LiveOverlayWindow : Window
         WindowDecorations = WindowDecorations.None;
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         WindowStartupLocation = WindowStartupLocation.Manual;
-        Position = new PixelPoint(60, 60);
+
+        // The canvas owns dragging (header = drag handle); when a drag ends it asks us to reposition and
+        // reports completion so the app can follow with the ambient glow.
+        Canvas.MoveDragRequested += MoveDragTo;
     }
+
+    /// <summary>Raised when the user finishes dragging the overlay, so the app can re-evaluate anything
+    /// tied to the overlay's screen — chiefly moving the screen-edge glow to the monitor it now sits on.</summary>
+    public event Action? DragCompleted
+    {
+        add    => Canvas.DragCompleted += value;
+        remove => Canvas.DragCompleted -= value;
+    }
+
+    protected override void OnOpened(EventArgs e)
+    {
+        base.OnOpened(e);
+
+        // Auto-position at the top-right of the primary screen's work area (below any top-docked bar),
+        // matching the WinForms overlay's default float. Positions are in physical pixels, so scale the
+        // DIP width/gaps by the screen's DPI.
+        var screen = Screens.Primary ?? (Screens.All.Count > 0 ? Screens.All[0] : null);
+        if (screen is not null)
+        {
+            var wa = screen.WorkingArea;
+            double scale = screen.Scaling;
+            int w = (int)(Width * scale);
+            Position = new PixelPoint(
+                wa.X + wa.Width - w - (int)(RightMargin * scale),
+                wa.Y + (int)(FloatTopGap * scale));
+        }
+
+        // No Alt+Tab entry and never take activation (showing must not steal focus from the terminal).
+        if (OperatingSystem.IsWindows() && TryGetPlatformHandle() is { } handle)
+            Perch.Platform.Windows.OverlayNativeChrome.MakeToolWindowNoActivate(handle.Handle);
+    }
+
+    // Moves the window by the given physical-pixel delta from where the drag began (the canvas tracks
+    // the start position and the running delta).
+    private void MoveDragTo(PixelPoint newPosition) => Position = newPosition;
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 }

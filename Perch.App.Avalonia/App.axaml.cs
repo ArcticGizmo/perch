@@ -7,6 +7,7 @@ using Avalonia.Threading;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Windows;
 using Perch.Data;
+using Perch.Platform;
 
 namespace Perch.Avalonia;
 
@@ -33,6 +34,7 @@ public partial class App : Application
     private DispatcherTimer? _autoCloseTimer;
     private bool _seenSession;
     private int _lastSessionCount;
+    private IGlobalHotkey? _hotkey;
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
@@ -47,6 +49,7 @@ public partial class App : Application
                 _monitorHost?.Dispose();
                 _usageHost?.Dispose();
                 _metricsHost?.Dispose();
+                _hotkey?.Dispose();
             };
 
             SetUpTray(desktop);
@@ -93,6 +96,7 @@ public partial class App : Application
             _overlay.Canvas.HistoryRequested += OpenHistoryViewer;
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
+            _overlay.DragCompleted += OnOverlayDragCompleted;
 
             // Quick-links strip: launch/focus goes through the platform seams; icons resolve off-thread.
             var settings = AppSettings.Load();
@@ -108,6 +112,12 @@ public partial class App : Application
             _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
             _usageHost.Start();   // initial usage fetch (polls every 5 min thereafter)
             LoadQuickLinks(settings);
+
+            // Global hotkey (Alt+Shift+W): toggle the overlay's visibility from anywhere. The callback
+            // fires on the hotkey's own thread, so hop to the UI thread. A refused binding is ignored.
+            _hotkey = PlatformServices.CreateGlobalHotkey();
+            _hotkey.Register(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 'W',
+                () => Dispatcher.UIThread.Post(ToggleOverlay));
         }
         base.OnFrameworkInitializationCompleted();
     }
@@ -167,6 +177,13 @@ public partial class App : Application
 
         _autoCloseTimer.Start();
         _overlay.Canvas.StartAutoCloseCountdown(AutoCloseGraceMs);
+    }
+
+    // The overlay was dragged to a (possibly different) monitor. The ambient screen-edge glow is a
+    // Phase-5 window; this is where it will be re-homed onto the overlay's current screen.
+    private static void OnOverlayDragCompleted()
+    {
+        // TODO(phase5): move the screen-edge glow to the monitor the overlay now sits on.
     }
 
     // ── Context-menu handlers ─────────────────────────────────────────────────

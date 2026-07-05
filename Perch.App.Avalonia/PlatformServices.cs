@@ -17,4 +17,5 @@ internal static class PlatformServices
     public static IAppIconProvider AppIconProvider { get; } = new Win.WindowsAppIconProvider();
 
     public static ISessionLock CreateSessionLock() => new Win.SessionLock();
+    public static IGlobalHotkey CreateGlobalHotkey() => new Win.GlobalHotkey();
 }

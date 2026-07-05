@@ -1276,14 +1276,43 @@ public sealed class OverlayCanvas : Control
     }
 
     // ── Pointer interaction ──────────────────────────────────────────────────
-    // Row highlight + hand cursors on hover; click routes to artifact-open, row-focus, quick-link
-    // launch, or header expand/collapse. The dwell tooltips (thermo/warn/task/metrics), window drag,
-    // and right-click menu land in 4.12/4.16/4.13 respectively.
+    // Hover highlight + hand cursors; the header doubles as a drag handle (manual reposition, so a click
+    // still toggles expand/collapse — drag vs click is told apart by a small movement threshold, as in
+    // the WinForms form). Click routing runs on release (when it wasn't a drag): artifact-open, row-focus,
+    // quick-link launch, section toggle, header expand. Right-click opens the context menu.
     private static readonly Cursor HandCursor = new(StandardCursorType.Hand);
+
+    // Drag state. A left press in the header arms a potential drag; movement past the threshold turns it
+    // into a real window move (via MoveDragRequested), which suppresses the release click.
+    private bool _leftPressed;
+    private bool _dragging;
+    private bool _wasDrag;
+    private PixelPoint _dragStartScreen;
+    private PixelPoint _windowStartPos;
+
+    /// <summary>Raised while dragging with the new absolute window position (physical pixels); the host
+    /// window applies it. A seam so the canvas doesn't reference the window type for the move itself.</summary>
+    internal event Action<PixelPoint>? MoveDragRequested;
+
+    /// <summary>Raised once when a drag finishes, so the app can follow with the screen-edge glow.</summary>
+    public event Action? DragCompleted;
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         var p = e.GetPosition(this);
+
+        if (_dragging)
+        {
+            // PointToScreen adds the (moving) window origin, so `cur` is the true cursor screen point
+            // regardless of how far we've moved the window — no feedback loop.
+            var cur = this.PointToScreen(p);
+            int dx = cur.X - _dragStartScreen.X, dy = cur.Y - _dragStartScreen.Y;
+            if (!_wasDrag && (Math.Abs(dx) > 4 || Math.Abs(dy) > 4)) _wasDrag = true;
+            if (_wasDrag)
+                MoveDragRequested?.Invoke(new PixelPoint(_windowStartPos.X + dx, _windowStartPos.Y + dy));
+            base.OnPointerMoved(e);
+            return;
+        }
 
         int row = HitTestRow(p);
         if (row != _hoveredRow) { _hoveredRow = row; InvalidateVisual(); }
@@ -1365,16 +1394,56 @@ public sealed class OverlayCanvas : Control
             return;
         }
         if (!props.IsLeftButtonPressed) { base.OnPointerPressed(e); return; }
-        var p = e.GetPosition(this);
 
-        // Artifact glyph sits inside a session row, so it must be checked before the row's focus click.
+        var p = e.GetPosition(this);
+        _leftPressed = true;
+        _wasDrag = false;
+        _dragging = false;
+
+        // The header is the drag handle: record the start so a move can reposition the window. The click
+        // action (if this turns out not to be a drag) fires on release.
+        if (p.Y < HeaderHeight && VisualRoot is Window w)
+        {
+            _dragging = true;
+            _dragStartScreen = this.PointToScreen(p);
+            _windowStartPos = w.Position;
+        }
+
+        e.Pointer.Capture(this);
+        e.Handled = true;
+        base.OnPointerPressed(e);
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        if (!_leftPressed) { base.OnPointerReleased(e); return; }
+        _leftPressed = false;
+        e.Pointer.Capture(null);
+
+        bool wasDrag = _wasDrag;
+        _dragging = false;
+        _wasDrag = false;
+
+        if (wasDrag) DragCompleted?.Invoke();  // a real drag → no click action
+        else RouteClick(e.GetPosition(this));
+
+        base.OnPointerReleased(e);
+    }
+
+    // Routes a (non-drag) left click to whatever's under the point, in priority order: the artifact glyph
+    // (inside a row, so checked first), a session/section row, a quick-link icon, then the header (toggle
+    // expand/collapse). Mirrors the WinForms MouseUp click chain.
+    private void RouteClick(Point p)
+    {
         int art = HitTestArtifactIcon(p);
         if (art >= 0 && _rows[art].Session is { } artSession)
         {
             ArtifactActivated?.Invoke(artSession);
-            e.Handled = true;
+            return;
         }
-        else if (HitTestRow(p) is var row && row >= 0)
+
+        int row = HitTestRow(p);
+        if (row >= 0)
         {
             if (_rows[row].IsSectionHeader)
             {
@@ -1386,24 +1455,24 @@ public sealed class OverlayCanvas : Control
                 // Sub-agent rows resolve to their parent session (they share its process/terminal).
                 SessionActivated?.Invoke(_rows[row].Session!);
             }
-            e.Handled = true;
+            return;
         }
-        else if (HitTestQuickLink(p) is var ql && ql >= 0 && ql < _quickLinks.Count)
+
+        int ql = HitTestQuickLink(p);
+        if (ql >= 0 && ql < _quickLinks.Count)
         {
             QuickLinkActivated?.Invoke(_quickLinks[ql]);
-            e.Handled = true;
+            return;
         }
-        else if (p.Y < HeaderHeight && _sessions.Count > 0)
+
+        if (p.Y < HeaderHeight && _sessions.Count > 0)
         {
             // Header click toggles expand/collapse; SizeToContent resizes the window to match.
             _expanded = !_expanded;
             UpdateTickTimer();
             InvalidateMeasure();
             InvalidateVisual();
-            e.Handled = true;
         }
-
-        base.OnPointerPressed(e);
     }
 
     // ── Context menu ─────────────────────────────────────────────────────────
