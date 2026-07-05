@@ -27,6 +27,13 @@ public sealed class OverlayCanvas : Control
     private const double IconBoxW     = 16;
     private const double IconBoxH     = 16;
     private const double IconGap      = 6;
+    private const double RowHeight    = 46;
+    private const double RowsTop      = HeaderHeight; // strips (usage/metrics/quick-links) inserted here later
+
+    // Font sizes (px ~= the WinForms point sizes: name 8.5pt, status/activity 7.5pt).
+    private const double NameSize     = 11.5;
+    private const double StatusSize   = 10;
+    private const double ActivitySize = 10;
 
     // ── Palette (the overlay's own; matches OverlayForm) ──────────────────────
     private static readonly IBrush BgBrush        = new SolidColorBrush(Color.FromArgb(245, 15, 15, 20));
@@ -37,6 +44,12 @@ public sealed class OverlayCanvas : Control
     private static readonly Color  AttentionColor = Color.FromRgb(251, 146, 60);
     private static readonly Color  AwaitingColor  = Color.FromRgb(250, 204, 21);
     private static readonly Color  IdleColor      = Color.FromRgb(100, 116, 139);
+    private static readonly IPen   SepPen         = new Pen(new SolidColorBrush(Color.FromRgb(35, 35, 50)), 1);
+    private static readonly IBrush AttentionBrush = new SolidColorBrush(AttentionColor);
+    private static readonly IBrush AwaitingBrush  = new SolidColorBrush(AwaitingColor);
+
+    // "Waiting on you" ramp length (minutes to fully red); user-tunable later (SetWaitingTimerRedMinutes).
+    private int _waitingTimerRedMinutes = 3;
 
     // Brand mark (the app icon), loaded once.
     private static readonly Bitmap? Brand = LoadBrand();
@@ -61,16 +74,112 @@ public sealed class OverlayCanvas : Control
     // Measure-or-paint: returns the content height; paints only when ctx is non-null.
     private double Draw(DrawingContext? ctx, double width)
     {
-        double height = HeaderHeight; // header-only until rows land (4.3)
+        bool showRows = _expanded && _sessions.Count > 0;
+        double height = HeaderHeight + (showRows ? _sessions.Count * RowHeight + 2 : 0);
 
         if (ctx != null)
         {
             var panel = new Rect(0.5, 0.5, width - 1, height - 1);
             OverlayDraw.Panel(ctx, panel, BgBrush, BorderPen, Corner);
             DrawHeader(ctx, width);
+
+            if (showRows)
+            {
+                double top = RowsTop;
+                foreach (var s in _sessions)
+                {
+                    DrawSessionRow(ctx, s, top, width);
+                    top += RowHeight;
+                }
+            }
         }
 
         return height;
+    }
+
+    // Core session row: separator, status dot, name (truncated), right-aligned status, and a second
+    // line with the activity phrase + elapsed time. The per-row glyphs (warn/artifact/mail/remote/bot/
+    // mode/thermo/tasks/burn/git) and hover highlight land in steps 4.5–4.7 / 4.11.
+    private void DrawSessionRow(DrawingContext ctx, ClaudeSession session, double top, double width)
+    {
+        ctx.DrawLine(SepPen, new Point(HorizPad, top), new Point(width - HorizPad, top));
+
+        double midY = top + RowHeight / 2;
+        bool running  = session.Status == SessionStatus.Running;
+        bool awaiting = session.Status == SessionStatus.AwaitingInput;
+
+        string? activity = running ? session.Activity : awaiting ? "waiting on you" : null;
+        string? elapsed  = running ? session.RunningElapsedLabel()
+                         : awaiting ? session.AwaitingElapsedLabel() : null;
+        bool twoLine = !string.IsNullOrEmpty(activity) || !string.IsNullOrEmpty(elapsed);
+        double nameMidY = twoLine ? top + RowHeight / 2 - 8 : midY;
+
+        IBrush secondLine = awaiting
+            ? new SolidColorBrush(WarmWaitingColor(session.AwaitingElapsed() ?? TimeSpan.Zero))
+            : MutedBrush;
+
+        var dotColor = session.Status switch
+        {
+            SessionStatus.Running        => RunningColor,
+            SessionStatus.NeedsAttention => AttentionColor,
+            SessionStatus.AwaitingInput  => AwaitingColor,
+            _                            => IdleColor,
+        };
+        ctx.DrawEllipse(new SolidColorBrush(dotColor), null, new Point(HorizPad + 4, nameMidY), 4, 4);
+
+        string statusText = session.Status switch
+        {
+            SessionStatus.Running        => "running",
+            SessionStatus.NeedsAttention => "done ↩",
+            SessionStatus.AwaitingInput  => "input ↩",
+            _                            => "idle",
+        };
+        IBrush statusBrush = session.Status switch
+        {
+            SessionStatus.NeedsAttention => AttentionBrush,
+            SessionStatus.AwaitingInput  => AwaitingBrush,
+            _                            => MutedBrush,
+        };
+
+        double statusW = OverlayDraw.MeasureWidth(statusText, StatusSize);
+        double nameMax = width - HorizPad * 3 - 8 - statusW; // later steps subtract glyph widths too
+        string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
+        double nameX = HorizPad + 14;
+        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
+
+        double statusX = width - HorizPad - statusW;
+        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(statusText, StatusSize, statusBrush), statusX, nameMidY);
+
+        if (twoLine)
+        {
+            double activityMidY = top + RowHeight / 2 + 9;
+            double lineLeft = HorizPad + 14;
+
+            double elapsedW = 0;
+            if (!string.IsNullOrEmpty(elapsed))
+            {
+                elapsedW = OverlayDraw.MeasureWidth(elapsed, ActivitySize);
+                OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(elapsed, ActivitySize, secondLine),
+                    width - HorizPad - elapsedW, activityMidY);
+            }
+            if (!string.IsNullOrEmpty(activity))
+            {
+                double activityMax = width - lineLeft - HorizPad - (elapsedW > 0 ? elapsedW + 6 : 0);
+                string actTrunc = OverlayDraw.Truncate(activity, ActivitySize, activityMax);
+                OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(actTrunc, ActivitySize, secondLine),
+                    lineLeft, activityMidY);
+            }
+        }
+    }
+
+    // "Waiting on you" ramp: awaiting-yellow at 0 warming to alarm-red once blocked _waitingTimerRedMinutes.
+    private Color WarmWaitingColor(TimeSpan waited)
+    {
+        double fullMinutes = Math.Max(1, _waitingTimerRedMinutes);
+        double t = Math.Clamp(waited.TotalMinutes / fullMinutes, 0.0, 1.0);
+        var to = Color.FromRgb(239, 68, 68);
+        byte Lerp(byte a, byte b) => (byte)Math.Round(a + (b - a) * t);
+        return Color.FromRgb(Lerp(AwaitingColor.R, to.R), Lerp(AwaitingColor.G, to.G), Lerp(AwaitingColor.B, to.B));
     }
 
     private void DrawHeader(DrawingContext ctx, double width)

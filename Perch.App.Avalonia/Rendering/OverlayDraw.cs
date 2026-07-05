@@ -43,4 +43,25 @@ internal static class OverlayDraw
     /// <paramref name="midY"/> using its measured line height (the anti-clipping rule).</summary>
     public static void TextLeftMid(DrawingContext ctx, FormattedText ft, double x, double midY)
         => ctx.DrawText(ft, new Point(x, midY - ft.Height / 2));
+
+    /// <summary>Measured width of a string at the given size/weight (uses a throwaway brush).</summary>
+    public static double MeasureWidth(string s, double size, FontWeight weight = FontWeight.Normal)
+        => Text(s, size, Brushes.White, weight).Width;
+
+    /// <summary>Truncates <paramref name="text"/> with a trailing ellipsis so it fits
+    /// <paramref name="maxWidth"/> at the given size/weight — the Avalonia counterpart of the WinForms
+    /// TruncateString helper. Binary-searches the longest prefix that fits.</summary>
+    public static string Truncate(string text, double size, double maxWidth, FontWeight weight = FontWeight.Normal)
+    {
+        if (string.IsNullOrEmpty(text) || MeasureWidth(text, size, weight) <= maxWidth) return text ?? "";
+        if (maxWidth <= 0) return "";
+        const string ell = "…";
+        int lo = 0, hi = text.Length;
+        while (lo < hi)
+        {
+            int mid = (lo + hi + 1) / 2;
+            if (MeasureWidth(text[..mid] + ell, size, weight) <= maxWidth) lo = mid; else hi = mid - 1;
+        }
+        return lo == 0 ? ell : text[..lo] + ell;
+    }
 }
