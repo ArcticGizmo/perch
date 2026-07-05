@@ -257,3 +257,13 @@ a month's.
   and the settings-driven display gates. New seam: `IGlobalHotkey` (Alt+Shift+W → toggle overlay).
   The thin-vertical scaffolding is retired. Build clean, 144 tests green; verified 1×/1.5× renders +
   live launch. Overlay stubs left for Phase 5: history/QR/confetti/glow windows + external-notify.
+- **Phase 5 — DONE.** Every remaining WinForms window is ported to Avalonia across 8 steps (see
+  [avalonia-phase5-windows.md](avalonia-phase5-windows.md)): an Avalonia `WindowHost` + tray entries;
+  the QR card; the confetti + ambient-glow (`IAmbientGlow`) transient windows; the Stats, Flight-Path,
+  and History (chrome/list + rich Markdown/tool-expand/live-tail) surfaces — all owner-drawn via the
+  overlay's `OverlayDraw`/`Palette` kit, over Core's stats/flight/history services loaded off the UI
+  thread; and the multi-artifact picker + external-notify wiring. This retired every overlay Phase-5
+  stub (history/QR/confetti/glow/external-notify). The remaining transient surfaces (hint tooltips,
+  popovers) are covered by `OverlayTooltip` + `MenuFlyout`. Build clean, 144 tests green; verified via
+  headless renders + live launch. **Only the Phase-3 remainder (full Settings UI, quick-links dialog,
+  desktop notifications) stands between here and the Phase-6 cutover.**
