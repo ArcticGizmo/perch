@@ -56,7 +56,12 @@ internal static class HeadlessRenderer
         probe.StartAutoCloseCountdown(20_000);
         RenderControl(probe, Path.Combine(outDir, "overlay_autoclose_1x.png"), 96);
 
-        Console.WriteLine($"Rendered overlay PNGs to {Path.GetFullPath(outDir)}");
+        // QR card (5.2): render the window's content card so the code + chrome can be eyeballed.
+        var qr = new Windows.QrWindow("perch", "https://claude.ai/code/bridge-xyz-1234");
+        if (qr.Content is Control qrCard)
+            RenderControl(qrCard, Path.Combine(outDir, "qr_1x.png"), 96);
+
+        Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }
 

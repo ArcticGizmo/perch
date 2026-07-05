@@ -27,6 +27,9 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.5" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.5" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <!-- QR generation for the remote-control card (QrWindow). Only the pure QRCodeGenerator/
+         ModuleMatrix are used; the matrix is rendered via DrawingContext, no System.Drawing renderer. -->
+    <PackageReference Include="QRCoder" Version="1.8.0" />
     <!-- Headless + Skia: the `render` mode dumps views to PNG for visual verification without a
          display. A standing harness reused across the UI-port phases. -->
     <PackageReference Include="Avalonia.Headless" Version="12.0.5" />

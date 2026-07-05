@@ -272,10 +272,17 @@ public partial class App : Application
     private void OpenFlightPath() =>
         _flightWindow = WindowHost.ShowOrFocus(_flightWindow, () => new FlightPathWindow(), () => _flightWindow = null);
 
-    // "Show QR code" — the QR window is a Phase-5 window; stub the trigger until it lands.
-    private static void ShowQrCode(ClaudeSession session)
+    // "Show QR code" — a centred card with the session's remote-control deep-link QR. Only one is shown
+    // at a time; opening another (or clicking away) closes the previous.
+    private QrWindow? _qrWindow;
+    private void ShowQrCode(ClaudeSession session)
     {
-        // TODO(phase5): open the ported QR card for session.BridgeSessionId.
+        if (string.IsNullOrEmpty(session.BridgeSessionId)) return;
+        _qrWindow?.Close();
+        _qrWindow = new QrWindow(session.DisplayName, $"https://claude.ai/code/{session.BridgeSessionId}");
+        _qrWindow.Closed += (_, _) => _qrWindow = null;
+        _qrWindow.Show();
+        _qrWindow.Activate();
     }
 
     // "Enable/Disable external notifications" — the ntfy pipeline isn't ported yet (no NotificationService
