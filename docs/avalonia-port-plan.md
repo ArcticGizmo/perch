@@ -172,6 +172,8 @@ notifications fire. WinForms remains the shipped app.
 **Risk:** **High** — largest, most detailed surface. Budget the most time here; lean on Phase 0.
 
 ### Phase 5 — Port remaining windows
+> Broken into small, independently-committable steps in **[avalonia-phase5-windows.md](avalonia-phase5-windows.md)**.
+
 **Goal:** History, Stats, Flight Path, tooltips, popovers, confetti, glow — all in Avalonia.
 **Work:** Port each owner-drawn surface as a custom-drawn control (Stats/History/FlightPath reuse
 the mini-PaintKit). Port `WindowHost` "single reused window" idiom to Avalonia window management
@@ -248,3 +250,10 @@ a month's.
     dumps views to PNG for verification. Verified against real `~/.claude` data + synthetic render.
   - *Still to do in Phase 3:* full Settings UI (view-model over Core), desktop notifications
     (`INotifier` + `Avalonia.Labs.Notifications`), `IAppIconProvider`, quick-links dialog.
+- **Phase 4 — DONE.** The floating overlay is ported to a single owner-drawn `OverlayCanvas` at full
+  parity with `OverlayForm` across 17 steps (see [avalonia-phase4-overlay.md](avalonia-phase4-overlay.md)):
+  panel/header/rows/sub-agents, every info glyph + bar strip, hit-testing + hover + dwell tooltips,
+  the right-click menu, the attention chase-border, the auto-close countdown, window drag/behaviors,
+  and the settings-driven display gates. New seam: `IGlobalHotkey` (Alt+Shift+W → toggle overlay).
+  The thin-vertical scaffolding is retired. Build clean, 144 tests green; verified 1×/1.5× renders +
+  live launch. Overlay stubs left for Phase 5: history/QR/confetti/glow windows + external-notify.
