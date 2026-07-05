@@ -121,10 +121,10 @@ public partial class App : Application
             ApplyDisplaySettings(settings);
 
             _overlay.Show();
-            _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: true);
+            _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: settings.IncludeSubprocessMetrics);
             _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
-            LoadQuickLinks(settings);
+            ReloadQuickLinks(settings);
 
             // Global hotkey (Alt+Shift+W): toggle dense mode from anywhere (dense replaces the old
             // show/hide). The callback fires on the hotkey's own thread, so hop to the UI thread.
@@ -334,12 +334,21 @@ public partial class App : Application
     // is just this file, so the toggle is wired now.
     private void OnToggleExternalNotify(string sessionId) => _monitorHost?.ToggleExternalNotify(sessionId);
 
-    // Resolves the enabled links' icons off the UI thread (the first shell lookup enumerates the Start
-    // Menu, ~1s), then applies them on the UI thread. Icons come back as PNG file paths from the seam.
-    private void LoadQuickLinks(AppSettings settings)
+    // Applies the enabled links to the overlay strip, resolving their icons off the UI thread (the first
+    // shell lookup enumerates the Start Menu, ~1s) then applying on the UI thread. Icons come back as PNG
+    // file paths from the seam. Always sets the strip — an empty list clears it — so a link removed or
+    // disabled in Settings disappears immediately; also syncs the upside-down flag.
+    private void ReloadQuickLinks(AppSettings settings)
     {
+        if (_overlay is null || _quickLinkLauncher is null) return;
+        _overlay.Canvas.SetUpsideDownQuickLinks(settings.UpsideDownQuickLinks);
+
         var links = (settings.QuickLinks ?? []).Where(l => l.Enabled).ToList();
-        if (links.Count == 0 || _quickLinkLauncher is null) return;
+        if (links.Count == 0)
+        {
+            _overlay.Canvas.SetQuickLinks(links, new List<string?>());
+            return;
+        }
 
         var launcher = _quickLinkLauncher;
         System.Threading.Tasks.Task.Run(() =>
@@ -396,7 +405,9 @@ public partial class App : Application
     // edge strip (that expands on hover) rather than hiding entirely.
     private void ToggleDense() => _overlay?.Canvas.ToggleDense();
 
-    // Lazily create-or-focus the single Settings window instance.
+    // Lazily create-or-focus the single Settings window instance. The window edits the shared
+    // AppSettings and applies changes live through the hooks below — the Avalonia counterpart of the
+    // WinForms OverlayApplicationContext's SettingsForm wiring.
     private void OpenSettings()
     {
         if (_settings is { } w && w.IsVisible)
@@ -404,9 +415,50 @@ public partial class App : Application
             w.Activate();
             return;
         }
-        _settings = new SettingsWindow();
+        var settings = _appSettings ??= AppSettings.Load();
+        var hooks = new SettingsHooks
+        {
+            DisplayChanged = () => ApplyDisplaySettings(settings),
+            UsageEnabledChanged = on => { if (on) _usageHost?.Start(); else _usageHost?.Stop(); },
+            MetricsChanged = () => _metricsHost?.Configure(
+                settings.ShowSystemMetrics, settings.ShowSessionMetrics, settings.IncludeSubprocessMetrics),
+            QuickLinksChanged = () => ReloadQuickLinks(settings),
+            GlowChanged = UpdateGlow,
+            TestNotification = kind => PlatformServices.AudioCue.Play(kind),
+            TestExternalNotification = () => _ = SendExternalTestAsync(settings),
+            OpenStats = OpenStats,
+            OpenFlightPath = OpenFlightPath,
+        };
+        _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider);
         _settings.Closed += (_, _) => _settings = null;
         _settings.Show();
         _settings.Activate();
+    }
+
+    // Sends a one-off test push through the configured ntfy channel (the Settings "Send test
+    // notification" button). A plain HTTP POST to {host}/{topic}; failures are swallowed (best-effort,
+    // like the WinForms NtfyNotifier), so a dead host can't wedge the UI.
+    private static readonly System.Net.Http.HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private static async Task SendExternalTestAsync(AppSettings settings)
+    {
+        var host = settings.NtfyHost?.Trim();
+        var topic = settings.NtfyTopic?.Trim();
+        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(topic)) return;
+        try
+        {
+            var baseUrl = host.TrimEnd('/');
+            if (!baseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                baseUrl = "https://" + baseUrl;
+            var url = $"{baseUrl}/{Uri.EscapeDataString(topic)}";
+            using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, url)
+            {
+                Content = new System.Net.Http.StringContent("This is a test notification from Perch."),
+            };
+            req.Headers.TryAddWithoutValidation("Title", "Perch");
+            req.Headers.TryAddWithoutValidation("Tags", "bell");
+            using var _ = await _http.SendAsync(req);
+        }
+        catch { /* best-effort */ }
     }
 }

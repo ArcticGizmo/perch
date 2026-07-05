@@ -248,8 +248,20 @@ a month's.
     (reusable body) renders status-coloured rows in a transparent/topmost/borderless window; row-click
     focuses the terminal via `IWindowActivator`. A headless-Skia `render` mode (`HeadlessRenderer`)
     dumps views to PNG for verification. Verified against real `~/.claude` data + synthetic render.
-  - *Still to do in Phase 3:* full Settings UI (view-model over Core), desktop notifications
-    (`INotifier` + `Avalonia.Labs.Notifications`), `IAppIconProvider`, quick-links dialog.
+  - *Settings UI + quick-links dialog — DONE.* The full `SettingsWindow` is ported (a nav rail over
+    scrollable pages: Getting started, Plugin Control, Usage, Indicators, Monitoring, Session Stats,
+    Notifications, Quick Links, Experimental, About, Changelog). It edits the shared `AppSettings` and
+    applies live to the overlay/monitors via a compact `SettingsHooks` callback set (the Avalonia
+    counterpart of `SettingsForm`'s ~30 events). New Avalonia custom controls port the WinForms ones —
+    the pill `PerchToggle`, `SpinnerView`, owner-drawn `UsageBarsView`, `ModeLegendView`, and the
+    draggable `ContextThresholdSliderView` — plus the `QuickLinkDialog` (Browse via `StorageProvider`,
+    name-resolution via the `IAppIconProvider` seam). Best-effort backends where the head has none yet:
+    notification "Test" plays the real chime via `IAudioCue`, "Send test" does a real ntfy POST, About
+    shows version/links (the updater is Phase 6). Verified via headless renders + a full-window frame
+    capture across pages. `IAppIconProvider` was already grounded in Phase 5.
+  - *Still to do in Phase 3:* desktop notification **delivery** (`INotifier` + a toast library) — the
+    Settings page configures it and the chime/ntfy paths work, but the local balloon pipeline that fires
+    on session events is not yet wired.
 - **Phase 4 — DONE.** The floating overlay is ported to a single owner-drawn `OverlayCanvas` at full
   parity with `OverlayForm` across 17 steps (see [avalonia-phase4-overlay.md](avalonia-phase4-overlay.md)):
   panel/header/rows/sub-agents, every info glyph + bar strip, hit-testing + hover + dwell tooltips,
@@ -265,5 +277,6 @@ a month's.
   thread; and the multi-artifact picker + external-notify wiring. This retired every overlay Phase-5
   stub (history/QR/confetti/glow/external-notify). The remaining transient surfaces (hint tooltips,
   popovers) are covered by `OverlayTooltip` + `MenuFlyout`. Build clean, 144 tests green; verified via
-  headless renders + live launch. **Only the Phase-3 remainder (full Settings UI, quick-links dialog,
-  desktop notifications) stands between here and the Phase-6 cutover.**
+  headless renders + live launch. **Of the Phase-3 remainder, the full Settings UI and quick-links
+  dialog are now done (see Phase 3 above); only desktop notification delivery (`INotifier` toast
+  pipeline) stands between here and the Phase-6 cutover.**

@@ -19,6 +19,9 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets/**" />
+    <!-- The changelog is embedded so the Settings → Changelog page can render it at runtime (read via
+         the assembly manifest under the logical name "Perch.CHANGELOG.md"). -->
+    <EmbeddedResource Include="..\CHANGELOG.md" LogicalName="Perch.CHANGELOG.md" />
   </ItemGroup>
 
   <ItemGroup>

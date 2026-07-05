@@ -97,8 +97,47 @@ internal static class HeadlessRenderer
         mdPanel.Children.Add(md);
         RenderControl(mdPanel, Path.Combine(outDir, "markdown_1x.png"), 96);
 
+        // Settings surface (Phase 3 remainder): a factory-built sample page exercising the new custom
+        // controls — the pill toggles, the owner-drawn usage bars, the permission-mode legend, and the
+        // context-pressure slider — over synthetic state (no subprocess, no real settings).
+        RenderControl(SampleSettingsPage(), Path.Combine(outDir, "settings_1x.png"), 96);
+        RenderControl(SampleSettingsPage(), Path.Combine(outDir, "settings_1.5x.png"), 144);
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
+    }
+
+    private static Control SampleSettingsPage()
+    {
+        static Windows.PerchToggle Toggle(bool on) { var t = new Windows.PerchToggle(); t.SetCheckedSilent(on); return t; }
+
+        var stack = new StackPanel { Width = 560, Margin = new Thickness(16) };
+        stack.Children.Add(Windows.SettingsUi.TitleRow("Usage limits", Toggle(true)));
+        stack.Children.Add(Windows.SettingsUi.BodyText("Your account-wide 5-hour and weekly rate-limit usage."));
+        var bars = new Windows.UsageBarsView();
+        bars.SetOn(true);
+        bars.SetUsage(SampleUsage());
+        stack.Children.Add(bars);
+
+        stack.Children.Add(Windows.SettingsUi.Separator());
+
+        stack.Children.Add(Windows.SettingsUi.TitleRow("Permission mode badges", Toggle(true)));
+        stack.Children.Add(new Windows.ModeLegendView());
+
+        stack.Children.Add(Windows.SettingsUi.Separator());
+
+        stack.Children.Add(Windows.SettingsUi.TitleRow("Context pressure", Toggle(true)));
+        var slider = new Windows.ContextThresholdSliderView();
+        slider.SetValues(50, 65, 80);
+        stack.Children.Add(slider);
+        stack.Children.Add(Windows.SettingsUi.SubRow("Show a green indicator below the first threshold", Toggle(false), out _));
+
+        stack.Children.Add(Windows.SettingsUi.Separator());
+        stack.Children.Add(Windows.SettingsUi.TitleRow("Stuck detection (off)", Toggle(false)));
+
+        var panel = new Panel { Width = 592, Background = new SolidColorBrush(Color.FromRgb(24, 24, 32)) };
+        panel.Children.Add(stack);
+        return panel;
     }
 
     private static void RenderControl(Control control, string path, double dpi)

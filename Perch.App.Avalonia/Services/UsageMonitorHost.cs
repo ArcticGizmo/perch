@@ -20,6 +20,15 @@ internal sealed class UsageMonitorHost : IDisposable
     private readonly Action<UsageInfo> _onUsage;
     private readonly DispatcherTimer _timer;
 
+    /// <summary>The most recent reading, cached so a surface opened mid-run (e.g. the Settings usage
+    /// bars) can seed itself without waiting for the next poll. <see cref="UsageInfo.Empty"/> until the
+    /// first fetch completes.</summary>
+    public UsageInfo Last { get; private set; } = UsageInfo.Empty;
+
+    /// <summary>Raised on the UI thread after every fetch (poll or manual refresh), so additional
+    /// listeners — the Settings usage bars — track the same readings the overlay does.</summary>
+    public event Action<UsageInfo>? Updated;
+
     public UsageMonitorHost(Action<UsageInfo> onUsage)
     {
         _onUsage = onUsage;
@@ -34,12 +43,25 @@ internal sealed class UsageMonitorHost : IDisposable
         _ = Poll();
     }
 
+    /// <summary>Stops polling (usage tracking turned off). The last reading is retained.</summary>
+    public void Stop() => _timer.Stop();
+
+    /// <summary>Fetches once immediately and returns the fresh reading (for the Settings "Refresh"
+    /// button). Pumps the result to every listener just like a poll.</summary>
+    public async Task<UsageInfo> RefreshAsync()
+    {
+        await Poll();
+        return Last;
+    }
+
     // Ticks on the UI thread; FetchAsync runs its IO off it and the continuation resumes here, so the
     // callback (and the repaint it drives) stays on the UI thread.
     private async Task Poll()
     {
         var info = await _monitor.FetchAsync();
+        Last = info;
         _onUsage(info);
+        Updated?.Invoke(info);
     }
 
     public void Dispose() => _timer.Stop();
