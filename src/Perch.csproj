@@ -13,8 +13,8 @@
     <AssemblyTitle>Perch</AssemblyTitle>
   </PropertyGroup>
   <ItemGroup>
-    <!-- The test project exercises the internal data/parsing logic directly. -->
-    <InternalsVisibleTo Include="Perch.Tests" />
+    <!-- The data layer now lives in Perch.Core (UI-free); the app consumes it as a library. -->
+    <ProjectReference Include="..\Perch.Core\Perch.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="icon.ico" />

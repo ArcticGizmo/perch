@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The UI-free core of Perch: the ~/.claude data layer (readers, parsers, models, settings) plus
+    (over the port) the platform-service interfaces the UIs resolve. Targets plain net10.0 — no
+    WinForms, no System.Drawing — so it builds for any RID on the road to macOS/Linux. P/Invokes
+    that remain here (e.g. MetricsMonitor) compile everywhere and simply no-op off-Windows until
+    moved behind ISystemMetrics.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Perch</RootNamespace>
+    <AssemblyName>Perch.Core</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The WinForms app (assembly name "perch") and the test project exercise Core's internals. -->
+    <InternalsVisibleTo Include="perch" />
+    <InternalsVisibleTo Include="Perch.Tests" />
+  </ItemGroup>
+</Project>

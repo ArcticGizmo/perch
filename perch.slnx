@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="Perch.Core/Perch.Core.csproj" />
     <Project Path="src/Perch.csproj" />
   </Folder>
   <Folder Name="/tests/">

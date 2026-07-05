@@ -90,7 +90,7 @@ internal static class ProcessTree
 /// <summary>
 /// Samples whole-machine and per-session CPU/RAM on a fixed cadence and raises <see cref="Updated"/>
 /// with the results. Runs entirely off the UI thread on its own <see cref="System.Threading.Timer"/>;
-/// the owner marshals the event onto the UI thread (see <see cref="Perch.App.UiDispatch"/>).
+/// the owner marshals the event onto the UI thread (the UI layer's dispatch helper).
 ///
 /// CPU needs two samples to produce a delta, so the very first tick reports 0 and the next (one
 /// interval later) is the first real reading. Sampling only runs while at least one of the system /
