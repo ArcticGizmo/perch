@@ -150,6 +150,8 @@ functions already live in the tray). See the discussion decision recorded in pro
   honours `CLAUDE_CONFIG_DIR` and `PERCH_DEV` like the app, always exits 0, never emits a block decision.
   Perf-validated (~2.8× faster than `powershell invoke.ps1`, and that was the R2R upper bound). In the
   solution; builds AOT-clean (0 warnings). Functionally verified via a hermetic temp-config harness.
+- **Detailed handoff spec for the remaining work: `docs/self-managed-hooks-plan.md`** (self-contained,
+  can be tackled by a separate process).
 - **Still TODO (part of #3):** the self-wiring — write/reconcile Perch's hook block in
   `~/.claude/settings.json` on launch (idempotent, tagged with a `_perch`/`managed` marker; always exit 0
   so a stale entry can't wedge Claude Code), self-heal (remove own entries when Perch is gone), remove on
