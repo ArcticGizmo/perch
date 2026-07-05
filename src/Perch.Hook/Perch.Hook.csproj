@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    perch-hook: a tiny, fast Claude Code hook writer, NativeAOT-compiled so its cold start is competitive
+    with (or better than) the current `powershell.exe invoke.ps1` path. The hot-path events (mode) fire on
+    every tool call, so process startup latency is the whole ballgame — hence AOT (no JIT, no runtime
+    init, no self-extract) and the size/startup-trimming switches below. Reflection-free (Utf8JsonReader)
+    so trimming/AOT can't break it.
+
+    SPIKE (macOS-port hook redesign): this exists to measure that latency before we commit to replacing
+    the installed plugin with self-managed hooks. Not yet wired into the solution or release.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>perch-hook</AssemblyName>
+    <RootNamespace>Perch.Hook</RootNamespace>
+
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StackTraceSupport>false</StackTraceSupport>
+    <OptimizationPreference>Size</OptimizationPreference>
+  </PropertyGroup>
+</Project>
