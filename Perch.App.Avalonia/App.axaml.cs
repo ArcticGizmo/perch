@@ -24,6 +24,8 @@ public partial class App : Application
     private QuickLinkLauncher? _quickLinkLauncher;
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
+    private AppSettings? _appSettings;
+    private IClassicDesktopStyleApplicationLifetime? _desktop;
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
@@ -31,6 +33,7 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            _desktop = desktop;
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown; // tray app — outlives its windows
             desktop.ShutdownRequested += (_, _) =>
             {
@@ -59,8 +62,19 @@ public partial class App : Application
             _overlay.Canvas.SessionActivated += FocusSession;
             _overlay.Canvas.ArtifactActivated += OpenArtifacts;
 
+            // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
+            // down. History / QR / external-notify / confetti are Phase-5 concerns — their triggers are
+            // wired here so the menu is complete, with best-effort/stub handlers until those windows land.
+            _overlay.Canvas.ExitRequested += () => desktop.Shutdown();
+            _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
+            _overlay.Canvas.UsageToggleRequested += SetUsageEnabled;
+            _overlay.Canvas.HistoryRequested += OpenHistoryViewer;
+            _overlay.Canvas.QrRequested += ShowQrCode;
+            _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
+
             // Quick-links strip: launch/focus goes through the platform seams; icons resolve off-thread.
             var settings = AppSettings.Load();
+            _appSettings = settings;
             _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider);
             _overlay.Canvas.QuickLinkActivated += _quickLinkLauncher.LaunchOrFocus;
             _overlay.Canvas.SetUpsideDownQuickLinks(settings.UpsideDownQuickLinks);
@@ -95,6 +109,47 @@ public partial class App : Application
             try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
             catch { /* best-effort */ }
         }
+    }
+
+    // ── Context-menu handlers ─────────────────────────────────────────────────
+    // Toggle the whole-machine metrics strip: persist the choice and apply it live. (4.17 will read the
+    // persisted value back at startup; for now the canvas defaults the strip on.)
+    private void SetSystemMetricsEnabled(bool enabled)
+    {
+        if (_appSettings is null || _overlay is null) return;
+        if (_appSettings.ShowSystemMetrics == enabled) return;
+        _appSettings.ShowSystemMetrics = enabled;
+        _appSettings.Save();
+        _overlay.Canvas.SetShowSystemMetrics(enabled);
+    }
+
+    // Toggle the account-usage strip: persist the choice and apply it live.
+    private void SetUsageEnabled(bool enabled)
+    {
+        if (_appSettings is null || _overlay is null) return;
+        if (_appSettings.ShowUsage == enabled) return;
+        _appSettings.ShowUsage = enabled;
+        _appSettings.Save();
+        _overlay.Canvas.SetShowUsage(enabled);
+    }
+
+    // "View history" — the history viewer is a Phase-5 window; stub the trigger until it lands.
+    private static void OpenHistoryViewer(string sessionId)
+    {
+        // TODO(phase5): open the ported history viewer on this session.
+    }
+
+    // "Show QR code" — the QR window is a Phase-5 window; stub the trigger until it lands.
+    private static void ShowQrCode(ClaudeSession session)
+    {
+        // TODO(phase5): open the ported QR card for session.BridgeSessionId.
+    }
+
+    // "Enable/Disable external notifications" — the ntfy pipeline isn't ported yet (no NotificationService
+    // on the Avalonia head), so the menu item stays hidden (availability defaults off). Stub the trigger.
+    private static void OnToggleExternalNotify(string sessionId)
+    {
+        // TODO(phase5): toggle the session's external-notify marker file, then rescan.
     }
 
     // Resolves the enabled links' icons off the UI thread (the first shell lookup enumerates the Start

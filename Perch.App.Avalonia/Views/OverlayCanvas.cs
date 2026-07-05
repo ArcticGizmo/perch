@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -290,6 +291,76 @@ public sealed class OverlayCanvas : Control
 
     /// <summary>Raised when a row's artifact glyph is clicked; the app opens the artifact(s).</summary>
     internal event Action<ClaudeSession>? ArtifactActivated;
+
+    // ── Right-click context menu (4.13) ───────────────────────────────────────
+    // External (ntfy) notifications + the experimental confetti-finish are gated by global settings that
+    // decide whether their per-session items appear at all. Confetti arming is in-memory only (never
+    // persisted, so a celebration can't fire by surprise after a restart) and is spent the moment the
+    // session next finishes (ConsumeConfetti). The QR / history windows themselves are Phase 5; the menu
+    // wires only their triggers.
+    private bool _externalNotifyAvailable;
+    private bool _confettiAvailable;
+    private readonly HashSet<string> _confettiSessions = new();
+
+    /// <summary>Raised when the user picks "Exit Perch" from the header's right-click menu.</summary>
+    public event Action? ExitRequested;
+
+    /// <summary>Raised when the user picks "View history" for a session; carries the session id so the
+    /// app can open the history viewer on it.</summary>
+    public event Action<string>? HistoryRequested;
+
+    /// <summary>Raised when the user toggles a session's external-notify opt-in; carries the session id
+    /// for the app to flip its marker file.</summary>
+    public event Action<string>? ExternalNotifyToggleRequested;
+
+    /// <summary>Raised when the user toggles the whole-machine metrics strip from the right-click menu;
+    /// carries the desired new enabled state for the app to persist and apply.</summary>
+    public event Action<bool>? SystemMetricsToggleRequested;
+
+    /// <summary>Raised when the user toggles the account-usage strip from the right-click menu; carries
+    /// the desired new enabled state for the app to persist and apply.</summary>
+    public event Action<bool>? UsageToggleRequested;
+
+    /// <summary>Raised when the user picks "Show QR code" for a remote-controlled session. The QR window
+    /// is Phase 5; this wires only the trigger. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
+    internal event Action<ClaudeSession>? QrRequested;
+
+    /// <summary>Whether external (ntfy) notifications are switched on globally — gates the right-click
+    /// enable/disable item. (The per-row mail glyph reads the session's own state.)</summary>
+    public void SetExternalNotificationsAvailable(bool available)
+    {
+        if (_externalNotifyAvailable == available) return;
+        _externalNotifyAvailable = available;
+        InvalidateVisual();
+    }
+
+    /// <summary>Whether the experimental confetti-finish is switched on globally — gates the right-click
+    /// arm/disarm item. Turning it off clears every armed session so nothing stays primed.</summary>
+    public void SetConfettiFinishAvailable(bool available)
+    {
+        if (_confettiAvailable == available) return;
+        _confettiAvailable = available;
+        if (!available) _confettiSessions.Clear();
+        InvalidateVisual();
+    }
+
+    /// <summary>If the session was armed for a confetti finish, disarm it and report true so the app can
+    /// set off the celebration. Arming is one-shot: a finish spends it. Returns false otherwise.</summary>
+    public bool ConsumeConfetti(string sessionId)
+    {
+        if (!_confettiAvailable || !_confettiSessions.Remove(sessionId)) return false;
+        InvalidateVisual();
+        return true;
+    }
+
+    private bool ConfettiArmed(ClaudeSession s) => _confettiAvailable && _confettiSessions.Contains(s.SessionId);
+
+    // Flips a session's confetti arming from the right-click menu (in-memory only).
+    private void ToggleConfetti(string sessionId)
+    {
+        if (!_confettiSessions.Remove(sessionId)) _confettiSessions.Add(sessionId);
+        InvalidateVisual();
+    }
 
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~150ms pops a hint. A single timer serves whichever the cursor last
@@ -1267,7 +1338,14 @@ public sealed class OverlayCanvas : Control
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
-        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) { base.OnPointerPressed(e); return; }
+        var props = e.GetCurrentPoint(this).Properties;
+        if (props.IsRightButtonPressed)
+        {
+            ShowContextMenuAt(e.GetPosition(this));
+            e.Handled = true;
+            return;
+        }
+        if (!props.IsLeftButtonPressed) { base.OnPointerPressed(e); return; }
         var p = e.GetPosition(this);
 
         // Artifact glyph sits inside a session row, so it must be checked before the row's focus click.
@@ -1306,6 +1384,91 @@ public sealed class OverlayCanvas : Control
         }
 
         base.OnPointerPressed(e);
+    }
+
+    // ── Context menu ─────────────────────────────────────────────────────────
+    // Opens a right-click menu at the clicked point, with each item scoped to what's under the cursor:
+    // per-session actions on a session row, strip toggles over a strip, and the header menu (the one
+    // place that can bring a hidden strip back, plus Exit) over the header. No applicable item → no menu.
+    private void ShowContextMenuAt(Point p)
+    {
+        var items = new List<Control>();
+
+        int row = HitTestRow(p);
+        // The "Autonomous" divider carries no session, so none of the per-session items apply to it.
+        bool sessionRow = row >= 0 && !_rows[row].IsSectionHeader;
+        bool subRow = sessionRow && _rows[row].IsSubAgent;
+
+        if (sessionRow && _rows[row].Session is { } s)
+        {
+            // View history / copy id / open transcript work on any session row — sub-agent rows resolve
+            // to their parent session, which owns the transcript.
+            items.Add(MenuItem("View history", () => HistoryRequested?.Invoke(s.SessionId)));
+            items.Add(MenuItem("Copy session ID", () => CopyToClipboard(s.SessionId)));
+            items.Add(MenuItem("Open transcript in VS Code", () => OpenTranscriptInVsCode(s)));
+
+            if (s.RemoteControlled)
+                items.Add(MenuItem("Show QR code", () => QrRequested?.Invoke(s)));
+
+            // External-notify + confetti apply only to a real session row (not its sub-agents), and only
+            // while switched on globally.
+            if (!subRow && _externalNotifyAvailable)
+            {
+                string label = s.ExternalNotify ? "Disable external notifications" : "Enable external notifications";
+                items.Add(MenuItem(label, () => ExternalNotifyToggleRequested?.Invoke(s.SessionId)));
+            }
+            if (!subRow && _confettiAvailable)
+            {
+                string label = ConfettiArmed(s) ? "Cancel confetti finish" : "Confetti finish";
+                items.Add(MenuItem(label, () => ToggleConfetti(s.SessionId)));
+            }
+        }
+
+        // Right-clicking a strip toggles just that strip off (only when it's actually showing); the
+        // header menu below can turn either back on.
+        bool showRows = _expanded && _rows.Count > 0;
+        bool overSystemStrip = showRows && _showSystemMetrics && p.Y >= HeaderHeight && p.Y < UsageStripTop;
+        if (overSystemStrip)
+            items.Add(MenuItem("Hide system metrics", () => SystemMetricsToggleRequested?.Invoke(false)));
+        if (InUsageStrip(p))
+            items.Add(MenuItem("Hide usage", () => UsageToggleRequested?.Invoke(false)));
+
+        if (p.Y >= 0 && p.Y < HeaderHeight)
+        {
+            // Both strip toggles regardless of state, so the header is the one place that can bring a
+            // hidden strip back. Wording flips with the current state.
+            items.Add(MenuItem(_showSystemMetrics ? "Hide system metrics" : "Show system metrics",
+                () => SystemMetricsToggleRequested?.Invoke(!_showSystemMetrics)));
+            items.Add(MenuItem(_usageEnabled ? "Hide usage" : "Show usage",
+                () => UsageToggleRequested?.Invoke(!_usageEnabled)));
+            items.Add(MenuItem("Exit Perch", () => ExitRequested?.Invoke()));
+        }
+
+        if (items.Count == 0) return;
+
+        var flyout = new MenuFlyout { ItemsSource = items, Placement = PlacementMode.Pointer };
+        flyout.ShowAt(this, showAtPointer: true);
+    }
+
+    private static MenuItem MenuItem(string header, Action onClick)
+    {
+        var item = new MenuItem { Header = header };
+        item.Click += (_, _) => onClick();
+        return item;
+    }
+
+    private void CopyToClipboard(string text) => TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(text);
+
+    private static void OpenTranscriptInVsCode(ClaudeSession s)
+    {
+        var path = TranscriptLocator.Resolve(s.SessionId, s.Cwd);
+        if (path == null) return;
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo("code", $"\"{path}\"") { UseShellExecute = true });
+        }
+        catch { /* best-effort — VS Code may not be on PATH */ }
     }
 
     // ── Tooltip content ────────────────────────────────────────────────────────
