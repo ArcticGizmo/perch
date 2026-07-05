@@ -419,6 +419,7 @@ public sealed class OverlayCanvas : Control
                 s.Status != SessionStatus.NeedsAttention && s.Status != SessionStatus.AwaitingInput))
             StopAttention();
 
+        UpdateTickTimer();
         InvalidateMeasure();
         InvalidateVisual();
     }
@@ -476,6 +477,7 @@ public sealed class OverlayCanvas : Control
                 OverlayDraw.Panel(ctx, panelRect, BgBrush, BorderPen, Corner);
             }
             DrawHeader(ctx, width);
+            if (_autoCloseActive) DrawAutoCloseBar(ctx, width);
 
             if (showSys) DrawSystemMetricsStrip(ctx, width);
             if (showUsage) DrawUsageBars(ctx, width);
@@ -1395,6 +1397,7 @@ public sealed class OverlayCanvas : Control
         {
             // Header click toggles expand/collapse; SizeToContent resizes the window to match.
             _expanded = !_expanded;
+            UpdateTickTimer();
             InvalidateMeasure();
             InvalidateVisual();
             e.Handled = true;
@@ -1507,6 +1510,7 @@ public sealed class OverlayCanvas : Control
         if (!_expanded && _rows.Count > 0)
         {
             _expanded = true;
+            UpdateTickTimer();
             InvalidateMeasure();
         }
 
@@ -1551,7 +1555,88 @@ public sealed class OverlayCanvas : Control
         _chaseTimer?.Stop();
         _chaseStopTimer?.Stop();
         _dwellTimer?.Stop();
+        _tickTimer?.Stop();
+        _autoCloseBarTimer?.Stop();
         base.OnDetachedFromVisualTree(e);
+    }
+
+    // ── Auto-close countdown + per-second tick (4.15) ──────────────────────────
+    // A per-second repaint keeps the running-elapsed / waiting-on-you labels current between scans; it
+    // runs only while the panel is expanded with a session that actually shows a live label.
+    private DispatcherTimer? _tickTimer;
+
+    // Auto-close: an auto-started tray whose last session ended shows a quietly depleting bar over the
+    // header edge for the grace period, then the app exits. _autoCloseEnds is when the bar empties.
+    private DispatcherTimer? _autoCloseBarTimer;
+    private bool _autoCloseActive;
+    private DateTime _autoCloseEnds;
+    private int _autoCloseDurationMs;
+
+    /// <summary>Begins the auto-close countdown indicator: a depleting bar due <paramref name="durationMs"/>
+    /// from now. Idempotent — the app arms it once when sessions hit zero, so it won't reset mid-count.</summary>
+    public void StartAutoCloseCountdown(int durationMs)
+    {
+        _autoCloseActive = true;
+        _autoCloseDurationMs = durationMs;
+        _autoCloseEnds = DateTime.Now.AddMilliseconds(durationMs);
+        _autoCloseBarTimer ??= CreateAutoCloseBarTimer();
+        if (!_autoCloseBarTimer.IsEnabled) _autoCloseBarTimer.Start();
+        InvalidateVisual();
+    }
+
+    /// <summary>Hides the countdown bar (a session reappeared, or the conditions no longer hold).</summary>
+    public void CancelAutoCloseCountdown()
+    {
+        if (!_autoCloseActive && (_autoCloseBarTimer is null || !_autoCloseBarTimer.IsEnabled)) return;
+        _autoCloseActive = false;
+        _autoCloseBarTimer?.Stop();
+        InvalidateVisual();
+    }
+
+    // Repaints the bar every 50ms while active; stops itself once the deadline passes (the app's grace
+    // timer fires the exit at that point and tears the window down).
+    private DispatcherTimer CreateAutoCloseBarTimer()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+        t.Tick += (_, _) =>
+        {
+            if (!_autoCloseActive || DateTime.Now >= _autoCloseEnds) _autoCloseBarTimer?.Stop();
+            InvalidateVisual();
+        };
+        return t;
+    }
+
+    // Starts/stops the per-second label tick to match what's on screen: a running session's elapsed run
+    // time or a blocked session's "waiting on you" timer, and only while the panel is expanded.
+    private void UpdateTickTimer()
+    {
+        bool need = _expanded && _sessions.Any(s =>
+            s.Status == SessionStatus.Running || s.Status == SessionStatus.AwaitingInput);
+        _tickTimer ??= CreateTickTimer();
+        if (need && !_tickTimer.IsEnabled) _tickTimer.Start();
+        else if (!need && _tickTimer.IsEnabled) _tickTimer.Stop();
+    }
+
+    private DispatcherTimer CreateTickTimer()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        t.Tick += (_, _) => InvalidateVisual();
+        return t;
+    }
+
+    // A thin bar hugging the top edge that shrinks from full to empty over the grace period, quietly
+    // hinting when the window will close itself. Drawn in the muted idle grey so it stays unobtrusive;
+    // harmless once the deadline has passed (renders empty) until the window is torn down.
+    private void DrawAutoCloseBar(DrawingContext ctx, double width)
+    {
+        double remaining = (_autoCloseEnds - DateTime.Now).TotalMilliseconds;
+        double frac = _autoCloseDurationMs > 0 ? Math.Clamp(remaining / _autoCloseDurationMs, 0, 1) : 0;
+
+        const double TrackH = 3, Y = 4;
+        double left = HorizPad, right = width - HorizPad;
+        double fillW = Math.Round((right - left) * frac);
+        if (fillW > 0)
+            OverlayDraw.Pill(ctx, new SolidColorBrush(IdleColor), new Rect(left, Y, fillW, TrackH));
     }
 
     // Draws the attention border as an animated neon "chase": a bright comet head with a trailing tail

@@ -27,6 +27,13 @@ public partial class App : Application
     private AppSettings? _appSettings;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
 
+    // Auto-close after the last session ends (only for an --autostarted tray with the setting on). The
+    // overlay shows a depleting bar for this grace period; if still no sessions when it elapses, exit.
+    private const int AutoCloseGraceMs = 20_000;
+    private DispatcherTimer? _autoCloseTimer;
+    private bool _seenSession;
+    private int _lastSessionCount;
+
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
     public override void OnFrameworkInitializationCompleted()
@@ -56,7 +63,17 @@ public partial class App : Application
             {
                 _overlay!.Canvas.Update(sessions);
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
+                MaybeHandleAutoClose(sessions.Count);
             });
+
+            // One-shot grace timer: fires AutoCloseGraceMs after the last session ends; if still none by
+            // then, an auto-started tray exits. Armed/cancelled from the scan callback above.
+            _autoCloseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(AutoCloseGraceMs) };
+            _autoCloseTimer.Tick += (_, _) =>
+            {
+                _autoCloseTimer!.Stop();
+                if (_monitorHost is not null && _lastSessionCount == 0) desktop.Shutdown();
+            };
 
             // A session finishing or blocking flashes the overlay's attention chase-border (and expands
             // it if collapsed). The balloon/chime/external push are Phase-5 notification concerns.
@@ -114,6 +131,42 @@ public partial class App : Application
             try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
             catch { /* best-effort */ }
         }
+    }
+
+    // Auto-close: only an --autostarted tray with the setting on ever closes itself, so a manually
+    // opened window never vanishes under the user. Once at least one session has been seen, dropping
+    // back to zero arms the grace timer (and the overlay's depleting bar); any session reappearing
+    // cancels both. The setting is read live, so toggling it takes effect immediately.
+    private void MaybeHandleAutoClose(int sessionCount)
+    {
+        _lastSessionCount = sessionCount;
+        if (_overlay is null || _autoCloseTimer is null) return;
+
+        if (!Program.AutoStarted || _appSettings is not { AutoCloseAfterLastSession: true })
+        {
+            _autoCloseTimer.Stop();
+            _overlay.Canvas.CancelAutoCloseCountdown();
+            return;
+        }
+
+        if (sessionCount > 0)
+        {
+            _seenSession = true;
+            _autoCloseTimer.Stop();
+            _overlay.Canvas.CancelAutoCloseCountdown();
+            return;
+        }
+
+        // Zero sessions: hold off until we've actually seen one (don't exit during the startup race).
+        if (!_seenSession) return;
+
+        // Leave an already-running countdown alone. The scan callback re-enters on every scan (not just
+        // on a real change), so re-arming each time would reset the grace period so it never elapsed —
+        // the countdown must measure time since sessions actually hit zero.
+        if (_autoCloseTimer.IsEnabled) return;
+
+        _autoCloseTimer.Start();
+        _overlay.Canvas.StartAutoCloseCountdown(AutoCloseGraceMs);
     }
 
     // ── Context-menu handlers ─────────────────────────────────────────────────

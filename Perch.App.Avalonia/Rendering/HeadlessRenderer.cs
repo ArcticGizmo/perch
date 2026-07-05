@@ -51,6 +51,11 @@ internal static class HeadlessRenderer
         canvas.TriggerAttention();
         RenderControl(canvas, Path.Combine(outDir, "overlay_attention_1x.png"), 96);
 
+        var probe = new OverlayCanvas();
+        probe.Update(SampleSessions());
+        probe.StartAutoCloseCountdown(20_000);
+        RenderControl(probe, Path.Combine(outDir, "overlay_autoclose_1x.png"), 96);
+
         Console.WriteLine($"Rendered overlay PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }
