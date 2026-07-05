@@ -1375,17 +1375,14 @@ public sealed class OverlayCanvas : Control
     // quick-link launch, section toggle, header expand. Right-click opens the context menu.
     private static readonly Cursor HandCursor = new(StandardCursorType.Hand);
 
-    // Drag state. A left press in the header arms a potential drag; movement past the threshold turns it
-    // into a real window move (via MoveDragRequested), which suppresses the release click.
+    // Drag state. A left press in the header arms a potential drag; once the pointer moves past a small
+    // threshold the gesture is handed to the OS move loop (BeginMoveDrag). A press that never moves is a
+    // click, routed on release (header toggle, row focus, artifact / quick-link open).
     private bool _leftPressed;
-    private bool _dragging;
-    private bool _wasDrag;
-    private PixelPoint _dragStartScreen;
-    private PixelPoint _windowStartPos;
-
-    /// <summary>Raised while dragging with the new absolute window position (physical pixels); the host
-    /// window applies it. A seam so the canvas doesn't reference the window type for the move itself.</summary>
-    internal event Action<PixelPoint>? MoveDragRequested;
+    private bool _headerArmed;
+    private bool _headerDragged;
+    private Point _headerPressPoint;
+    private PointerPressedEventArgs? _headerPressArgs;
 
     /// <summary>Raised once when a drag finishes, so the app can follow with the screen-edge glow.</summary>
     public event Action? DragCompleted;
@@ -1394,18 +1391,26 @@ public sealed class OverlayCanvas : Control
     {
         var p = e.GetPosition(this);
 
-        if (_dragging)
+        // Header press waiting to become a drag: once past the threshold, hand off to the OS move loop.
+        // A borderless window can't use the title bar, so BeginMoveDrag is the cross-platform way to move
+        // it — far more reliable than repositioning by hand on every pointer move.
+        if (_headerArmed && !_headerDragged)
         {
-            // PointToScreen adds the (moving) window origin, so `cur` is the true cursor screen point
-            // regardless of how far we've moved the window — no feedback loop.
-            var cur = this.PointToScreen(p);
-            int dx = cur.X - _dragStartScreen.X, dy = cur.Y - _dragStartScreen.Y;
-            if (!_wasDrag && (Math.Abs(dx) > 4 || Math.Abs(dy) > 4)) _wasDrag = true;
-            if (_wasDrag)
-                MoveDragRequested?.Invoke(new PixelPoint(_windowStartPos.X + dx, _windowStartPos.Y + dy));
+            if (Math.Abs(p.X - _headerPressPoint.X) > 4 || Math.Abs(p.Y - _headerPressPoint.Y) > 4)
+            {
+                _headerDragged = true;
+                _headerArmed = false;
+                e.Pointer.Capture(null); // release our capture so the OS can drive the move
+                if (VisualRoot is Window w && _headerPressArgs is { } pa)
+                {
+                    w.BeginMoveDrag(pa);     // OS-native move (blocks on Windows until the button is released)
+                    DragCompleted?.Invoke(); // re-home the screen-edge glow onto the overlay's new monitor
+                }
+            }
             base.OnPointerMoved(e);
             return;
         }
+        if (_headerDragged) { base.OnPointerMoved(e); return; } // gesture owned by the OS move loop
 
         int row = HitTestRow(p);
         if (row != _hoveredRow) { _hoveredRow = row; InvalidateVisual(); }
@@ -1490,16 +1495,18 @@ public sealed class OverlayCanvas : Control
 
         var p = e.GetPosition(this);
         _leftPressed = true;
-        _wasDrag = false;
-        _dragging = false;
+        _headerArmed = false;
+        _headerDragged = false;
+        _headerPressArgs = null;
 
-        // The header is the drag handle: record the start so a move can reposition the window. The click
-        // action (if this turns out not to be a drag) fires on release.
-        if (p.Y < HeaderHeight && VisualRoot is Window w)
+        // The header is the drag handle: arm a potential OS move (started in OnPointerMoved once the
+        // pointer actually moves). Keep the press args — BeginMoveDrag needs them. A press that never
+        // moves falls through to RouteClick on release (header toggle).
+        if (p.Y < HeaderHeight && VisualRoot is Window)
         {
-            _dragging = true;
-            _dragStartScreen = this.PointToScreen(p);
-            _windowStartPos = w.Position;
+            _headerArmed = true;
+            _headerPressPoint = p;
+            _headerPressArgs = e;
         }
 
         e.Pointer.Capture(this);
@@ -1513,12 +1520,12 @@ public sealed class OverlayCanvas : Control
         _leftPressed = false;
         e.Pointer.Capture(null);
 
-        bool wasDrag = _wasDrag;
-        _dragging = false;
-        _wasDrag = false;
+        bool dragged = _headerDragged;
+        _headerArmed = false;
+        _headerDragged = false;
+        _headerPressArgs = null;
 
-        if (wasDrag) DragCompleted?.Invoke();  // a real drag → no click action
-        else RouteClick(e.GetPosition(this));
+        if (!dragged) RouteClick(e.GetPosition(this)); // a real drag already handed off to the OS
 
         base.OnPointerReleased(e);
     }

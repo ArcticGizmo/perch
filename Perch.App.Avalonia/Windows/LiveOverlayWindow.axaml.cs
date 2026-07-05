@@ -33,9 +33,8 @@ public partial class LiveOverlayWindow : Window
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         WindowStartupLocation = WindowStartupLocation.Manual;
 
-        // The canvas owns dragging (header = drag handle); when a drag ends it asks us to reposition and
-        // reports completion so the app can follow with the ambient glow.
-        Canvas.MoveDragRequested += MoveDragTo;
+        // The canvas owns dragging (header = drag handle) via BeginMoveDrag; it raises DragCompleted when
+        // a move ends so the app can follow with the ambient glow.
     }
 
     /// <summary>Raised when the user finishes dragging the overlay, so the app can re-evaluate anything
@@ -68,10 +67,6 @@ public partial class LiveOverlayWindow : Window
         if (OperatingSystem.IsWindows() && TryGetPlatformHandle() is { } handle)
             Perch.Platform.Windows.OverlayNativeChrome.MakeToolWindowNoActivate(handle.Handle);
     }
-
-    // Moves the window by the given physical-pixel delta from where the drag began (the canvas tracks
-    // the start position and the running delta).
-    private void MoveDragTo(PixelPoint newPosition) => Position = newPosition;
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 }
