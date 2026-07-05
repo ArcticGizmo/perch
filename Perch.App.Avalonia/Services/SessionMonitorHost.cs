@@ -57,6 +57,15 @@ internal sealed class SessionMonitorHost : IDisposable
         _monitor.Scan();
     }
 
+    /// <summary>Clears a completed session's "done" badge — the user focused/clicked it — and rescans so
+    /// the overlay drops the NeedsAttention state back to Idle. Harmless for a session that isn't done.
+    /// Call on the UI thread.</summary>
+    public void Acknowledge(string pid)
+    {
+        _monitor.Acknowledge(pid);
+        _monitor.Scan();
+    }
+
     private void OnSessionsChanged(IReadOnlyList<ClaudeSession> sessions) => _onSessions(sessions);
 
     public void Dispose()

@@ -139,11 +139,15 @@ public partial class App : Application
         base.OnFrameworkInitializationCompleted();
     }
 
-    // Focuses the terminal hosting a clicked session (sub-agent rows already resolve to their parent).
-    private static void FocusSession(ClaudeSession session)
+    // Focuses the terminal hosting a clicked session (sub-agent rows already resolve to their parent) and
+    // acknowledges it, so clicking a finished ("done"/NeedsAttention) session clears its badge — the
+    // WinForms SessionFocused → AcknowledgeSession behaviour. Acknowledge is a no-op for a session that
+    // isn't done, and rescans so the overlay refreshes.
+    private void FocusSession(ClaudeSession session)
     {
         if (int.TryParse(session.Pid, out int pid))
             PlatformServices.WindowActivator.FocusTerminalForProcess(pid, session.ProjectName);
+        _monitorHost?.Acknowledge(session.Pid);
     }
 
     // Opens a single-artifact row's artifact in the browser. (Multi-artifact rows pop the canvas picker,
