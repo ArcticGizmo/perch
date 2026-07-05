@@ -105,6 +105,11 @@ public sealed class OverlayCanvas : Control
     // Brand mark (the app icon), loaded once.
     private static readonly Bitmap? Brand = LoadBrand();
 
+    public OverlayCanvas() =>
+        // The brand mark and quick-link icons are 256px sources drawn at ~16–18px; the default sampler
+        // aliases them badly. HighQuality makes Skia mipmap the downscale so they stay crisp at any DPI.
+        RenderOptions.SetBitmapInterpolationMode(this, BitmapInterpolationMode.HighQuality);
+
     // "Waiting on you" ramp length (minutes to fully red); user-tunable later (SetWaitingTimerRedMinutes).
     private int _waitingTimerRedMinutes = 3;
 
