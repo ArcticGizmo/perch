@@ -25,8 +25,10 @@ Multi-project solution (`perch.slnx`); the projects live under `src/`:
   etc.), `Rendering/` (`OverlayDraw` mini-PaintKit, `HeadlessRenderer`), `Services/` (`*MonitorHost`,
   `UpdateService`), `Theming/Palette`, `Notifications/`.
 - `tests/Perch.Tests/` — xUnit tests over `Perch.Core` (see Testing).
-- `plugins/perch/` — the companion Claude Code plugin (`commands/`, `hooks/`, `scripts/`). Its hooks
-  launch/detect the tray by the process name **`perch`**.
+- `src/Perch.Hook/` — `perch-hook`, the small NativeAOT console app Perch wires into Claude Code's
+  hooks (self-managed in `~/.claude/settings.json`; see `Perch.Data.ClaudeUserSettings` +
+  `Perch.App/Services/HookInstaller`). It writes the session sidecars the tray watches and launches/
+  detects the tray by the process name **`perch`**. (This replaced the old marketplace plugin.)
 - `tools/IconGen` — regenerates the raster icons from `perch.svg` (`tools/gen-icons.ps1`/`.cmd`), writing
   `src/Perch.App/Assets/icon.{png,ico}` and `landing-icon.png`.
 

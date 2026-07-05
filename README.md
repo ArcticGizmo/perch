@@ -71,7 +71,7 @@ Click the header to expand it into per-session rows; click a row to focus that s
 
 - **Desktop toasts** when a session finishes or starts awaiting input — click one to jump straight to that terminal.
 - **System chimes** for done / waiting, honouring your Windows sound scheme.
-- **Push to your phone** via [ntfy](https://ntfy.sh) — opt in per session (or via `/afk`), with an optional "Open session" button for sessions controlled from claude.ai.
+- **Push to your phone** via [ntfy](https://ntfy.sh) — opt in per session, with an optional "Open session" button for sessions controlled from claude.ai.
 - **Away override** — when your workstation is locked, push _any_ session's alerts so you never miss one while you're AFK.
 - Independent on/off toggles for every notification type, each with a test button.
 
@@ -89,13 +89,13 @@ Click the header to expand it into per-session rows; click a row to focus that s
 - Click to focus the app if it's already running, or launch it if not.
 - Fully customisable — add, edit, enable/disable links, with presets for well-known apps.
 
-### Companion plugin
+### Live session state
 
-Install the Claude Code plugin (one click from **Settings → Plugin Control**) to unlock:
+Perch wires a few hooks into Claude Code for you — no plugin to install. On launch it points
+`~/.claude/settings.json` at its own fast `perch-hook` binary, keeps it current across updates, heals
+stale entries, and removes them cleanly on uninstall. That unlocks:
 
 - **Permission-mode badges** in the overlay (Plan / Accept Edits / Auto / Bypass).
-- **`/afk`** — toggle push notifications for the current session from the terminal.
-- **`/history`** — pop open the history viewer for the current session.
 - **Auto-start** — launch Perch automatically when you open your first session (and optionally close it after the last one ends).
 
 ### The little things
