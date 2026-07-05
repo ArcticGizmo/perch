@@ -33,6 +33,8 @@ public sealed class OverlayCanvas : Control
     private const double SubRowHeight     = 24;
     private const double SectionRowHeight = 26;
     private const double SubIndent        = 22;
+    private const double BarRowHeight     = 18;
+    private const double UsageStripHeight = 50; // two usage bars + padding, shown only when expanded
     private const double BotIconWidth     = 16;
     private const double RcIconWidth      = 14;
     private const double MailIconWidth    = 16;
@@ -40,7 +42,6 @@ public sealed class OverlayCanvas : Control
     private const double WarnIconWidth    = 14;
     private const double ThermoIconWidth  = 12;
     private const double ArtifactIconWidth = 16;
-    private const double RowsTop          = HeaderHeight; // usage/metrics/quick-links strips inserted here later
 
     // Font sizes (px ~= the WinForms point sizes).
     private const double NameSize       = 11.5;
@@ -85,6 +86,10 @@ public sealed class OverlayCanvas : Control
     private static readonly IBrush ArtifactHover  = new SolidColorBrush(Color.FromRgb(255, 224, 140));
     private static readonly IBrush ThermoGlassFill = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
     private static readonly IPen   ThermoOutline  = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
+    private static readonly Color  MutedColor     = Color.FromRgb(110, 110, 130);
+    private static readonly Color  SepColor       = Color.FromRgb(35, 35, 50);
+    private static readonly Color  UsageTrackColor = Color.FromRgb(38, 38, 52);
+    private static readonly Color  ExpectedMarkColor = Color.FromRgb(180, 180, 195);
 
     // Brand mark (the app icon), loaded once.
     private static readonly Bitmap? Brand = LoadBrand();
@@ -103,6 +108,36 @@ public sealed class OverlayCanvas : Control
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
     private float _ctxYellow = 0.60f, _ctxOrange = 0.75f, _ctxRed = 0.90f;
+
+    // Rate-limit usage strip (5-hour + weekly bars), shown between the header and the rows when expanded.
+    private UsageInfo _usage = UsageInfo.Empty;
+    private bool _usageEnabled = true;
+    private bool _showExpectedRate = true;
+
+    /// <summary>Feeds the latest account-wide rate-limit usage (on the UI thread) and repaints the strip.
+    /// Internal because <see cref="UsageInfo"/> is a Core-internal type shared via InternalsVisibleTo.</summary>
+    internal void UpdateUsage(UsageInfo usage)
+    {
+        _usage = usage;
+        if (_usageEnabled) InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the whole usage strip. Toggling it changes the panel height, so relayout.</summary>
+    public void SetShowUsage(bool enabled)
+    {
+        if (_usageEnabled == enabled) return;
+        _usageEnabled = enabled;
+        InvalidateMeasure();
+        InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the expected-rate marker on each usage bar.</summary>
+    public void SetShowExpectedRate(bool show)
+    {
+        if (_showExpectedRate == show) return;
+        _showExpectedRate = show;
+        InvalidateVisual();
+    }
 
     /// <summary>Show/hide the clickable artifact glyph (the session still tracks its artifacts).</summary>
     public void SetShowArtifacts(bool show)
@@ -204,9 +239,12 @@ public sealed class OverlayCanvas : Control
     private double Draw(DrawingContext? ctx, double width)
     {
         bool showRows = _expanded && _rows.Count > 0;
+        bool showUsage = showRows && _usageEnabled; // strip only appears alongside the expanded rows
+
         double height = HeaderHeight;
         if (showRows)
         {
+            if (showUsage) height += UsageStripHeight; // usage bars sit between the header and the rows
             foreach (var r in _rows) height += HeightOf(r);
             height += 2;
         }
@@ -216,9 +254,11 @@ public sealed class OverlayCanvas : Control
             OverlayDraw.Panel(ctx, new Rect(0.5, 0.5, width - 1, height - 1), BgBrush, BorderPen, Corner);
             DrawHeader(ctx, width);
 
+            if (showUsage) DrawUsageBars(ctx, width);
+
             if (showRows)
             {
-                double top = RowsTop;
+                double top = HeaderHeight + (showUsage ? UsageStripHeight : 0);
                 foreach (var r in _rows)
                 {
                     if (r.IsSectionHeader) DrawSectionHeaderRow(ctx, r, top, width);
@@ -322,6 +362,33 @@ public sealed class OverlayCanvas : Control
             ctx.DrawLine(pen, new Point(pipeX, r.Top + pad), new Point(pipeX, r.Bottom - pad));
         }
     }
+
+    // ── Usage bars ─────────────────────────────────────────────────────────────
+    // Two bars below the header when expanded: the 5-hour ("Session") and 7-day ("Weekly") rate-limit
+    // windows. Dimmed when the reading is stale/unavailable. (The system-metrics strip, when added in
+    // 4.9, pushes this down — hence the UsageStripTop seam.)
+    private double UsageStripTop => HeaderHeight;
+
+    private void DrawUsageBars(DrawingContext ctx, double width)
+    {
+        bool stale = _usage.IsStale(DateTime.Now);
+        double top = UsageStripTop + 2;
+        double? sessionExpected = _showExpectedRate
+            ? UsageBarRenderer.ElapsedPercent(_usage.FiveHourResetsAt, TimeSpan.FromHours(5)) : null;
+        double? weeklyExpected = _showExpectedRate
+            ? UsageBarRenderer.ElapsedPercent(_usage.SevenDayResetsAt, TimeSpan.FromDays(7)) : null;
+        DrawUsageBar(ctx, width, top,                 "Session", _usage.FiveHourPercent, sessionExpected, stale);
+        DrawUsageBar(ctx, width, top + BarRowHeight,  "Weekly",  _usage.SevenDayPercent, weeklyExpected,  stale);
+    }
+
+    // The overlay's compact bar: a HorizPad inset on both sides, narrow caption/pct columns, the
+    // overlay's own muted/track/bg shades. Caption/pct at 10px (the WinForms 7.5pt at 96→72).
+    private void DrawUsageBar(DrawingContext ctx, double width, double rowTop, string caption,
+                              double? percent, double? expectedPct, bool stale) =>
+        UsageBarRenderer.Draw(ctx, HorizPad, width - HorizPad, rowTop + BarRowHeight / 2,
+            caption, percent, expectedPct, stale, 10, 10,
+            MutedColor, UsageTrackColor, ExpectedMarkColor, BgColor,
+            captionW: 46, pctW: 34, trackH: 7);
 
     // ── Session row (core) ────────────────────────────────────────────────────
     private void DrawSessionRow(DrawingContext ctx, ClaudeSession session, double top, double width)

@@ -28,6 +28,7 @@ internal static class HeadlessRenderer
 
         var canvas = new OverlayCanvas();
         canvas.Update(SampleSessions());
+        canvas.UpdateUsage(SampleUsage());
 
         RenderControl(canvas, Path.Combine(outDir, "overlay_1x.png"), 96);
         RenderControl(canvas, Path.Combine(outDir, "overlay_1.5x.png"), 144);
@@ -48,6 +49,17 @@ internal static class HeadlessRenderer
         rtb.Render(control);
         using var fs = File.Create(path);
         rtb.Save(fs);
+    }
+
+    // A healthy-but-visible reading: session bar mid-yellow, weekly bar low-green, both with a reset
+    // time an hour or two out so the expected-rate markers land partway along each track.
+    private static UsageInfo SampleUsage()
+    {
+        var now = DateTime.Now;
+        return new UsageInfo(
+            FiveHourPercent: 62, SevenDayPercent: 28,
+            FiveHourResetsAt: now.AddHours(2), SevenDayResetsAt: now.AddDays(4),
+            LastUpdated: now, Ok: true, Error: null);
     }
 
     private static IReadOnlyList<ClaudeSession> SampleSessions()
