@@ -94,8 +94,10 @@ needs on-device verification on a Mac** (the native calls only resolve at runtim
 - **`IAudioCue`** — DONE (unverified): shells to `/usr/bin/afplay` with the stock
   `/System/Library/Sounds` aiffs — "Glass" for Done, "Funk" for WaitingForInput. Future refinement:
   `NSSound` to avoid a process per chime.
-- **`ISessionLock`** — screen-lock state via `CGSessionCopyCurrentDictionary`
-  (`kCGSSessionOnConsoleKey`) or the `com.apple.screenIsLocked`/`Unlocked` distributed notifications.
+- **`ISessionLock`** — DONE (unverified): polls `CGSessionCopyCurrentDictionary()` for
+  `CGSSessionScreenIsLocked` on the getter (handling both CFNumber and CFBoolean value types via
+  `CFGetTypeID`); any failure reads as unlocked so a notification is never wrongly suppressed. No
+  distributed-notification observer needed since the dispatcher only reads it per push.
 - **`ISystemMetrics`** — DONE (unverified): CPU via `host_statistics(HOST_CPU_LOAD_INFO)` mapped to the
   Windows `(idle, kernel⊇idle, user)` convention; total RAM via `sysctlbyname(hw.memsize)` and used via
   `host_statistics64(HOST_VM_INFO64)` (`total − (free + inactive)`); parent-pid map via `libproc`
