@@ -25,6 +25,9 @@ public partial class App : Application
     private QuickLinkLauncher? _quickLinkLauncher;
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
+    private StatsWindow? _statsWindow;
+    private FlightPathWindow? _flightWindow;
+    private HistoryWindow? _historyWindow;
     private AppSettings? _appSettings;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
 
@@ -34,6 +37,7 @@ public partial class App : Application
     private DispatcherTimer? _autoCloseTimer;
     private bool _seenSession;
     private int _lastSessionCount;
+    private IReadOnlyList<ClaudeSession> _lastSessions = [];
     private IGlobalHotkey? _hotkey;
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
@@ -64,8 +68,10 @@ public partial class App : Application
             // Each scan feeds both the canvas and the metrics sampler (which pids to measure).
             _monitorHost = new SessionMonitorHost(sessions =>
             {
+                _lastSessions = sessions;
                 _overlay!.Canvas.Update(sessions);
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
+                if (_historyWindow is { } h) h.SetActiveSessions(sessions);
                 MaybeHandleAutoClose(sessions.Count);
             });
 
@@ -93,7 +99,7 @@ public partial class App : Application
             _overlay.Canvas.ExitRequested += () => desktop.Shutdown();
             _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
             _overlay.Canvas.UsageToggleRequested += SetUsageEnabled;
-            _overlay.Canvas.HistoryRequested += OpenHistoryViewer;
+            _overlay.Canvas.HistoryRequested += OpenHistory;
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
             _overlay.DragCompleted += OnOverlayDragCompleted;
@@ -245,11 +251,26 @@ public partial class App : Application
         _overlay.Canvas.SetShowUsage(enabled);
     }
 
-    // "View history" — the history viewer is a Phase-5 window; stub the trigger until it lands.
-    private static void OpenHistoryViewer(string sessionId)
+    // ── Tray / overlay window openers (single reused instances via WindowHost) ─
+    // "Session history…" (tray) or "View history" (overlay row) — opens/focuses the one viewer and, when
+    // a session id is given, jumps to it. The list + transcript pane land in 5.7; the wiring is here now.
+    private void OpenHistory(string? sessionId)
     {
-        // TODO(phase5): open the ported history viewer on this session.
+        _historyWindow = WindowHost.ShowOrFocus(_historyWindow,
+            () => new HistoryWindow(),
+            () => _historyWindow = null,
+            w =>
+            {
+                if (_monitorHost is not null) w.SetActiveSessions(_lastSessions);
+                w.ShowSession(sessionId);
+            });
     }
+
+    private void OpenStats() =>
+        _statsWindow = WindowHost.ShowOrFocus(_statsWindow, () => new StatsWindow(), () => _statsWindow = null);
+
+    private void OpenFlightPath() =>
+        _flightWindow = WindowHost.ShowOrFocus(_flightWindow, () => new FlightPathWindow(), () => _flightWindow = null);
 
     // "Show QR code" — the QR window is a Phase-5 window; stub the trigger until it lands.
     private static void ShowQrCode(ClaudeSession session)
@@ -289,6 +310,15 @@ public partial class App : Application
         var settingsItem = new NativeMenuItem("Settings…");
         settingsItem.Click += (_, _) => OpenSettings();
 
+        var historyItem = new NativeMenuItem("Session history…");
+        historyItem.Click += (_, _) => OpenHistory(null);
+
+        var statsItem = new NativeMenuItem("Session stats…");
+        statsItem.Click += (_, _) => OpenStats();
+
+        var flightItem = new NativeMenuItem("Flight path…");
+        flightItem.Click += (_, _) => OpenFlightPath();
+
         var exitItem = new NativeMenuItem("Exit");
         exitItem.Click += (_, _) => desktop.Shutdown();
 
@@ -299,7 +329,11 @@ public partial class App : Application
             Menu = new NativeMenu
             {
                 overlayItem,
+                new NativeMenuItemSeparator(),
                 settingsItem,
+                historyItem,
+                statsItem,
+                flightItem,
                 new NativeMenuItemSeparator(),
                 exitItem,
             },
