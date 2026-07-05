@@ -456,8 +456,8 @@ public partial class App : Application
     {
         var icon = new WindowIcon(AssetLoader.Open(new Uri("avares://perch/Assets/icon.ico")));
 
-        var overlayItem = new NativeMenuItem("Toggle dense mode");
-        overlayItem.Click += (_, _) => ToggleDense();
+        // Read-only version indicator (dense mode is still toggled via the global hotkey Alt+Shift+W).
+        var versionItem = new NativeMenuItem($"Perch - {AppInfo.Version}") { IsEnabled = false };
 
         var settingsItem = new NativeMenuItem("Settings…");
         settingsItem.Click += (_, _) => OpenSettings();
@@ -489,7 +489,7 @@ public partial class App : Application
             ToolTipText = "Perch",
             Menu = new NativeMenu
             {
-                overlayItem,
+                versionItem,
                 new NativeMenuItemSeparator(),
                 settingsItem,
                 historyItem,
@@ -501,7 +501,7 @@ public partial class App : Application
             },
         };
         // Left-clicking the tray icon opens Settings (matching the WinForms tray); dense mode is toggled
-        // from the menu item above (and the global hotkey).
+        // via the global hotkey (Alt+Shift+W).
         tray.Clicked += (_, _) => OpenSettings();
 
         TrayIcon.SetIcons(this, new TrayIcons { tray });
