@@ -89,13 +89,19 @@ file-based detection work, everything else degrades quietly) until Phase 3 fills
 ### Phase 3 — Implement `Perch.Platform.Mac`
 The `net10.0` project now exists with no-op stubs (Phase 2). Fill in the real interop via P/Invoke
 (`objc_msgSend` into AppKit/CoreGraphics, plus `libSystem`/`libproc`), one interface at a time, easiest
-first so the app is usable early:
-- **`IAudioCue`** — `NSSound`/system sounds (or `afplay`). Trivial.
+first so the app is usable early. **Everything below compiles on Windows/CI; anything marked DONE still
+needs on-device verification on a Mac** (the native calls only resolve at runtime).
+- **`IAudioCue`** — DONE (unverified): shells to `/usr/bin/afplay` with the stock
+  `/System/Library/Sounds` aiffs — "Glass" for Done, "Funk" for WaitingForInput. Future refinement:
+  `NSSound` to avoid a process per chime.
 - **`ISessionLock`** — screen-lock state via `CGSessionCopyCurrentDictionary`
   (`kCGSSessionOnConsoleKey`) or the `com.apple.screenIsLocked`/`Unlocked` distributed notifications.
-- **`ISystemMetrics`** — CPU via `host_statistics(HOST_CPU_LOAD_INFO)`, memory via
-  `host_statistics64`/`sysctl`, parent-pid map via `libproc` (`proc_listpids` + `proc_pidinfo`). Returns
-  the same tuples the Windows impl does, so `MetricsMonitor`'s delta maths is unchanged.
+- **`ISystemMetrics`** — DONE (unverified): CPU via `host_statistics(HOST_CPU_LOAD_INFO)` mapped to the
+  Windows `(idle, kernel⊇idle, user)` convention; total RAM via `sysctlbyname(hw.memsize)` and used via
+  `host_statistics64(HOST_VM_INFO64)` (`total − (free + inactive)`); parent-pid map via `libproc`
+  (`proc_listpids` + `proc_pidinfo(PROC_PIDTBSDINFO)`, reading `pbi_ppid` at offset 16). Constants pinned
+  from the XNU headers; symbols imported from the libSystem umbrella. `MetricsMonitor`'s delta maths is
+  unchanged.
 - **`IWindowChrome`** (from Phase 1) — set `NSWindow` level / `collectionBehavior` (keep out of
   Mission Control / Spaces cycling) and `ignoresMouseEvents` (click-through) on the handle.
 - **`IAppIconProvider`** — `NSWorkspace.iconForFile`/`iconForContentType`, materialised to a PNG cache
