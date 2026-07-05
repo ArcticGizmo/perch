@@ -48,10 +48,17 @@ internal static class Program
         // The install/update/uninstall fast callbacks are Velopack's Windows-only installer surface; they
         // keep the per-user PATH entry in sync so `perch` resolves in any terminal. macOS packaging
         // (Phase 5) wires the equivalent PATH symlink through the .app/.pkg install instead.
+        // Uninstall also tears down the self-managed hooks: strip our block from ~/.claude/settings.json
+        // and delete the stable perch-hook bin (macOS relies on perch-hook's own self-heal until it has
+        // an uninstaller of its own).
         velopack
             .OnAfterInstallFastCallback(_ => PlatformServices.PathInstaller.Register())
             .OnAfterUpdateFastCallback(_ => PlatformServices.PathInstaller.Register())
-            .OnBeforeUninstallFastCallback(_ => PlatformServices.PathInstaller.Unregister());
+            .OnBeforeUninstallFastCallback(_ =>
+            {
+                PlatformServices.PathInstaller.Unregister();
+                Services.HookInstaller.Uninstall();
+            });
 #endif
         velopack
             .OnFirstRun(_ => IsFirstRun = true)
