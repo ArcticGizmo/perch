@@ -53,13 +53,24 @@ internal static class HeadlessRenderer
     private static IReadOnlyList<ClaudeSession> SampleSessions()
     {
         var now = DateTime.Now;
+        var subs = new List<SubAgent>
+        {
+            new("t1", "teammate", "general-purpose", IsTeammate: true, Name: "arch-explorer",
+                Color: "blue", Activity: "Reading Program.cs"),
+            new("t2", "teammate", "general-purpose", IsTeammate: true, Name: "reviewer",
+                Color: "green", IsIdle: true),
+            new("a1", "Explore the auth flow", "general-purpose"),
+        };
         return
         [
             new ClaudeSession("1234", "s1", SessionStatus.Running, @"C:\src\perch", "perch", now,
-                Activity: "Editing OverlayForm.cs"),
+                Activity: "Editing OverlayForm.cs", SubAgents: subs),
             new ClaudeSession("5678", "s2", SessionStatus.AwaitingInput, @"C:\src\api", "api", now),
             new ClaudeSession("9012", "s3", SessionStatus.NeedsAttention, @"C:\src\docs", "docs-site", now),
             new ClaudeSession("3456", "s4", SessionStatus.Idle, @"C:\src\scratch", "scratch", now),
+            // A background/SDK session (Entrypoint != "cli") -> grouped under the Autonomous section.
+            new ClaudeSession("7788", "s5", SessionStatus.Running, @"C:\src\bot", "nightly-bot", now,
+                Entrypoint: "sdk-py"),
         ];
     }
 }
