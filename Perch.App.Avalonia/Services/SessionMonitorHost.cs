@@ -12,8 +12,19 @@ namespace Perch.Avalonia.Services;
 /// </summary>
 internal sealed class SessionMonitorHost : IDisposable
 {
+    // Safety-net rescan cadence (matches the WinForms ReconcileIntervalMs), catching anything a file
+    // event or the deadline timer misses. The deadline timer below is what makes "done" fire on time.
+    private static readonly TimeSpan ReconcileInterval = TimeSpan.FromSeconds(30);
+
     private readonly SessionMonitor _monitor = new();
     private readonly Action<IReadOnlyList<ClaudeSession>> _onSessions;
+
+    // One-shot timer armed to the monitor's next deferred-completion deadline (a busy->idle settle or a
+    // sub-agent grace). Without this the "done" badge only appears on the next incidental file event, so
+    // a finished session lingers as Running/Idle far too long — the Avalonia port of the WinForms
+    // _deadlineTimer + ArmDeadlineTimer. Ticks on the UI thread, so the Scan it drives is UI-thread-safe.
+    private readonly DispatcherTimer _deadlineTimer;
+    private readonly DispatcherTimer _reconcileTimer;
 
     /// <summary>Raised when a session newly needs attention (finished) — the app flashes the overlay.</summary>
     public event Action<ClaudeSession>? NeedsAttention;
@@ -36,6 +47,11 @@ internal sealed class SessionMonitorHost : IDisposable
         // FileSystemWatcher/debounce fire on background threads; hop to the UI thread and re-scan there
         // (matches the WinForms BeginInvoke(Scan) pattern) so the callback only runs on the UI thread.
         _monitor.ChangeDetected += () => Dispatcher.UIThread.Post(() => _monitor.Scan());
+
+        _deadlineTimer = new DispatcherTimer();
+        _deadlineTimer.Tick += (_, _) => { _deadlineTimer.Stop(); _monitor.Scan(); };
+        _reconcileTimer = new DispatcherTimer { Interval = ReconcileInterval };
+        _reconcileTimer.Tick += (_, _) => _monitor.Scan();
     }
 
     /// <summary>Whether the monitor flags stuck sessions (feeds the overlay's warning glyph). Off by
@@ -46,8 +62,13 @@ internal sealed class SessionMonitorHost : IDisposable
     /// by default in the monitor; the app sets it from settings.</summary>
     public bool GitStatsEnabled { set => _monitor.GitStatsEnabled = value; }
 
-    /// <summary>Reads the initial session state. Call on the UI thread (Scan raises SessionsChanged).</summary>
-    public void Start() => _monitor.Scan();
+    /// <summary>Reads the initial session state and starts the safety-net reconcile timer. Call on the
+    /// UI thread (Scan raises SessionsChanged).</summary>
+    public void Start()
+    {
+        _monitor.Scan();
+        _reconcileTimer.Start();
+    }
 
     /// <summary>Flips a session's external-notify opt-in (writes/deletes its marker file) and rescans so
     /// the overlay's mail glyph + menu wording refresh. Call on the UI thread.</summary>
@@ -66,10 +87,29 @@ internal sealed class SessionMonitorHost : IDisposable
         _monitor.Scan();
     }
 
-    private void OnSessionsChanged(IReadOnlyList<ClaudeSession> sessions) => _onSessions(sessions);
+    // Runs after every scan (SessionsChanged fires from within Scan): pump the result to the UI, then
+    // (re)arm the one-shot deadline timer so the next deferred completion fires on time.
+    private void OnSessionsChanged(IReadOnlyList<ClaudeSession> sessions)
+    {
+        _onSessions(sessions);
+        ArmDeadlineTimer();
+    }
+
+    // Arms the one-shot timer for the monitor's next needs-attention deadline (or leaves it stopped when
+    // none is pending). Mirrors the WinForms ArmDeadlineTimer; fires on the next tick if already due.
+    private void ArmDeadlineTimer()
+    {
+        _deadlineTimer.Stop();
+        if (_monitor.NextNeedsAttentionDeadline is not { } deadline) return;
+        var ms = (deadline - DateTime.Now).TotalMilliseconds;
+        _deadlineTimer.Interval = TimeSpan.FromMilliseconds(Math.Clamp(ms, 1, int.MaxValue));
+        _deadlineTimer.Start();
+    }
 
     public void Dispose()
     {
+        _deadlineTimer.Stop();
+        _reconcileTimer.Stop();
         _monitor.SessionsChanged -= OnSessionsChanged;
         _monitor.Dispose();
     }
