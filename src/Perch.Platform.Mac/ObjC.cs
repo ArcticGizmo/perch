@@ -36,6 +36,14 @@ internal static class ObjC
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern IntPtr SendGet(IntPtr receiver, IntPtr selector, IntPtr arg);
 
+    /// <summary>id (*)(id, SEL, int) — e.g. +runningApplicationWithProcessIdentifier: (pid_t is int).</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    public static extern IntPtr SendGet(IntPtr receiver, IntPtr selector, int arg);
+
+    /// <summary>NSInteger (*)(id, SEL) — a message send returning an NSInteger (e.g. -activationPolicy).</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    public static extern nint SendNint(IntPtr receiver, IntPtr selector);
+
     /// <summary>void (*)(id, SEL, NSInteger).</summary>
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern void SendVoid(IntPtr receiver, IntPtr selector, nint arg);

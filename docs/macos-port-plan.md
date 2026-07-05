@@ -52,8 +52,10 @@ throwaway all-no-op platform layer (or the `render` mode, which needs no platfor
 overlay renders, `~/.claude` file-watching fires, and DPI/Retina scaling looks right via `render <out>` at
 1× and 1.5×. Small, fast, tells us whether anything in Avalonia 12 misbehaves on macOS before we commit.
 
-> **Status: Phases 1 and 2 are done** (branch `cross-platform`). The app compiles as two heads and the
-> macOS head builds against no-op platform stubs. Phase 3 (real `Perch.Platform.Mac` interop) is next.
+> **Status: Phases 1–3 are done** (branch `cross-platform`). The app compiles as two heads and every
+> `Perch.Platform.Mac` interface now has a real implementation — **all written on Windows and not yet
+> verified on a Mac** (the native calls only resolve at runtime). Phase 4 (plugin `invoke.sh`) is next;
+> on-device verification of the interop rides along with Phase 5 packaging when a Mac is available.
 
 ### Phase 1 — Close the `OverlayNativeChrome` leak (do this regardless) — DONE
 Introduce a Core seam, e.g. `IWindowChrome` with `MakeToolWindowNoActivate(...)` and
@@ -114,20 +116,26 @@ needs on-device verification on a Mac** (the native calls only resolve at runtim
   `mdfind`), finding its `.icns` (`CFBundleIconFile` via `defaults read`, else first `*.icns`), and
   converting to a cached PNG with `sips -Z <size>`. Null on any failure → strip draws initials. Future
   refinement: `NSWorkspace.iconForFile` for pixel-exact icons.
-- **`IWindowActivator`** — hardest. Raise the session's terminal (Terminal.app / iTerm2 / VS Code
-  integrated terminal). Walk parent pids via `libproc`, then raise the owning app via Accessibility API
-  (`AXUIElement`) or scoped AppleScript. Expect this to be best-effort per terminal, like the Windows
-  ConPTY caveat. **Needs the Accessibility permission** (Phase 6).
-- **`IGlobalHotkey`** — Carbon `RegisterEventHotKey` (works without focus) or an `NSEvent` global
-  monitor. **Needs Accessibility/Input-Monitoring permission** for the monitor route.
+- **`IWindowActivator`** — DONE (unverified), hardest. Walks parent pids via `libproc` up to the nearest
+  regular GUI app (the hosting terminal/IDE) and activates it via
+  `NSRunningApplication.runningApplicationWithProcessIdentifier:` + `activateWithOptions:`. Coarser than
+  Windows — focuses the app, not a specific window/tab (`projectHint` unused until we add `AXUIElement`
+  window-level raising in Phase 6). No Accessibility permission needed for app-level activation.
+- **`IGlobalHotkey`** — DONE (unverified): Carbon `RegisterEventHotKey` (fires without focus and needs no
+  Accessibility permission, unlike an `NSEvent` global monitor). One lazily-installed app-wide Carbon
+  event handler dispatches to the registered `Action` by hot-key id; letters/digits map to `kVK_ANSI_*`
+  virtual key codes.
 - **`IPathInstaller`** — DONE (pure managed, low-risk): symlinks `Environment.ProcessPath` into
   `~/.local/bin/perch` (user-writable, no sudo) and removes it on uninstall. Phase 5 may relocate to
   `/usr/local/bin` via a privileged installer step. Still needs wiring into the mac install hooks (Phase 5).
 - **`INotifier` (optional native)** — `UNUserNotificationCenter` for real Notification Center toasts;
   skip initially since `AvaloniaToastNotifier` already covers it.
 
-Ship the harder ones (activator, hotkey) as no-ops first if needed — the app stays fully usable without
-them.
+All eight interfaces are now implemented (no remaining no-op stubs). What's left for Phase 3 proper is
+purely **on-device verification** — every one is flagged "unverified on a Mac" until then. The likeliest
+to need tuning are the objc-heavy ones: `WindowChrome` (does Avalonia fight the window level?),
+`WindowActivator` (which ancestor is the terminal; does focus land right), and `GlobalHotkey` (Carbon
+handler wiring + keycode map).
 
 ### Phase 4 — Port the plugin to macOS
 - Add `plugins/perch/scripts/invoke.sh` mirroring `invoke.ps1`: write the same sidecars
