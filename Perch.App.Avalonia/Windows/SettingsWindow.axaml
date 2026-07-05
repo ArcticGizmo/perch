@@ -1,0 +1,29 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Perch.Avalonia.Windows.SettingsWindow"
+        Title="Perch — Settings"
+        Width="560" Height="640"
+        MinWidth="460" MinHeight="480"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource FormBgBrush}"
+        Icon="/Assets/icon.ico">
+
+    <!-- Phase 3 scaffold: proves the Avalonia shell boots, the tray opens a themed window, and the
+         palette applies. The real settings UI (bound to a Perch.Core-backed view-model) lands next. -->
+    <Border Padding="28">
+        <StackPanel Spacing="14" VerticalAlignment="Top">
+            <TextBlock Text="Perch"
+                       Foreground="{StaticResource TitleBrush}"
+                       FontSize="26" FontWeight="SemiBold" />
+            <TextBlock Text="Avalonia settings window — scaffold"
+                       Foreground="{StaticResource AccentBrush}"
+                       FontSize="14" />
+            <TextBlock TextWrapping="Wrap"
+                       Foreground="{StaticResource MutedBrush}"
+                       Text="This window confirms the Avalonia head boots, the tray icon and menu work, and the shared dark palette renders. The full settings UI — notifications, usage bars, quick links, hotkey — is bound to a view-model over Perch.Core in the next step." />
+            <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,6" />
+            <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="12"
+                       Text="Running as a second executable alongside the WinForms app during the port." />
+        </StackPanel>
+    </Border>
+</Window>
