@@ -1,8 +1,17 @@
 # Self-managed hooks — implementation plan (handoff)
 
-**Status:** ready to implement. The hook *binary* is done; this covers the *wiring* that installs it into
-Claude Code and the migration off the old plugin. Self-contained — you shouldn't need the originating
-conversation. Parent context: `docs/macos-port-plan.md` (Phase 4).
+**Status:** ✅ **done** (branch `cross-platform`). All tasks implemented, built (both heads +
+`perch-hook`), unit-tested, and verified end-to-end hermetically. Commits: `5cd4e13` (reconcile +
+`HookInstaller` + startup wiring + `PluginManager` migration + Settings UI removal + tests), `8c11d34`
+(`perch-hook` self-heal), `c1ecc76` (uninstall removal), `236c886` (ship `perch-hook` next to `perch`),
+`160a6b3` (deleted `plugins/perch/` + `.claude-plugin/marketplace.json`, docs updated). Kept below as the
+implementation record. Parent context: `docs/macos-port-plan.md` (Phase 4).
+
+Resolved open questions: user-`settings.json` hooks are keyed by event → `[{matcher, hooks:[{type,
+command, args?}]}]`; the exec `args` form is used (no shell quoting for the `Perch (Dev)` path); unknown
+`_perch` fields are ignored; a **missing command is non-blocking** (only exit 2 blocks, which `perch-hook`
+never emits). Stable bin: `%APPDATA%\Perch[ (Dev)]\bin`, consistent with `AppSettings` and `perch-hook`'s
+profile logic. `plugins/perch/` was **deleted** (git history retains it).
 
 ## Why
 
