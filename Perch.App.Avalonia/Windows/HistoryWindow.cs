@@ -69,9 +69,13 @@ internal sealed class HistoryWindow : Window
         _dropdown = new ComboBox
         {
             MinWidth = 340, MaxDropDownHeight = 480, VerticalAlignment = VerticalAlignment.Center,
+            // Avalonia invokes this template with a null item on the ComboBox's selection-box measure
+            // pass (even while the list is empty); an unguarded DisplayName(null) dereferences the item
+            // inside a layout pass, which crashes the whole process (0xC0000005) rather than throwing a
+            // catchable exception. Guard the null.
             ItemTemplate = new FuncDataTemplate<HistoryEntry>((e, _) => new TextBlock
             {
-                Text = DisplayName(e), Foreground = e is { IsActive: true } ? AsstBrush : FgBrush,
+                Text = e is null ? "" : DisplayName(e), Foreground = e is { IsActive: true } ? AsstBrush : FgBrush,
             }, supportsRecycling: true),
         };
         _dropdown.SelectionChanged += (_, _) =>
