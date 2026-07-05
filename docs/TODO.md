@@ -1,5 +1,5 @@
 # TODO
-
+- make artefact icon always open a list so that it is consistent
 
 ## Bigger ideas (brainstorm)
 - turn the watcher into a controller — push past read-only monitoring
