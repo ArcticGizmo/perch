@@ -71,6 +71,12 @@ internal static class HeadlessRenderer
         });
         RenderControl(glowPanel, Path.Combine(outDir, "glow_1x.png"), 96);
 
+        // Stats dashboard (5.5): synthetic "Today" report so the cards, bars, and histograms render.
+        var stats = new Views.StatsDashboard(showCost: true);
+        stats.SetReport(SampleStatsReport(), null);
+        RenderControl(stats, Path.Combine(outDir, "stats_1x.png"), 96);
+        RenderControl(stats, Path.Combine(outDir, "stats_1.5x.png"), 144);
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }
@@ -122,6 +128,35 @@ internal static class HeadlessRenderer
         };
         var icons = new string?[] { brandPng, null, null };
         return (links, icons);
+    }
+
+    private static StatsReport SampleStatsReport()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var tk = new TokenTotals(Input: 120_000, Output: 45_000, CacheWrite: 30_000, CacheRead: 900_000);
+        var hourly = new int[24];
+        hourly[9] = 900; hourly[10] = 2400; hourly[11] = 1800; hourly[14] = 3000; hourly[15] = 2100; hourly[20] = 1200;
+        return new StatsReport(
+            Day: today, SessionCount: 7, ActiveTime: TimeSpan.FromHours(3) + TimeSpan.FromMinutes(42),
+            Prompts: 58, ToolCalls: 214, SubAgents: 4, Teammates: 2,
+            Tokens: tk, TeammateTokens: new TokenTotals(5_000, 2_000, 0, 10_000),
+            EstimatedCost: 4.37m, CostComplete: true,
+            Projects:
+            [
+                new ProjectStat("perch", 4, TimeSpan.FromHours(2), 800_000),
+                new ProjectStat("api", 3, TimeSpan.FromMinutes(90), 400_000),
+            ],
+            Tools:
+            [
+                new ToolStat("Edit", 92), new ToolStat("Bash", 64), new ToolStat("Read", 58), new ToolStat("Grep", 30),
+            ],
+            Models: [new ModelStat("claude-opus-4-8", tk, 4.37m)],
+            Branches:
+            [
+                new ProjectStat("main", 5, TimeSpan.FromHours(2), 700_000),
+                new ProjectStat("feature-x", 2, TimeSpan.FromHours(1), 200_000),
+            ],
+            HourlyActiveSeconds: hourly);
     }
 
     private static IReadOnlyList<ClaudeSession> SampleSessions()

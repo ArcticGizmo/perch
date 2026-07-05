@@ -301,7 +301,8 @@ public partial class App : Application
     }
 
     private void OpenStats() =>
-        _statsWindow = WindowHost.ShowOrFocus(_statsWindow, () => new StatsWindow(), () => _statsWindow = null);
+        _statsWindow = WindowHost.ShowOrFocus(_statsWindow,
+            () => new StatsWindow(_appSettings ?? AppSettings.Load()), () => _statsWindow = null);
 
     private void OpenFlightPath() =>
         _flightWindow = WindowHost.ShowOrFocus(_flightWindow, () => new FlightPathWindow(), () => _flightWindow = null);
