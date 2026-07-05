@@ -1,9 +1,8 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="Perch.Core/Perch.Core.csproj" />
-    <Project Path="Perch.Platform.Windows/Perch.Platform.Windows.csproj" />
-    <Project Path="Perch.App.Avalonia/Perch.App.Avalonia.csproj" />
-    <Project Path="src/Perch.csproj" />
+    <Project Path="src/Perch.Core/Perch.Core.csproj" />
+    <Project Path="src/Perch.Platform.Windows/Perch.Platform.Windows.csproj" />
+    <Project Path="src/Perch.App.Avalonia/Perch.App.Avalonia.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Perch.Tests/Perch.Tests.csproj" />

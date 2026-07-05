@@ -38,6 +38,11 @@ public partial class App : Application
     private NotificationService? _notifications;
     private ISessionLock? _sessionLock;
 
+    // The in-app updater (startup + hourly GitHub check, and the user-initiated apply). Its
+    // AvailabilityChanged event lights up the tray item, the overlay badge and any open Settings window.
+    private UpdateService? _updateService;
+    private NativeMenuItem? _updateItem;
+
     // Auto-close after the last session ends (only for an --autostarted tray with the setting on). The
     // overlay shows a depleting bar for this grace period; if still no sessions when it elapses, exit.
     private const int AutoCloseGraceMs = 20_000;
@@ -134,6 +139,12 @@ public partial class App : Application
             _notifier.SessionActivated += OnToastActivated;
             _notifications = new NotificationService(_notifier, settings, _sessionLock, PlatformServices.AudioCue);
 
+            // In-app updater: reflect availability on the tray item, the overlay badge and any open
+            // Settings window. The overlay's badge click and the tray/Settings actions all route here.
+            _updateService = new UpdateService(settings, _notifications);
+            _updateService.AvailabilityChanged += OnUpdateAvailabilityChanged;
+            _overlay.Canvas.UpdateRequested += () => _updateService!.PerformUpdate(CloseAuxWindows);
+
             // Drive every overlay display gate + the monitor's data-layer toggles from persisted settings
             // (the Phase-3 Settings UI will edit these; this reads whatever's on disk, defaults included).
             ApplyDisplaySettings(settings);
@@ -153,8 +164,57 @@ public partial class App : Application
             // Re-dock the dense strip when monitors are added/removed (the controller self-heals to primary).
             if (_overlay.Screens is { } screens)
                 screens.Changed += (_, _) => _overlay?.Canvas.OnScreensChanged();
+
+            // Startup + hourly update check (restores a persisted "update available" state first).
+            _updateService.Start();
+
+            // First launch after an install: add the marketplace and install the Claude Code plugin in
+            // the background so the user doesn't have to. Failures are silently skipped.
+            if (Program.IsFirstRun)
+                AutoInstallPlugin();
         }
         base.OnFrameworkInitializationCompleted();
+    }
+
+    // Fire-and-forget plugin install on first run. Shows a tray toast up front so the work is visible,
+    // then a quiet success toast; any failure is swallowed (the user can still enable it from Settings).
+    private async void AutoInstallPlugin()
+    {
+        var (marketplace, plugin) = PluginManager.ReadInstalledState();
+        if (marketplace && plugin) return; // already set up from a previous machine state — skip the noise
+
+        _notifications?.ShowInfo("Perch", "Setting up the Claude Code plugin…", ToastLevel.Info);
+        try
+        {
+            var (ok, _) = await new PluginManager().EnableAsync();
+            if (ok)
+                _notifications?.ShowInfo("Perch",
+                    "Claude Code plugin installed. Run /reload-plugins (or restart) in open sessions to load it.",
+                    ToastLevel.Info);
+        }
+        catch { /* best-effort: skip on any failure */ }
+    }
+
+    // Reflects the updater's availability on every surface: the tray menu item's wording, the overlay's
+    // header badge, and any open Settings window's About page. Fires on the UI thread.
+    private void OnUpdateAvailabilityChanged(bool available, string? version)
+    {
+        if (_updateItem is not null)
+            _updateItem.Header = available ? "Update available" : "Check for Updates…";
+        _overlay?.Canvas.SetUpdateAvailable(available);
+        _settings?.SetUpdateAvailable(available, version);
+    }
+
+    // Closes the auxiliary windows before an update applies (the closing windows signal the update is
+    // under way and stop a button being clicked again mid-download). The overlay stays up so the app
+    // survives the awaits — ApplyUpdatesAndRestart tears everything down when it relaunches.
+    private void CloseAuxWindows()
+    {
+        _settings?.Close();
+        _historyWindow?.Close();
+        _statsWindow?.Close();
+        _flightWindow?.Close();
+        _qrWindow?.Close();
     }
 
     // Focuses the terminal hosting a clicked session (sub-agent rows already resolve to their parent) and
@@ -394,7 +454,7 @@ public partial class App : Application
 
     private void SetUpTray(IClassicDesktopStyleApplicationLifetime desktop)
     {
-        var icon = new WindowIcon(AssetLoader.Open(new Uri("avares://perch-avalonia/Assets/icon.ico")));
+        var icon = new WindowIcon(AssetLoader.Open(new Uri("avares://perch/Assets/icon.ico")));
 
         var overlayItem = new NativeMenuItem("Toggle dense mode");
         overlayItem.Click += (_, _) => ToggleDense();
@@ -411,6 +471,15 @@ public partial class App : Application
         var flightItem = new NativeMenuItem("Flight path…");
         flightItem.Click += (_, _) => OpenFlightPath();
 
+        // Reads "Check for Updates…" normally; flips to "Update available" once a pending update is
+        // detected (see OnUpdateAvailabilityChanged). Clicking it applies the pending update, else checks.
+        _updateItem = new NativeMenuItem("Check for Updates…");
+        _updateItem.Click += (_, _) =>
+        {
+            if (_updateService is { HasPendingUpdate: true }) _updateService.PerformUpdate(CloseAuxWindows);
+            else _updateService?.CheckManual();
+        };
+
         var exitItem = new NativeMenuItem("Exit");
         exitItem.Click += (_, _) => desktop.Shutdown();
 
@@ -426,6 +495,7 @@ public partial class App : Application
                 historyItem,
                 statsItem,
                 flightItem,
+                _updateItem,
                 new NativeMenuItemSeparator(),
                 exitItem,
             },
@@ -462,10 +532,13 @@ public partial class App : Application
             GlowChanged = UpdateGlow,
             TestNotification = kind => _notifications?.ShowTest(kind),
             TestExternalNotification = () => { if (_notifications is { } n) _ = n.SendExternalTestAsync(); },
+            CheckForUpdates = () => _updateService?.CheckManual(),
+            PerformUpdate = () => _updateService?.PerformUpdate(CloseAuxWindows),
             OpenStats = OpenStats,
             OpenFlightPath = OpenFlightPath,
         };
         _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider);
+        _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);
         _settings.Closed += (_, _) => _settings = null;
         _settings.Show();
         _settings.Activate();

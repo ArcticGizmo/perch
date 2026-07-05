@@ -12,8 +12,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Perch.Avalonia</RootNamespace>
-    <AssemblyName>perch-avalonia</AssemblyName>
+    <AssemblyName>perch</AssemblyName>
     <Product>Perch</Product>
+    <!-- App-wide version — the single source the publish/pack scripts read (bump here to cut a release).
+         AppInfo.Version reads it back at runtime from the assembly's informational version. -->
+    <Version>0.1.27</Version>
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
@@ -23,7 +27,7 @@
     <AvaloniaResource Include="Assets/**" />
     <!-- The changelog is embedded so the Settings → Changelog page can render it at runtime (read via
          the assembly manifest under the logical name "Perch.CHANGELOG.md"). -->
-    <EmbeddedResource Include="..\CHANGELOG.md" LogicalName="Perch.CHANGELOG.md" />
+    <EmbeddedResource Include="..\..\CHANGELOG.md" LogicalName="Perch.CHANGELOG.md" />
   </ItemGroup>
 
   <ItemGroup>
@@ -32,6 +36,9 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.5" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.5" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <!-- Velopack: install/update/uninstall lifecycle + the in-app updater (GitHub release source).
+         The bootstrap runs first in Program.Main; the tray + Settings + overlay drive check/apply. -->
+    <PackageReference Include="Velopack" Version="1.2.0" />
     <!-- QR generation for the remote-control card (QrWindow). Only the pure QRCodeGenerator/
          ModuleMatrix are used; the matrix is rendered via DrawingContext, no System.Drawing renderer. -->
     <PackageReference Include="QRCoder" Version="1.8.0" />

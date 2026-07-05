@@ -97,6 +97,8 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private static readonly IBrush ThermoGlassFill = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
     private static readonly IPen   ThermoOutline  = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
     private static readonly Color  MutedColor     = Color.FromRgb(110, 110, 130);
+    private static readonly IBrush UpdateBrush    = new SolidColorBrush(Color.FromRgb(255, 68, 45));   // perch-logo red-orange — the update badge
+    private static readonly IBrush UpdateHover     = new SolidColorBrush(Color.FromRgb(255, 104, 84));  // brightened while hovered
     private static readonly Color  SepColor       = Color.FromRgb(35, 35, 50);
     private static readonly IBrush RowHoverBrush  = new SolidColorBrush(Color.FromRgb(25, 25, 38));
     private static readonly Color  UsageTrackColor = Color.FromRgb(38, 38, 52);
@@ -464,6 +466,25 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private readonly Dictionary<int, Rect> _taskRects = new();
     private readonly Dictionary<int, Rect> _metricsRects = new();
 
+    // The header's update badge (a perch-orange download disc), shown only while an update is pending. Its
+    // hit-rect is captured at paint time; clicking it raises UpdateRequested for the app to apply.
+    private bool _updateAvailable;
+    private bool _hoveredUpdateIcon;
+    private Rect _updateIconRect;
+
+    /// <summary>Raised when the user clicks the header's update badge, asking the app to download and
+    /// apply the pending update.</summary>
+    public event Action? UpdateRequested;
+
+    /// <summary>Shows or hides the header's update badge (repaint only — the badge lives in the header
+    /// glyph cluster and is drawn each frame from this flag).</summary>
+    public void SetUpdateAvailable(bool available)
+    {
+        if (_updateAvailable == available) return;
+        _updateAvailable = available;
+        InvalidateVisual();
+    }
+
     /// <summary>Raised when a session row is clicked (sub-agent rows resolve to their parent). The app
     /// focuses the session's terminal via the platform seam. Internal — <see cref="ClaudeSession"/> is
     /// a Core-internal type.</summary>
@@ -761,7 +782,38 @@ public sealed class OverlayCanvas : Control, IDenseHost
             var chevron = OverlayDraw.Text(_expanded ? "▲" : "▼", 9, MutedBrush);
             double chevX = clusterLeft - IconGap - chevron.Width;
             OverlayDraw.TextLeftMid(ctx, chevron, chevX, midY);
+            clusterLeft = chevX;
         }
+
+        // Update badge — only while an update is pending. Drawn in the perch-logo colour so it stands out
+        // from the muted glyphs; clicking it (see RouteClick) applies the update.
+        if (_updateAvailable)
+        {
+            double ux = clusterLeft - IconGap - IconBoxW;
+            double uy = (HeaderHeight - IconBoxH) / 2;
+            _updateIconRect = new Rect(ux, uy, IconBoxW, IconBoxH);
+            DrawUpdateIcon(ctx, _updateIconRect, _hoveredUpdateIcon);
+        }
+        else
+        {
+            _updateIconRect = default;
+        }
+    }
+
+    // The update badge: a filled perch-orange disc with a white "download" arrow (a down arrow over a
+    // short tray line), brightened a touch while hovered. Mirrors the WinForms OverlayForm badge.
+    private static void DrawUpdateIcon(DrawingContext ctx, Rect r, bool hovered)
+    {
+        ctx.DrawEllipse(hovered ? UpdateHover : UpdateBrush, null, r.Center, r.Width / 2, r.Height / 2);
+
+        var pen = new Pen(Brushes.White, 1.5, lineCap: PenLineCap.Round);
+        double cx = r.Left + r.Width / 2;
+        double midY = r.Top + r.Height / 2;
+        double top = midY - 4, bot = midY + 2;
+        ctx.DrawLine(pen, new Point(cx, top), new Point(cx, bot));                     // arrow shaft
+        ctx.DrawLine(pen, new Point(cx - 3, bot - 3), new Point(cx, bot));             // arrowhead
+        ctx.DrawLine(pen, new Point(cx + 3, bot - 3), new Point(cx, bot));
+        ctx.DrawLine(pen, new Point(cx - 3, midY + 4), new Point(cx + 3, midY + 4));   // tray line
     }
 
     private Rect SideIconRect(double width)
@@ -1559,8 +1611,12 @@ public sealed class OverlayCanvas : Control, IDenseHost
         int art = HitTestArtifactIcon(p);
         if (art != _hoveredArtifactRow) { _hoveredArtifactRow = art; InvalidateVisual(); }
 
-        // Hand cursor over clickable glyphs (quick links + artifacts); rows show only the highlight.
-        Cursor = (ql >= 0 || art >= 0) ? HandCursor : Cursor.Default;
+        bool overUpdate = _updateAvailable && _updateIconRect.Width > 0 && _updateIconRect.Contains(p);
+        if (overUpdate != _hoveredUpdateIcon) { _hoveredUpdateIcon = overUpdate; InvalidateVisual(); }
+
+        // Hand cursor over clickable glyphs (quick links + artifacts + the update badge); rows show only
+        // the highlight.
+        Cursor = (ql >= 0 || art >= 0 || overUpdate) ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
         base.OnPointerMoved(e);
@@ -1609,8 +1665,9 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredArtifactRow != -1;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon;
         _hoveredRow = _hoveredQuickLink = _hoveredArtifactRow = -1;
+        _hoveredUpdateIcon = false;
         Cursor = Cursor.Default;
         _tipKind = TipKind.None;
         _tipRow = -1;
@@ -1725,6 +1782,14 @@ public sealed class OverlayCanvas : Control, IDenseHost
         if (!_denseCtl.IsClosedStrip && p.Y < HeaderHeight && SideIconRect(Bounds.Width).Contains(p))
         {
             _denseCtl.Toggle();
+            return;
+        }
+
+        // Update badge (header, floating): apply the pending update. Checked before the header-toggle
+        // fallback below, since the badge sits inside the header band.
+        if (_updateAvailable && _updateIconRect.Width > 0 && _updateIconRect.Contains(p))
+        {
+            UpdateRequested?.Invoke();
             return;
         }
 
@@ -2255,7 +2320,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
     private static Bitmap? LoadBrand()
     {
-        try { return new Bitmap(AssetLoader.Open(new Uri("avares://perch-avalonia/Assets/icon.png"))); }
+        try { return new Bitmap(AssetLoader.Open(new Uri("avares://perch/Assets/icon.png"))); }
         catch { return null; }
     }
 }

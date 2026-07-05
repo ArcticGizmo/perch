@@ -285,3 +285,17 @@ a month's.
   headless renders + live launch. **The Phase-3 remainder (Settings UI, quick-links dialog, and desktop
   notification delivery) is now complete — see the Phase 3 progress entry — so the Avalonia head is at
   Windows parity and the Phase-6 cutover is the next milestone.**
+- **Phase 6 — DONE.** Avalonia is now *the* Windows Perch. The Velopack lifecycle moved into the Avalonia
+  `Program` (install/update PATH register, uninstall unregister, first-run flag), and a new
+  `UpdateService` ports the WinForms update block (startup + hourly GitHub check, persisted
+  `PendingUpdateVersion`, user-initiated check/apply-and-restart) wired to the tray "Check for
+  Updates…"/"Update available" item, a ported owner-drawn overlay update badge (`OverlayCanvas`), and the
+  Settings → About page (Check/Update-now buttons). First-run auto-installs the Claude Code plugin. The
+  app head was renamed **`perch-avalonia` → `perch`** (assembly/exe + `avares://` URIs + single-instance
+  mutex now canonical) so the plugin (`Get-Process`/`Start-Process 'perch'`), per-user PATH, and Start-Menu
+  shortcut keep working unchanged; `<Version>`/`ApplicationIcon` moved onto the Avalonia csproj.
+  `publish.bat` + the release workflow now publish `Perch.App.Avalonia` (`mainExe perch.exe`).
+  **`Perch.App.WinForms` (`src/`) is deleted** — with it the dead Win32 (dark-titlebar/scrollbar hacks in
+  the old `NativeMethods`) — and dropped from `perch.slnx`; `tools/IconGen` now targets
+  `Perch.App.Avalonia/Assets`. `CLAUDE.md`/`README.md`/tools docs updated. Build clean, 144 tests green;
+  overlay update badge + settings verified via headless render. Next: Phase 7 cross-platform.

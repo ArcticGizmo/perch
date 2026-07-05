@@ -5,9 +5,9 @@ using Svg;
 
 // Generates every raster icon asset from the single source-of-truth SVG (perch.svg).
 //
-//   src/icon.png      256x256 PNG — embedded, used for window icons and the in-app logo PictureBoxes
-//   src/icon.ico      multi-resolution ICO (16..256) — the tray icon and the .exe ApplicationIcon
-//   landing-icon.png  512x512 PNG — the README header logo
+//   src/Perch.App.Avalonia/Assets/icon.png   256x256 PNG — window icons and the in-app logo
+//   src/Perch.App.Avalonia/Assets/icon.ico   multi-resolution ICO (16..256) — tray icon + the .exe ApplicationIcon
+//   landing-icon.png                         512x512 PNG — the README header logo
 //
 // Re-run after editing perch.svg:  dotnet run --project tools/IconGen
 // (or tools/gen-icons.ps1, which also restores packages.)
@@ -38,10 +38,10 @@ Console.WriteLine($"Fit: content {fit.Box.Width:0.0}x{fit.Box.Height:0.0} croppe
 // (the tray asks for a 16px frame; large surfaces ask for 256).
 int[] icoSizes = { 16, 24, 32, 48, 64, 128, 256 };
 
-string srcDir = Path.Combine(repoRoot, "src");
-WritePng(doc, fit, Path.Combine(srcDir, "icon.png"), 256);
+string assetsDir = Path.Combine(repoRoot, "src", "Perch.App.Avalonia", "Assets");
+WritePng(doc, fit, Path.Combine(assetsDir, "icon.png"), 256);
 WritePng(doc, fit, Path.Combine(repoRoot, "landing-icon.png"), 512);
-WriteIco(doc, fit, Path.Combine(srcDir, "icon.ico"), icoSizes);
+WriteIco(doc, fit, Path.Combine(assetsDir, "icon.ico"), icoSizes);
 
 Console.WriteLine("Done.");
 return 0;

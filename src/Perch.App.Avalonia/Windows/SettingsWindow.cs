@@ -45,6 +45,12 @@ internal sealed class SettingsHooks
     /// <summary>Send a test push through the configured external (ntfy) channel.</summary>
     public Action? TestExternalNotification;
 
+    /// <summary>Run a user-initiated update check (explicit feedback via a toast).</summary>
+    public Action? CheckForUpdates;
+
+    /// <summary>Download and apply the pending update, then restart.</summary>
+    public Action? PerformUpdate;
+
     public Action? OpenStats;
     public Action? OpenFlightPath;
 }
@@ -73,6 +79,13 @@ internal sealed class SettingsWindow : Window
     private readonly List<(string key, Button item)> _navItems = new();
     private string _currentKey = "";
 
+    // About-page update controls + the current pending-update state (kept so a state change that arrives
+    // while the window is open — or the state read at open time — reflects on the About page live).
+    private TextBlock? _updateStatus;
+    private Button? _updateNowBtn;
+    private bool _updateAvailable;
+    private string? _updateVersion;
+
     public SettingsWindow(AppSettings settings, UsageMonitorHost usageHost, SettingsHooks hooks, IAppIconProvider icons)
     {
         _settings = settings;
@@ -87,7 +100,7 @@ internal sealed class SettingsWindow : Window
         MinHeight = 560;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Palette.FormBgBrush;
-        try { Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://perch-avalonia/Assets/icon.ico"))); } catch { }
+        try { Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://perch/Assets/icon.ico"))); } catch { }
 
         BuildLayout();
 
@@ -256,7 +269,7 @@ internal sealed class SettingsWindow : Window
         };
         try
         {
-            var bmp = new Bitmap(AssetLoader.Open(new Uri("avares://perch-avalonia/Assets/icon.png")));
+            var bmp = new Bitmap(AssetLoader.Open(new Uri("avares://perch/Assets/icon.png")));
             stack.Children.Add(new Image
             {
                 Source = bmp, Width = 64, Height = 64,
@@ -1201,7 +1214,7 @@ internal sealed class SettingsWindow : Window
         var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, Margin = new Thickness(0, 0, 0, 6) };
         try
         {
-            var bmp = new Bitmap(AssetLoader.Open(new Uri("avares://perch-avalonia/Assets/icon.png")));
+            var bmp = new Bitmap(AssetLoader.Open(new Uri("avares://perch/Assets/icon.png")));
             header.Children.Add(new Image { Source = bmp, Width = 32, Height = 32, VerticalAlignment = VerticalAlignment.Center });
         }
         catch { }
@@ -1217,9 +1230,39 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(SettingsUi.Separator());
 
         page.Children.Add(SettingsUi.SectionTitle("Updates"));
-        page.Children.Add(SettingsUi.BodyText(
-            $"Currently running v{AppInfo.Version}. Perch updates itself in the background and applies new " +
-            "versions on the next launch."));
+        _updateStatus = SettingsUi.BodyText("");
+        page.Children.Add(_updateStatus);
+
+        var buttons = SettingsUi.ButtonRow();
+        var checkBtn = SettingsUi.FlatButton("Check for updates");
+        checkBtn.Click += (_, _) => _hooks.CheckForUpdates?.Invoke();
+        buttons.Children.Add(checkBtn);
+
+        _updateNowBtn = SettingsUi.FlatButton("Update now");
+        _updateNowBtn.Click += (_, _) => _hooks.PerformUpdate?.Invoke();
+        buttons.Children.Add(_updateNowBtn);
+        page.Children.Add(buttons);
+
+        RefreshUpdateUi();
+    }
+
+    /// <summary>Reflects the pending-update state on the About page (called by the App when the updater's
+    /// availability changes, and once at open time). Safe to call before/after the page is built.</summary>
+    public void SetUpdateAvailable(bool available, string? version)
+    {
+        _updateAvailable = available;
+        _updateVersion = version;
+        RefreshUpdateUi();
+    }
+
+    private void RefreshUpdateUi()
+    {
+        if (_updateStatus is null || _updateNowBtn is null) return;
+        _updateStatus.Text = _updateAvailable
+            ? $"Version {_updateVersion} is ready to install. Click Update now to apply it and restart."
+            : $"Currently running v{AppInfo.Version}. Perch checks for updates in the background and applies " +
+              "new versions on the next launch.";
+        _updateNowBtn.IsVisible = _updateAvailable;
     }
 
     private Control LinkRow(string text, string url)

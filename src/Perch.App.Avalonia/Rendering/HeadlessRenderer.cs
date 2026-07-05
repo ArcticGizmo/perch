@@ -53,6 +53,12 @@ internal static class HeadlessRenderer
         canvas.TriggerAttention();
         RenderControl(canvas, Path.Combine(outDir, "overlay_attention_1x.png"), 96);
 
+        // Update badge: the perch-orange download disc in the header cluster, shown while an update is
+        // pending. Rendered at both DPIs so the owner-drawn disc + arrow stay crisp.
+        canvas.SetUpdateAvailable(true);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_update_1x.png"), 96);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_update_1.5x.png"), 144);
+
         var probe = new OverlayCanvas();
         probe.Update(SampleSessions());
         probe.StartAutoCloseCountdown(20_000);
@@ -173,7 +179,7 @@ internal static class HeadlessRenderer
         string brandPng = Path.Combine(outDir, "sample_quicklink.png");
         try
         {
-            using var s = AssetLoader.Open(new Uri("avares://perch-avalonia/Assets/icon.png"));
+            using var s = AssetLoader.Open(new Uri("avares://perch/Assets/icon.png"));
             using var fs = File.Create(brandPng);
             s.CopyTo(fs);
         }

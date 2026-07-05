@@ -18,7 +18,7 @@
   <ItemGroup>
     <!-- The data/parsing logic under test now lives in Perch.Core; the tests reference it
          directly and no longer depend on the WinForms app. -->
-    <ProjectReference Include="..\..\Perch.Core\Perch.Core.csproj" />
+    <ProjectReference Include="..\..\src\Perch.Core\Perch.Core.csproj" />
   </ItemGroup>
 
   <!-- Fixtures are a synthetic ~/.claude tree the tests point CLAUDE_CONFIG_DIR at. -->
