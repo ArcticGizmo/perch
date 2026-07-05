@@ -158,6 +158,8 @@ notifications fire. WinForms remains the shipped app.
 **Risk:** Medium — first real Avalonia surface; establishes all the patterns.
 
 ### Phase 4 — Port the overlay (the hard one)
+> Broken into 17 small, independently-committable steps in **[avalonia-phase4-overlay.md](avalonia-phase4-overlay.md)**.
+
 **Goal:** The floating status widget, in Avalonia, at parity.
 **Work:**
 - Overlay `Window` from the Phase-0 shell. Build a `DrawingContext` mini-`PaintKit`
