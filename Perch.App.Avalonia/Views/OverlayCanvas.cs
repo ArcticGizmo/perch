@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -37,6 +38,7 @@ public sealed class OverlayCanvas : Control
     private const double UsageStripHeight = 50; // two usage bars + padding, shown only when expanded
     private const double SysMetricsStripHeight = 50; // system CPU + RAM bars + padding, shown only when expanded
     private const double MetricsBarWidth  = 28; // width reserved for a session row's CPU/RAM mini-bars
+    private const double QuickLinksRowHeight = 24; // height of the quick-links icon strip below the usage bars
     private const double BotIconWidth     = 16;
     private const double RcIconWidth      = 14;
     private const double MailIconWidth    = 16;
@@ -180,6 +182,51 @@ public sealed class OverlayCanvas : Control
         if (_showSessionMetrics) InvalidateVisual();
     }
 
+    // Quick-links strip: the enabled subset of the user's links, their decoded icons (null → draw
+    // initials), and the hover index. Icons are resolved to PNG file paths by the app (off the platform
+    // seam) and decoded here once per SetQuickLinks. The source icons render upside-down, so each is
+    // flipped 180° unless the user opts into the upside-down look.
+    private IReadOnlyList<QuickLink> _quickLinks = [];
+    private List<Bitmap?> _quickLinkIcons = [];
+    private bool _upsideDownQuickLinks;
+    private int _hoveredQuickLink = -1;
+
+    private bool HasQuickLinksRow => _quickLinks.Count > 0;
+    private double QuickLinksTop => UsageStripTop + (_usageEnabled ? UsageStripHeight : 0);
+
+    /// <summary>Raised when a quick-link icon is clicked; the app wires this to the launcher's
+    /// LaunchOrFocus. Internal because <see cref="QuickLink"/> is a Core-internal type.</summary>
+    internal event Action<QuickLink>? QuickLinkActivated;
+
+    /// <summary>Replaces the quick-links strip with the given (already enabled-filtered) links and their
+    /// resolved icon file paths — a null path draws name-derived initials. Called on the UI thread on
+    /// startup and whenever the list is edited. Changes the panel height, so relayout.</summary>
+    internal void SetQuickLinks(IReadOnlyList<QuickLink> links, IReadOnlyList<string?> iconFiles)
+    {
+        _quickLinks = links;
+        _quickLinkIcons = new List<Bitmap?>(links.Count);
+        for (int i = 0; i < links.Count; i++)
+            _quickLinkIcons.Add(DecodeIcon(i < iconFiles.Count ? iconFiles[i] : null));
+        _hoveredQuickLink = -1;
+        InvalidateMeasure();
+        InvalidateVisual();
+    }
+
+    /// <summary>Toggles the upside-down quick-link icons. Repaint only — layout is unaffected.</summary>
+    public void SetUpsideDownQuickLinks(bool upsideDown)
+    {
+        if (_upsideDownQuickLinks == upsideDown) return;
+        _upsideDownQuickLinks = upsideDown;
+        InvalidateVisual();
+    }
+
+    private static Bitmap? DecodeIcon(string? file)
+    {
+        if (string.IsNullOrEmpty(file)) return null;
+        try { return new Bitmap(file); }
+        catch { return null; }
+    }
+
     /// <summary>Show/hide the clickable artifact glyph (the session still tracks its artifacts).</summary>
     public void SetShowArtifacts(bool show)
     {
@@ -280,14 +327,16 @@ public sealed class OverlayCanvas : Control
     private double Draw(DrawingContext? ctx, double width)
     {
         bool showRows = _expanded && _rows.Count > 0;
-        bool showSys = showRows && _showSystemMetrics;   // machine CPU/RAM strip, just under the header
-        bool showUsage = showRows && _usageEnabled;      // rate-limit bars, below the metrics strip
+        bool showSys = showRows && _showSystemMetrics;        // machine CPU/RAM strip, just under the header
+        bool showUsage = showRows && _usageEnabled;           // rate-limit bars, below the metrics strip
+        bool showQuickLinks = showRows && HasQuickLinksRow;   // app icon strip, below the usage bars
 
         double height = HeaderHeight;
         if (showRows)
         {
             if (showSys) height += SysMetricsStripHeight;
             if (showUsage) height += UsageStripHeight;
+            if (showQuickLinks) height += QuickLinksRowHeight;
             foreach (var r in _rows) height += HeightOf(r);
             height += 2;
         }
@@ -299,11 +348,13 @@ public sealed class OverlayCanvas : Control
 
             if (showSys) DrawSystemMetricsStrip(ctx, width);
             if (showUsage) DrawUsageBars(ctx, width);
+            if (showQuickLinks) DrawQuickLinksRow(ctx, width);
 
             if (showRows)
             {
                 double top = HeaderHeight + (showSys ? SysMetricsStripHeight : 0)
-                                          + (showUsage ? UsageStripHeight : 0);
+                                          + (showUsage ? UsageStripHeight : 0)
+                                          + (showQuickLinks ? QuickLinksRowHeight : 0);
                 foreach (var r in _rows)
                 {
                     if (r.IsSectionHeader) DrawSectionHeaderRow(ctx, r, top, width);
@@ -461,6 +512,116 @@ public sealed class OverlayCanvas : Control
             caption, percent, expectedPct, stale, 10, 10,
             MutedColor, UsageTrackColor, ExpectedMarkColor, BgColor,
             captionW: 46, pctW: 34, trackH: 7);
+
+    // ── Quick-links row ────────────────────────────────────────────────────────
+    // The enabled quick-link icons side-by-side, centred horizontally. Each slot shows its pre-decoded
+    // icon, or drawn initials over a name-derived colour when no icon resolved. The source icons render
+    // upside-down, so each is flipped 180° about its own centre unless the user opts into upside-down.
+    private void DrawQuickLinksRow(DrawingContext ctx, double width)
+    {
+        const double IconSize = 16, IconGap = 14, HitPad = 4;
+        double rowTop = QuickLinksTop;
+        double centerY = rowTop + QuickLinksRowHeight / 2;
+
+        int count = _quickLinks.Count;
+        double totalW = count * IconSize + (count - 1) * IconGap;
+        double startX = (width - totalW) / 2;
+
+        for (int i = 0; i < count; i++)
+        {
+            double iconX = startX + i * (IconSize + IconGap);
+            double iconY = centerY - IconSize / 2;
+
+            if (_hoveredQuickLink == i)
+                ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+                    new Rect(iconX - HitPad, iconY - HitPad, IconSize + HitPad * 2, IconSize + HitPad * 2));
+
+            var icon = i < _quickLinkIcons.Count ? _quickLinkIcons[i] : null;
+            var iconRect = new Rect(iconX, iconY, IconSize, IconSize);
+
+            if (icon != null)
+            {
+                if (_upsideDownQuickLinks)
+                {
+                    ctx.DrawImage(icon, iconRect);
+                }
+                else
+                {
+                    double cx = iconX + IconSize / 2, cy = iconY + IconSize / 2;
+                    var flip = Matrix.CreateTranslation(-cx, -cy)
+                             * Matrix.CreateRotation(Math.PI)
+                             * Matrix.CreateTranslation(cx, cy);
+                    using (ctx.PushTransform(flip))
+                        ctx.DrawImage(icon, iconRect);
+                }
+            }
+            else
+            {
+                var initials = Initials(_quickLinks[i].Name);
+                var ft = OverlayDraw.Text(initials, 9.5, new SolidColorBrush(FallbackColor(_quickLinks[i].Name)),
+                    FontWeight.Bold);
+                ctx.DrawText(ft, new Point(iconX + (IconSize - ft.Width) / 2, iconY + (IconSize - ft.Height) / 2));
+            }
+        }
+    }
+
+    // Returns the index into _quickLinks under point p, or -1 if none (or the strip isn't shown).
+    private int HitTestQuickLink(Point p)
+    {
+        if (!(_expanded && _rows.Count > 0 && HasQuickLinksRow)) return -1;
+        double rowTop = QuickLinksTop;
+        if (p.Y < rowTop || p.Y >= rowTop + QuickLinksRowHeight) return -1;
+
+        const double IconSize = 16, IconGap = 14, HitPad = 4;
+        int count = _quickLinks.Count;
+        double totalW = count * IconSize + (count - 1) * IconGap;
+        double startX = (Bounds.Width - totalW) / 2;
+
+        for (int i = 0; i < count; i++)
+        {
+            double iconX = startX + i * (IconSize + IconGap);
+            if (p.X >= iconX - HitPad && p.X < iconX + IconSize + HitPad) return i;
+        }
+        return -1;
+    }
+
+    // Up to two letters for the icon-less fallback glyph: the initials of the first two words, or the
+    // first two characters of a single word. Falls back to "?" for an empty name.
+    private static string Initials(string name)
+    {
+        var words = name.Split([' ', '-', '_'], StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length == 0) return "?";
+        if (words.Length == 1)
+            return new string(words[0].Take(2).ToArray()).ToUpperInvariant();
+        return string.Concat(char.ToUpperInvariant(words[0][0]), char.ToUpperInvariant(words[1][0]));
+    }
+
+    // A stable, reasonably saturated colour derived from the name, so two icon-less links are visually
+    // distinguishable without any per-link configuration.
+    private static Color FallbackColor(string name)
+    {
+        int hash = 0;
+        foreach (char c in name) hash = hash * 31 + c;
+        int hue = ((hash % 360) + 360) % 360;
+        return ColorFromHsv(hue, 0.55, 0.85);
+    }
+
+    private static Color ColorFromHsv(double h, double s, double v)
+    {
+        int hi = (int)(h / 60) % 6;
+        double f = h / 60 - Math.Floor(h / 60);
+        double p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+        (double r, double g, double b) = hi switch
+        {
+            0 => (v, t, p),
+            1 => (q, v, p),
+            2 => (p, v, t),
+            3 => (p, q, v),
+            4 => (t, p, v),
+            _ => (v, p, q),
+        };
+        return Color.FromRgb((byte)(r * 255), (byte)(g * 255), (byte)(b * 255));
+    }
 
     // ── Session row (core) ────────────────────────────────────────────────────
     private void DrawSessionRow(DrawingContext ctx, ClaudeSession session, double top, double width)
@@ -927,6 +1088,37 @@ public sealed class OverlayCanvas : Control
         double fillW = Math.Round(w * pct / 100.0);
         if (fillW > 0)
             OverlayDraw.Pill(ctx, new SolidColorBrush(Palette.UsageColor(pct)), new Rect(x, y, fillW, h));
+    }
+
+    // ── Pointer interaction ──────────────────────────────────────────────────
+    // Only quick-link hover + click is handled here; 4.11 extends these to row focus, artifact clicks,
+    // and the other hit-tested glyphs.
+    private static readonly Cursor HandCursor = new(StandardCursorType.Hand);
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        int ql = HitTestQuickLink(e.GetPosition(this));
+        if (ql != _hoveredQuickLink) { _hoveredQuickLink = ql; InvalidateVisual(); }
+        Cursor = ql >= 0 ? HandCursor : Cursor.Default;
+        base.OnPointerMoved(e);
+    }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        if (_hoveredQuickLink != -1) { _hoveredQuickLink = -1; InvalidateVisual(); }
+        Cursor = Cursor.Default;
+        base.OnPointerExited(e);
+    }
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        int ql = HitTestQuickLink(e.GetPosition(this));
+        if (ql >= 0 && ql < _quickLinks.Count && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            QuickLinkActivated?.Invoke(_quickLinks[ql]);
+            e.Handled = true;
+        }
+        base.OnPointerPressed(e);
     }
 
     private static Bitmap? LoadBrand()

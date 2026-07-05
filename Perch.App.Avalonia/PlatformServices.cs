@@ -14,6 +14,7 @@ internal static class PlatformServices
     public static IPathInstaller PathInstaller { get; } = new Win.PathInstaller();
     public static IAudioCue AudioCue { get; } = new Win.AudioCue();
     public static ISystemMetrics SystemMetrics { get; } = new Win.WindowsSystemMetrics();
+    public static IAppIconProvider AppIconProvider { get; } = new Win.WindowsAppIconProvider();
 
     public static ISessionLock CreateSessionLock() => new Win.SessionLock();
 }

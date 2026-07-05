@@ -22,5 +22,8 @@
          SessionSwitch (session lock/unlock). These compat packages ship the Windows-only surface. -->
     <PackageReference Include="System.Windows.Extensions" Version="10.0.9" />
     <PackageReference Include="Microsoft.Win32.SystemEvents" Version="10.0.9" />
+    <!-- Shell icon extraction + PNG encoding for the quick-links strip (WindowsAppIconProvider).
+         Windows-only, so it lives here rather than in the UI-neutral Core. -->
+    <PackageReference Include="System.Drawing.Common" Version="10.0.9" />
   </ItemGroup>
 </Project>

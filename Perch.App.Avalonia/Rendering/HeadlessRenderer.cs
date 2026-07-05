@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Perch.Avalonia.Views;
 using Perch.Data;
 
@@ -36,6 +37,11 @@ internal static class HeadlessRenderer
             ["7788"] = new(CpuPercent: 8.0,  RamBytes: 600_000_000,   ProcessCount: 2),
         });
 
+        // Quick links: one real icon (the bundled brand PNG, materialised to a temp file the way the
+        // seam would) plus two icon-less links so both the image and initials-fallback paths render.
+        var (links, icons) = SampleQuickLinks(outDir);
+        canvas.SetQuickLinks(links, icons);
+
         RenderControl(canvas, Path.Combine(outDir, "overlay_1x.png"), 96);
         RenderControl(canvas, Path.Combine(outDir, "overlay_1.5x.png"), 144);
         Console.WriteLine($"Rendered overlay PNGs to {Path.GetFullPath(outDir)}");
@@ -66,6 +72,29 @@ internal static class HeadlessRenderer
             FiveHourPercent: 62, SevenDayPercent: 28,
             FiveHourResetsAt: now.AddHours(2), SevenDayResetsAt: now.AddDays(4),
             LastUpdated: now, Ok: true, Error: null);
+    }
+
+    private static (IReadOnlyList<QuickLink> links, IReadOnlyList<string?> icons) SampleQuickLinks(string outDir)
+    {
+        // Write the bundled brand icon to a PNG file so the icon-drawing path (decode + 180° flip) is
+        // exercised; the other two links carry no icon, so they draw initials.
+        string brandPng = Path.Combine(outDir, "sample_quicklink.png");
+        try
+        {
+            using var s = AssetLoader.Open(new Uri("avares://perch-avalonia/Assets/icon.png"));
+            using var fs = File.Create(brandPng);
+            s.CopyTo(fs);
+        }
+        catch { brandPng = null!; }
+
+        var links = new List<QuickLink>
+        {
+            new() { Name = "GitKraken" },
+            new() { Name = "Slack" },
+            new() { Name = "Microsoft Teams" },
+        };
+        var icons = new string?[] { brandPng, null, null };
+        return (links, icons);
     }
 
     private static IReadOnlyList<ClaudeSession> SampleSessions()
