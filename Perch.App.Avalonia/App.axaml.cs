@@ -55,6 +55,10 @@ public partial class App : Application
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
             });
 
+            // Row click focuses the session's terminal; artifact click opens the artifact(s).
+            _overlay.Canvas.SessionActivated += FocusSession;
+            _overlay.Canvas.ArtifactActivated += OpenArtifacts;
+
             // Quick-links strip: launch/focus goes through the platform seams; icons resolve off-thread.
             var settings = AppSettings.Load();
             _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider);
@@ -70,6 +74,27 @@ public partial class App : Application
             LoadQuickLinks(settings);
         }
         base.OnFrameworkInitializationCompleted();
+    }
+
+    // Focuses the terminal hosting a clicked session (sub-agent rows already resolve to their parent).
+    private static void FocusSession(ClaudeSession session)
+    {
+        if (int.TryParse(session.Pid, out int pid))
+            PlatformServices.WindowActivator.FocusTerminalForProcess(pid, session.ProjectName);
+    }
+
+    // Opens a clicked row's artifact(s) in the browser. Single artifact opens directly; the multi-artifact
+    // picker popover is a Phase-5 UI concern, so for now the first is opened.
+    private static void OpenArtifacts(ClaudeSession session)
+    {
+        var artifacts = session.Artifacts;
+        if (artifacts.Count == 0) return;
+        var url = artifacts[0].Url;
+        if (!string.IsNullOrWhiteSpace(url))
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
+            catch { /* best-effort */ }
+        }
     }
 
     // Resolves the enabled links' icons off the UI thread (the first shell lookup enumerates the Start

@@ -92,6 +92,7 @@ public sealed class OverlayCanvas : Control
     private static readonly IPen   ThermoOutline  = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
     private static readonly Color  MutedColor     = Color.FromRgb(110, 110, 130);
     private static readonly Color  SepColor       = Color.FromRgb(35, 35, 50);
+    private static readonly IBrush RowHoverBrush  = new SolidColorBrush(Color.FromRgb(25, 25, 38));
     private static readonly Color  UsageTrackColor = Color.FromRgb(38, 38, 52);
     private static readonly Color  ExpectedMarkColor = Color.FromRgb(180, 180, 195);
 
@@ -194,6 +195,18 @@ public sealed class OverlayCanvas : Control
     private bool HasQuickLinksRow => _quickLinks.Count > 0;
     private double QuickLinksTop => UsageStripTop + (_usageEnabled ? UsageStripHeight : 0);
 
+    // Top of the first session row: below the header and whichever strips are showing. Mirrors the
+    // painted layout so hit-testing lines up (guarded by the expanded/rows check in HitTestRow).
+    private double RowsTop => QuickLinksTop + (HasQuickLinksRow ? QuickLinksRowHeight : 0);
+
+    // The top of a given display row.
+    private double RowTop(int index)
+    {
+        double top = RowsTop;
+        for (int i = 0; i < index && i < _rows.Count; i++) top += HeightOf(_rows[i]);
+        return top;
+    }
+
     /// <summary>Raised when a quick-link icon is clicked; the app wires this to the launcher's
     /// LaunchOrFocus. Internal because <see cref="QuickLink"/> is a Core-internal type.</summary>
     internal event Action<QuickLink>? QuickLinkActivated;
@@ -256,6 +269,26 @@ public sealed class OverlayCanvas : Control
     private List<DisplayRow> _rows = [];
     private bool _expanded = true;
     private bool _autonomousExpanded;
+
+    // Hover state + click routing. _hoveredRow drives the row highlight; _hoveredArtifactRow the brighter
+    // artifact glyph + hand cursor. The glyph hit-rects (artifact/thermo/warn/task/metrics) are captured
+    // at paint time, keyed by row index, so a hit-test tracks exactly where each glyph landed — the
+    // thermo/warn/task/metrics rects feed the tooltips wired in 4.12.
+    private int _hoveredRow = -1;
+    private int _hoveredArtifactRow = -1;
+    private readonly Dictionary<int, Rect> _artifactRects = new();
+    private readonly Dictionary<int, Rect> _thermoRects = new();
+    private readonly Dictionary<int, Rect> _warnRects = new();
+    private readonly Dictionary<int, Rect> _taskRects = new();
+    private readonly Dictionary<int, Rect> _metricsRects = new();
+
+    /// <summary>Raised when a session row is clicked (sub-agent rows resolve to their parent). The app
+    /// focuses the session's terminal via the platform seam. Internal — <see cref="ClaudeSession"/> is
+    /// a Core-internal type.</summary>
+    internal event Action<ClaudeSession>? SessionActivated;
+
+    /// <summary>Raised when a row's artifact glyph is clicked; the app opens the artifact(s).</summary>
+    internal event Action<ClaudeSession>? ArtifactActivated;
 
     // A flat render row: a parent session, one of its sub-agents, or the "Autonomous" section header.
     private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1)
@@ -352,14 +385,21 @@ public sealed class OverlayCanvas : Control
 
             if (showRows)
             {
-                double top = HeaderHeight + (showSys ? SysMetricsStripHeight : 0)
-                                          + (showUsage ? UsageStripHeight : 0)
-                                          + (showQuickLinks ? QuickLinksRowHeight : 0);
-                foreach (var r in _rows)
+                // Glyph hit-rects are rebuilt from scratch each paint; DrawSessionRow repopulates them
+                // for any row that actually shows the glyph.
+                _artifactRects.Clear();
+                _thermoRects.Clear();
+                _warnRects.Clear();
+                _taskRects.Clear();
+                _metricsRects.Clear();
+
+                double top = RowsTop;
+                for (int i = 0; i < _rows.Count; i++)
                 {
+                    var r = _rows[i];
                     if (r.IsSectionHeader) DrawSectionHeaderRow(ctx, r, top, width);
                     else if (r.IsSubAgent) DrawSubAgentRow(ctx, r.Sub!, top, width);
-                    else DrawSessionRow(ctx, r.Session!, top, width);
+                    else DrawSessionRow(ctx, i, r.Session!, top, width);
                     top += HeightOf(r);
                 }
             }
@@ -585,6 +625,35 @@ public sealed class OverlayCanvas : Control
         return -1;
     }
 
+    // Returns the display-row index under p, or -1 (only while the panel is expanded with rows).
+    private int HitTestRow(Point p)
+    {
+        if (!(_expanded && _rows.Count > 0) || p.Y < RowsTop) return -1;
+        double y = RowsTop;
+        for (int i = 0; i < _rows.Count; i++)
+        {
+            double h = HeightOf(_rows[i]);
+            if (p.Y >= y && p.Y < y + h) return i;
+            y += h;
+        }
+        return -1;
+    }
+
+    // The glyph hit-tests read the rects captured at paint time, so they track exactly where each glyph
+    // was drawn. Artifact routes clicks + the hand cursor; the rest feed the 4.12 tooltips.
+    private int HitTestArtifactIcon(Point p) => HitRect(_artifactRects, p);
+    private int HitTestThermoIcon(Point p)   => HitRect(_thermoRects, p);
+    private int HitTestWarnIcon(Point p)     => HitRect(_warnRects, p);
+    private int HitTestTaskCount(Point p)    => HitRect(_taskRects, p);
+    private int HitTestMetrics(Point p)      => HitRect(_metricsRects, p);
+
+    private static int HitRect(Dictionary<int, Rect> rects, Point p)
+    {
+        foreach (var (row, rect) in rects)
+            if (rect.Contains(p)) return row;
+        return -1;
+    }
+
     // Up to two letters for the icon-less fallback glyph: the initials of the first two words, or the
     // first two characters of a single word. Falls back to "?" for an empty name.
     private static string Initials(string name)
@@ -624,9 +693,12 @@ public sealed class OverlayCanvas : Control
     }
 
     // ── Session row (core) ────────────────────────────────────────────────────
-    private void DrawSessionRow(DrawingContext ctx, ClaudeSession session, double top, double width)
+    private void DrawSessionRow(DrawingContext ctx, int rowIndex, ClaudeSession session, double top, double width)
     {
         ctx.DrawLine(SepPen, new Point(HorizPad, top), new Point(width - HorizPad, top));
+
+        if (rowIndex == _hoveredRow)
+            ctx.FillRectangle(RowHoverBrush, new Rect(1, top + 1, width - 2, RowHeight - 1));
 
         double midY = top + RowHeight / 2;
         bool running  = session.Status == SessionStatus.Running;
@@ -717,9 +789,17 @@ public sealed class OverlayCanvas : Control
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
 
-        // Left glyphs, in draw order.
-        if (stuck)        DrawWarnIcon(ctx, HorizPad + 14, nameMidY);
-        if (hasArtifacts) DrawArtifactIcon(ctx, HorizPad + 14 + warnW, nameMidY, hovered: false);
+        // Left glyphs, in draw order. Warn + artifact capture generous hit-rects for hover/tooltip.
+        if (stuck)
+        {
+            DrawWarnIcon(ctx, HorizPad + 14, nameMidY);
+            _warnRects[rowIndex] = new Rect(HorizPad + 12, nameMidY - 9, WarnIconWidth + 2, 18);
+        }
+        if (hasArtifacts)
+        {
+            DrawArtifactIcon(ctx, HorizPad + 14 + warnW, nameMidY, hovered: _hoveredArtifactRow == rowIndex);
+            _artifactRects[rowIndex] = new Rect(HorizPad + 12 + warnW, nameMidY - 9, ArtifactIconWidth + 2, 18);
+        }
         if (mailW > 0)    DrawMailIcon(ctx, HorizPad + 14 + warnW + artW, nameMidY);
         if (rcW > 0)   DrawRemoteIcon(ctx, HorizPad + 16 + warnW + artW + mailW, nameMidY);
         if (botW > 0)  DrawBotIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW + partyW, nameMidY);
@@ -740,7 +820,10 @@ public sealed class OverlayCanvas : Control
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(statusText, StatusSize, statusBrush), statusX, nameMidY);
 
         if (showThermo)
+        {
             DrawThermoIcon(ctx, ctxFill, statusX - thermoW, nameMidY);
+            _thermoRects[rowIndex] = new Rect(statusX - thermoW, nameMidY - 9, thermoW, 18);
+        }
         if (showBadge)
         {
             int alpha = session.Status == SessionStatus.Idle ? 110 : 255;
@@ -752,11 +835,13 @@ public sealed class OverlayCanvas : Control
             bool allDone = session.CompletedTaskCount == session.Tasks.Count;
             OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(taskLabel, StatusSize, allDone ? RunningBrush : MutedBrush),
                 taskX, nameMidY);
+            _taskRects[rowIndex] = new Rect(taskX, nameMidY - 9, taskW, 18);
         }
         if (showMetrics)
         {
             double metricsX = statusX - thermoW - badgeW - taskW - metricsW;
             DrawMetricsBars(ctx, sessMetrics, metricsX, nameMidY);
+            _metricsRects[rowIndex] = new Rect(metricsX, nameMidY - 9, metricsW, 18);
         }
         if (showBurn)
         {
@@ -1091,33 +1176,78 @@ public sealed class OverlayCanvas : Control
     }
 
     // ── Pointer interaction ──────────────────────────────────────────────────
-    // Only quick-link hover + click is handled here; 4.11 extends these to row focus, artifact clicks,
-    // and the other hit-tested glyphs.
+    // Row highlight + hand cursors on hover; click routes to artifact-open, row-focus, quick-link
+    // launch, or header expand/collapse. The dwell tooltips (thermo/warn/task/metrics), window drag,
+    // and right-click menu land in 4.12/4.16/4.13 respectively.
     private static readonly Cursor HandCursor = new(StandardCursorType.Hand);
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
-        int ql = HitTestQuickLink(e.GetPosition(this));
+        var p = e.GetPosition(this);
+
+        int row = HitTestRow(p);
+        if (row != _hoveredRow) { _hoveredRow = row; InvalidateVisual(); }
+
+        int ql = HitTestQuickLink(p);
         if (ql != _hoveredQuickLink) { _hoveredQuickLink = ql; InvalidateVisual(); }
-        Cursor = ql >= 0 ? HandCursor : Cursor.Default;
+
+        int art = HitTestArtifactIcon(p);
+        if (art != _hoveredArtifactRow) { _hoveredArtifactRow = art; InvalidateVisual(); }
+
+        // Hand cursor over clickable glyphs (quick links + artifacts); rows show only the highlight.
+        Cursor = (ql >= 0 || art >= 0) ? HandCursor : Cursor.Default;
         base.OnPointerMoved(e);
     }
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        if (_hoveredQuickLink != -1) { _hoveredQuickLink = -1; InvalidateVisual(); }
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredArtifactRow != -1;
+        _hoveredRow = _hoveredQuickLink = _hoveredArtifactRow = -1;
         Cursor = Cursor.Default;
+        if (changed) InvalidateVisual();
         base.OnPointerExited(e);
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
-        int ql = HitTestQuickLink(e.GetPosition(this));
-        if (ql >= 0 && ql < _quickLinks.Count && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) { base.OnPointerPressed(e); return; }
+        var p = e.GetPosition(this);
+
+        // Artifact glyph sits inside a session row, so it must be checked before the row's focus click.
+        int art = HitTestArtifactIcon(p);
+        if (art >= 0 && _rows[art].Session is { } artSession)
+        {
+            ArtifactActivated?.Invoke(artSession);
+            e.Handled = true;
+        }
+        else if (HitTestRow(p) is var row && row >= 0)
+        {
+            if (_rows[row].IsSectionHeader)
+            {
+                _autonomousExpanded = !_autonomousExpanded;
+                Update(_sessions); // rebuild the render list under the new section state
+            }
+            else
+            {
+                // Sub-agent rows resolve to their parent session (they share its process/terminal).
+                SessionActivated?.Invoke(_rows[row].Session!);
+            }
+            e.Handled = true;
+        }
+        else if (HitTestQuickLink(p) is var ql && ql >= 0 && ql < _quickLinks.Count)
         {
             QuickLinkActivated?.Invoke(_quickLinks[ql]);
             e.Handled = true;
         }
+        else if (p.Y < HeaderHeight && _sessions.Count > 0)
+        {
+            // Header click toggles expand/collapse; SizeToContent resizes the window to match.
+            _expanded = !_expanded;
+            InvalidateMeasure();
+            InvalidateVisual();
+            e.Handled = true;
+        }
+
         base.OnPointerPressed(e);
     }
 
