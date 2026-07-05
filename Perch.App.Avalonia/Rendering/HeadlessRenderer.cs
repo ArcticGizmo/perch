@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Perch.Avalonia.Views;
@@ -60,6 +61,15 @@ internal static class HeadlessRenderer
         var qr = new Windows.QrWindow("perch", "https://claude.ai/code/bridge-xyz-1234");
         if (qr.Content is Control qrCard)
             RenderControl(qrCard, Path.Combine(outDir, "qr_1x.png"), 96);
+
+        // Glow edge bitmap (5.4): over a dark backdrop so the quadratic edge falloff is visible.
+        var glowPanel = new Panel { Width = 480, Height = 320, Background = new SolidColorBrush(Color.FromRgb(20, 20, 26)) };
+        glowPanel.Children.Add(new Image
+        {
+            Source = Windows.GlowWindow.BuildGlowBitmap(480, 320, 52, Theming.Palette.Orange),
+            Stretch = Stretch.Fill,
+        });
+        RenderControl(glowPanel, Path.Combine(outDir, "glow_1x.png"), 96);
 
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;

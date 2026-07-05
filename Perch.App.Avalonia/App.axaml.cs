@@ -72,6 +72,7 @@ public partial class App : Application
                 _overlay!.Canvas.Update(sessions);
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
+                UpdateGlow();
                 MaybeHandleAutoClose(sessions.Count);
             });
 
@@ -241,11 +242,25 @@ public partial class App : Application
         (_confetti ??= new ConfettiWindow()).Launch(screen);
     }
 
-    // The overlay was dragged to a (possibly different) monitor. The ambient screen-edge glow is a
-    // Phase-5 window; this is where it will be re-homed onto the overlay's current screen.
-    private static void OnOverlayDragCompleted()
+    // The overlay was dragged to a (possibly different) monitor — re-home the glow onto its screen.
+    private void OnOverlayDragCompleted() => UpdateGlow();
+
+    // Shows/hides the ambient screen-edge glow from the current session state: lit while any session
+    // needs attention or is awaiting input (and the ScreenEdgeGlow setting is on), around the overlay's
+    // screen in the attention orange; hidden otherwise. Called after every scan and on a drag, so it
+    // self-corrects as sessions come and go and as the overlay moves between monitors.
+    private GlowWindow? _glow;
+    private void UpdateGlow()
     {
-        // TODO(phase5): move the screen-edge glow to the monitor the overlay now sits on.
+        if (_overlay is null) return;
+        bool on = _appSettings is { ScreenEdgeGlow: true }
+            && _lastSessions.Any(s => s.Status is SessionStatus.NeedsAttention or SessionStatus.AwaitingInput);
+
+        if (!on) { _glow?.HideGlow(); return; }
+
+        var screen = _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
+        if (screen is null) return;
+        (_glow ??= new GlowWindow()).ShowGlow(screen, Theming.Palette.Orange);
     }
 
     // ── Context-menu handlers ─────────────────────────────────────────────────
