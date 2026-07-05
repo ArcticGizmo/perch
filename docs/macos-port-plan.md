@@ -102,8 +102,11 @@ needs on-device verification on a Mac** (the native calls only resolve at runtim
   (`proc_listpids` + `proc_pidinfo(PROC_PIDTBSDINFO)`, reading `pbi_ppid` at offset 16). Constants pinned
   from the XNU headers; symbols imported from the libSystem umbrella. `MetricsMonitor`'s delta maths is
   unchanged.
-- **`IWindowChrome`** (from Phase 1) — set `NSWindow` level / `collectionBehavior` (keep out of
-  Mission Control / Spaces cycling) and `ignoresMouseEvents` (click-through) on the handle.
+- **`IWindowChrome`** (from Phase 1) — DONE (unverified): a shared `ObjC` interop helper (class/selector
+  lookup + typed `objc_msgSend` overloads, BOOL-as-byte, no struct returns) underpins it. Gets the
+  `NSWindow` via `[nsView window]`, then sets `level` (NSStatusWindowLevel), `collectionBehavior`
+  (all-Spaces | stationary | ignores-cycle | fullscreen-aux) and, for the click-through overlays,
+  `setIgnoresMouseEvents:`. The `ObjC` helper is the foundation the remaining objc-based impls build on.
 - **`IAppIconProvider`** — `NSWorkspace.iconForFile`/`iconForContentType`, materialised to a PNG cache
   (same on-disk contract); launch via `NSWorkspace.launchApplication` / `open -a`.
 - **`IWindowActivator`** — hardest. Raise the session's terminal (Terminal.app / iTerm2 / VS Code
