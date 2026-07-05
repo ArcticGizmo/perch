@@ -26,6 +26,17 @@ if %ERRORLEVEL% neq 0 (
     exit /b %ERRORLEVEL%
 )
 
+echo Publishing perch-hook (NativeAOT) ...
+
+:: perch-hook is the self-managed Claude Code hook binary. Publish it into the SAME dir as perch.exe
+:: so Velopack packs the two together; the app copies it to a stable per-user path on launch.
+dotnet publish src\Perch.Hook\Perch.Hook.csproj -c Release -r win-x64 -o publish\
+
+if %ERRORLEVEL% neq 0 (
+    echo perch-hook publish failed. NativeAOT needs the Visual Studio "Desktop development with C++" workload.
+    exit /b %ERRORLEVEL%
+)
+
 echo Packaging ...
 
 dnx vpk pack --packId Perch --packTitle "Perch" --packVersion %VERSION% --packDir publish\ --mainExe perch.exe --outputDir releases\

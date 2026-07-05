@@ -35,6 +35,11 @@ jobs:
             -p:Version=${{ steps.version.outputs.VERSION }} `
             -o publish/
 
+      # perch-hook is the self-managed Claude Code hook binary. Publish it into the SAME dir as perch.exe
+      # so Velopack packs the two together (windows-latest ships the required C++ build tools for AOT).
+      - name: Publish perch-hook (NativeAOT)
+        run: dotnet publish src/Perch.Hook/Perch.Hook.csproj -c Release -r win-x64 -o publish/
+
       - name: Pack with Velopack
         run: vpk pack --packId Perch --packTitle "Perch" --packVersion ${{ steps.version.outputs.VERSION }} --packDir publish/ --mainExe perch.exe --outputDir releases/
 
