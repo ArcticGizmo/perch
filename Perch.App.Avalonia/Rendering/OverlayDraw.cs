@@ -44,6 +44,30 @@ internal static class OverlayDraw
     public static void TextLeftMid(DrawingContext ctx, FormattedText ft, double x, double midY)
         => ctx.DrawText(ft, new Point(x, midY - ft.Height / 2));
 
+    /// <summary>Strokes a circular arc using GDI-style angles (0° = east, positive = clockwise in the
+    /// y-down screen space), matching the WinForms <c>Graphics.DrawArc</c> calls the glyphs were built
+    /// with. <paramref name="cx"/>/<paramref name="cy"/> is the circle centre, <paramref name="r"/> its
+    /// radius.</summary>
+    public static void Arc(DrawingContext ctx, IPen pen, double cx, double cy, double r,
+        double startDeg, double sweepDeg)
+    {
+        Point At(double deg)
+        {
+            double a = deg * Math.PI / 180.0;
+            return new Point(cx + r * Math.Cos(a), cy + r * Math.Sin(a));
+        }
+        var geo = new StreamGeometry();
+        using (var gc = geo.Open())
+        {
+            gc.BeginFigure(At(startDeg), isFilled: false);
+            gc.ArcTo(At(startDeg + sweepDeg), new Size(r, r), 0,
+                Math.Abs(sweepDeg) > 180,
+                sweepDeg >= 0 ? SweepDirection.Clockwise : SweepDirection.CounterClockwise);
+            gc.EndFigure(false);
+        }
+        ctx.DrawGeometry(null, pen, geo);
+    }
+
     /// <summary>Measured width of a string at the given size/weight (uses a throwaway brush).</summary>
     public static double MeasureWidth(string s, double size, FontWeight weight = FontWeight.Normal)
         => Text(s, size, Brushes.White, weight).Width;

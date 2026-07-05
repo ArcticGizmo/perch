@@ -34,6 +34,9 @@ public sealed class OverlayCanvas : Control
     private const double SectionRowHeight = 26;
     private const double SubIndent        = 22;
     private const double BotIconWidth     = 16;
+    private const double RcIconWidth      = 14;
+    private const double MailIconWidth    = 16;
+    private const double ModeBadgeWidth   = 16;
     private const double RowsTop          = HeaderHeight; // usage/metrics/quick-links strips inserted here later
 
     // Font sizes (px ~= the WinForms point sizes).
@@ -64,6 +67,10 @@ public sealed class OverlayCanvas : Control
     private static readonly IPen   TreeLinePen    = new Pen(new SolidColorBrush(Color.FromRgb(55, 55, 72)), 1);
     private static readonly IBrush BotBrush       = new SolidColorBrush(Color.FromRgb(148, 163, 184));
     private static readonly IBrush BadgeBrush     = new SolidColorBrush(Color.FromRgb(38, 38, 52));
+    private static readonly Color  MailColor      = Color.FromRgb(94, 234, 212);
+    private static readonly IBrush MailBrush      = new SolidColorBrush(MailColor);
+    private static readonly Color  RemoteColor    = Color.FromRgb(96, 165, 250);
+    private static readonly IBrush RemoteBrush    = new SolidColorBrush(RemoteColor);
 
     // Brand mark (the app icon), loaded once.
     private static readonly Bitmap? Brand = LoadBrand();
@@ -71,8 +78,17 @@ public sealed class OverlayCanvas : Control
     // "Waiting on you" ramp length (minutes to fully red); user-tunable later (SetWaitingTimerRedMinutes).
     private int _waitingTimerRedMinutes = 3;
 
-    // Display gate for idle teammates (SetHideInactiveTeamMembers, wired in 4.17).
+    // Display gates (wired to Settings in 4.17).
     private bool _hideInactiveTeamMembers;
+    private bool _showModeBadges = true;
+
+    /// <summary>Show/hide the permission-mode badge on session rows.</summary>
+    public void SetShowModeBadges(bool show)
+    {
+        if (_showModeBadges == show) return;
+        _showModeBadges = show;
+        InvalidateVisual();
+    }
 
     private IReadOnlyList<ClaudeSession> _sessions = [];
     private List<DisplayRow> _rows = [];
@@ -311,12 +327,35 @@ public sealed class OverlayCanvas : Control
         };
 
         double statusW = OverlayDraw.MeasureWidth(statusText, StatusSize);
-        double nameMax = width - HorizPad * 3 - 8 - statusW; // later steps subtract glyph widths too
+
+        // Left-of-name glyph cluster (warn/artifact/party slots are reserved 0-width until 4.6/4.7).
+        const double warnW = 0, artW = 0, partyW = 0;
+        double mailW = session.ExternalNotify ? MailIconWidth : 0;
+        double rcW   = session.RemoteControlled ? RcIconWidth : 0;
+        double botW  = session.IsBackground ? BotIconWidth : 0;
+
+        // Right side: the permission-mode badge, just left of the status text.
+        bool showBadge = session.Mode != PermissionMode.Normal && _showModeBadges;
+        double badgeW = showBadge ? ModeBadgeWidth : 0;
+
+        double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - botW - mailW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
-        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), HorizPad + 14, nameMidY);
+
+        if (mailW > 0) DrawMailIcon(ctx, HorizPad + 14 + warnW + artW, nameMidY);
+        if (rcW > 0)   DrawRemoteIcon(ctx, HorizPad + 16 + warnW + artW + mailW, nameMidY);
+        if (botW > 0)  DrawBotIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW + partyW, nameMidY);
+
+        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW;
+        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
         double statusX = width - HorizPad - statusW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(statusText, StatusSize, statusBrush), statusX, nameMidY);
+
+        if (showBadge)
+        {
+            int alpha = session.Status == SessionStatus.Idle ? 110 : 255;
+            DrawModeBadge(ctx, session.Mode, statusX - badgeW, nameMidY, alpha);
+        }
 
         if (twoLine)
         {
@@ -494,6 +533,58 @@ public sealed class OverlayCanvas : Control
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(left, top, w, h), 2)); // face
         ctx.DrawEllipse(BotBrush, null, new Point(left + 3.5, top + 4), 1, 1);  // eyes
         ctx.DrawEllipse(BotBrush, null, new Point(left + w - 3.5, top + 4), 1, 1);
+    }
+
+    // The remote-control "broadcast" glyph: a source dot with two quarter-arc waves rising up-right.
+    private static void DrawRemoteIcon(DrawingContext ctx, double originX, double midY)
+    {
+        var pen = new Pen(RemoteBrush, 2.25, lineCap: PenLineCap.Round);
+        double oy = midY + 4;
+        ctx.DrawEllipse(RemoteBrush, null, new Point(originX, oy), 2, 2);
+        OverlayDraw.Arc(ctx, pen, originX, oy, 5, 270, 90);
+        OverlayDraw.Arc(ctx, pen, originX, oy, 9, 270, 90);
+    }
+
+    // The external-notify glyph: an envelope outline with a "V" flap.
+    private static void DrawMailIcon(DrawingContext ctx, double x, double midY)
+    {
+        var pen = new Pen(MailBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        const double w = 11, h = 8;
+        double top = midY - h / 2;
+        ctx.DrawRectangle(null, pen, new Rect(x, top, w, h));
+        var flap = new StreamGeometry();
+        using (var gc = flap.Open())
+        {
+            gc.BeginFigure(new Point(x, top), isFilled: false);
+            gc.LineTo(new Point(x + w / 2, top + h / 2));
+            gc.LineTo(new Point(x + w, top));
+            gc.EndFigure(false);
+        }
+        ctx.DrawGeometry(null, pen, flap);
+    }
+
+    // The permission-mode badge: two fast-forward chevrons in the mode's colour, faded when idle.
+    private static void DrawModeBadge(DrawingContext ctx, PermissionMode mode, double x, double midY, int alpha)
+    {
+        Color c = Palette.ModeColor(mode);
+        if (alpha < 255) c = Color.FromArgb((byte)alpha, c.R, c.G, c.B);
+        var brush = new SolidColorBrush(c);
+        const double hh = 4, w = 5;
+        Chevron(ctx, brush, x, midY, hh, w);
+        Chevron(ctx, brush, x + w + 1, midY, hh, w);
+
+        static void Chevron(DrawingContext ctx, IBrush brush, double x, double midY, double hh, double w)
+        {
+            var g = new StreamGeometry();
+            using (var gc = g.Open())
+            {
+                gc.BeginFigure(new Point(x, midY - hh), isFilled: true);
+                gc.LineTo(new Point(x + w, midY));
+                gc.LineTo(new Point(x, midY + hh));
+                gc.EndFigure(true);
+            }
+            ctx.DrawGeometry(brush, null, g);
+        }
     }
 
     private static Bitmap? LoadBrand()
