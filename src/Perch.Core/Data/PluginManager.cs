@@ -1,73 +1,47 @@
 namespace Perch.Data;
 
 using System.Diagnostics;
-using System.Text;
 using System.Text.Json;
-using Perch.Data;
+using System.Text.Json.Nodes;
 
 /// <summary>
-/// What action (if any) the user can take on the perch Claude Code plugin, derived from the
-/// CLI's view of marketplaces/plugins plus a version check. Drives the label and enabled-state of
-/// the single button in the settings "Claude Code plugin" section.
-/// </summary>
-internal enum PluginStatus
-{
-    /// <summary>The <c>claude</c> CLI couldn't be located on PATH, so nothing can be installed.</summary>
-    CliMissing,
-
-    /// <summary>Marketplace and/or plugin are missing — offer "Enable".</summary>
-    NeedsEnable,
-
-    /// <summary>Installed and enabled, but a newer version exists upstream — offer "Update".</summary>
-    UpdateAvailable,
-
-    /// <summary>Installed, enabled, and current — nothing to do.</summary>
-    UpToDate,
-}
-
-/// <summary>
-/// Drives the Claude Code CLI to add the perch marketplace and install/update the
-/// <c>perch</c> plugin, and reports its status. The plugin feeds each session's live
-/// permission mode (and the /afk and /history commands) to the tray app; this class only manages
-/// install/update/health, never the session files themselves.
+/// Migrates users off the retired <c>perch</c> Claude Code marketplace plugin. Perch now self-manages
+/// its hooks directly in <c>~/.claude/settings.json</c> (see <see cref="ClaudeUserSettings"/>), so the
+/// old plugin must be removed or its hooks would fire in addition to ours — every event delivered
+/// twice.
 ///
-/// "Is it installed?" is answered by reading <c>~/.claude/settings.json</c> directly (fast, no
-/// subprocess); "is there a newer version?" needs the CLI to refresh the marketplace clone and a
-/// git/version comparison against it.
+/// "Is the old plugin still registered?" is answered by reading <c>~/.claude/settings.json</c> directly
+/// (fast, no subprocess); removal strips those keys (authoritative — it stops event delivery at once)
+/// and then best-effort asks the CLI to drop the installed plugin and its marketplace clone.
 /// </summary>
 internal sealed class PluginManager
 {
     // The repo doubles as the marketplace (see .claude-plugin/marketplace.json). The marketplace
     // *name* comes from that file's "name" field; the plugin id is "<plugin>@<marketplace>".
-    private const string MarketplaceRepo = "ArcticGizmo/perch";
     private const string MarketplaceName = "perch";
     private const string PluginName = "perch";
     private const string PluginId = PluginName + "@" + MarketplaceName;
 
     private static string SettingsPath => ClaudePaths.UserSettingsFile;
-    private static string InstalledPluginsPath =>
-        Path.Combine(ClaudePaths.PluginsDir, "installed_plugins.json");
-    private static string MarketplaceClonePath =>
-        Path.Combine(ClaudePaths.PluginsDir, "marketplaces", MarketplaceName);
-
-    /// <summary>The slash commands a user can paste into a session if the CLI isn't on PATH.</summary>
-    public static string FallbackCommands =>
-        $"/plugin marketplace add {MarketplaceRepo} --scope user\n/plugin install {PluginId} --scope user";
 
     // ── Quick state from settings.json (no subprocess) ───────────────────────────────
     /// <summary>
     /// Reads <c>~/.claude/settings.json</c> and reports whether our marketplace is registered
     /// (under <c>extraKnownMarketplaces</c>) and our plugin is enabled (under <c>enabledPlugins</c>).
-    /// Tolerant of a missing/unreadable file (both false).
+    /// Tolerant of a missing/unreadable file (both false). Used to decide whether a migration is needed.
     /// </summary>
-    public static (bool marketplace, bool plugin) ReadInstalledState()
+    public static (bool marketplace, bool plugin) ReadInstalledState() =>
+        ReadInstalledState(SettingsPath);
+
+    /// <summary>As <see cref="ReadInstalledState()"/>, against an explicit settings file (test seam).</summary>
+    public static (bool marketplace, bool plugin) ReadInstalledState(string settingsPath)
     {
         try
         {
-            if (!File.Exists(SettingsPath))
+            if (!File.Exists(settingsPath))
                 return (false, false);
 
-            using var doc = JsonDocument.Parse(File.ReadAllText(SettingsPath), JsonLeniency);
+            using var doc = JsonDocument.Parse(File.ReadAllText(settingsPath), JsonLeniency);
             var root = doc.RootElement;
 
             bool marketplace =
@@ -89,228 +63,78 @@ internal sealed class PluginManager
         }
     }
 
-    // ── Status (settings read + async version check) ─────────────────────────────────
+    // ── Migration / removal ──────────────────────────────────────────────────────────
     /// <summary>
-    /// Decides which action to surface. Fast path: if the marketplace or plugin is missing, returns
-    /// <see cref="PluginStatus.NeedsEnable"/> without touching the CLI. Otherwise refreshes the
-    /// marketplace clone and compares the installed commit/version against it to decide
-    /// <see cref="PluginStatus.UpdateAvailable"/> vs <see cref="PluginStatus.UpToDate"/>.
+    /// Removes the old marketplace plugin: strips our marketplace from <c>extraKnownMarketplaces</c>
+    /// and our plugin from <c>enabledPlugins</c> in settings.json (which stops Claude Code delivering
+    /// the plugin's hooks immediately), then best-effort asks the CLI to uninstall the plugin and drop
+    /// the marketplace clone so no stale state lingers. Idempotent and safe when nothing is installed.
     /// </summary>
-    public async Task<PluginStatus> GetStatusAsync()
+    public async Task RemoveAsync()
     {
-        var (marketplace, plugin) = ReadInstalledState();
-        if (!marketplace || !plugin)
+        RemoveRegistration(SettingsPath); // authoritative: disables the plugin at once, no CLI needed
+
+        if (await IsCliPresentAsync())
         {
-            // Distinguish "needs enabling" from "can't enable" so the UI can explain the latter.
-            return await IsCliPresentAsync() ? PluginStatus.NeedsEnable : PluginStatus.CliMissing;
+            // Best-effort tidy-up of the on-disk plugin/marketplace clones; failures are ignored (the
+            // settings strip above already stopped the double events).
+            await RunClaudeAsync($"plugin uninstall {PluginId}");
+            await RunClaudeAsync($"plugin marketplace remove {MarketplaceName}");
         }
-
-        if (!await IsCliPresentAsync())
-            return PluginStatus.UpToDate; // installed but can't check — don't nag.
-
-        // Refresh the local marketplace clone from its source so the comparison is against latest.
-        await RunClaudeAsync($"plugin marketplace update {MarketplaceName}");
-
-        return await IsUpdateAvailableAsync()
-            ? PluginStatus.UpdateAvailable
-            : PluginStatus.UpToDate;
     }
 
     /// <summary>
-    /// Compares the installed plugin against the (freshly-refreshed) marketplace clone. Prefers the
-    /// git commit sha — the marketplace is a github checkout, so its HEAD is the latest available
-    /// commit — and falls back to comparing plugin.json <c>version</c> strings. Returns false when it
-    /// can't tell, so we never nag with a phantom update.
+    /// Strips our marketplace + plugin keys from the given settings file, preserving every other key
+    /// (and dropping the parent objects only when they empty). Tolerant of a hand-edited file
+    /// (// comments, trailing commas); a missing/garbage file is a no-op. Returns true if it rewrote.
+    /// Exposed as a static test seam; <see cref="RemoveAsync"/> is the production entry point.
     /// </summary>
-    private async Task<bool> IsUpdateAvailableAsync()
-    {
-        var (installedVersion, installedSha) = ReadInstalledVersion();
-
-        var latestSha = await GitHeadShaAsync(MarketplaceClonePath);
-        if (!string.IsNullOrEmpty(installedSha) && !string.IsNullOrEmpty(latestSha))
-            return !ShaEquals(installedSha!, latestSha!);
-
-        var latestVersion = ReadMarketplaceVersion();
-        if (!string.IsNullOrEmpty(installedVersion) && !string.IsNullOrEmpty(latestVersion))
-            return !string.Equals(
-                installedVersion,
-                latestVersion,
-                StringComparison.OrdinalIgnoreCase
-            );
-
-        return false;
-    }
-
-    // ── Actions ──────────────────────────────────────────────────────────────────────
-    /// <summary>
-    /// Adds the marketplace (idempotent) then installs the plugin. Best-effort and safe to re-run;
-    /// returns a user-facing message. Used by the settings "Enable" button and the first-run
-    /// auto-install.
-    /// </summary>
-    public async Task<(bool ok, string message)> EnableAsync()
-    {
-        if (!await IsCliPresentAsync())
-            return (false, "claude CLI not found on PATH.");
-
-        var (marketplace, _) = ReadInstalledState();
-        if (!marketplace)
-        {
-            var add = await RunClaudeAsync(
-                $"plugin marketplace add {MarketplaceRepo} --scope user"
-            );
-            if (add.exitCode != 0)
-                return (false, $"Adding marketplace failed: {FirstLine(add.output)}");
-        }
-
-        var install = await RunClaudeAsync($"plugin install {PluginId} --scope user");
-        if (install.exitCode != 0)
-            return (false, $"Install failed: {FirstLine(install.output)}");
-
-        return (
-            true,
-            "Claude Code plugin installed. Run /reload-plugins in any open session (or restart it) to load it."
-        );
-    }
-
-    /// <summary>
-    /// Refreshes the marketplace then updates the plugin to the latest version. Returns a
-    /// user-facing message.
-    /// </summary>
-    public async Task<(bool ok, string message)> UpdateAsync()
-    {
-        if (!await IsCliPresentAsync())
-            return (false, "claude CLI not found on PATH.");
-
-        await RunClaudeAsync($"plugin marketplace update {MarketplaceName}");
-
-        var update = await RunClaudeAsync($"plugin update {PluginId}");
-        if (update.exitCode != 0)
-            return (false, $"Update failed: {FirstLine(update.output)}");
-
-        return (
-            true,
-            "Claude Code plugin updated. Run /reload-plugins in any open session (or restart it) to apply it."
-        );
-    }
-
-    // ── On-disk reads ──────────────────────────────────────────────────────────────
-    // Reads the installed plugin's version and git commit from installed_plugins.json. The value is
-    // an array of per-scope entries; the first is fine for our single-scope (user) install.
-    private static (string? version, string? sha) ReadInstalledVersion()
+    public static bool RemoveRegistration(string settingsPath)
     {
         try
         {
-            if (!File.Exists(InstalledPluginsPath))
-                return (null, null);
+            if (!File.Exists(settingsPath))
+                return false;
 
-            using var doc = JsonDocument.Parse(
-                File.ReadAllText(InstalledPluginsPath),
-                JsonLeniency
-            );
-            if (
-                !doc.RootElement.TryGetProperty("plugins", out var plugins)
-                || !plugins.TryGetProperty(PluginId, out var entries)
-                || entries.ValueKind != JsonValueKind.Array
-            )
-                return (null, null);
+            if (JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: JsonLeniency) is not JsonObject root)
+                return false;
 
-            foreach (var entry in entries.EnumerateArray())
+            bool changed = false;
+
+            if (root["extraKnownMarketplaces"] is JsonObject mkts && mkts.Remove(MarketplaceName))
             {
-                var version = entry.TryGetProperty("version", out var v) ? v.GetString() : null;
-                var sha = entry.TryGetProperty("gitCommitSha", out var s) ? s.GetString() : null;
-                return (version, sha);
-            }
-        }
-        catch { }
-        return (null, null);
-    }
-
-    // Reads the latest plugin version from the refreshed marketplace clone: marketplace.json names
-    // the plugin's source dir; that dir's .claude-plugin/plugin.json carries the version.
-    private static string? ReadMarketplaceVersion()
-    {
-        try
-        {
-            var marketplaceJson = Path.Combine(
-                MarketplaceClonePath,
-                ".claude-plugin",
-                "marketplace.json"
-            );
-            if (!File.Exists(marketplaceJson))
-                return null;
-
-            string sourceRel = "./plugins/" + PluginName; // sensible default for our repo layout
-            using (var doc = JsonDocument.Parse(File.ReadAllText(marketplaceJson), JsonLeniency))
-            {
-                if (
-                    doc.RootElement.TryGetProperty("plugins", out var arr)
-                    && arr.ValueKind == JsonValueKind.Array
-                )
-                    foreach (var p in arr.EnumerateArray())
-                        if (
-                            p.TryGetProperty("name", out var n)
-                            && string.Equals(
-                                n.GetString(),
-                                PluginName,
-                                StringComparison.OrdinalIgnoreCase
-                            )
-                            && p.TryGetProperty("source", out var src)
-                            && src.ValueKind == JsonValueKind.String
-                        )
-                        {
-                            sourceRel = src.GetString() ?? sourceRel;
-                            break;
-                        }
+                changed = true;
+                if (mkts.Count == 0) root.Remove("extraKnownMarketplaces");
             }
 
-            var pluginJson = Path.Combine(
-                MarketplaceClonePath,
-                sourceRel.Replace('/', Path.DirectorySeparatorChar),
-                ".claude-plugin",
-                "plugin.json"
-            );
-            if (!File.Exists(pluginJson))
-                return null;
+            if (root["enabledPlugins"] is JsonObject plugins && plugins.Remove(PluginId))
+            {
+                changed = true;
+                if (plugins.Count == 0) root.Remove("enabledPlugins");
+            }
 
-            using var pdoc = JsonDocument.Parse(File.ReadAllText(pluginJson), JsonLeniency);
-            return pdoc.RootElement.TryGetProperty("version", out var ver) ? ver.GetString() : null;
+            if (changed)
+                File.WriteAllText(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+
+            return changed;
         }
         catch
         {
-            return null;
+            return false;
         }
-    }
-
-    private static bool ShaEquals(string a, string b)
-    {
-        // installed_plugins.json may record a short sha; compare on the shorter common length.
-        int len = Math.Min(a.Length, b.Length);
-        return len > 0 && string.Equals(a[..len], b[..len], StringComparison.OrdinalIgnoreCase);
     }
 
     // ── Process helpers ────────────────────────────────────────────────────────────
     private async Task<bool> IsCliPresentAsync() =>
         (await RunClaudeAsync("--version")).exitCode == 0;
 
-    // The marketplace clone's HEAD commit — the latest available version for a github source.
-    private static async Task<string?> GitHeadShaAsync(string repoDir)
-    {
-        if (!Directory.Exists(repoDir))
-            return null;
-        var (exitCode, output) = await RunProcessAsync("git", $"-C \"{repoDir}\" rev-parse HEAD");
-        return exitCode == 0 ? output.Trim() : null;
-    }
-
     // Runs `claude <args>` via cmd.exe so PATHEXT shims (.exe/.cmd/.bat) all resolve.
     private static Task<(int exitCode, string output)> RunClaudeAsync(string args) =>
         RunProcessAsync("cmd.exe", $"/c claude {args}");
 
     // Runs a process, capturing combined stdout+stderr, with a hard timeout so a hung CLI/network
-    // call can never wedge the UI. A non-zero exit code (including "command not found") is failure.
-    private static async Task<(int exitCode, string output)> RunProcessAsync(
-        string fileName,
-        string args
-    )
+    // call can never wedge the caller. A non-zero exit code (including "command not found") is failure.
+    private static async Task<(int exitCode, string output)> RunProcessAsync(string fileName, string args)
     {
         try
         {
@@ -338,19 +162,14 @@ internal sealed class PluginManager
             }
             catch (OperationCanceledException)
             {
-                try
-                {
-                    proc.Kill(entireProcessTree: true);
-                }
+                try { proc.Kill(entireProcessTree: true); }
                 catch { }
                 return (-1, "Timed out.");
             }
 
-            var sb = new StringBuilder(await stdoutTask);
-            var err = await stderrTask;
-            if (err.Length > 0)
-                sb.Append(err);
-            return (proc.ExitCode, sb.ToString());
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
+            return (proc.ExitCode, stdout + stderr);
         }
         catch
         {
@@ -363,11 +182,4 @@ internal sealed class PluginManager
         AllowTrailingCommas = true,
         CommentHandling = JsonCommentHandling.Skip,
     };
-
-    private static string FirstLine(string text)
-    {
-        var trimmed = text.Trim();
-        var nl = trimmed.IndexOf('\n');
-        return nl < 0 ? trimmed : trimmed[..nl].Trim();
-    }
 }

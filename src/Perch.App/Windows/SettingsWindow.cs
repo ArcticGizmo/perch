@@ -58,8 +58,8 @@ internal sealed class SettingsHooks
 /// <summary>
 /// The first-class settings window (the Avalonia port of the WinForms <c>SettingsForm</c>). A dark
 /// window split into a fixed-width left navigation rail and a scrollable content area; the nav switches
-/// between pages (Getting started, Plugin Control, Usage, Indicators, Monitoring, Session Stats,
-/// Notifications, Quick Links, Experimental, About, Changelog). Reads/writes the shared
+/// between pages (Getting started, Usage, Indicators, Monitoring, Session Stats, Notifications,
+/// Quick Links, Experimental, About, Changelog). Reads/writes the shared
 /// <see cref="AppSettings"/> and applies changes live through <see cref="SettingsHooks"/> so the overlay
 /// and monitors stay in sync.
 /// </summary>
@@ -133,7 +133,6 @@ internal sealed class SettingsWindow : Window
         };
 
         AddPage(nav, "start",        "Getting started", BuildGettingStartedPage);
-        AddPage(nav, "plugin",       "Plugin Control",  BuildPluginPage);
         AddPage(nav, "usage",        "Usage Limits",    BuildUsagePage);
         AddPage(nav, "indicators",   "Indicators",      BuildIndicatorsPage);
         AddPage(nav, "monitoring",   "Monitoring",      BuildMonitoringPage);
@@ -240,7 +239,8 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(SettingsUi.BodyText(
             "•  Keep an eye on your 5-hour and weekly usage limits without leaving your desktop."));
         page.Children.Add(SettingsUi.BodyText(
-            "•  Install the companion Claude Code plugin for live permission-mode badges, /afk, and /history."));
+            "•  See each session's live permission mode (Plan, Accept edits, Auto, Bypass) badged in the " +
+            "overlay — Perch wires this into Claude Code automatically, no plugin to install."));
 
         page.Children.Add(SettingsUi.Separator());
 
@@ -248,8 +248,8 @@ internal sealed class SettingsWindow : Window
             SaveToggle(_settings.AutoStartOnFirstSession, v => _settings.AutoStartOnFirstSession = v)));
         page.Children.Add(SettingsUi.BodyText(
             "Launch Perch in the background when a Claude Code session opens and it isn't already " +
-            "running. Requires the installed app — the plugin starts it via the \"perch\" command on " +
-            "your PATH, so sessions run from a dev build (dotnet run) won't trigger it."));
+            "running. Requires the installed app — the SessionStart hook starts it via the \"perch\" " +
+            "command on your PATH, so sessions run from a dev build (dotnet run) won't trigger it."));
 
         page.Children.Add(SettingsUi.Separator());
 
@@ -288,113 +288,6 @@ internal sealed class SettingsWindow : Window
             HorizontalAlignment = HorizontalAlignment.Center,
         });
         page.Children.Add(stack);
-    }
-
-    // ── Plugin Control ────────────────────────────────────────────────────────────
-    private Button _pluginActionBtn = null!;
-    private SpinnerView _pluginSpinner = null!;
-    private TextBlock _pluginStatusLabel = null!;
-    private PluginStatus _pluginStatus = PluginStatus.UpToDate;
-
-    private void BuildPluginPage(StackPanel page)
-    {
-        page.Children.Add(SettingsUi.SectionTitle("Plugin Control"));
-        page.Children.Add(SettingsUi.BodyText("Perch pairs with a small Claude Code plugin. With it installed you get:"));
-        page.Children.Add(SettingsUi.BodyText(
-            "•  Live permission-mode badges next to each session in the overlay — Plan, Accept edits, Auto, and Bypass."));
-        page.Children.Add(SettingsUi.BodyText(
-            "•  /afk — toggle external (phone) notifications for the current session without leaving Claude Code."));
-        page.Children.Add(SettingsUi.BodyText("•  /history — open the current session's history in Perch."));
-        page.Children.Add(SettingsUi.BodyText(
-            "Perch can add the marketplace and install the plugin for you. If a newer version is " +
-            "published later, use Update to pull it in."));
-
-        var row = SettingsUi.ButtonRow();
-        _pluginActionBtn = SettingsUi.FlatButton("Enable");
-        _pluginActionBtn.IsEnabled = false;
-        _pluginActionBtn.Click += async (_, _) => await RunPluginActionAsync();
-        _pluginSpinner = new SpinnerView { VerticalAlignment = VerticalAlignment.Center };
-        row.Children.Add(_pluginActionBtn);
-        row.Children.Add(_pluginSpinner);
-        page.Children.Add(row);
-
-        _pluginStatusLabel = SettingsUi.BodyText("Checking plugin status…");
-        page.Children.Add(_pluginStatusLabel);
-
-        page.Children.Add(SettingsUi.FieldCaption("Or run these in any Claude Code session:"));
-        page.Children.Add(SettingsUi.CodeBlock(PluginManager.FallbackCommands));
-        var copyRow = SettingsUi.ButtonRow();
-        var copyBtn = SettingsUi.FlatButton("Copy install commands");
-        copyBtn.Click += async (_, _) =>
-        {
-            var cb = GetTopLevel(this)?.Clipboard;
-            if (cb == null) return;
-            try
-            {
-                var data = new DataTransfer();
-                data.Add(DataTransferItem.CreateText(PluginManager.FallbackCommands));
-                await cb.SetDataAsync(data);
-            }
-            catch { }
-        };
-        copyRow.Children.Add(copyBtn);
-        page.Children.Add(copyRow);
-
-        _ = RefreshPluginStatusAsync();
-    }
-
-    private async System.Threading.Tasks.Task RefreshPluginStatusAsync()
-    {
-        SetPluginBusy("Checking plugin status…");
-        var status = await new PluginManager().GetStatusAsync();
-        ApplyPluginStatus(status);
-    }
-
-    private async System.Threading.Tasks.Task RunPluginActionAsync()
-    {
-        var mgr = new PluginManager();
-        bool updating = _pluginStatus == PluginStatus.UpdateAvailable;
-        SetPluginBusy(updating ? "Updating the plugin…" : "Installing the plugin…");
-
-        var (ok, message) = updating ? await mgr.UpdateAsync() : await mgr.EnableAsync();
-        if (!ok)
-        {
-            _pluginSpinner.Spinning = false;
-            _pluginStatusLabel.Text = message;
-            _pluginActionBtn.IsEnabled = true;
-            return;
-        }
-
-        await RefreshPluginStatusAsync();
-        _pluginStatusLabel.Text = message;
-    }
-
-    private void SetPluginBusy(string message)
-    {
-        _pluginSpinner.Spinning = true;
-        _pluginActionBtn.IsEnabled = false;
-        _pluginStatusLabel.Text = message;
-    }
-
-    private void ApplyPluginStatus(PluginStatus status)
-    {
-        _pluginStatus = status;
-        _pluginSpinner.Spinning = false;
-        switch (status)
-        {
-            case PluginStatus.NeedsEnable:
-                _pluginActionBtn.Content = "Enable"; _pluginActionBtn.IsEnabled = true;
-                _pluginStatusLabel.Text = "Not installed yet."; break;
-            case PluginStatus.UpdateAvailable:
-                _pluginActionBtn.Content = "Update"; _pluginActionBtn.IsEnabled = true;
-                _pluginStatusLabel.Text = "A newer version is available."; break;
-            case PluginStatus.UpToDate:
-                _pluginActionBtn.Content = "Up to date"; _pluginActionBtn.IsEnabled = false;
-                _pluginStatusLabel.Text = "Installed and up to date."; break;
-            case PluginStatus.CliMissing:
-                _pluginActionBtn.Content = "Enable"; _pluginActionBtn.IsEnabled = false;
-                _pluginStatusLabel.Text = "claude CLI not found on PATH — run the commands below manually."; break;
-        }
     }
 
     // ── Usage ───────────────────────────────────────────────────────────────────────
@@ -482,8 +375,8 @@ internal sealed class SettingsWindow : Window
         };
         page.Children.Add(SettingsUi.TitleRow("Permission mode badges", toggle));
         page.Children.Add(SettingsUi.BodyText(
-            "When the Claude Code plugin is installed, each session's live permission mode is shown as a " +
-            "coloured badge next to that session in the overlay:"));
+            "Each session's live permission mode is shown as a coloured badge next to that session in the " +
+            "overlay (Perch tracks this through the hooks it wires into Claude Code automatically):"));
         legend.IsEnabled = _settings.ShowPermissionModeBadges;
         page.Children.Add(legend);
     }

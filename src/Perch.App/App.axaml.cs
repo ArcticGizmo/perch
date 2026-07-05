@@ -174,31 +174,31 @@ public partial class App : Application
             // Startup + hourly update check (restores a persisted "update available" state first).
             _updateService.Start();
 
-            // First launch after an install: add the marketplace and install the Claude Code plugin in
-            // the background so the user doesn't have to. Failures are silently skipped.
-            if (Program.IsFirstRun)
-                AutoInstallPlugin();
+            // Self-managed hooks: on every launch, copy perch-hook to a stable per-user path and
+            // reconcile our managed block in ~/.claude/settings.json (idempotent; self-corrects after
+            // an update changes the versioned install dir), then migrate any user still on the retired
+            // marketplace plugin so events aren't delivered twice. All off the UI thread, best-effort.
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                HookInstaller.Install();
+                await MigrateOffPlugin();
+            });
         }
         base.OnFrameworkInitializationCompleted();
     }
 
-    // Fire-and-forget plugin install on first run. Shows a tray toast up front so the work is visible,
-    // then a quiet success toast; any failure is swallowed (the user can still enable it from Settings).
-    private async void AutoInstallPlugin()
+    // One-time-ish migration off the retired marketplace plugin. Only acts when the plugin/marketplace
+    // is still registered (a fast settings.json read), so it's a no-op for fresh installs and on every
+    // launch after the first successful migration. Best-effort — any failure is swallowed.
+    private static async System.Threading.Tasks.Task MigrateOffPlugin()
     {
-        var (marketplace, plugin) = PluginManager.ReadInstalledState();
-        if (marketplace && plugin) return; // already set up from a previous machine state — skip the noise
-
-        _notifications?.ShowInfo("Perch", "Setting up the Claude Code plugin…", ToastLevel.Info);
         try
         {
-            var (ok, _) = await new PluginManager().EnableAsync();
-            if (ok)
-                _notifications?.ShowInfo("Perch",
-                    "Claude Code plugin installed. Run /reload-plugins (or restart) in open sessions to load it.",
-                    ToastLevel.Info);
+            var (marketplace, plugin) = PluginManager.ReadInstalledState();
+            if (!marketplace && !plugin) return;
+            await new PluginManager().RemoveAsync();
         }
-        catch { /* best-effort: skip on any failure */ }
+        catch { /* best-effort */ }
     }
 
     // Reflects the updater's availability on every surface: the tray menu item's wording, the overlay's
