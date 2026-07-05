@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
 using Perch.Data;
@@ -289,6 +290,15 @@ public sealed class OverlayCanvas : Control
 
     /// <summary>Raised when a row's artifact glyph is clicked; the app opens the artifact(s).</summary>
     internal event Action<ClaudeSession>? ArtifactActivated;
+
+    // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
+    // or the usage strip for ~150ms pops a hint. A single timer serves whichever the cursor last
+    // settled on; moving to a different (or no) target restarts it and hides the current tip.
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics }
+    private TipKind _tipKind = TipKind.None;
+    private int _tipRow = -1;
+    private DispatcherTimer? _dwellTimer;
+    private OverlayTooltip? _tooltip;
 
     // A flat render row: a parent session, one of its sub-agents, or the "Autonomous" section header.
     private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1)
@@ -1196,14 +1206,61 @@ public sealed class OverlayCanvas : Control
 
         // Hand cursor over clickable glyphs (quick links + artifacts); rows show only the highlight.
         Cursor = (ql >= 0 || art >= 0) ? HandCursor : Cursor.Default;
+
+        UpdateDwell(p);
         base.OnPointerMoved(e);
     }
+
+    // Picks whichever info glyph (or the usage strip) the cursor is over and (re)arms the dwell timer.
+    private void UpdateDwell(Point p)
+    {
+        (TipKind kind, int row) =
+            HitTestThermoIcon(p) is var th && th >= 0 ? (TipKind.Thermo, th) :
+            HitTestWarnIcon(p)   is var wa && wa >= 0 ? (TipKind.Warn, wa) :
+            HitTestTaskCount(p)  is var ta && ta >= 0 ? (TipKind.Task, ta) :
+            HitTestMetrics(p)    is var me && me >= 0 ? (TipKind.Metrics, me) :
+            InUsageStrip(p)                           ? (TipKind.Usage, -1) :
+                                                        (TipKind.None, -1);
+
+        if (kind == _tipKind && row == _tipRow) return;
+        _tipKind = kind;
+        _tipRow = row;
+        _dwellTimer?.Stop();
+        _tooltip?.HideTip();
+        if (kind == TipKind.None) return;
+
+        _dwellTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _dwellTimer.Tick -= OnDwellTick;
+        _dwellTimer.Tick += OnDwellTick;
+        _dwellTimer.Start();
+    }
+
+    private void OnDwellTick(object? sender, EventArgs e)
+    {
+        _dwellTimer?.Stop();
+        switch (_tipKind)
+        {
+            case TipKind.Usage:   ShowUsageTooltip();          break;
+            case TipKind.Thermo:  ShowThermoTooltip(_tipRow);  break;
+            case TipKind.Warn:    ShowWarnTooltip(_tipRow);    break;
+            case TipKind.Task:    ShowTaskTooltip(_tipRow);    break;
+            case TipKind.Metrics: ShowMetricsTooltip(_tipRow); break;
+        }
+    }
+
+    private bool InUsageStrip(Point p) =>
+        _expanded && _rows.Count > 0 && _usageEnabled
+        && p.Y >= UsageStripTop && p.Y < UsageStripTop + UsageStripHeight;
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
         bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredArtifactRow != -1;
         _hoveredRow = _hoveredQuickLink = _hoveredArtifactRow = -1;
         Cursor = Cursor.Default;
+        _tipKind = TipKind.None;
+        _tipRow = -1;
+        _dwellTimer?.Stop();
+        _tooltip?.HideTip();
         if (changed) InvalidateVisual();
         base.OnPointerExited(e);
     }
@@ -1250,6 +1307,117 @@ public sealed class OverlayCanvas : Control
 
         base.OnPointerPressed(e);
     }
+
+    // ── Tooltip content ────────────────────────────────────────────────────────
+    private OverlayTooltip Tooltip() => _tooltip ??= new OverlayTooltip();
+    private PixelPoint ToScreen(double x, double y) => this.PointToScreen(new Point(x, y));
+
+    private void ShowThermoTooltip(int row)
+    {
+        if (row < 0 || row >= _rows.Count || _rows[row].Session is not { } s) return;
+        if (!_thermoRects.TryGetValue(row, out var r)) return;
+        float fill = s.ContextFill ?? 0f;
+        int pct = (int)Math.Round(fill * 100f);
+        long window = s.ContextWindow;
+        long used = (long)Math.Round(fill * window);
+        Tooltip().ShowText($"{FormatTokens(used)}/{FormatTokens(window)} ({pct}%)", ToScreen(r.Left, r.Bottom + 4));
+    }
+
+    private void ShowWarnTooltip(int row)
+    {
+        if (row < 0 || row >= _rows.Count || _rows[row].Session?.Stuck is not { } stuck) return;
+        if (!_warnRects.TryGetValue(row, out var r)) return;
+        Tooltip().ShowText(stuck.Reason, ToScreen(r.Left, r.Bottom + 4));
+    }
+
+    private void ShowTaskTooltip(int row)
+    {
+        if (row < 0 || row >= _rows.Count || _rows[row].Session is not { } s) return;
+        if (!_taskRects.TryGetValue(row, out var r) || s.Tasks.Count == 0) return;
+
+        // One line per task, prefixed by a status glyph: ✓ done, ▸ in progress, ○ pending. The active
+        // task reads better as its gerund; the rest by subject. Long labels are clipped.
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < s.Tasks.Count; i++)
+        {
+            if (i > 0) sb.Append('\n');
+            var t = s.Tasks[i];
+            char glyph = t.State switch
+            {
+                TaskState.Completed  => '✓',
+                TaskState.InProgress => '▸',
+                _                    => '○',
+            };
+            string label = t.State == TaskState.InProgress && t.ActiveForm.Length > 0 ? t.ActiveForm : t.Subject;
+            if (label.Length > 64) label = label[..63].TrimEnd() + "…";
+            sb.Append(glyph).Append(' ').Append(label);
+        }
+        Tooltip().ShowText(sb.ToString(), ToScreen(r.Left, r.Bottom + 4));
+    }
+
+    private void ShowMetricsTooltip(int row)
+    {
+        if (row < 0 || row >= _rows.Count || _rows[row].Session is not { } s) return;
+        if (!_metricsRects.TryGetValue(row, out var r)) return;
+        if (!_sessionMetrics.TryGetValue(s.Pid, out var m)) return;
+
+        string text = $"CPU {m.CpuPercent:0}%   ·   RAM {FormatBytes(m.RamBytes)}";
+        if (m.ProcessCount > 1) text += $"   ·   {m.ProcessCount} procs";
+        Tooltip().ShowText(text, ToScreen(r.Left, r.Bottom + 4));
+    }
+
+    private void ShowUsageTooltip()
+    {
+        var now = DateTime.Now;
+        var lines = new List<OverlayTooltip.Line>
+        {
+            new("Plan usage", OverlayTooltip.FgColor, true),
+            new(UsageLine("Session", _usage.FiveHourPercent, _usage.FiveHourResetsAt, now), OverlayTooltip.FgColor, false),
+            new(UsageLine("Weekly",  _usage.SevenDayPercent, _usage.SevenDayResetsAt, now), OverlayTooltip.FgColor, false),
+        };
+        if (_usage.IsStale(now))
+        {
+            var reason = _usage.Error;
+            if (string.IsNullOrEmpty(reason))
+                reason = _usage.LastUpdated == DateTime.MinValue
+                    ? "No usage data yet"
+                    : $"Updated {Ago(now - _usage.LastUpdated)} ago — couldn't refresh";
+            lines.Add(new(reason, OverlayTooltip.MutedColor, false));
+        }
+        // Open to the left of the overlay's left edge so it never covers the strip.
+        Tooltip().ShowLines(lines, ToScreen(0, UsageStripTop), placeLeft: true);
+    }
+
+    private static string UsageLine(string label, double? percent, DateTime? resetsAt, DateTime now)
+    {
+        string pct = percent is { } p ? $"{(int)Math.Round(p)}%" : "—";
+        string s = $"{label}  {pct}";
+        if (resetsAt is { } r && r > now) s += $"  · resets in {Until(r - now)}";
+        return s;
+    }
+
+    private static string Until(TimeSpan t) =>
+        t.TotalDays >= 1  ? $"{(int)t.TotalDays}d {t.Hours}h"
+      : t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes}m"
+                          : $"{Math.Max(1, (int)t.TotalMinutes)}m";
+
+    private static string Ago(TimeSpan t) =>
+        t.TotalHours >= 1   ? $"{(int)t.TotalHours}h"
+      : t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m"
+                            : $"{(int)t.TotalSeconds}s";
+
+    // Compact token count for the thermometer tooltip: 34631 → "34.6k", 1000000 → "1M".
+    private static string FormatTokens(long n) =>
+        n >= 1_000_000 ? $"{n / 1_000_000.0:0.##}M"
+      : n >= 1_000     ? $"{n / 1_000.0:0.#}k"
+                       : n.ToString();
+
+    // Compact byte count for the metrics tooltip: 536870912 → "512 MB", 1610612736 → "1.5 GB".
+    private static string FormatBytes(long bytes) =>
+        bytes >= 1L << 30 ? $"{bytes / (double)(1L << 30):0.0} GB"
+      : bytes >= 1L << 20 ? $"{bytes / (double)(1L << 20):0} MB"
+      : bytes >= 1L << 10 ? $"{bytes / (double)(1L << 10):0} KB"
+                          : $"{bytes} B";
 
     private static Bitmap? LoadBrand()
     {
