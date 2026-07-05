@@ -14,6 +14,7 @@ public static class OverlayNativeChrome
     private const int WS_EX_TOOLWINDOW  = 0x00000080;
     private const int WS_EX_NOACTIVATE  = 0x08000000;
     private const int WS_EX_TRANSPARENT = 0x00000020; // clicks fall through to the window beneath
+    private const int WS_EX_LAYERED     = 0x00080000; // required alongside TRANSPARENT for click-through
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
@@ -31,11 +32,19 @@ public static class OverlayNativeChrome
 
     /// <summary>Marks the window click-through (transparent to mouse), plus tool-window + no-activate —
     /// for the ambient overlays (confetti, glow) that must never intercept input or take focus.
-    /// Best-effort; a zero handle is ignored.</summary>
+    /// Best-effort; a zero handle is ignored.
+    /// <para>
+    /// Both <c>WS_EX_LAYERED</c> and <c>WS_EX_TRANSPARENT</c> are required for click-through: on a
+    /// DWM-composited (DirectComposition-backed) Avalonia window — which is how a transparent, topmost
+    /// window is realised — <c>WS_EX_TRANSPARENT</c> alone does <em>not</em> pass mouse input through;
+    /// the window keeps eating clicks until <c>WS_EX_LAYERED</c> is also set. Adding the layered bit does
+    /// not disturb the DirectComposition per-pixel content (verified: the glow still renders), and no
+    /// <c>SetLayeredWindowAttributes</c> call is needed — the compositor supplies the alpha.
+    /// </para></summary>
     public static void MakeClickThroughNoActivate(IntPtr hWnd)
     {
         if (hWnd == IntPtr.Zero) return;
         int ex = GetWindowLong(hWnd, GWL_EXSTYLE);
-        SetWindowLong(hWnd, GWL_EXSTYLE, ex | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+        SetWindowLong(hWnd, GWL_EXSTYLE, ex | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
     }
 }
