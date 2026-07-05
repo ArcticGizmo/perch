@@ -77,6 +77,11 @@ internal static class HeadlessRenderer
         RenderControl(stats, Path.Combine(outDir, "stats_1x.png"), 96);
         RenderControl(stats, Path.Combine(outDir, "stats_1.5x.png"), 144);
 
+        // Flight path (5.6): synthetic day with active / waiting / stuck segments across a few lanes.
+        var flight = new Views.FlightPathTimeline();
+        flight.SetReport(SampleFlightReport());
+        RenderControl(flight, Path.Combine(outDir, "flightpath_1x.png"), 96);
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }
@@ -157,6 +162,32 @@ internal static class HeadlessRenderer
                 new ProjectStat("feature-x", 2, TimeSpan.FromHours(1), 200_000),
             ],
             HourlyActiveSeconds: hourly);
+    }
+
+    private static FlightPathReport SampleFlightReport()
+    {
+        var day = DateOnly.FromDateTime(DateTime.Now);
+        DateTime At(int h, int m) => day.ToDateTime(new TimeOnly(h, m));
+        var lanes = new List<FlightLane>
+        {
+            new("s1", "perch", "avalonia-port", At(9, 10), At(12, 30), TimeSpan.FromHours(2), TimeSpan.FromMinutes(30),
+            [
+                new FlightSegment(At(9, 10), At(10, 20), FlightState.Active),
+                new FlightSegment(At(10, 20), At(10, 50), FlightState.Waiting),
+                new FlightSegment(At(10, 50), At(12, 30), FlightState.Active),
+            ]),
+            new("s2", "api", "main", At(11, 0), At(15, 0), TimeSpan.FromMinutes(90), TimeSpan.FromMinutes(20),
+            [
+                new FlightSegment(At(11, 0), At(11, 40), FlightState.Active),
+                new FlightSegment(At(13, 0), At(13, 30), FlightState.Stuck),
+                new FlightSegment(At(14, 0), At(15, 0), FlightState.Active),
+            ]),
+            new("s3", "docs-site", "", At(16, 0), At(17, 30), TimeSpan.FromMinutes(45), TimeSpan.Zero,
+            [
+                new FlightSegment(At(16, 0), At(16, 45), FlightState.Active),
+            ]),
+        };
+        return new FlightPathReport(day, At(9, 0), At(18, 0), lanes);
     }
 
     private static IReadOnlyList<ClaudeSession> SampleSessions()
