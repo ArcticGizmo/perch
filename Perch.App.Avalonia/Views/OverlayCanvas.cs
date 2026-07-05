@@ -35,6 +35,8 @@ public sealed class OverlayCanvas : Control
     private const double SubIndent        = 22;
     private const double BarRowHeight     = 18;
     private const double UsageStripHeight = 50; // two usage bars + padding, shown only when expanded
+    private const double SysMetricsStripHeight = 50; // system CPU + RAM bars + padding, shown only when expanded
+    private const double MetricsBarWidth  = 28; // width reserved for a session row's CPU/RAM mini-bars
     private const double BotIconWidth     = 16;
     private const double RcIconWidth      = 14;
     private const double MailIconWidth    = 16;
@@ -139,6 +141,45 @@ public sealed class OverlayCanvas : Control
         InvalidateVisual();
     }
 
+    // Resource metrics: the whole-machine strip (CPU + RAM, just under the header) and the per-row
+    // mini-bars. _sysMetrics is the latest machine reading; _sessionMetrics is keyed by session pid.
+    // Defaulted on for the port so a live launch shows them; 4.17 will drive these from Settings.
+    private bool _showSystemMetrics = true;
+    private bool _showSessionMetrics = true;
+    private SystemMetrics _sysMetrics = SystemMetrics.Empty;
+    private IReadOnlyDictionary<string, SessionMetrics> _sessionMetrics = new Dictionary<string, SessionMetrics>();
+
+    /// <summary>Show/hide the whole-machine metrics strip. Changes the panel height, so relayout.</summary>
+    public void SetShowSystemMetrics(bool show)
+    {
+        if (_showSystemMetrics == show) return;
+        _showSystemMetrics = show;
+        InvalidateMeasure();
+        InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the per-row CPU/RAM mini-bars (row height is unchanged; only the glyph cluster).</summary>
+    public void SetShowSessionMetrics(bool show)
+    {
+        if (_showSessionMetrics == show) return;
+        _showSessionMetrics = show;
+        InvalidateVisual();
+    }
+
+    /// <summary>Feeds the latest whole-machine CPU/RAM reading (on the UI thread) and repaints the strip.</summary>
+    internal void UpdateSystemMetrics(SystemMetrics metrics)
+    {
+        _sysMetrics = metrics;
+        if (_showSystemMetrics || _showSessionMetrics) InvalidateVisual();
+    }
+
+    /// <summary>Feeds the latest per-session CPU/RAM map (on the UI thread) and repaints the mini-bars.</summary>
+    internal void UpdateSessionMetrics(IReadOnlyDictionary<string, SessionMetrics> metrics)
+    {
+        _sessionMetrics = metrics;
+        if (_showSessionMetrics) InvalidateVisual();
+    }
+
     /// <summary>Show/hide the clickable artifact glyph (the session still tracks its artifacts).</summary>
     public void SetShowArtifacts(bool show)
     {
@@ -239,12 +280,14 @@ public sealed class OverlayCanvas : Control
     private double Draw(DrawingContext? ctx, double width)
     {
         bool showRows = _expanded && _rows.Count > 0;
-        bool showUsage = showRows && _usageEnabled; // strip only appears alongside the expanded rows
+        bool showSys = showRows && _showSystemMetrics;   // machine CPU/RAM strip, just under the header
+        bool showUsage = showRows && _usageEnabled;      // rate-limit bars, below the metrics strip
 
         double height = HeaderHeight;
         if (showRows)
         {
-            if (showUsage) height += UsageStripHeight; // usage bars sit between the header and the rows
+            if (showSys) height += SysMetricsStripHeight;
+            if (showUsage) height += UsageStripHeight;
             foreach (var r in _rows) height += HeightOf(r);
             height += 2;
         }
@@ -254,11 +297,13 @@ public sealed class OverlayCanvas : Control
             OverlayDraw.Panel(ctx, new Rect(0.5, 0.5, width - 1, height - 1), BgBrush, BorderPen, Corner);
             DrawHeader(ctx, width);
 
+            if (showSys) DrawSystemMetricsStrip(ctx, width);
             if (showUsage) DrawUsageBars(ctx, width);
 
             if (showRows)
             {
-                double top = HeaderHeight + (showUsage ? UsageStripHeight : 0);
+                double top = HeaderHeight + (showSys ? SysMetricsStripHeight : 0)
+                                          + (showUsage ? UsageStripHeight : 0);
                 foreach (var r in _rows)
                 {
                     if (r.IsSectionHeader) DrawSectionHeaderRow(ctx, r, top, width);
@@ -363,11 +408,38 @@ public sealed class OverlayCanvas : Control
         }
     }
 
+    // ── System metrics strip ─────────────────────────────────────────────────
+    // Two bars just under the header: whole-machine CPU and physical-RAM load, drawn with the same
+    // shared renderer as the usage bars so the two strips read alike. The percentage doubles as the
+    // fill and is coloured by load (green → red). Shows em-dashes until the first real sample lands
+    // (CPU needs two samples to produce a reading).
+    private void DrawSystemMetricsStrip(DrawingContext ctx, double width)
+    {
+        bool has = _sysMetrics.HasData;
+        double top = HeaderHeight + 2;
+        DrawSysBar(ctx, width, top,                "CPU", has ? _sysMetrics.CpuPercent : null);
+        DrawSysBar(ctx, width, top + BarRowHeight, "RAM", has ? _sysMetrics.RamPercent : null);
+
+        // A thin grey rule separating the system strip from the usage strip below — only when the usage
+        // strip is there to divide from. Floated a few px above the boundary so the clearance reads even.
+        if (_usageEnabled)
+        {
+            double sepY = UsageStripTop - 4;
+            ctx.DrawLine(new Pen(new SolidColorBrush(SepColor), 1),
+                new Point(HorizPad, sepY), new Point(width - HorizPad, sepY));
+        }
+    }
+
+    private void DrawSysBar(DrawingContext ctx, double width, double rowTop, string caption, double? percent) =>
+        UsageBarRenderer.Draw(ctx, HorizPad, width - HorizPad, rowTop + BarRowHeight / 2,
+            caption, percent, expectedPct: null, stale: false, 10, 10,
+            MutedColor, UsageTrackColor, ExpectedMarkColor, BgColor,
+            captionW: 46, pctW: 34, trackH: 7);
+
     // ── Usage bars ─────────────────────────────────────────────────────────────
-    // Two bars below the header when expanded: the 5-hour ("Session") and 7-day ("Weekly") rate-limit
-    // windows. Dimmed when the reading is stale/unavailable. (The system-metrics strip, when added in
-    // 4.9, pushes this down — hence the UsageStripTop seam.)
-    private double UsageStripTop => HeaderHeight;
+    // Two bars below the header (or the metrics strip, when shown) when expanded: the 5-hour ("Session")
+    // and 7-day ("Weekly") rate-limit windows. Dimmed when the reading is stale/unavailable.
+    private double UsageStripTop => HeaderHeight + (_showSystemMetrics ? SysMetricsStripHeight : 0);
 
     private void DrawUsageBars(DrawingContext ctx, double width)
     {
@@ -462,7 +534,9 @@ public sealed class OverlayCanvas : Control
         string taskLabel = hasTasks ? $"{session.CompletedTaskCount}/{session.Tasks.Count}" : "";
         double taskW = hasTasks ? OverlayDraw.MeasureWidth(taskLabel, StatusSize) + 8 : 0;
 
-        const double metricsW = 0; // 4.9
+        _sessionMetrics.TryGetValue(session.Pid, out var sessMetrics);
+        bool showMetrics = _showSessionMetrics && sessMetrics.ProcessCount > 0;
+        double metricsW = showMetrics ? MetricsBarWidth : 0;
 
         bool showBurn = _showBurnRate && running && session.BurnRate is > 0;
         string burnLabel = showBurn ? StatsFormat.Tokens((long)session.BurnRate!.Value) + "/m" : "";
@@ -517,6 +591,11 @@ public sealed class OverlayCanvas : Control
             bool allDone = session.CompletedTaskCount == session.Tasks.Count;
             OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(taskLabel, StatusSize, allDone ? RunningBrush : MutedBrush),
                 taskX, nameMidY);
+        }
+        if (showMetrics)
+        {
+            double metricsX = statusX - thermoW - badgeW - taskW - metricsW;
+            DrawMetricsBars(ctx, sessMetrics, metricsX, nameMidY);
         }
         if (showBurn)
         {
@@ -819,6 +898,35 @@ public sealed class OverlayCanvas : Control
             }
             ctx.DrawGeometry(brush, null, g);
         }
+    }
+
+    // A session's rolled-up resource use as two stacked micro-bars — CPU on top, RAM below — each filled
+    // proportionally and coloured by load (green → red via Palette.UsageColor). CPU is a percentage of
+    // the whole machine; RAM is drawn against total physical RAM (the same denominator as the strip's
+    // RAM bar), so a row's bars are directly comparable to the machine total. x is the left edge of the
+    // reserved MetricsBarWidth; midY is the row's name-line centre.
+    private void DrawMetricsBars(DrawingContext ctx, SessionMetrics m, double x, double midY)
+    {
+        const double barH = 3;
+        double barW = MetricsBarWidth - 4; // small inset within the reserved width
+        double cpuY = midY - 4;            // top bar just above centre  (WinForms: midY − gap/2 − barH)
+        double ramY = midY + 1;            // bottom bar just below       (WinForms: midY + (gap+1)/2)
+
+        double cpuPct = Math.Clamp(m.CpuPercent, 0, 100);
+        double ramPct = _sysMetrics.TotalRamBytes > 0
+            ? Math.Clamp(100.0 * m.RamBytes / _sysMetrics.TotalRamBytes, 0, 100)
+            : 0;
+
+        DrawMiniBar(ctx, x, cpuY, barW, barH, cpuPct);
+        DrawMiniBar(ctx, x, ramY, barW, barH, ramPct);
+    }
+
+    private static void DrawMiniBar(DrawingContext ctx, double x, double y, double w, double h, double pct)
+    {
+        OverlayDraw.Pill(ctx, new SolidColorBrush(UsageTrackColor), new Rect(x, y, w, h));
+        double fillW = Math.Round(w * pct / 100.0);
+        if (fillW > 0)
+            OverlayDraw.Pill(ctx, new SolidColorBrush(Palette.UsageColor(pct)), new Rect(x, y, fillW, h));
     }
 
     private static Bitmap? LoadBrand()

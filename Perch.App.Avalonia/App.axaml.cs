@@ -18,6 +18,7 @@ public partial class App : Application
 {
     private SessionMonitorHost? _monitorHost;
     private UsageMonitorHost? _usageHost;
+    private MetricsMonitorHost? _metricsHost;
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
 
@@ -28,17 +29,34 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown; // tray app — outlives its windows
-            desktop.ShutdownRequested += (_, _) => { _monitorHost?.Dispose(); _usageHost?.Dispose(); };
+            desktop.ShutdownRequested += (_, _) =>
+            {
+                _monitorHost?.Dispose();
+                _usageHost?.Dispose();
+                _metricsHost?.Dispose();
+            };
 
             SetUpTray(desktop);
 
-            // Live overlay + the data pipelines that feed it. Both hosts deliver on the UI thread, so
+            // Live overlay + the data pipelines that feed it. Every host delivers on the UI thread, so
             // feeding the owner-drawn canvas from their callbacks is UI-thread-safe.
             _overlay = new LiveOverlayWindow();
-            _monitorHost = new SessionMonitorHost(_overlay.Canvas.Update);
             _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage);
+            _metricsHost = new MetricsMonitorHost(PlatformServices.SystemMetrics,
+                _overlay.Canvas.UpdateSystemMetrics, _overlay.Canvas.UpdateSessionMetrics);
+
+            // Each scan feeds both the canvas and the metrics sampler (which pids to measure).
+            _monitorHost = new SessionMonitorHost(sessions =>
+            {
+                _overlay!.Canvas.Update(sessions);
+                _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
+            });
+
             _overlay.Show();
-            _monitorHost.Start(); // initial scan (we're on the UI thread here)
+            // Sampling defaults for the port (4.17 drives these from Settings): both strips on, rolled
+            // up over each session's process tree.
+            _metricsHost.Configure(system: true, perSession: true, subprocess: true);
+            _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
             _usageHost.Start();   // initial usage fetch (polls every 5 min thereafter)
         }
         base.OnFrameworkInitializationCompleted();

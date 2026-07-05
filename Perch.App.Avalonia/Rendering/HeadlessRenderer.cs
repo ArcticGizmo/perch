@@ -29,6 +29,12 @@ internal static class HeadlessRenderer
         var canvas = new OverlayCanvas();
         canvas.Update(SampleSessions());
         canvas.UpdateUsage(SampleUsage());
+        canvas.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));
+        canvas.UpdateSessionMetrics(new Dictionary<string, SessionMetrics>
+        {
+            ["1234"] = new(CpuPercent: 24.0, RamBytes: 1_800_000_000, ProcessCount: 5),
+            ["7788"] = new(CpuPercent: 8.0,  RamBytes: 600_000_000,   ProcessCount: 2),
+        });
 
         RenderControl(canvas, Path.Combine(outDir, "overlay_1x.png"), 96);
         RenderControl(canvas, Path.Combine(outDir, "overlay_1.5x.png"), 144);
