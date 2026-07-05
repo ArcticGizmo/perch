@@ -39,9 +39,9 @@ internal static class Program
 
         VelopackApp
             .Build()
-            .OnAfterInstallFastCallback(_ => PathRegistration.Register())
-            .OnAfterUpdateFastCallback(_ => PathRegistration.Register())
-            .OnBeforeUninstallFastCallback(_ => PathRegistration.Unregister())
+            .OnAfterInstallFastCallback(_ => PlatformServices.PathInstaller.Register())
+            .OnAfterUpdateFastCallback(_ => PlatformServices.PathInstaller.Register())
+            .OnBeforeUninstallFastCallback(_ => PlatformServices.PathInstaller.Unregister())
             // First launch after an install: flag it so the tray auto-installs the Claude Code
             // plugin. Done here (not in a fast callback) because installing it is a slow network
             // op that needs the running app — and a tray icon — to show progress.

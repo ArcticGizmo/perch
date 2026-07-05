@@ -4,6 +4,7 @@ using Velopack;
 using Velopack.Sources;
 
 using Perch.Data;
+using Perch.Platform;
 namespace Perch.App;
 
 internal sealed class OverlayApplicationContext : ApplicationContext
@@ -63,7 +64,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _updateItem;
 
     // Tracks workstation lock state so the AFK override can push any session's alert while locked.
-    private readonly LockMonitor _lockMonitor = new();
+    private readonly ISessionLock _lockMonitor = PlatformServices.CreateSessionLock();
 
     // The settings window, lazily created on first open and reused while it stays open.
     private SettingsForm? _settingsForm;
@@ -124,7 +125,7 @@ internal sealed class OverlayApplicationContext : ApplicationContext
         _notifyIcon.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) OpenSettings(); };
         _notifyIcon.BalloonTipClicked += OnBalloonTipClicked;
 
-        _notifications = new NotificationService(_notifyIcon, _settings, _lockMonitor);
+        _notifications = new NotificationService(_notifyIcon, _settings, _lockMonitor, PlatformServices.AudioCue);
 
         var trayMenu = new ContextMenuStrip();
 

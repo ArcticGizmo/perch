@@ -16,4 +16,11 @@
   <ItemGroup>
     <ProjectReference Include="..\Perch.Core\Perch.Core.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- Windows-desktop APIs used without pulling in WinForms/WPF: SystemSounds (chimes) and
+         SessionSwitch (session lock/unlock). These compat packages ship the Windows-only surface. -->
+    <PackageReference Include="System.Windows.Extensions" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Win32.SystemEvents" Version="10.0.9" />
+  </ItemGroup>
 </Project>

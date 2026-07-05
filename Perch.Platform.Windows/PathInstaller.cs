@@ -1,15 +1,17 @@
 using System.Runtime.InteropServices;
+using Perch.Platform;
 
-namespace Perch.App;
+namespace Perch.Platform.Windows;
 
 /// <summary>
-/// Adds (and removes) the install directory to the per-user PATH so the perch plugin — and the
-/// user — can invoke <c>perch</c> from any terminal. Per-user PATH needs no elevation. Run from
-/// Velopack's install/update/uninstall hooks; existing shells must be restarted to see the change.
+/// Windows <see cref="IPathInstaller"/>: adds (and removes) the install directory to the per-user PATH
+/// so the perch plugin — and the user — can invoke <c>perch</c> from any terminal. Per-user PATH needs
+/// no elevation. Run from the installer's install/update/uninstall hooks; existing shells must be
+/// restarted to see the change. (Moved from the WinForms app's PathRegistration.)
 /// </summary>
-internal static class PathRegistration
+public sealed class PathInstaller : IPathInstaller
 {
-    public static void Register()
+    public void Register()
     {
         var dir = InstallDir();
         var current = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User) ?? "";
@@ -20,7 +22,7 @@ internal static class PathRegistration
         Broadcast();
     }
 
-    public static void Unregister()
+    public void Unregister()
     {
         var dir = InstallDir();
         var current = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User);

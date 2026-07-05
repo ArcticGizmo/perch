@@ -1,4 +1,5 @@
 using Perch.Data;
+using Perch.Platform;
 namespace Perch.App;
 
 /// <summary>
@@ -15,13 +16,15 @@ internal sealed class NotificationService
 {
     private readonly NotifyIcon _icon;
     private readonly AppSettings _settings;
-    private readonly LockMonitor _lock;
+    private readonly ISessionLock _lock;
+    private readonly IAudioCue _audioCue;
 
-    public NotificationService(NotifyIcon icon, AppSettings settings, LockMonitor lockMonitor)
+    public NotificationService(NotifyIcon icon, AppSettings settings, ISessionLock sessionLock, IAudioCue audioCue)
     {
         _icon = icon;
         _settings = settings;
-        _lock = lockMonitor;
+        _lock = sessionLock;
+        _audioCue = audioCue;
     }
 
     /// <summary>PID of the session whose balloon was shown last (null for a non-session info balloon),
@@ -42,7 +45,7 @@ internal sealed class NotificationService
             ShowSessionBalloon(kind, session.DisplayName, session.Pid);
 
         if (_settings.NotificationsEnabled && ChimeEnabled(kind))
-            PlayChime(kind);
+            _audioCue.Play(kind);
 
         MaybeSendExternal(kind, session);
     }
@@ -60,7 +63,7 @@ internal sealed class NotificationService
     public void ShowTest(NotificationKind kind)
     {
         ShowSessionBalloon(kind, "example-project", null);
-        PlayChime(kind);
+        _audioCue.Play(kind);
     }
 
     // Shows the desktop balloon for a session notification. A null pid means there's no real session
@@ -83,23 +86,6 @@ internal sealed class NotificationService
                 break;
         }
         _icon.ShowBalloonTip(8000);
-    }
-
-    // Plays the built-in Windows system chime matching a notification type. Asterisk is the soft
-    // "information" tone (Done); Exclamation is the sharper "attention" tone (WaitingForInput). Both
-    // are fire-and-forget and honour the user's per-event sound scheme in Windows. External (ntfy)
-    // pushes deliberately never reach here — sound is a local-desktop affordance only.
-    private static void PlayChime(NotificationKind kind)
-    {
-        switch (kind)
-        {
-            case NotificationKind.Done:
-                System.Media.SystemSounds.Asterisk.Play();
-                break;
-            case NotificationKind.WaitingForInput:
-                System.Media.SystemSounds.Exclamation.Play();
-                break;
-        }
     }
 
     // Pushes an external notification for a session, but only when the feature is on and that session
