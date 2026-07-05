@@ -17,10 +17,12 @@ internal static class Program
     public static bool IsFirstRun { get; private set; }
 
     // Per-user-session name: only one tray runs per desktop login. The Windows "Local\" session
-    // namespace prefix isn't valid off Windows, so use a plain name there. (The port's side-by-side
-    // "_Avalonia" mutex is gone now that Avalonia is the one and only Perch.)
+    // namespace prefix isn't valid off Windows, so use a plain name there. A dev instance gets its own
+    // name (see AppProfile) so it can run alongside an installed Perch instead of no-op'ing against its
+    // mutex. (The port's side-by-side "_Avalonia" mutex is gone now that Avalonia is the one and only Perch.)
     private static readonly string SingleInstanceMutexName =
-        OperatingSystem.IsWindows() ? @"Local\Perch_SingleInstance" : "Perch_SingleInstance";
+        (OperatingSystem.IsWindows() ? @"Local\Perch_SingleInstance" : "Perch_SingleInstance")
+        + (Perch.Data.AppProfile.IsDev ? "_Dev" : "");
     private static Mutex? _instanceMutex;
 
     // STA for shell/clipboard/COM interop parity with the WinForms app.

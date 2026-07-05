@@ -5,9 +5,10 @@ using System.Text.Json.Serialization;
 
 internal sealed class AppSettings
 {
+    // Per-profile so a dev instance doesn't read/write the installed Perch's settings (see AppProfile).
     private static readonly string FilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "Perch", "settings.json");
+        AppProfile.DataFolderName, "settings.json");
 
     // Whether to show (and fetch, via the OAuth /usage endpoint) the session/weekly usage bars.
     // Defaults to true; a missing key in an older settings file keeps this default.

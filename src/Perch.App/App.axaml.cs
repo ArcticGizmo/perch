@@ -463,7 +463,8 @@ public partial class App : Application
         var icon = new WindowIcon(AssetLoader.Open(new Uri("avares://perch/Assets/icon.ico")));
 
         // Read-only version indicator (dense mode is still toggled via the global hotkey Alt+Shift+W).
-        var versionItem = new NativeMenuItem($"Perch - {AppInfo.Version}") { IsEnabled = false };
+        // The (Dev) suffix marks an isolated development instance running alongside an installed Perch.
+        var versionItem = new NativeMenuItem($"Perch{AppProfile.DisplaySuffix} - {AppInfo.Version}") { IsEnabled = false };
 
         var settingsItem = new NativeMenuItem("Settings…");
         settingsItem.Click += (_, _) => OpenSettings();
@@ -492,7 +493,7 @@ public partial class App : Application
         var tray = new TrayIcon
         {
             Icon = icon,
-            ToolTipText = "Perch",
+            ToolTipText = $"Perch{AppProfile.DisplaySuffix}",
             Menu = new NativeMenu
             {
                 versionItem,
