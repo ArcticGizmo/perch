@@ -31,9 +31,10 @@ public partial class App : Application
     private AppSettings? _appSettings;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
 
-    // Notifications: the owner-drawn toast notifier + the toolkit-neutral dispatcher over it, plus the
-    // session-lock seam the dispatcher reads for the AFK-lock external override.
-    private Notifications.AvaloniaToastNotifier? _notifier;
+    // Notifications: the notifier (real Windows Action Center toasts, or the owner-drawn fallback off
+    // Windows) + the toolkit-neutral dispatcher over it, plus the session-lock seam the dispatcher reads
+    // for the AFK-lock external override.
+    private INotifier? _notifier;
     private NotificationService? _notifications;
     private ISessionLock? _sessionLock;
 
@@ -123,11 +124,14 @@ public partial class App : Application
             _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider);
             _overlay.Canvas.QuickLinkActivated += _quickLinkLauncher.LaunchOrFocus;
 
-            // Notifications: the toast notifier shows on the overlay's current screen; the dispatcher gates
-            // toast/chime/external per settings. A toast click focuses that terminal and acknowledges it.
+            // Notifications: real Windows Action Center toasts (owner-drawn fallback off Windows); the
+            // dispatcher gates toast/chime/external per settings. A toast click focuses that terminal and
+            // acknowledges it.
             _sessionLock = PlatformServices.CreateSessionLock();
-            _notifier = new Notifications.AvaloniaToastNotifier(
-                () => _overlay is null ? null : _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary);
+            _notifier = OperatingSystem.IsWindows()
+                ? new Notifications.WindowsToastNotifier()
+                : new Notifications.AvaloniaToastNotifier(
+                    () => _overlay is null ? null : _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary);
             _notifier.SessionActivated += OnToastActivated;
             _notifications = new NotificationService(_notifier, settings, _sessionLock, PlatformServices.AudioCue);
 

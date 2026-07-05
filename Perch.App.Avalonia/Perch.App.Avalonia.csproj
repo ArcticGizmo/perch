@@ -6,7 +6,9 @@
   -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- Windows-10 TFM so the UWP notifications compat shim (real Action Center toasts) can project the
+         Windows.UI.Notifications APIs for this unpackaged Win32 app. Phase 7 splits a per-OS head. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Perch.Avalonia</RootNamespace>
@@ -36,6 +38,9 @@
     <!-- Markdown parsing for the readable transcript view (HistoryWindow) — AST only; rendered to
          Avalonia inlines by MarkdownRender. -->
     <PackageReference Include="Markdig" Version="1.3.2" />
+    <!-- Real Windows Action Center toasts for the (unpackaged) app: ToastContentBuilder +
+         ToastNotificationManagerCompat auto-register an AppUserModelId + COM activator on first use. -->
+    <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" />
     <!-- Headless + Skia: the `render` mode dumps views to PNG for visual verification without a
          display. A standing harness reused across the UI-port phases. -->
     <PackageReference Include="Avalonia.Headless" Version="12.0.5" />
