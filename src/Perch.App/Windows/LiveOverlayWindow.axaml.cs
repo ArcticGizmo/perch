@@ -65,8 +65,8 @@ public partial class LiveOverlayWindow : Window
         }
 
         // No Alt+Tab entry and never take activation (showing must not steal focus from the terminal).
-        if (OperatingSystem.IsWindows() && TryGetPlatformHandle() is { } handle)
-            Perch.Platform.Windows.OverlayNativeChrome.MakeToolWindowNoActivate(handle.Handle);
+        if (TryGetPlatformHandle() is { } handle)
+            PlatformServices.WindowChrome.MakeToolWindowNoActivate(handle.Handle);
     }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);

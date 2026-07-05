@@ -106,8 +106,8 @@ public sealed class GlowWindow : Window, IAmbientGlow
 
     private void MakeClickThrough()
     {
-        if (OperatingSystem.IsWindows() && TryGetPlatformHandle() is { } h)
-            Perch.Platform.Windows.OverlayNativeChrome.MakeClickThroughNoActivate(h.Handle);
+        if (TryGetPlatformHandle() is { } h)
+            PlatformServices.WindowChrome.MakeClickThroughNoActivate(h.Handle);
     }
 
     // Builds the edge-glow bitmap: a pixel's alpha falls off quadratically with its distance from the

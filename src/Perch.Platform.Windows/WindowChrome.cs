@@ -1,14 +1,16 @@
 using System.Runtime.InteropServices;
+using Perch.Platform;
 
 namespace Perch.Platform.Windows;
 
 /// <summary>
-/// Applies the overlay window's Win32 extended styles that Avalonia doesn't expose directly: a tool
-/// window (no Alt+Tab entry) that never takes activation (so showing it never steals focus from the
-/// terminal the user is typing in). The WinForms overlay got the tool-window bit from
-/// <c>CreateParams</c>; here we set both bits on the window handle once it exists.
+/// Windows <see cref="IWindowChrome"/>: applies the overlay windows' Win32 extended styles that Avalonia
+/// doesn't expose directly. A tool window (no Alt+Tab entry) that never takes activation (so showing it
+/// never steals focus from the terminal the user is typing in), plus a click-through variant for the
+/// ambient overlays (confetti, glow, dense drop-zone). The WinForms overlay got the tool-window bit from
+/// <c>CreateParams</c>; here we set the bits on the window handle once it exists.
 /// </summary>
-public static class OverlayNativeChrome
+public sealed class WindowChrome : IWindowChrome
 {
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW  = 0x00000080;
@@ -23,11 +25,11 @@ public static class OverlayNativeChrome
     private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
 
     /// <summary>Marks the window as a no-activate tool window. Best-effort; a zero handle is ignored.</summary>
-    public static void MakeToolWindowNoActivate(IntPtr hWnd)
+    public void MakeToolWindowNoActivate(IntPtr handle)
     {
-        if (hWnd == IntPtr.Zero) return;
-        int ex = GetWindowLong(hWnd, GWL_EXSTYLE);
-        SetWindowLong(hWnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+        if (handle == IntPtr.Zero) return;
+        int ex = GetWindowLong(handle, GWL_EXSTYLE);
+        SetWindowLong(handle, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
     }
 
     /// <summary>Marks the window click-through (transparent to mouse), plus tool-window + no-activate —
@@ -41,10 +43,10 @@ public static class OverlayNativeChrome
     /// not disturb the DirectComposition per-pixel content (verified: the glow still renders), and no
     /// <c>SetLayeredWindowAttributes</c> call is needed — the compositor supplies the alpha.
     /// </para></summary>
-    public static void MakeClickThroughNoActivate(IntPtr hWnd)
+    public void MakeClickThroughNoActivate(IntPtr handle)
     {
-        if (hWnd == IntPtr.Zero) return;
-        int ex = GetWindowLong(hWnd, GWL_EXSTYLE);
-        SetWindowLong(hWnd, GWL_EXSTYLE, ex | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+        if (handle == IntPtr.Zero) return;
+        int ex = GetWindowLong(handle, GWL_EXSTYLE);
+        SetWindowLong(handle, GWL_EXSTYLE, ex | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
     }
 }

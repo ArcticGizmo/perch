@@ -90,8 +90,8 @@ internal sealed class ToastHostWindow : Window
         base.OnOpened(e);
         // Tool-window + no-activate so it stays out of Alt+Tab and never takes focus. NOT click-through:
         // the cards must receive clicks.
-        if (OperatingSystem.IsWindows() && TryGetPlatformHandle() is { } h)
-            Perch.Platform.Windows.OverlayNativeChrome.MakeToolWindowNoActivate(h.Handle);
+        if (TryGetPlatformHandle() is { } h)
+            PlatformServices.WindowChrome.MakeToolWindowNoActivate(h.Handle);
     }
 
     public void AddToast(string title, string body, ToastLevel level, string? pid, string? project)

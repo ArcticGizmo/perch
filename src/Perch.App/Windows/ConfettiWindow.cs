@@ -56,8 +56,8 @@ public sealed class ConfettiWindow : Window
 
     private void MakeClickThrough()
     {
-        if (OperatingSystem.IsWindows() && TryGetPlatformHandle() is { } h)
-            Perch.Platform.Windows.OverlayNativeChrome.MakeClickThroughNoActivate(h.Handle);
+        if (TryGetPlatformHandle() is { } h)
+            PlatformServices.WindowChrome.MakeClickThroughNoActivate(h.Handle);
     }
 }
 

@@ -68,8 +68,8 @@ internal sealed class DenseDropZoneWindow : Window
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
-        if (OperatingSystem.IsWindows() && TryGetPlatformHandle() is { } h)
-            Perch.Platform.Windows.OverlayNativeChrome.MakeClickThroughNoActivate(h.Handle);
+        if (TryGetPlatformHandle() is { } h)
+            PlatformServices.WindowChrome.MakeClickThroughNoActivate(h.Handle);
     }
 
     // Owner-drawn lane: a dashed inner border plus a centred pin glyph (arrow into a pipe) hinting the
