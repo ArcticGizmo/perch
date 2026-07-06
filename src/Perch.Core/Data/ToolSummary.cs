@@ -52,7 +52,11 @@ internal static class ToolSummary
             return "file";
         try
         {
-            var name = Path.GetFileName(path.TrimEnd('/', '\\'));
+            // Split on both separators, not Path.GetFileName: transcripts carry paths from whatever OS
+            // wrote them, so a Windows path (C:\a\Foo.cs) must resolve to its leaf on a macOS/Linux host too.
+            var trimmed = path.TrimEnd('/', '\\');
+            int cut = trimmed.LastIndexOfAny(['/', '\\']);
+            var name = cut >= 0 ? trimmed[(cut + 1)..] : trimmed;
             return string.IsNullOrEmpty(name) ? Clip(path) : name;
         }
         catch

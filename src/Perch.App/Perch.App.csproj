@@ -4,8 +4,12 @@
          toasts via the UWP notifications compat shim, so it needs the Windows-10 TFM. The cross-platform
          head (plain net10.0) serves macOS/Linux and reaches native APIs through Perch.Platform.Mac's
          P/Invoke. The item groups below fork the OutputType, manifest/icon, packages and platform
-         project reference per TFM; PlatformServices selects the implementation set with #if WINDOWS. -->
-          <TargetFrameworks>net10.0-windows10.0.19041.0;net10.0</TargetFrameworks>
+         project reference per TFM; PlatformServices selects the implementation set with #if WINDOWS.
+         The Windows head only builds on a Windows host (its reference packs need EnableWindowsTargeting
+         off-Windows); on macOS/Linux we build the cross-platform head alone, so `dotnet build`/`run`
+         work with no extra flags. CI/publish runs on windows-latest and gets both. -->
+          <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('Windows'))">net10.0-windows10.0.19041.0;net10.0</TargetFrameworks>
+          <TargetFrameworks Condition="!$([MSBuild]::IsOSPlatform('Windows'))">net10.0</TargetFrameworks>
           <Nullable>enable</Nullable>
           <ImplicitUsings>enable</ImplicitUsings>
           <RootNamespace>Perch.Avalonia</RootNamespace>

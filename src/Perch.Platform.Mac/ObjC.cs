@@ -44,6 +44,11 @@ internal static class ObjC
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern nint SendNint(IntPtr receiver, IntPtr selector);
 
+    /// <summary>BOOL (*)(id, SEL, SEL/id) — a message send taking one pointer arg and returning a Darwin
+    /// BOOL (1-byte signed char), e.g. -respondsToSelector: / -isKindOfClass:. Returns non-zero for YES.</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    public static extern byte SendBool(IntPtr receiver, IntPtr selector, IntPtr arg);
+
     /// <summary>void (*)(id, SEL) — a no-argument message send returning nothing (e.g. -orderFrontRegardless).</summary>
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern void SendVoid(IntPtr receiver, IntPtr selector);

@@ -35,13 +35,17 @@ Multi-project solution (`perch.slnx`); the projects live under `src/`:
 ## Build & run
 
 - Build: `dotnet build perch.slnx` (or just the head: `dotnet build src/Perch.App/Perch.App.csproj`).
-  The head multi-targets, so a build compiles **both** heads: the Windows head
-  (`net10.0-windows10.0.19041.0`) and the cross-platform head (plain `net10.0`, used for macOS).
-- Run (dev): `dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0` — the `-f` is required
-  now that the head multi-targets (Windows is the head to run on Windows).
-- **Headless render (UI verification):** `dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0 -- render <outDir>` dumps
-  every owner-drawn surface to PNG at 1× and 1.5× via `HeadlessRenderer` — the standing way to eyeball UI
-  changes without a display. Use it when touching any owner-drawn control.
+  On **Windows** the head multi-targets, so a build compiles **both** heads: the Windows head
+  (`net10.0-windows10.0.19041.0`) and the cross-platform head (plain `net10.0`, used for macOS). On
+  **macOS/Linux** the csproj drops the Windows TFM (its reference packs need a Windows host), so the head
+  builds as the single `net10.0` cross-platform head — plain `dotnet build`/`run`/`test`, no `-f` or flags.
+- Run (dev): on Windows `dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0` — the `-f` is
+  required there because the head multi-targets. On macOS just `dotnet run --project src/Perch.App` (only
+  the `net10.0` head exists on that host).
+- **Headless render (UI verification):** `dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0 -- render <outDir>`
+  (Windows) or `dotnet run --project src/Perch.App -- render <outDir>` (macOS) dumps every owner-drawn
+  surface to PNG at 1× and 1.5× via `HeadlessRenderer` — the standing way to eyeball UI changes without a
+  display. Use it when touching any owner-drawn control.
 - Release artifacts: Velopack (`vpk`) via `publish.bat`, or the `v*`-tag GitHub Actions workflow
   (`.github/workflows/release.yml`) — see `README.md`. Bump `<Version>` in
   `src/Perch.App/Perch.App.csproj`.

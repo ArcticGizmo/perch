@@ -466,9 +466,7 @@ internal sealed class SessionMonitor : IDisposable
 
             var projectName = string.IsNullOrEmpty(cwd)
                 ? sessionId[..Math.Min(8, sessionId.Length)]
-                : Path.GetFileName(
-                    cwd.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                );
+                : PathLeaf.Of(cwd);
 
             var mode = ReadPermissionMode(Path.Combine(_sessionsDir, $"{sessionId}.mode"));
 

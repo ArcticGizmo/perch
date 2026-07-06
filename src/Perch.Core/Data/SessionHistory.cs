@@ -427,7 +427,7 @@ internal static class SessionHistory
         catch { }
 
         string project = !string.IsNullOrEmpty(cwd)
-            ? System.IO.Path.GetFileName(cwd.TrimEnd('/', '\\'))
+            ? PathLeaf.Of(cwd)
             : System.IO.Path.GetFileName(dir);
 
         if (string.IsNullOrEmpty(project))

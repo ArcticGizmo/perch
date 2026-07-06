@@ -127,7 +127,7 @@ internal static class FlightPathService
                 {
                     var cwd = node["cwd"]?.GetValue<string>();
                     if (!string.IsNullOrEmpty(cwd))
-                        project = Path.GetFileName(cwd!.TrimEnd('/', '\\'));
+                        project = PathLeaf.Of(cwd!);
                 }
                 if (branch.Length == 0)
                 {

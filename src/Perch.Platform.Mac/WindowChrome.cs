@@ -9,13 +9,18 @@ namespace Perch.Platform.Mac;
 /// Cmd-` window cycling — set via <c>collectionBehavior</c> and the window <c>level</c>. Click-through
 /// (for the ambient glow/confetti overlays) maps to <c>setIgnoresMouseEvents:</c>.
 ///
-/// Avalonia's platform handle for a window on macOS is its top-level <c>NSView</c>; the <c>NSWindow</c> is
-/// <c>[view window]</c>. All the sends here are void setters taking a primitive — no struct returns — so
-/// they work identically on arm64 and x86_64.
+/// Avalonia's platform handle for a window on macOS is the <c>NSWindow</c> itself (its native window class
+/// is <c>AvnWindow</c>, an <c>NSWindow</c> subclass) — <em>not</em> the top-level <c>NSView</c> as the AppKit
+/// docs' usual "[view window]" idiom would suggest. <see cref="WindowOf"/> tolerates either: an NSView
+/// responds to <c>-window</c> and an NSWindow does not, so we branch on that. Getting this wrong is fatal,
+/// not best-effort: an <c>unrecognized selector</c> raises an Objective-C <c>NSException</c> that unwinds
+/// through the P/Invoke boundary and terminates the process — a managed <c>try/catch</c> does not stop it.
+/// All the sends here are void setters taking a primitive — no struct returns — so they work identically on
+/// arm64 and x86_64.
 ///
-/// NOTE (Phase 3): written against the AppKit docs but not yet verified on a Mac. If Avalonia ends up
-/// managing the window level itself and fights this, drop the <c>setLevel:</c> line (Topmost already
-/// elevates the window) and keep the collection-behaviour / click-through bits.
+/// NOTE (verified on macOS arm64): if Avalonia ends up managing the window level itself and fights this,
+/// drop the <c>setLevel:</c> line (Topmost already elevates the window) and keep the collection-behaviour /
+/// click-through bits.
 /// </summary>
 public sealed class WindowChrome : IWindowChrome
 {
@@ -34,23 +39,21 @@ public sealed class WindowChrome : IWindowChrome
 
     /// <summary>Lifts the window to the front of its level without activating it, so a hint shows above
     /// the overlay. <c>orderFrontRegardless</c> raises a window without making it key/main. Best-effort.</summary>
-    public void BringToTopNoActivate(IntPtr nsView)
+    public void BringToTopNoActivate(IntPtr handle)
     {
-        if (nsView == IntPtr.Zero) return;
         try
         {
-            IntPtr window = ObjC.SendGet(nsView, ObjC.Sel("window"));
+            IntPtr window = WindowOf(handle);
             if (window != IntPtr.Zero) ObjC.SendVoid(window, ObjC.Sel("orderFrontRegardless"));
         }
         catch { /* best-effort */ }
     }
 
-    private static void Configure(IntPtr nsView, bool clickThrough)
+    private static void Configure(IntPtr handle, bool clickThrough)
     {
-        if (nsView == IntPtr.Zero) return;
         try
         {
-            IntPtr window = ObjC.SendGet(nsView, ObjC.Sel("window"));
+            IntPtr window = WindowOf(handle);
             if (window == IntPtr.Zero) return;
 
             ObjC.SendVoid(window, ObjC.Sel("setLevel:"), (nint)NSStatusWindowLevel);
@@ -61,5 +64,16 @@ public sealed class WindowChrome : IWindowChrome
                 ObjC.SendVoid(window, ObjC.Sel("setIgnoresMouseEvents:"), (byte)1);
         }
         catch { /* best-effort: leave Avalonia's defaults if the runtime interop misbehaves */ }
+    }
+
+    // Resolve the NSWindow from Avalonia's platform handle. Avalonia 12 hands back the NSWindow (AvnWindow)
+    // directly, but older paths (and the generic AppKit idiom) hand back the top-level NSView. Only an
+    // NSView responds to -window, so probe for it: view → [view window]; otherwise the handle is the window.
+    private static IntPtr WindowOf(IntPtr handle)
+    {
+        if (handle == IntPtr.Zero) return IntPtr.Zero;
+        IntPtr windowSel = ObjC.Sel("window");
+        bool isView = ObjC.SendBool(handle, ObjC.Sel("respondsToSelector:"), windowSel) != 0;
+        return isView ? ObjC.SendGet(handle, windowSel) : handle;
     }
 }
