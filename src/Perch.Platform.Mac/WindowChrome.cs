@@ -32,6 +32,19 @@ public sealed class WindowChrome : IWindowChrome
     public void MakeToolWindowNoActivate(IntPtr handle) => Configure(handle, clickThrough: false);
     public void MakeClickThroughNoActivate(IntPtr handle) => Configure(handle, clickThrough: true);
 
+    /// <summary>Lifts the window to the front of its level without activating it, so a hint shows above
+    /// the overlay. <c>orderFrontRegardless</c> raises a window without making it key/main. Best-effort.</summary>
+    public void BringToTopNoActivate(IntPtr nsView)
+    {
+        if (nsView == IntPtr.Zero) return;
+        try
+        {
+            IntPtr window = ObjC.SendGet(nsView, ObjC.Sel("window"));
+            if (window != IntPtr.Zero) ObjC.SendVoid(window, ObjC.Sel("orderFrontRegardless"));
+        }
+        catch { /* best-effort */ }
+    }
+
     private static void Configure(IntPtr nsView, bool clickThrough)
     {
         if (nsView == IntPtr.Zero) return;

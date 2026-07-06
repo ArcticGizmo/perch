@@ -15,6 +15,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - A session armed for a "Confetti finish" now shows the promised party-popper glyph on its row, so you can see at a glance which sessions are primed to celebrate.
+- Overlay glyph tooltips (context pressure, stuck warnings, task lists, session metrics) now appear in front of the always-on-top overlay instead of behind it.
+- Tooltip text is vertically centred, so hints read cleanly regardless of the window's exact height.
 
 ---
 

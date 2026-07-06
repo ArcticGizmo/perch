@@ -18,11 +18,20 @@ public sealed class WindowChrome : IWindowChrome
     private const int WS_EX_TRANSPARENT = 0x00000020; // clicks fall through to the window beneath
     private const int WS_EX_LAYERED     = 0x00080000; // required alongside TRANSPARENT for click-through
 
+    private static readonly IntPtr HWND_TOPMOST = new(-1);
+    private const uint SWP_NOSIZE     = 0x0001;
+    private const uint SWP_NOMOVE     = 0x0002;
+    private const uint SWP_NOACTIVATE = 0x0010;
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+        int x, int y, int cx, int cy, uint uFlags);
 
     /// <summary>Marks the window as a no-activate tool window. Best-effort; a zero handle is ignored.</summary>
     public void MakeToolWindowNoActivate(IntPtr handle)
@@ -48,5 +57,14 @@ public sealed class WindowChrome : IWindowChrome
         if (handle == IntPtr.Zero) return;
         int ex = GetWindowLong(handle, GWL_EXSTYLE);
         SetWindowLong(handle, GWL_EXSTYLE, ex | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+    }
+
+    /// <summary>Re-asserts topmost and lifts the window to the top of the topmost band via
+    /// <c>SetWindowPos(HWND_TOPMOST, SWP_NOACTIVATE)</c>, so a hint drawn over another always-on-top
+    /// window (the overlay) is visible rather than buried. Best-effort; a zero handle is ignored.</summary>
+    public void BringToTopNoActivate(IntPtr handle)
+    {
+        if (handle == IntPtr.Zero) return;
+        SetWindowPos(handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 }

@@ -44,6 +44,10 @@ internal static class ObjC
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern nint SendNint(IntPtr receiver, IntPtr selector);
 
+    /// <summary>void (*)(id, SEL) — a no-argument message send returning nothing (e.g. -orderFrontRegardless).</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    public static extern void SendVoid(IntPtr receiver, IntPtr selector);
+
     /// <summary>void (*)(id, SEL, NSInteger).</summary>
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern void SendVoid(IntPtr receiver, IntPtr selector, nint arg);

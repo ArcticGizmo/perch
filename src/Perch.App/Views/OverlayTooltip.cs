@@ -43,6 +43,14 @@ internal sealed class OverlayTooltip : Window
         Content               = _body;
     }
 
+    protected override void OnOpened(EventArgs e)
+    {
+        base.OnOpened(e);
+        // No Alt+Tab entry and never take activation (a hint must not steal focus from the terminal).
+        if (TryGetPlatformHandle() is { } handle)
+            PlatformServices.WindowChrome.MakeToolWindowNoActivate(handle.Handle);
+    }
+
     /// <summary>Shows a single line anchored with its top-left at <paramref name="anchor"/> (screen px).</summary>
     public void ShowText(string text, PixelPoint anchor)
         => ShowLines([new Line(text, FgColor, false)], anchor);
@@ -74,6 +82,12 @@ internal sealed class OverlayTooltip : Window
         }
         Position = new PixelPoint(x, y);
         Show();
+
+        // Both this hint and the overlay are always-on-top; a non-activating Show() alone leaves the hint
+        // buried behind the overlay when it's anchored over it (the glyph tooltips). Lift it to the front
+        // of the topmost band without taking focus so it's actually visible.
+        if (TryGetPlatformHandle() is { } handle)
+            PlatformServices.WindowChrome.BringToTopNoActivate(handle.Handle);
     }
 
     public void HideTip()
@@ -82,7 +96,8 @@ internal sealed class OverlayTooltip : Window
     }
 
     // The owner-drawn content: rounded panel + one DrawText per line, sized from the font line heights.
-    private sealed class Body : Control
+    // Internal (not private) so the headless render harness can eyeball it without opening a window.
+    internal sealed class Body : Control
     {
         private IReadOnlyList<Line> _lines = [];
         public IReadOnlyList<Line> Lines { set => _lines = value; }
@@ -110,10 +125,20 @@ internal sealed class OverlayTooltip : Window
             OverlayDraw.Panel(ctx, r, new SolidColorBrush(BgColor),
                 new Pen(new SolidColorBrush(BorderColor), 1.5), Corner);
 
-            double y = VertPad;
-            foreach (var l in _lines)
+            // Vertically centre the whole text block within our arranged height (rather than anchoring to
+            // the top), so the lines stay centred even if the borderless window is rounded up a pixel or
+            // two taller than the content by DPI scaling.
+            var fts = new FormattedText[_lines.Count];
+            double contentH = 0;
+            for (int i = 0; i < _lines.Count; i++)
             {
-                var ft = Ft(l);
+                fts[i] = Ft(_lines[i]);
+                contentH += fts[i].Height + (i > 0 ? LineGap : 0);
+            }
+
+            double y = Math.Max(VertPad, (Bounds.Height - contentH) / 2);
+            foreach (var ft in fts)
+            {
                 ctx.DrawText(ft, new Point(HorizPad, y));
                 y += ft.Height + LineGap;
             }

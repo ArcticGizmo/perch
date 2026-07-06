@@ -105,6 +105,24 @@ internal static class HeadlessRenderer
         if (wrappedCard.Content is Control card)
             RenderControl(card, Path.Combine(outDir, "wrapped_card_1x.png"), 96);
 
+        // Overlay tooltips: a single-line glyph hint (the context-pressure figure) and the multi-line
+        // usage panel, over the dark backdrop they float on — so the text centering can be eyeballed.
+        var tipSingle = new Views.OverlayTooltip.Body
+        {
+            Lines = [new Views.OverlayTooltip.Line("128k/200k (64%)", Views.OverlayTooltip.FgColor, false)],
+        };
+        RenderOnBackdrop(tipSingle, Path.Combine(outDir, "tooltip_single_1x.png"), Color.FromRgb(40, 40, 52));
+        var tipUsage = new Views.OverlayTooltip.Body
+        {
+            Lines =
+            [
+                new Views.OverlayTooltip.Line("Plan usage", Views.OverlayTooltip.FgColor, true),
+                new Views.OverlayTooltip.Line("Session  62%  ·  resets 3:40pm", Views.OverlayTooltip.FgColor, false),
+                new Views.OverlayTooltip.Line("Weekly   28%  ·  resets Thu", Views.OverlayTooltip.FgColor, false),
+            ],
+        };
+        RenderOnBackdrop(tipUsage, Path.Combine(outDir, "tooltip_usage_1x.png"), Color.FromRgb(40, 40, 52));
+
         // Flight path (5.6): synthetic day with active / waiting / stuck segments across a few lanes.
         var flight = new Views.FlightPathTimeline();
         flight.SetReport(SampleFlightReport());
@@ -165,6 +183,16 @@ internal static class HeadlessRenderer
         var panel = new Panel { Width = 592, Background = new SolidColorBrush(Color.FromRgb(24, 24, 32)) };
         panel.Children.Add(stack);
         return panel;
+    }
+
+    // Renders a control centred on a padded solid backdrop, so a self-contained panel (e.g. a tooltip
+    // that draws its own dark card) can be eyeballed against a contrasting background.
+    private static void RenderOnBackdrop(Control control, string path, Color backdrop)
+    {
+        var panel = new Panel { Background = new SolidColorBrush(backdrop) };
+        control.Margin = new Thickness(20);
+        panel.Children.Add(control);
+        RenderControl(panel, path, 96);
     }
 
     private static void RenderControl(Control control, string path, double dpi)

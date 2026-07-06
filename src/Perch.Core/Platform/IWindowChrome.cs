@@ -21,4 +21,9 @@ public interface IWindowChrome
     /// tool-window — for the ambient overlays that must never intercept input or take focus.
     /// Best-effort; a zero handle is ignored.</summary>
     void MakeClickThroughNoActivate(IntPtr handle);
+
+    /// <summary>Raises the window to the top of the topmost z-order band <em>without</em> activating it,
+    /// so a non-activating tooltip/hint shows above another always-on-top window (e.g. the overlay)
+    /// instead of behind it. Best-effort; a zero handle is ignored.</summary>
+    void BringToTopNoActivate(IntPtr handle);
 }
