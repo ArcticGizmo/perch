@@ -295,20 +295,25 @@ internal sealed class SettingsWindow : Window
     private PerchToggle _expectedRateToggle = null!;
     private Button _usageRefreshBtn = null!;
 
+    // The two display toggles the overlay's right-click menu can also flip, kept as fields so
+    // SyncDisplayToggles can mirror an out-of-band change back into this window.
+    private PerchToggle _usageToggle = null!;
+    private PerchToggle _systemMetricsToggle = null!;
+
     private void BuildUsagePage(StackPanel page)
     {
-        var usageToggle = Toggle(_settings.ShowUsage);
-        usageToggle.CheckedChanged += (_, _) =>
+        _usageToggle = Toggle(_settings.ShowUsage);
+        _usageToggle.CheckedChanged += (_, _) =>
         {
-            _settings.ShowUsage = usageToggle.IsChecked;
+            _settings.ShowUsage = _usageToggle.IsChecked;
             _settings.Save();
             _hooks.DisplayChanged?.Invoke();
-            _hooks.UsageEnabledChanged?.Invoke(usageToggle.IsChecked);
-            _usageRefreshBtn.IsEnabled = usageToggle.IsChecked;
-            _expectedRateToggle.IsEnabled = usageToggle.IsChecked;
-            _usageBars.SetOn(usageToggle.IsChecked);
+            _hooks.UsageEnabledChanged?.Invoke(_usageToggle.IsChecked);
+            _usageRefreshBtn.IsEnabled = _usageToggle.IsChecked;
+            _expectedRateToggle.IsEnabled = _usageToggle.IsChecked;
+            _usageBars.SetOn(_usageToggle.IsChecked);
         };
-        page.Children.Add(SettingsUi.TitleRow("Usage limits", usageToggle));
+        page.Children.Add(SettingsUi.TitleRow("Usage limits", _usageToggle));
         page.Children.Add(SettingsUi.BodyText("Your account-wide 5-hour and weekly rate-limit usage."));
 
         _expectedRateToggle = Toggle(_settings.ShowExpectedUsageRate);
@@ -345,6 +350,19 @@ internal sealed class SettingsWindow : Window
 
     // Keeps the settings usage bars in step with the shared poll while the window is open.
     private void OnUsageUpdated(UsageInfo usage) => _usageBars?.SetUsage(usage);
+
+    /// <summary>Mirrors the usage/system-metrics flags back into their toggles after the overlay's
+    /// right-click menu flips one, so the menu and this window never disagree. Uses the silent setter —
+    /// the App-side handler has already persisted the flag and driven the hosts, so re-firing the toggle
+    /// handlers would be redundant. Safe to call any time the window is open (pages build eagerly).</summary>
+    public void SyncDisplayToggles()
+    {
+        _usageToggle.SetCheckedSilent(_settings.ShowUsage);
+        _usageRefreshBtn.IsEnabled = _settings.ShowUsage;
+        _expectedRateToggle.IsEnabled = _settings.ShowUsage;
+        _usageBars.SetOn(_settings.ShowUsage);
+        _systemMetricsToggle.SetCheckedSilent(_settings.ShowSystemMetrics);
+    }
 
     // ── Indicators ──────────────────────────────────────────────────────────────────
     private void BuildIndicatorsPage(StackPanel page)
@@ -538,15 +556,15 @@ internal sealed class SettingsWindow : Window
 
         page.Children.Add(SettingsUi.Separator());
 
-        var systemToggle = Toggle(_settings.ShowSystemMetrics);
-        systemToggle.CheckedChanged += (_, _) =>
+        _systemMetricsToggle = Toggle(_settings.ShowSystemMetrics);
+        _systemMetricsToggle.CheckedChanged += (_, _) =>
         {
-            _settings.ShowSystemMetrics = systemToggle.IsChecked;
+            _settings.ShowSystemMetrics = _systemMetricsToggle.IsChecked;
             _settings.Save();
             _hooks.DisplayChanged?.Invoke();
             _hooks.MetricsChanged?.Invoke();
         };
-        page.Children.Add(SettingsUi.TitleRow("System metrics", systemToggle));
+        page.Children.Add(SettingsUi.TitleRow("System metrics", _systemMetricsToggle));
         page.Children.Add(SettingsUi.BodyText(
             "A whole-machine CPU and physical-RAM strip at the top of the overlay, above the sessions."));
 

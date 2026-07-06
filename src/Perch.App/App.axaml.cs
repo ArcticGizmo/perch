@@ -372,8 +372,10 @@ public partial class App : Application
     }
 
     // ── Context-menu handlers ─────────────────────────────────────────────────
-    // Toggle the whole-machine metrics strip: persist the choice and apply it live. (4.17 will read the
-    // persisted value back at startup; for now the canvas defaults the strip on.)
+    // Toggle the whole-machine metrics strip from the overlay's right-click menu. This is a full settings
+    // change — the same one the "System metrics" toggle in Settings makes: persist the flag, apply it to
+    // the canvas, reconfigure the sampler (so turning it on actually starts collection and off stops it),
+    // and keep an open Settings window's toggle in step.
     private void SetSystemMetricsEnabled(bool enabled)
     {
         if (_appSettings is null || _overlay is null) return;
@@ -381,9 +383,13 @@ public partial class App : Application
         _appSettings.ShowSystemMetrics = enabled;
         _appSettings.Save();
         _overlay.Canvas.SetShowSystemMetrics(enabled);
+        _metricsHost?.Configure(_appSettings.ShowSystemMetrics, _appSettings.ShowSessionMetrics, _appSettings.IncludeSubprocessMetrics);
+        _settings?.SyncDisplayToggles();
     }
 
-    // Toggle the account-usage strip: persist the choice and apply it live.
+    // Toggle the account-usage strip from the right-click menu — the counterpart of the Settings "Usage
+    // limits" toggle: persist the flag, apply it to the canvas, start/stop the poller (so turning it on
+    // fetches data rather than showing an empty strip), and sync an open Settings window.
     private void SetUsageEnabled(bool enabled)
     {
         if (_appSettings is null || _overlay is null) return;
@@ -391,6 +397,8 @@ public partial class App : Application
         _appSettings.ShowUsage = enabled;
         _appSettings.Save();
         _overlay.Canvas.SetShowUsage(enabled);
+        if (enabled) _usageHost?.Start(); else _usageHost?.Stop();
+        _settings?.SyncDisplayToggles();
     }
 
     // ── Tray / overlay window openers (single reused instances via WindowHost) ─
