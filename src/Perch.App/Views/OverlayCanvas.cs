@@ -52,6 +52,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private const double WarnIconWidth    = 14;
     private const double ThermoIconWidth  = 12;
     private const double ArtifactIconWidth = 16;
+    private const double PartyIconWidth   = 16; // the "confetti finish" party-popper glyph on an armed row
 
     // Font sizes (px ~= the WinForms point sizes).
     private const double NameSize       = 11.5;
@@ -94,6 +95,18 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private static readonly IBrush RunningBrush   = new SolidColorBrush(RunningColor);
     private static readonly IBrush ArtifactBrush  = new SolidColorBrush(Color.FromRgb(251, 191, 36));
     private static readonly IBrush ArtifactHover  = new SolidColorBrush(Color.FromRgb(255, 224, 140));
+
+    // Party-popper glyph: a gold cone spraying a fan of festive confetti dots (shared with the confetti
+    // window's palette so the armed-row hint and the finish burst read as one feature).
+    private static readonly IBrush PartyConeBrush = new SolidColorBrush(Color.FromRgb(255, 190, 70));
+    private static readonly (double dx, double dy, double r, IBrush brush)[] PartyBits =
+    [
+        (13, -6, 1.8, new SolidColorBrush(Color.FromRgb(255, 92, 92))),   // red
+        (11, -2, 1.5, new SolidColorBrush(Color.FromRgb(94, 234, 212))),  // teal
+        (14, -1, 1.6, new SolidColorBrush(Color.FromRgb(178, 120, 255))), // purple
+        (10, -7, 1.4, new SolidColorBrush(Color.FromRgb(255, 236, 92))),  // yellow
+        (13, -9, 1.5, new SolidColorBrush(Color.FromRgb(92, 214, 122))),  // green
+    ];
     private static readonly IBrush ThermoGlassFill = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
     private static readonly IPen   ThermoOutline  = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
     private static readonly Color  MutedColor     = Color.FromRgb(110, 110, 130);
@@ -557,8 +570,9 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
     private bool ConfettiArmed(ClaudeSession s) => _confettiAvailable && _confettiSessions.Contains(s.SessionId);
 
-    // Flips a session's confetti arming from the right-click menu (in-memory only).
-    private void ToggleConfetti(string sessionId)
+    // Flips a session's confetti arming from the right-click menu (in-memory only). Internal (not
+    // private) so the headless render harness can arm a row the same way the menu does.
+    internal void ToggleConfetti(string sessionId)
     {
         if (!_confettiSessions.Remove(sessionId)) _confettiSessions.Add(sessionId);
         InvalidateVisual();
@@ -1102,13 +1116,12 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
         double statusW = OverlayDraw.MeasureWidth(statusText, StatusSize);
 
-        // Left-of-name glyph cluster. (artifact/party slots stay 0-width until 4.7/confetti; metrics
-        // until 4.9.)
+        // Left-of-name glyph cluster: warn, artifact, mail, remote-control, party (confetti armed), bot.
         bool stuck = _showStuckWarnings && session.IsStuck;
         double warnW = stuck ? WarnIconWidth : 0;
         bool hasArtifacts = _showArtifacts && session.HasArtifacts;
         double artW = hasArtifacts ? ArtifactIconWidth : 0;
-        const double partyW = 0;
+        double partyW = ConfettiArmed(session) ? PartyIconWidth : 0;
         double mailW = session.ExternalNotify ? MailIconWidth : 0;
         double rcW   = session.RemoteControlled ? RcIconWidth : 0;
         double botW  = session.IsBackground ? BotIconWidth : 0;
@@ -1162,6 +1175,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
         }
         if (mailW > 0)    DrawMailIcon(ctx, HorizPad + 14 + warnW + artW, nameMidY);
         if (rcW > 0)   DrawRemoteIcon(ctx, HorizPad + 16 + warnW + artW + mailW, nameMidY);
+        if (partyW > 0) DrawPartyIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW, nameMidY);
         if (botW > 0)  DrawBotIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW + partyW, nameMidY);
 
         double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW;
@@ -1373,6 +1387,26 @@ public sealed class OverlayCanvas : Control, IDenseHost
     }
 
     // The background-session robot glyph: antenna + rounded-square face + two dot eyes.
+    // The "confetti finish" indicator: a little party popper — a gold cone spraying a fan of coloured
+    // confetti up and to the right — drawn on a session that's armed to celebrate when it next finishes.
+    private static void DrawPartyIcon(DrawingContext ctx, double x, double midY)
+    {
+        // Cone: a narrow gold triangle, apex at the bottom-left, mouth opening toward the upper-right.
+        var cone = new StreamGeometry();
+        using (var gc = cone.Open())
+        {
+            gc.BeginFigure(new Point(x + 2, midY + 6), isFilled: true);   // apex
+            gc.LineTo(new Point(x + 11, midY - 4));                       // mouth top
+            gc.LineTo(new Point(x + 6, midY + 3));                        // mouth bottom
+            gc.EndFigure(true);
+        }
+        ctx.DrawGeometry(PartyConeBrush, null, cone);
+
+        // Confetti: a few small dots sprayed out from the cone's mouth, each a different festive colour.
+        foreach (var (dx, dy, r, brush) in PartyBits)
+            ctx.DrawEllipse(brush, null, new Point(x + dx, midY + dy), r, r);
+    }
+
     private static void DrawBotIcon(DrawingContext ctx, double x, double midY)
     {
         var pen = new Pen(BotBrush, 1.3, lineCap: PenLineCap.Round);

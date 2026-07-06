@@ -59,6 +59,14 @@ internal static class HeadlessRenderer
         RenderControl(canvas, Path.Combine(outDir, "overlay_update_1x.png"), 96);
         RenderControl(canvas, Path.Combine(outDir, "overlay_update_1.5x.png"), 144);
 
+        // Confetti finish armed: the party-popper glyph on a session row (left of its name). Arm the
+        // first sample session the same way the right-click menu does, then repaint.
+        canvas.SetUpdateAvailable(false);
+        canvas.SetConfettiFinishAvailable(true);
+        canvas.ToggleConfetti(SampleSessions()[1].SessionId);   // the "api" row: short name, shows the glyph cluster
+        RenderControl(canvas, Path.Combine(outDir, "overlay_confetti_1x.png"), 96);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_confetti_1.5x.png"), 144);
+
         var probe = new OverlayCanvas();
         probe.Update(SampleSessions());
         probe.StartAutoCloseCountdown(20_000);
