@@ -84,6 +84,19 @@ internal static class HeadlessRenderer
         RenderControl(stats, Path.Combine(outDir, "stats_1x.png"), 96);
         RenderControl(stats, Path.Combine(outDir, "stats_1.5x.png"), 144);
 
+        // Perch Wrapped poster: a shareable Spotify-Wrapped-style card built from the sample report.
+        // Rendered with the bundled bird icon so the header/footer icon paths are exercised too.
+        IImage? brandIcon = null;
+        try { brandIcon = new Bitmap(AssetLoader.Open(new Uri("avares://perch/Assets/icon.png"))); }
+        catch { /* no icon — the poster just omits it */ }
+        var wrapped = WrappedSummary.Build(SampleStatsReport(), null, "All Time", "since Jan 2026", showCost: true);
+        RenderControl(new Views.WrappedPoster(wrapped, brandIcon), Path.Combine(outDir, "wrapped_1x.png"), 96);
+
+        // The reveal card that hosts the poster (scaled) plus the Copy / Save / Close buttons.
+        var wrappedCard = new Windows.WrappedWindow(wrapped, brandIcon, "perch-wrapped-all-time");
+        if (wrappedCard.Content is Control card)
+            RenderControl(card, Path.Combine(outDir, "wrapped_card_1x.png"), 96);
+
         // Flight path (5.6): synthetic day with active / waiting / stuck segments across a few lanes.
         var flight = new Views.FlightPathTimeline();
         flight.SetReport(SampleFlightReport());

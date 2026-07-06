@@ -20,6 +20,7 @@ internal static class PlatformServices
     public static IPathInstaller PathInstaller { get; } = new Impl.PathInstaller();
     public static IAudioCue AudioCue { get; } = new Impl.AudioCue();
     public static IWindowChrome WindowChrome { get; } = new Impl.WindowChrome();
+    public static IImageClipboard ImageClipboard { get; } = new Impl.ImageClipboard();
 #if WINDOWS
     public static IAppIconProvider AppIconProvider { get; } = new Impl.WindowsAppIconProvider();
     public static ISystemMetrics SystemMetrics { get; } = new Impl.WindowsSystemMetrics();

@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Perch Wrapped is back**: the session-stats window's gradient "Wrapped" button turns any scope into a shareable Spotify-Wrapped-style poster — persona, headline numbers, token equivalences ("≈ 9 novels of text"), and a highlight reel.
+- Copy the poster straight to the clipboard or save it as a PNG, then go flex.
+
 ---
 
 ## [v0.1.27] - 2026-07-04

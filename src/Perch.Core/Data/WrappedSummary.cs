@@ -24,7 +24,7 @@ internal sealed record WrappedItem(string Emoji, string Text);
 /// A "Perch Wrapped" — a Spotify-Wrapped-style snapshot of one scope's stats, distilled into a fun,
 /// shareable poster. This is the pure-data half (no drawing): it picks a persona, builds the playful
 /// equivalences ("≈ 3 novels of text") and the highlight one-liners, and carries the headline numbers.
-/// <see cref="Ui.WrappedRenderer"/> turns it into an image.
+/// The app's owner-drawn <c>WrappedPoster</c> control turns it into a shareable image.
 ///
 /// Everything here is derived from a <see cref="StatsReport"/> (and the optional <see cref="RangeReport"/>
 /// for the range scopes), so it's retroactive and testable without touching the UI.

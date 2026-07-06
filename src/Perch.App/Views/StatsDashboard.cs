@@ -203,10 +203,15 @@ internal sealed class StatsDashboard : Control
         return y + Pad;
     }
 
-    private string Subtitle()
+    private string Subtitle() => SubtitleFor(_range);
+
+    /// <summary>The date-range subtitle for a scope — "since Mar 2025" for all-time, a day span for the
+    /// week/month ranges, or today's date when there's no range. Shared with the Wrapped poster so the
+    /// two show the same subtitle for a scope.</summary>
+    public static string SubtitleFor(RangeReport? range)
     {
-        if (_range is not { } r) return DateTime.Now.ToString("dddd, MMM d");
-        if (_range.ScopeLabel.StartsWith("All", StringComparison.Ordinal))
+        if (range is not { } r) return DateTime.Now.ToString("dddd, MMM d");
+        if (r.ScopeLabel.StartsWith("All", StringComparison.Ordinal))
             return r.FirstActiveDay is { } first ? $"since {first:MMM yyyy}" : "";
         if (r.Trend.Count > 0) return $"{r.Trend[0].Day:MMM d} – {r.Trend[^1].Day:MMM d}";
         return "";

@@ -4,6 +4,8 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
@@ -23,7 +25,13 @@ internal sealed class StatsWindow : Window
 
     private readonly StatsDashboard _dashboard;
     private readonly Dictionary<Scope, Button> _scopeButtons = new();
+    private readonly GradientButton _wrappedButton;
+    private readonly bool _showCost;
     private Scope _scope = Scope.Today;
+
+    private StatsReport? _report;
+    private RangeReport? _range;
+    private WrappedWindow? _wrapped;
 
     public StatsWindow(AppSettings settings)
     {
@@ -35,17 +43,34 @@ internal sealed class StatsWindow : Window
         Background = new SolidColorBrush(Color.FromRgb(18, 18, 24));
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        _dashboard = new StatsDashboard(settings.ShowEstimatedCost);
+        _showCost = settings.ShowEstimatedCost;
+        _dashboard = new StatsDashboard(_showCost);
 
-        var toolbar = new StackPanel
+        var scopes = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 6,
-            Margin = new Thickness(12, 9), Height = 46,
+            VerticalAlignment = VerticalAlignment.Center,
         };
-        AddScopeButton(toolbar, "Today", Scope.Today);
-        AddScopeButton(toolbar, "7 days", Scope.Week);
-        AddScopeButton(toolbar, "30 days", Scope.Month);
-        AddScopeButton(toolbar, "All time", Scope.AllTime);
+        AddScopeButton(scopes, "Today", Scope.Today);
+        AddScopeButton(scopes, "7 days", Scope.Week);
+        AddScopeButton(scopes, "30 days", Scope.Month);
+        AddScopeButton(scopes, "All time", Scope.AllTime);
+
+        // The fun bit: generates a shareable "Wrapped" poster from the current scope. Sits at the far
+        // right of the toolbar, wearing the poster's own gradient so it draws the eye; enabled only once
+        // a report with sessions has loaded.
+        _wrappedButton = new GradientButton("✨", "Wrapped")
+        {
+            Width = 108, Enabled = false, VerticalAlignment = VerticalAlignment.Center,
+            [DockPanel.DockProperty] = Dock.Right,
+        };
+        _wrappedButton.Click += OpenWrapped;
+
+        var toolbar = new DockPanel
+        {
+            Margin = new Thickness(12, 9), Height = 46, LastChildFill = true,
+            Children = { _wrappedButton, scopes },
+        };
 
         var toolbarPanel = new Border
         {
@@ -103,6 +128,7 @@ internal sealed class StatsWindow : Window
     {
         UpdateScopeButtons();
         _dashboard.SetLoading();
+        _wrappedButton.Enabled = false;
 
         var today = DateOnly.FromDateTime(DateTime.Now);
         var scope = _scope;
@@ -112,9 +138,58 @@ internal sealed class StatsWindow : Window
             Dispatcher.UIThread.Post(() =>
             {
                 if (!IsVisible) return;
+                _report = t.Result.report;
+                _range = t.Result.range;
                 _dashboard.SetReport(t.Result.report, t.Result.range);
+                _wrappedButton.Enabled = _report.SessionCount > 0;
             });
         });
+    }
+
+    // Builds a Wrapped poster from the current scope's report and shows it in a reveal card. Guarded so
+    // an accidental click while loading (or with no sessions) is a no-op; only one card is shown at once.
+    private void OpenWrapped()
+    {
+        if (_report is not { SessionCount: > 0 } report) return;
+        var summary = WrappedSummary.Build(report, _range, ScopeTitle(), StatsDashboard.SubtitleFor(_range), _showCost);
+        _wrapped?.Close();
+        _wrapped = new WrappedWindow(summary, AppIcon(), SuggestedFileName());
+        _wrapped.Closed += (_, _) => _wrapped = null;
+        _wrapped.Show();
+        _wrapped.Activate();
+    }
+
+    private string ScopeTitle() => _scope switch
+    {
+        Scope.Week => "This Week",
+        Scope.Month => "This Month",
+        Scope.AllTime => "All Time",
+        _ => "Today",
+    };
+
+    private string SuggestedFileName()
+    {
+        string scope = _scope switch
+        {
+            Scope.Week => "week",
+            Scope.Month => "month",
+            Scope.AllTime => "all-time",
+            _ => "today",
+        };
+        return $"perch-wrapped-{scope}-{DateTime.Now:yyyy-MM-dd}";
+    }
+
+    // The bundled brand bird, drawn into the poster's header and footer. Loaded lazily and cached; best
+    // effort — a missing asset just yields a poster without the icon.
+    private static Bitmap? _appIcon;
+    private static bool _appIconTried;
+    private static Bitmap? AppIcon()
+    {
+        if (_appIconTried) return _appIcon;
+        _appIconTried = true;
+        try { _appIcon = new Bitmap(AssetLoader.Open(new Uri("avares://perch/Assets/icon.png"))); }
+        catch { _appIcon = null; }
+        return _appIcon;
     }
 
     private static (StatsReport report, RangeReport? range) LoadScope(Scope scope, DateOnly today) => scope switch
