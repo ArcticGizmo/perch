@@ -20,9 +20,11 @@ plan) is code-complete. What was *never possible before* was running any of it o
   `WindowChrome`, `WindowActivator`, `SystemMetrics`, `SessionLock`, `AudioCue`, `AppIconProvider`,
   `GlobalHotkey`, `PathInstaller` (+ the shared `ObjC` interop helper).
 
-**The one genuine code stub:**
-- `Perch.Platform.Mac/ImageClipboard.cs` → `TryCopyBgra(...)` returns `false`. The Wrapped card's
-  "Copy image" is a no-op on macOS; "Save PNG…" works everywhere (Avalonia storage).
+**The one genuine code stub — FIXED (2026-07-07):**
+- `Perch.Platform.Mac/ImageClipboard.cs` used to `return false` (Wrapped "Copy image" a no-op). Now it
+  encodes the BGRA poster to PNG via a portable `Perch.Core/Data/PngEncoder` and writes it to the general
+  `NSPasteboard` as `public.png`. Verified on-device: the clipboard carries a valid 8-bit RGBA PNG (macOS
+  auto-derives TIFF/JPEG/etc. from it, so it pastes into any app).
 
 **Not started:**
 - macOS packaging (`.app` / `Info.plist` / `.icns` / DMG) — `publish.bat` + `release.yml` are Windows-only.
@@ -187,15 +189,16 @@ the right terminal; lock/unlock suppresses/fires a notification; chimes are audi
 
 ---
 
-## Phase C — Close the last stub + fix what Phase B surfaces
+## Phase C — Close the last stub + fix what Phase B surfaces — DONE
 
-- **`ImageClipboard.TryCopyBgra`** — implement via `NSPasteboard` (write PNG/TIFF rep) using the existing
-  `ObjC` helper, so the Wrapped card's "Copy image" works. Low priority (Save PNG covers the gap) but it's
-  the only real code hole. Decide whether to do it now or leave documented as a known no-op.
-- Land fixes for any interop bugs Phase B found (expected candidates: window level, activation target,
-  hotkey wiring). Re-run the affected checks.
+- **`ImageClipboard.TryCopyBgra`** — DONE. Encodes the BGRA poster to PNG (`Perch.Core/Data/PngEncoder`,
+  unit-tested) and writes it to the general `NSPasteboard` as `public.png` via the `ObjC` helper. Verified
+  on-device (valid 8-bit RGBA PNG on the clipboard). "Copy image" now works on macOS.
+- Interop bugs Phase B surfaced were fixed as they were found (WindowChrome `AvnWindow` crash;
+  WindowActivator activation + root-process walk + wrong-window; Keychain credentials). No known remaining
+  interop bugs.
 
-**Exit:** no known interop bugs; `ImageClipboard` either implemented or explicitly deferred with a note.
+**Exit:** met — no known interop bugs; `ImageClipboard` implemented and verified.
 
 ---
 

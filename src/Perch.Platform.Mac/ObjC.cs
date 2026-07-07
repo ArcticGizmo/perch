@@ -40,6 +40,19 @@ internal static class ObjC
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern IntPtr SendGet(IntPtr receiver, IntPtr selector, int arg);
 
+    /// <summary>id (*)(id, SEL, const void*, NSUInteger) — e.g. +[NSData dataWithBytes:length:].</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    public static extern IntPtr SendGet(IntPtr receiver, IntPtr selector, IntPtr bytes, nuint length);
+
+    /// <summary>id (*)(id, SEL, const char*) — e.g. +[NSString stringWithUTF8String:] (UTF8 C string).</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    public static extern IntPtr SendGetUtf8(IntPtr receiver, IntPtr selector,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string utf8);
+
+    /// <summary>BOOL (*)(id, SEL, id, id) — e.g. -[NSPasteboard setData:forType:]. Non-zero is YES.</summary>
+    [DllImport(Lib, EntryPoint = "objc_msgSend")]
+    public static extern byte SendBool(IntPtr receiver, IntPtr selector, IntPtr arg1, IntPtr arg2);
+
     /// <summary>NSInteger (*)(id, SEL) — a message send returning an NSInteger (e.g. -activationPolicy).</summary>
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern nint SendNint(IntPtr receiver, IntPtr selector);
