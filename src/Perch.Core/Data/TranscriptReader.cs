@@ -390,6 +390,7 @@ internal sealed class TranscriptReader
         // only re-runs when the transcript actually changed.
         long latestUsed = 0;
         string? latestDisplayName = null;
+        string? latestModelId = null;
 
         foreach (var line in TranscriptScan.ReadLines(path))
         {
@@ -423,7 +424,16 @@ internal sealed class TranscriptReader
             {
                 try
                 {
-                    var usage = JsonNode.Parse(line)?["message"]?["usage"];
+                    var message = JsonNode.Parse(line)?["message"];
+
+                    // The running model id (e.g. "claude-opus-4-8"). Ambiguous about 200k vs 1M, but it's
+                    // the only record of what model is actually answering when the session never ran
+                    // /model and settings.json carries no "model" — the common case. Most recent wins.
+                    var model = message?["model"]?.GetValue<string>();
+                    if (!string.IsNullOrEmpty(model))
+                        latestModelId = model;
+
+                    var usage = message?["usage"];
                     if (usage != null)
                     {
                         // The prompt's true size is all three input buckets summed. Omitting
@@ -443,13 +453,14 @@ internal sealed class TranscriptReader
             }
         }
 
-        // A /model confirmation in the transcript is authoritative (the user explicitly switched, and
-        // the most recent one wins). Lacking one, the session is running the configured default model —
-        // whose transcript message.model field can't reveal whether it's the 200k or 1M variant — so we
-        // fall back to the model id in settings.json, where the "[1m]" suffix makes that distinction.
+        // A /model confirmation in the transcript is authoritative (the user explicitly switched, and the
+        // most recent one wins). Lacking one, resolve from the model id: the transcript's running
+        // message.model first (what's actually answering), then the settings.json default. message.model
+        // can't reveal 200k vs 1M for models where that's an opt-in, so WindowForConfiguredModel applies
+        // the "[1m]"/family assumptions (e.g. Opus 4.x is treated as 1M).
         int window = latestDisplayName != null
             ? ModelContext.WindowFor(latestDisplayName)
-            : ModelContext.WindowForConfiguredModel(ReadConfiguredModel(cwd));
+            : ModelContext.WindowForConfiguredModel(latestModelId ?? ReadConfiguredModel(cwd));
 
         if (latestUsed == 0)
             return (null, window);
