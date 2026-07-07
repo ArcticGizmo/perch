@@ -2,13 +2,15 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json.Nodes;
 using Perch.Data;
+using Perch.Platform;
 
 namespace Perch.Data;
 
 /// <summary>
 /// Polls the account-wide rate-limit usage from the same undocumented endpoint Claude Code's
 /// /usage command uses (GET https://api.anthropic.com/api/oauth/usage), authenticating with the
-/// OAuth access token Claude Code stores in ~/.claude/.credentials.json.
+/// OAuth access token Claude Code stores in its credentials blob (the file ~/.claude/.credentials.json
+/// on Windows/Linux, the login Keychain on macOS — sourced via <see cref="IClaudeCredentials"/>).
 ///
 /// The token is read fresh on every poll and never written back — Claude Code refreshes it during
 /// normal use, so an active user keeps it valid. When a fetch fails (network, expired token, shape
@@ -22,8 +24,13 @@ internal sealed class UsageMonitor
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
 
+    // Where the OAuth blob lives is OS-specific (file on Windows/Linux, Keychain on macOS) — behind a seam.
+    private readonly IClaudeCredentials _credentials;
+
     // The most recent successful reading, so a failed fetch can still surface last-known values.
     private UsageInfo _last = UsageInfo.Empty;
+
+    public UsageMonitor(IClaudeCredentials credentials) => _credentials = credentials;
 
     /// <summary>
     /// Fetches the current usage. Always resolves (never throws): on failure the result has
@@ -89,15 +96,13 @@ internal sealed class UsageMonitor
 
     private string? ReadAccessToken()
     {
-        var path = ClaudePaths.CredentialsFile;
-        if (!File.Exists(path))
+        var json = _credentials.ReadCredentialsJson();
+        if (string.IsNullOrEmpty(json))
             return null;
 
         try
         {
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(fs);
-            var root = JsonNode.Parse(reader.ReadToEnd())?.AsObject();
+            var root = JsonNode.Parse(json)?.AsObject();
             return root?["claudeAiOauth"]?["accessToken"]?.ToString();
         }
         catch

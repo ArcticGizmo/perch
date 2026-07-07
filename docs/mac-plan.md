@@ -145,6 +145,15 @@ After the fix the app boots and runs cleanly (empty log, no exception).
 icon cache lands) while `SpecialFolder.ApplicationData` → `~/.config` (where settings land). The two roots
 diverge — relevant to choosing the `perch-hook` stable-bin location (Phase B hook task / Phase D).
 
+**Bug found & fixed — credentials on macOS live in the Keychain, not a file.** The usage strip showed
+"Couldn't read Claude credentials — sign in to Claude Code" because `UsageMonitor` only read
+`~/.claude/.credentials.json`, which **does not exist on macOS** — Claude Code stores the OAuth blob in the
+login **Keychain** (generic-password item, service `Claude Code-credentials`). Added an `IClaudeCredentials`
+Core seam: a portable `FileClaudeCredentials` (Windows/Linux) and a `KeychainClaudeCredentials` (macOS, via
+`/usr/bin/security -w`, falling back to the file), resolved through `PlatformServices` and injected into
+`UsageMonitor`. Verified live: the Keychain read returns the same JSON shape and a valid access token is
+parsed, so the usage poll authenticates. (First read may raise a one-time Keychain access prompt.)
+
 **Remaining manual checks** (need a human at the machine, not scriptable): hotkey actually toggles the
 overlay; overlay floats above all Spaces and click-through overlays pass clicks; window activation lands on
 the right terminal; lock/unlock suppresses/fires a notification; chimes are audible.

@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using Perch.Data;
+using Perch.Platform;
 
 namespace Perch.Avalonia.Services;
 
@@ -16,7 +17,7 @@ internal sealed class UsageMonitorHost : IDisposable
     // Matches the WinForms UsageIntervalMs (300s) — the endpoint's data only moves on that scale.
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(5);
 
-    private readonly UsageMonitor _monitor = new();
+    private readonly UsageMonitor _monitor;
     private readonly Action<UsageInfo> _onUsage;
     private readonly DispatcherTimer _timer;
 
@@ -29,9 +30,10 @@ internal sealed class UsageMonitorHost : IDisposable
     /// listeners — the Settings usage bars — track the same readings the overlay does.</summary>
     public event Action<UsageInfo>? Updated;
 
-    public UsageMonitorHost(Action<UsageInfo> onUsage)
+    public UsageMonitorHost(Action<UsageInfo> onUsage, IClaudeCredentials credentials)
     {
         _onUsage = onUsage;
+        _monitor = new UsageMonitor(credentials);
         _timer = new DispatcherTimer { Interval = Interval };
         _timer.Tick += (_, _) => _ = Poll();
     }

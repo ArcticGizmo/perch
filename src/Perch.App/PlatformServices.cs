@@ -24,9 +24,13 @@ internal static class PlatformServices
 #if WINDOWS
     public static IAppIconProvider AppIconProvider { get; } = new Impl.WindowsAppIconProvider();
     public static ISystemMetrics SystemMetrics { get; } = new Impl.WindowsSystemMetrics();
+    // Windows/Linux store the OAuth blob in ~/.claude/.credentials.json — the portable file reader.
+    public static IClaudeCredentials ClaudeCredentials { get; } = new FileClaudeCredentials();
 #else
     public static IAppIconProvider AppIconProvider { get; } = new Impl.AppIconProvider();
     public static ISystemMetrics SystemMetrics { get; } = new Impl.SystemMetrics();
+    // macOS keeps the OAuth blob in the login Keychain (with a file fallback for a Linux head).
+    public static IClaudeCredentials ClaudeCredentials { get; } = new Impl.KeychainClaudeCredentials();
 #endif
 
     public static ISessionLock CreateSessionLock() => new Impl.SessionLock();

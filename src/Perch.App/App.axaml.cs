@@ -75,7 +75,7 @@ public partial class App : Application
             // Live overlay + the data pipelines that feed it. Every host delivers on the UI thread, so
             // feeding the owner-drawn canvas from their callbacks is UI-thread-safe.
             _overlay = new LiveOverlayWindow();
-            _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage);
+            _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage, PlatformServices.ClaudeCredentials);
             _metricsHost = new MetricsMonitorHost(PlatformServices.SystemMetrics,
                 _overlay.Canvas.UpdateSystemMetrics, _overlay.Canvas.UpdateSessionMetrics);
 
