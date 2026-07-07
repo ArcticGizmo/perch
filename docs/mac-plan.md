@@ -127,7 +127,7 @@ tray app. `dotnet build`/`run` on macOS builds the single `net10.0` head flag-fr
 | `IAppIconProvider` | ✅ pass | Produced a real 32px PNG from `Safari.app` via `sips`. |
 | `IPathInstaller` | ✅ pass | Created + removed `~/.local/bin/perch` symlink. |
 | `IGlobalHotkey` | ✅ pass (registration) | Carbon `RegisterEventHotKey`+`InstallEventHandler` succeed; unmappable key refused. **Firing** needs the app run loop — confirm the bound key toggles the overlay in the live app. |
-| `IWindowActivator` | ✅ pass (verified end-to-end, after fix) | Focus actually moves to the hosting terminal now — see the two bugs below. Coarser than Windows: foregrounds the app, not a specific window/tab (needs Accessibility/AXUIElement — Phase 6). |
+| `IWindowActivator` | ✅ pass (window-precise for Terminal.app) | Focus moves to the exact Terminal window+tab via tty match; other terminals fall back to app-level. See the bugs below. |
 | `IWindowChrome` | ✅ pass (after fix) | See bug below — was a fatal startup crash; fixed. Visual "floats above all Spaces / click-through" is a manual live check. |
 
 **Bug found & fixed — fatal startup crash (`WindowChrome`).** Booting the tray app on macOS crashed with
@@ -156,6 +156,17 @@ causes, both needed:
    uses `proc_pidinfo` too and has the same blind spot for root processes, but that only affects a session's
    *descendant* rollup, which is user-owned — left as-is.)
 Verified end-to-end: with Finder frontmost, `FocusTerminalForProcess(claudePid)` moves focus to Terminal.
+
+**Follow-up — wrong Terminal window.** `open -b` foregrounds the app but lands on its last-used window, not
+the one running the session, so with several Terminal windows open it focused the wrong one. Fixed by raising
+the exact window+tab whose `tty` matches the session's controlling tty (`ps -o tty= -p <pid>` → `/dev/ttysNNN`),
+via AppleScript against Terminal.app (the only interface exposing a tab's `tty`). Other terminals fall back to
+app-level `open` (iTerm2 also exposes `tty` per session — a clean extension point; VS Code / others don't
+script tabs). Verified end-to-end: with the other Terminal window frontmost, focusing the session raises its
+window/tab (`ttys000 → ttys001`).
+- **Packaging dependency (Phase D):** controlling Terminal via Apple Events needs the app bundle's
+  `Info.plist` to declare **`NSAppleEventsUsageDescription`**, and triggers a one-time "Perch wants to control
+  Terminal.app" Automation prompt (Phase E first-run flow). If declined, it degrades to app-level `open`.
 
 **Also noted:** on macOS `SpecialFolder.LocalApplicationData` → `~/Library/Application Support` (where the
 icon cache lands) while `SpecialFolder.ApplicationData` → `~/.config` (where settings land). The two roots
@@ -193,7 +204,9 @@ the right terminal; lock/unlock suppresses/fires a notification; chimes are audi
 Scoped to the decisions: **arm64 only, unsigned.**
 
 - **`Info.plist`:** bundle id (e.g. `com.arcticgizmo.perch`), `LSUIElement=true` (menu-bar/agent app, no Dock
-  icon), version, min-OS. Author it under `src/Perch.App/` (mac-only) and wire into the publish.
+  icon), version, min-OS, and **`NSAppleEventsUsageDescription`** (required for the Terminal.app
+  window-focus AppleScript — without it the Automation request is denied). Author it under `src/Perch.App/`
+  (mac-only) and wire into the publish.
 - **`.icns`:** generate from `perch.svg`. Extend `tools/gen-icons.*` with a mac path (`iconutil` from an
   `iconset`, or `sips`), writing `Assets/icon.icns`. `tools/gen-icons.ps1` is PowerShell — either add a
   `gen-icons.sh` or make the existing script cross-platform (`pwsh` runs on macOS).
