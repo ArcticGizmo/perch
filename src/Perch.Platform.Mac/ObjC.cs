@@ -65,6 +65,17 @@ internal static class ObjC
     [DllImport(Lib, EntryPoint = "objc_msgSend")]
     public static extern void SendVoid(IntPtr receiver, IntPtr selector, byte arg);
 
+    /// <summary>Send a selector that returns an <c>NSString</c> and marshal it to a managed string via
+    /// <c>-UTF8String</c>. Null when the receiver or either result is nil (e.g. an app with no bundle id).</summary>
+    public static string? SendString(IntPtr receiver, IntPtr selector)
+    {
+        if (receiver == IntPtr.Zero) return null;
+        IntPtr nsString = SendGet(receiver, selector);
+        if (nsString == IntPtr.Zero) return null;
+        IntPtr utf8 = SendGet(nsString, sel_registerName("UTF8String"));
+        return utf8 == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(utf8);
+    }
+
     public static IntPtr Sel(string name) => sel_registerName(name);
     public static IntPtr Class(string name) => objc_getClass(name);
 }

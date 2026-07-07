@@ -127,7 +127,7 @@ tray app. `dotnet build`/`run` on macOS builds the single `net10.0` head flag-fr
 | `IAppIconProvider` | ✅ pass | Produced a real 32px PNG from `Safari.app` via `sips`. |
 | `IPathInstaller` | ✅ pass | Created + removed `~/.local/bin/perch` symlink. |
 | `IGlobalHotkey` | ✅ pass (registration) | Carbon `RegisterEventHotKey`+`InstallEventHandler` succeed; unmappable key refused. **Firing** needs the app run loop — confirm the bound key toggles the overlay in the live app. |
-| `IWindowActivator` | ✅ pass (mechanism) | `libproc` ppid read is the same technique `ISystemMetrics` proved; `NSRunningApplication`+`activationPolicy` resolve (Finder→Regular) once AppKit is loaded; `FocusProcessMainWindow` doesn't throw. **Visible focus change** is a manual live check. |
+| `IWindowActivator` | ✅ pass (verified end-to-end, after fix) | Focus actually moves to the hosting terminal now — see the two bugs below. Coarser than Windows: foregrounds the app, not a specific window/tab (needs Accessibility/AXUIElement — Phase 6). |
 | `IWindowChrome` | ✅ pass (after fix) | See bug below — was a fatal startup crash; fixed. Visual "floats above all Spaces / click-through" is a manual live check. |
 
 **Bug found & fixed — fatal startup crash (`WindowChrome`).** Booting the tray app on macOS crashed with
@@ -140,6 +140,22 @@ assumed — so `[handle window]` hit a nonexistent selector. Two lessons baked i
    boundary and terminates the process. So a bad selector isn't "best-effort degradation" — it's fatal.
    Any future objc send must target a selector we're certain the receiver implements.
 After the fix the app boots and runs cleanly (empty log, no exception).
+
+**Bug found & fixed — click-to-focus-terminal did nothing on macOS** (`WindowActivator`). Two independent
+causes, both needed:
+1. **Activation is ignored for a background agent.** `NSRunningApplication.activateWithOptions:` returns YES
+   and flips the target's `isActive`, but on Sonoma+ the window server refuses the focus change when the
+   request comes from a background app — and Perch is exactly that (`LSUIElement` + a no-activate overlay,
+   so it's never frontmost when a row is clicked). Fix: resolve the app's bundle id via `NSRunningApplication`
+   and foreground it with the stock **`open -b <bundleId>`** (falls back to `open <bundlePath>`), which the
+   system honours from a background process with no Accessibility/Automation permission.
+2. **The ppid walk dead-ended at a root process.** Terminal spawns a setuid-**root** `login` (Terminal →
+   login(root) → shell → claude), and `libproc`'s `proc_pidinfo` refuses to read a root-owned process's info
+   from our non-root process — so the walk stopped at `login` and never reached Terminal. Fix: read the full
+   pid→ppid map once via **`ps -Ao pid=,ppid=`** (world-readable) and walk that. (Note: `ISystemMetrics.ReadParentMap`
+   uses `proc_pidinfo` too and has the same blind spot for root processes, but that only affects a session's
+   *descendant* rollup, which is user-owned — left as-is.)
+Verified end-to-end: with Finder frontmost, `FocusTerminalForProcess(claudePid)` moves focus to Terminal.
 
 **Also noted:** on macOS `SpecialFolder.LocalApplicationData` → `~/Library/Application Support` (where the
 icon cache lands) while `SpecialFolder.ApplicationData` → `~/.config` (where settings land). The two roots
