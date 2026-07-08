@@ -77,6 +77,11 @@ internal static class Program
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>()
             .UsePlatformDetect()
+            // Perch is a menu-bar/tray app — keep it out of the macOS Dock and app switcher. The plist's
+            // LSUIElement handles the pre-launch moment, but Avalonia's macOS backend otherwise forces a
+            // Regular activation policy (dock icon) at startup; ShowInDock=false makes it an accessory app,
+            // which is the setting that actually sticks. A no-op on Windows/Linux.
+            .With(new MacOSPlatformOptions { ShowInDock = false })
 #if DEBUG
             .WithDeveloperTools()
 #endif

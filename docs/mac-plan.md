@@ -253,6 +253,22 @@ drop-target; the bundled self-contained binary runs (`render` mode exits 0 from 
   `perch-hook` self-heal, as planned.
 - **Gatekeeper** — README gained a "macOS (unsigned)" install note (`xattr -dr com.apple.quarantine` /
   right-click Open) and the local-build section documents `publish-mac.sh`.
+- **Auto-start ("start automatically")** — was broken on macOS. Autostart is hook-driven: on `SessionStart`,
+  `perch-hook start` launches the tray if `AutoStartOnFirstSession` is set. `LaunchPerch` did
+  `Process.Start("perch")`, which relies on `perch` being on the hook process's `PATH` — but on macOS
+  `perch` is only a `~/.local/bin` symlink, absent from Claude Code's hook `PATH`, so the launch silently
+  no-op'd. Fixed: on macOS `LaunchPerch` now resolves the installed `.app` from the installer's
+  `perch.path` breadcrumb (`~/Library/Application Support/Perch/bin/perch.path` → walk up to the `*.app`)
+  and launches it via `open -a <bundle> --args --autostarted` — no `PATH` dependency, and detached from the
+  short-lived hook via LaunchServices. Verified the breadcrumb resolves `/Applications/Perch.app` and that
+  `open --args` delivers `--autostarted` to the bundle. (Existing installs pick this up once the new bundle
+  is installed and the app copies the newer `perch-hook` to the stable bin on next launch.)
+- **No Dock icon** — `LSUIElement=true` in the plist is necessary but **not sufficient**: Avalonia's macOS
+  backend forces a Regular activation policy at startup, so the packaged app still reported
+  `ApplicationType=Foreground` (a Dock icon). Fixed in `Program.BuildAvaloniaApp` with
+  `.With(new MacOSPlatformOptions { ShowInDock = false })` — verified the activation type flips
+  `Foreground → UIElement` (accessory/agent, no Dock icon). This lands the "no Dock icon" half of Phase E's
+  menu-bar task early. The plist key stays too — it suppresses any icon flash before Avalonia initialises.
 
 **Not done here (belongs to E/F):** live launch of the installed `.app` (menu-bar item, overlay, the one-time
 Notifications/Automation prompts) — needs a human at the machine; the CI mac lane is Phase F.
@@ -282,9 +298,11 @@ Notifications/Automation prompts) — needs a human at the machine; the CI mac l
 
 ## Phase F — CI & docs
 
-- **CI:** add a `macos-latest` (arm64) job to `.github/workflows/release.yml` on the `v*` tag — publish
-  `perch` + `perch-hook` for `osx-arm64`, pack the unsigned `.app`/DMG, attach to the release. Keep the
-  existing Windows job untouched. (Signing/notarization secrets are a later add when there's a Developer ID.)
+- **CI:** DONE. `.github/workflows/release.yml` now fans out into two build jobs on the `v*` tag —
+  `build-windows` (unchanged steps) and `build-macos` (`macos-14` arm64, runs `publish-mac.sh`) — each
+  uploading its artifacts. A final `release` job `needs: [build-windows, build-macos]`, so the GitHub Release
+  is created only when **both** platforms build; a failure on either publishes nothing. (Signing/notarization
+  secrets are a later add when there's a Developer ID.)
 - **Docs:** update `README.md` (mac install + Gatekeeper workaround), `CLAUDE.md` (layout note already covers
   `Perch.Platform.Mac`; refresh the build/run/render commands for macOS), and `tools/` docs for the `.icns`
   path.

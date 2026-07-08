@@ -8,8 +8,11 @@ on:
 permissions:
   contents: write
 
+# Two build jobs (Windows + macOS) each produce artifacts but do NOT touch the GitHub Release. The final
+# `release` job `needs` both, so it runs only when both builds succeed — a failure on either platform means
+# no release is published (rather than a half-populated one). Re-running the failed job re-gates it.
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,8 +46,60 @@ jobs:
       - name: Pack with Velopack
         run: vpk pack --packId Perch --packTitle "Perch" --packVersion ${{ steps.version.outputs.VERSION }} --packDir publish/ --mainExe perch.exe --outputDir releases/
 
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: releases/
+          if-no-files-found: error
+
+  build-macos:
+    # arm64 runner — required: perch-hook is NativeAOT (osx-arm64) and can't cross-compile from x64.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Install vpk CLI
+        run: |
+          dotnet tool install -g vpk
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      # Reuses the same script as a local mac build (publish perch + perch-hook for osx-arm64, pack the
+      # unsigned .app, wrap it in a DMG). The version comes from the tag.
+      - name: Publish + pack (unsigned arm64 .app + DMG)
+        run: bash publish-mac.sh "${GITHUB_REF_NAME#v}"
+
+      # Everything except the runnable Perch.app bundle the script leaves behind (a directory — we ship the
+      # DMG/pkg/update-feed files, not the loose bundle).
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: |
+            releases/*.dmg
+            releases/*.pkg
+            releases/*.zip
+            releases/*.nupkg
+            releases/RELEASES-osx
+            releases/*.json
+          if-no-files-found: error
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: releases/*
+          files: artifacts/**/*
           generate_release_notes: true

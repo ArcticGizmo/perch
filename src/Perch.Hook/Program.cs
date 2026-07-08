@@ -270,17 +270,60 @@ static bool IsPerchRunning()
 }
 
 // --autostarted tells the tray it was launched by this hook, so it may auto-close after the last session
-// ends. Relies on `perch` being on PATH (the installer registers it); a dev build run via `dotnet run`
-// simply won't resolve here and this no-ops.
+// ends. On macOS the tray is a .app launched through LaunchServices (see TryLaunchMacBundle); elsewhere it
+// resolves `perch` from PATH (the installer registers it). A dev build run via `dotnet run` won't resolve
+// either way and this no-ops.
 static void LaunchPerch()
 {
     try
     {
+        if (OperatingSystem.IsMacOS() && TryLaunchMacBundle()) return;
+
         var psi = new ProcessStartInfo("perch") { UseShellExecute = false, CreateNoWindow = true };
         psi.ArgumentList.Add("--autostarted");
         Process.Start(psi);
     }
     catch { /* not on PATH (e.g. dev build) → no-op */ }
+}
+
+// macOS: `perch` is only a ~/.local/bin symlink, which the hook's PATH usually lacks, and the tray is a
+// .app that should launch through LaunchServices — not by exec'ing the inner binary as a child of this
+// short-lived hook. Resolve the installed bundle from the installer's perch.path breadcrumb (the same
+// marker MaybeSelfHeal reads) and hand it to `open`, which detaches it and registers it as a proper agent
+// app. Returns false (fall through to the PATH launch) if the marker or bundle can't be resolved.
+static bool TryLaunchMacBundle()
+{
+    string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+    string marker = Path.Combine(appData, ProfileFolder(), "bin", "perch.path");
+    if (!File.Exists(marker)) return false;
+
+    string trayPath = File.ReadAllText(marker).Trim(); // …/Perch.app/Contents/MacOS/perch
+    if (string.IsNullOrEmpty(trayPath) || !File.Exists(trayPath)) return false;
+
+    string? bundle = FindAppBundle(trayPath);
+    if (bundle is null) return false;
+
+    // `open -a <bundle> --args --autostarted` activates a running instance or launches a fresh one; we only
+    // reach here when none is running (HandleStart guards on IsPerchRunning), so the args reach the app.
+    var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false, CreateNoWindow = true };
+    psi.ArgumentList.Add("-a");
+    psi.ArgumentList.Add(bundle);
+    psi.ArgumentList.Add("--args");
+    psi.ArgumentList.Add("--autostarted");
+    Process.Start(psi);
+    return true;
+}
+
+// Walk up from …/Perch.app/Contents/MacOS/perch to the nearest …/*.app ancestor directory.
+static string? FindAppBundle(string execPath)
+{
+    var dir = new DirectoryInfo(Path.GetDirectoryName(execPath) ?? "");
+    while (dir is not null)
+    {
+        if (dir.Name.EndsWith(".app", StringComparison.OrdinalIgnoreCase)) return dir.FullName;
+        dir = dir.Parent;
+    }
+    return null;
 }
 
 static void TryDelete(string path)
