@@ -49,6 +49,12 @@ echo "Building Perch v$VERSION ($RID)..."
 # same version, and stale files in the publish dir would otherwise be packed into the bundle.
 rm -rf "$PUBLISH_DIR" "$OUT_DIR"
 
+# All intermediate work stays under releases/ (a project-local, gitignored dir) rather than the system
+# temp dir, so everything the build touches is visible next to the artifacts. WORK is cleaned on exit.
+WORK="$OUT_DIR/.work"
+mkdir -p "$WORK"
+trap 'rm -rf "$WORK"' EXIT
+
 # --- perch (the app head, self-contained) --------------------------------------------------------
 # net10.0 is the only head on a Mac host, but the project still declares TargetFrameworks (plural), so
 # `publish` demands an explicit -f. Self-contained so the .app has no external .NET dependency. No
@@ -69,9 +75,8 @@ dotnet publish src/Perch.Hook/Perch.Hook.csproj -c Release -r "$RID" \
 # .app (the Windows lane strips .pdb the same way via vpk's default --exclude).
 rm -rf "$PUBLISH_DIR"/*.dSYM
 
-# --- Info.plist: substitute the release version into a temp copy ---------------------------------
-plist_tmp="$(mktemp -t perch-plist).plist"
-trap 'rm -f "$plist_tmp"' EXIT
+# --- Info.plist: substitute the release version into a local working copy ------------------------
+plist_tmp="$WORK/Info.plist"
 sed "s/__VERSION__/$VERSION/g" "$PLIST_SRC" > "$plist_tmp"
 
 # --- pack the unsigned .app + DMG ----------------------------------------------------------------
@@ -88,20 +93,29 @@ vpk pack \
     --plist "$plist_tmp" \
     --outputDir "$OUT_DIR"
 
-# --- DMG: the drag-install artifact the README points users at ------------------------------------
-# Velopack's mac lane emits a .pkg installer + a portable .zip, but not a .dmg. Wrap the packed Perch.app
-# (from the portable zip — vpk deletes its own temp bundle) into a compressed DMG with an /Applications
-# drop target, the familiar unsigned-mac install UX.
+# --- DMG + a runnable local Perch.app -------------------------------------------------------------
+# Velopack's mac lane emits a .pkg installer + a portable .zip, but not a .dmg, and leaves no loose .app
+# (it assembles the bundle in its own temp dir and deletes it). Unpack the portable zip locally so:
+#   * releases/Perch.app  is a runnable bundle you can launch/inspect without mounting anything, and
+#   * the DMG is built from it — a compressed image with an /Applications drop target (the familiar
+#     unsigned-mac drag-install UX the README points users at).
 echo "Building DMG ..."
 dmg="$OUT_DIR/Perch-$VERSION-osx-arm64.dmg"
-stage="$(mktemp -d)"
-unzip -q "$OUT_DIR/Perch-osx-Portable.zip" -d "$stage"
+app="$OUT_DIR/Perch.app"
+rm -rf "$app"
+unzip -q "$OUT_DIR/Perch-osx-Portable.zip" -d "$OUT_DIR"   # yields releases/Perch.app
+
+# hdiutil needs a folder holding the .app + the Applications symlink; stage that under WORK (a transient
+# copy, cleaned on exit) so the kept releases/Perch.app stays a plain bundle, not a DMG source tree.
+stage="$WORK/dmg"
+mkdir -p "$stage"
+cp -R "$app" "$stage/Perch.app"
 ln -s /Applications "$stage/Applications"
 rm -f "$dmg"
 hdiutil create -volname "Perch" -srcfolder "$stage" -ov -format UDZO "$dmg" >/dev/null
-rm -rf "$stage"
 
 echo
 echo "Release artifacts ready in: $OUT_DIR/"
 echo "  $(basename "$dmg")   <- drag-install DMG (see README Gatekeeper note; unsigned)"
+echo "  Perch.app                  <- runnable bundle (open $app)"
 echo "Upload to: https://github.com/ArcticGizmo/perch/releases/new?tag=v$VERSION"
