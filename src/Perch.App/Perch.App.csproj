@@ -33,7 +33,9 @@
      </PropertyGroup>
 
      <ItemGroup>
-          <AvaloniaResource Include="Assets/**" />
+          <!-- icon.icns is only consumed by the mac packaging step (vpk's icon flag), never at runtime —
+               keep it out of the embedded resources so it isn't baked into the assembly on every head. -->
+          <AvaloniaResource Include="Assets/**" Exclude="Assets/icon.icns" />
           <!-- The changelog is embedded so the Settings → Changelog page can render it at runtime (read via
          the assembly manifest under the logical name "Perch.CHANGELOG.md"). -->
           <EmbeddedResource Include="..\..\CHANGELOG.md" LogicalName="Perch.CHANGELOG.md" />

@@ -202,7 +202,7 @@ the right terminal; lock/unlock suppresses/fires a notification; chimes are audi
 
 ---
 
-## Phase D — Packaging: unsigned arm64 `.app` + DMG
+## Phase D — Packaging: unsigned arm64 `.app` + DMG — DONE (2026-07-07)
 
 Scoped to the decisions: **arm64 only, unsigned.**
 
@@ -226,6 +226,36 @@ Scoped to the decisions: **arm64 only, unsigned.**
 
 **Exit:** a runnable unsigned `Perch.app` / DMG built locally on this Mac; launches, shows the menu-bar item,
 overlay works, hooks wire up.
+
+### Phase D results (macOS arm64, verified 2026-07-07)
+
+Built end-to-end on this Mac with `./publish-mac.sh` (vpk 1.2.0). Produces `releases/Perch-0.2.0-osx-arm64.dmg`
+(+ Velopack's `.pkg`, portable `.zip`, and update feed). DMG mounts with a `Perch.app` / `Applications`
+drop-target; the bundled self-contained binary runs (`render` mode exits 0 from inside the mounted DMG).
+
+- **`Info.plist`** (`src/Perch.App/Info.plist`) — committed with a `__VERSION__` token the script substitutes.
+  Confirmed in the packed bundle: `CFBundleIdentifier=com.arcticgizmo.perch`, `LSUIElement=true`,
+  `LSMinimumSystemVersion=12.0`, `NSAppleEventsUsageDescription` present, `CFBundleIconFile=icon`, version
+  stamped. Passed to `vpk pack --plist` — **note vpk rejects `--bundleId` + `--plist` together**, so the id
+  lives in the plist alone.
+- **`.icns`** — `tools/gen-icns.sh` (sips + iconutil) derives `Assets/icon.icns` from `landing-icon.png`
+  (IconGen's SVG→raster path is System.Drawing, Windows-only, so the mac icon has its own tool). Committed;
+  excluded from `AvaloniaResource` so it isn't embedded in the assembly. Ends up in `Contents/Resources/`.
+- **`publish-mac.sh`** — sibling of `publish.bat`: publishes `perch` (`-f net10.0 -r osx-arm64`, self-contained;
+  the multi-target csproj still needs the explicit `-f`) + `perch-hook` (NativeAOT) into one dir, strips the
+  `perch-hook.dSYM`, then `vpk pack` (channel `osx`) → `.app`/`.pkg`/portable, and wraps the `.app` into a
+  compressed DMG via `hdiutil` (Velopack's mac lane emits `.pkg`, not DMG). Cleans `publish/`+`releases/` for
+  a repeatable run.
+- **Install hooks (mac)** — `PathInstaller.Register()` now runs on launch **only from inside a `.app`**
+  (`App.IsInsideAppBundle()` guards a dev `dotnet run` from clobbering `~/.local/bin/perch`), mirroring the
+  Windows Velopack install callback. `HookInstaller.Install()` already runs cross-platform every launch and
+  copies the bundled `perch-hook` to the stable per-user bin. No Velopack uninstall hook on mac — relies on
+  `perch-hook` self-heal, as planned.
+- **Gatekeeper** — README gained a "macOS (unsigned)" install note (`xattr -dr com.apple.quarantine` /
+  right-click Open) and the local-build section documents `publish-mac.sh`.
+
+**Not done here (belongs to E/F):** live launch of the installed `.app` (menu-bar item, overlay, the one-time
+Notifications/Automation prompts) — needs a human at the machine; the CI mac lane is Phase F.
 
 ---
 

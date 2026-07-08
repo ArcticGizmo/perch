@@ -107,11 +107,31 @@ stale entries, and removes them cleanly on uninstall. That unlocks:
 
 ## Installing
 
+### Windows
+
 Download `PerchSetup.exe` from the [latest release](https://github.com/ArcticGizmo/perch/releases/latest) and run it.
 
 - No admin rights required — installs to `%LocalAppData%\Perch\`
 - Starts automatically after install
 - Adds a Start Menu shortcut and a standard uninstaller (Settings → Apps)
+
+### macOS (Apple Silicon, unsigned)
+
+Download the `…-osx-arm64.dmg`, open it, and drag **Perch** to Applications.
+
+The mac build is **not yet code-signed or notarized**, so Gatekeeper will refuse to open it on the first
+try ("Perch is damaged / can't be opened"). Clear the quarantine flag once:
+
+```
+xattr -dr com.apple.quarantine /Applications/Perch.app
+```
+
+(Or right-click **Perch.app → Open** and confirm the prompt.) After that it launches normally.
+
+Perch runs as a menu-bar app — there's no Dock icon. On first launch it symlinks `perch` into
+`~/.local/bin`, wires its Claude Code hooks, and may raise one-time macOS prompts: **Notifications**, and
+an **Automation** prompt to control Terminal (needed to focus the terminal window running a session — if
+you decline, click-to-focus falls back to just bringing the terminal app forward).
 
 ## Updating
 
@@ -147,10 +167,15 @@ dotnet tool install -g vpk
 Then run:
 
 ```
-publish.bat
+publish.bat        # Windows: PerchSetup.exe
+./publish-mac.sh   # macOS (Apple Silicon): unsigned Perch.app + .dmg
 ```
 
 Artifacts land in `releases/`. Upload them manually to a GitHub Release tagged to match the version in the csproj.
+
+The mac build is arm64-only and unsigned (see the [macOS install note](#macos-apple-silicon-unsigned) for
+the Gatekeeper workaround). `publish-mac.sh` regenerates `Assets/icon.icns` on demand via
+[`tools/gen-icns.sh`](tools/gen-icns.sh) if it's missing.
 
 ## Development
 
@@ -183,3 +208,11 @@ tools\gen-icons.cmd              # cmd
 
 This writes `src/Perch.App/Assets/icon.png` (256×256), `src/Perch.App/Assets/icon.ico`
 (multi-resolution), and `landing-icon.png` (512×512).
+
+The macOS app icon (`src/Perch.App/Assets/icon.icns`) is regenerated separately, on a Mac, from
+`landing-icon.png` — the IconGen path above renders the SVG through System.Drawing, which only runs on
+Windows:
+
+```
+tools/gen-icns.sh
+```

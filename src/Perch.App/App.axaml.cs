@@ -180,12 +180,25 @@ public partial class App : Application
             // marketplace plugin so events aren't delivered twice. All off the UI thread, best-effort.
             System.Threading.Tasks.Task.Run(async () =>
             {
+                // macOS has no Velopack install callback (the .app is drag-installed), so keep the
+                // `perch` PATH symlink in sync here instead — but only for a real installed bundle, never a
+                // dev `dotnet run` (which would point ~/.local/bin/perch at a throwaway build dir). On
+                // Windows the equivalent runs from Velopack's install/update fast callbacks (see Program).
+                if (!OperatingSystem.IsWindows() && IsInsideAppBundle())
+                    PlatformServices.PathInstaller.Register();
+
                 HookInstaller.Install();
                 await MigrateOffPlugin();
             });
         }
         base.OnFrameworkInitializationCompleted();
     }
+
+    // True when this process is running from inside a macOS .app bundle (…/Perch.app/Contents/MacOS/perch),
+    // i.e. an installed build rather than a `dotnet run` from the repo. Gates the mac PATH-symlink install
+    // so a dev run never clobbers an installed Perch's ~/.local/bin/perch link with a build-output path.
+    private static bool IsInsideAppBundle() =>
+        Environment.ProcessPath?.Contains("/Contents/MacOS/", StringComparison.Ordinal) == true;
 
     // One-time-ish migration off the retired marketplace plugin. Only acts when the plugin/marketplace
     // is still registered (a fast settings.json read), so it's a no-op for fresh installs and on every

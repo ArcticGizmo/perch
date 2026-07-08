@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS bundle metadata for the .app produced by publish-mac.sh (passed to `vpk pack --plist`).
+  This is the mac counterpart of the Windows head's app.manifest — it's only consumed by the mac
+  packaging path and is ignored by every other build.
+
+  __VERSION__ is substituted with the release version by publish-mac.sh before packing; the committed
+  token is a placeholder, not a valid version, so don't hand this file to `vpk` directly.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.arcticgizmo.perch</string>
+    <key>CFBundleName</key>
+    <string>Perch</string>
+    <key>CFBundleDisplayName</key>
+    <string>Perch</string>
+    <!-- Must match `vpk pack --mainExe` and the published binary name (AssemblyName `perch`). -->
+    <key>CFBundleExecutable</key>
+    <string>perch</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <!-- Icon file in Contents/Resources (the .icns extension is implied). -->
+    <key>CFBundleIconFile</key>
+    <string>icon</string>
+    <!-- Menu-bar / agent app: no Dock icon, no app-switcher entry, no stray main window. -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <!-- .NET 10's osx-arm64 runtime floor. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <!-- Required for the Terminal.app window-focus AppleScript (WindowActivator). Without this key the
+         one-time Automation prompt is denied outright and click-to-focus degrades to app-level `open`. -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Perch focuses the terminal window running a Claude Code session when you click its overlay row.</string>
+</dict>
+</plist>
