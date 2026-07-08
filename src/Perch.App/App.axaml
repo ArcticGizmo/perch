@@ -1,0 +1,21 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Perch.Avalonia.App"
+             RequestedThemeVariant="Dark">
+    <!-- Perch is a dark app; force the dark Fluent variant rather than following the system. -->
+    <Application.Styles>
+        <FluentTheme />
+    </Application.Styles>
+
+    <Application.Resources>
+        <!-- Shared palette exposed to XAML. Kept in sync with Theming/Palette.cs (same ARGB values). -->
+        <SolidColorBrush x:Key="FormBgBrush" Color="#181820" />
+        <SolidColorBrush x:Key="FgBrush" Color="#E1E1EB" />
+        <SolidColorBrush x:Key="TitleBrush" Color="#F5F5FA" />
+        <SolidColorBrush x:Key="MutedBrush" Color="#8C8CA0" />
+        <SolidColorBrush x:Key="AccentBrush" Color="#60A5FA" />
+        <SolidColorBrush x:Key="BorderBrush" Color="#2D2D3C" />
+        <SolidColorBrush x:Key="ButtonBgBrush" Color="#2D2D3C" />
+        <SolidColorBrush x:Key="BrandBrush" Color="#FF442D" />
+    </Application.Resources>
+</Application>

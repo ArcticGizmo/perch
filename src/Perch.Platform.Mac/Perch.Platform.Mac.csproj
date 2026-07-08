@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    macOS implementations of the platform-service interfaces declared in Perch.Core. Targets plain
+    net10.0 (NOT net10.0-macos) and reaches AppKit / CoreGraphics / libSystem through P/Invoke
+    (objc_msgSend et al), so it builds on any host — Windows and CI included — because the native
+    entry points only resolve at runtime on macOS. That keeps the mac head buildable without the
+    macios workload or a Mac in the loop.
+
+    Phase 2 ships these as graceful no-op / degraded stubs so the cross-platform head compiles and
+    launches; Phase 3 fills in the real interop one interface at a time.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Perch.Platform.Mac</RootNamespace>
+    <AssemblyName>Perch.Platform.Mac</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Perch.Core\Perch.Core.csproj" />
+  </ItemGroup>
+</Project>

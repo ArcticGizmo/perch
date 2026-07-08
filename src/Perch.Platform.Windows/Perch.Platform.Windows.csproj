@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Windows implementations of the platform-service interfaces declared in Perch.Core. Targets
+    net10.0-windows for the Win32 / shell / SystemEvents surface, but deliberately does NOT enable
+    WinForms — so both the (current) WinForms app and the (future) Avalonia app can share these
+    implementations. macOS/Linux siblings will implement the same Core interfaces later.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Perch.Platform.Windows</RootNamespace>
+    <AssemblyName>Perch.Platform.Windows</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Perch.Core\Perch.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Windows-desktop APIs used without pulling in WinForms/WPF: SystemSounds (chimes) and
+         SessionSwitch (session lock/unlock). These compat packages ship the Windows-only surface. -->
+    <PackageReference Include="System.Windows.Extensions" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Win32.SystemEvents" Version="10.0.9" />
+    <!-- Shell icon extraction + PNG encoding for the quick-links strip (WindowsAppIconProvider).
+         Windows-only, so it lives here rather than in the UI-neutral Core. -->
+    <PackageReference Include="System.Drawing.Common" Version="10.0.9" />
+  </ItemGroup>
+</Project>

@@ -1,6 +1,0 @@
-{
-  "name": "perch",
-  "version": "0.2.0",
-  "description": "Integrates Claude Code with the Perch tray app: reports each session's live permission mode, adds /afk (toggle external notifications) and /history (open the history panel), and can auto-start the tray when a session opens. Commands are handled in the hook script itself by writing session sidecar files the tray observes; fails gracefully when perch isn't installed or running.",
-  "author": { "name": "Jonathan Howell" }
-}

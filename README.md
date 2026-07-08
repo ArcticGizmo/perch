@@ -71,7 +71,7 @@ Click the header to expand it into per-session rows; click a row to focus that s
 
 - **Desktop toasts** when a session finishes or starts awaiting input — click one to jump straight to that terminal.
 - **System chimes** for done / waiting, honouring your Windows sound scheme.
-- **Push to your phone** via [ntfy](https://ntfy.sh) — opt in per session (or via `/afk`), with an optional "Open session" button for sessions controlled from claude.ai.
+- **Push to your phone** via [ntfy](https://ntfy.sh) — opt in per session, with an optional "Open session" button for sessions controlled from claude.ai.
 - **Away override** — when your workstation is locked, push _any_ session's alerts so you never miss one while you're AFK.
 - Independent on/off toggles for every notification type, each with a test button.
 
@@ -89,13 +89,13 @@ Click the header to expand it into per-session rows; click a row to focus that s
 - Click to focus the app if it's already running, or launch it if not.
 - Fully customisable — add, edit, enable/disable links, with presets for well-known apps.
 
-### Companion plugin
+### Live session state
 
-Install the Claude Code plugin (one click from **Settings → Plugin Control**) to unlock:
+Perch wires a few hooks into Claude Code for you — no plugin to install. On launch it points
+`~/.claude/settings.json` at its own fast `perch-hook` binary, keeps it current across updates, heals
+stale entries, and removes them cleanly on uninstall. That unlocks:
 
 - **Permission-mode badges** in the overlay (Plan / Accept Edits / Auto / Bypass).
-- **`/afk`** — toggle push notifications for the current session from the terminal.
-- **`/history`** — pop open the history viewer for the current session.
 - **Auto-start** — launch Perch automatically when you open your first session (and optionally close it after the last one ends).
 
 ### The little things
@@ -107,11 +107,31 @@ Install the Claude Code plugin (one click from **Settings → Plugin Control**) 
 
 ## Installing
 
+### Windows
+
 Download `PerchSetup.exe` from the [latest release](https://github.com/ArcticGizmo/perch/releases/latest) and run it.
 
 - No admin rights required — installs to `%LocalAppData%\Perch\`
 - Starts automatically after install
 - Adds a Start Menu shortcut and a standard uninstaller (Settings → Apps)
+
+### macOS (Apple Silicon, unsigned)
+
+Download the `…-osx-arm64.dmg`, open it, and drag **Perch** to Applications.
+
+The mac build is **not yet code-signed or notarized**, so Gatekeeper will refuse to open it on the first
+try ("Perch is damaged / can't be opened"). Clear the quarantine flag once:
+
+```
+xattr -dr com.apple.quarantine /Applications/Perch.app
+```
+
+(Or right-click **Perch.app → Open** and confirm the prompt.) After that it launches normally.
+
+Perch runs as a menu-bar app — there's no Dock icon. On first launch it symlinks `perch` into
+`~/.local/bin`, wires its Claude Code hooks, and may raise one-time macOS prompts: **Notifications**, and
+an **Automation** prompt to control Terminal (needed to focus the terminal window running a session — if
+you decline, click-to-focus falls back to just bringing the terminal app forward).
 
 ## Updating
 
@@ -125,7 +145,7 @@ Releases are created by pushing a version tag. GitHub Actions handles the build 
 
 **Steps:**
 
-1. Bump `<Version>` in `src/Perch.csproj` to the new version (e.g. `0.2.0`)
+1. Bump `<Version>` in `src/Perch.App/Perch.App.csproj` to the new version (e.g. `0.2.0`)
 2. Commit the change
 3. Push a matching tag:
    ```
@@ -147,17 +167,29 @@ dotnet tool install -g vpk
 Then run:
 
 ```
-publish.bat
+publish.bat        # Windows: PerchSetup.exe
+./publish-mac.sh   # macOS (Apple Silicon): unsigned Perch.app + .dmg
 ```
 
 Artifacts land in `releases/`. Upload them manually to a GitHub Release tagged to match the version in the csproj.
+
+The mac build is arm64-only and unsigned (see the [macOS install note](#macos-apple-silicon-unsigned) for
+the Gatekeeper workaround). `publish-mac.sh` regenerates `Assets/icon.icns` on demand via
+[`tools/gen-icns.sh`](tools/gen-icns.sh) if it's missing.
 
 ## Development
 
 Requirements: .NET 10 SDK
 
 ```
-dotnet run --project src
+dotnet run --project src/Perch.App
+```
+
+The UI is [Avalonia](https://avaloniaui.net/). To eyeball owner-drawn surfaces without launching the tray,
+render them to PNG (1× and 1.5×):
+
+```
+dotnet run --project src/Perch.App -- render out
 ```
 
 ### Icons
@@ -174,4 +206,13 @@ tools\gen-icons.cmd              # cmd
 # or directly: dotnet run --project tools/IconGen
 ```
 
-This writes `src/icon.png` (256×256), `src/icon.ico` (multi-resolution), and `landing-icon.png` (512×512).
+This writes `src/Perch.App/Assets/icon.png` (256×256), `src/Perch.App/Assets/icon.ico`
+(multi-resolution), and `landing-icon.png` (512×512).
+
+The macOS app icon (`src/Perch.App/Assets/icon.icns`) is regenerated separately, on a Mac, from
+`landing-icon.png` — the IconGen path above renders the SVG through System.Drawing, which only runs on
+Windows:
+
+```
+tools/gen-icns.sh
+```

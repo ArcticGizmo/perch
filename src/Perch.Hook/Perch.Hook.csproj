@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    perch-hook: a tiny, fast Claude Code hook writer, NativeAOT-compiled so its cold start is competitive
+    with (or better than) the current `powershell.exe invoke.ps1` path. The hot-path events (mode) fire on
+    every tool call, so process startup latency is the whole ballgame — hence AOT (no JIT, no runtime
+    init, no self-extract) and the size/startup-trimming switches below. Mostly reflection-free
+    (Utf8JsonReader on the hot path; JsonNode only for the rare self-heal write) so trimming/AOT can't
+    break it.
+
+    Perch self-manages its Claude Code hooks by pointing ~/.claude/settings.json at this binary (see
+    Perch.Data.ClaudeUserSettings + the app's HookInstaller). publish.bat / release.yml publish it into
+    the same output dir as `perch` so Velopack packs the two together.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>perch-hook</AssemblyName>
+    <RootNamespace>Perch.Hook</RootNamespace>
+
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <StackTraceSupport>false</StackTraceSupport>
+    <OptimizationPreference>Size</OptimizationPreference>
+  </PropertyGroup>
+</Project>

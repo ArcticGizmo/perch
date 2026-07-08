@@ -1,11 +1,11 @@
 @echo off
 setlocal
 
-:: Read version from csproj if not passed as argument
+:: Read version from the Avalonia csproj if not passed as argument
 if not "%~1"=="" (
     set VERSION=%~1
 ) else (
-    for /f "tokens=*" %%i in ('powershell -NoProfile -Command "(Select-Xml -Path src\Perch.csproj -XPath \"//Version\").Node.InnerText"') do set VERSION=%%i
+    for /f "tokens=*" %%i in ('powershell -NoProfile -Command "(Select-Xml -Path src\Perch.App\Perch.App.csproj -XPath \"//Version\").Node.InnerText"') do set VERSION=%%i
 )
 
 if "%VERSION%"=="" (
@@ -15,7 +15,7 @@ if "%VERSION%"=="" (
 
 echo Building Perch v%VERSION%...
 
-dotnet publish src\Perch.csproj -c Release -r win-x64 --self-contained true ^
+dotnet publish src\Perch.App\Perch.App.csproj -c Release -f net10.0-windows10.0.19041.0 -r win-x64 --self-contained true ^
     -p:PublishSingleFile=true ^
     -p:EnableCompressionInSingleFile=true ^
     -p:DebugType=embedded ^
@@ -23,6 +23,17 @@ dotnet publish src\Perch.csproj -c Release -r win-x64 --self-contained true ^
 
 if %ERRORLEVEL% neq 0 (
     echo Build failed.
+    exit /b %ERRORLEVEL%
+)
+
+echo Publishing perch-hook (NativeAOT) ...
+
+:: perch-hook is the self-managed Claude Code hook binary. Publish it into the SAME dir as perch.exe
+:: so Velopack packs the two together; the app copies it to a stable per-user path on launch.
+dotnet publish src\Perch.Hook\Perch.Hook.csproj -c Release -r win-x64 -o publish\
+
+if %ERRORLEVEL% neq 0 (
+    echo perch-hook publish failed. NativeAOT needs the Visual Studio "Desktop development with C++" workload.
     exit /b %ERRORLEVEL%
 )
 

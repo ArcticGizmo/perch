@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
+    <!-- Plain net10.0: the tests exercise only the portable Perch.Core data layer (no WinForms, no
+         Win32), so they build and run on macOS/Linux as well as Windows. -->
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
@@ -16,7 +17,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Perch.csproj" />
+    <!-- The data/parsing logic under test now lives in Perch.Core; the tests reference it
+         directly and no longer depend on the WinForms app. -->
+    <ProjectReference Include="..\..\src\Perch.Core\Perch.Core.csproj" />
   </ItemGroup>
 
   <!-- Fixtures are a synthetic ~/.claude tree the tests point CLAUDE_CONFIG_DIR at. -->

@@ -1,0 +1,76 @@
+<Project Sdk="Microsoft.NET.Sdk">
+     <PropertyGroup>
+          <!-- Two heads from one project. The Windows head (net10.0-windows) uses real Action Center
+         toasts via the UWP notifications compat shim, so it needs the Windows-10 TFM. The cross-platform
+         head (plain net10.0) serves macOS/Linux and reaches native APIs through Perch.Platform.Mac's
+         P/Invoke. The item groups below fork the OutputType, manifest/icon, packages and platform
+         project reference per TFM; PlatformServices selects the implementation set with #if WINDOWS.
+         The Windows head only builds on a Windows host (its reference packs need EnableWindowsTargeting
+         off-Windows); on macOS/Linux we build the cross-platform head alone, so `dotnet build`/`run`
+         work with no extra flags. CI/publish runs on windows-latest and gets both. -->
+          <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('Windows'))">net10.0-windows10.0.19041.0;net10.0</TargetFrameworks>
+          <TargetFrameworks Condition="!$([MSBuild]::IsOSPlatform('Windows'))">net10.0</TargetFrameworks>
+          <Nullable>enable</Nullable>
+          <ImplicitUsings>enable</ImplicitUsings>
+          <RootNamespace>Perch.Avalonia</RootNamespace>
+          <AssemblyName>perch</AssemblyName>
+          <Product>Perch</Product>
+          <Version>0.2.0</Version>
+          <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+     </PropertyGroup>
+
+     <!-- Windows head only: windowed subsystem, app manifest + icon, and COM interop for shell/clipboard. -->
+     <PropertyGroup Condition="$(TargetFramework.Contains('-windows'))">
+          <OutputType>WinExe</OutputType>
+          <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+          <ApplicationManifest>app.manifest</ApplicationManifest>
+          <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+     </PropertyGroup>
+
+     <!-- Cross-platform head: a plain executable (macOS GUI/agent behaviour comes from the .app bundle). -->
+     <PropertyGroup Condition="!$(TargetFramework.Contains('-windows'))">
+          <OutputType>Exe</OutputType>
+     </PropertyGroup>
+
+     <ItemGroup>
+          <!-- icon.icns is only consumed by the mac packaging step (vpk's icon flag), never at runtime —
+               keep it out of the embedded resources so it isn't baked into the assembly on every head. -->
+          <AvaloniaResource Include="Assets/**" Exclude="Assets/icon.icns" />
+          <!-- The changelog is embedded so the Settings → Changelog page can render it at runtime (read via
+         the assembly manifest under the logical name "Perch.CHANGELOG.md"). -->
+          <EmbeddedResource Include="..\..\CHANGELOG.md" LogicalName="Perch.CHANGELOG.md" />
+     </ItemGroup>
+
+     <ItemGroup>
+          <PackageReference Include="Avalonia" Version="12.0.5" />
+          <PackageReference Include="Avalonia.Desktop" Version="12.0.5" />
+          <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.5" />
+          <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.5" />
+          <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+          <PackageReference Include="Velopack" Version="1.2.0" />
+          <PackageReference Include="QRCoder" Version="1.8.0" />
+          <PackageReference Include="Markdig" Version="1.3.2" />
+          <PackageReference Include="Avalonia.Headless" Version="12.0.5" />
+          <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3">
+               <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
+               <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
+          </PackageReference>
+     </ItemGroup>
+
+     <!-- Windows head: UWP Action Center toasts + the Win32 platform implementations. -->
+     <ItemGroup Condition="$(TargetFramework.Contains('-windows'))">
+          <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" />
+          <ProjectReference Include="..\Perch.Platform.Windows\Perch.Platform.Windows.csproj" />
+     </ItemGroup>
+
+     <!-- Cross-platform head: the macOS platform implementations. The Windows-only Action Center notifier
+          is compiled out (AvaloniaToastNotifier is the notifier off Windows). -->
+     <ItemGroup Condition="!$(TargetFramework.Contains('-windows'))">
+          <ProjectReference Include="..\Perch.Platform.Mac\Perch.Platform.Mac.csproj" />
+          <Compile Remove="Notifications\WindowsToastNotifier.cs" />
+     </ItemGroup>
+
+     <ItemGroup>
+          <ProjectReference Include="..\Perch.Core\Perch.Core.csproj" />
+     </ItemGroup>
+</Project>

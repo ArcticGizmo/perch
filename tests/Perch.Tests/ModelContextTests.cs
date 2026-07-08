@@ -33,7 +33,8 @@ public class ModelContextTests
     [InlineData("Opus 4.8 (1M context)", ModelContext.ExtendedWindow)]
     [InlineData("Sonnet 5", ModelContext.ExtendedWindow)]        // 1M by default, no marker
     [InlineData("Sonnet 4.6", ModelContext.DefaultWindow)]
-    [InlineData("Opus 4.8", ModelContext.DefaultWindow)]         // plain Opus is the 200k variant
+    [InlineData("Opus 4.8", ModelContext.ExtendedWindow)]        // Opus 4.x is 1M (assumed for the family)
+    [InlineData("Opus 4.6", ModelContext.ExtendedWindow)]
     [InlineData("Haiku 4.5", ModelContext.DefaultWindow)]        // 200k-only
     [InlineData(null, ModelContext.DefaultWindow)]
     [InlineData("", ModelContext.DefaultWindow)]
@@ -47,7 +48,9 @@ public class ModelContextTests
     [InlineData("opus[1m]", ModelContext.ExtendedWindow)]
     [InlineData("claude-sonnet-5", ModelContext.ExtendedWindow)] // Sonnet 5 defaults to 1M
     [InlineData("sonnet", ModelContext.ExtendedWindow)]          // alias → current Sonnet (5)
-    [InlineData("claude-opus-4-8", ModelContext.DefaultWindow)]
+    [InlineData("claude-opus-4-8", ModelContext.ExtendedWindow)] // Opus 4.x assumed 1M (bare id can't tell)
+    [InlineData("claude-opus-4-6", ModelContext.ExtendedWindow)]
+    [InlineData("opus", ModelContext.ExtendedWindow)]            // alias → current Opus (1M)
     [InlineData("claude-sonnet-4-6", ModelContext.DefaultWindow)]
     [InlineData(null, ModelContext.DefaultWindow)]
     public void WindowForConfiguredModel_OneMSuffixIsExtended(string? model, int expected)

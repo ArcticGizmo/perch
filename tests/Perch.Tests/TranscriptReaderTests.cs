@@ -41,6 +41,20 @@ public class TranscriptReaderTests
     }
 
     [Fact]
+    public void GetContextFill_DefaultOpusSession_AssumesOneMWindow()
+    {
+        var reader = new TranscriptReader();
+        // No /model switch and no settings.json "model": the window is resolved from the running
+        // message.model ("claude-opus-4-8"). That bare id can't distinguish 200k from 1M, and Opus 4.x
+        // is 1M, so it must resolve to the extended window — not fall back to 200k.
+        var (fill, window) = reader.GetContextFill("sessOpusDefault", Cwd);
+        Assert.Equal(ModelContext.ExtendedWindow, window);
+        Assert.NotNull(fill);
+        // used = input 100 + cache_creation 10000 + cache_read 50000 = 60100 over a 1,000,000 window.
+        Assert.Equal(0.0601, (double)fill!.Value, 4);
+    }
+
+    [Fact]
     public void GetContextFill_CountsCacheCreationAfterModelSwitch()
     {
         var reader = new TranscriptReader();

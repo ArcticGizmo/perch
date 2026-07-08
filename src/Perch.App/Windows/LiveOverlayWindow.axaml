@@ -1,0 +1,10 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Perch.Avalonia.Windows.LiveOverlayWindow"
+        Title="Perch"
+        Width="280" SizeToContent="Height"
+        CanResize="False" ShowInTaskbar="False" Topmost="True"
+        Background="Transparent">
+    <!-- Content is the owner-drawn OverlayCanvas, set in code-behind. Chrome (borderless/transparent/
+         manual position) is also set in code-behind. -->
+</Window>

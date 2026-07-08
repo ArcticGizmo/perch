@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-07-01T08:00:00Z","cwd":"C:\\fixtures\\proj","gitBranch":"main","message":{"role":"user","content":"Start a task"}}
+{"type":"assistant","timestamp":"2026-07-01T08:00:20Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":40,"cache_creation_input_tokens":10000,"cache_read_input_tokens":50000},"content":[{"type":"text","text":"On it."}]}}
