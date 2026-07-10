@@ -117,16 +117,32 @@ Download `PerchSetup.exe` from the [latest release](https://github.com/ArcticGiz
 
 ### macOS (Apple Silicon, unsigned)
 
-Download the `…-osx-arm64.dmg`, open it, and drag **Perch** to Applications.
+1. Download the `…-osx-arm64.dmg` from the [latest release](https://github.com/ArcticGizmo/perch/releases/latest).
+2. Open the `.dmg` and drag **Perch** to the **Applications** folder.
+3. Clear the quarantine flag (see below), then launch Perch from Applications.
 
-The mac build is **not yet code-signed or notarized**, so Gatekeeper will refuse to open it on the first
-try ("Perch is damaged / can't be opened"). Clear the quarantine flag once:
+The mac build is **not yet code-signed or notarized**. When macOS downloads an unsigned app it tags it
+with a `com.apple.quarantine` flag, and Gatekeeper then refuses to open it — showing **"Perch is damaged
+and can't be opened. You should move it to the Trash."** The app isn't actually damaged; that misleading
+message just means the quarantine flag is set. Remove it once, from **Terminal**:
 
+```sh
+xattr -cr /Applications/Perch.app
 ```
-xattr -dr com.apple.quarantine /Applications/Perch.app
-```
 
-(Or right-click **Perch.app → Open** and confirm the prompt.) After that it launches normally.
+Then open Perch normally (double-click, or right-click → **Open**). You only need to do this once per
+install/update.
+
+> **Note:** on macOS Sonoma/Sequoia the old "right-click → Open" bypass no longer clears a *damaged*
+> verdict — you must run the `xattr` command above. If you dragged Perch somewhere other than
+> `/Applications`, point the command at wherever `Perch.app` actually lives.
+
+If the `.dmg` **itself** won't open ("damaged"), the quarantine is on the download — clear it on the disk
+image first, then reopen it:
+
+```sh
+xattr -cr ~/Downloads/Perch-*-osx-arm64.dmg
+```
 
 Perch runs as a menu-bar app — there's no Dock icon. On first launch it symlinks `perch` into
 `~/.local/bin`, wires its Claude Code hooks, and may raise one-time macOS prompts: **Notifications**, and
