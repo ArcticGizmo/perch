@@ -33,6 +33,9 @@ internal sealed class SettingsHooks
     /// <summary>Start (true) or stop (false) the Claude service-status poll.</summary>
     public Action<bool>? ServiceStatusEnabledChanged;
 
+    /// <summary>Re-apply the service-status poll interval (the App reads the mutated setting back).</summary>
+    public Action? ServiceStatusIntervalChanged;
+
 #if DEBUG
     /// <summary>Push a sample outage onto the overlay so the status footer can be illustrated (debug only).</summary>
     public Action? TestServiceStatus;
@@ -393,25 +396,37 @@ internal sealed class SettingsWindow : Window
     private void BuildServiceStatusSection(StackPanel page)
     {
         Button? testBtn = null;
+        var intervalStepper = BuildStatusIntervalStepper(out var applyIntervalEnabled);
+
         var toggle = Toggle(_settings.ShowServiceStatus);
+        void ApplyEnabled(bool on)
+        {
+            applyIntervalEnabled(on);
+            if (testBtn is not null) testBtn.IsEnabled = on;
+        }
         toggle.CheckedChanged += (_, _) =>
         {
             _settings.ShowServiceStatus = toggle.IsChecked;
             _settings.Save();
             _hooks.DisplayChanged?.Invoke();
             _hooks.ServiceStatusEnabledChanged?.Invoke(toggle.IsChecked);
-            if (testBtn is not null) testBtn.IsEnabled = toggle.IsChecked;
+            ApplyEnabled(toggle.IsChecked);
         };
         page.Children.Add(SettingsUi.TitleRow("Service status", toggle));
         page.Children.Add(SettingsUi.BodyText(
             "Shows an outage banner at the bottom of the overlay when status.claude.com reports a problem — " +
             "click it for the list of incidents and a link to the status page. Nothing shows while all " +
-            "systems are operational. Perch polls the public status page every couple of minutes."));
+            "systems are operational."));
+
+        page.Children.Add(SettingsUi.FieldCaption("Check for outages every"));
+        page.Children.Add(intervalStepper);
+        page.Children.Add(SettingsUi.BodyText(
+            "How often Perch polls the status page. Checks are conditional, so an unchanged status barely " +
+            "costs anything — this mainly bounds how quickly a new incident shows up."));
 
 #if DEBUG
         var row = SettingsUi.ButtonRow();
         testBtn = SettingsUi.FlatButton("Show example outage");
-        testBtn.IsEnabled = _settings.ShowServiceStatus;
         testBtn.Click += (_, _) => _hooks.TestServiceStatus?.Invoke();
         row.Children.Add(testBtn);
         page.Children.Add(row);
@@ -419,6 +434,47 @@ internal sealed class SettingsWindow : Window
             "Pushes a sample outage to the overlay so you can see how the banner looks; a real status check " +
             "replaces it within a couple of minutes. (Debug builds only.)"));
 #endif
+
+        ApplyEnabled(_settings.ShowServiceStatus);
+    }
+
+    // A −/+ stepper for the service-status poll interval (minutes). Returns the row plus an enable hook so
+    // the section can grey it out with the feature toggle. Mirrors BuildIdleStepper.
+    private Control BuildStatusIntervalStepper(out Action<bool> applyEnabled)
+    {
+        const int min = 1, max = 60;
+        var row = SettingsUi.ButtonRow();
+        var dec = SettingsUi.FlatButton("−");
+        var inc = SettingsUi.FlatButton("+");
+        dec.Width = 36; inc.Width = 36;
+        var value = new TextBlock
+        {
+            Width = 90, TextAlignment = TextAlignment.Center, Foreground = Palette.FgBrush,
+            VerticalAlignment = VerticalAlignment.Center, FontSize = 14,
+        };
+        void Render() => value.Text = _settings.ServiceStatusIntervalMinutes == 1
+            ? "1 minute" : $"{_settings.ServiceStatusIntervalMinutes} minutes";
+        void Apply(int v)
+        {
+            v = Math.Clamp(v, min, max);
+            if (v == _settings.ServiceStatusIntervalMinutes) return;
+            _settings.ServiceStatusIntervalMinutes = v;
+            _settings.Save();
+            _hooks.ServiceStatusIntervalChanged?.Invoke();
+            Render();
+        }
+        dec.Click += (_, _) => Apply(_settings.ServiceStatusIntervalMinutes - 1);
+        inc.Click += (_, _) => Apply(_settings.ServiceStatusIntervalMinutes + 1);
+        Render();
+        row.Children.Add(dec);
+        row.Children.Add(value);
+        row.Children.Add(inc);
+        applyEnabled = on =>
+        {
+            dec.IsEnabled = on; inc.IsEnabled = on;
+            value.Foreground = on ? Palette.FgBrush : Palette.MutedBrush;
+        };
+        return row;
     }
 
     private void BuildModeBadgeSection(StackPanel page)

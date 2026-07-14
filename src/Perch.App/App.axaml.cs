@@ -77,11 +77,13 @@ public partial class App : Application
             // Live overlay + the data pipelines that feed it. Every host delivers on the UI thread, so
             // feeding the owner-drawn canvas from their callbacks is UI-thread-safe.
             _overlay = new LiveOverlayWindow();
+            var settings = AppSettings.Load();
+            _appSettings = settings;
             _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage, PlatformServices.ClaudeCredentials);
             _metricsHost = new MetricsMonitorHost(PlatformServices.SystemMetrics,
                 _overlay.Canvas.UpdateSystemMetrics, _overlay.Canvas.UpdateSessionMetrics);
             // Public Claude service status → the overlay's outage footer (only shown when there's an issue).
-            _statusHost = new StatusMonitorHost(_overlay.Canvas.UpdateStatus);
+            _statusHost = new StatusMonitorHost(_overlay.Canvas.UpdateStatus, settings.ServiceStatusIntervalMinutes);
 
             // Each scan feeds both the canvas and the metrics sampler (which pids to measure).
             _monitorHost = new SessionMonitorHost(sessions =>
@@ -127,8 +129,6 @@ public partial class App : Application
             _overlay.DragCompleted += OnOverlayDragCompleted;
 
             // Quick-links strip: launch/focus goes through the platform seams; icons resolve off-thread.
-            var settings = AppSettings.Load();
-            _appSettings = settings;
             _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider);
             _overlay.Canvas.QuickLinkActivated += _quickLinkLauncher.LaunchOrFocus;
 
@@ -571,6 +571,7 @@ public partial class App : Application
             DisplayChanged = () => ApplyDisplaySettings(settings),
             UsageEnabledChanged = on => { if (on) _usageHost?.Start(); else _usageHost?.Stop(); },
             ServiceStatusEnabledChanged = on => { if (on) _statusHost?.Start(); else _statusHost?.Stop(); },
+            ServiceStatusIntervalChanged = () => _statusHost?.SetInterval(settings.ServiceStatusIntervalMinutes),
 #if DEBUG
             TestServiceStatus = () => _overlay?.Canvas.UpdateStatus(SampleOutage()),
 #endif

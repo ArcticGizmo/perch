@@ -12,10 +12,6 @@ namespace Perch.Avalonia.Services;
 /// </summary>
 internal sealed class StatusMonitorHost : IDisposable
 {
-    // Status pages move on the order of minutes; poll a little more eagerly than usage so an outage
-    // surfaces reasonably promptly without hammering the endpoint.
-    private static readonly TimeSpan Interval = TimeSpan.FromMinutes(2);
-
     private readonly StatusMonitor _monitor = new();
     private readonly Action<StatusInfo> _onStatus;
     private readonly DispatcherTimer _timer;
@@ -23,10 +19,10 @@ internal sealed class StatusMonitorHost : IDisposable
     /// <summary>The most recent reading. <see cref="StatusInfo.Healthy"/> until the first fetch completes.</summary>
     public StatusInfo Last { get; private set; } = StatusInfo.Healthy;
 
-    public StatusMonitorHost(Action<StatusInfo> onStatus)
+    public StatusMonitorHost(Action<StatusInfo> onStatus, int intervalMinutes)
     {
         _onStatus = onStatus;
-        _timer = new DispatcherTimer { Interval = Interval };
+        _timer = new DispatcherTimer { Interval = ClampInterval(intervalMinutes) };
         _timer.Tick += (_, _) => _ = Poll();
     }
 
@@ -38,6 +34,20 @@ internal sealed class StatusMonitorHost : IDisposable
     }
 
     public void Stop() => _timer.Stop();
+
+    /// <summary>Changes the poll cadence live (from the Settings stepper). A change while running restarts
+    /// the countdown so the new interval takes effect immediately.</summary>
+    public void SetInterval(int intervalMinutes)
+    {
+        var interval = ClampInterval(intervalMinutes);
+        if (_timer.Interval == interval) return;
+        _timer.Interval = interval;
+        if (_timer.IsEnabled) { _timer.Stop(); _timer.Start(); }
+    }
+
+    // Poll no more than once a minute and no less than hourly — status pages move on the order of minutes,
+    // and conditional (304) polls are cheap, so the bound is really just sanity.
+    private static TimeSpan ClampInterval(int minutes) => TimeSpan.FromMinutes(Math.Clamp(minutes, 1, 60));
 
     // Ticks on the UI thread; FetchAsync runs its IO off it and the continuation resumes here, so the
     // callback (and the repaint it drives) stays on the UI thread.

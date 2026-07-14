@@ -23,6 +23,10 @@ internal sealed class StatusMonitor
     // The most recent successful reading, so a failed fetch can still surface last-known state.
     private StatusInfo _last = StatusInfo.Healthy;
 
+    // The ETag of the last 200 response. Sent back as If-None-Match so an unchanged status returns an
+    // empty 304 (Statuspage sits behind a CDN that honours this) instead of re-sending the whole body.
+    private string? _etag;
+
     /// <summary>Fetches the current status. Always resolves (never throws): on failure the result carries
     /// the last successful reading with <c>Ok=false</c> plus a human reason.</summary>
     public async Task<StatusInfo> FetchAsync()
@@ -32,8 +36,18 @@ internal sealed class StatusMonitor
             using var req = new HttpRequestMessage(HttpMethod.Get, SummaryUrl);
             req.Headers.Accept.ParseAdd("application/json");
             req.Headers.UserAgent.ParseAdd("perch");
+            if (_etag is { } tag)
+                req.Headers.TryAddWithoutValidation("If-None-Match", tag);
 
             using var resp = await Http.SendAsync(req).ConfigureAwait(false);
+
+            // Unchanged since the last poll — reuse the cached reading (refreshing its timestamp so it
+            // doesn't read as stale). Cheap: the 304 body is empty.
+            if (resp.StatusCode == System.Net.HttpStatusCode.NotModified)
+            {
+                _last = _last with { LastUpdated = DateTime.Now, Ok = true, Error = null };
+                return _last;
+            }
             if (!resp.IsSuccessStatusCode)
                 return Fail($"Status service returned {(int)resp.StatusCode}");
 
@@ -42,6 +56,7 @@ internal sealed class StatusMonitor
             if (info is null)
                 return Fail("Couldn't parse status response");
 
+            _etag = resp.Headers.ETag?.Tag;
             _last = info;
             return _last;
         }
