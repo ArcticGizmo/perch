@@ -22,6 +22,7 @@ public partial class App : Application
     private SessionMonitorHost? _monitorHost;
     private UsageMonitorHost? _usageHost;
     private MetricsMonitorHost? _metricsHost;
+    private StatusMonitorHost? _statusHost;
     private QuickLinkLauncher? _quickLinkLauncher;
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
@@ -65,6 +66,7 @@ public partial class App : Application
                 _monitorHost?.Dispose();
                 _usageHost?.Dispose();
                 _metricsHost?.Dispose();
+                _statusHost?.Dispose();
                 _hotkey?.Dispose();
                 _sessionLock?.Dispose();
                 _overlay?.Canvas.DisposeDense();
@@ -78,6 +80,8 @@ public partial class App : Application
             _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage, PlatformServices.ClaudeCredentials);
             _metricsHost = new MetricsMonitorHost(PlatformServices.SystemMetrics,
                 _overlay.Canvas.UpdateSystemMetrics, _overlay.Canvas.UpdateSessionMetrics);
+            // Public Claude service status → the overlay's outage footer (only shown when there's an issue).
+            _statusHost = new StatusMonitorHost(_overlay.Canvas.UpdateStatus);
 
             // Each scan feeds both the canvas and the metrics sampler (which pids to measure).
             _monitorHost = new SessionMonitorHost(sessions =>
@@ -159,6 +163,7 @@ public partial class App : Application
             _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: settings.IncludeSubprocessMetrics);
             _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
+            if (settings.ShowServiceStatus) _statusHost.Start(); // initial fetch (polls every 2 min thereafter)
             ReloadQuickLinks(settings);
 
             // Global hotkey (Alt+Shift+W): toggle dense mode from anywhere (dense replaces the old
@@ -314,6 +319,7 @@ public partial class App : Application
         c.SetShowWaitingTimer(s.ShowWaitingTimer);
         c.SetWaitingTimerRedMinutes(s.WaitingTimerRedMinutes);
         c.SetShowArtifacts(s.ShowArtifacts);
+        c.SetServiceStatusEnabled(s.ShowServiceStatus);
         c.SetHideInactiveTeamMembers(s.HideInactiveTeamMembers);
         c.SetUpsideDownQuickLinks(s.UpsideDownQuickLinks);
         c.SetConfettiFinishAvailable(s.ConfettiFinish);
@@ -413,6 +419,16 @@ public partial class App : Application
         if (enabled) _usageHost?.Start(); else _usageHost?.Stop();
         _settings?.SyncDisplayToggles();
     }
+
+#if DEBUG
+    // A sample outage the Settings "Show example outage" button pushes onto the overlay so the footer can
+    // be eyeballed without waiting for a real incident. A real poll replaces it within a couple of minutes.
+    private static StatusInfo SampleOutage() =>
+        new(StatusLevel.Major, "Partial System Outage",
+            [new StatusIncident("Elevated errors on the Messages API", "major", "investigating",
+                "We are investigating elevated error rates.", "https://status.claude.com")],
+            StatusInfo.DefaultPageUrl, DateTime.Now, true, null);
+#endif
 
     // ── Tray / overlay window openers (single reused instances via WindowHost) ─
     // "Session history…" (tray) or "View history" (overlay row) — opens/focuses the one viewer and, when
@@ -554,6 +570,10 @@ public partial class App : Application
         {
             DisplayChanged = () => ApplyDisplaySettings(settings),
             UsageEnabledChanged = on => { if (on) _usageHost?.Start(); else _usageHost?.Stop(); },
+            ServiceStatusEnabledChanged = on => { if (on) _statusHost?.Start(); else _statusHost?.Stop(); },
+#if DEBUG
+            TestServiceStatus = () => _overlay?.Canvas.UpdateStatus(SampleOutage()),
+#endif
             MetricsChanged = () => _metricsHost?.Configure(
                 settings.ShowSystemMetrics, settings.ShowSessionMetrics, settings.IncludeSubprocessMetrics),
             QuickLinksChanged = () => ReloadQuickLinks(settings),

@@ -72,6 +72,14 @@ internal static class HeadlessRenderer
         probe.StartAutoCloseCountdown(20_000);
         RenderControl(probe, Path.Combine(outDir, "overlay_autoclose_1x.png"), 96);
 
+        // Service-status outage footer: a major-impact reading with one unresolved incident, so the
+        // severity-tinted banner + dot + description render at the panel bottom.
+        canvas.SetConfettiFinishAvailable(false);
+        canvas.UpdateStatus(SampleStatus());
+        RenderControl(canvas, Path.Combine(outDir, "overlay_status_1x.png"), 96);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_status_1.5x.png"), 144);
+        canvas.UpdateStatus(StatusInfo.Healthy);
+
         // QR card (5.2): render the window's content card so the code + chrome can be eyeballed.
         var qr = new Windows.QrWindow("perch", "https://claude.ai/code/bridge-xyz-1234");
         if (qr.Content is Control qrCard)
@@ -220,6 +228,14 @@ internal static class HeadlessRenderer
             FiveHourResetsAt: now.AddHours(2), SevenDayResetsAt: now.AddDays(4),
             LastUpdated: now, Ok: true, Error: null);
     }
+
+    // A visible outage: major impact with one unresolved incident, so the footer's severity colour,
+    // description, and click-menu content are all exercised.
+    private static StatusInfo SampleStatus() =>
+        new(StatusLevel.Major, "Partial System Outage",
+            [new StatusIncident("Elevated errors on the Messages API", "major", "investigating",
+                "We are investigating elevated error rates.", "https://status.claude.com/incidents/abc123")],
+            StatusInfo.DefaultPageUrl, DateTime.Now, true, null);
 
     private static (IReadOnlyList<QuickLink> links, IReadOnlyList<string?> icons) SampleQuickLinks(string outDir)
     {

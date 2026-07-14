@@ -30,6 +30,14 @@ internal sealed class SettingsHooks
     /// <summary>Start (true) or stop (false) the account-usage poll.</summary>
     public Action<bool>? UsageEnabledChanged;
 
+    /// <summary>Start (true) or stop (false) the Claude service-status poll.</summary>
+    public Action<bool>? ServiceStatusEnabledChanged;
+
+#if DEBUG
+    /// <summary>Push a sample outage onto the overlay so the status footer can be illustrated (debug only).</summary>
+    public Action? TestServiceStatus;
+#endif
+
     /// <summary>Reconfigure the system/per-session/subprocess metrics sampler.</summary>
     public Action? MetricsChanged;
 
@@ -378,6 +386,39 @@ internal sealed class SettingsWindow : Window
         BuildContextPressureSection(page);
         page.Children.Add(SettingsUi.Separator());
         BuildDetectionSection(page);
+        page.Children.Add(SettingsUi.Separator());
+        BuildServiceStatusSection(page);
+    }
+
+    private void BuildServiceStatusSection(StackPanel page)
+    {
+        Button? testBtn = null;
+        var toggle = Toggle(_settings.ShowServiceStatus);
+        toggle.CheckedChanged += (_, _) =>
+        {
+            _settings.ShowServiceStatus = toggle.IsChecked;
+            _settings.Save();
+            _hooks.DisplayChanged?.Invoke();
+            _hooks.ServiceStatusEnabledChanged?.Invoke(toggle.IsChecked);
+            if (testBtn is not null) testBtn.IsEnabled = toggle.IsChecked;
+        };
+        page.Children.Add(SettingsUi.TitleRow("Service status", toggle));
+        page.Children.Add(SettingsUi.BodyText(
+            "Shows an outage banner at the bottom of the overlay when status.claude.com reports a problem — " +
+            "click it for the list of incidents and a link to the status page. Nothing shows while all " +
+            "systems are operational. Perch polls the public status page every couple of minutes."));
+
+#if DEBUG
+        var row = SettingsUi.ButtonRow();
+        testBtn = SettingsUi.FlatButton("Show example outage");
+        testBtn.IsEnabled = _settings.ShowServiceStatus;
+        testBtn.Click += (_, _) => _hooks.TestServiceStatus?.Invoke();
+        row.Children.Add(testBtn);
+        page.Children.Add(row);
+        page.Children.Add(SettingsUi.BodyText(
+            "Pushes a sample outage to the overlay so you can see how the banner looks; a real status check " +
+            "replaces it within a couple of minutes. (Debug builds only.)"));
+#endif
     }
 
     private void BuildModeBadgeSection(StackPanel page)
