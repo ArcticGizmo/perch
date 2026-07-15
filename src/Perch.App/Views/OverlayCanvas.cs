@@ -209,6 +209,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             foreach (var r in _rows) h += HeightOf(r);
             h += 2;
         }
+        if (ShowFooter) h += FooterHeight;
         return h;
     }
 
@@ -498,6 +499,45 @@ public sealed class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
+    // ── Service status footer ─────────────────────────────────────────────────
+    // A slim banner pinned to the panel bottom, shown only when status.claude.com reports an issue.
+    // Clicking it opens a menu of the unresolved incidents plus a link to the status page.
+    private const double FooterHeight = 24;
+    private StatusInfo _status = StatusInfo.Healthy;
+    private bool _serviceStatusEnabled = true;
+    private Rect _footerRect;
+    private bool _hoveredFooter;
+
+    private static readonly Color FooterMinorColor = Color.FromRgb(245, 158, 11); // amber (minor)
+    private static readonly Color FooterMajorColor = Color.FromRgb(239, 68, 68);  // red (major / critical)
+    private static readonly Color FooterMaintColor = Color.FromRgb(96, 165, 250); // blue (maintenance)
+
+    // The footer is on screen only when the feature is enabled and there's actually an issue.
+    private bool ShowFooter => _serviceStatusEnabled && _status.HasIssue;
+
+    /// <summary>Feeds the latest service-status reading (on the UI thread). When the footer's visibility
+    /// flips the panel height changes, so remeasure (the floating window auto-sizes to content); otherwise
+    /// just repaint. Internal because <see cref="StatusInfo"/> is a Core-internal type shared via
+    /// InternalsVisibleTo.</summary>
+    internal void UpdateStatus(StatusInfo status)
+    {
+        bool before = ShowFooter;
+        _status = status;
+        if (ShowFooter != before) InvalidateMeasure();
+        InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the whole service-status footer feature. Changes the panel height when there's a
+    /// live issue, so remeasure; hides any footer immediately when turned off.</summary>
+    public void SetServiceStatusEnabled(bool enabled)
+    {
+        if (_serviceStatusEnabled == enabled) return;
+        bool before = ShowFooter;
+        _serviceStatusEnabled = enabled;
+        if (ShowFooter != before) InvalidateMeasure();
+        InvalidateVisual();
+    }
+
     /// <summary>Raised when a session row is clicked (sub-agent rows resolve to their parent). The app
     /// focuses the session's terminal via the platform seam. Internal — <see cref="ClaudeSession"/> is
     /// a Core-internal type.</summary>
@@ -700,6 +740,10 @@ public sealed class OverlayCanvas : Control, IDenseHost
             foreach (var r in _rows) height += HeightOf(r);
             height += 2;
         }
+        // The outage footer sits below everything; shown only when enabled and there's an issue. Reached
+        // only past the closed-strip early-return, so the header is always present to anchor it to.
+        bool showFooter = ShowFooter;
+        if (showFooter) height += FooterHeight;
 
         if (ctx != null)
         {
@@ -742,6 +786,9 @@ public sealed class OverlayCanvas : Control, IDenseHost
                     top += HeightOf(r);
                 }
             }
+
+            if (showFooter) DrawStatusFooter(ctx, width, height);
+            else _footerRect = default;
         }
 
         return height;
@@ -1648,9 +1695,12 @@ public sealed class OverlayCanvas : Control, IDenseHost
         bool overUpdate = _updateAvailable && _updateIconRect.Width > 0 && _updateIconRect.Contains(p);
         if (overUpdate != _hoveredUpdateIcon) { _hoveredUpdateIcon = overUpdate; InvalidateVisual(); }
 
-        // Hand cursor over clickable glyphs (quick links + artifacts + the update badge); rows show only
-        // the highlight.
-        Cursor = (ql >= 0 || art >= 0 || overUpdate) ? HandCursor : Cursor.Default;
+        bool overFooter = ShowFooter && _footerRect.Width > 0 && _footerRect.Contains(p);
+        if (overFooter != _hoveredFooter) { _hoveredFooter = overFooter; InvalidateVisual(); }
+
+        // Hand cursor over clickable glyphs (quick links + artifacts + the update badge + outage footer);
+        // rows show only the highlight.
+        Cursor = (ql >= 0 || art >= 0 || overUpdate || overFooter) ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
         base.OnPointerMoved(e);
@@ -1699,9 +1749,10 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter;
         _hoveredRow = _hoveredQuickLink = _hoveredArtifactRow = -1;
         _hoveredUpdateIcon = false;
+        _hoveredFooter = false;
         Cursor = Cursor.Default;
         _tipKind = TipKind.None;
         _tipRow = -1;
@@ -1824,6 +1875,13 @@ public sealed class OverlayCanvas : Control, IDenseHost
         if (_updateAvailable && _updateIconRect.Width > 0 && _updateIconRect.Contains(p))
         {
             UpdateRequested?.Invoke();
+            return;
+        }
+
+        // Outage footer: open the incident menu (with the "open status.claude.com" link).
+        if (ShowFooter && _footerRect.Width > 0 && _footerRect.Contains(p))
+        {
+            ShowStatusMenu();
             return;
         }
 
@@ -2116,6 +2174,85 @@ public sealed class OverlayCanvas : Control, IDenseHost
         double fillW = Math.Round((right - left) * frac);
         if (fillW > 0)
             OverlayDraw.Pill(ctx, new SolidColorBrush(IdleColor), new Rect(left, Y, fillW, TrackH));
+    }
+
+    // ── Service status footer ─────────────────────────────────────────────────
+    // A slim severity-tinted band across the panel bottom (rounded to match the panel's bottom corners),
+    // with a status dot, the status-page description, and a chevron hinting it's clickable. Its hit-rect
+    // is captured for the click → incident menu (see RouteClick / ShowStatusMenu).
+    private void DrawStatusFooter(DrawingContext ctx, double width, double panelHeight)
+    {
+        double top = panelHeight - FooterHeight;
+        _footerRect = new Rect(0, top, width, FooterHeight);
+
+        var color = StatusColor(_status.Level);
+
+        // Severity-tinted fill (brighter on hover). Clipped to the panel's rounded rect so the band's
+        // bottom corners follow the panel edge instead of squaring off past it.
+        var panelRect = new Rect(0.5, 0.5, width - 1, panelHeight - 1);
+        using (ctx.PushClip(new RoundedRect(panelRect, Corner)))
+            ctx.FillRectangle(new SolidColorBrush(color, _hoveredFooter ? 0.30 : 0.18),
+                new Rect(1, top, width - 2, FooterHeight));
+
+        // Hairline rule separating the band from whatever's above it.
+        ctx.DrawLine(SepPen, new Point(HorizPad, top), new Point(width - HorizPad, top));
+
+        double midY = top + FooterHeight / 2;
+        double x = HorizPad;
+        ctx.DrawEllipse(new SolidColorBrush(color), null, new Point(x + 3, midY), 3, 3);
+        x += 12;
+
+        // Chevron on the right hints the click target; reserve its width so the text truncates before it.
+        var chevron = OverlayDraw.Text("›", 12, new SolidColorBrush(color), FontWeight.Bold);
+        double chevX = width - HorizPad - chevron.Width;
+
+        string text = string.IsNullOrWhiteSpace(_status.Description) ? "Service issue" : _status.Description;
+        var label = OverlayDraw.Text(OverlayDraw.Truncate(text, StatusSize, chevX - x - 6, FontWeight.Bold),
+            StatusSize, new SolidColorBrush(color), FontWeight.Bold);
+        OverlayDraw.TextLeftMid(ctx, label, x, midY);
+        OverlayDraw.TextLeftMid(ctx, chevron, chevX, midY);
+    }
+
+    private static Color StatusColor(StatusLevel level) => level switch
+    {
+        StatusLevel.Minor       => FooterMinorColor,
+        StatusLevel.Maintenance => FooterMaintColor,
+        StatusLevel.None        => MutedColor,
+        _                       => FooterMajorColor, // Major / Critical
+    };
+
+    // Pops the outage menu at the footer: the overall description (as a disabled header), one entry per
+    // unresolved incident (opening its status-page link), then a final "Open status.claude.com". Mirrors
+    // the artifact picker's flyout.
+    private void ShowStatusMenu()
+    {
+        var items = new List<Control>();
+
+        if (!string.IsNullOrWhiteSpace(_status.Description))
+            items.Add(new MenuItem { Header = _status.Description, IsEnabled = false });
+
+        foreach (var inc in _status.Incidents)
+        {
+            string header = inc.Impact is "minor" or "major" or "critical"
+                ? $"{char.ToUpperInvariant(inc.Impact[0])}{inc.Impact[1..]} — {inc.Name}"
+                : inc.Name;
+            if (header.Length > 72) header = header[..71].TrimEnd() + "…";
+            string url = inc.Url;
+            items.Add(MenuItem(header, () => OpenUrl(url)));
+        }
+
+        if (items.Count > 0) items.Add(new Separator());
+        items.Add(MenuItem("Open status.claude.com", () => OpenUrl(_status.PageUrl)));
+
+        var flyout = new MenuFlyout { ItemsSource = items, Placement = PlacementMode.Pointer };
+        flyout.ShowAt(this, showAtPointer: true);
+    }
+
+    private static void OpenUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return;
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
+        catch { /* best-effort — no default browser, etc. */ }
     }
 
     // Draws the attention border as an animated neon "chase": a bright comet head with a trailing tail

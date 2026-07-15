@@ -67,6 +67,16 @@ internal sealed class AppSettings
     // reclaim its width; the artifacts are still tracked. Defaults to true; a missing key keeps it on.
     public bool ShowArtifacts { get; set; } = true;
 
+    // Whether to show the outage footer at the bottom of the overlay when status.claude.com reports a
+    // problem (clicking it lists the incidents + links to the status page). Off stops the poll entirely
+    // and hides the footer. On by default; a missing key in an older settings file keeps it on.
+    public bool ShowServiceStatus { get; set; } = true;
+
+    // How often (minutes) to poll status.claude.com. Clamped to a sane range when applied. Polls are
+    // conditional (ETag/If-None-Match), so an unchanged status costs an empty 304 — the interval mainly
+    // bounds how quickly a new incident surfaces. Defaults to 2; a missing key keeps that.
+    public int ServiceStatusIntervalMinutes { get; set; } = 2;
+
     // Stuck/runaway detection. When on, a session that's spinning — several tool calls failing in a
     // row, or the same action repeated and failing — gets an amber warning glyph in the overlay. The
     // two sub-switches scope which heuristics run, so a user plagued by false positives on one can
