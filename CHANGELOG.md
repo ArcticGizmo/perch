@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.1] - 2026-07-15
+
+- Claude service-status footer — flags an Anthropic outage, so you know it's not just you.
+- Configurable status poll interval.
+- Perch is now MIT licensed (the paperwork was overdue).
+
+---
+
 ## [v0.2.0] - 2026-07-08
 
 - Rebuilt on Avalonia so you can use this on MacOS!
