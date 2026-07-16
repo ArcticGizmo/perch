@@ -80,6 +80,7 @@ internal sealed class StatusMonitor
 
         var status = root["status"]?.AsObject();
         var level = MapIndicator(status?["indicator"]?.ToString());
+        var aggregateLevel = level; // remember the page-level reading before folding in incidents
         var description = status?["description"]?.ToString() ?? "";
 
         var incidents = new List<StatusIncident>();
@@ -87,18 +88,48 @@ internal sealed class StatusMonitor
 
         // Unresolved incidents (summary.json only carries these) and any in-progress maintenance, both
         // surfaced in the footer's menu so the user sees what's actually going on.
+        //
+        // As we read them, escalate the overall level to the worst incident impact. The page-level
+        // status.indicator can lag an individual incident (e.g. a major SSO outage posted while the
+        // aggregate indicator still reads "minor"), so folding each unresolved incident's impact back
+        // into the level keeps the footer from under-reporting a live outage.
         if (root["incidents"] is JsonArray inc)
             foreach (var node in inc)
-                if (ReadIncident(node?.AsObject(), pageUrl) is { } i) incidents.Add(i);
+                if (ReadIncident(node?.AsObject(), pageUrl) is { } i)
+                {
+                    incidents.Add(i);
+                    level = Worse(level, MapIndicator(i.Impact));
+                }
 
         if (root["scheduled_maintenances"] is JsonArray maint)
             foreach (var node in maint)
                 if (node?.AsObject() is { } m && m["status"]?.ToString() == "in_progress"
                     && ReadIncident(m, pageUrl) is { } i)
+                {
                     incidents.Add(i);
+                    level = Worse(level, MapIndicator(i.Impact));
+                }
+
+        // If an incident escalated the level past the page-level indicator, the aggregate description
+        // (e.g. "Minor Service Outage") now contradicts the level — the footer would show a red band
+        // labelled "Minor". Replace it with a label that matches the escalated level so text and colour
+        // agree; when nothing escalated, keep the status page's own human wording.
+        if (level != aggregateLevel)
+            description = DescribeLevel(level);
 
         return new StatusInfo(level, description, incidents, pageUrl, DateTime.Now, true, null);
     }
+
+    // Fallback human description used when a folded-in incident escalates the level beyond what the
+    // page-level indicator's own description covers.
+    private static string DescribeLevel(StatusLevel level) => level switch
+    {
+        StatusLevel.Minor       => "Minor Service Outage",
+        StatusLevel.Major       => "Major Service Outage",
+        StatusLevel.Critical    => "Critical Service Outage",
+        StatusLevel.Maintenance => "Service Under Maintenance",
+        _                       => "All Systems Operational",
+    };
 
     private static StatusIncident? ReadIncident(JsonObject? o, string pageUrl)
     {
@@ -115,6 +146,20 @@ internal sealed class StatusMonitor
 
         return new StatusIncident(name, impact, state, latest, url);
     }
+
+    // Returns the worse (higher-severity) of two levels. Maintenance is treated as *below* the real
+    // outage levels — it's a category, not a severity — so a live incident always outranks concurrent
+    // maintenance rather than being masked by it.
+    private static StatusLevel Worse(StatusLevel a, StatusLevel b) => Rank(b) > Rank(a) ? b : a;
+
+    private static int Rank(StatusLevel level) => level switch
+    {
+        StatusLevel.Critical    => 4,
+        StatusLevel.Major       => 3,
+        StatusLevel.Minor       => 2,
+        StatusLevel.Maintenance => 1,
+        _                       => 0, // None
+    };
 
     private static StatusLevel MapIndicator(string? indicator) => indicator switch
     {

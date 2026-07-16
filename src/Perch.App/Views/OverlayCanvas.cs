@@ -1771,6 +1771,20 @@ public sealed class OverlayCanvas : Control, IDenseHost
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         var props = e.GetCurrentPoint(this).Properties;
+
+        // Any press that reaches the canvas while a menu is open is a click *outside* that menu — presses
+        // on the menu itself land on its own popup window and never arrive here. Dismiss it. (The overlay
+        // is a no-activate tool window so it never deactivates, which is what Avalonia's built-in light
+        // dismiss waits for; hence we close menus ourselves.) A left press only dismisses — swallowed so it
+        // doesn't also act on whatever's underneath; a right press falls through to open a fresh menu at
+        // the new spot.
+        if (_openFlyout is { } open)
+        {
+            _openFlyout = null;
+            open.Hide();
+            if (!props.IsRightButtonPressed) { e.Handled = true; return; }
+        }
+
         if (props.IsRightButtonPressed)
         {
             ShowContextMenuAt(e.GetPosition(this));
@@ -1934,6 +1948,14 @@ public sealed class OverlayCanvas : Control, IDenseHost
     // place that can bring a hidden strip back, plus Exit) over the header. No applicable item → no menu.
     private void ShowContextMenuAt(Point p)
     {
+        // The outage footer has one menu regardless of button — a right-click there opens the same incident
+        // menu a left-click does, rather than the per-row context menu.
+        if (ShowFooter && _footerRect.Width > 0 && _footerRect.Contains(p))
+        {
+            ShowStatusMenu();
+            return;
+        }
+
         var items = new List<Control>();
 
         int row = HitTestRow(p);
@@ -1987,9 +2009,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
         }
 
         if (items.Count == 0) return;
-
-        var flyout = new MenuFlyout { ItemsSource = items, Placement = PlacementMode.Pointer };
-        flyout.ShowAt(this, showAtPointer: true);
+        ShowFlyout(items);
     }
 
     private static MenuItem MenuItem(string header, Action onClick)
@@ -1999,6 +2019,20 @@ public sealed class OverlayCanvas : Control, IDenseHost
         return item;
     }
 
+    // The one place every context/flyout menu is shown. Tracks the open menu in _openFlyout so a press
+    // elsewhere on the overlay can close it (see OnPointerPressed) — the overlay's no-activate tool window
+    // defeats Avalonia's built-in light dismiss. Opening a menu first closes any still-open one.
+    private MenuFlyout? _openFlyout;
+
+    private void ShowFlyout(IEnumerable<Control> items)
+    {
+        _openFlyout?.Hide();
+        var flyout = new MenuFlyout { ItemsSource = items, Placement = PlacementMode.Pointer };
+        flyout.Closed += (_, _) => { if (ReferenceEquals(_openFlyout, flyout)) _openFlyout = null; };
+        _openFlyout = flyout;
+        flyout.ShowAt(this, showAtPointer: true);
+    }
+
     // Pops a small menu of a session's artifacts at the cursor; picking one opens it. Always used for the
     // artifact glyph (a single artifact shows as a one-item list), so the click behaviour is consistent.
     private void ShowArtifactPicker(IReadOnlyList<Artifact> artifacts)
@@ -2006,8 +2040,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
         var items = new List<Control>(artifacts.Count);
         foreach (var a in artifacts)
             items.Add(MenuItem(string.IsNullOrWhiteSpace(a.Title) ? a.Url : a.Title, () => ArtifactChosen?.Invoke(a)));
-        var flyout = new MenuFlyout { ItemsSource = items, Placement = PlacementMode.Pointer };
-        flyout.ShowAt(this, showAtPointer: true);
+        ShowFlyout(items);
     }
 
     private void CopyToClipboard(string text) => TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(text);
@@ -2244,8 +2277,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
         if (items.Count > 0) items.Add(new Separator());
         items.Add(MenuItem("Open status.claude.com", () => OpenUrl(_status.PageUrl)));
 
-        var flyout = new MenuFlyout { ItemsSource = items, Placement = PlacementMode.Pointer };
-        flyout.ShowAt(this, showAtPointer: true);
+        ShowFlyout(items);
     }
 
     private static void OpenUrl(string url)

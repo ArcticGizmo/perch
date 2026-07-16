@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.4] - 2026-07-16
+
+- Outage footer now reflects the worst live incident (a major outage no longer poses as "minor").
+- Outage menu opens on either mouse button.
+
+---
+
 ## [v0.2.3] - 2026-07-16
 
 - Fixed auto-start hanging your first prompt.
