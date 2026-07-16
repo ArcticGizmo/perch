@@ -35,21 +35,31 @@ internal static class ClaudeUserSettings
 
     private const string ManagedNote = "Added by Perch. Safe to delete if Perch is uninstalled.";
 
+    // The hook binary's file name (no directory, no extension), used to recognise Perch's own entries by
+    // command when the "_perch" marker is gone. Mirrors HookInstaller.HookFileName sans the ".exe".
+    private const string HookExeName = "perch-hook";
+
+    private static readonly char[] PathSeparators = { '/', '\\' };
+
     private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
 
     /// <summary>
-    /// Reconciles Perch's managed hook block in <c>~/.claude/settings.json</c>: strips every entry we
-    /// previously wrote (matched by the <c>_perch.managed</c> marker) then re-adds the current set
-    /// pointing at <paramref name="hookBinaryPath"/>. Idempotent — repeated calls converge and never
-    /// duplicate — and it only touches our own entries, so user-authored hooks are preserved. Returns
-    /// true on a successful write.
+    /// Reconciles Perch's managed hook block in <c>~/.claude/settings.json</c>: strips the entries this
+    /// profile owns then re-adds the current set pointing at <paramref name="hookBinaryPath"/>. Idempotent
+    /// — repeated calls converge and never duplicate — and it never touches user-authored hooks.
+    ///
+    /// <para><paramref name="isDev"/> sets the scope. A <b>release</b> instance is authoritative: it
+    /// strips <em>every</em> Perch-managed entry (any profile's, including a dev instance's leftovers). A
+    /// <b>dev</b> instance is polite: it strips only its own entries (the <c>_perch.dev</c> marker, or a
+    /// command equal to its own dev binary), leaving an installed release Perch's hooks intact so both can
+    /// coexist while you develop. Returns true on a successful write.</para>
     /// </summary>
-    public static bool ReconcileHooks(string hookBinaryPath, string version) =>
-        ReconcileHooks(ClaudePaths.UserSettingsFile, hookBinaryPath, version);
+    public static bool ReconcileHooks(string hookBinaryPath, string version, bool isDev) =>
+        ReconcileHooks(ClaudePaths.UserSettingsFile, hookBinaryPath, version, isDev);
 
-    /// <summary>As <see cref="ReconcileHooks(string,string)"/>, against an explicit settings file
-    /// (test seam).</summary>
-    public static bool ReconcileHooks(string settingsPath, string hookBinaryPath, string version)
+    /// <summary>As <see cref="ReconcileHooks(string,string,bool)"/>, against an explicit settings file
+    /// (test seam). Defaults to release scope.</summary>
+    public static bool ReconcileHooks(string settingsPath, string hookBinaryPath, string version, bool isDev = false)
     {
         try
         {
@@ -64,7 +74,7 @@ internal static class ClaudeUserSettings
                 root["hooks"] = hooks;
             }
 
-            StripManaged(hooks);
+            StripManaged(hooks, OwnedBy(isDev, hookBinaryPath));
 
             foreach (var (evt, arg) in ManagedHooks)
             {
@@ -73,7 +83,7 @@ internal static class ClaudeUserSettings
                     arr = new JsonArray();
                     hooks[evt] = arr;
                 }
-                arr.Add(NewEntry(hookBinaryPath, arg, version));
+                arr.Add(NewEntry(hookBinaryPath, arg, version, isDev));
             }
 
             if (hooks.Count == 0) root.Remove("hooks");
@@ -90,12 +100,16 @@ internal static class ClaudeUserSettings
 
     /// <summary>
     /// Removes Perch's managed hook entries from <c>~/.claude/settings.json</c> (uninstall / self-heal),
-    /// leaving user-authored hooks untouched. Returns true if the file was rewritten.
+    /// leaving user-authored hooks untouched. Scope matches <see cref="ReconcileHooks(string,string,bool)"/>:
+    /// a release instance clears every Perch-managed entry; a dev instance clears only its own (pass its
+    /// binary path as <paramref name="devBinaryPath"/> so path-matching works after a marker strip).
+    /// Returns true if the file was rewritten.
     /// </summary>
-    public static bool RemoveManagedHooks() => RemoveManagedHooks(ClaudePaths.UserSettingsFile);
+    public static bool RemoveManagedHooks(bool isDev = false, string? devBinaryPath = null) =>
+        RemoveManagedHooks(ClaudePaths.UserSettingsFile, isDev, devBinaryPath);
 
-    /// <summary>As <see cref="RemoveManagedHooks()"/>, against an explicit settings file (test seam).</summary>
-    public static bool RemoveManagedHooks(string settingsPath)
+    /// <summary>As <see cref="RemoveManagedHooks(bool,string)"/>, against an explicit settings file (test seam).</summary>
+    public static bool RemoveManagedHooks(string settingsPath, bool isDev = false, string? devBinaryPath = null)
     {
         try
         {
@@ -106,7 +120,7 @@ internal static class ClaudeUserSettings
                 || root["hooks"] is not JsonObject hooks)
                 return false;
 
-            StripManaged(hooks);
+            StripManaged(hooks, OwnedBy(isDev, devBinaryPath));
             if (hooks.Count == 0) root.Remove("hooks");
 
             File.WriteAllText(path, root.ToJsonString(WriteOptions));
@@ -118,8 +132,10 @@ internal static class ClaudeUserSettings
         }
     }
 
-    // Builds one { "matcher": "", "hooks": [ <command object> ] } entry for a single managed hook.
-    private static JsonObject NewEntry(string bin, string arg, string version) => new()
+    // Builds one { "matcher": "", "hooks": [ <command object> ] } entry for a single managed hook. The
+    // _perch.dev flag records which profile wrote it, so a dev instance can strip only its own (see
+    // OwnedBy); it rides alongside the durable command-path signal in case an external rewrite drops it.
+    private static JsonObject NewEntry(string bin, string arg, string version, bool isDev) => new()
     {
         ["matcher"] = "",
         ["hooks"] = new JsonArray(new JsonObject
@@ -130,15 +146,17 @@ internal static class ClaudeUserSettings
             ["_perch"]  = new JsonObject
             {
                 ["managed"] = true,
+                ["dev"]     = isDev,
                 ["version"] = version,
                 ["note"]    = ManagedNote,
             },
         }),
     };
 
-    // Removes every managed command object from the hooks map, dropping any entry (and any event key)
-    // left empty. Snapshots the keys/indices first since we mutate as we go.
-    private static void StripManaged(JsonObject hooks)
+    // Removes every command object the caller owns (per <paramref name="owned"/>) from the hooks map,
+    // dropping any entry (and any event key) left empty. Snapshots the keys/indices first since we mutate
+    // as we go.
+    private static void StripManaged(JsonObject hooks, Func<JsonNode?, bool> owned)
     {
         foreach (var evt in hooks.Select(kv => kv.Key).ToList())
         {
@@ -150,7 +168,7 @@ internal static class ClaudeUserSettings
                     continue;
 
                 for (int j = hookList.Count - 1; j >= 0; j--)
-                    if (IsManaged(hookList[j]))
+                    if (owned(hookList[j]))
                         hookList.RemoveAt(j);
 
                 if (hookList.Count == 0)
@@ -162,8 +180,54 @@ internal static class ClaudeUserSettings
         }
     }
 
+    // The ownership predicate for a strip pass. Release (isDev == false) is authoritative and owns every
+    // Perch-managed entry — any profile's — so it also sweeps up a dev instance's leftovers. Dev owns only
+    // what it wrote (its _perch.dev marker, or a command equal to its own dev binary), so it never disturbs
+    // an installed release Perch's hooks.
+    private static Func<JsonNode?, bool> OwnedBy(bool isDev, string? devBinaryPath) =>
+        isDev ? hook => IsDevOwned(hook, devBinaryPath) : IsManaged;
+
+    // An entry is "ours" if it carries the _perch.managed marker OR its command runs Perch's hook binary.
+    // The marker is the primary signal, but Claude Code re-serialises settings.json through its own hook
+    // schema whenever it rewrites the file (a /model or theme change, a plugin toggle, …), dropping our
+    // unknown _perch field. Matching the command by binary name as a fallback keeps reconcile idempotent
+    // across those rewrites — without it every launch after one would fail to strip the now-unmarked
+    // entries and re-add the full set, so the hook block grows by seven each launch.
     private static bool IsManaged(JsonNode? hook) =>
-        hook is JsonObject o && o["_perch"] is JsonObject p && ReadTrue(p["managed"]);
+        hook is JsonObject o && (HasMarker(o["_perch"]) || IsPerchCommand(o["command"]));
+
+    // A dev instance owns an entry only if it wrote it: the _perch.dev marker, or (marker stripped) a
+    // command equal to this dev instance's own binary path. Never matches a release entry.
+    private static bool IsDevOwned(JsonNode? hook, string? devBinaryPath) =>
+        hook is JsonObject o && (HasDevMarker(o["_perch"]) || SameCommand(o["command"], devBinaryPath));
+
+    private static bool HasMarker(JsonNode? perch) =>
+        perch is JsonObject p && ReadTrue(p["managed"]);
+
+    private static bool HasDevMarker(JsonNode? perch) =>
+        perch is JsonObject p && ReadTrue(p["managed"]) && ReadTrue(p["dev"]);
+
+    // True when a hook command runs Perch's hook binary, identified by file name so the match survives a
+    // different install dir, a Windows "\" vs POSIX "/" separator (e.g. a Windows-written path seen on a
+    // later reconcile), and a ".exe" suffix.
+    private static bool IsPerchCommand(JsonNode? command)
+    {
+        if (command is null || command.GetValueKind() != JsonValueKind.String) return false;
+        var leaf = command.ToString();
+        int cut = leaf.LastIndexOfAny(PathSeparators);
+        if (cut >= 0) leaf = leaf[(cut + 1)..];
+        if (leaf.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) leaf = leaf[..^4];
+        return string.Equals(leaf, HookExeName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Whole-path command match, tolerant of "\" vs "/" and case — used to recognise a dev instance's own
+    // entries by their exact binary path when the _perch marker has been stripped.
+    private static bool SameCommand(JsonNode? command, string? path)
+    {
+        if (path is null || command is null || command.GetValueKind() != JsonValueKind.String) return false;
+        return string.Equals(
+            command.ToString().Replace('\\', '/'), path.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
+    }
 
     // Tolerant boolean read: accepts a JSON true or the string "true" (a hand-edited file).
     private static bool ReadTrue(JsonNode? n)

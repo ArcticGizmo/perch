@@ -15,7 +15,7 @@
           <RootNamespace>Perch.Avalonia</RootNamespace>
           <AssemblyName>perch</AssemblyName>
           <Product>Perch</Product>
-          <Version>0.2.1</Version>
+          <Version>0.2.2</Version>
           <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
      </PropertyGroup>
 
@@ -73,4 +73,51 @@
      <ItemGroup>
           <ProjectReference Include="..\Perch.Core\Perch.Core.csproj" />
      </ItemGroup>
+
+     <!-- ── Dev-only: self-wire perch-hook so `dotnet run` reflects the current source ─────────────────
+          Production publishes perch-hook (NativeAOT) next to perch via publish.bat / release.yml, so the
+          tray finds it at AppContext.BaseDirectory and copies it to the per-user profile bin dir
+          (HookInstaller). A plain Debug build never produces a runnable perch-hook there, so the tray
+          silently skips hook wiring in dev (HookInstaller.Install bails on the missing binary). The target
+          below publishes perch-hook as a framework-dependent SINGLE FILE — fast, no AOT — into the app's
+          output dir on each Debug build, so a dev run installs it into the "Perch (Dev)" profile bin and
+          reconciles it live. It's skipped when the hook's sources are unchanged, and Release/publish is
+          untouched (everything here gates on Debug).
+
+          The nested publish uses an isolated obj/bin under this project's intermediates, so it can never
+          collide with a parallel solution build of Perch.Hook. Redirecting the hook's obj means the SDK
+          no longer auto-excludes its *default* obj/bin from the source glob, so we re-add that exclusion
+          (DefaultItemExcludes) — otherwise stale generated AssemblyInfo under Perch.Hook/obj gets compiled
+          and fails with duplicate-attribute (CS0579) errors. -->
+     <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+          <_HookProj>$(MSBuildThisFileDirectory)..\Perch.Hook\Perch.Hook.csproj</_HookProj>
+          <_HookExe Condition="$([MSBuild]::IsOSPlatform('Windows'))">perch-hook.exe</_HookExe>
+          <_HookExe Condition="!$([MSBuild]::IsOSPlatform('Windows'))">perch-hook</_HookExe>
+     </PropertyGroup>
+
+     <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+          <_HookSource Include="$(MSBuildThisFileDirectory)..\Perch.Hook\**\*.cs;$(_HookProj)"
+                       Exclude="$(MSBuildThisFileDirectory)..\Perch.Hook\obj\**;$(MSBuildThisFileDirectory)..\Perch.Hook\bin\**" />
+     </ItemGroup>
+
+     <!-- Runs once, for the single head that matches the host OS: the '-windows' head on Windows, the
+          plain net10.0 head elsewhere. That skips the multi-targeting *outer* build (empty TFM/OutDir)
+          and avoids the two Windows heads publishing the hook concurrently (which races over the shared
+          Perch.Hook restore). The chosen head is exactly the one a dev actually runs on that OS.
+          The isolated obj/bin paths are computed *inside* the target: as top-level properties they'd bind
+          before the SDK sets IntermediateOutputPath, landing under the project root instead of obj/. -->
+     <Target Name="PublishHookForDev"
+             Condition="'$(Configuration)' == 'Debug' and '$(TargetFramework)' != '' and
+                        ($([MSBuild]::IsOSPlatform('Windows')) == $(TargetFramework.Contains('-windows')))"
+             AfterTargets="Build"
+             Inputs="@(_HookSource)"
+             Outputs="$(OutDir)$(_HookExe)">
+          <PropertyGroup>
+               <_HookObjDir>$(MSBuildProjectDirectory)/$(IntermediateOutputPath.Replace('\','/'))hook-dev-obj/</_HookObjDir>
+               <_HookOutDir>$(MSBuildProjectDirectory)/$(IntermediateOutputPath.Replace('\','/'))hook-dev-out/</_HookOutDir>
+          </PropertyGroup>
+          <Message Importance="high" Text="Publishing perch-hook (dev, single-file) into $(OutDir)" />
+          <Exec Command="dotnet publish &quot;$(_HookProj)&quot; -c $(Configuration) -p:UseCurrentRuntime=true --self-contained false -p:PublishSingleFile=true -p:PublishAot=false -p:PublishTrimmed=false -p:BaseIntermediateOutputPath=&quot;$(_HookObjDir)&quot; -p:DefaultItemExcludes=obj/** -o &quot;$(_HookOutDir)&quot; --nologo -v quiet" />
+          <Copy SourceFiles="$(_HookOutDir)$(_HookExe)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="false" />
+     </Target>
 </Project>

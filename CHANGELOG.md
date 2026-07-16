@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.2] - 2026-07-16
+
+- Stopped duplicating our own hooks into settings.json on every launch (they were multiplying).
+- Existing duplicate hook entries get swept up on the next startup.
+
+---
+
 ## [v0.2.1] - 2026-07-15
 
 - Claude service-status footer — flags an Anthropic outage, so you know it's not just you.

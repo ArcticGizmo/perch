@@ -29,11 +29,24 @@ if %ERRORLEVEL% neq 0 (
 echo Publishing perch-hook (NativeAOT) ...
 
 :: perch-hook is the self-managed Claude Code hook binary. Publish it into the SAME dir as perch.exe
-:: so Velopack packs the two together; the app copies it to a stable per-user path on launch.
+:: so Velopack packs the two together; the app copies it to a stable per-user path on launch. NativeAOT
+:: gives the best hook cold-start (it fires on every tool call), but needs the Visual Studio "Desktop
+:: development with C++" workload for the native linker. When that's missing (common on a fresh dev box)
+:: the AOT publish can't link, so fall back to a self-contained single-file build below so LOCAL packaging
+:: still works. CI releases (release.yml, on a runner that has the workload) stay AOT.
 dotnet publish src\Perch.Hook\Perch.Hook.csproj -c Release -r win-x64 -o publish\
 
 if %ERRORLEVEL% neq 0 (
-    echo perch-hook publish failed. NativeAOT needs the Visual Studio "Desktop development with C++" workload.
+    echo.
+    echo NativeAOT publish failed - falling back to a self-contained single-file perch-hook so local
+    echo packaging can proceed. This local build has a slower hook cold-start than a CI/AOT release;
+    echo install the C++ workload from https://aka.ms/nativeaot-prerequisites for an AOT-equivalent build.
+    echo.
+    dotnet publish src\Perch.Hook\Perch.Hook.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishAot=false -p:EnableCompressionInSingleFile=true -o publish\
+)
+
+if %ERRORLEVEL% neq 0 (
+    echo perch-hook publish failed.
     exit /b %ERRORLEVEL%
 )
 

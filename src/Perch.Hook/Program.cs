@@ -209,21 +209,29 @@ static void MaybeSelfHeal()
     try
     {
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        string marker = Path.Combine(appData, ProfileFolder(), "bin", "perch.path");
+        string profile = ProfileFolder();
+        string marker = Path.Combine(appData, profile, "bin", "perch.path");
         if (!File.Exists(marker)) return;
 
         string trayPath = File.ReadAllText(marker).Trim();
         if (string.IsNullOrEmpty(trayPath) || File.Exists(trayPath)) return; // Perch still installed
 
-        StripManagedHooks(Path.Combine(ResolveClaudeDir(), "settings.json"));
+        // Scope matches ClaudeUserSettings: a release hook clears every Perch entry; a dev hook clears only
+        // its own (this running binary's path, or the _perch.dev marker) so it never strips release's hooks.
+        bool isDev = profile == "Perch (Dev)";
+        string ownBin = Environment.ProcessPath
+            ?? Path.Combine(appData, profile, "bin", OperatingSystem.IsWindows() ? "perch-hook.exe" : "perch-hook");
+        StripManagedHooks(Path.Combine(ResolveClaudeDir(), "settings.json"), isDev, ownBin);
     }
     catch { /* best-effort */ }
 }
 
-// Removes every Perch-managed hook object (tagged _perch.managed) from settings.json, dropping any
-// entry/event left empty, and preserving the user's own hooks. Mirrors ClaudeUserSettings.StripManaged;
-// duplicated here so perch-hook stays a standalone AOT binary with no dependency on Perch.Core.
-static void StripManagedHooks(string settingsPath)
+// Removes the Perch-managed hook objects this profile owns from settings.json, dropping any entry/event
+// left empty, and preserving the user's own hooks. Scope matches ClaudeUserSettings: a release hook
+// (isDev == false) clears every Perch entry; a dev hook clears only its own (this binary's path via
+// ownBin, or the _perch.dev marker). Mirrors ClaudeUserSettings.StripManaged; duplicated here so
+// perch-hook stays a standalone AOT binary with no dependency on Perch.Core.
+static void StripManagedHooks(string settingsPath, bool isDev, string ownBin)
 {
     if (!File.Exists(settingsPath)) return;
 
@@ -242,8 +250,7 @@ static void StripManagedHooks(string settingsPath)
             if (entries[i] is not JsonObject entry || entry["hooks"] is not JsonArray list) continue;
 
             for (int j = list.Count - 1; j >= 0; j--)
-                if (list[j] is JsonObject h && h["_perch"] is JsonObject p &&
-                    p["managed"]?.GetValueKind() == JsonValueKind.True)
+                if (list[j] is JsonObject h && (isDev ? IsDevOwned(h, ownBin) : IsPerchManaged(h)))
                 {
                     list.RemoveAt(j);
                     changed = true;
@@ -258,6 +265,39 @@ static void StripManagedHooks(string settingsPath)
     if (!changed) return;
     if (hooks.Count == 0) root.Remove("hooks");
     File.WriteAllText(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+}
+
+// An entry is Perch's if it carries the _perch.managed marker, or — since Claude Code drops our unknown
+// _perch field whenever it rewrites settings.json — if its command runs the perch-hook binary. Mirrors
+// ClaudeUserSettings.IsManaged.
+static bool IsPerchManaged(JsonObject h)
+{
+    if (h["_perch"] is JsonObject p && p["managed"]?.GetValueKind() == JsonValueKind.True)
+        return true;
+    return IsPerchCommand(h["command"]);
+}
+
+// A dev instance owns an entry only if it wrote it: the _perch.dev marker, or (marker stripped) a command
+// equal to this running binary. Mirrors ClaudeUserSettings.IsDevOwned.
+static bool IsDevOwned(JsonObject h, string ownBin)
+{
+    if (h["_perch"] is JsonObject p && p["managed"]?.GetValueKind() == JsonValueKind.True
+        && p["dev"]?.GetValueKind() == JsonValueKind.True)
+        return true;
+    return h["command"] is JsonNode c && c.GetValueKind() == JsonValueKind.String &&
+        string.Equals(c.ToString().Replace('\\', '/'), ownBin.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
+}
+
+// True when the command runs Perch's hook binary, matched by file name so it holds across install dirs,
+// path-separator styles ("\" vs "/"), and a ".exe" suffix.
+static bool IsPerchCommand(JsonNode? command)
+{
+    if (command is null || command.GetValueKind() != JsonValueKind.String) return false;
+    string leaf = command.ToString();
+    int cut = leaf.LastIndexOfAny(new[] { '/', '\\' });
+    if (cut >= 0) leaf = leaf[(cut + 1)..];
+    if (leaf.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) leaf = leaf[..^4];
+    return string.Equals(leaf, "perch-hook", StringComparison.OrdinalIgnoreCase);
 }
 
 static bool IsPerchRunning()

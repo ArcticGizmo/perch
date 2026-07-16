@@ -38,10 +38,10 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
     // ── helpers ──────────────────────────────────────────────────────────────────────
     private JsonObject Read() => (JsonObject)JsonNode.Parse(File.ReadAllText(_settings))!;
 
-    // All managed command objects across every event, as (event, arg, command, version) tuples.
-    private static List<(string Event, string Arg, string Command, string? Version)> ManagedHooks(JsonObject root)
+    // All managed command objects across every event, as (event, arg, command, version, dev) tuples.
+    private static List<(string Event, string Arg, string Command, string? Version, bool Dev)> ManagedHooks(JsonObject root)
     {
-        var result = new List<(string, string, string, string?)>();
+        var result = new List<(string, string, string, string?, bool)>();
         if (root["hooks"] is not JsonObject hooks) return result;
 
         foreach (var (evt, entriesNode) in hooks)
@@ -57,11 +57,44 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
                         continue;
 
                     string arg = (h["args"] as JsonArray)?.FirstOrDefault()?.GetValue<string>() ?? "";
-                    result.Add((evt, arg, h["command"]?.GetValue<string>() ?? "", p["version"]?.GetValue<string>()));
+                    bool dev = p["dev"]?.GetValue<bool>() == true;
+                    result.Add((evt, arg, h["command"]?.GetValue<string>() ?? "",
+                                p["version"]?.GetValue<string>(), dev));
                 }
             }
         }
         return result;
+    }
+
+    // Raw count of hook command objects whose command equals the given path — regardless of any _perch
+    // marker — so we can assert on entries an external rewrite has left marker-less.
+    private static int CountCommand(JsonObject root, string command)
+    {
+        int n = 0;
+        if (root["hooks"] is not JsonObject hooks) return 0;
+        foreach (var (_, entriesNode) in hooks)
+            if (entriesNode is JsonArray entries)
+                foreach (var entryNode in entries)
+                    if (entryNode is JsonObject entry && entry["hooks"] is JsonArray list)
+                        foreach (var hookNode in list)
+                            if (hookNode is JsonObject h && h["command"]?.GetValue<string>() == command)
+                                n++;
+        return n;
+    }
+
+    // Simulate Claude Code rewriting settings.json: it round-trips hooks through its own schema, keeping
+    // the known {type,command,args} fields but dropping our unknown "_perch" marker off every entry.
+    private void StripPerchMarkers()
+    {
+        var root = Read();
+        if (root["hooks"] is not JsonObject hooks) return;
+        foreach (var (_, entriesNode) in hooks)
+            if (entriesNode is JsonArray entries)
+                foreach (var entryNode in entries)
+                    if (entryNode is JsonObject entry && entry["hooks"] is JsonArray list)
+                        foreach (var hookNode in list)
+                            (hookNode as JsonObject)?.Remove("_perch");
+        File.WriteAllText(_settings, root.ToJsonString());
     }
 
     // ── reconcile ──────────────────────────────────────────────────────────────────────
@@ -97,6 +130,98 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
         Assert.Equal(Expected.Length, managed.Count);
         Assert.All(managed, m => Assert.Equal("/new/perch-hook", m.Command));
         Assert.All(managed, m => Assert.Equal("0.2.0", m.Version));
+    }
+
+    [Fact]
+    public void Reconcile_CollapsesMarkerlessDuplicates_FromExternalRewrite()
+    {
+        // Reproduce the duplicate-accumulation bug: Claude Code rewrites settings.json between launches
+        // and drops our unknown "_perch" marker, so past launches kept re-adding an unrecognised set.
+        // Three reconciles, each preceded by a simulated marker-stripping rewrite of the *previous* one.
+        ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0");
+        StripPerchMarkers();
+        ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0");
+        StripPerchMarkers();
+        ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0");
+
+        // The marker-less duplicates are recognised by command and collapsed to the single managed set.
+        Assert.Equal(Expected.Length, ManagedHooks(Read()).Count);
+        var hooks = (JsonObject)Read()["hooks"]!;
+        foreach (var (evt, _) in Expected)
+            Assert.Single((JsonArray)hooks[evt]!);
+    }
+
+    [Fact]
+    public void Reconcile_MatchesBinaryPath_AcrossSeparatorsAndExeSuffix()
+    {
+        // A prior Windows install left a marker-less entry with a backslash path and ".exe"; the current
+        // reconcile runs with a POSIX path. It must still be recognised as ours and replaced, not doubled.
+        File.WriteAllText(_settings, """
+        {
+          "hooks": {
+            "PreToolUse": [
+              { "matcher": "", "hooks": [ { "type": "command",
+                "command": "C:\\Users\\me\\AppData\\Roaming\\Perch\\bin\\perch-hook.exe", "args": ["mode"] } ] }
+            ]
+          }
+        }
+        """);
+
+        ClaudeUserSettings.ReconcileHooks(_settings, "/opt/perch/bin/perch-hook", "0.2.0");
+
+        Assert.Equal(Expected.Length, ManagedHooks(Read()).Count);
+        Assert.Single((JsonArray)((JsonObject)Read()["hooks"]!)["PreToolUse"]!);
+    }
+
+    // ── dev / release profile scope ─────────────────────────────────────────────────────
+    [Fact]
+    public void Reconcile_Dev_LeavesReleaseHooksIntact_AndAddsItsOwn()
+    {
+        // A release Perch has wired its hooks; then a dev build runs. The dev reconcile must add its own
+        // set without disturbing release's — so both coexist while developing.
+        ClaudeUserSettings.ReconcileHooks(_settings, "/rel/perch-hook", "1.0.0", isDev: false);
+        ClaudeUserSettings.ReconcileHooks(_settings, "/dev/perch-hook", "9.9.9", isDev: true);
+
+        var managed = ManagedHooks(Read());
+        Assert.Equal(Expected.Length * 2, managed.Count);
+        Assert.Equal(Expected.Length, managed.Count(m => !m.Dev && m.Command == "/rel/perch-hook"));
+        Assert.Equal(Expected.Length, managed.Count(m => m.Dev && m.Command == "/dev/perch-hook"));
+    }
+
+    [Fact]
+    public void Reconcile_Release_ClearsEverythingThenReaddsReleaseOnly()
+    {
+        // Release is authoritative: with both a dev and a release set present, a release reconcile sweeps
+        // both away and leaves exactly its own clean set.
+        ClaudeUserSettings.ReconcileHooks(_settings, "/rel/perch-hook", "1.0.0", isDev: false);
+        ClaudeUserSettings.ReconcileHooks(_settings, "/dev/perch-hook", "9.9.9", isDev: true);
+
+        ClaudeUserSettings.ReconcileHooks(_settings, "/rel/perch-hook", "1.0.0", isDev: false);
+
+        var managed = ManagedHooks(Read());
+        Assert.Equal(Expected.Length, managed.Count);
+        Assert.All(managed, m => Assert.False(m.Dev));
+        Assert.All(managed, m => Assert.Equal("/rel/perch-hook", m.Command));
+        Assert.Equal(0, CountCommand(Read(), "/dev/perch-hook"));
+    }
+
+    [Fact]
+    public void Reconcile_Dev_AfterMarkerStrip_CollapsesOwnByPath_KeepsRelease()
+    {
+        // Both sets present, then Claude Code rewrites the file and drops every _perch marker. A fresh dev
+        // reconcile must recognise its own now-marker-less entries by command path and collapse them,
+        // while leaving release's (a different path) entirely alone.
+        ClaudeUserSettings.ReconcileHooks(_settings, "/rel/perch-hook", "1.0.0", isDev: false);
+        ClaudeUserSettings.ReconcileHooks(_settings, "/dev/perch-hook", "9.9.9", isDev: true);
+        StripPerchMarkers();
+
+        ClaudeUserSettings.ReconcileHooks(_settings, "/dev/perch-hook", "9.9.9", isDev: true);
+
+        var root = Read();
+        Assert.Equal(Expected.Length, CountCommand(root, "/dev/perch-hook")); // collapsed, not doubled
+        Assert.Equal(Expected.Length, CountCommand(root, "/rel/perch-hook")); // release untouched
+        // Release stayed marker-less (dev didn't rewrite it); only dev's set carries fresh markers.
+        Assert.All(ManagedHooks(root), m => Assert.True(m.Dev));
     }
 
     [Fact]

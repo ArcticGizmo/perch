@@ -57,7 +57,7 @@ internal static class HookInstaller
             // published perch-hook alongside it has nothing to point at — skip rather than write a
             // dangling command).
             if (File.Exists(HookBinaryPath))
-                ClaudeUserSettings.ReconcileHooks(HookBinaryPath, AppInfo.Version);
+                ClaudeUserSettings.ReconcileHooks(HookBinaryPath, AppInfo.Version, AppProfile.IsDev);
         }
         catch
         {
@@ -71,7 +71,7 @@ internal static class HookInstaller
     /// </summary>
     public static void Uninstall()
     {
-        try { ClaudeUserSettings.RemoveManagedHooks(); } catch { }
+        try { ClaudeUserSettings.RemoveManagedHooks(AppProfile.IsDev, HookBinaryPath); } catch { }
         try { if (Directory.Exists(BinDir)) Directory.Delete(BinDir, recursive: true); } catch { }
     }
 
