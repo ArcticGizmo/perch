@@ -313,13 +313,19 @@ static bool IsPerchRunning()
 // ends. On macOS the tray is a .app launched through LaunchServices (see TryLaunchMacBundle); elsewhere it
 // resolves `perch` from PATH (the installer registers it). A dev build run via `dotnet run` won't resolve
 // either way and this no-ops.
+//
+// UseShellExecute = true is load-bearing, not cosmetic: this hook's stdout is a pipe Claude Code reads to
+// EOF before it lets the session's first prompt proceed. With UseShellExecute = false the long-lived tray
+// would inherit that stdout handle and hold the pipe's write end open for the whole session, so Claude
+// Code never sees EOF and the first prompt hangs until the hook times out. ShellExecuteEx launches the
+// tray detached, without inheriting our std handles, so the pipe closes the instant this hook exits.
 static void LaunchPerch()
 {
     try
     {
         if (OperatingSystem.IsMacOS() && TryLaunchMacBundle()) return;
 
-        var psi = new ProcessStartInfo("perch") { UseShellExecute = false, CreateNoWindow = true };
+        var psi = new ProcessStartInfo("perch") { UseShellExecute = true };
         psi.ArgumentList.Add("--autostarted");
         Process.Start(psi);
     }

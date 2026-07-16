@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.3] - 2026-07-16
+
+- Fixed auto-start hanging your first prompt.
+
+---
+
 ## [v0.2.2] - 2026-07-16
 
 - Stopped duplicating our own hooks into settings.json on every launch (they were multiplying).
