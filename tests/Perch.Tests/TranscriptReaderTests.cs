@@ -8,6 +8,40 @@ public class TranscriptReaderTests
     private const string Cwd = TestEnvironment.FixtureCwd;
 
     [Fact]
+    public void LastTurnAwaitingAssistant_TrueWhenSubAgentResultUnanswered()
+    {
+        var reader = new TranscriptReader();
+        // Tail is a user tool_result (a sub-agent's result handed back to the parent) with no assistant
+        // reply after it — the parent still owes a turn, so it is not done. A trailing metadata record
+        // must not change the verdict.
+        Assert.True(reader.LastTurnAwaitingAssistant("sessSubReturned", Cwd));
+    }
+
+    [Fact]
+    public void LastTurnAwaitingAssistant_FalseWhenParentRepliedAfterSub()
+    {
+        var reader = new TranscriptReader();
+        // Same shape but the parent produced its final assistant text after the sub's result: turn
+        // complete, so not awaiting (a genuine completion the "done" alert should fire on).
+        Assert.False(reader.LastTurnAwaitingAssistant("sessSubDone", Cwd));
+    }
+
+    [Fact]
+    public void LastTurnAwaitingAssistant_TrueWhenAssistantEndsOnPendingToolUse()
+    {
+        var reader = new TranscriptReader();
+        // Tail is an assistant record whose last block is a tool_use awaiting its result — mid-turn.
+        Assert.True(reader.LastTurnAwaitingAssistant("sessPendingTool", Cwd));
+    }
+
+    [Fact]
+    public void LastTurnAwaitingAssistant_FalseWhenTranscriptMissing()
+    {
+        var reader = new TranscriptReader();
+        Assert.False(reader.LastTurnAwaitingAssistant("no-such-session", Cwd));
+    }
+
+    [Fact]
     public void GetActivity_ReturnsMostRecentToolCallPhrase()
     {
         var reader = new TranscriptReader();

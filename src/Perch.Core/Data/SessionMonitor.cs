@@ -304,6 +304,14 @@ internal sealed class SessionMonitor : IDisposable
             bool IsInterrupted() =>
                 (interrupted ??= _transcripts.LastTurnWasInterrupted(sessionId, cwd)) == true;
 
+            // Same lazy, cached-by-mtime read, consulted only at the sub-agent-completion grace expiry
+            // below. True when the transcript tail shows the parent still owes an assistant reply (a
+            // sub-agent's result handed back but not yet answered), i.e. the session is mid-turn — just
+            // slow to produce its first follow-up token — not actually done. See LastTurnAwaitingAssistant.
+            bool? parentMidTurn = null;
+            bool IsParentMidTurn() =>
+                (parentMidTurn ??= _transcripts.LastTurnAwaitingAssistant(sessionId, cwd)) == true;
+
             SessionStatus status;
             // Set when a deferred busy->idle completion settle elapses this scan (below), so the "done"
             // notification is raised even though this is no longer a busy->idle edge.
@@ -443,15 +451,24 @@ internal sealed class SessionMonitor : IDisposable
 
                 // Still idle once the grace window has elapsed: the parent never picked the work back
                 // up (a busy transition would have cleared the entry below), so the sub-agents' return
-                // really was the end of the session's work. Surface it like a busy->idle completion.
-                if (status == SessionStatus.Idle
+                // really was the end of the session's work. Surface it like a busy->idle completion —
+                // unless the transcript tail shows the parent still mid-turn (a sub-agent's result handed
+                // back but not yet answered). Reading a large result back to the model can take far longer
+                // than the grace window while the session file still reads idle; firing here is the
+                // premature "done". In that case drop the watch and stay silent — the parent will resume
+                // and its own busy->idle raises the single completion. If instead the tail is a finished
+                // assistant turn, the session genuinely stopped on the sub-agents' return, so fire.
+                else if (status == SessionStatus.Idle
                     && _subsFinishedIdleAt.TryGetValue(pid, out var finishedAt)
                     && (now - finishedAt).TotalMilliseconds >= SubsCompletionGraceMs)
                 {
                     _subsFinishedIdleAt.Remove(pid);
-                    _idleSince[pid] = now;
-                    status = SessionStatus.NeedsAttention;
-                    fireSubsCompletion = true;
+                    if (!IsParentMidTurn())
+                    {
+                        _idleSince[pid] = now;
+                        status = SessionStatus.NeedsAttention;
+                        fireSubsCompletion = true;
+                    }
                 }
             }
 

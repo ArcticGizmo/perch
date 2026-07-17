@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2025-03-10T14:00:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":"Read the file"}}
+{"type":"assistant","timestamp":"2025-03-10T14:00:10Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":20},"content":[{"type":"text","text":"I'll read it."},{"type":"tool_use","id":"rd1","name":"Read","input":{"file_path":"C:\\fixtures\\proj\\Foo.cs"}}]}}

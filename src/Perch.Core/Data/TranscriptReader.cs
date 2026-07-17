@@ -27,6 +27,7 @@ internal sealed class TranscriptReader
     private readonly MtimeCache<double?> _burnRate = new();
     private readonly MtimeCache<bool> _bareCommand = new();
     private readonly MtimeCache<bool> _interrupted = new();
+    private readonly MtimeCache<bool> _awaitingAssistant = new();
     private readonly MtimeCache<IReadOnlyList<Artifact>> _artifacts = new();
     private readonly MtimeCache<IReadOnlyList<TaskItem>> _tasks = new();
     private readonly MtimeCache<StuckMetrics> _stuck = new();
@@ -92,6 +93,32 @@ internal sealed class TranscriptReader
             return false;
         var path = TranscriptLocator.Resolve(sessionId, cwd);
         return path != null && _interrupted.GetOrCompute(path, ParseInterrupted, false);
+    }
+
+    /// <summary>
+    /// True when the session's transcript tail ends mid-turn — i.e. the model still owes an assistant
+    /// reply. That is the case either when the last meaningful record is a user record (a prompt or a
+    /// <c>tool_result</c> the model hasn't answered yet — notably a sub-agent's result just handed back
+    /// to the parent) or an assistant record whose last block is a <c>tool_use</c> awaiting its result.
+    /// A <em>completed</em> turn instead ends in an assistant record with no pending tool call.
+    ///
+    /// This is the discriminator that keeps a sub-agent's return from raising a premature "done": a
+    /// sub-agent finishing hands its result back to the parent as a <c>tool_result</c>, and reading that
+    /// (often large) result back to the model to produce the next turn can take far longer than the
+    /// sub-agent-completion grace window — during which the session file still reads idle. If the tail
+    /// shows the parent mid-turn, the session hasn't finished; it's just slow to produce its first token.
+    ///
+    /// Metadata trailers (<c>attachment</c>, <c>file-history</c>, <c>queue-operation</c>, <c>system</c>,
+    /// <c>summary</c>) are ignored; only <c>assistant</c>/<c>user</c> records are weighed. Mirrors
+    /// <see cref="SubAgentReader"/>'s own working/idle classification. Cached by (length, last-write)
+    /// like the other readers. Best-effort; never throws (returns false on any failure).
+    /// </summary>
+    public bool LastTurnAwaitingAssistant(string sessionId, string cwd)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return false;
+        var path = TranscriptLocator.Resolve(sessionId, cwd);
+        return path != null && _awaitingAssistant.GetOrCompute(path, ParseAwaitingAssistant, false);
     }
 
     /// <summary>
@@ -828,6 +855,49 @@ internal sealed class TranscriptReader
         }
 
         return lastWasInterrupt;
+    }
+
+    private static bool ParseAwaitingAssistant(string path)
+    {
+        // Walk the tail chronologically; the verdict is decided by the last meaningful assistant/user
+        // record. A user record (a prompt, or a tool_result the model hasn't answered — e.g. a sub-agent's
+        // result just handed back) leaves the turn awaiting the model's reply. An assistant record ends
+        // the turn only when it carries no pending tool_use; one that ends on a tool_use is still awaiting
+        // that tool's result. Metadata trailers every transcript ends with are skipped so they don't muddy
+        // the verdict. Same tail-window reasoning as ParseBareCommand/ParseInterrupted, and the same
+        // working/idle definition SubAgentReader.Classify uses for a sub-agent's own transcript.
+        bool sawTurn = false;
+        bool awaiting = false;
+
+        foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
+        {
+            // Only assistant/user records carry the turn boundary; skip the rest without parsing.
+            if (line.Length == 0 || (!line.Contains("assistant") && !line.Contains("user")))
+                continue;
+
+            JsonNode? node;
+            try { node = JsonNode.Parse(line); }
+            catch { continue; }
+
+            var type = node?["type"]?.GetValue<string>();
+            if (type == "user")
+            {
+                sawTurn = true;
+                awaiting = true;
+            }
+            else if (type == "assistant")
+            {
+                sawTurn = true;
+                bool hadToolUse = false;
+                if (TranscriptJson.ContentArray(node) is { } content)
+                    foreach (var block in content)
+                        if (TranscriptJson.BlockType(block) == "tool_use")
+                            hadToolUse = true;
+                awaiting = hadToolUse;
+            }
+        }
+
+        return sawTurn && awaiting;
     }
 
     // True when a user record's message content contains the given text, in either shape we see:
