@@ -2,6 +2,7 @@ namespace Perch.Data;
 
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Perch.Platform;
 
 internal sealed class AppSettings
 {
@@ -178,6 +179,17 @@ internal sealed class AppSettings
     // Renders the quick-link icons rotated 180°. Purely for fun — the icons happen to look upside down
     // already, so this leans in. Off by default.
     public bool UpsideDownQuickLinks { get; set; }
+
+    // Global keyboard shortcuts (system-wide, work even when Perch isn't focused). Each is registered on
+    // startup and re-registered live when the Hotkeys settings page edits it. A binding that's disabled or
+    // invalid simply isn't registered; the OS refusing a combo (another app owns it) is ignored. The
+    // defaults are the house style (Alt+Shift + a key); a missing key in an older settings file keeps them.
+    //  • Dense    — collapse/expand the overlay (this was the app's only shortcut before, Alt+Shift+W).
+    //  • Cycle    — focus the next active session's terminal, round-robin.
+    //  • Switcher — pop the centred keyboard session switcher (Alt+Shift+Space).
+    public HotkeyBinding HotkeyToggleDense { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 'W');
+    public HotkeyBinding HotkeyCycleSessions { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 'S');
+    public HotkeyBinding HotkeyOpenSwitcher { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, ' ');
 
     // "Perch reacts": the tray and overlay bird wears the aggregate session mood — dozing (faded, a
     // trail of z's) when nothing's running, plainly alert while sessions work, a "!" badge when one

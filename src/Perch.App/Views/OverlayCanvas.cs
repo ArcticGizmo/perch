@@ -68,6 +68,15 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private static readonly Color  FgColor        = Color.FromRgb(225, 225, 235);
     private static readonly IBrush BgBrush        = new SolidColorBrush(Color.FromArgb(245, 15, 15, 20));
     private static readonly IPen   BorderPen      = new Pen(new SolidColorBrush(Color.FromRgb(45, 45, 60)), 1);
+    // Dev-instance marker: a hot-pink brand so an isolated dev build is unmistakable next to a running
+    // installed Perch — a 2px border around the panel plus a "Perch - DEV" header label. Only ever used
+    // when AppProfile.IsDev, so a normal build never pays for it.
+    private static readonly IBrush DevPinkBrush   = new SolidColorBrush(Color.FromRgb(244, 114, 182));
+    private static readonly IPen   DevBorderPen   = new Pen(DevPinkBrush, 2);
+    // "Jump to next session" landed here: a blue selection wash + left bar that holds then fades, so the
+    // hotkey user can see which session they've cycled to. Blue reads as navigation, distinct from the
+    // green/orange/yellow status hues.
+    private static readonly Color  CycleColor     = Color.FromRgb(96, 165, 250);
     private static readonly IBrush MutedBrush     = new SolidColorBrush(Color.FromRgb(110, 110, 130));
     private static readonly IBrush FgBrush        = new SolidColorBrush(FgColor);
     private static readonly Color  RunningColor   = Color.FromRgb(34, 197, 94);
@@ -705,6 +714,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, Corner); DrawChaseBorder(ctx, pr, AttentionColor); }
             else OverlayDraw.Panel(ctx, pr, BgBrush, BorderPen, Corner);
             _denseCtl.PaintStrip(ctx, width);
+            DrawDevBorder(ctx, width, h);
         }
         return h;
     }
@@ -789,9 +799,22 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
             if (showFooter) DrawStatusFooter(ctx, width, height);
             else _footerRect = default;
+
+            DrawDevBorder(ctx, width, height);
         }
 
         return height;
+    }
+
+    // A hot-pink 2px border hugging the panel, drawn only for an isolated dev instance so it can't be
+    // confused with a running installed Perch. Inset a touch so the 2px stroke sits fully inside the
+    // window bounds, and painted last so it rides over the content edges.
+    private static void DrawDevBorder(DrawingContext ctx, double width, double height)
+    {
+        if (!AppProfile.IsDev) return;
+        var r = new Rect(1, 1, width - 2, height - 2);
+        if (r.Width <= 0 || r.Height <= 0) return;
+        OverlayDraw.Panel(ctx, r, null, DevBorderPen, Corner - 1);
     }
 
     private void DrawHeader(DrawingContext ctx, double width)
@@ -806,7 +829,9 @@ public sealed class OverlayCanvas : Control, IDenseHost
             brandRight = HorizPad + iconSize + 5;
         }
 
-        var label = OverlayDraw.Text("Perch", 11, MutedBrush);
+        var label = AppProfile.IsDev
+            ? OverlayDraw.Text("Perch - DEV", 11, DevPinkBrush)
+            : OverlayDraw.Text("Perch", 11, MutedBrush);
         OverlayDraw.TextLeftMid(ctx, label, brandRight, midY);
         brandRight += label.Width;
 
@@ -1118,6 +1143,15 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
         if (rowIndex == _hoveredRow)
             ctx.FillRectangle(RowHoverBrush, new Rect(1, top + 1, width - 2, RowHeight - 1));
+
+        // "Jump to next session" landing highlight: a blue wash + bright left bar, fading over time.
+        if (session.SessionId == _cycleHighlightId && CycleHighlightOpacity() is > 0 and var op)
+        {
+            var rowRect = new Rect(1, top + 1, width - 2, RowHeight - 1);
+            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb((byte)(46 * op), CycleColor.R, CycleColor.G, CycleColor.B)), rowRect);
+            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb((byte)(255 * op), CycleColor.R, CycleColor.G, CycleColor.B)),
+                new Rect(1, top + 1, 3, RowHeight - 1));
+        }
 
         double midY = top + RowHeight / 2;
         bool running  = session.Status == SessionStatus.Running;
@@ -2117,12 +2151,67 @@ public sealed class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
+    // ── "Jump to next session" landing highlight ───────────────────────────────
+    // The session the cycle hotkey last jumped to, plus when it landed. The row is washed blue with a
+    // bright left bar that holds full then fades, so the user can see where the cycle put them. Reset on
+    // each press, so rapid cycling keeps a stable marker on the current target that lingers, then fades.
+    private string? _cycleHighlightId;
+    private DateTime _cycleHighlightStart;
+    private DispatcherTimer? _cycleTimer;
+    private const double CycleHoldMs = 2200;
+    private const double CycleFadeMs = 900;
+
+    /// <summary>Marks <paramref name="sessionId"/> as the session the "jump to next session" hotkey just
+    /// focused, briefly highlighting its row. Surfaces the panel first (pops the dense popup or expands a
+    /// collapsed float) so the highlight is actually visible. Called on the UI thread from the App.</summary>
+    public void HighlightCycledSession(string sessionId)
+    {
+        if (_denseCtl.IsDense) _denseCtl.OpenPopup();
+        else if (!_expanded && _rows.Count > 0)
+        {
+            _expanded = true;
+            UpdateTickTimer();
+            InvalidateMeasure();
+        }
+
+        _cycleHighlightId = sessionId;
+        _cycleHighlightStart = DateTime.Now;
+        (_cycleTimer ??= CreateCycleTimer()).Stop();
+        _cycleTimer.Start();
+        InvalidateVisual();
+    }
+
+    private DispatcherTimer CreateCycleTimer()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+        t.Tick += (_, _) =>
+        {
+            if ((DateTime.Now - _cycleHighlightStart).TotalMilliseconds >= CycleHoldMs + CycleFadeMs)
+            {
+                _cycleHighlightId = null;
+                _cycleTimer?.Stop();
+            }
+            InvalidateVisual();
+        };
+        return t;
+    }
+
+    // Opacity (0..1) of the landing highlight: full through the hold window, then a linear fade out.
+    private double CycleHighlightOpacity()
+    {
+        if (_cycleHighlightId is null) return 0;
+        double elapsed = (DateTime.Now - _cycleHighlightStart).TotalMilliseconds;
+        if (elapsed <= CycleHoldMs) return 1;
+        return Math.Clamp(1 - (elapsed - CycleHoldMs) / CycleFadeMs, 0, 1);
+    }
+
     // Stop the animation timers if the canvas leaves the visual tree (belt-and-braces; the overlay
     // normally lives for the whole app session).
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         _chaseTimer?.Stop();
         _chaseStopTimer?.Stop();
+        _cycleTimer?.Stop();
         _dwellTimer?.Stop();
         _tickTimer?.Stop();
         _autoCloseBarTimer?.Stop();

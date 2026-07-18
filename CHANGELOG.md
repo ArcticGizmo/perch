@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.5] - 2026-07-18
+
+- Configurable keyboard shortcuts — a new Shortcuts settings page, every hotkey rebindable.
+- Jump to next session (Alt+Shift+S) — cycle focus through your terminals; the overlay marks where you land.
+- Session switcher (Alt+Shift+Space) — a keyboard palette to leap to any session. Perch's own Cmd+Space.
+- A finishing sub-agent no longer fires a premature "done" mid-thought.
+
+---
+
 ## [v0.2.4] - 2026-07-16
 
 - Outage footer now reflects the worst live incident (a major outage no longer poses as "minor").

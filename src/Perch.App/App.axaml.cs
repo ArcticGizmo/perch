@@ -48,10 +48,24 @@ public partial class App : Application
     // overlay shows a depleting bar for this grace period; if still no sessions when it elapses, exit.
     private const int AutoCloseGraceMs = 20_000;
     private DispatcherTimer? _autoCloseTimer;
+
+    // Re-asserts the overlay's topmost z-order every few seconds. "Topmost" only puts a window in the
+    // topmost band; another topmost surface (Chrome/Electron popups, a fullscreen app) can come to the
+    // front of that band and bury the overlay, which — being WS_EX_NOACTIVATE — can't re-float itself.
+    // A no-op SetWindowPos when already frontmost, so polling this often is effectively free.
+    private static readonly TimeSpan TopmostReassertInterval = TimeSpan.FromSeconds(5);
+    private DispatcherTimer? _topmostTimer;
     private bool _seenSession;
     private int _lastSessionCount;
     private IReadOnlyList<ClaudeSession> _lastSessions = [];
-    private IGlobalHotkey? _hotkey;
+
+    // Global keyboard shortcuts. Each configured binding gets its own IGlobalHotkey instance (a Windows
+    // instance owns a fixed hotkey id + message-loop thread), rebuilt whenever the Hotkeys settings page
+    // edits them. _lastCycledSessionId tracks the "jump to next session" round-robin; _switcher is the
+    // single reused keyboard session-switcher popup.
+    private readonly List<IGlobalHotkey> _hotkeys = new();
+    private string? _lastCycledSessionId;
+    private SessionSwitcherWindow? _switcher;
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
@@ -67,8 +81,9 @@ public partial class App : Application
                 _usageHost?.Dispose();
                 _metricsHost?.Dispose();
                 _statusHost?.Dispose();
-                _hotkey?.Dispose();
+                foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
+                _topmostTimer?.Stop();
                 _overlay?.Canvas.DisposeDense();
             };
 
@@ -160,17 +175,22 @@ public partial class App : Application
             ApplyDisplaySettings(settings);
 
             _overlay.Show();
+
+            // Keep the overlay at the front of the topmost band (see field comment) — cheap enough to poll.
+            _topmostTimer = new DispatcherTimer { Interval = TopmostReassertInterval };
+            _topmostTimer.Tick += (_, _) => _overlay?.ReassertTopmost();
+            _topmostTimer.Start();
+
             _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: settings.IncludeSubprocessMetrics);
             _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
             if (settings.ShowServiceStatus) _statusHost.Start(); // initial fetch (polls every 2 min thereafter)
             ReloadQuickLinks(settings);
 
-            // Global hotkey (Alt+Shift+W): toggle dense mode from anywhere (dense replaces the old
-            // show/hide). The callback fires on the hotkey's own thread, so hop to the UI thread.
-            _hotkey = PlatformServices.CreateGlobalHotkey();
-            _hotkey.Register(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 'W',
-                () => Dispatcher.UIThread.Post(ToggleDense));
+            // Global hotkeys: dense-toggle, jump-to-next-session, and the keyboard switcher — each read
+            // from settings and (re)registered together. Callbacks fire on a hotkey's own thread, so each
+            // hops to the UI thread.
+            RegisterHotkeys();
 
             // Re-dock the dense strip when monitors are added/removed (the controller self-heals to primary).
             if (_overlay.Screens is { } screens)
@@ -239,6 +259,7 @@ public partial class App : Application
         _statsWindow?.Close();
         _flightWindow?.Close();
         _qrWindow?.Close();
+        _switcher?.Close();
     }
 
     // Focuses the terminal hosting a clicked session (sub-agent rows already resolve to their parent) and
@@ -555,6 +576,63 @@ public partial class App : Application
     // edge strip (that expands on hover) rather than hiding entirely.
     private void ToggleDense() => _overlay?.Canvas.ToggleDense();
 
+    // ── Global hotkeys ────────────────────────────────────────────────────────────
+    // Disposes any current bindings and re-registers the three configured shortcuts from settings. Called
+    // once at startup and again whenever the Hotkeys settings page edits a binding, so a change takes
+    // effect live. A disabled/invalid binding is skipped; a combo the OS refuses (another app owns it) is
+    // dropped without fuss.
+    private void RegisterHotkeys()
+    {
+        foreach (var hk in _hotkeys) hk.Dispose();
+        _hotkeys.Clear();
+        if (_appSettings is not { } s) return;
+
+        TryRegister(s.HotkeyToggleDense,   () => Dispatcher.UIThread.Post(ToggleDense));
+        TryRegister(s.HotkeyCycleSessions, () => Dispatcher.UIThread.Post(CycleSessions));
+        TryRegister(s.HotkeyOpenSwitcher,  () => Dispatcher.UIThread.Post(OpenSwitcher));
+    }
+
+    private void TryRegister(HotkeyBinding binding, Action onPressed)
+    {
+        if (binding is not { Enabled: true } || !binding.IsValid) return;
+        var hk = PlatformServices.CreateGlobalHotkey();
+        if (hk.Register(binding.Modifiers, binding.KeyChar, onPressed)) _hotkeys.Add(hk);
+        else hk.Dispose(); // OS refused the combo — leave the slot empty rather than hold a dead binding
+    }
+
+    // "Jump to next session": focus the terminal of the session after the last one we jumped to, wrapping
+    // around — so repeatedly pressing the hotkey walks every interactive session in turn. Background/SDK
+    // sessions have no terminal to focus, so they're skipped. Focusing also acknowledges the session,
+    // clearing a "done" badge just like a click.
+    private void CycleSessions()
+    {
+        var targets = _lastSessions.Where(s => !s.IsBackground).ToList();
+        if (targets.Count == 0) return;
+
+        int last = _lastCycledSessionId is null ? -1 : targets.FindIndex(s => s.SessionId == _lastCycledSessionId);
+        var next = targets[(last + 1) % targets.Count];
+        _lastCycledSessionId = next.SessionId;
+        FocusSession(next);
+        _overlay?.Canvas.HighlightCycledSession(next.SessionId); // mark the row so the user sees where they landed
+    }
+
+    // "Session switcher": pop the centred keyboard palette over the current interactive sessions. Pressing
+    // the hotkey again while it's open dismisses it (Esc / clicking away do too). Focus is forced because a
+    // global hotkey firing in a background tray doesn't grant foreground rights on its own.
+    private void OpenSwitcher()
+    {
+        if (_switcher is { IsVisible: true } open) { open.Close(); return; }
+
+        var targets = _lastSessions.Where(s => !s.IsBackground).ToList();
+        if (targets.Count == 0) return;
+
+        var switcher = new SessionSwitcherWindow(targets, FocusSession);
+        _switcher = switcher;
+        switcher.Closed += (_, _) => { if (ReferenceEquals(_switcher, switcher)) _switcher = null; };
+        switcher.Show();
+        switcher.TakeFocus();
+    }
+
     // Lazily create-or-focus the single Settings window instance. The window edits the shared
     // AppSettings and applies changes live through the hooks below — the Avalonia counterpart of the
     // WinForms OverlayApplicationContext's SettingsForm wiring.
@@ -579,6 +657,7 @@ public partial class App : Application
                 settings.ShowSystemMetrics, settings.ShowSessionMetrics, settings.IncludeSubprocessMetrics),
             QuickLinksChanged = () => ReloadQuickLinks(settings),
             GlowChanged = UpdateGlow,
+            HotkeysChanged = RegisterHotkeys,
             TestNotification = kind => _notifications?.ShowTest(kind),
             TestExternalNotification = () => { if (_notifications is { } n) _ = n.SendExternalTestAsync(); },
             CheckForUpdates = () => _updateService?.CheckManual(),

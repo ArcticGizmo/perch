@@ -7,6 +7,7 @@ using Avalonia.Threading;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
 using Perch.Data;
+using Perch.Platform;
 
 namespace Perch.Avalonia.Windows;
 
@@ -197,6 +198,107 @@ internal sealed class PerchToggle : Control
         double r = knobD / 2;
         ctx.DrawEllipse(new SolidColorBrush(knob), null,
             new Point(knobX + r, rect.Top + 3 + r), r, r);
+    }
+}
+
+/// <summary>
+/// A button that records a global-shortcut combo: click it, then press your modifiers + a main key
+/// (letter / digit / Space) and it captures the chord into the bound <see cref="HotkeyBinding"/>. Shows the
+/// current combo ("Alt + Shift + W") at rest and "Press keys…" while listening. A modifier-less chord is
+/// rejected (so a bare key can't be claimed system-wide); Escape or losing focus cancels the capture.
+/// </summary>
+internal sealed class HotkeyCaptureButton : Button
+{
+    private readonly HotkeyBinding _binding;
+    private bool _listening;
+
+    /// <summary>Raised once a new combo has been captured into the binding.</summary>
+    public event Action? Changed;
+
+    public HotkeyCaptureButton(HotkeyBinding binding)
+    {
+        _binding = binding;
+        Width = 210;
+        Background = Palette.ButtonBgBrush;
+        Foreground = Palette.FgBrush;
+        BorderThickness = new Thickness(1);
+        BorderBrush = Palette.BorderBrush;
+        CornerRadius = new CornerRadius(4);
+        Padding = new Thickness(12, 6);
+        FontSize = 13;
+        HorizontalContentAlignment = HorizontalAlignment.Center;
+        VerticalContentAlignment = VerticalAlignment.Center;
+        Cursor = new Cursor(StandardCursorType.Hand);
+        UpdateLabel();
+
+        // Clicking away mid-capture cancels it.
+        LostFocus += (_, _) => { if (_listening) StopListening(); };
+    }
+
+    // Clicking (or Space/Enter while focused) begins capture; don't chain to base (there's no command).
+    protected override void OnClick() => StartListening();
+
+    private void StartListening()
+    {
+        _listening = true;
+        Content = "Press keys…";
+        BorderBrush = Palette.AccentBrush;
+        Focus();
+    }
+
+    private void StopListening()
+    {
+        _listening = false;
+        BorderBrush = Palette.BorderBrush;
+        UpdateLabel();
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (!_listening) { base.OnKeyDown(e); return; }
+
+        // Swallow every key while listening so Space/Enter don't re-fire the button and Escape doesn't
+        // bubble up to close the settings window.
+        e.Handled = true;
+
+        if (e.Key == Key.Escape) { StopListening(); return; }
+        if (IsModifierKey(e.Key)) return;           // lone modifier — wait for the main key
+        if (!TryMapKey(e.Key, out char key)) return; // unsupported main key — keep listening
+
+        var mods = MapModifiers(e.KeyModifiers);
+        if (mods == HotkeyModifiers.None) return;    // require ≥1 modifier — keep listening
+
+        _binding.Modifiers = mods;
+        _binding.KeyChar = key;
+        StopListening();
+        Changed?.Invoke();
+    }
+
+    private void UpdateLabel() => Content = _binding.Describe();
+
+    private static bool IsModifierKey(Key k) => k is
+        Key.LeftShift or Key.RightShift or Key.LeftCtrl or Key.RightCtrl or
+        Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin or Key.System;
+
+    private static HotkeyModifiers MapModifiers(KeyModifiers m)
+    {
+        var r = HotkeyModifiers.None;
+        if (m.HasFlag(KeyModifiers.Control)) r |= HotkeyModifiers.Control;
+        if (m.HasFlag(KeyModifiers.Alt)) r |= HotkeyModifiers.Alt;
+        if (m.HasFlag(KeyModifiers.Shift)) r |= HotkeyModifiers.Shift;
+        return r;
+    }
+
+    // Maps the main key to the char IGlobalHotkey expects; only letters, digits and Space are supported
+    // (the cross-platform hotkey layer maps exactly these).
+    private static bool TryMapKey(Key k, out char c)
+    {
+        if (k is >= Key.A and <= Key.Z) { c = (char)('A' + (k - Key.A)); return true; }
+        if (k is >= Key.D0 and <= Key.D9) { c = (char)('0' + (k - Key.D0)); return true; }
+        if (k is >= Key.NumPad0 and <= Key.NumPad9) { c = (char)('0' + (k - Key.NumPad0)); return true; }
+        if (k == Key.Space) { c = ' '; return true; }
+        c = '\0';
+        return false;
     }
 }
 
