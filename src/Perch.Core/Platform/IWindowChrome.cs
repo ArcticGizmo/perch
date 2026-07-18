@@ -26,4 +26,11 @@ public interface IWindowChrome
     /// so a non-activating tooltip/hint shows above another always-on-top window (e.g. the overlay)
     /// instead of behind it. Best-effort; a zero handle is ignored.</summary>
     void BringToTopNoActivate(IntPtr handle);
+
+    /// <summary>Forces the window to the foreground and gives it keyboard focus, working around the OS
+    /// foreground-lock that otherwise stops a background tray process from stealing focus (needed by the
+    /// session switcher, which a global hotkey summons and which must accept typing immediately). Unlike
+    /// the no-activate helpers above, this one deliberately activates. Best-effort; a zero handle is
+    /// ignored.</summary>
+    void ForceForeground(IntPtr handle);
 }

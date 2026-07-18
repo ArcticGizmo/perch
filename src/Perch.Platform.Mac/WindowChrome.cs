@@ -49,6 +49,23 @@ public sealed class WindowChrome : IWindowChrome
         catch { /* best-effort */ }
     }
 
+    /// <summary>Brings the window to the front and makes it key so it can take keyboard input — the macOS
+    /// counterpart of forcing foreground (there's no foreground-lock dance to do here). Also nudges the app
+    /// itself active so a background/agent process's window can accept typing. Best-effort.</summary>
+    public void ForceForeground(IntPtr handle)
+    {
+        try
+        {
+            IntPtr window = WindowOf(handle);
+            if (window == IntPtr.Zero) return;
+            IntPtr app = ObjC.SendGet(ObjC.Class("NSApplication"), ObjC.Sel("sharedApplication"));
+            if (app != IntPtr.Zero) ObjC.SendVoid(app, ObjC.Sel("activateIgnoringOtherApps:"), (byte)1);
+            // makeKeyAndOrderFront: returns void; sending through the id-returning overload is harmless.
+            ObjC.SendGet(window, ObjC.Sel("makeKeyAndOrderFront:"), IntPtr.Zero);
+        }
+        catch { /* best-effort */ }
+    }
+
     private static void Configure(IntPtr handle, bool clickThrough)
     {
         try

@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- New **Shortcuts** settings page — every global hotkey in one place, each rebindable (click, then press your combo) and switchable off if it clashes.
+- **Jump to next session** hotkey (Alt+Shift+S) — focuses the next active session's terminal, walking through them one press at a time.
+- **Session switcher** (Alt+Shift+Space) — a centred, keyboard-driven palette: type or arrow to a session and press Enter to jump to it; Esc or click away to dismiss. Perch's own Cmd+Space.
+- The overlay's expand/collapse hotkey (Alt+Shift+W) is now configurable alongside the rest, instead of being hard-wired.
+
+---
+
+## [v0.2.5] - 2026-07-17
+
+- A finishing sub-agent no longer fires a premature "done" while the parent is still thinking.
+
 ---
 
 ## [v0.2.4] - 2026-07-16

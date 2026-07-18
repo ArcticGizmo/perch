@@ -50,6 +50,9 @@ internal sealed class SettingsHooks
     /// <summary>Re-evaluate the ambient screen-edge glow (its enable toggle flipped).</summary>
     public Action? GlowChanged;
 
+    /// <summary>Re-register the global keyboard shortcuts after a binding was edited or toggled.</summary>
+    public Action? HotkeysChanged;
+
     /// <summary>Preview a local desktop notification of the given kind.</summary>
     public Action<NotificationKind>? TestNotification;
 
@@ -69,8 +72,8 @@ internal sealed class SettingsHooks
 /// <summary>
 /// The first-class settings window (the Avalonia port of the WinForms <c>SettingsForm</c>). A dark
 /// window split into a fixed-width left navigation rail and a scrollable content area; the nav switches
-/// between pages (Getting started, Usage, Indicators, Monitoring, Session Stats, Notifications,
-/// Quick Links, Experimental, About, Changelog). Reads/writes the shared
+/// between pages (Getting started, Usage, Indicators, Monitoring, Shortcuts, Session Stats,
+/// Notifications, Quick Links, Experimental, About, Changelog). Reads/writes the shared
 /// <see cref="AppSettings"/> and applies changes live through <see cref="SettingsHooks"/> so the overlay
 /// and monitors stay in sync.
 /// </summary>
@@ -147,6 +150,7 @@ internal sealed class SettingsWindow : Window
         AddPage(nav, "usage",        "Usage Limits",    BuildUsagePage);
         AddPage(nav, "indicators",   "Indicators",      BuildIndicatorsPage);
         AddPage(nav, "monitoring",   "Monitoring",      BuildMonitoringPage);
+        AddPage(nav, "shortcuts",    "Shortcuts",       BuildHotkeysPage);
         AddPage(nav, "stats",        "Session Stats",   BuildStatsPage);
         AddPage(nav, "notify",       "Notifications",   BuildNotificationsPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
@@ -704,6 +708,61 @@ internal sealed class SettingsWindow : Window
             "the true cost of the session. Off, only the claude process itself is measured."));
 
         ApplyEnabled(_settings.ShowSessionMetrics);
+    }
+
+    // ── Shortcuts (global hotkeys) ───────────────────────────────────────────────────
+    private void BuildHotkeysPage(StackPanel page)
+    {
+        page.Children.Add(SettingsUi.SectionTitle("Keyboard shortcuts"));
+        page.Children.Add(SettingsUi.BodyText(
+            "System-wide shortcuts that work even when Perch isn't focused. Click a shortcut to change it — " +
+            "hold your modifiers (Ctrl / Alt / Shift) and press a letter, digit or Space. Switch one off " +
+            "with its toggle if it clashes with another app."));
+
+        page.Children.Add(SettingsUi.Separator());
+
+        AddHotkeyRow(page, "Expand / collapse the overlay", _settings.HotkeyToggleDense,
+            "Collapses the overlay to its slim dock strip, or expands it back to the full panel.");
+
+        page.Children.Add(SettingsUi.Separator());
+
+        AddHotkeyRow(page, "Jump to next session", _settings.HotkeyCycleSessions,
+            "Focuses the terminal of the next active session, walking through them one press at a time.");
+
+        page.Children.Add(SettingsUi.Separator());
+
+        AddHotkeyRow(page, "Open session switcher", _settings.HotkeyOpenSwitcher,
+            "Pops a search box in the middle of the screen — type or arrow to a session and press Enter to " +
+            "jump to its terminal. Esc or clicking away dismisses it.");
+    }
+
+    private void AddHotkeyRow(StackPanel page, string title, HotkeyBinding binding, string desc)
+    {
+        var enableToggle = Toggle(binding.Enabled);
+        var capture = new HotkeyCaptureButton(binding);
+
+        enableToggle.CheckedChanged += (_, _) =>
+        {
+            binding.Enabled = enableToggle.IsChecked;
+            capture.IsEnabled = binding.Enabled;
+            SaveHotkeys();
+        };
+        capture.Changed += SaveHotkeys;
+        capture.IsEnabled = binding.Enabled;
+
+        page.Children.Add(SettingsUi.TitleRow(title, enableToggle));
+        page.Children.Add(SettingsUi.BodyText(desc));
+        var row = SettingsUi.ButtonRow();
+        row.Children.Add(capture);
+        page.Children.Add(row);
+    }
+
+    // Persist the (mutated-in-place) bindings and ask the App to re-register the OS hotkeys so an edit or
+    // a toggle takes effect immediately.
+    private void SaveHotkeys()
+    {
+        _settings.Save();
+        _hooks.HotkeysChanged?.Invoke();
     }
 
     // ── Session Stats ────────────────────────────────────────────────────────────────

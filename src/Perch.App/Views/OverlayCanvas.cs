@@ -68,6 +68,11 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private static readonly Color  FgColor        = Color.FromRgb(225, 225, 235);
     private static readonly IBrush BgBrush        = new SolidColorBrush(Color.FromArgb(245, 15, 15, 20));
     private static readonly IPen   BorderPen      = new Pen(new SolidColorBrush(Color.FromRgb(45, 45, 60)), 1);
+    // Dev-instance marker: a hot-pink brand so an isolated dev build is unmistakable next to a running
+    // installed Perch — a 2px border around the panel plus a "Perch - DEV" header label. Only ever used
+    // when AppProfile.IsDev, so a normal build never pays for it.
+    private static readonly IBrush DevPinkBrush   = new SolidColorBrush(Color.FromRgb(244, 114, 182));
+    private static readonly IPen   DevBorderPen   = new Pen(DevPinkBrush, 2);
     private static readonly IBrush MutedBrush     = new SolidColorBrush(Color.FromRgb(110, 110, 130));
     private static readonly IBrush FgBrush        = new SolidColorBrush(FgColor);
     private static readonly Color  RunningColor   = Color.FromRgb(34, 197, 94);
@@ -705,6 +710,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, Corner); DrawChaseBorder(ctx, pr, AttentionColor); }
             else OverlayDraw.Panel(ctx, pr, BgBrush, BorderPen, Corner);
             _denseCtl.PaintStrip(ctx, width);
+            DrawDevBorder(ctx, width, h);
         }
         return h;
     }
@@ -789,9 +795,22 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
             if (showFooter) DrawStatusFooter(ctx, width, height);
             else _footerRect = default;
+
+            DrawDevBorder(ctx, width, height);
         }
 
         return height;
+    }
+
+    // A hot-pink 2px border hugging the panel, drawn only for an isolated dev instance so it can't be
+    // confused with a running installed Perch. Inset a touch so the 2px stroke sits fully inside the
+    // window bounds, and painted last so it rides over the content edges.
+    private static void DrawDevBorder(DrawingContext ctx, double width, double height)
+    {
+        if (!AppProfile.IsDev) return;
+        var r = new Rect(1, 1, width - 2, height - 2);
+        if (r.Width <= 0 || r.Height <= 0) return;
+        OverlayDraw.Panel(ctx, r, null, DevBorderPen, Corner - 1);
     }
 
     private void DrawHeader(DrawingContext ctx, double width)
@@ -806,7 +825,9 @@ public sealed class OverlayCanvas : Control, IDenseHost
             brandRight = HorizPad + iconSize + 5;
         }
 
-        var label = OverlayDraw.Text("Perch", 11, MutedBrush);
+        var label = AppProfile.IsDev
+            ? OverlayDraw.Text("Perch - DEV", 11, DevPinkBrush)
+            : OverlayDraw.Text("Perch", 11, MutedBrush);
         OverlayDraw.TextLeftMid(ctx, label, brandRight, midY);
         brandRight += label.Width;
 

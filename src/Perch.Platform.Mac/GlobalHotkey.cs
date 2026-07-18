@@ -112,6 +112,7 @@ public sealed class GlobalHotkey : IGlobalHotkey
             'O' => 31, 'U' => 32, 'I' => 34, 'P' => 35, 'L' => 37, 'J' => 38, 'K' => 40, 'N' => 45, 'M' => 46,
             '1' => 18, '2' => 19, '3' => 20, '4' => 21, '5' => 23, '6' => 22, '7' => 26, '8' => 28,
             '9' => 25, '0' => 29,
+            ' ' => 49, // kVK_Space — the session switcher's default combo uses Space
             _ => uint.MaxValue,
         };
         return code != uint.MaxValue;
