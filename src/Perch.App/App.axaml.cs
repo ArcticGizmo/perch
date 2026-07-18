@@ -613,6 +613,7 @@ public partial class App : Application
         var next = targets[(last + 1) % targets.Count];
         _lastCycledSessionId = next.SessionId;
         FocusSession(next);
+        _overlay?.Canvas.HighlightCycledSession(next.SessionId); // mark the row so the user sees where they landed
     }
 
     // "Session switcher": pop the centred keyboard palette over the current interactive sessions. Pressing

@@ -72,6 +72,13 @@ internal static class HeadlessRenderer
         probe.StartAutoCloseCountdown(20_000);
         RenderControl(probe, Path.Combine(outDir, "overlay_autoclose_1x.png"), 96);
 
+        // "Jump to next session" landing highlight: the blue selection wash + left bar on the cycled row.
+        // Rendered immediately after triggering it, so the fade timer hasn't run and it's at full strength.
+        var cycleProbe = new OverlayCanvas();
+        cycleProbe.Update(SampleSessions());
+        cycleProbe.HighlightCycledSession(SampleSessions()[1].SessionId);
+        RenderControl(cycleProbe, Path.Combine(outDir, "overlay_cycle_1x.png"), 96);
+
         // Service-status outage footer: a major-impact reading with one unresolved incident, so the
         // severity-tinted banner + dot + description render at the panel bottom.
         canvas.SetConfettiFinishAvailable(false);
