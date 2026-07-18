@@ -78,6 +78,15 @@ internal sealed class SessionMonitorHost : IDisposable
         _monitor.Scan();
     }
 
+    /// <summary>Sets or clears a session's pinned note (writes/deletes its <c>.note</c> sidecar) and
+    /// rescans so the overlay's note glyph + second line refresh. A null/blank text clears it. Call on
+    /// the UI thread.</summary>
+    public void SetNote(string sessionId, string? text)
+    {
+        _monitor.SetNote(sessionId, text);
+        _monitor.Scan();
+    }
+
     /// <summary>Clears a completed session's "done" badge — the user focused/clicked it — and rescans so
     /// the overlay drops the NeedsAttention state back to Idle. Harmless for a session that isn't done.
     /// Call on the UI thread.</summary>

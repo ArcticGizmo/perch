@@ -386,6 +386,8 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(SettingsUi.Separator());
         BuildTaskProgressSection(page);
         page.Children.Add(SettingsUi.Separator());
+        BuildNotesSection(page);
+        page.Children.Add(SettingsUi.Separator());
         BuildWaitingTimerSection(page);
         page.Children.Add(SettingsUi.Separator());
         BuildArtifactsSection(page);
@@ -508,6 +510,16 @@ internal sealed class SettingsWindow : Window
             "Shows a small \"done/total\" count next to a session that's working through a task list " +
             "(the native checklist Claude Code builds as it plans). It turns green when every task is " +
             "complete; hover it in the overlay for the full list."));
+    }
+
+    private void BuildNotesSection(StackPanel page)
+    {
+        page.Children.Add(SettingsUi.TitleRow("Session notes",
+            DisplayToggle(_settings.ShowNotes, v => _settings.ShowNotes = v)));
+        page.Children.Add(SettingsUi.BodyText(
+            "Shows a pinned note on its own line under a session (add or edit one from a session's " +
+            "right-click menu). With this off the note stays as a small glyph you can hover to read, " +
+            "keeping the row compact. On by default."));
     }
 
     private void BuildWaitingTimerSection(StackPanel page)

@@ -37,6 +37,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private const double IconBoxH         = 16;
     private const double IconGap          = 6;
     private const double RowHeight        = 46;
+    private const double NoteLineHeight   = 16; // extra height a row gains when a note needs its own third line
     private const double SubRowHeight     = 24;
     private const double SectionRowHeight = 26;
     private const double SubIndent        = 22;
@@ -53,6 +54,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private const double ThermoIconWidth  = 12;
     private const double ArtifactIconWidth = 16;
     private const double PartyIconWidth   = 16; // the "confetti finish" party-popper glyph on an armed row
+    private const double NoteIconWidth    = 15; // the pinned-note glyph shown on a row that has a note
 
     // Font sizes (px ~= the WinForms point sizes).
     private const double NameSize       = 11.5;
@@ -104,6 +106,10 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private static readonly IBrush RunningBrush   = new SolidColorBrush(RunningColor);
     private static readonly IBrush ArtifactBrush  = new SolidColorBrush(Color.FromRgb(251, 191, 36));
     private static readonly IBrush ArtifactHover  = new SolidColorBrush(Color.FromRgb(255, 224, 140));
+    // Pinned-note glyph + its own note line: a sticky-note amber for the glyph, a dimmer amber for the
+    // note text, so a note reads as a deliberate human annotation distinct from the muted activity line.
+    private static readonly IBrush NoteBrush      = new SolidColorBrush(Color.FromRgb(244, 193, 79));
+    private static readonly IBrush NoteLineBrush  = new SolidColorBrush(Color.FromRgb(217, 196, 143));
 
     // Party-popper glyph: a gold cone spraying a fan of festive confetti dots (shared with the confetti
     // window's palette so the armed-row hint and the finish burst read as one feature).
@@ -233,6 +239,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private bool _showTaskProgress = true;
     private bool _showBurnRate = true;
     private bool _showGitStats = true;
+    private bool _showNoteLine = true;
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
     private bool _showWaitingTimer = true;
@@ -434,6 +441,16 @@ public sealed class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
+    /// <summary>Show/hide a pinned note's own line under a session. Off keeps the note glyph + hover (the
+    /// note is still there, just compact); on gives it a dedicated line. Changes row height, so relayout.</summary>
+    public void SetShowNoteLine(bool show)
+    {
+        if (_showNoteLine == show) return;
+        _showNoteLine = show;
+        InvalidateMeasure();
+        InvalidateVisual();
+    }
+
     /// <summary>Show/hide the "waiting on you" timer on awaiting-input rows. Display only — the row still
     /// shows its "input ↩" status, just without the elapsed-wait line.</summary>
     public void SetShowWaitingTimer(bool show)
@@ -488,6 +505,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private readonly Dictionary<int, Rect> _warnRects = new();
     private readonly Dictionary<int, Rect> _taskRects = new();
     private readonly Dictionary<int, Rect> _metricsRects = new();
+    private readonly Dictionary<int, Rect> _noteRects = new();
 
     // The header's update badge (a perch-orange download disc), shown only while an update is pending. Its
     // hit-rect is captured at paint time; clicking it raises UpdateRequested for the app to apply.
@@ -577,6 +595,15 @@ public sealed class OverlayCanvas : Control, IDenseHost
     /// for the app to flip its marker file.</summary>
     public event Action<string>? ExternalNotifyToggleRequested;
 
+    /// <summary>Raised when the user picks "Add note…"/"Edit note…" for a session. The app opens the note
+    /// editor (prefilled from <see cref="ClaudeSession.Note"/>) and writes the result via the monitor.
+    /// Internal — <see cref="ClaudeSession"/> is a Core-internal type.</summary>
+    internal event Action<ClaudeSession>? NoteEditRequested;
+
+    /// <summary>Raised when the user picks "Clear note" for a session; carries the session id for the app
+    /// to delete its <c>.note</c> sidecar.</summary>
+    public event Action<string>? NoteClearRequested;
+
     /// <summary>Raised when the user toggles the whole-machine metrics strip from the right-click menu;
     /// carries the desired new enabled state for the app to persist and apply.</summary>
     public event Action<bool>? SystemMetricsToggleRequested;
@@ -630,7 +657,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~150ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Note }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -700,8 +727,34 @@ public sealed class OverlayCanvas : Control, IDenseHost
         foreach (var sub in ordered) rows.Add(new DisplayRow(session, sub));
     }
 
-    private static double HeightOf(DisplayRow row) =>
-        row.IsSectionHeader ? SectionRowHeight : row.IsSubAgent ? SubRowHeight : RowHeight;
+    private double HeightOf(DisplayRow row) =>
+        row.IsSectionHeader ? SectionRowHeight :
+        row.IsSubAgent ? SubRowHeight :
+        SessionRowHeight(row.Session!);
+
+    // A session row is RowHeight for the name + one optional sub-line (activity/elapsed OR a note); it
+    // grows by NoteLineHeight only when it needs *both* — so a note gets its own third line rather than
+    // overriding the activity/status line.
+    private double SessionRowHeight(ClaudeSession s)
+    {
+        var (activity, elapsed) = SecondLineContent(s);
+        bool activityLine = !string.IsNullOrEmpty(activity) || !string.IsNullOrEmpty(elapsed);
+        return activityLine && s.HasNote && _showNoteLine ? RowHeight + NoteLineHeight : RowHeight;
+    }
+
+    // The live second-line content (activity phrase + elapsed timer) for a session, or (null, null) when
+    // it has none. Single source of truth so the measured row height and the painted layout can't drift.
+    private (string? activity, string? elapsed) SecondLineContent(ClaudeSession session)
+    {
+        bool running  = session.Status == SessionStatus.Running;
+        bool awaiting = session.Status == SessionStatus.AwaitingInput && _showWaitingTimer;
+        string? activity = running
+            ? (session.CurrentTask?.ActiveForm is { Length: > 0 } af ? af : session.Activity)
+            : awaiting ? "waiting on you" : null;
+        string? elapsed  = running ? session.RunningElapsedLabel()
+                         : awaiting ? session.AwaitingElapsedLabel() : null;
+        return (activity, elapsed);
+    }
 
     // The closed dense strip: the rounded panel + border (or attention chase), then the controller's
     // icon-and-status-dots strip. Mirrors the OverlayForm.OnPaint closed-strip branch.
@@ -785,6 +838,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
                 _warnRects.Clear();
                 _taskRects.Clear();
                 _metricsRects.Clear();
+                _noteRects.Clear();
 
                 double top = RowsTop;
                 for (int i = 0; i < _rows.Count; i++)
@@ -1090,6 +1144,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private int HitTestWarnIcon(Point p)     => HitRect(_warnRects, p);
     private int HitTestTaskCount(Point p)    => HitRect(_taskRects, p);
     private int HitTestMetrics(Point p)      => HitRect(_metricsRects, p);
+    private int HitTestNoteIcon(Point p)     => HitRect(_noteRects, p);
 
     private static int HitRect(Dictionary<int, Rect> rects, Point p)
     {
@@ -1139,34 +1194,36 @@ public sealed class OverlayCanvas : Control, IDenseHost
     // ── Session row (core) ────────────────────────────────────────────────────
     private void DrawSessionRow(DrawingContext ctx, int rowIndex, ClaudeSession session, double top, double width)
     {
+        double rowH = SessionRowHeight(session);
         ctx.DrawLine(SepPen, new Point(HorizPad, top), new Point(width - HorizPad, top));
 
         if (rowIndex == _hoveredRow)
-            ctx.FillRectangle(RowHoverBrush, new Rect(1, top + 1, width - 2, RowHeight - 1));
+            ctx.FillRectangle(RowHoverBrush, new Rect(1, top + 1, width - 2, rowH - 1));
 
         // "Jump to next session" landing highlight: a blue wash + bright left bar, fading over time.
         if (session.SessionId == _cycleHighlightId && CycleHighlightOpacity() is > 0 and var op)
         {
-            var rowRect = new Rect(1, top + 1, width - 2, RowHeight - 1);
+            var rowRect = new Rect(1, top + 1, width - 2, rowH - 1);
             ctx.FillRectangle(new SolidColorBrush(Color.FromArgb((byte)(46 * op), CycleColor.R, CycleColor.G, CycleColor.B)), rowRect);
             ctx.FillRectangle(new SolidColorBrush(Color.FromArgb((byte)(255 * op), CycleColor.R, CycleColor.G, CycleColor.B)),
-                new Rect(1, top + 1, 3, RowHeight - 1));
+                new Rect(1, top + 1, 3, rowH - 1));
         }
 
-        double midY = top + RowHeight / 2;
-        bool running  = session.Status == SessionStatus.Running;
-        // When the waiting timer is off, an awaiting row keeps its "input ↩" status (from the switch
-        // below) but drops the "waiting on you" activity + elapsed line, so it renders single-line.
+        bool running = session.Status == SessionStatus.Running;
+        // When the waiting timer is off, an awaiting row keeps its "input ↩" status but drops the "waiting
+        // on you" activity + elapsed line (see SecondLineContent), so it renders single-line.
+        var (activity, elapsed) = SecondLineContent(session);
+        bool activityLine = !string.IsNullOrEmpty(activity) || !string.IsNullOrEmpty(elapsed);
         bool awaiting = session.Status == SessionStatus.AwaitingInput && _showWaitingTimer;
+        bool hasNote = session.HasNote;                 // drives the glyph + hover (always, if a note exists)
+        bool showNoteLine = hasNote && _showNoteLine;   // drives the dedicated note line (Indicators toggle)
 
-        // While working a checklist, the active task's gerund is more telling than the raw tool phrase.
-        string? activity = running
-            ? (session.CurrentTask?.ActiveForm is { Length: > 0 } af ? af : session.Activity)
-            : awaiting ? "waiting on you" : null;
-        string? elapsed  = running ? session.RunningElapsedLabel()
-                         : awaiting ? session.AwaitingElapsedLabel() : null;
-        bool twoLine = !string.IsNullOrEmpty(activity) || !string.IsNullOrEmpty(elapsed);
-        double nameMidY = twoLine ? top + RowHeight / 2 - 8 : midY;
+        // Lines stack under the name: the activity/elapsed line (when present), then the note on its own
+        // line. The name centres in a single-line row and rides high once anything sits beneath it.
+        double firstLineY = top + 32;                                  // the activity/elapsed slot
+        double noteLineY  = activityLine ? firstLineY + NoteLineHeight // note takes the 3rd line…
+                                         : firstLineY;                 // …or the 2nd when there's no activity
+        double nameMidY   = activityLine || showNoteLine ? top + 15 : top + rowH / 2;
 
         IBrush secondLine = awaiting
             ? new SolidColorBrush(WarmWaitingColor(session.AwaitingElapsed() ?? TimeSpan.Zero))
@@ -1206,6 +1263,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
         double mailW = session.ExternalNotify ? MailIconWidth : 0;
         double rcW   = session.RemoteControlled ? RcIconWidth : 0;
         double botW  = session.IsBackground ? BotIconWidth : 0;
+        double noteW = hasNote ? NoteIconWidth : 0;
 
         // Right-side cluster (right→left from the status text): thermometer, mode badge, task count,
         // metrics bars (4.9), burn rate.
@@ -1239,7 +1297,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
         double gitW = showGit ? gitAddW + GitGap + gitDelW + 8 : 0;
 
         double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - botW - partyW - mailW
-                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW;
+                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
 
@@ -1258,8 +1316,14 @@ public sealed class OverlayCanvas : Control, IDenseHost
         if (rcW > 0)   DrawRemoteIcon(ctx, HorizPad + 16 + warnW + artW + mailW, nameMidY);
         if (partyW > 0) DrawPartyIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW, nameMidY);
         if (botW > 0)  DrawBotIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW + partyW, nameMidY);
+        if (noteW > 0)
+        {
+            double noteGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW;
+            DrawNoteIcon(ctx, noteGlyphX, nameMidY);
+            _noteRects[rowIndex] = new Rect(noteGlyphX - 2, nameMidY - 9, NoteIconWidth + 2, 18);
+        }
 
-        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW;
+        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW + noteW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
         // Git churn immediately right of the name: "+added" green, "-deleted" red.
@@ -1304,25 +1368,33 @@ public sealed class OverlayCanvas : Control, IDenseHost
             OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(burnLabel, StatusSize, BurnBrush), burnX, nameMidY);
         }
 
-        if (twoLine)
+        double lineLeft = HorizPad + 14;
+        if (activityLine)
         {
-            double activityMidY = top + RowHeight / 2 + 9;
-            double lineLeft = HorizPad + 14;
-
             double elapsedW = 0;
             if (!string.IsNullOrEmpty(elapsed))
             {
                 elapsedW = OverlayDraw.MeasureWidth(elapsed, ActivitySize);
                 OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(elapsed, ActivitySize, secondLine),
-                    width - HorizPad - elapsedW, activityMidY);
+                    width - HorizPad - elapsedW, firstLineY);
             }
             if (!string.IsNullOrEmpty(activity))
             {
                 double activityMax = width - lineLeft - HorizPad - (elapsedW > 0 ? elapsedW + 6 : 0);
                 string actTrunc = OverlayDraw.Truncate(activity, ActivitySize, activityMax);
                 OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(actTrunc, ActivitySize, secondLine),
-                    lineLeft, activityMidY);
+                    lineLeft, firstLineY);
             }
+        }
+
+        // The pinned note on its own line, in the note amber — never overriding the activity/status line.
+        // Gated by the Indicators toggle; when off the note survives as the glyph + hover only.
+        if (showNoteLine)
+        {
+            double noteMax = width - lineLeft - HorizPad;
+            string noteTrunc = OverlayDraw.Truncate(session.Note!, ActivitySize, noteMax);
+            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(noteTrunc, ActivitySize, NoteLineBrush),
+                lineLeft, noteLineY);
         }
     }
 
@@ -1528,6 +1600,40 @@ public sealed class OverlayCanvas : Control, IDenseHost
             gc.EndFigure(false);
         }
         ctx.DrawGeometry(null, pen, flap);
+    }
+
+    // The pinned-note glyph: a small dog-eared page (folded top-right corner) with two short "text"
+    // lines, in the sticky-note amber. Marks a row that carries a note; hovering it pops the full text.
+    private static void DrawNoteIcon(DrawingContext ctx, double x, double midY)
+    {
+        var pen = new Pen(NoteBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        const double w = 10, h = 12, fold = 3.5;
+        double left = x, top = midY - h / 2, right = left + w, bottom = top + h;
+
+        var page = new StreamGeometry();
+        using (var gc = page.Open())
+        {
+            gc.BeginFigure(new Point(left, top), isFilled: false);
+            gc.LineTo(new Point(right - fold, top));
+            gc.LineTo(new Point(right, top + fold));
+            gc.LineTo(new Point(right, bottom));
+            gc.LineTo(new Point(left, bottom));
+            gc.EndFigure(true);
+        }
+        ctx.DrawGeometry(null, pen, page);
+
+        // The folded corner + two text lines.
+        var fold2 = new StreamGeometry();
+        using (var gc = fold2.Open())
+        {
+            gc.BeginFigure(new Point(right - fold, top), isFilled: false);
+            gc.LineTo(new Point(right - fold, top + fold));
+            gc.LineTo(new Point(right, top + fold));
+            gc.EndFigure(false);
+        }
+        ctx.DrawGeometry(null, pen, fold2);
+        ctx.DrawLine(pen, new Point(left + 2.5, top + 6), new Point(right - 2.5, top + 6));
+        ctx.DrawLine(pen, new Point(left + 2.5, top + 9), new Point(right - 3.5, top + 9));
     }
 
     // The artifact glyph: two staggered rounded-square outlines in amber (brighter when hovered).
@@ -1748,6 +1854,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             HitTestWarnIcon(p)   is var wa && wa >= 0 ? (TipKind.Warn, wa) :
             HitTestTaskCount(p)  is var ta && ta >= 0 ? (TipKind.Task, ta) :
             HitTestMetrics(p)    is var me && me >= 0 ? (TipKind.Metrics, me) :
+            HitTestNoteIcon(p)   is var no && no >= 0 ? (TipKind.Note, no) :
             InUsageStrip(p)                           ? (TipKind.Usage, -1) :
                                                         (TipKind.None, -1);
 
@@ -1774,6 +1881,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             case TipKind.Warn:    ShowWarnTooltip(_tipRow);    break;
             case TipKind.Task:    ShowTaskTooltip(_tipRow);    break;
             case TipKind.Metrics: ShowMetricsTooltip(_tipRow); break;
+            case TipKind.Note:    ShowNoteTooltip(_tipRow);    break;
         }
     }
 
@@ -2007,6 +2115,15 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
             if (s.RemoteControlled)
                 items.Add(MenuItem("Show QR code", () => QrRequested?.Invoke(s)));
+
+            // Pinned notes apply to a real session row (not its sub-agents). Always available — notes are
+            // a core, ungated feature like history/copy-id.
+            if (!subRow)
+            {
+                items.Add(MenuItem(s.HasNote ? "Edit note…" : "Add note…", () => NoteEditRequested?.Invoke(s)));
+                if (s.HasNote)
+                    items.Add(MenuItem("Clear note", () => NoteClearRequested?.Invoke(s.SessionId)));
+            }
 
             // External-notify + confetti apply only to a real session row (not its sub-agents), and only
             // while switched on globally.
@@ -2544,6 +2661,13 @@ public sealed class OverlayCanvas : Control, IDenseHost
             sb.Append(glyph).Append(' ').Append(label);
         }
         Tooltip().ShowText(sb.ToString(), ToScreen(r.Left, r.Bottom + 4));
+    }
+
+    private void ShowNoteTooltip(int row)
+    {
+        if (row < 0 || row >= _rows.Count || _rows[row].Session?.Note is not { } note) return;
+        if (!_noteRects.TryGetValue(row, out var r)) return;
+        Tooltip().ShowText(note, ToScreen(r.Left, r.Bottom + 4));
     }
 
     private void ShowMetricsTooltip(int row)

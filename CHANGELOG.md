@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.6] - 2026-07-18
+
+- Pinned session notes — annotate any session from its right-click menu.
+- Notes ride along in the overlay and survive restarts (the sticky that doesn't fall off).
+- New "Session notes" toggle in Indicators — a dedicated line, or a compact hover-able glyph.
+
+---
+
 ## [v0.2.5] - 2026-07-18
 
 - Configurable keyboard shortcuts — a new Shortcuts settings page, every hotkey rebindable.

@@ -337,6 +337,7 @@ internal static class HeadlessRenderer
         [
             new ClaudeSession("1234", "s1", SessionStatus.Running, @"C:\src\perch", "perch", now,
                 Activity: "Editing OverlayForm.cs", SubAgents: subs, Mode: PermissionMode.AcceptEdits,
+                Note: "risky refactor — waiting on review",
                 ContextFill: 0.82f, BurnRate: 12300, GitStats: new GitLineStats(142, 37),
                 Tasks: new List<TaskItem>
                 {
@@ -349,7 +350,8 @@ internal static class HeadlessRenderer
                 Artifacts: new List<Artifact> { new("https://claude.ai/code/artifact/1", "API report") }),
             new ClaudeSession("9012", "s3", SessionStatus.NeedsAttention, @"C:\src\docs", "docs-site", now,
                 BridgeSessionId: "bridge-xyz", Stuck: new StuckSignal(StuckKind.FailingLoop, "repeating build")),
-            new ClaudeSession("3456", "s4", SessionStatus.Idle, @"C:\src\scratch", "scratch", now),
+            new ClaudeSession("3456", "s4", SessionStatus.Idle, @"C:\src\scratch", "scratch", now,
+                Note: "don't touch — bisecting a flaky test"),
             // A background/SDK session (Entrypoint != "cli") -> grouped under the Autonomous section.
             new ClaudeSession("7788", "s5", SessionStatus.Running, @"C:\src\bot", "nightly-bot", now,
                 Entrypoint: "sdk-py"),

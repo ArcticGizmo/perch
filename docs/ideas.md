@@ -12,15 +12,9 @@ has always been both.
 - **Focus / Do-Not-Disturb hours** — a schedule (or one-click toggle) that mutes chimes,
   push, and the attention glow during meetings or after hours, then delivers a quiet
   "3 sessions needed you" summary when you come back.
-- **Global hotkey to cycle sessions** — `IGlobalHotkey` already exists; bind a key to
-  jump-focus the next session that's waiting on you, without touching the overlay. A
-  "focus the stuck one" chord would pair nicely.
 - **Daily spend guardrail** — set a soft token/cost ceiling; the tray badge warms as you
   approach it and pings once at 80/100%. Complements the burn-rate readout (that's the
   speedometer, this is the fuel gauge).
-- **Pinned session notes** — a little sticky per session ("this is the risky refactor",
-  "waiting on review") that rides along in the overlay and history. Survives restarts,
-  unlike the confetti arming.
 - **Git diff peek on hover** — the `+142 -37` chip already exists; let hovering it pop the
   actual changed-files list (or a mini diff) so you can gut-check a session without
   alt-tabbing.
@@ -40,6 +34,7 @@ has always been both.
   who want to chart it themselves.
 - **Cron/Scheduled tasks** - display and allow setting of scheduled tasks
 - **Maximise sessions** - ability to set scheduled prompts before you start work so you never run out of window
+- Extend command window to allow opening sessions in a terminal
 
 ## Whimsical
 

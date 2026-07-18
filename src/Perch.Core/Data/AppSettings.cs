@@ -48,6 +48,11 @@ internal sealed class AppSettings
     // its width; the checklist is still tracked, just not shown. Defaults to true; a missing key keeps it on.
     public bool ShowTaskProgress { get; set; } = true;
 
+    // Whether to draw a pinned note on its own line under a session in the overlay. Off keeps the note
+    // glyph + hover (so the note is still there, just compact) but drops the extra line. Defaults to true;
+    // a missing key keeps it on.
+    public bool ShowNotes { get; set; } = true;
+
     // Whether to draw the live token burn rate (tokens/min) next to a running session in the overlay —
     // measured over its most recent burst of assistant turns. A glanceable read on how hard a session is
     // leaning on the plan's token limits. Off by default (opt-in); a missing key keeps it off.

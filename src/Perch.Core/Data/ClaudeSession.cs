@@ -105,7 +105,8 @@ public record ClaudeSession(
     double? BurnRate = null,
     DateTime? AwaitingSince = null,
     GitLineStats? GitStats = null,
-    string? Entrypoint = null
+    string? Entrypoint = null,
+    string? Note = null
 )
 {
     /// <summary>Running sub-agents under this session; never null.</summary>
@@ -202,6 +203,18 @@ public record ClaudeSession(
     /// written/removed both by the overlay's right-click toggle and the plugin's <c>/afk</c> command.
     /// </summary>
     public bool ExternalNotify { get; init; } = ExternalNotify;
+
+    /// <summary>
+    /// A short free-text note the user has pinned against this session ("risky refactor", "waiting on
+    /// review"), sourced from a sibling <c>{sessionId}.note</c> sidecar. Null when no note is set;
+    /// normalised so blank is null. Written/removed by the overlay's right-click menu + note editor.
+    /// Survives a restart (and the session ending) because the sidecar is left on disk. See
+    /// <see cref="SessionMonitor.SetNote"/>.
+    /// </summary>
+    public string? Note { get; init; } = string.IsNullOrWhiteSpace(Note) ? null : Note.Trim();
+
+    /// <summary>True when this session has a pinned note.</summary>
+    public bool HasNote => Note != null;
 
     /// <summary>
     /// When this session most recently entered the current continuous <see cref="SessionStatus.AwaitingInput"/>

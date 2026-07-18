@@ -141,6 +141,8 @@ public partial class App : Application
             _overlay.Canvas.HistoryRequested += OpenHistory;
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
+            _overlay.Canvas.NoteEditRequested += OnEditNote;
+            _overlay.Canvas.NoteClearRequested += sessionId => _monitorHost?.SetNote(sessionId, null);
             _overlay.DragCompleted += OnOverlayDragCompleted;
 
             // Quick-links strip: launch/focus goes through the platform seams; icons resolve off-thread.
@@ -334,6 +336,7 @@ public partial class App : Application
         c.SetContextThresholds(s.ContextPressureYellowPercent, s.ContextPressureOrangePercent, s.ContextPressureRedPercent);
         c.SetShowModeBadges(s.ShowPermissionModeBadges);
         c.SetShowTaskProgress(s.ShowTaskProgress);
+        c.SetShowNoteLine(s.ShowNotes);
         c.SetShowBurnRate(s.ShowBurnRate);
         c.SetShowGitStats(s.ShowGitStats);
         c.SetStuckDetectionEnabled(s.StuckDetectionEnabled);
@@ -491,6 +494,17 @@ public partial class App : Application
     // pushes actually fire on this marker is the Phase-3 notification pipeline's job; the opt-in itself
     // is just this file, so the toggle is wired now.
     private void OnToggleExternalNotify(string sessionId) => _monitorHost?.ToggleExternalNotify(sessionId);
+
+    // "Add note…/Edit note…" — opens the small note editor prefilled from the session's current note, then
+    // writes the result to its .note sidecar (empty clears it). Modal on the overlay so it can take focus,
+    // which the no-activate overlay window can't. Best-effort: a closed overlay mid-flow just no-ops.
+    private async void OnEditNote(ClaudeSession session)
+    {
+        if (_overlay is null) return;
+        var dlg = new NoteDialog(session.DisplayName, session.Note);
+        bool ok = await dlg.ShowDialog<bool>(_overlay);
+        if (ok) _monitorHost?.SetNote(session.SessionId, dlg.NoteText);
+    }
 
     // Applies the enabled links to the overlay strip, resolving their icons off the UI thread (the first
     // shell lookup enumerates the Start Menu, ~1s) then applying on the UI thread. Icons come back as PNG

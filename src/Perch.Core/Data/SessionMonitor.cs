@@ -208,6 +208,41 @@ internal sealed class SessionMonitor : IDisposable
         }
     }
 
+    /// <summary>
+    /// Sets or clears a session's pinned note by writing or deleting its <c>{sessionId}.note</c> sidecar.
+    /// A null/blank <paramref name="text"/> removes the note; otherwise it's stored as a small JSON payload
+    /// (<c>{ "text": …, "updatedAt": … }</c>) so pin/colour can be layered on later without a format change.
+    /// Best-effort — never throws. Call <see cref="Scan"/> afterwards to refresh the session list and glyphs.
+    /// The sidecar is deliberately left on disk when the session ends (unlike <c>.mode</c>/<c>.notify</c>),
+    /// so a note rides along into the history viewer.
+    /// </summary>
+    public void SetNote(string sessionId, string? text)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return;
+        var path = Path.Combine(_sessionsDir, $"{sessionId}.note");
+        try
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+                return;
+            }
+            Directory.CreateDirectory(_sessionsDir);
+            var payload = new JsonObject
+            {
+                ["text"] = text.Trim(),
+                ["updatedAt"] = DateTime.UtcNow.ToString("o"),
+            };
+            File.WriteAllText(path, payload.ToJsonString());
+        }
+        catch
+        {
+            // Best-effort: a failed write leaves whatever was there; the next scan reflects reality.
+        }
+    }
+
     private DateTime? ComputeNextDeadline()
     {
         DateTime? earliest = null;
@@ -492,6 +527,12 @@ internal sealed class SessionMonitor : IDisposable
             var externalNotify = !string.IsNullOrEmpty(sessionId)
                 && File.Exists(Path.Combine(_sessionsDir, $"{sessionId}.notify"));
 
+            // Pinned note: a short human annotation stored in a sibling {sessionId}.note sidecar,
+            // written/removed by the overlay's right-click menu + note editor. Null when unset.
+            var note = string.IsNullOrEmpty(sessionId)
+                ? null
+                : ReadNote(Path.Combine(_sessionsDir, $"{sessionId}.note"));
+
             // The explicit name set by Claude Code's built-in /rename command (a custom-title record
             // in the transcript). Null when the session was never renamed, in which case the overlay
             // falls back to the project name from cwd. The auto-generated ai-title is ignored.
@@ -588,7 +629,8 @@ internal sealed class SessionMonitor : IDisposable
                 burnRate,
                 awaitingSince,
                 gitStats,
-                entrypoint
+                entrypoint,
+                note
             );
 
             if (status == SessionStatus.NeedsAttention
@@ -651,6 +693,41 @@ internal sealed class SessionMonitor : IDisposable
         }
 
         return null;
+    }
+
+    // Reads a session's pinned note from its {sessionId}.note sidecar. The canonical format is a small
+    // JSON object with a "text" field (see SetNote); a hand-edited plain-text file is tolerated as a
+    // fallback so a note dropped in by hand still shows. Missing/blank/unparseable → null. Never throws.
+    // Internal (not private) so the note round-trip can be unit-tested without a full scan.
+    internal static string? ReadNote(string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+                return null;
+            var raw = File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(raw))
+                return null;
+
+            JsonNode? node;
+            try { node = JsonNode.Parse(raw); }
+            catch { node = null; } // not JSON at all — treated as plain text below
+
+            // A JSON object is the canonical payload: trust its "text" field (a missing/blank one means no
+            // note). Anything that isn't a JSON object — a hand-edited plain-text file — is used verbatim.
+            string? text = node switch
+            {
+                JsonObject obj => obj["text"]?.GetValue<string>(),
+                null           => raw,
+                _              => null,
+            };
+
+            return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static PermissionMode ReadPermissionMode(string path)
