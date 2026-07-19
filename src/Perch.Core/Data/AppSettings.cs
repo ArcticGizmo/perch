@@ -4,6 +4,19 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Perch.Platform;
 
+/// <summary>
+/// The terminal Perch launches to reopen a closed session (<c>claude --resume</c>). The ordinal is what's
+/// persisted in settings, so keep the order stable and append new members at the end.
+/// </summary>
+public enum TerminalApp
+{
+    /// <summary>Best available: Windows Terminal if present, otherwise Command Prompt.</summary>
+    Auto = 0,
+    WindowsTerminal = 1,
+    PowerShell = 2,
+    CommandPrompt = 3,
+}
+
 internal sealed class AppSettings
 {
     // Per-profile so a dev instance doesn't read/write the installed Perch's settings (see AppProfile).
@@ -195,6 +208,13 @@ internal sealed class AppSettings
     public HotkeyBinding HotkeyToggleDense { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 'W');
     public HotkeyBinding HotkeyCycleSessions { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 'S');
     public HotkeyBinding HotkeyOpenSwitcher { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, ' ');
+
+    // Which terminal the session switcher launches when reopening a closed session (`claude --resume <id>`
+    // in its working directory). Auto picks the best available (Windows Terminal, else Command Prompt); an
+    // explicit choice still falls back to a plain console if it can't be launched, and reopening degrades to
+    // copying the command when no terminal is available at all. Serialised as its enum ordinal; a missing key
+    // keeps Auto. See <see cref="Perch.Platform.ISessionLauncher"/>.
+    public TerminalApp ReopenTerminal { get; set; } = TerminalApp.Auto;
 
     // "Perch reacts": the tray and overlay bird wears the aggregate session mood — dozing (faded, a
     // trail of z's) when nothing's running, plainly alert while sessions work, a "!" badge when one

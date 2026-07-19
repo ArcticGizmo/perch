@@ -13,15 +13,21 @@ using Perch.Data;
 namespace Perch.Avalonia.Windows;
 
 /// <summary>
-/// A centred, keyboard-driven session switcher — Perch's "command palette" for jumping between active
-/// Claude Code sessions, summoned by a global hotkey (Alt+Shift+Space by default). A search box takes
-/// focus immediately; type to filter, ↑/↓ (or Tab) to move, Enter to jump to the highlighted session's
-/// terminal, Esc or clicking away to dismiss. Modelled on <see cref="QrWindow"/>'s borderless card chrome.
+/// A centred, keyboard-driven session palette — Perch's "command palette" for jumping to and reopening
+/// Claude Code sessions, summoned by a global hotkey (Alt+Shift+Space by default). A search box takes focus
+/// immediately; type to filter, ↑/↓ (or Tab) to move, Enter to act on the highlighted row, Ctrl+Enter to
+/// copy its <c>claude --resume</c> command, Esc or clicking away to dismiss. Modelled on
+/// <see cref="QrWindow"/>'s borderless card chrome.
+///
+/// The list is unified: <b>active</b> sessions (a live process, focusing its terminal on Enter) sit above a
+/// hairline divider, then <b>recently-closed</b> sessions (reopened in a fresh terminal on Enter). Active
+/// rows come from the live monitor and are shown immediately; the closed roster is read from disk off the UI
+/// thread and streamed in via <see cref="SetClosedSessions"/> so the hotkey stays instant. It works on a
+/// snapshot — short-lived, so it doesn't track live updates.
 ///
 /// Unlike the overlay (a no-activate tool window), this window must take keyboard focus, so the app forces
 /// it to the foreground on open (see <see cref="Perch.Platform.IWindowChrome.ForceForeground"/>) — the OS
-/// otherwise blocks a background tray process from stealing focus. It works on a snapshot of the session
-/// list passed at construction; it's short-lived, so it doesn't track live updates.
+/// otherwise blocks a background tray process from stealing focus.
 /// </summary>
 internal sealed class SessionSwitcherWindow : Window
 {
@@ -36,22 +42,56 @@ internal sealed class SessionSwitcherWindow : Window
     private static readonly IBrush RowSel    = new SolidColorBrush(Color.FromRgb(40, 44, 62));
     private static readonly IBrush SearchBg  = new SolidColorBrush(Color.FromRgb(24, 24, 34));
 
-    private readonly List<ClaudeSession> _all;
-    private readonly Action<ClaudeSession> _onChosen;
+    private const string HintText = "↵ focus / reopen        Ctrl+↵ copy resume command";
+
+    // One filterable row, built from either a live session or a closed transcript. IsActive picks the
+    // Enter action (focus vs reopen) and the row's look (filled vs hollow dot).
+    private sealed class Entry
+    {
+        public bool IsActive { get; init; }
+        public ClaudeSession? Session { get; init; } // set iff IsActive — the target for FocusSession
+        public string SessionId { get; init; } = "";
+        public string Cwd { get; init; } = "";
+        public string DisplayName { get; init; } = "";
+        public string ProjectName { get; init; } = "";
+        public string Subtitle { get; init; } = "";
+        public string StatusText { get; init; } = "";
+        public Color StatusColor { get; init; }
+
+        public bool Matches(string q) =>
+            DisplayName.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || ProjectName.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || Cwd.Contains(q, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private readonly Action<ClaudeSession> _onFocus;
+    private readonly Action<string, string> _onReopen; // (cwd, sessionId)
+    private readonly Action<string> _onCopy;            // (sessionId)
+
+    private readonly List<Entry> _active;
+    private List<Entry> _closed = new();
+    private List<Entry> _filtered;
+
     private readonly TextBox _search;
     private readonly StackPanel _list;
-
-    private List<ClaudeSession> _filtered;
+    private readonly TextBlock _hint;
     private readonly List<Control> _rows = new();
+    private DispatcherTimer? _hintTimer;
     private int _selected;
     private bool _chosen;
     private bool _ready; // armed once focus settles, so the foreground-forcing dance can't self-dismiss
 
-    public SessionSwitcherWindow(IReadOnlyList<ClaudeSession> sessions, Action<ClaudeSession> onChosen)
+    public SessionSwitcherWindow(
+        IReadOnlyList<ClaudeSession> active,
+        Action<ClaudeSession> onFocus,
+        Action<string, string> onReopen,
+        Action<string> onCopy)
     {
-        _all = sessions.ToList();
-        _filtered = _all.ToList();
-        _onChosen = onChosen;
+        _onFocus = onFocus;
+        _onReopen = onReopen;
+        _onCopy = onCopy;
+        _active = active.Select(ActiveEntry).ToList();
+        _filtered = _active.ToList();
 
         WindowDecorations = WindowDecorations.None;
         Background = Brushes.Transparent;
@@ -65,7 +105,7 @@ internal sealed class SessionSwitcherWindow : Window
 
         _search = new TextBox
         {
-            PlaceholderText = "Jump to a session…",
+            PlaceholderText = "Jump to or reopen a session…",
             Background = SearchBg, Foreground = Palette.FgBrush,
             BorderBrush = Stroke, BorderThickness = new Thickness(0, 0, 0, 1),
             CornerRadius = new CornerRadius(11, 11, 0, 0), FontSize = 16, Padding = new Thickness(14, 12),
@@ -80,7 +120,18 @@ internal sealed class SessionSwitcherWindow : Window
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
 
-        var stack = new StackPanel { Children = { _search, scroll } };
+        _hint = new TextBlock
+        {
+            Text = HintText, Foreground = Palette.MutedBrush, FontSize = 11,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        var footer = new Border
+        {
+            BorderBrush = Stroke, BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(12, 9), Child = _hint,
+        };
+
+        var stack = new StackPanel { Children = { _search, scroll, footer } };
         Content = new Border
         {
             Background = CardBg, CornerRadius = new CornerRadius(12),
@@ -100,6 +151,48 @@ internal sealed class SessionSwitcherWindow : Window
         Rebuild();
     }
 
+    /// <summary>Folds the recently-closed roster (read from disk off the UI thread) into the list beneath
+    /// the active sessions. Called on the UI thread after the window is already showing; a no-op once a row
+    /// has been chosen. Preserves the current search text and re-applies the filter.</summary>
+    public void SetClosedSessions(IReadOnlyList<HistoryEntry> closed)
+    {
+        if (_chosen) return;
+        // Keep the user's place if they've already started navigating the active rows while the roster loaded.
+        var selectedId = _selected >= 0 && _selected < _filtered.Count ? _filtered[_selected].SessionId : null;
+        _closed = closed.Select(ClosedEntry).ToList();
+        ApplyFilter();
+        if (selectedId is not null)
+        {
+            int i = _filtered.FindIndex(e => e.SessionId == selectedId);
+            if (i >= 0) { _selected = i; Highlight(); }
+        }
+    }
+
+    private static Entry ActiveEntry(ClaudeSession s) => new()
+    {
+        IsActive = true,
+        Session = s,
+        SessionId = s.SessionId,
+        Cwd = s.Cwd ?? "",
+        DisplayName = s.DisplayName,
+        ProjectName = s.ProjectName,
+        Subtitle = Subtitle(s),
+        StatusText = StatusLabel(s),
+        StatusColor = StatusColor(s.Status),
+    };
+
+    private static Entry ClosedEntry(HistoryEntry e) => new()
+    {
+        IsActive = false,
+        SessionId = e.SessionId,
+        Cwd = e.Cwd,
+        DisplayName = e.DisplayName, // the /rename title when set, else the project name
+        ProjectName = e.ProjectName,
+        Subtitle = string.IsNullOrWhiteSpace(e.Cwd) ? e.ProjectName : e.Cwd,
+        StatusText = $"closed · {e.RelativeTime}",
+        StatusColor = IdleColor,
+    };
+
     private void OnPreviewKeyDown(object? sender, KeyEventArgs e)
     {
         switch (e.Key)
@@ -118,7 +211,7 @@ internal sealed class SessionSwitcherWindow : Window
                 e.Handled = true;
                 break;
             case Key.Enter:
-                if (_filtered.Count > 0) Choose(_filtered[_selected]);
+                if (_filtered.Count > 0) Choose(_filtered[_selected], copy: e.KeyModifiers.HasFlag(KeyModifiers.Control));
                 e.Handled = true;
                 break;
         }
@@ -135,17 +228,11 @@ internal sealed class SessionSwitcherWindow : Window
     private void ApplyFilter()
     {
         string q = (_search.Text ?? "").Trim();
-        _filtered = q.Length == 0
-            ? _all.ToList()
-            : _all.Where(s => Matches(s, q)).ToList();
+        IEnumerable<Entry> all = _active.Concat(_closed);
+        _filtered = q.Length == 0 ? all.ToList() : all.Where(e => e.Matches(q)).ToList();
         _selected = 0;
         Rebuild();
     }
-
-    private static bool Matches(ClaudeSession s, string q) =>
-        s.DisplayName.Contains(q, StringComparison.OrdinalIgnoreCase)
-        || s.ProjectName.Contains(q, StringComparison.OrdinalIgnoreCase)
-        || (s.Cwd?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false);
 
     private void Rebuild()
     {
@@ -164,6 +251,11 @@ internal sealed class SessionSwitcherWindow : Window
 
         for (int i = 0; i < _filtered.Count; i++)
         {
+            // Hairline divider at the active→closed boundary (only when both groups are present). It's not
+            // added to _rows, so it never gets keyboard/selection focus.
+            if (i > 0 && _filtered[i - 1].IsActive && !_filtered[i].IsActive)
+                _list.Children.Add(BuildDivider());
+
             var row = BuildRow(_filtered[i], i);
             _rows.Add(row);
             _list.Children.Add(row);
@@ -171,22 +263,37 @@ internal sealed class SessionSwitcherWindow : Window
         Highlight();
     }
 
-    private Control BuildRow(ClaudeSession s, int index)
+    private static Control BuildDivider() => new Border
+    {
+        Height = 1, Background = Stroke, Margin = new Thickness(12, 5),
+    };
+
+    private Control BuildRow(Entry e, int index)
     {
         var dot = new Ellipse
         {
-            Width = 10, Height = 10, Fill = new SolidColorBrush(StatusColor(s.Status)),
-            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 12, 0),
+            Width = 10, Height = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 12, 0),
         };
+        if (e.IsActive)
+        {
+            dot.Fill = new SolidColorBrush(e.StatusColor);
+        }
+        else
+        {
+            // Hollow dot marks a closed session — nothing to focus, only to reopen.
+            dot.Fill = Brushes.Transparent;
+            dot.Stroke = new SolidColorBrush(IdleColor);
+            dot.StrokeThickness = 1.5;
+        }
 
         var name = new TextBlock
         {
-            Text = s.DisplayName, Foreground = Palette.TitleBrush, FontSize = 14, FontWeight = FontWeight.SemiBold,
+            Text = e.DisplayName, Foreground = Palette.TitleBrush, FontSize = 14, FontWeight = FontWeight.SemiBold,
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
         var subtitle = new TextBlock
         {
-            Text = Subtitle(s), Foreground = Palette.MutedBrush, FontSize = 11,
+            Text = e.Subtitle, Foreground = Palette.MutedBrush, FontSize = 11,
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
         var textStack = new StackPanel
@@ -198,16 +305,26 @@ internal sealed class SessionSwitcherWindow : Window
 
         var status = new TextBlock
         {
-            Text = StatusLabel(s), Foreground = new SolidColorBrush(StatusColor(s.Status)), FontSize = 11,
-            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 2, 0),
+            Text = e.StatusText, Foreground = new SolidColorBrush(e.StatusColor), FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 0, 0),
             HorizontalAlignment = HorizontalAlignment.Right,
         };
         Grid.SetColumn(status, 2);
 
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
+        // Trailing affordance: → jump to the live terminal, ↻ reopen a closed session.
+        var glyph = new TextBlock
+        {
+            Text = e.IsActive ? "→" : "↻",
+            Foreground = e.IsActive ? Palette.MutedBrush : Palette.TitleBrush, FontSize = 14,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 2, 0),
+        };
+        Grid.SetColumn(glyph, 3);
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto") };
         grid.Children.Add(dot);
         grid.Children.Add(textStack);
         grid.Children.Add(status);
+        grid.Children.Add(glyph);
 
         var border = new Border
         {
@@ -215,7 +332,7 @@ internal sealed class SessionSwitcherWindow : Window
             Background = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand),
         };
         border.PointerEntered += (_, _) => { _selected = index; Highlight(); };
-        border.PointerPressed += (_, _) => Choose(s);
+        border.PointerPressed += (_, _) => Choose(e, copy: false);
         return border;
     }
 
@@ -228,12 +345,38 @@ internal sealed class SessionSwitcherWindow : Window
             _rows[_selected].BringIntoView();
     }
 
-    private void Choose(ClaudeSession s)
+    // Enter (copy=false): focus the live terminal, or reopen a closed session in a fresh one, then dismiss.
+    // Ctrl+Enter (copy=true): copy the `claude --resume` command and stay open with a brief confirmation,
+    // so the user can grab several or keep browsing.
+    private void Choose(Entry e, bool copy)
     {
         if (_chosen) return;
+
+        if (copy)
+        {
+            _onCopy(e.SessionId);
+            FlashCopied();
+            return;
+        }
+
         _chosen = true;
-        _onChosen(s);
+        if (e.IsActive) _onFocus(e.Session!);
+        else _onReopen(e.Cwd, e.SessionId);
         Close();
+    }
+
+    // Briefly replace the hint with a "copied" confirmation, then restore it.
+    private void FlashCopied()
+    {
+        _hint.Text = "Copied  ·  claude --resume …";
+        _hintTimer?.Stop();
+        _hintTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1600) };
+        _hintTimer.Tick += (_, _) =>
+        {
+            _hintTimer!.Stop();
+            _hint.Text = HintText;
+        };
+        _hintTimer.Start();
     }
 
     private static string Subtitle(ClaudeSession s)

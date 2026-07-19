@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Input.Platform;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform;
 using Avalonia.Threading;
@@ -630,21 +631,65 @@ public partial class App : Application
         _overlay?.Canvas.HighlightCycledSession(next.SessionId); // mark the row so the user sees where they landed
     }
 
-    // "Session switcher": pop the centred keyboard palette over the current interactive sessions. Pressing
-    // the hotkey again while it's open dismisses it (Esc / clicking away do too). Focus is forced because a
-    // global hotkey firing in a background tray doesn't grant foreground rights on its own.
+    // How many recently-closed sessions the switcher lists beneath the active ones. A cap keeps the palette
+    // from turning into a full transcript history — that's what the History window is for.
+    private const int SwitcherClosedLimit = 20;
+
+    // "Session switcher": pop the centred keyboard palette over the current interactive sessions plus the
+    // recently-closed ones (Enter reopens those in a fresh terminal). Pressing the hotkey again while it's
+    // open dismisses it (Esc / clicking away do too). Focus is forced because a global hotkey firing in a
+    // background tray doesn't grant foreground rights on its own.
     private void OpenSwitcher()
     {
         if (_switcher is { IsVisible: true } open) { open.Close(); return; }
 
-        var targets = _lastSessions.Where(s => !s.IsBackground).ToList();
-        if (targets.Count == 0) return;
+        var active = _lastSessions.Where(s => !s.IsBackground).ToList();
 
-        var switcher = new SessionSwitcherWindow(targets, FocusSession);
+        var switcher = new SessionSwitcherWindow(active, FocusSession, ReopenSession, CopyResumeCommand);
         _switcher = switcher;
         switcher.Closed += (_, _) => { if (ReferenceEquals(_switcher, switcher)) _switcher = null; };
         switcher.Show();
         switcher.TakeFocus();
+
+        // The closed roster lives on disk (SessionMonitor only ever surfaces live-PID sessions), so read it
+        // off the UI thread and stream it in — the hotkey stays instant even when many transcripts exist.
+        var activeIds = new HashSet<string>(active.Select(s => s.SessionId));
+        System.Threading.Tasks.Task.Run(() => SessionHistory.ListAll(activeIds)).ContinueWith(t =>
+        {
+            if (!t.IsCompletedSuccessfully) return;
+            var closed = t.Result
+                .Where(e => !e.IsActive && !string.IsNullOrEmpty(e.SessionId) && !string.IsNullOrEmpty(e.Cwd))
+                .Take(SwitcherClosedLimit)
+                .ToList();
+            if (closed.Count == 0) return;
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (ReferenceEquals(_switcher, switcher) && switcher.IsVisible)
+                    switcher.SetClosedSessions(closed);
+            });
+        });
+    }
+
+    // Reopen a closed session: spawn a fresh terminal running `claude --resume <id>` in its working
+    // directory. If no terminal can be launched (or the platform doesn't implement it yet), fall back to
+    // copying the command so the user can paste it wherever they like.
+    private void ReopenSession(string cwd, string sessionId)
+    {
+        var terminal = _appSettings?.ReopenTerminal ?? TerminalApp.Auto;
+        if (!PlatformServices.SessionLauncher.Reopen(cwd, sessionId, terminal))
+            CopyResumeCommand(sessionId);
+    }
+
+    // Copy `claude --resume <id>` to the clipboard (via the overlay's TopLevel, which is always alive —
+    // the switcher may be mid-close). Best-effort; a clipboard failure is swallowed.
+    private void CopyResumeCommand(string sessionId)
+    {
+        try
+        {
+            if (_overlay is { } o && TopLevel.GetTopLevel(o)?.Clipboard is { } clip)
+                _ = clip.SetTextAsync(ClaudeCli.ResumeCommand(sessionId));
+        }
+        catch { /* clipboard unavailable — best-effort */ }
     }
 
     // Lazily create-or-focus the single Settings window instance. The window edits the shared

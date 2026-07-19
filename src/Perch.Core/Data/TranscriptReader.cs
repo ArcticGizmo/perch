@@ -137,6 +137,16 @@ internal sealed class TranscriptReader
         return path == null ? null : _title.GetOrCompute(path, ParseTitle, null);
     }
 
+    /// <summary>Reads the <c>/rename</c> title (a <c>custom-title</c> record) straight from a transcript
+    /// file, tail-first then head — for callers that already have a path but no live
+    /// <see cref="TranscriptReader"/> instance (e.g. the session listing). Null when never renamed or
+    /// unreadable. Never throws.</summary>
+    public static string? ReadTitle(string path)
+    {
+        try { return ParseTitle(path); }
+        catch { return null; }
+    }
+
     /// <summary>
     /// Returns the session's context-window fill (0–1) and the resolved window size in tokens.
     /// Fill is null when no usage data is available. The window defaults to

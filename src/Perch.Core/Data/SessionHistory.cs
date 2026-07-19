@@ -330,10 +330,16 @@ internal sealed record HistoryEntry(
     string Path,
     DateTime LastUpdated,
     bool IsActive,
-    long SizeBytes = 0
+    long SizeBytes = 0,
+    string? Title = null
 )
 {
     public string RelativeTime => SessionHistory.Relative(LastUpdated);
+
+    /// <summary>The label to show the user: the explicit <c>/rename</c> <see cref="Title"/> when one was
+    /// set, otherwise the <see cref="ProjectName"/> derived from the cwd — mirrors
+    /// <see cref="ClaudeSession.DisplayName"/> so a session reads the same live or closed.</summary>
+    public string DisplayName => string.IsNullOrWhiteSpace(Title) ? ProjectName : Title!;
 
     /// <summary>Human-readable transcript size (e.g. "1.4 MB"), shown in the dropdown.</summary>
     public string SizeLabel => SessionHistory.FormatSize(SizeBytes);
@@ -358,10 +364,14 @@ internal sealed record HistoryEntry(
 /// </summary>
 internal static class SessionHistory
 {
-    // Project name keyed by transcript path — the cwd inside a transcript never changes, so caching
-    // avoids reopening every file on each (frequent) re-list. Listing runs on a background thread, so
-    // guard the cache.
-    private static readonly Dictionary<string, string> _projectNameCache = new();
+    // Project name + cwd + /rename title keyed by transcript path — none change materially for a given
+    // transcript, so caching avoids reopening every file on each (frequent) re-list. All three are cached
+    // (a cache hit must return the cwd/title too, or a re-list would surface empty values). The title is a
+    // tail-first scan of the file, so it's read once per transcript and reused. A /rename made mid-session
+    // won't refresh until restart, which is fine: the live overlay and the switcher's *active* rows read the
+    // title from SessionMonitor, not from here — this cache only backs the *closed* (static) rows. Listing
+    // runs on a background thread, so guard the cache.
+    private static readonly Dictionary<string, (string Project, string Cwd, string? Title)> _projectCache = new();
     private static readonly object _cacheLock = new();
 
     /// <summary>Transcripts at or above this size are flagged "large": the viewer shows their size in an
@@ -379,7 +389,7 @@ internal static class SessionHistory
             {
                 var fi = new FileInfo(file);
                 var sessionId = System.IO.Path.GetFileNameWithoutExtension(file);
-                var (project, cwd) = ResolveProject(file, System.IO.Path.GetDirectoryName(file) ?? "");
+                var (project, cwd, title) = ResolveProject(file, System.IO.Path.GetDirectoryName(file) ?? "");
                 entries.Add(new HistoryEntry(
                     sessionId,
                     project,
@@ -387,7 +397,8 @@ internal static class SessionHistory
                     file,
                     fi.LastWriteTime,
                     activeSessionIds.Contains(sessionId),
-                    fi.Length));
+                    fi.Length,
+                    title));
             }
             catch { }
         }
@@ -398,14 +409,14 @@ internal static class SessionHistory
             .ToList();
     }
 
-    // Derives a friendly project name from the transcript's cwd (read once, cached), falling back to
-    // the encoded directory name when no cwd can be recovered.
-    private static (string project, string cwd) ResolveProject(string file, string dir)
+    // Derives a friendly project name from the transcript's cwd, plus the /rename title (read once, cached
+    // together), falling back to the encoded directory name when no cwd can be recovered.
+    private static (string project, string cwd, string? title) ResolveProject(string file, string dir)
     {
         lock (_cacheLock)
         {
-            if (_projectNameCache.TryGetValue(file, out var cached))
-                return (cached, "");
+            if (_projectCache.TryGetValue(file, out var cached))
+                return cached;
         }
 
         string cwd = "";
@@ -433,9 +444,12 @@ internal static class SessionHistory
         if (string.IsNullOrEmpty(project))
             project = "session";
 
+        // The explicit /rename name, if any — a tail-first scan (the record lands wherever it was set).
+        string? title = TranscriptReader.ReadTitle(file);
+
         lock (_cacheLock)
-            _projectNameCache[file] = project;
-        return (project, cwd);
+            _projectCache[file] = (project, cwd, title);
+        return (project, cwd, title);
     }
 
     /// <summary>Formats a byte count as a short, human-readable size (e.g. "812 KB", "1.4 MB").</summary>

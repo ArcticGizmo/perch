@@ -79,6 +79,17 @@ internal static class SettingsUi
         CornerRadius = new CornerRadius(3), FontSize = 13, Padding = new Thickness(6, 4),
     };
 
+    // A themed single-select dropdown for the (rare) enum-style setting; Fluent supplies the popup, we set
+    // the resting palette so the closed control reads as part of Perch.
+    public static ComboBox Dropdown(IEnumerable<string> items, int selectedIndex) => new()
+    {
+        ItemsSource = items.ToList(), SelectedIndex = selectedIndex,
+        Background = Palette.ButtonBgBrush, Foreground = Palette.FgBrush,
+        BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
+        CornerRadius = new CornerRadius(3), FontSize = 13, Padding = new Thickness(8, 4),
+        HorizontalAlignment = HorizontalAlignment.Stretch,
+    };
+
     // A horizontal row of buttons (LeftToRight, small gap), for the action rows on each page.
     public static StackPanel ButtonRow() => new()
     {

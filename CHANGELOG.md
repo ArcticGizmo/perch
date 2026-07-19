@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.7] - 2026-07-19
+
+- Reopen recently-closed sessions from the switcher — a fresh terminal running claude --resume.
+- Closed sessions join the switcher list, renamed titles and all.
+- Ctrl+Enter copies the resume command instead of launching a terminal.
+- Choose which terminal reopening uses — Windows Terminal, PowerShell, or Command Prompt.
+
+---
+
 ## [v0.2.6] - 2026-07-18
 
 - Pinned session notes — annotate any session from its right-click menu.

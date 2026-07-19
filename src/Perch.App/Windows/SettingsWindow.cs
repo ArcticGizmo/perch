@@ -744,9 +744,42 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(SettingsUi.Separator());
 
         AddHotkeyRow(page, "Open session switcher", _settings.HotkeyOpenSwitcher,
-            "Pops a search box in the middle of the screen — type or arrow to a session and press Enter to " +
-            "jump to its terminal. Esc or clicking away dismisses it.");
+            "Pops a search box in the middle of the screen — type or arrow to a session and press Enter. " +
+            "Active sessions jump to their terminal; recently-closed ones reopen in a fresh one (Ctrl+Enter " +
+            "copies the claude --resume command instead). Esc or clicking away dismisses it.");
+
+#if WINDOWS
+        page.Children.Add(SettingsUi.Separator());
+        BuildReopenTerminalSection(page);
+#endif
     }
+
+#if WINDOWS
+    // The terminal the switcher launches when reopening a closed session. Read live by App.ReopenSession, so
+    // saving the setting is all that's needed — no re-registration hook.
+    private void BuildReopenTerminalSection(StackPanel page)
+    {
+        page.Children.Add(SettingsUi.SectionTitle("Reopen sessions in"));
+        page.Children.Add(SettingsUi.BodyText(
+            "Which terminal the switcher launches to reopen a closed session (running claude --resume in its " +
+            "working directory). If it can't be launched, the command is copied to your clipboard instead."));
+
+        // Order must match the TerminalApp enum ordinals (Auto, WindowsTerminal, PowerShell, CommandPrompt).
+        var combo = SettingsUi.Dropdown(
+            new[] { "Automatic (Windows Terminal, else Command Prompt)", "Windows Terminal", "PowerShell", "Command Prompt" },
+            (int)_settings.ReopenTerminal);
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (combo.SelectedIndex < 0) return;
+            _settings.ReopenTerminal = (TerminalApp)combo.SelectedIndex;
+            _settings.Save();
+        };
+
+        var row = SettingsUi.ButtonRow();
+        row.Children.Add(combo);
+        page.Children.Add(row);
+    }
+#endif
 
     private void AddHotkeyRow(StackPanel page, string title, HotkeyBinding binding, string desc)
     {
