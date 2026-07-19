@@ -7,7 +7,7 @@ public class AchievementServiceTests
 {
     private static string TempPath() => Path.Combine(Path.GetTempPath(), $"perch-ach-{Guid.NewGuid():N}.json");
 
-    // Minimal all-time report earning a controllable set of badges (first-flight, century, wordsmith).
+    // Minimal all-time report earning a controllable set of levels (sessions + tokens families).
     private static StatsReport Report(int sessions = 0, long tokens = 0) =>
         new(DateOnly.FromDateTime(DateTime.Now), sessions, TimeSpan.Zero, 0, 0, 0, 0,
             new TokenTotals(tokens, 0, 0, 0), TokenTotals.Zero, 0m, true, [], [], [], [], new int[24]);
@@ -20,19 +20,19 @@ public class AchievementServiceTests
         {
             var fresh = AchievementStore.LoadFrom(path);
             Assert.False(fresh.Existed);
-            Assert.True(fresh.Add("night-owl"));
-            Assert.False(fresh.Add("night-owl"));   // already present
+            Assert.True(fresh.Add("tokens.wordsmith"));
+            Assert.False(fresh.Add("tokens.wordsmith"));
             fresh.Save();
 
             var reloaded = AchievementStore.LoadFrom(path);
             Assert.True(reloaded.Existed);
-            Assert.True(reloaded.Contains("night-owl"));
+            Assert.True(reloaded.Contains("tokens.wordsmith"));
         }
         finally { File.Delete(path); }
     }
 
     [Fact]
-    public void FirstRun_SeedsSilently_ButPersists()
+    public void FirstRun_SeedsSilently_ButPersistsEveryEarnedLevel()
     {
         var path = TempPath();
         try
@@ -43,44 +43,44 @@ public class AchievementServiceTests
             Assert.Empty(announced);   // nothing toasted on the seeding run
 
             var reloaded = AchievementStore.LoadFrom(path);
-            Assert.True(reloaded.Contains("first-flight"));
-            Assert.True(reloaded.Contains("wordsmith"));
+            Assert.True(reloaded.Contains("sessions.firstflight"));
+            Assert.True(reloaded.Contains("tokens.wordsmith"));
         }
         finally { File.Delete(path); }
     }
 
     [Fact]
-    public void ExistingStore_AnnouncesOnlyNewUnlocks()
+    public void ExistingStore_AnnouncesOnlyNewLevels()
     {
         var path = TempPath();
         try
         {
             var seed = AchievementStore.LoadFrom(path);
-            seed.Add("first-flight");
-            seed.Save();   // store now exists on disk with first-flight already celebrated
+            seed.Add("sessions.firstflight");
+            seed.Save();
 
             var svc = new AchievementService(AchievementStore.LoadFrom(path));
             var announced = svc.Sync(Report(sessions: 1, tokens: 1_000_000), null, includeCost: true);
 
-            Assert.Contains(announced, a => a.Id == "wordsmith");
-            Assert.DoesNotContain(announced, a => a.Id == "first-flight");   // already unlocked
+            Assert.Contains(announced, u => u.Name == "Wordsmith");
+            Assert.DoesNotContain(announced, u => u.Name == "First Flight");   // already unlocked
         }
         finally { File.Delete(path); }
     }
 
     [Fact]
-    public void SecondSyncInProcess_AnnouncesNewlyCrossedThresholds()
+    public void CrossingSeveralLevelsAtOnce_AnnouncesEachNewOne()
     {
         var path = TempPath();
         try
         {
             var svc = new AchievementService(AchievementStore.LoadFrom(path));
-            svc.Sync(Report(sessions: 1), null, includeCost: true);   // silent seed (first-flight)
+            svc.Sync(Report(sessions: 1), null, includeCost: true);   // silent seed: First Flight only
 
-            var announced = svc.Sync(Report(sessions: 100, tokens: 1_000_000), null, includeCost: true);
-            Assert.Contains(announced, a => a.Id == "century");
-            Assert.Contains(announced, a => a.Id == "wordsmith");
-            Assert.DoesNotContain(announced, a => a.Id == "first-flight");
+            var announced = svc.Sync(Report(sessions: 100), null, includeCost: true);
+            Assert.Contains(announced, u => u.Name == "Frequent Flyer");   // 10
+            Assert.Contains(announced, u => u.Name == "Century");          // 100
+            Assert.DoesNotContain(announced, u => u.Name == "First Flight");
         }
         finally { File.Delete(path); }
     }
@@ -95,8 +95,8 @@ public class AchievementServiceTests
             var svc = new AchievementService(AchievementStore.LoadFrom(path));
 
             var report = Report(sessions: 1);
-            Assert.Contains(svc.Sync(report, null, includeCost: true), a => a.Id == "first-flight");
-            Assert.Empty(svc.Sync(report, null, includeCost: true));   // nothing new the second time
+            Assert.Contains(svc.Sync(report, null, includeCost: true), u => u.Name == "First Flight");
+            Assert.Empty(svc.Sync(report, null, includeCost: true));
         }
         finally { File.Delete(path); }
     }

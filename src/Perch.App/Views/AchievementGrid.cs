@@ -31,11 +31,11 @@ internal static class AchievementGrid
     // Progress bar (locked quota badges only): a dark track with a tier-ink fill showing how close you are.
     private static readonly IBrush ProgressTrack = new SolidColorBrush(Color.FromArgb(150, 90, 90, 110));
 
-    private const double NameSize = 12, DescSize = 11, TileGap = 10, TilePadH = 10, TilePadV = 12, IconGap = 5, BarH = 4;
+    private const double NameSize = 12, DescSize = 11, CatSize = 10, TileGap = 10, TilePadH = 10, TilePadV = 12, IconGap = 5, BarH = 4;
 
-    /// <summary>"29 / 41 unlocked".</summary>
+    /// <summary>"37 / 62 unlocked" — counts levels reached across every family, not just tiles.</summary>
     public static string Tally(IReadOnlyList<Achievement> badges) =>
-        $"{badges.Count(b => b.Earned)} / {badges.Count} unlocked";
+        $"{badges.Sum(b => b.Level)} / {badges.Sum(b => b.MaxLevel)} unlocked";
 
     /// <summary>Draws the trophy grid at <paramref name="x"/>,<paramref name="y"/> across
     /// <paramref name="innerW"/>, returning the y just below it. Columns flow to the width (target tile
@@ -59,18 +59,19 @@ internal static class AchievementGrid
 
         double emojiH = OverlayDraw.Text("X", emojiSize, FgBrush).Height;
         double nameH = OverlayDraw.Text("X", NameSize, FgBrush, FontWeight.SemiBold).Height;
+        double catH = OverlayDraw.Text("X", CatSize, MutedBrush).Height;
         double descLineH = OverlayDraw.Text("X", DescSize, MutedBrush).Height;
         double descH = showDescription ? descLineH * 2 + 2 : 0;   // up to two wrapped lines
-        // A reserved bar row at the bottom (drawn only for unearned quota badges, blank otherwise) so every
-        // tile is the same height whether or not it shows progress.
-        double tileH = TilePadV + emojiH + IconGap + nameH + (showDescription ? IconGap + descH : 0)
+        // A category-label row (grey "Tokens · Lvl 3/5", blank on uncategorised one-offs) and a reserved
+        // bar row at the bottom, so every tile is the same height whichever kind of badge it is.
+        double tileH = TilePadV + emojiH + IconGap + nameH + 2 + catH + (showDescription ? IconGap + descH : 0)
                      + IconGap + BarH + TilePadV;
 
         for (int i = 0; i < ordered.Count; i++)
         {
             int col = i % cols, row = i / cols;
             var r = new Rect(x + col * (tileW + TileGap), y + row * (tileH + TileGap), tileW, tileH);
-            if (ctx != null) DrawTile(ctx, ordered[i], r, emojiSize, emojiH, nameH, descLineH, showDescription);
+            if (ctx != null) DrawTile(ctx, ordered[i], r, emojiSize, emojiH, nameH, catH, descLineH, showDescription);
         }
 
         int rows = (ordered.Count + cols - 1) / cols;
@@ -78,7 +79,7 @@ internal static class AchievementGrid
     }
 
     private static void DrawTile(DrawingContext ctx, Achievement b, Rect r, double emojiSize,
-        double emojiH, double nameH, double descLineH, bool showDescription)
+        double emojiH, double nameH, double catH, double descLineH, bool showDescription)
     {
         var (bg, ink) = b.Tier switch
         {
@@ -101,9 +102,19 @@ internal static class AchievementGrid
         var name = OverlayDraw.Text(OverlayDraw.Truncate(b.Name, NameSize, r.Width - 2 * TilePadH, FontWeight.SemiBold),
             NameSize, ink, FontWeight.SemiBold);
         ctx.DrawText(name, new Point(r.X + (r.Width - name.Width) / 2, cy));
-        cy += nameH;
+        cy += nameH + 2;
 
-        // Criteria line(s), centred and wrapped to at most two lines — tells you how to earn a locked one.
+        // The grey category label — what a levelled family compares ("Tokens · Lvl 3/5", or "· MAX" when
+        // topped out). Blank for uncategorised one-offs, which just leave the reserved row empty.
+        if (b.Category.Length > 0)
+        {
+            string cat = b.Level >= b.MaxLevel ? $"{b.Category} · MAX" : $"{b.Category} · Lvl {b.Level}/{b.MaxLevel}";
+            var catText = OverlayDraw.Text(OverlayDraw.Truncate(cat, CatSize, r.Width - 2 * TilePadH), CatSize, MutedBrush);
+            ctx.DrawText(catText, new Point(r.X + (r.Width - catText.Width) / 2, cy));
+        }
+        cy += catH;
+
+        // Criteria / next-target line(s), centred and wrapped to at most two lines (roomy variant only).
         if (showDescription)
         {
             cy += IconGap;
@@ -118,13 +129,13 @@ internal static class AchievementGrid
             ctx.DrawText(desc, new Point(r.X + TilePadH, cy));
         }
 
-        // Locked → a scrim over the whole tile so even the colour emoji reads as dimmed.
+        // Locked (no level reached) → a scrim over the whole tile so even the colour emoji reads as dimmed.
         if (!b.Earned)
             OverlayDraw.Panel(ctx, r, LockedScrim, null, 10);
 
-        // Completion bar for an unearned quota badge — drawn over the scrim so it stays bright and legible,
-        // since it's the actionable "how close am I" cue. Sits in the reserved bottom row.
-        if (!b.Earned && b.Progress is { } p)
+        // Completion bar showing progress toward the next level — for a locked tile (drawn over the scrim so
+        // it stays bright) and an earned-but-climbing one alike. Null progress (maxed / conditional) = none.
+        if (b.Progress is { } p)
         {
             double barY = r.Bottom - TilePadV - BarH;
             var track = new Rect(r.X + TilePadH, barY, r.Width - 2 * TilePadH, BarH);

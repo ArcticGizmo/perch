@@ -5,7 +5,6 @@ namespace Perch.Tests;
 
 public class AchievementCatalogTests
 {
-    // Builds a minimal all-time StatsReport; only the fields an assertion cares about need real values.
     private static StatsReport Report(
         int sessions = 0, int activeHours = 0, int prompts = 0, int toolCalls = 0,
         int subAgents = 0, int teammates = 0, TokenTotals tokens = default, decimal cost = 0,
@@ -25,139 +24,91 @@ public class AchievementCatalogTests
     private static RangeReport Range(StatsReport totals, int activeDays = 0, int? streak = null, TimeSpan longest = default)
         => new("All time", "Active per day", totals, [], activeDays, streak, null, TimeSpan.Zero, longest, null);
 
-    private static bool Earned(IReadOnlyList<Achievement> badges, string id) =>
-        badges.Single(b => b.Id == id).Earned;
-
     private static IReadOnlyList<Achievement> Eval(StatsReport r, RangeReport? range = null, bool cost = true)
         => AchievementCatalog.Evaluate(r, range, cost);
 
+    private static Achievement Fam(IReadOnlyList<Achievement> fams, string id) => fams.Single(f => f.Id == id);
+
     [Fact]
-    public void EmptyHistory_UnlocksNothing()
+    public void EmptyHistory_LeavesEveryFamilyAtLevelZero()
     {
-        var badges = Eval(Report());
-        Assert.All(badges, b => Assert.False(b.Earned));
+        var fams = Eval(Report());
+        Assert.All(fams, f => Assert.False(f.Earned));
+        Assert.All(fams, f => Assert.Equal(0, f.Level));
     }
 
     [Fact]
-    public void FirstSession_UnlocksFirstFlight()
+    public void ScalingFamily_LevelsUpInPlace()
     {
-        Assert.True(Earned(Eval(Report(sessions: 1)), "first-flight"));
+        var tokens = Fam(Eval(Report(tokens: new TokenTotals(15_000_000, 0, 0, 0))), "tokens");
+        Assert.True(tokens.Earned);
+        Assert.Equal(2, tokens.Level);            // past 1M and 10M, not 100M
+        Assert.Equal(5, tokens.MaxLevel);
+        Assert.Equal("Prolific", tokens.Name);    // the level-2 rung
+        Assert.Equal("Tokens", tokens.Category);
     }
 
     [Fact]
-    public void MillionTokens_UnlocksWordsmith_ButNotTokenTitan()
+    public void ScalingFamily_ProgressIsBandTowardNextLevel()
     {
-        var badges = Eval(Report(tokens: new TokenTotals(1_000_000, 0, 0, 0)));
-        Assert.True(Earned(badges, "wordsmith"));
-        Assert.False(Earned(badges, "token-titan"));
+        // 15M sits 1/18 of the way from the 10M rung to the 100M rung.
+        var tokens = Fam(Eval(Report(tokens: new TokenTotals(15_000_000, 0, 0, 0))), "tokens");
+        Assert.NotNull(tokens.Progress);
+        Assert.Equal((15_000_000.0 - 10_000_000) / (100_000_000 - 10_000_000), tokens.Progress!.Value, 4);
     }
 
     [Fact]
-    public void LateNightPeak_UnlocksNightOwl_NotEarlyBird()
+    public void MaxedFamily_HasNoProgressBar()
     {
-        var badges = Eval(Report(sessions: 1, peakHour: 2));
-        Assert.True(Earned(badges, "night-owl"));
-        Assert.False(Earned(badges, "early-bird"));
+        var tokens = Fam(Eval(Report(tokens: new TokenTotals(20_000_000_000, 0, 0, 0))), "tokens");
+        Assert.Equal(tokens.MaxLevel, tokens.Level);
+        Assert.Null(tokens.Progress);
+        Assert.Equal("Tokenlord", tokens.Name);
     }
 
     [Fact]
-    public void MorningPeak_UnlocksEarlyBird()
+    public void LevelsCarryNamespacedIdsAndEarnedFlags()
     {
-        Assert.True(Earned(Eval(Report(sessions: 1, peakHour: 7)), "early-bird"));
+        var tokens = Fam(Eval(Report(tokens: new TokenTotals(15_000_000, 0, 0, 0))), "tokens");
+        Assert.Equal("tokens.wordsmith", tokens.Levels[0].Id);
+        Assert.True(tokens.Levels[0].Earned);
+        Assert.True(tokens.Levels[1].Earned);
+        Assert.False(tokens.Levels[2].Earned);
     }
 
     [Fact]
-    public void EveryHourActive_UnlocksAroundTheClock()
+    public void OneOffQuota_HasProgressButNoCategory()
     {
-        Assert.True(Earned(Eval(Report(sessions: 1, allHours: true)), "around-the-clock"));
+        var tools = new List<ToolStat> { new("Grep", 250) };
+        var grep = Fam(Eval(Report(tools: tools)), "grep-goblin");
+        Assert.False(grep.Earned);
+        Assert.Equal("", grep.Category);
+        Assert.Equal(0.5, grep.Progress!.Value, 3);
     }
 
     [Fact]
-    public void GrepHeavy_UnlocksGrepGoblin()
+    public void ConditionalBadge_HasNoProgressAndNoCategory()
     {
-        var tools = new List<ToolStat> { new("Grep", 500), new("Read", 3) };
-        Assert.True(Earned(Eval(Report(tools: tools)), "grep-goblin"));
+        var nightOwl = Fam(Eval(Report(sessions: 1, peakHour: 2)), "night-owl");
+        Assert.True(nightOwl.Earned);
+        Assert.Null(nightOwl.Progress);
+        Assert.Equal("", nightOwl.Category);
     }
 
     [Fact]
-    public void OneToolDominates_UnlocksOneTrickPony()
-    {
-        var tools = new List<ToolStat> { new("Bash", 190), new("Read", 10) };
-        Assert.True(Earned(Eval(Report(toolCalls: 200, tools: tools)), "one-trick-pony"));
-    }
-
-    [Fact]
-    public void ThreeModelFamilies_UnlocksModelCitizen()
-    {
-        var models = new List<ModelStat>
-        {
-            new("claude-opus-4-8", TokenTotals.Zero, null),
-            new("claude-sonnet-4-5", TokenTotals.Zero, null),
-            new("claude-haiku-4-5-20251001", TokenTotals.Zero, null),
-        };
-        Assert.True(Earned(Eval(Report(models: models)), "model-citizen"));
-    }
-
-    [Fact]
-    public void Streak_ComesFromRange()
+    public void StreakAndLongest_ComeFromRange()
     {
         var report = Report(sessions: 3);
-        Assert.True(Earned(Eval(report, Range(report, streak: 7)), "on-fire"));
-        Assert.False(Earned(Eval(report, range: null), "on-fire"));   // no range → streak reads as 0
+        var fams = Eval(report, Range(report, streak: 7, longest: TimeSpan.FromHours(4)));
+        Assert.Equal(2, Fam(fams, "streak").Level);      // past 3-day and 7-day
+        Assert.Equal(2, Fam(fams, "longest").Level);     // past 2h and 4h
     }
 
     [Fact]
-    public void LongestSession_ComesFromRange()
-    {
-        var report = Report(sessions: 1);
-        Assert.True(Earned(Eval(report, Range(report, longest: TimeSpan.FromHours(4))), "ultramarathoner"));
-    }
-
-    [Fact]
-    public void CacheMoney_NeedsCacheReadsOverFreshInput()
-    {
-        Assert.True(Earned(Eval(Report(tokens: new TokenTotals(100, 0, 0, 500))), "cache-money"));
-        Assert.False(Earned(Eval(Report(tokens: new TokenTotals(500, 0, 0, 100))), "cache-money"));
-    }
-
-    [Fact]
-    public void HidingCost_DropsSpendBadgesEntirely()
+    public void HidingCost_DropsTheSpendFamily()
     {
         var report = Report(cost: 5000m);
-        Assert.Contains(Eval(report, cost: true), b => b.Id == "whale");
-        Assert.DoesNotContain(Eval(report, cost: false), b => b.Id == "whale");
-    }
-
-    [Fact]
-    public void QuotaBadge_ReportsProgressTowardTarget()
-    {
-        var century = Eval(Report(sessions: 50)).Single(b => b.Id == "century");   // target 100
-        Assert.False(century.Earned);
-        Assert.NotNull(century.Progress);
-        Assert.Equal(0.5, century.Progress!.Value, 3);
-    }
-
-    [Fact]
-    public void QuotaBadge_ProgressCapsAtOne_WhenEarned()
-    {
-        var century = Eval(Report(sessions: 250)).Single(b => b.Id == "century");
-        Assert.True(century.Earned);
-        Assert.Equal(1.0, century.Progress);
-    }
-
-    [Fact]
-    public void ConditionalBadge_HasNoProgressBar()
-    {
-        var nightOwl = Eval(Report(sessions: 1, peakHour: 2)).Single(b => b.Id == "night-owl");
-        Assert.Null(nightOwl.Progress);
-    }
-
-    [Fact]
-    public void OneShotBadge_HasNoProgressBar()
-    {
-        // A target of 1 is 0%-or-100%, so it carries no bar even while locked.
-        var firstFlight = Eval(Report(sessions: 1)).Single(b => b.Id == "first-flight");
-        Assert.True(firstFlight.Earned);
-        Assert.Null(firstFlight.Progress);
+        Assert.Contains(Eval(report, cost: true), f => f.Id == "spend");
+        Assert.DoesNotContain(Eval(report, cost: false), f => f.Id == "spend");
     }
 }

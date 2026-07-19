@@ -412,9 +412,9 @@ public partial class App : Application
             if (!settings.NotifyOnAchievement)
                 return;
             if (_notifications is { } n)
-                foreach (var a in t.Result)
-                    n.ShowInfo("🏆 Achievement unlocked", $"{a.Emoji} {a.Name} — {a.Description}", ToastLevel.Info);
-            if (t.Result.Any(a => a.Tier == AchievementTier.Gold))
+                foreach (var u in t.Result)
+                    n.ShowInfo("🏆 Achievement unlocked", $"{u.Emoji} {u.Name} — {u.Detail}", ToastLevel.Info);
+            if (t.Result.Any(u => u.Tier == AchievementTier.Gold))
                 LaunchConfetti();
         }));
     }
