@@ -28,8 +28,10 @@ internal static class AchievementGrid
     private static readonly IBrush BronzeInk = new SolidColorBrush(Color.FromRgb(214, 158, 110));
     private static readonly IBrush SilverInk = new SolidColorBrush(Color.FromRgb(200, 208, 222));
     private static readonly IBrush GoldInk   = new SolidColorBrush(Color.FromRgb(240, 200, 96));
+    // Progress bar (locked quota badges only): a dark track with a tier-ink fill showing how close you are.
+    private static readonly IBrush ProgressTrack = new SolidColorBrush(Color.FromArgb(150, 90, 90, 110));
 
-    private const double NameSize = 12, DescSize = 11, TileGap = 10, TilePadH = 10, TilePadV = 12, IconGap = 5;
+    private const double NameSize = 12, DescSize = 11, TileGap = 10, TilePadH = 10, TilePadV = 12, IconGap = 5, BarH = 4;
 
     /// <summary>"29 / 41 unlocked".</summary>
     public static string Tally(IReadOnlyList<Achievement> badges) =>
@@ -59,7 +61,10 @@ internal static class AchievementGrid
         double nameH = OverlayDraw.Text("X", NameSize, FgBrush, FontWeight.SemiBold).Height;
         double descLineH = OverlayDraw.Text("X", DescSize, MutedBrush).Height;
         double descH = showDescription ? descLineH * 2 + 2 : 0;   // up to two wrapped lines
-        double tileH = TilePadV + emojiH + IconGap + nameH + (showDescription ? IconGap + descH : 0) + TilePadV;
+        // A reserved bar row at the bottom (drawn only for unearned quota badges, blank otherwise) so every
+        // tile is the same height whether or not it shows progress.
+        double tileH = TilePadV + emojiH + IconGap + nameH + (showDescription ? IconGap + descH : 0)
+                     + IconGap + BarH + TilePadV;
 
         for (int i = 0; i < ordered.Count; i++)
         {
@@ -116,6 +121,18 @@ internal static class AchievementGrid
         // Locked → a scrim over the whole tile so even the colour emoji reads as dimmed.
         if (!b.Earned)
             OverlayDraw.Panel(ctx, r, LockedScrim, null, 10);
+
+        // Completion bar for an unearned quota badge — drawn over the scrim so it stays bright and legible,
+        // since it's the actionable "how close am I" cue. Sits in the reserved bottom row.
+        if (!b.Earned && b.Progress is { } p)
+        {
+            double barY = r.Bottom - TilePadV - BarH;
+            var track = new Rect(r.X + TilePadH, barY, r.Width - 2 * TilePadH, BarH);
+            OverlayDraw.Pill(ctx, ProgressTrack, track);
+            double fillW = track.Width * Math.Clamp(p, 0, 1);
+            if (fillW >= BarH)
+                OverlayDraw.Pill(ctx, ink, new Rect(track.X, barY, fillW, BarH));
+        }
     }
 
     // Emoji variation selectors (U+FE0F / U+FE0E) nudge glyph metrics off; drop them and the base

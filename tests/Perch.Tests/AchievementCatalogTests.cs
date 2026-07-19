@@ -127,4 +127,37 @@ public class AchievementCatalogTests
         Assert.Contains(Eval(report, cost: true), b => b.Id == "whale");
         Assert.DoesNotContain(Eval(report, cost: false), b => b.Id == "whale");
     }
+
+    [Fact]
+    public void QuotaBadge_ReportsProgressTowardTarget()
+    {
+        var century = Eval(Report(sessions: 50)).Single(b => b.Id == "century");   // target 100
+        Assert.False(century.Earned);
+        Assert.NotNull(century.Progress);
+        Assert.Equal(0.5, century.Progress!.Value, 3);
+    }
+
+    [Fact]
+    public void QuotaBadge_ProgressCapsAtOne_WhenEarned()
+    {
+        var century = Eval(Report(sessions: 250)).Single(b => b.Id == "century");
+        Assert.True(century.Earned);
+        Assert.Equal(1.0, century.Progress);
+    }
+
+    [Fact]
+    public void ConditionalBadge_HasNoProgressBar()
+    {
+        var nightOwl = Eval(Report(sessions: 1, peakHour: 2)).Single(b => b.Id == "night-owl");
+        Assert.Null(nightOwl.Progress);
+    }
+
+    [Fact]
+    public void OneShotBadge_HasNoProgressBar()
+    {
+        // A target of 1 is 0%-or-100%, so it carries no bar even while locked.
+        var firstFlight = Eval(Report(sessions: 1)).Single(b => b.Id == "first-flight");
+        Assert.True(firstFlight.Earned);
+        Assert.Null(firstFlight.Progress);
+    }
 }
