@@ -26,18 +26,6 @@ internal sealed class StatsDashboard : Control
     private static readonly IBrush BranchBrush = new SolidColorBrush(Color.FromRgb(167, 139, 250));
     private static readonly IPen   BorderPen   = new Pen(new SolidColorBrush(Palette.Border), 1);
 
-    // Badge grid: a tier-tinted panel per trophy, colour-emoji font for the icon (a mixed run renders
-    // the emoji as tofu), and a translucent scrim over the locked ones so their colour icon reads as dim.
-    private static readonly Typeface EmojiFace =
-        new(new FontFamily("Segoe UI Emoji, Apple Color Emoji, Noto Color Emoji"));
-    private static readonly IBrush LockedScrim = new SolidColorBrush(Color.FromArgb(176, 18, 18, 24));
-    private static readonly IBrush BronzeBg = new SolidColorBrush(Color.FromRgb(58, 42, 30));
-    private static readonly IBrush SilverBg = new SolidColorBrush(Color.FromRgb(44, 48, 58));
-    private static readonly IBrush GoldBg   = new SolidColorBrush(Color.FromRgb(64, 54, 26));
-    private static readonly IBrush BronzeInk = new SolidColorBrush(Color.FromRgb(214, 158, 110));
-    private static readonly IBrush SilverInk = new SolidColorBrush(Color.FromRgb(200, 208, 222));
-    private static readonly IBrush GoldInk   = new SolidColorBrush(Color.FromRgb(240, 200, 96));
-
     // px sizes ≈ the WinForms point sizes (pt × 96/72).
     private const double BigSize = 28, H1Size = 20, H2Size = 15, BodySize = 13, LabelSize = 11;
     private const double Pad = 22, Gap = 12;
@@ -224,78 +212,22 @@ internal sealed class StatsDashboard : Control
     // only place the (inherently lifetime) badges belong. Matches the label SubtitleFor keys off.
     private bool IsAllTime => _range is { } r && r.ScopeLabel.StartsWith("All", StringComparison.Ordinal);
 
-    // Draws the trophy grid: a "N / M unlocked" header, then tier-tinted tiles (emoji + name), shiniest
-    // earned first, with the locked ones dimmed under a scrim. Columns flow to the available width.
+    // The compact dashboard trophy section: a "N / M unlocked" header, then the shared tile grid (icon +
+    // name, no criteria line here — the dedicated Achievements window shows those). See AchievementGrid.
     private double BadgesSection(DrawingContext? ctx, IReadOnlyList<Achievement> badges, double x, double y, double innerW)
     {
         if (badges.Count == 0) return y;
 
-        int earned = badges.Count(b => b.Earned);
         y = SectionHeader(ctx, "Achievements", x, y, innerW);
-        // Right-aligned tally on the header row we just drew (header advanced y by 34, line sits at +24).
-        if (ctx != null)
+        if (ctx != null)   // right-aligned tally on the header row (header advanced y by 34, line sits at +24)
         {
-            var tally = OverlayDraw.Text($"{earned} / {badges.Count} unlocked", BodySize, MutedBrush);
+            var tally = OverlayDraw.Text(AchievementGrid.Tally(badges), BodySize, MutedBrush);
             ctx.DrawText(tally, new Point(x + innerW - tally.Width, y - 34));
         }
 
-        // Earned first (shiniest tier first within each group) so the wall of trophies leads with wins.
-        var ordered = badges
-            .OrderByDescending(b => b.Earned)
-            .ThenByDescending(b => (int)b.Tier)
-            .ThenBy(b => b.Name, StringComparer.Ordinal)
-            .ToList();
-
-        const double tileGap = 10, tilePadV = 12, emojiSize = 24, iconGap = 5;
-        int cols = Math.Max(2, (int)((innerW + tileGap) / (148 + tileGap)));
-        double tileW = (innerW - tileGap * (cols - 1)) / cols;
-        double emojiH = OverlayDraw.Text("X", emojiSize, FgBrush).Height;
-        double nameH = OverlayDraw.Text("X", LabelSize, FgBrush).Height;
-        double tileH = tilePadV + emojiH + iconGap + nameH + tilePadV;
-
-        for (int i = 0; i < ordered.Count; i++)
-        {
-            int col = i % cols, row = i / cols;
-            double tx = x + col * (tileW + tileGap);
-            double ty = y + row * (tileH + tileGap);
-            if (ctx != null) DrawBadgeTile(ctx, ordered[i], new Rect(tx, ty, tileW, tileH), emojiSize, tilePadV, iconGap, emojiH, nameH);
-        }
-
-        int rows = (ordered.Count + cols - 1) / cols;
-        return y + rows * tileH + (rows - 1) * tileGap + 22;
+        y = AchievementGrid.Draw(ctx, badges, x, y, innerW, targetTileW: 148, emojiSize: 24, showDescription: false);
+        return y + 22;
     }
-
-    private void DrawBadgeTile(DrawingContext ctx, Achievement b, Rect r, double emojiSize,
-        double padV, double iconGap, double emojiH, double nameH)
-    {
-        var (bg, ink) = b.Tier switch
-        {
-            AchievementTier.Gold   => (GoldBg, GoldInk),
-            AchievementTier.Silver => (SilverBg, SilverInk),
-            _                      => (BronzeBg, BronzeInk),
-        };
-        OverlayDraw.Panel(ctx, r, bg, null, 10);
-
-        // Emoji centred near the top; drawn in the colour-emoji face (variation selectors stripped so the
-        // base codepoint renders in colour rather than nudging position).
-        var emoji = new FormattedText(StripVariation(b.Emoji), System.Globalization.CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight, EmojiFace, emojiSize, FgBrush);
-        ctx.DrawText(emoji, new Point(r.X + (r.Width - emoji.Width) / 2, r.Y + padV));
-
-        // Name below, tinted to the tier, single line, truncated to the tile.
-        var name = OverlayDraw.Text(OverlayDraw.Truncate(b.Name, LabelSize, r.Width - 12, FontWeight.SemiBold),
-            LabelSize, ink, FontWeight.SemiBold);
-        ctx.DrawText(name, new Point(r.X + (r.Width - name.Width) / 2, r.Y + padV + emojiH + iconGap));
-
-        // Locked → drop a scrim over the whole tile so even the colour emoji reads as dimmed.
-        if (!b.Earned)
-            OverlayDraw.Panel(ctx, r, LockedScrim, null, 10);
-    }
-
-    // Emoji variation selectors (U+FE0F / U+FE0E) nudge glyph metrics off; drop them and the base
-    // codepoint still renders in colour. Mirrors the Wrapped poster's Emoji() helper.
-    private static string StripVariation(string s) =>
-        string.Concat(s.Where(ch => ch != '️' && ch != '︎'));
 
     private string Subtitle() => SubtitleFor(_range);
 

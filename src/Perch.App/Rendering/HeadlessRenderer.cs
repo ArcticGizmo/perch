@@ -115,6 +115,14 @@ internal static class HeadlessRenderer
         RenderControl(statsAll, Path.Combine(outDir, "stats_alltime_1x.png"), 96);
         RenderControl(statsAll, Path.Combine(outDir, "stats_alltime_1.5x.png"), 144);
 
+        // Dedicated Achievements window (the "trophy cabinet"): the roomy grid variant with per-badge
+        // criteria lines, fed the same all-time sample so earned + locked tiles both show.
+        var cabinet = new Views.AchievementsDashboard { Width = 640 };
+        cabinet.SetBadges(AchievementCatalog.Evaluate(allReport, allRange, includeCost: true),
+            "your lifetime trophies · since Jan 2026");
+        RenderControl(cabinet, Path.Combine(outDir, "achievements_1x.png"), 96);
+        RenderControl(cabinet, Path.Combine(outDir, "achievements_1.5x.png"), 144);
+
         // Perch Wrapped poster: a shareable Spotify-Wrapped-style card built from the sample report.
         // Rendered with the bundled bird icon so the header/footer icon paths are exercised too.
         IImage? brandIcon = null;

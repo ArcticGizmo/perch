@@ -28,6 +28,7 @@ public partial class App : Application
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
     private StatsWindow? _statsWindow;
+    private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
     private HistoryWindow? _historyWindow;
     private AppSettings? _appSettings;
@@ -270,6 +271,7 @@ public partial class App : Application
         _settings?.Close();
         _historyWindow?.Close();
         _statsWindow?.Close();
+        _achievementsWindow?.Close();
         _flightWindow?.Close();
         _qrWindow?.Close();
         _switcher?.Close();
@@ -514,6 +516,10 @@ public partial class App : Application
         _statsWindow = WindowHost.ShowOrFocus(_statsWindow,
             () => new StatsWindow(_appSettings ?? AppSettings.Load()), () => _statsWindow = null);
 
+    private void OpenAchievements() =>
+        _achievementsWindow = WindowHost.ShowOrFocus(_achievementsWindow,
+            () => new AchievementsWindow(_appSettings ?? AppSettings.Load()), () => _achievementsWindow = null);
+
     private void OpenFlightPath() =>
         _flightWindow = WindowHost.ShowOrFocus(_flightWindow, () => new FlightPathWindow(), () => _flightWindow = null);
 
@@ -591,6 +597,9 @@ public partial class App : Application
         var flightItem = new NativeMenuItem("Flight path…");
         flightItem.Click += (_, _) => OpenFlightPath();
 
+        var achievementsItem = new NativeMenuItem("Achievements…");
+        achievementsItem.Click += (_, _) => OpenAchievements();
+
         // Reads "Check for Updates…" normally; flips to "Update available" once a pending update is
         // detected (see OnUpdateAvailabilityChanged). Clicking it applies the pending update, else checks.
         _updateItem = new NativeMenuItem("Check for Updates…");
@@ -615,6 +624,7 @@ public partial class App : Application
                 historyItem,
                 statsItem,
                 flightItem,
+                achievementsItem,
                 _updateItem,
                 new NativeMenuItemSeparator(),
                 exitItem,
