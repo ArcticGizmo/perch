@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.8] - 2026-07-19
+
+- Achievement badges — trophies that level up with your lifetime stats, earned retroactively.
+
+---
+
 ## [v0.2.7] - 2026-07-19
 
 - Reopen recently-closed sessions from the switcher — a fresh terminal running claude --resume.

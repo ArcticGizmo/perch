@@ -171,6 +171,46 @@ public class SubAgentReaderTests
         Assert.True(Assert.Single(strict.GetRunning("sessTeam", Cwd), s => s.Name == "ux-explorer").IsStale);
     }
 
+    // ----- Nesting: parent → sub-agent tree -------------------------------------------------
+    //
+    // sessNest's subagents/ holds two working agents that live flat in the one directory: a parent
+    // (spawnDepth 1, toolUseId "toolu_parent") whose transcript launches an Agent tool_use with id
+    // "toolu_child", and a child (spawnDepth 2, toolUseId "toolu_child"). The reader must reconstruct the
+    // link from that tool_use ownership and return the child nested under the parent, not at the root.
+
+    [Fact]
+    public void GetRunning_NestedSubAgent_HangsUnderItsParentNotAtRoot()
+    {
+        StampFixtureAge(Path.Combine("sessNest", "subagents", "agent-anestpar.jsonl"), TimeSpan.Zero);
+        StampFixtureAge(Path.Combine("sessNest", "subagents", "agent-anestkid.jsonl"), TimeSpan.Zero);
+        var reader = new SubAgentReader();
+        var roots = reader.GetRunning("sessNest", Cwd);
+
+        // The parent is the session's only direct child; the sub-sub-agent hangs off it.
+        var parent = Assert.Single(roots);
+        Assert.Equal("anestpar", parent.AgentId);
+
+        var child = Assert.Single(parent.Children);
+        Assert.Equal("anestkid", child.AgentId);
+        Assert.Equal("do a batch", child.Description);
+        Assert.Empty(child.Children);
+    }
+
+    [Fact]
+    public void GetRunning_NestedChild_WhoseParentHasGoneStale_FallsBackToRoot()
+    {
+        // If a nested child is still working but its parent's transcript has gone silent (stale, so the
+        // parent drops off the transient roster), the orphaned child has no surfaced parent to hang under
+        // and is returned at the root rather than vanishing with its parent.
+        StampFixtureAge(Path.Combine("sessNest", "subagents", "agent-anestpar.jsonl"), TimeSpan.FromMinutes(10));
+        StampFixtureAge(Path.Combine("sessNest", "subagents", "agent-anestkid.jsonl"), TimeSpan.Zero);
+        var reader = new SubAgentReader();
+        var roots = reader.GetRunning("sessNest", Cwd);
+
+        var child = Assert.Single(roots);
+        Assert.Equal("anestkid", child.AgentId);
+    }
+
     // ----- Hook-driven turn markers (SubagentStop / TeammateIdle) -----------------------------
     //
     // The plugin drops agent-{id}.stopped / .idle beside an agent's transcript when Claude Code fires

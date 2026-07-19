@@ -18,12 +18,6 @@ has always been both.
 - **Git diff peek on hover** — the `+142 -37` chip already exists; let hovering it pop the
   actual changed-files list (or a mini diff) so you can gut-check a session without
   alt-tabbing.
-- **Reopen recently-closed session** — a "Roost" list of the last N finished/closed
-  sessions with a one-click re-focus of that terminal (or the `claude --resume` command
-  copied to clipboard).
-- **Sub-agent tree view** — a small expandable tree showing the parent → sub-agent →
-  teammate hierarchy with per-node status, for the sessions where you've got a whole flock
-  working.
 - **Weekly digest** — an opt-in Sunday-night notification (or exportable card) summarising
   the week: active hours, busiest project, longest session — basically Wrapped on a
   cadence, not just on demand.
@@ -32,9 +26,6 @@ has always been both.
   looking.
 - **Stats CSV / JSON export** — let the data layer that's already built escape for people
   who want to chart it themselves.
-- **Cron/Scheduled tasks** - display and allow setting of scheduled tasks
-- **Maximise sessions** - ability to set scheduled prompts before you start work so you never run out of window
-- Extend command window to allow opening sessions in a terminal
 
 ## Whimsical
 
@@ -52,5 +43,3 @@ has always been both.
   around, so the overlay feels alive rather than frozen.
 - **Ambient chirps** — optional, very-off-by-default soft birdsong when all sessions are
   idle; silenced the moment work resumes.
-- **Achievement badges** — "Night Owl", "Marathoner (4h session)", "Agent Wrangler (5
-  teammates at once)" — reuse the Wrapped persona engine as collectible tray trophies.

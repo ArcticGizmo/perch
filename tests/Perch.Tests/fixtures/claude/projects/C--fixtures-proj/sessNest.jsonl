@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2025-03-12T13:00:00Z","cwd":"C:\\fixtures\\proj","gitBranch":"dev","message":{"role":"user","content":"Refactor with a flock"}}
+{"type":"assistant","timestamp":"2025-03-12T13:00:10Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","id":"toolu_parent","name":"Agent","input":{"description":"orchestrate refactor","subagent_type":"general-purpose"}}]}}

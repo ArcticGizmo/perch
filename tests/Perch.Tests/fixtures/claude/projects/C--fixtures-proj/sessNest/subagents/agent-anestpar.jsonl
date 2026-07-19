@@ -1,0 +1,2 @@
+{"type":"user","isSidechain":true,"timestamp":"2025-03-12T13:00:20Z","message":{"role":"user","content":"orchestrate"}}
+{"type":"assistant","isSidechain":true,"timestamp":"2025-03-12T13:00:35Z","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"toolu_child","name":"Agent","input":{"description":"do a batch","subagent_type":"general-purpose"}}]}}

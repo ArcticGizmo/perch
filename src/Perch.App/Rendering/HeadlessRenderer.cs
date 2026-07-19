@@ -378,11 +378,16 @@ internal static class HeadlessRenderer
         var now = DateTime.Now;
         var subs = new List<SubAgent>
         {
+            // A teammate that has itself spawned a sub-agent, and a plain sub-agent nesting two levels
+            // deep — the parent → sub-agent → teammate tree, exercising indent + the collapse chevron.
             new("t1", "teammate", "general-purpose", IsTeammate: true, Name: "arch-explorer",
-                Color: "blue", Activity: "Reading Program.cs"),
+                Color: "blue", Activity: "Reading Program.cs",
+                Children: [new("t1a", "Trace the token refresh path", "Explore")]),
             new("t2", "teammate", "general-purpose", IsTeammate: true, Name: "reviewer",
                 Color: "green", IsIdle: true),
-            new("a1", "Explore the auth flow", "general-purpose"),
+            new("a1", "Explore the auth flow", "general-purpose",
+                Children: [new("a1a", "Map the OAuth callback", "general-purpose",
+                    Children: [new("a1b", "Read middleware config", "Explore")])]),
         };
         return
         [
