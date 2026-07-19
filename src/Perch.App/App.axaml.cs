@@ -40,6 +40,14 @@ public partial class App : Application
     private NotificationService? _notifications;
     private ISessionLock? _sessionLock;
 
+    // Achievement badges: evaluates lifetime trophies against an all-time scan and toasts newly-unlocked
+    // ones (once). The all-time scan is the slowest stats path, so checks are throttled — one at startup,
+    // then at most one per AchievementCheckInterval when a session finishes.
+    private AchievementService? _achievements;
+    private DateTime _lastAchievementCheck = DateTime.MinValue;
+    private bool _achievementCheckInFlight;
+    private static readonly TimeSpan AchievementCheckInterval = TimeSpan.FromMinutes(3);
+
     // The in-app updater (startup + hourly GitHub check, and the user-initiated apply). Its
     // AvailabilityChanged event lights up the tray item, the overlay badge and any open Settings window.
     private UpdateService? _updateService;
@@ -166,6 +174,7 @@ public partial class App : Application
 #endif
             _notifier.SessionActivated += OnToastActivated;
             _notifications = new NotificationService(_notifier, settings, _sessionLock, PlatformServices.AudioCue);
+            _achievements = new AchievementService(AchievementStore.Load());
 
             // In-app updater: reflect availability on the tray item, the overlay badge and any open
             // Settings window. The overlay's badge click and the tray/Settings actions all route here.
@@ -186,6 +195,7 @@ public partial class App : Application
 
             _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: settings.IncludeSubprocessMetrics);
             _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
+            CheckAchievements(force: true); // background all-time scan → celebrate anything unlocked while away
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
             if (settings.ShowServiceStatus) _statusHost.Start(); // initial fetch (polls every 2 min thereafter)
             ReloadQuickLinks(settings);
@@ -368,6 +378,36 @@ public partial class App : Application
         _notifications?.Notify(NotificationKind.Done, session);
         if (_overlay.Canvas.ConsumeConfetti(session.SessionId))
             LaunchConfetti();
+        CheckAchievements(force: false); // a finish is a natural moment to have crossed a threshold
+    }
+
+    // Evaluates lifetime achievement badges off the UI thread and toasts any newly-unlocked ones (once,
+    // via the store). The all-time scan is the slowest stats path, so this is throttled (force bypasses it
+    // for the startup check) and single-flighted so overlapping finishes can't stack scans.
+    private void CheckAchievements(bool force)
+    {
+        if (_achievements is not { } svc || _appSettings is not { } settings || _achievementCheckInFlight)
+            return;
+        var now = DateTime.Now;
+        if (!force && now - _lastAchievementCheck < AchievementCheckInterval)
+            return;
+        _lastAchievementCheck = now;
+        _achievementCheckInFlight = true;
+
+        bool includeCost = settings.ShowEstimatedCost;
+        var today = DateOnly.FromDateTime(now);
+        Task.Run(() =>
+        {
+            var range = SessionStatsService.ReportAllTime(today);
+            return svc.Sync(range.Totals, range, includeCost);
+        }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        {
+            _achievementCheckInFlight = false;
+            if (!t.IsCompletedSuccessfully || _notifications is not { } n)
+                return;
+            foreach (var a in t.Result)
+                n.ShowInfo("🏆 Achievement unlocked", $"{a.Emoji} {a.Name} — {a.Description}", ToastLevel.Info);
+        }));
     }
 
     // A session blocked awaiting input: flash the overlay and fire the "waiting for input" notification.
