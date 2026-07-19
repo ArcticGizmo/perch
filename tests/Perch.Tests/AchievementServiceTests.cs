@@ -32,7 +32,7 @@ public class AchievementServiceTests
     }
 
     [Fact]
-    public void FirstRun_SeedsSilently_ButPersistsEveryEarnedLevel()
+    public void FirstRun_ReturnsEveryEarnedLevel_AndPersists()
     {
         var path = TempPath();
         try
@@ -40,11 +40,29 @@ public class AchievementServiceTests
             var svc = new AchievementService(AchievementStore.LoadFrom(path));   // no file → first run
             var announced = svc.Sync(Report(sessions: 1, tokens: 1_000_000), null, includeCost: true);
 
-            Assert.Empty(announced);   // nothing toasted on the seeding run
+            // The first run returns everything earned (the App collapses a big batch into one summary toast).
+            Assert.Contains(announced, u => u.Name == "First Flight");
+            Assert.Contains(announced, u => u.Name == "Wordsmith");
 
             var reloaded = AchievementStore.LoadFrom(path);
             Assert.True(reloaded.Contains("sessions.firstflight"));
             Assert.True(reloaded.Contains("tokens.wordsmith"));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void OnceCommitted_ASubsequentRunIsQuiet()
+    {
+        var path = TempPath();
+        try
+        {
+            var report = Report(sessions: 1, tokens: 1_000_000);
+            new AchievementService(AchievementStore.LoadFrom(path)).Sync(report, null, includeCost: true);
+
+            // A fresh service over the now-populated store re-scans the same history and finds nothing new.
+            var second = new AchievementService(AchievementStore.LoadFrom(path)).Sync(report, null, includeCost: true);
+            Assert.Empty(second);
         }
         finally { File.Delete(path); }
     }

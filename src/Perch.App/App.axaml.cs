@@ -48,6 +48,9 @@ public partial class App : Application
     private DateTime _lastAchievementCheck = DateTime.MinValue;
     private bool _achievementCheckInFlight;
     private static readonly TimeSpan AchievementCheckInterval = TimeSpan.FromMinutes(3);
+    // Above this many new unlocks in one check (a first run, a store migration, a long-away return), we
+    // collapse to a single "you've earned N achievements" toast instead of stacking that many.
+    private const int AchievementToastMax = 3;
 
     // The in-app updater (startup + hourly GitHub check, and the user-initiated apply). Its
     // AvailabilityChanged event lights up the tray item, the overlay badge and any open Settings window.
@@ -407,14 +410,22 @@ public partial class App : Application
             _achievementCheckInFlight = false;
             if (!t.IsCompletedSuccessfully || t.Result.Count == 0)
                 return;
-            // Muted → the badge is already recorded (and shows in the Achievements window); just don't
+            // Muted → the levels are already recorded (and show in the Achievements window); just don't
             // interrupt. Otherwise toast each unlock, and set off confetti for a rare gold-tier one.
             if (!settings.NotifyOnAchievement)
                 return;
+            var unlocks = t.Result;
             if (_notifications is { } n)
-                foreach (var u in t.Result)
-                    n.ShowInfo("🏆 Achievement unlocked", $"{u.Emoji} {u.Name} — {u.Detail}", ToastLevel.Info);
-            if (t.Result.Any(u => u.Tier == AchievementTier.Gold))
+            {
+                if (unlocks.Count > AchievementToastMax)
+                    // A big batch (first run / migration / long-away return) — one summary, not a wall.
+                    n.ShowInfo("🏆 Achievements unlocked",
+                        $"You've earned {unlocks.Count} achievements — open Achievements to see them.", ToastLevel.Info);
+                else
+                    foreach (var u in unlocks)
+                        n.ShowInfo("🏆 Achievement unlocked", $"{u.Emoji} {u.Name} — {u.Detail}", ToastLevel.Info);
+            }
+            if (unlocks.Any(u => u.Tier == AchievementTier.Gold))
                 LaunchConfetti();
         }));
     }

@@ -6,14 +6,14 @@ internal sealed record AchievementUnlock(string Name, string Emoji, string Detai
 
 /// <summary>
 /// Ties the (stateless) <see cref="AchievementCatalog"/> to the durable <see cref="AchievementStore"/>:
-/// evaluates the families, commits any newly-reached <b>levels</b>, and hands back the rungs to announce
-/// (a toast each). The once-only guarantee lives here — a rung already in the store is never returned again,
-/// and crossing several rungs at once announces each.
+/// evaluates the families, commits any newly-reached <b>levels</b>, and hands back the rungs to announce.
+/// The once-only guarantee lives here — a rung already in the store is never returned again, and crossing
+/// several rungs at once returns each.
 ///
-/// <b>Silent first run.</b> On a fresh install the store file doesn't exist yet, so the first sync would
-/// otherwise toast every rung the user has already earned across their whole history — a wall of pop-ups.
-/// Instead the first sync seeds the store silently and announces nothing; every sync after that (this run
-/// or a later launch, since the file now exists) announces only genuinely-new unlocks.
+/// It does <b>not</b> decide how to present them. The first sync on a fresh install (or after the store's
+/// id scheme changes) legitimately returns everything you've ever earned — dozens of rungs — so the caller
+/// collapses a large batch into a single summary toast rather than a wall of pop-ups. See the App's
+/// achievement check.
 ///
 /// Not thread-safe; call <see cref="Sync"/> from one owner (the app marshals the disk scan off the UI
 /// thread but invokes this from a single place).
@@ -21,18 +21,13 @@ internal sealed record AchievementUnlock(string Name, string Emoji, string Detai
 internal sealed class AchievementService
 {
     private readonly AchievementStore _store;
-    private bool _seeded;
 
     public AchievementService(AchievementStore store) => _store = store;
 
-    /// <summary>Evaluates the families, commits newly-reached levels to the store, and returns the rungs to
-    /// announce (empty on the silent first-run seed).</summary>
+    /// <summary>Evaluates the families, commits newly-reached levels to the store, and returns the rungs
+    /// crossed since the last sync (empty when nothing is new).</summary>
     public IReadOnlyList<AchievementUnlock> Sync(StatsReport report, RangeReport? range, bool includeCost)
     {
-        // Announce once we've either seeded this process or found a pre-existing store on disk.
-        bool announce = _seeded || _store.Existed;
-        _seeded = true;
-
         var newlyUnlocked = new List<AchievementUnlock>();
         foreach (var fam in AchievementCatalog.Evaluate(report, range, includeCost))
         {
@@ -49,6 +44,6 @@ internal sealed class AchievementService
         if (newlyUnlocked.Count > 0)
             _store.Save();
 
-        return announce ? newlyUnlocked : [];
+        return newlyUnlocked;
     }
 }
