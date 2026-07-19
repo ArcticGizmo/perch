@@ -107,6 +107,14 @@ internal static class HeadlessRenderer
         RenderControl(stats, Path.Combine(outDir, "stats_1x.png"), 96);
         RenderControl(stats, Path.Combine(outDir, "stats_1.5x.png"), 144);
 
+        // Stats dashboard, all-time scope: same control fed an "All time" range so the achievements grid
+        // renders (it's gated to that scope) with a realistic mix of earned + locked trophies.
+        var statsAll = new Views.StatsDashboard(showCost: true);
+        var (allReport, allRange) = SampleAllTimeReport();
+        statsAll.SetReport(allReport, allRange);
+        RenderControl(statsAll, Path.Combine(outDir, "stats_alltime_1x.png"), 96);
+        RenderControl(statsAll, Path.Combine(outDir, "stats_alltime_1.5x.png"), 144);
+
         // Perch Wrapped poster: a shareable Spotify-Wrapped-style card built from the sample report.
         // Rendered with the bundled bird icon so the header/footer icon paths are exercised too.
         IImage? brandIcon = null;
@@ -294,6 +302,41 @@ internal static class HeadlessRenderer
                 new ProjectStat("feature-x", 2, TimeSpan.FromHours(1), 200_000),
             ],
             HourlyActiveSeconds: hourly);
+    }
+
+    // A beefy all-time report + range, tuned so a spread of achievements land on both sides of their
+    // thresholds — enough earned to look rewarding, enough locked to show the aspirational greyed tiles.
+    private static (StatsReport report, RangeReport range) SampleAllTimeReport()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var tk = new TokenTotals(Input: 5_000_000, Output: 6_000_000, CacheWrite: 4_000_000, CacheRead: 30_000_000);
+        var hourly = new int[24];
+        for (int h = 8; h <= 23; h++) hourly[h] = 1000 + h * 40;   // busy days, peak late — not all 24 hours
+        hourly[23] = 40_000;                                       // clear late-night peak → Night Owl
+        var report = new StatsReport(
+            Day: today, SessionCount: 340, ActiveTime: TimeSpan.FromHours(126),
+            Prompts: 3400, ToolCalls: 12_000, SubAgents: 140, Teammates: 3,
+            Tokens: tk, TeammateTokens: TokenTotals.Zero, EstimatedCost: 260m, CostComplete: true,
+            Projects: Enumerable.Range(1, 12).Select(i => new ProjectStat($"proj-{i}", 4, TimeSpan.FromHours(3), 1_000_000)).ToList(),
+            Tools:
+            [
+                new ToolStat("Edit", 2000), new ToolStat("Read", 1500), new ToolStat("Bash", 700),
+                new ToolStat("Grep", 600), new ToolStat("Glob", 260), new ToolStat("Task", 140),
+                new ToolStat("WebSearch", 40), new ToolStat("WebFetch", 30),
+            ],
+            Models:
+            [
+                new ModelStat("claude-opus-4-8", tk, 260m),
+                new ModelStat("claude-sonnet-4-5", TokenTotals.Zero, 0m),
+                new ModelStat("claude-haiku-4-5", TokenTotals.Zero, 0m),
+            ],
+            Branches: Enumerable.Range(1, 14).Select(i => new ProjectStat($"branch-{i}", 2, TimeSpan.FromHours(1), 200_000)).ToList(),
+            HourlyActiveSeconds: hourly);
+        var range = new RangeReport("All time", "Active per day (last 30 days)", report,
+            Trend: [], ActiveDays: 140, StreakDays: 9, BusiestDay: today.AddDays(-3),
+            BusiestDayActive: TimeSpan.FromHours(7), LongestSession: TimeSpan.FromHours(5),
+            FirstActiveDay: today.AddDays(-300));
+        return (report, range);
     }
 
     private static FlightPathReport SampleFlightReport()
