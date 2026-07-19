@@ -67,6 +67,7 @@ internal sealed class SettingsHooks
 
     public Action? OpenStats;
     public Action? OpenFlightPath;
+    public Action? OpenAchievements;
 }
 
 /// <summary>
@@ -152,6 +153,7 @@ internal sealed class SettingsWindow : Window
         AddPage(nav, "monitoring",   "Monitoring",      BuildMonitoringPage);
         AddPage(nav, "shortcuts",    "Shortcuts",       BuildHotkeysPage);
         AddPage(nav, "stats",        "Session Stats",   BuildStatsPage);
+        AddPage(nav, "achievements", "Achievements",    BuildAchievementsPage);
         AddPage(nav, "notify",       "Notifications",   BuildNotificationsPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
         AddPage(nav, "experimental", "Experimental",    BuildExperimentalPage);
@@ -847,6 +849,31 @@ internal sealed class SettingsWindow : Window
             "\"Active\" time is estimated from the gaps between transcript records. A gap longer than this " +
             "counts as you having stepped away, and is capped at the threshold. Default 5 minutes."));
         page.Children.Add(BuildIdleStepper());
+    }
+
+    // ── Achievements ─────────────────────────────────────────────────────────────────
+    private void BuildAchievementsPage(StackPanel page)
+    {
+        page.Children.Add(SettingsUi.SectionTitle("Achievements"));
+        page.Children.Add(SettingsUi.BodyText(
+            "Collectible trophies earned from your lifetime Claude Code activity — sessions, streaks, tokens, " +
+            "tool use and more. They unlock retroactively, so your history already counts. Locked trophies " +
+            "show how close you are."));
+
+        var openRow = SettingsUi.ButtonRow();
+        var openBtn = SettingsUi.FlatButton("Open achievements…");
+        openBtn.Click += (_, _) => _hooks.OpenAchievements?.Invoke();
+        openRow.Children.Add(openBtn);
+        page.Children.Add(openRow);
+
+        page.Children.Add(SettingsUi.Separator());
+
+        page.Children.Add(SettingsUi.TitleRow("Celebrate new unlocks",
+            SaveToggle(_settings.NotifyOnAchievement, v => _settings.NotifyOnAchievement = v)));
+        page.Children.Add(SettingsUi.BodyText(
+            "Pop a notification when you unlock a new achievement — with a burst of confetti for the rare " +
+            "gold-tier ones. Turn this off to unlock silently; your trophies still appear in the Achievements " +
+            "window."));
     }
 
     private Control BuildIdleStepper()

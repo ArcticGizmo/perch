@@ -28,6 +28,7 @@ public partial class App : Application
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
     private StatsWindow? _statsWindow;
+    private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
     private HistoryWindow? _historyWindow;
     private AppSettings? _appSettings;
@@ -39,6 +40,17 @@ public partial class App : Application
     private INotifier? _notifier;
     private NotificationService? _notifications;
     private ISessionLock? _sessionLock;
+
+    // Achievement badges: evaluates lifetime trophies against an all-time scan and toasts newly-unlocked
+    // ones (once). The all-time scan is the slowest stats path, so checks are throttled — one at startup,
+    // then at most one per AchievementCheckInterval when a session finishes.
+    private AchievementService? _achievements;
+    private DateTime _lastAchievementCheck = DateTime.MinValue;
+    private bool _achievementCheckInFlight;
+    private static readonly TimeSpan AchievementCheckInterval = TimeSpan.FromMinutes(3);
+    // Above this many new unlocks in one check (a first run, a store migration, a long-away return), we
+    // collapse to a single "you've earned N achievements" toast instead of stacking that many.
+    private const int AchievementToastMax = 3;
 
     // The in-app updater (startup + hourly GitHub check, and the user-initiated apply). Its
     // AvailabilityChanged event lights up the tray item, the overlay badge and any open Settings window.
@@ -166,6 +178,7 @@ public partial class App : Application
 #endif
             _notifier.SessionActivated += OnToastActivated;
             _notifications = new NotificationService(_notifier, settings, _sessionLock, PlatformServices.AudioCue);
+            _achievements = new AchievementService(AchievementStore.Load());
 
             // In-app updater: reflect availability on the tray item, the overlay badge and any open
             // Settings window. The overlay's badge click and the tray/Settings actions all route here.
@@ -186,6 +199,7 @@ public partial class App : Application
 
             _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: settings.IncludeSubprocessMetrics);
             _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
+            CheckAchievements(force: true); // background all-time scan → celebrate anything unlocked while away
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
             if (settings.ShowServiceStatus) _statusHost.Start(); // initial fetch (polls every 2 min thereafter)
             ReloadQuickLinks(settings);
@@ -260,6 +274,7 @@ public partial class App : Application
         _settings?.Close();
         _historyWindow?.Close();
         _statsWindow?.Close();
+        _achievementsWindow?.Close();
         _flightWindow?.Close();
         _qrWindow?.Close();
         _switcher?.Close();
@@ -368,6 +383,51 @@ public partial class App : Application
         _notifications?.Notify(NotificationKind.Done, session);
         if (_overlay.Canvas.ConsumeConfetti(session.SessionId))
             LaunchConfetti();
+        CheckAchievements(force: false); // a finish is a natural moment to have crossed a threshold
+    }
+
+    // Evaluates lifetime achievement badges off the UI thread and toasts any newly-unlocked ones (once,
+    // via the store). The all-time scan is the slowest stats path, so this is throttled (force bypasses it
+    // for the startup check) and single-flighted so overlapping finishes can't stack scans.
+    private void CheckAchievements(bool force)
+    {
+        if (_achievements is not { } svc || _appSettings is not { } settings || _achievementCheckInFlight)
+            return;
+        var now = DateTime.Now;
+        if (!force && now - _lastAchievementCheck < AchievementCheckInterval)
+            return;
+        _lastAchievementCheck = now;
+        _achievementCheckInFlight = true;
+
+        bool includeCost = settings.ShowEstimatedCost;
+        var today = DateOnly.FromDateTime(now);
+        Task.Run(() =>
+        {
+            var range = SessionStatsService.ReportAllTime(today);
+            return svc.Sync(range.Totals, range, includeCost);
+        }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        {
+            _achievementCheckInFlight = false;
+            if (!t.IsCompletedSuccessfully || t.Result.Count == 0)
+                return;
+            // Muted → the levels are already recorded (and show in the Achievements window); just don't
+            // interrupt. Otherwise toast each unlock, and set off confetti for a rare gold-tier one.
+            if (!settings.NotifyOnAchievement)
+                return;
+            var unlocks = t.Result;
+            if (_notifications is { } n)
+            {
+                if (unlocks.Count > AchievementToastMax)
+                    // A big batch (first run / migration / long-away return) — one summary, not a wall.
+                    n.ShowInfo("🏆 Achievements unlocked",
+                        $"You've earned {unlocks.Count} achievements — open Achievements to see them.", ToastLevel.Info);
+                else
+                    foreach (var u in unlocks)
+                        n.ShowInfo("🏆 Achievement unlocked", $"{u.Emoji} {u.Name} — {u.Detail}", ToastLevel.Info);
+            }
+            if (unlocks.Any(u => u.Tier == AchievementTier.Gold))
+                LaunchConfetti();
+        }));
     }
 
     // A session blocked awaiting input: flash the overlay and fire the "waiting for input" notification.
@@ -474,6 +534,10 @@ public partial class App : Application
         _statsWindow = WindowHost.ShowOrFocus(_statsWindow,
             () => new StatsWindow(_appSettings ?? AppSettings.Load()), () => _statsWindow = null);
 
+    private void OpenAchievements() =>
+        _achievementsWindow = WindowHost.ShowOrFocus(_achievementsWindow,
+            () => new AchievementsWindow(_appSettings ?? AppSettings.Load()), () => _achievementsWindow = null);
+
     private void OpenFlightPath() =>
         _flightWindow = WindowHost.ShowOrFocus(_flightWindow, () => new FlightPathWindow(), () => _flightWindow = null);
 
@@ -551,6 +615,9 @@ public partial class App : Application
         var flightItem = new NativeMenuItem("Flight path…");
         flightItem.Click += (_, _) => OpenFlightPath();
 
+        var achievementsItem = new NativeMenuItem("Achievements…");
+        achievementsItem.Click += (_, _) => OpenAchievements();
+
         // Reads "Check for Updates…" normally; flips to "Update available" once a pending update is
         // detected (see OnUpdateAvailabilityChanged). Clicking it applies the pending update, else checks.
         _updateItem = new NativeMenuItem("Check for Updates…");
@@ -575,6 +642,7 @@ public partial class App : Application
                 historyItem,
                 statsItem,
                 flightItem,
+                achievementsItem,
                 _updateItem,
                 new NativeMenuItemSeparator(),
                 exitItem,
@@ -723,6 +791,7 @@ public partial class App : Application
             PerformUpdate = () => _updateService?.PerformUpdate(CloseAuxWindows),
             OpenStats = OpenStats,
             OpenFlightPath = OpenFlightPath,
+            OpenAchievements = OpenAchievements,
         };
         _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);

@@ -45,9 +45,10 @@ internal sealed class SubAgentReader
     public SubAgentReader(TimeSpan? staleAfter = null) => _staleAfter = staleAfter ?? DefaultStaleAfter;
 
     /// <summary>
-    /// Returns the sub-agents currently working under the given session, or an empty list if the
-    /// transcript can't be located or read. Only direct children of the session are reported (a
-    /// sub-agent's own sub-agents live in that sub-agent's transcript).
+    /// Returns the sub-agents currently working under the given session as a tree (each
+    /// <see cref="SubAgent.Children"/> holds the agents it has itself spawned), or an empty list if the
+    /// transcript can't be located or read. The returned list is the session's direct children; deeper
+    /// nesting hangs off <see cref="SubAgent.Children"/> and is rare in practice.
     /// </summary>
     public IReadOnlyList<SubAgent> GetRunning(string sessionId, string cwd)
     {
@@ -80,8 +81,9 @@ internal sealed class SubAgentReader
         return _legacy.GetOrCompute(path, Parse, []);
     }
 
-    // The sub-agents under {sessionId}/subagents/ to surface for the parent session, each described
-    // from its sibling agent-{id}.meta.json. Two lifecycles share this directory:
+    // The sub-agents under {sessionId}/subagents/ to surface for the parent session, assembled into a
+    // parent → child tree. Every agent (however deep) lives flat in this one directory, described by its
+    // sibling agent-{id}.meta.json. Two lifecycles share it:
     //   • ordinary sub-agents (Task/Agent) are transient — surfaced only while actively working;
     //   • teammates (Agent Teams) are persistent — surfaced whenever alive, idle or working, so the
     //     roster doesn't flicker as members go quiet between messages from the lead.
@@ -89,8 +91,12 @@ internal sealed class SubAgentReader
     // transcript costs a stat, not a parse.
     private IReadOnlyList<SubAgent> ScanBackground(string dir)
     {
-        var result = new List<SubAgent>();
         var nowUtc = DateTime.UtcNow;
+
+        // Pass 1 — build every *surfaced* agent as a childless node, remembering the tool_use that
+        // spawned it (meta.ToolUseId) and the tool_use ids it launched (state.LaunchedIds), the two ends
+        // of the parent → child link reconstructed in pass 2.
+        var surfaced = new List<AgentNode>();
         foreach (var file in Directory.EnumerateFiles(dir, "agent-*.jsonl"))
         {
             try
@@ -111,35 +117,96 @@ internal sealed class SubAgentReader
                 bool stale = state.Working && !ended && IsStale(file, nowUtc);
                 bool working = state.Working && !ended && !stale;
 
+                var agentId = AgentIdFromFile(file);
+                SubAgent? node = null;
                 if (meta.IsTeammate)
                 {
                     // Persistent: idle (and stale/interrupted) teammates stay on the roster, just marked
                     // waiting. The stale flag lets SessionMonitor tell an interrupted team from a clean
                     // completion and skip the "done" alert in that case.
                     bool idle = !working;
-                    result.Add(new SubAgent(
-                        AgentIdFromFile(file), meta.Description, meta.AgentType,
-                        IsTeammate: true,
-                        Name: meta.Name,
-                        TeamName: meta.TeamName,
-                        Color: meta.Color,
-                        Activity: idle ? null : state.Activity,
-                        IsIdle: idle,
-                        IsStale: stale));
+                    node = new SubAgent(agentId, meta.Description, meta.AgentType,
+                        IsTeammate: true, Name: meta.Name, TeamName: meta.TeamName, Color: meta.Color,
+                        Activity: idle ? null : state.Activity, IsIdle: idle, IsStale: stale);
                 }
                 else if (working)
                 {
                     // Transient: an ordinary sub-agent only matters while it's still working; a stale one
                     // drops off the roster like any finished one.
-                    result.Add(new SubAgent(AgentIdFromFile(file), meta.Description, meta.AgentType));
+                    node = new SubAgent(agentId, meta.Description, meta.AgentType);
                 }
+
+                if (node != null)
+                    surfaced.Add(new AgentNode(agentId, meta.ToolUseId, state.LaunchedIds ?? [], node));
             }
             catch
             {
                 // Skip an agent transcript/meta that vanished or couldn't be read mid-scan.
             }
         }
-        return result;
+
+        return BuildForest(surfaced);
+    }
+
+    // A surfaced agent before nesting: its id, the tool_use that spawned it, the Task/Agent tool_use ids
+    // it launched (its future children's spawn ids), and the display node itself.
+    private readonly record struct AgentNode(
+        string AgentId, string? SpawnedBy, IReadOnlyList<string> Launched, SubAgent Node);
+
+    // Pass 2 — reconstruct nesting into a forest of roots. Nested agents live flat in the same directory;
+    // the only link is that a child's spawning tool_use (meta.ToolUseId) is the id of a Task/Agent
+    // tool_use recorded in its parent's transcript. So map each launched tool_use id to the agent that
+    // launched it, wire every agent whose spawn id is owned by another *surfaced* agent up as that agent's
+    // child, and return the rest as roots — their spawn id lives in the session transcript, not here, so
+    // they are the session's own direct children.
+    private static IReadOnlyList<SubAgent> BuildForest(List<AgentNode> surfaced)
+    {
+        if (surfaced.Count == 0)
+            return [];
+
+        var launchOwner = new Dictionary<string, string>();     // launched tool_use id -> launching agentId
+        foreach (var a in surfaced)
+            foreach (var id in a.Launched)
+                launchOwner[id] = a.AgentId;
+
+        var byId = new Dictionary<string, SubAgent>();
+        foreach (var a in surfaced)
+            byId[a.AgentId] = a.Node;
+
+        var childIds = new Dictionary<string, List<string>>();  // parent agentId -> child agentIds
+        var hasParent = new HashSet<string>();
+        foreach (var a in surfaced)
+        {
+            if (a.SpawnedBy != null
+                && launchOwner.TryGetValue(a.SpawnedBy, out var parent)
+                && parent != a.AgentId
+                && byId.ContainsKey(parent))
+            {
+                if (!childIds.TryGetValue(parent, out var list))
+                    childIds[parent] = list = new List<string>();
+                list.Add(a.AgentId);
+                hasParent.Add(a.AgentId);
+            }
+        }
+
+        // Assemble top-down, grafting each agent's children via `with`. The visited guard keeps a
+        // pathological cycle (shouldn't arise — tool_use ownership is acyclic) from recursing forever.
+        var visiting = new HashSet<string>();
+        SubAgent Assemble(string id)
+        {
+            var node = byId[id];
+            if (!childIds.TryGetValue(id, out var kids) || !visiting.Add(id))
+                return node;
+            var built = kids.Select(Assemble).ToList();
+            visiting.Remove(id);
+            return node with { Children = built };
+        }
+
+        var roots = new List<SubAgent>();
+        foreach (var a in surfaced)
+            if (!hasParent.Contains(a.AgentId))
+                roots.Add(Assemble(a.AgentId));
+        return roots;
     }
 
     // True when an agent's transcript hasn't been written to within the staleness window — the signal
@@ -186,9 +253,12 @@ internal sealed class SubAgentReader
     }
 
     // What a sub-agent's meta sidecar tells us. A teammate's meta carries taskKind ==
-    // "in_process_teammate" plus a human name/team/colour; an ordinary sub-agent's does not.
+    // "in_process_teammate" plus a human name/team/colour; an ordinary sub-agent's does not. ToolUseId is
+    // the id of the Task/Agent tool_use that spawned this agent — the key that links it to its parent's
+    // transcript when reconstructing the tree (see BuildForest); absent for the top-level teammates.
     private readonly record struct AgentMeta(
-        string Description, string AgentType, bool IsTeammate, string? Name, string? TeamName, string? Color);
+        string Description, string AgentType, bool IsTeammate, string? Name, string? TeamName, string? Color,
+        string? ToolUseId);
 
     // Reads (and caches) an agent's tiny meta sidecar; blank/non-teammate if it's missing or bad.
     private AgentMeta ReadAgentMeta(string metaPath)
@@ -208,7 +278,8 @@ internal sealed class SubAgentReader
                 IsTeammate: isTeammate,
                 Name: node?["name"]?.GetValue<string>(),
                 TeamName: node?["teamName"]?.GetValue<string>(),
-                Color: node?["color"]?.GetValue<string>());
+                Color: node?["color"]?.GetValue<string>(),
+                ToolUseId: node?["toolUseId"]?.GetValue<string>());
             _meta[metaPath] = meta; // immutable once written — safe to cache forever
             return meta;
         }
@@ -218,8 +289,10 @@ internal sealed class SubAgentReader
         }
     }
 
-    // A sub-agent's turn state, parsed from the tail of its own transcript.
-    private readonly record struct Classification(bool Working, string? Activity);
+    // A sub-agent's turn state, parsed from its own transcript: whether it's mid-turn (Working) with a
+    // present-tense Activity phrase, plus the Task/Agent tool_use ids it has launched (LaunchedIds) — the
+    // spawn ids of any nested sub-agents, used to reconstruct the tree in BuildForest.
+    private readonly record struct Classification(bool Working, string? Activity, IReadOnlyList<string>? LaunchedIds);
 
     // A sub-agent's transcript ends in a completed assistant turn — a final assistant message with no
     // pending tool call — only while it is idle, waiting for its next instruction. While it is working,
@@ -235,6 +308,7 @@ internal sealed class SubAgentReader
         bool lastAssistantHadToolUse = false;
         string? lastToolName = null;
         JsonNode? lastToolInput = null;
+        List<string>? launched = null;  // Task/Agent tool_use ids this transcript has spawned
 
         foreach (var line in TranscriptScan.ReadLines(path))
         {
@@ -267,6 +341,11 @@ internal sealed class SubAgentReader
                             lastAssistantHadToolUse = true;
                             lastToolName = block!["name"]?.GetValue<string>();
                             lastToolInput = block["input"];
+                            // A Task/Agent tool_use here spawned a nested sub-agent; remember its id so the
+                            // child (whose meta.ToolUseId matches) can be wired up under this agent.
+                            if (lastToolName is "Agent" or "Task"
+                                && block["id"]?.GetValue<string>() is { } spawnId)
+                                (launched ??= new List<string>()).Add(spawnId);
                         }
                     }
                 }
@@ -274,13 +353,13 @@ internal sealed class SubAgentReader
         }
 
         if (!sawTurn)
-            return default;                  // nothing yet / just spawned — idle, no work to surface
+            return new Classification(false, null, launched);  // nothing yet / just spawned — idle
         bool working = lastWasUser           // an injected prompt or a tool_result awaiting the next step
             || lastAssistantHadToolUse;      // assistant ended on a tool_use -> awaiting its result
         string? activity = working && !string.IsNullOrEmpty(lastToolName)
             ? ToolSummary.Describe(lastToolName!, lastToolInput)
             : null;
-        return new Classification(working, activity);
+        return new Classification(working, activity, launched);
     }
 
     private static IReadOnlyList<SubAgent> Parse(string path)

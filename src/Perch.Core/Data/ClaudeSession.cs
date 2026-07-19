@@ -48,8 +48,30 @@ public record SubAgent(
     string? Color = null,       // Claude-assigned member colour ("green"/"yellow"/"blue"/…); null if none
     string? Activity = null,    // present-tense phrase for what it's doing now ("Reading Foo.cs"); null when idle
     bool IsIdle = false,        // teammate is alive but waiting (tail is a finished assistant turn)
-    bool IsStale = false        // classified working but the transcript went silent (interrupted/frozen mid-turn)
-);
+    bool IsStale = false,       // classified working but the transcript went silent (interrupted/frozen mid-turn)
+    IReadOnlyList<SubAgent>? Children = null // sub-agents this agent has itself spawned (see below)
+)
+{
+    /// <summary>
+    /// The sub-agents this agent has itself spawned, forming the parent → sub-agent → teammate tree the
+    /// overlay draws. Never null and almost always empty: nesting past the session's own direct children
+    /// is rare. Reconstructed from tool_use ownership by <see cref="SubAgentReader"/> — all agents live
+    /// flat in one <c>subagents/</c> directory, so the only link is that a child's spawning
+    /// <c>toolUseId</c> is a Task/Agent tool_use recorded in its parent's transcript.
+    /// </summary>
+    public IReadOnlyList<SubAgent> Children { get; init; } = Children ?? [];
+
+    /// <summary>This agent followed by every agent in its subtree, depth-first. For consumers that must
+    /// reason over the whole flock rather than one tree level — e.g. the monitor's "is any sub-agent still
+    /// working" gate, which would otherwise miss a working agent nested under another.</summary>
+    public IEnumerable<SubAgent> SelfAndDescendants()
+    {
+        yield return this;
+        foreach (var child in Children)
+            foreach (var descendant in child.SelfAndDescendants())
+                yield return descendant;
+    }
+}
 
 /// <summary>
 /// A web Artifact this session has published (via the Artifact tool) to claude.ai. Surfaced from the

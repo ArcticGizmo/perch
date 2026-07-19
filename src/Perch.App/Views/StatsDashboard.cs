@@ -139,6 +139,11 @@ internal sealed class StatsDashboard : Control
             y += 22;
         }
 
+        // Achievements — lifetime trophies, so only on the all-time scope (the one scope that loads
+        // all-time totals + streak/record extras). Evaluated retroactively from the report; no storage.
+        if (IsAllTime)
+            y = BadgesSection(ctx, AchievementCatalog.Evaluate(report, _range, _showCost), x, y, innerW);
+
         // Daily trend (range scopes only).
         if (_range is { } rng2 && rng2.Trend.Count > 1)
             y = TrendHistogram(ctx, rng2.Trend, rng2.TrendLabel, x, y, innerW);
@@ -201,6 +206,27 @@ internal sealed class StatsDashboard : Control
         }
 
         return y + Pad;
+    }
+
+    // All-time is the only scope whose report carries lifetime totals + a meaningful streak, so it's the
+    // only place the (inherently lifetime) badges belong. Matches the label SubtitleFor keys off.
+    private bool IsAllTime => _range is { } r && r.ScopeLabel.StartsWith("All", StringComparison.Ordinal);
+
+    // The compact dashboard trophy section: a "N / M unlocked" header, then the shared tile grid (icon +
+    // name, no criteria line here — the dedicated Achievements window shows those). See AchievementGrid.
+    private double BadgesSection(DrawingContext? ctx, IReadOnlyList<Achievement> badges, double x, double y, double innerW)
+    {
+        if (badges.Count == 0) return y;
+
+        y = SectionHeader(ctx, "Achievements", x, y, innerW);
+        if (ctx != null)   // right-aligned tally on the header row (header advanced y by 34, line sits at +24)
+        {
+            var tally = OverlayDraw.Text(AchievementGrid.Tally(badges), BodySize, MutedBrush);
+            ctx.DrawText(tally, new Point(x + innerW - tally.Width, y - 34));
+        }
+
+        y = AchievementGrid.Draw(ctx, badges, x, y, innerW, targetTileW: 148, emojiSize: 24, showDescription: false);
+        return y + 22;
     }
 
     private string Subtitle() => SubtitleFor(_range);

@@ -494,6 +494,11 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private bool _expanded = true;
     private bool _autonomousExpanded;
 
+    // Sub-agent tree nodes the user has collapsed, by agent id. A node is expanded by default (absent
+    // here); collapsing hides its subtree and rolls a "+N" hidden-count onto the row. In-memory only —
+    // a collapse doesn't survive a restart, and ids for agents that have since finished simply go unused.
+    private readonly HashSet<string> _collapsedAgents = new();
+
     // Hover state + click routing. _hoveredRow drives the row highlight; _hoveredArtifactRow the brighter
     // artifact glyph + hand cursor. The glyph hit-rects (artifact/thermo/warn/task/metrics) are captured
     // at paint time, keyed by row index, so a hit-test tracks exactly where each glyph landed — the
@@ -506,6 +511,9 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private readonly Dictionary<int, Rect> _taskRects = new();
     private readonly Dictionary<int, Rect> _metricsRects = new();
     private readonly Dictionary<int, Rect> _noteRects = new();
+    // The expand/collapse chevron on a sub-agent row that has children — captured at paint time so a
+    // click can toggle that node (see RouteClick). Only rows with children get an entry.
+    private readonly Dictionary<int, Rect> _subChevronRects = new();
 
     // The header's update badge (a perch-orange download disc), shown only while an update is pending. Its
     // hit-rect is captured at paint time; clicking it raises UpdateRequested for the app to apply.
@@ -664,7 +672,9 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private OverlayTooltip? _tooltip;
 
     // A flat render row: a parent session, one of its sub-agents, or the "Autonomous" section header.
-    private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1)
+    // Depth is the sub-agent's nesting level (1 = a session's direct child, 2 = a sub-agent's own child,
+    // …), driving its indent in the tree; 0 for session and section rows.
+    private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1, int Depth = 0)
     {
         public bool IsSubAgent => Sub != null;
         public bool IsSectionHeader => SectionCount >= 0;
@@ -715,16 +725,43 @@ public sealed class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
-    // A session's row plus its running sub-agent / teammate child rows, in draw order.
+    // A session's row plus its running sub-agent / teammate subtree, walked depth-first in draw order so
+    // each parent is immediately followed by its (indented) children.
     private void AddSessionRows(List<DisplayRow> rows, ClaudeSession session)
     {
         rows.Add(new DisplayRow(session, null));
-        var ordered = session.SubAgents
+        AddSubTree(rows, session, session.SubAgents, 1);
+    }
+
+    // Appends one level of the sub-agent tree, then recurses into each node's children unless the node is
+    // collapsed. Ordering per level matches the flat layout it replaces: teammates first, working before
+    // idle, then by name.
+    private void AddSubTree(List<DisplayRow> rows, ClaudeSession session, IReadOnlyList<SubAgent> subs, int depth)
+    {
+        var ordered = subs
             .Where(s => !_hideInactiveTeamMembers || !(s.IsTeammate && s.IsIdle))
             .OrderByDescending(s => s.IsTeammate)
             .ThenBy(s => s.IsTeammate && s.IsIdle)
             .ThenBy(s => s.Name ?? s.Description, StringComparer.OrdinalIgnoreCase);
-        foreach (var sub in ordered) rows.Add(new DisplayRow(session, sub));
+        foreach (var sub in ordered)
+        {
+            rows.Add(new DisplayRow(session, sub, Depth: depth));
+            if (sub.Children.Count > 0 && !_collapsedAgents.Contains(sub.AgentId))
+                AddSubTree(rows, session, sub.Children, depth + 1);
+        }
+    }
+
+    // How many descendants a node hides when collapsed — the "+N" badge on its row. Counts the whole
+    // subtree, honouring the same idle-teammate gate as the visible rows so the number matches.
+    private int HiddenDescendantCount(SubAgent sub)
+    {
+        int n = 0;
+        foreach (var c in sub.Children)
+        {
+            if (_hideInactiveTeamMembers && c.IsTeammate && c.IsIdle) continue;
+            n += 1 + HiddenDescendantCount(c);
+        }
+        return n;
     }
 
     private double HeightOf(DisplayRow row) =>
@@ -839,13 +876,14 @@ public sealed class OverlayCanvas : Control, IDenseHost
                 _taskRects.Clear();
                 _metricsRects.Clear();
                 _noteRects.Clear();
+                _subChevronRects.Clear();
 
                 double top = RowsTop;
                 for (int i = 0; i < _rows.Count; i++)
                 {
                     var r = _rows[i];
                     if (r.IsSectionHeader) DrawSectionHeaderRow(ctx, r, top, width);
-                    else if (r.IsSubAgent) DrawSubAgentRow(ctx, r.Sub!, top, width);
+                    else if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, top, width);
                     else DrawSessionRow(ctx, i, r.Session!, top, width);
                     top += HeightOf(r);
                 }
@@ -1437,28 +1475,59 @@ public sealed class OverlayCanvas : Control, IDenseHost
     }
 
     // ── Sub-agent / teammate rows ─────────────────────────────────────────────
-    private void DrawSubAgentRow(DrawingContext ctx, SubAgent sub, double top, double width)
+    private void DrawSubAgentRow(DrawingContext ctx, int rowIndex, DisplayRow row, double top, double width)
     {
+        var sub = row.Sub!;
+        int depth = Math.Max(1, row.Depth);
         double midY = top + SubRowHeight / 2;
 
-        // Tree connector: a stub dropping from the parent row down to this child's marker.
-        double branchX = HorizPad + 4;
-        double markerX = HorizPad + SubIndent;
+        // Tree connector: one SubIndent step of indent per nesting level, with the branch dropping from
+        // the row above at the parent's marker column and turning in to this node's marker.
+        double branchX = HorizPad + SubIndent * (depth - 1) + 4;
+        double markerX = HorizPad + SubIndent * depth;
         ctx.DrawLine(TreeLinePen, new Point(branchX, top - SubRowHeight / 2), new Point(branchX, midY));
-        ctx.DrawLine(TreeLinePen, new Point(branchX, midY), new Point(markerX - 2, midY));
 
-        if (sub.IsTeammate) DrawTeammateRow(ctx, sub, markerX, midY, width);
-        else DrawPlainSubAgentRow(ctx, sub, markerX, midY, width);
+        bool hasChildren = sub.Children.Count > 0;
+        bool collapsed = hasChildren && _collapsedAgents.Contains(sub.AgentId);
+        if (hasChildren)
+        {
+            // A node with children carries an expand/collapse chevron on the branch, in place of the
+            // horizontal stub; clicking it toggles the subtree (see RouteClick).
+            var chevron = OverlayDraw.Text(collapsed ? "▸" : "▾", SectionChev, MutedBrush);
+            OverlayDraw.TextLeftMid(ctx, chevron, markerX - 11, midY);
+            _subChevronRects[rowIndex] = new Rect(branchX - 2, top, markerX - branchX + 8, SubRowHeight);
+        }
+        else
+        {
+            ctx.DrawLine(TreeLinePen, new Point(branchX, midY), new Point(markerX - 2, midY));
+        }
+
+        int hidden = collapsed ? HiddenDescendantCount(sub) : 0;
+        if (sub.IsTeammate) DrawTeammateRow(ctx, sub, markerX, midY, width, hidden);
+        else DrawPlainSubAgentRow(ctx, sub, markerX, midY, width, hidden);
     }
 
-    private void DrawPlainSubAgentRow(DrawingContext ctx, SubAgent sub, double dotX, double midY, double width)
+    // The "+N" muted hidden-count badge on a collapsed node, drawn just left of the row's status text.
+    // Returns the width it reserves (badge + gap, or 0) so the label can shrink to avoid overrunning it.
+    private double DrawHiddenBadge(DrawingContext ctx, int hidden, double statusW, double midY, double width)
+    {
+        if (hidden <= 0) return 0;
+        string badge = "+" + hidden;
+        double badgeW = OverlayDraw.MeasureWidth(badge, SubStatusSize) + 8;
+        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(badge, SubStatusSize, MutedBrush),
+            width - HorizPad - statusW - badgeW + 2, midY);
+        return badgeW;
+    }
+
+    private void DrawPlainSubAgentRow(DrawingContext ctx, SubAgent sub, double dotX, double midY, double width, int hidden)
     {
         ctx.DrawEllipse(SubAgentBrush, null, new Point(dotX + 3, midY), 3, 3);
 
         const string statusText = "running";
         double statusW = OverlayDraw.MeasureWidth(statusText, SubStatusSize);
+        double badgeW = DrawHiddenBadge(ctx, hidden, statusW, midY, width);
         double labelX = dotX + 12;
-        double labelMaxW = width - labelX - HorizPad - statusW - 6;
+        double labelMaxW = width - labelX - HorizPad - statusW - badgeW - 6;
 
         string type = sub.AgentType?.Trim() ?? "";
         string desc = sub.Description?.Trim() ?? "";
@@ -1482,7 +1551,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             width - HorizPad - statusW, midY);
     }
 
-    private void DrawTeammateRow(DrawingContext ctx, SubAgent sub, double glyphX, double midY, double width)
+    private void DrawTeammateRow(DrawingContext ctx, SubAgent sub, double glyphX, double midY, double width, int hidden)
     {
         bool idle = sub.IsIdle;
         Color teamColor = Palette.TeamColor(sub.Color);
@@ -1495,8 +1564,9 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
         string stateText = idle ? "idle" : "working";
         double stateW = OverlayDraw.MeasureWidth(stateText, SubStatusSize);
+        double badgeW = DrawHiddenBadge(ctx, hidden, stateW, midY, width);
         double labelX = glyphX + 16;
-        double labelMaxW = width - labelX - HorizPad - stateW - 6;
+        double labelMaxW = width - labelX - HorizPad - stateW - badgeW - 6;
 
         string handle = "@" + (string.IsNullOrWhiteSpace(sub.Name) ? "teammate" : sub.Name!.Trim());
         string handleTrunc = OverlayDraw.Truncate(handle, SubNameSize, labelMaxW);
@@ -2048,6 +2118,16 @@ public sealed class OverlayCanvas : Control, IDenseHost
             // (a click never silently opens a link; you always see and choose from the list).
             var arts = artSession.Artifacts;
             if (arts.Count > 0) ShowArtifactPicker(arts);
+            return;
+        }
+
+        // A sub-agent's expand/collapse chevron (only present on a node that has children).
+        int chev = HitRect(_subChevronRects, p);
+        if (chev >= 0 && _rows[chev].Sub is { } chevSub)
+        {
+            if (!_collapsedAgents.Remove(chevSub.AgentId))
+                _collapsedAgents.Add(chevSub.AgentId);
+            Update(_sessions); // rebuild the render list under the new collapse state
             return;
         }
 

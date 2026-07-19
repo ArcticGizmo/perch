@@ -441,11 +441,14 @@ internal sealed class SessionMonitor : IDisposable
             // actively-working child means the parent loop is blocked — an idle teammate sitting waiting
             // for the lead must not keep the parent pegged as Running.
             var subAgents = _subAgents.GetRunning(sessionId, cwd);
-            bool hasRunningSubs = subAgents.Any(s => !s.IsIdle);
+            // The gates reason over the whole flock (a working agent can be nested under another), so
+            // flatten the tree; the tree itself is what the session below carries for the overlay.
+            var allSubs = subAgents.SelectMany(s => s.SelfAndDescendants()).ToList();
+            bool hasRunningSubs = allSubs.Any(s => !s.IsIdle);
             // A teammate frozen mid-turn by an interrupt eventually goes stale and flips to idle, which
             // is what drops hasRunningSubs here. That's a deliberate stop, not a completion — so when a
             // stale teammate is present we let the parent fall back to plain Idle without the "done" alert.
-            bool subsWentStale = subAgents.Any(s => s.IsStale);
+            bool subsWentStale = allSubs.Any(s => s.IsStale);
             bool hadRunningSubs = _hadRunningSubs.Contains(pid);
             bool subsJustFinished = hadRunningSubs && !hasRunningSubs;
             // Set when the deferred sub-agent completion below actually fires this scan, so the
