@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.9] - 2026-07-19
+
+- More trophies for the cabinet: tool-grind badges (Web Crawler, Search Party, List Maker, Plan B).
+- Secret achievements — mystery tiles showing only a cryptic hint until earned (that's rather the point).
+
+---
+
 ## [v0.2.8] - 2026-07-19
 
 - Achievement badges — trophies that level up with your lifetime stats, earned retroactively.

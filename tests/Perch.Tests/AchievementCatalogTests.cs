@@ -21,8 +21,9 @@ public class AchievementCatalogTests
             projects ?? [], tools ?? [], models ?? [], branches ?? [], hourly);
     }
 
-    private static RangeReport Range(StatsReport totals, int activeDays = 0, int? streak = null, TimeSpan longest = default)
-        => new("All time", "Active per day", totals, [], activeDays, streak, null, TimeSpan.Zero, longest, null);
+    private static RangeReport Range(StatsReport totals, int activeDays = 0, int? streak = null,
+        TimeSpan longest = default, IReadOnlyList<DayPoint>? trend = null)
+        => new("All time", "Active per day", totals, trend ?? [], activeDays, streak, null, TimeSpan.Zero, longest, null);
 
     private static IReadOnlyList<Achievement> Eval(StatsReport r, RangeReport? range = null, bool cost = true)
         => AchievementCatalog.Evaluate(r, range, cost);
@@ -110,5 +111,90 @@ public class AchievementCatalogTests
         var report = Report(cost: 5000m);
         Assert.Contains(Eval(report, cost: true), f => f.Id == "spend");
         Assert.DoesNotContain(Eval(report, cost: false), f => f.Id == "spend");
+    }
+
+    [Fact]
+    public void ToolBadges_EarnAtTheirThreshold()
+    {
+        var tools = new List<ToolStat>
+        {
+            new("WebFetch", 100), new("WebSearch", 500), new("TodoWrite", 500), new("ExitPlanMode", 25),
+        };
+        var fams = Eval(Report(tools: tools));
+        Assert.True(Fam(fams, "web-crawler").Earned);
+        Assert.True(Fam(fams, "search-party").Earned);
+        Assert.True(Fam(fams, "list-maker").Earned);
+        Assert.True(Fam(fams, "plan-b").Earned);
+    }
+
+    [Fact]
+    public void ToolBadge_ShowsProgressWhileShort()
+    {
+        var crawler = Fam(Eval(Report(tools: [new("WebFetch", 50)])), "web-crawler");
+        Assert.False(crawler.Earned);
+        Assert.Equal(0.5, crawler.Progress!.Value, 3);
+    }
+
+    [Fact]
+    public void SecretBadge_LockedShowsHintAndIsFlaggedSecret()
+    {
+        var witching = Fam(Eval(Report()), "the-witching-hour");
+        Assert.True(witching.Secret);
+        Assert.False(witching.Earned);
+        Assert.Equal("Something stirs when the clocks reset.", witching.Description);   // the cryptic hint
+        Assert.Null(witching.Progress);                                                 // no bar → no leak
+    }
+
+    [Fact]
+    public void SecretBadge_UnlockRevealsTheRealCriteria()
+    {
+        var witching = Fam(Eval(Report(sessions: 1, peakHour: 0)), "the-witching-hour");
+        Assert.True(witching.Earned);
+        Assert.Equal("Logged work in the midnight hour", witching.Description);
+    }
+
+    [Fact]
+    public void Elite_EarnsAt1337Prompts()
+    {
+        Assert.False(Fam(Eval(Report(prompts: 1336)), "elite").Earned);
+        Assert.True(Fam(Eval(Report(prompts: 1337)), "elite").Earned);
+    }
+
+    [Fact]
+    public void TheAnswer_And_FlatCircle_ComeFromRange()
+    {
+        var report = Report(sessions: 1);
+        var fams = Eval(report, Range(report, activeDays: 42, longest: TimeSpan.FromHours(12)));
+        Assert.True(Fam(fams, "the-answer").Earned);
+        Assert.True(Fam(fams, "flat-circle").Earned);
+    }
+
+    [Fact]
+    public void Nocturnal_NeedsMoreNightThanDay()
+    {
+        Assert.True(Fam(Eval(Report(sessions: 1, peakHour: 0)), "nocturnal").Earned);    // 9000s at midnight
+        Assert.False(Fam(Eval(Report(sessions: 1, peakHour: 12)), "nocturnal").Earned);  // busiest at noon
+    }
+
+    [Fact]
+    public void GroundhogDay_NeedsAFullMondayToSundayWeek()
+    {
+        var report = Report(sessions: 1);
+        var monday = new DateOnly(2024, 1, 1);   // a Monday
+        var fullWeek = Enumerable.Range(0, 7)
+            .Select(i => new DayPoint(monday.AddDays(i), 1, TimeSpan.FromHours(1), 0)).ToList();
+        Assert.True(Fam(Eval(report, Range(report, trend: fullWeek)), "groundhog-day").Earned);
+
+        var sixDays = fullWeek.Take(6).ToList();
+        Assert.False(Fam(Eval(report, Range(report, trend: sixDays)), "groundhog-day").Earned);
+    }
+
+    [Fact]
+    public void Completionist_IsSecretAndUnearnedUntilEverythingElseIs()
+    {
+        var completionist = Fam(Eval(Report()), "completionist");
+        Assert.True(completionist.Secret);
+        Assert.False(completionist.Earned);
+        Assert.Equal("There is nothing left to prove.", completionist.Description);
     }
 }

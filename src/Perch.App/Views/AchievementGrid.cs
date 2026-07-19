@@ -89,17 +89,23 @@ internal static class AchievementGrid
         };
         OverlayDraw.Panel(ctx, r, bg, null, 10);
 
+        // A locked secret stays a mystery: a "❓" box named "???", with only its cryptic hint (already in
+        // Description) to go on. Earning it reveals the real emoji and name.
+        bool masked = b is { Secret: true, Earned: false };
+        string emojiText = masked ? "❓" : b.Emoji;
+        string nameText = masked ? "???" : b.Name;
+
         double cy = r.Y + TilePadV;
 
         // Emoji centred near the top, in the colour-emoji face (variation selectors stripped so the base
         // codepoint renders in colour rather than nudging its metrics).
-        var emoji = new FormattedText(StripVariation(b.Emoji), CultureInfo.CurrentCulture,
+        var emoji = new FormattedText(StripVariation(emojiText), CultureInfo.CurrentCulture,
             FlowDirection.LeftToRight, EmojiFace, emojiSize, FgBrush);
         ctx.DrawText(emoji, new Point(r.X + (r.Width - emoji.Width) / 2, cy));
         cy += emojiH + IconGap;
 
         // Name, tinted to the tier, single line, truncated to the tile.
-        var name = OverlayDraw.Text(OverlayDraw.Truncate(b.Name, NameSize, r.Width - 2 * TilePadH, FontWeight.SemiBold),
+        var name = OverlayDraw.Text(OverlayDraw.Truncate(nameText, NameSize, r.Width - 2 * TilePadH, FontWeight.SemiBold),
             NameSize, ink, FontWeight.SemiBold);
         ctx.DrawText(name, new Point(r.X + (r.Width - name.Width) / 2, cy));
         cy += nameH + 2;

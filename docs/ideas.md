@@ -33,8 +33,6 @@ has always been both.
   sunglasses in summer. Purely cosmetic, entirely worth it.
 - **Tamagotchi mode** — the bird's long-term wellbeing tracks your streak; feed it by
   shipping, neglect it and it looks a bit ruffled. A gentle guilt engine.
-- **Milestone fireworks** — confetti is per-session; add a screen-wide celebration for
-  lifetime landmarks (first 1M tokens, 100th session, a 30-day streak).
 - **Time-of-day roosting** — the idle bird yawns and tucks its head at night, perks up in
   the morning. Matches the mood system already shipped.
 - **Rubber-duck click** — click the tray bird when stuck and it offers a random rubber-duck
