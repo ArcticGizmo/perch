@@ -405,10 +405,17 @@ public partial class App : Application
         }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
         {
             _achievementCheckInFlight = false;
-            if (!t.IsCompletedSuccessfully || _notifications is not { } n)
+            if (!t.IsCompletedSuccessfully || t.Result.Count == 0)
                 return;
-            foreach (var a in t.Result)
-                n.ShowInfo("🏆 Achievement unlocked", $"{a.Emoji} {a.Name} — {a.Description}", ToastLevel.Info);
+            // Muted → the badge is already recorded (and shows in the Achievements window); just don't
+            // interrupt. Otherwise toast each unlock, and set off confetti for a rare gold-tier one.
+            if (!settings.NotifyOnAchievement)
+                return;
+            if (_notifications is { } n)
+                foreach (var a in t.Result)
+                    n.ShowInfo("🏆 Achievement unlocked", $"{a.Emoji} {a.Name} — {a.Description}", ToastLevel.Info);
+            if (t.Result.Any(a => a.Tier == AchievementTier.Gold))
+                LaunchConfetti();
         }));
     }
 
@@ -773,6 +780,7 @@ public partial class App : Application
             PerformUpdate = () => _updateService?.PerformUpdate(CloseAuxWindows),
             OpenStats = OpenStats,
             OpenFlightPath = OpenFlightPath,
+            OpenAchievements = OpenAchievements,
         };
         _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);

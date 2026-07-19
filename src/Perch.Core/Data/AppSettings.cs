@@ -229,6 +229,11 @@ internal sealed class AppSettings
     // by surprise after a restart. Off by default (experimental); a missing key keeps it off.
     public bool ConfettiFinish { get; set; }
 
+    // "Celebrate achievement unlocks": when on, unlocking a new achievement badge pops a toast — with a
+    // burst of confetti for the rare gold-tier ones. Off unlocks silently (the badge is still recorded and
+    // shows in the Achievements window). On by default; a missing key keeps it on.
+    public bool NotifyOnAchievement { get; set; } = true;
+
     // Update checking. The version string of an update that has been detected and surfaced to the user
     // (via the "update available" notification, overlay button, tray menu and About highlight). Null
     // means no update is currently pending. Its presence is what suppresses re-notifying on subsequent
