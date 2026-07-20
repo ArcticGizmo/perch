@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.10] - 2026-07-20
+
+- Gold unlocks now flip a card out of the screen under a black vignette (confetti has retired).
+- A batch flips in up to three cards side by side, plus a "+N more" card.
+- Unlock toasts are now a separate toggle, off by default (the reveal does the celebrating).
+
+---
+
 ## [v0.2.9] - 2026-07-19
 
 - More trophies for the cabinet: tool-grind badges (Web Crawler, Search Party, List Maker, Plan B).

@@ -20,6 +20,12 @@ internal sealed class AchievementsWindow : Window
     private readonly AchievementsDashboard _dashboard = new();
     private readonly bool _showCost;
 
+#if DEBUG
+    /// <summary>Debug-only hook (set by the app): invoked with a clicked badge so its unlock reveal can be
+    /// played on demand, without having to actually earn it. Wired up only in debug builds.</summary>
+    public Action<AchievementUnlock>? PreviewReveal;
+#endif
+
     public AchievementsWindow(AppSettings settings)
     {
         Title = "Achievements";
@@ -32,6 +38,14 @@ internal sealed class AchievementsWindow : Window
 
         _showCost = settings.ShowEstimatedCost;
         Content = new ScrollViewer { Content = _dashboard, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+
+#if DEBUG
+        _dashboard.BadgeActivated += a =>
+        {
+            string detail = a.Category.Length > 0 ? $"{a.Category} · Lvl {Math.Max(1, a.Level)}" : a.Description;
+            PreviewReveal?.Invoke(new AchievementUnlock(a.Name, a.Emoji, detail, a.Tier));
+        };
+#endif
     }
 
     protected override void OnOpened(EventArgs e)
@@ -67,6 +81,9 @@ internal sealed class AchievementsWindow : Window
                 if (!IsVisible) return;
                 var (badges, firstDay) = t.Result;
                 string subtitle = firstDay is { } f ? $"your lifetime trophies · since {f:MMM yyyy}" : "your lifetime trophies";
+#if DEBUG
+                subtitle += "  ·  (debug) click a badge to preview its reveal";
+#endif
                 _dashboard.SetBadges(badges, subtitle);
             });
         });

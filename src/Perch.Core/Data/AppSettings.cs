@@ -229,10 +229,15 @@ internal sealed class AppSettings
     // by surprise after a restart. Off by default (experimental); a missing key keeps it off.
     public bool ConfettiFinish { get; set; }
 
-    // "Celebrate achievement unlocks": when on, unlocking a new achievement badge pops a toast — with a
-    // burst of confetti for the rare gold-tier ones. Off unlocks silently (the badge is still recorded and
-    // shows in the Achievements window). On by default; a missing key keeps it on.
+    // "Celebrate new unlocks": when on, unlocking new achievement badges plays the full-screen card reveal
+    // (up to a few cards side by side, plus a "+N more" card for a big batch). Off unlocks silently (the
+    // badges are still recorded and show in the Achievements window). On by default; a missing key keeps it on.
     public bool NotifyOnAchievement { get; set; } = true;
+
+    // "Unlock toast messages": when on, each new unlock also pops a desktop toast (a single summary toast
+    // for a big batch). This is separate from — and on top of — the card reveal, and can get noisy, so it's
+    // off by default; a missing key keeps it off. The card reveal is the primary celebration.
+    public bool AchievementToasts { get; set; }
 
     // Update checking. The version string of an update that has been detected and surfaced to the user
     // (via the "update available" notification, overlay button, tray menu and About highlight). Null

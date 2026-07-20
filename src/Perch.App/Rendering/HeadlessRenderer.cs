@@ -123,6 +123,24 @@ internal static class HeadlessRenderer
         RenderControl(cabinet, Path.Combine(outDir, "achievements_1x.png"), 96);
         RenderControl(cabinet, Path.Combine(outDir, "achievements_1.5x.png"), 144);
 
+        // Achievement unlock reveal, single card: the vignette + coin-flip card (frozen at its settled,
+        // face-up frame) under the "Achievement Unlocked!" heading with the OK / Don't-show-again buttons.
+        var reveal = Windows.AchievementCardWindow.BuildStaticSurface(
+            [new AchievementUnlock("Token Titan", "🏆", "Tokens · Lvl 5", AchievementTier.Gold)], 900, 680);
+        RenderControl(reveal, Path.Combine(outDir, "achievement_reveal_1x.png"), 96);
+        RenderControl(reveal, Path.Combine(outDir, "achievement_reveal_1.5x.png"), 144);
+
+        // Achievement unlock reveal, batch: four unlocks → three cards side by side plus a "+1 more" card.
+        var revealBatch = Windows.AchievementCardWindow.BuildStaticSurface(
+        [
+            new AchievementUnlock("Token Titan", "🏆", "Tokens · Lvl 5", AchievementTier.Gold),
+            new AchievementUnlock("Tool Master", "🛠", "Tools · Lvl 4", AchievementTier.Gold),
+            new AchievementUnlock("Night Owl", "🦉", "Sessions · Lvl 3", AchievementTier.Silver),
+            new AchievementUnlock("Streak Keeper", "🔥", "Streak · Lvl 2", AchievementTier.Bronze),
+        ], 1280, 680);
+        RenderControl(revealBatch, Path.Combine(outDir, "achievement_reveal_batch_1x.png"), 96);
+        RenderControl(revealBatch, Path.Combine(outDir, "achievement_reveal_batch_1.5x.png"), 144);
+
         // Perch Wrapped poster: a shareable Spotify-Wrapped-style card built from the sample report.
         // Rendered with the bundled bird icon so the header/footer icon paths are exercised too.
         IImage? brandIcon = null;

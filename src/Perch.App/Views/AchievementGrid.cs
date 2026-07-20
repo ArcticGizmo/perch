@@ -47,6 +47,40 @@ internal static class AchievementGrid
     {
         if (badges.Count == 0) return y;
 
+        var g = Compute(badges, innerW, targetTileW, emojiSize, showDescription);
+        for (int i = 0; i < g.Ordered.Count; i++)
+        {
+            if (ctx != null) DrawTile(ctx, g.Ordered[i], TileRect(g, x, y, i), emojiSize,
+                g.EmojiH, g.NameH, g.CatH, g.DescLineH, showDescription);
+        }
+
+        int rows = (g.Ordered.Count + g.Cols - 1) / g.Cols;
+        return y + rows * g.TileH + (rows - 1) * TileGap;
+    }
+
+    /// <summary>Maps a point (in the same space <see cref="Draw"/> was given <paramref name="x"/>/
+    /// <paramref name="y"/>) to the badge whose tile it lands on, or null. Uses the exact layout
+    /// <see cref="Draw"/> does, so a click can never target a tile other than the one drawn.</summary>
+    public static Achievement? HitTest(IReadOnlyList<Achievement> badges, Point p,
+        double x, double y, double innerW, double targetTileW, double emojiSize, bool showDescription)
+    {
+        if (badges.Count == 0) return null;
+        var g = Compute(badges, innerW, targetTileW, emojiSize, showDescription);
+        for (int i = 0; i < g.Ordered.Count; i++)
+            if (TileRect(g, x, y, i).Contains(p)) return g.Ordered[i];
+        return null;
+    }
+
+    // The layout both Draw and HitTest share: the ordered badges, the column count/tile size, and the
+    // measured text heights that set a tile's (uniform) height. Kept in one place so paint and hit-test
+    // can never disagree about where a tile is.
+    private readonly record struct GridLayout(
+        IReadOnlyList<Achievement> Ordered, int Cols, double TileW, double TileH,
+        double EmojiH, double NameH, double CatH, double DescLineH);
+
+    private static GridLayout Compute(IReadOnlyList<Achievement> badges, double innerW,
+        double targetTileW, double emojiSize, bool showDescription)
+    {
         // Earned first, shiniest tier first, then stable by name — so the wall leads with wins.
         var ordered = badges
             .OrderByDescending(b => b.Earned)
@@ -67,15 +101,13 @@ internal static class AchievementGrid
         double tileH = TilePadV + emojiH + IconGap + nameH + 2 + catH + (showDescription ? IconGap + descH : 0)
                      + IconGap + BarH + TilePadV;
 
-        for (int i = 0; i < ordered.Count; i++)
-        {
-            int col = i % cols, row = i / cols;
-            var r = new Rect(x + col * (tileW + TileGap), y + row * (tileH + TileGap), tileW, tileH);
-            if (ctx != null) DrawTile(ctx, ordered[i], r, emojiSize, emojiH, nameH, catH, descLineH, showDescription);
-        }
+        return new GridLayout(ordered, cols, tileW, tileH, emojiH, nameH, catH, descLineH);
+    }
 
-        int rows = (ordered.Count + cols - 1) / cols;
-        return y + rows * tileH + (rows - 1) * TileGap;
+    private static Rect TileRect(GridLayout g, double x, double y, int i)
+    {
+        int col = i % g.Cols, row = i / g.Cols;
+        return new Rect(x + col * (g.TileW + TileGap), y + row * (g.TileH + TileGap), g.TileW, g.TileH);
     }
 
     private static void DrawTile(DrawingContext ctx, Achievement b, Rect r, double emojiSize,

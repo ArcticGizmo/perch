@@ -39,6 +39,10 @@ internal sealed class SettingsHooks
 #if DEBUG
     /// <summary>Push a sample outage onto the overlay so the status footer can be illustrated (debug only).</summary>
     public Action? TestServiceStatus;
+
+    /// <summary>Fire a batch of 4 fake achievement unlocks through the real announce path, to test the
+    /// post-update / first-run "several at once" behaviour (debug only).</summary>
+    public Action? TestAchievementBatch;
 #endif
 
     /// <summary>Reconfigure the system/per-session/subprocess metrics sampler.</summary>
@@ -852,6 +856,13 @@ internal sealed class SettingsWindow : Window
     }
 
     // ── Achievements ─────────────────────────────────────────────────────────────────
+    private PerchToggle? _celebrateToggle;
+
+    /// <summary>Re-reads the "Celebrate new unlocks" setting into its toggle without firing the change
+    /// handler — so the switch reflects it when it's turned off elsewhere (the reveal's "Don't show again"
+    /// button) while this window is open.</summary>
+    public void SyncAchievementCelebration() => _celebrateToggle?.SetCheckedSilent(_settings.NotifyOnAchievement);
+
     private void BuildAchievementsPage(StackPanel page)
     {
         page.Children.Add(SettingsUi.SectionTitle("Achievements"));
@@ -868,12 +879,31 @@ internal sealed class SettingsWindow : Window
 
         page.Children.Add(SettingsUi.Separator());
 
-        page.Children.Add(SettingsUi.TitleRow("Celebrate new unlocks",
-            SaveToggle(_settings.NotifyOnAchievement, v => _settings.NotifyOnAchievement = v)));
+        _celebrateToggle = SaveToggle(_settings.NotifyOnAchievement, v => _settings.NotifyOnAchievement = v);
+        page.Children.Add(SettingsUi.TitleRow("Celebrate new unlocks", _celebrateToggle));
         page.Children.Add(SettingsUi.BodyText(
-            "Pop a notification when you unlock a new achievement — with a burst of confetti for the rare " +
-            "gold-tier ones. Turn this off to unlock silently; your trophies still appear in the Achievements " +
-            "window."));
+            "Play a full-screen card reveal when you cross a rare gold-tier achievement — up to three cards " +
+            "side by side, plus a \"+N more\" card if a batch unlocked several at once. Turn this off to " +
+            "unlock silently; your trophies still appear in the Achievements window."));
+
+        page.Children.Add(SettingsUi.Separator());
+
+        page.Children.Add(SettingsUi.TitleRow("Unlock toast messages",
+            SaveToggle(_settings.AchievementToasts, v => _settings.AchievementToasts = v)));
+        page.Children.Add(SettingsUi.BodyText(
+            "Also pop a desktop toast for each unlock (a single summary for a big batch). This is on top of " +
+            "the card reveal and can get noisy, so it's off by default."));
+
+#if DEBUG
+        page.Children.Add(SettingsUi.Separator());
+        var batchRow = SettingsUi.ButtonRow();
+        var batchBtn = SettingsUi.FlatButton("Simulate 4 unlocks at once");
+        batchBtn.Click += (_, _) => _hooks.TestAchievementBatch?.Invoke();
+        batchRow.Children.Add(batchBtn);
+        page.Children.Add(batchRow);
+        page.Children.Add(SettingsUi.BodyText(
+            "(debug) Play the reveal for a batch of 4 fake unlocks — three cards plus a \"+1 more\" card."));
+#endif
     }
 
     private Control BuildIdleStepper()

@@ -275,6 +275,7 @@ public partial class App : Application
         _historyWindow?.Close();
         _statsWindow?.Close();
         _achievementsWindow?.Close();
+        _achievementCard?.Close();
         _flightWindow?.Close();
         _qrWindow?.Close();
         _switcher?.Close();
@@ -410,24 +411,33 @@ public partial class App : Application
             _achievementCheckInFlight = false;
             if (!t.IsCompletedSuccessfully || t.Result.Count == 0)
                 return;
-            // Muted → the levels are already recorded (and show in the Achievements window); just don't
-            // interrupt. Otherwise toast each unlock, and set off confetti for a rare gold-tier one.
-            if (!settings.NotifyOnAchievement)
-                return;
-            var unlocks = t.Result;
-            if (_notifications is { } n)
-            {
-                if (unlocks.Count > AchievementToastMax)
-                    // A big batch (first run / migration / long-away return) — one summary, not a wall.
-                    n.ShowInfo("🏆 Achievements unlocked",
-                        $"You've earned {unlocks.Count} achievements — open Achievements to see them.", ToastLevel.Info);
-                else
-                    foreach (var u in unlocks)
-                        n.ShowInfo("🏆 Achievement unlocked", $"{u.Emoji} {u.Name} — {u.Detail}", ToastLevel.Info);
-            }
-            if (unlocks.Any(u => u.Tier == AchievementTier.Gold))
-                LaunchConfetti();
+            PresentAchievementUnlocks(t.Result);
         }));
+    }
+
+    // Announces a batch of freshly-crossed rungs through two independent channels, each with its own gate:
+    // optional desktop toasts (off by default — noisy; a summary for a big batch, else one each), and the
+    // full-screen card reveal (the primary celebration). When both are off the batch unlocks silently — the
+    // levels are still recorded and show in the Achievements window.
+    private void PresentAchievementUnlocks(IReadOnlyList<AchievementUnlock> unlocks)
+    {
+        if (unlocks.Count == 0 || _appSettings is not { } settings) return;
+
+        if (settings.AchievementToasts && _notifications is { } n)
+        {
+            if (unlocks.Count > AchievementToastMax)
+                n.ShowInfo("🏆 Achievements unlocked",
+                    $"You've earned {unlocks.Count} achievements — open Achievements to see them.", ToastLevel.Info);
+            else
+                foreach (var u in unlocks)
+                    n.ShowInfo("🏆 Achievement unlocked", $"{u.Emoji} {u.Name} — {u.Detail}", ToastLevel.Info);
+        }
+
+        // The reveal stays reserved for a notable batch — one that crossed a rare gold-tier rung — so a lone
+        // bronze unlock mid-work won't throw up a full-screen card. It shows the whole batch (shiniest first,
+        // up to a few cards) with the rest folded into a "+N more" card.
+        if (settings.NotifyOnAchievement && unlocks.Any(u => u.Tier == AchievementTier.Gold))
+            ShowAchievementCards(unlocks);
     }
 
     // A session blocked awaiting input: flash the overlay and fire the "waiting for input" notification.
@@ -452,6 +462,34 @@ public partial class App : Application
         var screen = _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
         if (screen is null) return;
         (_confetti ??= new ConfettiWindow()).Launch(screen);
+    }
+
+    // Reveals the achievement card(s) — a vignette + coin-flip reveal in the middle of the overlay's
+    // screen. "Don't show again" turns off "Celebrate new unlocks" (NotifyOnAchievement) — the same
+    // setting the toggle on the Achievements settings page drives — so it never fires again until
+    // re-enabled there. Reuses one live window across batches.
+    private AchievementCardWindow? _achievementCard;
+    private void ShowAchievementCards(IReadOnlyList<AchievementUnlock> unlocks)
+    {
+        if (_overlay is null || unlocks.Count == 0) return;
+        var screen = _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
+        if (screen is null) return;
+
+        if (_achievementCard is { IsVisible: true } live)
+        {
+            live.Enqueue(unlocks);   // a reveal's still up — add these to its queue
+            return;
+        }
+        _achievementCard = new AchievementCardWindow();
+        _achievementCard.DoNotShowAgain += () =>
+        {
+            if (_appSettings is not { } s) return;
+            s.NotifyOnAchievement = false;
+            s.Save();
+            _settings?.SyncAchievementCelebration();   // keep an open settings window's toggle in step
+        };
+        _achievementCard.Closed += (_, _) => _achievementCard = null;
+        _achievementCard.Present(unlocks, screen);
     }
 
     // The overlay was dragged to a (possibly different) monitor — re-home the glow onto its screen.
@@ -513,6 +551,16 @@ public partial class App : Application
             [new StatusIncident("Elevated errors on the Messages API", "major", "investigating",
                 "We are investigating elevated error rates.", "https://status.claude.com")],
             StatusInfo.DefaultPageUrl, DateTime.Now, true, null);
+
+    // Four fake unlocks (a mix of tiers) the Settings "Simulate 4 unlocks" button fires through the real
+    // announce path, to test the post-update / first-run batch case (a single summary toast, no cards).
+    private static IReadOnlyList<AchievementUnlock> SampleAchievementBatch() =>
+    [
+        new("Token Titan", "🏆", "Tokens · Lvl 5", AchievementTier.Gold),
+        new("Night Owl", "🦉", "Sessions · Lvl 3", AchievementTier.Silver),
+        new("Streak Keeper", "🔥", "Streak · Lvl 2", AchievementTier.Bronze),
+        new("Tool Master", "🛠", "Tools · Lvl 4", AchievementTier.Gold),
+    ];
 #endif
 
     // ── Tray / overlay window openers (single reused instances via WindowHost) ─
@@ -536,7 +584,14 @@ public partial class App : Application
 
     private void OpenAchievements() =>
         _achievementsWindow = WindowHost.ShowOrFocus(_achievementsWindow,
-            () => new AchievementsWindow(_appSettings ?? AppSettings.Load()), () => _achievementsWindow = null);
+            () =>
+            {
+                var w = new AchievementsWindow(_appSettings ?? AppSettings.Load());
+#if DEBUG
+                w.PreviewReveal = u => ShowAchievementCards([u]);   // click a badge to test the reveal
+#endif
+                return w;
+            }, () => _achievementsWindow = null);
 
     private void OpenFlightPath() =>
         _flightWindow = WindowHost.ShowOrFocus(_flightWindow, () => new FlightPathWindow(), () => _flightWindow = null);
@@ -779,6 +834,7 @@ public partial class App : Application
             ServiceStatusIntervalChanged = () => _statusHost?.SetInterval(settings.ServiceStatusIntervalMinutes),
 #if DEBUG
             TestServiceStatus = () => _overlay?.Canvas.UpdateStatus(SampleOutage()),
+            TestAchievementBatch = () => ShowAchievementCards(SampleAchievementBatch()),
 #endif
             MetricsChanged = () => _metricsHost?.Configure(
                 settings.ShowSystemMetrics, settings.ShowSessionMetrics, settings.IncludeSubprocessMetrics),

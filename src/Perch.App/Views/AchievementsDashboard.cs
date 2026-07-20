@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
@@ -21,11 +22,15 @@ internal sealed class AchievementsDashboard : Control
     private static readonly IBrush MutedBrush  = new SolidColorBrush(Palette.Muted);
     private static readonly IBrush AccentBrush = new SolidColorBrush(Palette.Accent);
 
-    private const double H1Size = 20, BodySize = 13, Pad = 22;
+    private const double H1Size = 20, BodySize = 13, Pad = 22, HeaderH = 58;
 
     private IReadOnlyList<Achievement> _badges = [];
     private string? _subtitle;
     private bool _loading = true;
+
+    /// <summary>Raised when a badge tile is clicked, with the badge under the pointer. Only wired up by the
+    /// host in debug builds (to preview the unlock reveal); a no-op otherwise.</summary>
+    public event Action<Achievement>? BadgeActivated;
 
     public void SetLoading()
     {
@@ -67,7 +72,7 @@ internal sealed class AchievementsDashboard : Control
         }
         if (_subtitle is { Length: > 0 } sub)
             Text(ctx, sub, BodySize, MutedBrush, x + 4, y + 28);
-        y += 58;
+        y += HeaderH;
 
         if (_loading)
         {
@@ -82,6 +87,16 @@ internal sealed class AchievementsDashboard : Control
 
         y = AchievementGrid.Draw(ctx, _badges, x, y, innerW, targetTileW: 200, emojiSize: 30, showDescription: true);
         return y + Pad;
+    }
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e);
+        if (BadgeActivated is null || _loading || _badges.Count == 0) return;
+        // Same geometry Draw uses: grid starts a header's-height below the title, inset by the padding.
+        var hit = AchievementGrid.HitTest(_badges, e.GetPosition(this),
+            Pad, Pad + HeaderH, Bounds.Width - Pad * 2, targetTileW: 200, emojiSize: 30, showDescription: true);
+        if (hit is not null) BadgeActivated(hit);
     }
 
     private static void Text(DrawingContext? ctx, string s, double size, IBrush brush, double x, double y,
