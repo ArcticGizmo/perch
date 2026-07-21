@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.14] - 2026-07-21
+
+- New **Replay mode**: record a Claude Code session and scrub through it in the real Perch (demos, bug repros).
+- Capture recordings from Settings → Export, redacted by default (text out, shape in).
+- Play back with `perch replay <file>` — a transport window with play/pause, speed, and a scrub timeline.
+- The timeline plots prompts, tool calls, sub-agents and interrupts as hover-able markers you can jump between.
+- Replays wear a light-blue "Perch - Replay" badge and leave your live sessions well alone.
+
+---
+
 ## [v0.2.13] - 2026-07-21
 
 - Fixed the dense strip eating clicks where "Hide inactive members" had removed rows (invisible, but still grabby).
