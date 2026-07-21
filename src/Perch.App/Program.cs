@@ -38,6 +38,15 @@ internal static class Program
         if (args.Length > 0 && string.Equals(args[0], "handle", StringComparison.OrdinalIgnoreCase))
             return 0;
 
+        // `perch replay <recording>` drives the real app through a recording. Prepare it here — at the
+        // very top, before the Velopack/mutex work — because it must repoint CLAUDE_CONFIG_DIR at a
+        // sandbox and install the virtual clock + probe before ClaudePaths is ever read.
+        bool isReplay = args.Length > 0 && string.Equals(args[0], "replay", StringComparison.OrdinalIgnoreCase);
+        if (isReplay)
+            AttachParentConsole(); // so a "not a readable recording" error is visible before the GUI boots
+        if (isReplay && !Services.Replay.ReplayBootstrap.Prepare(args.Length > 1 ? args[1] : null))
+            return 1;
+
         AutoStarted = args.Any(a => string.Equals(a, "--autostarted", StringComparison.OrdinalIgnoreCase));
 
         // Velopack install/update/uninstall lifecycle. The fast callbacks keep the per-user PATH entry
@@ -64,7 +73,10 @@ internal static class Program
             .OnFirstRun(_ => IsFirstRun = true)
             .Run();
 
-        _instanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out bool createdNew);
+        // A replay instance gets its own mutex so it runs alongside a live tray instead of no-op'ing
+        // against it — you can watch a recording play while your real sessions keep running.
+        var mutexName = SingleInstanceMutexName + (isReplay ? "_Replay" : "");
+        _instanceMutex = new Mutex(initiallyOwned: true, mutexName, out bool createdNew);
         if (!createdNew)
             return 0; // another Avalonia tray instance already owns the mutex
 
@@ -73,6 +85,34 @@ internal static class Program
         GC.KeepAlive(_instanceMutex);
         return 0;
     }
+
+    // Attaches this WinExe to the launching terminal's console (Windows only) and reopens the standard
+    // streams onto it, so `perch <cli-subcommand>` output is actually visible. A GUI-subsystem process
+    // isn't wired to an interactive console for stdio (only when its output is redirected to a pipe/file),
+    // which is why the CLI subcommands looked silent. A no-op off Windows or when there's no parent
+    // console (e.g. double-clicked), where output simply goes nowhere as before.
+    private static void AttachParentConsole()
+    {
+#if WINDOWS
+        const int ATTACH_PARENT_PROCESS = -1;
+        if (!NativeConsole.AttachConsole(ATTACH_PARENT_PROCESS))
+            return;
+        try
+        {
+            Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
+            Console.SetError(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+        }
+        catch { /* best-effort console reopen */ }
+#endif
+    }
+
+#if WINDOWS
+    private static class NativeConsole
+    {
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool AttachConsole(int dwProcessId);
+    }
+#endif
 
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>()

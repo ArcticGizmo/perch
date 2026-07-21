@@ -1,5 +1,12 @@
 using Perch.Data;
 using System.Runtime.CompilerServices;
+using Xunit;
+
+// The replay Clock seam is an ambient static (Clock.SetProvider), and ClaudeSession / SubAgentReader /
+// SessionMonitor now read it. A test that swaps the provider would race any parallel test relying on
+// the real clock (e.g. SubAgentReaderTests stamps fixtures against DateTime.UtcNow). The suite runs in
+// well under a second, so serialising the whole assembly is the simplest way to keep the swap safe.
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
 
 namespace Perch.Tests;
 

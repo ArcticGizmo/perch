@@ -34,6 +34,11 @@ public partial class App : Application
     private AppSettings? _appSettings;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
 
+    // Debug-only replay transport, present only under `perch replay <recording>`. It advances the scrub
+    // position, projects the sandbox, and reconciles the monitor. Null in a normal launch.
+    private Services.Replay.ReplayController? _replayController;
+    private ReplayControllerWindow? _replayWindow;
+
     // Notifications: the notifier (real Windows Action Center toasts, or the owner-drawn fallback off
     // Windows) + the toolkit-neutral dispatcher over it, plus the session-lock seam the dispatcher reads
     // for the AFK-lock external override.
@@ -84,6 +89,8 @@ public partial class App : Application
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown; // tray app — outlives its windows
             desktop.ShutdownRequested += (_, _) =>
             {
+                _replayController?.Dispose();
+                _replayWindow?.Close();
                 _monitorHost?.Dispose();
                 _usageHost?.Dispose();
                 _metricsHost?.Dispose();
@@ -91,6 +98,7 @@ public partial class App : Application
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
                 _overlay?.Canvas.DisposeDense();
+                Services.Replay.ReplayBootstrap.Cleanup(); // delete the disposable replay sandbox
             };
 
             SetUpTray(desktop);
@@ -98,6 +106,9 @@ public partial class App : Application
             // Live overlay + the data pipelines that feed it. Every host delivers on the UI thread, so
             // feeding the owner-drawn canvas from their callbacks is UI-thread-safe.
             _overlay = new LiveOverlayWindow();
+            // Under `perch replay`, brand the overlay light-blue "Perch - Replay" (set before first paint)
+            // so it's unmistakably a recording and not live sessions.
+            _overlay.Canvas.ReplayMode = Services.Replay.ReplaySession.IsActive;
             var settings = AppSettings.Load();
             _appSettings = settings;
 
@@ -116,7 +127,8 @@ public partial class App : Application
             // Public Claude service status → the overlay's outage footer (only shown when there's an issue).
             _statusHost = new StatusMonitorHost(_overlay.Canvas.UpdateStatus, settings.ServiceStatusIntervalMinutes);
 
-            // Each scan feeds both the canvas and the metrics sampler (which pids to measure).
+            // Each scan feeds both the canvas and the metrics sampler (which pids to measure). Under
+            // replay the projector doubles as the process-probe so recorded (dead) pids read as alive.
             _monitorHost = new SessionMonitorHost(sessions =>
             {
                 _lastSessions = sessions;
@@ -125,7 +137,7 @@ public partial class App : Application
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
                 UpdateGlow();
                 MaybeHandleAutoClose(sessions.Count);
-            });
+            }, Services.Replay.ReplaySession.Current?.Projector);
 
             // One-shot grace timer: fires AutoCloseGraceMs after the last session ends; if still none by
             // then, an auto-started tray exits. Armed/cancelled from the scan callback above.
@@ -201,6 +213,18 @@ public partial class App : Application
 
             _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: settings.IncludeSubprocessMetrics);
             _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
+
+            // Replay: hand the monitor over to the transport, which advances the scrub position, projects
+            // the sandbox, and forces a rescan. The controller window binds play/pause/scrub/markers to
+            // this engine. It starts paused at the beginning — the user hits Play (or scrubs) when ready.
+            if (Services.Replay.ReplaySession.Current is { } replay)
+            {
+                _replayController = new Services.Replay.ReplayController(
+                    replay.Projector, replay.SceneDurationMs, () => _monitorHost!.Reconcile());
+                _replayWindow = new ReplayControllerWindow(
+                    _replayController, Perch.Data.Replay.MarkerExtractor.Extract(replay.Recording));
+                _replayWindow.Show();
+            }
             CheckAchievements(force: true); // background all-time scan → celebrate anything unlocked while away
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
             if (settings.ShowServiceStatus) _statusHost.Start(); // initial fetch (polls every 2 min thereafter)
@@ -215,25 +239,31 @@ public partial class App : Application
             if (_overlay.Screens is { } screens)
                 screens.Changed += (_, _) => _overlay?.Canvas.OnScreensChanged();
 
-            // Startup + hourly update check (restores a persisted "update available" state first).
-            _updateService.Start();
-
-            // Self-managed hooks: on every launch, copy perch-hook to a stable per-user path and
-            // reconcile our managed block in ~/.claude/settings.json (idempotent; self-corrects after
-            // an update changes the versioned install dir), then migrate any user still on the retired
-            // marketplace plugin so events aren't delivered twice. All off the UI thread, best-effort.
-            System.Threading.Tasks.Task.Run(async () =>
+            // Live-only startup work — skipped entirely under replay, which must never mutate the real
+            // ~/.claude/settings.json, install hooks, register PATH, or nag about updates while it drives
+            // a disposable sandbox.
+            if (!Services.Replay.ReplaySession.IsActive)
             {
-                // macOS has no Velopack install callback (the .app is drag-installed), so keep the
-                // `perch` PATH symlink in sync here instead — but only for a real installed bundle, never a
-                // dev `dotnet run` (which would point ~/.local/bin/perch at a throwaway build dir). On
-                // Windows the equivalent runs from Velopack's install/update fast callbacks (see Program).
-                if (!OperatingSystem.IsWindows() && IsInsideAppBundle())
-                    PlatformServices.PathInstaller.Register();
+                // Startup + hourly update check (restores a persisted "update available" state first).
+                _updateService.Start();
 
-                HookInstaller.Install();
-                await MigrateOffPlugin();
-            });
+                // Self-managed hooks: on every launch, copy perch-hook to a stable per-user path and
+                // reconcile our managed block in ~/.claude/settings.json (idempotent; self-corrects after
+                // an update changes the versioned install dir), then migrate any user still on the retired
+                // marketplace plugin so events aren't delivered twice. All off the UI thread, best-effort.
+                System.Threading.Tasks.Task.Run(async () =>
+                {
+                    // macOS has no Velopack install callback (the .app is drag-installed), so keep the
+                    // `perch` PATH symlink in sync here instead — but only for a real installed bundle, never a
+                    // dev `dotnet run` (which would point ~/.local/bin/perch at a throwaway build dir). On
+                    // Windows the equivalent runs from Velopack's install/update fast callbacks (see Program).
+                    if (!OperatingSystem.IsWindows() && IsInsideAppBundle())
+                        PlatformServices.PathInstaller.Register();
+
+                    HookInstaller.Install();
+                    await MigrateOffPlugin();
+                });
+            }
         }
         base.OnFrameworkInitializationCompleted();
     }

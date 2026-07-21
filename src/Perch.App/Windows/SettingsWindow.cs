@@ -6,10 +6,12 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
 using Perch.Data;
+using Perch.Data.Replay;
 using Perch.Platform;
 
 namespace Perch.Avalonia.Windows;
@@ -82,7 +84,7 @@ internal sealed class SettingsHooks
 /// The first-class settings window (the Avalonia port of the WinForms <c>SettingsForm</c>). A dark
 /// window split into a fixed-width left navigation rail and a scrollable content area; the nav switches
 /// between pages (Getting started, Usage, Indicators, Monitoring, Shortcuts, Session Stats,
-/// Notifications, Quick Links, Experimental, About, Changelog). Reads/writes the shared
+/// Notifications, Quick Links, Experimental, Export, About, Changelog). Reads/writes the shared
 /// <see cref="AppSettings"/> and applies changes live through <see cref="SettingsHooks"/> so the overlay
 /// and monitors stay in sync.
 /// </summary>
@@ -165,6 +167,7 @@ internal sealed class SettingsWindow : Window
         AddPage(nav, "notify",       "Notifications",   BuildNotificationsPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
         AddPage(nav, "experimental", "Experimental",    BuildExperimentalPage);
+        AddPage(nav, "export",       "Export",          BuildExportPage);
         AddPage(nav, "about",        "About",           BuildAboutPage);
         AddPage(nav, "changelog",    "Changelog",       BuildChangelogPage);
 
@@ -219,6 +222,14 @@ internal sealed class SettingsWindow : Window
             item.Background = sel ? Palette.ButtonBgBrush : NavBg;
             item.Foreground = sel ? Palette.TitleBrush : Palette.MutedBrush;
             item.BorderBrush = sel ? Palette.AccentBrush : Brushes.Transparent;
+        }
+
+        // Scan for recordable sessions only when the Export page is first opened — it walks ~/.claude, so
+        // there's no reason to pay for it on every Settings open.
+        if (key == "export" && !_exportLoaded)
+        {
+            _exportLoaded = true;
+            LoadExportSessions();
         }
     }
 
@@ -939,6 +950,160 @@ internal sealed class SettingsWindow : Window
         row.Children.Add(value);
         row.Children.Add(inc);
         return row;
+    }
+
+    // ── Export (replay recordings) ───────────────────────────────────────────────────
+    private ComboBox? _exportCombo;
+    private PerchToggle? _exportRedactToggle;
+    private Button? _exportBtn;
+    private Button? _exportRefreshBtn;
+    private TextBlock? _exportStatus;
+    private bool _exportLoaded;
+    private IReadOnlyList<ReplaySessionInfo> _exportSessions = [];
+
+    private void BuildExportPage(StackPanel page)
+    {
+        page.Children.Add(SettingsUi.SectionTitle("Export a session for replay"));
+        page.Children.Add(SettingsUi.BodyText(
+            "Capture a Claude Code session to a portable .perchreplay recording, then play it back through " +
+            "the real Perch later — a repeatable demo, or a step-by-step repro of a bug, on any machine."));
+
+        page.Children.Add(SettingsUi.Separator());
+
+        page.Children.Add(SettingsUi.FieldCaption("Session"));
+        _exportCombo = SettingsUi.Dropdown(["Scanning…"], 0);
+        _exportCombo.IsEnabled = false;
+        page.Children.Add(_exportCombo);
+
+        var refreshRow = SettingsUi.ButtonRow();
+        _exportRefreshBtn = SettingsUi.FlatButton("Rescan");
+        _exportRefreshBtn.Click += (_, _) => LoadExportSessions();
+        refreshRow.Children.Add(_exportRefreshBtn);
+        page.Children.Add(refreshRow);
+
+        _exportRedactToggle = Toggle(true);
+        page.Children.Add(SettingsUi.TitleRow("Redact content (recommended)", _exportRedactToggle));
+        page.Children.Add(SettingsUi.BodyText(
+            "Scrub message text, tool input/output, file paths, titles and git branch — keeping only the " +
+            "structure, timings, token counts and models replay needs, so the recording is safe to share. " +
+            "Turn this off only for a private local repro you won't share: a raw recording contains your " +
+            "session verbatim."));
+
+        var exportRow = SettingsUi.ButtonRow();
+        exportRow.Margin = new Thickness(0, 8, 0, 4);
+        _exportBtn = SettingsUi.FlatButton("Export…");
+        _exportBtn.IsEnabled = false;
+        _exportBtn.Click += (_, _) => ExportSelected();
+        exportRow.Children.Add(_exportBtn);
+        page.Children.Add(exportRow);
+
+        _exportStatus = SettingsUi.BodyText("");
+        _exportStatus.IsVisible = false;
+        page.Children.Add(_exportStatus);
+
+        page.Children.Add(SettingsUi.Separator());
+
+        page.Children.Add(SettingsUi.SectionTitle("Playing a recording back"));
+        page.Children.Add(SettingsUi.BodyText(
+            "Replay drives the real, unmodified Perch through the recording under a virtual clock. Run it " +
+            "from a terminal:"));
+        page.Children.Add(SettingsUi.CodeBlock("perch replay <path-to-recording>.perchreplay"));
+        page.Children.Add(SettingsUi.BodyText(
+            "A “Perch Replay” controller window opens with play/pause, a speed selector, a scrub bar, and " +
+            "prev/next-marker buttons that jump between prompts, tool calls and sub-agent activity. While " +
+            "replaying, the overlay is branded light-blue “Perch - Replay” so it can't be mistaken for live " +
+            "sessions, and it runs alongside your real Perch without touching it."));
+        page.Children.Add(SettingsUi.BodyText(
+            "The recording is self-contained — copy it to another machine and replay it there; no original " +
+            "session, process, or Claude account is needed."));
+
+        // Session discovery is kicked off lazily the first time this page is shown (see SelectPage).
+    }
+
+    // Discovers recordable sessions off the UI thread (it walks ~/.claude), then repopulates the picker.
+    private void LoadExportSessions()
+    {
+        if (_exportCombo is null) return;
+        _exportRefreshBtn!.IsEnabled = false;
+        _exportBtn!.IsEnabled = false;
+        _exportCombo.ItemsSource = new[] { "Scanning…" };
+        _exportCombo.SelectedIndex = 0;
+        _exportCombo.IsEnabled = false;
+
+        Task.Run(() => RecordingExporter.DiscoverSessions()).ContinueWith(t =>
+        {
+            IReadOnlyList<ReplaySessionInfo> sessions =
+                t.IsCompletedSuccessfully ? t.Result : Array.Empty<ReplaySessionInfo>();
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_exportCombo is null) return; // window closed mid-scan
+                _exportSessions = sessions.Take(50).ToList();
+                _exportRefreshBtn!.IsEnabled = true;
+                if (_exportSessions.Count == 0)
+                {
+                    _exportCombo.ItemsSource = new[] { "No sessions found" };
+                    _exportCombo.SelectedIndex = 0;
+                    _exportCombo.IsEnabled = false;
+                    _exportBtn!.IsEnabled = false;
+                    return;
+                }
+                _exportCombo.ItemsSource = _exportSessions.Select(FormatSession).ToList();
+                _exportCombo.SelectedIndex = 0;
+                _exportCombo.IsEnabled = true;
+                _exportBtn!.IsEnabled = true;
+            });
+        });
+    }
+
+    private static string FormatSession(ReplaySessionInfo s)
+    {
+        var where = string.IsNullOrEmpty(s.Cwd) ? s.SessionId[..Math.Min(8, s.SessionId.Length)] : PathLeaf.Of(s.Cwd);
+        return $"{where}  ·  {s.LastActivityUtc.ToLocalTime():MMM d, HH:mm}  ·  {s.SizeBytes / 1024} KB";
+    }
+
+    // Prompts for a destination, then exports the picked session off the UI thread.
+    private async void ExportSelected()
+    {
+        if (_exportCombo is null || _exportBtn is null) return;
+        int idx = _exportCombo.SelectedIndex;
+        if (idx < 0 || idx >= _exportSessions.Count) return;
+        var session = _exportSessions[idx];
+        bool redact = _exportRedactToggle!.IsChecked;
+
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Export replay recording",
+            SuggestedFileName = session.SessionId + ".perchreplay",
+            DefaultExtension = "perchreplay",
+            FileTypeChoices = [new FilePickerFileType("Perch replay") { Patterns = ["*.perchreplay"] }],
+        });
+        if (file is null) return;
+        var path = file.Path.LocalPath;
+
+        _exportBtn.IsEnabled = false;
+        SetExportStatus("Exporting…");
+        try
+        {
+            await Task.Run(() => RecordingExporter.Export([session], path, redact));
+            SetExportStatus(redact
+                ? $"Exported (redacted) to {path}"
+                : $"Exported RAW to {path} — contains your session verbatim, keep it local.");
+        }
+        catch (Exception ex)
+        {
+            SetExportStatus($"Export failed: {ex.Message}");
+        }
+        finally
+        {
+            _exportBtn.IsEnabled = true;
+        }
+    }
+
+    private void SetExportStatus(string text)
+    {
+        if (_exportStatus is null) return;
+        _exportStatus.Text = text;
+        _exportStatus.IsVisible = true;
     }
 
     // ── Notifications ────────────────────────────────────────────────────────────────

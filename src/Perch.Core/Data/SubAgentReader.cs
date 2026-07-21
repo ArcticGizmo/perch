@@ -91,7 +91,7 @@ internal sealed class SubAgentReader
     // transcript costs a stat, not a parse.
     private IReadOnlyList<SubAgent> ScanBackground(string dir)
     {
-        var nowUtc = DateTime.UtcNow;
+        var nowUtc = Clock.UtcNow;
 
         // Pass 1 — build every *surfaced* agent as a childless node, remembering the tool_use that
         // spawned it (meta.ToolUseId) and the tool_use ids it launched (state.LaunchedIds), the two ends
