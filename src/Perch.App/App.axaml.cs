@@ -106,6 +106,9 @@ public partial class App : Application
             // Live overlay + the data pipelines that feed it. Every host delivers on the UI thread, so
             // feeding the owner-drawn canvas from their callbacks is UI-thread-safe.
             _overlay = new LiveOverlayWindow();
+            // Under `perch replay`, brand the overlay light-blue "Perch - Replay" (set before first paint)
+            // so it's unmistakably a recording and not live sessions.
+            _overlay.Canvas.ReplayMode = Services.Replay.ReplaySession.IsActive;
             var settings = AppSettings.Load();
             _appSettings = settings;
 

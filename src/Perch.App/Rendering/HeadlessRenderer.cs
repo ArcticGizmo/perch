@@ -79,6 +79,13 @@ internal static class HeadlessRenderer
         cycleProbe.HighlightCycledSession(SampleSessions()[1].SessionId);
         RenderControl(cycleProbe, Path.Combine(outDir, "overlay_cycle_1x.png"), 96);
 
+        // Replay branding: the light-blue "Perch - Replay" header label + 2px border shown under
+        // `perch replay`, so a recording can't be mistaken for live sessions.
+        var replayProbe = new OverlayCanvas { ReplayMode = true };
+        replayProbe.Update(SampleSessions());
+        RenderControl(replayProbe, Path.Combine(outDir, "overlay_replay_1x.png"), 96);
+        RenderControl(replayProbe, Path.Combine(outDir, "overlay_replay_1.5x.png"), 144);
+
         // Service-status outage footer: a major-impact reading with one unresolved incident, so the
         // severity-tinted banner + dot + description render at the panel bottom.
         canvas.SetConfettiFinishAvailable(false);

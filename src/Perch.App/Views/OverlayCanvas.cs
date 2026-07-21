@@ -75,6 +75,16 @@ public sealed class OverlayCanvas : Control, IDenseHost
     // when AppProfile.IsDev, so a normal build never pays for it.
     private static readonly IBrush DevPinkBrush   = new SolidColorBrush(Color.FromRgb(244, 114, 182));
     private static readonly IPen   DevBorderPen   = new Pen(DevPinkBrush, 2);
+    // Replay-instance marker: a light-blue brand + "Perch - Replay" header label so a replay is
+    // unmistakable and can't be read as live sessions. Mirrors the dev marker and takes precedence over
+    // it (a replay is always a dev `dotnet run` too). Only used when ReplayMode is set.
+    private static readonly IBrush ReplayBlueBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+    private static readonly IPen   ReplayBorderPen = new Pen(ReplayBlueBrush, 2);
+
+    /// <summary>True when this overlay is driving a replay recording. Swaps the dev/normal branding for
+    /// a light-blue "Perch - Replay" header + border so a replay can't be mistaken for live sessions.
+    /// Set once by <c>App</c> at startup when <c>perch replay</c> is active.</summary>
+    public bool ReplayMode { get; set; }
     // "Jump to next session" landed here: a blue selection wash + left bar that holds then fades, so the
     // hotkey user can see which session they've cycled to. Blue reads as navigation, distinct from the
     // green/orange/yellow status hues.
@@ -811,7 +821,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, Corner); DrawChaseBorder(ctx, pr, AttentionColor); }
             else OverlayDraw.Panel(ctx, pr, BgBrush, BorderPen, Corner);
             _denseCtl.PaintStrip(ctx, width);
-            DrawDevBorder(ctx, width, h);
+            DrawInstanceBorder(ctx, width, h);
         }
         return h;
     }
@@ -899,21 +909,23 @@ public sealed class OverlayCanvas : Control, IDenseHost
             if (showFooter) DrawStatusFooter(ctx, width, height);
             else _footerRect = default;
 
-            DrawDevBorder(ctx, width, height);
+            DrawInstanceBorder(ctx, width, height);
         }
 
         return height;
     }
 
-    // A hot-pink 2px border hugging the panel, drawn only for an isolated dev instance so it can't be
-    // confused with a running installed Perch. Inset a touch so the 2px stroke sits fully inside the
-    // window bounds, and painted last so it rides over the content edges.
-    private static void DrawDevBorder(DrawingContext ctx, double width, double height)
+    // A 2px marker border hugging the panel so an isolated instance can't be confused with a running
+    // installed Perch: light blue under replay (takes precedence), else hot pink for a dev build, else
+    // none. Inset a touch so the stroke sits fully inside the window bounds, and painted last so it rides
+    // over the content edges.
+    private void DrawInstanceBorder(DrawingContext ctx, double width, double height)
     {
-        if (!AppProfile.IsDev) return;
+        var pen = ReplayMode ? ReplayBorderPen : AppProfile.IsDev ? DevBorderPen : null;
+        if (pen == null) return;
         var r = new Rect(1, 1, width - 2, height - 2);
         if (r.Width <= 0 || r.Height <= 0) return;
-        OverlayDraw.Panel(ctx, r, null, DevBorderPen, Corner - 1);
+        OverlayDraw.Panel(ctx, r, null, pen, Corner - 1);
     }
 
     private void DrawHeader(DrawingContext ctx, double width)
@@ -928,9 +940,11 @@ public sealed class OverlayCanvas : Control, IDenseHost
             brandRight = HorizPad + iconSize + 5;
         }
 
-        var label = AppProfile.IsDev
-            ? OverlayDraw.Text("Perch - DEV", 11, DevPinkBrush)
-            : OverlayDraw.Text("Perch", 11, MutedBrush);
+        var label = ReplayMode
+            ? OverlayDraw.Text("Perch - Replay", 11, ReplayBlueBrush)
+            : AppProfile.IsDev
+                ? OverlayDraw.Text("Perch - DEV", 11, DevPinkBrush)
+                : OverlayDraw.Text("Perch", 11, MutedBrush);
         OverlayDraw.TextLeftMid(ctx, label, brandRight, midY);
         brandRight += label.Width;
 
