@@ -35,8 +35,14 @@ internal sealed class ReplayControllerWindow : Window
 
         Title = "Perch Replay";
         Width = 480;
+        MinWidth = 380;
+        // Width is adjustable so the timeline can be stretched for a long recording (the owner-drawn
+        // ReplayTimelineBar fills the window width and repaints at the new size); height is pinned to the
+        // content by clamping Min == Max.
         Height = 196;
-        CanResize = false;
+        MinHeight = 196;
+        MaxHeight = 196;
+        CanResize = true;
         Topmost = true;
         ShowInTaskbar = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
