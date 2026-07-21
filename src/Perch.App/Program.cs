@@ -33,17 +33,6 @@ internal static class Program
         if (args.Length > 0 && args[0] == "render")
             return HeadlessRenderer.RenderAll(args.Length > 1 ? args[1] : ".");
 
-        // `perch export <sessionId> <out.perchreplay> [--no-redact]` captures a session on disk into a
-        // portable replay recording. Runs ahead of the Velopack/mutex work so it never spins up a tray.
-        if (args.Length > 0 && string.Equals(args[0], "export", StringComparison.OrdinalIgnoreCase))
-        {
-            // The Windows head is a WinExe (GUI subsystem) with no console of its own, so Console output
-            // is discarded to an interactive terminal. Attach to the launching terminal's console so the
-            // session list + confirmation are actually visible.
-            AttachParentConsole();
-            return Services.ReplayExportCli.Run(args);
-        }
-
         // A stale older plugin might still invoke `perch handle <event>` — short-circuit to a no-op
         // so it never launches a second tray. (Matches the WinForms entry point.)
         if (args.Length > 0 && string.Equals(args[0], "handle", StringComparison.OrdinalIgnoreCase))

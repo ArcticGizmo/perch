@@ -5,7 +5,8 @@
 > unmodified app** through it under a virtual clock — scrubbable forward and back via the controller
 > window (play/pause, speed, scrub bar, jump-to-marker), "realtime Cypress" for demos and bug repros.
 >   - **Phase 0** — `Clock` ambient + `IProcessProbe`, Must-list sites migrated.
->   - **Phase 1** — exporter + redaction + `perch export <sessionId> <out> [--no-redact]`.
+>   - **Phase 1** — exporter + redaction, surfaced as the Settings **Export** page (session picker +
+>     redaction toggle + save-file picker).
 >   - **Phase 2** — projector + `perch replay <recording>` sandbox bootstrap (forward replay end-to-end).
 >   - **Phase 3** — controller window: transport, scrub, event/marker stepping, over the shared clock.
 >
@@ -205,9 +206,9 @@ Point at sessions **already on disk** and build the recording. No live capture i
   - cwd is replaced with a stable placeholder (e.g. `C:\demo\project-a`); the enc-project-dir is
     recomputed from the placeholder so the tree stays self-consistent.
 
-This lives in `Perch.Core` (pure, testable) with a thin App-head window to pick sessions and toggle
-redaction. A CLI form (`perch export <sessionId> <out.perchreplay> [--redact]`) is worth adding for
-scripted repro capture.
+This lives in `Perch.Core` (pure, testable). The App-head surfaces it as an **Export** page in the
+Settings window (session picker + redaction toggle + save-file picker). An earlier `perch export` CLI
+was removed once the Settings page landed — the GUI is the one entry point.
 
 ---
 
