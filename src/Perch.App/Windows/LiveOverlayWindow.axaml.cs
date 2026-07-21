@@ -69,16 +69,5 @@ public partial class LiveOverlayWindow : Window
             PlatformServices.WindowChrome.MakeToolWindowNoActivate(handle.Handle);
     }
 
-    /// <summary>Re-lifts the overlay to the front of the topmost band without taking focus. "Topmost" only
-    /// places a window in the topmost band; another topmost surface (Chrome/Electron popups, a fullscreen
-    /// app) that comes to the front will bury us, and — being <c>WS_EX_NOACTIVATE</c> — we never re-float
-    /// ourselves the way an activatable window would. The app calls this on a low-frequency timer so the
-    /// overlay stays visible. A no-op <c>SetWindowPos</c> when already frontmost, so it's cheap to poll.</summary>
-    public void ReassertTopmost()
-    {
-        if (TryGetPlatformHandle() is { } handle)
-            PlatformServices.WindowChrome.BringToTopNoActivate(handle.Handle);
-    }
-
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 }

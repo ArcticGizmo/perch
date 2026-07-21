@@ -62,12 +62,6 @@ public partial class App : Application
     private const int AutoCloseGraceMs = 20_000;
     private DispatcherTimer? _autoCloseTimer;
 
-    // Re-asserts the overlay's topmost z-order every few seconds. "Topmost" only puts a window in the
-    // topmost band; another topmost surface (Chrome/Electron popups, a fullscreen app) can come to the
-    // front of that band and bury the overlay, which — being WS_EX_NOACTIVATE — can't re-float itself.
-    // A no-op SetWindowPos when already frontmost, so polling this often is effectively free.
-    private static readonly TimeSpan TopmostReassertInterval = TimeSpan.FromSeconds(5);
-    private DispatcherTimer? _topmostTimer;
     private bool _seenSession;
     private int _lastSessionCount;
     private IReadOnlyList<ClaudeSession> _lastSessions = [];
@@ -96,7 +90,6 @@ public partial class App : Application
                 _statusHost?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
-                _topmostTimer?.Stop();
                 _overlay?.Canvas.DisposeDense();
             };
 
@@ -191,11 +184,6 @@ public partial class App : Application
             ApplyDisplaySettings(settings);
 
             _overlay.Show();
-
-            // Keep the overlay at the front of the topmost band (see field comment) — cheap enough to poll.
-            _topmostTimer = new DispatcherTimer { Interval = TopmostReassertInterval };
-            _topmostTimer.Tick += (_, _) => _overlay?.ReassertTopmost();
-            _topmostTimer.Start();
 
             _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: settings.IncludeSubprocessMetrics);
             _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids

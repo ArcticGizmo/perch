@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.11] - 2026-07-21
+
+- Stopped the overlay hopping to the front every five seconds (it kept landing on its own tooltips).
+
+---
+
 ## [v0.2.10] - 2026-07-20
 
 - Gold unlocks now flip a card out of the screen under a black vignette (confetti has retired).
