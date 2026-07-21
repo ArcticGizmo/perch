@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.13] - 2026-07-21
+
+- Fixed the dense strip eating clicks where "Hide inactive members" had removed rows (invisible, but still grabby).
+
+---
+
 ## [v0.2.12] - 2026-07-21
 
 - Post-update "what's new" window — only the releases since your last version.

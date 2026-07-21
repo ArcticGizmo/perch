@@ -210,6 +210,18 @@ public sealed class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
+    // Re-applies the window footprint after a change that may alter the panel's content height. The floating
+    // window auto-sizes through SizeToContent, so invalidating the measure is enough. The dense strip/popup
+    // is sized manually (its MeasureOverride returns the size the controller placed), so a bare remeasure
+    // repaints the now-shorter content but leaves the window at its old, taller size — an invisible region
+    // that keeps eating clicks where the removed rows used to be. In dense mode we must re-run the geometry
+    // so the window actually shrinks to match. Use this anywhere a toggle/update can change the panel height.
+    private void RemeasurePanel()
+    {
+        if (_denseCtl.IsDense) RelayoutWindow();
+        else { InvalidateMeasure(); InvalidateVisual(); }
+    }
+
     // Height of the full panel (header + optional strips + all session rows), computed as if expanded —
     // the size the dense popup and the floating expanded panel both use. Kept in lockstep with Draw's
     // showRows branch so the measured window height and the painted layout can't drift.
@@ -263,8 +275,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
     {
         if (_usageEnabled == enabled) return;
         _usageEnabled = enabled;
-        InvalidateMeasure();
-        InvalidateVisual();
+        RemeasurePanel();
     }
 
     /// <summary>Show/hide the expected-rate marker on each usage bar.</summary>
@@ -288,8 +299,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
     {
         if (_showSystemMetrics == show) return;
         _showSystemMetrics = show;
-        InvalidateMeasure();
-        InvalidateVisual();
+        RemeasurePanel();
     }
 
     /// <summary>Show/hide the per-row CPU/RAM mini-bars (row height is unchanged; only the glyph cluster).</summary>
@@ -352,8 +362,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
         for (int i = 0; i < links.Count; i++)
             _quickLinkIcons.Add(DecodeIcon(i < iconFiles.Count ? iconFiles[i] : null));
         _hoveredQuickLink = -1;
-        InvalidateMeasure();
-        InvalidateVisual();
+        RemeasurePanel();
     }
 
     /// <summary>Toggles the upside-down quick-link icons. Repaint only — layout is unaffected.</summary>
@@ -447,8 +456,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
     {
         if (_showNoteLine == show) return;
         _showNoteLine = show;
-        InvalidateMeasure();
-        InvalidateVisual();
+        RemeasurePanel();
     }
 
     /// <summary>Show/hide the "waiting on you" timer on awaiting-input rows. Display only — the row still
@@ -558,8 +566,8 @@ public sealed class OverlayCanvas : Control, IDenseHost
     {
         bool before = ShowFooter;
         _status = status;
-        if (ShowFooter != before) InvalidateMeasure();
-        InvalidateVisual();
+        if (ShowFooter != before) RemeasurePanel();
+        else InvalidateVisual();
     }
 
     /// <summary>Show/hide the whole service-status footer feature. Changes the panel height when there's a
@@ -569,8 +577,8 @@ public sealed class OverlayCanvas : Control, IDenseHost
         if (_serviceStatusEnabled == enabled) return;
         bool before = ShowFooter;
         _serviceStatusEnabled = enabled;
-        if (ShowFooter != before) InvalidateMeasure();
-        InvalidateVisual();
+        if (ShowFooter != before) RemeasurePanel();
+        else InvalidateVisual();
     }
 
     /// <summary>Raised when a session row is clicked (sub-agent rows resolve to their parent). The app
@@ -721,8 +729,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             StopAttention();
 
         UpdateTickTimer();
-        InvalidateMeasure();
-        InvalidateVisual();
+        RemeasurePanel();
     }
 
     // A session's row plus its running sub-agent / teammate subtree, walked depth-first in draw order so
