@@ -36,7 +36,13 @@ internal static class Program
         // `perch export <sessionId> <out.perchreplay> [--no-redact]` captures a session on disk into a
         // portable replay recording. Runs ahead of the Velopack/mutex work so it never spins up a tray.
         if (args.Length > 0 && string.Equals(args[0], "export", StringComparison.OrdinalIgnoreCase))
+        {
+            // The Windows head is a WinExe (GUI subsystem) with no console of its own, so Console output
+            // is discarded to an interactive terminal. Attach to the launching terminal's console so the
+            // session list + confirmation are actually visible.
+            AttachParentConsole();
             return Services.ReplayExportCli.Run(args);
+        }
 
         // A stale older plugin might still invoke `perch handle <event>` — short-circuit to a no-op
         // so it never launches a second tray. (Matches the WinForms entry point.)
@@ -47,6 +53,8 @@ internal static class Program
         // very top, before the Velopack/mutex work — because it must repoint CLAUDE_CONFIG_DIR at a
         // sandbox and install the virtual clock + probe before ClaudePaths is ever read.
         bool isReplay = args.Length > 0 && string.Equals(args[0], "replay", StringComparison.OrdinalIgnoreCase);
+        if (isReplay)
+            AttachParentConsole(); // so a "not a readable recording" error is visible before the GUI boots
         if (isReplay && !Services.Replay.ReplayBootstrap.Prepare(args.Length > 1 ? args[1] : null))
             return 1;
 
@@ -88,6 +96,34 @@ internal static class Program
         GC.KeepAlive(_instanceMutex);
         return 0;
     }
+
+    // Attaches this WinExe to the launching terminal's console (Windows only) and reopens the standard
+    // streams onto it, so `perch <cli-subcommand>` output is actually visible. A GUI-subsystem process
+    // isn't wired to an interactive console for stdio (only when its output is redirected to a pipe/file),
+    // which is why the CLI subcommands looked silent. A no-op off Windows or when there's no parent
+    // console (e.g. double-clicked), where output simply goes nowhere as before.
+    private static void AttachParentConsole()
+    {
+#if WINDOWS
+        const int ATTACH_PARENT_PROCESS = -1;
+        if (!NativeConsole.AttachConsole(ATTACH_PARENT_PROCESS))
+            return;
+        try
+        {
+            Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
+            Console.SetError(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+        }
+        catch { /* best-effort console reopen */ }
+#endif
+    }
+
+#if WINDOWS
+    private static class NativeConsole
+    {
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool AttachConsole(int dwProcessId);
+    }
+#endif
 
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>()
