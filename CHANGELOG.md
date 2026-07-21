@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.12] - 2026-07-21
+
+- Post-update "what's new" window — only the releases since your last version.
+- Switch it off in Settings → Changelog, or dismiss it for good from the window.
+
+---
+
 ## [v0.2.11] - 2026-07-21
 
 - Stopped the overlay hopping to the front every five seconds (it kept landing on its own tooltips).

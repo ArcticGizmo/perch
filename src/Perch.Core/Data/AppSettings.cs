@@ -248,6 +248,17 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? PendingUpdateVersion { get; set; }
 
+    // Pop the "what's new" changelog window on the first launch after an update, showing only the entries
+    // newer than LastSeenVersion. On by default; the window's "Don't show changelogs again" button flips
+    // this off. See ChangelogWindow + App.OnFrameworkInitializationCompleted.
+    public bool ShowChangelogOnUpdate { get; set; } = true;
+
+    // The app version that last ran on this machine, stamped every launch. Compared against
+    // AppInfo.Version at startup to detect an update and pick which changelog entries are new. Null on a
+    // fresh install (nothing to show — seeded silently on first run). See the startup changelog check.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LastSeenVersion { get; set; }
+
     // Legacy quick-link switches (pre-configurable links). Kept only so an older settings file can be
     // migrated into QuickLinks on load; nullable to tell "absent" from "false", and cleared once
     // folded in so they're not re-written. See MigrateQuickLinks.

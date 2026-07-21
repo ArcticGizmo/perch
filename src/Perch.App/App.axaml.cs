@@ -100,6 +100,16 @@ public partial class App : Application
             _overlay = new LiveOverlayWindow();
             var settings = AppSettings.Load();
             _appSettings = settings;
+
+            // First launch after an update: grab the changelog entries newer than the version that last
+            // ran here, then stamp the current version so they're only ever shown once. A null last-seen is
+            // a fresh install (or the first run of this feature) — seed it silently, nothing to show.
+            _pendingChangelog = ResolvePendingChangelog(settings);
+            if (settings.LastSeenVersion != AppInfo.Version)
+            {
+                settings.LastSeenVersion = AppInfo.Version;
+                settings.Save();
+            }
             _usageHost = new UsageMonitorHost(_overlay.Canvas.UpdateUsage, PlatformServices.ClaudeCredentials);
             _metricsHost = new MetricsMonitorHost(PlatformServices.SystemMetrics,
                 _overlay.Canvas.UpdateSystemMetrics, _overlay.Canvas.UpdateSessionMetrics);
@@ -185,6 +195,10 @@ public partial class App : Application
 
             _overlay.Show();
 
+            // Once the UI is up, pop the post-update "what's new" window (if this launch detected an update).
+            if (_pendingChangelog is { Count: > 0 } changelog)
+                Dispatcher.UIThread.Post(() => ShowChangelog(changelog), DispatcherPriority.Background);
+
             _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: settings.IncludeSubprocessMetrics);
             _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
             CheckAchievements(force: true); // background all-time scan → celebrate anything unlocked while away
@@ -266,6 +280,7 @@ public partial class App : Application
         _achievementCard?.Close();
         _flightWindow?.Close();
         _qrWindow?.Close();
+        _changelogWindow?.Close();
         _switcher?.Close();
     }
 
@@ -597,6 +612,59 @@ public partial class App : Application
         _qrWindow.Activate();
     }
 
+    // The "what's new" entries captured at startup (newer than the last-run version), or null if this
+    // launch wasn't a post-update one. Shown once, then discarded.
+    private System.Collections.Generic.IReadOnlyList<ChangelogSection>? _pendingChangelog;
+    private ChangelogWindow? _changelogWindow;
+
+    // Picks the changelog sections to surface on this launch: nothing unless the feature is on, we have a
+    // prior version on record, and it differs from the current one — then only the sections in between.
+    private static System.Collections.Generic.IReadOnlyList<ChangelogSection>? ResolvePendingChangelog(AppSettings settings)
+    {
+        if (!settings.ShowChangelogOnUpdate) return null;
+        if (string.IsNullOrWhiteSpace(settings.LastSeenVersion)) return null; // fresh install — nothing to show
+        if (settings.LastSeenVersion == AppInfo.Version) return null;         // same version — no update
+        var markdown = ChangelogMarkdown.LoadEmbedded();
+        if (markdown is null) return null;
+        var sections = ChangelogParser.UnseenSince(markdown, settings.LastSeenVersion, AppInfo.Version);
+        return sections.Count > 0 ? sections : null;
+    }
+
+    private void ShowChangelog(System.Collections.Generic.IReadOnlyList<ChangelogSection> sections)
+    {
+        string subhead = sections.Count == 1
+            ? $"Updated to {sections[0].Display}."
+            : $"Updated to {sections[0].Display} — {sections.Count} releases since {sections[^1].Display}.";
+        DisplayChangelogWindow(subhead, sections);
+    }
+
+    private void DisplayChangelogWindow(string subhead, System.Collections.Generic.IReadOnlyList<ChangelogSection> sections)
+    {
+        _changelogWindow?.Close();
+        _changelogWindow = new ChangelogWindow("What's new in Perch", subhead, sections, onSuppress: () =>
+        {
+            if (_appSettings is { } s) { s.ShowChangelogOnUpdate = false; s.Save(); }
+        });
+        _changelogWindow.Closed += (_, _) => _changelogWindow = null;
+        _changelogWindow.Show();
+        _changelogWindow.Activate();
+    }
+
+#if DEBUG
+    // Debug preview: pop the "what's new" window for any (from, to] version range, exactly as a real
+    // update from `from` to `to` would render it — including the empty case when nothing lies between.
+    private void PreviewChangelogWindow(string fromVersion, string toVersion)
+    {
+        var markdown = ChangelogMarkdown.LoadEmbedded();
+        if (markdown is null) return;
+        var sections = ChangelogParser.UnseenSince(markdown, fromVersion, toVersion);
+        string subhead = sections.Count == 0
+            ? $"Nothing between {fromVersion} and {toVersion}."
+            : $"Preview: {fromVersion} → {toVersion} ({sections.Count} release{(sections.Count == 1 ? "" : "s")}).";
+        DisplayChangelogWindow(subhead, sections);
+    }
+#endif
+
     // "Enable/Disable external notifications" — flips the session's marker file (the same source of truth
     // the plugin's /afk toggles) and rescans so the mail glyph + menu wording refresh. Whether external
     // pushes actually fire on this marker is the Phase-3 notification pipeline's job; the opt-in itself
@@ -823,6 +891,7 @@ public partial class App : Application
 #if DEBUG
             TestServiceStatus = () => _overlay?.Canvas.UpdateStatus(SampleOutage()),
             TestAchievementBatch = () => ShowAchievementCards(SampleAchievementBatch()),
+            PreviewChangelog = PreviewChangelogWindow,
 #endif
             MetricsChanged = () => _metricsHost?.Configure(
                 settings.ShowSystemMetrics, settings.ShowSessionMetrics, settings.IncludeSubprocessMetrics),

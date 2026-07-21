@@ -8,7 +8,8 @@ has always been both.
 > closer than they look.
 
 ## Useful
-
+- Add indicator for next meeting (teams/outlook)
+- Show changelog on version update
 - **Focus / Do-Not-Disturb hours** — a schedule (or one-click toggle) that mutes chimes,
   push, and the attention glow during meetings or after hours, then delivers a quiet
   "3 sessions needed you" summary when you come back.

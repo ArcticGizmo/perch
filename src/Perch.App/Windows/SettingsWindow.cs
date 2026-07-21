@@ -43,6 +43,10 @@ internal sealed class SettingsHooks
     /// <summary>Fire a batch of 4 fake achievement unlocks through the real announce path, to test the
     /// post-update / first-run "several at once" behaviour (debug only).</summary>
     public Action? TestAchievementBatch;
+
+    /// <summary>Pop the post-update "what's new" window for an arbitrary (from, to) version range, to
+    /// preview exactly what an update from one version to another would surface (debug only).</summary>
+    public Action<string, string>? PreviewChangelog;
 #endif
 
     /// <summary>Reconfigure the system/per-session/subprocess metrics sampler.</summary>
@@ -1449,61 +1453,43 @@ internal sealed class SettingsWindow : Window
     // ── Changelog ────────────────────────────────────────────────────────────────
     private void BuildChangelogPage(StackPanel page)
     {
-        string? markdown = LoadEmbeddedChangelog();
+        page.Children.Add(SettingsUi.TitleRow("Show changelog after updates",
+            SaveToggle(_settings.ShowChangelogOnUpdate, v => _settings.ShowChangelogOnUpdate = v)));
+        page.Children.Add(SettingsUi.BodyText(
+            "After Perch updates itself, pop a \"what's new\" window listing only the releases since the " +
+            "version you were last on. On by default; you can also dismiss it for good from the window."));
+        page.Children.Add(SettingsUi.Separator());
+
+#if DEBUG
+        page.Children.Add(SettingsUi.SectionTitle("Preview (debug)"));
+        var fromBox = SettingsUi.ThemedTextBox("v0.2.0");
+        var toBox = SettingsUi.ThemedTextBox("v" + AppInfo.Version);
+        fromBox.Width = 96;
+        toBox.Width = 96;
+        var previewBtn = SettingsUi.FlatButton("Preview window");
+        previewBtn.Click += (_, _) => _hooks.PreviewChangelog?.Invoke(fromBox.Text ?? "", toBox.Text ?? "");
+        var previewRow = SettingsUi.ButtonRow();
+        previewRow.VerticalAlignment = VerticalAlignment.Center;
+        previewRow.Children.Add(SettingsUi.ToggleCaption("From"));
+        previewRow.Children.Add(fromBox);
+        previewRow.Children.Add(SettingsUi.ToggleCaption("to"));
+        previewRow.Children.Add(toBox);
+        previewRow.Children.Add(previewBtn);
+        page.Children.Add(previewRow);
+        page.Children.Add(SettingsUi.BodyText(
+            "Pops the \"what's new\" window for the entries an update from one version to the other would " +
+            "show (exclusive of \"From\", inclusive of \"to\"). (Debug builds only.)"));
+        page.Children.Add(SettingsUi.Separator());
+#endif
+
+        string? markdown = ChangelogMarkdown.LoadEmbedded();
         if (markdown is null)
         {
             page.Children.Add(SettingsUi.BodyText("Changelog not available."));
             return;
         }
 
-        foreach (var rawLine in markdown.Split('\n'))
-        {
-            var line = rawLine.TrimEnd('\r');
-            if (line.StartsWith("## "))
-                page.Children.Add(SettingsUi.SectionTitle(StripInlineMarkdown(line[3..])));
-            else if (line.StartsWith("### "))
-                page.Children.Add(new TextBlock
-                {
-                    Text = StripInlineMarkdown(line[4..]), FontSize = 13, FontWeight = FontWeight.Bold,
-                    Foreground = Palette.FgBrush, Margin = new Thickness(0, 6, 0, 4),
-                });
-            else if (line.StartsWith("# ")) { /* the nav label already says "Changelog" */ }
-            else if (line.StartsWith("- ") || line.StartsWith("* "))
-                page.Children.Add(SettingsUi.BodyText("•  " + StripInlineMarkdown(line[2..])));
-            else if (line == "---")
-                page.Children.Add(SettingsUi.Separator());
-            else if (line.StartsWith("> "))
-                page.Children.Add(new TextBlock
-                {
-                    Text = StripInlineMarkdown(line[2..]), TextWrapping = TextWrapping.Wrap, FontSize = 13,
-                    FontStyle = FontStyle.Italic, Foreground = Palette.MutedBrush, Margin = new Thickness(12, 0, 0, 6),
-                });
-            else if (line.Trim().Length > 0)
-                page.Children.Add(SettingsUi.BodyText(StripInlineMarkdown(line)));
-        }
-    }
-
-    private static string? LoadEmbeddedChangelog()
-    {
-        try
-        {
-            using var s = typeof(SettingsWindow).Assembly.GetManifestResourceStream("Perch.CHANGELOG.md");
-            if (s is null) return null;
-            using var reader = new StreamReader(s);
-            return reader.ReadToEnd();
-        }
-        catch { return null; }
-    }
-
-    private static string StripInlineMarkdown(string text)
-    {
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"\*\*(.*?)\*\*", "$1");
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"__(.*?)__", "$1");
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"\*(.*?)\*", "$1");
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"_(.*?)_", "$1");
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"`([^`]+)`", "$1");
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"\[([^\]]+)\]\([^)]+\)", "$1");
-        return text;
+        ChangelogMarkdown.Render(page, markdown.Split('\n'));
     }
 
     private static void OpenUrl(string url)
