@@ -43,6 +43,13 @@ internal static class Program
         if (args.Length > 0 && string.Equals(args[0], "handle", StringComparison.OrdinalIgnoreCase))
             return 0;
 
+        // `perch replay <recording>` drives the real app through a recording. Prepare it here — at the
+        // very top, before the Velopack/mutex work — because it must repoint CLAUDE_CONFIG_DIR at a
+        // sandbox and install the virtual clock + probe before ClaudePaths is ever read.
+        bool isReplay = args.Length > 0 && string.Equals(args[0], "replay", StringComparison.OrdinalIgnoreCase);
+        if (isReplay && !Services.Replay.ReplayBootstrap.Prepare(args.Length > 1 ? args[1] : null))
+            return 1;
+
         AutoStarted = args.Any(a => string.Equals(a, "--autostarted", StringComparison.OrdinalIgnoreCase));
 
         // Velopack install/update/uninstall lifecycle. The fast callbacks keep the per-user PATH entry
@@ -69,7 +76,10 @@ internal static class Program
             .OnFirstRun(_ => IsFirstRun = true)
             .Run();
 
-        _instanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out bool createdNew);
+        // A replay instance gets its own mutex so it runs alongside a live tray instead of no-op'ing
+        // against it — you can watch a recording play while your real sessions keep running.
+        var mutexName = SingleInstanceMutexName + (isReplay ? "_Replay" : "");
+        _instanceMutex = new Mutex(initiallyOwned: true, mutexName, out bool createdNew);
         if (!createdNew)
             return 0; // another Avalonia tray instance already owns the mutex
 

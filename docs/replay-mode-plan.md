@@ -1,13 +1,16 @@
 # Replay mode — implementation plan
 
-> **Status: in progress (2026-07-21).** Design agreed. **Phase 0 (Clock + IProcessProbe seams) and
-> Phase 1 (exporter + redaction + `perch export` CLI) are implemented and tested;** Phases 2–3
-> (projector/bootstrap, controller window) remain. A debug-only "replay" mode that materialises a
-> synthetic `~/.claude` tree from an exported recording and drives the **real, unmodified app** through
-> it under a virtual clock — scrubbable forward and back, "realtime Cypress" for demos and bug repros.
+> **Status: in progress (2026-07-21).** Design agreed. **Phases 0–2 are implemented and tested:**
+> Phase 0 (Clock + IProcessProbe seams), Phase 1 (exporter + redaction + `perch export` CLI), and
+> Phase 2 (projector + `perch replay` sandbox bootstrap — forward replay drives the real app
+> end-to-end at a fixed speed). **Phase 3 (the controller window) remains.** A debug-only "replay" mode
+> that materialises a synthetic `~/.claude` tree from an exported recording and drives the **real,
+> unmodified app** through it under a virtual clock — scrubbable forward and back, "realtime Cypress"
+> for demos and bug repros.
 >
-> **Deferred within Phase 1:** the App-head session-picker window (the CLI covers scripted capture; the
-> picker is debug UI best built alongside the Phase 3 controller window).
+> **Deferred:** the App-head session-picker window (the CLI covers scripted capture; the picker is debug
+> UI best built alongside the Phase 3 controller window). Forward-delta projection optimisation (Phase 2
+> rebuilds the whole tree each tick — correct, and fine for demos).
 
 Goal: build reusable **reference timelines** from sessions already on disk, bundle them into a portable
 export, and replay them through the actual Perch UI/detection/state-machine at a controllable rate,

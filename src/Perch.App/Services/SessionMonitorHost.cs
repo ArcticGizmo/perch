@@ -16,7 +16,7 @@ internal sealed class SessionMonitorHost : IDisposable
     // event or the deadline timer misses. The deadline timer below is what makes "done" fire on time.
     private static readonly TimeSpan ReconcileInterval = TimeSpan.FromSeconds(30);
 
-    private readonly SessionMonitor _monitor = new();
+    private readonly SessionMonitor _monitor;
     private readonly Action<IReadOnlyList<ClaudeSession>> _onSessions;
 
     // One-shot timer armed to the monitor's next deferred-completion deadline (a busy->idle settle or a
@@ -35,8 +35,12 @@ internal sealed class SessionMonitorHost : IDisposable
     /// <summary>Raised when the plugin asks to open the history viewer on a session (carries its id).</summary>
     public event Action<string>? OpenHistoryRequested;
 
-    public SessionMonitorHost(Action<IReadOnlyList<ClaudeSession>> onSessions)
+    /// <param name="processProbe">How pid liveness is tested. Defaults to the real OS probe; a replay
+    /// passes one backed by the projector so recorded (dead) pids read as alive within their window.</param>
+    public SessionMonitorHost(
+        Action<IReadOnlyList<ClaudeSession>> onSessions, Perch.Platform.IProcessProbe? processProbe = null)
     {
+        _monitor = new SessionMonitor(processProbe);
         _onSessions = onSessions;
         _monitor.SessionsChanged += OnSessionsChanged;
         // These fire from within Scan, which only runs on the UI thread (see ChangeDetected below and
@@ -69,6 +73,11 @@ internal sealed class SessionMonitorHost : IDisposable
         _monitor.Scan();
         _reconcileTimer.Start();
     }
+
+    /// <summary>Forces an immediate rescan on the UI thread. Replay calls this right after each
+    /// projection so scrubbing reflects the new state without waiting out the watcher debounce /
+    /// reconcile cadence.</summary>
+    public void Reconcile() => _monitor.Scan();
 
     /// <summary>Flips a session's external-notify opt-in (writes/deletes its marker file) and rescans so
     /// the overlay's mail glyph + menu wording refresh. Call on the UI thread.</summary>

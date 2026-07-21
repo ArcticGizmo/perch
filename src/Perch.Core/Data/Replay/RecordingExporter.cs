@@ -113,7 +113,13 @@ internal static class RecordingExporter
         if (t0 == null)
             return null; // no timestamped records — nothing to place on the clock
 
-        CaptureSubagents(archive, session, baseEntry, placeholderCwd, redact);
+        // Fold sub-agent activity into the timeline's end so a teammate that finishes after the parent's
+        // last recorded token is never clipped out of the scene (the parent transcript is the master
+        // timeline, but its span doesn't always cover every child's tail).
+        var subsEnd = CaptureSubagents(archive, session, baseEntry, placeholderCwd, redact);
+        if (subsEnd is { } se && (tEnd == null || se > tEnd))
+            tEnd = se;
+
         CaptureSidecarsAndSnapshot(archive, session, baseEntry, placeholderCwd, syntheticPid, redact);
 
         return new ReplayTimeline
@@ -129,18 +135,20 @@ internal static class RecordingExporter
     }
 
     // The per-agent transcripts, meta sidecars, and hook markers under {projectDir}/{sessionId}/subagents/.
-    private static void CaptureSubagents(
+    // Returns the latest timestamp seen across the agent transcripts (null when there are none).
+    private static DateTime? CaptureSubagents(
         ZipArchive archive, ReplaySessionInfo session, string baseEntry, string placeholderCwd, bool redact)
     {
+        DateTime? maxTs = null;
         string subagentsDir;
         try
         {
             subagentsDir = Path.Combine(
                 Path.GetDirectoryName(session.TranscriptPath)!, session.SessionId, "subagents");
             if (!Directory.Exists(subagentsDir))
-                return;
+                return null;
         }
-        catch { return; }
+        catch { return null; }
 
         foreach (var file in Directory.EnumerateFiles(subagentsDir))
         {
@@ -150,7 +158,12 @@ internal static class RecordingExporter
                 var entry = $"{baseEntry}/{ReplayFormat.SubagentsDir}/{name}";
                 var ext = Path.GetExtension(file);
                 if (ext == ".jsonl")
+                {
+                    foreach (var line in TranscriptScan.ReadLines(file))
+                        if (ParseTimestamp(line) is { } ts && (maxTs == null || ts > maxTs))
+                            maxTs = ts;
                     CopyTranscript(archive, file, entry, placeholderCwd, redact);
+                }
                 else if (name.EndsWith(".meta.json", StringComparison.Ordinal))
                     WriteEntry(archive, entry,
                         redact ? TranscriptRedactor.RedactMeta(File.ReadAllText(file), placeholderCwd)
@@ -164,6 +177,7 @@ internal static class RecordingExporter
                 // Skip an agent file that vanished or couldn't be read mid-export.
             }
         }
+        return maxTs;
     }
 
     // The session's .mode / .notify / .note sidecars, plus the final sessions/{pid}.json snapshot if one
