@@ -1,6 +1,5 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -12,9 +11,9 @@ namespace Perch.Avalonia.Windows;
 
 /// <summary>
 /// The replay "transport" — a small always-on-top window that drives the <see cref="ReplayController"/>:
-/// play/pause, a speed selector, a scrub bar over the whole scene, event stepping, and jump-to-marker.
-/// Debug-only by construction: it exists only under <c>perch replay</c>. Standard themed controls (not
-/// owner-drawn) — it's a developer tool, so plumbing beats pixels.
+/// play/pause, a speed selector, an owner-drawn <see cref="ReplayTimelineBar"/> that plots the markers,
+/// event stepping, and jump-to-marker. Debug-only by construction: it exists only under
+/// <c>perch replay</c>.
 /// </summary>
 internal sealed class ReplayControllerWindow : Window
 {
@@ -24,10 +23,10 @@ internal sealed class ReplayControllerWindow : Window
 
     private readonly ReplayController _controller;
     private readonly IReadOnlyList<ReplayMarker> _markers;
-    private readonly Slider _scrub;
+    private readonly ReplayTimelineBar _timeline;
     private readonly TextBlock _position;
+    private readonly TextBlock _hint;
     private readonly Button _playPause;
-    private bool _syncing; // suppresses the scrub→seek feedback loop during programmatic updates
 
     public ReplayControllerWindow(ReplayController controller, IReadOnlyList<ReplayMarker> markers)
     {
@@ -36,7 +35,7 @@ internal sealed class ReplayControllerWindow : Window
 
         Title = "Perch Replay";
         Width = 480;
-        Height = 190;
+        Height = 196;
         CanResize = false;
         Topmost = true;
         ShowInTaskbar = true;
@@ -49,12 +48,11 @@ internal sealed class ReplayControllerWindow : Window
             Foreground = Palette.TitleBrush, VerticalAlignment = VerticalAlignment.Center,
         };
 
-        _scrub = new Slider
-        {
-            Minimum = 0, Maximum = Math.Max(1, _controller.DurationMs), SmallChange = 1000, LargeChange = 5000,
-            Foreground = Palette.AccentBrush,
-        };
-        _scrub.ValueChanged += OnScrubChanged;
+        _timeline = new ReplayTimelineBar();
+        _timeline.SetDuration(_controller.DurationMs);
+        _timeline.SetMarkers(_markers);
+        _timeline.Seeked += t => { _controller.Seek(t); RefreshPlayLabel(); };
+        _timeline.Hovered += OnMarkerHover;
 
         _playPause = SettingsUi.FlatButton("Pause");
         _playPause.Width = 82;
@@ -77,7 +75,7 @@ internal sealed class ReplayControllerWindow : Window
         var transport = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 8,
-            HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 12, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 10, 0, 0),
         };
         transport.Children.Add(stepBack);
         transport.Children.Add(_playPause);
@@ -89,19 +87,21 @@ internal sealed class ReplayControllerWindow : Window
         });
         transport.Children.Add(speed);
 
-        var header = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
-        var hint = new TextBlock
+        // Header: position/duration on the left, and a hint that shows the marker count at rest and the
+        // hovered marker's label + time while the cursor is over a tick.
+        _hint = new TextBlock
         {
-            Text = $"{_markers.Count} markers", Foreground = Palette.MutedBrush, FontSize = 12,
-            VerticalAlignment = VerticalAlignment.Center,
+            Text = MarkerCountText(), Foreground = Palette.MutedBrush, FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right,
         };
-        DockPanel.SetDock(hint, Dock.Right);
-        header.Children.Add(hint);
+        var header = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+        DockPanel.SetDock(_hint, Dock.Right);
+        header.Children.Add(_hint);
         header.Children.Add(_position);
 
         var layout = new StackPanel { Margin = new Thickness(16) };
         layout.Children.Add(header);
-        layout.Children.Add(_scrub);
+        layout.Children.Add(_timeline);
         layout.Children.Add(transport);
         Content = layout;
 
@@ -128,19 +128,26 @@ internal sealed class ReplayControllerWindow : Window
         RefreshPlayLabel();
     }
 
-    private void OnScrubChanged(object? sender, RangeBaseValueChangedEventArgs e)
+    // Reflect the hovered marker in the header hint (label + time), or the marker count when none.
+    private void OnMarkerHover(ReplayMarker? marker)
     {
-        if (_syncing)
-            return; // a programmatic move, not a user drag — don't seek (which would pause playback)
-        _controller.Seek((long)e.NewValue);
-        RefreshPlayLabel();
+        if (marker is { } m)
+        {
+            _hint.Text = $"{m.Label} · {Format(m.ScenePos)}";
+            _hint.Foreground = new SolidColorBrush(ReplayTimelineBar.MarkerColor(m.Kind));
+        }
+        else
+        {
+            _hint.Text = MarkerCountText();
+            _hint.Foreground = Palette.MutedBrush;
+        }
     }
+
+    private string MarkerCountText() => _markers.Count == 1 ? "1 marker" : $"{_markers.Count} markers";
 
     private void UpdateReadout(long pos)
     {
-        _syncing = true;
-        _scrub.Value = Math.Clamp(pos, 0, _scrub.Maximum);
-        _syncing = false;
+        _timeline.SetPosition(pos);
         _position.Text = $"{Format(pos)} / {Format(_controller.DurationMs)}";
     }
 

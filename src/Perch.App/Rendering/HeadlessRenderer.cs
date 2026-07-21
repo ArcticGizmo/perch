@@ -6,7 +6,9 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Perch.Avalonia.Views;
+using Perch.Avalonia.Windows;
 using Perch.Data;
+using Perch.Data.Replay;
 
 namespace Perch.Avalonia.Rendering;
 
@@ -85,6 +87,15 @@ internal static class HeadlessRenderer
         replayProbe.Update(SampleSessions());
         RenderControl(replayProbe, Path.Combine(outDir, "overlay_replay_1x.png"), 96);
         RenderControl(replayProbe, Path.Combine(outDir, "overlay_replay_1.5x.png"), 144);
+
+        // Replay timeline scrubber: the played track + a marker tick per notable frame (prompt / tool /
+        // sub-agent / interrupt), coloured by kind, with the playhead partway along.
+        var timeline = new ReplayTimelineBar { Width = 448 };
+        timeline.SetDuration(300_000);
+        timeline.SetMarkers(SampleMarkers());
+        timeline.SetPosition(120_000);
+        RenderControl(timeline, Path.Combine(outDir, "replay_timeline_1x.png"), 96);
+        RenderControl(timeline, Path.Combine(outDir, "replay_timeline_1.5x.png"), 144);
 
         // Service-status outage footer: a major-impact reading with one unresolved incident, so the
         // severity-tinted banner + dot + description render at the panel bottom.
@@ -276,6 +287,19 @@ internal static class HeadlessRenderer
             FiveHourResetsAt: now.AddHours(2), SevenDayResetsAt: now.AddDays(4),
             LastUpdated: now, Ok: true, Error: null);
     }
+
+    // A spread of marker kinds across a 5-minute scene, so the timeline shows each tick colour.
+    private static IReadOnlyList<ReplayMarker> SampleMarkers() =>
+    [
+        new(0,       ReplayMarkerKind.Prompt,        "prompt"),
+        new(28_000,  ReplayMarkerKind.ToolUse,       "Bash"),
+        new(45_000,  ReplayMarkerKind.ToolUse,       "Read"),
+        new(90_000,  ReplayMarkerKind.SubagentSpawn, "sub-agent"),
+        new(150_000, ReplayMarkerKind.Interrupt,     "interrupt"),
+        new(210_000, ReplayMarkerKind.Prompt,        "prompt"),
+        new(240_000, ReplayMarkerKind.ToolUse,       "Edit"),
+        new(300_000, ReplayMarkerKind.Prompt,        "prompt"),
+    ];
 
     // A visible outage: major impact with one unresolved incident, so the footer's severity colour,
     // description, and click-menu content are all exercised.
