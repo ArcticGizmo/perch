@@ -97,6 +97,19 @@ public class ProjectorTests : IDisposable
     }
 
     [Fact]
+    public void SessionFile_StaysPresent_AcrossForwardSweep()
+    {
+        // Regression: the projector must overwrite the session file in place, never delete-and-recreate
+        // it. A momentary gap let a watcher-driven scan read zero sessions and collapse the overlay for
+        // good. Assert the file is present after every step of a forward sweep.
+        for (long t = 0; t <= _recording.SceneDurationMs; t += 1000)
+        {
+            _projector.MaterialiseAt(t);
+            Assert.True(File.Exists(SessionFilePath), $"session file missing at T={t}");
+        }
+    }
+
+    [Fact]
     public void Probe_ReportsSyntheticPidAlive_OnceStarted()
     {
         _projector.MaterialiseAt(0);

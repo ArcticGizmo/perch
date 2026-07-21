@@ -23,6 +23,12 @@ internal sealed class Projector : IProcessProbe
     private readonly string _sandboxDir;
     private long _currentT = -1;
 
+    // Full paths written during the current MaterialiseAt pass. Everything the pass didn't (re)write is
+    // stale and gets pruned afterwards. Tracked so files are overwritten IN PLACE rather than
+    // deleted-and-recreated — a delete-then-recreate briefly empties the sessions dir, and a
+    // watcher-triggered scan landing in that gap reads zero sessions and collapses the overlay for good.
+    private readonly HashSet<string> _written = new(StringComparer.OrdinalIgnoreCase);
+
     public Projector(Recording recording, ReplayClock clock, string sandboxDir)
     {
         _recording = recording;
@@ -43,14 +49,19 @@ internal sealed class Projector : IProcessProbe
 
         Directory.CreateDirectory(SessionsDir);
         Directory.CreateDirectory(ProjectsDir);
-        WipeContents(SessionsDir);
-        WipeContents(ProjectsDir);
 
+        _written.Clear();
         foreach (var timeline in _recording.Manifest.Timelines)
         {
             if (Recording.StartScenePos(timeline) <= t)
                 MaterialiseTimeline(timeline, t);
         }
+
+        // Remove only what this position doesn't include (a timeline before its start, sub-agents not yet
+        // spawned, a shrunk transcript on a back-scrub). Everything current was overwritten in place above,
+        // so it's absent from this prune — the sessions dir is never momentarily emptied.
+        PruneExcept(SessionsDir);
+        PruneExcept(ProjectsDir);
     }
 
     /// <summary>Replay liveness: a synthetic pid is "alive" once its timeline's window has begun at the
@@ -175,6 +186,7 @@ internal sealed class Projector : IProcessProbe
         var path = Path.Combine(SessionsDir, $"{timeline.SyntheticPid}.json");
         File.WriteAllText(path, obj.ToJsonString());
         StampMtime(path, lastPos);
+        Track(path);
     }
 
     // .mode / .notify / .note sidecars are ambient (not time-series) — present them verbatim in sessions/.
@@ -185,17 +197,19 @@ internal sealed class Projector : IProcessProbe
             return;
         foreach (var file in Directory.EnumerateFiles(sidecarsDir))
         {
-            try { File.Copy(file, Path.Combine(SessionsDir, Path.GetFileName(file)), overwrite: true); }
+            var dest = Path.Combine(SessionsDir, Path.GetFileName(file));
+            try { File.Copy(file, dest, overwrite: true); Track(dest); }
             catch { }
         }
     }
 
     private void WriteLines(string path, IEnumerable<string> lines, long scenePos)
     {
-        using (var writer = new StreamWriter(path))
+        using (var writer = new StreamWriter(path)) // overwrites in place; no delete → no Deleted event
             foreach (var line in lines)
                 writer.WriteLine(line);
         StampMtime(path, scenePos);
+        Track(path);
     }
 
     private void CopyStamped(string source, string dest, long scenePos)
@@ -204,8 +218,14 @@ internal sealed class Projector : IProcessProbe
         {
             File.Copy(source, dest, overwrite: true);
             StampMtime(dest, scenePos);
+            Track(dest);
         }
         catch { }
+    }
+
+    private void Track(string path)
+    {
+        try { _written.Add(Path.GetFullPath(path)); } catch { }
     }
 
     // The one place the projection and the clock must agree: a materialised file's mtime is its record's
@@ -217,14 +237,19 @@ internal sealed class Projector : IProcessProbe
         catch { }
     }
 
-    private static void WipeContents(string dir)
+    // Deletes every file under dir that this pass didn't (re)write — the stale remnants of a position we
+    // scrubbed away from. Files that are still current were overwritten in place and are in _written, so
+    // they're left untouched (crucially, the live session file is never deleted). Empty dirs left behind
+    // are harmless — the readers tolerate an empty subagents dir.
+    private void PruneExcept(string dir)
     {
         try
         {
-            foreach (var file in Directory.EnumerateFiles(dir))
-                try { File.Delete(file); } catch { }
-            foreach (var sub in Directory.EnumerateDirectories(dir))
-                try { Directory.Delete(sub, recursive: true); } catch { }
+            foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+            {
+                if (!_written.Contains(Path.GetFullPath(file)))
+                    try { File.Delete(file); } catch { }
+            }
         }
         catch { }
     }
