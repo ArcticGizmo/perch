@@ -216,7 +216,7 @@ public partial class App : Application
 
             // Replay: hand the monitor over to the transport, which advances the scrub position, projects
             // the sandbox, and forces a rescan. The controller window binds play/pause/scrub/markers to
-            // this engine; it starts playing so the recording rolls straight away.
+            // this engine. It starts paused at the beginning — the user hits Play (or scrubs) when ready.
             if (Services.Replay.ReplaySession.Current is { } replay)
             {
                 _replayController = new Services.Replay.ReplayController(
@@ -224,7 +224,6 @@ public partial class App : Application
                 _replayWindow = new ReplayControllerWindow(
                     _replayController, Perch.Data.Replay.MarkerExtractor.Extract(replay.Recording));
                 _replayWindow.Show();
-                _replayController.Play();
             }
             CheckAchievements(force: true); // background all-time scan → celebrate anything unlocked while away
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)

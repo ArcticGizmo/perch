@@ -37,12 +37,10 @@ internal sealed class ReplayControllerWindow : Window
         Width = 480;
         MinWidth = 380;
         // Width is adjustable so the timeline can be stretched for a long recording (the owner-drawn
-        // ReplayTimelineBar fills the window width and repaints at the new size); height is pinned to the
-        // content by clamping Min == Max.
-        Height = 196;
-        MinHeight = 196;
-        MaxHeight = 196;
+        // ReplayTimelineBar fills the window width and repaints at the new size). Height auto-fits the
+        // content (SizeToContent) so there's no wasted vertical space, and it can't be dragged out of shape.
         CanResize = true;
+        SizeToContent = SizeToContent.Height;
         Topmost = true;
         ShowInTaskbar = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -113,6 +111,7 @@ internal sealed class ReplayControllerWindow : Window
 
         _controller.PositionChanged += OnPositionChanged;
         UpdateReadout(_controller.PositionMs);
+        RefreshPlayLabel(); // reflect the initial (paused) state on the button
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
