@@ -1,16 +1,19 @@
 # Replay mode — implementation plan
 
-> **Status: in progress (2026-07-21).** Design agreed. **Phases 0–2 are implemented and tested:**
-> Phase 0 (Clock + IProcessProbe seams), Phase 1 (exporter + redaction + `perch export` CLI), and
-> Phase 2 (projector + `perch replay` sandbox bootstrap — forward replay drives the real app
-> end-to-end at a fixed speed). **Phase 3 (the controller window) remains.** A debug-only "replay" mode
-> that materialises a synthetic `~/.claude` tree from an exported recording and drives the **real,
-> unmodified app** through it under a virtual clock — scrubbable forward and back, "realtime Cypress"
-> for demos and bug repros.
+> **Status: implemented (2026-07-21).** **Phases 0–3 are all built and tested.** A debug-only "replay"
+> mode that materialises a synthetic `~/.claude` tree from an exported recording and drives the **real,
+> unmodified app** through it under a virtual clock — scrubbable forward and back via the controller
+> window (play/pause, speed, scrub bar, jump-to-marker), "realtime Cypress" for demos and bug repros.
+>   - **Phase 0** — `Clock` ambient + `IProcessProbe`, Must-list sites migrated.
+>   - **Phase 1** — exporter + redaction + `perch export <sessionId> <out> [--no-redact]`.
+>   - **Phase 2** — projector + `perch replay <recording>` sandbox bootstrap (forward replay end-to-end).
+>   - **Phase 3** — controller window: transport, scrub, event/marker stepping, over the shared clock.
 >
-> **Deferred:** the App-head session-picker window (the CLI covers scripted capture; the picker is debug
-> UI best built alongside the Phase 3 controller window). Forward-delta projection optimisation (Phase 2
-> rebuilds the whole tree each tick — correct, and fine for demos).
+> **Deferred (future):** the App-head session-picker window (the CLI covers scripted capture); authoring
+> multi-timeline scenes with per-timeline `startOffsetMs` (the projector already composes N timelines
+> against one T, but the exporter captures one session per call, so a scene is a manifest-editing task
+> today); forward-delta projection (Phase 2 rebuilds the whole tree each tick — correct, fine for demos);
+> the live recorder (exact status fidelity) and metric-sample replay.
 
 Goal: build reusable **reference timelines** from sessions already on disk, bundle them into a portable
 export, and replay them through the actual Perch UI/detection/state-machine at a controllable rate,

@@ -37,6 +37,7 @@ public partial class App : Application
     // Debug-only replay transport, present only under `perch replay <recording>`. It advances the scrub
     // position, projects the sandbox, and reconciles the monitor. Null in a normal launch.
     private Services.Replay.ReplayController? _replayController;
+    private ReplayControllerWindow? _replayWindow;
 
     // Notifications: the notifier (real Windows Action Center toasts, or the owner-drawn fallback off
     // Windows) + the toolkit-neutral dispatcher over it, plus the session-lock seam the dispatcher reads
@@ -89,6 +90,7 @@ public partial class App : Application
             desktop.ShutdownRequested += (_, _) =>
             {
                 _replayController?.Dispose();
+                _replayWindow?.Close();
                 _monitorHost?.Dispose();
                 _usageHost?.Dispose();
                 _metricsHost?.Dispose();
@@ -210,12 +212,15 @@ public partial class App : Application
             _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
 
             // Replay: hand the monitor over to the transport, which advances the scrub position, projects
-            // the sandbox, and forces a rescan. Playing straightaway gives the fixed-speed forward replay;
-            // the Phase 3 controller window binds its play/pause/scrub to this same engine.
+            // the sandbox, and forces a rescan. The controller window binds play/pause/scrub/markers to
+            // this engine; it starts playing so the recording rolls straight away.
             if (Services.Replay.ReplaySession.Current is { } replay)
             {
                 _replayController = new Services.Replay.ReplayController(
                     replay.Projector, replay.SceneDurationMs, () => _monitorHost!.Reconcile());
+                _replayWindow = new ReplayControllerWindow(
+                    _replayController, Perch.Data.Replay.MarkerExtractor.Extract(replay.Recording));
+                _replayWindow.Show();
                 _replayController.Play();
             }
             CheckAchievements(force: true); // background all-time scan → celebrate anything unlocked while away
