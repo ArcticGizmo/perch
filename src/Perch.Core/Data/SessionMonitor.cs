@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Perch.Data;
+using Perch.Platform;
 
 namespace Perch.Data;
 
@@ -82,6 +83,10 @@ internal sealed class SessionMonitor : IDisposable
     private readonly TranscriptReader _transcripts = new();
     private readonly GitStatsService _gitStats = new();
 
+    // How we decide a session's pid is still alive. Defaults to the real OS probe; replay swaps in one
+    // backed by the projector so recorded (dead) pids read as alive within their active window.
+    private readonly IProcessProbe _processProbe;
+
     // PIDs we have an exit subscription for, keyed by the same string PID used everywhere else.
     private readonly Dictionary<string, Process> _trackedProcesses = new();
 
@@ -116,8 +121,11 @@ internal sealed class SessionMonitor : IDisposable
     /// </summary>
     public DateTime? NextNeedsAttentionDeadline { get; private set; }
 
-    public SessionMonitor()
+    /// <param name="processProbe">How pid liveness is tested. Defaults to the real OS probe; replay
+    /// injects one backed by the recording so dead recorded pids report alive within their window.</param>
+    public SessionMonitor(IProcessProbe? processProbe = null)
     {
+        _processProbe = processProbe ?? SystemProcessProbe.Instance;
         _debounceTimer = new System.Threading.Timer(_ => ChangeDetected?.Invoke());
         // A background git refresh landing with new numbers should repaint the overlay — treat it like
         // any other change trigger. The rescan re-reads the (now-fresh) cache, so it settles at once.
@@ -139,7 +147,7 @@ internal sealed class SessionMonitor : IDisposable
         }
 
         var sessions = new List<ClaudeSession>();
-        var now = DateTime.Now;
+        var now = Clock.Now;
 
         string[] files;
         try
@@ -314,7 +322,7 @@ internal sealed class SessionMonitor : IDisposable
                     : now;
 
             if (!IsProcessRunning(pid))
-                return null;
+                return null; // dead pid — drop the stale session file (replay's probe keeps recorded pids alive)
 
             var prevRaw = _lastRawStatus.TryGetValue(pid, out var p) ? p : null;
             if (rawStatus == "idle" && prevRaw == "busy")
@@ -783,19 +791,8 @@ internal sealed class SessionMonitor : IDisposable
         return rawStatus == "waiting" || !string.IsNullOrWhiteSpace(waitingFor);
     }
 
-    private static bool IsProcessRunning(string pid)
-    {
-        if (!int.TryParse(pid, out var id))
-            return false;
-        try
-        {
-            return !Process.GetProcessById(id).HasExited;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    private bool IsProcessRunning(string pid)
+        => int.TryParse(pid, out var id) && _processProbe.IsAlive(id);
 
     // ----- Event-driven trigger plumbing -------------------------------------------------
 

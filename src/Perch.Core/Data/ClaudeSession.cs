@@ -250,17 +250,17 @@ public record ClaudeSession(
     /// most significant unit ("8s", "3m", "2h"). Null when the session isn't running.
     /// </summary>
     public string? RunningElapsedLabel() =>
-        RunningSince is { } start ? FormatElapsed(DateTime.Now - start) : null;
+        RunningSince is { } start ? FormatElapsed(Clock.Now - start) : null;
 
     /// <summary>How long this session has been blocked awaiting input, as the same compact label
     /// (<see cref="RunningElapsedLabel"/>). Null when the session isn't awaiting input.</summary>
     public string? AwaitingElapsedLabel() =>
-        AwaitingSince is { } start ? FormatElapsed(DateTime.Now - start) : null;
+        AwaitingSince is { } start ? FormatElapsed(Clock.Now - start) : null;
 
     /// <summary>The continuous time this session has been blocked awaiting input, or null when it
     /// isn't. Lets the overlay warm the "waiting on you" timer from yellow toward red as it grows.</summary>
     public TimeSpan? AwaitingElapsed() =>
-        AwaitingSince is { } start ? Max(DateTime.Now - start, TimeSpan.Zero) : null;
+        AwaitingSince is { } start ? Max(Clock.Now - start, TimeSpan.Zero) : null;
 
     // Compact "most significant unit" label ("8s", "3m", "2h"); clamps negatives to zero.
     private static string FormatElapsed(TimeSpan elapsed)
