@@ -538,9 +538,9 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(SettingsUi.TitleRow("Session notes",
             DisplayToggle(_settings.ShowNotes, v => _settings.ShowNotes = v)));
         page.Children.Add(SettingsUi.BodyText(
-            "Shows a pinned note on its own line under a session (add or edit one from a session's " +
-            "right-click menu). With this off the note stays as a small glyph you can hover to read, " +
-            "keeping the row compact. On by default."));
+            "Shows a session's pinned note on its row — a note glyph plus the note text on its own line. " +
+            "Click the glyph (or use the session's right-click menu) to edit. Off by default; the note is " +
+            "still stored and editable from the menu even when hidden."));
     }
 
     private void BuildWaitingTimerSection(StackPanel page)

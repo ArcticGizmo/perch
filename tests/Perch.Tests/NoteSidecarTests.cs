@@ -62,6 +62,29 @@ public class NoteSidecarTests
         }
     }
 
+    // The scratch pad is multi-line: newlines survive the JSON round trip (only outer whitespace is
+    // trimmed), so a pad written over several lines reads back with its line breaks intact.
+    [Fact]
+    public void SetNote_MultiLine_RoundTripsPreservingNewlines()
+    {
+        var sid = "note-test-" + Guid.NewGuid().ToString("N");
+        var path = Path.Combine(ClaudePaths.SessionsDir, sid + ".note");
+        using var monitor = new SessionMonitor();
+        try
+        {
+            const string text = "line one\nline two\n\n- a todo\n- another";
+            monitor.SetNote(sid, text);
+            Assert.Equal(text, SessionMonitor.ReadNote(path));
+
+            var obj = Assert.IsType<JsonObject>(JsonNode.Parse(File.ReadAllText(path)));
+            Assert.Equal(text, (string?)obj["text"]);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
     [Fact]
     public void ReadNote_MissingFile_IsNull()
     {

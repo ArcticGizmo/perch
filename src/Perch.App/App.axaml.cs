@@ -171,6 +171,7 @@ public partial class App : Application
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
             _overlay.Canvas.NoteEditRequested += OnEditNote;
             _overlay.Canvas.NoteClearRequested += sessionId => _monitorHost?.SetNote(sessionId, null);
+            _overlay.Canvas.ScratchPadRequested += OnOpenScratchPad;
             _overlay.DragCompleted += OnOverlayDragCompleted;
 
             // Quick-links strip: launch/focus goes through the platform seams; icons resolve off-thread.
@@ -701,15 +702,33 @@ public partial class App : Application
     // is just this file, so the toggle is wired now.
     private void OnToggleExternalNotify(string sessionId) => _monitorHost?.ToggleExternalNotify(sessionId);
 
-    // "Add note…/Edit note…" — opens the small note editor prefilled from the session's current note, then
-    // writes the result to its .note sidecar (empty clears it). Modal on the overlay so it can take focus,
-    // which the no-activate overlay window can't. Best-effort: a closed overlay mid-flow just no-ops.
+    // "Add note…/Edit note…" — opens the multi-line scratch pad prefilled from the session's current note,
+    // then writes the result to its .note sidecar (empty clears it). The note shows inline on the session's
+    // overlay row. Modal on the overlay so it can take focus, which the no-activate overlay window can't.
+    // Best-effort: a closed overlay mid-flow just no-ops.
     private async void OnEditNote(ClaudeSession session)
     {
         if (_overlay is null) return;
-        var dlg = new NoteDialog(session.DisplayName, session.Note);
+        var dlg = new ScratchPadDialog(session.DisplayName,
+            $"A note pinned to “{session.DisplayName}”. It shows on the session's overlay row and survives " +
+            "a restart. Leave it empty to clear it.", session.Note);
         bool ok = await dlg.ShowDialog<bool>(_overlay);
-        if (ok) _monitorHost?.SetNote(session.SessionId, dlg.NoteText);
+        if (ok) _monitorHost?.SetNote(session.SessionId, dlg.Text);
+    }
+
+    // The global scratch pad — opened from the note button leading the overlay's quick-links row. Multi-line
+    // free text persisted in AppSettings (not tied to any session). Modal, like the per-session editor.
+    private async void OnOpenScratchPad()
+    {
+        if (_overlay is null) return;
+        var settings = _appSettings ??= AppSettings.Load();
+        var dlg = new ScratchPadDialog("Scratch pad",
+            "A global scratch pad — notes, todos, reminders. Kept on this machine and always a click away.",
+            settings.ScratchText);
+        bool ok = await dlg.ShowDialog<bool>(_overlay);
+        if (!ok) return;
+        settings.ScratchText = string.IsNullOrWhiteSpace(dlg.Text) ? null : dlg.Text;
+        settings.Save();
     }
 
     // Applies the enabled links to the overlay strip, resolving their icons off the UI thread (the first

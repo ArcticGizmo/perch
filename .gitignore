@@ -486,3 +486,6 @@ $RECYCLE.BIN/
 
 # worktrees
 .claude/worktrees
+
+captures
+*.perchreplay

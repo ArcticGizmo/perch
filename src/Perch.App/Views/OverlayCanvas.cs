@@ -343,7 +343,14 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private bool _upsideDownQuickLinks;
     private int _hoveredQuickLink = -1;
 
-    private bool HasQuickLinksRow => _quickLinks.Count > 0;
+    // The global scratch-pad note button that leads the quick-links row: its hit-rect (captured at paint
+    // time) and hover state. Clicking it opens the scratch pad (see RouteClick / ScratchPadRequested).
+    private Rect _noteButtonRect;
+    private bool _hoveredNoteButton;
+
+    // The quick-links row is always shown with the panel now — it hosts the note button even when the user
+    // has no quick links of their own.
+    private bool HasQuickLinksRow => true;
     private double QuickLinksTop => UsageStripTop + (_usageEnabled ? UsageStripHeight : 0);
 
     // Top of the first session row: below the header and whichever strips are showing. Mirrors the
@@ -630,6 +637,10 @@ public sealed class OverlayCanvas : Control, IDenseHost
     /// to delete its <c>.note</c> sidecar.</summary>
     public event Action<string>? NoteClearRequested;
 
+    /// <summary>Raised when the user clicks the note button at the start of the quick-links row. The app
+    /// opens the global scratch pad (prefilled from <c>AppSettings.ScratchText</c>) and persists it.</summary>
+    public event Action? ScratchPadRequested;
+
     /// <summary>Raised when the user toggles the whole-machine metrics strip from the right-click menu;
     /// carries the desired new enabled state for the app to persist and apply.</summary>
     public event Action<bool>? SystemMetricsToggleRequested;
@@ -882,6 +893,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             if (showSys) DrawSystemMetricsStrip(ctx, width);
             if (showUsage) DrawUsageBars(ctx, width);
             if (showQuickLinks) DrawQuickLinksRow(ctx, width);
+            else _noteButtonRect = default; // no row painted → drop the stale note-button hit-rect
 
             if (showRows)
             {
@@ -1120,13 +1132,23 @@ public sealed class OverlayCanvas : Control, IDenseHost
         double rowTop = QuickLinksTop;
         double centerY = rowTop + QuickLinksRowHeight / 2;
 
+        // The note button leads the row (slot 0); the user's quick links follow (slots 1..count).
         int count = _quickLinks.Count;
-        double totalW = count * IconSize + (count - 1) * IconGap;
+        int slots = count + 1;
+        double totalW = slots * IconSize + (slots - 1) * IconGap;
         double startX = (width - totalW) / 2;
+
+        double noteX = startX;
+        double iconY0 = centerY - IconSize / 2;
+        if (_hoveredNoteButton)
+            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+                new Rect(noteX - HitPad, iconY0 - HitPad, IconSize + HitPad * 2, IconSize + HitPad * 2));
+        DrawNoteIcon(ctx, noteX + (IconSize - 10) / 2, centerY);
+        _noteButtonRect = new Rect(noteX - HitPad, iconY0 - HitPad, IconSize + HitPad * 2, IconSize + HitPad * 2);
 
         for (int i = 0; i < count; i++)
         {
-            double iconX = startX + i * (IconSize + IconGap);
+            double iconX = startX + (i + 1) * (IconSize + IconGap);
             double iconY = centerY - IconSize / 2;
 
             if (_hoveredQuickLink == i)
@@ -1171,12 +1193,13 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
         const double IconSize = 16, IconGap = 14, HitPad = 4;
         int count = _quickLinks.Count;
-        double totalW = count * IconSize + (count - 1) * IconGap;
+        int slots = count + 1;                          // slot 0 is the note button (not a quick link)
+        double totalW = slots * IconSize + (slots - 1) * IconGap;
         double startX = (Bounds.Width - totalW) / 2;
 
         for (int i = 0; i < count; i++)
         {
-            double iconX = startX + i * (IconSize + IconGap);
+            double iconX = startX + (i + 1) * (IconSize + IconGap);
             if (p.X >= iconX - HitPad && p.X < iconX + IconSize + HitPad) return i;
         }
         return -1;
@@ -1274,15 +1297,17 @@ public sealed class OverlayCanvas : Control, IDenseHost
         var (activity, elapsed) = SecondLineContent(session);
         bool activityLine = !string.IsNullOrEmpty(activity) || !string.IsNullOrEmpty(elapsed);
         bool awaiting = session.Status == SessionStatus.AwaitingInput && _showWaitingTimer;
-        bool hasNote = session.HasNote;                 // drives the glyph + hover (always, if a note exists)
-        bool showNoteLine = hasNote && _showNoteLine;   // drives the dedicated note line (Indicators toggle)
+        // The "Session notes" indicator toggle (off by default) gates the whole inline note — the clickable
+        // glyph and its text line. Off ⇒ the note is still stored and editable from the right-click menu,
+        // just not shown on the row.
+        bool showNote = session.HasNote && _showNoteLine;
 
         // Lines stack under the name: the activity/elapsed line (when present), then the note on its own
         // line. The name centres in a single-line row and rides high once anything sits beneath it.
         double firstLineY = top + 32;                                  // the activity/elapsed slot
         double noteLineY  = activityLine ? firstLineY + NoteLineHeight // note takes the 3rd line…
                                          : firstLineY;                 // …or the 2nd when there's no activity
-        double nameMidY   = activityLine || showNoteLine ? top + 15 : top + rowH / 2;
+        double nameMidY   = activityLine || showNote ? top + 15 : top + rowH / 2;
 
         IBrush secondLine = awaiting
             ? new SolidColorBrush(WarmWaitingColor(session.AwaitingElapsed() ?? TimeSpan.Zero))
@@ -1322,7 +1347,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
         double mailW = session.ExternalNotify ? MailIconWidth : 0;
         double rcW   = session.RemoteControlled ? RcIconWidth : 0;
         double botW  = session.IsBackground ? BotIconWidth : 0;
-        double noteW = hasNote ? NoteIconWidth : 0;
+        double noteW = showNote ? NoteIconWidth : 0;
 
         // Right-side cluster (right→left from the status text): thermometer, mode badge, task count,
         // metrics bars (4.9), burn rate.
@@ -1447,8 +1472,8 @@ public sealed class OverlayCanvas : Control, IDenseHost
         }
 
         // The pinned note on its own line, in the note amber — never overriding the activity/status line.
-        // Gated by the Indicators toggle; when off the note survives as the glyph + hover only.
-        if (showNoteLine)
+        // Shown with the glyph when the "Session notes" indicator is on.
+        if (showNote)
         {
             double noteMax = width - lineLeft - HorizPad;
             string noteTrunc = OverlayDraw.Truncate(session.Note!, ActivitySize, noteMax);
@@ -1929,9 +1954,16 @@ public sealed class OverlayCanvas : Control, IDenseHost
         bool overFooter = ShowFooter && _footerRect.Width > 0 && _footerRect.Contains(p);
         if (overFooter != _hoveredFooter) { _hoveredFooter = overFooter; InvalidateVisual(); }
 
-        // Hand cursor over clickable glyphs (quick links + artifacts + the update badge + outage footer);
-        // rows show only the highlight.
-        Cursor = (ql >= 0 || art >= 0 || overUpdate || overFooter) ? HandCursor : Cursor.Default;
+        bool overNote = _noteButtonRect.Width > 0 && _noteButtonRect.Contains(p);
+        if (overNote != _hoveredNoteButton) { _hoveredNoteButton = overNote; InvalidateVisual(); }
+
+        // A row's note glyph is clickable (opens its scratch pad), so it earns the hand cursor too.
+        bool overRowNote = HitTestNoteIcon(p) >= 0;
+
+        // Hand cursor over clickable glyphs (quick links + artifacts + the update badge + outage footer +
+        // the scratch-pad note button + a row's note glyph); rows show only the highlight.
+        Cursor = (ql >= 0 || art >= 0 || overUpdate || overFooter || overNote || overRowNote)
+            ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
         base.OnPointerMoved(e);
@@ -1982,10 +2014,11 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton;
         _hoveredRow = _hoveredQuickLink = _hoveredArtifactRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
+        _hoveredNoteButton = false;
         Cursor = Cursor.Default;
         _tipKind = TipKind.None;
         _tipRow = -1;
@@ -2142,6 +2175,14 @@ public sealed class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+        // The note glyph opens that session's scratch pad for editing.
+        int note = HitTestNoteIcon(p);
+        if (note >= 0 && _rows[note].Session is { } noteSession)
+        {
+            NoteEditRequested?.Invoke(noteSession);
+            return;
+        }
+
         // A sub-agent's expand/collapse chevron (only present on a node that has children).
         int chev = HitRect(_subChevronRects, p);
         if (chev >= 0 && _rows[chev].Sub is { } chevSub)
@@ -2165,6 +2206,13 @@ public sealed class OverlayCanvas : Control, IDenseHost
                 // Sub-agent rows resolve to their parent session (they share its process/terminal).
                 SessionActivated?.Invoke(_rows[row].Session!);
             }
+            return;
+        }
+
+        // The note button leading the quick-links row opens the global scratch pad.
+        if (_noteButtonRect.Width > 0 && _noteButtonRect.Contains(p))
+        {
+            ScratchPadRequested?.Invoke();
             return;
         }
 

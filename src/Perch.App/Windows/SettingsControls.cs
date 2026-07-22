@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -77,6 +78,18 @@ internal static class SettingsUi
         Text = value, Background = Palette.ButtonBgBrush, Foreground = Palette.FgBrush,
         BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
         CornerRadius = new CornerRadius(3), FontSize = 13, Padding = new Thickness(6, 4),
+    };
+
+    // A themed multi-line editor (the single-line ThemedTextBox with wrapping + return/tab acceptance and
+    // a vertical scrollbar). Used by the scratch pad; stretches to fill its container.
+    public static TextBox ThemedTextArea(string value) => new()
+    {
+        Text = value, Background = Palette.ButtonBgBrush, Foreground = Palette.FgBrush,
+        BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
+        CornerRadius = new CornerRadius(3), FontSize = 13, Padding = new Thickness(8, 6),
+        AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.Wrap,
+        VerticalContentAlignment = VerticalAlignment.Top,
+        [ScrollViewer.VerticalScrollBarVisibilityProperty] = ScrollBarVisibility.Auto,
     };
 
     // A themed single-select dropdown for the (rare) enum-style setting; Fluent supplies the popup, we set

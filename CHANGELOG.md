@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.15] - 2026-07-22
+
+- New global scratch pad — a note button on the quick-links row opens a multi-line pad.
+- Session notes are multi-line now; the 140-character limit has been retired.
+- Click a session's note glyph to edit it (no more digging through the right-click menu).
+- Session notes are an Indicators toggle now, off by default.
+
+---
+
 ## [v0.2.14] - 2026-07-21
 
 - New **Replay mode**: record a Claude Code session and scrub through it in the real Perch (demos, bug repros).
