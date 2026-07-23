@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.17] - 2026-07-23
+
+- Clicking the "update available" toast now starts the update, not just the button.
+- Reworded the toast to admit both routes exist.
+
+---
+
 ## [v0.2.16] - 2026-07-23
 
 - Notes are sticky notes now — draggable, resizable, and shamelessly yellow.

@@ -25,7 +25,18 @@ public interface INotifier
     /// </summary>
     void Show(string title, string body, ToastLevel level, string? pid, string? project);
 
+    /// <summary>
+    /// Shows the actionable "update available" toast. Clicking it raises <see cref="UpdateActivated"/> so
+    /// the click starts the update — exactly what the update button does. Called on the UI thread; never
+    /// throws.
+    /// </summary>
+    void ShowUpdate(string title, string body);
+
     /// <summary>Raised (on the UI thread) when a session toast is clicked, carrying its pid and project so
     /// the owner can focus that terminal and acknowledge the alert.</summary>
     event Action<string, string?>? SessionActivated;
+
+    /// <summary>Raised (on the UI thread) when the "update available" toast is clicked, so the owner can
+    /// start the update — the same action as the update button.</summary>
+    event Action? UpdateActivated;
 }

@@ -15,6 +15,7 @@ namespace Perch.Avalonia.Notifications;
 internal sealed class WindowsToastNotifier : INotifier
 {
     public event Action<string, string?>? SessionActivated;
+    public event Action? UpdateActivated;
 
     public WindowsToastNotifier()
     {
@@ -39,11 +40,30 @@ internal sealed class WindowsToastNotifier : INotifier
         catch { /* best-effort — a toast failure must never break the monitor callback */ }
     }
 
+    public void ShowUpdate(string title, string body)
+    {
+        try
+        {
+            // Tag the toast with an action argument so a click routes to UpdateActivated (start the update)
+            // rather than the session path.
+            var builder = new ToastContentBuilder();
+            builder.AddArgument("action", "update");
+            builder.AddText(title).AddText(body);
+            builder.Show();
+        }
+        catch { /* best-effort — a toast failure must never break the update flow */ }
+    }
+
     private void OnToastActivated(ToastNotificationActivatedEventArgsCompat e)
     {
         try
         {
             var args = ToastArguments.Parse(e.Argument);
+            if (args.TryGetValue("action", out var action) && action == "update")
+            {
+                Dispatcher.UIThread.Post(() => UpdateActivated?.Invoke());
+                return;
+            }
             if (!args.TryGetValue("pid", out var pid) || string.IsNullOrEmpty(pid)) return;
             args.TryGetValue("project", out var project);
             Dispatcher.UIThread.Post(() => SessionActivated?.Invoke(pid, project));

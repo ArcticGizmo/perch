@@ -206,6 +206,8 @@ public partial class App : Application
             _updateService = new UpdateService(settings, _notifications);
             _updateService.AvailabilityChanged += OnUpdateAvailabilityChanged;
             _overlay.Canvas.UpdateRequested += () => _updateService!.PerformUpdate(CloseAuxWindows);
+            // Clicking the "update available" toast starts the update, same as the update button.
+            _notifier.UpdateActivated += () => _updateService!.PerformUpdate(CloseAuxWindows);
 
             // Drive every overlay display gate + the monitor's data-layer toggles from persisted settings
             // (the Phase-3 Settings UI will edit these; this reads whatever's on disk, defaults included).

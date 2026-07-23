@@ -79,6 +79,11 @@ internal sealed class NotificationService
     public void ShowInfo(string title, string text, ToastLevel level) =>
         _notifier.Show(title, text, level, null, null);
 
+    /// <summary>The actionable "update available" toast — clicking it starts the update, the same action
+    /// as the update button, routed back through <see cref="INotifier.UpdateActivated"/>.</summary>
+    public void ShowUpdateAvailable(string title, string text) =>
+        _notifier.ShowUpdate(title, text);
+
     private bool ToastEnabled(NotificationKind kind) =>
         kind == NotificationKind.Done ? _settings.NotifyOnDone : _settings.NotifyOnWaitingInput;
 

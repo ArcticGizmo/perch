@@ -123,8 +123,8 @@ internal sealed class UpdateService
         _settings.Save();
         AvailabilityChanged?.Invoke(true, version);
         if (notify)
-            _notifications.ShowInfo("Perch — Update available",
-                $"Version {version} is ready to install. Use the update button to update.", ToastLevel.Info);
+            _notifications.ShowUpdateAvailable("Perch — Update available",
+                $"Version {version} is ready to install. Click this notification or the update button to update.");
     }
 
     // Clears a pending update and returns every surface to default. Used after applying and to self-heal

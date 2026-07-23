@@ -23,6 +23,7 @@ internal sealed class AvaloniaToastNotifier : INotifier
     private ToastHostWindow? _host;
 
     public event Action<string, string?>? SessionActivated;
+    public event Action? UpdateActivated;
 
     /// <param name="targetScreen">Resolves the screen to show toasts on (the overlay's current screen);
     /// falls back to primary when it returns null.</param>
@@ -30,19 +31,29 @@ internal sealed class AvaloniaToastNotifier : INotifier
 
     public void Show(string title, string body, ToastLevel level, string? pid, string? project)
     {
+        // A session toast (non-null pid) focuses that terminal on click; a plain info toast just dismisses.
+        Action? onClick = string.IsNullOrEmpty(pid) ? null : () => SessionActivated?.Invoke(pid!, project);
         // Always marshal to the UI thread — a monitor callback may arrive on it already, but ntfy-test
         // continuations resume off it.
         Dispatcher.UIThread.Post(() =>
         {
             _host ??= CreateHost();
-            _host.AddToast(title, body, level, pid, project);
+            _host.AddToast(title, body, level, onClick);
+        });
+    }
+
+    public void ShowUpdate(string title, string body)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            _host ??= CreateHost();
+            _host.AddToast(title, body, ToastLevel.Info, () => UpdateActivated?.Invoke());
         });
     }
 
     private ToastHostWindow CreateHost()
     {
         var host = new ToastHostWindow(_targetScreen);
-        host.ToastActivated += (pid, project) => SessionActivated?.Invoke(pid, project);
         host.Closed += (_, _) => _host = null; // recreate if it's ever torn down
         return host;
     }
@@ -63,9 +74,6 @@ internal sealed class ToastHostWindow : Window
     private readonly StackPanel _stack;
     private readonly Func<Screen?> _targetScreen;
     private readonly Dictionary<Control, DispatcherTimer> _timers = new();
-
-    /// <summary>Raised when a session card (one built with a non-null pid) is clicked.</summary>
-    public event Action<string, string?>? ToastActivated;
 
     public ToastHostWindow(Func<Screen?> targetScreen)
     {
@@ -94,7 +102,7 @@ internal sealed class ToastHostWindow : Window
             PlatformServices.WindowChrome.MakeToolWindowNoActivate(h.Handle);
     }
 
-    public void AddToast(string title, string body, ToastLevel level, string? pid, string? project)
+    public void AddToast(string title, string body, ToastLevel level, Action? onClick)
     {
         if (!IsVisible)
         {
@@ -106,7 +114,7 @@ internal sealed class ToastHostWindow : Window
         while (_stack.Children.Count >= MaxCards)
             RemoveCard((Control)_stack.Children[0]);
 
-        var card = BuildCard(title, body, level, pid, project);
+        var card = BuildCard(title, body, level, onClick);
         _stack.Children.Add(card);
 
         var timer = new DispatcherTimer { Interval = Dwell };
@@ -125,7 +133,7 @@ internal sealed class ToastHostWindow : Window
         else Reposition();
     }
 
-    private Control BuildCard(string title, string body, ToastLevel level, string? pid, string? project)
+    private Control BuildCard(string title, string body, ToastLevel level, Action? onClick)
     {
         var dot = new Ellipse
         {
@@ -160,7 +168,7 @@ internal sealed class ToastHostWindow : Window
         };
         card.PointerPressed += (_, _) =>
         {
-            if (!string.IsNullOrEmpty(pid)) ToastActivated?.Invoke(pid, project);
+            onClick?.Invoke();
             RemoveCard(card);
         };
         return card;
