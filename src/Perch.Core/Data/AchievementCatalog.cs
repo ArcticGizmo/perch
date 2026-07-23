@@ -73,17 +73,35 @@ internal static class AchievementCatalog
 
     private static List<Family> BuildFamilies()
     {
-        const double M = 1_000_000, B = 1_000_000_000;
+        const double K = 1_000, M = 1_000_000, B = 1_000_000_000;
 
         return new List<Family>
         {
             // ── Scaling families (level up in place) ──
-            Family.Levelled("tokens", "Tokens", c => c.Tokens,
-                R("wordsmith",  "Wordsmith",  "✍️", AchievementTier.Bronze, 1 * M,   "1M tokens"),
-                R("prolific",   "Prolific",   "📚", AchievementTier.Bronze, 10 * M,  "10M tokens"),
-                R("tokenaire",  "Tokenaire",  "🤑", AchievementTier.Silver, 100 * M, "100M tokens"),
-                R("tokentitan", "Token Titan","💎", AchievementTier.Gold,   1 * B,   "1B tokens"),
-                R("tokenlord",  "Tokenlord",  "👑", AchievementTier.Gold,   10 * B,  "10B tokens")),
+            // Tokens split by billing class rather than one lumped total: cache reads dwarf everything (often
+            // >95% of the sum), so a single "total tokens" tile just measures caching. Three separate climbs —
+            // what you send (input), what the model writes back (output), and what rides the cache — each tell
+            // a different story and scale very differently, hence the very different rung spacing.
+            Family.Levelled("input", "Input", c => c.Input,
+                R("scribbler",       "Scribbler",        "📝", AchievementTier.Bronze, 100 * K, "100K input tokens"),
+                R("wordsmith",       "Wordsmith",        "✍️", AchievementTier.Bronze, 1 * M,   "1M input tokens"),
+                R("keyboardwarrior", "Keyboard Warrior", "⌨️", AchievementTier.Silver, 10 * M,  "10M input tokens"),
+                R("novelist",        "Novelist",         "📜", AchievementTier.Gold,   50 * M,  "50M input tokens"),
+                R("magnumopus",      "Magnum Opus",      "🗿", AchievementTier.Gold,   100 * M, "100M input tokens")),
+
+            Family.Levelled("output", "Output", c => c.Output,
+                R("ghostwriter",  "Ghostwriter",  "🖋️", AchievementTier.Bronze, 1 * M,   "1M output tokens"),
+                R("prolific",     "Prolific",     "📚", AchievementTier.Bronze, 10 * M,  "10M output tokens"),
+                R("wordfactory",  "Word Factory", "🏭", AchievementTier.Silver, 50 * M,  "50M output tokens"),
+                R("firehose",     "Firehose",     "🌊", AchievementTier.Gold,   100 * M, "100M output tokens"),
+                R("encyclopedia", "Encyclopedia", "📖", AchievementTier.Gold,   500 * M, "500M output tokens")),
+
+            Family.Levelled("cached", "Cached", c => c.Cached,
+                R("warmcache",  "Warm Cache",  "📦", AchievementTier.Bronze, 10 * M,  "10M cached tokens"),
+                R("pettycache", "Petty Cache", "💵", AchievementTier.Bronze, 100 * M, "100M cached tokens"),
+                R("cachevault", "Cache Vault", "🏦", AchievementTier.Silver, 1 * B,   "1B cached tokens"),
+                R("cachecow",   "Cache Cow",   "🤑", AchievementTier.Gold,   10 * B,  "10B cached tokens"),
+                R("cachebaron", "Cache Baron", "👑", AchievementTier.Gold,   100 * B, "100B cached tokens")),
 
             Family.Levelled("sessions", "Sessions", c => c.Sessions,
                 R("firstflight",   "First Flight",   "🐣", AchievementTier.Bronze, 1,     "1 session"),
@@ -340,9 +358,11 @@ internal static class AchievementCatalog
         }
 
         public int Sessions => _r.SessionCount;
-        public long Tokens => _r.Tokens.Total;
         public long Input => _r.Tokens.Input;
+        public long Output => _r.Tokens.Output;
         public long CacheRead => _r.Tokens.CacheRead;
+        // "Cached" is the whole cache footprint — reads (served from cache) plus writes (cache creation).
+        public long Cached => _r.Tokens.CacheRead + _r.Tokens.CacheWrite;
         public int Prompts => _r.Prompts;
         public int ToolCalls => _r.ToolCalls;
         public int SubAgents => _r.SubAgents;

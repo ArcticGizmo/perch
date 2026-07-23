@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.19] - 2026-07-23
+
+- Token achievements split into Input, Output, and Cached milestones.
+- Retired the lumped "total tokens" trophy (it just measured cache reads).
+
+---
+
 ## [v0.2.18] - 2026-07-23
 
 - The floating overlay finds its way home when you undock — no more hiding on a monitor that left.

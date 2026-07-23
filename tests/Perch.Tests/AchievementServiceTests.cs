@@ -7,7 +7,7 @@ public class AchievementServiceTests
 {
     private static string TempPath() => Path.Combine(Path.GetTempPath(), $"perch-ach-{Guid.NewGuid():N}.json");
 
-    // Minimal all-time report earning a controllable set of levels (sessions + tokens families).
+    // Minimal all-time report earning a controllable set of levels (sessions + input-token families).
     private static StatsReport Report(int sessions = 0, long tokens = 0) =>
         new(DateOnly.FromDateTime(DateTime.Now), sessions, TimeSpan.Zero, 0, 0, 0, 0,
             new TokenTotals(tokens, 0, 0, 0), TokenTotals.Zero, 0m, true, [], [], [], [], new int[24]);
@@ -20,13 +20,13 @@ public class AchievementServiceTests
         {
             var fresh = AchievementStore.LoadFrom(path);
             Assert.False(fresh.Existed);
-            Assert.True(fresh.Add("tokens.wordsmith"));
-            Assert.False(fresh.Add("tokens.wordsmith"));
+            Assert.True(fresh.Add("input.wordsmith"));
+            Assert.False(fresh.Add("input.wordsmith"));
             fresh.Save();
 
             var reloaded = AchievementStore.LoadFrom(path);
             Assert.True(reloaded.Existed);
-            Assert.True(reloaded.Contains("tokens.wordsmith"));
+            Assert.True(reloaded.Contains("input.wordsmith"));
         }
         finally { File.Delete(path); }
     }
@@ -46,7 +46,7 @@ public class AchievementServiceTests
 
             var reloaded = AchievementStore.LoadFrom(path);
             Assert.True(reloaded.Contains("sessions.firstflight"));
-            Assert.True(reloaded.Contains("tokens.wordsmith"));
+            Assert.True(reloaded.Contains("input.wordsmith"));
         }
         finally { File.Delete(path); }
     }

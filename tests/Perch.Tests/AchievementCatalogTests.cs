@@ -41,40 +41,42 @@ public class AchievementCatalogTests
     [Fact]
     public void ScalingFamily_LevelsUpInPlace()
     {
-        var tokens = Fam(Eval(Report(tokens: new TokenTotals(15_000_000, 0, 0, 0))), "tokens");
-        Assert.True(tokens.Earned);
-        Assert.Equal(2, tokens.Level);            // past 1M and 10M, not 100M
-        Assert.Equal(5, tokens.MaxLevel);
-        Assert.Equal("Prolific", tokens.Name);    // the level-2 rung
-        Assert.Equal("Tokens", tokens.Category);
+        // TokenTotals is (Input, Output, CacheWrite, CacheRead) — 15M output.
+        var output = Fam(Eval(Report(tokens: new TokenTotals(0, 15_000_000, 0, 0))), "output");
+        Assert.True(output.Earned);
+        Assert.Equal(2, output.Level);            // past 1M and 10M, not 50M
+        Assert.Equal(5, output.MaxLevel);
+        Assert.Equal("Prolific", output.Name);    // the level-2 rung
+        Assert.Equal("Output", output.Category);
     }
 
     [Fact]
     public void ScalingFamily_ProgressIsBandTowardNextLevel()
     {
-        // 15M sits 1/18 of the way from the 10M rung to the 100M rung.
-        var tokens = Fam(Eval(Report(tokens: new TokenTotals(15_000_000, 0, 0, 0))), "tokens");
-        Assert.NotNull(tokens.Progress);
-        Assert.Equal((15_000_000.0 - 10_000_000) / (100_000_000 - 10_000_000), tokens.Progress!.Value, 4);
+        // 15M output sits 1/8 of the way from the 10M rung to the 50M rung.
+        var output = Fam(Eval(Report(tokens: new TokenTotals(0, 15_000_000, 0, 0))), "output");
+        Assert.NotNull(output.Progress);
+        Assert.Equal((15_000_000.0 - 10_000_000) / (50_000_000 - 10_000_000), output.Progress!.Value, 4);
     }
 
     [Fact]
     public void MaxedFamily_HasNoProgressBar()
     {
-        var tokens = Fam(Eval(Report(tokens: new TokenTotals(20_000_000_000, 0, 0, 0))), "tokens");
-        Assert.Equal(tokens.MaxLevel, tokens.Level);
-        Assert.Null(tokens.Progress);
-        Assert.Equal("Tokenlord", tokens.Name);
+        // "Cached" folds cache reads + writes; 200B blows past the 100B top rung.
+        var cached = Fam(Eval(Report(tokens: new TokenTotals(0, 0, 0, 200_000_000_000))), "cached");
+        Assert.Equal(cached.MaxLevel, cached.Level);
+        Assert.Null(cached.Progress);
+        Assert.Equal("Cache Baron", cached.Name);
     }
 
     [Fact]
     public void LevelsCarryNamespacedIdsAndEarnedFlags()
     {
-        var tokens = Fam(Eval(Report(tokens: new TokenTotals(15_000_000, 0, 0, 0))), "tokens");
-        Assert.Equal("tokens.wordsmith", tokens.Levels[0].Id);
-        Assert.True(tokens.Levels[0].Earned);
-        Assert.True(tokens.Levels[1].Earned);
-        Assert.False(tokens.Levels[2].Earned);
+        var output = Fam(Eval(Report(tokens: new TokenTotals(0, 15_000_000, 0, 0))), "output");
+        Assert.Equal("output.ghostwriter", output.Levels[0].Id);
+        Assert.True(output.Levels[0].Earned);
+        Assert.True(output.Levels[1].Earned);
+        Assert.False(output.Levels[2].Earned);
     }
 
     [Fact]
