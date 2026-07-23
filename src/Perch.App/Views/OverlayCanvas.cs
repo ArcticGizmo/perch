@@ -160,8 +160,16 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
     // ── Dense mode: public surface for the app (tray / hotkey / screen changes) ──
     public bool IsDense => _denseCtl.IsDense;
-    public void ToggleDense() => _denseCtl.Toggle();
-    public void OnScreensChanged() => _denseCtl.OnScreensChanged();
+
+    // Toggling between the slim strip and the full panel is a deliberate user action and a natural moment
+    // to self-correct: re-snap the floating window onto a live screen (dense docks itself) and re-assert
+    // topmost, in case a display change (e.g. undocking) left it stranded or buried.
+    public void ToggleDense() { _denseCtl.Toggle(); EnsureFloatingOnScreen(); BringWindowToTop(); }
+
+    // Monitors added/removed. Dense self-heals to a live edge (ApplyGeometry); the floating window has no
+    // such logic on its own, so re-validate it here — this is what rescues the overlay after an undock.
+    public void OnScreensChanged() { _denseCtl.OnScreensChanged(); EnsureFloatingOnScreen(); }
+
     public void DisposeDense() => _denseCtl.Dispose();
 
     // ── IDenseHost (geometry lives on the window) ──
@@ -195,6 +203,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
         w.Width = FormWidth;
         w.SizeToContent = SizeToContent.Height; // recomputes height from content, keeps the 280 width
         w.Position = position;
+        EnsureFloatingOnScreen(); // the remembered floating spot may have been on a since-removed monitor
     }
 
     double IDenseHost.FullPanelWidthDip => FormWidth;
@@ -216,6 +225,82 @@ public sealed class OverlayCanvas : Control, IDenseHost
         else { w.Width = FormWidth; w.SizeToContent = SizeToContent.Height; }
         InvalidateMeasure();
         InvalidateVisual();
+    }
+
+    // The floating window's default auto-placement: this far below the work-area top (below any top-docked
+    // bar) and this far in from the right edge. DIPs; scaled per screen. Mirrors LiveOverlayWindow's open.
+    private const int FloatTopGap = 32;
+    private const int FloatRightMargin = 16;
+
+    // Physical top-left that puts the floating window at the top-right of the given screen's work area.
+    private static PixelPoint DefaultFloatingPosition(Screen screen, int physWidth)
+    {
+        var wa = screen.WorkingArea;
+        double scale = screen.Scaling;
+        return new PixelPoint(
+            wa.X + wa.Width - physWidth - (int)(FloatRightMargin * scale),
+            wa.Y + (int)(FloatTopGap * scale));
+    }
+
+    /// <summary>Places the owning floating window at its default top-right float on the primary screen.
+    /// Called for the initial placement (from <c>LiveOverlayWindow.OnOpened</c>) and as the fallback when
+    /// the window's monitor has vanished.</summary>
+    public void PlaceAtDefaultFloating()
+    {
+        if (HostWindow is not { Screens: { } screens } w) return;
+        var home = screens.Primary ?? (screens.All.Count > 0 ? screens.All[0] : null);
+        if (home is null) return;
+        w.Position = DefaultFloatingPosition(home, (int)(w.Width * home.Scaling));
+    }
+
+    // Guarantees the floating window sits on a currently-connected screen. Its position is otherwise only
+    // computed at open and when leaving dense mode, so unplugging the monitor it lived on — e.g. undocking a
+    // laptop — can strand it off every screen, out of reach. If it still overlaps a live screen we clamp it
+    // fully into that screen's work area; if it overlaps none (its monitor is gone) we re-snap to the primary
+    // screen's default float. No-op in dense mode, which docks itself. Best-effort; swallows layout hiccups.
+    private void EnsureFloatingOnScreen()
+    {
+        if (_denseCtl.IsDense) return;
+        if (HostWindow is not { Screens: { } screens } w) return;
+
+        try
+        {
+            double scale = w.RenderScaling <= 0 ? 1.0 : w.RenderScaling;
+            int physW = Math.Max(1, (int)(w.Width * scale));
+            int physH = Math.Max(1, (int)(w.Height * scale));
+            var rect = new PixelRect(w.Position, new PixelSize(physW, physH));
+
+            // The screen the window overlaps most; none → its monitor was disconnected.
+            Screen? best = null;
+            long bestArea = 0;
+            foreach (var s in screens.All)
+            {
+                var i = s.Bounds.Intersect(rect);
+                long area = (long)i.Width * i.Height;
+                if (area > bestArea) { bestArea = area; best = s; }
+            }
+
+            if (best is null)
+            {
+                PlaceAtDefaultFloating();
+                return;
+            }
+
+            // Still on a live screen — clamp fully inside its work area.
+            var wa = best.WorkingArea;
+            int x = Math.Clamp(w.Position.X, wa.X, Math.Max(wa.X, wa.X + wa.Width - physW));
+            int y = Math.Clamp(w.Position.Y, wa.Y, Math.Max(wa.Y, wa.Y + wa.Height - physH));
+            w.Position = new PixelPoint(x, y);
+        }
+        catch { /* best-effort re-anchoring; never throw out of a toggle/screen-change */ }
+    }
+
+    // Re-asserts the overlay at the top of the always-on-top band without stealing focus. A display change
+    // (undock) can drop even a Topmost window behind others, so every expand/dense toggle re-lifts it.
+    private void BringWindowToTop()
+    {
+        if (HostWindow?.TryGetPlatformHandle() is { } h)
+            PlatformServices.WindowChrome.BringToTopNoActivate(h.Handle);
     }
 
     // Re-applies the window footprint after a change that may alter the panel's content height. The floating
@@ -2212,6 +2297,9 @@ public sealed class OverlayCanvas : Control, IDenseHost
             UpdateTickTimer();
             InvalidateMeasure();
             InvalidateVisual();
+            // Expanding can push the panel's bottom off-screen; re-anchor and re-lift on this deliberate toggle.
+            EnsureFloatingOnScreen();
+            BringWindowToTop();
         }
     }
 

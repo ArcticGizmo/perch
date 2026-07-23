@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.18] - 2026-07-23
+
+- The floating overlay finds its way home when you undock — no more hiding on a monitor that left.
+- Expanding or collapsing re-asserts the overlay as topmost, in case a display change buried it.
+
+---
+
 ## [v0.2.17] - 2026-07-23
 
 - Clicking the "update available" toast now starts the update, not just the button.

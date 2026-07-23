@@ -12,10 +12,6 @@ namespace Perch.Avalonia.Windows;
 /// </summary>
 public partial class LiveOverlayWindow : Window
 {
-    // The overlay floats this far below the work-area top when auto-positioned (mirrors OverlayForm).
-    private const int FloatTopGap = 32;
-    private const int RightMargin = 16;
-
     public OverlayCanvas Canvas { get; }
 
     // Design-time / XAML-loader ctor. The app uses the canvas-taking overload below.
@@ -51,18 +47,9 @@ public partial class LiveOverlayWindow : Window
         base.OnOpened(e);
 
         // Auto-position at the top-right of the primary screen's work area (below any top-docked bar),
-        // matching the WinForms overlay's default float. Positions are in physical pixels, so scale the
-        // DIP width/gaps by the screen's DPI.
-        var screen = Screens.Primary ?? (Screens.All.Count > 0 ? Screens.All[0] : null);
-        if (screen is not null)
-        {
-            var wa = screen.WorkingArea;
-            double scale = screen.Scaling;
-            int w = (int)(Width * scale);
-            Position = new PixelPoint(
-                wa.X + wa.Width - w - (int)(RightMargin * scale),
-                wa.Y + (int)(FloatTopGap * scale));
-        }
+        // matching the WinForms overlay's default float. The canvas owns floating placement so the initial
+        // spot and the undock re-anchoring stay in one place.
+        Canvas.PlaceAtDefaultFloating();
 
         // No Alt+Tab entry and never take activation (showing must not steal focus from the terminal).
         if (TryGetPlatformHandle() is { } handle)
