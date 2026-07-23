@@ -37,7 +37,6 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private const double IconBoxH         = 16;
     private const double IconGap          = 6;
     private const double RowHeight        = 46;
-    private const double NoteLineHeight   = 16; // extra height a row gains when a note needs its own third line
     private const double SubRowHeight     = 24;
     private const double SectionRowHeight = 26;
     private const double SubIndent        = 22;
@@ -116,10 +115,9 @@ public sealed class OverlayCanvas : Control, IDenseHost
     private static readonly IBrush RunningBrush   = new SolidColorBrush(RunningColor);
     private static readonly IBrush ArtifactBrush  = new SolidColorBrush(Color.FromRgb(251, 191, 36));
     private static readonly IBrush ArtifactHover  = new SolidColorBrush(Color.FromRgb(255, 224, 140));
-    // Pinned-note glyph + its own note line: a sticky-note amber for the glyph, a dimmer amber for the
-    // note text, so a note reads as a deliberate human annotation distinct from the muted activity line.
+    // Pinned-note glyph: a sticky-note amber, so a note reads as a deliberate human annotation. The note's
+    // text isn't previewed on the row (hover the glyph); this is just the glyph colour.
     private static readonly IBrush NoteBrush      = new SolidColorBrush(Color.FromRgb(244, 193, 79));
-    private static readonly IBrush NoteLineBrush  = new SolidColorBrush(Color.FromRgb(217, 196, 143));
 
     // Party-popper glyph: a gold cone spraying a fan of festive confetti dots (shared with the confetti
     // window's palette so the armed-row hint and the finish burst read as one feature).
@@ -467,8 +465,9 @@ public sealed class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
-    /// <summary>Show/hide a pinned note's own line under a session. Off keeps the note glyph + hover (the
-    /// note is still there, just compact); on gives it a dedicated line. Changes row height, so relayout.</summary>
+    /// <summary>Show/hide the pinned-note glyph on a session row (session note and/or project note). Off ⇒
+    /// the note is still stored and editable from the right-click menu, just no glyph. The note's text is
+    /// never previewed inline — hover the glyph or open the editor — so this doesn't change row height.</summary>
     public void SetShowNoteLine(bool show)
     {
         if (_showNoteLine == show) return;
@@ -797,15 +796,9 @@ public sealed class OverlayCanvas : Control, IDenseHost
         row.IsSubAgent ? SubRowHeight :
         SessionRowHeight(row.Session!);
 
-    // A session row is RowHeight for the name + one optional sub-line (activity/elapsed OR a note); it
-    // grows by NoteLineHeight only when it needs *both* — so a note gets its own third line rather than
-    // overriding the activity/status line.
-    private double SessionRowHeight(ClaudeSession s)
-    {
-        var (activity, elapsed) = SecondLineContent(s);
-        bool activityLine = !string.IsNullOrEmpty(activity) || !string.IsNullOrEmpty(elapsed);
-        return activityLine && s.HasNote && _showNoteLine ? RowHeight + NoteLineHeight : RowHeight;
-    }
+    // A session row is a fixed RowHeight: the name plus one optional sub-line (activity/elapsed). A note is
+    // shown only as a glyph (hover for the text), so it no longer adds a line or grows the row.
+    private double SessionRowHeight(ClaudeSession s) => RowHeight;
 
     // The live second-line content (activity phrase + elapsed timer) for a session, or (null, null) when
     // it has none. Single source of truth so the measured row height and the painted layout can't drift.
@@ -1297,17 +1290,15 @@ public sealed class OverlayCanvas : Control, IDenseHost
         var (activity, elapsed) = SecondLineContent(session);
         bool activityLine = !string.IsNullOrEmpty(activity) || !string.IsNullOrEmpty(elapsed);
         bool awaiting = session.Status == SessionStatus.AwaitingInput && _showWaitingTimer;
-        // The "Session notes" indicator toggle (off by default) gates the whole inline note — the clickable
-        // glyph and its text line. Off ⇒ the note is still stored and editable from the right-click menu,
-        // just not shown on the row.
-        bool showNote = session.HasNote && _showNoteLine;
+        // The "Session notes" indicator toggle (off by default) gates the note glyph on the row. The note's
+        // full text isn't previewed inline (it's multi-line — hover the glyph, or open the editor); off ⇒
+        // the note is still stored and editable from the right-click menu, just no glyph.
+        bool showNote = session.HasAnyNote && _showNoteLine;
 
-        // Lines stack under the name: the activity/elapsed line (when present), then the note on its own
-        // line. The name centres in a single-line row and rides high once anything sits beneath it.
+        // The activity/elapsed line sits under the name; the name centres in a single-line row and rides
+        // high once an activity line sits beneath it.
         double firstLineY = top + 32;                                  // the activity/elapsed slot
-        double noteLineY  = activityLine ? firstLineY + NoteLineHeight // note takes the 3rd line…
-                                         : firstLineY;                 // …or the 2nd when there's no activity
-        double nameMidY   = activityLine || showNote ? top + 15 : top + rowH / 2;
+        double nameMidY   = activityLine ? top + 15 : top + rowH / 2;
 
         IBrush secondLine = awaiting
             ? new SolidColorBrush(WarmWaitingColor(session.AwaitingElapsed() ?? TimeSpan.Zero))
@@ -1471,15 +1462,6 @@ public sealed class OverlayCanvas : Control, IDenseHost
             }
         }
 
-        // The pinned note on its own line, in the note amber — never overriding the activity/status line.
-        // Shown with the glyph when the "Session notes" indicator is on.
-        if (showNote)
-        {
-            double noteMax = width - lineLeft - HorizPad;
-            string noteTrunc = OverlayDraw.Truncate(session.Note!, ActivitySize, noteMax);
-            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(noteTrunc, ActivitySize, NoteLineBrush),
-                lineLeft, noteLineY);
-        }
     }
 
     private Color WarmWaitingColor(TimeSpan waited)
@@ -2269,7 +2251,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             // a core, ungated feature like history/copy-id.
             if (!subRow)
             {
-                items.Add(MenuItem(s.HasNote ? "Edit note…" : "Add note…", () => NoteEditRequested?.Invoke(s)));
+                items.Add(MenuItem(s.HasAnyNote ? "Edit note…" : "Add note…", () => NoteEditRequested?.Invoke(s)));
                 if (s.HasNote)
                     items.Add(MenuItem("Clear note", () => NoteClearRequested?.Invoke(s.SessionId)));
             }
@@ -2814,9 +2796,20 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
     private void ShowNoteTooltip(int row)
     {
-        if (row < 0 || row >= _rows.Count || _rows[row].Session?.Note is not { } note) return;
+        if (row < 0 || row >= _rows.Count || _rows[row].Session is not { } session) return;
         if (!_noteRects.TryGetValue(row, out var r)) return;
-        Tooltip().ShowText(note, ToScreen(r.Left, r.Bottom + 4));
+
+        // Show whatever the row carries: the session note, the project note, or both (labelled) when the
+        // glyph stands for both at once.
+        string? text = (session.Note, session.ProjectNote) switch
+        {
+            ({ } n, { } p) => $"{n}\n\n— Project note —\n{p}",
+            ({ } n, null)  => n,
+            (null, { } p)  => $"Project note\n{p}",
+            _              => null,
+        };
+        if (text is null) return;
+        Tooltip().ShowText(text, ToScreen(r.Left, r.Bottom + 4));
     }
 
     private void ShowMetricsTooltip(int row)

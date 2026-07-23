@@ -128,7 +128,8 @@ public record ClaudeSession(
     DateTime? AwaitingSince = null,
     GitLineStats? GitStats = null,
     string? Entrypoint = null,
-    string? Note = null
+    string? Note = null,
+    string? ProjectNote = null
 )
 {
     /// <summary>Running sub-agents under this session; never null.</summary>
@@ -237,6 +238,25 @@ public record ClaudeSession(
 
     /// <summary>True when this session has a pinned note.</summary>
     public bool HasNote => Note != null;
+
+    /// <summary>
+    /// A note shared by every session in this project's working directory (<see cref="Cwd"/>), sourced
+    /// from a <c>project.note</c> sidecar in the project's transcript directory. Null when unset;
+    /// normalised so blank is null. Written/removed by the row note editor's project section. See
+    /// <see cref="SessionMonitor.SetProjectNote"/>.
+    /// </summary>
+    public string? ProjectNote { get; init; } = string.IsNullOrWhiteSpace(ProjectNote) ? null : ProjectNote.Trim();
+
+    /// <summary>True when this session's project has a shared note.</summary>
+    public bool HasProjectNote => ProjectNote != null;
+
+    /// <summary>True when this session carries any note at all — its own or its project's — so the overlay
+    /// shows the note glyph.</summary>
+    public bool HasAnyNote => HasNote || HasProjectNote;
+
+    /// <summary>The note text to surface on the row: the session note takes precedence, falling back to
+    /// the project note. Null when neither is set.</summary>
+    public string? DisplayNote => Note ?? ProjectNote;
 
     /// <summary>
     /// When this session most recently entered the current continuous <see cref="SessionStatus.AwaitingInput"/>

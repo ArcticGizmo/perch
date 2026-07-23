@@ -228,7 +228,39 @@ internal sealed class SessionMonitor : IDisposable
     {
         if (string.IsNullOrEmpty(sessionId))
             return;
-        var path = Path.Combine(_sessionsDir, $"{sessionId}.note");
+        WriteNote(Path.Combine(_sessionsDir, $"{sessionId}.note"), text);
+    }
+
+    /// <summary>
+    /// Sets or clears a <em>project</em> note — a note shared by every session with the same working
+    /// directory <paramref name="cwd"/>, stored as a <c>project.note</c> sidecar in the project's
+    /// transcript directory (<c>~/.claude/projects/{enc-cwd}/</c>) so it's naturally scoped to the project
+    /// and rides along with its transcripts. Same JSON payload and best-effort semantics as
+    /// <see cref="SetNote"/>; a null/blank <paramref name="text"/> removes it. Call <see cref="Scan"/>
+    /// afterwards to refresh.
+    /// </summary>
+    public void SetProjectNote(string cwd, string? text)
+    {
+        if (ProjectNotePath(cwd) is { } path)
+            WriteNote(path, text);
+    }
+
+    /// <summary>Reads the project note shared by sessions under <paramref name="cwd"/> (its
+    /// <c>project.note</c> sidecar), or null when unset. See <see cref="SetProjectNote"/>.</summary>
+    public static string? ReadProjectNote(string cwd) =>
+        ProjectNotePath(cwd) is { } path ? ReadNote(path) : null;
+
+    // The project.note sidecar path for a working directory, or null when cwd is blank.
+    private static string? ProjectNotePath(string cwd) =>
+        string.IsNullOrEmpty(cwd)
+            ? null
+            : Path.Combine(ClaudePaths.ProjectsDir, TranscriptLocator.EncodeProjectDir(cwd), "project.note");
+
+    // Writes or clears a note sidecar at `path`: a null/blank text deletes it, otherwise the canonical
+    // JSON payload ({ text, updatedAt }) is written (creating the parent directory). Best-effort; never
+    // throws. Shared by the per-session (SetNote) and per-project (SetProjectNote) writers.
+    private static void WriteNote(string path, string? text)
+    {
         try
         {
             if (string.IsNullOrWhiteSpace(text))
@@ -237,7 +269,7 @@ internal sealed class SessionMonitor : IDisposable
                     File.Delete(path);
                 return;
             }
-            Directory.CreateDirectory(_sessionsDir);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var payload = new JsonObject
             {
                 ["text"] = text.Trim(),
@@ -544,6 +576,10 @@ internal sealed class SessionMonitor : IDisposable
                 ? null
                 : ReadNote(Path.Combine(_sessionsDir, $"{sessionId}.note"));
 
+            // Project note: a note shared by every session in this cwd, from a project.note sidecar in the
+            // project's transcript dir. Surfaced so the row can show the note glyph even with no session note.
+            var projectNote = ReadProjectNote(cwd);
+
             // The explicit name set by Claude Code's built-in /rename command (a custom-title record
             // in the transcript). Null when the session was never renamed, in which case the overlay
             // falls back to the project name from cwd. The auto-generated ai-title is ignored.
@@ -641,7 +677,8 @@ internal sealed class SessionMonitor : IDisposable
                 awaitingSince,
                 gitStats,
                 entrypoint,
-                note
+                note,
+                projectNote
             );
 
             if (status == SessionStatus.NeedsAttention

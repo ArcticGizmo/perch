@@ -209,6 +209,21 @@ internal static class HeadlessRenderer
         mdPanel.Children.Add(md);
         RenderControl(mdPanel, Path.Combine(outDir, "markdown_1x.png"), 96);
 
+        // Row note glyph with the notes indicator on: s1 has a session note and s2 ("api") has only a
+        // project note — both should show the amber note glyph, confirming a shared project note surfaces
+        // on the row too.
+        var noteProbe = new OverlayCanvas();
+        noteProbe.SetShowNoteLine(true);
+        noteProbe.Update(SampleSessions());
+        RenderControl(noteProbe, Path.Combine(outDir, "overlay_notes_1x.png"), 96);
+
+        // Sticky notes: the global scratch pad (single section) and a session row note (project + session
+        // sections at double height), over a dark backdrop so the paper, tape strip and shadow read.
+        RenderOnBackdrop(Windows.StickyNoteWindow.BuildPreviewSurface(sessionRow: false),
+            Path.Combine(outDir, "note_scratch_1x.png"), Color.FromRgb(30, 30, 38));
+        RenderOnBackdrop(Windows.StickyNoteWindow.BuildPreviewSurface(sessionRow: true),
+            Path.Combine(outDir, "note_row_1x.png"), Color.FromRgb(30, 30, 38));
+
         // Settings surface (Phase 3 remainder): a factory-built sample page exercising the new custom
         // controls — the pill toggles, the owner-drawn usage bars, the permission-mode legend, and the
         // context-pressure slider — over synthetic state (no subprocess, no real settings).
@@ -452,6 +467,8 @@ internal static class HeadlessRenderer
                 }),
             new ClaudeSession("5678", "s2", SessionStatus.AwaitingInput, @"C:\src\api", "api", now,
                 ExternalNotify: true,
+                // No session note, but a project note — so the row still shows the note glyph.
+                ProjectNote: "API freeze — ship v0.9 before merging anything",
                 Artifacts: new List<Artifact> { new("https://claude.ai/code/artifact/1", "API report") }),
             new ClaudeSession("9012", "s3", SessionStatus.NeedsAttention, @"C:\src\docs", "docs-site", now,
                 BridgeSessionId: "bridge-xyz", Stuck: new StuckSignal(StuckKind.FailingLoop, "repeating build")),

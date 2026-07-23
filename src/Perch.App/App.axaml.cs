@@ -31,6 +31,11 @@ public partial class App : Application
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
     private HistoryWindow? _historyWindow;
+    // Open sticky notes, keyed so a second request for the same note focuses the existing one rather than
+    // stacking a duplicate: "__scratch__" for the global pad, the sessionId for a session's row note. They
+    // are non-modal and owned by the overlay (see StickyNoteWindow); closed together in CloseAuxWindows.
+    private readonly Dictionary<string, StickyNoteWindow> _noteWindows = new();
+    private const string ScratchNoteKey = "__scratch__";
     private AppSettings? _appSettings;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
 
@@ -313,6 +318,8 @@ public partial class App : Application
         _qrWindow?.Close();
         _changelogWindow?.Close();
         _switcher?.Close();
+        foreach (var note in _noteWindows.Values.ToList())
+            note.CloseWithoutPrompt();
     }
 
     // Focuses the terminal hosting a clicked session (sub-agent rows already resolve to their parent) and
@@ -706,29 +713,52 @@ public partial class App : Application
     // then writes the result to its .note sidecar (empty clears it). The note shows inline on the session's
     // overlay row. Modal on the overlay so it can take focus, which the no-activate overlay window can't.
     // Best-effort: a closed overlay mid-flow just no-ops.
-    private async void OnEditNote(ClaudeSession session)
+    private void OnEditNote(ClaudeSession session)
     {
-        if (_overlay is null) return;
-        var dlg = new ScratchPadDialog(session.DisplayName,
-            $"A note pinned to “{session.DisplayName}”. It shows on the session's overlay row and survives " +
-            "a restart. Leave it empty to clear it.", session.Note);
-        bool ok = await dlg.ShowDialog<bool>(_overlay);
-        if (ok) _monitorHost?.SetNote(session.SessionId, dlg.Text);
+        if (_monitorHost is not { } host) return;
+        OpenStickyNote(session.SessionId, () =>
+            StickyNoteWindow.ForSessionRow(
+                session.DisplayName, session.ProjectName,
+                host.ReadProjectNote(session.Cwd), session.Note,
+                (projectText, sessionText) =>
+                {
+                    host.SetProjectNote(session.Cwd, projectText);
+                    host.SetNote(session.SessionId, sessionText);
+                }));
     }
 
     // The global scratch pad — opened from the note button leading the overlay's quick-links row. Multi-line
-    // free text persisted in AppSettings (not tied to any session). Modal, like the per-session editor.
-    private async void OnOpenScratchPad()
+    // free text persisted in AppSettings (not tied to any session). A non-modal sticky note like the
+    // per-session editor.
+    private void OnOpenScratchPad()
     {
-        if (_overlay is null) return;
         var settings = _appSettings ??= AppSettings.Load();
-        var dlg = new ScratchPadDialog("Scratch pad",
-            "A global scratch pad — notes, todos, reminders. Kept on this machine and always a click away.",
-            settings.ScratchText);
-        bool ok = await dlg.ShowDialog<bool>(_overlay);
-        if (!ok) return;
-        settings.ScratchText = string.IsNullOrWhiteSpace(dlg.Text) ? null : dlg.Text;
-        settings.Save();
+        OpenStickyNote(ScratchNoteKey, () =>
+            StickyNoteWindow.Global(settings.ScratchText, text =>
+            {
+                settings.ScratchText = string.IsNullOrWhiteSpace(text) ? null : text;
+                settings.Save();
+            }));
+    }
+
+    // Opens (or re-focuses) a sticky note, owned by the overlay so it stays above it and never falls
+    // behind. Keyed so a repeat request focuses the live note rather than stacking a duplicate; new notes
+    // cascade off the count already open. Wired into CloseAuxWindows via the tracking dictionary.
+    private void OpenStickyNote(string key, Func<StickyNoteWindow> factory)
+    {
+        if (_overlay is not { } overlay) return;
+        if (_noteWindows.TryGetValue(key, out var existing))
+        {
+            if (existing.WindowState == WindowState.Minimized) existing.WindowState = WindowState.Normal;
+            existing.Activate();
+            return;
+        }
+
+        var note = factory();
+        note.CascadeIndex = _noteWindows.Count;
+        note.Closed += (_, _) => _noteWindows.Remove(key);
+        _noteWindows[key] = note;
+        note.Show(overlay); // owned + non-modal: above the overlay, but the overlay stays clickable
     }
 
     // Applies the enabled links to the overlay strip, resolving their icons off the UI thread (the first

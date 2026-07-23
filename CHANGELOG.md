@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.16] - 2026-07-23
+
+- Notes are sticky notes now — draggable, resizable, and shamelessly yellow.
+- They open beside the overlay, never on top of or behind it, and don't block the rest of Perch.
+- Row notes split into a project note (shared across the project) and a session note.
+- A project note lights the note glyph on every session in that folder.
+
+---
+
 ## [v0.2.15] - 2026-07-22
 
 - New global scratch pad — a note button on the quick-links row opens a multi-line pad.

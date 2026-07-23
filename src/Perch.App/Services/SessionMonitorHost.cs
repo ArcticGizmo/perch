@@ -96,6 +96,19 @@ internal sealed class SessionMonitorHost : IDisposable
         _monitor.Scan();
     }
 
+    /// <summary>Sets or clears the project note shared by every session under <paramref name="cwd"/>
+    /// (writes/deletes the project's <c>project.note</c> sidecar) and rescans. A null/blank text clears
+    /// it. Call on the UI thread.</summary>
+    public void SetProjectNote(string cwd, string? text)
+    {
+        _monitor.SetProjectNote(cwd, text);
+        _monitor.Scan();
+    }
+
+    /// <summary>Reads the project note shared by sessions under <paramref name="cwd"/>, or null when
+    /// unset.</summary>
+    public string? ReadProjectNote(string cwd) => SessionMonitor.ReadProjectNote(cwd);
+
     /// <summary>Clears a completed session's "done" badge — the user focused/clicked it — and rescans so
     /// the overlay drops the NeedsAttention state back to Idle. Harmless for a session that isn't done.
     /// Call on the UI thread.</summary>

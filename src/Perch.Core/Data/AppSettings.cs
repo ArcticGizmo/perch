@@ -68,7 +68,7 @@ internal sealed class AppSettings
 
     // The global scratch pad — free-form multi-line text opened from the note button leading the overlay's
     // quick-links row. Not tied to any session; persisted here so it survives a restart. Null/empty means
-    // the pad is empty (nothing written to the file when empty). See ScratchPadDialog.
+    // the pad is empty (nothing written to the file when empty). See StickyNoteWindow.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ScratchText { get; set; }
 

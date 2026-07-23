@@ -123,6 +123,60 @@ public class NoteSidecarTests
         finally { File.Delete(path); }
     }
 
+    // A project note is written to a project.note sidecar in the cwd's encoded transcript directory and
+    // reads back verbatim (trimmed) — the round trip the row-note editor's project section relies on. It's
+    // shared by every session with that cwd, which is why it's keyed by cwd rather than session id.
+    [Fact]
+    public void SetProjectNote_ThenRead_RoundTrips()
+    {
+        var cwd = @"C:\fixtures\note-proj-" + Guid.NewGuid().ToString("N");
+        var path = Path.Combine(ClaudePaths.ProjectsDir, TranscriptLocator.EncodeProjectDir(cwd), "project.note");
+        using var monitor = new SessionMonitor();
+        try
+        {
+            monitor.SetProjectNote(cwd, "  shared: freeze main before the release  ");
+            Assert.Equal("shared: freeze main before the release", SessionMonitor.ReadProjectNote(cwd));
+            Assert.True(File.Exists(path));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void SetProjectNote_WithBlank_ClearsTheSidecar(string? blank)
+    {
+        var cwd = @"C:\fixtures\note-proj-" + Guid.NewGuid().ToString("N");
+        var path = Path.Combine(ClaudePaths.ProjectsDir, TranscriptLocator.EncodeProjectDir(cwd), "project.note");
+        using var monitor = new SessionMonitor();
+        try
+        {
+            monitor.SetProjectNote(cwd, "temporary");
+            Assert.True(File.Exists(path));
+
+            monitor.SetProjectNote(cwd, blank);
+            Assert.False(File.Exists(path));
+            Assert.Null(SessionMonitor.ReadProjectNote(cwd));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    // A blank cwd has no project to key against, so the read is null and the write is a harmless no-op.
+    [Fact]
+    public void ProjectNote_WithBlankCwd_IsNullAndNoOp()
+    {
+        using var monitor = new SessionMonitor();
+        monitor.SetProjectNote("", "ignored"); // must not throw
+        Assert.Null(SessionMonitor.ReadProjectNote(""));
+    }
+
     private static string WriteTemp(string content)
     {
         var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".note");
