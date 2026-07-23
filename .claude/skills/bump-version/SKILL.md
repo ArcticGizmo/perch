@@ -1,6 +1,6 @@
 ---
 name: bump-version
-description: Bump the Perch version and refresh the changelog. Determines the next version from the LAST GIT TAG (not the csproj value, which can drift), bumps src/Perch.csproj, backfills changelog sections for any tagged versions that were never documented, summarises every change since the last tag into a new CHANGELOG.md section (keeping the dry humour), clears the Unreleased section, and prints the new version plus its changelog entries. Use when the user says "bump version", "bump the version", "/bump-version", or wants to cut a new release entry.
+description: Bump the Perch version and refresh the changelog. Determines the next version from the LAST GIT TAG (not the csproj value, which can drift), bumps src/Perch.App/Perch.App.csproj, backfills changelog sections for any tagged versions that were never documented, summarises every change since the last tag into a new CHANGELOG.md section (keeping the dry humour), clears the Unreleased section, and prints the new version plus its changelog entries. Use when the user says "bump version", "bump the version", "/bump-version", or wants to cut a new release entry.
 ---
 
 # Bump Version
@@ -9,7 +9,7 @@ Bumps Perch to the next patch version and brings `CHANGELOG.md` up to date.
 
 ## Why the tag, not the csproj
 
-The version in `src/Perch.csproj` and the `[Unreleased]` changelog section both
+The version in `src/Perch.App/Perch.App.csproj` and the `[Unreleased]` changelog section both
 drift — sometimes a version gets tagged without the csproj or changelog catching up. The
 **last git tag is the source of truth**. Always derive the next version from it.
 
@@ -45,7 +45,7 @@ would never notice. Collapse related commits into the single *net* change they a
 
 ### 2. Bump the csproj
 
-Edit the `<Version>` element in `src/Perch.csproj` to `$NEXT` (no `v` prefix). Leave
+Edit the `<Version>` element in `src/Perch.App/Perch.App.csproj` to `$NEXT` (no `v` prefix). Leave
 everything else untouched — set it to `$NEXT` regardless of its current value.
 
 ### 3. Backfill any missing tagged versions

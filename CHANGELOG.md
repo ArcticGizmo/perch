@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.20] - 2026-07-23
+
+- Now-playing media strip on the overlay, with previous / play-pause / next.
+- Toggle it from Settings → Music or the header right-click menu (off by default).
+
+---
+
 ## [v0.2.19] - 2026-07-23
 
 - Token achievements split into Input, Output, and Cached milestones.

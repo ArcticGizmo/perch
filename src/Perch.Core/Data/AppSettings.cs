@@ -92,6 +92,12 @@ internal sealed class AppSettings
     // reclaim its width; the artifacts are still tracked. Defaults to true; a missing key keeps it on.
     public bool ShowArtifacts { get; set; } = true;
 
+    // Whether to show the now-playing media controller strip on the overlay — what's currently playing
+    // (from the Windows media session: Spotify, a browser media tab, etc.) plus previous / play-pause /
+    // next controls. Off by default (opt-in); the strip is only visible while something is actually
+    // playing. A missing key keeps it off.
+    public bool ShowMediaController { get; set; } = false;
+
     // Whether to show the outage footer at the bottom of the overlay when status.claude.com reports a
     // problem (clicking it lists the incidents + links to the status page). Off stops the poll entirely
     // and hides the footer. On by default; a missing key in an older settings file keeps it on.

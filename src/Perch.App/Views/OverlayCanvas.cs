@@ -26,7 +26,7 @@ namespace Perch.Avalonia.Views;
 /// attention chase-border (4.14); the auto-close countdown (4.15); window drag/behaviors (4.16); and the
 /// display-toggle gates driven from settings (4.17).
 /// </summary>
-public sealed class OverlayCanvas : Control, IDenseHost
+public sealed partial class OverlayCanvas : Control, IDenseHost
 {
     // ── Layout (mirrors OverlayForm's constants) ──────────────────────────────
     private const double FormWidth        = 280;
@@ -328,6 +328,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             if (HasQuickLinksRow) h += QuickLinksRowHeight;
             foreach (var r in _rows) h += HeightOf(r);
             h += 2;
+            if (MediaStripVisible) h += MediaStripHeight;
         }
         if (ShowFooter) h += FooterHeight;
         return h;
@@ -733,6 +734,10 @@ public sealed class OverlayCanvas : Control, IDenseHost
     /// the desired new enabled state for the app to persist and apply.</summary>
     public event Action<bool>? UsageToggleRequested;
 
+    /// <summary>Raised when the user toggles the now-playing media strip from the header right-click menu;
+    /// carries the desired new enabled state for the app to persist, apply, and start/stop the listener.</summary>
+    public event Action<bool>? MediaControllerToggleRequested;
+
     /// <summary>Raised when the user picks "Show QR code" for a remote-controlled session. The QR window
     /// is Phase 5; this wires only the trigger. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
     internal event Action<ClaudeSession>? QrRequested;
@@ -778,7 +783,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~150ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Note }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Note, Media }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -936,6 +941,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
         bool showSys = showRows && _showSystemMetrics;        // machine CPU/RAM strip, just under the header
         bool showUsage = showRows && _usageEnabled;           // rate-limit bars, below the metrics strip
         bool showQuickLinks = showRows && HasQuickLinksRow;   // app icon strip, below the usage bars
+        bool showMedia = showRows && MediaStripVisible;       // now-playing + transport strip, below the rows
 
         double height = HeaderHeight;
         if (showRows)
@@ -945,6 +951,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             if (showQuickLinks) height += QuickLinksRowHeight;
             foreach (var r in _rows) height += HeightOf(r);
             height += 2;
+            if (showMedia) height += MediaStripHeight;
         }
         // The outage footer sits below everything; shown only when enabled and there's an issue. Reached
         // only past the closed-strip early-return, so the header is always present to anchor it to.
@@ -994,7 +1001,13 @@ public sealed class OverlayCanvas : Control, IDenseHost
                     else DrawSessionRow(ctx, i, r.Session!, top, width);
                     top += HeightOf(r);
                 }
+
+                // The now-playing strip sits below the rows (and above any outage footer); it captures its
+                // own transport-button hit-rects, which are otherwise cleared each paint just below.
+                if (showMedia) DrawMediaStrip(ctx, width, top);
             }
+
+            if (!showMedia) ClearMediaHitRects();
 
             if (showFooter) DrawStatusFooter(ctx, width, height);
             else _footerRect = default;
@@ -2027,9 +2040,13 @@ public sealed class OverlayCanvas : Control, IDenseHost
         // A row's note glyph is clickable (opens its scratch pad), so it earns the hand cursor too.
         bool overRowNote = HitTestNoteIcon(p) >= 0;
 
+        // The media transport buttons highlight on hover and take the hand cursor like the other controls.
+        int media = HitTestMedia(p);
+        if (media != _hoveredMediaButton) { _hoveredMediaButton = media; InvalidateVisual(); }
+
         // Hand cursor over clickable glyphs (quick links + artifacts + the update badge + outage footer +
-        // the scratch-pad note button + a row's note glyph); rows show only the highlight.
-        Cursor = (ql >= 0 || art >= 0 || overUpdate || overFooter || overNote || overRowNote)
+        // the scratch-pad note button + a row's note glyph + the media buttons); rows show only the highlight.
+        Cursor = (ql >= 0 || art >= 0 || overUpdate || overFooter || overNote || overRowNote || media >= 0)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -2045,6 +2062,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             HitTestTaskCount(p)  is var ta && ta >= 0 ? (TipKind.Task, ta) :
             HitTestMetrics(p)    is var me && me >= 0 ? (TipKind.Metrics, me) :
             HitTestNoteIcon(p)   is var no && no >= 0 ? (TipKind.Note, no) :
+            _mediaTitleRect.Contains(p)               ? (TipKind.Media, -1) :
             InUsageStrip(p)                           ? (TipKind.Usage, -1) :
                                                         (TipKind.None, -1);
 
@@ -2072,6 +2090,7 @@ public sealed class OverlayCanvas : Control, IDenseHost
             case TipKind.Task:    ShowTaskTooltip(_tipRow);    break;
             case TipKind.Metrics: ShowMetricsTooltip(_tipRow); break;
             case TipKind.Note:    ShowNoteTooltip(_tipRow);    break;
+            case TipKind.Media:   ShowMediaTooltip();          break;
         }
     }
 
@@ -2081,11 +2100,12 @@ public sealed class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1;
         _hoveredRow = _hoveredQuickLink = _hoveredArtifactRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
         _hoveredNoteButton = false;
+        _hoveredMediaButton = -1;
         Cursor = Cursor.Default;
         _tipKind = TipKind.None;
         _tipRow = -1;
@@ -2232,6 +2252,12 @@ public sealed class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+        // Media transport buttons (the now-playing strip): each raises its request for the App to relay to
+        // the media controller. A disabled button has a zero-size hit-rect, so it simply can't be clicked.
+        if (_mediaPrevRect.Contains(p)) { MediaPreviousRequested?.Invoke(); return; }
+        if (_mediaPlayRect.Contains(p)) { MediaPlayPauseRequested?.Invoke(); return; }
+        if (_mediaNextRect.Contains(p)) { MediaNextRequested?.Invoke(); return; }
+
         int art = HitTestArtifactIcon(p);
         if (art >= 0 && _rows[art].Session is { } artSession)
         {
@@ -2375,6 +2401,8 @@ public sealed class OverlayCanvas : Control, IDenseHost
                 () => SystemMetricsToggleRequested?.Invoke(!_showSystemMetrics)));
             items.Add(MenuItem(_usageEnabled ? "Hide usage" : "Show usage",
                 () => UsageToggleRequested?.Invoke(!_usageEnabled)));
+            items.Add(MenuItem(_mediaEnabled ? "Hide media controller" : "Show media controller",
+                () => MediaControllerToggleRequested?.Invoke(!_mediaEnabled)));
             items.Add(MenuItem("Exit Perch", () => ExitRequested?.Invoke()));
         }
 

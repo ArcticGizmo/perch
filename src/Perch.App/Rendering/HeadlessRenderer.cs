@@ -9,6 +9,7 @@ using Perch.Avalonia.Views;
 using Perch.Avalonia.Windows;
 using Perch.Data;
 using Perch.Data.Replay;
+using Perch.Platform;
 
 namespace Perch.Avalonia.Rendering;
 
@@ -73,6 +74,19 @@ internal static class HeadlessRenderer
         probe.Update(SampleSessions());
         probe.StartAutoCloseCountdown(20_000);
         RenderControl(probe, Path.Combine(outDir, "overlay_autoclose_1x.png"), 96);
+
+        // Now-playing media strip: below the session rows, a track label + previous / play-pause / next.
+        // Rendered "playing" (pause glyph shown) with previous disabled, to exercise the enabled/disabled
+        // button styling and the label truncation.
+        var mediaProbe = new OverlayCanvas();
+        mediaProbe.Update(SampleSessions());
+        mediaProbe.SetShowMediaController(true);
+        mediaProbe.UpdateMedia(new MediaSnapshot(
+            Title: "Weightless (Ambient Transmission, Pt. 3)", Artist: "Marconi Union",
+            IsPlaying: true, CanPlayPause: true, CanNext: true, CanPrevious: false,
+            Position: TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(14), Duration: TimeSpan.FromMinutes(8)));
+        RenderControl(mediaProbe, Path.Combine(outDir, "overlay_media_1x.png"), 96);
+        RenderControl(mediaProbe, Path.Combine(outDir, "overlay_media_1.5x.png"), 144);
 
         // "Jump to next session" landing highlight: the blue selection wash + left bar on the cycled row.
         // Rendered immediately after triggering it, so the fade timer hasn't run and it's at full strength.

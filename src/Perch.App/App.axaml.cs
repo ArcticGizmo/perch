@@ -24,6 +24,7 @@ public partial class App : Application
     private UsageMonitorHost? _usageHost;
     private MetricsMonitorHost? _metricsHost;
     private StatusMonitorHost? _statusHost;
+    private MediaMonitorHost? _mediaHost;
     private QuickLinkLauncher? _quickLinkLauncher;
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
@@ -100,6 +101,7 @@ public partial class App : Application
                 _usageHost?.Dispose();
                 _metricsHost?.Dispose();
                 _statusHost?.Dispose();
+                _mediaHost?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
                 _overlay?.Canvas.DisposeDense();
@@ -131,6 +133,8 @@ public partial class App : Application
                 _overlay.Canvas.UpdateSystemMetrics, _overlay.Canvas.UpdateSessionMetrics);
             // Public Claude service status → the overlay's outage footer (only shown when there's an issue).
             _statusHost = new StatusMonitorHost(_overlay.Canvas.UpdateStatus, settings.ServiceStatusIntervalMinutes);
+            // System media session → the overlay's now-playing strip (opt-in; started below when enabled).
+            _mediaHost = new MediaMonitorHost(PlatformServices.CreateMediaController(), _overlay.Canvas.UpdateMedia);
 
             // Each scan feeds both the canvas and the metrics sampler (which pids to measure). Under
             // replay the projector doubles as the process-probe so recorded (dead) pids read as alive.
@@ -165,12 +169,18 @@ public partial class App : Application
             _overlay.Canvas.SessionActivated += FocusSession;
             _overlay.Canvas.ArtifactChosen += OpenArtifact;
 
+            // Media transport buttons on the now-playing strip → the system media session.
+            _overlay.Canvas.MediaPlayPauseRequested += () => _mediaHost?.Controller.TogglePlayPause();
+            _overlay.Canvas.MediaNextRequested += () => _mediaHost?.Controller.Next();
+            _overlay.Canvas.MediaPreviousRequested += () => _mediaHost?.Controller.Previous();
+
             // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
             // down. History / QR / external-notify / confetti are Phase-5 concerns — their triggers are
             // wired here so the menu is complete, with best-effort/stub handlers until those windows land.
             _overlay.Canvas.ExitRequested += () => desktop.Shutdown();
             _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
             _overlay.Canvas.UsageToggleRequested += SetUsageEnabled;
+            _overlay.Canvas.MediaControllerToggleRequested += SetMediaControllerEnabled;
             _overlay.Canvas.HistoryRequested += OpenHistory;
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
@@ -236,6 +246,7 @@ public partial class App : Application
             CheckAchievements(force: true); // background all-time scan → celebrate anything unlocked while away
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
             if (settings.ShowServiceStatus) _statusHost.Start(); // initial fetch (polls every 2 min thereafter)
+            if (settings.ShowMediaController) _mediaHost.Start(); // begin listening to the system media session
             ReloadQuickLinks(settings);
 
             // Global hotkeys: dense-toggle, jump-to-next-session, and the keyboard switcher — each read
@@ -404,6 +415,7 @@ public partial class App : Application
         c.SetWaitingTimerRedMinutes(s.WaitingTimerRedMinutes);
         c.SetShowArtifacts(s.ShowArtifacts);
         c.SetServiceStatusEnabled(s.ShowServiceStatus);
+        c.SetShowMediaController(s.ShowMediaController);
         c.SetHideInactiveTeamMembers(s.HideInactiveTeamMembers);
         c.SetUpsideDownQuickLinks(s.UpsideDownQuickLinks);
         c.SetConfettiFinishAvailable(s.ConfettiFinish);
@@ -583,6 +595,20 @@ public partial class App : Application
         _appSettings.Save();
         _overlay.Canvas.SetShowUsage(enabled);
         if (enabled) _usageHost?.Start(); else _usageHost?.Stop();
+        _settings?.SyncDisplayToggles();
+    }
+
+    // Toggle the now-playing media strip from the header right-click menu — the counterpart of the Music
+    // page's toggle: persist the flag, apply it to the canvas, start/stop the media-session listener, and
+    // sync an open Settings window so the menu and the page never disagree.
+    private void SetMediaControllerEnabled(bool enabled)
+    {
+        if (_appSettings is null || _overlay is null) return;
+        if (_appSettings.ShowMediaController == enabled) return;
+        _appSettings.ShowMediaController = enabled;
+        _appSettings.Save();
+        _overlay.Canvas.SetShowMediaController(enabled);
+        if (enabled) _mediaHost?.Start(); else _mediaHost?.Stop();
         _settings?.SyncDisplayToggles();
     }
 
@@ -969,6 +995,7 @@ public partial class App : Application
             UsageEnabledChanged = on => { if (on) _usageHost?.Start(); else _usageHost?.Stop(); },
             ServiceStatusEnabledChanged = on => { if (on) _statusHost?.Start(); else _statusHost?.Stop(); },
             ServiceStatusIntervalChanged = () => _statusHost?.SetInterval(settings.ServiceStatusIntervalMinutes),
+            MediaEnabledChanged = on => { if (on) _mediaHost?.Start(); else _mediaHost?.Stop(); },
 #if DEBUG
             TestServiceStatus = () => _overlay?.Canvas.UpdateStatus(SampleOutage()),
             TestAchievementBatch = () => ShowAchievementCards(SampleAchievementBatch()),

@@ -36,4 +36,15 @@ internal static class PlatformServices
 
     public static ISessionLock CreateSessionLock() => new Impl.SessionLock();
     public static IGlobalHotkey CreateGlobalHotkey() => new Impl.GlobalHotkey();
+
+    // The now-playing controller lives in the app head (not a platform project) because it needs the
+    // Windows-10 WinRT projection the head already targets — same arrangement as the Action-Center toast
+    // notifier. Dual-guarded like the notifier: compiled only on the Windows head, and gated at runtime so
+    // a Windows binary running elsewhere falls back to the no-op.
+    public static IMediaController CreateMediaController() =>
+#if WINDOWS
+        OperatingSystem.IsWindows() ? new Media.WindowsMediaController() : new Media.NullMediaController();
+#else
+        new Media.NullMediaController();
+#endif
 }

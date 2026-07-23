@@ -15,7 +15,7 @@
           <RootNamespace>Perch.Avalonia</RootNamespace>
           <AssemblyName>perch</AssemblyName>
           <Product>Perch</Product>
-          <Version>0.2.19</Version>
+          <Version>0.2.20</Version>
           <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
      </PropertyGroup>
 
@@ -68,6 +68,9 @@
      <ItemGroup Condition="!$(TargetFramework.Contains('-windows'))">
           <ProjectReference Include="..\Perch.Platform.Mac\Perch.Platform.Mac.csproj" />
           <Compile Remove="Notifications\WindowsToastNotifier.cs" />
+          <!-- The SMTC now-playing controller uses the Windows-10 WinRT projection; the cross-platform
+               head uses Media\NullMediaController.cs instead. -->
+          <Compile Remove="Media\WindowsMediaController.cs" />
      </ItemGroup>
 
      <ItemGroup>

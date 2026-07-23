@@ -38,6 +38,9 @@ internal sealed class SettingsHooks
     /// <summary>Re-apply the service-status poll interval (the App reads the mutated setting back).</summary>
     public Action? ServiceStatusIntervalChanged;
 
+    /// <summary>Start (true) or stop (false) listening to the system media session for the overlay strip.</summary>
+    public Action<bool>? MediaEnabledChanged;
+
 #if DEBUG
     /// <summary>Push a sample outage onto the overlay so the status footer can be illustrated (debug only).</summary>
     public Action? TestServiceStatus;
@@ -166,6 +169,7 @@ internal sealed class SettingsWindow : Window
         AddPage(nav, "achievements", "Achievements",    BuildAchievementsPage);
         AddPage(nav, "notify",       "Notifications",   BuildNotificationsPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
+        AddPage(nav, "music",        "Music",           BuildMusicPage);
         AddPage(nav, "experimental", "Experimental",    BuildExperimentalPage);
         AddPage(nav, "export",       "Export",          BuildExportPage);
         AddPage(nav, "about",        "About",           BuildAboutPage);
@@ -335,6 +339,7 @@ internal sealed class SettingsWindow : Window
     // SyncDisplayToggles can mirror an out-of-band change back into this window.
     private PerchToggle _usageToggle = null!;
     private PerchToggle _systemMetricsToggle = null!;
+    private PerchToggle _mediaToggle = null!;
 
     private void BuildUsagePage(StackPanel page)
     {
@@ -398,6 +403,28 @@ internal sealed class SettingsWindow : Window
         _expectedRateToggle.IsEnabled = _settings.ShowUsage;
         _usageBars.SetOn(_settings.ShowUsage);
         _systemMetricsToggle.SetCheckedSilent(_settings.ShowSystemMetrics);
+        _mediaToggle.SetCheckedSilent(_settings.ShowMediaController);
+    }
+
+    // ── Music ─────────────────────────────────────────────────────────────────────
+    private void BuildMusicPage(StackPanel page)
+    {
+        page.Children.Add(SettingsUi.SectionTitle("Media controller"));
+        page.Children.Add(SettingsUi.BodyText(
+            "Show what's currently playing — from the Windows media session (Spotify, a browser media tab, "
+            + "Groove, …) — as a strip on the overlay, with previous / play-pause / next controls. It uses "
+            + "the built-in system media session, so there's nothing extra to install."));
+
+        _mediaToggle = Toggle(_settings.ShowMediaController);
+        _mediaToggle.CheckedChanged += (_, _) =>
+        {
+            _settings.ShowMediaController = _mediaToggle.IsChecked;
+            _settings.Save();
+            _hooks.DisplayChanged?.Invoke();                     // applies SetShowMediaController to the overlay
+            _hooks.MediaEnabledChanged?.Invoke(_mediaToggle.IsChecked); // starts/stops the media session listener
+        };
+        page.Children.Add(SettingsUi.TitleRow("Show media controller", _mediaToggle));
+        page.Children.Add(SettingsUi.BodyText("The strip only appears while something is actually playing."));
     }
 
     // ── Indicators ──────────────────────────────────────────────────────────────────
