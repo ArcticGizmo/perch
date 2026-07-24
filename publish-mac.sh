@@ -8,7 +8,7 @@
 # targets osx-arm64 and hands vpk our own Info.plist so LSUIElement + NSAppleEventsUsageDescription
 # survive into the bundle (see src/Perch.App/Info.plist).
 #
-# Output lands in releases/ : Perch-<ver>-osx-arm64.dmg (drag-install), a portable .zip, and the update
+# Output lands in releases/ : Perch-osx-arm64.dmg (drag-install), a portable .zip, and the update
 # feed. The build is UNSIGNED — see the README's "macOS (unsigned)" note for the Gatekeeper workaround.
 set -euo pipefail
 
@@ -100,7 +100,7 @@ vpk pack \
 #   * the DMG is built from it — a compressed image with an /Applications drop target (the familiar
 #     unsigned-mac drag-install UX the README points users at).
 echo "Building DMG ..."
-dmg="$OUT_DIR/Perch-$VERSION-osx-arm64.dmg"
+dmg="$OUT_DIR/Perch-osx-arm64.dmg"
 app="$OUT_DIR/Perch.app"
 rm -rf "$app"
 unzip -q "$OUT_DIR/Perch-osx-Portable.zip" -d "$OUT_DIR"   # yields releases/Perch.app

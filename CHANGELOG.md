@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.21] - 2026-07-24
+
+- Renamed the macOS DMG to a stable `Perch-osx-arm64.dmg` (the version was just noise).
+- Dropped the portable .zip builds from releases (nobody was reaching for them).
+
+---
+
 ## [v0.2.20] - 2026-07-23
 
 - Now-playing media strip on the overlay, with previous / play-pause / next.

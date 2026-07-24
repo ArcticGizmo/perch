@@ -141,7 +141,7 @@ If the `.dmg` **itself** won't open ("damaged"), the quarantine is on the downlo
 image first, then reopen it:
 
 ```sh
-xattr -cr ~/Downloads/Perch-*-osx-arm64.dmg
+xattr -cr ~/Downloads/Perch-osx-arm64.dmg
 ```
 
 Perch runs as a menu-bar app — there's no Dock icon. On first launch it symlinks `perch` into
