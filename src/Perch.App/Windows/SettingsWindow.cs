@@ -355,7 +355,7 @@ internal sealed class SettingsWindow : Window
             _usageBars.SetOn(_usageToggle.IsChecked);
         };
         page.Children.Add(SettingsUi.TitleRow("Usage limits", _usageToggle));
-        page.Children.Add(SettingsUi.BodyText("Your account-wide 5-hour and weekly rate-limit usage."));
+        page.Children.Add(SettingsUi.BodyText("Your account-wide 5-hour and weekly rate-limit usage, plus any per-model weekly limits."));
 
         _expectedRateToggle = Toggle(_settings.ShowExpectedUsageRate);
         _expectedRateToggle.IsEnabled = _settings.ShowUsage;

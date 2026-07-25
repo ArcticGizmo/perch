@@ -41,7 +41,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double SectionRowHeight = 26;
     private const double SubIndent        = 22;
     private const double BarRowHeight     = 18;
-    private const double UsageStripHeight = 50; // two usage bars + padding, shown only when expanded
+    private const double UsageStripPad    = 14; // padding around the usage bars; the strip's own height is
+                                                // UsageStripHeight (bar count varies with scoped windows)
     private const double SysMetricsStripHeight = 50; // system CPU + RAM bars + padding, shown only when expanded
     private const double MetricsBarWidth  = 28; // width reserved for a session row's CPU/RAM mini-bars
     private const double QuickLinksRowHeight = 24; // height of the quick-links icon strip below the usage bars
@@ -360,8 +361,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// Internal because <see cref="UsageInfo"/> is a Core-internal type shared via InternalsVisibleTo.</summary>
     internal void UpdateUsage(UsageInfo usage)
     {
+        // A scoped window appearing or disappearing between polls changes the bar count, and so the
+        // panel height — that needs a relayout, not just a repaint, or the strip paints past the panel.
+        int before = UsageBarCount;
         _usage = usage;
-        if (_usageEnabled) InvalidateVisual();
+        if (!_usageEnabled) return;
+        if (UsageBarCount != before) RemeasurePanel();
+        else InvalidateVisual();
     }
 
     /// <summary>Show/hide the whole usage strip. Toggling it changes the panel height, so relayout.</summary>
@@ -1188,9 +1194,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             captionW: 46, pctW: 34, trackH: 7);
 
     // ── Usage bars ─────────────────────────────────────────────────────────────
-    // Two bars below the header (or the metrics strip, when shown) when expanded: the 5-hour ("Session")
-    // and 7-day ("Weekly") rate-limit windows. Dimmed when the reading is stale/unavailable.
+    // Bars below the header (or the metrics strip, when shown) when expanded: the 5-hour ("Session") and
+    // 7-day ("Weekly") rate-limit windows, plus one per model-scoped weekly window the endpoint reports
+    // (e.g. Fable). Dimmed when the reading is stale/unavailable.
     private double UsageStripTop => HeaderHeight + (_showSystemMetrics ? SysMetricsStripHeight : 0);
+
+    // Session + Weekly are always drawn; scoped windows only when the endpoint returns them, so the
+    // strip's height rides on the reading. UpdateUsage relayouts when this changes.
+    private int UsageBarCount => 2 + _usage.Scoped.Count;
+    private double UsageStripHeight => UsageBarCount * BarRowHeight + UsageStripPad;
 
     private void DrawUsageBars(DrawingContext ctx, double width)
     {
@@ -1202,6 +1214,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             ? UsageBarRenderer.ElapsedPercent(_usage.SevenDayResetsAt, TimeSpan.FromDays(7)) : null;
         DrawUsageBar(ctx, width, top,                 "Session", _usage.FiveHourPercent, sessionExpected, stale);
         DrawUsageBar(ctx, width, top + BarRowHeight,  "Weekly",  _usage.SevenDayPercent, weeklyExpected,  stale);
+
+        double scopedTop = top + BarRowHeight * 2;
+        foreach (var s in _usage.Scoped)
+        {
+            double? expected = _showExpectedRate
+                ? UsageBarRenderer.ElapsedPercent(s.ResetsAt, TimeSpan.FromDays(7)) : null;
+            DrawUsageBar(ctx, width, scopedTop, s.Label, s.Percent, expected, stale);
+            scopedTop += BarRowHeight;
+        }
     }
 
     // The overlay's compact bar: a HorizPad inset on both sides, narrow caption/pct columns, the
@@ -2948,6 +2969,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             new(UsageLine("Session", _usage.FiveHourPercent, _usage.FiveHourResetsAt, now), OverlayTooltip.FgColor, false),
             new(UsageLine("Weekly",  _usage.SevenDayPercent, _usage.SevenDayResetsAt, now), OverlayTooltip.FgColor, false),
         };
+        foreach (var s in _usage.Scoped)
+            lines.Add(new(UsageLine(s.Label, s.Percent, s.ResetsAt, now), OverlayTooltip.FgColor, false));
+
         if (_usage.IsStale(now))
         {
             var reason = _usage.Error;

@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.22] - 2026-07-25
+
+- Per-model weekly limits in the usage strip (Fable's was there all along)
+
+---
+
 ## [v0.2.21] - 2026-07-24
 
 - Renamed the macOS DMG to a stable `Perch-osx-arm64.dmg` (the version was just noise).

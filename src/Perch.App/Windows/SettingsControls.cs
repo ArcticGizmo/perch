@@ -373,22 +373,28 @@ internal sealed class SpinnerView : Control
 }
 
 /// <summary>Renders the 5-hour ("Session") and 7-day ("Weekly") usage windows as labelled bars, matching
-/// the overlay (via <see cref="UsageBarRenderer"/>). Shows a placeholder line when usage tracking is off
-/// or no reading is available yet. The Avalonia port of the WinForms <c>UsageBarsControl</c>.</summary>
+/// the overlay (via <see cref="UsageBarRenderer"/>), plus one bar per model-scoped weekly window the
+/// endpoint reports (e.g. Fable). Shows a placeholder line when usage tracking is off or no reading is
+/// available yet. The Avalonia port of the WinForms <c>UsageBarsControl</c>.</summary>
 internal sealed class UsageBarsView : Control
 {
     private const double BarRowHeight = 24;
     private const double CaptionW = 64;
     private const double PctW = 44;
     private const double TrackH = 8;
+    private const double FooterHeight = 26; // the "Updated … · resets …" line below the bars
 
     private UsageInfo _usage = UsageInfo.Empty;
     private bool _on = true;
     private bool _showExpectedRate = true;
 
-    public UsageBarsView() => Height = 74;
+    public UsageBarsView() => Height = MeasuredHeight;
 
-    public void SetUsage(UsageInfo usage) { _usage = usage; InvalidateVisual(); }
+    // Session + Weekly, plus a row per scoped window — so the control's height rides on the reading.
+    private int BarCount => 2 + _usage.Scoped.Count;
+    private double MeasuredHeight => BarCount * BarRowHeight + FooterHeight;
+
+    public void SetUsage(UsageInfo usage) { _usage = usage; Height = MeasuredHeight; InvalidateVisual(); }
     public void SetOn(bool on) { _on = on; InvalidateVisual(); }
     public void SetShowExpectedRate(bool show) { _showExpectedRate = show; InvalidateVisual(); }
 
@@ -414,13 +420,21 @@ internal sealed class UsageBarsView : Control
         DrawBar(ctx, 0, "Session", _usage.FiveHourPercent, sessionExpected, stale);
         DrawBar(ctx, BarRowHeight, "Weekly", _usage.SevenDayPercent, weeklyExpected, stale);
 
+        double scopedTop = BarRowHeight * 2;
+        foreach (var s in _usage.Scoped)
+        {
+            double? expected = _showExpectedRate ? UsageBarRenderer.ElapsedPercent(s.ResetsAt, TimeSpan.FromDays(7)) : null;
+            DrawBar(ctx, scopedTop, s.Label, s.Percent, expected, stale);
+            scopedTop += BarRowHeight;
+        }
+
         var parts = new List<string>
         {
             _usage.Ok ? $"Updated {_usage.LastUpdated:h:mm tt}" : $"Stale — {_usage.Error}",
         };
         if (_usage.FiveHourResetsAt is { } fr) parts.Add($"5h resets {fr:ddd h:mm tt}");
         if (_usage.SevenDayResetsAt is { } wr) parts.Add($"weekly resets {wr:ddd h:mm tt}");
-        ctx.DrawText(OverlayDraw.Text(string.Join("   ·   ", parts), 11, muted), new Point(0, BarRowHeight * 2 + 2));
+        ctx.DrawText(OverlayDraw.Text(string.Join("   ·   ", parts), 11, muted), new Point(0, scopedTop + 2));
     }
 
     private void DrawBar(DrawingContext ctx, double rowTop, string caption, double? percent, double? expected, bool stale) =>

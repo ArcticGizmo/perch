@@ -11,7 +11,7 @@
 
 Perch is a **Windows and macOS** menu-bar / system-tray app that watches your active Claude Code sessions and surfaces what each one is doing — at a glance, without alt-tabbing through a dozen terminals. When a session finishes, gets stuck on a permission prompt, or needs you, you'll know.
 
-Already know you want it? [Skip the details and install it ▼](#install)
+Already know you want it? [Skip the details and install it ▼](#Installing)
 
 ### At a glance
 

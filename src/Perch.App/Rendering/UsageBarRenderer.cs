@@ -28,9 +28,14 @@ internal static class UsageBarRenderer
         Color muted, Color track, Color expectedMark, Color bgBlend,
         double captionW, double pctW, double trackH)
     {
-        // Caption (left)
+        // Caption (left). Clamped to its column with an ellipsis: captions are fixed strings for the
+        // Session/Weekly bars, but a scoped bar is captioned with the model's display name from the
+        // endpoint, which would otherwise run under the track.
         Color capColor = stale ? Palette.Blend(muted, bgBlend, 0.5f) : muted;
-        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(caption, capSize, new SolidColorBrush(capColor)), left, midY);
+        var capFt = OverlayDraw.Text(caption, capSize, new SolidColorBrush(capColor));
+        capFt.MaxTextWidth = Math.Max(0, captionW - 4);
+        capFt.Trimming = TextTrimming.CharacterEllipsis;
+        OverlayDraw.TextLeftMid(ctx, capFt, left, midY);
 
         // Track
         double trackLeft  = left + captionW;

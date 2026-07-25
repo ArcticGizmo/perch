@@ -200,6 +200,7 @@ internal static class HeadlessRenderer
                 new Views.OverlayTooltip.Line("Plan usage", Views.OverlayTooltip.FgColor, true),
                 new Views.OverlayTooltip.Line("Session  62%  ·  resets 3:40pm", Views.OverlayTooltip.FgColor, false),
                 new Views.OverlayTooltip.Line("Weekly   28%  ·  resets Thu", Views.OverlayTooltip.FgColor, false),
+                new Views.OverlayTooltip.Line("Fable    41%  ·  resets Thu", Views.OverlayTooltip.FgColor, false),
             ],
         };
         RenderOnBackdrop(tipUsage, Path.Combine(outDir, "tooltip_usage_1x.png"), Color.FromRgb(40, 40, 52));
@@ -254,7 +255,7 @@ internal static class HeadlessRenderer
 
         var stack = new StackPanel { Width = 560, Margin = new Thickness(16) };
         stack.Children.Add(Windows.SettingsUi.TitleRow("Usage limits", Toggle(true)));
-        stack.Children.Add(Windows.SettingsUi.BodyText("Your account-wide 5-hour and weekly rate-limit usage."));
+        stack.Children.Add(Windows.SettingsUi.BodyText("Your account-wide 5-hour and weekly rate-limit usage, plus any per-model weekly limits."));
         var bars = new Windows.UsageBarsView();
         bars.SetOn(true);
         bars.SetUsage(SampleUsage());
@@ -307,14 +308,18 @@ internal static class HeadlessRenderer
     }
 
     // A healthy-but-visible reading: session bar mid-yellow, weekly bar low-green, both with a reset
-    // time an hour or two out so the expected-rate markers land partway along each track.
+    // time an hour or two out so the expected-rate markers land partway along each track. Carries a
+    // model-scoped weekly window too, so the render exercises the variable-height three-bar strip.
     private static UsageInfo SampleUsage()
     {
         var now = DateTime.Now;
         return new UsageInfo(
             FiveHourPercent: 62, SevenDayPercent: 28,
             FiveHourResetsAt: now.AddHours(2), SevenDayResetsAt: now.AddDays(4),
-            LastUpdated: now, Ok: true, Error: null);
+            LastUpdated: now, Ok: true, Error: null)
+        {
+            Scoped = [new ScopedUsage("Fable", 41, now.AddDays(4))],
+        };
     }
 
     // A spread of marker kinds across a 5-minute scene, so the timeline shows each tick colour.

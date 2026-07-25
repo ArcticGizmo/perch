@@ -61,10 +61,7 @@ internal sealed class UsageMonitor
             if (root is null)
                 return Fail("Couldn't parse usage response");
 
-            var (fivePct, fiveReset) = ReadWindow(root, "five_hour");
-            var (sevenPct, sevenReset) = ReadWindow(root, "seven_day");
-
-            _last = new UsageInfo(fivePct, sevenPct, fiveReset, sevenReset, DateTime.Now, true, null);
+            _last = Parse(root);
             return _last;
         }
         catch (Exception ex)
@@ -78,6 +75,54 @@ internal sealed class UsageMonitor
     private UsageInfo Fail(string reason) => _last.Ok
         ? _last with { Ok = false, Error = reason }
         : UsageInfo.Empty with { Error = reason };
+
+    /// <summary>
+    /// Turns a usage-endpoint response body into a reading. Pure and internal so the parse can be
+    /// unit-tested against a captured payload without going near the network.
+    /// </summary>
+    internal static UsageInfo Parse(JsonObject root)
+    {
+        var (fivePct, fiveReset) = ReadWindow(root, "five_hour");
+        var (sevenPct, sevenReset) = ReadWindow(root, "seven_day");
+
+        return new UsageInfo(fivePct, sevenPct, fiveReset, sevenReset, Clock.Now, true, null)
+        {
+            Scoped = ReadScoped(root, sevenReset),
+        };
+    }
+
+    /// <summary>
+    /// Walks the response's <c>limits</c> array for <c>weekly_scoped</c> entries — the per-model weekly
+    /// buckets. They appear *only* there: the top-level <c>seven_day_opus</c>/<c>seven_day_sonnet</c>
+    /// keys are null even when a scoped bucket exists, so <see cref="ReadWindow"/> can't reach them.
+    /// Entries without a model display name are skipped (nothing to caption a bar with).
+    /// </summary>
+    private static IReadOnlyList<ScopedUsage> ReadScoped(JsonObject root, DateTime? weeklyReset)
+    {
+        if (root["limits"] is not JsonArray limits)
+            return [];
+
+        var scoped = new List<ScopedUsage>();
+        foreach (var node in limits)
+        {
+            if (node is not JsonObject entry) continue;
+            if (entry["kind"]?.ToString() != "weekly_scoped") continue;
+
+            var label = entry["scope"]?["model"]?["display_name"]?.ToString();
+            if (string.IsNullOrWhiteSpace(label)) continue;
+
+            double? percent = entry["percent"] is { } p && double.TryParse(p.ToString(), out var v) ? v : null;
+
+            // Scoped entries carry a null resets_at in practice; weekly windows share a reset boundary,
+            // so fall back to the account-wide weekly one to keep the pace marker meaningful.
+            DateTime? resetsAt = null;
+            if (entry["resets_at"]?.ToString() is { Length: > 0 } iso && DateTimeOffset.TryParse(iso, out var dto))
+                resetsAt = dto.LocalDateTime;
+
+            scoped.Add(new ScopedUsage(label, percent, resetsAt ?? weeklyReset));
+        }
+        return scoped;
+    }
 
     private static (double? percent, DateTime? resetsAt) ReadWindow(JsonObject root, string key)
     {
