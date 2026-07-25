@@ -632,7 +632,7 @@ internal sealed class SessionMonitor : IDisposable
                 ? DetectStuck(sessionId, cwd)
                 : null;
 
-            var (contextFill, contextWindow) = _transcripts.GetContextFill(sessionId, cwd);
+            var (contextFill, context) = _transcripts.GetContextFill(sessionId, cwd);
 
             // Live token burn rate (tokens/min): only meaningful while the session is actively working,
             // where recent assistant turns give a current pace. Cached by mtime like the other readers.
@@ -669,7 +669,7 @@ internal sealed class SessionMonitor : IDisposable
                 externalNotify,
                 title,
                 contextFill,
-                contextWindow,
+                context.Tokens,
                 artifacts,
                 stuck,
                 tasks,
@@ -678,7 +678,9 @@ internal sealed class SessionMonitor : IDisposable
                 gitStats,
                 entrypoint,
                 note,
-                projectNote
+                projectNote,
+                context.Model,
+                context.Source
             );
 
             if (status == SessionStatus.NeedsAttention

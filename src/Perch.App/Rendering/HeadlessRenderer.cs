@@ -186,11 +186,16 @@ internal static class HeadlessRenderer
         if (wrappedCard.Content is Control card)
             RenderControl(card, Path.Combine(outDir, "wrapped_card_1x.png"), 96);
 
-        // Overlay tooltips: a single-line glyph hint (the context-pressure figure) and the multi-line
-        // usage panel, over the dark backdrop they float on — so the text centering can be eyeballed.
+        // Overlay tooltips: the context-pressure hint (figure, then the model and how its window was
+        // worked out) and the multi-line usage panel, over the dark backdrop they float on — so the text
+        // centering can be eyeballed.
         var tipSingle = new Views.OverlayTooltip.Body
         {
-            Lines = [new Views.OverlayTooltip.Line("128k/200k (64%)", Views.OverlayTooltip.FgColor, false)],
+            Lines =
+            [
+                new Views.OverlayTooltip.Line("128k/200k (64%)", Views.OverlayTooltip.FgColor, false),
+                new Views.OverlayTooltip.Line("Sonnet 4.6 · from /model line", Views.OverlayTooltip.FgColor, false),
+            ],
         };
         RenderOnBackdrop(tipSingle, Path.Combine(outDir, "tooltip_single_1x.png"), Color.FromRgb(40, 40, 52));
         var tipUsage = new Views.OverlayTooltip.Body

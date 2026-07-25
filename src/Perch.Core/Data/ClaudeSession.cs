@@ -129,7 +129,9 @@ public record ClaudeSession(
     GitLineStats? GitStats = null,
     string? Entrypoint = null,
     string? Note = null,
-    string? ProjectNote = null
+    string? ProjectNote = null,
+    string? Model = null,                                              // model behind ContextWindow
+    ContextWindowSource ContextSource = ContextWindowSource.Assumed    // how ContextWindow was decided
 )
 {
     /// <summary>Running sub-agents under this session; never null.</summary>

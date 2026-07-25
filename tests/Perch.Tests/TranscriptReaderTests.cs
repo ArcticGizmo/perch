@@ -68,10 +68,56 @@ public class TranscriptReaderTests
     {
         var reader = new TranscriptReader();
         var (fill, window) = reader.GetContextFill("sessA", Cwd);
-        Assert.Equal(ModelContext.ExtendedWindow, window);         // "(1M context)" model switch
+        Assert.Equal(ModelContext.ExtendedWindow, window.Tokens);   // "(1M context)" model switch
+        Assert.Equal(ContextWindowSource.ModelLine, window.Source);
         Assert.NotNull(fill);
         // latest usage = input 50000 + cache_read 150000 = 200000 over a 1,000,000 window.
         Assert.Equal(0.2, (double)fill!.Value, 3);
+    }
+
+    [Fact]
+    public void GetContextFill_SystemLocalCommandModelLine_ResolvesTheVariant()
+    {
+        var reader = new TranscriptReader();
+        // How current Claude Code records a /model confirmation: a type:"system" record with
+        // subtype:"local_command", the stdout in the record's own top-level "content". Reading only the
+        // older user-record shape meant this — the one signal that states the 1M variant outright — went
+        // unseen on every modern transcript, and a 1M Opus 5 session read as 200k.
+        var (fill, window) = reader.GetContextFill("sessSystemModelLine", Cwd);
+        Assert.Equal(ModelContext.ExtendedWindow, window.Tokens);
+        Assert.Equal(ContextWindowSource.ModelLine, window.Source);
+        Assert.Equal("Opus 5 (1M context)", window.Model);
+        // used = 12 + 8000 + 42000 = 50012 over a 1,000,000 window.
+        Assert.Equal(0.050012, (double)fill!.Value, 5);
+    }
+
+    [Fact]
+    public void GetContextFill_KeptModelLine_ResolvesTheVariant()
+    {
+        var reader = new TranscriptReader();
+        // The older user-record shape of the same line, still on disk in existing transcripts. "Kept model
+        // as …" is what /model logs when it closes on the model already running — just as authoritative as
+        // "Set model to …", and message.model is a bare "claude-opus-5" either way.
+        var (fill, window) = reader.GetContextFill("sessKeptModel", Cwd);
+        Assert.Equal(ModelContext.ExtendedWindow, window.Tokens);
+        Assert.Equal(ContextWindowSource.ModelLine, window.Source);
+        Assert.Equal("Opus 5 (1M context)", window.Model);
+        // used = 12 + 8000 + 42000 = 50012 over a 1,000,000 window.
+        Assert.Equal(0.050012, (double)fill!.Value, 5);
+    }
+
+    [Fact]
+    public void GetContextFill_PromptTooBigForTheAssumedWindow_RatchetsUp()
+    {
+        var reader = new TranscriptReader();
+        // Nothing names the variant and "claude-sonnet-4-6" is a 200k model by the rules — but this
+        // session sent a 255,914-token prompt, which the API would have refused on a 200k window. The
+        // observed high-water mark overrides the rules, and survives the compaction that follows it.
+        var (fill, window) = reader.GetContextFill("sessOversized", Cwd);
+        Assert.Equal(ModelContext.ExtendedWindow, window.Tokens);
+        Assert.Equal(ContextWindowSource.Observed, window.Source);
+        // Fill still tracks the *latest* turn (post-compaction): 10 + 50000 = 50010 over 1,000,000.
+        Assert.Equal(0.05001, (double)fill!.Value, 5);
     }
 
     [Fact]
@@ -82,7 +128,8 @@ public class TranscriptReaderTests
         // message.model ("claude-opus-4-8"). That bare id can't distinguish 200k from 1M, and Opus 4.x
         // is 1M, so it must resolve to the extended window — not fall back to 200k.
         var (fill, window) = reader.GetContextFill("sessOpusDefault", Cwd);
-        Assert.Equal(ModelContext.ExtendedWindow, window);
+        Assert.Equal(ModelContext.ExtendedWindow, window.Tokens);
+        Assert.Equal(ContextWindowSource.ModelId, window.Source);
         Assert.NotNull(fill);
         // used = input 100 + cache_creation 10000 + cache_read 50000 = 60100 over a 1,000,000 window.
         Assert.Equal(0.0601, (double)fill!.Value, 4);
@@ -96,7 +143,7 @@ public class TranscriptReaderTests
         // context in cache_creation (34621) + input (10). All three input buckets must be summed, or
         // the fill collapses to ~0 and the pressure glyph under-reports badly.
         var (fill, window) = reader.GetContextFill("sessCtxSwitch", Cwd);
-        Assert.Equal(ModelContext.DefaultWindow, window);          // "Haiku 4.5" → 200k
+        Assert.Equal(ModelContext.DefaultWindow, window.Tokens);   // "Haiku 4.5" → 200k
         Assert.NotNull(fill);
         // (10 + 0 + 34621) / 200000 = 0.173105
         Assert.Equal(0.1731, (double)fill!.Value, 3);

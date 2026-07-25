@@ -23,7 +23,7 @@ internal sealed class TranscriptReader
 
     private readonly MtimeCache<string?> _activity = new();
     private readonly MtimeCache<string?> _title = new();
-    private readonly MtimeCache<(float? Fill, int Window)> _contextFill = new();
+    private readonly MtimeCache<(float? Fill, ContextWindowInfo Window)> _contextFill = new();
     private readonly MtimeCache<double?> _burnRate = new();
     private readonly MtimeCache<bool> _bareCommand = new();
     private readonly MtimeCache<bool> _interrupted = new();
@@ -148,20 +148,22 @@ internal sealed class TranscriptReader
     }
 
     /// <summary>
-    /// Returns the session's context-window fill (0–1) and the resolved window size in tokens.
-    /// Fill is null when no usage data is available. The window defaults to
-    /// <see cref="ModelContext.DefaultWindow"/> when no <c>/model</c> command was found.
-    /// Best-effort; never throws.
+    /// Returns the session's context-window fill (0–1) and the window it's measured against — size,
+    /// model, and which signal decided the size (see <see cref="ModelContext.Resolve"/>). Fill is null
+    /// when no usage data is available. Best-effort; never throws.
     /// </summary>
-    public (float? Fill, int Window) GetContextFill(string sessionId, string cwd)
+    public (float? Fill, ContextWindowInfo Window) GetContextFill(string sessionId, string cwd)
     {
         if (string.IsNullOrEmpty(sessionId))
-            return (null, ModelContext.DefaultWindow);
+            return (null, UnknownWindow);
         var path = TranscriptLocator.Resolve(sessionId, cwd);
         if (path == null)
-            return (null, ModelContext.DefaultWindow);
-        return _contextFill.GetOrCompute(path, p => ParseContextFill(p, cwd), (null, ModelContext.DefaultWindow));
+            return (null, UnknownWindow);
+        return _contextFill.GetOrCompute(path, p => ParseContextFill(p, cwd), (null, UnknownWindow));
     }
+
+    private static readonly ContextWindowInfo UnknownWindow =
+        new(ModelContext.DefaultWindow, null, ContextWindowSource.Assumed);
 
     /// <summary>
     /// Returns the session's current token burn rate in tokens per minute — measured over the most
@@ -418,7 +420,35 @@ internal sealed class TranscriptReader
         return order.Select(u => new Artifact(u, titles[u])).ToList();
     }
 
-    private static (float? fill, int window) ParseContextFill(string path, string cwd)
+    /// <summary>
+    /// The terminal output a slash command captured, or null when the record isn't one. Claude Code has
+    /// written this two ways and both still turn up in transcripts on disk:
+    /// <list type="bullet">
+    /// <item><b>Current:</b> a <c>type:"system"</c> record with <c>subtype:"local_command"</c> and the
+    ///   text in the record's own top-level <c>content</c>.</item>
+    /// <item><b>Older:</b> a <c>type:"user"</c> record whose <c>message.content</c> is the same wrapped
+    ///   string.</item>
+    /// </list>
+    /// Either way the <c>&lt;local-command-stdout&gt;</c> wrapper must be at the <i>start</i> of the text:
+    /// a message that quotes or discusses a "Set model to" line carries the wrapper mid-string, and must
+    /// not be mistaken for the real thing (this file, and any conversation about it, is full of them).
+    /// </summary>
+    private static string? LocalCommandStdout(JsonNode? record)
+    {
+        if (record == null)
+            return null;
+
+        var raw = TranscriptJson.AsString(record["type"]) switch
+        {
+            "system" => TranscriptJson.AsString(record["content"]),
+            "user"   => TranscriptJson.AsString(record["message"]?["content"]),
+            _        => null,
+        };
+
+        return raw != null && raw.StartsWith("<local-command-stdout>", StringComparison.Ordinal) ? raw : null;
+    }
+
+    private static (float? fill, ContextWindowInfo window) ParseContextFill(string path, string cwd)
     {
         // A /model switch can land anywhere in the transcript, and the most recent one wins — so unlike
         // the activity/title tail-scans we must read the whole file. It's cheap: a substring pre-filter
@@ -426,32 +456,30 @@ internal sealed class TranscriptReader
         // end's worth of assistant turns), and the result is cached by length+mtime so this full pass
         // only re-runs when the transcript actually changed.
         long latestUsed = 0;
+        long maxUsed = 0;
         string? latestDisplayName = null;
         string? latestModelId = null;
+        // The model answering *since* the last /model line, which is how the resolver tells a live line
+        // from one the session has already moved on from. Reset whenever a newer line appears.
+        string? modelIdSinceLine = null;
 
         foreach (var line in TranscriptScan.ReadLines(path))
         {
             if (line.Length == 0)
                 continue;
 
-            // /model confirmation: a user-type record whose content is the terminal output string
-            // wrapped in <local-command-stdout>. The wrapper is the key discriminator — and it must be
-            // at the *start* of the content: user messages that quote or mention a "Set model to" line
-            // in their body carry the wrapper mid-string and must not be mistaken for a real switch.
-            if (line.Contains("local-command-stdout") && line.Contains("Set model to"))
+            // /model confirmation — the captured stdout of the slash command, in either of the two shapes
+            // Claude Code has written it (see LocalCommandStdout). A later line supersedes an earlier one,
+            // and resets the "who has answered since" tracker the resolver uses to spot a stale line.
+            if (line.Contains("local-command-stdout") && ModelContext.LooksLikeModelLine(line))
             {
                 try
                 {
-                    var node = JsonNode.Parse(line);
-                    if (node?["type"]?.GetValue<string>() == "user")
+                    var dn = ModelContext.ParseDisplayName(LocalCommandStdout(JsonNode.Parse(line)));
+                    if (dn != null)
                     {
-                        var raw = node["message"]?["content"]?.GetValue<string>();
-                        if (raw != null && raw.StartsWith("<local-command-stdout>"))
-                        {
-                            var dn = ModelContext.ParseDisplayName(raw);
-                            if (dn != null)
-                                latestDisplayName = dn;
-                        }
+                        latestDisplayName = dn;
+                        modelIdSinceLine = null;
                     }
                 }
                 catch { }
@@ -468,7 +496,7 @@ internal sealed class TranscriptReader
                     // /model and settings.json carries no "model" — the common case. Most recent wins.
                     var model = message?["model"]?.GetValue<string>();
                     if (!string.IsNullOrEmpty(model))
-                        latestModelId = model;
+                        latestModelId = modelIdSinceLine = model;
 
                     var usage = message?["usage"];
                     if (usage != null)
@@ -483,26 +511,37 @@ internal sealed class TranscriptReader
                                    + TranscriptJson.AsLong(usage["cache_read_input_tokens"])
                                    + TranscriptJson.AsLong(usage["cache_creation_input_tokens"]);
                         if (total > 0)
+                        {
                             latestUsed = total;
+                            // The high-water mark is evidence about the window itself: the API rejects a
+                            // prompt bigger than the window, so the largest prompt this session ever sent
+                            // is a hard floor on its size. Kept even across a compaction that drops the
+                            // live fill back to nothing — the proof stands.
+                            maxUsed = Math.Max(maxUsed, total);
+                        }
                     }
                 }
                 catch { }
             }
         }
 
-        // A /model confirmation in the transcript is authoritative (the user explicitly switched, and the
-        // most recent one wins). Lacking one, resolve from the model id: the transcript's running
-        // message.model first (what's actually answering), then the settings.json default. message.model
-        // can't reveal 200k vs 1M for models where that's an opt-in, so WindowForConfiguredModel applies
-        // the "[1m]"/family assumptions (e.g. Opus 4.x is treated as 1M).
-        int window = latestDisplayName != null
-            ? ModelContext.WindowFor(latestDisplayName)
-            : ModelContext.WindowForConfiguredModel(latestModelId ?? ReadConfiguredModel(cwd));
+        // Hand every signal we gathered to the resolver, which ranks them: the /model line, then
+        // settings.json's id (the only one that keeps the "[1m]" opt-in marker), then the running
+        // message.model, and finally the largest prompt observed — which overrides the lot when it
+        // doesn't fit. Note settings.json is read even when message.model is present: the transcript id
+        // is variant-stripped ("claude-opus-5" on both the 200k and 1M variants), so on its own it can
+        // only ever under-size.
+        var window = ModelContext.Resolve(new ContextEvidence(
+            ModelLineName: latestDisplayName,
+            ModelIdSinceLine: modelIdSinceLine,
+            RunningModelId: latestModelId,
+            ConfiguredModelId: ReadConfiguredModel(cwd),
+            MaxObservedPrompt: maxUsed));
 
         if (latestUsed == 0)
             return (null, window);
 
-        return (Math.Clamp((float)latestUsed / window, 0f, 1f), window);
+        return (Math.Clamp((float)latestUsed / window.Tokens, 0f, 1f), window);
     }
 
     // How far apart two assistant turns can be and still count as one continuous burst of work.

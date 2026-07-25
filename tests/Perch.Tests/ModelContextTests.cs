@@ -14,9 +14,21 @@ public class ModelContextTests
     }
 
     [Fact]
+    public void ParseDisplayName_KeptModelAs_IsAlsoAModelLine()
+    {
+        // Closing /model on the model already running reports "Kept model as …" rather than "Set model
+        // to …". It states the current model just as authoritatively, and missing it was why a 1M Opus 5
+        // session read as 200k.
+        var content = "Kept model as [1mOpus 5 (1M context)[22m";
+        Assert.Equal("Opus 5 (1M context)", ModelContext.ParseDisplayName(content));
+        Assert.True(ModelContext.LooksLikeModelLine(content));
+    }
+
+    [Fact]
     public void ParseDisplayName_PlainText_StripsTrailingClauses()
     {
         Assert.Equal("Opus 4.8", ModelContext.ParseDisplayName("Set model to Opus 4.8 for this session only"));
+        Assert.Equal("Opus 5", ModelContext.ParseDisplayName("Kept model as Opus 5 · Draws from usage credits"));
     }
 
     [Theory]
@@ -29,32 +41,117 @@ public class ModelContextTests
     }
 
     [Theory]
+    // Display names: the "(1M context)" marker is decisive.
     [InlineData("Sonnet 4.6 (1M context)", ModelContext.ExtendedWindow)]
     [InlineData("Opus 4.8 (1M context)", ModelContext.ExtendedWindow)]
-    [InlineData("Sonnet 5", ModelContext.ExtendedWindow)]        // 1M by default, no marker
+    [InlineData("Opus 5 (1M context)", ModelContext.ExtendedWindow)]
+    // Ids: the "[1m]" marker is decisive.
+    [InlineData("claude-opus-4-8[1m]", ModelContext.ExtendedWindow)]
+    [InlineData("claude-opus-5[1m]", ModelContext.ExtendedWindow)]
+    [InlineData("opus[1m]", ModelContext.ExtendedWindow)]
+    // Unmarked: family + generation rule. Opus 4.x+ and Sonnet 5+ are 1M.
+    [InlineData("Sonnet 5", ModelContext.ExtendedWindow)]
+    [InlineData("claude-sonnet-5", ModelContext.ExtendedWindow)]
+    [InlineData("Opus 5", ModelContext.ExtendedWindow)]
+    [InlineData("claude-opus-5", ModelContext.ExtendedWindow)]
+    [InlineData("Opus 4.8", ModelContext.ExtendedWindow)]
+    [InlineData("claude-opus-4-6", ModelContext.ExtendedWindow)]
     [InlineData("Sonnet 4.6", ModelContext.DefaultWindow)]
-    [InlineData("Opus 4.8", ModelContext.ExtendedWindow)]        // Opus 4.x is 1M (assumed for the family)
-    [InlineData("Opus 4.6", ModelContext.ExtendedWindow)]
-    [InlineData("Haiku 4.5", ModelContext.DefaultWindow)]        // 200k-only
+    [InlineData("claude-sonnet-4-6", ModelContext.DefaultWindow)]
+    [InlineData("Haiku 4.5", ModelContext.DefaultWindow)]
+    [InlineData("claude-haiku-4-5-20251001", ModelContext.DefaultWindow)]
+    // Unreleased generations resolve by rule, with no table to update.
+    [InlineData("claude-sonnet-6", ModelContext.ExtendedWindow)]
+    [InlineData("Opus 7.2", ModelContext.ExtendedWindow)]
+    // Bare aliases mean "the current model of this family".
+    [InlineData("sonnet", ModelContext.ExtendedWindow)]
+    [InlineData("opus", ModelContext.ExtendedWindow)]
+    [InlineData("haiku", ModelContext.DefaultWindow)]
+    // Nothing recognisable.
+    [InlineData("some-other-llm", ModelContext.DefaultWindow)]
     [InlineData(null, ModelContext.DefaultWindow)]
     [InlineData("", ModelContext.DefaultWindow)]
-    public void WindowFor_MapsDisplayNameToWindow(string? displayName, int expected)
+    public void WindowFor_MapsAnyModelStringToAWindow(string? model, int expected)
     {
-        Assert.Equal(expected, ModelContext.WindowFor(displayName));
+        Assert.Equal(expected, ModelContext.WindowFor(model));
+    }
+
+    [Fact]
+    public void Resolve_ModelLineBeatsModelId()
+    {
+        // The /model line is the only signal that spells the variant out, so it wins over the ambiguous id.
+        var r = ModelContext.Resolve(new ContextEvidence(
+            ModelLineName: "Sonnet 4.6 (1M context)", RunningModelId: "claude-sonnet-4-6"));
+        Assert.Equal(ModelContext.ExtendedWindow, r.Tokens);
+        Assert.Equal(ContextWindowSource.ModelLine, r.Source);
+        Assert.Equal("Sonnet 4.6 (1M context)", r.Model);
+    }
+
+    [Fact]
+    public void Resolve_StaleModelLineFromAnotherFamilyIsIgnored()
+    {
+        // Claude Code can move a session to another family on its own (an Opus limit falling back to
+        // Sonnet) without writing a /model line, leaving the old line describing a model that is no
+        // longer answering. The id that *is* answering wins.
+        var r = ModelContext.Resolve(new ContextEvidence(
+            ModelLineName: "Opus 4.8 (1M context)", ModelIdSinceLine: "claude-sonnet-4-6",
+            RunningModelId: "claude-sonnet-4-6"));
+        Assert.Equal(ModelContext.DefaultWindow, r.Tokens);
+        Assert.Equal(ContextWindowSource.ModelId, r.Source);
+    }
+
+    [Fact]
+    public void Resolve_ConfiguredOptInBeatsVariantStrippedTranscriptId()
+    {
+        // The exact shape that made a 1M Opus 5 session read as 200k: the transcript's message.model is
+        // stripped to "claude-opus-5", and only settings.json still carries the "[1m]" opt-in.
+        var r = ModelContext.Resolve(new ContextEvidence(
+            RunningModelId: "claude-opus-5", ConfiguredModelId: "opus[1m]"));
+        Assert.Equal(ModelContext.ExtendedWindow, r.Tokens);
+        Assert.Equal(ContextWindowSource.ConfiguredOptIn, r.Source);
+        Assert.Equal("claude-opus-5", r.Model);   // label the model answering, not the settings alias
+    }
+
+    [Fact]
+    public void Resolve_ConfiguredOptInForAnotherFamilyIsIgnored()
+    {
+        // settings.json says opus-with-1M, but a Sonnet 4.6 is answering: the marker says nothing about
+        // the model the session actually moved to.
+        var r = ModelContext.Resolve(new ContextEvidence(
+            RunningModelId: "claude-sonnet-4-6", ConfiguredModelId: "opus[1m]"));
+        Assert.Equal(ModelContext.DefaultWindow, r.Tokens);
+        Assert.Equal(ContextWindowSource.ModelId, r.Source);
     }
 
     [Theory]
-    [InlineData("claude-opus-4-8[1m]", ModelContext.ExtendedWindow)]
-    [InlineData("opus[1m]", ModelContext.ExtendedWindow)]
-    [InlineData("claude-sonnet-5", ModelContext.ExtendedWindow)] // Sonnet 5 defaults to 1M
-    [InlineData("sonnet", ModelContext.ExtendedWindow)]          // alias → current Sonnet (5)
-    [InlineData("claude-opus-4-8", ModelContext.ExtendedWindow)] // Opus 4.x assumed 1M (bare id can't tell)
-    [InlineData("claude-opus-4-6", ModelContext.ExtendedWindow)]
-    [InlineData("opus", ModelContext.ExtendedWindow)]            // alias → current Opus (1M)
-    [InlineData("claude-sonnet-4-6", ModelContext.DefaultWindow)]
-    [InlineData(null, ModelContext.DefaultWindow)]
-    public void WindowForConfiguredModel_OneMSuffixIsExtended(string? model, int expected)
+    [InlineData(255_914, ModelContext.ExtendedWindow)]   // >200k proves the window isn't 200k
+    [InlineData(1_400_000, 2_000_000)]                   // a future 2M model, rounded to the next million
+    public void Resolve_ObservedPromptRatchetsTheWindowUp(long observed, int expected)
     {
-        Assert.Equal(expected, ModelContext.WindowForConfiguredModel(model));
+        // The rules go stale with every model release; the tokens in the transcript don't. The API rejects
+        // a prompt bigger than the window, so an oversized prompt is proof and overrides every guess.
+        var r = ModelContext.Resolve(new ContextEvidence(
+            RunningModelId: "claude-sonnet-4-6", MaxObservedPrompt: observed));
+        Assert.Equal(expected, r.Tokens);
+        Assert.Equal(ContextWindowSource.Observed, r.Source);
+        Assert.Equal("claude-sonnet-4-6", r.Model);
+    }
+
+    [Fact]
+    public void Resolve_ObservedPromptThatFitsChangesNothing()
+    {
+        var r = ModelContext.Resolve(new ContextEvidence(
+            RunningModelId: "claude-sonnet-4-6", MaxObservedPrompt: 199_000));
+        Assert.Equal(ModelContext.DefaultWindow, r.Tokens);
+        Assert.Equal(ContextWindowSource.ModelId, r.Source);
+    }
+
+    [Fact]
+    public void Resolve_NoSignalsAtAll_AssumesStandardWindow()
+    {
+        var r = ModelContext.Resolve(new ContextEvidence());
+        Assert.Equal(ModelContext.DefaultWindow, r.Tokens);
+        Assert.Equal(ContextWindowSource.Assumed, r.Source);
+        Assert.Null(r.Model);
     }
 }

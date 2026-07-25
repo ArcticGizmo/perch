@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.23] - 2026-07-25
+
+- Context pressure sizes the window from the evidence, not a table of model names
+- Opus 5 on the 1M beta stops reading as 200k (it was inventing five times the pressure)
+- Context tooltip names the model and where its window came from, for when it's still wrong
+
+---
+
 ## [v0.2.22] - 2026-07-25
 
 - Per-model weekly limits in the usage strip (Fable's was there all along)

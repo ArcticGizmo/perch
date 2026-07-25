@@ -2896,7 +2896,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int pct = (int)Math.Round(fill * 100f);
         long window = s.ContextWindow;
         long used = (long)Math.Round(fill * window);
-        Tooltip().ShowText($"{FormatTokens(used)}/{FormatTokens(window)} ({pct}%)", ToScreen(r.Left, r.Bottom + 4));
+
+        // Second line names the model and how its window was worked out. The window is inferred from
+        // several imperfect signals (see ModelContext.Resolve) — a model that reads with the wrong window
+        // is the failure to expect, so make it diagnosable on hover rather than in a debugger.
+        var text = $"{FormatTokens(used)}/{FormatTokens(window)} ({pct}%)";
+        var model = string.IsNullOrWhiteSpace(s.Model) ? "unknown model" : s.Model;
+        text += $"\n{model} · {ModelContext.SourceLabel(s.ContextSource)}";
+
+        Tooltip().ShowText(text, ToScreen(r.Left, r.Bottom + 4));
     }
 
     private void ShowWarnTooltip(int row)

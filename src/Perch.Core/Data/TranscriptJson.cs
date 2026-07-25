@@ -32,4 +32,15 @@ internal static class TranscriptJson
     /// <summary>The <c>type</c> discriminator of a content block (<c>tool_use</c>, <c>text</c>,
     /// <c>tool_result</c>, …), or null.</summary>
     public static string? BlockType(JsonNode? block) => block?["type"]?.GetValue<string>();
+
+    /// <summary>Reads a node as a string, returning null rather than throwing when it holds something
+    /// else (a block array, a number). Transcript fields change shape between Claude Code versions —
+    /// <c>message.content</c> is a plain string in some records and an array in others — so any read of
+    /// a "string" field has to survive the other shape.</summary>
+    public static string? AsString(JsonNode? n)
+    {
+        if (n is not JsonValue v) return null;
+        try { return v.GetValue<string>(); }
+        catch { return null; }
+    }
 }
