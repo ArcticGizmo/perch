@@ -1241,6 +1241,12 @@ internal sealed class SettingsWindow : Window
             _settings.ChimeOnWaitingInput, v => { _settings.ChimeOnWaitingInput = v; _settings.Save(); },
             NotificationKind.WaitingForInput));
 
+        page.Children.Add(BuildNotifyRow(
+            "API error — a session's last request failed (e.g. 529 Overloaded)",
+            _settings.NotifyOnApiError, v => { _settings.NotifyOnApiError = v; _settings.Save(); },
+            _settings.ChimeOnApiError, v => { _settings.ChimeOnApiError = v; _settings.Save(); },
+            NotificationKind.ApiFailed));
+
         ApplyNotifyEnabled();
 
         page.Children.Add(SettingsUi.Separator());

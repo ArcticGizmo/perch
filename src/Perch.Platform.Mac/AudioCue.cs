@@ -22,6 +22,7 @@ public sealed class AudioCue : IAudioCue
         {
             NotificationKind.Done => "Glass",
             NotificationKind.WaitingForInput => "Funk",
+            NotificationKind.ApiFailed => "Basso", // the stock macOS error tone — matches a failed run
             _ => "",
         };
         if (sound.Length == 0) return;

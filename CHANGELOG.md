@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.25] - 2026-07-27
+
+- New red "API error" status when a session's last request fails (e.g. 529 Overloaded)
+- A failed run no longer masquerades as a cheerful "done"
+- Shows the HTTP code on the row ("api 529"), with its own notification and chime toggle
+- Clears itself the moment the session retries and recovers
+
+---
+
 ## [v0.2.24] - 2026-07-27
 
 - Optional [Hypertree](https://github.com/ArcticGizmo/hypertree) integration: your desktop branches under the quick links, click to jump

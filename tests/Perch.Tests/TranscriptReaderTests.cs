@@ -42,6 +42,34 @@ public class TranscriptReaderTests
     }
 
     [Fact]
+    public void GetLastApiError_ReturnsFailureWhenTranscriptEndsOnApiError()
+    {
+        var reader = new TranscriptReader();
+        // Tail is a synthetic 529 assistant record (isApiErrorMessage/apiErrorStatus) with no turn after it.
+        var failure = reader.GetLastApiError("sessApiError", Cwd);
+        Assert.NotNull(failure);
+        Assert.Equal(529, failure!.Status);
+        Assert.Contains("Overloaded", failure.Message);
+    }
+
+    [Fact]
+    public void GetLastApiError_NullWhenSessionRecoveredAfterError()
+    {
+        var reader = new TranscriptReader();
+        // A 529 error followed by a retry prompt and a genuine assistant turn: the session moved past the
+        // failure, so it must not still read as an API error.
+        Assert.Null(reader.GetLastApiError("sessApiErrorRecovered", Cwd));
+    }
+
+    [Fact]
+    public void GetLastApiError_NullWhenNoErrorAndWhenMissing()
+    {
+        var reader = new TranscriptReader();
+        Assert.Null(reader.GetLastApiError("sessA", Cwd));            // a normal, healthy transcript
+        Assert.Null(reader.GetLastApiError("no-such-session", Cwd));  // no transcript at all
+    }
+
+    [Fact]
     public void GetActivity_ReturnsMostRecentToolCallPhrase()
     {
         var reader = new TranscriptReader();

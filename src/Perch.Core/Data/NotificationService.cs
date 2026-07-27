@@ -36,7 +36,7 @@ internal sealed class NotificationService
     {
         if (_settings.NotificationsEnabled && ToastEnabled(kind))
         {
-            var (title, body, level) = Describe(kind, session.DisplayName);
+            var (title, body, level) = Describe(kind, session.DisplayName, session.ApiFailure?.Status ?? 0);
             _notifier.Show(title, body, level, session.Pid, session.ProjectName);
         }
 
@@ -50,7 +50,7 @@ internal sealed class NotificationService
     /// toggles, so the user can preview exactly what a notification looks and sounds like.</summary>
     public void ShowTest(NotificationKind kind)
     {
-        var (title, body, level) = Describe(kind, "example-project");
+        var (title, body, level) = Describe(kind, "example-project", 529);
         _notifier.Show(title, body, level, null, null); // null pid — a preview, not a real session
         _audio.Play(kind);
     }
@@ -84,16 +84,32 @@ internal sealed class NotificationService
     public void ShowUpdateAvailable(string title, string text) =>
         _notifier.ShowUpdate(title, text);
 
-    private bool ToastEnabled(NotificationKind kind) =>
-        kind == NotificationKind.Done ? _settings.NotifyOnDone : _settings.NotifyOnWaitingInput;
+    private bool ToastEnabled(NotificationKind kind) => kind switch
+    {
+        NotificationKind.Done => _settings.NotifyOnDone,
+        NotificationKind.ApiFailed => _settings.NotifyOnApiError,
+        _ => _settings.NotifyOnWaitingInput,
+    };
 
-    private bool ChimeEnabled(NotificationKind kind) =>
-        kind == NotificationKind.Done ? _settings.ChimeOnDone : _settings.ChimeOnWaitingInput;
+    private bool ChimeEnabled(NotificationKind kind) => kind switch
+    {
+        NotificationKind.Done => _settings.ChimeOnDone,
+        NotificationKind.ApiFailed => _settings.ChimeOnApiError,
+        _ => _settings.ChimeOnWaitingInput,
+    };
 
-    private static (string title, string body, ToastLevel level) Describe(NotificationKind kind, string project) =>
-        kind == NotificationKind.Done
-            ? ("Claude Code — Done", $"Waiting for you in {project}", ToastLevel.Info)
-            : ("Claude Code — Waiting for Input", $"{project} needs your response", ToastLevel.Warning);
+    // The API status code is folded into the body when known (0 = unknown, so a bare "API error").
+    private static (string title, string body, ToastLevel level) Describe(NotificationKind kind, string project, int apiStatus) => kind switch
+    {
+        NotificationKind.Done =>
+            ("Claude Code — Done", $"Waiting for you in {project}", ToastLevel.Info),
+        NotificationKind.ApiFailed =>
+            ("Claude Code — API Error",
+             apiStatus > 0 ? $"API {apiStatus} error in {project} — try again" : $"API error in {project} — try again",
+             ToastLevel.Error),
+        _ =>
+            ("Claude Code — Waiting for Input", $"{project} needs your response", ToastLevel.Warning),
+    };
 
     // Pushes an external notification for a session, but only when the feature is on and that session
     // has opted in (or the account-wide AFK override is on and the screen is locked). Independent of the
@@ -105,9 +121,19 @@ internal sealed class NotificationService
         if (!_settings.ExternalNotificationsEnabled || (!optedIn && !afkActive))
             return;
 
-        var (title, body, tags) = kind == NotificationKind.Done
-            ? ("Claude Code — Done", $"Waiting for you in {session.DisplayName}", "white_check_mark")
-            : ("Claude Code — Waiting for Input", $"{session.DisplayName} needs your response", "bell");
+        var (title, body, tags) = kind switch
+        {
+            NotificationKind.Done =>
+                ("Claude Code — Done", $"Waiting for you in {session.DisplayName}", "white_check_mark"),
+            NotificationKind.ApiFailed =>
+                ("Claude Code — API Error",
+                 session.ApiFailure is { Status: > 0 } f
+                     ? $"API {f.Status} error in {session.DisplayName} — try again"
+                     : $"API error in {session.DisplayName} — try again",
+                 "warning"),
+            _ =>
+                ("Claude Code — Waiting for Input", $"{session.DisplayName} needs your response", "bell"),
+        };
 
         var host = _settings.NtfyHost;
         var topic = _settings.NtfyTopic;

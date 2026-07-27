@@ -64,6 +64,10 @@ internal sealed class SessionMonitor : IDisposable
     // timer. Distinct from _awaitingInputPids, which is the one-shot notification-dedup set.
     private readonly Dictionary<string, DateTime> _awaitingSince = new();
     private readonly HashSet<string> _awaitingInputPids = new();
+    // One-shot notification-dedup set for the API-error alert: a pid is added when the session first
+    // enters ApiError (so the toast/chime fires once) and dropped as soon as it leaves that state, so a
+    // later failure re-arms.
+    private readonly HashSet<string> _apiErrorPids = new();
     // PIDs that had at least one running sub-agent on the previous scan, so we can detect the
     // moment they all finish and treat it like a busy->idle completion.
     private readonly HashSet<string> _hadRunningSubs = new();
@@ -97,6 +101,11 @@ internal sealed class SessionMonitor : IDisposable
     public event Action<IReadOnlyList<ClaudeSession>>? SessionsChanged;
     public event Action<ClaudeSession>? NeedsAttention;
     public event Action<ClaudeSession>? AwaitingInput;
+    /// <summary>Raised once when a session's most recent request to the API failed and it stopped (its
+    /// status settles on <see cref="SessionStatus.ApiError"/>). Fires in place of — not alongside —
+    /// the "done" <see cref="NeedsAttention"/> for that session, so an API failure never reads as a
+    /// successful completion.</summary>
+    public event Action<ClaudeSession>? ApiError;
 
     /// <summary>
     /// Raised when a session asks (via the plugin's <c>/history</c> command, which drops a one-shot
@@ -174,6 +183,7 @@ internal sealed class SessionMonitor : IDisposable
             _runningSince.Remove(key);
             _awaitingSince.Remove(key);
             _awaitingInputPids.Remove(key);
+            _apiErrorPids.Remove(key);
             _hadRunningSubs.Remove(key);
             _subsFinishedIdleAt.Remove(key);
             _completionSettleAt.Remove(key);
@@ -559,6 +569,27 @@ internal sealed class SessionMonitor : IDisposable
                 _completionSettleAt.Remove(pid);
             }
 
+            // API failure: Claude Code writes a failed request (e.g. 529 Overloaded) as a synthetic
+            // assistant record and stops — which flips the session busy->idle and would otherwise read as
+            // a "done". When the session has come to rest (not running, not blocked on the user) and its
+            // transcript tail is currently sitting on such an error, surface the distinct ApiError alert
+            // instead. The read is cached by mtime, so a settled healthy session costs a stat, not a parse.
+            ApiFailure? apiFailure = null;
+            if (status is SessionStatus.Idle or SessionStatus.NeedsAttention)
+            {
+                apiFailure = _transcripts.GetLastApiError(sessionId, cwd);
+                if (apiFailure != null)
+                {
+                    status = SessionStatus.ApiError;
+                    // The failure owns this stop; no deferred/settled "done" should fire behind it.
+                    _idleSince.Remove(pid);
+                    _completionSettleAt.Remove(pid);
+                    _subsFinishedIdleAt.Remove(pid);
+                    fireCompletionSettled = false;
+                    fireSubsCompletion = false;
+                }
+            }
+
             var projectName = string.IsNullOrEmpty(cwd)
                 ? sessionId[..Math.Min(8, sessionId.Length)]
                 : PathLeaf.Of(cwd);
@@ -680,7 +711,8 @@ internal sealed class SessionMonitor : IDisposable
                 note,
                 projectNote,
                 context.Model,
-                context.Source
+                context.Source,
+                apiFailure
             );
 
             if (status == SessionStatus.NeedsAttention
@@ -689,6 +721,15 @@ internal sealed class SessionMonitor : IDisposable
 
             if (status == SessionStatus.AwaitingInput && _awaitingInputPids.Add(pid))
                 AwaitingInput?.Invoke(session);
+
+            // The API-error alert fires once on entry and re-arms once the session leaves the state.
+            if (status == SessionStatus.ApiError)
+            {
+                if (_apiErrorPids.Add(pid))
+                    ApiError?.Invoke(session);
+            }
+            else
+                _apiErrorPids.Remove(pid);
 
             return session;
         }

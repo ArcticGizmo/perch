@@ -67,9 +67,9 @@ internal sealed class DenseController : IDisposable
 
     private readonly IDenseHost _host;
 
-    // The four session-status dot colours, top-to-bottom display order, supplied by the host so the strip's
+    // The session-status dot colours, top-to-bottom display order, supplied by the host so the strip's
     // counts match the rest of the overlay exactly.
-    private readonly Color _running, _awaiting, _attention, _idle;
+    private readonly Color _running, _awaiting, _attention, _apiError, _idle;
 
     // _dense toggles the whole mode; _denseOpen is the hover-expanded popup within it. Floating and dense
     // each keep their own position: _floatingLoc holds the floating position (physical) while we're in
@@ -93,12 +93,13 @@ internal sealed class DenseController : IDisposable
     // (OnPointerEntered → OnMouseEntered) cancels it, so a quick out-and-back keeps it open.
     private readonly DispatcherTimer _closeTimer;
 
-    public DenseController(IDenseHost host, Color running, Color awaiting, Color attention, Color idle)
+    public DenseController(IDenseHost host, Color running, Color awaiting, Color attention, Color apiError, Color idle)
     {
         _host      = host;
         _running   = running;
         _awaiting  = awaiting;
         _attention = attention;
+        _apiError  = apiError;
         _idle      = idle;
 
         _closeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
@@ -301,12 +302,13 @@ internal sealed class DenseController : IDisposable
     }
 
     // ── Painting ────────────────────────────────────────────────────────────────
-    // The four statuses in top-to-bottom display order, paired with their dot colour.
+    // The statuses in top-to-bottom display order, paired with their dot colour.
     private (Color color, int count)[] StatusCounts() =>
     [
         (_running,   _host.Sessions.Count(s => s.Status == SessionStatus.Running)),
         (_awaiting,  _host.Sessions.Count(s => s.Status == SessionStatus.AwaitingInput)),
         (_attention, _host.Sessions.Count(s => s.Status == SessionStatus.NeedsAttention)),
+        (_apiError,  _host.Sessions.Count(s => s.Status == SessionStatus.ApiError)),
         (_idle,      _host.Sessions.Count(s => s.Status == SessionStatus.Idle)),
     ];
 

@@ -99,8 +99,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private static readonly Color  AttentionColor = Color.FromRgb(251, 146, 60);
     private static readonly Color  AwaitingColor  = Color.FromRgb(250, 204, 21);
     private static readonly Color  IdleColor      = Color.FromRgb(100, 116, 139);
+    private static readonly Color  ApiErrorColor  = Color.FromRgb(239, 68, 68);   // red — a failed run, distinct from the orange "done"
     private static readonly IBrush AttentionBrush = new SolidColorBrush(AttentionColor);
     private static readonly IBrush AwaitingBrush  = new SolidColorBrush(AwaitingColor);
+    private static readonly IBrush ApiErrorBrush  = new SolidColorBrush(ApiErrorColor);
     private static readonly IPen   SepPen         = new Pen(new SolidColorBrush(Color.FromRgb(35, 35, 50)), 1);
     private static readonly Color  SubAgentColor  = Color.FromRgb(168, 85, 247);
     private static readonly IBrush SubAgentBrush  = new SolidColorBrush(SubAgentColor);
@@ -156,7 +158,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // The brand mark and quick-link icons are 256px sources drawn at ~16–18px; the default sampler
         // aliases them badly. HighQuality makes Skia mipmap the downscale so they stay crisp at any DPI.
         RenderOptions.SetBitmapInterpolationMode(this, BitmapInterpolationMode.HighQuality);
-        _denseCtl = new DenseController(this, RunningColor, AwaitingColor, AttentionColor, IdleColor);
+        _denseCtl = new DenseController(this, RunningColor, AwaitingColor, AttentionColor, ApiErrorColor, IdleColor);
     }
 
     // Whether the full session body is currently on screen: the floating expand state, or — in dense
@@ -915,9 +917,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _rows = rows;
         if (sessions.Count == 0) _expanded = false;
 
-        // Stop the attention flash once nothing needs attention or is awaiting input anymore.
+        // Stop the attention flash once nothing needs attention, is awaiting input, or has an API error.
         if (_attentionFlash && sessions.All(s =>
-                s.Status != SessionStatus.NeedsAttention && s.Status != SessionStatus.AwaitingInput))
+                s.Status is not (SessionStatus.NeedsAttention or SessionStatus.AwaitingInput or SessionStatus.ApiError)))
             StopAttention();
 
         UpdateTickTimer();
@@ -1149,12 +1151,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             int running   = _sessions.Count(s => s.Status == SessionStatus.Running);
             int attention = _sessions.Count(s => s.Status == SessionStatus.NeedsAttention);
             int awaiting  = _sessions.Count(s => s.Status == SessionStatus.AwaitingInput);
+            int apiError  = _sessions.Count(s => s.Status == SessionStatus.ApiError);
             int idle      = _sessions.Count(s => s.Status == SessionStatus.Idle);
 
+            x = DrawStatusPill(ctx, x, midY, apiError,  ApiErrorColor,  ApiErrorColor);
             x = DrawStatusPill(ctx, x, midY, awaiting,  AwaitingColor,  AwaitingColor);
             x = DrawStatusPill(ctx, x, midY, running,   RunningColor,   FgColor);
             x = DrawStatusPill(ctx, x, midY, attention, AttentionColor, AttentionColor);
-            if (running == 0 && attention == 0 && awaiting == 0)
+            if (running == 0 && attention == 0 && awaiting == 0 && apiError == 0)
                 DrawStatusPill(ctx, x, midY, idle, IdleColor, IdleColor);
         }
 
@@ -1585,6 +1589,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             SessionStatus.Running        => RunningColor,
             SessionStatus.NeedsAttention => AttentionColor,
             SessionStatus.AwaitingInput  => AwaitingColor,
+            SessionStatus.ApiError       => ApiErrorColor,
             _                            => IdleColor,
         };
         ctx.DrawEllipse(new SolidColorBrush(dotColor), null, new Point(HorizPad + 4, nameMidY), 4, 4);
@@ -1594,12 +1599,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             SessionStatus.Running        => "running",
             SessionStatus.NeedsAttention => "done ↩",
             SessionStatus.AwaitingInput  => "input ↩",
+            // Show the HTTP code when known ("api 529") so the failure is self-explaining at a glance.
+            SessionStatus.ApiError       => session.ApiFailure is { Status: > 0 } f ? $"api {f.Status}" : "api error",
             _                            => "idle",
         };
         IBrush statusBrush = session.Status switch
         {
             SessionStatus.NeedsAttention => AttentionBrush,
             SessionStatus.AwaitingInput  => AwaitingBrush,
+            SessionStatus.ApiError       => ApiErrorBrush,
             _                            => MutedBrush,
         };
 

@@ -22,6 +22,10 @@ public sealed class AudioCue : IAudioCue
             case NotificationKind.WaitingForInput:
                 SystemSounds.Exclamation.Play();
                 break;
+            case NotificationKind.ApiFailed:
+                // The system "error" tone — the sharpest of the three, matching a failed run.
+                SystemSounds.Hand.Play();
+                break;
         }
     }
 }

@@ -6,6 +6,10 @@ public enum SessionStatus
     Running = 1,
     NeedsAttention = 2,
     AwaitingInput = 3,
+    /// <summary>The session's last request to the API failed (e.g. 529 Overloaded) and it stopped. A
+    /// distinct alert so the failure's busy→idle flip isn't mistaken for a successful completion. Carries
+    /// the detail in <see cref="ClaudeSession.ApiFailure"/>. See <see cref="Perch.Data.ApiFailure"/>.</summary>
+    ApiError = 4,
 }
 
 /// <summary>The kinds of desktop notification Perch raises for a session, each with its
@@ -14,6 +18,7 @@ public enum NotificationKind
 {
     Done = 0,
     WaitingForInput = 1,
+    ApiFailed = 2,
 }
 
 public enum PermissionMode
@@ -131,9 +136,20 @@ public record ClaudeSession(
     string? Note = null,
     string? ProjectNote = null,
     string? Model = null,                                              // model behind ContextWindow
-    ContextWindowSource ContextSource = ContextWindowSource.Assumed    // how ContextWindow was decided
+    ContextWindowSource ContextSource = ContextWindowSource.Assumed,   // how ContextWindow was decided
+    ApiFailure? ApiFailure = null                                      // set iff Status == ApiError
 )
 {
+    /// <summary>
+    /// The API failure this session ended on, when <see cref="Status"/> is <see cref="SessionStatus.ApiError"/>;
+    /// null otherwise. Carries the HTTP status (529, 429, …) and message for the overlay row + notification.
+    /// See <see cref="TranscriptReader.GetLastApiError"/>.
+    /// </summary>
+    public ApiFailure? ApiFailure { get; init; } = ApiFailure;
+
+    /// <summary>True when this session's most recent request to the API failed and it stopped.</summary>
+    public bool HasApiError => Status == SessionStatus.ApiError;
+
     /// <summary>Running sub-agents under this session; never null.</summary>
     public IReadOnlyList<SubAgent> SubAgents { get; init; } = SubAgents ?? [];
 

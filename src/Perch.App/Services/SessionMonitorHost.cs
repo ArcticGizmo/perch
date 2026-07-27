@@ -32,6 +32,10 @@ internal sealed class SessionMonitorHost : IDisposable
     /// <summary>Raised when a session newly blocks awaiting input — the app flashes the overlay.</summary>
     public event Action<ClaudeSession>? AwaitingInput;
 
+    /// <summary>Raised when a session's last request to the API failed (e.g. 529) — the app flashes the
+    /// overlay and raises the API-error notification.</summary>
+    public event Action<ClaudeSession>? ApiError;
+
     /// <summary>Raised when the plugin asks to open the history viewer on a session (carries its id).</summary>
     public event Action<string>? OpenHistoryRequested;
 
@@ -47,6 +51,7 @@ internal sealed class SessionMonitorHost : IDisposable
         // Start), so forwarding them straight through keeps every consumer on the UI thread.
         _monitor.NeedsAttention += s => NeedsAttention?.Invoke(s);
         _monitor.AwaitingInput += s => AwaitingInput?.Invoke(s);
+        _monitor.ApiError += s => ApiError?.Invoke(s);
         _monitor.OpenHistoryRequested += id => OpenHistoryRequested?.Invoke(id);
         // FileSystemWatcher/debounce fire on background threads; hop to the UI thread and re-scan there
         // (matches the WinForms BeginInvoke(Scan) pattern) so the callback only runs on the UI thread.

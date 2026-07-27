@@ -31,6 +31,7 @@ internal sealed class TranscriptReader
     private readonly MtimeCache<IReadOnlyList<Artifact>> _artifacts = new();
     private readonly MtimeCache<IReadOnlyList<TaskItem>> _tasks = new();
     private readonly MtimeCache<StuckMetrics> _stuck = new();
+    private readonly MtimeCache<ApiFailure?> _apiError = new();
 
     // How many of the most recent tool calls the failing-loop heuristic looks across. Tuned against
     // real transcripts (see the throwaway analysis behind this feature): with proper per-command
@@ -207,6 +208,81 @@ internal sealed class TranscriptReader
             return default;
         var path = TranscriptLocator.Resolve(sessionId, cwd);
         return path == null ? default : _stuck.GetOrCompute(path, ParseStuck, default);
+    }
+
+    /// <summary>
+    /// The API failure the session's transcript currently <em>ends</em> on, or null when it doesn't.
+    /// Claude Code writes each failed request as a synthetic assistant record (<c>isApiErrorMessage</c>
+    /// true, with the HTTP <c>apiErrorStatus</c> — e.g. 529 Overloaded); we return that failure only while
+    /// it's the trailing meaningful turn. A later normal assistant turn or a fresh user prompt means the
+    /// session recovered / moved on, so this clears — the same "trailing record wins" reasoning as
+    /// <see cref="ParseInterrupted"/>. Cached by (length, last-write) like the other readers. Best-effort;
+    /// never throws (returns null on any failure, so a format change simply falls back to the old
+    /// completion behaviour). See <see cref="ApiFailure"/>.
+    /// </summary>
+    public ApiFailure? GetLastApiError(string sessionId, string cwd)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return null;
+        var path = TranscriptLocator.Resolve(sessionId, cwd);
+        return path == null ? null : _apiError.GetOrCompute(path, ParseApiError, null);
+    }
+
+    private static ApiFailure? ParseApiError(string path)
+    {
+        // Walk the tail chronologically; the verdict is the last meaningful assistant/user record.
+        //   • A synthetic API-error assistant record (isApiErrorMessage == true) sets the pending failure.
+        //   • Any ordinary assistant turn or user record after it clears the failure — the session either
+        //     produced a real reply (recovered) or the user prompted again (moved on).
+        // Because the error is the final record precisely when the session is sitting on it, this
+        // trailing-wins walk yields the right answer for a single error, back-to-back retries that keep
+        // failing (the last error wins), and a recovery (cleared). Metadata trailers are skipped.
+        ApiFailure? pending = null;
+
+        foreach (var line in TranscriptScan.ReadTailLines(path, TailBytes))
+        {
+            // Only assistant/user records carry the verdict; skip the rest without parsing. The cheap
+            // substring pre-filters keep this off the JSON path for the metadata trailers that dominate.
+            if (line.Length == 0 || (!line.Contains("assistant") && !line.Contains("user")))
+                continue;
+
+            JsonNode? node;
+            try { node = JsonNode.Parse(line); }
+            catch { continue; } // malformed/partial line (transcripts are appended live) — skip it
+
+            var type = node?["type"]?.GetValue<string>();
+            if (type == "assistant")
+            {
+                if (node?["isApiErrorMessage"]?.GetValue<bool>() == true)
+                {
+                    int status = (int)TranscriptJson.AsLong(node?["apiErrorStatus"]);
+                    string message = FirstTextBlock(node) ?? $"API error {status}".Trim();
+                    pending = new ApiFailure(status, message);
+                }
+                else
+                {
+                    pending = null; // a genuine assistant turn landed — the session recovered
+                }
+            }
+            else if (type == "user")
+            {
+                pending = null; // a fresh prompt / tool_result — no longer sitting on the error
+            }
+        }
+
+        return pending;
+    }
+
+    // The text of the first `text` content block in a message (the API-error records carry their message
+    // there), or null when the content isn't a block array or holds no text block.
+    private static string? FirstTextBlock(JsonNode? node)
+    {
+        if (TranscriptJson.ContentArray(node) is not { } content)
+            return null;
+        foreach (var block in content)
+            if (TranscriptJson.BlockType(block) == "text")
+                return TranscriptJson.AsString(block?["text"]);
+        return null;
     }
 
     /// <summary>

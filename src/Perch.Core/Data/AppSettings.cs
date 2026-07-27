@@ -125,6 +125,9 @@ internal sealed class AppSettings
     // "WaitingForInput" fires when a session is blocked on a prompt (e.g. a permission request).
     public bool NotifyOnDone { get; set; } = true;
     public bool NotifyOnWaitingInput { get; set; } = true;
+    // "ApiFailed" fires when a session's last request to the API errored (e.g. 529 Overloaded) and it
+    // stopped — on by default, since a failed run is exactly the moment the user wants pulled to.
+    public bool NotifyOnApiError { get; set; } = true;
 
     // Per-type sound switches: play the built-in Windows system chime when that notification type
     // fires (Done -> Asterisk, WaitingForInput -> Exclamation). Independent of the balloon switches
@@ -132,6 +135,7 @@ internal sealed class AppSettings
     // (ntfy) pushes never chime; sound is for the local desktop only.
     public bool ChimeOnDone { get; set; }
     public bool ChimeOnWaitingInput { get; set; }
+    public bool ChimeOnApiError { get; set; }
 
     // External notifications via ntfy (https://ntfy.sh). The master switch gates whether any
     // external push is sent and whether the per-session toggle is offered in the overlay; the

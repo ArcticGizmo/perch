@@ -543,6 +543,9 @@ internal static class HeadlessRenderer
                 BridgeSessionId: "bridge-xyz", Stuck: new StuckSignal(StuckKind.FailingLoop, "repeating build")),
             new ClaudeSession("3456", "s4", SessionStatus.Idle, @"C:\src\scratch", "scratch", now,
                 Note: "don't touch — bisecting a flaky test"),
+            // A session whose last request to the API failed (529 Overloaded) — the red ApiError alert.
+            new ClaudeSession("6543", "s6", SessionStatus.ApiError, @"C:\src\web", "web", now,
+                ApiFailure: new ApiFailure(529, "API Error: 529 Overloaded.")),
             // A background/SDK session (Entrypoint != "cli") -> grouped under the Autonomous section.
             new ClaudeSession("7788", "s5", SessionStatus.Running, @"C:\src\bot", "nightly-bot", now,
                 Entrypoint: "sdk-py"),

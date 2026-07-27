@@ -35,6 +35,7 @@ internal sealed class SessionSwitcherWindow : Window
     private static readonly Color RunningColor   = Color.FromRgb(34, 197, 94);
     private static readonly Color AttentionColor = Color.FromRgb(251, 146, 60);
     private static readonly Color AwaitingColor  = Color.FromRgb(250, 204, 21);
+    private static readonly Color ApiErrorColor  = Color.FromRgb(239, 68, 68);
     private static readonly Color IdleColor      = Color.FromRgb(100, 116, 139);
 
     private static readonly IBrush CardBg   = new SolidColorBrush(Color.FromRgb(15, 15, 20));
@@ -392,6 +393,7 @@ internal sealed class SessionSwitcherWindow : Window
         SessionStatus.Running        => s.RunningElapsedLabel() is { } e ? $"running · {e}" : "running",
         SessionStatus.AwaitingInput  => s.AwaitingElapsedLabel() is { } e ? $"waiting · {e}" : "waiting on you",
         SessionStatus.NeedsAttention => "needs you",
+        SessionStatus.ApiError       => s.ApiFailure is { Status: > 0 } f ? $"api {f.Status} error" : "api error",
         _                            => "idle",
     };
 
@@ -400,6 +402,7 @@ internal sealed class SessionSwitcherWindow : Window
         SessionStatus.Running        => RunningColor,
         SessionStatus.NeedsAttention => AttentionColor,
         SessionStatus.AwaitingInput  => AwaitingColor,
+        SessionStatus.ApiError       => ApiErrorColor,
         _                            => IdleColor,
     };
 

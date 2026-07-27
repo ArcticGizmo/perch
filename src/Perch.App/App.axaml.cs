@@ -167,6 +167,7 @@ public partial class App : Application
             // toast + chime + external push (gated per settings) via the notification dispatcher.
             _monitorHost.NeedsAttention += OnNeedsAttention;
             _monitorHost.AwaitingInput += OnAwaitingInput;
+            _monitorHost.ApiError += OnApiError;
             _monitorHost.OpenHistoryRequested += OpenHistory; // the plugin's jump-to-session
 
             // Row click focuses the session's terminal; the artifact glyph always pops a picker list, and
@@ -511,6 +512,14 @@ public partial class App : Application
         _notifications?.Notify(NotificationKind.WaitingForInput, session);
     }
 
+    // A session's last API request failed (e.g. 529 Overloaded): flash the overlay and fire the API-error
+    // notification. Deliberately not a "done" — this is the failure alert that replaces it.
+    private void OnApiError(ClaudeSession session)
+    {
+        _overlay!.Canvas.TriggerAttention();
+        _notifications?.Notify(NotificationKind.ApiFailed, session);
+    }
+
     // A toast was clicked: focus the session's terminal and acknowledge it (clears the "done" badge) —
     // the Avalonia counterpart of the WinForms balloon-click handler.
     private void OnToastActivated(string pid, string? project)
@@ -568,7 +577,7 @@ public partial class App : Application
     {
         if (_overlay is null) return;
         bool on = _appSettings is { ScreenEdgeGlow: true }
-            && _lastSessions.Any(s => s.Status is SessionStatus.NeedsAttention or SessionStatus.AwaitingInput);
+            && _lastSessions.Any(s => s.Status is SessionStatus.NeedsAttention or SessionStatus.AwaitingInput or SessionStatus.ApiError);
 
         if (!on) { _glow?.HideGlow(); return; }
 
