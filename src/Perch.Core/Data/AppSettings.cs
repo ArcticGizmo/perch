@@ -210,6 +210,14 @@ internal sealed class AppSettings
     // already, so this leans in. Off by default.
     public bool UpsideDownQuickLinks { get; set; }
 
+    // Integrations. Hypertree (the virtual-desktop branch manager) — when on, the overlay grows a
+    // "Hypertree" section under the quick links listing its branches (main included), marking the one
+    // you're on and jumping to any of them on click. Off by default and load-bearing while off: nothing
+    // polls Hypertree's status file and no `htree` process is ever spawned until it's turned on, so the
+    // integration costs nothing to the vast majority who don't have Hypertree. A missing key keeps it off.
+    // See Perch.Data.Hypertree and docs/hypertree-integration.md.
+    public bool HypertreeEnabled { get; set; }
+
     // Global keyboard shortcuts (system-wide, work even when Perch isn't focused). Each is registered on
     // startup and re-registered live when the Hotkeys settings page edits it. A binding that's disabled or
     // invalid simply isn't registered; the OS refusing a combo (another app owns it) is ignored. The

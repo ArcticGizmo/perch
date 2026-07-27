@@ -10,6 +10,7 @@ using Avalonia.Threading;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
 using Perch.Data;
+using Perch.Data.Hypertree;
 
 namespace Perch.Avalonia.Views;
 
@@ -64,6 +65,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double SubStatusSize  = 9.5;
     private const double SectionLabel   = 10;
     private const double SectionChev    = 9;
+    private const double HyperLabelSize = 9;    // the "Hypertree" caption above the branch lines
+    private const double HyperRowSize   = 10.5; // a branch line's name
+    private const double HyperMetaSize  = 9;    // a branch line's trailing desktop label
 
     // ── Palette (the overlay's own; matches OverlayForm) ──────────────────────
     private static readonly Color  BgColor        = Color.FromRgb(15, 15, 20);
@@ -327,6 +331,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (_showSystemMetrics) h += SysMetricsStripHeight;
             if (_usageEnabled) h += UsageStripHeight;
             if (HasQuickLinksRow) h += QuickLinksRowHeight;
+            if (HypertreeStripVisible) h += HypertreeStripHeight;
             foreach (var r in _rows) h += HeightOf(r);
             h += 2;
             if (MediaStripVisible) h += MediaStripHeight;
@@ -443,9 +448,80 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool HasQuickLinksRow => true;
     private double QuickLinksTop => UsageStripTop + (_usageEnabled ? UsageStripHeight : 0);
 
+    // ── Hypertree strip ───────────────────────────────────────────────────────
+    // The optional integration with Hypertree (the virtual-desktop branch manager): one narrow line per
+    // branch in its vertical stack, main included, with the branch you're on marked and a click jumping
+    // to it. Null status means no Hypertree tray is running — the whole section then disappears, since a
+    // list of branches you can't jump to would be noise.
+    private HypertreeStatus? _hypertree;
+    private int _hoveredHypertreeRow = -1;
+
+    /// <summary>Raised when a Hypertree branch line is clicked, with the row to jump to. The app routes
+    /// this to <c>HypertreeBridge.GoTo</c> off the UI thread.</summary>
+    internal event Action<HypertreeRow>? HypertreeRowActivated;
+
+    // Shown only when a tray is running AND it has at least one branch beyond main: a lone "main" line
+    // says nothing the user doesn't already know, and costs a section header to say it.
+    private bool HypertreeStripVisible
+        => _hypertree is { Rows.Count: > 1 };
+
+    // Measured, never assumed: the caption and each branch line are sized from their own line height per
+    // the owner-drawn text rule, so the strip can't clip its glyphs on a DPI change.
+    //
+    // Measured ONCE and cached, though. Building a FormattedText shapes the text, and these feed RowsTop,
+    // which every paint and — via HitTestRow — every pointer move reads. Recomputing them there made
+    // hovering the overlay reshape text several times per mouse move. The inputs are compile-time font
+    // sizes and FormattedText.Height is in DIPs (render scale doesn't enter into it), so the measurement
+    // is a constant and caching it costs no correctness on a DPI change.
+    private static double? _hyperLineH, _hyperCaptionH;
+
+    private static double HypertreeLineHeight
+        => _hyperLineH ??= OverlayDraw.Text("Xg", HyperRowSize, FgBrush).Height + 4;
+
+    private static double HypertreeCaptionHeight
+        => _hyperCaptionH ??= OverlayDraw.Text("Xg", HyperLabelSize, MutedBrush).Height + 4;
+
+    private double HypertreeStripHeight
+        => !HypertreeStripVisible
+            ? 0
+            : HypertreeCaptionHeight + (_hypertree!.Rows.Count * HypertreeLineHeight) + 6;
+
+    private double HypertreeTop => QuickLinksTop + (HasQuickLinksRow ? QuickLinksRowHeight : 0);
+
+    /// <summary>Replaces the Hypertree strip's contents; null clears it. Called on the UI thread by
+    /// <c>HypertreeMonitorHost</c>. Changes the panel height, so relayout.</summary>
+    internal void SetHypertree(HypertreeStatus? status)
+    {
+        _hypertree = status;
+        _hoveredHypertreeRow = -1;
+        RemeasurePanel();
+    }
+
+    /// <summary>
+    /// Moves the "you are here" marker to <paramref name="index"/> straight away, before Hypertree has
+    /// confirmed the jump.
+    /// </summary>
+    /// <remarks>
+    /// The jump itself takes ~85ms, but the confirming read arrives whenever the status file next changes
+    /// — so without this the marker visibly trails the click and the whole thing feels slow for something
+    /// that already happened. The next real snapshot overwrites this wholesale, so a jump that fails
+    /// simply corrects itself rather than leaving the marker lying.
+    /// <para>Layout is unaffected (the rows don't change), so this repaints without a remeasure.</para>
+    /// </remarks>
+    internal void MarkHypertreeRow(int index)
+    {
+        if (_hypertree is not { } status || index < 0 || index >= status.Rows.Count) return;
+        if (status.Current.Row == index) return;
+
+        status.Current.Row = index;
+        // The row's resume point is where a bare jump lands, so the desktop marker follows it.
+        status.Current.Desktop = status.Rows[index].Cursor;
+        InvalidateVisual();
+    }
+
     // Top of the first session row: below the header and whichever strips are showing. Mirrors the
     // painted layout so hit-testing lines up (guarded by the expanded/rows check in HitTestRow).
-    private double RowsTop => QuickLinksTop + (HasQuickLinksRow ? QuickLinksRowHeight : 0);
+    private double RowsTop => HypertreeTop + HypertreeStripHeight;
 
     // The top of a given display row.
     private double RowTop(int index)
@@ -947,6 +1023,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool showSys = showRows && _showSystemMetrics;        // machine CPU/RAM strip, just under the header
         bool showUsage = showRows && _usageEnabled;           // rate-limit bars, below the metrics strip
         bool showQuickLinks = showRows && HasQuickLinksRow;   // app icon strip, below the usage bars
+        bool showHypertree = showRows && HypertreeStripVisible; // Hypertree branches, below the quick links
         bool showMedia = showRows && MediaStripVisible;       // now-playing + transport strip, below the rows
 
         double height = HeaderHeight;
@@ -955,6 +1032,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (showSys) height += SysMetricsStripHeight;
             if (showUsage) height += UsageStripHeight;
             if (showQuickLinks) height += QuickLinksRowHeight;
+            if (showHypertree) height += HypertreeStripHeight;
             foreach (var r in _rows) height += HeightOf(r);
             height += 2;
             if (showMedia) height += MediaStripHeight;
@@ -985,6 +1063,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (showUsage) DrawUsageBars(ctx, width);
             if (showQuickLinks) DrawQuickLinksRow(ctx, width);
             else _noteButtonRect = default; // no row painted → drop the stale note-button hit-rect
+            if (showHypertree) DrawHypertreeStrip(ctx, width);
 
             if (showRows)
             {
@@ -1315,6 +1394,84 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (p.X >= iconX - HitPad && p.X < iconX + IconSize + HitPad) return i;
         }
         return -1;
+    }
+
+    /// <summary>
+    /// Paints the Hypertree section: a caption, then one narrow line per row of Hypertree's vertical
+    /// stack (main included, at its slot — Hypertree publishes the stack already flattened, so this is
+    /// just array order). The row the cursor is on takes an accent bar and a brighter name; the rest sit
+    /// muted. Each line trails the desktop a jump would land on — the row's resume point — so the result
+    /// of a click is legible before you make it.
+    /// </summary>
+    private void DrawHypertreeStrip(DrawingContext ctx, double width)
+    {
+        var status = _hypertree;
+        if (status is null) return;
+
+        double y = HypertreeTop;
+        double captionH = HypertreeCaptionHeight;
+
+        var caption = OverlayDraw.Text("Hypertree", HyperLabelSize, MutedBrush, FontWeight.SemiBold);
+        OverlayDraw.TextLeftMid(ctx, caption, HorizPad, y + captionH / 2);
+        y += captionH;
+
+        double lineH = HypertreeLineHeight;
+        const double MarkerW = 2, MarkerGap = 6, MetaMaxW = 96;
+        double nameX = HorizPad + MarkerW + MarkerGap;
+
+        for (int i = 0; i < status.Rows.Count; i++)
+        {
+            var row = status.Rows[i];
+            bool here = status.IsCurrentRow(i);
+            double midY = y + lineH / 2;
+
+            if (_hoveredHypertreeRow == i)
+                ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+                    new Rect(4, y, Math.Max(0, width - 8), lineH));
+
+            // "You are here" is a bar in the gutter rather than a glyph: at this line height a glyph
+            // would cost width the branch names need, and the bar reads at a glance.
+            if (here)
+                OverlayDraw.Pill(ctx, new SolidColorBrush(CycleColor),
+                    new Rect(HorizPad, y + 3, MarkerW, Math.Max(2, lineH - 6)));
+
+            // The trailing desktop label gives up width first — the branch name is what's being chosen.
+            var meta = row.ResumeLabel;
+            double metaReserve = 0;
+            if (meta.Length > 0)
+            {
+                meta = OverlayDraw.Truncate(meta, HyperMetaSize, MetaMaxW);
+                metaReserve = OverlayDraw.MeasureWidth(meta, HyperMetaSize) + 8;
+            }
+
+            var weight = here ? FontWeight.SemiBold : FontWeight.Normal;
+            double nameMax = Math.Max(20, width - HorizPad - nameX - metaReserve);
+            var nameFt = OverlayDraw.Text(OverlayDraw.Truncate(row.Name, HyperRowSize, nameMax, weight),
+                HyperRowSize, here ? FgBrush : BotBrush, weight);
+            OverlayDraw.TextLeftMid(ctx, nameFt, nameX, midY);
+
+            if (meta.Length > 0)
+            {
+                var metaFt = OverlayDraw.Text(meta, HyperMetaSize, MutedBrush);
+                OverlayDraw.TextLeftMid(ctx, metaFt, width - HorizPad - metaFt.Width, midY);
+            }
+
+            y += lineH;
+        }
+    }
+
+    // Returns the index into the Hypertree rows under p, or -1 if none (or the strip isn't shown).
+    private int HitTestHypertreeRow(Point p)
+    {
+        if (!(ShowFullPanel && _rows.Count > 0 && HypertreeStripVisible)) return -1;
+
+        double top = HypertreeTop + HypertreeCaptionHeight;
+        double lineH = HypertreeLineHeight;
+        int count = _hypertree!.Rows.Count;
+        if (p.Y < top || p.Y >= top + count * lineH) return -1;
+
+        int index = (int)((p.Y - top) / lineH);
+        return index >= 0 && index < count ? index : -1;
     }
 
     // Returns the display-row index under p, or -1 (only while the panel is expanded with rows).
@@ -2046,6 +2203,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int ql = HitTestQuickLink(p);
         if (ql != _hoveredQuickLink) { _hoveredQuickLink = ql; InvalidateVisual(); }
 
+        int hyper = HitTestHypertreeRow(p);
+        if (hyper != _hoveredHypertreeRow) { _hoveredHypertreeRow = hyper; InvalidateVisual(); }
+
         int art = HitTestArtifactIcon(p);
         if (art != _hoveredArtifactRow) { _hoveredArtifactRow = art; InvalidateVisual(); }
 
@@ -2065,9 +2225,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int media = HitTestMedia(p);
         if (media != _hoveredMediaButton) { _hoveredMediaButton = media; InvalidateVisual(); }
 
-        // Hand cursor over clickable glyphs (quick links + artifacts + the update badge + outage footer +
-        // the scratch-pad note button + a row's note glyph + the media buttons); rows show only the highlight.
-        Cursor = (ql >= 0 || art >= 0 || overUpdate || overFooter || overNote || overRowNote || media >= 0)
+        // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + artifacts + the update
+        // badge + outage footer + the scratch-pad note button + a row's note glyph + the media buttons);
+        // rows show only the highlight.
+        Cursor = (ql >= 0 || hyper >= 0 || art >= 0 || overUpdate || overFooter || overNote || overRowNote || media >= 0)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -2121,8 +2282,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1;
-        _hoveredRow = _hoveredQuickLink = _hoveredArtifactRow = -1;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1;
+        _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredArtifactRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
         _hoveredNoteButton = false;
@@ -2334,6 +2495,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (ql >= 0 && ql < _quickLinks.Count)
         {
             QuickLinkActivated?.Invoke(_quickLinks[ql]);
+            return;
+        }
+
+        int hyper = HitTestHypertreeRow(p);
+        if (hyper >= 0 && _hypertree is { } hs && hyper < hs.Rows.Count)
+        {
+            var branch = hs.Rows[hyper];
+            MarkHypertreeRow(hyper); // move the marker now; the confirming read corrects it if the jump fails
+            HypertreeRowActivated?.Invoke(branch);
             return;
         }
 

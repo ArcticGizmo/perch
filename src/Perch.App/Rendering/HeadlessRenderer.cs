@@ -8,6 +8,7 @@ using Avalonia.Platform;
 using Perch.Avalonia.Views;
 using Perch.Avalonia.Windows;
 using Perch.Data;
+using Perch.Data.Hypertree;
 using Perch.Data.Replay;
 using Perch.Platform;
 
@@ -87,6 +88,16 @@ internal static class HeadlessRenderer
             Position: TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(14), Duration: TimeSpan.FromMinutes(8)));
         RenderControl(mediaProbe, Path.Combine(outDir, "overlay_media_1x.png"), 96);
         RenderControl(mediaProbe, Path.Combine(outDir, "overlay_media_1.5x.png"), 144);
+
+        // Hypertree strip: the branch list under the quick links, with the row the cursor is on marked.
+        // The sample puts main mid-stack (Hypertree publishes the stack already flattened, main at its
+        // slot) and gives one branch a long desktop label so the trailing-label truncation is exercised.
+        var hyperProbe = new OverlayCanvas();
+        hyperProbe.Update(SampleSessions());
+        hyperProbe.SetQuickLinks(links, icons);
+        hyperProbe.SetHypertree(SampleHypertree());
+        RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_1x.png"), 96);
+        RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_1.5x.png"), 144);
 
         // "Jump to next session" landing highlight: the blue selection wash + left bar on the cycled row.
         // Rendered immediately after triggering it, so the fade timer hasn't run and it's at full strength.
@@ -347,6 +358,40 @@ internal static class HeadlessRenderer
             [new StatusIncident("Elevated errors on the Messages API", "major", "investigating",
                 "We are investigating elevated error rates.", "https://status.claude.com/incidents/abc123")],
             StatusInfo.DefaultPageUrl, DateTime.Now, true, null);
+
+    // A Hypertree stack as its tray would publish one: two branches around the main timeline, the cursor
+    // sitting on main. Cursors point at a non-first desktop so the trailing "where a jump lands" label is
+    // visibly the resume point rather than just the first entry.
+    private static HypertreeStatus SampleHypertree() => new()
+    {
+        Schema = 1,
+        Version = "0.2.0",
+        Pid = Environment.ProcessId,
+        Rows =
+        [
+            new HypertreeRow
+            {
+                Kind = "branch", Id = Guid.NewGuid(), Name = "perch", Cursor = 1,
+                Desktops = [new() { Label = "code" }, new() { Label = "docs" }],
+            },
+            new HypertreeRow
+            {
+                Kind = "main", Name = "main", Cursor = 4,
+                Desktops =
+                [
+                    new() { Label = "1 - Admin" }, new() { Label = "2 - Git+Jira" },
+                    new() { Label = "3 - Spa" },   new() { Label = "4 - Api" },
+                    new() { Label = "5 - Mobile" },
+                ],
+            },
+            new HypertreeRow
+            {
+                Kind = "branch", Id = Guid.NewGuid(), Name = "hypertree-cli-spike", Cursor = 0,
+                Desktops = [new() { Label = "a rather long desktop label" }],
+            },
+        ],
+        Current = new HypertreePosition { Row = 1, Desktop = 4 },
+    };
 
     private static (IReadOnlyList<QuickLink> links, IReadOnlyList<string?> icons) SampleQuickLinks(string outDir)
     {

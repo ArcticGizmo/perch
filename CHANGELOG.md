@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.24] - 2026-07-27
+
+- Optional [Hypertree](https://github.com/ArcticGizmo/hypertree) integration: your desktop branches under the quick links, click to jump
+- The branch you're on is marked, and stays marked when you switch desktops outside Perch
+- Settings grows an Integrations page (a population of one, for now)
+
+---
+
 ## [v0.2.23] - 2026-07-25
 
 - Context pressure sizes the window from the evidence, not a table of model names

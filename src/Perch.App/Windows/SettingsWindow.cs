@@ -11,6 +11,7 @@ using Avalonia.Threading;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
 using Perch.Data;
+using Perch.Data.Hypertree;
 using Perch.Data.Replay;
 using Perch.Platform;
 
@@ -40,6 +41,9 @@ internal sealed class SettingsHooks
 
     /// <summary>Start (true) or stop (false) listening to the system media session for the overlay strip.</summary>
     public Action<bool>? MediaEnabledChanged;
+
+    /// <summary>Start (true) or stop (false) polling Hypertree's status file for the overlay's branch strip.</summary>
+    public Action<bool>? HypertreeEnabledChanged;
 
 #if DEBUG
     /// <summary>Push a sample outage onto the overlay so the status footer can be illustrated (debug only).</summary>
@@ -169,6 +173,7 @@ internal sealed class SettingsWindow : Window
         AddPage(nav, "achievements", "Achievements",    BuildAchievementsPage);
         AddPage(nav, "notify",       "Notifications",   BuildNotificationsPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
+        AddPage(nav, "integrations", "Integrations",    BuildIntegrationsPage);
         AddPage(nav, "music",        "Music",           BuildMusicPage);
         AddPage(nav, "experimental", "Experimental",    BuildExperimentalPage);
         AddPage(nav, "export",       "Export",          BuildExportPage);
@@ -404,6 +409,68 @@ internal sealed class SettingsWindow : Window
         _usageBars.SetOn(_settings.ShowUsage);
         _systemMetricsToggle.SetCheckedSilent(_settings.ShowSystemMetrics);
         _mediaToggle.SetCheckedSilent(_settings.ShowMediaController);
+    }
+
+    // ── Integrations ──────────────────────────────────────────────────────────────
+    private PerchToggle _hypertreeToggle = null!;
+    private TextBlock _hypertreeStatusText = null!;
+
+    private void BuildIntegrationsPage(StackPanel page)
+    {
+        page.Children.Add(SettingsUi.SectionTitle("Hypertree"));
+        page.Children.Add(SettingsUi.BodyText(
+            "Hypertree gives a task its own branch — a named set of virtual desktops. Turn this on and the "
+            + "overlay grows a \"Hypertree\" section under the quick links, listing every branch (main "
+            + "included), marking the one you're on, and jumping to it when you click."));
+
+        _hypertreeToggle = Toggle(_settings.HypertreeEnabled);
+        _hypertreeToggle.CheckedChanged += (_, _) =>
+        {
+            _settings.HypertreeEnabled = _hypertreeToggle.IsChecked;
+            _settings.Save();
+            _hooks.DisplayChanged?.Invoke();
+            _hooks.HypertreeEnabledChanged?.Invoke(_hypertreeToggle.IsChecked); // starts/stops the status poll
+            RefreshHypertreeStatus();
+        };
+        page.Children.Add(SettingsUi.TitleRow("Show Hypertree branches", _hypertreeToggle));
+
+        _hypertreeStatusText = SettingsUi.BodyText("Looking for Hypertree…");
+        page.Children.Add(_hypertreeStatusText);
+
+        page.Children.Add(SettingsUi.BodyText(
+            "The section only appears while Hypertree is running and has at least one branch. Jumping shells "
+            + "Hypertree's own `htree` command, which hands the request to its tray — nothing here drives "
+            + "virtual desktops directly."));
+
+        RefreshHypertreeStatus();
+    }
+
+    /// <summary>
+    /// Refreshes the "is Hypertree there" line. The probe touches the filesystem and may spawn
+    /// <c>htree --version</c>, so it runs off the UI thread and marshals back — and it's skipped entirely
+    /// while the integration is off, keeping the setting genuinely load-bearing.
+    /// </summary>
+    private void RefreshHypertreeStatus()
+    {
+        if (!_settings.HypertreeEnabled)
+        {
+            _hypertreeStatusText.Text = "Turned off — Hypertree isn't contacted at all while this is off.";
+            return;
+        }
+
+        _hypertreeStatusText.Text = "Looking for Hypertree…";
+        Task.Run(HypertreeBridge.Describe).ContinueWith(t =>
+        {
+            // The window may have closed while the probe was in flight.
+            if (!IsVisible || _hypertreeStatusText is null) return;
+
+            var install = t.IsCompletedSuccessfully ? t.Result : HypertreeInstall.Missing;
+            _hypertreeStatusText.Text = !install.Installed
+                ? "Not installed — get it from github.com/ArcticGizmo/hypertree."
+                : install.Running
+                    ? $"Hypertree {install.Version ?? "?"} is running."
+                    : $"Hypertree {install.Version ?? "?"} is installed but not running — start it to see your branches.";
+        }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     // ── Music ─────────────────────────────────────────────────────────────────────

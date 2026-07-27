@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Windows;
 using Perch.Data;
+using Perch.Data.Hypertree;
 using Perch.Platform;
 
 namespace Perch.Avalonia;
@@ -25,6 +26,7 @@ public partial class App : Application
     private MetricsMonitorHost? _metricsHost;
     private StatusMonitorHost? _statusHost;
     private MediaMonitorHost? _mediaHost;
+    private HypertreeMonitorHost? _hypertreeHost;
     private QuickLinkLauncher? _quickLinkLauncher;
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
@@ -102,6 +104,7 @@ public partial class App : Application
                 _metricsHost?.Dispose();
                 _statusHost?.Dispose();
                 _mediaHost?.Dispose();
+                _hypertreeHost?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
                 _overlay?.Canvas.DisposeDense();
@@ -135,6 +138,8 @@ public partial class App : Application
             _statusHost = new StatusMonitorHost(_overlay.Canvas.UpdateStatus, settings.ServiceStatusIntervalMinutes);
             // System media session → the overlay's now-playing strip (opt-in; started below when enabled).
             _mediaHost = new MediaMonitorHost(PlatformServices.CreateMediaController(), _overlay.Canvas.UpdateMedia);
+            // Hypertree's published status file → the overlay's branch strip (opt-in; started below).
+            _hypertreeHost = new HypertreeMonitorHost(_overlay.Canvas.SetHypertree);
 
             // Each scan feeds both the canvas and the metrics sampler (which pids to measure). Under
             // replay the projector doubles as the process-probe so recorded (dead) pids read as alive.
@@ -193,6 +198,9 @@ public partial class App : Application
             _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider);
             _overlay.Canvas.QuickLinkActivated += _quickLinkLauncher.LaunchOrFocus;
 
+            // Hypertree branch strip: a click hands the jump to Hypertree's tray via its CLI.
+            _overlay.Canvas.HypertreeRowActivated += OnHypertreeRowActivated;
+
             // Notifications: real Windows Action Center toasts (owner-drawn fallback off Windows); the
             // dispatcher gates toast/chime/external per settings. A toast click focuses that terminal and
             // acknowledges it.
@@ -247,6 +255,7 @@ public partial class App : Application
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
             if (settings.ShowServiceStatus) _statusHost.Start(); // initial fetch (polls every 2 min thereafter)
             if (settings.ShowMediaController) _mediaHost.Start(); // begin listening to the system media session
+            if (settings.HypertreeEnabled) _hypertreeHost.Start(); // begin polling Hypertree's status file
             ReloadQuickLinks(settings);
 
             // Global hotkeys: dense-toggle, jump-to-next-session, and the keyboard switcher — each read
@@ -789,6 +798,23 @@ public partial class App : Application
         note.Show(overlay); // owned + non-modal: above the overlay, but the overlay stays clickable
     }
 
+    /// <summary>
+    /// Jumps to a Hypertree branch. The work is a process launch that waits on Hypertree's tray, so it
+    /// runs off the UI thread; the strip's own poll then picks the new position up.
+    /// </summary>
+    /// <remarks>
+    /// A failed jump is silent, like a failed quick-link launch — and here it is also self-correcting:
+    /// the two realistic failures are Hypertree having exited (the strip clears on the next poll) and the
+    /// branch having been removed (it disappears on the next poll). Reporting either would be telling the
+    /// user something the overlay is about to show them anyway.
+    /// </remarks>
+    private void OnHypertreeRowActivated(HypertreeRow row)
+    {
+        var target = row.Target;
+        var cli = _hypertreeHost?.Last?.Cli;
+        System.Threading.Tasks.Task.Run(() => HypertreeBridge.GoTo(target, cli));
+    }
+
     // Applies the enabled links to the overlay strip, resolving their icons off the UI thread (the first
     // shell lookup enumerates the Start Menu, ~1s) then applying on the UI thread. Icons come back as PNG
     // file paths from the seam. Always sets the strip — an empty list clears it — so a link removed or
@@ -996,6 +1022,7 @@ public partial class App : Application
             ServiceStatusEnabledChanged = on => { if (on) _statusHost?.Start(); else _statusHost?.Stop(); },
             ServiceStatusIntervalChanged = () => _statusHost?.SetInterval(settings.ServiceStatusIntervalMinutes),
             MediaEnabledChanged = on => { if (on) _mediaHost?.Start(); else _mediaHost?.Stop(); },
+            HypertreeEnabledChanged = on => { if (on) _hypertreeHost?.Start(); else _hypertreeHost?.Stop(); },
 #if DEBUG
             TestServiceStatus = () => _overlay?.Canvas.UpdateStatus(SampleOutage()),
             TestAchievementBatch = () => ShowAchievementCards(SampleAchievementBatch()),
