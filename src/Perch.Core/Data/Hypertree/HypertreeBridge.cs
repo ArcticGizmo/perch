@@ -78,14 +78,20 @@ internal static class HypertreeBridge
     private static string? FallbackPath() => File.Exists(InstalledCliPath) ? InstalledCliPath : null;
 
     /// <summary>
-    /// Jump to a row — its resume desktop, which is what a bare "go to this branch" means to Hypertree.
+    /// Jump to a row — by default its resume desktop, which is what a bare "go to this branch" means to
+    /// Hypertree, or to a specific desktop on it.
     /// </summary>
     /// <param name="target">The row's <see cref="HypertreeRow.Target"/>: a branch id, or <c>main</c>.</param>
     /// <param name="cliPath">The path the status file published, if we have it.</param>
-    public static HypertreeJump GoTo(string target, string? cliPath)
+    /// <param name="desktopIndex">A 0-based index into the row's desktops, or <c>-1</c> for its resume
+    /// point.</param>
+    /// <remarks>See <see cref="Address"/> for how a desktop is spelled on the command line.</remarks>
+    public static HypertreeJump GoTo(string target, string? cliPath, int desktopIndex = -1)
     {
         var exe = cliPath is not null && File.Exists(cliPath) ? cliPath : FallbackPath();
         if (exe is null) return HypertreeJump.Unavailable;
+
+        var addressed = Address(target, desktopIndex);
 
         try
         {
@@ -93,7 +99,7 @@ internal static class HypertreeBridge
             {
                 // Passed as a separate argument rather than a joined string so a branch name can never be
                 // re-split by the shell — though in practice we always send a GUID or "main".
-                ArgumentList = { "goto", target },
+                ArgumentList = { "goto", addressed },
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
@@ -124,6 +130,21 @@ internal static class HypertreeBridge
             return HypertreeJump.Unavailable;
         }
     }
+
+    /// <summary>
+    /// Spells a jump target for <c>htree goto</c>: the row on its own, or <c>&lt;row&gt;/&lt;n&gt;</c> for a
+    /// specific desktop on it.
+    /// </summary>
+    /// <remarks>
+    /// The desktop is given by 1-based position rather than by label. Positions come straight from the
+    /// array the strip was painted from, whereas labels are Hypertree's to duplicate — and main can't be
+    /// addressed by id at all (it has none), so a name-based form would have no fallback there.
+    /// <para><c>htree</c> resolves the segment as a label first and only then as a position, so a desktop
+    /// literally named "2" would win over the second slot. That's the one case this gets wrong, and it
+    /// still lands on a desktop of the right row.</para>
+    /// </remarks>
+    internal static string Address(string target, int desktopIndex)
+        => desktopIndex >= 0 ? $"{target}/{desktopIndex + 1}" : target;
 
     // htree prints its version and exits 0. Best-effort: a version we can't read is cosmetic.
     private static string? QueryVersion(string exe)

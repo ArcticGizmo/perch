@@ -458,9 +458,20 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private HypertreeStatus? _hypertree;
     private int _hoveredHypertreeRow = -1;
 
-    /// <summary>Raised when a Hypertree branch line is clicked, with the row to jump to. The app routes
-    /// this to <c>HypertreeBridge.GoTo</c> off the UI thread.</summary>
-    internal event Action<HypertreeRow>? HypertreeRowActivated;
+    // The trailing desktop chip on a row that has more than one desktop: its hit-rect (captured at paint
+    // time, keyed by Hypertree row index) and hover state. Clicking it opens the desktop picker instead of
+    // jumping to the row's resume point — see ShowHypertreeDesktopPicker.
+    private readonly Dictionary<int, Rect> _hyperDesktopRects = new();
+    private int _hoveredHyperDesktop = -1;
+
+    // The chip's "there's a list behind this" hint. Same glyph the sub-agent tree uses for an expandable
+    // node, so the affordance reads the same across the overlay.
+    private const string DesktopChevron = "▾";
+
+    /// <summary>Raised when a Hypertree branch line is clicked, with the row to jump to and the 0-based
+    /// desktop on it — or <c>-1</c> for the row's resume desktop, which is what clicking the line means.
+    /// The app routes this to <c>HypertreeBridge.GoTo</c> off the UI thread.</summary>
+    internal event Action<HypertreeRow, int>? HypertreeRowActivated;
 
     // Shown only when a tray is running AND it has at least one branch beyond main: a lone "main" line
     // says nothing the user doesn't already know, and costs a section header to say it.
@@ -496,6 +507,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         _hypertree = status;
         _hoveredHypertreeRow = -1;
+        _hoveredHyperDesktop = -1;
+        _hyperDesktopRects.Clear();
         RemeasurePanel();
     }
 
@@ -503,6 +516,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// Moves the "you are here" marker to <paramref name="index"/> straight away, before Hypertree has
     /// confirmed the jump.
     /// </summary>
+    /// <param name="index">The Hypertree row jumped to.</param>
+    /// <param name="desktop">The 0-based desktop on it, or <c>-1</c> for the row's resume point.</param>
     /// <remarks>
     /// The jump itself takes ~85ms, but the confirming read arrives whenever the status file next changes
     /// — so without this the marker visibly trails the click and the whole thing feels slow for something
@@ -510,14 +525,21 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// simply corrects itself rather than leaving the marker lying.
     /// <para>Layout is unaffected (the rows don't change), so this repaints without a remeasure.</para>
     /// </remarks>
-    internal void MarkHypertreeRow(int index)
+    internal void MarkHypertreeRow(int index, int desktop = -1)
     {
         if (_hypertree is not { } status || index < 0 || index >= status.Rows.Count) return;
-        if (status.Current.Row == index) return;
+
+        var row = status.Rows[index];
+        // A bare jump lands on the row's resume point, so that's what the marker follows when no desktop
+        // was chosen.
+        if (desktop < 0 || desktop >= row.Desktops.Count) desktop = row.Cursor;
+        if (status.Current.Row == index && status.Current.Desktop == desktop) return;
 
         status.Current.Row = index;
-        // The row's resume point is where a bare jump lands, so the desktop marker follows it.
-        status.Current.Desktop = status.Rows[index].Cursor;
+        status.Current.Desktop = desktop;
+        // Hypertree moves a row's resume point to the desktop you last used on it, so the trailing chip's
+        // label follows the jump too — otherwise it would sit on the old desktop until the next snapshot.
+        row.Cursor = desktop;
         InvalidateVisual();
     }
 
@@ -1066,6 +1088,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (showQuickLinks) DrawQuickLinksRow(ctx, width);
             else _noteButtonRect = default; // no row painted → drop the stale note-button hit-rect
             if (showHypertree) DrawHypertreeStrip(ctx, width);
+            else _hyperDesktopRects.Clear(); // no strip painted → drop the stale desktop-chip hit-rects
 
             if (showRows)
             {
@@ -1406,9 +1429,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// just array order). The row the cursor is on takes an accent bar and a brighter name; the rest sit
     /// muted. Each line trails the desktop a jump would land on — the row's resume point — so the result
     /// of a click is legible before you make it.
+    /// <para>
+    /// On a row with more than one desktop that trailing label is a chip: it takes a chevron and its own
+    /// hover background, and clicking it picks a desktop rather than taking the resume point. A row with a
+    /// single desktop offers no choice, so it stays a plain label.
+    /// </para>
     /// </summary>
     private void DrawHypertreeStrip(DrawingContext ctx, double width)
     {
+        _hyperDesktopRects.Clear(); // rebuilt below for whichever rows actually draw a chip
+
         var status = _hypertree;
         if (status is null) return;
 
@@ -1440,12 +1470,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     new Rect(HorizPad, y + 3, MarkerW, Math.Max(2, lineH - 6)));
 
             // The trailing desktop label gives up width first — the branch name is what's being chosen.
+            // A row with a desktop to choose from also spends a few pixels on the picker chevron.
             var meta = row.ResumeLabel;
+            bool pickable = row.Desktops.Count > 1;
+            double chevW = pickable ? OverlayDraw.MeasureWidth(DesktopChevron, HyperMetaSize) + 3 : 0;
             double metaReserve = 0;
             if (meta.Length > 0)
             {
                 meta = OverlayDraw.Truncate(meta, HyperMetaSize, MetaMaxW);
-                metaReserve = OverlayDraw.MeasureWidth(meta, HyperMetaSize) + 8;
+                metaReserve = OverlayDraw.MeasureWidth(meta, HyperMetaSize) + chevW + 8;
             }
 
             var weight = here ? FontWeight.SemiBold : FontWeight.Normal;
@@ -1456,8 +1489,31 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
             if (meta.Length > 0)
             {
-                var metaFt = OverlayDraw.Text(meta, HyperMetaSize, MutedBrush);
-                OverlayDraw.TextLeftMid(ctx, metaFt, width - HorizPad - metaFt.Width, midY);
+                // The chip's lit background washes out a muted label, so hovering it brightens the text
+                // too — otherwise the thing you're about to click is the hardest part of the line to read.
+                bool chipHot = pickable && _hoveredHyperDesktop == i;
+                var metaBrush = chipHot ? FgBrush : MutedBrush;
+                var metaFt = OverlayDraw.Text(meta, HyperMetaSize, metaBrush);
+                double metaX = width - HorizPad - metaFt.Width - chevW;
+
+                if (pickable)
+                {
+                    // Captured before the text so the chip's background paints under it. The rect is the
+                    // click target: everywhere else on the line still jumps to the resume point.
+                    var chip = new Rect(metaX - 5, y + 2, metaFt.Width + chevW + 10, Math.Max(2, lineH - 4));
+                    _hyperDesktopRects[i] = chip;
+                    if (chipHot)
+                        // Deliberately stronger than the line's own hover wash (alpha 28), which is drawn
+                        // underneath it — the chip has to read as its own target, not just a lit row.
+                        OverlayDraw.Panel(ctx, chip, new SolidColorBrush(Color.FromArgb(58, 255, 255, 255)),
+                            null, 4);
+                }
+
+                OverlayDraw.TextLeftMid(ctx, metaFt, metaX, midY);
+
+                if (pickable)
+                    OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(DesktopChevron, HyperMetaSize, metaBrush),
+                        metaX + metaFt.Width + 3, midY);
             }
 
             y += lineH;
@@ -1477,6 +1533,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int index = (int)((p.Y - top) / lineH);
         return index >= 0 && index < count ? index : -1;
     }
+
+    // Returns the Hypertree row whose trailing desktop chip is under p, or -1. Only rows with more than
+    // one desktop have a chip, so a hit here always means there is a choice to offer.
+    private int HitTestHypertreeDesktop(Point p)
+        => ShowFullPanel && _rows.Count > 0 && HypertreeStripVisible ? HitRect(_hyperDesktopRects, p) : -1;
 
     // Returns the display-row index under p, or -1 (only while the panel is expanded with rows).
     private int HitTestRow(Point p)
@@ -2214,6 +2275,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int hyper = HitTestHypertreeRow(p);
         if (hyper != _hoveredHypertreeRow) { _hoveredHypertreeRow = hyper; InvalidateVisual(); }
 
+        int hyperDesk = HitTestHypertreeDesktop(p);
+        if (hyperDesk != _hoveredHyperDesktop) { _hoveredHyperDesktop = hyperDesk; InvalidateVisual(); }
+
         int art = HitTestArtifactIcon(p);
         if (art != _hoveredArtifactRow) { _hoveredArtifactRow = art; InvalidateVisual(); }
 
@@ -2290,8 +2354,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1;
-        _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredArtifactRow = -1;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1;
+        _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredArtifactRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
         _hoveredNoteButton = false;
@@ -2506,12 +2570,21 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+        // The trailing desktop chip opens a picker for that row's desktops; the rest of the line is the
+        // plain "go to this branch" jump. Tested first — the chip sits inside the line's own hit-band.
+        int hyperDesk = HitTestHypertreeDesktop(p);
+        if (hyperDesk >= 0)
+        {
+            ShowHypertreeDesktopPicker(hyperDesk);
+            return;
+        }
+
         int hyper = HitTestHypertreeRow(p);
         if (hyper >= 0 && _hypertree is { } hs && hyper < hs.Rows.Count)
         {
             var branch = hs.Rows[hyper];
             MarkHypertreeRow(hyper); // move the marker now; the confirming read corrects it if the jump fails
-            HypertreeRowActivated?.Invoke(branch);
+            HypertreeRowActivated?.Invoke(branch, -1);
             return;
         }
 
@@ -2637,6 +2710,40 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         var items = new List<Control>(artifacts.Count);
         foreach (var a in artifacts)
             items.Add(MenuItem(string.IsNullOrWhiteSpace(a.Title) ? a.Url : a.Title, () => ArtifactChosen?.Invoke(a)));
+        ShowFlyout(items);
+    }
+
+    /// <summary>
+    /// Pops the desktops on a Hypertree row at the cursor; picking one jumps straight to it instead of to
+    /// the row's resume point. Only ever reached from the trailing chip, which is only drawn when the row
+    /// has more than one desktop — so this never offers a list of one.
+    /// </summary>
+    /// <remarks>The desktop you're on is called out in the menu text: the strip says "you are here" with
+    /// an accent bar, and a menu has only words to say it with.</remarks>
+    private void ShowHypertreeDesktopPicker(int rowIndex)
+    {
+        if (_hypertree is not { } status || rowIndex < 0 || rowIndex >= status.Rows.Count) return;
+        var row = status.Rows[rowIndex];
+
+        var items = new List<Control>(row.Desktops.Count);
+        for (int i = 0; i < row.Desktops.Count; i++)
+        {
+            int desktop = i; // captured per item — the click fires long after this loop
+            var label = row.Desktops[i].Label;
+            if (string.IsNullOrWhiteSpace(label)) label = $"Desktop {i + 1}";
+            // A menu header is access-key text, so a desktop the user named "dev_env" would otherwise lose
+            // its underscore to a mnemonic. These are labels, not commands — nothing here wants one.
+            label = label.Replace("_", "__");
+            if (status.IsCurrentRow(rowIndex) && status.Current.Desktop == i) label += "   (here)";
+
+            items.Add(MenuItem(label, () =>
+            {
+                // Optimistic, exactly as a line click is: the confirming snapshot corrects a jump that
+                // didn't happen.
+                MarkHypertreeRow(rowIndex, desktop);
+                HypertreeRowActivated?.Invoke(row, desktop);
+            }));
+        }
         ShowFlyout(items);
     }
 

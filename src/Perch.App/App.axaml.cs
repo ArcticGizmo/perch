@@ -808,8 +808,10 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Jumps to a Hypertree branch. The work is a process launch that waits on Hypertree's tray, so it
-    /// runs off the UI thread; the strip's own poll then picks the new position up.
+    /// Jumps to a Hypertree branch — to its resume desktop, or to the specific desktop picked from the
+    /// row's trailing chip (<paramref name="desktopIndex"/>, 0-based; -1 for the resume point). The work is
+    /// a process launch that waits on Hypertree's tray, so it runs off the UI thread; the strip's own poll
+    /// then picks the new position up.
     /// </summary>
     /// <remarks>
     /// A failed jump is silent, like a failed quick-link launch — and here it is also self-correcting:
@@ -817,11 +819,11 @@ public partial class App : Application
     /// branch having been removed (it disappears on the next poll). Reporting either would be telling the
     /// user something the overlay is about to show them anyway.
     /// </remarks>
-    private void OnHypertreeRowActivated(HypertreeRow row)
+    private void OnHypertreeRowActivated(HypertreeRow row, int desktopIndex)
     {
         var target = row.Target;
         var cli = _hypertreeHost?.Last?.Cli;
-        System.Threading.Tasks.Task.Run(() => HypertreeBridge.GoTo(target, cli));
+        System.Threading.Tasks.Task.Run(() => HypertreeBridge.GoTo(target, cli, desktopIndex));
     }
 
     // Applies the enabled links to the overlay strip, resolving their icons off the UI thread (the first

@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.26] - 2026-07-28
+
+- Hypertree rows with more than one desktop gain a chevron on their label
+- Click it to pick a desktop, rather than always taking the resume point
+- The rest of the line still jumps where it always did
+
+---
+
 ## [v0.2.25] - 2026-07-27
 
 - New red "API error" status when a session's last request fails (e.g. 529 Overloaded)

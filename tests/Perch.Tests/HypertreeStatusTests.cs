@@ -154,6 +154,21 @@ public class HypertreeStatusTests
         Assert.Equal("", row.ResumeLabel);
     }
 
+    // Clicking a branch line jumps to its resume point, so no desktop is spelled out; picking one from the
+    // line's trailing chip addresses it by 1-based position on the row. The row part is untouched either
+    // way, so a branch still goes by id and main by the literal.
+    [Fact]
+    public void Address_AppendsThePickedDesktopByPosition()
+    {
+        Assert.Equal("main", HypertreeBridge.Address("main", -1));
+        Assert.Equal("main/1", HypertreeBridge.Address("main", 0));
+        Assert.Equal("main/5", HypertreeBridge.Address("main", 4));
+
+        const string id = "57adeeb8-8ca1-4945-a697-87cb9ed48e5c";
+        Assert.Equal(id, HypertreeBridge.Address(id, -1));
+        Assert.Equal($"{id}/2", HypertreeBridge.Address(id, 1));
+    }
+
     // A schema we don't know is refused outright. Guessing at an unfamiliar layout would paint a strip
     // whose click targets we can't trust.
     [Fact]
