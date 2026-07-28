@@ -937,7 +937,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         else _autonomousExpanded = false;
 
         _rows = rows;
-        if (sessions.Count == 0) _expanded = false;
+        // Deliberately *not* collapsing when the session list empties: everything below the header already
+        // keys off `_rows.Count > 0`, so an empty roster renders as the bare header either way — clearing
+        // _expanded would only throw away the user's expand state and leave the panel collapsed once
+        // sessions return (the header chevron is hidden at zero sessions, so they couldn't undo it).
 
         // Stop the attention flash once nothing needs attention, is awaiting input, or has an API error.
         if (_attentionFlash && sessions.All(s =>

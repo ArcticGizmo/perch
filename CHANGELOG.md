@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.27] - 2026-07-28
+
+- The panel keeps its expanded state when the last session ends
+- Previously it collapsed itself and hid the chevron you'd need to undo that
+
+---
+
 ## [v0.2.26] - 2026-07-28
 
 - Hypertree rows with more than one desktop gain a chevron on their label
