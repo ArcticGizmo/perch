@@ -895,7 +895,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~150ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Note, Media }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Note, Media, Mic }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1057,7 +1057,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool showUsage = showRows && _usageEnabled;           // rate-limit bars, below the metrics strip
         bool showQuickLinks = showRows && HasQuickLinksRow;   // app icon strip, below the usage bars
         bool showHypertree = showRows && HypertreeStripVisible; // Hypertree branches, below the quick links
-        bool showMedia = showRows && MediaStripVisible;       // now-playing + transport strip, below the rows
+        bool showMic = showRows && MicStripVisible;           // who has the microphone, below the rows
+        bool showMedia = showRows && MediaStripVisible;       // now-playing + transport strip, below that
 
         double height = HeaderHeight;
         if (showRows)
@@ -1068,6 +1069,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (showHypertree) height += HypertreeStripHeight;
             foreach (var r in _rows) height += HeightOf(r);
             height += 2;
+            if (showMic) height += MicStripHeight;
             if (showMedia) height += MediaStripHeight;
         }
         // The outage footer sits below everything; shown only when enabled and there's an issue. Reached
@@ -1121,11 +1123,17 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     top += HeightOf(r);
                 }
 
-                // The now-playing strip sits below the rows (and above any outage footer); it captures its
-                // own transport-button hit-rects, which are otherwise cleared each paint just below.
+                // The mic and now-playing strips sit below the rows (and above any outage footer), in that
+                // order; each captures its own button hit-rects, which are otherwise cleared just below.
+                if (showMic)
+                {
+                    DrawMicStrip(ctx, width, top);
+                    top += MicStripHeight;
+                }
                 if (showMedia) DrawMediaStrip(ctx, width, top);
             }
 
+            if (!showMic) ClearMicHitRects();
             if (!showMedia) ClearMediaHitRects();
 
             if (showFooter) DrawStatusFooter(ctx, width, height);
@@ -2306,10 +2314,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int media = HitTestMedia(p);
         if (media != _hoveredMediaButton) { _hoveredMediaButton = media; InvalidateVisual(); }
 
+        // The mic strip's mute button, and its app name — which is itself the jump-to-app control, so it
+        // brightens on hover and takes the hand cursor like any other clickable text.
+        bool overMicMute = HitTestMicMute(p);
+        if (overMicMute != _hoveredMicMute) { _hoveredMicMute = overMicMute; InvalidateVisual(); }
+        bool overMicLabel = HitTestMicLabel(p);
+        if (overMicLabel != _hoveredMicLabel) { _hoveredMicLabel = overMicLabel; InvalidateVisual(); }
+
         // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + artifacts + the update
-        // badge + outage footer + the scratch-pad note button + a row's note glyph + the media buttons);
-        // rows show only the highlight.
-        Cursor = (ql >= 0 || hyper >= 0 || art >= 0 || overUpdate || overFooter || overNote || overRowNote || media >= 0)
+        // badge + outage footer + the scratch-pad note button + a row's note glyph + the media buttons + the
+        // mic strip's mute button and app name); rows show only the highlight.
+        Cursor = (ql >= 0 || hyper >= 0 || art >= 0 || overUpdate || overFooter || overNote || overRowNote
+                  || media >= 0 || overMicMute || overMicLabel)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -2326,6 +2342,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitTestMetrics(p)    is var me && me >= 0 ? (TipKind.Metrics, me) :
             HitTestNoteIcon(p)   is var no && no >= 0 ? (TipKind.Note, no) :
             _mediaTitleRect.Contains(p)               ? (TipKind.Media, -1) :
+            _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             InUsageStrip(p)                           ? (TipKind.Usage, -1) :
                                                         (TipKind.None, -1);
 
@@ -2354,6 +2371,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Metrics: ShowMetricsTooltip(_tipRow); break;
             case TipKind.Note:    ShowNoteTooltip(_tipRow);    break;
             case TipKind.Media:   ShowMediaTooltip();          break;
+            case TipKind.Mic:     ShowMicTooltip();            break;
         }
     }
 
@@ -2363,12 +2381,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicMute || _hoveredMicLabel;
         _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredArtifactRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
         _hoveredNoteButton = false;
         _hoveredMediaButton = -1;
+        _hoveredMicMute = false;
+        _hoveredMicLabel = false;
         Cursor = Cursor.Default;
         _tipKind = TipKind.None;
         _tipRow = -1;
@@ -2520,6 +2540,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (_mediaPrevRect.Contains(p)) { MediaPreviousRequested?.Invoke(); return; }
         if (_mediaPlayRect.Contains(p)) { MediaPlayPauseRequested?.Invoke(); return; }
         if (_mediaNextRect.Contains(p)) { MediaNextRequested?.Invoke(); return; }
+
+        // The mic strip: the mute button (in the call app when Perch has a link to it, otherwise on the
+        // capture device — the App decides which), and the app's name, which jumps to that app's window.
+        // Mute is tested first: its rect sits inside the strip but outside the label's, so order only matters
+        // if the two ever overlap.
+        if (HitTestMicMute(p)) { MicMuteToggleRequested?.Invoke(); return; }
+        if (HitTestMicLabel(p)) { MicJumpRequested?.Invoke(); return; }
 
         int art = HitTestArtifactIcon(p);
         if (art >= 0 && _rows[art].Session is { } artSession)

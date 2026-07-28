@@ -25,4 +25,27 @@ public interface IWindowActivator
     /// <summary>Brings the main window of the process identified by <paramref name="pid"/> to the
     /// foreground (used to re-focus an already-running quick-link app). Best-effort; never throws.</summary>
     void FocusProcessMainWindow(int pid);
+
+    /// <summary>
+    /// Focuses the window of the <em>application</em> that owns <paramref name="pid"/> — for "take me back
+    /// to the call I'm talking into". Distinct from <see cref="FocusProcessMainWindow"/> because the pid
+    /// available here often belongs to a windowless helper: a microphone capture stream is typically owned
+    /// by a media/renderer child process, not the one holding the app's UI. So the search widens to the
+    /// process's ancestors and to its siblings running the same executable, preferring the closest
+    /// relative that actually has a window.
+    /// <para>
+    /// <paramref name="titleHint"/>, when given, prefers a window whose title contains it — for picking one
+    /// of several windows the app has open. Without a hint (or when nothing matches) the topmost in
+    /// Z-order wins, which is the app's most recently used window.
+    /// </para>
+    /// <para>
+    /// A window sitting on another virtual desktop / Space is a normal case here, not an error: the user is
+    /// working elsewhere, which is the whole point of the affordance. Implementations are expected to
+    /// activate it anyway and let the OS follow (on Windows, foregrounding such a window switches desktop).
+    /// </para>
+    /// Returns true when a window was found and activation was issued, false when the app has no window to
+    /// go to — the caller is expected to tell the user rather than leave a click that does nothing.
+    /// Best-effort; never throws.
+    /// </summary>
+    bool FocusAppWindowForProcess(int pid, string? titleHint = null);
 }

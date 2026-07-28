@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.29] - 2026-07-28
+
+- New microphone strip: which app is currently using your mic
+- Names Slack, Zoom, browser tabs and OBS too, not just Teams
+- Click the app's name to jump to it, virtual desktops included
+- Mute from the strip — the capture device, or Teams itself when connected
+- Opt-in Teams call controls: real meeting state, and a mute Teams agrees with
+- Settings checks whether Teams' third-party API is switched on (it usually isn't)
+
+---
+
 ## [v0.2.28] - 2026-07-28
 
 - Clicking a session with a hidden terminal window un-hides it

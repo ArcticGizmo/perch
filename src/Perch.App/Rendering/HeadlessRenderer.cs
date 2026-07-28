@@ -89,6 +89,37 @@ internal static class HeadlessRenderer
         RenderControl(mediaProbe, Path.Combine(outDir, "overlay_media_1x.png"), 96);
         RenderControl(mediaProbe, Path.Combine(outDir, "overlay_media_1.5x.png"), 144);
 
+        // Microphone strip: who currently holds the mic, with jump-to-app and mute. Three states, because
+        // they read quite differently — the generic path (an app Perch has no call integration for, so the
+        // mute button drives the capture device), a recognised call app with a live link (real meeting
+        // state), and that same call muted, which greys the glyph and strikes it through.
+        var micProbe = new OverlayCanvas();
+        micProbe.Update(SampleSessions());
+        micProbe.SetShowMicPresence(true);
+        micProbe.UpdateMic(new MicSnapshot(
+            [new MicUser("91750D7E.Slack_8she8kybcnzg4", "Slack", 4242, true, DateTimeOffset.Now.AddMinutes(-7))],
+            DeviceMuted: false, DeviceName: "Microphone (Logitech Webcam C930e)"));
+        RenderControl(micProbe, Path.Combine(outDir, "overlay_mic_1x.png"), 96);
+        RenderControl(micProbe, Path.Combine(outDir, "overlay_mic_1.5x.png"), 144);
+
+        var callProbe = new OverlayCanvas();
+        callProbe.Update(SampleSessions());
+        callProbe.SetShowMicPresence(true);
+        callProbe.UpdateMic(new MicSnapshot(
+            [new MicUser("MSTeams_8wekyb3d8bbwe", "Microsoft Teams", 5028, true, DateTimeOffset.Now.AddMinutes(-23))],
+            DeviceMuted: false, DeviceName: "Microphone (Logitech Webcam C930e)"));
+        callProbe.UpdateCall(
+            new CallSnapshot(IsInMeeting: true, IsMuted: false, IsCameraOn: true, CanToggleMute: true, CanLeave: true),
+            CallLinkState.Connected);
+        RenderControl(callProbe, Path.Combine(outDir, "overlay_mic_call_1x.png"), 96);
+        RenderControl(callProbe, Path.Combine(outDir, "overlay_mic_call_1.5x.png"), 144);
+
+        callProbe.UpdateCall(
+            new CallSnapshot(IsInMeeting: true, IsMuted: true, IsCameraOn: true, CanToggleMute: true, CanLeave: true),
+            CallLinkState.Connected);
+        RenderControl(callProbe, Path.Combine(outDir, "overlay_mic_muted_1x.png"), 96);
+        RenderControl(callProbe, Path.Combine(outDir, "overlay_mic_muted_1.5x.png"), 144);
+
         // Hypertree strip: the branch list under the quick links, with the row the cursor is on marked.
         // The sample puts main mid-stack (Hypertree publishes the stack already flattened, main at its
         // slot) and gives one branch a long desktop label so the trailing-label truncation is exercised.

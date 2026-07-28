@@ -26,6 +26,7 @@ public partial class App : Application
     private MetricsMonitorHost? _metricsHost;
     private StatusMonitorHost? _statusHost;
     private MediaMonitorHost? _mediaHost;
+    private MicMonitorHost? _micHost;
     private HypertreeMonitorHost? _hypertreeHost;
     private QuickLinkLauncher? _quickLinkLauncher;
     private LiveOverlayWindow? _overlay;
@@ -104,6 +105,7 @@ public partial class App : Application
                 _metricsHost?.Dispose();
                 _statusHost?.Dispose();
                 _mediaHost?.Dispose();
+                _micHost?.Dispose();
                 _hypertreeHost?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
@@ -138,6 +140,15 @@ public partial class App : Application
             _statusHost = new StatusMonitorHost(_overlay.Canvas.UpdateStatus, settings.ServiceStatusIntervalMinutes);
             // System media session → the overlay's now-playing strip (opt-in; started below when enabled).
             _mediaHost = new MediaMonitorHost(PlatformServices.CreateMediaController(), _overlay.Canvas.UpdateMedia);
+            // Who holds the microphone → the overlay's mic strip, plus (separately opt-in) a recognised call
+            // app's own control channel for real meeting state and in-app mute. Both started below.
+            _micHost = new MicMonitorHost(
+                PlatformServices.CreateMicrophoneMonitor(),
+                PlatformServices.CreateCallController(
+                    () => settings.TeamsApiToken,
+                    token => { settings.TeamsApiToken = token; settings.Save(); }),
+                _overlay.Canvas.UpdateMic,
+                _overlay.Canvas.UpdateCall);
             // Hypertree's published status file → the overlay's branch strip (opt-in; started below).
             _hypertreeHost = new HypertreeMonitorHost(_overlay.Canvas.SetHypertree);
 
@@ -179,6 +190,11 @@ public partial class App : Application
             _overlay.Canvas.MediaPlayPauseRequested += () => _mediaHost?.Controller.TogglePlayPause();
             _overlay.Canvas.MediaNextRequested += () => _mediaHost?.Controller.Next();
             _overlay.Canvas.MediaPreviousRequested += () => _mediaHost?.Controller.Previous();
+
+            // Mic strip: jump to the app holding the microphone, or toggle its mute (the host picks the call
+            // app's own mute over the capture device's when it has a live link).
+            _overlay.Canvas.MicJumpRequested += JumpToMicApp;
+            _overlay.Canvas.MicMuteToggleRequested += () => _micHost?.ToggleMute();
 
             // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
             // down. History / QR / external-notify / confetti are Phase-5 concerns — their triggers are
@@ -257,6 +273,9 @@ public partial class App : Application
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
             if (settings.ShowServiceStatus) _statusHost.Start(); // initial fetch (polls every 2 min thereafter)
             if (settings.ShowMediaController) _mediaHost.Start(); // begin listening to the system media session
+            if (settings.ShowMicPresence) _micHost.Start();       // begin watching which app holds the mic
+            // Separate switch: connecting can make the call app show a one-time authorisation prompt.
+            _micHost.SetCallControlsEnabled(settings.TeamsCallControls);
             if (settings.HypertreeEnabled) _hypertreeHost.Start(); // begin polling Hypertree's status file
             ReloadQuickLinks(settings);
 
@@ -476,6 +495,7 @@ public partial class App : Application
         c.SetShowArtifacts(s.ShowArtifacts);
         c.SetServiceStatusEnabled(s.ShowServiceStatus);
         c.SetShowMediaController(s.ShowMediaController);
+        c.SetShowMicPresence(s.ShowMicPresence);
         c.SetHideInactiveTeamMembers(s.HideInactiveTeamMembers);
         c.SetUpsideDownQuickLinks(s.UpsideDownQuickLinks);
         c.SetConfettiFinishAvailable(s.ConfettiFinish);
@@ -680,6 +700,25 @@ public partial class App : Application
         _overlay.Canvas.SetShowMediaController(enabled);
         if (enabled) _mediaHost?.Start(); else _mediaHost?.Stop();
         _settings?.SyncDisplayToggles();
+    }
+
+    // "Take me back to the call I'm talking into": focus the window of whatever app currently holds the
+    // microphone. The pid to hand over is the one owning the capture stream, which for Teams (and any
+    // Electron/WebView2 app) is a windowless media child process — FocusAppWindowForProcess widens the
+    // search to the app's other processes, and a window parked on another virtual desktop is the normal case
+    // here rather than a problem: foregrounding it makes Windows switch desktop, which is the whole point.
+    private void JumpToMicApp()
+    {
+        if (_micHost?.Microphone.Current?.Primary is not { } holder || holder.ProcessId <= 0) return;
+        if (PlatformServices.WindowActivator.FocusAppWindowForProcess(holder.ProcessId)) return;
+
+        // Same reasoning as FocusSession: a click that silently does nothing reads as Perch being broken,
+        // and the strip gives no hint that the app has no window to go to.
+        _notifier?.Show(
+            "No window to focus",
+            $"{holder.DisplayName} is using your microphone (PID {holder.ProcessId}) but has no window "
+                + "on screen to bring forward.",
+            ToastLevel.Warning, null, null);
     }
 
 #if DEBUG
@@ -1085,6 +1124,8 @@ public partial class App : Application
             ServiceStatusEnabledChanged = on => { if (on) _statusHost?.Start(); else _statusHost?.Stop(); },
             ServiceStatusIntervalChanged = () => _statusHost?.SetInterval(settings.ServiceStatusIntervalMinutes),
             MediaEnabledChanged = on => { if (on) _mediaHost?.Start(); else _mediaHost?.Stop(); },
+            MicEnabledChanged = on => { if (on) _micHost?.Start(); else _micHost?.Stop(); },
+            TeamsCallControlsChanged = on => _micHost?.SetCallControlsEnabled(on),
             HypertreeEnabledChanged = on => { if (on) _hypertreeHost?.Start(); else _hypertreeHost?.Stop(); },
 #if DEBUG
             TestServiceStatus = () => _overlay?.Canvas.UpdateStatus(SampleOutage()),

@@ -67,6 +67,38 @@ public sealed class WindowActivator : IWindowActivator
         catch { /* best-effort */ }
     }
 
+    // Raise the app that owns pid — the "jump back to the call" path, where pid is usually a windowless
+    // media/renderer child of the real app. The same nearest-GUI-ancestor walk as FocusTerminalForProcess
+    // finds it, since on macOS those helpers are genuine children of the app bundle's process, and
+    // app-level foregrounding brings its most recently used window forward (switching Space if that window
+    // lives on another one).
+    //
+    // titleHint is ignored: picking a specific window needs per-app AppleScript or the Accessibility API,
+    // which is the same follow-up as the per-tab terminal precision noted in the class remarks. App-level is
+    // the honest best-effort here, and it lands on the right window whenever the call window was the last
+    // one used in that app — which for a call in progress it almost always is.
+    public bool FocusAppWindowForProcess(int pid, string? titleHint = null)
+    {
+        try
+        {
+            var parents = ReadParentMap();
+            int current = pid;
+            for (int depth = 0; depth < 12 && current > 1; depth++)
+            {
+                IntPtr app = RunningApp(current);
+                if (app != IntPtr.Zero &&
+                    ObjC.SendNint(app, ObjC.Sel("activationPolicy")) == NSApplicationActivationPolicyRegular)
+                {
+                    ForegroundApp(app);
+                    return true;
+                }
+                current = parents.TryGetValue(current, out var pp) ? pp : 0;
+            }
+        }
+        catch { /* best-effort */ }
+        return false;
+    }
+
     // Raise the host app, window-precise when we know how. sessionPid is the session's own process (claude),
     // whose controlling tty identifies the exact terminal window/tab; the app is its hosting GUI ancestor.
     private static void FocusHostApp(IntPtr app, int sessionPid)

@@ -42,6 +42,13 @@ internal sealed class SettingsHooks
     /// <summary>Start (true) or stop (false) listening to the system media session for the overlay strip.</summary>
     public Action<bool>? MediaEnabledChanged;
 
+    /// <summary>Start (true) or stop (false) watching which app holds the microphone for the overlay strip.</summary>
+    public Action<bool>? MicEnabledChanged;
+
+    /// <summary>Connect (true) or disconnect (false) Microsoft Teams' local API, which upgrades the mic strip
+    /// to real meeting state and in-app mute. Enabling it makes Teams show a one-time approval prompt.</summary>
+    public Action<bool>? TeamsCallControlsChanged;
+
     /// <summary>Start (true) or stop (false) polling Hypertree's status file for the overlay's branch strip.</summary>
     public Action<bool>? HypertreeEnabledChanged;
 
@@ -175,6 +182,7 @@ internal sealed class SettingsWindow : Window
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
         AddPage(nav, "integrations", "Integrations",    BuildIntegrationsPage);
         AddPage(nav, "music",        "Music",           BuildMusicPage);
+        AddPage(nav, "microphone",   "Microphone",      BuildMicrophonePage);
         AddPage(nav, "experimental", "Experimental",    BuildExperimentalPage);
         AddPage(nav, "export",       "Export",          BuildExportPage);
         AddPage(nav, "about",        "About",           BuildAboutPage);
@@ -409,6 +417,8 @@ internal sealed class SettingsWindow : Window
         _usageBars.SetOn(_settings.ShowUsage);
         _systemMetricsToggle.SetCheckedSilent(_settings.ShowSystemMetrics);
         _mediaToggle.SetCheckedSilent(_settings.ShowMediaController);
+        _micToggle.SetCheckedSilent(_settings.ShowMicPresence);
+        _teamsCallToggle.SetCheckedSilent(_settings.TeamsCallControls);
     }
 
     // ── Integrations ──────────────────────────────────────────────────────────────
@@ -492,6 +502,99 @@ internal sealed class SettingsWindow : Window
         };
         page.Children.Add(SettingsUi.TitleRow("Show media controller", _mediaToggle));
         page.Children.Add(SettingsUi.BodyText("The strip only appears while something is actually playing."));
+    }
+
+    // ── Microphone ────────────────────────────────────────────────────────────────
+    private PerchToggle _micToggle = null!;
+    private PerchToggle _teamsCallToggle = null!;
+    private TextBlock _teamsApiStatusText = null!;
+    private Button _teamsApiCheckBtn = null!;
+
+    // Two switches, deliberately separate. The first is the generic feature and needs nothing from anybody.
+    // The second reaches into Teams, which costs the user an approval prompt — so it is its own decision,
+    // described plainly, and everything still works without it.
+    private void BuildMicrophonePage(StackPanel page)
+    {
+        page.Children.Add(SettingsUi.SectionTitle("Microphone strip"));
+        page.Children.Add(SettingsUi.BodyText(
+            "Show which app is using your microphone as a strip on the overlay, with a button to jump "
+            + "straight to that app's window — useful when a call is buried on another virtual desktop — and "
+            + "a button to mute. Works for any app: Teams, Slack, Zoom, a browser tab, OBS. It reads the same "
+            + "information as the Windows privacy indicator, so there's nothing extra to install."));
+
+        _micToggle = Toggle(_settings.ShowMicPresence);
+        _micToggle.CheckedChanged += (_, _) =>
+        {
+            _settings.ShowMicPresence = _micToggle.IsChecked;
+            _settings.Save();
+            _hooks.DisplayChanged?.Invoke();                  // applies SetShowMicPresence to the overlay
+            _hooks.MicEnabledChanged?.Invoke(_micToggle.IsChecked); // starts/stops the microphone watch
+        };
+        page.Children.Add(SettingsUi.TitleRow("Show microphone strip", _micToggle));
+        page.Children.Add(SettingsUi.BodyText(
+            "The strip only appears while something is actually using the mic. Without the Teams option "
+            + "below, the mute button mutes the capture device — which silences you everywhere, and the app "
+            + "in the call won't know, so it will still show you as unmuted."));
+
+        page.Children.Add(SettingsUi.SectionTitle("Microsoft Teams controls"));
+        page.Children.Add(SettingsUi.BodyText(
+            "When a Teams call has your microphone, talk to Teams directly instead: the strip then shows "
+            + "real meeting state and the mute button mutes you inside Teams, so the Teams window and "
+            + "everyone else agree with it. Works from any desktop, without switching to Teams first."));
+        page.Children.Add(SettingsUi.BodyText(
+            "Turning this on asks Teams for permission once — Teams pops an approval prompt, and Perch "
+            + "remembers the token it hands back. It also needs the API enabled inside Teams: Settings › "
+            + "Privacy › Third-party app API › Manage API › Enable API. Teams only allows one connected app "
+            + "at a time, so this will compete with a Stream Deck plugin if you use one. Everything else on "
+            + "this page keeps working if you leave it off."));
+
+        _teamsCallToggle = Toggle(_settings.TeamsCallControls);
+        _teamsCallToggle.CheckedChanged += (_, _) =>
+        {
+            _settings.TeamsCallControls = _teamsCallToggle.IsChecked;
+            _settings.Save();
+            _hooks.TeamsCallControlsChanged?.Invoke(_teamsCallToggle.IsChecked);
+            ProbeTeamsApi();  // the answer changes meaning once it's on, so re-state it
+        };
+        page.Children.Add(SettingsUi.TitleRow("Use Teams call controls", _teamsCallToggle));
+
+        // Live reachability, because the two things that break this integration — Teams not running, and its
+        // API setting being off — are both invisible from Perch's side otherwise, and the symptom (a mute
+        // button that only mutes the device) gives no hint which it is.
+        _teamsApiStatusText = SettingsUi.BodyText("Checking Teams…");
+        page.Children.Add(_teamsApiStatusText);
+
+        _teamsApiCheckBtn = SettingsUi.FlatButton("Check again");
+        _teamsApiCheckBtn.Click += (_, _) => ProbeTeamsApi();
+        page.Children.Add(_teamsApiCheckBtn);
+
+        ProbeTeamsApi();
+    }
+
+    // Off-thread probe → UI thread, the pattern the Hypertree page uses. The probe is a bare TCP connect, so
+    // it neither pops Teams' approval prompt nor takes its single client slot.
+    private void ProbeTeamsApi()
+    {
+        _teamsApiStatusText.Text = "Checking Teams…";
+        Task.Run(() => TeamsCallController.ProbeAsync(default)).ContinueWith(t =>
+        {
+            // The window may have closed while the probe was in flight.
+            if (!IsVisible || _teamsApiStatusText is null) return;
+
+            var status = t.IsCompletedSuccessfully ? t.Result : TeamsApiStatus.NotRunning;
+            _teamsApiStatusText.Text = status switch
+            {
+                TeamsApiStatus.Reachable when _settings.TeamsCallControls =>
+                    "Teams is reachable. If Teams hasn't shown you an approval prompt yet, it will the first "
+                    + "time Perch connects — accept it and the strip will follow your Teams mute.",
+                TeamsApiStatus.Reachable =>
+                    "Teams is reachable — turn the switch above on to use it.",
+                TeamsApiStatus.ApiDisabled =>
+                    "Teams is running but not accepting connections. Turn its API on: in Teams, Settings › "
+                    + "Privacy › Third-party app API › Manage API › Enable API, then check again.",
+                _ => "Teams isn't running — Perch will connect on its own once it is.",
+            };
+        }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     // ── Indicators ──────────────────────────────────────────────────────────────────

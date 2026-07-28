@@ -111,6 +111,124 @@ public sealed class WindowActivator : IWindowActivator
         return byDepth;
     }
 
+    // Focuses the app that owns pid, where pid may well be a windowless helper process — the case this
+    // exists for is a microphone capture session, which on Teams (and any Electron/WebView2 app) belongs to
+    // a media child process while the windows live in the main one.
+    //
+    // Candidates are therefore the pid, its ancestors, and every process running the *same executable*. That
+    // last set is what actually resolves the Teams case — the capture pid and the UI pid are two instances
+    // of the same ms-teams.exe — and it survives a helper being reparented, which an ancestor walk alone
+    // would not. Ancestors are still walked (and scored closer) so a conventional app with a parent-owned
+    // window works too; explorer.exe is an ancestor of nearly everything, hence the depth cap and the
+    // closest-depth-wins rule below, which keeps a File Explorer window from ever being the answer.
+    //
+    // Unlike FocusTerminalForProcess this requires a *titled, visible* window: we're looking for a real app
+    // window a user would recognise, not a 0×0 pseudo-console, and every titleless helper window in the
+    // candidate processes would otherwise be a candidate.
+    public bool FocusAppWindowForProcess(int pid, string? titleHint = null)
+    {
+        try
+        {
+            var processes = SnapshotProcesses();
+            var depthByPid = new Dictionary<int, int>();
+
+            // Depth 0..MaxDepth: the process itself, then its ancestors.
+            const int MaxDepth = 5;
+            int current = pid;
+            for (int depth = 0; depth <= MaxDepth && current > 0; depth++)
+            {
+                if (!depthByPid.TryAdd(current, depth)) break; // a cycle in a torn snapshot
+                current = processes.TryGetValue(current, out var info) ? info.ParentPid : 0;
+            }
+
+            // Same-executable siblings, scored at depth 1: they are the same application, and closer to the
+            // truth than any real ancestor beyond the parent.
+            if (processes.TryGetValue(pid, out var self) && !string.IsNullOrEmpty(self.ExeFile))
+            {
+                foreach (var (otherPid, info) in processes)
+                {
+                    if (otherPid == pid) continue;
+                    if (string.Equals(info.ExeFile, self.ExeFile, StringComparison.OrdinalIgnoreCase))
+                        depthByPid.TryAdd(otherPid, 1);
+                }
+            }
+
+            var byDepth = CollectAppWindows(depthByPid);
+            if (byDepth.Count == 0) return false;
+
+            // Closest relative first; within it, EnumWindows order is Z-order, so the first entry is the
+            // app's most recently used window — the right default for "take me back".
+            var atClosest = byDepth.First().Value;
+            var chosen = atClosest.FirstOrDefault(
+                c => !string.IsNullOrEmpty(titleHint)
+                     && c.title.Contains(titleHint!, StringComparison.OrdinalIgnoreCase));
+            if (chosen.hWnd == IntPtr.Zero) chosen = atClosest[0];
+
+            // A window on another virtual desktop stays WS_VISIBLE (it's DWM-cloaked, not hidden), so it
+            // arrives here like any other; foregrounding it makes Windows switch desktop, which is exactly
+            // the "jump back to the meeting from wherever I am" behaviour.
+            FocusWindow(chosen.hWnd);
+            return true;
+        }
+        catch
+        {
+            return false; // best-effort
+        }
+    }
+
+    // Visible, titled top-level windows belonging to any candidate process, grouped by that process's depth
+    // and kept in EnumWindows (Z-order) order within each group.
+    private static SortedDictionary<int, List<(IntPtr hWnd, string title)>> CollectAppWindows(
+        Dictionary<int, int> depthByPid)
+    {
+        var byDepth = new SortedDictionary<int, List<(IntPtr hWnd, string title)>>();
+
+        EnumWindows((hWnd, _) =>
+        {
+            if (!IsWindowVisible(hWnd)) return true;
+            GetWindowThreadProcessId(hWnd, out uint windowPid);
+            if (!depthByPid.TryGetValue((int)windowPid, out int depth)) return true;
+
+            // Top-level only: an owned dialog resolves to its owner, and we keep the owner.
+            IntPtr owner = GetAncestor(hWnd, GA_ROOTOWNER);
+            if (owner == IntPtr.Zero) owner = hWnd;
+
+            var title = GetWindowTitle(owner);
+            if (title.Length == 0) return true;
+
+            if (!byDepth.TryGetValue(depth, out var list))
+                byDepth[depth] = list = new List<(IntPtr, string)>();
+            if (!list.Any(e => e.hWnd == owner)) list.Add((owner, title));
+            return true;
+        }, IntPtr.Zero);
+
+        return byDepth;
+    }
+
+    // One Toolhelp pass giving both the parent map and each process's executable name — the two things the
+    // candidate search needs, without a second snapshot or a per-process OpenProcess.
+    private static Dictionary<int, (int ParentPid, string ExeFile)> SnapshotProcesses()
+    {
+        var map = new Dictionary<int, (int, string)>();
+        var snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == IntPtr.Zero) return map;
+        try
+        {
+            var entry = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
+            if (!Process32First(snapshot, ref entry)) return map;
+            do
+            {
+                map[(int)entry.th32ProcessID] = ((int)entry.th32ParentProcessID, entry.szExeFile ?? "");
+            }
+            while (Process32Next(snapshot, ref entry));
+            return map;
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+    }
+
     public void FocusProcessMainWindow(int pid)
     {
         try
