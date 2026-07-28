@@ -24,7 +24,10 @@ public sealed class WindowActivator : IWindowActivator
     // "… - perch - Visual Studio Code") disambiguates projectHint among windows sharing a pid.
     // Focus is best-effort for Windows Terminal, whose title follows the *active tab* and can't be
     // steered to a background tab via Win32.
-    public void FocusTerminalForProcess(int pid, string? projectHint = null)
+    //
+    // Returns false when no host window could be resolved at all, so the caller can say so instead of
+    // leaving a click that appears to do nothing.
+    public bool FocusTerminalForProcess(int pid, string? projectHint = null)
     {
         // Build ancestor list closest-first: claude → cmd → WindowsTerminal → explorer …
         var ancestors = new List<int>();
@@ -41,32 +44,18 @@ public sealed class WindowActivator : IWindowActivator
             .Select((p, i) => (p, i))
             .ToDictionary(x => x.p, x => x.i);
 
-        // For every visible window owned by an ancestor, resolve it to its root owner and keep that,
-        // grouped by the *owning ancestor's* depth. There is deliberately NO size/title/cloak gate:
-        // any such heuristic can wrongly drop a real terminal window (an untitled one, a minimized
-        // one reporting a tiny rect, one cloaked onto another virtual desktop), and focusing the
-        // terminal correctly every time is the priority. Junk windows (explorer's title-less
-        // thumbnail/DWM helpers) don't interfere because they live at explorer's depth — deeper than
-        // the terminal/IDE — and the closest-depth rule below reaches the real host first. The 0×0
-        // ConPTY pseudo-console isn't junk: GA_ROOTOWNER maps it to the exact terminal window.
-        var byDepth = new SortedDictionary<int, List<(IntPtr hWnd, string title)>>();
-
-        EnumWindows((hWnd, _) =>
+        // Visible windows only on the first pass — that's the healthy case and the narrowest net. If it
+        // comes up empty the host window is itself hidden (see below), so we retry accepting those too.
+        var byDepth = CollectHostWindows(depthByPid, includeHidden: false);
+        if (byDepth.Count == 0)
         {
-            if (!IsWindowVisible(hWnd)) return true;
-            GetWindowThreadProcessId(hWnd, out uint windowPid);
-            if (!depthByPid.TryGetValue((int)windowPid, out int d)) return true;
-
-            IntPtr owner = GetAncestor(hWnd, GA_ROOTOWNER);
-            if (owner == IntPtr.Zero) owner = hWnd;
-
-            if (!byDepth.TryGetValue(d, out var list))
-                byDepth[d] = list = new List<(IntPtr, string)>();
-            list.Add((owner, GetWindowTitle(owner)));
-            return true;
-        }, IntPtr.Zero);
-
-        if (byDepth.Count == 0) return;
+            // A live session whose whole host window has been hidden (WS_VISIBLE cleared — not
+            // minimized, not cloaked onto another virtual desktop). It is still perfectly focusable
+            // once shown, so don't give up on it; FocusWindow below un-hides whatever we pick. The
+            // hidden pass runs *second* so the common path keeps the tighter visible-only net.
+            byDepth = CollectHostWindows(depthByPid, includeHidden: true);
+            if (byDepth.Count == 0) return false;
+        }
 
         // Prefer the *closest* ancestor — explorer is a distant ancestor of every process and owns
         // the taskbar, so it would otherwise win. SortedDictionary keeps depths ascending.
@@ -83,6 +72,43 @@ public sealed class WindowActivator : IWindowActivator
         // FocusWindow (not the old unconditional-restore path) so a maximized IDE window isn't
         // un-maximized on the way to the foreground.
         FocusWindow(chosen.hWnd);
+        return true;
+    }
+
+    // For every window owned by an ancestor, resolve it to its root owner and keep that, grouped by the
+    // *owning ancestor's* depth. There is deliberately NO size/title/cloak gate: any such heuristic can
+    // wrongly drop a real terminal window (an untitled one, a minimized one reporting a tiny rect, one
+    // cloaked onto another virtual desktop), and focusing the terminal correctly every time is the
+    // priority. Junk windows (explorer's title-less thumbnail/DWM helpers) don't interfere because they
+    // live at explorer's depth — deeper than the terminal/IDE — and the closest-depth rule in the caller
+    // reaches the real host first. The 0×0 ConPTY pseudo-console isn't junk: GA_ROOTOWNER maps it to the
+    // exact terminal window.
+    //
+    // Note the visibility test is on the *enumerated* window, while what we keep is its root owner. So a
+    // visible pseudo-console owning a hidden terminal window still gets through the visible-only pass —
+    // that case is handled by FocusWindow un-hiding what it's given. includeHidden is for the narrower
+    // case where the ancestor has no visible window of its own to enumerate.
+    private static SortedDictionary<int, List<(IntPtr hWnd, string title)>> CollectHostWindows(
+        Dictionary<int, int> depthByPid, bool includeHidden)
+    {
+        var byDepth = new SortedDictionary<int, List<(IntPtr hWnd, string title)>>();
+
+        EnumWindows((hWnd, _) =>
+        {
+            if (!includeHidden && !IsWindowVisible(hWnd)) return true;
+            GetWindowThreadProcessId(hWnd, out uint windowPid);
+            if (!depthByPid.TryGetValue((int)windowPid, out int d)) return true;
+
+            IntPtr owner = GetAncestor(hWnd, GA_ROOTOWNER);
+            if (owner == IntPtr.Zero) owner = hWnd;
+
+            if (!byDepth.TryGetValue(d, out var list))
+                byDepth[d] = list = new List<(IntPtr, string)>();
+            list.Add((owner, GetWindowTitle(owner)));
+            return true;
+        }, IntPtr.Zero);
+
+        return byDepth;
     }
 
     public void FocusProcessMainWindow(int pid)
@@ -104,6 +130,17 @@ public sealed class WindowActivator : IWindowActivator
     // silently ignores SetForegroundWindow when the caller doesn't already own the foreground.
     private static void FocusWindow(IntPtr hWnd)
     {
+        // A hidden window (WS_VISIBLE cleared) must be shown before it can take the foreground —
+        // SetForegroundWindow on one is silently a no-op, which is exactly how a live session with a
+        // hidden terminal ends up looking like a dead row you can't click. This is a *distinct* state
+        // from minimized (WS_MINIMIZE) and from DWM-cloaked (a window on another virtual desktop stays
+        // WS_VISIBLE), so it needs its own SW_SHOW and neither branch below covers it.
+        //
+        // Deliberately not checking ShowWindow's return value: it reports the window's *previous*
+        // visibility, not success, so un-hiding a hidden window correctly returns false.
+        if (!IsWindowVisible(hWnd))
+            ShowWindow(hWnd, SW_SHOW);
+
         if (IsIconic(hWnd))
             ShowWindow(hWnd, SW_RESTORE);
 
@@ -154,6 +191,7 @@ public sealed class WindowActivator : IWindowActivator
     }
 
     // ── Interop ──────────────────────────────────────────────────────────────
+    private const int SW_SHOW = 5;
     private const int SW_RESTORE = 9;
     private const uint TH32CS_SNAPPROCESS = 0x00000002;
     private const uint GA_ROOTOWNER = 3;

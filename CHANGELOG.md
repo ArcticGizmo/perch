@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.28] - 2026-07-28
+
+- Clicking a session with a hidden terminal window un-hides it
+- Previously the click did nothing, quietly
+- A session with no window left to focus says so
+- New "Terminate session…" on the row right-click menu, with a confirmation
+- It re-checks the PID before killing anything (the desktop app is also claude.exe)
+
+---
+
 ## [v0.2.27] - 2026-07-28
 
 - The panel keeps its expanded state when the last session ends

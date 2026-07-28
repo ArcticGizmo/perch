@@ -192,6 +192,7 @@ public partial class App : Application
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
             _overlay.Canvas.NoteEditRequested += OnEditNote;
             _overlay.Canvas.NoteClearRequested += sessionId => _monitorHost?.SetNote(sessionId, null);
+            _overlay.Canvas.TerminateRequested += OnTerminateSession;
             _overlay.Canvas.ScratchPadRequested += OnOpenScratchPad;
             _overlay.DragCompleted += OnOverlayDragCompleted;
 
@@ -351,9 +352,58 @@ public partial class App : Application
     // isn't done, and rescans so the overlay refreshes.
     private void FocusSession(ClaudeSession session)
     {
-        if (int.TryParse(session.Pid, out int pid))
-            PlatformServices.WindowActivator.FocusTerminalForProcess(pid, session.ProjectName);
+        if (int.TryParse(session.Pid, out int pid)
+            && !PlatformServices.WindowActivator.FocusTerminalForProcess(pid, session.ProjectName))
+        {
+            // The session is alive but has no host window to bring forward — its terminal was hidden or
+            // torn down while the process kept running. Say so: an unexplained no-op click reads as Perch
+            // being broken, and the row itself gives no hint that there's nothing behind it. A plain info
+            // toast (null pid), so clicking it just dismisses rather than retrying the focus that failed.
+            _notifier?.Show(
+                "No window to focus",
+                $"{session.DisplayName} is still running (PID {pid}) but has no terminal window on screen. "
+                    + "Right-click the row to terminate it.",
+                ToastLevel.Warning, null, null);
+        }
         _monitorHost?.Acknowledge(session.Pid);
+    }
+
+    // Terminates a session from the row's right-click menu, after an explicit confirmation — this kills
+    // the process tree, so whatever turn it was mid-way through is lost. The escape hatch for a session
+    // that has outlived its terminal (see FocusSession): still running, still holding context, with no
+    // window left to interrupt it in.
+    private async void OnTerminateSession(ClaudeSession session)
+    {
+        if (_overlay is not { } owner) return;
+
+        bool confirmed = await ConfirmDialog.ShowAsync(
+            owner,
+            "Terminate session?",
+            $"Kill {session.DisplayName} (PID {session.Pid}) and everything it started? "
+                + "Any work in its current turn is lost. This can't be undone.",
+            "Terminate", "Cancel");
+        if (!confirmed) return;
+
+        var result = SessionTerminator.Terminate(session.Pid);
+
+        // The kill leaves the {pid}.json behind, so no watcher event fires — rescan to drop the row (the
+        // monitor discards a session file whose pid is dead).
+        _monitorHost?.Rescan();
+
+        var (title, body, level) = result switch
+        {
+            TerminateResult.Terminated => ("Session terminated",
+                $"{session.DisplayName} (PID {session.Pid}) was stopped.", ToastLevel.Info),
+            TerminateResult.AlreadyGone => ("Session already gone",
+                $"{session.DisplayName} had already exited.", ToastLevel.Info),
+            TerminateResult.NotTheSession => ("Not terminated",
+                $"PID {session.Pid} no longer looks like {session.DisplayName}, so Perch left it alone.",
+                ToastLevel.Warning),
+            _ => ("Couldn't terminate",
+                $"{session.DisplayName} (PID {session.Pid}) refused to stop — it may be running elevated.",
+                ToastLevel.Error),
+        };
+        _notifier?.Show(title, body, level, null, null);
     }
 
     // Opens the artifact the user picked from the overlay's artifact-glyph list.
@@ -524,8 +574,10 @@ public partial class App : Application
     // the Avalonia counterpart of the WinForms balloon-click handler.
     private void OnToastActivated(string pid, string? project)
     {
+        // Focus failure is deliberately swallowed here, unlike in FocusSession: answering a toast click
+        // with another toast about the first toast is worse than doing nothing quietly.
         if (int.TryParse(pid, out int p))
-            PlatformServices.WindowActivator.FocusTerminalForProcess(p, project);
+            _ = PlatformServices.WindowActivator.FocusTerminalForProcess(p, project);
         _monitorHost?.Acknowledge(pid);
     }
 

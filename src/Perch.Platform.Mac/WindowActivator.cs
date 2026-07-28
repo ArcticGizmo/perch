@@ -32,7 +32,10 @@ public sealed class WindowActivator : IWindowActivator
     private const nint NSApplicationActivationPolicyRegular = 0;
     private const string TerminalBundleId = "com.apple.Terminal";
 
-    public void FocusTerminalForProcess(int pid, string? projectHint = null)
+    // Returns false when the walk finds no GUI host app for the session — a headless/backgrounded run, or
+    // one whose terminal has gone away while the process kept going. The caller reports that rather than
+    // leaving a click that appears to do nothing.
+    public bool FocusTerminalForProcess(int pid, string? projectHint = null)
     {
         try
         {
@@ -45,12 +48,13 @@ public sealed class WindowActivator : IWindowActivator
                     ObjC.SendNint(app, ObjC.Sel("activationPolicy")) == NSApplicationActivationPolicyRegular)
                 {
                     FocusHostApp(app, pid);
-                    return;
+                    return true;
                 }
                 current = parents.TryGetValue(current, out var pp) ? pp : 0;
             }
         }
         catch { /* best-effort */ }
+        return false;
     }
 
     public void FocusProcessMainWindow(int pid)

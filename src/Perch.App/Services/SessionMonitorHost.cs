@@ -114,6 +114,12 @@ internal sealed class SessionMonitorHost : IDisposable
     /// unset.</summary>
     public string? ReadProjectNote(string cwd) => SessionMonitor.ReadProjectNote(cwd);
 
+    /// <summary>Forces an immediate rescan. For actions that change the live session set from *outside* the
+    /// sessions directory — terminating a session kills the process but leaves its <c>{pid}.json</c> behind,
+    /// so no file event fires and the row would linger until the reconcile poll. Call on the UI thread.
+    /// </summary>
+    public void Rescan() => _monitor.Scan();
+
     /// <summary>Clears a completed session's "done" badge — the user focused/clicked it — and rescans so
     /// the overlay drops the NeedsAttention state back to Idle. Harmless for a session that isn't done.
     /// Call on the UI thread.</summary>

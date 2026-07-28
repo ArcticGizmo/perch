@@ -828,6 +828,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// to delete its <c>.note</c> sidecar.</summary>
     public event Action<string>? NoteClearRequested;
 
+    /// <summary>Raised when the user picks "Terminate session…". The app confirms first (this is
+    /// destructive and unrecoverable — the session's turn is lost), then kills the process tree. The
+    /// escape hatch for a session that has outlived its terminal: still running, still burning context,
+    /// with no window left to type Ctrl+C into.</summary>
+    public event Action<ClaudeSession>? TerminateRequested;
+
     /// <summary>Raised when the user clicks the note button at the start of the quick-links row. The app
     /// opens the global scratch pad (prefilled from <c>AppSettings.ScratchText</c>) and persists it.</summary>
     public event Action? ScratchPadRequested;
@@ -2656,6 +2662,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             {
                 string label = ConfettiArmed(s) ? "Cancel confetti finish" : "Confetti finish";
                 items.Add(MenuItem(label, () => ToggleConfetti(s.SessionId)));
+            }
+
+            // Terminate goes last and behind a separator — it's the only destructive item here, and a
+            // mis-click costs the user a running session. Sub-agent rows are excluded: they have no
+            // process of their own (they run inside the parent), so there is nothing to kill.
+            if (!subRow)
+            {
+                items.Add(new Separator());
+                items.Add(MenuItem("Terminate session…", () => TerminateRequested?.Invoke(s)));
             }
         }
 
