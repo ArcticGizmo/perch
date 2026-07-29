@@ -309,12 +309,30 @@ public partial class App : Application
                     if (!OperatingSystem.IsWindows() && IsInsideAppBundle())
                         PlatformServices.PathInstaller.Register();
 
+                    // Re-assert the login registration against the setting: registering again refreshes a
+                    // path an update (or a move) left stale, and a stray registration is cleared if the
+                    // mode is no longer "on login" — e.g. the settings file was edited while Perch was shut.
+                    SyncLoginItem(settings.StartMode);
+
                     HookInstaller.Install();
                     await MigrateOffPlugin();
                 });
             }
         }
         base.OnFrameworkInitializationCompleted();
+    }
+
+    /// <summary>Brings the OS login registration in line with <paramref name="mode"/> — registered only
+    /// while the mode is <see cref="StartMode.OnLogin"/>. Called at startup and whenever the Getting
+    /// started page changes the mode. Best-effort: the registration is a convenience, never load-bearing.</summary>
+    internal static void SyncLoginItem(StartMode mode)
+    {
+        try
+        {
+            if (mode == StartMode.OnLogin) PlatformServices.LoginItem.Register();
+            else if (PlatformServices.LoginItem.IsRegistered()) PlatformServices.LoginItem.Unregister();
+        }
+        catch { /* best-effort */ }
     }
 
     // True when this process is running from inside a macOS .app bundle (…/Perch.app/Contents/MacOS/perch),

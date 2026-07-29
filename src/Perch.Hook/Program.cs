@@ -182,14 +182,23 @@ static string? SubagentsDir(string? transcriptPath)
     return Path.Combine(d, n, "subagents");
 }
 
-// Reads AutoStartOnFirstSession from the tray's own settings.json for the active profile. Mirrors
-// AppProfile: PERCH_DEV (non-empty, not 0/false) selects the "Perch (Dev)" folder, else "Perch".
+// Reads StartMode from the tray's own settings.json for the active profile and reports whether it says
+// "launch me when a session opens" (the other modes — Off and OnLogin — are none of this hook's business).
+// Mirrors AppProfile: PERCH_DEV (non-empty, not 0/false) selects the "Perch (Dev)" folder, else "Perch".
+// Falls back to the legacy AutoStartOnFirstSession bool for a settings file the tray hasn't migrated yet.
 static bool AutoStartEnabled()
 {
     string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
     string path = Path.Combine(appData, ProfileFolder(), "settings.json");
     if (!File.Exists(path)) return false;
-    try { return ReadBool(File.ReadAllBytes(path), "AutoStartOnFirstSession") == true; }
+    try
+    {
+        byte[] json = File.ReadAllBytes(path);
+        string? mode = ReadFields(json, "StartMode")["StartMode"];
+        if (!string.IsNullOrEmpty(mode))
+            return string.Equals(mode, "OnSessionStart", StringComparison.OrdinalIgnoreCase);
+        return ReadBool(json, "AutoStartOnFirstSession") == true;
+    }
     catch { return false; }
 }
 

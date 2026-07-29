@@ -66,6 +66,7 @@ internal static class Program
             .OnBeforeUninstallFastCallback(_ =>
             {
                 PlatformServices.PathInstaller.Unregister();
+                PlatformServices.LoginItem.Unregister(); // don't leave a Run key pointing at a deleted exe
                 Services.HookInstaller.Uninstall();
             });
 #endif

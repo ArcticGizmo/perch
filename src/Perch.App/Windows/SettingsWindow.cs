@@ -297,20 +297,38 @@ internal sealed class SettingsWindow : Window
 
         page.Children.Add(SettingsUi.Separator());
 
-        page.Children.Add(SettingsUi.TitleRow("Start automatically",
-            SaveToggle(_settings.AutoStartOnFirstSession, v => _settings.AutoStartOnFirstSession = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Launch Perch in the background when a Claude Code session opens and it isn't already " +
-            "running. Requires the installed app — the SessionStart hook starts it via the \"perch\" " +
-            "command on your PATH, so sessions run from a dev build (dotnet run) won't trigger it."));
+        BuildStartModeSection(page);
 
         page.Children.Add(SettingsUi.Separator());
 
         page.Children.Add(SettingsUi.TitleRow("Close automatically",
             SaveToggle(_settings.AutoCloseAfterLastSession, v => _settings.AutoCloseAfterLastSession = v)));
         page.Children.Add(SettingsUi.BodyText(
-            "Exit Perch a short while after the last Claude Code session ends — but only when it was " +
-            "started automatically by the option above. A window you opened yourself stays open."));
+            "Exit Perch a short while after the last Claude Code session ends — but only when a session " +
+            "start is what launched it. A window you opened yourself, or one started at login, stays open."));
+    }
+
+    // When Perch launches itself, as a dropdown sitting on the header row (the options say enough on their
+    // own). "On session start" is read by perch-hook straight from settings.json, so saving is enough;
+    // "at login" also has to be registered with the OS, which SyncLoginItem does both here and at startup
+    // (so a stale path from an update is refreshed).
+    private void BuildStartModeSection(StackPanel page)
+    {
+        // Order must match the StartMode enum ordinals (Off, OnSessionStart, OnLogin).
+        var combo = SettingsUi.Dropdown(
+            new[] { "Never", "When a Claude Code session starts", "When I log in" },
+            (int)_settings.StartMode);
+        combo.MinWidth = 280;
+        combo.HorizontalAlignment = HorizontalAlignment.Right;
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (combo.SelectedIndex < 0) return;
+            _settings.StartMode = (StartMode)combo.SelectedIndex;
+            _settings.Save();
+            App.SyncLoginItem(_settings.StartMode);
+        };
+
+        page.Children.Add(SettingsUi.TitleRow("Auto Start Perch", combo));
     }
 
     private void BuildBanner(StackPanel page)

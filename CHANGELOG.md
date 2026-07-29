@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.31] - 2026-07-29
+
+- Auto Start Perch: never, when a session starts, or when you log in
+- Starting at login is Windows' job now, so Perch is up before the first session
+- Your old auto-start setting carries over (it becomes "when a session starts")
+
+---
+
 ## [v0.2.30] - 2026-07-29
 
 - Limits, quick links and Hypertree stay put with no sessions running

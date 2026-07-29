@@ -19,6 +19,7 @@ internal static class PlatformServices
     public static IWindowActivator WindowActivator { get; } = new Impl.WindowActivator();
     public static ISessionLauncher SessionLauncher { get; } = new Impl.SessionLauncher();
     public static IPathInstaller PathInstaller { get; } = new Impl.PathInstaller();
+    public static ILoginItem LoginItem { get; } = new Impl.LoginItem();
     public static IAudioCue AudioCue { get; } = new Impl.AudioCue();
     public static IWindowChrome WindowChrome { get; } = new Impl.WindowChrome();
     public static IImageClipboard ImageClipboard { get; } = new Impl.ImageClipboard();

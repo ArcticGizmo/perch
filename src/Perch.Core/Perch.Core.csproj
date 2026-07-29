@@ -19,5 +19,9 @@
          monitors/readers are internal-with-friends, not a public API). -->
     <InternalsVisibleTo Include="perch" />
     <InternalsVisibleTo Include="Perch.Tests" />
+    <!-- The platform heads implement Core's interfaces and need the same app identity the head uses
+         (AppProfile) so their per-user registrations — PATH, login item — stay dev/release separated. -->
+    <InternalsVisibleTo Include="Perch.Platform.Windows" />
+    <InternalsVisibleTo Include="Perch.Platform.Mac" />
   </ItemGroup>
 </Project>

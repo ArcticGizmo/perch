@@ -17,6 +17,21 @@ public enum TerminalApp
     CommandPrompt = 3,
 }
 
+/// <summary>
+/// When Perch launches itself. Persisted by <em>name</em> (see the converter) rather than ordinal, because
+/// perch-hook reads the raw settings.json with a string-only mini-parser — so keep the member names stable.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum StartMode
+{
+    /// <summary>Never launch on its own — Perch only runs when you start it.</summary>
+    Off = 0,
+    /// <summary>perch-hook launches the tray when a Claude Code session opens and none is running.</summary>
+    OnSessionStart = 1,
+    /// <summary>The OS launches the tray when you log in (Run key on Windows, LaunchAgent on macOS).</summary>
+    OnLogin = 2,
+}
+
 internal sealed class AppSettings
 {
     // Per-profile so a dev instance doesn't read/write the installed Perch's settings (see AppProfile).
@@ -174,13 +189,23 @@ internal sealed class AppSettings
     // is actually connected via /remote-control. Gated by ExternalNotificationsEnabled.
     public bool ExternalNotificationsIncludeRemoteLink { get; set; }
 
-    // Automation. AutoStart: the plugin's SessionStart hook reads this value (the tray usually
-    // isn't running when a session opens) and launches the installed perch when on. AutoClose:
-    // the running tray exits a short grace period after the last session ends — but only when it was
-    // itself auto-started, so a manually-opened window never vanishes under the user. Both off by
-    // default. See the plugin's invoke.ps1 ("start" action) and [[OverlayApplicationContext]].
-    public bool AutoStartOnFirstSession  { get; set; }
+    // Automation. StartMode: how Perch launches itself.
+    //  • OnSessionStart — perch-hook reads this value straight out of settings.json (the tray usually isn't
+    //    running when a session opens) and launches the installed perch. See Perch.Hook's HandleStart.
+    //  • OnLogin — the OS starts the tray at login; the registration lives outside the app (a per-user Run
+    //    key on Windows, a LaunchAgent on macOS) and is written/removed by ILoginItem as this value changes.
+    //  • Off (the default) — Perch only ever runs when you start it.
+    // AutoClose: the running tray exits a short grace period after the last session ends — but only when it
+    // was itself auto-started (--autostarted), so neither a manually-opened nor a login-started window
+    // vanishes under the user. See [[App]]'s auto-close flow.
+    public StartMode StartMode { get; set; } = StartMode.Off;
     public bool AutoCloseAfterLastSession { get; set; }
+
+    // Legacy auto-start switch (pre-StartMode). Kept only so an older settings file can be migrated;
+    // nullable to tell "absent" from "false", and cleared once folded in so it's not re-written.
+    // See MigrateStartMode.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? AutoStartOnFirstSession { get; set; }
 
     // Session stats. ShowTodayStatsInTray: the "Today: N sessions · Hh Mm active" info line in the tray
     // right-click menu. ShowEstimatedCost: the equivalent-API-cost figure in the stats window.
@@ -316,13 +341,26 @@ internal sealed class AppSettings
             {
                 var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new();
                 s.MigrateQuickLinks();
+                s.MigrateStartMode();
                 return s;
             }
         }
         catch { }
         var fresh = new AppSettings();
         fresh.MigrateQuickLinks();
+        fresh.MigrateStartMode();
         return fresh;
+    }
+
+    // Folds the legacy AutoStartOnFirstSession switch into StartMode: it was on -> "on session start",
+    // it was off (or the file predates both) -> "off". Only applies when the legacy key is present and
+    // StartMode is still at its default, so a file already written by this version keeps its mode. The
+    // legacy switch is then dropped either way, so it stops being persisted.
+    internal void MigrateStartMode()
+    {
+        if (AutoStartOnFirstSession is { } legacy && StartMode == StartMode.Off)
+            StartMode = legacy ? StartMode.OnSessionStart : StartMode.Off;
+        AutoStartOnFirstSession = null;
     }
 
     // Seeds QuickLinks the first time (null list), one entry per well-known preset. Each preset is
