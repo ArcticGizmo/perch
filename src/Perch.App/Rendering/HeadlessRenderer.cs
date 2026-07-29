@@ -130,6 +130,18 @@ internal static class HeadlessRenderer
         RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_1x.png"), 96);
         RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_1.5x.png"), 144);
 
+        // Empty roster: no sessions at all, so the header reads "no sessions" and the rows are simply
+        // absent — but the strips the session list has nothing to do with (machine metrics, plan limits,
+        // quick links, Hypertree branches) all stay, which is the whole point of this surface.
+        var emptyProbe = new OverlayCanvas();
+        emptyProbe.Update([]);
+        emptyProbe.UpdateUsage(SampleUsage());
+        emptyProbe.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));
+        emptyProbe.SetQuickLinks(links, icons);
+        emptyProbe.SetHypertree(SampleHypertree());
+        RenderControl(emptyProbe, Path.Combine(outDir, "overlay_empty_1x.png"), 96);
+        RenderControl(emptyProbe, Path.Combine(outDir, "overlay_empty_1.5x.png"), 144);
+
         // "Jump to next session" landing highlight: the blue selection wash + left bar on the cycled row.
         // Rendered immediately after triggering it, so the fade timer hasn't run and it's at full strength.
         var cycleProbe = new OverlayCanvas();

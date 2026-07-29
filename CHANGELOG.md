@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.30] - 2026-07-29
+
+- Limits, quick links and Hypertree stay put with no sessions running
+- Only the Claude rows go missing, there being none to show
+- The header chevron expands and collapses at zero sessions too
+- Dense hover popup no longer clips the microphone strip
+
+---
+
 ## [v0.2.29] - 2026-07-28
 
 - New microphone strip: which app is currently using your mic

@@ -323,22 +323,25 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // Height of the full panel (header + optional strips + all session rows), computed as if expanded —
-    // the size the dense popup and the floating expanded panel both use. Kept in lockstep with Draw's
-    // showRows branch so the measured window height and the painted layout can't drift.
-    private double FullPanelHeight()
+    // the size the dense popup and the floating expanded panel both use.
+    private double FullPanelHeight() => HeaderHeight + PanelBodyHeight() + (ShowFooter ? FooterHeight : 0);
+
+    // Everything the open panel shows below the header: the strips, one line per display row, then the
+    // trailing mic/now-playing strips. An empty roster simply contributes no rows — the strips stand on
+    // their own, since the limits, quick links and Hypertree branches say nothing about the session list.
+    // Draw() calls this for its own measure, so the measured window height and the painted layout can
+    // never drift.
+    private double PanelBodyHeight()
     {
-        double h = HeaderHeight;
-        if (_rows.Count > 0)
-        {
-            if (_showSystemMetrics) h += SysMetricsStripHeight;
-            if (_usageEnabled) h += UsageStripHeight;
-            if (HasQuickLinksRow) h += QuickLinksRowHeight;
-            if (HypertreeStripVisible) h += HypertreeStripHeight;
-            foreach (var r in _rows) h += HeightOf(r);
-            h += 2;
-            if (MediaStripVisible) h += MediaStripHeight;
-        }
-        if (ShowFooter) h += FooterHeight;
+        double h = 0;
+        if (_showSystemMetrics) h += SysMetricsStripHeight;
+        if (_usageEnabled) h += UsageStripHeight;
+        if (HasQuickLinksRow) h += QuickLinksRowHeight;
+        if (HypertreeStripVisible) h += HypertreeStripHeight;
+        foreach (var r in _rows) h += HeightOf(r);
+        h += 2;
+        if (MicStripVisible) h += MicStripHeight;
+        if (MediaStripVisible) h += MediaStripHeight;
         return h;
     }
 
@@ -943,10 +946,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         else _autonomousExpanded = false;
 
         _rows = rows;
-        // Deliberately *not* collapsing when the session list empties: everything below the header already
-        // keys off `_rows.Count > 0`, so an empty roster renders as the bare header either way — clearing
-        // _expanded would only throw away the user's expand state and leave the panel collapsed once
-        // sessions return (the header chevron is hidden at zero sessions, so they couldn't undo it).
+        // Deliberately *not* collapsing when the session list empties. The panel keeps its strips at zero
+        // sessions (see Draw), so an empty roster is still worth having open — and clearing _expanded would
+        // throw away the user's expand state every time the last session ended.
 
         // Stop the attention flash once nothing needs attention, is awaiting input, or has an API error.
         if (_attentionFlash && sessions.All(s =>
@@ -1052,26 +1054,19 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (_denseCtl.IsClosedStrip) return DrawStrip(ctx, width);
 
-        bool showRows = ShowFullPanel && _rows.Count > 0;
-        bool showSys = showRows && _showSystemMetrics;        // machine CPU/RAM strip, just under the header
-        bool showUsage = showRows && _usageEnabled;           // rate-limit bars, below the metrics strip
-        bool showQuickLinks = showRows && HasQuickLinksRow;   // app icon strip, below the usage bars
-        bool showHypertree = showRows && HypertreeStripVisible; // Hypertree branches, below the quick links
-        bool showMic = showRows && MicStripVisible;           // who has the microphone, below the rows
-        bool showMedia = showRows && MediaStripVisible;       // now-playing + transport strip, below that
+        // The open panel shows its strips whether or not any sessions are running — an empty roster just
+        // contributes no session rows, so the panel reads as "here are your limits, links and branches;
+        // no Claude is working right now".
+        bool showBody = ShowFullPanel;
+        bool showSys = showBody && _showSystemMetrics;        // machine CPU/RAM strip, just under the header
+        bool showUsage = showBody && _usageEnabled;           // rate-limit bars, below the metrics strip
+        bool showQuickLinks = showBody && HasQuickLinksRow;   // app icon strip, below the usage bars
+        bool showHypertree = showBody && HypertreeStripVisible; // Hypertree branches, below the quick links
+        bool showMic = showBody && MicStripVisible;           // who has the microphone, below the rows
+        bool showMedia = showBody && MediaStripVisible;       // now-playing + transport strip, below that
 
         double height = HeaderHeight;
-        if (showRows)
-        {
-            if (showSys) height += SysMetricsStripHeight;
-            if (showUsage) height += UsageStripHeight;
-            if (showQuickLinks) height += QuickLinksRowHeight;
-            if (showHypertree) height += HypertreeStripHeight;
-            foreach (var r in _rows) height += HeightOf(r);
-            height += 2;
-            if (showMic) height += MicStripHeight;
-            if (showMedia) height += MediaStripHeight;
-        }
+        if (showBody) height += PanelBodyHeight();
         // The outage footer sits below everything; shown only when enabled and there's an issue. Reached
         // only past the closed-strip early-return, so the header is always present to anchor it to.
         bool showFooter = ShowFooter;
@@ -1101,7 +1096,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (showHypertree) DrawHypertreeStrip(ctx, width);
             else _hyperDesktopRects.Clear(); // no strip painted → drop the stale desktop-chip hit-rects
 
-            if (showRows)
+            if (showBody)
             {
                 // Glyph hit-rects are rebuilt from scratch each paint; DrawSessionRow repopulates them
                 // for any row that actually shows the glyph.
@@ -1208,7 +1203,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         DrawSideCollapseIcon(ctx, SideIconRect(width), reversed: _denseCtl.IsDense ^ (_denseCtl.Side == DenseSide.Left));
         double clusterLeft = width - HorizPad - IconBoxW;
 
-        if (!_denseCtl.IsDense && _sessions.Count > 0)
+        // Shown regardless of the session count: the panel below has content (limits, quick links,
+        // Hypertree) even with an empty roster, so the expand affordance has to be reachable at zero
+        // sessions too — otherwise a collapse there could never be undone.
+        if (!_denseCtl.IsDense)
         {
             var chevron = OverlayDraw.Text(_expanded ? "▲" : "▼", 9, MutedBrush);
             double chevX = clusterLeft - IconGap - chevron.Width;
@@ -1422,7 +1420,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Returns the index into _quickLinks under point p, or -1 if none (or the strip isn't shown).
     private int HitTestQuickLink(Point p)
     {
-        if (!(ShowFullPanel && _rows.Count > 0 && HasQuickLinksRow)) return -1;
+        if (!(ShowFullPanel && HasQuickLinksRow)) return -1;
         double rowTop = QuickLinksTop;
         if (p.Y < rowTop || p.Y >= rowTop + QuickLinksRowHeight) return -1;
 
@@ -1540,7 +1538,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Returns the index into the Hypertree rows under p, or -1 if none (or the strip isn't shown).
     private int HitTestHypertreeRow(Point p)
     {
-        if (!(ShowFullPanel && _rows.Count > 0 && HypertreeStripVisible)) return -1;
+        if (!(ShowFullPanel && HypertreeStripVisible)) return -1;
 
         double top = HypertreeTop + HypertreeCaptionHeight;
         double lineH = HypertreeLineHeight;
@@ -1554,7 +1552,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Returns the Hypertree row whose trailing desktop chip is under p, or -1. Only rows with more than
     // one desktop have a chip, so a hit here always means there is a choice to offer.
     private int HitTestHypertreeDesktop(Point p)
-        => ShowFullPanel && _rows.Count > 0 && HypertreeStripVisible ? HitRect(_hyperDesktopRects, p) : -1;
+        => ShowFullPanel && HypertreeStripVisible ? HitRect(_hyperDesktopRects, p) : -1;
 
     // Returns the display-row index under p, or -1 (only while the panel is expanded with rows).
     private int HitTestRow(Point p)
@@ -2376,7 +2374,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     private bool InUsageStrip(Point p) =>
-        ShowFullPanel && _rows.Count > 0 && _usageEnabled
+        ShowFullPanel && _usageEnabled
         && p.Y >= UsageStripTop && p.Y < UsageStripTop + UsageStripHeight;
 
     protected override void OnPointerExited(PointerEventArgs e)
@@ -2624,7 +2622,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
-        if (!_denseCtl.IsDense && p.Y < HeaderHeight && _sessions.Count > 0)
+        if (!_denseCtl.IsDense && p.Y < HeaderHeight)
         {
             // Header click toggles expand/collapse (floating only); SizeToContent resizes to match.
             _expanded = !_expanded;
@@ -2703,8 +2701,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // Right-clicking a strip toggles just that strip off (only when it's actually showing); the
         // header menu below can turn either back on.
-        bool showRows = ShowFullPanel && _rows.Count > 0;
-        bool overSystemStrip = showRows && _showSystemMetrics && p.Y >= HeaderHeight && p.Y < UsageStripTop;
+        bool overSystemStrip = ShowFullPanel && _showSystemMetrics
+                               && p.Y >= HeaderHeight && p.Y < UsageStripTop;
         if (overSystemStrip)
             items.Add(MenuItem("Hide system metrics", () => SystemMetricsToggleRequested?.Invoke(false)));
         if (InUsageStrip(p))
