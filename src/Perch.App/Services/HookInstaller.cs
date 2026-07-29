@@ -86,16 +86,16 @@ internal static class HookInstaller
         return s.Length != d.Length || s.LastWriteTimeUtc > d.LastWriteTimeUtc;
     }
 
-    // A Velopack install already lives at a stable path (…\Perch\current\perch.exe), but a Scoop-managed
-    // copy runs out of a *versioned* app dir that `scoop update` deletes — so record the path through
-    // Scoop's stable `current` junction instead, or perch-hook would see a dead binary after every update
-    // and self-heal our hooks away. A no-op on every other channel (see InstallChannel.StableExePath).
+    // The breadcrumb perch-hook uses to find (or launch) the tray. A Velopack install already lives at a
+    // stable path — …\Perch\current\perch.exe — that survives updates, so the running path is recorded
+    // as-is. A portable copy the user later moves invalidates it, and perch-hook self-heals by stripping
+    // our hooks when the recorded binary is gone.
     private static void WriteMarker()
     {
         try
         {
             Directory.CreateDirectory(BinDir);
-            File.WriteAllText(MarkerPath, InstallChannel.StableExePath(Environment.ProcessPath ?? ""));
+            File.WriteAllText(MarkerPath, Environment.ProcessPath ?? "");
         }
         catch { }
     }

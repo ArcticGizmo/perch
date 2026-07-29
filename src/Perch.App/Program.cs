@@ -39,8 +39,8 @@ internal static class Program
             return 0;
 
         // `perch uninstall` performs the same teardown as Velopack's uninstall callback, for the channels
-        // that have no Velopack uninstaller: Scoop's manifest runs it from `pre_uninstall`, and a portable
-        // copy can be cleaned up by hand before deleting the folder. Idempotent and best-effort.
+        // that have no Velopack uninstaller — a portable copy can be cleaned up this way before deleting
+        // the folder. Idempotent and best-effort.
         if (args.Length > 0 && string.Equals(args[0], "uninstall", StringComparison.OrdinalIgnoreCase))
             return RunUninstallCleanup();
 

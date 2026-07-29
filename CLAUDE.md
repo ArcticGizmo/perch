@@ -31,9 +31,10 @@ Multi-project solution (`perch.slnx`); the projects live under `src/`:
   detects the tray by the process name **`perch`**. (This replaced the old marketplace plugin.)
 - `tools/IconGen` — regenerates the raster icons from `perch.svg` (`tools/gen-icons.ps1`/`.cmd`), writing
   `src/Perch.App/Assets/icon.{png,ico}` and `landing-icon.png`.
-- `packaging/scoop/perch.json` — the Scoop manifest **template** (version/url/hash are placeholders CI
-  fills in). The `scoop` job in `release.yml` renders it and commits it to the bucket repo; see
-  `docs/distribution-plan.md`.
+- `install.ps1` — the Windows one-liner installer (`irm …/install.ps1 | iex`), served straight from
+  `raw.githubusercontent.com` on `main`. It resolves a release, verifies `Perch-win-Setup.exe` against the
+  release's `SHA256SUMS.txt`, and runs it — so every install ends up an ordinary Velopack install that
+  self-updates. Tested by `tools/test-install.ps1`; see `docs/distribution-plan.md`.
 
 ## Build & run
 
@@ -60,7 +61,13 @@ set at compile time with `#if WINDOWS`. `Nullable` and `ImplicitUsings` enabled 
 
 ## Testing
 
-Run the test project with `dotnet test tests/Perch.Tests/Perch.Tests.csproj`. It exercises `Perch.Core`,
+Two suites. Run the .NET one with `dotnet test tests/Perch.Tests/Perch.Tests.csproj`, and — after touching
+`install.ps1` — `powershell -NoProfile -File tools\test-install.ps1`, which covers the installer's manifest
+parsing, its cross-host (`5.1`/`7.x`) response decoding, and its download/verify path against a loopback
+`HttpListener` serving a real artifact out of `releases\` (run `publish.bat` once first, or those checks
+skip). Nothing in it touches the network, so the live GitHub API lookup stays a manual check.
+
+The .NET suite: It exercises `Perch.Core`,
 pointing the data layer at a synthetic `~/.claude` fixture tree via `CLAUDE_CONFIG_DIR` (set in
 `TestEnvironment.cs`; fixtures live under `tests/Perch.Tests/fixtures/claude/` and `FixtureCwd` is
 `C:\fixtures\proj`). Prefer adding a fixture + an xUnit test alongside the existing `*Tests.cs` files when
@@ -97,12 +104,12 @@ running the tray app.
 - **Single reused window instances.** Settings / history / stats / flight windows are created lazily and
   reused via `WindowHost.ShowOrFocus`; they're closed together in `App` (Exit / update flow via
   `CloseAuxWindows`). Wire any new top-level window into that idiom.
-- **Don't assume a Velopack install.** Perch also ships as Velopack's portable zip through a Scoop bucket,
-  where the package manager owns the app directory. `Services/InstallChannel` classifies the running copy
-  (`Setup` / `Scoop` / `Portable` / `Unpackaged`); anything that *writes to the install dir or applies an
-  update* must gate on `InstallChannel.SelfUpdates`, and anything persisting the exe path outside the app
-  dir should go through `InstallChannel.StableExePath` (a Scoop app dir is versioned). Checking the update
-  feed works on every channel, so only the apply step needs the gate.
+- **Don't assume a Velopack install.** Perch also ships as Velopack's portable zip, extracted wherever the
+  user likes. `Services/InstallChannel` classifies the running copy (`Setup` / `Portable` / `Unpackaged`);
+  anything that *writes to the install dir or applies an update* must gate on `InstallChannel.SelfUpdates`.
+  Checking the update feed works on every channel, so only the apply step needs the gate. (`install.ps1`
+  produces a plain `Setup` install — it only downloads, verifies and runs the Velopack installer, so it adds
+  no channel of its own.)
 - **Every OS-specific capability goes behind a `Perch.Core` interface** with a `Perch.Platform.Windows`
   implementation, resolved through `PlatformServices`. Don't call Win32 (or reference the concrete types)
   from UI code — add/extend an interface so a future macOS/Linux head can implement it.

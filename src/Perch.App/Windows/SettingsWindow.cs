@@ -1730,15 +1730,9 @@ internal sealed class SettingsWindow : Window
         checkBtn.Click += (_, _) => _hooks.CheckForUpdates?.Invoke();
         buttons.Children.Add(checkBtn);
 
-        // A self-updating (Velopack) install gets "Update now". A package-managed one can't apply the
-        // update itself, so it offers the command to paste into a terminal instead — see InstallChannel.
-        if (InstallChannel.UpdateCommand is { } cmd)
-        {
-            var copyBtn = SettingsUi.FlatButton($"Copy \"{cmd}\"");
-            copyBtn.Click += (_, _) => GetTopLevel(this)?.Clipboard?.SetTextAsync(cmd);
-            buttons.Children.Add(copyBtn);
-        }
-        else if (InstallChannel.SelfUpdates)
+        // Only a self-updating (Velopack) install gets "Update now" — a portable copy is replaced by hand,
+        // and RefreshUpdateUi says so instead. See InstallChannel.
+        if (InstallChannel.SelfUpdates)
         {
             _updateNowBtn = SettingsUi.FlatButton("Update now");
             _updateNowBtn.Click += (_, _) => _hooks.PerformUpdate?.Invoke();
@@ -1758,9 +1752,9 @@ internal sealed class SettingsWindow : Window
         RefreshUpdateUi();
     }
 
-    // The wording follows the install channel: a Velopack install talks about "Update now", a Scoop or
-    // portable copy names whoever actually installs updates there. "Update now" only exists on the former,
-    // so the button may legitimately be absent.
+    // The wording follows the install channel: a Velopack install talks about "Update now", a portable copy
+    // says it's replaced by hand. "Update now" only exists on the former, so the button may legitimately be
+    // absent.
     private void RefreshUpdateUi()
     {
         if (_updateStatus is null) return;

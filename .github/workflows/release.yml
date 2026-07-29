@@ -46,9 +46,8 @@ jobs:
       - name: Pack with Velopack
         run: vpk pack --packId Perch --packTitle "Perch" --packVersion ${{ steps.version.outputs.VERSION }} --packDir publish/ --mainExe perch.exe --outputDir releases/
 
-      # Everything in releases/: the Setup.exe installer, the Velopack update feed (nupkg + RELEASES +
-      # releases.win.json) the in-app updater reads, and the portable .zip — which is the payload the Scoop
-      # bucket downloads, so it needs a stable public URL on the release (see the `scoop` job below).
+      # Everything in releases/: Perch-win-Setup.exe (what install.ps1 downloads and verifies), the Velopack
+      # update feed the in-app updater reads (nupkg + RELEASES + releases.win.json), and the portable .zip.
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -101,19 +100,44 @@ jobs:
         with:
           path: artifacts
 
+      # Flatten both build jobs into the single flat namespace a GitHub Release actually has, then hash it.
+      # SHA256SUMS.txt is what install.ps1 verifies the installer against before running it, so it has to
+      # describe exactly the bytes that get uploaded — which is why it's generated here, from the artifacts
+      # about to be published, rather than in either build job.
+      - name: Collect artifacts and generate SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # A duplicate basename across the two jobs would make the manifest ambiguous and silently publish
+          # one of two different files under one name. Refuse rather than guess. (Velopack already keeps
+          # these distinct — the macOS nupkg carries its channel, e.g. Perch-1.2.3-osx-full.nupkg.)
+          while IFS= read -r f; do
+            dest="dist/$(basename "$f")"
+            if [ -e "$dest" ]; then
+              echo "::error::Two build artifacts are both named $(basename "$f") — refusing to publish an ambiguous release."
+              exit 1
+            fi
+            mv "$f" "$dest"
+          done < <(find artifacts -type f | LC_ALL=C sort)
+
+          # install.ps1 resolves this asset by name from the release metadata; a release without it can't be
+          # installed by the one-liner, so fail here rather than shipping a broken install path.
+          if [ ! -f dist/Perch-win-Setup.exe ]; then
+            echo "::error::Perch-win-Setup.exe is missing — install.ps1 depends on it."
+            exit 1
+          fi
+
+          # Generated outside dist/ and moved in, so the manifest can never race its own glob.
+          ( cd dist && LC_ALL=C sha256sum -- * > ../SHA256SUMS.txt )
+          mv SHA256SUMS.txt dist/SHA256SUMS.txt
+
+          echo '### Published assets' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat dist/SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: dist/*
           generate_release_notes: true
-
-  # Publishes the Scoop manifest to our own bucket repo — a JSON commit, so `scoop install perch` is current
-  # within seconds of the release. Runs after `release` because it reads the zip (and its URL) from the
-  # published release. It's a reusable workflow rather than inline steps so the same publish can be run by
-  # hand for any tag — Actions → "Publish Scoop manifest" — if this leg fails or the bucket needs repointing.
-  scoop:
-    needs: release
-    uses: ./.github/workflows/scoop-publish.yml
-    with:
-      tag: ${{ github.ref_name }}
-    secrets: inherit

@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.34] - 2026-07-29
+
+- One-line Windows install: `irm https://raw.githubusercontent.com/ArcticGizmo/perch/main/install.ps1 | iex`
+- Releases ship `SHA256SUMS.txt`; a download that doesn't match is deleted, not run
+- Still no SmartScreen wall, and updates stay in-app where they belong
+- Removed Scoop support (a bold same-day experiment): updating meant leaving the app
+
+---
+
 ## [v0.2.33] - 2026-07-29
 
 - `scoop install perch`, with no SmartScreen wall to click past

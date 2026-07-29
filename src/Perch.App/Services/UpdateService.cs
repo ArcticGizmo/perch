@@ -12,9 +12,9 @@ namespace Perch.Avalonia.Services;
 /// in <see cref="Program"/>. A pending update is persisted (<see cref="AppSettings.PendingUpdateVersion"/>)
 /// so the UI restores its "update available" state across restarts and doesn't re-notify.
 ///
-/// Checking is channel-agnostic — a Scoop/portable copy resolves the same update feed — but *applying* is
-/// only ours to do on a Velopack install. On a package-managed copy the apply path surfaces the command to
-/// run instead of rewriting a directory Scoop owns (see <see cref="InstallChannel"/>).
+/// Checking is channel-agnostic — a portable copy resolves the same update feed — but *applying* is only
+/// ours to do on a Velopack install, which is every route except the hand-extracted portable zip. There the
+/// apply path explains who does install updates instead (see <see cref="InstallChannel"/>).
 ///
 /// Every callback marshals to the UI thread. The check itself is a synchronous-over-async metadata fetch,
 /// so it runs on the thread pool; failures (including "not installed" in a dev run) collapse to a quiet
@@ -133,8 +133,8 @@ internal sealed class UpdateService
         AvailabilityChanged?.Invoke(true, version);
         if (!notify) return;
 
-        // On a self-updating install the toast is actionable (clicking it applies the update); on a
-        // package-managed one it can only tell the user which command to run.
+        // On a self-updating install the toast is actionable (clicking it applies the update); on a portable
+        // copy it can only say who does.
         _notifications.ShowUpdateAvailable("Perch — Update available", InstallChannel.SelfUpdates
             ? $"Version {version} is ready to install. Click this notification or the update button to update."
             : $"Version {version} is available. {InstallChannel.Instruction}");
@@ -153,9 +153,9 @@ internal sealed class UpdateService
     /// is invoked up front to tear down open windows — the closing windows are the visible signal the
     /// update is under way. On drift (already latest / release pulled) it self-heals the UI instead.
     ///
-    /// On a channel Perch doesn't own (Scoop, portable) it applies nothing and hands the user the command
-    /// instead — the pending state stays lit so the badge keeps nagging until the package manager has
-    /// actually installed the new version.</summary>
+    /// On a channel Perch doesn't own (the portable zip) it applies nothing and explains what to do instead
+    /// — the pending state stays lit so the badge keeps nagging until the new version is actually in
+    /// place.</summary>
     public async void PerformUpdate(Action closeWindows)
     {
         if (_inProgress) return;

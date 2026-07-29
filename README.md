@@ -107,36 +107,53 @@ stale entries, and removes them cleanly on uninstall. That unlocks:
 
 ## Installing
 
-### Windows — Scoop (recommended)
+### Windows
 
+```powershell
+irm https://raw.githubusercontent.com/ArcticGizmo/perch/main/install.ps1 | iex
 ```
-scoop bucket add arcticgizmo https://github.com/ArcticGizmo/scoop-arcticgizmo
-scoop install perch
+
+That's the whole install. No admin rights (it lands in `%LocalAppData%\Perch\`), a Start Menu shortcut and a
+normal uninstaller in Settings → Apps, and Perch starts in the tray when it's done. Every update after this
+is in-app: right-click the tray icon → **Check for Updates…**.
+
+What the script does, in order: resolves the latest release, fetches `SHA256SUMS.txt` and
+`Perch-win-Setup.exe`, **checks the installer against the manifest and deletes it rather than run it on any
+mismatch**, then hands off to the installer. It's [`install.ps1`](install.ps1) in this repo — read it before
+piping it into your shell, the same as you should with any installer.
+
+Pin a version instead of taking the latest:
+
+```powershell
+$env:PERCH_VERSION = '0.2.34'; irm https://raw.githubusercontent.com/ArcticGizmo/perch/main/install.ps1 | iex
 ```
 
-Then launch **Perch** from the Start Menu (or just run `perch`).
+Because PowerShell rather than a browser does the downloading, nothing is tagged with the mark-of-the-web —
+so this route never hits the **"Windows protected your PC"** SmartScreen wall.
 
-Nothing Scoop downloads is tagged with the mark-of-the-web, so this route skips the
-**"Windows protected your PC"** SmartScreen wall the raw `.exe` download hits. Updates are Scoop's job
-here — `scoop update perch` — and Perch tells you when there's one to install.
+### Windows — installer by hand
 
-### Windows — installer
+Prefer to click things: download `Perch-win-Setup.exe` from the
+[latest release](https://github.com/ArcticGizmo/perch/releases/latest) and run it. Identical install,
+identical self-updates.
 
-Download `PerchSetup.exe` from the [latest release](https://github.com/ArcticGizmo/perch/releases/latest) and run it.
+A browser download *is* tagged with the mark-of-the-web, so SmartScreen shows the blue **"Windows protected
+your PC"** dialog — click **More info → Run anyway**, or use the one-liner above and skip it. To check the
+download against the release's `SHA256SUMS.txt` yourself:
 
-- No admin rights required — installs to `%LocalAppData%\Perch\`
-- Starts automatically after install
-- Adds a Start Menu shortcut and a standard uninstaller (Settings → Apps)
-- Updates itself in place (tray → **Check for Updates…**)
-
-SmartScreen doesn't know this installer yet, so it shows a blue **"Windows protected your PC"** dialog on
-first run: click **More info → Run anyway**, or install via Scoop above and skip it entirely.
+```powershell
+$want = (Select-String -Path SHA256SUMS.txt -Pattern 'Perch-win-Setup.exe').Line.Split()[0]
+(Get-FileHash Perch-win-Setup.exe -Algorithm SHA256).Hash -eq $want   # True
+```
 
 ### macOS (Apple Silicon, unsigned)
 
 1. Download the `…-osx-arm64.dmg` from the [latest release](https://github.com/ArcticGizmo/perch/releases/latest).
 2. Open the `.dmg` and drag **Perch** to the **Applications** folder.
 3. Clear the quarantine flag (see below), then launch Perch from Applications.
+
+Every release also publishes a `SHA256SUMS.txt` covering all of its assets, if you want to check the
+download first: `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`.
 
 The mac build is **not yet code-signed or notarized**. When macOS downloads an unsigned app it tags it
 with a `com.apple.quarantine` flag, and Gatekeeper then refuses to open it — showing **"Perch is damaged
@@ -173,13 +190,13 @@ depends on the channel:
 
 | Installed with | How it updates |
 | --- | --- |
-| `PerchSetup.exe` / the `.dmg` | Right-click the tray icon → **Check for Updates…**. Perch downloads the release and restarts itself. |
-| Scoop | `scoop update perch`. Perch's tray badge and Settings → About tell you when one is waiting (with a button to copy the command). |
+| `install.ps1`, `Perch-win-Setup.exe`, or the `.dmg` | Right-click the tray icon → **Check for Updates…**. Perch downloads the release and restarts itself. |
 | Portable zip | Download the new release and replace the folder. |
 
-Perch never rewrites a directory a package manager owns, so a Scoop copy won't fight `scoop update`.
-`scoop uninstall perch` also removes the Claude Code hooks and the login registration Perch set up, the same
-way the Windows uninstaller does.
+The one-liner is only a verified download-and-run wrapper around the installer, so an install through it is
+an ordinary installed copy — Velopack owns everything from there, and you never need to re-run the script.
+Only the hand-extracted portable zip is outside that: Perch will tell you a new version exists but won't
+rewrite a directory it doesn't own.
 
 ## Building a release (maintainers)
 
@@ -194,36 +211,33 @@ Releases are created by pushing a version tag. GitHub Actions handles the build 
    git tag v0.2.0
    git push origin v0.2.0
    ```
-4. GitHub Actions builds, packs, and uploads the installer to the release page
-5. The `scoop` job then renders `packaging/scoop/perch.json` (version + download URL + SHA-256 of
-   `Perch-win-Portable.zip`) and commits it to the bucket repo
+4. GitHub Actions builds and packs both platforms, then the `release` job flattens every artifact into one
+   directory, writes `SHA256SUMS.txt` over it, and uploads the lot to the release page
 
 Teammates can then use **Check for Updates...** in the tray to get the new version.
 
-### The Scoop bucket (maintainers)
+### Checksums (maintainers)
 
-`scoop install perch` reads a manifest from a bucket repo — a separate repo so `scoop bucket add` stays
-clean. One-time setup:
+`SHA256SUMS.txt` is generated in the `release` job from the exact files about to be uploaded — never in a
+build job — so it can't drift from what users download. It's plain `sha256sum` format, so
+`sha256sum -c SHA256SUMS.txt` works on it directly.
 
-1. Create **`ArcticGizmo/scoop-arcticgizmo`** (public, empty is fine — the workflow creates `bucket/`).
-2. Add a repo secret **`SCOOP_BUCKET_TOKEN`** to *this* repo: a fine-grained PAT with
-   **Contents: read & write** on the bucket repo only.
-3. Push a tag as usual. Without the secret the `scoop` job logs a warning and skips — releases still
-   succeed, the bucket just stays where it was.
+Two guards run before it's written, because [`install.ps1`](install.ps1) depends on the result and a silently
+wrong manifest is worse than a failed release:
 
-The manifest template is [`packaging/scoop/perch.json`](packaging/scoop/perch.json); its `version`, `url`
-and `hash` are placeholders that CI fills in. Edit it there, never in the bucket, or the next release
-overwrites your change.
+- a duplicate asset basename across the Windows and macOS jobs fails the release rather than publishing one
+  of two different files under one name;
+- a missing `Perch-win-Setup.exe` fails the release, since the one-liner resolves that asset by name.
 
-**If publishing to the bucket fails** (missing secret, expired PAT, bucket outage), the release itself is
-fine — only the manifest is stale, and no hand-editing is needed. Re-run it:
+`install.ps1` refuses to install a release that has no `SHA256SUMS.txt` — which includes every release
+published before this was added, so pinning `$env:PERCH_VERSION` to an old version won't work. If you ever
+hand-upload a release, run `publish.bat` (it writes the same manifest into `releases\`) and include the file.
 
-> **Actions → Publish Scoop manifest → Run workflow →** enter the tag (e.g. `v0.2.33`)
-
-It reads the zip from the published release rather than from build artifacts, so it works months later and
-for any tag — including pointing the bucket back at an older release. It's idempotent: an unchanged manifest
-pushes nothing, and re-running a successful publish is a no-op. Run without the secret configured and it
-fails loudly rather than skipping.
+**What this does and doesn't buy.** Checksums prove the bytes you ran are the bytes that were published —
+they catch truncated downloads, a proxy or mirror rewriting the payload, and tampering anywhere between
+GitHub and the disk. They are *not* a signature: the manifest lives on the same release as the installer, so
+anyone who could replace one could replace both. Closing that gap needs code signing (or at minimum GitHub
+build-provenance attestation) — see [`docs/distribution-plan.md`](docs/distribution-plan.md).
 
 ### Building locally (optional)
 
@@ -236,11 +250,14 @@ dotnet tool install -g vpk
 Then run:
 
 ```
-publish.bat        # Windows: PerchSetup.exe
+publish.bat        # Windows: Perch-win-Setup.exe + SHA256SUMS.txt
 ./publish-mac.sh   # macOS (Apple Silicon): unsigned Perch.app + .dmg
 ```
 
-Artifacts land in `releases/`. Upload them manually to a GitHub Release tagged to match the version in the csproj.
+Artifacts land in `releases/`. Upload them manually to a GitHub Release tagged to match the version in the
+csproj — including `SHA256SUMS.txt`, or `install.ps1` won't install that release. Note that `publish.bat`
+hashes everything currently in `releases\`, which accumulates older versions' `.nupkg`s locally; CI starts
+from a clean artifact set.
 
 The mac build is arm64-only and unsigned (see the [macOS install note](#macos-apple-silicon-unsigned) for
 the Gatekeeper workaround). `publish-mac.sh` regenerates `Assets/icon.icns` on demand via
