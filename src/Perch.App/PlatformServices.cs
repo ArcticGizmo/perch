@@ -43,13 +43,6 @@ internal static class PlatformServices
     // implementation is still a stub, which the contract expresses as "can't report" rather than "idle".
     public static IMicrophoneMonitor CreateMicrophoneMonitor() => new Impl.MicrophoneMonitor();
 
-    // The recognised call app's control channel — the one product-specific piece of the microphone feature,
-    // and the reason it isn't behind the #if above: Teams' local API is plain loopback WebSocket + JSON and
-    // the Teams client exposes it on macOS too, so a single Perch.Core implementation serves every head.
-    // The token accessors are injected so the persistence stays the App's business (it owns AppSettings).
-    public static ICallController CreateCallController(Func<string?> readToken, Action<string?> writeToken) =>
-        new Perch.Data.TeamsCallController(readToken, writeToken);
-
     // The now-playing controller lives in the app head (not a platform project) because it needs the
     // Windows-10 WinRT projection the head already targets — same arrangement as the Action-Center toast
     // notifier. Dual-guarded like the notifier: compiled only on the Windows head, and gated at runtime so

@@ -1,17 +1,39 @@
 # Investigation: microphone-in-use detection, "jump back to the call", and remote mute
 
-**Status:** findings, now implemented — see [What shipped](#what-shipped) at the end for the code. Verified
-on this machine (Windows 11 Pro 26200, new Teams `MSTeams 26163.405.4842.717`) with a throwaway probe (see
-[Probe](#the-probe)).
+> ## Status: two of three shipped; **mute and meeting state were removed**
+>
+> **What Perch does today:** the mic strip names whichever app holds the microphone, and clicking that name
+> focuses it. That's all. Detection (§1) and cross-desktop activation (§2) are solid and stay.
+>
+> **What was removed, and why.** The Teams local-API layer (§3a) — in-app mute, real meeting state, pairing,
+> the Connect/Retry pill, the four-state link model — was built, shipped, and then deleted, because it could
+> not be made reliably *correct*:
+>
+> - **You cannot ask Teams for the current state.** `query-meeting-state` is a 1.0.0 service, absent from the
+>   2.0.0 protocol that pairing needs. Teams volunteers state only when it *changes*, and its opening frame on
+>   a connection can carry permissions alone. So a client that starts mid-call may not know your mute for the
+>   rest of that call.
+> - **Every honest response to that is a worse UI than none.** Claiming "unmuted" was wrong. Hiding the
+>   indicator until Teams speaks left a strip that said nothing, on a feature whose whole promise was to tell
+>   you something. Neither is worth the pairing prompt, the token, the retry states and the settings copy that
+>   paid for it.
+> - **The device mute isn't a substitute.** The app in the call doesn't know about it, so muting there creates
+>   exactly the "you're on mute" trap the feature was meant to prevent. Removed as well.
+>
+> The protocol findings below are kept verbatim: they cost real effort, and if Microsoft ever adds a state
+> query this becomes viable again. Everything in "What shipped" that mentions a call link is now history.
+> `AppSettings` no longer carries `TeamsCallControls`/`TeamsApiToken`; a settings file still holding them is
+> ignored and rewritten without them.
 
-**Goal.** Perch should be able to tell that the microphone is live and *which app* has it, offer a
-one-click "jump back to the meeting" that survives working across multiple virtual desktops, and — if
-possible — mute/unmute without leaving the current desktop.
+**Goal (as originally framed).** Perch should be able to tell that the microphone is live and *which app* has
+it, offer a one-click "jump back to the meeting" that survives working across multiple virtual desktops,
+and — if possible — mute/unmute without leaving the current desktop.
 
-**Short answer.** All three are achievable on Windows. Detection is two independent, fully public
-mechanisms; cross-desktop activation works via a documented shell API; and *real* Teams-level
-mute/unmute is possible through Teams' own local WebSocket API, which as a bonus gives a far better
-presence signal than sniffing the mic at all.
+**Short answer at the time.** All three looked achievable on Windows. Detection is two independent, fully
+public mechanisms; cross-desktop activation works via a documented shell API; and *real* Teams-level
+mute/unmute is possible through Teams' own local WebSocket API. The first two held up. The third worked in the
+narrow sense that commands were honoured — and failed in the sense that matters, which is knowing what to
+show before the user touches anything.
 
 ---
 
@@ -135,7 +157,8 @@ ws://127.0.0.1:8124/?protocol-version=2.0.0&manufacturer=Perch&device=PC&app=Per
   `isBackgroundBlurred`, `isSharing`, `hasUnreadMessages`, plus `canToggleMute`-style capability flags.
   This makes it a presence source *and* a control channel.
 - **Pairing:** connect with an empty `token`; Teams shows an in-app authorisation prompt, then sends a
-  `tokenRefresh` message with a token to persist and reuse.
+  `tokenRefresh` message with a token to persist and reuse. (The prompt is triggered by the first *command*
+  during a *call*, not by connecting — see "Pairing, corrected" below.)
 
 ### Observed protocol (captured against Teams 26163.405.4842.717)
 
@@ -159,10 +182,76 @@ On connecting (API enabled, no token, not in a call), Teams sent:
 2. **Since fields are carried forward, `isInMeeting` needs a way back down.** The end-of-call frame is the
    idle one above — permissions all false, no state — so the permissions double as the in-call signal when
    `meetingState` is silent: Teams only grants `canLeave`/`canToggleMute` while there's a call.
-3. **`{"response":"Success"}` is the authorisation signal**, and it arrives immediately. Waiting for meeting
-   state instead leaves a client stuck "awaiting approval" for as long as the user stays out of a call.
-4. **No `tokenRefresh` arrived, and no approval prompt appeared** — the connection simply succeeded without a
-   token. So token persistence is a nice-to-have, not a precondition.
+3. ~~**`{"response":"Success"}` is the authorisation signal**, and it arrives immediately.~~ **Wrong — see
+   "Pairing, corrected" below.** The `requestId:0` `Success` is a *connection* ack; it says nothing about
+   whether commands will be honoured. Reading it as a grant is what makes the unpaired window invisible.
+4. ~~**No `tokenRefresh` arrived, and no approval prompt appeared**~~ — true, but only because the capture was
+   taken *outside a call and without sending a command*. Both are preconditions for the prompt. Token
+   persistence is not a nice-to-have: the token is the only durable proof of pairing.
+
+### Pairing, corrected (July 2026)
+
+Prompted by the observed behaviour: with the integration on and the strip showing an apparently live mute
+button, the **first** mute click pops a Teams "allow third-party connection" prompt and *does not mute*.
+
+The read feed and the command channel have **separate** permissions, and only the latter needs pairing:
+
+- **The state feed is free.** Teams pushes `meetingUpdate` frames to an unpaired client (that is what the
+  idle capture above is). So a client can look connected, and be, for reads.
+- **Commands require pairing, and pairing requires a call.** `meetingPermissions.canPair` is the flag:
+  true means *in a meeting and not yet paired*, i.e. pairing can be triggered now. Both captured frames
+  above have `canPair:false` — the idle one because there is no call, the in-call one because that session
+  was already paired. Pairing simply cannot be completed outside a call, which is why the settings page can
+  never be the place it happens.
+- **Any command triggers the prompt; `pair` is the side-effect-free one.**
+  `{"action":"pair","parameters":{},"requestId":N}` exists precisely to negotiate without toggling anything.
+  A command sent while unpaired pops the prompt and comes back
+  `{"requestId":N,"response":"Pairing response resulted in no action"}` — a second, independent "you are not
+  paired" signal, and the exact shape of the silent-mute-failure above.
+- **`{"tokenRefresh":"<token>"}` is the grant**, and the only one. Persist it (`AppSettings.TeamsApiToken`);
+  reconnecting with it in the query string skips the prompt for good.
+- **The refusal also answers the `pair` request itself** — pairing performs no action, which is exactly why
+  `pair` is the safe way to ask. So the refusal only means "not paired" when its `requestId` belongs to
+  *something else*; reading it unconditionally tore the link down moments after it was granted, with the strip
+  flipping back to "not synced" the instant the user approved Perch
+  (`TeamsCallController.RejectionMeansUnpaired`, pinned by tests).
+- **There is no way to ask Teams for the current state on this protocol.** `query-meeting-state` is a 1.0.0
+  service and is absent from 2.0.0 — confirmed by [Raycast's 2.0.0 client](https://github.com/raycast/extensions/blob/main/extensions/microsoft-teams-calling/src/teams/meetingClient.ts),
+  which resorts to *"the last state we received, or undefined if none has arrived yet"*. Perch sent it in both
+  envelopes for a while; it did nothing, and the code is gone.
+  <br>Which makes **"muted" a genuinely unknown quantity**, not a startup blip: Teams volunteers state on change,
+  its opening frame on a connection can carry `meetingPermissions` alone, and nothing can be asked. Connect to a
+  call already in progress and the mute may stay unknown for the whole call. Hence `CallSnapshot.IsMuted` is
+  `bool?` and stays null until Teams says — flattening it to false is what made restarting Perch mid-call
+  confidently report an unmuted mic until the user toggled it. The strip drops the status glyph and marks the mute
+  button with a "?"; the button stays live, because toggling is both legitimate and the only thing that makes
+  Teams answer.
+- **Everything received before the grant was said to an unauthorised client**, so a mid-session grant still
+  closes the socket and reconnects carrying the new token — the closest thing to a bootstrap (Teams re-sends its
+  opening frame), and it makes the paired session identical to the one every later launch gets.
+  <br>Guard the reconnect on the session having started *unpaired*. Teams may rotate the token mid-session, and
+  reconnecting on every `tokenRefresh` would loop forever.
+- **The prompt renders inside the Teams window.** With Teams minimised or on another virtual desktop the
+  user never sees what they are waiting for — so whatever triggers pairing should also raise Teams
+  (`IWindowActivator`, the same pid the strip's jump-to-app uses).
+
+Which gives the state machine — four states, each answering "can the strip say anything true about the mic?":
+
+| `CallLinkState` | Means | Strip |
+|---|---|---|
+| `Unknown` | Integration off, Teams absent, API unreachable, connecting, or on the socket unpaired. The default, and where every disconnect lands. | No indicators. Connect pill when `canPair`. |
+| `Connecting` | A `pair` request is in flight; Teams' prompt is on screen. | No indicators, flat "Connecting…" pill. |
+| `Blocked` | Refused: the prompt went unanswered, or a command came back rejected. | No indicators, "Retry" pill. |
+| `Connected` | `tokenRefresh` arrived, or the connection carried a stored token. | Real meeting state, in-app mute. |
+
+Deliberately about *knowledge*, not plumbing: "the socket is open but unpaired" is not worth a state of its own,
+because an unpaired connection knows nothing it can be trusted on and is `Unknown` like any other ignorance.
+Nothing learned from a connection outlives it.
+
+`canPair:true` has not been captured on this machine (Perch paired before the flag was being read), so that
+half rests on two independent third-party clients — [teams-monitor](https://github.com/svrooij/teams-monitor)
+documents the semantics, [StreamDeckMSTeams_Udo](https://github.com/kosmonautica/StreamDeckMSTeams_Udo) pairs
+off it — plus its consistency with both frames above. Clear `TeamsApiToken` to re-observe it.
 5. **Field names** (confirmed against Teams' own client model): `isMuted`, `isInMeeting`, `isVideoOn` (*not*
    `isCameraOn`), `isHandRaised`, `isRecordingOn`, `isBackgroundBlurred`, `isSharing`, `hasUnreadMessages`.
 
@@ -237,12 +326,12 @@ the Teams integration is strictly additive and behind its own opt-in.
 | --- | --- |
 | `IMicrophoneMonitor`, `MicUser`, `MicSnapshot` — app-agnostic detection + device mute | `src/Perch.Core/Platform/IMicrophoneMonitor.cs` |
 | `ICallController`, `CallSnapshot`, `CallLinkState`, `NullCallController` — the optional per-product layer | `src/Perch.Core/Platform/ICallController.cs` |
-| `MicApps` — identity → name, product recognition, ledger↔process matching, and `CallLinkApplies` (the single gate on product-specific behaviour) | `src/Perch.Core/Data/MicApps.cs` |
+| `MicApps` — identity → name, product recognition, ledger↔process matching, and `CallLinkApplies` / `CallLinkPairable` (the two gates on product-specific behaviour: drive it, or offer to pair) | `src/Perch.Core/Data/MicApps.cs` |
 | `TeamsCallController` — the local WebSocket client (pairing, state feed, toggle-mute/leave) | `src/Perch.Core/Data/TeamsCallController.cs` |
 | Windows detection: ConsentStore ∪ WASAPI, endpoint mute | `src/Perch.Platform.Windows/MicrophoneMonitor.cs` + `CoreAudio.cs` |
 | macOS stub (reports "can't tell you", so the strip stays hidden; the Teams link still works there) | `src/Perch.Platform.Mac/MicrophoneMonitor.cs` |
 | `FocusAppWindowForProcess` — jump to the app owning a capture pid, across desktops | `IWindowActivator` + both platform impls |
-| Overlay strip (label, jump, mute, tooltip with the setup hints) | `src/Perch.App/Views/OverlayCanvas.Mic.cs` |
+| Overlay strip (label, jump, mute, Connect pill, context-menu connect/unpair, tooltip with the setup hints) | `src/Perch.App/Views/OverlayCanvas.Mic.cs` |
 | Host bridging both halves to the UI thread, and choosing which mute a click means | `src/Perch.App/Services/MicMonitorHost.cs` |
 | Settings page + `ShowMicPresence` / `TeamsCallControls` / `TeamsApiToken` | `SettingsWindow.BuildMicrophonePage`, `AppSettings` |
 | Tests for the pure logic | `tests/Perch.Tests/MicAppsTests.cs` |
@@ -266,6 +355,41 @@ Notable decisions:
 - **`meetingUpdate` frames are merged, not replayed wholesale.** See
   [Observed protocol](#observed-protocol-captured-against-teams-261634054842717) — this is the difference
   between tracking a Teams-side mute and never seeing it.
+- **Perch never asks Teams for control on its own.** Connecting is silent; the only thing that makes Teams
+  prompt is the user pressing Connect, which sends `action:"pair"` — the one action with no side effect if
+  they decline. Unpaired therefore has its own state (`PairingRequired`), a visible affordance, and an honest
+  label, instead of an in-app mute button that pops a surprise prompt and mutes nobody.
+- **Nothing is shown about a mute Perch can't read.** In every state but `Connected` the strip drops *both*
+  indicators — the glyph on the left and the mute button on the right — and the label names the link state
+  instead ("not linked", "connecting…", "link blocked"). The capture device's mute is still measurable, but it
+  isn't the question: Teams can have you muted while the device is wide open, so drawing either indicator would
+  assert something Perch cannot see (`MicApps.CallStateUnknown`, the second gate beside `CallLinkApplies`; a test
+  pins that the two never contradict each other).
+  <br>That same predicate puts the Connect pill in the space the indicators vacated — one fact, two consequences,
+  since being unable to read the app is exactly when there is something to offer.
+- **Never gate the offer on `canPair`.** It reads like the right precondition — it is Teams' own "you may ask" —
+  but Teams only sends it when it chooses to, and *not* on a socket opened mid-call. Which is precisely what an
+  unpair leaves behind, so gating on it meant unpairing during a call offered no way back into the call you were
+  already in. Ask regardless: if Teams won't pair it just doesn't answer, `ApprovalWindow` turns the silence into
+  `Blocked`, and the user gets a Retry. A dead end that explains itself beats a missing button.
+  <br>`canPair` keeps one job — on a head with no microphone detection it is the only evidence a call exists, so
+  it still earns the strip its place on screen.
+  <br>The integration being *switched on* is the other half of that test, and it is a setting rather than a link
+  state — so it's pushed to the overlay separately (`OverlayCanvas.SetCallControlsEnabled`). With it off, Perch
+  never claimed to know Teams' mute, so a Teams call is treated like any app it has no integration for (Slack,
+  Zoom, a browser, OBS) and keeps both indicators, reporting only what it measured about the device.
+- **An unpair lands in `Unknown` because that is where every disconnect lands** — one rule, enforced in one
+  place (`TeamsCallController.Forget`), rather than a special case. `Stop()` clears the snapshot as well as the
+  state, so the last mute Perch was allowed to read never lingers on screen. The restart behind an unpair pushes
+  once at the end rather than repainting the strip through each step of the teardown
+  (`MicMonitorHost.RestartCallControls`).
+- **The strip's right-click menu carries the same two actions the strip itself can be in** — Connect while
+  unpaired, Unpair once paired — hung off the strip's region the way the system-metrics and usage strips hang
+  theirs. It can only appear while the strip is visible (i.e. while something holds the mic), so the settings
+  page keeps the unconditional version.
+- **`canPair` is trusted over our own token.** A stored token that Teams no longer honours is otherwise
+  invisible until a mute silently fails, so a `canPair:true` frame (or a `"…Pairing…"` response to a command)
+  demotes a `Connected` link back to `PairingRequired` and the Connect button returns.
 
 ## Open questions
 
@@ -278,6 +402,11 @@ Notable decisions:
   during the spike), and whether Teams' "open meetings in main window" setting changes what
   `FocusAppWindowForProcess` lands on.
 - Whether the Teams API's single-client limit collides with anything already in use here.
+- **Unverified in the pairing path:** whether Teams streams full `meetingState` (not just `meetingPermissions`)
+  to an *unpaired* client mid-call, and whether it answers a `pair` action with a prompt every time or only
+  once. Both only affect wording — the strip's Connect pill needs nothing but `canPair` — but the second
+  decides whether `ApprovalWindow`'s fallback to `PairingRequired` ever gets used. Clear `TeamsApiToken`
+  ("Forget Teams pairing" in settings) and join a call to observe.
 - Privacy: presence stays local and nothing is persisted today beyond the pairing token. If a mic-history
   view is ever added, note that a log of "mic was live 15:01–15:34" is more sensitive than Perch's existing
   session stats.

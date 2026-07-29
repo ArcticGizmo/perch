@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.32] - 2026-07-29
+
+- The mic strip is one line now: which app has your microphone, click it to go there
+- Removed Teams call controls and every mute button (a bold four-hour experiment)
+
+---
+
 ## [v0.2.31] - 2026-07-29
 
 - Auto Start Perch: never, when a session starts, or when you log in

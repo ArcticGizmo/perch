@@ -2312,18 +2312,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int media = HitTestMedia(p);
         if (media != _hoveredMediaButton) { _hoveredMediaButton = media; InvalidateVisual(); }
 
-        // The mic strip's mute button, and its app name — which is itself the jump-to-app control, so it
-        // brightens on hover and takes the hand cursor like any other clickable text.
-        bool overMicMute = HitTestMicMute(p);
-        if (overMicMute != _hoveredMicMute) { _hoveredMicMute = overMicMute; InvalidateVisual(); }
+        // The mic strip's app name is itself the jump-to-app control, so it brightens on hover and takes the
+        // hand cursor like any other clickable text.
         bool overMicLabel = HitTestMicLabel(p);
         if (overMicLabel != _hoveredMicLabel) { _hoveredMicLabel = overMicLabel; InvalidateVisual(); }
 
         // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + artifacts + the update
         // badge + outage footer + the scratch-pad note button + a row's note glyph + the media buttons + the
-        // mic strip's mute button and app name); rows show only the highlight.
+        // mic strip's app name); rows show only the highlight.
         Cursor = (ql >= 0 || hyper >= 0 || art >= 0 || overUpdate || overFooter || overNote || overRowNote
-                  || media >= 0 || overMicMute || overMicLabel)
+                  || media >= 0 || overMicLabel)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -2379,13 +2377,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicMute || _hoveredMicLabel;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel;
         _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredArtifactRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
         _hoveredNoteButton = false;
         _hoveredMediaButton = -1;
-        _hoveredMicMute = false;
         _hoveredMicLabel = false;
         Cursor = Cursor.Default;
         _tipKind = TipKind.None;
@@ -2543,7 +2540,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // capture device — the App decides which), and the app's name, which jumps to that app's window.
         // Mute is tested first: its rect sits inside the strip but outside the label's, so order only matters
         // if the two ever overlap.
-        if (HitTestMicMute(p)) { MicMuteToggleRequested?.Invoke(); return; }
         if (HitTestMicLabel(p)) { MicJumpRequested?.Invoke(); return; }
 
         int art = HitTestArtifactIcon(p);

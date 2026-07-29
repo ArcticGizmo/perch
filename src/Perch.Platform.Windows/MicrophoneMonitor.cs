@@ -47,13 +47,6 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
     private Timer? _timer;
     private bool _started;
 
-    // The endpoint SetDeviceMuted acts on: whichever capture device is actually in use when we know one,
-    // else the communications default. Latched on each tick so muting hits the mic being used for the call
-    // rather than some idle device.
-    // Written on the poll thread, read on the UI thread when a mute button is clicked — volatile because a
-    // stale read would mute the wrong endpoint, and there's nothing to lock against a single reference write.
-    private volatile string? _muteTargetDeviceId;
-
     public MicSnapshot? Current { get; private set; }
 
     public event Action? Changed;
@@ -112,7 +105,6 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
     private MicSnapshot Build()
     {
         var audio = ReadAudio();
-        _muteTargetDeviceId = audio.DeviceId;
 
         var holders = new List<Holder>();
 
@@ -148,7 +140,7 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
                 Since: h.Since))
             .ToList();
 
-        return new MicSnapshot(users, audio.DeviceMuted, audio.DeviceName);
+        return new MicSnapshot(users, audio.DeviceName);
     }
 
     private readonly record struct Holder(string Identity, int ProcessId, bool IsStreaming, DateTimeOffset? Since);
@@ -201,13 +193,11 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
         }
     }
 
-    // ── WASAPI (live streams + the device's own mute) ─────────────────────────
+    // ── WASAPI (live streams + the device's name) ─────────────────────────────
 
     private readonly record struct AudioState(
         List<int> ActivePids,
-        string? DeviceId,
-        string? DeviceName,
-        bool DeviceMuted);
+        string? DeviceName);
 
     private static AudioState ReadAudio()
     {
@@ -220,7 +210,7 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
         {
             enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
             if (enumerator.EnumAudioEndpoints(EDataFlow.eCapture, DEVICE_STATE_ACTIVE, out collection) != 0)
-                return new AudioState(activePids, null, null, false);
+                return new AudioState(activePids, null);
 
             collection.GetCount(out var deviceCount);
             for (var i = 0; i < deviceCount; i++)
@@ -232,8 +222,8 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
                 devices.Add((device, id, FriendlyName(device) ?? id, pidsHere.Count > 0));
             }
 
-            // Name and mute-state the device that's actually in use; fall back to the communications
-            // default so the strip can still show and toggle a sensible endpoint when nothing is capturing.
+            // Name the device that's actually in use; fall back to the communications default so the tooltip can
+            // still name a sensible endpoint when nothing is capturing.
             var chosen = devices.FirstOrDefault(d => d.HasActive);
             if (chosen.Device is null && enumerator.GetDefaultAudioEndpoint(
                     EDataFlow.eCapture, Role_Communications, out var fallback) == 0)
@@ -243,12 +233,12 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
                 devices.Add(chosen);
             }
 
-            if (chosen.Device is null) return new AudioState(activePids, null, null, false);
-            return new AudioState(activePids, chosen.Id, chosen.Name, ReadMute(chosen.Device) ?? false);
+            if (chosen.Device is null) return new AudioState(activePids, null);
+            return new AudioState(activePids, chosen.Name);
         }
         catch
         {
-            return new AudioState(activePids, null, null, false);
+            return new AudioState(activePids, null);
         }
         finally
         {
@@ -310,55 +300,6 @@ public sealed class MicrophoneMonitor : IMicrophoneMonitor
             finally { Release(store); }
         }
         catch { return null; }
-    }
-
-    private static bool? ReadMute(IMMDevice device)
-    {
-        object? volumeObj = null;
-        try
-        {
-            var iid = typeof(IAudioEndpointVolume).GUID;
-            if (device.Activate(ref iid, CLSCTX_ALL, IntPtr.Zero, out volumeObj) != 0
-                || volumeObj is not IAudioEndpointVolume volume) return null;
-            return volume.GetMute(out var muted) == 0 ? muted : null;
-        }
-        catch { return null; }
-        finally { Release(volumeObj); }
-    }
-
-    public void SetDeviceMuted(bool muted)
-    {
-        IMMDeviceEnumerator? enumerator = null;
-        IMMDevice? device = null;
-        object? volumeObj = null;
-        try
-        {
-            enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
-
-            var target = _muteTargetDeviceId;
-            var ok = target is not null
-                ? enumerator.GetDevice(target, out device) == 0
-                : enumerator.GetDefaultAudioEndpoint(EDataFlow.eCapture, Role_Communications, out device) == 0;
-            if (!ok || device is null) return;
-
-            var iid = typeof(IAudioEndpointVolume).GUID;
-            if (device.Activate(ref iid, CLSCTX_ALL, IntPtr.Zero, out volumeObj) != 0
-                || volumeObj is not IAudioEndpointVolume volume) return;
-
-            var context = Guid.Empty;
-            volume.SetMute(muted, ref context);
-
-            // Reflect it immediately rather than waiting up to a poll interval — a mute button that takes
-            // two seconds to look muted reads as broken, and the user may well click it again.
-            if (Current is { } current) Publish(current with { DeviceMuted = muted });
-        }
-        catch { /* best-effort: no device, or the endpoint rejected it */ }
-        finally
-        {
-            Release(volumeObj);
-            Release(device);
-            Release(enumerator);
-        }
     }
 
     // ── Naming help ──────────────────────────────────────────────────────────

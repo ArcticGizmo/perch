@@ -4,8 +4,8 @@ namespace Perch.Platform;
 /// One application currently holding the microphone, as reported by the platform's capture stack. Kept
 /// deliberately app-agnostic: Teams, Slack, Zoom, a browser tab and OBS all arrive through the same shape,
 /// and nothing in this record knows which of them it is describing. <see cref="Perch.Data.MicApps"/> is
-/// where an <see cref="Identity"/> is turned into a display name or recognised as a specific product, so
-/// that knowledge stays in one testable place instead of leaking into each platform implementation.
+/// where an <see cref="Identity"/> is turned into a display name, so that knowledge stays in one testable
+/// place instead of leaking into each platform implementation.
 ///
 /// <see cref="Identity"/> is the stable key — on Windows a package family name (<c>MSTeams_8wekyb3d8bbwe</c>)
 /// or a full executable path — and is the only field guaranteed non-empty.
@@ -30,25 +30,23 @@ public sealed record MicUser(
     DateTimeOffset? Since);
 
 /// <summary>
-/// A point-in-time picture of microphone use across the machine, plus the state of the capture device's
-/// own mute. Immutable; the monitor swaps a whole new snapshot in so a reader never sees a half-updated
-/// one — the same discipline as <see cref="MediaSnapshot"/>.
+/// A point-in-time picture of microphone use across the machine. Immutable; the monitor swaps a whole new
+/// snapshot in so a reader never sees a half-updated one — the same discipline as <see cref="MediaSnapshot"/>.
+///
+/// <para>Reports use, not mute. The capture device's own mute used to be here, and the app in a call doesn't
+/// know about it — so showing or driving it produced precisely the "you're on mute" misunderstanding the
+/// feature was supposed to prevent.</para>
 /// </summary>
 /// <param name="Users">The apps holding the microphone <em>right now</em>, most-recently-started first.
 /// Empty when the mic is idle — history is deliberately not reported, so a reader never has to work out
 /// which entries are stale.</param>
-/// <param name="DeviceMuted">Whether the default capture endpoint is muted at the OS level. This is the
-/// "hardware" mute — an app in a call generally does <em>not</em> know about it, which is exactly the
-/// "you're on mute" trap, so any UI driving it has to say plainly that's what it is.</param>
 /// <param name="DeviceName">The default capture device's friendly name, or null when unavailable.</param>
 public sealed record MicSnapshot(
     IReadOnlyList<MicUser> Users,
-    bool DeviceMuted,
     string? DeviceName)
 {
     /// <summary>The app to talk about in the UI, or null when the mic is idle. Several apps can hold the mic
-    /// at once (a Teams call while OBS records); the most recently started one is the one the strip names
-    /// and the buttons act on.</summary>
+    /// at once (a Teams call while OBS records); the most recently started one is the one the strip names.</summary>
     public MicUser? Primary => Users.Count > 0 ? Users[0] : null;
 
     /// <summary>Whether anything at all holds the microphone right now.</summary>
@@ -59,19 +57,17 @@ public sealed record MicSnapshot(
     // updates" check in the monitor and the host. MicUser is a record, so SequenceEqual is a value compare.
     public bool Equals(MicSnapshot? other) =>
         other is not null
-        && DeviceMuted == other.DeviceMuted
         && DeviceName == other.DeviceName
         && Users.SequenceEqual(other.Users);
 
-    public override int GetHashCode() => HashCode.Combine(DeviceMuted, DeviceName, Users.Count);
+    public override int GetHashCode() => HashCode.Combine(DeviceName, Users.Count);
 }
 
 /// <summary>
 /// The platform's "who is using the microphone" seam. Intentionally generic — it reports whatever the OS
 /// attributes capture to, with no product-specific behaviour anywhere in the implementation, so a Zoom or
-/// Slack call surfaces exactly as well as a Teams one. Product-specific <em>extras</em> (real in-app
-/// mute, meeting state) live behind <see cref="ICallController"/> and are layered on top only once the
-/// app has been recognised.
+/// Slack call surfaces exactly as well as a Teams one. Read-only: nothing here changes the microphone's state,
+/// and the overlay's strip does no more than name the holder and offer to focus it.
 ///
 /// Event-driven from the consumer's point of view: <see cref="Changed"/> fires when the picture moves and
 /// <see cref="Current"/> reads the latest snapshot (null when the platform can't report at all — as
@@ -93,9 +89,4 @@ public interface IMicrophoneMonitor : IDisposable
 
     /// <summary>Stop watching and release any OS subscription. <see cref="Current"/> reverts to null.</summary>
     void Stop();
-
-    /// <summary>Mutes or unmutes the default capture <em>device</em> — the blunt, universal instrument that
-    /// works for any app but that the app in the call knows nothing about. Best-effort; no-op when
-    /// unsupported. Prefer <see cref="ICallController.ToggleMute"/> when it is available.</summary>
-    void SetDeviceMuted(bool muted);
 }

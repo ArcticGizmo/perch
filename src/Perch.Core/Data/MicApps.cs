@@ -1,25 +1,13 @@
 namespace Perch.Data;
 
-using Perch.Platform;
-
-/// <summary>Which product Perch has recognised behind a microphone user. Deliberately coarse: the
-/// detection path treats every app identically, and this exists only to decide whether a product-specific
-/// integration is worth offering on top. Anything Perch has no integration for is <see cref="Other"/> —
-/// it still gets the generic treatment (naming, jump-to-window, device mute).</summary>
-public enum MicAppKind
-{
-    /// <summary>No product-specific integration — the generic path. Slack, Zoom, a browser, OBS, …</summary>
-    Other,
-
-    /// <summary>Microsoft Teams, which exposes a local API Perch can drive for real in-app mute and
-    /// meeting state. See <see cref="Perch.Platform.ICallController"/>.</summary>
-    Teams,
-}
-
 /// <summary>
-/// The single place that turns a platform capture identity into something human, and the single place that
-/// knows how to recognise a product Perch has extra support for. Everything else — the platform monitors,
-/// the hosts, the overlay strip — stays product-agnostic and asks here.
+/// The single place that turns a platform capture identity into something human. Everything else — the platform
+/// monitors, the host, the overlay strip — stays entirely product-agnostic and asks here.
+///
+/// <para>It used to recognise <em>which</em> product was calling, so a Teams-specific control layer could be
+/// layered on top. That layer is gone (see the remarks on the overlay's mic strip), and with it the last place
+/// in the microphone path that treated one app differently from another. All that's left is naming, which is
+/// cosmetic.</para>
 ///
 /// Pure string logic with no OS calls, so it is unit-testable and shared by every head. Identities arrive
 /// in the two shapes Windows uses (a package family name such as <c>MSTeams_8wekyb3d8bbwe</c>, or a full
@@ -51,44 +39,6 @@ public static class MicApps
         ("obs32",           "OBS Studio"),
         ("audacity",        "Audacity"),
     ];
-
-    // Identity tokens that mean "this is Teams". Both the new Teams (packaged MSTeams / ms-teams.exe) and
-    // the classic client (Teams.exe, MicrosoftTeams package) are recognised: classic doesn't expose the
-    // local API, but ICallController already degrades to unavailable when it can't connect, so being
-    // generous here costs nothing and avoids silently dropping the integration on a client we mis-detect.
-    private static readonly string[] TeamsTokens = ["msteams", "ms-teams", "microsoftteams", "teams"];
-
-    /// <summary>Process names (no extension, any case) that indicate a Teams client is running — used to
-    /// avoid opening a local-API socket when Teams isn't even up.</summary>
-    public static readonly string[] TeamsProcessNames = ["ms-teams", "Teams", "Microsoft Teams"];
-
-    /// <summary>
-    /// Whether a recognised app's own control channel should be preferred over the generic path right now:
-    /// the link is live, the app reports a call in progress, and — the part that matters — the app holding
-    /// the microphone is the one the link belongs to. A live Teams link while Zoom has the mic must not
-    /// hijack Zoom's strip.
-    /// <para>
-    /// Shared by the overlay (deciding what to draw) and the monitor host (deciding which mute a click
-    /// means) so the two can never disagree about whose mute the button sends. The
-    /// <see cref="MicAppKind.Teams"/> test is the one place that would grow into a lookup when a second
-    /// integration lands; nothing else needs to change.
-    /// </para>
-    /// A null <see cref="MicSnapshot"/> passes deliberately: a platform whose microphone detection is a
-    /// stub still gets working call controls from the link alone.
-    /// </summary>
-    public static bool CallLinkApplies(MicSnapshot? mic, CallSnapshot? call, CallLinkState link) =>
-        link == CallLinkState.Connected
-        && call is { IsInMeeting: true }
-        && (mic?.Primary is null || Classify(mic.Primary.Identity) == MicAppKind.Teams);
-
-    /// <summary>Recognises a product Perch has an integration for. Returns <see cref="MicAppKind.Other"/>
-    /// for everything else, which is the normal case and not a failure.</summary>
-    public static MicAppKind Classify(string? identity)
-    {
-        var token = Token(identity);
-        if (token.Length == 0) return MicAppKind.Other;
-        return TeamsTokens.Contains(token, StringComparer.OrdinalIgnoreCase) ? MicAppKind.Teams : MicAppKind.Other;
-    }
 
     /// <summary>
     /// The best human-readable name for a capture identity. <paramref name="fileDescription"/> is the

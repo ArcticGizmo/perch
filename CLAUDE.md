@@ -13,7 +13,7 @@ Multi-project solution (`perch.slnx`); the projects live under `src/`:
   parsers, models, `AppSettings`, stats/flight/history services, `NotificationService`, `PluginManager`,
   `AppInfo`) plus the platform-service **interfaces** the UI resolves (`Platform/`: `INotifier`,
   `IWindowActivator`, `IPathInstaller`, `IAudioCue`, `IAppIconProvider`, `ISystemMetrics`, `ISessionLock`,
-  `IGlobalHotkey`, `IMicrophoneMonitor`, `ICallController`, …). No UI, no `System.Drawing`.
+  `IGlobalHotkey`, `IMicrophoneMonitor`, …). No UI, no `System.Drawing`.
 - `src/Perch.Platform.Windows/` — Win32 implementations of the Core interfaces (`net10.0-windows`).
 - `src/Perch.Platform.Mac/` — macOS implementations of the same Core interfaces (plain `net10.0`, reaching
   AppKit/libSystem via P/Invoke — no `net10.0-macos` workload, so it builds on any host). Currently no-op

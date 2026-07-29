@@ -113,22 +113,14 @@ internal sealed class AppSettings
     // playing. A missing key keeps it off.
     public bool ShowMediaController { get; set; } = false;
 
-    // Whether to show the microphone strip on the overlay — which app currently holds the mic, with buttons
-    // to jump to its window and to mute. App-agnostic: Teams, Slack, Zoom, a browser tab and OBS all
-    // surface the same way. Off by default (opt-in); the strip is only visible while the mic is in use.
+    // Whether to show the microphone strip on the overlay — which app currently holds the mic, whose name is a
+    // link to its window. App-agnostic: Teams, Slack, Zoom, a browser tab and OBS all surface the same way. Off
+    // by default (opt-in); the strip is only visible while the mic is in use.
+    //
+    // A companion TeamsCallControls/TeamsApiToken pair used to sit here, driving Teams' local API for in-app mute
+    // and meeting state. Both are gone; a settings file still carrying them is simply ignored, and the keys
+    // disappear the next time settings are saved.
     public bool ShowMicPresence { get; set; } = false;
-
-    // Whether to drive Microsoft Teams' own local API, which upgrades the microphone strip for a Teams call
-    // to real meeting state and an in-app mute the Teams UI and the other participants agree with. Off by
-    // default and deliberately separate from ShowMicPresence: enabling it makes Teams show a one-time
-    // authorisation prompt, so it must be a decision the user takes knowingly. It additionally needs the
-    // third-party app API turned on inside Teams; when it isn't, the strip quietly stays on the generic path.
-    public bool TeamsCallControls { get; set; } = false;
-
-    // The pairing token Teams hands back once the user approves Perch, persisted so the prompt is a one-time
-    // cost. Scoped to this machine's Teams client and useless anywhere else — it only authorises a loopback
-    // connection to a Teams already running as this user.
-    public string? TeamsApiToken { get; set; }
 
     // Whether to show the outage footer at the bottom of the overlay when status.claude.com reports a
     // problem (clicking it lists the incidents + links to the status page). Off stops the poll entirely
