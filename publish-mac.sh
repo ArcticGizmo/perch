@@ -4,12 +4,12 @@
 #   ./publish-mac.sh [version]
 #
 # With no argument the version is read from src/Perch.App/Perch.App.csproj (<Version>). Mirrors the
-# Windows script's three steps — publish perch, publish perch-hook alongside it, then `vpk pack` — but
+# Windows script's three steps - publish perch, publish perch-hook alongside it, then `vpk pack` - but
 # targets osx-arm64 and hands vpk our own Info.plist so LSUIElement + NSAppleEventsUsageDescription
 # survive into the bundle (see src/Perch.App/Info.plist).
 #
 # Output lands in releases/ : Perch-osx-arm64.dmg (drag-install), a portable .zip, and the update
-# feed. The build is UNSIGNED — see the README's "macOS (unsigned)" note for the Gatekeeper workaround.
+# feed. The build is UNSIGNED - see the README's "macOS (unsigned)" note for the Gatekeeper workaround.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,12 +40,12 @@ if ! command -v vpk >/dev/null 2>&1; then
     exit 1
 fi
 if [[ ! -f "$ICNS" ]]; then
-    echo "$ICNS missing — generating it..." >&2
+    echo "$ICNS missing - generating it..." >&2
     ./tools/gen-icns.sh
 fi
 
 echo "Building Perch v$VERSION ($RID)..."
-# Clean both dirs so a re-run is repeatable — Velopack refuses to pack over an existing release of the
+# Clean both dirs so a re-run is repeatable - Velopack refuses to pack over an existing release of the
 # same version, and stale files in the publish dir would otherwise be packed into the bundle.
 rm -rf "$PUBLISH_DIR" "$OUT_DIR"
 
@@ -97,7 +97,7 @@ vpk pack \
 # Velopack's mac lane emits a .pkg installer + a portable .zip, but not a .dmg, and leaves no loose .app
 # (it assembles the bundle in its own temp dir and deletes it). Unpack the portable zip locally so:
 #   * releases/Perch.app  is a runnable bundle you can launch/inspect without mounting anything, and
-#   * the DMG is built from it — a compressed image with an /Applications drop target (the familiar
+#   * the DMG is built from it - a compressed image with an /Applications drop target (the familiar
 #     unsigned-mac drag-install UX the README points users at).
 echo "Building DMG ..."
 dmg="$OUT_DIR/Perch-osx-arm64.dmg"

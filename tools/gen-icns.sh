@@ -2,7 +2,7 @@
 # Regenerates the macOS app icon (src/Perch.App/Assets/icon.icns) from the committed raster.
 #
 # The other icon assets (icon.png, icon.ico, landing-icon.png) come from tools/IconGen, which renders
-# perch.svg via System.Drawing — a Windows-only runtime, so it can't run on a Mac. This script is the mac
+# perch.svg via System.Drawing - a Windows-only runtime, so it can't run on a Mac. This script is the mac
 # path the port plan calls for: it derives the .icns from landing-icon.png (512px, the highest-res raster
 # IconGen emits from the same SVG + crop), using the stock `sips` + `iconutil` tools present on every Mac.
 #
@@ -22,7 +22,7 @@ fi
 iconset="$(mktemp -d)/icon.iconset"
 mkdir -p "$iconset"
 
-# Standard Retina iconset ladder. 1024 (512@2x) is upscaled from the 512 source — acceptable for an
+# Standard Retina iconset ladder. 1024 (512@2x) is upscaled from the 512 source - acceptable for an
 # unsigned local build; the sizes the menu bar and Finder actually ask for (<=512) are downscales.
 gen() { sips -z "$1" "$1" "$src_png" --out "$iconset/$2" >/dev/null; }
 gen 16   icon_16x16.png

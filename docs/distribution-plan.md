@@ -342,11 +342,26 @@ the worst case, since the one-liner has to work there without `pwsh`:
 - **The CI shell logic** was run against a simulated two-job artifact tree: correct flatten, `sha256sum -c`
   round-trip, and both guards firing (duplicate basename, missing `Perch-win-Setup.exe`).
 
-**Not yet verified**, and only verifiable once a release with `SHA256SUMS.txt` exists: the live GitHub API
-lookup, and the installer actually running to completion from the one-liner. Worth walking through by hand on
-the first tag. `pwsh` isn't installed on the dev box either, so the PowerShell 7 path is covered by
-construction (an explicit `byte[]`/string decode, with a test proving the branch is required) rather than by
-running the script there.
+Two bugs came out of actually running the installer, both fixed and both worth remembering:
+
+- **`Start-Process -Wait` hung forever.** It waits for the started process *and all its descendants*, and
+  Velopack's Setup launches the tray app before exiting — so the wait blocked on Perch itself, which is
+  supposed to keep running. Now the script waits on the Setup process's own handle
+  (`[Diagnostics.Process]::Start(...)` + `WaitForExit`), which returns as soon as the install is done.
+  Measured with a stand-in installer that spawns a long-lived child: `-Wait` returned after 27 s (the
+  child's lifetime), `WaitForExit` after 1.0 s with the child still running.
+- **`install.ps1` must stay pure ASCII.** The file has no BOM, so Windows PowerShell 5.1 decodes it as the
+  system codepage (Windows-1252) rather than UTF-8. A UTF-8 em dash then arrives as three characters ending
+  in `0x94` = **U+201D, a curly closing quote — which PowerShell honours as a string delimiter**. One em dash
+  inside a normal `"..."` string silently terminates it early, and its real closing quote opens a new string
+  that swallows the following lines. Verified directly: the same function with a hyphen parses clean, with an
+  em dash gives *"The string is missing the terminator"*. The earlier em dashes were harmless only because
+  they sat in comments and here-strings. `tools/test-install.ps1` now asserts the file is ASCII and parses.
+
+**Still not verified**, and only verifiable once a release with `SHA256SUMS.txt` exists: the live GitHub API
+lookup, and the verify-then-install path against a real published release. `pwsh` isn't installed on the dev
+box either, so the PowerShell 7 path is covered by construction (an explicit `byte[]`/string decode, with a
+test proving the branch is required) rather than by running the script there.
 
 ## macOS parity
 

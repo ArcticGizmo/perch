@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Tests for install.ps1 — the Windows one-liner installer.
+    Tests for install.ps1 - the Windows one-liner installer.
 
 .DESCRIPTION
     install.ps1 is the primary Windows install path and can't be covered by the xUnit suite (which tests
@@ -9,14 +9,15 @@
         powershell -NoProfile -File tools\test-install.ps1
 
     It loads install.ps1's functions with the entrypoint call stripped, then drives them directly. The
-    download path is tested against a real loopback HttpListener serving a real artifact out of releases\ —
-    no network, no mocking of the HTTP stack — so run publish.bat at least once first. Nothing here talks to
+    download path is tested against a real loopback HttpListener serving a real artifact out of releases\ -
+    no network, no mocking of the HTTP stack - so run publish.bat at least once first. Nothing here talks to
     github.com, so the live release lookup and the installer actually running are still manual checks.
 #>
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
-$src = (Get-Content (Join-Path $root 'install.ps1') -Raw) -replace '(?m)^Install-Perch\s+.*$', ''
+$installPs1 = Join-Path $root 'install.ps1'
+$src = (Get-Content $installPs1 -Raw) -replace '(?m)^Install-Perch\s+.*$', ''
 Invoke-Expression $src
 
 $pass = 0; $fail = 0
@@ -27,6 +28,40 @@ function Check($name, $cond, $detail = '') {
 function CheckThrows($name, [scriptblock]$sb, [string]$expect) {
     try { & $sb; Check $name $false 'did not throw' }
     catch { Check $name ($_.Exception.Message -like "*$expect*") "message was: $($_.Exception.Message)" }
+}
+
+Write-Host "`n=== Encoding and parse (whole release pipeline) ===" -ForegroundColor Cyan
+# None of these carry a BOM, so Windows PowerShell 5.1 decodes .ps1 files as the system codepage rather
+# than UTF-8. A UTF-8 em dash then arrives as three Windows-1252 chars ending in 0x94 = U+201D - a curly
+# closing quote, and PowerShell honours curly quotes as string delimiters. One em dash inside a "..." string
+# therefore terminates it early and silently mis-parses everything after it. That actually happened here.
+#
+# Only the .ps1 files can break that way, but the whole pipeline is held to ASCII: it's one rule instead of
+# three, and it keeps console output legible under any codepage. Use plain hyphens.
+$pipeline = 'install.ps1', 'publish.bat', 'publish-mac.sh',
+'tools\test-install.ps1', 'tools\gen-icns.sh', 'tools\gen-icons.ps1', 'tools\gen-icons.cmd',
+'.github\workflows\release.yml'
+foreach ($rel in $pipeline) {
+    $path = Join-Path $root $rel
+    if (-not (Test-Path -LiteralPath $path)) { Check "$rel exists" $false 'file not found'; continue }
+    $bytes = [System.IO.File]::ReadAllBytes($path)
+    $offender = [System.IO.File]::ReadAllLines($path) |
+        Where-Object { $_.ToCharArray() | Where-Object { [int]$_ -gt 127 } } | Select-Object -First 1
+    $ok = @($bytes | Where-Object { $_ -gt 127 }).Count -eq 0 -and
+    -not ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+    Check "$rel is pure ASCII, no BOM" $ok "first offending line: $offender"
+
+    if ($rel -like '*.ps1') {
+        $perr = $null
+        $null = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$null, [ref]$perr)
+        Check "$rel parses with no errors" ($perr.Count -eq 0) `
+        (($perr | ForEach-Object { "line $($_.Extent.StartLineNumber): $($_.Message)" }) -join '; ')
+    }
+    # Shell scripts must stay LF: a CRLF shebang makes macOS/Linux fail with "bad interpreter".
+    if ($rel -like '*.sh') {
+        Check "$rel is LF-only (CRLF would break its shebang)" `
+        (-not ([System.IO.File]::ReadAllText($path) -match "`r`n"))
+    }
 }
 
 Write-Host "`n=== Get-ExpectedHash ===" -ForegroundColor Cyan
@@ -72,7 +107,7 @@ Write-Host "`n=== Save-File + verification (real HTTP, real artifact) ===" -Fore
 $payload = Get-ChildItem -File (Join-Path $root 'releases') -ErrorAction SilentlyContinue |
     Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object Length -Descending | Select-Object -First 1
 if (-not $payload) {
-    Write-Host '  SKIP  releases\ is empty — run publish.bat first to exercise the download path.' -ForegroundColor Yellow
+    Write-Host '  SKIP  releases\ is empty - run publish.bat first to exercise the download path.' -ForegroundColor Yellow
 }
 else {
     $bytes = [System.IO.File]::ReadAllBytes($payload.FullName)
@@ -90,7 +125,7 @@ else {
                 try { $ctx = $listener.GetContext() } catch { break }
                 if ($ctx.Request.Url.AbsolutePath -eq '/truncated') {
                     # Advertise the full length, send half, then kill the connection: the shape of a download
-                    # cut short. Save-File must fail however that surfaces — reset, short read, or timeout.
+                    # cut short. Save-File must fail however that surfaces - reset, short read, or timeout.
                     $ctx.Response.ContentLength64 = $bytes.Length
                     $ctx.Response.OutputStream.Write($bytes, 0, [int]($bytes.Length / 2))
                     try { $ctx.Response.Abort() } catch { }
@@ -142,7 +177,7 @@ Write-Host "`n=== The real manifest publish.bat writes ===" -ForegroundColor Cya
 $localSums = Join-Path $root 'releases\SHA256SUMS.txt'
 $localSetup = Join-Path $root 'releases\Perch-win-Setup.exe'
 if (-not (Test-Path -LiteralPath $localSums) -or -not (Test-Path -LiteralPath $localSetup)) {
-    Write-Host '  SKIP  no local SHA256SUMS.txt + Perch-win-Setup.exe — run publish.bat to cover this.' -ForegroundColor Yellow
+    Write-Host '  SKIP  no local SHA256SUMS.txt + Perch-win-Setup.exe - run publish.bat to cover this.' -ForegroundColor Yellow
 }
 else {
     $want = Get-ExpectedHash -Sums (Get-Content -LiteralPath $localSums -Raw) -Name 'Perch-win-Setup.exe' -Tag 'local'

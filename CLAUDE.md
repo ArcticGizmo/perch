@@ -110,6 +110,15 @@ running the tray app.
   Checking the update feed works on every channel, so only the apply step needs the gate. (`install.ps1`
   produces a plain `Setup` install — it only downloads, verifies and runs the Velopack installer, so it adds
   no channel of its own.)
+- **Release-pipeline scripts stay pure ASCII — use plain hyphens, never em dashes.** `install.ps1`,
+  `publish.bat`, `publish-mac.sh`, `tools/gen-ic*`, `release.yml`. The `.ps1` files are the ones that can
+  actually break: they ship with no BOM, so Windows PowerShell 5.1 decodes them as the system codepage, and a
+  UTF-8 em dash becomes three chars ending in `0x94` = U+201D — a curly quote, which PowerShell honours as a
+  *string delimiter*, silently mis-parsing everything after it. Holding the whole pipeline to ASCII is one
+  rule instead of three. Shell scripts must also stay LF (a CRLF shebang fails on macOS).
+- **Never wait on the installer's process tree.** `Start-Process -Wait` waits for descendants, so it hangs
+  forever on the tray app Velopack's Setup launches — wait on the Setup process's own handle instead
+  (`[Diagnostics.Process]::Start(...)` + `WaitForExit`). `tools/test-install.ps1` guards all of the above.
 - **Every OS-specific capability goes behind a `Perch.Core` interface** with a `Perch.Platform.Windows`
   implementation, resolved through `PlatformServices`. Don't call Win32 (or reference the concrete types)
   from UI code — add/extend an interface so a future macOS/Linux head can implement it.

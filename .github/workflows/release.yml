@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 # Two build jobs (Windows + macOS) each produce artifacts but do NOT touch the GitHub Release. The final
-# `release` job `needs` both, so it runs only when both builds succeed — a failure on either platform means
+# `release` job `needs` both, so it runs only when both builds succeed - a failure on either platform means
 # no release is published (rather than a half-populated one). Re-running the failed job re-gates it.
 jobs:
   build-windows:
@@ -56,7 +56,7 @@ jobs:
           if-no-files-found: error
 
   build-macos:
-    # arm64 runner — required: perch-hook is NativeAOT (osx-arm64) and can't cross-compile from x64.
+    # arm64 runner - required: perch-hook is NativeAOT (osx-arm64) and can't cross-compile from x64.
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -78,7 +78,7 @@ jobs:
 
       # The DMG + pkg installers plus the Velopack update feed (nupkg + RELEASES-osx + releases.osx.json)
       # the in-app updater reads. Deliberately omits the runnable Perch.app bundle (a directory) and the
-      # portable .zip — neither is a shipped artifact.
+      # portable .zip - neither is a shipped artifact.
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -102,7 +102,7 @@ jobs:
 
       # Flatten both build jobs into the single flat namespace a GitHub Release actually has, then hash it.
       # SHA256SUMS.txt is what install.ps1 verifies the installer against before running it, so it has to
-      # describe exactly the bytes that get uploaded — which is why it's generated here, from the artifacts
+      # describe exactly the bytes that get uploaded - which is why it's generated here, from the artifacts
       # about to be published, rather than in either build job.
       - name: Collect artifacts and generate SHA256SUMS.txt
         run: |
@@ -110,11 +110,11 @@ jobs:
           mkdir -p dist
           # A duplicate basename across the two jobs would make the manifest ambiguous and silently publish
           # one of two different files under one name. Refuse rather than guess. (Velopack already keeps
-          # these distinct — the macOS nupkg carries its channel, e.g. Perch-1.2.3-osx-full.nupkg.)
+          # these distinct - the macOS nupkg carries its channel, e.g. Perch-1.2.3-osx-full.nupkg.)
           while IFS= read -r f; do
             dest="dist/$(basename "$f")"
             if [ -e "$dest" ]; then
-              echo "::error::Two build artifacts are both named $(basename "$f") — refusing to publish an ambiguous release."
+              echo "::error::Two build artifacts are both named $(basename "$f") - refusing to publish an ambiguous release."
               exit 1
             fi
             mv "$f" "$dest"
@@ -123,7 +123,7 @@ jobs:
           # install.ps1 resolves this asset by name from the release metadata; a release without it can't be
           # installed by the one-liner, so fail here rather than shipping a broken install path.
           if [ ! -f dist/Perch-win-Setup.exe ]; then
-            echo "::error::Perch-win-Setup.exe is missing — install.ps1 depends on it."
+            echo "::error::Perch-win-Setup.exe is missing - install.ps1 depends on it."
             exit 1
           fi
 
