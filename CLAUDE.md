@@ -31,6 +31,9 @@ Multi-project solution (`perch.slnx`); the projects live under `src/`:
   detects the tray by the process name **`perch`**. (This replaced the old marketplace plugin.)
 - `tools/IconGen` — regenerates the raster icons from `perch.svg` (`tools/gen-icons.ps1`/`.cmd`), writing
   `src/Perch.App/Assets/icon.{png,ico}` and `landing-icon.png`.
+- `packaging/scoop/perch.json` — the Scoop manifest **template** (version/url/hash are placeholders CI
+  fills in). The `scoop` job in `release.yml` renders it and commits it to the bucket repo; see
+  `docs/distribution-plan.md`.
 
 ## Build & run
 
@@ -94,6 +97,12 @@ running the tray app.
 - **Single reused window instances.** Settings / history / stats / flight windows are created lazily and
   reused via `WindowHost.ShowOrFocus`; they're closed together in `App` (Exit / update flow via
   `CloseAuxWindows`). Wire any new top-level window into that idiom.
+- **Don't assume a Velopack install.** Perch also ships as Velopack's portable zip through a Scoop bucket,
+  where the package manager owns the app directory. `Services/InstallChannel` classifies the running copy
+  (`Setup` / `Scoop` / `Portable` / `Unpackaged`); anything that *writes to the install dir or applies an
+  update* must gate on `InstallChannel.SelfUpdates`, and anything persisting the exe path outside the app
+  dir should go through `InstallChannel.StableExePath` (a Scoop app dir is versioned). Checking the update
+  feed works on every channel, so only the apply step needs the gate.
 - **Every OS-specific capability goes behind a `Perch.Core` interface** with a `Perch.Platform.Windows`
   implementation, resolved through `PlatformServices`. Don't call Win32 (or reference the concrete types)
   from UI code — add/extend an interface so a future macOS/Linux head can implement it.

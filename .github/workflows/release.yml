@@ -46,15 +46,14 @@ jobs:
       - name: Pack with Velopack
         run: vpk pack --packId Perch --packTitle "Perch" --packVersion ${{ steps.version.outputs.VERSION }} --packDir publish/ --mainExe perch.exe --outputDir releases/
 
-      # Everything in releases/ except the portable .zip — we ship the Setup.exe installer plus the
-      # Velopack update feed (nupkg + RELEASES + releases.win.json) the in-app updater reads.
+      # Everything in releases/: the Setup.exe installer, the Velopack update feed (nupkg + RELEASES +
+      # releases.win.json) the in-app updater reads, and the portable .zip — which is the payload the Scoop
+      # bucket downloads, so it needs a stable public URL on the release (see the `scoop` job below).
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-release
-          path: |
-            releases/
-            !releases/*-Portable.zip
+          path: releases/
           if-no-files-found: error
 
   build-macos:
@@ -107,3 +106,14 @@ jobs:
         with:
           files: artifacts/**/*
           generate_release_notes: true
+
+  # Publishes the Scoop manifest to our own bucket repo — a JSON commit, so `scoop install perch` is current
+  # within seconds of the release. Runs after `release` because it reads the zip (and its URL) from the
+  # published release. It's a reusable workflow rather than inline steps so the same publish can be run by
+  # hand for any tag — Actions → "Publish Scoop manifest" — if this leg fails or the bucket needs repointing.
+  scoop:
+    needs: release
+    uses: ./.github/workflows/scoop-publish.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit

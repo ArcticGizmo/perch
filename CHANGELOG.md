@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.33] - 2026-07-29
+
+- `scoop install perch`, with no SmartScreen wall to click past
+- Perch knows how it was installed, and won't update what Scoop owns
+- Scoop copies still hear about new versions, command included (one click to copy)
+- `scoop uninstall perch` clears the hooks and login entry, like the real uninstaller
+
+---
+
 ## [v0.2.32] - 2026-07-29
 
 - The mic strip is one line now: which app has your microphone, click it to go there

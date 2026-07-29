@@ -1,0 +1,54 @@
+{
+    "$schema": "https://raw.githubusercontent.com/ScoopInstaller/Scoop/master/schema.json",
+    "version": "0.0.0",
+    "description": "Keep an eye on every Claude Code session from one floating tray panel.",
+    "homepage": "https://github.com/ArcticGizmo/perch",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/ArcticGizmo/perch/releases/download/v0.0.0/Perch-win-Portable.zip",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+    },
+    "bin": [
+        [
+            "Perch.exe",
+            "perch"
+        ]
+    ],
+    "shortcuts": [
+        [
+            "Perch.exe",
+            "Perch"
+        ]
+    ],
+    "pre_uninstall": [
+        "# Perch holds its own files open while the tray is running, so stop this Scoop copy (and only this",
+        "# one - never a separately installed Perch) before Scoop replaces or removes the directory.",
+        "Get-Process -Name 'perch' -ErrorAction SilentlyContinue |",
+        "    Where-Object { $_.Path -like '*\\apps\\perch\\*' } |",
+        "    Stop-Process -Force -ErrorAction SilentlyContinue",
+        "Start-Sleep -Milliseconds 400",
+        "# On a real uninstall (never on an update, where the new version re-wires them on next launch) drop",
+        "# the things Perch registered outside this directory: the Claude Code hooks in ~/.claude/settings.json,",
+        "# the login registration, and any PATH entry.",
+        "if ($cmd -eq 'uninstall' -and (Test-Path \"$dir\\current\\perch.exe\")) {",
+        "    Start-Process -FilePath \"$dir\\current\\perch.exe\" -ArgumentList 'uninstall' -Wait -ErrorAction SilentlyContinue",
+        "}"
+    ],
+    "notes": [
+        "Perch lives in the system tray - launch it from the Start Menu shortcut or by running 'perch'.",
+        "Updates are Scoop's job here: run 'scoop update perch' (Perch will tell you when one is out).",
+        "Perch wires its own Claude Code hooks on first launch; 'scoop uninstall perch' removes them again."
+    ],
+    "checkver": {
+        "github": "https://github.com/ArcticGizmo/perch"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/ArcticGizmo/perch/releases/download/v$version/Perch-win-Portable.zip"
+            }
+        }
+    }
+}

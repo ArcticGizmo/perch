@@ -1,0 +1,88 @@
+name: Publish Scoop manifest
+
+# Renders packaging/scoop/perch.json for a released tag and commits it to the Scoop bucket repo.
+#
+# Two ways in:
+#   • called by release.yml after a tag's release is published (the normal path), and
+#   • run by hand (Actions → this workflow → Run workflow → tag) to recover when that leg fails, or to
+#     point the bucket back at an older release.
+#
+# It reads the zip from the *GitHub release* rather than a build artifact, so a manual run works long after
+# the original run's artifacts have expired, and the hash always describes exactly what users download.
+# Re-running is safe: the manifest is deterministic for a given tag, and an unchanged manifest pushes nothing.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v0.2.33)'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v0.2.33)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      BUCKET_REPO: ArcticGizmo/scoop-arcticgizmo
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the portable zip from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'Perch-win-Portable.zip' --dir releases
+          ls -l releases/
+
+      - name: Render the manifest
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          HASH=$(sha256sum releases/Perch-win-Portable.zip | cut -d' ' -f1)
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/Perch-win-Portable.zip"
+          jq --arg v "$VERSION" --arg u "$URL" --arg h "$HASH" \
+            '.version = $v | .architecture["64bit"].url = $u | .architecture["64bit"].hash = $h' \
+            packaging/scoop/perch.json > perch.json
+          cat perch.json
+
+      # A missing token is a warning on the automatic path (a release must never fail over the bucket) but a
+      # hard failure when a human explicitly asked for a publish — silently doing nothing would be worse.
+      - name: Commit to the bucket
+        env:
+          BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUCKET_TOKEN:-}" ]; then
+            if [ "${GITHUB_EVENT_NAME}" = 'workflow_dispatch' ]; then
+              echo "::error::SCOOP_BUCKET_TOKEN is not set — add it to this repo's secrets (a PAT with Contents: read & write on ${BUCKET_REPO})."
+              exit 1
+            fi
+            echo "::warning::SCOOP_BUCKET_TOKEN is not set — skipping the Scoop bucket update."
+            exit 0
+          fi
+          git clone --depth 1 "https://x-access-token:${BUCKET_TOKEN}@github.com/${BUCKET_REPO}.git" bucket-repo
+          mkdir -p bucket-repo/bucket
+          cp perch.json bucket-repo/bucket/perch.json
+          cd bucket-repo
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bucket/perch.json
+          if git diff --quiet --cached; then
+            echo "Manifest already matches ${TAG} — nothing to push."
+            exit 0
+          fi
+          git commit -m "perch: ${TAG#v}"
+          git push
+          echo "Published perch ${TAG#v} to ${BUCKET_REPO}."
