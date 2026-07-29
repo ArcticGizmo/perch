@@ -32,7 +32,8 @@ internal static class HookInstaller
     public static string HookBinaryPath => Path.Combine(BinDir, HookFileName);
 
     // A breadcrumb recording where the tray executable lives, so perch-hook can self-heal (strip its
-    // own entries) if Perch is removed without running the uninstaller. Refreshed on every launch.
+    // own entries) if Perch is removed without running the uninstaller — and, on macOS, so it can find the
+    // .app bundle to launch. Refreshed on every launch.
     private static string MarkerPath => Path.Combine(BinDir, "perch.path");
 
     /// <summary>
@@ -85,12 +86,16 @@ internal static class HookInstaller
         return s.Length != d.Length || s.LastWriteTimeUtc > d.LastWriteTimeUtc;
     }
 
+    // A Velopack install already lives at a stable path (…\Perch\current\perch.exe), but a Scoop-managed
+    // copy runs out of a *versioned* app dir that `scoop update` deletes — so record the path through
+    // Scoop's stable `current` junction instead, or perch-hook would see a dead binary after every update
+    // and self-heal our hooks away. A no-op on every other channel (see InstallChannel.StableExePath).
     private static void WriteMarker()
     {
         try
         {
             Directory.CreateDirectory(BinDir);
-            File.WriteAllText(MarkerPath, Environment.ProcessPath ?? "");
+            File.WriteAllText(MarkerPath, InstallChannel.StableExePath(Environment.ProcessPath ?? ""));
         }
         catch { }
     }

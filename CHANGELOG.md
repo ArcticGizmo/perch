@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- `scoop install perch` is now a thing, and it walks straight past SmartScreen's blue wall of doubt
+- Perch works out how it was installed and stops trying to update what Scoop owns
+- Scoop copies still get told a new version is out, with the command to install it (one click to copy)
+- `scoop uninstall perch` cleans up the hooks and login entry, same as the real uninstaller
+
 ---
 
 ## [v0.2.32] - 2026-07-29

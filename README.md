@@ -107,13 +107,30 @@ stale entries, and removes them cleanly on uninstall. That unlocks:
 
 ## Installing
 
-### Windows
+### Windows — Scoop (recommended)
+
+```
+scoop bucket add arcticgizmo https://github.com/ArcticGizmo/scoop-arcticgizmo
+scoop install perch
+```
+
+Then launch **Perch** from the Start Menu (or just run `perch`).
+
+Nothing Scoop downloads is tagged with the mark-of-the-web, so this route skips the
+**"Windows protected your PC"** SmartScreen wall the raw `.exe` download hits. Updates are Scoop's job
+here — `scoop update perch` — and Perch tells you when there's one to install.
+
+### Windows — installer
 
 Download `PerchSetup.exe` from the [latest release](https://github.com/ArcticGizmo/perch/releases/latest) and run it.
 
 - No admin rights required — installs to `%LocalAppData%\Perch\`
 - Starts automatically after install
 - Adds a Start Menu shortcut and a standard uninstaller (Settings → Apps)
+- Updates itself in place (tray → **Check for Updates…**)
+
+SmartScreen doesn't know this installer yet, so it shows a blue **"Windows protected your PC"** dialog on
+first run: click **More info → Run anyway**, or install via Scoop above and skip it entirely.
 
 ### macOS (Apple Silicon, unsigned)
 
@@ -151,9 +168,18 @@ you decline, click-to-focus falls back to just bringing the terminal app forward
 
 ## Updating
 
-Right-click the system tray icon and select **Check for Updates...**
+Perch watches for new releases in the background whichever way you installed it — who *installs* them
+depends on the channel:
 
-The app will download the latest release and restart automatically.
+| Installed with | How it updates |
+| --- | --- |
+| `PerchSetup.exe` / the `.dmg` | Right-click the tray icon → **Check for Updates…**. Perch downloads the release and restarts itself. |
+| Scoop | `scoop update perch`. Perch's tray badge and Settings → About tell you when one is waiting (with a button to copy the command). |
+| Portable zip | Download the new release and replace the folder. |
+
+Perch never rewrites a directory a package manager owns, so a Scoop copy won't fight `scoop update`.
+`scoop uninstall perch` also removes the Claude Code hooks and the login registration Perch set up, the same
+way the Windows uninstaller does.
 
 ## Building a release (maintainers)
 
@@ -169,8 +195,35 @@ Releases are created by pushing a version tag. GitHub Actions handles the build 
    git push origin v0.2.0
    ```
 4. GitHub Actions builds, packs, and uploads the installer to the release page
+5. The `scoop` job then renders `packaging/scoop/perch.json` (version + download URL + SHA-256 of
+   `Perch-win-Portable.zip`) and commits it to the bucket repo
 
 Teammates can then use **Check for Updates...** in the tray to get the new version.
+
+### The Scoop bucket (maintainers)
+
+`scoop install perch` reads a manifest from a bucket repo — a separate repo so `scoop bucket add` stays
+clean. One-time setup:
+
+1. Create **`ArcticGizmo/scoop-arcticgizmo`** (public, empty is fine — the workflow creates `bucket/`).
+2. Add a repo secret **`SCOOP_BUCKET_TOKEN`** to *this* repo: a fine-grained PAT with
+   **Contents: read & write** on the bucket repo only.
+3. Push a tag as usual. Without the secret the `scoop` job logs a warning and skips — releases still
+   succeed, the bucket just stays where it was.
+
+The manifest template is [`packaging/scoop/perch.json`](packaging/scoop/perch.json); its `version`, `url`
+and `hash` are placeholders that CI fills in. Edit it there, never in the bucket, or the next release
+overwrites your change.
+
+**If publishing to the bucket fails** (missing secret, expired PAT, bucket outage), the release itself is
+fine — only the manifest is stale, and no hand-editing is needed. Re-run it:
+
+> **Actions → Publish Scoop manifest → Run workflow →** enter the tag (e.g. `v0.2.33`)
+
+It reads the zip from the published release rather than from build artifacts, so it works months later and
+for any tag — including pointing the bucket back at an older release. It's idempotent: an unchanged manifest
+pushes nothing, and re-running a successful publish is a no-op. Run without the secret configured and it
+fails loudly rather than skipping.
 
 ### Building locally (optional)
 

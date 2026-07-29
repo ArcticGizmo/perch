@@ -38,6 +38,12 @@ internal static class Program
         if (args.Length > 0 && string.Equals(args[0], "handle", StringComparison.OrdinalIgnoreCase))
             return 0;
 
+        // `perch uninstall` performs the same teardown as Velopack's uninstall callback, for the channels
+        // that have no Velopack uninstaller: Scoop's manifest runs it from `pre_uninstall`, and a portable
+        // copy can be cleaned up by hand before deleting the folder. Idempotent and best-effort.
+        if (args.Length > 0 && string.Equals(args[0], "uninstall", StringComparison.OrdinalIgnoreCase))
+            return RunUninstallCleanup();
+
         // `perch replay <recording>` drives the real app through a recording. Prepare it here — at the
         // very top, before the Velopack/mutex work — because it must repoint CLAUDE_CONFIG_DIR at a
         // sandbox and install the virtual clock + probe before ClaudePaths is ever read.
@@ -84,6 +90,20 @@ internal static class Program
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
 
         GC.KeepAlive(_instanceMutex);
+        return 0;
+    }
+
+    // Drops everything Perch registered outside its own install directory: the per-user PATH entry, the
+    // OS login registration, and the managed hook block in ~/.claude/settings.json (plus the stable
+    // perch-hook copy). Each step is independent and swallowed — a cleanup that can't finish must never
+    // leave the caller's uninstall looking failed.
+    private static int RunUninstallCleanup()
+    {
+        AttachParentConsole();
+        try { PlatformServices.PathInstaller.Unregister(); } catch { }
+        try { PlatformServices.LoginItem.Unregister(); } catch { }
+        try { Services.HookInstaller.Uninstall(); } catch { }
+        Console.WriteLine("Perch: removed the PATH entry, login registration and Claude Code hooks.");
         return 0;
     }
 

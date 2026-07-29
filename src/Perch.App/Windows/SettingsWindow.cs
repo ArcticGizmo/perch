@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -1729,9 +1730,20 @@ internal sealed class SettingsWindow : Window
         checkBtn.Click += (_, _) => _hooks.CheckForUpdates?.Invoke();
         buttons.Children.Add(checkBtn);
 
-        _updateNowBtn = SettingsUi.FlatButton("Update now");
-        _updateNowBtn.Click += (_, _) => _hooks.PerformUpdate?.Invoke();
-        buttons.Children.Add(_updateNowBtn);
+        // A self-updating (Velopack) install gets "Update now". A package-managed one can't apply the
+        // update itself, so it offers the command to paste into a terminal instead — see InstallChannel.
+        if (InstallChannel.UpdateCommand is { } cmd)
+        {
+            var copyBtn = SettingsUi.FlatButton($"Copy \"{cmd}\"");
+            copyBtn.Click += (_, _) => GetTopLevel(this)?.Clipboard?.SetTextAsync(cmd);
+            buttons.Children.Add(copyBtn);
+        }
+        else if (InstallChannel.SelfUpdates)
+        {
+            _updateNowBtn = SettingsUi.FlatButton("Update now");
+            _updateNowBtn.Click += (_, _) => _hooks.PerformUpdate?.Invoke();
+            buttons.Children.Add(_updateNowBtn);
+        }
         page.Children.Add(buttons);
 
         RefreshUpdateUi();
@@ -1746,14 +1758,16 @@ internal sealed class SettingsWindow : Window
         RefreshUpdateUi();
     }
 
+    // The wording follows the install channel: a Velopack install talks about "Update now", a Scoop or
+    // portable copy names whoever actually installs updates there. "Update now" only exists on the former,
+    // so the button may legitimately be absent.
     private void RefreshUpdateUi()
     {
-        if (_updateStatus is null || _updateNowBtn is null) return;
+        if (_updateStatus is null) return;
         _updateStatus.Text = _updateAvailable
-            ? $"Version {_updateVersion} is ready to install. Click Update now to apply it and restart."
-            : $"Currently running v{AppInfo.Version}. Perch checks for updates in the background and applies " +
-              "new versions on the next launch.";
-        _updateNowBtn.IsVisible = _updateAvailable;
+            ? $"Version {_updateVersion} is available. {InstallChannel.Instruction}"
+            : $"Currently running v{AppInfo.Version}. {InstallChannel.OwnershipNote}";
+        if (_updateNowBtn is not null) _updateNowBtn.IsVisible = _updateAvailable;
     }
 
     private Control LinkRow(string text, string url)

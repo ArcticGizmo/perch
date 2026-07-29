@@ -2,7 +2,6 @@ using Avalonia.Threading;
 using Perch.Data;
 using Perch.Platform;
 using Velopack;
-using Velopack.Sources;
 
 namespace Perch.Avalonia.Services;
 
@@ -12,6 +11,10 @@ namespace Perch.Avalonia.Services;
 /// <c>OverlayApplicationContext</c> update block; the Velopack install/uninstall lifecycle itself lives
 /// in <see cref="Program"/>. A pending update is persisted (<see cref="AppSettings.PendingUpdateVersion"/>)
 /// so the UI restores its "update available" state across restarts and doesn't re-notify.
+///
+/// Checking is channel-agnostic — a Scoop/portable copy resolves the same update feed — but *applying* is
+/// only ours to do on a Velopack install. On a package-managed copy the apply path surfaces the command to
+/// run instead of rewriting a directory Scoop owns (see <see cref="InstallChannel"/>).
 ///
 /// Every callback marshals to the UI thread. The check itself is a synchronous-over-async metadata fetch,
 /// so it runs on the thread pool; failures (including "not installed" in a dev run) collapse to a quiet
@@ -65,7 +68,7 @@ internal sealed class UpdateService
     {
         try
         {
-            var mgr = new UpdateManager(new GithubSource(AppInfo.RepoUrl, null, false));
+            var mgr = InstallChannel.CreateManager();
             var update = mgr.CheckForUpdatesAsync().GetAwaiter().GetResult();
             return update == null
                 ? new CheckResult(Outcome.UpToDate, null, null)
@@ -81,7 +84,7 @@ internal sealed class UpdateService
     // available update notifies only the first time it is surfaced.
     private void CheckAuto()
     {
-        if (_inProgress) return;
+        if (_inProgress || !InstallChannel.CanCheck) return;
         Task.Run(RunCheck).ContinueWith(t =>
         {
             var r = t.Result;
@@ -95,6 +98,12 @@ internal sealed class UpdateService
     public void CheckManual()
     {
         if (_inProgress) return;
+        // A dev run has no update feed to consult — say so rather than reporting a check failure.
+        if (!InstallChannel.CanCheck)
+        {
+            _notifications.ShowInfo("Perch", InstallChannel.OwnershipNote, ToastLevel.Info);
+            return;
+        }
         _notifications.ShowInfo("Perch", "Checking for updates…", ToastLevel.Info);
         Task.Run(RunCheck).ContinueWith(t =>
         {
@@ -122,9 +131,13 @@ internal sealed class UpdateService
         _settings.PendingUpdateVersion = version;
         _settings.Save();
         AvailabilityChanged?.Invoke(true, version);
-        if (notify)
-            _notifications.ShowUpdateAvailable("Perch — Update available",
-                $"Version {version} is ready to install. Click this notification or the update button to update.");
+        if (!notify) return;
+
+        // On a self-updating install the toast is actionable (clicking it applies the update); on a
+        // package-managed one it can only tell the user which command to run.
+        _notifications.ShowUpdateAvailable("Perch — Update available", InstallChannel.SelfUpdates
+            ? $"Version {version} is ready to install. Click this notification or the update button to update."
+            : $"Version {version} is available. {InstallChannel.Instruction}");
     }
 
     // Clears a pending update and returns every surface to default. Used after applying and to self-heal
@@ -138,16 +151,29 @@ internal sealed class UpdateService
 
     /// <summary>Downloads and applies the pending update, then restarts. <paramref name="closeWindows"/>
     /// is invoked up front to tear down open windows — the closing windows are the visible signal the
-    /// update is under way. On drift (already latest / release pulled) it self-heals the UI instead.</summary>
+    /// update is under way. On drift (already latest / release pulled) it self-heals the UI instead.
+    ///
+    /// On a channel Perch doesn't own (Scoop, portable) it applies nothing and hands the user the command
+    /// instead — the pending state stays lit so the badge keeps nagging until the package manager has
+    /// actually installed the new version.</summary>
     public async void PerformUpdate(Action closeWindows)
     {
         if (_inProgress) return;
+        if (!InstallChannel.SelfUpdates)
+        {
+            _notifications.ShowInfo("Perch — Update available",
+                HasPendingUpdate
+                    ? $"Version {PendingVersion} is available. {InstallChannel.Instruction}"
+                    : InstallChannel.OwnershipNote,
+                ToastLevel.Info);
+            return;
+        }
         _inProgress = true;
         try
         {
             _notifications.ShowInfo("Perch — Updating", "Preparing update…", ToastLevel.Info);
 
-            var mgr = new UpdateManager(new GithubSource(AppInfo.RepoUrl, null, false));
+            var mgr = InstallChannel.CreateManager();
             var update = await mgr.CheckForUpdatesAsync();
             if (update == null)
             {
