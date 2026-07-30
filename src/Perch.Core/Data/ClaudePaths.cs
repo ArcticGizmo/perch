@@ -36,6 +36,14 @@ internal static class ClaudePaths
     /// <summary><c>~/.claude/plugins</c> — installed-plugin state and marketplace clones.</summary>
     public static string PluginsDir { get; } = Path.Combine(ClaudeDir, "plugins");
 
+    /// <summary><c>~/.claude/daemon</c> — the Claude Code background daemon's state directory
+    /// (its worker roster plus named-pipe keys). See <see cref="DaemonRosterReader"/>.</summary>
+    public static string DaemonDir { get; } = Path.Combine(ClaudeDir, "daemon");
+
+    /// <summary><c>~/.claude/daemon/roster.json</c> — the daemon supervisor's registry of the headless
+    /// worker sessions it is currently hosting.</summary>
+    public static string DaemonRosterFile { get; } = Path.Combine(DaemonDir, "roster.json");
+
     /// <summary><c>~/.claude/.credentials.json</c> — the OAuth tokens the usage poll reads.</summary>
     public static string CredentialsFile { get; } = Path.Combine(ClaudeDir, ".credentials.json");
 

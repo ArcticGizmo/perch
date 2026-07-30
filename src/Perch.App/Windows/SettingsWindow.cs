@@ -49,6 +49,10 @@ internal sealed class SettingsHooks
     /// <summary>Start (true) or stop (false) polling Hypertree's status file for the overlay's branch strip.</summary>
     public Action<bool>? HypertreeEnabledChanged;
 
+    /// <summary>Start (true) or stop (false) watching the Claude Code daemon's worker roster for the
+    /// overlay's "daemon" section.</summary>
+    public Action<bool>? DaemonProcessesEnabledChanged;
+
 #if DEBUG
     /// <summary>Push a sample outage onto the overlay so the status footer can be illustrated (debug only).</summary>
     public Action? TestServiceStatus;
@@ -565,7 +569,26 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(SettingsUi.Separator());
         BuildDetectionSection(page);
         page.Children.Add(SettingsUi.Separator());
+        BuildDaemonProcessesSection(page);
+        page.Children.Add(SettingsUi.Separator());
         BuildServiceStatusSection(page);
+    }
+
+    private void BuildDaemonProcessesSection(StackPanel page)
+    {
+        var toggle = Toggle(_settings.ShowDaemonProcesses);
+        toggle.CheckedChanged += (_, _) =>
+        {
+            _settings.ShowDaemonProcesses = toggle.IsChecked;
+            _settings.Save();
+            _hooks.DaemonProcessesEnabledChanged?.Invoke(toggle.IsChecked); // starts/stops the roster watch
+        };
+        page.Children.Add(SettingsUi.TitleRow("Display daemon processes", toggle));
+        page.Children.Add(SettingsUi.BodyText(
+            "Lists the Claude Code background daemon's headless worker sessions in their own \"daemon\" " +
+            "section under the overlay's rows. These sessions run on a background pipe with no terminal " +
+            "window to jump to, so clicking one opens its options menu instead. Off hides the section " +
+            "entirely — the workers themselves keep running."));
     }
 
     private void BuildServiceStatusSection(StackPanel page)

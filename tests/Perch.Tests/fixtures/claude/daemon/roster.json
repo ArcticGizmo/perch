@@ -1,0 +1,71 @@
+{
+  "proto": 1,
+  "supervisorPid": 54388,
+  "updatedAt": 1785395700393,
+  "workers": {
+    "b98bfb1f": {
+      "pid": 62548,
+      "procStart": "639210212978499140",
+      "sessionId": "b98bfb1f-c540-4dcf-9997-d12deb9e341d",
+      "rendezvousSock": "\\\\.\\pipe\\cc-daemon-0016d2c4f3e19beb-rv-b98bfb1f",
+      "ptySock": "\\\\.\\pipe\\cc-daemon-0016d2c4f3e19beb-pty-b98bfb1f",
+      "cliVersion": "2.1.220",
+      "startedAt": 1785395600837,
+      "attempt": 2,
+      "cwd": "C:\\src\\hypertree",
+      "dispatch": {
+        "proto": 1,
+        "short": "b98bfb1f",
+        "nonce": "b8f681d7",
+        "sessionId": "b98bfb1f-c540-4dcf-9997-d12deb9e341d",
+        "createdAt": 1785395597176,
+        "source": "spare",
+        "cwd": "C:\\src\\hypertree",
+        "launch": { "mode": "prompt", "args": [] },
+        "isolation": "none",
+        "agent": "claude",
+        "seed": { "intent": "" },
+        "cols": 120,
+        "rows": 30
+      }
+    },
+    "f7d0b5fc": {
+      "pid": 61112,
+      "sessionId": "f7d0b5fc-e679-492f-9fee-18a29f41602a",
+      "rendezvousSock": "\\\\.\\pipe\\cc-daemon-0016d2c4f3e19beb-rv-f7d0b5fc",
+      "ptySock": "\\\\.\\pipe\\cc-daemon-0016d2c4f3e19beb-pty-f7d0b5fc",
+      "cliVersion": "2.1.220",
+      "startedAt": 1785395601467,
+      "attempt": 1,
+      "cwd": "C:\\src\\hypertree",
+      "dispatch": {
+        "proto": 1,
+        "short": "f7d0b5fc",
+        "nonce": "a67842c4",
+        "sessionId": "f7d0b5fc-e679-492f-9fee-18a29f41602a",
+        "createdAt": 1785395597025,
+        "source": "slash",
+        "cwd": "C:\\src\\hypertree",
+        "launch": { "mode": "resume", "fork": true },
+        "isolation": "none",
+        "seed": {
+          "intent": "Can you implement the streamlined powershell install pathway?",
+          "name": "Implement streamlined PowerShell install pathway"
+        },
+        "cols": 120,
+        "rows": 30
+      }
+    },
+    "deadbeef": {
+      "pid": 99999,
+      "sessionId": "deadbeef-0000-4000-8000-000000000000",
+      "cliVersion": "2.1.220",
+      "startedAt": 1785395700000,
+      "cwd": "C:\\src\\other",
+      "dispatch": {
+        "source": "slash",
+        "seed": { "intent": "a worker whose process has exited" }
+      }
+    }
+  }
+}

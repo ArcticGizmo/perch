@@ -28,6 +28,11 @@ public partial class App : Application
     private MediaMonitorHost? _mediaHost;
     private MicMonitorHost? _micHost;
     private HypertreeMonitorHost? _hypertreeHost;
+    private DaemonMonitorHost? _daemonHost;
+    // The latest daemon roster, kept so the "show +N more" window opens on current data; the single
+    // reused list window itself follows the WindowHost idiom below.
+    private IReadOnlyList<DaemonWorker> _lastDaemonWorkers = [];
+    private DaemonListWindow? _daemonListWindow;
     private QuickLinkLauncher? _quickLinkLauncher;
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
@@ -107,6 +112,7 @@ public partial class App : Application
                 _mediaHost?.Dispose();
                 _micHost?.Dispose();
                 _hypertreeHost?.Dispose();
+                _daemonHost?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
                 _overlay?.Canvas.DisposeDense();
@@ -145,6 +151,15 @@ public partial class App : Application
                 PlatformServices.CreateMicrophoneMonitor(), _overlay.Canvas.UpdateMic);
             // Hypertree's published status file → the overlay's branch strip (opt-in; started below).
             _hypertreeHost = new HypertreeMonitorHost(_overlay.Canvas.SetHypertree);
+            // The Claude Code background daemon's worker roster → the overlay's "daemon" section. These
+            // headless sessions have no window to focus, so they get their own rows with an options menu.
+            // The full-list window (opened from the strip's overflow line) follows the roster live too.
+            _daemonHost = new DaemonMonitorHost(workers =>
+            {
+                _lastDaemonWorkers = workers;
+                _overlay!.Canvas.SetDaemonWorkers(workers);
+                _daemonListWindow?.SetWorkers(workers);
+            });
 
             // Each scan feeds both the canvas and the metrics sampler (which pids to measure). Under
             // replay the projector doubles as the process-probe so recorded (dead) pids read as alive.
@@ -179,6 +194,7 @@ public partial class App : Application
             // the chosen artifact is opened here.
             _overlay.Canvas.SessionActivated += FocusSession;
             _overlay.Canvas.ArtifactChosen += OpenArtifact;
+            _overlay.Canvas.DaemonListRequested += OpenDaemonList;
 
             // Media transport buttons on the now-playing strip → the system media session.
             _overlay.Canvas.MediaPlayPauseRequested += () => _mediaHost?.Controller.TogglePlayPause();
@@ -267,6 +283,8 @@ public partial class App : Application
             if (settings.ShowMediaController) _mediaHost.Start(); // begin listening to the system media session
             if (settings.ShowMicPresence) _micHost.Start();       // begin watching which app holds the mic
             if (settings.HypertreeEnabled) _hypertreeHost.Start(); // begin polling Hypertree's status file
+            // Begin watching the daemon roster (a no-op until the directory exists); off with the setting.
+            if (settings.ShowDaemonProcesses) _daemonHost.Start();
             ReloadQuickLinks(settings);
 
             // Global hotkeys: dense-toggle, jump-to-next-session, and the keyboard switcher — each read
@@ -363,6 +381,7 @@ public partial class App : Application
         _settings?.Close();
         _historyWindow?.Close();
         _statsWindow?.Close();
+        _daemonListWindow?.Close();
         _achievementsWindow?.Close();
         _achievementCard?.Close();
         _flightWindow?.Close();
@@ -521,8 +540,16 @@ public partial class App : Application
     // gated per settings), and if it was armed for a confetti finish, spend the arming and set off the
     // celebration on the overlay's current screen.
     private ConfettiWindow? _confetti;
+    // True when the session is one of the daemon's headless background workers. Those are deliberately
+    // silent: no attention flash, no toast/chime/external push — they have no terminal to jump to, so an
+    // alert would only lead to a dead click. Read from the roster watcher's latest list, which is empty
+    // while the "Display daemon processes" setting is off (daemon alerts return with the section).
+    private bool IsDaemonSession(ClaudeSession session)
+        => _lastDaemonWorkers.Any(w => w.SessionId == session.SessionId);
+
     private void OnNeedsAttention(ClaudeSession session)
     {
+        if (IsDaemonSession(session)) return;
         _overlay!.Canvas.TriggerAttention();
         _notifications?.Notify(NotificationKind.Done, session);
         if (_overlay.Canvas.ConsumeConfetti(session.SessionId))
@@ -586,6 +613,7 @@ public partial class App : Application
     // A session blocked awaiting input: flash the overlay and fire the "waiting for input" notification.
     private void OnAwaitingInput(ClaudeSession session)
     {
+        if (IsDaemonSession(session)) return;
         _overlay!.Canvas.TriggerAttention();
         _notifications?.Notify(NotificationKind.WaitingForInput, session);
     }
@@ -594,6 +622,7 @@ public partial class App : Application
     // notification. Deliberately not a "done" — this is the failure alert that replaces it.
     private void OnApiError(ClaudeSession session)
     {
+        if (IsDaemonSession(session)) return;
         _overlay!.Canvas.TriggerAttention();
         _notifications?.Notify(NotificationKind.ApiFailed, session);
     }
@@ -1102,6 +1131,20 @@ public partial class App : Application
             CopyResumeCommand(sessionId);
     }
 
+    // The centred window listing every daemon worker, opened from the overlay strip's "show +N more"
+    // overflow line. Single reused instance via the WindowHost idiom; refreshed live by the daemon
+    // host's callback while open, and closed with the other aux windows.
+    private void OpenDaemonList()
+    {
+        _daemonListWindow = WindowHost.ShowOrFocus(
+            _daemonListWindow,
+            () => new DaemonListWindow(
+                OpenHistory,
+                sessionId => _lastSessions.FirstOrDefault(s => s.SessionId == sessionId)?.Status),
+            () => _daemonListWindow = null,
+            w => w.SetWorkers(_lastDaemonWorkers));
+    }
+
     // Copy `claude --resume <id>` to the clipboard (via the overlay's TopLevel, which is always alive —
     // the switcher may be mid-close). Best-effort; a clipboard failure is swallowed.
     private void CopyResumeCommand(string sessionId)
@@ -1134,6 +1177,7 @@ public partial class App : Application
             MediaEnabledChanged = on => { if (on) _mediaHost?.Start(); else _mediaHost?.Stop(); },
             MicEnabledChanged = on => { if (on) _micHost?.Start(); else _micHost?.Stop(); },
             HypertreeEnabledChanged = on => { if (on) _hypertreeHost?.Start(); else _hypertreeHost?.Stop(); },
+            DaemonProcessesEnabledChanged = on => { if (on) _daemonHost?.Start(); else _daemonHost?.Stop(); },
 #if DEBUG
             TestServiceStatus = () => _overlay?.Canvas.UpdateStatus(SampleOutage()),
             TestAchievementBatch = () => ShowAchievementCards(SampleAchievementBatch()),

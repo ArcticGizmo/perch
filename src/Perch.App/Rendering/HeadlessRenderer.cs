@@ -117,6 +117,20 @@ internal static class HeadlessRenderer
         RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_1x.png"), 96);
         RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_1.5x.png"), 144);
 
+        // Daemon strip: the background daemon's headless workers as their own "daemon" section below the
+        // rows, capped at five with the "show +N more" overflow line (the spare is hidden as noise). One
+        // worker also has a live session file (its hooks ran): it must render only in the daemon strip —
+        // with the running-green dot taken from that session — while staying out of the normal rows and
+        // the header's status counts (still 2 running, not 3).
+        var daemonProbe = new OverlayCanvas();
+        daemonProbe.Update(SampleSessions()
+            .Append(new ClaudeSession("61112", "f7d0b5fc-e679-492f-9fee-18a29f41602a",
+                SessionStatus.Running, @"C:\src\hypertree", "hypertree", DateTime.Now))
+            .ToList());
+        daemonProbe.SetDaemonWorkers(SampleDaemonWorkers());
+        RenderControl(daemonProbe, Path.Combine(outDir, "overlay_daemon_1x.png"), 96);
+        RenderControl(daemonProbe, Path.Combine(outDir, "overlay_daemon_1.5x.png"), 144);
+
         // Empty roster: no sessions at all, so the header reads "no sessions" and the rows are simply
         // absent — but the strips the session list has nothing to do with (machine metrics, plan limits,
         // quick links, Hypertree branches) all stay, which is the whole point of this surface.
@@ -534,6 +548,25 @@ internal static class HeadlessRenderer
             ]),
         };
         return new FlightPathReport(day, At(9, 0), At(18, 0), lanes);
+    }
+
+    // Seven daemon workers mirroring the real roster shapes — a dispatched task (named, with a project),
+    // a pre-warmed spare, and enough more to push past the strip's five-row cap so the "show +N more"
+    // overflow line renders.
+    private static IReadOnlyList<DaemonWorker> SampleDaemonWorkers()
+    {
+        var now = DateTime.Now;
+        var workers = new List<DaemonWorker>
+        {
+            new("f7d0b5fc", "f7d0b5fc-e679-492f-9fee-18a29f41602a", 61112, @"C:\src\hypertree", "hypertree",
+                "slash", "Implement streamlined PowerShell install pathway", now.AddMinutes(-12)),
+            new("b98bfb1f", "b98bfb1f-c540-4dcf-9997-d12deb9e341d", 62548, @"C:\src\hypertree", "hypertree",
+                "spare", null, now.AddMinutes(-11)),
+        };
+        for (int i = 0; i < 5; i++)
+            workers.Add(new($"c0ffee0{i}", $"c0ffee0{i}-0000-4000-8000-00000000000{i}", 70000 + i,
+                @"C:\src\api", "api", "slash", $"Sweep flaky test batch {i + 1}", now.AddMinutes(-10 + i)));
+        return workers;
     }
 
     private static IReadOnlyList<ClaudeSession> SampleSessions()

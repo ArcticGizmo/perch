@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.35] - 2026-07-30
+
+- New "daemon" section: Claude Code's headless background workers, under the session rows
+- Clicking one opens an options menu — there is no terminal window to focus (we checked)
+- Five rows at most; "show +N more" opens the full list in its own window
+- Spare workers are hidden (pre-warmed, perpetually idle, not news)
+- Daemon workers stay out of the header counts and never fire notifications
+- "Display daemon processes" toggle under Settings → Indicators, on by default
+- Fixed the one-line installer on stock Windows PowerShell 5.1
+
+---
+
 ## [v0.2.34] - 2026-07-29
 
 - One-line Windows install: `irm https://raw.githubusercontent.com/ArcticGizmo/perch/main/install.ps1 | iex`

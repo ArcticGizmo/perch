@@ -215,7 +215,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     double IDenseHost.FullPanelWidthDip => FormWidth;
     double IDenseHost.FullPanelHeightDip => FullPanelHeight();
-    IReadOnlyList<ClaudeSession> IDenseHost.Sessions => _sessions;
+    // The dense strip's status dots must agree with the header pills, so it gets the same non-daemon view.
+    IReadOnlyList<ClaudeSession> IDenseHost.Sessions => _countedSessions;
     Bitmap? IDenseHost.Icon => Brand;
     void IDenseHost.RelayoutWindow() => RelayoutWindow();
     void IDenseHost.UpdateTickTimer() => UpdateTickTimer();
@@ -339,6 +340,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (HasQuickLinksRow) h += QuickLinksRowHeight;
         if (HypertreeStripVisible) h += HypertreeStripHeight;
         foreach (var r in _rows) h += HeightOf(r);
+        h += DaemonStripHeight;
         h += 2;
         if (MicStripVisible) h += MicStripHeight;
         if (MediaStripVisible) h += MediaStripHeight;
@@ -558,6 +560,55 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         return top;
     }
 
+    // ── Daemon strip ──────────────────────────────────────────────────────────
+    // The Claude Code background daemon's headless worker sessions (from ~/.claude/daemon/roster.json),
+    // shown as their own captioned section *below* the normal rows. They run on a named-pipe PTY with no
+    // window anywhere in their ancestry, so a focus click can never succeed — instead a click (either
+    // button) opens an options menu of the session actions that need no window. Hidden entirely when the
+    // roster is empty. Reuses the Hypertree strip's line metrics so the two narrow sections read alike.
+    private IReadOnlyList<DaemonWorker> _daemonWorkers = [];
+    // The workers the strip actually lists: spares are dropped as noise — a pre-warmed standby exists
+    // whenever the daemon is alive, so showing it means a permanent do-nothing line. The full roster
+    // (_daemonWorkers) still drives the normal-row dedupe, and the full-list window shows spares too.
+    private IReadOnlyList<DaemonWorker> _stripDaemonWorkers = [];
+    private int _hoveredDaemonRow = -1;
+
+    // At most this many workers on the strip itself; anything beyond collapses behind a "show +N more"
+    // line that opens the full-list window (DaemonListRequested) — the overlay must stay a glance, not
+    // scroll, when a busy daemon has a dozen workers.
+    private const int MaxDaemonRows = 5;
+
+    private bool DaemonStripVisible => _stripDaemonWorkers.Count > 0;
+    private int VisibleDaemonCount => Math.Min(_stripDaemonWorkers.Count, MaxDaemonRows);
+    private bool DaemonOverflow => _stripDaemonWorkers.Count > MaxDaemonRows;
+    // Lines the strip actually paints: the capped workers plus the "show +N more" line when it overflows.
+    private int DaemonLineCount => VisibleDaemonCount + (DaemonOverflow ? 1 : 0);
+
+    /// <summary>Raised when the user clicks the strip's "show +N more" overflow line; the app opens the
+    /// centred window listing every daemon worker.</summary>
+    public event Action? DaemonListRequested;
+
+    private double DaemonStripHeight
+        => !DaemonStripVisible
+            ? 0
+            : HypertreeCaptionHeight + (DaemonLineCount * HypertreeLineHeight) + 6;
+
+    // The strip sits directly under the last display row (and above the mic/media strips).
+    private double DaemonTop => RowTop(_rows.Count);
+
+    /// <summary>Replaces the daemon strip's contents. Called on the UI thread by
+    /// <c>DaemonMonitorHost</c>. Roster membership also decides which sessions render as normal rows
+    /// (a daemon session must not show twice), so rebuild the render list — which relayouts.</summary>
+    internal void SetDaemonWorkers(IReadOnlyList<DaemonWorker> workers)
+    {
+        _daemonWorkers = workers;
+        _stripDaemonWorkers = workers.Any(w => w.IsSpare)
+            ? workers.Where(w => !w.IsSpare).ToList()
+            : workers;
+        _hoveredDaemonRow = -1;
+        Update(_sessions);
+    }
+
     /// <summary>Raised when a quick-link icon is clicked; the app wires this to the launcher's
     /// LaunchOrFocus. Internal because <see cref="QuickLink"/> is a Core-internal type.</summary>
     internal event Action<QuickLink>? QuickLinkActivated;
@@ -709,6 +760,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     private IReadOnlyList<ClaudeSession> _sessions = [];
+    // _sessions minus any session the daemon roster claims. Daemon workers are headless background
+    // machinery, not "instances" in the at-a-glance sense — so the header pills, the "no sessions"
+    // label, the dense strip's dots and the attention-flash stop condition all read this view instead,
+    // and a daemon worker can never inflate the running/done/input counts. Rebuilt by Update.
+    private IReadOnlyList<ClaudeSession> _countedSessions = [];
     private List<DisplayRow> _rows = [];
     private bool _expanded = true;
     private bool _autonomousExpanded;
@@ -927,11 +983,22 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         _sessions = sessions;
 
+        // A session the daemon roster claims belongs to the "daemon" strip below the rows, not here —
+        // its hooks may still write an ordinary session file, and rendering it twice would be worse
+        // than either place alone.
+        var daemonIds = _daemonWorkers.Count == 0
+            ? null
+            : _daemonWorkers.Select(w => w.SessionId).ToHashSet();
+
+        _countedSessions = daemonIds is null
+            ? sessions
+            : sessions.Where(s => !daemonIds.Contains(s.SessionId)).ToList();
+
         // Interactive sessions render at the top; background/SDK-driven ones group under the
         // collapsible "Autonomous" section. Each partition sorted by display name.
-        var interactive = sessions.Where(s => !s.IsBackground)
+        var interactive = sessions.Where(s => !s.IsBackground && daemonIds?.Contains(s.SessionId) != true)
             .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase);
-        var background = sessions.Where(s => s.IsBackground)
+        var background = sessions.Where(s => s.IsBackground && daemonIds?.Contains(s.SessionId) != true)
             .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
 
         var rows = new List<DisplayRow>();
@@ -951,7 +1018,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // throw away the user's expand state every time the last session ended.
 
         // Stop the attention flash once nothing needs attention, is awaiting input, or has an API error.
-        if (_attentionFlash && sessions.All(s =>
+        // Daemon sessions are excluded: no visible row shows their state, so one mustn't hold the flash.
+        if (_attentionFlash && _countedSessions.All(s =>
                 s.Status is not (SessionStatus.NeedsAttention or SessionStatus.AwaitingInput or SessionStatus.ApiError)))
             StopAttention();
 
@@ -1062,6 +1130,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool showUsage = showBody && _usageEnabled;           // rate-limit bars, below the metrics strip
         bool showQuickLinks = showBody && HasQuickLinksRow;   // app icon strip, below the usage bars
         bool showHypertree = showBody && HypertreeStripVisible; // Hypertree branches, below the quick links
+        bool showDaemon = showBody && DaemonStripVisible;     // daemon background workers, below the rows
         bool showMic = showBody && MicStripVisible;           // who has the microphone, below the rows
         bool showMedia = showBody && MediaStripVisible;       // now-playing + transport strip, below that
 
@@ -1116,6 +1185,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     else if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, top, width);
                     else DrawSessionRow(ctx, i, r.Session!, top, width);
                     top += HeightOf(r);
+                }
+
+                // The daemon workers' section sits directly under the rows — the "separate section under
+                // the normal rows" for sessions that have no terminal to jump to.
+                if (showDaemon)
+                {
+                    DrawDaemonStrip(ctx, width, top);
+                    top += DaemonStripHeight;
                 }
 
                 // The mic and now-playing strips sit below the rows (and above any outage footer), in that
@@ -1177,17 +1254,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         ctx.DrawEllipse(MutedBrush, null, new Point(sepX + 2, midY), 2, 2);
         double x = sepX + 10;
 
-        if (_sessions.Count == 0)
+        // Counted over the non-daemon view: a headless background worker isn't an "instance" up here.
+        if (_countedSessions.Count == 0)
         {
             OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("no sessions", 11, MutedBrush), x, midY);
         }
         else
         {
-            int running   = _sessions.Count(s => s.Status == SessionStatus.Running);
-            int attention = _sessions.Count(s => s.Status == SessionStatus.NeedsAttention);
-            int awaiting  = _sessions.Count(s => s.Status == SessionStatus.AwaitingInput);
-            int apiError  = _sessions.Count(s => s.Status == SessionStatus.ApiError);
-            int idle      = _sessions.Count(s => s.Status == SessionStatus.Idle);
+            int running   = _countedSessions.Count(s => s.Status == SessionStatus.Running);
+            int attention = _countedSessions.Count(s => s.Status == SessionStatus.NeedsAttention);
+            int awaiting  = _countedSessions.Count(s => s.Status == SessionStatus.AwaitingInput);
+            int apiError  = _countedSessions.Count(s => s.Status == SessionStatus.ApiError);
+            int idle      = _countedSessions.Count(s => s.Status == SessionStatus.Idle);
 
             x = DrawStatusPill(ctx, x, midY, apiError,  ApiErrorColor,  ApiErrorColor);
             x = DrawStatusPill(ctx, x, midY, awaiting,  AwaitingColor,  AwaitingColor);
@@ -1553,6 +1631,101 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // one desktop have a chip, so a hit here always means there is a choice to offer.
     private int HitTestHypertreeDesktop(Point p)
         => ShowFullPanel && HypertreeStripVisible ? HitRect(_hyperDesktopRects, p) : -1;
+
+    /// <summary>
+    /// Paints the daemon section: a "daemon" caption, then one narrow line per dispatched background
+    /// worker (pre-warmed spares are hidden as noise — see <c>_stripDaemonWorkers</c>). Each line leads
+    /// with a status dot (enriched from the live session list when the worker's hooks have written a
+    /// session file; a roster-only worker sits idle-grey), then the worker's task name or project, with
+    /// a trailing muted label saying where it runs. The whole line is one click target — it opens the
+    /// options menu, since there is no window to focus.
+    /// </summary>
+    private void DrawDaemonStrip(DrawingContext ctx, double width, double top)
+    {
+        double y = top;
+        double captionH = HypertreeCaptionHeight;
+
+        var caption = OverlayDraw.Text("daemon", HyperLabelSize, MutedBrush, FontWeight.SemiBold);
+        OverlayDraw.TextLeftMid(ctx, caption, HorizPad, y + captionH / 2);
+        y += captionH;
+
+        double lineH = HypertreeLineHeight;
+        const double DotR = 3, MetaMaxW = 96;
+        double nameX = HorizPad + DotR * 2 + 6;
+
+        for (int i = 0; i < VisibleDaemonCount; i++)
+        {
+            var w = _stripDaemonWorkers[i];
+            double midY = y + lineH / 2;
+
+            if (_hoveredDaemonRow == i)
+                ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+                    new Rect(4, y, Math.Max(0, width - 8), lineH));
+
+            var match = MatchingSession(w);
+            var dotColor = match?.Status switch
+            {
+                SessionStatus.Running        => RunningColor,
+                SessionStatus.NeedsAttention => AttentionColor,
+                SessionStatus.AwaitingInput  => AwaitingColor,
+                SessionStatus.ApiError       => ApiErrorColor,
+                _                            => IdleColor,
+            };
+            ctx.DrawEllipse(new SolidColorBrush(dotColor), null, new Point(HorizPad + DotR, midY), DotR, DotR);
+
+            // Trailing label: a named task shows its project so the line still says where the work runs;
+            // an unnamed worker (project as its name) shows its id. (Spares never reach the strip.)
+            string meta = w.Name != null && w.ProjectName.Length > 0 ? w.ProjectName : w.ShortId;
+            meta = OverlayDraw.Truncate(meta, HyperMetaSize, MetaMaxW);
+            double metaReserve = meta.Length > 0 ? OverlayDraw.MeasureWidth(meta, HyperMetaSize) + 8 : 0;
+
+            double nameMax = Math.Max(20, width - HorizPad - nameX - metaReserve);
+            var nameFt = OverlayDraw.Text(OverlayDraw.Truncate(w.DisplayName, HyperRowSize, nameMax),
+                HyperRowSize, _hoveredDaemonRow == i ? FgBrush : BotBrush);
+            OverlayDraw.TextLeftMid(ctx, nameFt, nameX, midY);
+
+            if (meta.Length > 0)
+            {
+                var metaFt = OverlayDraw.Text(meta, HyperMetaSize, MutedBrush);
+                OverlayDraw.TextLeftMid(ctx, metaFt, width - HorizPad - metaFt.Width, midY);
+            }
+
+            y += lineH;
+        }
+
+        // Overflow line: how many workers the cap hid, clickable to open the full-list window. Hovered
+        // it brightens like a row, so it reads as the control it is.
+        if (DaemonOverflow)
+        {
+            bool hot = _hoveredDaemonRow == VisibleDaemonCount;
+            if (hot)
+                ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+                    new Rect(4, y, Math.Max(0, width - 8), lineH));
+            var moreFt = OverlayDraw.Text($"show +{_stripDaemonWorkers.Count - VisibleDaemonCount} more",
+                HyperRowSize, hot ? FgBrush : MutedBrush);
+            OverlayDraw.TextLeftMid(ctx, moreFt, nameX, y + lineH / 2);
+        }
+    }
+
+    // The live session this worker corresponds to, when its hooks have produced a session file — the
+    // source of the strip's status dot. Null for a roster-only worker (a spare never runs hooks).
+    private ClaudeSession? MatchingSession(DaemonWorker w)
+        => _sessions.FirstOrDefault(s => s.SessionId == w.SessionId);
+
+    // Returns the daemon strip line under p, or -1 if none (or the strip isn't shown). An index of
+    // VisibleDaemonCount is the "show +N more" overflow line; anything lower is a worker.
+    private int HitTestDaemonRow(Point p)
+    {
+        if (!(ShowFullPanel && DaemonStripVisible)) return -1;
+
+        double top = DaemonTop + HypertreeCaptionHeight;
+        double lineH = HypertreeLineHeight;
+        int count = DaemonLineCount;
+        if (p.Y < top || p.Y >= top + count * lineH) return -1;
+
+        int index = (int)((p.Y - top) / lineH);
+        return index >= 0 && index < count ? index : -1;
+    }
 
     // Returns the display-row index under p, or -1 (only while the panel is expanded with rows).
     private int HitTestRow(Point p)
@@ -2293,6 +2466,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int hyperDesk = HitTestHypertreeDesktop(p);
         if (hyperDesk != _hoveredHyperDesktop) { _hoveredHyperDesktop = hyperDesk; InvalidateVisual(); }
 
+        int daemon = HitTestDaemonRow(p);
+        if (daemon != _hoveredDaemonRow) { _hoveredDaemonRow = daemon; InvalidateVisual(); }
+
         int art = HitTestArtifactIcon(p);
         if (art != _hoveredArtifactRow) { _hoveredArtifactRow = art; InvalidateVisual(); }
 
@@ -2317,11 +2493,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool overMicLabel = HitTestMicLabel(p);
         if (overMicLabel != _hoveredMicLabel) { _hoveredMicLabel = overMicLabel; InvalidateVisual(); }
 
-        // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + artifacts + the update
-        // badge + outage footer + the scratch-pad note button + a row's note glyph + the media buttons + the
-        // mic strip's app name); rows show only the highlight.
-        Cursor = (ql >= 0 || hyper >= 0 || art >= 0 || overUpdate || overFooter || overNote || overRowNote
-                  || media >= 0 || overMicLabel)
+        // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + daemon worker lines +
+        // artifacts + the update badge + outage footer + the scratch-pad note button + a row's note glyph +
+        // the media buttons + the mic strip's app name); rows show only the highlight.
+        Cursor = (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || overUpdate || overFooter || overNote
+                  || overRowNote || media >= 0 || overMicLabel)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -2377,8 +2553,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel;
-        _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredArtifactRow = -1;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel;
+        _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredArtifactRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
         _hoveredNoteButton = false;
@@ -2586,6 +2762,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+        // A daemon worker line: there is no window to focus, so a left click opens the same options
+        // menu a right click does. The trailing "show +N more" overflow line opens the full-list window.
+        int daemonRow = HitTestDaemonRow(p);
+        if (daemonRow >= 0)
+        {
+            if (DaemonOverflow && daemonRow == VisibleDaemonCount) DaemonListRequested?.Invoke();
+            else ShowDaemonMenu(daemonRow);
+            return;
+        }
+
         // The note button leading the quick-links row opens the global scratch pad.
         if (_noteButtonRect.Width > 0 && _noteButtonRect.Contains(p))
         {
@@ -2642,6 +2828,17 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (ShowFooter && _footerRect.Width > 0 && _footerRect.Contains(p))
         {
             ShowStatusMenu();
+            return;
+        }
+
+        // A daemon worker line has a single options menu regardless of button (its left click opens the
+        // same one — there is no window to focus, so the menu *is* the row's interaction). The overflow
+        // line likewise opens the full-list window from either button.
+        int daemonRow = HitTestDaemonRow(p);
+        if (daemonRow >= 0)
+        {
+            if (DaemonOverflow && daemonRow == VisibleDaemonCount) DaemonListRequested?.Invoke();
+            else ShowDaemonMenu(daemonRow);
             return;
         }
 
@@ -2786,11 +2983,34 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         ShowFlyout(items);
     }
 
+    /// <summary>
+    /// The options menu for a daemon worker line — reached from either mouse button, since focusing a
+    /// headless session is impossible and a silent no-op click would read as Perch being broken. First
+    /// pass: the session-data actions that need no window; each is best-effort (a spare worker may not
+    /// have a transcript yet).
+    /// </summary>
+    private void ShowDaemonMenu(int index)
+    {
+        if (index < 0 || index >= _stripDaemonWorkers.Count) return;
+        var w = _stripDaemonWorkers[index];
+
+        var items = new List<Control>
+        {
+            MenuItem("View history", () => HistoryRequested?.Invoke(w.SessionId)),
+            MenuItem("Open transcript in VS Code", () => OpenTranscriptInVsCode(w.SessionId, w.Cwd)),
+            MenuItem("Copy session ID", () => CopyToClipboard(w.SessionId)),
+            MenuItem("Copy resume command", () => CopyToClipboard(ClaudeCli.ResumeCommand(w.SessionId))),
+        };
+        ShowFlyout(items);
+    }
+
     private void CopyToClipboard(string text) => TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(text);
 
-    private static void OpenTranscriptInVsCode(ClaudeSession s)
+    private static void OpenTranscriptInVsCode(ClaudeSession s) => OpenTranscriptInVsCode(s.SessionId, s.Cwd);
+
+    private static void OpenTranscriptInVsCode(string sessionId, string cwd)
     {
-        var path = TranscriptLocator.Resolve(s.SessionId, s.Cwd);
+        var path = TranscriptLocator.Resolve(sessionId, cwd);
         if (path == null) return;
         try
         {

@@ -81,6 +81,11 @@ internal sealed class AppSettings
     // session's right-click menu. A missing key keeps it off.
     public bool ShowNotes { get; set; }
 
+    // Whether to list the Claude Code background daemon's headless worker sessions in their own "daemon"
+    // section under the overlay's rows. Off hides the section and stops watching the roster — display
+    // only; the workers themselves keep running. Defaults to true; a missing key keeps it on.
+    public bool ShowDaemonProcesses { get; set; } = true;
+
     // The global scratch pad — free-form multi-line text opened from the note button leading the overlay's
     // quick-links row. Not tied to any session; persisted here so it survives a restart. Null/empty means
     // the pad is empty (nothing written to the file when empty). See StickyNoteWindow.
