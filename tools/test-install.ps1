@@ -82,15 +82,17 @@ CheckThrows 'throws when the file is absent from the manifest' { Get-ExpectedHas
 CheckThrows 'throws on an empty manifest' { Get-ExpectedHash -Sums '' -Name 'Perch-win-Setup.exe' -Tag 'v1' } 'no entry for'
 CheckThrows 'throws on an HTML error page as the manifest' { Get-ExpectedHash -Sums '<html>404</html>' -Name 'Perch-win-Setup.exe' -Tag 'v1' } 'no entry for'
 
-Write-Host "`n=== Manifest decoding across PowerShell hosts ===" -ForegroundColor Cyan
-# GitHub serves release assets as application/octet-stream. PowerShell 7's Invoke-WebRequest returns a
-# byte[] for content it doesn't consider text; 5.1 always decodes to a string. install.ps1 normalises both,
-# and the third check proves that branch is load-bearing rather than defensive noise.
+Write-Host "`n=== Manifest decoding (byte[] vs string response) ===" -ForegroundColor Cyan
+# GitHub serves release assets as application/octet-stream, and for a non-text content type
+# Invoke-WebRequest hands back a WebResponseObject whose .Content is a byte[], not a string. That was
+# confirmed on plain Windows PowerShell 5.1 against the real release, so it is the NORMAL path - the decode
+# in install.ps1 is what makes the checksum lookup work at all, not defensive noise. The third check proves
+# it: an undecoded byte[] stringifies to "55 49 102 ..." and matches no hash line.
 function Decode($raw) { if ($raw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($raw) } else { [string]$raw } }
 $asString = "$h  Perch-win-Setup.exe`n"
 $asBytes = [System.Text.Encoding]::UTF8.GetBytes($asString)
-Check 'string content (5.1) parses' ((Get-ExpectedHash -Sums (Decode $asString) -Name 'Perch-win-Setup.exe' -Tag v1) -eq $h.ToUpperInvariant())
-Check 'byte[] content (7.x) parses to the same manifest' ((Get-ExpectedHash -Sums (Decode $asBytes) -Name 'Perch-win-Setup.exe' -Tag v1) -eq $h.ToUpperInvariant())
+Check 'an already-decoded string parses' ((Get-ExpectedHash -Sums (Decode $asString) -Name 'Perch-win-Setup.exe' -Tag v1) -eq $h.ToUpperInvariant())
+Check 'byte[] content (what GitHub actually returns) parses the same' ((Get-ExpectedHash -Sums (Decode $asBytes) -Name 'Perch-win-Setup.exe' -Tag v1) -eq $h.ToUpperInvariant())
 Check 'an undecoded byte[] would have failed, so the decode is required' `
 (-not (($asBytes -split "`r?`n") -match '^\s*[0-9a-fA-F]{64}\s'))
 

@@ -82,9 +82,11 @@ function Install-Perch {
     $keepWork = $false   # set if we bail out while the installer might still be reading from $work
     try {
         # --- Download ----------------------------------------------------------------------------------
-        # GitHub serves release assets as application/octet-stream, and PowerShell 7 hands back a byte[]
-        # rather than a string for content it doesn't consider text (5.1 always decodes to a string). Decode
-        # explicitly so the manifest parses identically on both hosts.
+        # GitHub serves release assets as application/octet-stream, and for a non-text content type
+        # Invoke-WebRequest returns a WebResponseObject whose .Content is a byte[], NOT a string. That is the
+        # behaviour on plain Windows PowerShell 5.1, verified against the live release - so this is the normal
+        # path, not a 7.x edge case. Skip the decode and [string]$raw stringifies the array to "55 49 102 ..."
+        # instead, so no hash line ever matches and every install fails the checksum lookup.
         $raw   = (Invoke-WebRequest -Uri $sumsUrl -UseBasicParsing).Content
         $sums  = if ($raw -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($raw) } else { [string]$raw }
         $want  = Get-ExpectedHash -Sums $sums -Name $SetupAsset -Tag $tag

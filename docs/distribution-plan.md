@@ -358,10 +358,23 @@ Two bugs came out of actually running the installer, both fixed and both worth r
   em dash gives *"The string is missing the terminator"*. The earlier em dashes were harmless only because
   they sat in comments and here-strings. `tools/test-install.ps1` now asserts the file is ASCII and parses.
 
-**Still not verified**, and only verifiable once a release with `SHA256SUMS.txt` exists: the live GitHub API
-lookup, and the verify-then-install path against a real published release. `pwsh` isn't installed on the dev
-box either, so the PowerShell 7 path is covered by construction (an explicit `byte[]`/string decode, with a
-test proving the branch is required) rather than by running the script there.
+### Verified against the live v0.2.34 release (2026-07-30)
+
+Once `v0.2.34` was published the remaining gap closed. Every step of `install.ps1` bar `Process.Start` was
+run against the real release: the GitHub API resolved `v0.2.34`, both assets resolved by name from the
+release metadata, the live `SHA256SUMS.txt` (12 entries) parsed, the published `Perch-win-Setup.exe`
+downloaded (57.4 MB in 7.1 s), and its SHA-256 matched the manifest exactly — so the script reaches its
+"proceed to install" branch on real data.
+
+That run also corrected an assumption worth recording: **`Invoke-WebRequest.Content` is a `byte[]` on
+Windows PowerShell 5.1**, not just on 7.x. GitHub serves release assets as `application/octet-stream`, and
+for a non-text content type 5.1 returns a `WebResponseObject` whose `.Content` is `System.Byte[]`. This was
+first written up as a PowerShell 7 edge case; it is in fact the *normal* path. Without the explicit decode,
+`[string]$raw` yields `"55 49 102 ..."` (the byte values, space-joined), no hash line matches, and **every
+install would fail the checksum lookup**. The decode is load-bearing, not defensive.
+
+Still unverified, and only checkable by hand: `Process.Start` actually running the installer to completion,
+and the in-app update flow from an older installed version to a newer release.
 
 ## macOS parity
 
