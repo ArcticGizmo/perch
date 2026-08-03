@@ -2411,9 +2411,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private PixelPoint _denseDragStartScreen;
     private int _denseStartY;
 
-    /// <summary>Raised once when a drag finishes, so the app can follow with the screen-edge glow.</summary>
-    public event Action? DragCompleted;
-
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         var p = e.GetPosition(this);
@@ -2446,7 +2443,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 if (OwnerWindow is { } w && _headerPressArgs is { } pa)
                 {
                     w.BeginMoveDrag(pa);     // OS-native move (blocks on Windows until the button is released)
-                    DragCompleted?.Invoke(); // re-home the screen-edge glow onto the overlay's new monitor
                 }
             }
             base.OnPointerMoved(e);
@@ -2662,8 +2658,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _denseWasDrag = false;
             if (wasDrag) _denseCtl.PinToActiveDropZone(this.PointToScreen(e.GetPosition(this)));
             _denseCtl.HideDropZones();
-            if (wasDrag) DragCompleted?.Invoke();
-            else RouteClick(e.GetPosition(this));
+            if (!wasDrag) RouteClick(e.GetPosition(this));
             base.OnPointerReleased(e);
             return;
         }

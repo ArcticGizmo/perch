@@ -29,17 +29,6 @@ public partial class LiveOverlayWindow : Window
         WindowDecorations = WindowDecorations.None;
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         WindowStartupLocation = WindowStartupLocation.Manual;
-
-        // The canvas owns dragging (header = drag handle) via BeginMoveDrag; it raises DragCompleted when
-        // a move ends so the app can follow with the ambient glow.
-    }
-
-    /// <summary>Raised when the user finishes dragging the overlay, so the app can re-evaluate anything
-    /// tied to the overlay's screen — chiefly moving the screen-edge glow to the monitor it now sits on.</summary>
-    public event Action? DragCompleted
-    {
-        add    => Canvas.DragCompleted += value;
-        remove => Canvas.DragCompleted -= value;
     }
 
     protected override void OnOpened(EventArgs e)

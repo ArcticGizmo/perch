@@ -143,6 +143,12 @@ internal static class Program
             // Regular activation policy (dock icon) at startup; ShowInDock=false makes it an accessory app,
             // which is the setting that actually sticks. A no-op on Windows/Linux.
             .With(new MacOSPlatformOptions { ShowInDock = false })
+            // Force CPU (software) rendering on Windows instead of the default ANGLE/Direct3D GPU path.
+            // Perch is a small, rarely-repainted tray overlay, so the GPU stack (ANGLE's av_libGLESv2 +
+            // d3d11 + the d3dcompiler) costs far more resident memory than it saves in draw time here.
+            // A no-op off Windows: UsePlatformDetect selects the platform backend, and this options object
+            // only takes effect when the Win32 backend is the one chosen.
+            .With(new Win32PlatformOptions { RenderingMode = [Win32RenderingMode.Software] })
 #if DEBUG
             .WithDeveloperTools()
 #endif

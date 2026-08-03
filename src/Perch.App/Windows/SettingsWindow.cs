@@ -72,9 +72,6 @@ internal sealed class SettingsHooks
     /// <summary>Rebuild the overlay's quick-links strip (re-resolving icons off-thread).</summary>
     public Action? QuickLinksChanged;
 
-    /// <summary>Re-evaluate the ambient screen-edge glow (its enable toggle flipped).</summary>
-    public Action? GlowChanged;
-
     /// <summary>Re-register the global keyboard shortcuts after a binding was edited or toggled.</summary>
     public Action? HotkeysChanged;
 
@@ -1666,22 +1663,6 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(SettingsUi.BodyText(
             "Drops idle teammates — those waiting for the lead — from the overlay, so only teammates actively " +
             "working are shown. A hidden teammate reappears the moment it starts working again."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        var glowToggle = Toggle(_settings.ScreenEdgeGlow);
-        glowToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ScreenEdgeGlow = glowToggle.IsChecked;
-            _settings.Save();
-            _hooks.GlowChanged?.Invoke();
-        };
-        page.Children.Add(SettingsUi.TitleRow("Ambient screen-edge glow", glowToggle));
-        page.Children.Add(SettingsUi.BodyText(
-            "Softly pulses a glow around the edge of the screen while a session needs you or is waiting on " +
-            "input — a peripheral nudge you can catch without watching the overlay. It's click-through and " +
-            "never takes focus, so it stays out of your way, and it fades out the moment you've dealt with the " +
-            "session. Handy on a second monitor."));
 
         page.Children.Add(SettingsUi.Separator());
 

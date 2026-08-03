@@ -179,15 +179,6 @@ internal static class HeadlessRenderer
         if (qr.Content is Control qrCard)
             RenderControl(qrCard, Path.Combine(outDir, "qr_1x.png"), 96);
 
-        // Glow edge bitmap (5.4): over a dark backdrop so the quadratic edge falloff is visible.
-        var glowPanel = new Panel { Width = 480, Height = 320, Background = new SolidColorBrush(Color.FromRgb(20, 20, 26)) };
-        glowPanel.Children.Add(new Image
-        {
-            Source = Windows.GlowWindow.BuildGlowBitmap(480, 320, 52, Theming.Palette.Orange),
-            Stretch = Stretch.Fill,
-        });
-        RenderControl(glowPanel, Path.Combine(outDir, "glow_1x.png"), 96);
-
         // Stats dashboard (5.5): synthetic "Today" report so the cards, bars, and histograms render.
         var stats = new Views.StatsDashboard(showCost: true);
         stats.SetReport(SampleStatsReport(), null);

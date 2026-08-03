@@ -169,7 +169,6 @@ public partial class App : Application
                 _overlay!.Canvas.Update(sessions);
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
-                UpdateGlow();
                 MaybeHandleAutoClose(sessions.Count);
             }, Services.Replay.ReplaySession.Current?.Projector);
 
@@ -218,7 +217,6 @@ public partial class App : Application
             _overlay.Canvas.NoteClearRequested += sessionId => _monitorHost?.SetNote(sessionId, null);
             _overlay.Canvas.TerminateRequested += OnTerminateSession;
             _overlay.Canvas.ScratchPadRequested += OnOpenScratchPad;
-            _overlay.DragCompleted += OnOverlayDragCompleted;
 
             // Quick-links strip: launch/focus goes through the platform seams; icons resolve off-thread.
             _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider);
@@ -672,27 +670,6 @@ public partial class App : Application
         };
         _achievementCard.Closed += (_, _) => _achievementCard = null;
         _achievementCard.Present(unlocks, screen);
-    }
-
-    // The overlay was dragged to a (possibly different) monitor — re-home the glow onto its screen.
-    private void OnOverlayDragCompleted() => UpdateGlow();
-
-    // Shows/hides the ambient screen-edge glow from the current session state: lit while any session
-    // needs attention or is awaiting input (and the ScreenEdgeGlow setting is on), around the overlay's
-    // screen in the attention orange; hidden otherwise. Called after every scan and on a drag, so it
-    // self-corrects as sessions come and go and as the overlay moves between monitors.
-    private GlowWindow? _glow;
-    private void UpdateGlow()
-    {
-        if (_overlay is null) return;
-        bool on = _appSettings is { ScreenEdgeGlow: true }
-            && _lastSessions.Any(s => s.Status is SessionStatus.NeedsAttention or SessionStatus.AwaitingInput or SessionStatus.ApiError);
-
-        if (!on) { _glow?.HideGlow(); return; }
-
-        var screen = _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
-        if (screen is null) return;
-        (_glow ??= new GlowWindow()).ShowGlow(screen, Theming.Palette.Orange);
     }
 
     // ── Context-menu handlers ─────────────────────────────────────────────────
@@ -1186,7 +1163,6 @@ public partial class App : Application
             MetricsChanged = () => _metricsHost?.Configure(
                 settings.ShowSystemMetrics, settings.ShowSessionMetrics, settings.IncludeSubprocessMetrics),
             QuickLinksChanged = () => ReloadQuickLinks(settings),
-            GlowChanged = UpdateGlow,
             HotkeysChanged = RegisterHotkeys,
             TestNotification = kind => _notifications?.ShowTest(kind),
             TestExternalNotification = () => { if (_notifications is { } n) _ = n.SendExternalTestAsync(); },
