@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.37] - 2026-08-03
+
+- GitHub pull-request glyph on session rows, coloured by state (open, draft, merged, closed)
+- Click it to open the PR in a browser (title, state and number in tow)
+- New "GitHub pull requests" toggle under Settings → Integrations, off by default
+- Uses the `gh` CLI you're already signed into; nothing runs while it's off
+- Configurable check interval (default 5 minutes); a missing PR is remembered just as long
+
+---
+
 ## [v0.2.36] - 2026-08-03
 
 - Roughly halved memory use by switching the overlay to software rendering

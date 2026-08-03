@@ -439,9 +439,15 @@ internal sealed class SettingsWindow : Window
     // ── Integrations ──────────────────────────────────────────────────────────────
     private PerchToggle _hypertreeToggle = null!;
     private TextBlock _hypertreeStatusText = null!;
+    private PerchToggle _prToggle = null!;
+    private TextBlock _prStatusText = null!;
+    private Action<bool> _prIntervalEnabled = null!;
 
     private void BuildIntegrationsPage(StackPanel page)
     {
+        BuildGitHubPrSection(page);
+        page.Children.Add(SettingsUi.Separator());
+
         page.Children.Add(SettingsUi.SectionTitle("Hypertree"));
         page.Children.Add(SettingsUi.BodyText(
             "Hypertree gives a task its own branch — a named set of virtual desktops. Turn this on and the "
@@ -495,6 +501,107 @@ internal sealed class SettingsWindow : Window
                 : install.Running
                     ? $"Hypertree {install.Version ?? "?"} is running."
                     : $"Hypertree {install.Version ?? "?"} is installed but not running — start it to see your branches.";
+        }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    // GitHub pull requests: a merge glyph on a session's row once its branch has a PR, resolved with the
+    // gh CLI. Off by default and load-bearing while off (gh is never run), so the section leads with a live
+    // "is gh here / are you signed in" line to set expectations before it's turned on.
+    private void BuildGitHubPrSection(StackPanel page)
+    {
+        page.Children.Add(SettingsUi.SectionTitle("GitHub pull requests"));
+        page.Children.Add(SettingsUi.BodyText(
+            "Shows a merge glyph on a session whose working directory is a GitHub repo once its current "
+            + "branch has a pull request. Click the glyph for the PR's title, state and number; clicking that "
+            + "opens the PR in your browser. It uses the GitHub CLI (\"gh\") you're already signed in to, so "
+            + "there's no token to set up here."));
+
+        _prToggle = Toggle(_settings.ShowPullRequests);
+        _prToggle.CheckedChanged += (_, _) =>
+        {
+            _settings.ShowPullRequests = _prToggle.IsChecked;
+            _settings.Save();
+            _hooks.DisplayChanged?.Invoke();   // applies SetShowPullRequests + PrEnabled/interval to the monitor
+            _prIntervalEnabled(_prToggle.IsChecked);
+            RefreshGhStatus();
+        };
+        page.Children.Add(SettingsUi.TitleRow("Show pull requests", _prToggle));
+
+        page.Children.Add(SettingsUi.FieldCaption("Check for a PR every"));
+        page.Children.Add(BuildPrIntervalStepper(out _prIntervalEnabled));
+        page.Children.Add(SettingsUi.BodyText(
+            "How often a branch's PR is re-checked. A session is checked when it first appears and then only "
+            + "on this interval; \"no PR\" is remembered just as long, so gh runs rarely. Off means gh is "
+            + "never run at all."));
+
+        _prStatusText = SettingsUi.BodyText("Looking for gh…");
+        page.Children.Add(_prStatusText);
+
+        _prIntervalEnabled(_settings.ShowPullRequests);
+        RefreshGhStatus();
+    }
+
+    // A −/+ stepper for the PR poll interval (minutes). Mirrors BuildStatusIntervalStepper; a change fires
+    // DisplayChanged, which re-applies the interval to the running monitor.
+    private Control BuildPrIntervalStepper(out Action<bool> applyEnabled)
+    {
+        const int min = 1, max = 120;
+        var row = SettingsUi.ButtonRow();
+        var dec = SettingsUi.FlatButton("−");
+        var inc = SettingsUi.FlatButton("+");
+        dec.Width = 36; inc.Width = 36;
+        var value = new TextBlock
+        {
+            Width = 90, TextAlignment = TextAlignment.Center, Foreground = Palette.FgBrush,
+            VerticalAlignment = VerticalAlignment.Center, FontSize = 14,
+        };
+        void Render() => value.Text = _settings.PullRequestIntervalMinutes == 1
+            ? "1 minute" : $"{_settings.PullRequestIntervalMinutes} minutes";
+        void Apply(int v)
+        {
+            v = Math.Clamp(v, min, max);
+            if (v == _settings.PullRequestIntervalMinutes) return;
+            _settings.PullRequestIntervalMinutes = v;
+            _settings.Save();
+            _hooks.DisplayChanged?.Invoke();
+            Render();
+        }
+        dec.Click += (_, _) => Apply(_settings.PullRequestIntervalMinutes - 1);
+        inc.Click += (_, _) => Apply(_settings.PullRequestIntervalMinutes + 1);
+        Render();
+        row.Children.Add(dec);
+        row.Children.Add(value);
+        row.Children.Add(inc);
+        applyEnabled = on =>
+        {
+            dec.IsEnabled = on; inc.IsEnabled = on;
+            value.Foreground = on ? Palette.FgBrush : Palette.MutedBrush;
+        };
+        return row;
+    }
+
+    /// <summary>Refreshes the "is gh here / are you signed in" line. Probing spawns gh, so it runs off the
+    /// UI thread and marshals back — and it's skipped entirely while the integration is off, keeping the
+    /// setting genuinely load-bearing.</summary>
+    private void RefreshGhStatus()
+    {
+        if (!_settings.ShowPullRequests)
+        {
+            _prStatusText.Text = "Turned off — gh isn't run at all while this is off.";
+            return;
+        }
+
+        _prStatusText.Text = "Looking for gh…";
+        Task.Run(PrStatusService.DescribeGh).ContinueWith(t =>
+        {
+            if (!IsVisible || _prStatusText is null) return;
+
+            var (installed, authed) = t.IsCompletedSuccessfully ? t.Result : (false, false);
+            _prStatusText.Text = !installed
+                ? "gh (the GitHub CLI) isn't installed or isn't on PATH — get it from cli.github.com. No PRs will show until it is."
+                : !authed
+                    ? "gh is installed but not signed in — run \"gh auth login\". No PRs will show until you are."
+                    : "gh is installed and signed in — PRs will show as sessions are checked.";
         }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
     }
 

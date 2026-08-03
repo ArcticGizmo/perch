@@ -54,6 +54,30 @@ internal sealed class SessionMonitor : IDisposable
         set => _gitStats.Enabled = value;
     }
 
+    /// <summary>Master switch for the per-session GitHub pull-request glyph. Off by construction; the
+    /// owning context sets it from settings. While off no gh process is ever launched. Turning it on fires
+    /// <see cref="ChangeDetected"/> so a scan runs immediately — the PR lookups kick off for the visible
+    /// sessions right away rather than waiting out the reconcile tick, keeping the toggle responsive.</summary>
+    public bool PrEnabled
+    {
+        get => _pr.Enabled;
+        set
+        {
+            if (_pr.Enabled == value)
+                return;
+            _pr.Enabled = value;
+            if (value)
+                ChangeDetected?.Invoke();
+        }
+    }
+
+    /// <summary>How often (minutes) a working directory's PR is re-checked with gh. Feeds the service's
+    /// cache TTL; the default (5) applies until settings set otherwise.</summary>
+    public int PrIntervalMinutes
+    {
+        set => _pr.IntervalMinutes = value;
+    }
+
     private readonly string _sessionsDir = ClaudePaths.SessionsDir;
 
     private readonly Dictionary<string, string> _lastRawStatus = new();
@@ -86,6 +110,7 @@ internal sealed class SessionMonitor : IDisposable
     private readonly SubAgentReader _subAgents = new();
     private readonly TranscriptReader _transcripts = new();
     private readonly GitStatsService _gitStats = new();
+    private readonly PrStatusService _pr = new();
 
     // How we decide a session's pid is still alive. Defaults to the real OS probe; replay swaps in one
     // backed by the projector so recorded (dead) pids read as alive within their active window.
@@ -139,6 +164,7 @@ internal sealed class SessionMonitor : IDisposable
         // A background git refresh landing with new numbers should repaint the overlay — treat it like
         // any other change trigger. The rescan re-reads the (now-fresh) cache, so it settles at once.
         _gitStats.StatsUpdated += () => ChangeDetected?.Invoke();
+        _pr.Updated += () => ChangeDetected?.Invoke();
         EnsureWatcher();
     }
 
@@ -685,6 +711,11 @@ internal sealed class SessionMonitor : IDisposable
             // triggers a repaint when it lands.
             var gitStats = _gitStats.Get(cwd);
 
+            // The GitHub PR for this working directory's branch. Same gating as git stats: while the
+            // integration is off this returns null without ever launching gh, and a known value is served
+            // from a long (poll-interval) cache so a scan never blocks on gh.
+            var pullRequest = _pr.Get(cwd);
+
             var session = new ClaudeSession(
                 pid,
                 sessionId,
@@ -712,7 +743,8 @@ internal sealed class SessionMonitor : IDisposable
                 projectNote,
                 context.Model,
                 context.Source,
-                apiFailure
+                apiFailure,
+                pullRequest
             );
 
             if (status == SessionStatus.NeedsAttention
@@ -999,6 +1031,7 @@ internal sealed class SessionMonitor : IDisposable
 
         _debounceTimer.Dispose();
         _gitStats.Dispose();
+        _pr.Dispose();
 
         if (_watcher != null)
         {

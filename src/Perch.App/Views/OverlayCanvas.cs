@@ -56,6 +56,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double ArtifactIconWidth = 16;
     private const double PartyIconWidth   = 16; // the "confetti finish" party-popper glyph on an armed row
     private const double NoteIconWidth    = 15; // the pinned-note glyph shown on a row that has a note
+    private const double PrIconWidth      = 16; // the GitHub pull-request (merge) glyph on a row with a PR
 
     // Font sizes (px ~= the WinForms point sizes).
     private const double NameSize       = 11.5;
@@ -119,6 +120,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private static readonly IBrush BurnBrush      = new SolidColorBrush(Color.FromRgb(125, 185, 232));
     private static readonly IBrush GitAddBrush    = new SolidColorBrush(Color.FromRgb(34, 197, 94));
     private static readonly IBrush GitDelBrush    = new SolidColorBrush(Color.FromRgb(239, 68, 68));
+    // Pull-request glyph colours, keyed to the PR's state (open green, draft grey, merged purple, closed
+    // red) so the row reads the PR's status at a glance. Hover brightens to the lighter variant.
+    private static readonly IBrush PrOpenBrush    = new SolidColorBrush(Color.FromRgb(34, 197, 94));
+    private static readonly IBrush PrOpenHover    = new SolidColorBrush(Color.FromRgb(74, 222, 128));
+    private static readonly IBrush PrDraftBrush   = new SolidColorBrush(Color.FromRgb(148, 163, 184));
+    private static readonly IBrush PrDraftHover   = new SolidColorBrush(Color.FromRgb(203, 213, 225));
+    private static readonly IBrush PrMergedBrush  = new SolidColorBrush(Color.FromRgb(168, 85, 247));
+    private static readonly IBrush PrMergedHover  = new SolidColorBrush(Color.FromRgb(192, 132, 252));
+    private static readonly IBrush PrClosedBrush  = new SolidColorBrush(Color.FromRgb(239, 68, 68));
+    private static readonly IBrush PrClosedHover  = new SolidColorBrush(Color.FromRgb(248, 113, 113));
     private static readonly IBrush RunningBrush   = new SolidColorBrush(RunningColor);
     private static readonly IBrush ArtifactBrush  = new SolidColorBrush(Color.FromRgb(251, 191, 36));
     private static readonly IBrush ArtifactHover  = new SolidColorBrush(Color.FromRgb(255, 224, 140));
@@ -358,6 +369,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showTaskProgress = true;
     private bool _showBurnRate = true;
     private bool _showGitStats = true;
+    private bool _showPullRequests;
     private bool _showNoteLine = true;
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
@@ -711,6 +723,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
+    /// <summary>Show/hide the GitHub pull-request (merge) glyph on a session row. Display only — the data
+    /// layer's gh lookup is gated separately (see <c>PrEnabled</c>), so both are set together.</summary>
+    public void SetShowPullRequests(bool show)
+    {
+        if (_showPullRequests == show) return;
+        _showPullRequests = show;
+        InvalidateVisual();
+    }
+
     /// <summary>Show/hide the pinned-note glyph on a session row (session note and/or project note). Off ⇒
     /// the note is still stored and editable from the right-click menu, just no glyph. The note's text is
     /// never previewed inline — hover the glyph or open the editor — so this doesn't change row height.</summary>
@@ -780,12 +801,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // thermo/warn/task/metrics rects feed the tooltips wired in 4.12.
     private int _hoveredRow = -1;
     private int _hoveredArtifactRow = -1;
+    private int _hoveredPrRow = -1;
     private readonly Dictionary<int, Rect> _artifactRects = new();
     private readonly Dictionary<int, Rect> _thermoRects = new();
     private readonly Dictionary<int, Rect> _warnRects = new();
     private readonly Dictionary<int, Rect> _taskRects = new();
     private readonly Dictionary<int, Rect> _metricsRects = new();
     private readonly Dictionary<int, Rect> _noteRects = new();
+    private readonly Dictionary<int, Rect> _prRects = new();
     // The expand/collapse chevron on a sub-agent row that has children — captured at paint time so a
     // click can toggle that node (see RouteClick). Only rows with children get an entry.
     private readonly Dictionary<int, Rect> _subChevronRects = new();
@@ -1175,6 +1198,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _taskRects.Clear();
                 _metricsRects.Clear();
                 _noteRects.Clear();
+                _prRects.Clear();
                 _subChevronRects.Clear();
 
                 double top = RowsTop;
@@ -1872,6 +1896,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double rcW   = session.RemoteControlled ? RcIconWidth : 0;
         double botW  = session.IsBackground ? BotIconWidth : 0;
         double noteW = showNote ? NoteIconWidth : 0;
+        bool showPr = _showPullRequests && session.PullRequest is not null;
+        double prW  = showPr ? PrIconWidth : 0;
 
         // Right-side cluster (right→left from the status text): thermometer, mode badge, task count,
         // metrics bars (4.9), burn rate.
@@ -1905,7 +1931,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double gitW = showGit ? gitAddW + GitGap + gitDelW + 8 : 0;
 
         double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - botW - partyW - mailW
-                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW;
+                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
 
@@ -1930,8 +1956,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             DrawNoteIcon(ctx, noteGlyphX, nameMidY);
             _noteRects[rowIndex] = new Rect(noteGlyphX - 2, nameMidY - 9, NoteIconWidth + 2, 18);
         }
+        if (showPr)
+        {
+            double prGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW + noteW;
+            DrawPrIcon(ctx, prGlyphX, nameMidY, session.PullRequest!.Value.State, hovered: _hoveredPrRow == rowIndex);
+            _prRects[rowIndex] = new Rect(prGlyphX - 2, nameMidY - 9, PrIconWidth + 2, 18);
+        }
 
-        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW + noteW;
+        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW + noteW + prW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
         // Git churn immediately right of the name: "+added" green, "-deleted" red.
@@ -2278,6 +2310,43 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(x + offset, top + offset, side, side), radius));
     }
 
+    // GitHub pull-request glyph: the git-merge octicon — a left "base" branch (two nodes joined by a
+    // vertical line) with a "source" node on the right curving down to merge into it. Coloured by the PR's
+    // state (open/draft/merged/closed); hover brightens. The nodes are filled dots, the lines stroked.
+    private static void DrawPrIcon(DrawingContext ctx, double x, double midY, PrState state, bool hovered)
+    {
+        IBrush brush = state switch
+        {
+            PrState.Merged => hovered ? PrMergedHover : PrMergedBrush,
+            PrState.Closed => hovered ? PrClosedHover : PrClosedBrush,
+            PrState.Draft  => hovered ? PrDraftHover  : PrDraftBrush,
+            _              => hovered ? PrOpenHover   : PrOpenBrush,
+        };
+        var pen = new Pen(brush, 1.4, null, PenLineCap.Round, PenLineJoin.Round);
+
+        const double node = 1.9;
+        double lx = x + 3;             // left (base) branch column
+        double rx = x + 11;            // right (source) node column
+        double top = midY - 5;
+        double bot = midY + 5;
+
+        // Base branch: a vertical line between a top and bottom node.
+        ctx.DrawLine(pen, new Point(lx, top + node), new Point(lx, bot - node));
+        ctx.DrawEllipse(brush, null, new Point(lx, top + node), node, node);
+        ctx.DrawEllipse(brush, null, new Point(lx, bot - node), node, node);
+
+        // Source node up on the right, curving down-left to merge into the base branch's midpoint.
+        ctx.DrawEllipse(brush, null, new Point(rx, top + node), node, node);
+        var merge = new StreamGeometry();
+        using (var gc = merge.Open())
+        {
+            gc.BeginFigure(new Point(rx, top + node * 2), isFilled: false);
+            gc.CubicBezierTo(new Point(rx, midY), new Point(lx, midY - node), new Point(lx, midY + 1));
+            gc.EndFigure(false);
+        }
+        ctx.DrawGeometry(null, pen, merge);
+    }
+
     // Stuck-detection warning: an amber triangle with an exclamation mark punched out of the panel bg.
     private static void DrawWarnIcon(DrawingContext ctx, double x, double midY)
     {
@@ -2468,6 +2537,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int art = HitTestArtifactIcon(p);
         if (art != _hoveredArtifactRow) { _hoveredArtifactRow = art; InvalidateVisual(); }
 
+        int prIcon = HitRect(_prRects, p);
+        if (prIcon != _hoveredPrRow) { _hoveredPrRow = prIcon; InvalidateVisual(); }
+
         bool overUpdate = _updateAvailable && _updateIconRect.Width > 0 && _updateIconRect.Contains(p);
         if (overUpdate != _hoveredUpdateIcon) { _hoveredUpdateIcon = overUpdate; InvalidateVisual(); }
 
@@ -2492,8 +2564,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + daemon worker lines +
         // artifacts + the update badge + outage footer + the scratch-pad note button + a row's note glyph +
         // the media buttons + the mic strip's app name); rows show only the highlight.
-        Cursor = (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || overUpdate || overFooter || overNote
-                  || overRowNote || media >= 0 || overMicLabel)
+        Cursor = (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || prIcon >= 0 || overUpdate || overFooter
+                  || overNote || overRowNote || media >= 0 || overMicLabel)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -2549,8 +2621,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredArtifactRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel;
-        _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredArtifactRow = -1;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredArtifactRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel;
+        _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
         _hoveredNoteButton = false;
@@ -2720,6 +2792,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // (a click never silently opens a link; you always see and choose from the list).
             var arts = artSession.Artifacts;
             if (arts.Count > 0) ShowArtifactPicker(arts);
+            return;
+        }
+
+        // The PR glyph pops a one-item flyout (title · state · #number) that opens the PR in a browser —
+        // the same click-then-choose shape as the artifact picker, so a click never silently navigates.
+        int prRow = HitRect(_prRects, p);
+        if (prRow >= 0 && _rows[prRow].Session is { PullRequest: { } pr })
+        {
+            ShowPrFlyout(pr);
             return;
         }
 
@@ -2942,6 +3023,24 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         foreach (var a in artifacts)
             items.Add(MenuItem(string.IsNullOrWhiteSpace(a.Title) ? a.Url : a.Title, () => ArtifactChosen?.Invoke(a)));
         ShowFlyout(items);
+    }
+
+    // Pops the PR summary at the cursor: a header line (state · #number) and the title, either of which
+    // opens the PR in the browser. A single flyout item keeps the "click to open" behaviour consistent
+    // with the artifact glyph. An empty URL (shouldn't happen) just does nothing.
+    private void ShowPrFlyout(PullRequestInfo pr)
+    {
+        string stateWord = pr.State switch
+        {
+            PrState.Merged => "Merged",
+            PrState.Closed => "Closed",
+            PrState.Draft  => "Draft",
+            _              => "Open",
+        };
+        string title = string.IsNullOrWhiteSpace(pr.Title) ? "(untitled)" : pr.Title;
+        // A menu header treats "_" as an access-key mnemonic, so double it to keep a literal underscore.
+        string label = $"#{pr.Number} - {stateWord}: {title}".Replace("_", "__");
+        ShowFlyout([MenuItem(label, () => { if (!string.IsNullOrEmpty(pr.Url)) OpenUrl(pr.Url); })]);
     }
 
     /// <summary>

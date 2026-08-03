@@ -137,7 +137,8 @@ public record ClaudeSession(
     string? ProjectNote = null,
     string? Model = null,                                              // model behind ContextWindow
     ContextWindowSource ContextSource = ContextWindowSource.Assumed,   // how ContextWindow was decided
-    ApiFailure? ApiFailure = null                                      // set iff Status == ApiError
+    ApiFailure? ApiFailure = null,                                     // set iff Status == ApiError
+    PullRequestInfo? PullRequest = null                               // the PR for Cwd's branch, if any
 )
 {
     /// <summary>
@@ -180,6 +181,16 @@ public record ClaudeSession(
     /// value isn't known yet, or <see cref="Cwd"/> isn't a git repo. See <see cref="GitStatsService"/>.
     /// </summary>
     public GitLineStats? GitStats { get; init; } = GitStats;
+
+    /// <summary>
+    /// The pull request for this session's working directory (<see cref="Cwd"/>) on its current branch,
+    /// read from the GitHub CLI. Null when the PR feature is off, the value isn't known yet, the directory
+    /// isn't a GitHub repo, or the branch simply has no PR. See <see cref="PrStatusService"/>.
+    /// </summary>
+    public PullRequestInfo? PullRequest { get; init; } = PullRequest;
+
+    /// <summary>True when this session's branch has a pull request to surface.</summary>
+    public bool HasPullRequest => PullRequest != null;
 
     /// <summary>How many tasks in the checklist are completed.</summary>
     public int CompletedTaskCount => Tasks.Count(t => t.State == TaskState.Completed);

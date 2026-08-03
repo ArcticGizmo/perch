@@ -514,6 +514,7 @@ public partial class App : Application
         c.SetShowNoteLine(s.ShowNotes);
         c.SetShowBurnRate(s.ShowBurnRate);
         c.SetShowGitStats(s.ShowGitStats);
+        c.SetShowPullRequests(s.ShowPullRequests);
         c.SetStuckDetectionEnabled(s.StuckDetectionEnabled);
         c.SetShowWaitingTimer(s.ShowWaitingTimer);
         c.SetWaitingTimerRedMinutes(s.WaitingTimerRedMinutes);
@@ -531,6 +532,8 @@ public partial class App : Application
         {
             _monitorHost.GitStatsEnabled = s.ShowGitStats;
             _monitorHost.StuckDetectionEnabled = s.StuckDetectionEnabled;
+            _monitorHost.PrEnabled = s.ShowPullRequests;
+            _monitorHost.PrIntervalMinutes = s.PullRequestIntervalMinutes;
         }
     }
 

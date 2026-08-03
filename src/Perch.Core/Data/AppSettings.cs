@@ -254,6 +254,19 @@ internal sealed class AppSettings
     // See Perch.Data.Hypertree and docs/hypertree-integration.md.
     public bool HypertreeEnabled { get; set; }
 
+    // GitHub pull requests. When on, each session whose working directory is a GitHub repo grows a merge
+    // glyph on its overlay row once its current branch has a PR — clicking it opens a small flyout (title,
+    // state, number) that links out to the PR in a browser. Off by default and load-bearing while off:
+    // nothing runs the gh CLI until it's turned on, so it costs nothing to those who don't want it. A PR is
+    // checked when a session first appears and then only every PullRequestIntervalMinutes, with "no PR"
+    // cached just as long, so gh runs rarely. A missing key keeps it off. See Perch.Data.PrStatusService.
+    public bool ShowPullRequests { get; set; }
+
+    // How often (minutes) to re-check a working directory's PR with gh; also how long a "no PR" answer is
+    // cached before the next check. Clamped to a sane floor when applied. Defaults to 5; a missing key
+    // keeps that.
+    public int PullRequestIntervalMinutes { get; set; } = 5;
+
     // Global keyboard shortcuts (system-wide, work even when Perch isn't focused). Each is registered on
     // startup and re-registered live when the Hotkeys settings page edits it. A binding that's disabled or
     // invalid simply isn't registered; the OS refusing a combo (another app owns it) is ignored. The

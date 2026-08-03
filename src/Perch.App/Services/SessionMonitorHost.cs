@@ -71,6 +71,12 @@ internal sealed class SessionMonitorHost : IDisposable
     /// by default in the monitor; the app sets it from settings.</summary>
     public bool GitStatsEnabled { set => _monitor.GitStatsEnabled = value; }
 
+    /// <summary>Turns the GitHub pull-request lookup on/off in the data layer (off ⇒ gh is never run).</summary>
+    public bool PrEnabled { set => _monitor.PrEnabled = value; }
+
+    /// <summary>How often (minutes) each working directory's PR is re-checked with gh.</summary>
+    public int PrIntervalMinutes { set => _monitor.PrIntervalMinutes = value; }
+
     /// <summary>Reads the initial session state and starts the safety-net reconcile timer. Call on the
     /// UI thread (Scan raises SessionsChanged).</summary>
     public void Start()

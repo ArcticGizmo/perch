@@ -34,6 +34,7 @@ internal static class HeadlessRenderer
             .SetupWithoutStarting();
 
         var canvas = new OverlayCanvas();
+        canvas.SetShowPullRequests(true);
         canvas.Update(SampleSessions());
         canvas.UpdateUsage(SampleUsage());
         canvas.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));
@@ -592,11 +593,14 @@ internal static class HeadlessRenderer
                 ExternalNotify: true,
                 // No session note, but a project note — so the row still shows the note glyph.
                 ProjectNote: "API freeze — ship v0.9 before merging anything",
+                PullRequest: new PullRequestInfo(1135, "https://github.com/o/r/pull/1135", "Surface PRs on the overlay", PrState.Open),
                 Artifacts: new List<Artifact> { new("https://claude.ai/code/artifact/1", "API report") }),
             new ClaudeSession("9012", "s3", SessionStatus.NeedsAttention, @"C:\src\docs", "docs-site", now,
-                BridgeSessionId: "bridge-xyz", Stuck: new StuckSignal(StuckKind.FailingLoop, "repeating build")),
+                BridgeSessionId: "bridge-xyz", Stuck: new StuckSignal(StuckKind.FailingLoop, "repeating build"),
+                PullRequest: new PullRequestInfo(88, "https://github.com/o/r/pull/88", "Draft: docs restructure", PrState.Draft)),
             new ClaudeSession("3456", "s4", SessionStatus.Idle, @"C:\src\scratch", "scratch", now,
-                Note: "don't touch — bisecting a flaky test"),
+                Note: "don't touch — bisecting a flaky test",
+                PullRequest: new PullRequestInfo(74, "https://github.com/o/r/pull/74", "Ship v0.9", PrState.Merged)),
             // A session whose last request to the API failed (529 Overloaded) — the red ApiError alert.
             new ClaudeSession("6543", "s6", SessionStatus.ApiError, @"C:\src\web", "web", now,
                 ApiFailure: new ApiFailure(529, "API Error: 529 Overloaded.")),
