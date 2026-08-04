@@ -942,10 +942,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// the desired new enabled state for the app to persist and apply.</summary>
     public event Action<bool>? UsageToggleRequested;
 
-    /// <summary>Raised when the user toggles the now-playing media strip from the header right-click menu;
-    /// carries the desired new enabled state for the app to persist, apply, and start/stop the listener.</summary>
-    public event Action<bool>? MediaControllerToggleRequested;
-
     /// <summary>Raised when the user picks "Show QR code" for a remote-controlled session. The QR window
     /// is Phase 5; this wires only the trigger. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
     internal event Action<ClaudeSession>? QrRequested;
@@ -2999,8 +2995,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 () => SystemMetricsToggleRequested?.Invoke(!_showSystemMetrics)));
             items.Add(MenuItem(_usageEnabled ? "Hide usage" : "Show usage",
                 () => UsageToggleRequested?.Invoke(!_usageEnabled)));
-            items.Add(MenuItem(_mediaEnabled ? "Hide media controller" : "Show media controller",
-                () => MediaControllerToggleRequested?.Invoke(!_mediaEnabled)));
             items.Add(MenuItem("Exit Perch", () => ExitRequested?.Invoke()));
         }
 

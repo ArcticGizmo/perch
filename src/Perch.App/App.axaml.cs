@@ -209,7 +209,6 @@ public partial class App : Application
             _overlay.Canvas.ExitRequested += () => desktop.Shutdown();
             _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
             _overlay.Canvas.UsageToggleRequested += SetUsageEnabled;
-            _overlay.Canvas.MediaControllerToggleRequested += SetMediaControllerEnabled;
             _overlay.Canvas.HistoryRequested += OpenHistory;
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
@@ -680,20 +679,6 @@ public partial class App : Application
         _appSettings.Save();
         _overlay.Canvas.SetShowUsage(enabled);
         if (enabled) _usageHost?.Start(); else _usageHost?.Stop();
-        _settings?.SyncDisplayToggles();
-    }
-
-    // Toggle the now-playing media strip from the header right-click menu — the counterpart of the Music
-    // page's toggle: persist the flag, apply it to the canvas, start/stop the media-session listener, and
-    // sync an open Settings window so the menu and the page never disagree.
-    private void SetMediaControllerEnabled(bool enabled)
-    {
-        if (_appSettings is null || _overlay is null) return;
-        if (_appSettings.ShowMediaController == enabled) return;
-        _appSettings.ShowMediaController = enabled;
-        _appSettings.Save();
-        _overlay.Canvas.SetShowMediaController(enabled);
-        if (enabled) _mediaHost?.Start(); else _mediaHost?.Stop();
         _settings?.SyncDisplayToggles();
     }
 
