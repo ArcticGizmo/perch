@@ -11,9 +11,10 @@ namespace Perch.Avalonia.Views;
 /// <summary>
 /// The owner-drawn "trophy cabinet" — the whole-window achievements view, hosted by
 /// <c>AchievementsWindow</c>. A title + "N / M unlocked" tally over the shared <see cref="AchievementGrid"/>
-/// in its roomy variant (bigger tiles that carry each badge's criteria, so locked ones tell you how to earn
-/// them). One <see cref="Draw"/> routine measures (null context) and paints, so height never drifts from
-/// layout.
+/// in its roomy, grouped variant (bigger tiles carrying each badge's criteria, split into themed sections
+/// so locked ones tell you how to earn them). A live search filter (set by the host's search box) narrows
+/// the wall to matching tiles while the tally keeps counting the whole set. One <see cref="Draw"/> routine
+/// measures (null context) and paints, so height never drifts from layout.
 /// </summary>
 internal sealed class AchievementsDashboard : Control
 {
@@ -25,6 +26,7 @@ internal sealed class AchievementsDashboard : Control
     private const double H1Size = 20, BodySize = 13, Pad = 22, HeaderH = 58;
 
     private IReadOnlyList<Achievement> _badges = [];
+    private string _query = "";
     private string? _subtitle;
     private bool _loading = true;
 
@@ -46,6 +48,34 @@ internal sealed class AchievementsDashboard : Control
         _loading = false;
         InvalidateMeasure();
         InvalidateVisual();
+    }
+
+    /// <summary>Narrows the visible tiles to those matching <paramref name="query"/> (name, theme, category
+    /// or criteria); a query of only question marks (<c>?</c>/<c>???</c>) surfaces the still-mystery tiles.
+    /// The tally still reflects the whole set. An empty query shows everything.</summary>
+    public void SetFilter(string query)
+    {
+        query = query.Trim();
+        if (query == _query) return;
+        _query = query;
+        InvalidateMeasure();
+        InvalidateVisual();
+    }
+
+    // The tiles to actually draw for the current query. A locked secret is matched only on its cryptic hint
+    // (its real name/criteria stay hidden), so search can't leak an unearned secret.
+    private IReadOnlyList<Achievement> Visible() =>
+        _query.Length == 0 ? _badges : _badges.Where(b => Matches(b, _query)).ToList();
+
+    private static bool Matches(Achievement b, string q)
+    {
+        static bool Has(string s, string q) => s.Contains(q, StringComparison.OrdinalIgnoreCase);
+        bool masked = b is { Secret: true, Earned: false };
+        // A query of nothing but question marks surfaces the mystery tiles — the ones drawn as "???".
+        if (q.All(ch => ch == '?')) return masked;
+        if (masked) return Has(b.Description, q);   // hint only, so search can't spoil an unearned secret
+        return Has(b.Name, q) || Has(b.Group, q) || Has(b.Category, q) || Has(b.Description, q)
+            || b.Levels.Any(l => Has(l.Name, q));
     }
 
     protected override Size MeasureOverride(Size availableSize)
@@ -85,17 +115,28 @@ internal sealed class AchievementsDashboard : Control
             return y + 40;
         }
 
-        y = AchievementGrid.Draw(ctx, _badges, x, y, innerW, targetTileW: 200, emojiSize: 30, showDescription: true);
+        var visible = Visible();
+        if (visible.Count == 0)   // a search that matched nothing
+        {
+            Text(ctx, $"No achievements match “{_query}”.", BodySize, MutedBrush, x, y);
+            return y + 40;
+        }
+
+        y = AchievementGrid.Draw(ctx, visible, x, y, innerW, targetTileW: 200, emojiSize: 30,
+            showDescription: true, grouped: true);
         return y + Pad;
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
-        if (BadgeActivated is null || _loading || _badges.Count == 0) return;
+        if (BadgeActivated is null || _loading) return;
+        var visible = Visible();
+        if (visible.Count == 0) return;
         // Same geometry Draw uses: grid starts a header's-height below the title, inset by the padding.
-        var hit = AchievementGrid.HitTest(_badges, e.GetPosition(this),
-            Pad, Pad + HeaderH, Bounds.Width - Pad * 2, targetTileW: 200, emojiSize: 30, showDescription: true);
+        var hit = AchievementGrid.HitTest(visible, e.GetPosition(this),
+            Pad, Pad + HeaderH, Bounds.Width - Pad * 2, targetTileW: 200, emojiSize: 30,
+            showDescription: true, grouped: true);
         if (hit is not null) BadgeActivated(hit);
     }
 

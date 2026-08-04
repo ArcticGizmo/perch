@@ -16,13 +16,15 @@ internal sealed record AchievementLevel(
 /// reached, the display fields showing the current rung (or the first rung as the goal when none are), and
 /// <see cref="Progress"/> tracking the climb through the current band. <see cref="Category"/> is the small
 /// grey label ("Tokens", "Streak") that says what the levels are comparing; it's empty for one-off badges
-/// (a single rung, or a condition with no meaningful "how close"). <see cref="Levels"/> carries every rung
-/// so the unlock service can tell which were newly reached.
+/// (a single rung, or a condition with no meaningful "how close"). <see cref="Group"/> is the broad theme
+/// the trophy cabinet sorts tiles under ("Tokens", "Activity", "Tools", …) — coarser than
+/// <see cref="Category"/>, and shared across families. <see cref="Levels"/> carries every rung so the
+/// unlock service can tell which were newly reached.
 /// </summary>
 internal sealed record Achievement(
     string Id, string Category, string Name, string Emoji, string Description, AchievementTier Tier,
     bool Earned, int Level, int MaxLevel, double? Progress, IReadOnlyList<AchievementLevel> Levels,
-    bool Secret = false);
+    bool Secret = false, string Group = "");
 
 /// <summary>
 /// The Perch achievement catalogue — collectible tray trophies derived from lifetime stats. Every badge is
@@ -68,20 +70,29 @@ internal static class AchievementCatalog
             "Earn every other badge", AchievementTier.Gold, earned);
         return new Achievement("completionist", "", "Completionist", "🏆",
             earned ? "Earn every other badge" : "There is nothing left to prove.",
-            AchievementTier.Gold, earned, earned ? 1 : 0, 1, null, [level], Secret: true);
+            AchievementTier.Gold, earned, earned ? 1 : 0, 1, null, [level], Secret: true, Group: "Special");
     }
 
     private static List<Family> BuildFamilies()
     {
         const double K = 1_000, M = 1_000_000, B = 1_000_000_000;
 
-        return new List<Family>
+        var families = new List<Family>();
+
+        // Each badge is filed under a broad theme (the trophy cabinet groups tiles by it, so related
+        // milestones sit together rather than being scattered by tier). The declaration order here is the
+        // order the groups appear on the wall. `Group` just tags a batch — the families themselves are
+        // unchanged.
+        void Group(string group, params Family[] fams)
         {
-            // ── Scaling families (level up in place) ──
-            // Tokens split by billing class rather than one lumped total: cache reads dwarf everything (often
-            // >95% of the sum), so a single "total tokens" tile just measures caching. Three separate climbs —
-            // what you send (input), what the model writes back (output), and what rides the cache — each tell
-            // a different story and scale very differently, hence the very different rung spacing.
+            foreach (var f in fams) families.Add(f with { Group = group });
+        }
+
+        // ── Tokens: what you send, what the model writes back, and what rides the cache ──
+        // Split by billing class rather than one lumped total: cache reads dwarf everything (often >95% of
+        // the sum), so a single "total tokens" tile just measures caching. Three separate climbs each tell a
+        // different story and scale very differently, hence the very different rung spacing.
+        Group("Tokens",
             Family.Levelled("input", "Input", c => c.Input,
                 R("scribbler",       "Scribbler",        "📝", AchievementTier.Bronze, 100 * K, "100K input tokens"),
                 R("wordsmith",       "Wordsmith",        "✍️", AchievementTier.Bronze, 1 * M,   "1M input tokens"),
@@ -103,6 +114,11 @@ internal static class AchievementCatalog
                 R("cachecow",   "Cache Cow",   "🤑", AchievementTier.Gold,   10 * B,  "10B cached tokens"),
                 R("cachebaron", "Cache Baron", "👑", AchievementTier.Gold,   100 * B, "100B cached tokens")),
 
+            Family.Conditional("cache-money", "Cache Money", "🪙", "More cache reads than fresh input",
+                AchievementTier.Bronze, c => c.CacheRead > c.Input && c.Input > 0));
+
+        // ── Activity: how much and how long you've been at it ──
+        Group("Activity",
             Family.Levelled("sessions", "Sessions", c => c.Sessions,
                 R("firstflight",   "First Flight",   "🐣", AchievementTier.Bronze, 1,     "1 session"),
                 R("frequentflyer", "Frequent Flyer", "🕊️", AchievementTier.Bronze, 10,    "10 sessions"),
@@ -115,21 +131,11 @@ internal static class AchievementCatalog
                 R("filibuster",        "Filibuster",        "📢", AchievementTier.Silver, 10_000,   "10,000 prompts"),
                 R("motormouth",        "Motormouth",        "🎤", AchievementTier.Gold,   100_000,  "100,000 prompts")),
 
-            Family.Levelled("toolcalls", "Tool calls", c => c.ToolCalls,
-                R("handy",     "Handy",     "🔧", AchievementTier.Bronze, 1_000,   "1,000 tool calls"),
-                R("toolshed",  "Toolshed",  "🧰", AchievementTier.Silver, 10_000,  "10,000 tool calls"),
-                R("toolsmith", "Toolsmith", "⚙️", AchievementTier.Gold,   100_000, "100,000 tool calls")),
-
             Family.Levelled("activetime", "Active time", c => c.ActiveHours,
                 R("clockingin",  "Clocking In",     "⏰", AchievementTier.Bronze, 24,    "24 hours active"),
                 R("timesink",    "Time Sink",       "🕳️", AchievementTier.Silver, 100,   "100 hours active"),
                 R("whatissleep", "What Is Sleep?",  "💀", AchievementTier.Gold,   500,   "500 hours active"),
                 R("thousandhr",  "1,000-Hour Club", "🧘", AchievementTier.Gold,   1_000, "1,000 hours active")),
-
-            Family.Levelled("spend", "Spend", c => (double)c.Cost, needsCost: true,
-                R("bigspender", "Big Spender", "💸", AchievementTier.Silver, 100,    "$100 equivalent"),
-                R("whale",      "Whale",       "🐋", AchievementTier.Gold,   1_000,  "$1,000 equivalent"),
-                R("kingpin",    "Kingpin",     "💰", AchievementTier.Gold,   10_000, "$10,000 equivalent")),
 
             Family.Levelled("streak", "Streak", c => c.Streak,
                 R("warmedup",    "Warmed Up",   "🔥", AchievementTier.Bronze, 3,   "3-day streak"),
@@ -142,38 +148,27 @@ internal static class AchievementCatalog
                 R("creatureofhabit", "Creature of Habit", "🗓️", AchievementTier.Silver, 100, "100 active days"),
                 R("yearrounder",     "Year-Rounder",      "🎂", AchievementTier.Gold,   365, "365 active days")),
 
-            Family.Levelled("subagents", "Sub-agents", c => c.SubAgents,
-                R("delegator",     "Delegator",      "🤝", AchievementTier.Bronze, 1,      "1 sub-agent"),
-                R("middlemanager", "Middle Manager", "👔", AchievementTier.Silver, 100,    "100 sub-agents"),
-                R("puppetmaster",  "Puppet Master",  "🎭", AchievementTier.Gold,   1_000,  "1,000 sub-agents"),
-                R("overlord",      "Overlord",       "🐙", AchievementTier.Gold,   10_000, "10,000 sub-agents")),
-
             Family.Levelled("longest", "Longest session", c => c.LongestSessionHours,
                 R("marathoner",      "Marathoner",      "🏃", AchievementTier.Silver, 2, "2-hour session"),
                 R("ultramarathoner", "Ultramarathoner", "🥵", AchievementTier.Gold,   4, "4-hour session"),
                 R("ironbutt",        "Iron Butt",       "🪑", AchievementTier.Gold,   8, "8-hour session")),
 
-            Family.Levelled("projects", "Projects", c => c.Projects,
-                R("multitasker", "Multitasker", "🗂️", AchievementTier.Bronze, 5,  "5 projects"),
-                R("nomad",       "Nomad",       "🧭", AchievementTier.Silver, 15, "15 projects"),
-                R("polymath",    "Polymath",    "🌐", AchievementTier.Gold,   40, "40 projects")),
+            Family.Levelled("spend", "Spend", c => (double)c.Cost, needsCost: true,
+                R("bigspender", "Big Spender", "💸", AchievementTier.Silver, 100,    "$100 equivalent"),
+                R("whale",      "Whale",       "🐋", AchievementTier.Gold,   1_000,  "$1,000 equivalent"),
+                R("kingpin",    "Kingpin",     "💰", AchievementTier.Gold,   10_000, "$10,000 equivalent")));
 
-            Family.Levelled("branches", "Branches", c => c.Branches,
-                R("branchhopper",  "Branch Hopper",  "🌱", AchievementTier.Bronze, 5,  "5 branches"),
-                R("branchmanager", "Branch Manager", "🌿", AchievementTier.Silver, 10, "10 branches"),
-                R("arborist",      "Arborist",       "🌳", AchievementTier.Gold,   25, "25 branches")),
+        // ── Tools: reaching for the toolbox, and how you spread across it ──
+        Group("Tools",
+            Family.Levelled("toolcalls", "Tool calls", c => c.ToolCalls,
+                R("handy",     "Handy",     "🔧", AchievementTier.Bronze, 1_000,   "1,000 tool calls"),
+                R("toolshed",  "Toolshed",  "🧰", AchievementTier.Silver, 10_000,  "10,000 tool calls"),
+                R("toolsmith", "Toolsmith", "⚙️", AchievementTier.Gold,   100_000, "100,000 tool calls")),
 
-            Family.Levelled("teammates", "Teammates", c => c.Teammates,
-                R("teamcaptain",  "Team Captain",  "🧢", AchievementTier.Bronze, 1,  "1 teammate"),
-                R("fieldmarshal", "Field Marshal", "🎖️", AchievementTier.Gold,   10, "10 teammates")),
-
-            // ── One-off quota badges (single rung + progress bar, no category) ──
-            Family.Single("around-the-clock", "Around the Clock", "🕛", "Activity in all 24 hours",
-                AchievementTier.Gold, c => c.ActiveHourCount, 24),
-            Family.Single("model-citizen", "Model Citizen", "🎛️", "Three model families",
-                AchievementTier.Silver, c => c.ModelFamilies, 3),
             Family.Single("jack-of-all-tools", "Jack of All Tools", "🃏", "Eight different tools",
                 AchievementTier.Gold, c => c.DistinctTools, 8),
+            Family.Single("model-citizen", "Model Citizen", "🎛️", "Three model families",
+                AchievementTier.Silver, c => c.ModelFamilies, 3),
             Family.Single("grep-goblin", "Grep Goblin", "🔍", "500 Grep calls",
                 AchievementTier.Silver, c => c.Tool("Grep"), 500),
             Family.Single("bash-brawler", "Bash Brawler", "💥", "500 Bash calls",
@@ -190,39 +185,66 @@ internal static class AchievementCatalog
                 AchievementTier.Silver, c => c.Tool("TodoWrite"), 500),
             Family.Single("plan-b", "Plan B", "🗺️", "25 ExitPlanMode calls",
                 AchievementTier.Bronze, c => c.Tool("ExitPlanMode"), 25),
+            Family.Conditional("one-trick-pony", "One-Trick Pony", "🐴", "One tool is 90% of your calls",
+                AchievementTier.Bronze, c => c.ToolCalls >= 100 && c.TopToolShare >= 0.9));
 
-            // ── One-off conditional badges (no bar) ──
+        // ── Collaboration: sub-agents, teammates, and the breadth of what you touch ──
+        Group("Collaboration",
+            Family.Levelled("subagents", "Sub-agents", c => c.SubAgents,
+                R("delegator",     "Delegator",      "🤝", AchievementTier.Bronze, 1,      "1 sub-agent"),
+                R("middlemanager", "Middle Manager", "👔", AchievementTier.Silver, 100,    "100 sub-agents"),
+                R("puppetmaster",  "Puppet Master",  "🎭", AchievementTier.Gold,   1_000,  "1,000 sub-agents"),
+                R("overlord",      "Overlord",       "🐙", AchievementTier.Gold,   10_000, "10,000 sub-agents")),
+
+            Family.Levelled("teammates", "Teammates", c => c.Teammates,
+                R("teamcaptain",  "Team Captain",  "🧢", AchievementTier.Bronze, 1,  "1 teammate"),
+                R("fieldmarshal", "Field Marshal", "🎖️", AchievementTier.Gold,   10, "10 teammates")),
+
+            Family.Levelled("projects", "Projects", c => c.Projects,
+                R("multitasker", "Multitasker", "🗂️", AchievementTier.Bronze, 5,  "5 projects"),
+                R("nomad",       "Nomad",       "🧭", AchievementTier.Silver, 15, "15 projects"),
+                R("polymath",    "Polymath",    "🌐", AchievementTier.Gold,   40, "40 projects")),
+
+            Family.Levelled("branches", "Branches", c => c.Branches,
+                R("branchhopper",  "Branch Hopper",  "🌱", AchievementTier.Bronze, 5,  "5 branches"),
+                R("branchmanager", "Branch Manager", "🌿", AchievementTier.Silver, 10, "10 branches"),
+                R("arborist",      "Arborist",       "🌳", AchievementTier.Gold,   25, "25 branches")));
+
+        // ── Rhythm: the clock-face of when you work (plus the after-dark secrets) ──
+        Group("Rhythm",
+            Family.Single("around-the-clock", "Around the Clock", "🕛", "Activity in all 24 hours",
+                AchievementTier.Gold, c => c.ActiveHourCount, 24),
             Family.Conditional("night-owl", "Night Owl", "🦉", "Your busiest hour is after dark",
                 AchievementTier.Bronze, c => c.PeakHour is >= 22 or (>= 0 and <= 4)),
             Family.Conditional("early-bird", "Early Bird", "🌅", "Your busiest hour is at first light",
                 AchievementTier.Bronze, c => c.PeakHour is >= 5 and <= 8),
             Family.Conditional("the-3am-club", "The 3am Club", "🌚", "Logged work in the 3am hour",
                 AchievementTier.Silver, c => c.HourActive(3)),
-            Family.Conditional("cache-money", "Cache Money", "🪙", "More cache reads than fresh input",
-                AchievementTier.Bronze, c => c.CacheRead > c.Input && c.Input > 0),
-            Family.Conditional("one-trick-pony", "One-Trick Pony", "🐴", "One tool is 90% of your calls",
-                AchievementTier.Bronze, c => c.ToolCalls >= 100 && c.TopToolShare >= 0.9),
 
-            // ── Secret badges (masked as a "???" mystery tile until earned; only the cryptic hint shows) ──
+            // Secret badges (masked as a "???" mystery tile until earned; only the cryptic hint shows).
             Family.Hidden("the-witching-hour", "The Witching Hour", "🌙",
                 "Something stirs when the clocks reset.", "Logged work in the midnight hour",
                 AchievementTier.Silver, c => c.HourActive(0)),
             Family.Hidden("nocturnal", "Nocturnal", "🦇",
                 "You prefer the dark.", "More work at night (10pm–4am) than by day",
                 AchievementTier.Silver, c => c.NightActiveSeconds > c.DayActiveSeconds && c.NightActiveSeconds > 0),
-            Family.Hidden("elite", "Elite", "🔢",
-                "1337.", "1,337 prompts",
-                AchievementTier.Silver, c => c.Prompts >= 1337),
-            Family.Hidden("the-answer", "The Answer", "🌌",
-                "Life, the universe, and everything.", "42 active days",
-                AchievementTier.Gold, c => c.ActiveDays >= 42),
             Family.Hidden("flat-circle", "Time Is a Flat Circle", "⭕",
                 "You should have stopped hours ago.", "A single session over 12 hours",
                 AchievementTier.Gold, c => c.LongestSessionHours >= 12),
             Family.Hidden("groundhog-day", "Groundhog Day", "🔁",
                 "It keeps happening. All of it.", "Active every day of one calendar week (Mon–Sun)",
-                AchievementTier.Gold, c => c.PerfectCalendarWeek),
-        };
+                AchievementTier.Gold, c => c.PerfectCalendarWeek));
+
+        // ── Special: the number-nerd secrets and the capstone (Completionist is appended in Evaluate) ──
+        Group("Special",
+            Family.Hidden("elite", "Elite", "🔢",
+                "1337.", "1,337 prompts",
+                AchievementTier.Silver, c => c.Prompts >= 1337),
+            Family.Hidden("the-answer", "The Answer", "🌌",
+                "Life, the universe, and everything.", "42 active days",
+                AchievementTier.Gold, c => c.ActiveDays >= 42));
+
+        return families;
     }
 
     private static Rung R(string id, string name, string emoji, AchievementTier tier, double target, string criteria) =>
@@ -236,7 +258,7 @@ internal static class AchievementCatalog
     private sealed record Family(
         string Id, string Category, bool NeedsCost,
         Func<Ctx, double>? Metric, IReadOnlyList<Rung> Rungs, Func<Ctx, bool>? Condition,
-        bool Secret = false, string Hint = "")
+        bool Secret = false, string Hint = "", string Group = "")
     {
         public static Family Levelled(string id, string category, Func<Ctx, double> metric, params Rung[] rungs) =>
             new(id, category, false, metric, rungs, null);
@@ -309,7 +331,7 @@ internal static class AchievementCatalog
                     : (max > 1 ? $"Maxed — {cur.Criteria}" : cur.Criteria);
 
             return new Achievement(Id, Category, cur.Name, cur.Emoji, description, cur.Tier,
-                earned, level, max, progress, levels, Secret);
+                earned, level, max, progress, levels, Secret, Group);
         }
     }
 

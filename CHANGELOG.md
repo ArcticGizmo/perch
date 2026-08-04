@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.39] - 2026-08-04
+
+- Achievements window opens wider — three trophies across by default
+- Search box filters the wall live; `?` rounds up just the mystery tiles
+- Trophies group by theme instead of scattering across tiers, each section keeping its own tally
+
+---
+
 ## [v0.2.38] - 2026-08-04
 
 - Achievement cards and toasts now spell out the criteria that fired them ("1M input tokens")

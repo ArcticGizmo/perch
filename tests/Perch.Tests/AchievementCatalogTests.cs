@@ -192,6 +192,27 @@ public class AchievementCatalogTests
     }
 
     [Fact]
+    public void EveryBadge_IsFiledUnderAKnownGroup()
+    {
+        // Guards against a new family being added outside a Group(...) batch (which would leave it
+        // ungrouped, so the trophy cabinet would drop it into an empty-named section).
+        string[] known = ["Tokens", "Activity", "Tools", "Collaboration", "Rhythm", "Special"];
+        Assert.All(Eval(Report()), f => Assert.Contains(f.Group, known));
+    }
+
+    [Theory]
+    [InlineData("input", "Tokens")]
+    [InlineData("cache-money", "Tokens")]
+    [InlineData("streak", "Activity")]
+    [InlineData("grep-goblin", "Tools")]
+    [InlineData("teammates", "Collaboration")]
+    [InlineData("night-owl", "Rhythm")]
+    [InlineData("elite", "Special")]
+    [InlineData("completionist", "Special")]
+    public void Badge_IsInExpectedGroup(string id, string group) =>
+        Assert.Equal(group, Fam(Eval(Report()), id).Group);
+
+    [Fact]
     public void Completionist_IsSecretAndUnearnedUntilEverythingElseIs()
     {
         var completionist = Fam(Eval(Report()), "completionist");

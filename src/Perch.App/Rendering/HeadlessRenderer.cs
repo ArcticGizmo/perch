@@ -196,7 +196,7 @@ internal static class HeadlessRenderer
 
         // Dedicated Achievements window (the "trophy cabinet"): the roomy grid variant with per-badge
         // criteria lines, fed the same all-time sample so earned + locked tiles both show.
-        var cabinet = new Views.AchievementsDashboard { Width = 640 };
+        var cabinet = new Views.AchievementsDashboard { Width = 840 };
         cabinet.SetBadges(AchievementCatalog.Evaluate(allReport, allRange, includeCost: true),
             "your lifetime trophies · since Jan 2026");
         RenderControl(cabinet, Path.Combine(outDir, "achievements_1x.png"), 96);

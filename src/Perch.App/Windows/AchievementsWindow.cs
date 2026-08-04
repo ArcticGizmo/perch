@@ -2,8 +2,10 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
 using Perch.Data;
 
@@ -13,11 +15,17 @@ namespace Perch.Avalonia.Windows;
 /// The "trophy cabinet" window: the whole lifetime achievement set, opened from the tray. Always all-time
 /// (badges are lifetime), so there's no scope toolbar — it scans every transcript once on open, evaluates
 /// the catalogue off the UI thread (the CLAUDE.md load pattern), and hands the badges to the owner-drawn
-/// <see cref="AchievementsDashboard"/>. Escape closes; created lazily and reused via <c>WindowHost</c>.
+/// <see cref="AchievementsDashboard"/>. A search box at the top filters the wall live. Wide enough to lay
+/// the tiles three across by default. Escape clears the search (then closes); created lazily and reused via
+/// <c>WindowHost</c>.
 /// </summary>
 internal sealed class AchievementsWindow : Window
 {
+    private static readonly IBrush BodyBg   = new SolidColorBrush(Color.FromRgb(18, 18, 24));
+    private static readonly IBrush SearchBg = new SolidColorBrush(Color.FromRgb(24, 24, 34));
+
     private readonly AchievementsDashboard _dashboard = new();
+    private readonly TextBox _search;
     private readonly bool _showCost;
 
 #if DEBUG
@@ -29,15 +37,36 @@ internal sealed class AchievementsWindow : Window
     public AchievementsWindow(AppSettings settings)
     {
         Title = "Achievements";
-        Width = 640;
-        Height = 720;
+        Width = 840;   // three 200px tiles across, with room to spare
+        Height = 760;
         MinWidth = 460;
         MinHeight = 420;
-        Background = new SolidColorBrush(Color.FromRgb(18, 18, 24));
+        Background = BodyBg;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
         _showCost = settings.ShowEstimatedCost;
-        Content = new ScrollViewer { Content = _dashboard, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+
+        _search = new TextBox
+        {
+            PlaceholderText = "Search achievements…",
+            Background = SearchBg, Foreground = Palette.FgBrush,
+            BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8), FontSize = 14, Padding = new Thickness(10, 8),
+            Margin = new Thickness(22, 18, 22, 4),
+        };
+        _search.TextChanged += (_, _) => _dashboard.SetFilter(_search.Text ?? "");
+
+        var scroll = new ScrollViewer
+        {
+            Content = _dashboard,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+
+        var dock = new DockPanel();
+        DockPanel.SetDock(_search, Dock.Top);
+        dock.Children.Add(_search);
+        dock.Children.Add(scroll);
+        Content = dock;
 
 #if DEBUG
         _dashboard.BadgeActivated += a =>
@@ -58,7 +87,13 @@ internal sealed class AchievementsWindow : Window
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
-        if (e.Key == Key.Escape) { Close(); e.Handled = true; }
+        // Escape backs out one step at a time: clear an active search first, then close.
+        if (e.Key == Key.Escape)
+        {
+            if (_search.Text is { Length: > 0 }) _search.Text = "";
+            else Close();
+            e.Handled = true;
+        }
         base.OnKeyDown(e);
     }
 
