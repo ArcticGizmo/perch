@@ -104,6 +104,18 @@ running the tray app.
 - **Single reused window instances.** Settings / history / stats / flight windows are created lazily and
   reused via `WindowHost.ShowOrFocus`; they're closed together in `App` (Exit / update flow via
   `CloseAuxWindows`). Wire any new top-level window into that idiom.
+- **Settings are registry-driven — add a `SettingDescriptor`, not another page.** Every user-facing setting
+  is described once in `Perch.Core/Data/SettingsRegistry` (id, name, keywords, surface, kind, the
+  `AppSettings` property it backs, and a `PreviewTarget`). That one entry powers the **Search** page, the
+  surface **Features** catalogue (`SettingsCatalogView`), and the docked **live preview** — a real
+  `OverlayCanvas` (`Views/PreviewPane`) seeded from `Rendering/SampleData` and re-gated through the shared
+  `Services/OverlaySettingsGates.Apply(canvas, settings)`, the same helper the live overlay uses. When you
+  add a setting: add the `AppSettings` property **and** a registry descriptor (a coverage test,
+  `SettingsRegistryTests`, fails the build otherwise); if it drives an overlay glyph, add a canvas `Set*`
+  gate + a line in `OverlaySettingsGates` and a `PreviewTarget`; if it needs live activation beyond the
+  idempotent `DisplayChanged` (a poll/sampler), extend `SettingsLiveApply`. The pre-registry per-topic
+  pages (Indicators, Monitoring, Usage, …) are retired; a handful of pages with unique actions/editors
+  remain (Stats, Notifications, Quick Links, Export, About, Changelog, …).
 - **Don't assume a Velopack install.** Perch also ships as Velopack's portable zip, extracted wherever the
   user likes. `Services/InstallChannel` classifies the running copy (`Setup` / `Portable` / `Unpackaged`);
   anything that *writes to the install dir or applies an update* must gate on `InstallChannel.SelfUpdates`.

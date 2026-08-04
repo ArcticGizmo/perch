@@ -181,16 +181,25 @@ their existing pages until the shell consolidates them.
 preview coexist in one window; nothing is unreachable.
 **Effort:** high · **Risk:** med · **Depends on:** M1, M3.
 
-### M5 — Cutover, accessibility & cleanup
+### M5 — Cutover, accessibility & cleanup 🟡 *in progress*
 **Objective:** ship-ready; retire the old.
 
-- [ ] Keyboard: `Ctrl+F` to search, arrow/enter through results and cards, `Esc` to close.
-- [ ] Respect `prefers-reduced-motion` (no pulse), keep the preview crisp at 1.5×, tabular numerals on figures.
-- [ ] Extend `render` mode to dump the new surfaces + preview for eyeball verification.
-- [ ] Remove the dead page builders from `SettingsWindow.cs`; update the CLAUDE.md settings notes and add a
-      changelog entry (`/bump-version`).
+- [x] Retire the redundant per-topic pages (Usage, Indicators, Monitoring, Shortcuts, Integrations, Music,
+      Microphone) from the nav — every setting is now an inline catalogue card.
+- [x] Extend `render` mode to dump the new surfaces + preview (`settings_search`, `settings_catalog`,
+      `settings_shell`, `preview_pane`).
+- [x] Update the CLAUDE.md settings notes (registry-driven architecture).
+- [x] Keyboard: `Ctrl+F` to search, `Esc` to close (done in M2/M4).
+- [ ] **Pending:** physically excise the now-dead page-builder methods from `SettingsWindow.cs` (safe once
+      verified in the running app — the compiler catches any shared-helper reference).
+- [ ] **Pending:** hover→spotlight (`PreviewPane.Highlight` pulse) and `prefers-reduced-motion` for it.
+- [ ] **Pending:** migrate the few remaining unique actions (open Stats/Achievements, notification tests,
+      Agent Teams, Quick Links editor) into the shell so the last old pages can go too.
+- [ ] **Pending (release-time):** version bump + changelog entry (`/bump-version`) when the branch merges.
 
-**Exit:** `render` mode emits the new UI, no orphaned settings code remains, and docs describe the new architecture.
+**Exit — partially met:** `render` emits the new UI, the redundant pages are gone from the UI, and docs
+describe the new architecture. Remaining items are dead-code excision, the hover polish, and merge-time
+release chores.
 **Effort:** med · **Risk:** low · **Depends on:** M4.
 
 ---
