@@ -384,6 +384,14 @@ internal sealed class AppSettings
         ShowSlack     = null;
     }
 
+    // A detached deep copy, made through the same JSON round-trip used to persist — so the Settings live
+    // preview can mutate a snapshot and render it against a throwaway overlay without touching (or saving)
+    // the user's real settings. `this` is already migrated, so the copy needs no re-migration: the legacy
+    // nullable keys are cleared (and skipped when writing null), and QuickLinks is non-null so its one-time
+    // seed doesn't re-run on the clone.
+    public AppSettings Clone() =>
+        JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(this)) ?? new();
+
     public void Save()
     {
         try
