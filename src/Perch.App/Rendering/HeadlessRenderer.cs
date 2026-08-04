@@ -1,10 +1,13 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Perch.Avalonia.Services;
 using Perch.Avalonia.Views;
 using Perch.Avalonia.Windows;
 using Perch.Data;
@@ -35,8 +38,8 @@ internal static class HeadlessRenderer
 
         var canvas = new OverlayCanvas();
         canvas.SetShowPullRequests(true);
-        canvas.Update(SampleSessions());
-        canvas.UpdateUsage(SampleUsage());
+        canvas.Update(SampleData.Sessions());
+        canvas.UpdateUsage(SampleData.Usage());
         canvas.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));
         canvas.UpdateSessionMetrics(new Dictionary<string, SessionMetrics>
         {
@@ -68,12 +71,12 @@ internal static class HeadlessRenderer
         // first sample session the same way the right-click menu does, then repaint.
         canvas.SetUpdateAvailable(false);
         canvas.SetConfettiFinishAvailable(true);
-        canvas.ToggleConfetti(SampleSessions()[1].SessionId);   // the "api" row: short name, shows the glyph cluster
+        canvas.ToggleConfetti(SampleData.Sessions()[1].SessionId);   // the "api" row: short name, shows the glyph cluster
         RenderControl(canvas, Path.Combine(outDir, "overlay_confetti_1x.png"), 96);
         RenderControl(canvas, Path.Combine(outDir, "overlay_confetti_1.5x.png"), 144);
 
         var probe = new OverlayCanvas();
-        probe.Update(SampleSessions());
+        probe.Update(SampleData.Sessions());
         probe.StartAutoCloseCountdown(20_000);
         RenderControl(probe, Path.Combine(outDir, "overlay_autoclose_1x.png"), 96);
 
@@ -81,7 +84,7 @@ internal static class HeadlessRenderer
         // Rendered "playing" (pause glyph shown) with previous disabled, to exercise the enabled/disabled
         // button styling and the label truncation.
         var mediaProbe = new OverlayCanvas();
-        mediaProbe.Update(SampleSessions());
+        mediaProbe.Update(SampleData.Sessions());
         mediaProbe.SetShowMediaController(true);
         mediaProbe.UpdateMedia(new MediaSnapshot(
             Title: "Weightless (Ambient Transmission, Pt. 3)", Artist: "Marconi Union",
@@ -94,7 +97,7 @@ internal static class HeadlessRenderer
         // because that is all it has — the second app is there to exercise the tooltip's "Also:" line and the
         // long device name to exercise nothing on the strip itself, which stays a glyph and a name.
         var micProbe = new OverlayCanvas();
-        micProbe.Update(SampleSessions());
+        micProbe.Update(SampleData.Sessions());
         micProbe.SetShowMicPresence(true);
         micProbe.UpdateMic(new MicSnapshot(
             [new MicUser("91750D7E.Slack_8she8kybcnzg4", "Slack", 4242, true, DateTimeOffset.Now.AddMinutes(-7))],
@@ -112,7 +115,7 @@ internal static class HeadlessRenderer
         // The sample puts main mid-stack (Hypertree publishes the stack already flattened, main at its
         // slot) and gives one branch a long desktop label so the trailing-label truncation is exercised.
         var hyperProbe = new OverlayCanvas();
-        hyperProbe.Update(SampleSessions());
+        hyperProbe.Update(SampleData.Sessions());
         hyperProbe.SetQuickLinks(links, icons);
         hyperProbe.SetHypertree(SampleHypertree());
         RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_1x.png"), 96);
@@ -124,7 +127,7 @@ internal static class HeadlessRenderer
         // with the running-green dot taken from that session — while staying out of the normal rows and
         // the header's status counts (still 2 running, not 3).
         var daemonProbe = new OverlayCanvas();
-        daemonProbe.Update(SampleSessions()
+        daemonProbe.Update(SampleData.Sessions()
             .Append(new ClaudeSession("61112", "f7d0b5fc-e679-492f-9fee-18a29f41602a",
                 SessionStatus.Running, @"C:\src\hypertree", "hypertree", DateTime.Now))
             .ToList());
@@ -137,7 +140,7 @@ internal static class HeadlessRenderer
         // quick links, Hypertree branches) all stay, which is the whole point of this surface.
         var emptyProbe = new OverlayCanvas();
         emptyProbe.Update([]);
-        emptyProbe.UpdateUsage(SampleUsage());
+        emptyProbe.UpdateUsage(SampleData.Usage());
         emptyProbe.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));
         emptyProbe.SetQuickLinks(links, icons);
         emptyProbe.SetHypertree(SampleHypertree());
@@ -147,14 +150,14 @@ internal static class HeadlessRenderer
         // "Jump to next session" landing highlight: the blue selection wash + left bar on the cycled row.
         // Rendered immediately after triggering it, so the fade timer hasn't run and it's at full strength.
         var cycleProbe = new OverlayCanvas();
-        cycleProbe.Update(SampleSessions());
-        cycleProbe.HighlightCycledSession(SampleSessions()[1].SessionId);
+        cycleProbe.Update(SampleData.Sessions());
+        cycleProbe.HighlightCycledSession(SampleData.Sessions()[1].SessionId);
         RenderControl(cycleProbe, Path.Combine(outDir, "overlay_cycle_1x.png"), 96);
 
         // Replay branding: the light-blue "Perch - Replay" header label + 2px border shown under
         // `perch replay`, so a recording can't be mistaken for live sessions.
         var replayProbe = new OverlayCanvas { ReplayMode = true };
-        replayProbe.Update(SampleSessions());
+        replayProbe.Update(SampleData.Sessions());
         RenderControl(replayProbe, Path.Combine(outDir, "overlay_replay_1x.png"), 96);
         RenderControl(replayProbe, Path.Combine(outDir, "overlay_replay_1.5x.png"), 144);
 
@@ -276,12 +279,12 @@ internal static class HeadlessRenderer
         mdPanel.Children.Add(md);
         RenderControl(mdPanel, Path.Combine(outDir, "markdown_1x.png"), 96);
 
-        // Row note glyph with the notes indicator on: s1 has a session note and s2 ("api") has only a
-        // project note — both should show the amber note glyph, confirming a shared project note surfaces
-        // on the row too.
+        // Row note glyph with the notes indicator on: s1 has a session note (full amber) and s2 ("api")
+        // has only a project note (dimmed amber, so it recedes) — both surface the glyph, but the
+        // project-only note is deliberately quieter.
         var noteProbe = new OverlayCanvas();
         noteProbe.SetShowNoteLine(true);
-        noteProbe.Update(SampleSessions());
+        noteProbe.Update(SampleData.Sessions());
         RenderControl(noteProbe, Path.Combine(outDir, "overlay_notes_1x.png"), 96);
 
         // Sticky notes: the global scratch pad (single section) and a session row note (project + session
@@ -297,6 +300,45 @@ internal static class HeadlessRenderer
         RenderControl(SampleSettingsPage(), Path.Combine(outDir, "settings_1x.png"), 96);
         RenderControl(SampleSettingsPage(), Path.Combine(outDir, "settings_1.5x.png"), 144);
 
+        // Settings live-preview chain (M0 spike): drive a fresh canvas purely through
+        // OverlaySettingsGates.Apply with a *cloned* AppSettings — exactly the mechanism the Settings
+        // preview pane will use. One frame with the opt-in glyphs turned on (git churn, burn rate, metrics,
+        // notes), one with the row glyphs gated off, to prove a mutated clone re-gates what renders.
+        var previewOn = new OverlayCanvas();
+        previewOn.Update(SampleData.Sessions());
+        previewOn.UpdateUsage(SampleData.Usage());
+        previewOn.UpdateSystemMetrics(SampleData.SystemMetrics());
+        previewOn.UpdateSessionMetrics(SampleData.SessionMetrics());
+        OverlaySettingsGates.Apply(previewOn, PreviewSettings(allGlyphsOn: true));
+        RenderControl(previewOn, Path.Combine(outDir, "overlay_preview_on_1x.png"), 96);
+
+        var previewOff = new OverlayCanvas();
+        previewOff.Update(SampleData.Sessions());
+        previewOff.UpdateUsage(SampleData.Usage());
+        OverlaySettingsGates.Apply(previewOff, PreviewSettings(allGlyphsOn: false));
+        RenderControl(previewOff, Path.Combine(outDir, "overlay_preview_off_1x.png"), 96);
+
+        // The actual Settings live-preview control (M1): a Viewbox-scaled OverlayCanvas in its framed pane,
+        // applied a busy snapshot, at both DPIs — to confirm the miniature renders crisply and reflects the
+        // settings clone it's handed.
+        var pane = new PreviewPane();
+        pane.Apply(PreviewSettings(allGlyphsOn: true));
+        RenderControl(pane, Path.Combine(outDir, "preview_pane_1x.png"), 96);
+        RenderControl(pane, Path.Combine(outDir, "preview_pane_1.5x.png"), 144);
+
+        // Settings search page (M2): the registry-driven filter over every setting, captured with a query
+        // applied so the result rows, breadcrumbs, live toggles and the "matched keyword" hint all render.
+        RenderControl(SampleSearchPage("chime"), Path.Combine(outDir, "settings_search_1x.png"), 96);
+        RenderControl(SampleSearchPage(""),      Path.Combine(outDir, "settings_search_index_1x.png"), 96);
+
+        // Settings feature catalogue (M3): surface-grouped cards with previews, live toggles/steppers, and
+        // the surface chip row. Rendered wide enough to show the cards flowing into columns.
+        RenderControl(SampleCatalogPage(), Path.Combine(outDir, "settings_catalog_1x.png"), 96);
+
+        // Unified Settings shell (M4): the two-pane Features view — the catalogue on the left with the live
+        // overlay preview docked on the right, at a representative window size.
+        RenderControl(SampleShellPage(), Path.Combine(outDir, "settings_shell_1x.png"), 96);
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }
@@ -310,7 +352,7 @@ internal static class HeadlessRenderer
         stack.Children.Add(Windows.SettingsUi.BodyText("Your account-wide 5-hour and weekly rate-limit usage, plus any per-model weekly limits."));
         var bars = new Windows.UsageBarsView();
         bars.SetOn(true);
-        bars.SetUsage(SampleUsage());
+        bars.SetUsage(SampleData.Usage());
         stack.Children.Add(bars);
 
         stack.Children.Add(Windows.SettingsUi.Separator());
@@ -332,6 +374,99 @@ internal static class HeadlessRenderer
         var panel = new Panel { Width = 592, Background = new SolidColorBrush(Color.FromRgb(24, 24, 32)) };
         panel.Children.Add(stack);
         return panel;
+    }
+
+    // The Settings search page with a query applied, framed the way the content area presents it, so the
+    // registry-driven results can be eyeballed. Uses default settings + empty hooks (no live wiring needed
+    // to render).
+    private static Control SampleSearchPage(string query)
+    {
+        var view = new Windows.SettingsSearchView(new AppSettings(), new Windows.SettingsHooks())
+        {
+            Width = 620, Margin = new Thickness(16),
+        };
+        view.SetQuery(query);
+        return new Panel { Width = 652, Background = new SolidColorBrush(Color.FromRgb(24, 24, 32)), Children = { view } };
+    }
+
+    // The feature catalogue, framed the way the content area presents it, wide enough for two card columns.
+    private static Control SampleCatalogPage()
+    {
+        var view = new Windows.SettingsCatalogView(new AppSettings(), new Windows.SettingsHooks())
+        {
+            Width = 700, Margin = new Thickness(16),
+        };
+        return new Panel { Width = 732, Background = new SolidColorBrush(Color.FromRgb(24, 24, 32)), Children = { view } };
+    }
+
+    // The M4 two-pane Features shell: catalogue on the left, the live overlay preview docked on the right.
+    // Composed without the window's ScrollViewers (a one-shot RenderTargetBitmap doesn't realise scrolled
+    // content), so the split and the docked preview read in a single frame.
+    private static Control SampleShellPage()
+    {
+        var catalog = new Windows.SettingsCatalogView(new AppSettings(), new Windows.SettingsHooks())
+        {
+            Margin = new Thickness(16), VerticalAlignment = VerticalAlignment.Top,
+        };
+        Grid.SetColumn(catalog, 0);
+
+        var preview = new PreviewPane();
+        // Turn on the opt-in strips so the daemon/mic/now-playing sections all render in the probe.
+        var seeded = new AppSettings { ShowMediaController = true, ShowMicPresence = true };
+        preview.Apply(seeded);
+        var dockStack = new StackPanel { Margin = new Thickness(14, 16, 16, 16) };
+        dockStack.Children.Add(new TextBlock
+        {
+            Text = "LIVE PREVIEW", FontSize = 11, FontWeight = FontWeight.SemiBold,
+            Foreground = Theming.Palette.MutedBrush, Margin = new Thickness(2, 0, 0, 8),
+        });
+        dockStack.Children.Add(preview);
+        var dock = new Border
+        {
+            Width = 300, BorderThickness = new Thickness(1, 0, 0, 0), BorderBrush = Theming.Palette.BorderBrush,
+            VerticalAlignment = VerticalAlignment.Stretch, Child = dockStack,
+        };
+        Grid.SetColumn(dock, 1);
+
+        // The content area at the real default window width (1220) minus the 178-wide nav rail, so the
+        // two-column fit and leftover gap read as they will in the app. (The probe has no scrollbar, so the
+        // real cards column is ~18px narrower — still comfortably two columns.)
+        return new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"), Width = 1220 - 178,
+            Background = Theming.Palette.FormBgBrush, Children = { catalog, dock },
+        };
+    }
+
+    // A cloned settings snapshot for the live-preview render probe. `allGlyphsOn` flips the opt-in
+    // indicators on (git churn, burn rate, notes, metrics) for a busy overlay; otherwise it gates the
+    // common row glyphs off for a stripped-back one. Goes through Clone() to exercise the snapshot path
+    // the preview pane relies on.
+    private static AppSettings PreviewSettings(bool allGlyphsOn)
+    {
+        var s = new AppSettings().Clone();
+        if (allGlyphsOn)
+        {
+            s.ShowGitStats = true;
+            s.ShowBurnRate = true;
+            s.ShowNotes = true;
+            s.ShowPullRequests = true;
+            s.ShowSystemMetrics = true;
+            s.ShowSessionMetrics = true;
+            s.ShowMediaController = true;
+            s.ShowMicPresence = true;
+        }
+        else
+        {
+            s.ShowUsage = false;
+            s.ShowPermissionModeBadges = false;
+            s.ShowTaskProgress = false;
+            s.ShowContextPressure = false;
+            s.ShowWaitingTimer = false;
+            s.ShowArtifacts = false;
+            s.ShowServiceStatus = false;
+        }
+        return s;
     }
 
     // Renders a control centred on a padded solid backdrop, so a self-contained panel (e.g. a tooltip
@@ -357,21 +492,6 @@ internal static class HeadlessRenderer
         rtb.Render(control);
         using var fs = File.Create(path);
         rtb.Save(fs);
-    }
-
-    // A healthy-but-visible reading: session bar mid-yellow, weekly bar low-green, both with a reset
-    // time an hour or two out so the expected-rate markers land partway along each track. Carries a
-    // model-scoped weekly window too, so the render exercises the variable-height three-bar strip.
-    private static UsageInfo SampleUsage()
-    {
-        var now = DateTime.Now;
-        return new UsageInfo(
-            FiveHourPercent: 62, SevenDayPercent: 28,
-            FiveHourResetsAt: now.AddHours(2), SevenDayResetsAt: now.AddDays(4),
-            LastUpdated: now, Ok: true, Error: null)
-        {
-            Scoped = [new ScopedUsage("Fable", 41, now.AddDays(4))],
-        };
     }
 
     // A spread of marker kinds across a 5-minute scene, so the timeline shows each tick colour.
@@ -561,52 +681,4 @@ internal static class HeadlessRenderer
         return workers;
     }
 
-    private static IReadOnlyList<ClaudeSession> SampleSessions()
-    {
-        var now = DateTime.Now;
-        var subs = new List<SubAgent>
-        {
-            // A teammate that has itself spawned a sub-agent, and a plain sub-agent nesting two levels
-            // deep — the parent → sub-agent → teammate tree, exercising indent + the collapse chevron.
-            new("t1", "teammate", "general-purpose", IsTeammate: true, Name: "arch-explorer",
-                Color: "blue", Activity: "Reading Program.cs",
-                Children: [new("t1a", "Trace the token refresh path", "Explore")]),
-            new("t2", "teammate", "general-purpose", IsTeammate: true, Name: "reviewer",
-                Color: "green", IsIdle: true),
-            new("a1", "Explore the auth flow", "general-purpose",
-                Children: [new("a1a", "Map the OAuth callback", "general-purpose",
-                    Children: [new("a1b", "Read middleware config", "Explore")])]),
-        };
-        return
-        [
-            new ClaudeSession("1234", "s1", SessionStatus.Running, @"C:\src\perch", "perch", now,
-                Activity: "Editing OverlayForm.cs", SubAgents: subs, Mode: PermissionMode.AcceptEdits,
-                Note: "risky refactor — waiting on review",
-                ContextFill: 0.82f, BurnRate: 12300, GitStats: new GitLineStats(142, 37),
-                Tasks: new List<TaskItem>
-                {
-                    new("Extract core", "extracting core", TaskState.Completed),
-                    new("Port overlay", "porting overlay", TaskState.Pending),
-                    new("Cutover", "cutting over", TaskState.Pending),
-                }),
-            new ClaudeSession("5678", "s2", SessionStatus.AwaitingInput, @"C:\src\api", "api", now,
-                ExternalNotify: true,
-                // No session note, but a project note — so the row still shows the note glyph.
-                ProjectNote: "API freeze — ship v0.9 before merging anything",
-                PullRequest: new PullRequestInfo(1135, "https://github.com/o/r/pull/1135", "Surface PRs on the overlay", PrState.Open),
-                Artifacts: new List<Artifact> { new("https://claude.ai/code/artifact/1", "API report") }),
-            new ClaudeSession("9012", "s3", SessionStatus.NeedsAttention, @"C:\src\docs", "docs-site", now,
-                BridgeSessionId: "bridge-xyz", Stuck: new StuckSignal(StuckKind.FailingLoop, "repeating build"),
-                PullRequest: new PullRequestInfo(88, "https://github.com/o/r/pull/88", "Draft: docs restructure", PrState.Draft)),
-            new ClaudeSession("3456", "s4", SessionStatus.Idle, @"C:\src\scratch", "scratch", now,
-                Note: "don't touch — bisecting a flaky test",
-                PullRequest: new PullRequestInfo(74, "https://github.com/o/r/pull/74", "Ship v0.9", PrState.Merged)),
-            // A session whose last request to the API failed (529 Overloaded) — the red ApiError alert.
-            new ClaudeSession("6543", "s6", SessionStatus.ApiError, @"C:\src\web", "web", now,
-                ApiFailure: new ApiFailure(529, "API Error: 529 Overloaded.")),
-            // A background/SDK session (Entrypoint != "cli") -> grouped under the Autonomous section.
-            new ClaudeSession("7788", "s5", SessionStatus.Running, @"C:\src\bot", "nightly-bot", now,
-                Entrypoint: "sdk-py"),
-        ];
-    }
 }

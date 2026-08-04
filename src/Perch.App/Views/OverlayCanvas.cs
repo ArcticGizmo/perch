@@ -136,6 +136,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Pinned-note glyph: a sticky-note amber, so a note reads as a deliberate human annotation. The note's
     // text isn't previewed on the row (hover the glyph); this is just the glyph colour.
     private static readonly IBrush NoteBrush      = new SolidColorBrush(Color.FromRgb(244, 193, 79));
+    // A note that's only inherited from the project (no per-session note) draws in a dimmed amber so it
+    // recedes — a project note is ambient context, not something demanding attention like a session note.
+    private static readonly IBrush NoteDimBrush   = new SolidColorBrush(Color.FromArgb(105, 244, 193, 79));
 
     // Party-popper glyph: a gold cone spraying a fan of festive confetti dots (shared with the confetti
     // window's palette so the armed-row hint and the finish burst read as one feature).
@@ -584,13 +587,17 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // (_daemonWorkers) still drives the normal-row dedupe, and the full-list window shows spares too.
     private IReadOnlyList<DaemonWorker> _stripDaemonWorkers = [];
     private int _hoveredDaemonRow = -1;
+    // Display gate for the daemon strip (the "Daemon workers" setting). On by default; when off the strip is
+    // hidden even if a roster is still in hand, so the setting reads live on the overlay (and in the Settings
+    // preview) rather than only via the monitor dropping the roster.
+    private bool _daemonEnabled = true;
 
     // At most this many workers on the strip itself; anything beyond collapses behind a "show +N more"
     // line that opens the full-list window (DaemonListRequested) — the overlay must stay a glance, not
     // scroll, when a busy daemon has a dozen workers.
     private const int MaxDaemonRows = 5;
 
-    private bool DaemonStripVisible => _stripDaemonWorkers.Count > 0;
+    private bool DaemonStripVisible => _daemonEnabled && _stripDaemonWorkers.Count > 0;
     private int VisibleDaemonCount => Math.Min(_stripDaemonWorkers.Count, MaxDaemonRows);
     private bool DaemonOverflow => _stripDaemonWorkers.Count > MaxDaemonRows;
     // Lines the strip actually paints: the capped workers plus the "show +N more" line when it overflows.
@@ -611,6 +618,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// <summary>Replaces the daemon strip's contents. Called on the UI thread by
     /// <c>DaemonMonitorHost</c>. Roster membership also decides which sessions render as normal rows
     /// (a daemon session must not show twice), so rebuild the render list — which relayouts.</summary>
+    /// <summary>Show/hide the whole daemon-workers strip. Toggling it can change the panel height (when a
+    /// roster is present), so relayout in that case; otherwise nothing visible changes.</summary>
+    public void SetShowDaemonProcesses(bool enabled)
+    {
+        if (_daemonEnabled == enabled) return;
+        bool before = DaemonStripVisible;
+        _daemonEnabled = enabled;
+        if (DaemonStripVisible != before) RemeasurePanel();
+    }
+
     internal void SetDaemonWorkers(IReadOnlyList<DaemonWorker> workers)
     {
         _daemonWorkers = workers;
@@ -928,10 +945,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// the desired new enabled state for the app to persist and apply.</summary>
     public event Action<bool>? UsageToggleRequested;
 
-    /// <summary>Raised when the user toggles the now-playing media strip from the header right-click menu;
-    /// carries the desired new enabled state for the app to persist, apply, and start/stop the listener.</summary>
-    public event Action<bool>? MediaControllerToggleRequested;
-
     /// <summary>Raised when the user picks "Show QR code" for a remote-controlled session. The QR window
     /// is Phase 5; this wires only the trigger. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
     internal event Action<ClaudeSession>? QrRequested;
@@ -977,7 +990,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~150ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Note, Media, Mic }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1953,7 +1966,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (noteW > 0)
         {
             double noteGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW;
-            DrawNoteIcon(ctx, noteGlyphX, nameMidY);
+            // Full amber for a session note; dimmed for a project-only note so it stays ambient.
+            DrawNoteIcon(ctx, noteGlyphX, nameMidY, session.HasNote ? NoteBrush : NoteDimBrush);
             _noteRects[rowIndex] = new Rect(noteGlyphX - 2, nameMidY - 9, NoteIconWidth + 2, 18);
         }
         if (showPr)
@@ -2267,9 +2281,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // The pinned-note glyph: a small dog-eared page (folded top-right corner) with two short "text"
     // lines, in the sticky-note amber. Marks a row that carries a note; hovering it pops the full text.
-    private static void DrawNoteIcon(DrawingContext ctx, double x, double midY)
+    private static void DrawNoteIcon(DrawingContext ctx, double x, double midY, IBrush? brush = null)
     {
-        var pen = new Pen(NoteBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = new Pen(brush ?? NoteBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
         const double w = 10, h = 12, fold = 3.5;
         double left = x, top = midY - h / 2, right = left + w, bottom = top + h;
 
@@ -2580,7 +2594,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitTestWarnIcon(p)   is var wa && wa >= 0 ? (TipKind.Warn, wa) :
             HitTestTaskCount(p)  is var ta && ta >= 0 ? (TipKind.Task, ta) :
             HitTestMetrics(p)    is var me && me >= 0 ? (TipKind.Metrics, me) :
-            HitTestNoteIcon(p)   is var no && no >= 0 ? (TipKind.Note, no) :
             _mediaTitleRect.Contains(p)               ? (TipKind.Media, -1) :
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             InUsageStrip(p)                           ? (TipKind.Usage, -1) :
@@ -2609,7 +2622,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Warn:    ShowWarnTooltip(_tipRow);    break;
             case TipKind.Task:    ShowTaskTooltip(_tipRow);    break;
             case TipKind.Metrics: ShowMetricsTooltip(_tipRow); break;
-            case TipKind.Note:    ShowNoteTooltip(_tipRow);    break;
             case TipKind.Media:   ShowMediaTooltip();          break;
             case TipKind.Mic:     ShowMicTooltip();            break;
         }
@@ -2985,8 +2997,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 () => SystemMetricsToggleRequested?.Invoke(!_showSystemMetrics)));
             items.Add(MenuItem(_usageEnabled ? "Hide usage" : "Show usage",
                 () => UsageToggleRequested?.Invoke(!_usageEnabled)));
-            items.Add(MenuItem(_mediaEnabled ? "Hide media controller" : "Show media controller",
-                () => MediaControllerToggleRequested?.Invoke(!_mediaEnabled)));
             items.Add(MenuItem("Exit Perch", () => ExitRequested?.Invoke()));
         }
 
@@ -3575,24 +3585,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             sb.Append(glyph).Append(' ').Append(label);
         }
         Tooltip().ShowText(sb.ToString(), ToScreen(r.Left, r.Bottom + 4));
-    }
-
-    private void ShowNoteTooltip(int row)
-    {
-        if (row < 0 || row >= _rows.Count || _rows[row].Session is not { } session) return;
-        if (!_noteRects.TryGetValue(row, out var r)) return;
-
-        // Show whatever the row carries: the session note, the project note, or both (labelled) when the
-        // glyph stands for both at once.
-        string? text = (session.Note, session.ProjectNote) switch
-        {
-            ({ } n, { } p) => $"{n}\n\n— Project note —\n{p}",
-            ({ } n, null)  => n,
-            (null, { } p)  => $"Project note\n{p}",
-            _              => null,
-        };
-        if (text is null) return;
-        Tooltip().ShowText(text, ToScreen(r.Left, r.Bottom + 4));
     }
 
     private void ShowMetricsTooltip(int row)

@@ -209,7 +209,6 @@ public partial class App : Application
             _overlay.Canvas.ExitRequested += () => desktop.Shutdown();
             _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
             _overlay.Canvas.UsageToggleRequested += SetUsageEnabled;
-            _overlay.Canvas.MediaControllerToggleRequested += SetMediaControllerEnabled;
             _overlay.Canvas.HistoryRequested += OpenHistory;
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
@@ -500,32 +499,10 @@ public partial class App : Application
     private void ApplyDisplaySettings(AppSettings s)
     {
         if (_overlay is null) return;
-        var c = _overlay.Canvas;
 
-        c.SetShowUsage(s.ShowUsage);
-        c.SetShowExpectedRate(s.ShowExpectedUsageRate);
-        c.SetShowSystemMetrics(s.ShowSystemMetrics);
-        c.SetShowSessionMetrics(s.ShowSessionMetrics);
-        c.SetShowContextPressure(s.ShowContextPressure);
-        c.SetShowContextGreenSegment(s.ShowContextGreenSegment);
-        c.SetContextThresholds(s.ContextPressureYellowPercent, s.ContextPressureOrangePercent, s.ContextPressureRedPercent);
-        c.SetShowModeBadges(s.ShowPermissionModeBadges);
-        c.SetShowTaskProgress(s.ShowTaskProgress);
-        c.SetShowNoteLine(s.ShowNotes);
-        c.SetShowBurnRate(s.ShowBurnRate);
-        c.SetShowGitStats(s.ShowGitStats);
-        c.SetShowPullRequests(s.ShowPullRequests);
-        c.SetStuckDetectionEnabled(s.StuckDetectionEnabled);
-        c.SetShowWaitingTimer(s.ShowWaitingTimer);
-        c.SetWaitingTimerRedMinutes(s.WaitingTimerRedMinutes);
-        c.SetShowArtifacts(s.ShowArtifacts);
-        c.SetServiceStatusEnabled(s.ShowServiceStatus);
-        c.SetShowMediaController(s.ShowMediaController);
-        c.SetShowMicPresence(s.ShowMicPresence);
-        c.SetHideInactiveTeamMembers(s.HideInactiveTeamMembers);
-        c.SetUpsideDownQuickLinks(s.UpsideDownQuickLinks);
-        c.SetConfettiFinishAvailable(s.ConfettiFinish);
-        c.SetExternalNotificationsAvailable(s.ExternalNotificationsEnabled);
+        // Push every display gate onto the live canvas. The same helper drives the Settings live-preview
+        // pane against a detached canvas + a cloned AppSettings, so preview and overlay can't diverge.
+        OverlaySettingsGates.Apply(_overlay.Canvas, s);
 
         // Data-layer sources for the git chip / stuck glyph (off in the monitor unless enabled here).
         if (_monitorHost is not null)
@@ -702,20 +679,6 @@ public partial class App : Application
         _appSettings.Save();
         _overlay.Canvas.SetShowUsage(enabled);
         if (enabled) _usageHost?.Start(); else _usageHost?.Stop();
-        _settings?.SyncDisplayToggles();
-    }
-
-    // Toggle the now-playing media strip from the header right-click menu — the counterpart of the Music
-    // page's toggle: persist the flag, apply it to the canvas, start/stop the media-session listener, and
-    // sync an open Settings window so the menu and the page never disagree.
-    private void SetMediaControllerEnabled(bool enabled)
-    {
-        if (_appSettings is null || _overlay is null) return;
-        if (_appSettings.ShowMediaController == enabled) return;
-        _appSettings.ShowMediaController = enabled;
-        _appSettings.Save();
-        _overlay.Canvas.SetShowMediaController(enabled);
-        if (enabled) _mediaHost?.Start(); else _mediaHost?.Stop();
         _settings?.SyncDisplayToggles();
     }
 

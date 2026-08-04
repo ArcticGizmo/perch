@@ -11,6 +11,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
+using Perch.Avalonia.Views;
 using Perch.Data;
 using Perch.Data.Hypertree;
 using Perch.Data.Replay;
@@ -115,6 +116,8 @@ internal sealed class SettingsWindow : Window
     private readonly Dictionary<string, Control> _pages = new();
     private readonly List<(string key, Button item)> _navItems = new();
     private string _currentKey = "";
+    private SettingsSearchView? _search;
+    private SettingsCatalogView? _catalog;
 
     // About-page update controls + the current pending-update state (kept so a state change that arrives
     // while the window is open — or the state read at open time — reflects on the About page live).
@@ -131,23 +134,28 @@ internal sealed class SettingsWindow : Window
         _icons = icons;
 
         Title = "Perch Settings";
-        Width = 880;
-        Height = 660;
-        MinWidth = 748;
-        MinHeight = 560;
+        // Sized for the unified shell: just wide enough to show two catalogue card columns beside the docked
+        // live preview, without a lot of empty gap — nav (178) + preview dock (~301) + a cards column that
+        // fits two 320-wide cards plus the catalogue margins and scrollbar (~713).
+        Width = 1220;
+        Height = 858;
+        MinWidth = 1040;
+        MinHeight = 620;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Palette.FormBgBrush;
         try { Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://perch/Assets/icon.ico"))); } catch { }
 
         BuildLayout();
-
-        _usageHost.Updated += OnUsageUpdated;
-        Closed += (_, _) => _usageHost.Updated -= OnUsageUpdated;
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
         if (e.Key == Key.Escape) { Close(); e.Handled = true; }
+        else if (e.Key == Key.F && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            SelectPage("search");
+            e.Handled = true;
+        }
         base.OnKeyDown(e);
     }
 
@@ -161,48 +169,113 @@ internal sealed class SettingsWindow : Window
             Child = new ScrollViewer { Content = nav, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled },
         };
 
-        _contentHost = new Panel { Margin = new Thickness(16) };
-        var scroller = new ScrollViewer
-        {
-            Content = _contentHost,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-        };
+        // Each page owns its own scroller (so the Features page can pin its live-preview dock beside a
+        // scrolling card list); the content host just stacks them and toggles which is visible.
+        _contentHost = new Panel();
 
+        // Unified shell: Search + the Features catalogue (with its docked live preview) are the primary way
+        // to change settings. The old pure-toggle pages — Usage, Indicators, Monitoring, Shortcuts,
+        // Integrations, Music, Microphone — are retired: every one of their settings is now an inline card in
+        // the catalogue. The pages kept below carry things the catalogue doesn't (yet): actions (open Stats /
+        // Achievements, test notifications), a bespoke editor (Quick Links), the Agent Teams env toggle, or
+        // non-settings content (Getting started, Export, About, Changelog). Their builders are now
+        // unreachable dead code, excised in a follow-up once verified in the running app.
+        AddPage(nav, "search",       "Search",          BuildSearchPage);
+        AddFeaturesPage(nav);
         AddPage(nav, "start",        "Getting started", BuildGettingStartedPage);
-        AddPage(nav, "usage",        "Usage Limits",    BuildUsagePage);
-        AddPage(nav, "indicators",   "Indicators",      BuildIndicatorsPage);
-        AddPage(nav, "monitoring",   "Monitoring",      BuildMonitoringPage);
-        AddPage(nav, "shortcuts",    "Shortcuts",       BuildHotkeysPage);
         AddPage(nav, "stats",        "Session Stats",   BuildStatsPage);
         AddPage(nav, "achievements", "Achievements",    BuildAchievementsPage);
         AddPage(nav, "notify",       "Notifications",   BuildNotificationsPage);
+        AddPage(nav, "shortcuts",    "Shortcuts",       BuildHotkeysPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
-        AddPage(nav, "integrations", "Integrations",    BuildIntegrationsPage);
-        AddPage(nav, "music",        "Music",           BuildMusicPage);
-        AddPage(nav, "microphone",   "Microphone",      BuildMicrophonePage);
-        AddPage(nav, "experimental", "Experimental",    BuildExperimentalPage);
         AddPage(nav, "export",       "Export",          BuildExportPage);
         AddPage(nav, "about",        "About",           BuildAboutPage);
         AddPage(nav, "changelog",    "Changelog",       BuildChangelogPage);
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
         Grid.SetColumn(navHost, 0);
-        Grid.SetColumn(scroller, 1);
+        Grid.SetColumn(_contentHost, 1);
         grid.Children.Add(navHost);
-        grid.Children.Add(scroller);
+        grid.Children.Add(_contentHost);
         Content = grid;
 
-        SelectPage("start");
+        SelectPage("features");
     }
+
+    // The search page: a registry-driven filter over every setting (built once; owns its own field/results).
+    private void BuildSearchPage(StackPanel page)
+    {
+        _search = new SettingsSearchView(_settings, _hooks) { Navigate = SelectPage };
+        page.Children.Add(_search);
+    }
+
 
     private void AddPage(StackPanel nav, string key, string title, Action<StackPanel> build)
     {
-        var page = new StackPanel { IsVisible = false };
-        build(page);
+        var content = new StackPanel { Margin = new Thickness(16) };
+        build(content);
+        var page = new ScrollViewer
+        {
+            Content = content, IsVisible = false,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
         _pages[key] = page;
         _contentHost.Children.Add(page);
         AddNavItem(nav, key, title);
+    }
+
+    // The Features page is the unified shell's centrepiece: the surface catalogue on the left, a docked
+    // live overlay preview on the right that re-applies the settings on every inline edit — so a change is
+    // seen on the miniature overlay the moment it's made. Built directly (not via AddPage) because it owns
+    // a two-column layout with its own card scroller rather than a single scrolling StackPanel.
+    private void AddFeaturesPage(StackPanel nav)
+    {
+        var catalog = _catalog = new SettingsCatalogView(_settings, _hooks) { Navigate = SelectPage };
+        var preview = new PreviewPane();
+        preview.Apply(_settings);
+        catalog.Changed += () => preview.Apply(_settings);
+
+        var cards = new ScrollViewer
+        {
+            Content = new StackPanel { Margin = new Thickness(16), Children = { catalog } },
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        Grid.SetColumn(cards, 0);
+
+        var dock = BuildPreviewDock(preview);
+        Grid.SetColumn(dock, 1);
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), IsVisible = false };
+        grid.Children.Add(cards);
+        grid.Children.Add(dock);
+
+        _pages["features"] = grid;
+        _contentHost.Children.Add(grid);
+        AddNavItem(nav, "features", "Features");
+    }
+
+    private static Control BuildPreviewDock(PreviewPane preview)
+    {
+        var stack = new StackPanel { Margin = new Thickness(14, 16, 16, 16) };
+        stack.Children.Add(new TextBlock
+        {
+            Text = "LIVE PREVIEW", FontSize = 11, FontWeight = FontWeight.SemiBold,
+            Foreground = Palette.MutedBrush, Margin = new Thickness(2, 0, 0, 8),
+        });
+        stack.Children.Add(preview);
+
+        return new Border
+        {
+            Width = 300, BorderThickness = new Thickness(1, 0, 0, 0), BorderBrush = Palette.BorderBrush,
+            Child = new ScrollViewer
+            {
+                Content = stack,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            },
+        };
     }
 
     private void AddNavItem(StackPanel nav, string key, string title)
@@ -246,7 +319,14 @@ internal sealed class SettingsWindow : Window
             _exportLoaded = true;
             LoadExportSessions();
         }
+
+        if (key == "search") _search?.FocusSearch();
     }
+
+    /// <summary>Reflects an out-of-band settings change (e.g. a display flag flipped from the overlay's
+    /// right-click menu) back into the open window: the catalogue rebuilds its cards from the current
+    /// settings. The App-side handler has already persisted the flag and driven the hosts.</summary>
+    public void SyncDisplayToggles() => _catalog?.Sync();
 
     // ── Toggle helpers ──────────────────────────────────────────────────────────────
     private static PerchToggle Toggle(bool initial)
@@ -359,664 +439,6 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(stack);
     }
 
-    // ── Usage ───────────────────────────────────────────────────────────────────────
-    private UsageBarsView _usageBars = null!;
-    private PerchToggle _expectedRateToggle = null!;
-    private Button _usageRefreshBtn = null!;
-
-    // The two display toggles the overlay's right-click menu can also flip, kept as fields so
-    // SyncDisplayToggles can mirror an out-of-band change back into this window.
-    private PerchToggle _usageToggle = null!;
-    private PerchToggle _systemMetricsToggle = null!;
-    private PerchToggle _mediaToggle = null!;
-
-    private void BuildUsagePage(StackPanel page)
-    {
-        _usageToggle = Toggle(_settings.ShowUsage);
-        _usageToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ShowUsage = _usageToggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-            _hooks.UsageEnabledChanged?.Invoke(_usageToggle.IsChecked);
-            _usageRefreshBtn.IsEnabled = _usageToggle.IsChecked;
-            _expectedRateToggle.IsEnabled = _usageToggle.IsChecked;
-            _usageBars.SetOn(_usageToggle.IsChecked);
-        };
-        page.Children.Add(SettingsUi.TitleRow("Usage limits", _usageToggle));
-        page.Children.Add(SettingsUi.BodyText("Your account-wide 5-hour and weekly rate-limit usage, plus any per-model weekly limits."));
-
-        _expectedRateToggle = Toggle(_settings.ShowExpectedUsageRate);
-        _expectedRateToggle.IsEnabled = _settings.ShowUsage;
-        _expectedRateToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ShowExpectedUsageRate = _expectedRateToggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-            _usageBars.SetShowExpectedRate(_expectedRateToggle.IsChecked);
-        };
-        page.Children.Add(SettingsUi.TitleRow("Show expected rate", _expectedRateToggle));
-
-        _usageBars = new UsageBarsView { Margin = new Thickness(0, 2, 0, 6) };
-        _usageBars.SetOn(_settings.ShowUsage);
-        _usageBars.SetShowExpectedRate(_settings.ShowExpectedUsageRate);
-        _usageBars.SetUsage(_usageHost.Last);
-        page.Children.Add(_usageBars);
-
-        var row = SettingsUi.ButtonRow();
-        _usageRefreshBtn = SettingsUi.FlatButton("Refresh");
-        _usageRefreshBtn.IsEnabled = _settings.ShowUsage;
-        _usageRefreshBtn.Click += async (_, _) =>
-        {
-            if (!_settings.ShowUsage) return;
-            _usageRefreshBtn.IsEnabled = false;
-            var usage = await _usageHost.RefreshAsync();
-            _usageBars.SetUsage(usage);
-            _usageRefreshBtn.IsEnabled = _settings.ShowUsage;
-        };
-        row.Children.Add(_usageRefreshBtn);
-        page.Children.Add(row);
-    }
-
-    // Keeps the settings usage bars in step with the shared poll while the window is open.
-    private void OnUsageUpdated(UsageInfo usage) => _usageBars?.SetUsage(usage);
-
-    /// <summary>Mirrors the usage/system-metrics flags back into their toggles after the overlay's
-    /// right-click menu flips one, so the menu and this window never disagree. Uses the silent setter —
-    /// the App-side handler has already persisted the flag and driven the hosts, so re-firing the toggle
-    /// handlers would be redundant. Safe to call any time the window is open (pages build eagerly).</summary>
-    public void SyncDisplayToggles()
-    {
-        _usageToggle.SetCheckedSilent(_settings.ShowUsage);
-        _usageRefreshBtn.IsEnabled = _settings.ShowUsage;
-        _expectedRateToggle.IsEnabled = _settings.ShowUsage;
-        _usageBars.SetOn(_settings.ShowUsage);
-        _systemMetricsToggle.SetCheckedSilent(_settings.ShowSystemMetrics);
-        _mediaToggle.SetCheckedSilent(_settings.ShowMediaController);
-        _micToggle.SetCheckedSilent(_settings.ShowMicPresence);
-    }
-
-    // ── Integrations ──────────────────────────────────────────────────────────────
-    private PerchToggle _hypertreeToggle = null!;
-    private TextBlock _hypertreeStatusText = null!;
-    private PerchToggle _prToggle = null!;
-    private TextBlock _prStatusText = null!;
-    private Action<bool> _prIntervalEnabled = null!;
-
-    private void BuildIntegrationsPage(StackPanel page)
-    {
-        BuildGitHubPrSection(page);
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.SectionTitle("Hypertree"));
-        page.Children.Add(SettingsUi.BodyText(
-            "Hypertree gives a task its own branch — a named set of virtual desktops. Turn this on and the "
-            + "overlay grows a \"Hypertree\" section under the quick links, listing every branch (main "
-            + "included), marking the one you're on, and jumping to it when you click."));
-
-        _hypertreeToggle = Toggle(_settings.HypertreeEnabled);
-        _hypertreeToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.HypertreeEnabled = _hypertreeToggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-            _hooks.HypertreeEnabledChanged?.Invoke(_hypertreeToggle.IsChecked); // starts/stops the status poll
-            RefreshHypertreeStatus();
-        };
-        page.Children.Add(SettingsUi.TitleRow("Show Hypertree branches", _hypertreeToggle));
-
-        _hypertreeStatusText = SettingsUi.BodyText("Looking for Hypertree…");
-        page.Children.Add(_hypertreeStatusText);
-
-        page.Children.Add(SettingsUi.BodyText(
-            "The section only appears while Hypertree is running and has at least one branch. Jumping shells "
-            + "Hypertree's own `htree` command, which hands the request to its tray — nothing here drives "
-            + "virtual desktops directly."));
-
-        RefreshHypertreeStatus();
-    }
-
-    /// <summary>
-    /// Refreshes the "is Hypertree there" line. The probe touches the filesystem and may spawn
-    /// <c>htree --version</c>, so it runs off the UI thread and marshals back — and it's skipped entirely
-    /// while the integration is off, keeping the setting genuinely load-bearing.
-    /// </summary>
-    private void RefreshHypertreeStatus()
-    {
-        if (!_settings.HypertreeEnabled)
-        {
-            _hypertreeStatusText.Text = "Turned off — Hypertree isn't contacted at all while this is off.";
-            return;
-        }
-
-        _hypertreeStatusText.Text = "Looking for Hypertree…";
-        Task.Run(HypertreeBridge.Describe).ContinueWith(t =>
-        {
-            // The window may have closed while the probe was in flight.
-            if (!IsVisible || _hypertreeStatusText is null) return;
-
-            var install = t.IsCompletedSuccessfully ? t.Result : HypertreeInstall.Missing;
-            _hypertreeStatusText.Text = !install.Installed
-                ? "Not installed — get it from github.com/ArcticGizmo/hypertree."
-                : install.Running
-                    ? $"Hypertree {install.Version ?? "?"} is running."
-                    : $"Hypertree {install.Version ?? "?"} is installed but not running — start it to see your branches.";
-        }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
-    }
-
-    // GitHub pull requests: a merge glyph on a session's row once its branch has a PR, resolved with the
-    // gh CLI. Off by default and load-bearing while off (gh is never run), so the section leads with a live
-    // "is gh here / are you signed in" line to set expectations before it's turned on.
-    private void BuildGitHubPrSection(StackPanel page)
-    {
-        page.Children.Add(SettingsUi.SectionTitle("GitHub pull requests"));
-        page.Children.Add(SettingsUi.BodyText(
-            "Shows a merge glyph on a session whose working directory is a GitHub repo once its current "
-            + "branch has a pull request. Click the glyph for the PR's title, state and number; clicking that "
-            + "opens the PR in your browser. It uses the GitHub CLI (\"gh\") you're already signed in to, so "
-            + "there's no token to set up here."));
-
-        _prToggle = Toggle(_settings.ShowPullRequests);
-        _prToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ShowPullRequests = _prToggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();   // applies SetShowPullRequests + PrEnabled/interval to the monitor
-            _prIntervalEnabled(_prToggle.IsChecked);
-            RefreshGhStatus();
-        };
-        page.Children.Add(SettingsUi.TitleRow("Show pull requests", _prToggle));
-
-        page.Children.Add(SettingsUi.FieldCaption("Check for a PR every"));
-        page.Children.Add(BuildPrIntervalStepper(out _prIntervalEnabled));
-        page.Children.Add(SettingsUi.BodyText(
-            "How often a branch's PR is re-checked. A session is checked when it first appears and then only "
-            + "on this interval; \"no PR\" is remembered just as long, so gh runs rarely. Off means gh is "
-            + "never run at all."));
-
-        _prStatusText = SettingsUi.BodyText("Looking for gh…");
-        page.Children.Add(_prStatusText);
-
-        _prIntervalEnabled(_settings.ShowPullRequests);
-        RefreshGhStatus();
-    }
-
-    // A −/+ stepper for the PR poll interval (minutes). Mirrors BuildStatusIntervalStepper; a change fires
-    // DisplayChanged, which re-applies the interval to the running monitor.
-    private Control BuildPrIntervalStepper(out Action<bool> applyEnabled)
-    {
-        const int min = 1, max = 120;
-        var row = SettingsUi.ButtonRow();
-        var dec = SettingsUi.FlatButton("−");
-        var inc = SettingsUi.FlatButton("+");
-        dec.Width = 36; inc.Width = 36;
-        var value = new TextBlock
-        {
-            Width = 90, TextAlignment = TextAlignment.Center, Foreground = Palette.FgBrush,
-            VerticalAlignment = VerticalAlignment.Center, FontSize = 14,
-        };
-        void Render() => value.Text = _settings.PullRequestIntervalMinutes == 1
-            ? "1 minute" : $"{_settings.PullRequestIntervalMinutes} minutes";
-        void Apply(int v)
-        {
-            v = Math.Clamp(v, min, max);
-            if (v == _settings.PullRequestIntervalMinutes) return;
-            _settings.PullRequestIntervalMinutes = v;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-            Render();
-        }
-        dec.Click += (_, _) => Apply(_settings.PullRequestIntervalMinutes - 1);
-        inc.Click += (_, _) => Apply(_settings.PullRequestIntervalMinutes + 1);
-        Render();
-        row.Children.Add(dec);
-        row.Children.Add(value);
-        row.Children.Add(inc);
-        applyEnabled = on =>
-        {
-            dec.IsEnabled = on; inc.IsEnabled = on;
-            value.Foreground = on ? Palette.FgBrush : Palette.MutedBrush;
-        };
-        return row;
-    }
-
-    /// <summary>Refreshes the "is gh here / are you signed in" line. Probing spawns gh, so it runs off the
-    /// UI thread and marshals back — and it's skipped entirely while the integration is off, keeping the
-    /// setting genuinely load-bearing.</summary>
-    private void RefreshGhStatus()
-    {
-        if (!_settings.ShowPullRequests)
-        {
-            _prStatusText.Text = "Turned off — gh isn't run at all while this is off.";
-            return;
-        }
-
-        _prStatusText.Text = "Looking for gh…";
-        Task.Run(PrStatusService.DescribeGh).ContinueWith(t =>
-        {
-            if (!IsVisible || _prStatusText is null) return;
-
-            var (installed, authed) = t.IsCompletedSuccessfully ? t.Result : (false, false);
-            _prStatusText.Text = !installed
-                ? "gh (the GitHub CLI) isn't installed or isn't on PATH — get it from cli.github.com. No PRs will show until it is."
-                : !authed
-                    ? "gh is installed but not signed in — run \"gh auth login\". No PRs will show until you are."
-                    : "gh is installed and signed in — PRs will show as sessions are checked.";
-        }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
-    }
-
-    // ── Music ─────────────────────────────────────────────────────────────────────
-    private void BuildMusicPage(StackPanel page)
-    {
-        page.Children.Add(SettingsUi.SectionTitle("Media controller"));
-        page.Children.Add(SettingsUi.BodyText(
-            "Show what's currently playing — from the Windows media session (Spotify, a browser media tab, "
-            + "Groove, …) — as a strip on the overlay, with previous / play-pause / next controls. It uses "
-            + "the built-in system media session, so there's nothing extra to install."));
-
-        _mediaToggle = Toggle(_settings.ShowMediaController);
-        _mediaToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ShowMediaController = _mediaToggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();                     // applies SetShowMediaController to the overlay
-            _hooks.MediaEnabledChanged?.Invoke(_mediaToggle.IsChecked); // starts/stops the media session listener
-        };
-        page.Children.Add(SettingsUi.TitleRow("Show media controller", _mediaToggle));
-        page.Children.Add(SettingsUi.BodyText("The strip only appears while something is actually playing."));
-    }
-
-    // ── Microphone ────────────────────────────────────────────────────────────────
-    private PerchToggle _micToggle = null!;
-
-    // One switch, and one thing it does. A second switch used to sit here for Microsoft Teams' local API —
-    // in-app mute and real meeting state — and it was removed: the protocol can't be asked for the current mute,
-    // volunteers it only on a change, and needs an in-app pairing dance first, so the strip ended up confidently
-    // wrong more often than it was right. What's left is what the OS reports and Perch can always stand behind.
-    private void BuildMicrophonePage(StackPanel page)
-    {
-        page.Children.Add(SettingsUi.SectionTitle("Microphone strip"));
-        page.Children.Add(SettingsUi.BodyText(
-            "Show which app is using your microphone as a strip on the overlay. Click its name to jump straight "
-            + "to that app's window — useful when a call is buried on another virtual desktop. Works for any "
-            + "app: Teams, Slack, Zoom, a browser tab, OBS. It reads the same information as the Windows privacy "
-            + "indicator, so there's nothing extra to install."));
-
-        _micToggle = Toggle(_settings.ShowMicPresence);
-        _micToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ShowMicPresence = _micToggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();                  // applies SetShowMicPresence to the overlay
-            _hooks.MicEnabledChanged?.Invoke(_micToggle.IsChecked); // starts/stops the microphone watch
-        };
-        page.Children.Add(SettingsUi.TitleRow("Show microphone strip", _micToggle));
-        page.Children.Add(SettingsUi.BodyText(
-            "The strip only appears while something is actually using the mic, and it never mutes anything — "
-            + "muting is your call app's job, and only it can tell the other people in the room."));
-    }
-
-    // ── Indicators ──────────────────────────────────────────────────────────────────
-    private void BuildIndicatorsPage(StackPanel page)
-    {
-        BuildModeBadgeSection(page);
-        page.Children.Add(SettingsUi.Separator());
-        BuildTaskProgressSection(page);
-        page.Children.Add(SettingsUi.Separator());
-        BuildNotesSection(page);
-        page.Children.Add(SettingsUi.Separator());
-        BuildWaitingTimerSection(page);
-        page.Children.Add(SettingsUi.Separator());
-        BuildArtifactsSection(page);
-        page.Children.Add(SettingsUi.Separator());
-        BuildContextPressureSection(page);
-        page.Children.Add(SettingsUi.Separator());
-        BuildDetectionSection(page);
-        page.Children.Add(SettingsUi.Separator());
-        BuildDaemonProcessesSection(page);
-        page.Children.Add(SettingsUi.Separator());
-        BuildServiceStatusSection(page);
-    }
-
-    private void BuildDaemonProcessesSection(StackPanel page)
-    {
-        var toggle = Toggle(_settings.ShowDaemonProcesses);
-        toggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ShowDaemonProcesses = toggle.IsChecked;
-            _settings.Save();
-            _hooks.DaemonProcessesEnabledChanged?.Invoke(toggle.IsChecked); // starts/stops the roster watch
-        };
-        page.Children.Add(SettingsUi.TitleRow("Display daemon processes", toggle));
-        page.Children.Add(SettingsUi.BodyText(
-            "Lists the Claude Code background daemon's headless worker sessions in their own \"daemon\" " +
-            "section under the overlay's rows. These sessions run on a background pipe with no terminal " +
-            "window to jump to, so clicking one opens its options menu instead. Off hides the section " +
-            "entirely — the workers themselves keep running."));
-    }
-
-    private void BuildServiceStatusSection(StackPanel page)
-    {
-        Button? testBtn = null;
-        var intervalStepper = BuildStatusIntervalStepper(out var applyIntervalEnabled);
-
-        var toggle = Toggle(_settings.ShowServiceStatus);
-        void ApplyEnabled(bool on)
-        {
-            applyIntervalEnabled(on);
-            if (testBtn is not null) testBtn.IsEnabled = on;
-        }
-        toggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ShowServiceStatus = toggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-            _hooks.ServiceStatusEnabledChanged?.Invoke(toggle.IsChecked);
-            ApplyEnabled(toggle.IsChecked);
-        };
-        page.Children.Add(SettingsUi.TitleRow("Service status", toggle));
-        page.Children.Add(SettingsUi.BodyText(
-            "Shows an outage banner at the bottom of the overlay when status.claude.com reports a problem — " +
-            "click it for the list of incidents and a link to the status page. Nothing shows while all " +
-            "systems are operational."));
-
-        page.Children.Add(SettingsUi.FieldCaption("Check for outages every"));
-        page.Children.Add(intervalStepper);
-        page.Children.Add(SettingsUi.BodyText(
-            "How often Perch polls the status page. Checks are conditional, so an unchanged status barely " +
-            "costs anything — this mainly bounds how quickly a new incident shows up."));
-
-#if DEBUG
-        var row = SettingsUi.ButtonRow();
-        testBtn = SettingsUi.FlatButton("Show example outage");
-        testBtn.Click += (_, _) => _hooks.TestServiceStatus?.Invoke();
-        row.Children.Add(testBtn);
-        page.Children.Add(row);
-        page.Children.Add(SettingsUi.BodyText(
-            "Pushes a sample outage to the overlay so you can see how the banner looks; a real status check " +
-            "replaces it within a couple of minutes. (Debug builds only.)"));
-#endif
-
-        ApplyEnabled(_settings.ShowServiceStatus);
-    }
-
-    // A −/+ stepper for the service-status poll interval (minutes). Returns the row plus an enable hook so
-    // the section can grey it out with the feature toggle. Mirrors BuildIdleStepper.
-    private Control BuildStatusIntervalStepper(out Action<bool> applyEnabled)
-    {
-        const int min = 1, max = 60;
-        var row = SettingsUi.ButtonRow();
-        var dec = SettingsUi.FlatButton("−");
-        var inc = SettingsUi.FlatButton("+");
-        dec.Width = 36; inc.Width = 36;
-        var value = new TextBlock
-        {
-            Width = 90, TextAlignment = TextAlignment.Center, Foreground = Palette.FgBrush,
-            VerticalAlignment = VerticalAlignment.Center, FontSize = 14,
-        };
-        void Render() => value.Text = _settings.ServiceStatusIntervalMinutes == 1
-            ? "1 minute" : $"{_settings.ServiceStatusIntervalMinutes} minutes";
-        void Apply(int v)
-        {
-            v = Math.Clamp(v, min, max);
-            if (v == _settings.ServiceStatusIntervalMinutes) return;
-            _settings.ServiceStatusIntervalMinutes = v;
-            _settings.Save();
-            _hooks.ServiceStatusIntervalChanged?.Invoke();
-            Render();
-        }
-        dec.Click += (_, _) => Apply(_settings.ServiceStatusIntervalMinutes - 1);
-        inc.Click += (_, _) => Apply(_settings.ServiceStatusIntervalMinutes + 1);
-        Render();
-        row.Children.Add(dec);
-        row.Children.Add(value);
-        row.Children.Add(inc);
-        applyEnabled = on =>
-        {
-            dec.IsEnabled = on; inc.IsEnabled = on;
-            value.Foreground = on ? Palette.FgBrush : Palette.MutedBrush;
-        };
-        return row;
-    }
-
-    private void BuildModeBadgeSection(StackPanel page)
-    {
-        var legend = new ModeLegendView { Margin = new Thickness(0, 2, 0, 8) };
-        var toggle = Toggle(_settings.ShowPermissionModeBadges);
-        toggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ShowPermissionModeBadges = toggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-            legend.IsEnabled = toggle.IsChecked;
-        };
-        page.Children.Add(SettingsUi.TitleRow("Permission mode badges", toggle));
-        page.Children.Add(SettingsUi.BodyText(
-            "Each session's live permission mode is shown as a coloured badge next to that session in the " +
-            "overlay (Perch tracks this through the hooks it wires into Claude Code automatically):"));
-        legend.IsEnabled = _settings.ShowPermissionModeBadges;
-        page.Children.Add(legend);
-    }
-
-    private void BuildTaskProgressSection(StackPanel page)
-    {
-        page.Children.Add(SettingsUi.TitleRow("Task progress",
-            DisplayToggle(_settings.ShowTaskProgress, v => _settings.ShowTaskProgress = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Shows a small \"done/total\" count next to a session that's working through a task list " +
-            "(the native checklist Claude Code builds as it plans). It turns green when every task is " +
-            "complete; hover it in the overlay for the full list."));
-    }
-
-    private void BuildNotesSection(StackPanel page)
-    {
-        page.Children.Add(SettingsUi.TitleRow("Session notes",
-            DisplayToggle(_settings.ShowNotes, v => _settings.ShowNotes = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Shows a session's pinned note on its row — a note glyph plus the note text on its own line. " +
-            "Click the glyph (or use the session's right-click menu) to edit. Off by default; the note is " +
-            "still stored and editable from the menu even when hidden."));
-    }
-
-    private void BuildWaitingTimerSection(StackPanel page)
-    {
-        page.Children.Add(SettingsUi.TitleRow("Waiting timer",
-            DisplayToggle(_settings.ShowWaitingTimer, v => _settings.ShowWaitingTimer = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Shows how long a session has been blocked waiting on you once it hits a prompt or permission " +
-            "request — a \"waiting on you\" line with the elapsed time. It warms from yellow toward red the " +
-            "longer it sits unanswered, so a session you've left hanging is easy to spot."));
-
-        page.Children.Add(SettingsUi.FieldCaption("Minutes until fully red"));
-        var minutesBox = SettingsUi.ThemedTextBox(_settings.WaitingTimerRedMinutes.ToString());
-        minutesBox.Width = 64;
-        void Commit()
-        {
-            int minutes = int.TryParse(minutesBox.Text?.Trim(), out var m)
-                ? Math.Clamp(m, 1, 240)
-                : _settings.WaitingTimerRedMinutes;
-            minutesBox.Text = minutes.ToString();
-            _settings.WaitingTimerRedMinutes = minutes;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-        }
-        minutesBox.LostFocus += (_, _) => Commit();
-        minutesBox.KeyDown += (_, e) => { if (e.Key == Key.Enter) { Commit(); e.Handled = true; } };
-
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 0, 0, 8) };
-        row.Children.Add(minutesBox);
-        row.Children.Add(new TextBlock { Text = "minutes", Foreground = Palette.MutedBrush, VerticalAlignment = VerticalAlignment.Center });
-        page.Children.Add(row);
-    }
-
-    private void BuildArtifactsSection(StackPanel page)
-    {
-        page.Children.Add(SettingsUi.TitleRow("Artifacts",
-            DisplayToggle(_settings.ShowArtifacts, v => _settings.ShowArtifacts = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Shows a clickable amber glyph next to a session that has published one or more web artifacts. " +
-            "Click it in the overlay to open the artifact (or pick from a list when there are several)."));
-    }
-
-    private void BuildContextPressureSection(StackPanel page)
-    {
-        var slider = new ContextThresholdSliderView
-        {
-            Margin = new Thickness(0, 4, 0, 8), ShowGreenSegment = _settings.ShowContextGreenSegment,
-        };
-        var greenToggle = Toggle(_settings.ShowContextGreenSegment);
-        var greenRow = SettingsUi.SubRow(
-            "Show a green indicator below the first threshold instead of leaving it blank", greenToggle, out var greenLabel);
-
-        void ApplyEnabled(bool on)
-        {
-            slider.IsEnabled = on;
-            greenToggle.IsEnabled = on;
-            greenLabel.Foreground = on ? Palette.FgBrush : Palette.MutedBrush;
-        }
-
-        var toggle = Toggle(_settings.ShowContextPressure);
-        toggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ShowContextPressure = toggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-            ApplyEnabled(toggle.IsChecked);
-        };
-        page.Children.Add(SettingsUi.TitleRow("Context pressure", toggle));
-
-        page.Children.Add(SettingsUi.BodyText(
-            "Warns when a session is filling up its context window. A small thermometer appears next to " +
-            "the session in the overlay once it crosses the first threshold, filling up and warming from " +
-            "yellow to orange to red as the window approaches full. Drag the handles to set where it first " +
-            "appears and where it turns orange and red."));
-        page.Children.Add(SettingsUi.BodyText(
-            "The window size is read from the model the session is running — the 1M-token beta is " +
-            "recognised as such — so the gauge reflects the real headroom, not a fixed limit."));
-
-        slider.SetValues(_settings.ContextPressureYellowPercent, _settings.ContextPressureOrangePercent, _settings.ContextPressureRedPercent);
-        slider.RangeChanged += (y, o, r) =>
-        {
-            _settings.ContextPressureYellowPercent = y;
-            _settings.ContextPressureOrangePercent = o;
-            _settings.ContextPressureRedPercent = r;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-        };
-        page.Children.Add(slider);
-
-        greenToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ShowContextGreenSegment = greenToggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-            slider.ShowGreenSegment = greenToggle.IsChecked;
-        };
-        page.Children.Add(greenRow);
-
-        ApplyEnabled(_settings.ShowContextPressure);
-    }
-
-    private void BuildDetectionSection(StackPanel page)
-    {
-        var master = Toggle(_settings.StuckDetectionEnabled);
-        var errorToggle = Toggle(_settings.DetectErrorStreaks);
-        var loopToggle = Toggle(_settings.DetectFailingLoops);
-        var errorRow = SettingsUi.SubRow("Repeated failures — several tool calls fail in a row", errorToggle, out var errorLabel);
-        var loopRow = SettingsUi.SubRow("Failing loops — the same action repeats and keeps failing", loopToggle, out var loopLabel);
-
-        void Persist()
-        {
-            _settings.StuckDetectionEnabled = master.IsChecked;
-            _settings.DetectErrorStreaks = errorToggle.IsChecked;
-            _settings.DetectFailingLoops = loopToggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-        }
-        void ApplyEnabled()
-        {
-            bool on = master.IsChecked;
-            errorToggle.IsEnabled = on;
-            loopToggle.IsEnabled = on;
-            errorLabel.Foreground = on ? Palette.FgBrush : Palette.MutedBrush;
-            loopLabel.Foreground = on ? Palette.FgBrush : Palette.MutedBrush;
-        }
-
-        master.CheckedChanged += (_, _) => { ApplyEnabled(); Persist(); };
-        errorToggle.CheckedChanged += (_, _) => Persist();
-        loopToggle.CheckedChanged += (_, _) => Persist();
-
-        page.Children.Add(SettingsUi.TitleRow("Stuck detection", master));
-        page.Children.Add(SettingsUi.BodyText(
-            "Flags a running session that looks stuck with an amber warning glyph in the overlay. " +
-            "It's a heuristic — switch off whichever check is too eager, or the whole feature."));
-        page.Children.Add(errorRow);
-        page.Children.Add(loopRow);
-        ApplyEnabled();
-    }
-
-    // ── Monitoring ─────────────────────────────────────────────────────────────────
-    private void BuildMonitoringPage(StackPanel page)
-    {
-        page.Children.Add(SettingsUi.SectionTitle("Monitoring"));
-        page.Children.Add(SettingsUi.BodyText(
-            "Surface live CPU and memory use right in the overlay. Sampling only runs while one of these " +
-            "is on and reads standard Windows performance counters — nothing leaves your machine."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        _systemMetricsToggle = Toggle(_settings.ShowSystemMetrics);
-        _systemMetricsToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ShowSystemMetrics = _systemMetricsToggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-            _hooks.MetricsChanged?.Invoke();
-        };
-        page.Children.Add(SettingsUi.TitleRow("System metrics", _systemMetricsToggle));
-        page.Children.Add(SettingsUi.BodyText(
-            "A whole-machine CPU and physical-RAM strip at the top of the overlay, above the sessions."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        var subToggle = Toggle(_settings.IncludeSubprocessMetrics);
-        var subRow = SettingsUi.SubRow(
-            "Include subprocesses — roll a session up over its whole process tree", subToggle, out var subLabel);
-
-        void ApplyEnabled(bool on)
-        {
-            subToggle.IsEnabled = on;
-            subLabel.Foreground = on ? Palette.FgBrush : Palette.MutedBrush;
-        }
-
-        var sessionToggle = Toggle(_settings.ShowSessionMetrics);
-        sessionToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.ShowSessionMetrics = sessionToggle.IsChecked;
-            _settings.Save();
-            _hooks.DisplayChanged?.Invoke();
-            _hooks.MetricsChanged?.Invoke();
-            ApplyEnabled(sessionToggle.IsChecked);
-        };
-        page.Children.Add(SettingsUi.TitleRow("Per-session metrics", sessionToggle));
-        page.Children.Add(SettingsUi.BodyText(
-            "A small CPU (top) and RAM (bottom) bar on each session row, coloured by load. Hover it in the " +
-            "overlay for the exact figures. Sub-agents share their session's process, so their use rolls up " +
-            "into the session's own bar rather than showing on their row."));
-
-        subToggle.CheckedChanged += (_, _) =>
-        {
-            _settings.IncludeSubprocessMetrics = subToggle.IsChecked;
-            _settings.Save();
-            _hooks.MetricsChanged?.Invoke();
-        };
-        page.Children.Add(subRow);
-        page.Children.Add(SettingsUi.BodyText(
-            "On, a session's figure includes the MCP servers, shells and tools its claude process spawns — " +
-            "the true cost of the session. Off, only the claude process itself is measured."));
-
-        ApplyEnabled(_settings.ShowSessionMetrics);
-    }
 
     // ── Shortcuts (global hotkeys) ───────────────────────────────────────────────────
     private void BuildHotkeysPage(StackPanel page)
@@ -1743,71 +1165,6 @@ internal sealed class SettingsWindow : Window
         _hooks.QuickLinksChanged?.Invoke();
     }
 
-    // ── Experimental ────────────────────────────────────────────────────────────────
-    private void BuildExperimentalPage(StackPanel page)
-    {
-        page.Children.Add(SettingsUi.SectionTitle("Experimental"));
-        page.Children.Add(SettingsUi.BodyText(
-            "Opt-in switches for features still in development. They may change or break between updates."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        var teamsEnvToggle = Toggle(ClaudeUserSettings.IsAgentTeamsEnabled());
-        teamsEnvToggle.CheckedChanged += (_, _) => ClaudeUserSettings.SetAgentTeamsEnabled(teamsEnvToggle.IsChecked);
-        page.Children.Add(SettingsUi.TitleRow("Enable Agent Teams in Claude Code", teamsEnvToggle));
-        page.Children.Add(SettingsUi.BodyText(
-            "Sets the CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS environment variable in your user settings " +
-            "(~/.claude/settings.json). Claude Code reads it on launch, so restart any open sessions for it " +
-            "to take effect."));
-        page.Children.Add(SettingsUi.BodyText(
-            "Once enabled, Perch surfaces teammates automatically as distinct, named rows in the overlay — " +
-            "kept on the roster while they're alive, even when idle between messages from the lead."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.TitleRow("Hide inactive members",
-            DisplayToggle(_settings.HideInactiveTeamMembers, v => _settings.HideInactiveTeamMembers = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Drops idle teammates — those waiting for the lead — from the overlay, so only teammates actively " +
-            "working are shown. A hidden teammate reappears the moment it starts working again."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.TitleRow("Perch reacts",
-            SaveToggle(_settings.PerchReacts, v => _settings.PerchReacts = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Lets the tray and overlay bird wear the mood of your sessions: it dozes when nothing's running, " +
-            "perks up while sessions work, flags a \"!\" when one needs you, and visibly panics when a session " +
-            "looks stuck. Pure whimsy on top of the usual status cues. On by default."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.TitleRow("Token burn rate",
-            DisplayToggle(_settings.ShowBurnRate, v => _settings.ShowBurnRate = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Shows a live tokens-per-minute figure (e.g. \"12.3k/m\") next to a running session, measured over " +
-            "its most recent burst of turns. The rate can swing quite a bit between turns, so it's here in " +
-            "Experimental while that settles. Off by default."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.TitleRow("Git line changes",
-            DisplayToggle(_settings.ShowGitStats, v => _settings.ShowGitStats = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Shows a \"+142 -37\" chip next to a session — the lines added (green) and deleted (red) in its " +
-            "working directory that haven't been staged yet, read from git. While this is off, Perch never runs " +
-            "git at all, so it costs nothing; while on, it runs a lightweight \"git diff\" per session on a " +
-            "background thread, cached for a few seconds. Off by default."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.TitleRow("Confetti finish 🎉",
-            DisplayToggle(_settings.ConfettiFinish, v => _settings.ConfettiFinish = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Adds a \"Confetti finish 🎉\" item to a session's right-click menu. Arm a session and a " +
-            "party-popper icon appears on its row; the instant it next finishes, confetti erupts across the " +
-            "screen and the arming is spent (it fires exactly once). The arming is never saved. Off by default."));
-    }
 
     // ── About ─────────────────────────────────────────────────────────────────────
     private void BuildAboutPage(StackPanel page)

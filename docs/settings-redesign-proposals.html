@@ -1,0 +1,927 @@
+<title>Perch Settings — Redesign Proposals</title>
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#0e0e15;
+    --bg-2:#12121b;
+    --panel:#1a1a24;
+    --panel-2:#20202c;
+    --panel-3:#262633;
+    --line:#2b2b3a;
+    --line-soft:#22222f;
+    --fg:#e6e6f0;
+    --title:#f6f6fb;
+    --muted:#9090a6;
+    --muted-2:#6b6b80;
+    --accent:#60a5fa;
+    --accent-deep:#3b82f6;
+    --accent-ink:#bcd7fb;
+    --gold:#f0c674;
+    --good:#6ee7a8;
+    --good-track:#2f7d52;
+    --warn:#f4b860;
+    --danger:#f87171;
+    --ui: "Segoe UI Variable Display","Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-serif;
+    --mono: "Cascadia Code","Cascadia Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
+    --maxw: 1080px;
+    --r:10px;
+  }
+
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0}
+  .page{
+    background:
+      radial-gradient(1200px 620px at 78% -8%, rgba(96,165,250,.10), transparent 60%),
+      radial-gradient(900px 500px at 0% 4%, rgba(240,198,116,.05), transparent 55%),
+      var(--bg);
+    color:var(--fg);
+    font-family:var(--ui);
+    font-size:16px;
+    line-height:1.65;
+    letter-spacing:.005em;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+    overflow-x:hidden;
+  }
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px}
+
+  a{color:var(--accent-ink);text-decoration:none;border-bottom:1px solid rgba(96,165,250,.35)}
+  a:hover{border-bottom-color:var(--accent)}
+
+  .eyebrow{
+    font-size:.72rem;text-transform:uppercase;letter-spacing:.2em;
+    color:var(--muted);font-weight:600;
+    display:inline-flex;align-items:center;gap:.6em;
+  }
+  .eyebrow .bird{width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 12px 1px rgba(240,198,116,.6)}
+
+  h1,h2,h3{color:var(--title);text-wrap:balance;margin:0}
+  h1{
+    font-size:clamp(2.3rem,5.6vw,3.9rem);
+    line-height:1.02;font-weight:750;letter-spacing:-.02em;
+  }
+  h1 .accent{color:var(--accent)}
+  h2{font-size:clamp(1.55rem,3.1vw,2.15rem);line-height:1.08;font-weight:700;letter-spacing:-.015em}
+  h3{font-size:1.12rem;font-weight:650;letter-spacing:-.01em}
+
+  p{margin:0}
+  .lede{font-size:clamp(1.06rem,1.7vw,1.24rem);color:#c7c7d6;max-width:64ch;line-height:1.6}
+  .muted{color:var(--muted)}
+  .measure{max-width:64ch}
+
+  /* ---------- hero ---------- */
+  header.hero{padding:82px 0 30px}
+  .hero .kicker{margin-bottom:26px}
+  .hero h1{max-width:16ch}
+  .hero .lede{margin-top:26px}
+
+  .problem-pair{
+    display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:38px;max-width:760px;
+  }
+  .prob{
+    border:1px solid var(--line);border-radius:var(--r);
+    background:linear-gradient(180deg,rgba(255,255,255,.02),transparent);
+    padding:18px 20px;
+  }
+  .prob .q{
+    font-family:var(--mono);font-size:.76rem;color:var(--gold);
+    letter-spacing:.02em;margin-bottom:8px;
+  }
+  .prob .t{color:var(--title);font-weight:600;font-size:1.02rem}
+  .prob .d{color:var(--muted);font-size:.92rem;margin-top:4px}
+
+  /* ---------- diagnostic strip ---------- */
+  section{padding:48px 0}
+  .rule{height:1px;background:linear-gradient(90deg,transparent,var(--line),transparent);border:0;margin:0}
+
+  .diag{
+    display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
+    background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;
+    margin-top:30px;
+  }
+  .diag .cell{background:var(--panel);padding:24px 24px 22px}
+  .diag .n{font-size:2.6rem;font-weight:750;color:var(--title);letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1}
+  .diag .n.zero{color:var(--danger)}
+  .diag .k{color:var(--muted);font-size:.85rem;margin-top:8px}
+  .diag .sub{color:var(--muted-2);font-size:.8rem;margin-top:3px}
+
+  /* ---------- section headings ---------- */
+  .sec-head{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+  .sec-head .eyebrow{flex:0 0 auto}
+
+  /* ---------- principles ---------- */
+  .principles{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:26px}
+  .principle{padding:4px 2px}
+  .principle .idx{font-family:var(--mono);color:var(--muted-2);font-size:.8rem}
+  .principle h3{margin:10px 0 6px}
+  .principle p{color:var(--muted);font-size:.94rem}
+
+  /* ---------- proposal ---------- */
+  .proposal{padding-top:20px}
+  .prop-head{display:flex;gap:22px;align-items:flex-start;margin-bottom:8px}
+  .prop-num{
+    font-family:var(--mono);font-weight:600;
+    font-size:1rem;color:var(--gold);
+    border:1px solid rgba(240,198,116,.35);border-radius:8px;
+    padding:6px 10px;white-space:nowrap;margin-top:6px;
+    background:rgba(240,198,116,.06);
+  }
+  .prop-title-block{flex:1 1 auto;min-width:0}
+  .prop-tag{
+    display:inline-block;font-size:.72rem;text-transform:uppercase;letter-spacing:.16em;
+    color:var(--accent);font-weight:650;margin-bottom:8px;
+  }
+  .prop-title-block h2 .thin{color:var(--muted);font-weight:400}
+  .prop-lede{margin-top:14px;color:#c4c4d4;max-width:66ch;font-size:1.05rem}
+
+  /* mockup frame — a Perch window */
+  .mock{
+    margin:30px 0 6px;
+    border:1px solid var(--line);
+    border-radius:12px;
+    background:#181820;
+    box-shadow:0 30px 70px -30px rgba(0,0,0,.75), 0 2px 0 rgba(255,255,255,.02) inset;
+    overflow:hidden;
+  }
+  .mock-bar{
+    display:flex;align-items:center;gap:10px;
+    padding:9px 14px;background:#101018;border-bottom:1px solid var(--line-soft);
+  }
+  .mock-bar .dot{width:9px;height:9px;border-radius:50%;background:#33333f}
+  .mock-bar .ttl{margin-left:6px;font-size:.78rem;color:var(--muted);letter-spacing:.02em}
+  .mock-bar .grow{flex:1}
+  .mock-bar .chip{font-family:var(--mono);font-size:.68rem;color:var(--muted-2)}
+
+  .mock-body{display:grid;min-height:360px}
+
+  /* generic settings row bits (shared by mockups) */
+  .srow{display:flex;align-items:center;gap:12px;padding:11px 0}
+  .srow .lbl{flex:1;min-width:0}
+  .srow .lbl .name{color:var(--title);font-size:.95rem;font-weight:550}
+  .srow .lbl .desc{color:var(--muted);font-size:.82rem;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* the real PerchToggle look: pill + knob, green when on */
+  .tgl{--w:38px;--h:22px;flex:0 0 auto;width:var(--w);height:var(--h);border-radius:999px;
+    background:#2d2d3c;position:relative;cursor:pointer;transition:background .18s ease;border:0;padding:0}
+  .tgl::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;
+    background:#c9c9d6;transition:transform .18s ease, background .18s ease}
+  .tgl[aria-checked="true"]{background:var(--good-track)}
+  .tgl[aria-checked="true"]::after{transform:translateX(16px);background:#eafff2}
+  .tgl:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  /* ===== Proposal 1 mockup: search-first ===== */
+  .p1{grid-template-columns:200px 1fr}
+  .p1 .rail{background:#121218;border-right:1px solid var(--line-soft);padding:12px 10px;display:flex;flex-direction:column;gap:2px}
+  .p1 .rail .navitem{font-size:.86rem;color:var(--muted);padding:8px 10px;border-radius:6px;border-left:3px solid transparent}
+  .p1 .rail .navitem.dim{opacity:.5}
+  .p1 .rail .navitem.on{color:var(--title);background:#22222f;border-left-color:var(--accent)}
+  .p1 .content{padding:16px 20px}
+  .searchbox{display:flex;align-items:center;gap:10px;background:#0f0f16;border:1px solid var(--line);
+    border-radius:9px;padding:10px 12px;transition:border-color .15s}
+  .searchbox:focus-within{border-color:var(--accent)}
+  .searchbox svg{flex:0 0 auto;color:var(--muted)}
+  .searchbox input{flex:1;background:transparent;border:0;outline:0;color:var(--fg);font-family:var(--ui);font-size:.95rem}
+  .searchbox input::placeholder{color:var(--muted-2)}
+  .searchbox .kbd{font-family:var(--mono);font-size:.68rem;color:var(--muted-2);border:1px solid var(--line);border-radius:5px;padding:2px 6px}
+  .result-meta{display:flex;justify-content:space-between;align-items:center;margin:16px 2px 6px}
+  .result-meta .count{font-size:.8rem;color:var(--muted)}
+  .result-meta .count b{color:var(--accent-ink);font-variant-numeric:tabular-nums}
+  .result-meta .hint{font-size:.75rem;color:var(--muted-2)}
+  .results{display:flex;flex-direction:column}
+  .results .srow{border-bottom:1px solid var(--line-soft)}
+  .results .srow:last-child{border-bottom:0}
+  .crumb{font-family:var(--mono);font-size:.7rem;color:var(--muted-2);margin-top:2px}
+  .crumb .hit{color:var(--gold)}
+  mark{background:rgba(240,198,116,.22);color:var(--gold);border-radius:3px;padding:0 2px}
+  .empty{padding:34px 8px;text-align:center;color:var(--muted-2);font-size:.9rem}
+
+  /* ===== Proposal 2 mockup: feature catalog ===== */
+  .p2{grid-template-columns:1fr}
+  .p2 .top{padding:14px 20px 4px;border-bottom:1px solid var(--line-soft)}
+  .p2 .top .searchbox{max-width:none}
+  .p2 .filters{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 4px}
+  .p2 .filters .f{font-size:.78rem;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 12px;cursor:default}
+  .p2 .filters .f.on{color:#08121f;background:var(--accent);border-color:var(--accent);font-weight:600}
+  .catalog{padding:18px 20px 22px;overflow:auto}
+  .surface{margin-bottom:22px}
+  .surface .shead{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .surface .shead .icon{width:22px;height:22px;border-radius:6px;background:#22222f;display:grid;place-items:center;color:var(--accent);font-size:.8rem}
+  .surface .shead .t{font-size:.82rem;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);font-weight:600}
+  .surface .shead .ct{font-family:var(--mono);font-size:.7rem;color:var(--muted-2)}
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .fcard{border:1px solid var(--line);border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,.018),transparent);
+    padding:13px 14px;display:flex;flex-direction:column;gap:9px;min-height:118px}
+  .fcard .preview{height:34px;border-radius:6px;background:#0f0f16;border:1px solid var(--line-soft);
+    display:flex;align-items:center;gap:6px;padding:0 9px;overflow:hidden}
+  .fcard .head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .fcard .nm{color:var(--title);font-size:.9rem;font-weight:600;line-height:1.2}
+  .fcard .ds{color:var(--muted);font-size:.78rem;line-height:1.35}
+  /* tiny overlay preview glyphs */
+  .g{font-family:var(--mono);font-size:.68rem;display:inline-flex;align-items:center;height:16px;border-radius:4px;padding:0 5px;white-space:nowrap}
+  .g.badge{background:#26314a;color:var(--accent-ink)}
+  .g.badge.grn{background:#1f4030;color:var(--good)}
+  .g.badge.amb{background:#3d3320;color:var(--warn)}
+  .g.bar{width:52px;height:8px;border-radius:4px;background:linear-gradient(90deg,var(--good) 60%,#2d2d3c 60%);padding:0}
+  .g.dot{width:8px;height:8px;border-radius:50%;padding:0}
+  .thermo{width:8px;height:16px;border-radius:3px;background:linear-gradient(0deg,var(--good),var(--warn));}
+
+  /* ===== Proposal 3 mockup: live preview ===== */
+  .p3{grid-template-columns:1fr 300px}
+  .p3 .ctrls{padding:16px 18px;overflow:auto}
+  .p3 .grp{font-size:.74rem;text-transform:uppercase;letter-spacing:.14em;color:var(--muted-2);margin:14px 0 4px;font-weight:600}
+  .p3 .ctrls .srow{border-bottom:1px solid var(--line-soft)}
+  .p3 .stage{background:
+      radial-gradient(400px 300px at 60% 20%, rgba(96,165,250,.08), transparent 70%),
+      #0b0b12;
+    border-left:1px solid var(--line-soft);padding:16px 14px;position:relative}
+  .p3 .stage .glabel{font-size:.68rem;text-transform:uppercase;letter-spacing:.16em;color:var(--muted-2);margin-bottom:12px}
+  .ov{border:1px solid var(--line);border-radius:9px;background:#15151d;box-shadow:0 16px 40px -20px #000;overflow:hidden}
+  .ov .ovrow{display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--line-soft)}
+  .ov .ovrow:last-child{border-bottom:0}
+  .ov .bird{width:16px;height:16px;border-radius:50%;background:radial-gradient(circle at 35% 30%,var(--gold),#b8862f);flex:0 0 auto}
+  .ov .proj{font-size:.78rem;color:var(--fg);flex:1;font-family:var(--mono)}
+  .ov .flair{display:flex;gap:5px;align-items:center}
+  .ov .flair .hl{animation:pulse 1.1s ease}
+  .highlightable{transition:box-shadow .2s, opacity .2s}
+  .dimmed{opacity:.18}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(96,165,250,.7)}100%{box-shadow:0 0 0 8px rgba(96,165,250,0)}}
+
+  /* ---------- solves / tradeoffs blocks ---------- */
+  .cols2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:26px}
+  .solve{border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;background:linear-gradient(180deg,rgba(255,255,255,.015),transparent)}
+  .solve h4{margin:0 0 12px;font-size:.74rem;text-transform:uppercase;letter-spacing:.15em;color:var(--muted);font-weight:650;display:flex;align-items:center;gap:8px}
+  .solve h4 .tick{color:var(--good)}
+  .solve ul{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:9px}
+  .solve li{position:relative;padding-left:20px;font-size:.94rem;color:#cececk;color:#cfcfdc}
+  .solve li::before{content:"";position:absolute;left:2px;top:.6em;width:6px;height:6px;border-radius:50%;background:var(--accent)}
+  .solve.warn li::before{background:var(--warn)}
+
+  .meta-row{display:flex;gap:26px;flex-wrap:wrap;margin-top:20px;padding-top:18px;border-top:1px solid var(--line-soft)}
+  .meta-row .m{display:flex;flex-direction:column;gap:2px}
+  .meta-row .m .k{font-size:.7rem;text-transform:uppercase;letter-spacing:.14em;color:var(--muted-2)}
+  .meta-row .m .v{font-size:.92rem;color:var(--fg)}
+  .dots{display:inline-flex;gap:3px;align-items:center}
+  .dots i{width:8px;height:8px;border-radius:50%;background:var(--line);display:inline-block}
+  .dots i.on{background:var(--accent)}
+  .dots.gold i.on{background:var(--gold)}
+
+  .prop-divider{height:1px;background:var(--line-soft);margin:56px 0 0}
+
+  /* ---------- recommendation ---------- */
+  .rec{border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-top:28px;
+    background:linear-gradient(180deg,rgba(96,165,250,.05),transparent 40%)}
+  .rec .rhead{padding:24px 26px;border-bottom:1px solid var(--line-soft)}
+  .rec .rhead h3{font-size:1.35rem}
+  .rec .rhead p{margin-top:8px;color:var(--muted);max-width:70ch}
+  .phases{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line-soft)}
+  .phase{background:var(--panel);padding:20px 22px}
+  .phase .pk{font-family:var(--mono);font-size:.72rem;color:var(--gold);letter-spacing:.05em}
+  .phase h4{margin:8px 0 6px;color:var(--title);font-size:1rem;font-weight:650}
+  .phase p{color:var(--muted);font-size:.88rem}
+  .phase .eff{margin-top:12px;font-size:.75rem;color:var(--muted-2)}
+
+  .reuse{margin-top:26px;border:1px dashed var(--line);border-radius:var(--r);padding:16px 20px;
+    display:flex;gap:14px;align-items:flex-start;background:rgba(110,231,168,.03)}
+  .reuse .tick{color:var(--good);flex:0 0 auto;margin-top:2px}
+  .reuse p{font-size:.92rem;color:#cfcfdc}
+  .reuse code{font-family:var(--mono);font-size:.85em;color:var(--accent-ink);background:#0f0f16;border:1px solid var(--line-soft);border-radius:5px;padding:1px 6px}
+
+  footer{padding:40px 0 70px;color:var(--muted-2);font-size:.85rem;border-top:1px solid var(--line-soft);margin-top:20px}
+  footer .fl{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+  /* reveal */
+  .rv{opacity:0;transform:translateY(14px);transition:opacity .6s ease, transform .6s ease}
+  .rv.in{opacity:1;transform:none}
+
+  @media (prefers-reduced-motion: reduce){
+    .rv{opacity:1;transform:none;transition:none}
+    .tgl,.tgl::after,.highlightable{transition:none}
+    .ov .flair .hl{animation:none}
+  }
+
+  @media (max-width:860px){
+    .problem-pair,.diag,.principles,.cols2,.cards,.phases{grid-template-columns:1fr}
+    .diag{grid-template-columns:1fr 1fr}
+    .p1,.p3{grid-template-columns:1fr}
+    .p1 .rail{flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line-soft)}
+    .p3 .stage{border-left:0;border-top:1px solid var(--line-soft)}
+    .cards{grid-template-columns:1fr 1fr}
+  }
+  @media (max-width:560px){
+    .wrap{padding:0 18px}
+    .diag,.cards{grid-template-columns:1fr}
+    .prop-head{gap:14px}
+  }
+</style>
+
+<div class="page">
+<div class="wrap">
+
+  <!-- ============ HERO ============ -->
+  <header class="hero">
+    <div class="kicker eyebrow"><span class="bird"></span>Perch &nbsp;·&nbsp; Settings redesign</div>
+    <h1>Fifty switches, <span class="accent">sixteen rooms,</span> and no map.</h1>
+    <p class="lede">Perch has quietly grown a rich menu of indicators, chimes, and integrations. The
+      settings window has grown with it — into sixteen nav pages you have to already know your way around.
+      Two proposals below make the surface searchable and self-explaining, plus a more ambitious third.</p>
+
+    <div class="problem-pair">
+      <div class="prob">
+        <div class="q">pain&nbsp;#1</div>
+        <div class="t">&ldquo;I can&rsquo;t search to find something.&rdquo;</div>
+        <div class="d">You know the setting exists — you just can&rsquo;t remember which of the 16 pages it lives on.</div>
+      </div>
+      <div class="prob">
+        <div class="q">pain&nbsp;#2</div>
+        <div class="t">&ldquo;I don&rsquo;t know what features even exist.&rdquo;</div>
+        <div class="d">Half of Perch&rsquo;s value is little overlay glyphs hidden behind toggles you&rsquo;ve never scrolled to.</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============ DIAGNOSTIC ============ -->
+  <section class="rv">
+    <div class="sec-head"><span class="eyebrow">Where we are</span></div>
+    <div class="diag">
+      <div class="cell">
+        <div class="n">16</div>
+        <div class="k">nav pages in the rail</div>
+        <div class="sub">Getting started → Changelog</div>
+      </div>
+      <div class="cell">
+        <div class="n">50+</div>
+        <div class="k">toggles, steppers &amp; fields</div>
+        <div class="sub">most are &ldquo;show <em>X</em>&rdquo; overlay glyphs</div>
+      </div>
+      <div class="cell">
+        <div class="n zero">0</div>
+        <div class="k">ways to search or filter</div>
+        <div class="sub">navigation is click-and-scan only</div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ============ PRINCIPLES ============ -->
+  <section class="rv">
+    <div class="sec-head">
+      <span class="eyebrow">Design stance</span>
+    </div>
+    <div class="principles">
+      <div class="principle">
+        <div class="idx">01</div>
+        <h3>Find by name, not by memory</h3>
+        <p>You should be able to type &ldquo;chime&rdquo; or &ldquo;cost&rdquo; and land on the switch — no matter which page it technically lives on.</p>
+      </div>
+      <div class="principle">
+        <div class="idx">02</div>
+        <h3>Show the feature, not just its label</h3>
+        <p>Most settings toggle a visible glyph. A tiny preview of that glyph teaches what the setting does far faster than a paragraph.</p>
+      </div>
+      <div class="principle">
+        <div class="idx">03</div>
+        <h3>Reuse the parts, restructure the shell</h3>
+        <p>The owner-drawn <code style="font-family:var(--mono);font-size:.85em;color:var(--accent-ink)">PerchToggle</code> and sliders stay. Only the container and navigation change.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- ============ PROPOSAL 1 ============ -->
+  <section class="proposal rv">
+    <div class="prop-head">
+      <div class="prop-num">Proposal&nbsp;01</div>
+      <div class="prop-title-block">
+        <span class="prop-tag">Lowest effort · biggest win on Pain #1</span>
+        <h2>Search-first <span class="thin">— a filter bar over the pages you already have</span></h2>
+        <p class="prop-lede">Keep the nav rail. Add one persistent search field at the top that fuzzy-matches
+          <em>every</em> setting — by name and by synonyms — and lists results inline with a breadcrumb and a
+          live toggle. Nothing to relearn; the structure only reveals itself when you need it.</p>
+      </div>
+    </div>
+
+    <!-- interactive mockup -->
+    <div class="mock">
+      <div class="mock-bar">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="ttl">Perch Settings</span>
+        <span class="grow"></span>
+        <span class="chip">880 × 660</span>
+      </div>
+      <div class="mock-body p1">
+        <nav class="rail" aria-hidden="true">
+          <div class="navitem on">Search</div>
+          <div class="navitem dim">Getting started</div>
+          <div class="navitem dim">Usage Limits</div>
+          <div class="navitem dim">Indicators</div>
+          <div class="navitem dim">Monitoring</div>
+          <div class="navitem dim">Notifications</div>
+          <div class="navitem dim">Stats · Music …</div>
+        </nav>
+        <div class="content">
+          <label class="searchbox">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+            <input id="p1search" type="text" placeholder="Search all settings — try &ldquo;chime&rdquo;, &ldquo;cost&rdquo;, &ldquo;git&rdquo;…" autocomplete="off" spellcheck="false" aria-label="Search settings">
+            <span class="kbd">Ctrl&nbsp;F</span>
+          </label>
+          <div class="result-meta">
+            <div class="count"><b id="p1count">0</b> settings</div>
+            <div class="hint" id="p1hint">searches names &amp; keywords across all 16 pages</div>
+          </div>
+          <div class="results" id="p1results"></div>
+        </div>
+      </div>
+    </div>
+    <p class="muted" style="font-size:.82rem;margin-top:10px">↑ Live demo — type in the field. It filters the real Perch setting inventory, including synonyms (&ldquo;sound&rdquo; → chimes, &ldquo;beep&rdquo;; &ldquo;ram&rdquo; → metrics).</p>
+
+    <div class="cols2">
+      <div class="solve">
+        <h4><span class="tick">✓</span> How it fixes the pains</h4>
+        <ul>
+          <li><b>Pain #1 — search:</b> one field finds any setting by name or synonym, with a breadcrumb showing where it lives so you learn the map over time.</li>
+          <li><b>Pain #2 — discovery:</b> an empty query can list <em>everything</em> as a flat scannable index — a de-facto feature catalogue with zero extra pages.</li>
+          <li>Doubles as a command palette later (jump-to-page, run export, open changelog).</li>
+        </ul>
+      </div>
+      <div class="solve warn">
+        <h4>Trade-offs to weigh</h4>
+        <ul>
+          <li>Each setting needs a small metadata record — display name + keyword list. ~50 entries, one-time.</li>
+          <li>Doesn&rsquo;t reduce the 16 pages; it layers over them. Discovery improves but the underlying sprawl remains.</li>
+          <li>Results need their own lightweight row renderer distinct from the page builders.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="meta-row">
+      <div class="m"><span class="k">Effort</span><span class="v"><span class="dots"><i class="on"></i><i></i><i></i><i></i><i></i></span> &nbsp;Low</span></div>
+      <div class="m"><span class="k">Radicalness</span><span class="v"><span class="dots gold"><i class="on"></i><i></i><i></i><i></i><i></i></span> &nbsp;Additive</span></div>
+      <div class="m"><span class="k">Reuses</span><span class="v">Rail, pages, PerchToggle — all intact</span></div>
+      <div class="m"><span class="k">Ships as</span><span class="v">A 17th &ldquo;Search&rdquo; page, or a bar above the rail</span></div>
+    </div>
+  </section>
+
+  <div class="prop-divider"></div>
+
+  <!-- ============ PROPOSAL 2 ============ -->
+  <section class="proposal rv">
+    <div class="prop-head">
+      <div class="prop-num">Proposal&nbsp;02</div>
+      <div class="prop-title-block">
+        <span class="prop-tag">Radical rethink · biggest win on Pain #2</span>
+        <h2>The feature catalogue <span class="thin">— settings organised by where they appear</span></h2>
+        <p class="prop-lede">Collapse sixteen topic pages into a handful of <em>surfaces</em> — the places Perch actually
+          draws: the session row, the usage bars, the tray &amp; stats, notifications, the system strip. Each
+          feature becomes a card with a tiny preview of its glyph, a one-line description, and its toggle. You
+          browse a board of what Perch <em>can</em> show you, and you see it before you switch it on.</p>
+      </div>
+    </div>
+
+    <div class="mock">
+      <div class="mock-bar">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="ttl">Perch Settings — Features</span>
+        <span class="grow"></span>
+        <span class="chip">catalogue view</span>
+      </div>
+      <div class="mock-body p2">
+        <div class="top">
+          <label class="searchbox">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+            <input type="text" placeholder="Filter features…" aria-label="Filter features" spellcheck="false">
+          </label>
+          <div class="filters">
+            <span class="f on">All surfaces</span>
+            <span class="f">Session row</span>
+            <span class="f">Usage bars</span>
+            <span class="f">Tray &amp; stats</span>
+            <span class="f">Notifications</span>
+            <span class="f">System</span>
+          </div>
+        </div>
+        <div class="catalog">
+
+          <div class="surface">
+            <div class="shead">
+              <span class="icon">▤</span><span class="t">On the session row</span><span class="ct">9 features</span>
+            </div>
+            <div class="cards">
+              <div class="fcard">
+                <div class="preview"><span class="g badge grn">Plan</span><span class="g badge amb">Auto</span></div>
+                <div class="head"><span class="nm">Permission-mode badges</span><button class="tgl" aria-checked="true" aria-label="Permission-mode badges"></button></div>
+                <div class="ds">Plan / Accept / Auto / Bypass, at a glance.</div>
+              </div>
+              <div class="fcard">
+                <div class="preview"><span class="g badge">3 / 7</span></div>
+                <div class="head"><span class="nm">Task progress</span><button class="tgl" aria-checked="true" aria-label="Task progress"></button></div>
+                <div class="ds">Checklist count for the running to-do list.</div>
+              </div>
+              <div class="fcard">
+                <div class="preview"><span class="thermo"></span><span class="g" style="color:var(--muted)">68%</span></div>
+                <div class="head"><span class="nm">Context pressure</span><button class="tgl" aria-checked="true" aria-label="Context pressure"></button></div>
+                <div class="ds">How full the context window is getting.</div>
+              </div>
+              <div class="fcard">
+                <div class="preview"><span class="g" style="color:var(--muted)">⏱ 4m waiting</span></div>
+                <div class="head"><span class="nm">Waiting timer</span><button class="tgl" aria-checked="true" aria-label="Waiting timer"></button></div>
+                <div class="ds">How long a session has needed you.</div>
+              </div>
+              <div class="fcard">
+                <div class="preview"><span class="g badge" style="background:#3a2a44;color:#d9b8ff">◆ artifact</span></div>
+                <div class="head"><span class="nm">Artifacts</span><button class="tgl" aria-checked="true" aria-label="Artifacts"></button></div>
+                <div class="ds">Click straight to a published artifact.</div>
+              </div>
+              <div class="fcard">
+                <div class="preview"><span class="g" style="color:var(--muted)">≈ 4.2k tok/min</span></div>
+                <div class="head"><span class="nm">Burn rate</span><button class="tgl" aria-checked="false" aria-label="Burn rate"></button></div>
+                <div class="ds">Live tokens-per-minute for a session.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="surface">
+            <div class="shead">
+              <span class="icon">▬</span><span class="t">On the usage bars</span><span class="ct">2 features</span>
+            </div>
+            <div class="cards">
+              <div class="fcard">
+                <div class="preview"><span class="g bar"></span></div>
+                <div class="head"><span class="nm">5-hour &amp; weekly bars</span><button class="tgl" aria-checked="true" aria-label="Usage bars"></button></div>
+                <div class="ds">Your rolling usage against the limits.</div>
+              </div>
+              <div class="fcard">
+                <div class="preview"><span class="g bar" style="background:linear-gradient(90deg,var(--good) 45%,#2d2d3c 45%);position:relative"></span><span class="g" style="color:var(--muted-2)">| expected</span></div>
+                <div class="head"><span class="nm">Expected-rate marker</span><button class="tgl" aria-checked="true" aria-label="Expected rate"></button></div>
+                <div class="ds">Are you ahead of or behind pace?</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="surface">
+            <div class="shead">
+              <span class="icon">◔</span><span class="t">System &amp; whimsy</span><span class="ct">5 features</span>
+            </div>
+            <div class="cards">
+              <div class="fcard">
+                <div class="preview"><span class="g" style="color:var(--muted)">CPU 12% · RAM 3.1G</span></div>
+                <div class="head"><span class="nm">System metrics</span><button class="tgl" aria-checked="false" aria-label="System metrics"></button></div>
+                <div class="ds">Whole-machine CPU &amp; memory strip.</div>
+              </div>
+              <div class="fcard">
+                <div class="preview"><span class="g badge grn">+142 −18</span></div>
+                <div class="head"><span class="nm">Git line churn</span><button class="tgl" aria-checked="false" aria-label="Git stats"></button></div>
+                <div class="ds">Lines added / removed this session.</div>
+              </div>
+              <div class="fcard">
+                <div class="preview"><span class="bird" style="width:14px;height:14px;border-radius:50%;background:radial-gradient(circle at 35% 30%,var(--gold),#b8862f)"></span><span class="g" style="color:var(--muted)">reacts to mood</span></div>
+                <div class="head"><span class="nm">Perch reacts</span><button class="tgl" aria-checked="true" aria-label="Perch reacts"></button></div>
+                <div class="ds">The bird mirrors the session&rsquo;s mood.</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <div class="cols2">
+      <div class="solve">
+        <h4><span class="tick">✓</span> How it fixes the pains</h4>
+        <ul>
+          <li><b>Pain #2 — discovery:</b> the whole feature set is one scrollable board. You <em>see</em> each glyph before enabling it — nothing is hidden a scroll deep on a page you never open.</li>
+          <li><b>Pain #1 — search:</b> the same filter bar sits on top; the surface chips give a second, spatial way to narrow down.</li>
+          <li>Grouping by <em>surface</em> matches how you think — &ldquo;what shows on a session row?&rdquo; — not by our internal categories.</li>
+        </ul>
+      </div>
+      <div class="solve warn">
+        <h4>Trade-offs to weigh</h4>
+        <ul>
+          <li>The biggest build: a card renderer, mini-preview glyphs, and a re-homing of every setting onto a surface.</li>
+          <li>Config-heavy settings (ntfy host/topic, context thresholds, hotkeys) don&rsquo;t fit a card — they need a &ldquo;details&rdquo; expand or a companion Advanced page.</li>
+          <li>Previews are real drawing work; start with static glyphs, upgrade to live ones later.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="meta-row">
+      <div class="m"><span class="k">Effort</span><span class="v"><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span> &nbsp;High</span></div>
+      <div class="m"><span class="k">Radicalness</span><span class="v"><span class="dots gold"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span> &nbsp;Radical</span></div>
+      <div class="m"><span class="k">Reuses</span><span class="v">PerchToggle inside each card</span></div>
+      <div class="m"><span class="k">Best for</span><span class="v">&ldquo;What can Perch even show me?&rdquo;</span></div>
+    </div>
+  </section>
+
+  <div class="prop-divider"></div>
+
+  <!-- ============ PROPOSAL 3 ============ -->
+  <section class="proposal rv">
+    <div class="prop-head">
+      <div class="prop-num">Proposal&nbsp;03</div>
+      <div class="prop-title-block">
+        <span class="prop-tag">Most ambitious · teach by showing</span>
+        <h2>Live preview <span class="thin">— toggle on the left, watch the overlay change on the right</span></h2>
+        <p class="prop-lede">A two-pane window: controls on one side, a miniature live Perch overlay on the other.
+          Flip a switch and the affected glyph appears — and pulses — in the preview. You never wonder what a
+          setting does, because you&rsquo;re looking at it. The strongest possible answer to &ldquo;what does this feature look like?&rdquo;</p>
+      </div>
+    </div>
+
+    <div class="mock">
+      <div class="mock-bar">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="ttl">Perch Settings — Indicators</span>
+        <span class="grow"></span>
+        <span class="chip">live preview</span>
+      </div>
+      <div class="mock-body p3">
+        <div class="ctrls">
+          <div class="grp">Session row</div>
+          <div class="srow">
+            <div class="lbl"><div class="name">Permission-mode badges</div></div>
+            <button class="tgl" data-fx="badge" aria-checked="true" aria-label="Permission-mode badges"></button>
+          </div>
+          <div class="srow">
+            <div class="lbl"><div class="name">Task progress</div></div>
+            <button class="tgl" data-fx="tasks" aria-checked="true" aria-label="Task progress"></button>
+          </div>
+          <div class="srow">
+            <div class="lbl"><div class="name">Context pressure</div></div>
+            <button class="tgl" data-fx="ctx" aria-checked="true" aria-label="Context pressure"></button>
+          </div>
+          <div class="srow">
+            <div class="lbl"><div class="name">Waiting timer</div></div>
+            <button class="tgl" data-fx="wait" aria-checked="false" aria-label="Waiting timer"></button>
+          </div>
+          <div class="grp">Whimsy</div>
+          <div class="srow">
+            <div class="lbl"><div class="name">Perch reacts</div></div>
+            <button class="tgl" data-fx="bird" aria-checked="true" aria-label="Perch reacts"></button>
+          </div>
+        </div>
+        <div class="stage">
+          <div class="glabel">Live overlay preview</div>
+          <div class="ov">
+            <div class="ovrow">
+              <span class="bird highlightable" data-el="bird"></span>
+              <span class="proj">perch</span>
+              <span class="flair">
+                <span class="g badge grn highlightable" data-el="badge">Plan</span>
+                <span class="g badge highlightable" data-el="tasks">3/7</span>
+                <span class="thermo highlightable" data-el="ctx"></span>
+              </span>
+            </div>
+            <div class="ovrow">
+              <span class="bird" style="background:radial-gradient(circle at 35% 30%,#7fd6a0,#2f7d52)"></span>
+              <span class="proj">nexus-api</span>
+              <span class="flair">
+                <span class="g badge amb highlightable" data-el="badge">Auto</span>
+                <span class="g highlightable" data-el="wait" style="color:var(--muted);display:none">⏱ 2m</span>
+              </span>
+            </div>
+          </div>
+          <p class="muted" style="font-size:.78rem;margin-top:14px;line-height:1.5">Toggle a switch on the left — the matching glyph fades in or out here and pulses. Try &ldquo;Waiting timer&rdquo;.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="cols2">
+      <div class="solve">
+        <h4><span class="tick">✓</span> How it fixes the pains</h4>
+        <ul>
+          <li><b>Pain #2 — discovery:</b> unbeatable clarity. The setting&rsquo;s effect is literally rendered as you touch it; no description can compete.</li>
+          <li>Turns the dreaded &ldquo;what will this do to my overlay?&rdquo; hesitation into a safe, reversible experiment.</li>
+          <li>Pairs naturally with the search bar from Proposal 01 for the best of both.</li>
+        </ul>
+      </div>
+      <div class="solve warn">
+        <h4>Trade-offs to weigh</h4>
+        <ul>
+          <li>Only the ~20 visual indicators benefit; notifications, ntfy, hotkeys, export have nothing to preview.</li>
+          <li>Needs a real headless render of the overlay in-window — non-trivial, though <code style="font-family:var(--mono);color:var(--accent-ink)">HeadlessRenderer</code> is a head start.</li>
+          <li>Costs horizontal space; the window would want to grow wider than today&rsquo;s 880px.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="meta-row">
+      <div class="m"><span class="k">Effort</span><span class="v"><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span> &nbsp;Highest</span></div>
+      <div class="m"><span class="k">Radicalness</span><span class="v"><span class="dots gold"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span> &nbsp;Bold</span></div>
+      <div class="m"><span class="k">Reuses</span><span class="v">HeadlessRenderer / OverlayDraw</span></div>
+      <div class="m"><span class="k">Scope</span><span class="v">Best as an enhancement to Indicators only</span></div>
+    </div>
+  </section>
+
+  <hr class="rule" style="margin-top:56px">
+
+  <!-- ============ RECOMMENDATION ============ -->
+  <section class="rv">
+    <div class="sec-head"><span class="eyebrow">Recommendation</span></div>
+    <div class="rec">
+      <div class="rhead">
+        <h3>Ship search now, grow into the catalogue.</h3>
+        <p>The two pains have different best answers, and they compose. <b>Search (01)</b> is the cheapest fix and
+          resolves Pain #1 immediately. <b>The catalogue (02)</b> is the real cure for Pain #2 but is a bigger
+          build. Do them in order — search first delivers value in days and its metadata is exactly what the
+          catalogue needs later. <b>Live preview (03)</b> is a delightful topping for the Indicators surface once
+          the structure exists.</p>
+      </div>
+      <div class="phases">
+        <div class="phase">
+          <div class="pk">Phase 1 · days</div>
+          <h4>Add the search bar</h4>
+          <p>Persistent filter over a setting-metadata table (name + keywords + page). Ship it as a &ldquo;Search&rdquo; entry at the top of the existing rail. Instant relief for Pain #1.</p>
+          <div class="eff">Proposal 01 · Low effort · nothing else changes</div>
+        </div>
+        <div class="phase">
+          <div class="pk">Phase 2 · weeks</div>
+          <h4>Re-home pages onto surfaces</h4>
+          <p>Fold the 16 pages into ~6 surfaces and render each feature as a preview card. The Phase-1 metadata becomes the card catalogue; config-heavy settings get an &ldquo;Advanced&rdquo; details expand.</p>
+          <div class="eff">Proposal 02 · High effort · the real fix for Pain #2</div>
+        </div>
+        <div class="phase">
+          <div class="pk">Phase 3 · later</div>
+          <h4>Live-preview the indicators</h4>
+          <p>On the session-row surface, add the mini live overlay so toggles animate their effect. Scoped to visual glyphs where it earns its keep.</p>
+          <div class="eff">Proposal 03 · Enhancement · driven by HeadlessRenderer</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="reuse">
+      <span class="tick">✓</span>
+      <p>Every proposal keeps the parts that already work: the owner-drawn <code>PerchToggle</code>, the
+        context-band slider, the stepper rows, and <code>Theming.Palette</code>. This is a restructuring of the
+        <em>shell and navigation</em> — the individual controls, and the live-apply <code>SettingsHooks</code>
+        wiring behind them, carry straight over. No MVVM rewrite required.</p>
+    </div>
+  </section>
+
+  <footer>
+    <div class="fl">
+      <span>Perch · settings redesign · three proposals + a phased path</span>
+      <span>Mockups rendered in Perch&rsquo;s own palette · <span style="font-family:var(--mono);color:var(--muted)">docs/settings-redesign-proposals.html</span></span>
+    </div>
+  </footer>
+
+</div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---- Proposal 01: live search over the real Perch setting inventory ----
+  var SETTINGS = [
+    {n:"Show usage bars", p:"Usage Limits", t:"toggle", k:"5-hour weekly limit quota consumption rolling"},
+    {n:"Expected-rate marker", p:"Usage Limits", t:"toggle", k:"pace ahead behind expected consumption line"},
+    {n:"Context pressure thermometer", p:"Indicators", t:"toggle", k:"context window full fill percent"},
+    {n:"Context pressure thresholds", p:"Indicators", t:"slider", k:"yellow orange red band percent threshold"},
+    {n:"Permission-mode badges", p:"Indicators", t:"toggle", k:"plan accept edits auto bypass mode badge"},
+    {n:"Task progress count", p:"Indicators", t:"toggle", k:"todo checklist tasks n/m progress"},
+    {n:"Pinned notes glyph", p:"Indicators", t:"toggle", k:"note sticky reminder text"},
+    {n:"Waiting timer", p:"Indicators", t:"toggle", k:"waiting on you idle timer needs attention"},
+    {n:"Waiting timer red threshold", p:"Indicators", t:"stepper", k:"minutes waiting red urgent"},
+    {n:"Artifacts glyph", p:"Indicators", t:"toggle", k:"published artifact link claude.ai"},
+    {n:"Burn rate", p:"Indicators", t:"toggle", k:"tokens per minute speed rate live"},
+    {n:"Daemon processes section", p:"Indicators", t:"toggle", k:"headless worker background daemon"},
+    {n:"Service status footer", p:"Indicators", t:"toggle", k:"outage status.claude.com incident down"},
+    {n:"Stuck detection", p:"Indicators", t:"toggle", k:"stuck loop error streak detect frozen"},
+    {n:"Detect error streaks", p:"Indicators", t:"toggle", k:"stuck repeated errors heuristic"},
+    {n:"Detect failing loops", p:"Indicators", t:"toggle", k:"stuck infinite loop heuristic"},
+    {n:"Desktop notifications", p:"Notifications", t:"toggle", k:"toast popup notify alert action center"},
+    {n:"Notify when done", p:"Notifications", t:"toggle", k:"finished complete done popup"},
+    {n:"Notify when waiting for input", p:"Notifications", t:"toggle", k:"waiting input prompt needs you"},
+    {n:"Notify on API error", p:"Notifications", t:"toggle", k:"error api failure alert"},
+    {n:"Chime when done", p:"Notifications", t:"toggle", k:"sound beep audio chime done bell"},
+    {n:"Chime when waiting", p:"Notifications", t:"toggle", k:"sound beep audio chime waiting bell"},
+    {n:"Chime on error", p:"Notifications", t:"toggle", k:"sound beep audio chime error bell"},
+    {n:"External push (ntfy)", p:"Notifications", t:"toggle", k:"ntfy phone push remote server topic mobile"},
+    {n:"ntfy host & topic", p:"Notifications", t:"field", k:"ntfy server url topic address phone"},
+    {n:"Push while screen locked", p:"Notifications", t:"toggle", k:"locked away afk push remote"},
+    {n:"Start with Windows / session", p:"Monitoring", t:"dropdown", k:"startup login autostart launch boot"},
+    {n:"Auto-close after last session", p:"Monitoring", t:"toggle", k:"exit quit close auto shutdown"},
+    {n:"Today's stats in tray", p:"Session Stats", t:"toggle", k:"tray menu summary today stats"},
+    {n:"Estimated cost", p:"Session Stats", t:"toggle", k:"cost dollars price api equivalent money spend"},
+    {n:"Active-idle threshold", p:"Session Stats", t:"stepper", k:"idle active minutes time tracking"},
+    {n:"System metrics strip", p:"Monitoring", t:"toggle", k:"cpu ram memory machine system usage"},
+    {n:"Per-session metrics", p:"Monitoring", t:"toggle", k:"cpu ram memory per session mini bar"},
+    {n:"Include subprocess metrics", p:"Monitoring", t:"toggle", k:"subprocess tree cpu ram rollup"},
+    {n:"Hide inactive team members", p:"Experimental", t:"toggle", k:"team agents idle roster hide"},
+    {n:"Git line churn", p:"Experimental", t:"toggle", k:"git diff lines added removed churn stats"},
+    {n:"Agent Teams", p:"Experimental", t:"toggle", k:"agent teams env var multi agent"},
+    {n:"Quick links strip", p:"Quick Links", t:"list", k:"quick launch apps shortcut icons tools"},
+    {n:"Hypertree integration", p:"Integrations", t:"toggle", k:"hypertree branch worktree integration"},
+    {n:"Pull requests glyph", p:"Integrations", t:"toggle", k:"github pr pull request merge"},
+    {n:"Now-playing / media", p:"Music", t:"toggle", k:"music media now playing spotify controller sound"},
+    {n:"Microphone presence", p:"Microphone", t:"toggle", k:"mic microphone recording presence voice"},
+    {n:"Toggle-dense hotkey", p:"Shortcuts", t:"hotkey", k:"hotkey shortcut collapse expand dense keyboard"},
+    {n:"Cycle-sessions hotkey", p:"Shortcuts", t:"hotkey", k:"hotkey shortcut cycle next session keyboard"},
+    {n:"Session-switcher hotkey", p:"Shortcuts", t:"hotkey", k:"hotkey shortcut switcher keyboard"},
+    {n:"Reopen terminal in…", p:"Shortcuts", t:"dropdown", k:"terminal reopen powershell cmd wt"},
+    {n:"Confetti on finish", p:"Indicators", t:"toggle", k:"confetti celebrate finish whimsy fun"},
+    {n:"Perch reacts", p:"Indicators", t:"toggle", k:"bird mood reacts whimsy emotion"},
+    {n:"Achievement reveal card", p:"Achievements", t:"toggle", k:"achievement unlock card reveal badge"},
+    {n:"Achievement toasts", p:"Achievements", t:"toggle", k:"achievement toast popup unlock"},
+    {n:"Show changelog after update", p:"Changelog", t:"toggle", k:"changelog whats new update release notes"}
+  ];
+
+  var input = document.getElementById("p1search");
+  var out = document.getElementById("p1results");
+  var countEl = document.getElementById("p1count");
+  var hintEl = document.getElementById("p1hint");
+  if(!input || !out) return;
+
+  function esc(s){return s.replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+
+  function highlight(name, q){
+    if(!q) return esc(name);
+    var i = name.toLowerCase().indexOf(q.toLowerCase());
+    if(i<0) return esc(name);
+    return esc(name.slice(0,i)) + "<mark>" + esc(name.slice(i,i+q.length)) + "</mark>" + esc(name.slice(i+q.length));
+  }
+
+  function matches(s, q){
+    if(!q) return true;
+    var hay = (s.n + " " + s.k + " " + s.p).toLowerCase();
+    // token AND match, so "chime error" narrows correctly
+    return q.toLowerCase().split(/\s+/).filter(Boolean).every(function(tok){ return hay.indexOf(tok) >= 0; });
+  }
+
+  // whether the query hit a keyword rather than the visible name
+  function hitKeyword(s, q){
+    if(!q) return false;
+    return q.toLowerCase().split(/\s+/).some(function(tok){
+      return s.n.toLowerCase().indexOf(tok) < 0 && (s.k+" "+s.p).toLowerCase().indexOf(tok) >= 0;
+    });
+  }
+
+  function render(q){
+    var rows = SETTINGS.filter(function(s){ return matches(s,q); });
+    countEl.textContent = rows.length;
+    hintEl.textContent = q ? ("match on name or keyword") : ("empty query lists every setting — a built-in index");
+    if(rows.length === 0){
+      out.innerHTML = '<div class="empty">No setting matches &ldquo;' + esc(q) + '&rdquo;. Try a plainer word — &ldquo;sound&rdquo;, &ldquo;cpu&rdquo;, &ldquo;phone&rdquo;.</div>';
+      return;
+    }
+    var html = "";
+    for(var i=0;i<rows.length;i++){
+      var s = rows[i];
+      var via = hitKeyword(s,q) ? ' <span class="hit">· matched keyword</span>' : "";
+      var checked = (s.t === "toggle") ? (Math.abs(hash(s.n))%3 !== 0) : null;
+      var control = (s.t === "toggle")
+        ? '<button class="tgl" aria-checked="'+(checked?"true":"false")+'" aria-label="'+esc(s.n)+'"></button>'
+        : '<span class="g" style="color:var(--muted-2);font-size:.72rem;border:1px solid var(--line);border-radius:5px">'+s.t+'</span>';
+      html += '<div class="srow"><div class="lbl">'
+            + '<div class="name">'+highlight(s.n,q)+'</div>'
+            + '<div class="crumb">Settings › '+esc(s.p)+via+'</div>'
+            + '</div>'+control+'</div>';
+    }
+    out.innerHTML = html;
+  }
+
+  // tiny stable hash so demo toggle states don't flicker between renders
+  function hash(str){var h=0;for(var i=0;i<str.length;i++){h=(h*31+str.charCodeAt(i))|0;}return h;}
+
+  input.addEventListener("input", function(){ render(input.value.trim()); });
+  render("");
+
+  // ---- toggles are interactive everywhere (demo) ----
+  document.addEventListener("click", function(e){
+    var t = e.target.closest(".tgl");
+    if(!t) return;
+    var now = t.getAttribute("aria-checked") === "true";
+    t.setAttribute("aria-checked", now ? "false" : "true");
+    var fx = t.getAttribute("data-fx");
+    if(fx){ applyPreview(fx, !now, t); }
+  });
+
+  // ---- Proposal 03: live overlay preview reacts to toggles ----
+  function applyPreview(fx, on, srcToggle){
+    var stage = srcToggle.closest(".p3");
+    if(!stage) return;
+    var map = { badge:"badge", tasks:"tasks", ctx:"ctx", wait:"wait", bird:"bird" };
+    var sel = map[fx];
+    if(!sel) return;
+    var els = stage.querySelectorAll('[data-el="'+sel+'"]');
+    els.forEach(function(el){
+      if(fx === "wait"){
+        el.style.display = on ? "inline-flex" : "none";
+      } else {
+        el.classList.toggle("dimmed", !on);
+      }
+      if(on){
+        el.classList.remove("hl"); void el.offsetWidth; el.classList.add("hl");
+      }
+    });
+  }
+
+  // ---- scroll reveal ----
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){ if(en.isIntersecting){ en.target.classList.add("in"); io.unobserve(en.target); } });
+  }, {rootMargin:"0px 0px -8% 0px", threshold:0.08});
+  document.querySelectorAll(".rv").forEach(function(el){ io.observe(el); });
+})();
+</script>

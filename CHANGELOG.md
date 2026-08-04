@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.0] - 2026-08-04
+
+- Rebuilt Settings around a searchable catalogue of every feature
+- Live overlay preview docked in Settings, updating as you toggle
+- Retired the old per-topic settings pages (your settings carry over)
+- Dropped the Experimental section; Agent Teams joins the catalogue
+- Media controller now toggles from Settings, not the overlay menu
+- Project-only note glyph dimmed (an inherited note needn't shout)
+- Note glyph opens on click; the hover tooltip that fought it is gone
+
+---
+
 ## [v0.2.39] - 2026-08-04
 
 - Achievements window opens wider — three trophies across by default
