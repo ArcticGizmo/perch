@@ -133,11 +133,11 @@ internal sealed class SettingsWindow : Window
         _icons = icons;
 
         Title = "Perch Settings";
-        // Sized for the unified shell: the surface catalogue plus the docked live preview want more room
-        // than the old single-column window (~30% larger by default).
-        Width = 1144;
+        // Sized for the unified shell: wide enough to show two catalogue card columns beside the docked
+        // live preview by default (nav + two 320-wide cards + the 300-wide preview dock).
+        Width = 1372;
         Height = 858;
-        MinWidth = 920;
+        MinWidth = 1040;
         MinHeight = 620;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Palette.FormBgBrush;
@@ -207,7 +207,7 @@ internal sealed class SettingsWindow : Window
     // The search page: a registry-driven filter over every setting (built once; owns its own field/results).
     private void BuildSearchPage(StackPanel page)
     {
-        _search = new SettingsSearchView(_settings, _hooks);
+        _search = new SettingsSearchView(_settings, _hooks) { Navigate = SelectPage };
         page.Children.Add(_search);
     }
 

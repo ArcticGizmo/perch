@@ -43,9 +43,9 @@ internal static class SettingsRegistry
             nameof(AppSettings.ContextPressureYellowPercent), nameof(AppSettings.ContextPressureOrangePercent),
             nameof(AppSettings.ContextPressureRedPercent)),
 
-        Toggle("context-green-segment", "Context green segment",
-            "Draw a green thermometer below the first threshold instead of leaving it blank.",
-            SettingSurface.SessionRow, ["context", "green", "segment", "below", "threshold"],
+        Toggle("context-green-segment", "Always show context pressure",
+            "Always show the thermometer — green while context is low — instead of hiding it until the first threshold.",
+            SettingSurface.SessionRow, ["context", "green", "segment", "below", "threshold", "always", "show"],
             PreviewTarget.ContextPressure, nameof(AppSettings.ShowContextGreenSegment),
             s => s.ShowContextGreenSegment, (s, v) => s.ShowContextGreenSegment = v),
 

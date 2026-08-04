@@ -68,6 +68,9 @@ internal sealed class SettingsSearchView : StackPanel
     private readonly TextBlock _count;
     private readonly StackPanel _results;
 
+    /// <summary>Navigate to another settings page by key (for the quick-links result → its manager).</summary>
+    public Action<string>? Navigate;
+
     public SettingsSearchView(AppSettings settings, SettingsHooks hooks)
     {
         _settings = settings;
@@ -147,9 +150,14 @@ internal sealed class SettingsSearchView : StackPanel
         Grid.SetColumn(left, 0);
         grid.Children.Add(left);
 
-        Control right = d is { Kind: SettingKind.Toggle, GetBool: not null, SetBool: not null }
-            ? LiveToggle(d)
-            : KindChip(d.Kind);
+        // A toggle is edited in place; everything else gets a uniform "Edit" button that opens a modal (or,
+        // for quick links, jumps to their manager) — so every row stays the same height and is editable.
+        Control right = d switch
+        {
+            { Kind: SettingKind.Toggle, GetBool: not null, SetBool: not null } => LiveToggle(d),
+            { Kind: SettingKind.List }                                          => EditButton(() => Navigate?.Invoke("quicklinks")),
+            _                                                                    => EditButton(() => OpenEditor(d)),
+        };
         right.VerticalAlignment = VerticalAlignment.Center;
         Grid.SetColumn(right, 1);
         grid.Children.Add(right);
@@ -176,26 +184,19 @@ internal sealed class SettingsSearchView : StackPanel
         return t;
     }
 
-    // A muted pill naming the control a find-only result is edited with, so its home is legible even though
-    // it isn't editable inline yet (slider / stepper / dropdown / hotkey / text field / list).
-    private static Border KindChip(SettingKind kind)
+    private Button EditButton(Action onClick)
     {
-        var text = kind switch
-        {
-            SettingKind.Slider   => "slider",
-            SettingKind.Stepper  => "stepper",
-            SettingKind.Dropdown => "dropdown",
-            SettingKind.Field    => "text",
-            SettingKind.Hotkey   => "shortcut",
-            SettingKind.List     => "list",
-            _                    => kind.ToString().ToLowerInvariant(),
-        };
-        return new Border
-        {
-            Background = Palette.ButtonBgBrush, CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(8, 3),
-            Child = new TextBlock { Text = text, FontSize = 11, Foreground = Palette.MutedBrush },
-        };
+        var b = SettingsUi.FlatButton("Edit");
+        b.Padding = new Thickness(16, 5);
+        b.Click += (_, _) => onClick();
+        return b;
+    }
+
+    private void OpenEditor(SettingDescriptor d)
+    {
+        var win = new SettingEditorWindow(d, _settings, _hooks);
+        if (TopLevel.GetTopLevel(this) is Window owner) win.ShowDialog(owner);
+        else win.Show();
     }
 
     // True when the query matched only through a keyword/surface, not the visible name — so the row can note

@@ -32,6 +32,7 @@ internal sealed class SettingsCatalogView : StackPanel
     private readonly StackPanel _sections;
     private readonly List<(SettingSurface? surface, Button chip)> _chips = new();
     private SettingSurface? _active;   // null = all surfaces
+    private ContextThresholdSliderView? _thresholdSlider;   // so "always show" can tint its green segment
 
     /// <summary>Raised after any inline edit persists, so a docked live preview can re-apply the settings.</summary>
     public event Action? Changed;
@@ -264,6 +265,7 @@ internal sealed class SettingsCatalogView : StackPanel
         slider.SetValues(_settings.ContextPressureYellowPercent,
             _settings.ContextPressureOrangePercent, _settings.ContextPressureRedPercent);
         slider.ShowGreenSegment = _settings.ShowContextGreenSegment;
+        _thresholdSlider = slider;   // let the "always show context pressure" toggle repaint its green band
         slider.RangeChanged += (yellow, orange, red) =>
         {
             _settings.ContextPressureYellowPercent = yellow;
@@ -312,7 +314,9 @@ internal sealed class SettingsCatalogView : StackPanel
         return t;
     }
 
-    // The green-segment sub-toggle that rides on the context-pressure card (merged from its own card).
+    // The "always show context pressure" sub-toggle that rides on the context-pressure card (merged from
+    // its own card). When on, the thresholds slider paints its below-first-threshold band bright green to
+    // match what the overlay will draw.
     private Control GreenSegmentRow()
     {
         var t = new PerchToggle { VerticalAlignment = VerticalAlignment.Center };
@@ -322,13 +326,14 @@ internal sealed class SettingsCatalogView : StackPanel
             _settings.ShowContextGreenSegment = t.IsChecked;
             _settings.Save();
             SettingsLiveApply.Toggle("context-green-segment", _hooks, t.IsChecked);
+            if (_thresholdSlider is not null) _thresholdSlider.ShowGreenSegment = t.IsChecked;
             Changed?.Invoke();
         };
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var label = new TextBlock
         {
-            Text = "Green segment below threshold", FontSize = 12, Foreground = Palette.MutedBrush,
+            Text = "Always show context pressure", FontSize = 12, Foreground = Palette.MutedBrush,
             TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 10, 0),
         };
