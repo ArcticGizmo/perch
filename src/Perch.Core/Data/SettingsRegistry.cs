@@ -31,7 +31,8 @@ internal static class SettingsRegistry
 
         Toggle("context-pressure", "Context pressure",
             "Thermometer glyph showing how full a session's context window is.",
-            SettingSurface.SessionRow, ["context", "window", "pressure", "thermometer", "fill", "tokens", "full"],
+            SettingSurface.SessionRow,
+            ["context", "window", "pressure", "thermometer", "fill", "tokens", "full", "green", "segment"],
             PreviewTarget.ContextPressure, nameof(AppSettings.ShowContextPressure),
             s => s.ShowContextPressure, (s, v) => s.ShowContextPressure = v),
 
@@ -329,29 +330,9 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.AutoCloseAfterLastSession),
             s => s.AutoCloseAfterLastSession, (s, v) => s.AutoCloseAfterLastSession = v),
 
-        Info("hotkey-dense", "Collapse/expand hotkey",
-            "Global shortcut to collapse or expand the overlay.",
-            SettingSurface.Advanced, SettingKind.Hotkey,
-            ["hotkey", "shortcut", "dense", "collapse", "expand", "keyboard"], PreviewTarget.None,
-            nameof(AppSettings.HotkeyToggleDense)),
-
-        Info("hotkey-cycle", "Cycle-sessions hotkey",
-            "Global shortcut to focus the next active session.",
-            SettingSurface.Advanced, SettingKind.Hotkey,
-            ["hotkey", "shortcut", "cycle", "next", "session", "keyboard"], PreviewTarget.None,
-            nameof(AppSettings.HotkeyCycleSessions)),
-
-        Info("hotkey-switcher", "Session-switcher hotkey",
-            "Global shortcut to pop the keyboard session switcher.",
-            SettingSurface.Advanced, SettingKind.Hotkey,
-            ["hotkey", "shortcut", "switcher", "session", "keyboard"], PreviewTarget.None,
-            nameof(AppSettings.HotkeyOpenSwitcher)),
-
-        Info("reopen-terminal", "Reopen terminal in",
-            "Which terminal reopens a closed session (claude --resume).",
-            SettingSurface.Advanced, SettingKind.Dropdown,
-            ["terminal", "reopen", "resume", "powershell", "cmd", "windows", "wt"], PreviewTarget.None,
-            nameof(AppSettings.ReopenTerminal)),
+        // Keyboard shortcuts and the reopen-terminal choice live on the dedicated Shortcuts page (they want
+        // per-binding enable + key capture, not a catalogue card), so they're intentionally not registry
+        // entries — see the NotSettings exclusion in SettingsRegistryTests.
 
         Toggle("changelog-on-update", "Show changelog after update",
             "Pop the 'what's new' window on the first launch after an update.",

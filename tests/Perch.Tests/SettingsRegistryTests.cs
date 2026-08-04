@@ -23,6 +23,12 @@ public class SettingsRegistryTests
         nameof(AppSettings.AutoStartOnFirstSession),
         nameof(AppSettings.ShowGitKraken),
         nameof(AppSettings.ShowSlack),
+        // Edited on the dedicated Shortcuts page (per-binding enable + key capture / terminal choice),
+        // deliberately not catalogue cards.
+        nameof(AppSettings.HotkeyToggleDense),
+        nameof(AppSettings.HotkeyCycleSessions),
+        nameof(AppSettings.HotkeyOpenSwitcher),
+        nameof(AppSettings.ReopenTerminal),
     };
 
     private static IEnumerable<PropertyInfo> UserFacingProperties() =>

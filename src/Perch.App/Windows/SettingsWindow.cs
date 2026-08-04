@@ -187,6 +187,7 @@ internal sealed class SettingsWindow : Window
         AddPage(nav, "stats",        "Session Stats",   BuildStatsPage);
         AddPage(nav, "achievements", "Achievements",    BuildAchievementsPage);
         AddPage(nav, "notify",       "Notifications",   BuildNotificationsPage);
+        AddPage(nav, "shortcuts",    "Shortcuts",       BuildHotkeysPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
         AddPage(nav, "experimental", "Experimental",    BuildExperimentalPage);
         AddPage(nav, "export",       "Export",          BuildExportPage);

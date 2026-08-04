@@ -107,7 +107,7 @@ internal sealed class SettingsCatalogView : StackPanel
             if (_active is { } a && a != surface) continue;
 
             var items = SettingsRegistry.All
-                .Where(d => d.Surface == surface && d.MatchesQuery(query))
+                .Where(d => d.Surface == surface && d.Id != "context-green-segment" && d.MatchesQuery(query))
                 .ToList();
             if (items.Count == 0) continue;
 
@@ -152,7 +152,7 @@ internal sealed class SettingsCatalogView : StackPanel
     private Border Card(SettingDescriptor d)
     {
         var stack = new StackPanel { Spacing = 8 };
-        stack.Children.Add(CardPreview(d.Preview));
+        if (CardPreview(d.Preview) is { } preview) stack.Children.Add(preview);
 
         var head = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var text = new StackPanel { Spacing = 2, Margin = new Thickness(0, 0, 10, 0) };
@@ -185,6 +185,10 @@ internal sealed class SettingsCatalogView : StackPanel
             editor.Margin = new Thickness(0, 4, 0, 0);
             stack.Children.Add(editor);
         }
+
+        // The "green segment below the first threshold" option is a facet of context pressure, so it rides
+        // on the same card as a small secondary toggle instead of getting a card of its own.
+        if (d.Id == "context-pressure") stack.Children.Add(GreenSegmentRow());
 
         return new Border
         {
@@ -308,6 +312,38 @@ internal sealed class SettingsCatalogView : StackPanel
         return t;
     }
 
+    // The green-segment sub-toggle that rides on the context-pressure card (merged from its own card).
+    private Control GreenSegmentRow()
+    {
+        var t = new PerchToggle { VerticalAlignment = VerticalAlignment.Center };
+        t.SetCheckedSilent(_settings.ShowContextGreenSegment);
+        t.CheckedChanged += (_, _) =>
+        {
+            _settings.ShowContextGreenSegment = t.IsChecked;
+            _settings.Save();
+            SettingsLiveApply.Toggle("context-green-segment", _hooks, t.IsChecked);
+            Changed?.Invoke();
+        };
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var label = new TextBlock
+        {
+            Text = "Green segment below threshold", FontSize = 12, Foreground = Palette.MutedBrush,
+            TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 0),
+        };
+        Grid.SetColumn(label, 0);
+        Grid.SetColumn(t, 1);
+        grid.Children.Add(label);
+        grid.Children.Add(t);
+
+        return new Border
+        {
+            Child = grid, Margin = new Thickness(0, 6, 0, 0), Padding = new Thickness(0, 8, 0, 0),
+            BorderThickness = new Thickness(0, 1, 0, 0), BorderBrush = Palette.BorderBrush,
+        };
+    }
+
     // A compact -/value/+ stepper bound to the descriptor's int. Clamped to a sane floor; the data layer
     // clamps again on apply, so an odd value can't misbehave.
     private Control LiveStepper(SettingDescriptor d)
@@ -350,8 +386,9 @@ internal sealed class SettingsCatalogView : StackPanel
     }
 
     // A small representative glyph for the card — a taste of what the setting draws on the overlay. Static
-    // on purpose; the docked live preview (M4) is where the real overlay reacts.
-    private static Control CardPreview(PreviewTarget target)
+    // on purpose; the docked live preview (M4) is where the real overlay reacts. Returns null for settings
+    // with no single overlay glyph (behaviour/notification toggles), so those cards carry no preview chip.
+    private static Control? CardPreview(PreviewTarget target)
     {
         var (text, fg, bg) = target switch
         {
@@ -378,13 +415,9 @@ internal sealed class SettingsCatalogView : StackPanel
             _                             => ("",            Palette.Muted, Color.FromRgb(30, 30, 40)),
         };
 
-        // No single glyph (notifications, behaviour toggles) — a slim neutral strip keeps the card aligned.
-        if (text.Length == 0)
-            return new Border
-            {
-                Height = 28, CornerRadius = new CornerRadius(6),
-                Background = new SolidColorBrush(Color.FromRgb(30, 30, 40)),
-            };
+        // No single glyph (notifications, behaviour toggles) — no preview chip at all, rather than an empty
+        // box that reads as broken.
+        if (text.Length == 0) return null;
 
         return new Border
         {
