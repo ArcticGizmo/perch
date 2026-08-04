@@ -5,6 +5,7 @@ using Avalonia.Headless;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Perch.Avalonia.Services;
 using Perch.Avalonia.Views;
 using Perch.Avalonia.Windows;
 using Perch.Data;
@@ -297,6 +298,24 @@ internal static class HeadlessRenderer
         RenderControl(SampleSettingsPage(), Path.Combine(outDir, "settings_1x.png"), 96);
         RenderControl(SampleSettingsPage(), Path.Combine(outDir, "settings_1.5x.png"), 144);
 
+        // Settings live-preview chain (M0 spike): drive a fresh canvas purely through
+        // OverlaySettingsGates.Apply with a *cloned* AppSettings — exactly the mechanism the Settings
+        // preview pane will use. One frame with the opt-in glyphs turned on (git churn, burn rate, metrics,
+        // notes), one with the row glyphs gated off, to prove a mutated clone re-gates what renders.
+        var previewOn = new OverlayCanvas();
+        previewOn.Update(SampleData.Sessions());
+        previewOn.UpdateUsage(SampleData.Usage());
+        previewOn.UpdateSystemMetrics(SampleData.SystemMetrics());
+        previewOn.UpdateSessionMetrics(SampleData.SessionMetrics());
+        OverlaySettingsGates.Apply(previewOn, PreviewSettings(allGlyphsOn: true));
+        RenderControl(previewOn, Path.Combine(outDir, "overlay_preview_on_1x.png"), 96);
+
+        var previewOff = new OverlayCanvas();
+        previewOff.Update(SampleData.Sessions());
+        previewOff.UpdateUsage(SampleData.Usage());
+        OverlaySettingsGates.Apply(previewOff, PreviewSettings(allGlyphsOn: false));
+        RenderControl(previewOff, Path.Combine(outDir, "overlay_preview_off_1x.png"), 96);
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }
@@ -332,6 +351,35 @@ internal static class HeadlessRenderer
         var panel = new Panel { Width = 592, Background = new SolidColorBrush(Color.FromRgb(24, 24, 32)) };
         panel.Children.Add(stack);
         return panel;
+    }
+
+    // A cloned settings snapshot for the live-preview render probe. `allGlyphsOn` flips the opt-in
+    // indicators on (git churn, burn rate, notes, metrics) for a busy overlay; otherwise it gates the
+    // common row glyphs off for a stripped-back one. Goes through Clone() to exercise the snapshot path
+    // the preview pane relies on.
+    private static AppSettings PreviewSettings(bool allGlyphsOn)
+    {
+        var s = new AppSettings().Clone();
+        if (allGlyphsOn)
+        {
+            s.ShowGitStats = true;
+            s.ShowBurnRate = true;
+            s.ShowNotes = true;
+            s.ShowPullRequests = true;
+            s.ShowSystemMetrics = true;
+            s.ShowSessionMetrics = true;
+        }
+        else
+        {
+            s.ShowUsage = false;
+            s.ShowPermissionModeBadges = false;
+            s.ShowTaskProgress = false;
+            s.ShowContextPressure = false;
+            s.ShowWaitingTimer = false;
+            s.ShowArtifacts = false;
+            s.ShowServiceStatus = false;
+        }
+        return s;
     }
 
     // Renders a control centred on a padded solid backdrop, so a self-contained panel (e.g. a tooltip
