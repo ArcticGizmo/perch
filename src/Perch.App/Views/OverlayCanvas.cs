@@ -136,6 +136,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Pinned-note glyph: a sticky-note amber, so a note reads as a deliberate human annotation. The note's
     // text isn't previewed on the row (hover the glyph); this is just the glyph colour.
     private static readonly IBrush NoteBrush      = new SolidColorBrush(Color.FromRgb(244, 193, 79));
+    // A note that's only inherited from the project (no per-session note) draws in a dimmed amber so it
+    // recedes — a project note is ambient context, not something demanding attention like a session note.
+    private static readonly IBrush NoteDimBrush   = new SolidColorBrush(Color.FromArgb(105, 244, 193, 79));
 
     // Party-popper glyph: a gold cone spraying a fan of festive confetti dots (shared with the confetti
     // window's palette so the armed-row hint and the finish burst read as one feature).
@@ -1963,7 +1966,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (noteW > 0)
         {
             double noteGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW;
-            DrawNoteIcon(ctx, noteGlyphX, nameMidY);
+            // Full amber for a session note; dimmed for a project-only note so it stays ambient.
+            DrawNoteIcon(ctx, noteGlyphX, nameMidY, session.HasNote ? NoteBrush : NoteDimBrush);
             _noteRects[rowIndex] = new Rect(noteGlyphX - 2, nameMidY - 9, NoteIconWidth + 2, 18);
         }
         if (showPr)
@@ -2277,9 +2281,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // The pinned-note glyph: a small dog-eared page (folded top-right corner) with two short "text"
     // lines, in the sticky-note amber. Marks a row that carries a note; hovering it pops the full text.
-    private static void DrawNoteIcon(DrawingContext ctx, double x, double midY)
+    private static void DrawNoteIcon(DrawingContext ctx, double x, double midY, IBrush? brush = null)
     {
-        var pen = new Pen(NoteBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = new Pen(brush ?? NoteBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
         const double w = 10, h = 12, fold = 3.5;
         double left = x, top = midY - h / 2, right = left + w, bottom = top + h;
 

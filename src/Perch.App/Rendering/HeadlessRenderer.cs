@@ -279,9 +279,9 @@ internal static class HeadlessRenderer
         mdPanel.Children.Add(md);
         RenderControl(mdPanel, Path.Combine(outDir, "markdown_1x.png"), 96);
 
-        // Row note glyph with the notes indicator on: s1 has a session note and s2 ("api") has only a
-        // project note — both should show the amber note glyph, confirming a shared project note surfaces
-        // on the row too.
+        // Row note glyph with the notes indicator on: s1 has a session note (full amber) and s2 ("api")
+        // has only a project note (dimmed amber, so it recedes) — both surface the glyph, but the
+        // project-only note is deliberately quieter.
         var noteProbe = new OverlayCanvas();
         noteProbe.SetShowNoteLine(true);
         noteProbe.Update(SampleData.Sessions());
