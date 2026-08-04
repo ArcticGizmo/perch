@@ -115,6 +115,7 @@ internal sealed class SettingsWindow : Window
     private readonly Dictionary<string, Control> _pages = new();
     private readonly List<(string key, Button item)> _navItems = new();
     private string _currentKey = "";
+    private SettingsSearchView? _search;
 
     // About-page update controls + the current pending-update state (kept so a state change that arrives
     // while the window is open — or the state read at open time — reflects on the About page live).
@@ -148,6 +149,11 @@ internal sealed class SettingsWindow : Window
     protected override void OnKeyDown(KeyEventArgs e)
     {
         if (e.Key == Key.Escape) { Close(); e.Handled = true; }
+        else if (e.Key == Key.F && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            SelectPage("search");
+            e.Handled = true;
+        }
         base.OnKeyDown(e);
     }
 
@@ -169,6 +175,7 @@ internal sealed class SettingsWindow : Window
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
 
+        AddPage(nav, "search",       "Search",          BuildSearchPage);
         AddPage(nav, "start",        "Getting started", BuildGettingStartedPage);
         AddPage(nav, "usage",        "Usage Limits",    BuildUsagePage);
         AddPage(nav, "indicators",   "Indicators",      BuildIndicatorsPage);
@@ -193,7 +200,14 @@ internal sealed class SettingsWindow : Window
         grid.Children.Add(scroller);
         Content = grid;
 
-        SelectPage("start");
+        SelectPage("search");
+    }
+
+    // The search page: a registry-driven filter over every setting (built once; owns its own field/results).
+    private void BuildSearchPage(StackPanel page)
+    {
+        _search = new SettingsSearchView(_settings, _hooks);
+        page.Children.Add(_search);
     }
 
     private void AddPage(StackPanel nav, string key, string title, Action<StackPanel> build)
@@ -246,6 +260,8 @@ internal sealed class SettingsWindow : Window
             _exportLoaded = true;
             LoadExportSessions();
         }
+
+        if (key == "search") _search?.FocusSearch();
     }
 
     // ── Toggle helpers ──────────────────────────────────────────────────────────────

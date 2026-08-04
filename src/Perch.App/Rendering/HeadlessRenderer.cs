@@ -324,6 +324,11 @@ internal static class HeadlessRenderer
         RenderControl(pane, Path.Combine(outDir, "preview_pane_1x.png"), 96);
         RenderControl(pane, Path.Combine(outDir, "preview_pane_1.5x.png"), 144);
 
+        // Settings search page (M2): the registry-driven filter over every setting, captured with a query
+        // applied so the result rows, breadcrumbs, live toggles and the "matched keyword" hint all render.
+        RenderControl(SampleSearchPage("chime"), Path.Combine(outDir, "settings_search_1x.png"), 96);
+        RenderControl(SampleSearchPage(""),      Path.Combine(outDir, "settings_search_index_1x.png"), 96);
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }
@@ -359,6 +364,19 @@ internal static class HeadlessRenderer
         var panel = new Panel { Width = 592, Background = new SolidColorBrush(Color.FromRgb(24, 24, 32)) };
         panel.Children.Add(stack);
         return panel;
+    }
+
+    // The Settings search page with a query applied, framed the way the content area presents it, so the
+    // registry-driven results can be eyeballed. Uses default settings + empty hooks (no live wiring needed
+    // to render).
+    private static Control SampleSearchPage(string query)
+    {
+        var view = new Windows.SettingsSearchView(new AppSettings(), new Windows.SettingsHooks())
+        {
+            Width = 620, Margin = new Thickness(16),
+        };
+        view.SetQuery(query);
+        return new Panel { Width = 652, Background = new SolidColorBrush(Color.FromRgb(24, 24, 32)), Children = { view } };
     }
 
     // A cloned settings snapshot for the live-preview render probe. `allGlyphsOn` flips the opt-in
