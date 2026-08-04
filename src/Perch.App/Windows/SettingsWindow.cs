@@ -134,9 +134,10 @@ internal sealed class SettingsWindow : Window
         _icons = icons;
 
         Title = "Perch Settings";
-        // Sized for the unified shell: wide enough to show two catalogue card columns beside the docked
-        // live preview by default (nav + two 320-wide cards + the 300-wide preview dock).
-        Width = 1372;
+        // Sized for the unified shell: just wide enough to show two catalogue card columns beside the docked
+        // live preview, without a lot of empty gap — nav (178) + preview dock (~301) + a cards column that
+        // fits two 320-wide cards plus the catalogue margins and scrollbar (~713).
+        Width = 1220;
         Height = 858;
         MinWidth = 1040;
         MinHeight = 620;

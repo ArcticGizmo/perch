@@ -406,7 +406,7 @@ internal static class HeadlessRenderer
     {
         var catalog = new Windows.SettingsCatalogView(new AppSettings(), new Windows.SettingsHooks())
         {
-            Width = 520, Margin = new Thickness(16), VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(16), VerticalAlignment = VerticalAlignment.Top,
         };
         Grid.SetColumn(catalog, 0);
 
@@ -428,9 +428,12 @@ internal static class HeadlessRenderer
         };
         Grid.SetColumn(dock, 1);
 
+        // The content area at the real default window width (1220) minus the 178-wide nav rail, so the
+        // two-column fit and leftover gap read as they will in the app. (The probe has no scrollbar, so the
+        // real cards column is ~18px narrower — still comfortably two columns.)
         return new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto"), Width = 868,
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"), Width = 1220 - 178,
             Background = Theming.Palette.FormBgBrush, Children = { catalog, dock },
         };
     }
