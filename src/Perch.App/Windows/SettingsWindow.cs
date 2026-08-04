@@ -11,6 +11,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
+using Perch.Avalonia.Views;
 using Perch.Data;
 using Perch.Data.Hypertree;
 using Perch.Data.Replay;
@@ -167,16 +168,12 @@ internal sealed class SettingsWindow : Window
             Child = new ScrollViewer { Content = nav, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled },
         };
 
-        _contentHost = new Panel { Margin = new Thickness(16) };
-        var scroller = new ScrollViewer
-        {
-            Content = _contentHost,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-        };
+        // Each page owns its own scroller (so the Features page can pin its live-preview dock beside a
+        // scrolling card list); the content host just stacks them and toggles which is visible.
+        _contentHost = new Panel();
 
         AddPage(nav, "search",       "Search",          BuildSearchPage);
-        AddPage(nav, "features",     "Features",        BuildFeaturesPage);
+        AddFeaturesPage(nav);
         AddPage(nav, "start",        "Getting started", BuildGettingStartedPage);
         AddPage(nav, "usage",        "Usage Limits",    BuildUsagePage);
         AddPage(nav, "indicators",   "Indicators",      BuildIndicatorsPage);
@@ -196,12 +193,12 @@ internal sealed class SettingsWindow : Window
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
         Grid.SetColumn(navHost, 0);
-        Grid.SetColumn(scroller, 1);
+        Grid.SetColumn(_contentHost, 1);
         grid.Children.Add(navHost);
-        grid.Children.Add(scroller);
+        grid.Children.Add(_contentHost);
         Content = grid;
 
-        SelectPage("search");
+        SelectPage("features");
     }
 
     // The search page: a registry-driven filter over every setting (built once; owns its own field/results).
@@ -211,19 +208,73 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(_search);
     }
 
-    // The feature catalogue: every setting as a card, grouped by surface, with live inline editing.
-    private void BuildFeaturesPage(StackPanel page)
-    {
-        page.Children.Add(new SettingsCatalogView(_settings, _hooks));
-    }
 
     private void AddPage(StackPanel nav, string key, string title, Action<StackPanel> build)
     {
-        var page = new StackPanel { IsVisible = false };
-        build(page);
+        var content = new StackPanel { Margin = new Thickness(16) };
+        build(content);
+        var page = new ScrollViewer
+        {
+            Content = content, IsVisible = false,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
         _pages[key] = page;
         _contentHost.Children.Add(page);
         AddNavItem(nav, key, title);
+    }
+
+    // The Features page is the unified shell's centrepiece: the surface catalogue on the left, a docked
+    // live overlay preview on the right that re-applies the settings on every inline edit — so a change is
+    // seen on the miniature overlay the moment it's made. Built directly (not via AddPage) because it owns
+    // a two-column layout with its own card scroller rather than a single scrolling StackPanel.
+    private void AddFeaturesPage(StackPanel nav)
+    {
+        var catalog = new SettingsCatalogView(_settings, _hooks);
+        var preview = new PreviewPane();
+        preview.Apply(_settings);
+        catalog.Changed += () => preview.Apply(_settings);
+
+        var cards = new ScrollViewer
+        {
+            Content = new StackPanel { Margin = new Thickness(16), Children = { catalog } },
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        Grid.SetColumn(cards, 0);
+
+        var dock = BuildPreviewDock(preview);
+        Grid.SetColumn(dock, 1);
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), IsVisible = false };
+        grid.Children.Add(cards);
+        grid.Children.Add(dock);
+
+        _pages["features"] = grid;
+        _contentHost.Children.Add(grid);
+        AddNavItem(nav, "features", "Features");
+    }
+
+    private static Control BuildPreviewDock(PreviewPane preview)
+    {
+        var stack = new StackPanel { Margin = new Thickness(14, 16, 16, 16) };
+        stack.Children.Add(new TextBlock
+        {
+            Text = "LIVE PREVIEW", FontSize = 11, FontWeight = FontWeight.SemiBold,
+            Foreground = Palette.MutedBrush, Margin = new Thickness(2, 0, 0, 8),
+        });
+        stack.Children.Add(preview);
+
+        return new Border
+        {
+            Width = 300, BorderThickness = new Thickness(1, 0, 0, 0), BorderBrush = Palette.BorderBrush,
+            Child = new ScrollViewer
+            {
+                Content = stack,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            },
+        };
     }
 
     private void AddNavItem(StackPanel nav, string key, string title)

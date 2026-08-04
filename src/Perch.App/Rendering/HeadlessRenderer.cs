@@ -1,7 +1,9 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -333,6 +335,10 @@ internal static class HeadlessRenderer
         // the surface chip row. Rendered wide enough to show the cards flowing into columns.
         RenderControl(SampleCatalogPage(), Path.Combine(outDir, "settings_catalog_1x.png"), 96);
 
+        // Unified Settings shell (M4): the two-pane Features view — the catalogue on the left with the live
+        // overlay preview docked on the right, at a representative window size.
+        RenderControl(SampleShellPage(), Path.Combine(outDir, "settings_shell_1x.png"), 96);
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }
@@ -391,6 +397,40 @@ internal static class HeadlessRenderer
             Width = 700, Margin = new Thickness(16),
         };
         return new Panel { Width = 732, Background = new SolidColorBrush(Color.FromRgb(24, 24, 32)), Children = { view } };
+    }
+
+    // The M4 two-pane Features shell: catalogue on the left, the live overlay preview docked on the right.
+    // Composed without the window's ScrollViewers (a one-shot RenderTargetBitmap doesn't realise scrolled
+    // content), so the split and the docked preview read in a single frame.
+    private static Control SampleShellPage()
+    {
+        var catalog = new Windows.SettingsCatalogView(new AppSettings(), new Windows.SettingsHooks())
+        {
+            Width = 520, Margin = new Thickness(16), VerticalAlignment = VerticalAlignment.Top,
+        };
+        Grid.SetColumn(catalog, 0);
+
+        var preview = new PreviewPane();
+        preview.Apply(new AppSettings());
+        var dockStack = new StackPanel { Margin = new Thickness(14, 16, 16, 16) };
+        dockStack.Children.Add(new TextBlock
+        {
+            Text = "LIVE PREVIEW", FontSize = 11, FontWeight = FontWeight.SemiBold,
+            Foreground = Theming.Palette.MutedBrush, Margin = new Thickness(2, 0, 0, 8),
+        });
+        dockStack.Children.Add(preview);
+        var dock = new Border
+        {
+            Width = 300, BorderThickness = new Thickness(1, 0, 0, 0), BorderBrush = Theming.Palette.BorderBrush,
+            VerticalAlignment = VerticalAlignment.Stretch, Child = dockStack,
+        };
+        Grid.SetColumn(dock, 1);
+
+        return new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"), Width = 868,
+            Background = Theming.Palette.FormBgBrush, Children = { catalog, dock },
+        };
     }
 
     // A cloned settings snapshot for the live-preview render probe. `allGlyphsOn` flips the opt-in

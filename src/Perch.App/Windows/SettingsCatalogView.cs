@@ -33,6 +33,9 @@ internal sealed class SettingsCatalogView : StackPanel
     private readonly List<(SettingSurface? surface, Button chip)> _chips = new();
     private SettingSurface? _active;   // null = all surfaces
 
+    /// <summary>Raised after any inline edit persists, so a docked live preview can re-apply the settings.</summary>
+    public event Action? Changed;
+
     public SettingsCatalogView(AppSettings settings, SettingsHooks hooks)
     {
         _settings = settings;
@@ -190,6 +193,7 @@ internal sealed class SettingsCatalogView : StackPanel
             d.SetBool!(_settings, t.IsChecked);
             _settings.Save();
             SettingsLiveApply.Toggle(d.Id, _hooks, t.IsChecked);
+            Changed?.Invoke();
         };
         return t;
     }
@@ -212,6 +216,7 @@ internal sealed class SettingsCatalogView : StackPanel
             value.Text = next.ToString();
             _settings.Save();
             SettingsLiveApply.Value(d.Id, _hooks);
+            Changed?.Invoke();
         }
 
         var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
