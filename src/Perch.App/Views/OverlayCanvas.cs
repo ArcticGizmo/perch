@@ -990,7 +990,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~150ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Note, Media, Mic }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -2594,7 +2594,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitTestWarnIcon(p)   is var wa && wa >= 0 ? (TipKind.Warn, wa) :
             HitTestTaskCount(p)  is var ta && ta >= 0 ? (TipKind.Task, ta) :
             HitTestMetrics(p)    is var me && me >= 0 ? (TipKind.Metrics, me) :
-            HitTestNoteIcon(p)   is var no && no >= 0 ? (TipKind.Note, no) :
             _mediaTitleRect.Contains(p)               ? (TipKind.Media, -1) :
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             InUsageStrip(p)                           ? (TipKind.Usage, -1) :
@@ -2623,7 +2622,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Warn:    ShowWarnTooltip(_tipRow);    break;
             case TipKind.Task:    ShowTaskTooltip(_tipRow);    break;
             case TipKind.Metrics: ShowMetricsTooltip(_tipRow); break;
-            case TipKind.Note:    ShowNoteTooltip(_tipRow);    break;
             case TipKind.Media:   ShowMediaTooltip();          break;
             case TipKind.Mic:     ShowMicTooltip();            break;
         }
@@ -3587,24 +3585,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             sb.Append(glyph).Append(' ').Append(label);
         }
         Tooltip().ShowText(sb.ToString(), ToScreen(r.Left, r.Bottom + 4));
-    }
-
-    private void ShowNoteTooltip(int row)
-    {
-        if (row < 0 || row >= _rows.Count || _rows[row].Session is not { } session) return;
-        if (!_noteRects.TryGetValue(row, out var r)) return;
-
-        // Show whatever the row carries: the session note, the project note, or both (labelled) when the
-        // glyph stands for both at once.
-        string? text = (session.Note, session.ProjectNote) switch
-        {
-            ({ } n, { } p) => $"{n}\n\n— Project note —\n{p}",
-            ({ } n, null)  => n,
-            (null, { } p)  => $"Project note\n{p}",
-            _              => null,
-        };
-        if (text is null) return;
-        Tooltip().ShowText(text, ToScreen(r.Left, r.Bottom + 4));
     }
 
     private void ShowMetricsTooltip(int row)
