@@ -141,19 +141,22 @@ coverage tests green; toggling a result mutates real settings, `Save()`s and app
 now; their inline editors arrive with the catalogue in M3.
 **Effort:** med · **Risk:** low–med · **Depends on:** M0.
 
-### M3 — The catalogue surfaces
+### M3 — The catalogue surfaces ✅ *done (core)*
 **Objective:** biggest win on "what features exist?".
 
-- [ ] Assign each descriptor a surface: *Session row · Usage bars · Tray & stats · Notifications · System &
-      metrics · Whimsy · Integrations · Advanced*.
-- [ ] Feature-card control driven by descriptor: mini glyph preview + name + one-line description + control
-      (static glyphs first; live later).
-- [ ] Surface sections + filter chips to narrow by surface.
-- [ ] "Advanced" bucket for config-heavy settings that don't fit a card (ntfy host/topic, context thresholds
-      slider, hotkeys, reopen-terminal, export, about, changelog) — expandable detail rows.
+- [x] Assign each descriptor a surface: *Session row · Usage bars · System & metrics · Notifications ·
+      Tray & stats · Whimsy · Integrations · Advanced*.
+- [x] Feature-card control driven by descriptor: static representative preview + name + one-line description +
+      control. *(`src/Perch.App/Windows/SettingsCatalogView.cs`.)*
+- [x] Surface sections + filter box + chips to narrow by surface.
+- [x] "Advanced" surface for config-heavy settings; toggles + steppers edit inline (live at parity), richer
+      kinds (slider/dropdown/hotkey/field/list) are findable with a kind chip.
 
-**Exit:** every setting reachable from the catalogue, each visual feature shows a representative preview, and
-the chips filter by surface.
+**Exit — met:** every setting is reachable from the catalogue (a "Features" page), each visual feature shows a
+representative preview, and the chips filter by surface.
+**Deferred to a later pass / folded into M4:** bespoke inline editors for the richer kinds (a dropdown for
+the enums, a field for ntfy, the 3-handle context slider, hotkey capture) — those settings stay editable on
+their existing pages until the shell consolidates them.
 **Effort:** high · **Risk:** med · **Depends on:** M2.
 
 ### M4 — Unified shell + preview linkage
