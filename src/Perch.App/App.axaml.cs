@@ -500,32 +500,10 @@ public partial class App : Application
     private void ApplyDisplaySettings(AppSettings s)
     {
         if (_overlay is null) return;
-        var c = _overlay.Canvas;
 
-        c.SetShowUsage(s.ShowUsage);
-        c.SetShowExpectedRate(s.ShowExpectedUsageRate);
-        c.SetShowSystemMetrics(s.ShowSystemMetrics);
-        c.SetShowSessionMetrics(s.ShowSessionMetrics);
-        c.SetShowContextPressure(s.ShowContextPressure);
-        c.SetShowContextGreenSegment(s.ShowContextGreenSegment);
-        c.SetContextThresholds(s.ContextPressureYellowPercent, s.ContextPressureOrangePercent, s.ContextPressureRedPercent);
-        c.SetShowModeBadges(s.ShowPermissionModeBadges);
-        c.SetShowTaskProgress(s.ShowTaskProgress);
-        c.SetShowNoteLine(s.ShowNotes);
-        c.SetShowBurnRate(s.ShowBurnRate);
-        c.SetShowGitStats(s.ShowGitStats);
-        c.SetShowPullRequests(s.ShowPullRequests);
-        c.SetStuckDetectionEnabled(s.StuckDetectionEnabled);
-        c.SetShowWaitingTimer(s.ShowWaitingTimer);
-        c.SetWaitingTimerRedMinutes(s.WaitingTimerRedMinutes);
-        c.SetShowArtifacts(s.ShowArtifacts);
-        c.SetServiceStatusEnabled(s.ShowServiceStatus);
-        c.SetShowMediaController(s.ShowMediaController);
-        c.SetShowMicPresence(s.ShowMicPresence);
-        c.SetHideInactiveTeamMembers(s.HideInactiveTeamMembers);
-        c.SetUpsideDownQuickLinks(s.UpsideDownQuickLinks);
-        c.SetConfettiFinishAvailable(s.ConfettiFinish);
-        c.SetExternalNotificationsAvailable(s.ExternalNotificationsEnabled);
+        // Push every display gate onto the live canvas. The same helper drives the Settings live-preview
+        // pane against a detached canvas + a cloned AppSettings, so preview and overlay can't diverge.
+        OverlaySettingsGates.Apply(_overlay.Canvas, s);
 
         // Data-layer sources for the git chip / stuck glyph (off in the monitor unless enabled here).
         if (_monitorHost is not null)
