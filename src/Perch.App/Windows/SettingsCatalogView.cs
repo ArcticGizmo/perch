@@ -43,6 +43,10 @@ internal sealed class SettingsCatalogView : StackPanel
     /// <summary>Raised with a card's preview target when it's hovered, so a docked preview can spotlight it.</summary>
     public event Action<PreviewTarget>? Hovered;
 
+    /// <summary>Rebuild the cards from the current settings — used to reflect an out-of-band change (e.g. a
+    /// display toggle flipped from the overlay's right-click menu) while the window is open.</summary>
+    public void Sync() => Rebuild();
+
     public SettingsCatalogView(AppSettings settings, SettingsHooks hooks)
     {
         _settings = settings;
