@@ -159,19 +159,22 @@ the enums, a field for ntfy, the 3-handle context slider, hotkey capture) — th
 their existing pages until the shell consolidates them.
 **Effort:** high · **Risk:** med · **Depends on:** M2.
 
-### M4 — Unified shell + preview linkage
+### M4 — Unified shell + preview linkage ✅ *done (core); hover-spotlight pending*
 **Objective:** the three become one window.
 
-- [ ] New shell: top search bar (`Ctrl+F` focuses it), main pane = catalogue or search results, side/bottom
-      dock = `PreviewPane`.
-- [ ] Linkage: hovering/focusing a card or result calls `PreviewPane.Highlight(previewTarget)` → the affected
-      glyph pulses; editing a setting re-applies to the preview's working clone immediately.
-- [ ] Commit path unchanged: `Save()` still writes the real `AppSettings` and fires `DisplayChanged` for the
-      actual overlay.
-- [ ] Migrate remaining non-visual pages (Getting started, Export, About, Changelog) into shell sections.
+- [x] New shell: Search + a two-pane **Features** page (catalogue on the left, docked `PreviewPane` on the
+      right); Settings lands on Features, Search stays first in the rail with `Ctrl+F`. Per-page scrollers so
+      the preview pins beside a scrolling card list. *(`SettingsWindow.AddFeaturesPage`.)*
+- [x] Live update: `SettingsCatalogView.Changed` → `preview.Apply(_settings)`, so an edit shows on the
+      miniature overlay immediately.
+- [x] Commit path unchanged: `Save()` writes the real `AppSettings` and applies live via `SettingsLiveApply`.
+- [ ] **Pending:** hover/focus a card → `PreviewPane.Highlight(previewTarget)` pulses the affected glyph
+      (`Highlight` is still a stub).
+- [ ] **Pending:** migrate the genuinely-different pages (Getting started, Export, About, Changelog) into the
+      shell — currently still reachable via the demoted rail.
 
-**Exit:** end-to-end — hover a card → glyph highlights; toggle → preview and real overlay both update; search,
-catalogue and preview coexist; nothing from the old window is unreachable.
+**Exit — core met:** toggle in the catalogue → preview *and* real overlay both update; search, catalogue and
+preview coexist in one window; nothing is unreachable.
 **Effort:** high · **Risk:** med · **Depends on:** M1, M3.
 
 ### M5 — Cutover, accessibility & cleanup
