@@ -174,20 +174,20 @@ internal sealed class SettingsWindow : Window
         // scrolling card list); the content host just stacks them and toggles which is visible.
         _contentHost = new Panel();
 
+        // Unified shell: Search + the Features catalogue (with its docked live preview) are the primary way
+        // to change settings. The old pure-toggle pages — Usage, Indicators, Monitoring, Shortcuts,
+        // Integrations, Music, Microphone — are retired: every one of their settings is now an inline card in
+        // the catalogue. The pages kept below carry things the catalogue doesn't (yet): actions (open Stats /
+        // Achievements, test notifications), a bespoke editor (Quick Links), the Agent Teams env toggle, or
+        // non-settings content (Getting started, Export, About, Changelog). Their builders are now
+        // unreachable dead code, excised in a follow-up once verified in the running app.
         AddPage(nav, "search",       "Search",          BuildSearchPage);
         AddFeaturesPage(nav);
         AddPage(nav, "start",        "Getting started", BuildGettingStartedPage);
-        AddPage(nav, "usage",        "Usage Limits",    BuildUsagePage);
-        AddPage(nav, "indicators",   "Indicators",      BuildIndicatorsPage);
-        AddPage(nav, "monitoring",   "Monitoring",      BuildMonitoringPage);
-        AddPage(nav, "shortcuts",    "Shortcuts",       BuildHotkeysPage);
         AddPage(nav, "stats",        "Session Stats",   BuildStatsPage);
         AddPage(nav, "achievements", "Achievements",    BuildAchievementsPage);
         AddPage(nav, "notify",       "Notifications",   BuildNotificationsPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
-        AddPage(nav, "integrations", "Integrations",    BuildIntegrationsPage);
-        AddPage(nav, "music",        "Music",           BuildMusicPage);
-        AddPage(nav, "microphone",   "Microphone",      BuildMicrophonePage);
         AddPage(nav, "experimental", "Experimental",    BuildExperimentalPage);
         AddPage(nav, "export",       "Export",          BuildExportPage);
         AddPage(nav, "about",        "About",           BuildAboutPage);
