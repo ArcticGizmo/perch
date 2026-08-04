@@ -92,7 +92,11 @@ internal sealed record SettingDescriptor(
     Func<AppSettings, bool>? GetBool = null,
     Action<AppSettings, bool>? SetBool = null,
     Func<AppSettings, int>? GetInt = null,
-    Action<AppSettings, int>? SetInt = null)
+    Action<AppSettings, int>? SetInt = null,
+    // For a toggle not backed by an AppSettings property (e.g. a Claude Code env var). Leave Backing empty
+    // when these are set; the UI reads/writes through them instead of GetBool/SetBool.
+    Func<bool>? GetBoolRaw = null,
+    Action<bool>? SetBoolRaw = null)
 {
     /// <summary>
     /// Whether every whitespace-separated token in <paramref name="query"/> is a substring of the setting's

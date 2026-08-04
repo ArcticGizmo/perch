@@ -208,12 +208,12 @@ internal sealed class SettingsCatalogView : StackPanel
         return card;
     }
 
-    private Control? CompactControl(SettingDescriptor d) => d switch
+    private Control? CompactControl(SettingDescriptor d)
     {
-        { Kind: SettingKind.Toggle, GetBool: not null, SetBool: not null }  => LiveToggle(d),
-        { Kind: SettingKind.Stepper, GetInt: not null, SetInt: not null }    => LiveStepper(d),
-        _                                                                     => null,
-    };
+        if (d.Kind == SettingKind.Toggle && (d.GetBool is not null || d.GetBoolRaw is not null)) return LiveToggle(d);
+        if (d is { Kind: SettingKind.Stepper, GetInt: not null, SetInt: not null }) return LiveStepper(d);
+        return null;
+    }
 
     // The full-width editor for a non-compact setting, so no card is a dead end.
     private Control? WideEditor(SettingDescriptor d) => d.Kind switch
@@ -312,10 +312,11 @@ internal sealed class SettingsCatalogView : StackPanel
     private PerchToggle LiveToggle(SettingDescriptor d)
     {
         var t = new PerchToggle();
-        t.SetCheckedSilent(d.GetBool!(_settings));
+        t.SetCheckedSilent(d.GetBoolRaw is not null ? d.GetBoolRaw() : d.GetBool!(_settings));
         t.CheckedChanged += (_, _) =>
         {
-            d.SetBool!(_settings, t.IsChecked);
+            if (d.SetBoolRaw is not null) d.SetBoolRaw(t.IsChecked);
+            else d.SetBool!(_settings, t.IsChecked);
             _settings.Save();
             SettingsLiveApply.Toggle(d.Id, _hooks, t.IsChecked);
             Changed?.Invoke();

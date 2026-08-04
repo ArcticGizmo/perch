@@ -339,6 +339,15 @@ internal static class SettingsRegistry
             SettingSurface.Advanced, ["changelog", "whats", "new", "update", "release", "notes"],
             PreviewTarget.None, nameof(AppSettings.ShowChangelogOnUpdate),
             s => s.ShowChangelogOnUpdate, (s, v) => s.ShowChangelogOnUpdate = v),
+
+        // Not an AppSettings flag — this writes Claude Code's own settings.json env var, so it binds through
+        // the raw accessors and carries no Backing.
+        new SettingDescriptor("agent-teams", "Enable Agent Teams in Claude Code",
+            "Turn on Claude Code's experimental Agent Teams (multi-agent) feature via its settings.json.",
+            SettingSurface.Advanced, SettingKind.Toggle,
+            ["agent", "teams", "multi", "experimental", "claude code", "env"], PreviewTarget.None, Backing: [],
+            GetBoolRaw: ClaudeUserSettings.IsAgentTeamsEnabled,
+            SetBoolRaw: v => ClaudeUserSettings.SetAgentTeamsEnabled(v)),
     ];
 
     /// <summary>Finds a descriptor by its stable <see cref="SettingDescriptor.Id"/>, or null.</summary>

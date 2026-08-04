@@ -83,6 +83,14 @@ public class SettingsRegistryTests
     {
         foreach (var d in SettingsRegistry.All.Where(d => d.Kind == SettingKind.Toggle))
         {
+            // A toggle not backed by an AppSettings property (e.g. an env var) binds through raw accessors.
+            if (d.Backing is not { Length: > 0 })
+            {
+                Assert.NotNull(d.GetBoolRaw);
+                Assert.NotNull(d.SetBoolRaw);
+                continue;
+            }
+
             Assert.NotNull(d.GetBool);
             Assert.NotNull(d.SetBool);
             Assert.Single(d.Backing!);

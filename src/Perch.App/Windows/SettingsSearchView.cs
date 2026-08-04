@@ -154,9 +154,9 @@ internal sealed class SettingsSearchView : StackPanel
         // for quick links, jumps to their manager) — so every row stays the same height and is editable.
         Control right = d switch
         {
-            { Kind: SettingKind.Toggle, GetBool: not null, SetBool: not null } => LiveToggle(d),
-            { Kind: SettingKind.List }                                          => EditButton(() => Navigate?.Invoke("quicklinks")),
-            _                                                                    => EditButton(() => OpenEditor(d)),
+            { Kind: SettingKind.Toggle } when d.GetBool is not null || d.GetBoolRaw is not null => LiveToggle(d),
+            { Kind: SettingKind.List }                                                           => EditButton(() => Navigate?.Invoke("quicklinks")),
+            _                                                                                     => EditButton(() => OpenEditor(d)),
         };
         right.VerticalAlignment = VerticalAlignment.Center;
         Grid.SetColumn(right, 1);
@@ -174,10 +174,11 @@ internal sealed class SettingsSearchView : StackPanel
     private PerchToggle LiveToggle(SettingDescriptor d)
     {
         var t = new PerchToggle();
-        t.SetCheckedSilent(d.GetBool!(_settings));
+        t.SetCheckedSilent(d.GetBoolRaw is not null ? d.GetBoolRaw() : d.GetBool!(_settings));
         t.CheckedChanged += (_, _) =>
         {
-            d.SetBool!(_settings, t.IsChecked);
+            if (d.SetBoolRaw is not null) d.SetBoolRaw(t.IsChecked);
+            else d.SetBool!(_settings, t.IsChecked);
             _settings.Save();
             SettingsLiveApply.Toggle(d.Id, _hooks, t.IsChecked);
         };

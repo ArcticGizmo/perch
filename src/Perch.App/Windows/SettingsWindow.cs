@@ -187,7 +187,6 @@ internal sealed class SettingsWindow : Window
         AddPage(nav, "notify",       "Notifications",   BuildNotificationsPage);
         AddPage(nav, "shortcuts",    "Shortcuts",       BuildHotkeysPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
-        AddPage(nav, "experimental", "Experimental",    BuildExperimentalPage);
         AddPage(nav, "export",       "Export",          BuildExportPage);
         AddPage(nav, "about",        "About",           BuildAboutPage);
         AddPage(nav, "changelog",    "Changelog",       BuildChangelogPage);
@@ -1166,71 +1165,6 @@ internal sealed class SettingsWindow : Window
         _hooks.QuickLinksChanged?.Invoke();
     }
 
-    // ── Experimental ────────────────────────────────────────────────────────────────
-    private void BuildExperimentalPage(StackPanel page)
-    {
-        page.Children.Add(SettingsUi.SectionTitle("Experimental"));
-        page.Children.Add(SettingsUi.BodyText(
-            "Opt-in switches for features still in development. They may change or break between updates."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        var teamsEnvToggle = Toggle(ClaudeUserSettings.IsAgentTeamsEnabled());
-        teamsEnvToggle.CheckedChanged += (_, _) => ClaudeUserSettings.SetAgentTeamsEnabled(teamsEnvToggle.IsChecked);
-        page.Children.Add(SettingsUi.TitleRow("Enable Agent Teams in Claude Code", teamsEnvToggle));
-        page.Children.Add(SettingsUi.BodyText(
-            "Sets the CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS environment variable in your user settings " +
-            "(~/.claude/settings.json). Claude Code reads it on launch, so restart any open sessions for it " +
-            "to take effect."));
-        page.Children.Add(SettingsUi.BodyText(
-            "Once enabled, Perch surfaces teammates automatically as distinct, named rows in the overlay — " +
-            "kept on the roster while they're alive, even when idle between messages from the lead."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.TitleRow("Hide inactive members",
-            DisplayToggle(_settings.HideInactiveTeamMembers, v => _settings.HideInactiveTeamMembers = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Drops idle teammates — those waiting for the lead — from the overlay, so only teammates actively " +
-            "working are shown. A hidden teammate reappears the moment it starts working again."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.TitleRow("Perch reacts",
-            SaveToggle(_settings.PerchReacts, v => _settings.PerchReacts = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Lets the tray and overlay bird wear the mood of your sessions: it dozes when nothing's running, " +
-            "perks up while sessions work, flags a \"!\" when one needs you, and visibly panics when a session " +
-            "looks stuck. Pure whimsy on top of the usual status cues. On by default."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.TitleRow("Token burn rate",
-            DisplayToggle(_settings.ShowBurnRate, v => _settings.ShowBurnRate = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Shows a live tokens-per-minute figure (e.g. \"12.3k/m\") next to a running session, measured over " +
-            "its most recent burst of turns. The rate can swing quite a bit between turns, so it's here in " +
-            "Experimental while that settles. Off by default."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.TitleRow("Git line changes",
-            DisplayToggle(_settings.ShowGitStats, v => _settings.ShowGitStats = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Shows a \"+142 -37\" chip next to a session — the lines added (green) and deleted (red) in its " +
-            "working directory that haven't been staged yet, read from git. While this is off, Perch never runs " +
-            "git at all, so it costs nothing; while on, it runs a lightweight \"git diff\" per session on a " +
-            "background thread, cached for a few seconds. Off by default."));
-
-        page.Children.Add(SettingsUi.Separator());
-
-        page.Children.Add(SettingsUi.TitleRow("Confetti finish 🎉",
-            DisplayToggle(_settings.ConfettiFinish, v => _settings.ConfettiFinish = v)));
-        page.Children.Add(SettingsUi.BodyText(
-            "Adds a \"Confetti finish 🎉\" item to a session's right-click menu. Arm a session and a " +
-            "party-popper icon appears on its row; the instant it next finishes, confetti erupts across the " +
-            "screen and the arming is spent (it fires exactly once). The arming is never saved. Off by default."));
-    }
 
     // ── About ─────────────────────────────────────────────────────────────────────
     private void BuildAboutPage(StackPanel page)
