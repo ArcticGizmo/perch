@@ -176,6 +176,7 @@ internal sealed class SettingsWindow : Window
         };
 
         AddPage(nav, "search",       "Search",          BuildSearchPage);
+        AddPage(nav, "features",     "Features",        BuildFeaturesPage);
         AddPage(nav, "start",        "Getting started", BuildGettingStartedPage);
         AddPage(nav, "usage",        "Usage Limits",    BuildUsagePage);
         AddPage(nav, "indicators",   "Indicators",      BuildIndicatorsPage);
@@ -208,6 +209,12 @@ internal sealed class SettingsWindow : Window
     {
         _search = new SettingsSearchView(_settings, _hooks);
         page.Children.Add(_search);
+    }
+
+    // The feature catalogue: every setting as a card, grouped by surface, with live inline editing.
+    private void BuildFeaturesPage(StackPanel page)
+    {
+        page.Children.Add(new SettingsCatalogView(_settings, _hooks));
     }
 
     private void AddPage(StackPanel nav, string key, string title, Action<StackPanel> build)

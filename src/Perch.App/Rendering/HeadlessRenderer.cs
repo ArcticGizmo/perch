@@ -329,6 +329,10 @@ internal static class HeadlessRenderer
         RenderControl(SampleSearchPage("chime"), Path.Combine(outDir, "settings_search_1x.png"), 96);
         RenderControl(SampleSearchPage(""),      Path.Combine(outDir, "settings_search_index_1x.png"), 96);
 
+        // Settings feature catalogue (M3): surface-grouped cards with previews, live toggles/steppers, and
+        // the surface chip row. Rendered wide enough to show the cards flowing into columns.
+        RenderControl(SampleCatalogPage(), Path.Combine(outDir, "settings_catalog_1x.png"), 96);
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }
@@ -377,6 +381,16 @@ internal static class HeadlessRenderer
         };
         view.SetQuery(query);
         return new Panel { Width = 652, Background = new SolidColorBrush(Color.FromRgb(24, 24, 32)), Children = { view } };
+    }
+
+    // The feature catalogue, framed the way the content area presents it, wide enough for two card columns.
+    private static Control SampleCatalogPage()
+    {
+        var view = new Windows.SettingsCatalogView(new AppSettings(), new Windows.SettingsHooks())
+        {
+            Width = 700, Margin = new Thickness(16),
+        };
+        return new Panel { Width = 732, Background = new SolidColorBrush(Color.FromRgb(24, 24, 32)), Children = { view } };
     }
 
     // A cloned settings snapshot for the live-preview render probe. `allGlyphsOn` flips the opt-in

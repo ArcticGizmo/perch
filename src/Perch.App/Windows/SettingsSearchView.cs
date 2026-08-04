@@ -37,6 +37,19 @@ internal static class SettingsLiveApply
         // flags too. Harmless for settings with no display effect (notifications, chimes, achievements).
         hooks.DisplayChanged?.Invoke();
     }
+
+    // The same idea for a numeric (stepper) setting. Most intervals are read back by DisplayChanged
+    // (ApplyDisplaySettings pushes e.g. the PR interval onto the monitor); the service-status poll owns a
+    // dedicated interval hook.
+    public static void Value(string id, SettingsHooks hooks)
+    {
+        switch (id)
+        {
+            case "service-status-interval": hooks.ServiceStatusIntervalChanged?.Invoke(); break;
+        }
+
+        hooks.DisplayChanged?.Invoke();
+    }
 }
 
 /// <summary>
