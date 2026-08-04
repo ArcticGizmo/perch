@@ -1,0 +1,434 @@
+<title>Perch Settings Overhaul — Implementation Plan</title>
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#0e0e15; --bg-2:#12121b;
+    --panel:#1a1a24; --panel-2:#20202c; --panel-3:#262633;
+    --line:#2b2b3a; --line-soft:#22222f;
+    --fg:#e6e6f0; --title:#f6f6fb;
+    --muted:#9090a6; --muted-2:#6b6b80;
+    --accent:#60a5fa; --accent-deep:#3b82f6; --accent-ink:#bcd7fb;
+    --gold:#f0c674; --good:#6ee7a8; --good-track:#2f7d52;
+    --warn:#f4b860; --danger:#f87171; --violet:#c4a6ff;
+    --ui:"Segoe UI Variable Display","Segoe UI Variable","Segoe UI",system-ui,-apple-system,sans-serif;
+    --mono:"Cascadia Code","Cascadia Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
+    --maxw:1060px; --r:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0}
+  .page{
+    background:
+      radial-gradient(1100px 560px at 82% -6%, rgba(96,165,250,.10), transparent 60%),
+      radial-gradient(760px 440px at -4% 3%, rgba(240,198,116,.045), transparent 55%),
+      var(--bg);
+    color:var(--fg);font-family:var(--ui);font-size:16px;line-height:1.62;
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;overflow-x:hidden;
+  }
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px}
+  a{color:var(--accent-ink);text-decoration:none;border-bottom:1px solid rgba(96,165,250,.35)}
+  a:hover{border-bottom-color:var(--accent)}
+  code{font-family:var(--mono);font-size:.86em;color:var(--accent-ink);background:#0f0f16;border:1px solid var(--line-soft);border-radius:5px;padding:1px 6px}
+  code.plain{background:transparent;border:0;padding:0;color:var(--accent-ink)}
+
+  .eyebrow{font-size:.72rem;text-transform:uppercase;letter-spacing:.2em;color:var(--muted);font-weight:600;display:inline-flex;align-items:center;gap:.6em}
+  .eyebrow .bird{width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 12px 1px rgba(240,198,116,.6)}
+
+  h1,h2,h3,h4{color:var(--title);text-wrap:balance;margin:0}
+  h1{font-size:clamp(2.1rem,5vw,3.4rem);line-height:1.03;font-weight:750;letter-spacing:-.02em}
+  h1 .accent{color:var(--accent)}
+  h2{font-size:clamp(1.4rem,2.8vw,1.9rem);line-height:1.1;font-weight:700;letter-spacing:-.015em}
+  h3{font-size:1.1rem;font-weight:650;letter-spacing:-.01em}
+  p{margin:0}
+  .lede{font-size:clamp(1.04rem,1.6vw,1.2rem);color:#c7c7d6;max-width:66ch;line-height:1.58}
+  .muted{color:var(--muted)}
+
+  header.hero{padding:78px 0 26px}
+  .hero .kicker{margin-bottom:24px}
+  .hero h1{max-width:17ch}
+  .hero .lede{margin-top:24px}
+
+  .goalcard{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:34px}
+  .goalcard .g{border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;background:linear-gradient(180deg,rgba(255,255,255,.02),transparent)}
+  .goalcard .g .tag{font-size:.68rem;text-transform:uppercase;letter-spacing:.16em;font-weight:650;margin-bottom:7px}
+  .goalcard .g.s .tag{color:var(--accent)}
+  .goalcard .g.c .tag{color:var(--gold)}
+  .goalcard .g.p .tag{color:var(--good)}
+  .goalcard .g .t{color:var(--title);font-weight:600;font-size:1rem}
+  .goalcard .g .d{color:var(--muted);font-size:.86rem;margin-top:3px}
+
+  section{padding:44px 0}
+  .rule{height:1px;background:linear-gradient(90deg,transparent,var(--line),transparent);border:0;margin:0}
+  .sec-head{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;margin-bottom:8px}
+
+  /* feasibility banner */
+  .greenlight{display:flex;gap:16px;align-items:flex-start;border:1px solid rgba(110,231,168,.3);
+    border-radius:var(--r);padding:18px 20px;background:linear-gradient(180deg,rgba(110,231,168,.05),transparent);margin-top:8px}
+  .greenlight .ic{flex:0 0 auto;width:30px;height:30px;border-radius:8px;background:rgba(110,231,168,.12);color:var(--good);display:grid;place-items:center;font-size:1rem;margin-top:2px}
+  .greenlight h3{color:var(--good);font-size:1.02rem;margin-bottom:5px}
+  .greenlight p{color:#cfcfdc;font-size:.94rem;max-width:80ch}
+
+  /* spine diagram */
+  .spine{margin-top:26px}
+  .registry-node{border:1px solid var(--gold);border-radius:12px;background:linear-gradient(180deg,rgba(240,198,116,.07),transparent);
+    padding:18px 22px;text-align:center;max-width:640px;margin:0 auto}
+  .registry-node .rk{font-size:.68rem;text-transform:uppercase;letter-spacing:.18em;color:var(--gold);font-weight:650}
+  .registry-node .rn{color:var(--title);font-size:1.15rem;font-weight:700;margin:6px 0 8px}
+  .registry-node .rf{font-family:var(--mono);font-size:.76rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px 10px;justify-content:center}
+  .registry-node .rf span{background:#0f0f16;border:1px solid var(--line-soft);border-radius:5px;padding:2px 8px}
+  .connect{display:flex;justify-content:center;margin:2px 0}
+  .connect svg{color:var(--line)}
+  .consumers{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:2px}
+  .consumer{border:1px solid var(--line);border-radius:10px;padding:15px 16px;background:var(--panel)}
+  .consumer .ch{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .consumer .ch .d{width:9px;height:9px;border-radius:50%}
+  .consumer.s .ch .d{background:var(--accent)} .consumer.c .ch .d{background:var(--gold)} .consumer.p .ch .d{background:var(--good)}
+  .consumer .ch .n{font-weight:650;color:var(--title);font-size:.96rem}
+  .consumer .cd{color:var(--muted);font-size:.85rem}
+  .consumer .uses{font-family:var(--mono);font-size:.72rem;color:var(--muted-2);margin-top:8px}
+  .spine-foot{text-align:center;color:var(--muted-2);font-size:.82rem;margin-top:14px}
+  .spine-foot code{font-size:.9em}
+
+  /* milestones */
+  .milestones{margin-top:20px;display:flex;flex-direction:column;gap:14px}
+  .ms{display:grid;grid-template-columns:64px 1fr;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel)}
+  .ms .rail{background:#101018;border-right:1px solid var(--line-soft);display:flex;flex-direction:column;align-items:center;padding:16px 0;gap:8px}
+  .ms .rail .mk{font-family:var(--mono);font-weight:700;font-size:1.05rem;color:var(--accent)}
+  .ms .rail .ln{flex:1;width:2px;background:linear-gradient(180deg,var(--line),transparent)}
+  .ms .body{padding:18px 22px}
+  .ms .mhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .ms .mhead h3{font-size:1.16rem}
+  .ms .mhead .obj{font-size:.8rem;color:var(--gold);font-weight:600}
+  .ms .goal{color:#c7c7d6;font-size:.98rem;margin-top:6px;max-width:74ch}
+
+  .tasks{margin:14px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+  .tasks li{position:relative;padding-left:22px;font-size:.92rem;color:#cfcfdc;line-height:1.5}
+  .tasks li::before{content:"";position:absolute;left:3px;top:.55em;width:7px;height:7px;border-radius:2px;background:var(--accent);transform:rotate(45deg)}
+
+  .exit{margin-top:14px;border-top:1px solid var(--line-soft);padding-top:12px;display:flex;gap:10px;align-items:flex-start}
+  .exit .lab{flex:0 0 auto;font-size:.68rem;text-transform:uppercase;letter-spacing:.14em;color:var(--good);font-weight:650;margin-top:2px}
+  .exit .txt{font-size:.9rem;color:var(--muted)}
+  .exit .txt b{color:#dcdce6;font-weight:600}
+
+  .mmeta{display:flex;gap:20px;flex-wrap:wrap;margin-top:14px}
+  .mmeta .m{display:flex;align-items:center;gap:8px}
+  .mmeta .m .k{font-size:.68rem;text-transform:uppercase;letter-spacing:.13em;color:var(--muted-2)}
+  .dots{display:inline-flex;gap:3px}
+  .dots i{width:7px;height:7px;border-radius:50%;background:var(--line)}
+  .dots i.on{background:var(--accent)} .dots.gold i.on{background:var(--gold)} .dots.warn i.on{background:var(--warn)}
+  .depchip{font-family:var(--mono);font-size:.72rem;color:var(--muted-2);border:1px solid var(--line);border-radius:5px;padding:2px 7px}
+
+  /* sequencing */
+  .why{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:22px}
+  .why .w{border:1px solid var(--line);border-radius:var(--r);padding:16px 18px}
+  .why .w h4{font-size:.95rem;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+  .why .w h4 .n{font-family:var(--mono);color:var(--gold);font-size:.85rem}
+  .why .w p{color:var(--muted);font-size:.88rem}
+
+  /* strategy two-up */
+  .strat{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:22px}
+  .strat .card{border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;background:linear-gradient(180deg,rgba(255,255,255,.015),transparent)}
+  .strat .card h4{font-size:.74rem;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);margin-bottom:12px;font-weight:650}
+  .strat .card ul{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:9px}
+  .strat .card li{position:relative;padding-left:19px;font-size:.9rem;color:#cfcfdc}
+  .strat .card li::before{content:"";position:absolute;left:2px;top:.6em;width:6px;height:6px;border-radius:50%;background:var(--accent)}
+
+  /* risk register */
+  .risks{margin-top:22px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .risks .rrow{display:grid;grid-template-columns:1.5fr .7fr 2fr;gap:0;border-bottom:1px solid var(--line-soft)}
+  .risks .rrow:last-child{border-bottom:0}
+  .risks .rrow.h{background:#101018}
+  .risks .rrow.h .c{color:var(--muted-2);font-size:.68rem;text-transform:uppercase;letter-spacing:.14em;font-weight:650}
+  .risks .c{padding:12px 16px;font-size:.88rem;color:#cfcfdc;border-right:1px solid var(--line-soft)}
+  .risks .c:last-child{border-right:0}
+  .risks .c .sev{font-family:var(--mono);font-size:.74rem;padding:2px 8px;border-radius:5px}
+  .sev.lo{background:rgba(110,231,168,.12);color:var(--good)} .sev.md{background:rgba(244,184,96,.13);color:var(--warn)} .sev.hi{background:rgba(248,113,113,.13);color:var(--danger)}
+  .risks .c b{color:var(--title)}
+
+  footer{padding:38px 0 70px;color:var(--muted-2);font-size:.85rem;border-top:1px solid var(--line-soft);margin-top:24px}
+  footer .fl{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+  .rv{opacity:0;transform:translateY(12px);transition:opacity .55s ease, transform .55s ease}
+  .rv.in{opacity:1;transform:none}
+  @media (prefers-reduced-motion:reduce){.rv{opacity:1;transform:none;transition:none}}
+
+  @media (max-width:820px){
+    .goalcard,.consumers,.why,.strat{grid-template-columns:1fr}
+    .risks .rrow{grid-template-columns:1fr}
+    .risks .c{border-right:0;border-bottom:1px solid var(--line-soft)}
+    .risks .rrow.h{display:none}
+  }
+  @media (max-width:560px){.wrap{padding:0 18px}.ms{grid-template-columns:48px 1fr}}
+</style>
+
+<div class="page">
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker eyebrow"><span class="bird"></span>Perch · Settings overhaul · implementation plan</div>
+    <h1>One registry, three payoffs: <span class="accent">search, a catalogue, and a live preview.</span></h1>
+    <p class="lede">The target is the full overhaul — settings organised by where they appear, a search bar that
+      finds anything, and a miniature live overlay that shows each change as you make it. Feasibility is confirmed
+      against the real code; this plan sequences it into six milestones you can land one at a time on the
+      <code>settings-redesign</code> branch.</p>
+
+    <div class="goalcard">
+      <div class="g s"><div class="tag">Search</div><div class="t">Find by name or synonym</div><div class="d">Type &ldquo;chime&rdquo;, &ldquo;cost&rdquo;, &ldquo;git&rdquo; → land on the switch.</div></div>
+      <div class="g c"><div class="tag">Catalogue</div><div class="t">Browse by surface</div><div class="d">Every feature as a card, grouped by where it draws.</div></div>
+      <div class="g p"><div class="tag">Live preview</div><div class="t">See it before you set it</div><div class="d">A real mini-overlay reacts to every toggle.</div></div>
+    </div>
+  </header>
+
+  <!-- FEASIBILITY -->
+  <section class="rv">
+    <div class="sec-head"><span class="eyebrow">Feasibility · confirmed against the code</span></div>
+    <div class="greenlight">
+      <div class="ic">✓</div>
+      <div>
+        <h3>The live preview reuses the real overlay — no new renderer needed.</h3>
+        <p><code>OverlayCanvas</code> reads no settings globally; every glyph is gated through a <code>Set*</code> method
+          and its sessions are pushed in via <code>Update(...)</code>. <code>HeadlessRenderer</code> already builds
+          synthetic <code>ClaudeSession</code> data and renders a bare canvas with no window. So the preview is
+          &ldquo;<code>HeadlessRenderer</code>'s setup, embedded in a live control, re-fed on every toggle&rdquo; — driven
+          by a temp <code>AppSettings</code> clone so the user's real settings stay untouched until they commit.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- SPINE -->
+  <section class="rv">
+    <div class="sec-head"><span class="eyebrow">The architectural spine</span></div>
+    <p class="lede" style="margin-bottom:4px">All three features want the same thing: a description of every setting.
+      Build that <em>once</em> as a registry, and search, the catalogue, and the preview all read from it.</p>
+    <div class="spine">
+      <div class="registry-node">
+        <div class="rk">single source of truth</div>
+        <div class="rn">Settings Registry</div>
+        <div class="rf">
+          <span>id</span><span>name</span><span>keywords[]</span><span>surface</span><span>kind</span><span>get/set → AppSettings</span><span>previewTarget</span>
+        </div>
+      </div>
+      <div class="connect">
+        <svg width="220" height="26" viewBox="0 0 220 26" fill="none" stroke="currentColor" stroke-width="1.4">
+          <path d="M110 0 L110 8 M110 8 L28 8 L28 24 M110 8 L110 24 M110 8 L192 8 L192 24"/>
+        </svg>
+      </div>
+      <div class="consumers">
+        <div class="consumer s"><div class="ch"><span class="d"></span><span class="n">Search</span></div><div class="cd">Token-AND match over name + keywords; result rows with a breadcrumb.</div><div class="uses">reads · name · keywords · surface</div></div>
+        <div class="consumer c"><div class="ch"><span class="d"></span><span class="n">Catalogue</span></div><div class="cd">Groups descriptors by surface; renders each as a feature card with a control.</div><div class="uses">reads · surface · kind · name</div></div>
+        <div class="consumer p"><div class="ch"><span class="d"></span><span class="n">Live preview</span></div><div class="cd">Maps <code class="plain">previewTarget</code> to a glyph in the embedded overlay and pulses it.</div><div class="uses">reads · previewTarget · get/set</div></div>
+      </div>
+      <p class="spine-foot">Bindings read/write a temp <code>AppSettings</code> clone → shared <code>OverlaySettingsGates.Apply(canvas, settings)</code> feeds the preview · commit writes the real settings + fires <code>DisplayChanged</code>.</p>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- MILESTONES -->
+  <section class="rv">
+    <div class="sec-head"><span class="eyebrow">Milestones</span></div>
+
+    <div class="milestones">
+
+      <!-- M0 -->
+      <div class="ms">
+        <div class="rail"><span class="mk">M0</span><span class="ln"></span></div>
+        <div class="body">
+          <div class="mhead"><h3>Foundations &amp; the de-risk spike</h3><span class="obj">Prove the hard part before building UI</span></div>
+          <p class="goal">Put the shared plumbing in place and confirm a live <code>OverlayCanvas</code> renders inside a normal window (not just headless), reacting to a mutated settings clone.</p>
+          <ul class="tasks">
+            <li>Add the <code>SettingDescriptor</code> record + <code>SettingSurface</code> enum (id, name, keywords, surface, kind, get/set delegates, previewTarget).</li>
+            <li>Extract the canvas-gate block of <code>App.ApplyDisplaySettings</code> (<code>App.axaml.cs</code> ~505–528) into a shared <code>OverlaySettingsGates.Apply(OverlayCanvas, AppSettings)</code>; have the live path call it — <b>no behaviour change</b>.</li>
+            <li>Add <code>AppSettings.Clone()</code> via the existing JSON round-trip for a detached preview snapshot.</li>
+            <li>Promote <code>HeadlessRenderer.Sample*</code> builders to a shared <code>SampleData</code> class (they're the preview seed).</li>
+            <li>Spike: a scratch window hosting a seeded <code>OverlayCanvas</code>; toggle a gate on a clone and watch it repaint.</li>
+          </ul>
+          <div class="exit"><span class="lab">Exit</span><span class="txt"><b>Overlay behaves identically</b> after the gate extraction (regression check), and the spike window shows a mini-overlay that visibly changes when a gate flips on a clone.</span></div>
+          <div class="mmeta">
+            <div class="m"><span class="k">Effort</span><span class="dots"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></div>
+            <div class="m"><span class="k">Risk</span><span class="dots warn"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></div>
+            <div class="m"><span class="depchip">depends on: nothing</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- M1 -->
+      <div class="ms">
+        <div class="rail"><span class="mk">M1</span><span class="ln"></span></div>
+        <div class="body">
+          <div class="mhead"><h3>The live preview pane</h3><span class="obj">Highest technical risk — build it early</span></div>
+          <p class="goal">A reusable, self-contained control that mirrors a settings snapshot in a scaled-down live overlay, with no interference to the real one.</p>
+          <ul class="tasks">
+            <li>Build <code>PreviewPane</code>: owns an embedded <code>OverlayCanvas</code> (<code>OwnerWindow</code> null, never dense — keeps window-coupled relayout paths inert), seeded once from <code>SampleData</code>.</li>
+            <li><code>PreviewPane.Apply(AppSettings snapshot)</code> → <code>OverlaySettingsGates.Apply</code> + invalidate; scale to a fixed miniature width via a <code>Viewbox</code>, scroll if taller.</li>
+            <li>Scaffold <code>Highlight(previewTarget)</code> (a real spotlight lands in M4; a stub is fine here).</li>
+            <li>Verify crispness at 1× and 1.5× through <code>render</code> mode.</li>
+          </ul>
+          <div class="exit"><span class="lab">Exit</span><span class="txt">Dropping <code>PreviewPane</code> in a harness reflects clone toggles within a frame, <b>never touches the real overlay</b>, and renders cleanly at both scales.</span></div>
+          <div class="mmeta">
+            <div class="m"><span class="k">Effort</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></div>
+            <div class="m"><span class="k">Risk</span><span class="dots warn"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></div>
+            <div class="m"><span class="depchip">depends on: M0</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- M2 -->
+      <div class="ms">
+        <div class="rail"><span class="mk">M2</span><span class="ln"></span></div>
+        <div class="body">
+          <div class="mhead"><h3>Registry population + search</h3><span class="obj">Biggest win on &ldquo;I can't find it&rdquo;</span></div>
+          <p class="goal">Describe every setting once, then ship a global search that proves the registry is complete and correctly bound.</p>
+          <ul class="tasks">
+            <li>Populate <code>SettingsRegistry</code> — ~50 descriptors with keywords/synonyms, surface, kind and get/set bindings for all of <code>AppSettings</code>.</li>
+            <li>Add a coverage unit test in <code>Perch.Tests</code>: reflect over the display properties of <code>AppSettings</code> and assert each has a registry entry — a durable guard against drift.</li>
+            <li>Search UI: persistent filter field, token-AND match over name + keywords, result rows (name, surface breadcrumb, live control reusing <code>PerchToggle</code>); keyword-hit hint; empty-query = full index; empty-result state.</li>
+          </ul>
+          <div class="exit"><span class="lab">Exit</span><span class="txt">&ldquo;chime / sound / cost / cpu / git / phone&rdquo; each surface the right setting; <b>coverage test green</b>; toggling a result mutates real settings + <code>Save()</code> + <code>DisplayChanged</code> at parity with today.</span></div>
+          <div class="mmeta">
+            <div class="m"><span class="k">Effort</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></div>
+            <div class="m"><span class="k">Risk</span><span class="dots warn"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></div>
+            <div class="m"><span class="depchip">depends on: M0</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- M3 -->
+      <div class="ms">
+        <div class="rail"><span class="mk">M3</span><span class="ln"></span></div>
+        <div class="body">
+          <div class="mhead"><h3>The catalogue surfaces</h3><span class="obj">Biggest win on &ldquo;what features exist?&rdquo;</span></div>
+          <p class="goal">Fold the 16 pages into a handful of surfaces and render each feature as a browsable card with a glyph preview.</p>
+          <ul class="tasks">
+            <li>Assign each descriptor a surface: <em>Session row · Usage bars · Tray &amp; stats · Notifications · System &amp; metrics · Whimsy · Integrations · Advanced</em>.</li>
+            <li>Feature-card control driven by descriptor: mini glyph preview + name + one-line description + control (start with static glyphs; upgrade to live later).</li>
+            <li>Surface sections + filter chips to narrow by surface.</li>
+            <li>&ldquo;Advanced&rdquo; bucket for config-heavy settings that don't fit a card (ntfy host/topic, context thresholds slider, hotkeys, reopen-terminal, export, about, changelog) — expandable detail rows.</li>
+          </ul>
+          <div class="exit"><span class="lab">Exit</span><span class="txt">Every setting is reachable from the catalogue, <b>each visual feature shows a representative preview</b>, and the chips filter by surface.</span></div>
+          <div class="mmeta">
+            <div class="m"><span class="k">Effort</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></div>
+            <div class="m"><span class="k">Risk</span><span class="dots warn"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></div>
+            <div class="m"><span class="depchip">depends on: M2</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- M4 -->
+      <div class="ms">
+        <div class="rail"><span class="mk">M4</span><span class="ln"></span></div>
+        <div class="body">
+          <div class="mhead"><h3>Unified shell + preview linkage</h3><span class="obj">The three become one window</span></div>
+          <p class="goal">Assemble search + catalogue + a docked live preview into the new Settings window, wired so touching a setting lights up its glyph.</p>
+          <ul class="tasks">
+            <li>New shell: top search bar (<code>Ctrl+F</code> focuses it), main pane = catalogue or search results, side/bottom dock = <code>PreviewPane</code>.</li>
+            <li>Linkage: hovering/focusing a card or result calls <code>PreviewPane.Highlight(previewTarget)</code> → the affected glyph pulses; editing a setting re-applies to the preview's working clone immediately.</li>
+            <li>Commit path unchanged: <code>Save()</code> still writes the real <code>AppSettings</code> and fires <code>DisplayChanged</code> for the actual overlay.</li>
+            <li>Migrate remaining non-visual pages (Getting started, Export, About, Changelog) into shell sections.</li>
+          </ul>
+          <div class="exit"><span class="lab">Exit</span><span class="txt">End-to-end: hover a card → glyph highlights; toggle → <b>preview and real overlay both update</b>; search, catalogue and preview coexist; nothing from the old window is unreachable.</span></div>
+          <div class="mmeta">
+            <div class="m"><span class="k">Effort</span><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></div>
+            <div class="m"><span class="k">Risk</span><span class="dots warn"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></div>
+            <div class="m"><span class="depchip">depends on: M1 · M3</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- M5 -->
+      <div class="ms">
+        <div class="rail"><span class="mk">M5</span></div>
+        <div class="body">
+          <div class="mhead"><h3>Cutover, accessibility &amp; cleanup</h3><span class="obj">Ship-ready, retire the old</span></div>
+          <p class="goal">Round the edges, prove it under <code>render</code> mode, and delete the old page builders once parity holds.</p>
+          <ul class="tasks">
+            <li>Keyboard: <code>Ctrl+F</code> to search, arrow/enter through results and cards, <code>Esc</code> to close.</li>
+            <li>Respect <code>prefers-reduced-motion</code> (no pulse), keep the preview crisp at 1.5×, tabular numerals on all figures.</li>
+            <li>Extend <code>render</code> mode to dump the new surfaces + preview for eyeball verification.</li>
+            <li>Remove the dead page builders from <code>SettingsWindow.cs</code>; update the CLAUDE.md settings notes and add a changelog entry (<code>/bump-version</code>).</li>
+          </ul>
+          <div class="exit"><span class="lab">Exit</span><span class="txt"><code>render</code> mode emits the new UI, <b>no orphaned settings code remains</b>, and docs describe the new architecture.</span></div>
+          <div class="mmeta">
+            <div class="m"><span class="k">Effort</span><span class="dots"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></div>
+            <div class="m"><span class="k">Risk</span><span class="dots warn"><i class="on"></i><i></i><i></i><i></i><i></i></span></div>
+            <div class="m"><span class="depchip">depends on: M4</span></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- SEQUENCING -->
+  <section class="rv">
+    <div class="sec-head"><span class="eyebrow">Why this order</span></div>
+    <div class="why">
+      <div class="w"><h4><span class="n">01</span> Risk before polish</h4><p>The preview is the one genuinely uncertain piece, so M0–M1 prove it renders live in-window before any UI is committed to it. If it stumbled, we'd know on day one — not after building the shell around it.</p></div>
+      <div class="w"><h4><span class="n">02</span> The registry earns its keep twice</h4><p>Search (M2) forces a complete, correct registry — with a unit test to keep it honest. The catalogue (M3) and preview linkage (M4) then inherit that work for free instead of re-deriving it.</p></div>
+      <div class="w"><h4><span class="n">03</span> Value ships mid-way</h4><p>After M2 you already have working search — Pain&nbsp;#1 solved — even before the catalogue exists. Each milestone stands on its own; none is a dead-end prerequisite.</p></div>
+      <div class="w"><h4><span class="n">04</span> Integration last, not first</h4><p>Building <code>PreviewPane</code> and the catalogue as independent controls (M1, M3) means M4 is assembly and wiring, not invention — the riskiest interactions meet only once both halves are known-good.</p></div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- STRATEGY -->
+  <section class="rv">
+    <div class="sec-head"><span class="eyebrow">Testing &amp; cutover strategy</span></div>
+    <div class="strat">
+      <div class="card">
+        <h4>How we keep it honest</h4>
+        <ul>
+          <li><b>Registry coverage test</b> — reflect over <code>AppSettings</code> display props; fail the build if any lacks a descriptor. Durable, Core-side, cheap.</li>
+          <li><b>Gate-extraction regression</b> — the M0 refactor must leave the live overlay byte-identical; verify by eye + <code>render</code> before/after.</li>
+          <li><b>Render-mode snapshots</b> — the standing way to eyeball owner-drawn UI; extend it to the new surfaces and the preview pane.</li>
+          <li><b>Manual overlay parity</b> — the real overlay and the preview share <code>OverlaySettingsGates.Apply</code>, so they can't silently diverge.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Building alongside, not on top</h4>
+        <ul>
+          <li>New components (<code>PreviewPane</code>, catalogue, search) are built <b>next to</b> the current <code>SettingsWindow</code>, which keeps working throughout.</li>
+          <li>Swap the <code>ShowSettings</code> entry point to the new shell only when M4 reaches parity — a one-line cutover, easily reverted.</li>
+          <li>Optional dev env flag to flip old ↔ new during M4 for side-by-side comparison.</li>
+          <li>Old page builders deleted only in M5, after the new window has carried real use.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <hr class="rule">
+
+  <!-- RISKS -->
+  <section class="rv">
+    <div class="sec-head"><span class="eyebrow">Risk register</span></div>
+    <div class="risks">
+      <div class="rrow h"><div class="c">Risk</div><div class="c">Severity</div><div class="c">Mitigation</div></div>
+      <div class="rrow"><div class="c"><b>Miniature sizing / DPI</b> — scaling the overlay down and keeping glyphs legible at 1.5×.</div><div class="c"><span class="sev md">Medium</span></div><div class="c">Spike it in M1 with <code>Viewbox</code> + <code>render</code> checks before the shell depends on it.</div></div>
+      <div class="rrow"><div class="c"><b>Binding non-toggle controls</b> generically (sliders, steppers, hotkeys, dropdowns).</div><div class="c"><span class="sev md">Medium</span></div><div class="c">Descriptor carries a <code>kind</code> + typed accessors; cards/rows switch on kind. Toggles first, richer kinds incrementally.</div></div>
+      <div class="rrow"><div class="c"><b>Window width growth</b> — a docked preview wants horizontal room beyond today's 880px.</div><div class="c"><span class="sev lo">Low</span></div><div class="c">Raise <code>MinWidth</code>; collapse the preview to a bottom dock (or a toggle) at narrow sizes.</div></div>
+      <div class="rrow"><div class="c"><b>Registry drift</b> — a new setting added without a descriptor.</div><div class="c"><span class="sev lo">Low</span></div><div class="c">The coverage unit test fails the build until the descriptor exists.</div></div>
+      <div class="rrow"><div class="c"><b>Sample-data staleness</b> — preview stops exercising a new glyph.</div><div class="c"><span class="sev lo">Low</span></div><div class="c">Single <code>SampleData</code> source shared with <code>HeadlessRenderer</code>; updated in one place.</div></div>
+      <div class="rrow"><div class="c"><b>Scope creep on live glyph previews</b> in cards.</div><div class="c"><span class="sev md">Medium</span></div><div class="c">Cards ship with simple static glyphs in M3; the full live preview lives in the docked pane, not in every card.</div></div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="fl">
+      <span>Perch · settings overhaul · M0 → M5 on <code style="font-size:.85em">settings-redesign</code></span>
+      <span style="font-family:var(--mono);color:var(--muted)">docs/settings-redesign-plan.html</span>
+    </div>
+  </footer>
+
+</div>
+</div>
+
+<script>
+(function(){
+  var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add("in");io.unobserve(e.target);}});},{rootMargin:"0px 0px -6% 0px",threshold:0.06});
+  document.querySelectorAll(".rv").forEach(function(el){io.observe(el);});
+})();
+</script>
