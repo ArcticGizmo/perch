@@ -40,6 +40,9 @@ internal sealed class SettingsCatalogView : StackPanel
     /// <summary>Navigate to another settings page by key (for the few settings edited on a dedicated page).</summary>
     public Action<string>? Navigate;
 
+    /// <summary>Raised with a card's preview target when it's hovered, so a docked preview can spotlight it.</summary>
+    public event Action<PreviewTarget>? Hovered;
+
     public SettingsCatalogView(AppSettings settings, SettingsHooks hooks)
     {
         _settings = settings;
@@ -191,12 +194,14 @@ internal sealed class SettingsCatalogView : StackPanel
         // on the same card as a small secondary toggle instead of getting a card of its own.
         if (d.Id == "context-pressure") stack.Children.Add(GreenSegmentRow());
 
-        return new Border
+        var card = new Border
         {
             Child = stack, Width = CardWidth, Margin = new Thickness(0, 0, 12, 12),
             Padding = new Thickness(14, 13), CornerRadius = new CornerRadius(10),
             Background = Palette.ButtonBgBrush, BorderThickness = new Thickness(1), BorderBrush = Palette.BorderBrush,
         };
+        card.PointerEntered += (_, _) => Hovered?.Invoke(d.Preview);
+        return card;
     }
 
     private Control? CompactControl(SettingDescriptor d) => d switch
