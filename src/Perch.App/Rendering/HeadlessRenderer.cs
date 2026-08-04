@@ -316,6 +316,14 @@ internal static class HeadlessRenderer
         OverlaySettingsGates.Apply(previewOff, PreviewSettings(allGlyphsOn: false));
         RenderControl(previewOff, Path.Combine(outDir, "overlay_preview_off_1x.png"), 96);
 
+        // The actual Settings live-preview control (M1): a Viewbox-scaled OverlayCanvas in its framed pane,
+        // applied a busy snapshot, at both DPIs — to confirm the miniature renders crisply and reflects the
+        // settings clone it's handed.
+        var pane = new PreviewPane();
+        pane.Apply(PreviewSettings(allGlyphsOn: true));
+        RenderControl(pane, Path.Combine(outDir, "preview_pane_1x.png"), 96);
+        RenderControl(pane, Path.Combine(outDir, "preview_pane_1.5x.png"), 144);
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }
