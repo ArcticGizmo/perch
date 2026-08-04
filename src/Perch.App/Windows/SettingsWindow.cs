@@ -234,7 +234,6 @@ internal sealed class SettingsWindow : Window
         var preview = new PreviewPane();
         preview.Apply(_settings);
         catalog.Changed += () => preview.Apply(_settings);
-        catalog.Hovered += preview.Highlight;   // hovering a card pulses the live preview
 
         var cards = new ScrollViewer
         {
