@@ -35,8 +35,8 @@ internal static class HeadlessRenderer
 
         var canvas = new OverlayCanvas();
         canvas.SetShowPullRequests(true);
-        canvas.Update(SampleSessions());
-        canvas.UpdateUsage(SampleUsage());
+        canvas.Update(SampleData.Sessions());
+        canvas.UpdateUsage(SampleData.Usage());
         canvas.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));
         canvas.UpdateSessionMetrics(new Dictionary<string, SessionMetrics>
         {
@@ -68,12 +68,12 @@ internal static class HeadlessRenderer
         // first sample session the same way the right-click menu does, then repaint.
         canvas.SetUpdateAvailable(false);
         canvas.SetConfettiFinishAvailable(true);
-        canvas.ToggleConfetti(SampleSessions()[1].SessionId);   // the "api" row: short name, shows the glyph cluster
+        canvas.ToggleConfetti(SampleData.Sessions()[1].SessionId);   // the "api" row: short name, shows the glyph cluster
         RenderControl(canvas, Path.Combine(outDir, "overlay_confetti_1x.png"), 96);
         RenderControl(canvas, Path.Combine(outDir, "overlay_confetti_1.5x.png"), 144);
 
         var probe = new OverlayCanvas();
-        probe.Update(SampleSessions());
+        probe.Update(SampleData.Sessions());
         probe.StartAutoCloseCountdown(20_000);
         RenderControl(probe, Path.Combine(outDir, "overlay_autoclose_1x.png"), 96);
 
@@ -81,7 +81,7 @@ internal static class HeadlessRenderer
         // Rendered "playing" (pause glyph shown) with previous disabled, to exercise the enabled/disabled
         // button styling and the label truncation.
         var mediaProbe = new OverlayCanvas();
-        mediaProbe.Update(SampleSessions());
+        mediaProbe.Update(SampleData.Sessions());
         mediaProbe.SetShowMediaController(true);
         mediaProbe.UpdateMedia(new MediaSnapshot(
             Title: "Weightless (Ambient Transmission, Pt. 3)", Artist: "Marconi Union",
@@ -94,7 +94,7 @@ internal static class HeadlessRenderer
         // because that is all it has — the second app is there to exercise the tooltip's "Also:" line and the
         // long device name to exercise nothing on the strip itself, which stays a glyph and a name.
         var micProbe = new OverlayCanvas();
-        micProbe.Update(SampleSessions());
+        micProbe.Update(SampleData.Sessions());
         micProbe.SetShowMicPresence(true);
         micProbe.UpdateMic(new MicSnapshot(
             [new MicUser("91750D7E.Slack_8she8kybcnzg4", "Slack", 4242, true, DateTimeOffset.Now.AddMinutes(-7))],
@@ -112,7 +112,7 @@ internal static class HeadlessRenderer
         // The sample puts main mid-stack (Hypertree publishes the stack already flattened, main at its
         // slot) and gives one branch a long desktop label so the trailing-label truncation is exercised.
         var hyperProbe = new OverlayCanvas();
-        hyperProbe.Update(SampleSessions());
+        hyperProbe.Update(SampleData.Sessions());
         hyperProbe.SetQuickLinks(links, icons);
         hyperProbe.SetHypertree(SampleHypertree());
         RenderControl(hyperProbe, Path.Combine(outDir, "overlay_hypertree_1x.png"), 96);
@@ -124,7 +124,7 @@ internal static class HeadlessRenderer
         // with the running-green dot taken from that session — while staying out of the normal rows and
         // the header's status counts (still 2 running, not 3).
         var daemonProbe = new OverlayCanvas();
-        daemonProbe.Update(SampleSessions()
+        daemonProbe.Update(SampleData.Sessions()
             .Append(new ClaudeSession("61112", "f7d0b5fc-e679-492f-9fee-18a29f41602a",
                 SessionStatus.Running, @"C:\src\hypertree", "hypertree", DateTime.Now))
             .ToList());
@@ -137,7 +137,7 @@ internal static class HeadlessRenderer
         // quick links, Hypertree branches) all stay, which is the whole point of this surface.
         var emptyProbe = new OverlayCanvas();
         emptyProbe.Update([]);
-        emptyProbe.UpdateUsage(SampleUsage());
+        emptyProbe.UpdateUsage(SampleData.Usage());
         emptyProbe.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));
         emptyProbe.SetQuickLinks(links, icons);
         emptyProbe.SetHypertree(SampleHypertree());
@@ -147,14 +147,14 @@ internal static class HeadlessRenderer
         // "Jump to next session" landing highlight: the blue selection wash + left bar on the cycled row.
         // Rendered immediately after triggering it, so the fade timer hasn't run and it's at full strength.
         var cycleProbe = new OverlayCanvas();
-        cycleProbe.Update(SampleSessions());
-        cycleProbe.HighlightCycledSession(SampleSessions()[1].SessionId);
+        cycleProbe.Update(SampleData.Sessions());
+        cycleProbe.HighlightCycledSession(SampleData.Sessions()[1].SessionId);
         RenderControl(cycleProbe, Path.Combine(outDir, "overlay_cycle_1x.png"), 96);
 
         // Replay branding: the light-blue "Perch - Replay" header label + 2px border shown under
         // `perch replay`, so a recording can't be mistaken for live sessions.
         var replayProbe = new OverlayCanvas { ReplayMode = true };
-        replayProbe.Update(SampleSessions());
+        replayProbe.Update(SampleData.Sessions());
         RenderControl(replayProbe, Path.Combine(outDir, "overlay_replay_1x.png"), 96);
         RenderControl(replayProbe, Path.Combine(outDir, "overlay_replay_1.5x.png"), 144);
 
@@ -281,7 +281,7 @@ internal static class HeadlessRenderer
         // on the row too.
         var noteProbe = new OverlayCanvas();
         noteProbe.SetShowNoteLine(true);
-        noteProbe.Update(SampleSessions());
+        noteProbe.Update(SampleData.Sessions());
         RenderControl(noteProbe, Path.Combine(outDir, "overlay_notes_1x.png"), 96);
 
         // Sticky notes: the global scratch pad (single section) and a session row note (project + session
@@ -310,7 +310,7 @@ internal static class HeadlessRenderer
         stack.Children.Add(Windows.SettingsUi.BodyText("Your account-wide 5-hour and weekly rate-limit usage, plus any per-model weekly limits."));
         var bars = new Windows.UsageBarsView();
         bars.SetOn(true);
-        bars.SetUsage(SampleUsage());
+        bars.SetUsage(SampleData.Usage());
         stack.Children.Add(bars);
 
         stack.Children.Add(Windows.SettingsUi.Separator());
@@ -357,21 +357,6 @@ internal static class HeadlessRenderer
         rtb.Render(control);
         using var fs = File.Create(path);
         rtb.Save(fs);
-    }
-
-    // A healthy-but-visible reading: session bar mid-yellow, weekly bar low-green, both with a reset
-    // time an hour or two out so the expected-rate markers land partway along each track. Carries a
-    // model-scoped weekly window too, so the render exercises the variable-height three-bar strip.
-    private static UsageInfo SampleUsage()
-    {
-        var now = DateTime.Now;
-        return new UsageInfo(
-            FiveHourPercent: 62, SevenDayPercent: 28,
-            FiveHourResetsAt: now.AddHours(2), SevenDayResetsAt: now.AddDays(4),
-            LastUpdated: now, Ok: true, Error: null)
-        {
-            Scoped = [new ScopedUsage("Fable", 41, now.AddDays(4))],
-        };
     }
 
     // A spread of marker kinds across a 5-minute scene, so the timeline shows each tick colour.
@@ -561,52 +546,4 @@ internal static class HeadlessRenderer
         return workers;
     }
 
-    private static IReadOnlyList<ClaudeSession> SampleSessions()
-    {
-        var now = DateTime.Now;
-        var subs = new List<SubAgent>
-        {
-            // A teammate that has itself spawned a sub-agent, and a plain sub-agent nesting two levels
-            // deep — the parent → sub-agent → teammate tree, exercising indent + the collapse chevron.
-            new("t1", "teammate", "general-purpose", IsTeammate: true, Name: "arch-explorer",
-                Color: "blue", Activity: "Reading Program.cs",
-                Children: [new("t1a", "Trace the token refresh path", "Explore")]),
-            new("t2", "teammate", "general-purpose", IsTeammate: true, Name: "reviewer",
-                Color: "green", IsIdle: true),
-            new("a1", "Explore the auth flow", "general-purpose",
-                Children: [new("a1a", "Map the OAuth callback", "general-purpose",
-                    Children: [new("a1b", "Read middleware config", "Explore")])]),
-        };
-        return
-        [
-            new ClaudeSession("1234", "s1", SessionStatus.Running, @"C:\src\perch", "perch", now,
-                Activity: "Editing OverlayForm.cs", SubAgents: subs, Mode: PermissionMode.AcceptEdits,
-                Note: "risky refactor — waiting on review",
-                ContextFill: 0.82f, BurnRate: 12300, GitStats: new GitLineStats(142, 37),
-                Tasks: new List<TaskItem>
-                {
-                    new("Extract core", "extracting core", TaskState.Completed),
-                    new("Port overlay", "porting overlay", TaskState.Pending),
-                    new("Cutover", "cutting over", TaskState.Pending),
-                }),
-            new ClaudeSession("5678", "s2", SessionStatus.AwaitingInput, @"C:\src\api", "api", now,
-                ExternalNotify: true,
-                // No session note, but a project note — so the row still shows the note glyph.
-                ProjectNote: "API freeze — ship v0.9 before merging anything",
-                PullRequest: new PullRequestInfo(1135, "https://github.com/o/r/pull/1135", "Surface PRs on the overlay", PrState.Open),
-                Artifacts: new List<Artifact> { new("https://claude.ai/code/artifact/1", "API report") }),
-            new ClaudeSession("9012", "s3", SessionStatus.NeedsAttention, @"C:\src\docs", "docs-site", now,
-                BridgeSessionId: "bridge-xyz", Stuck: new StuckSignal(StuckKind.FailingLoop, "repeating build"),
-                PullRequest: new PullRequestInfo(88, "https://github.com/o/r/pull/88", "Draft: docs restructure", PrState.Draft)),
-            new ClaudeSession("3456", "s4", SessionStatus.Idle, @"C:\src\scratch", "scratch", now,
-                Note: "don't touch — bisecting a flaky test",
-                PullRequest: new PullRequestInfo(74, "https://github.com/o/r/pull/74", "Ship v0.9", PrState.Merged)),
-            // A session whose last request to the API failed (529 Overloaded) — the red ApiError alert.
-            new ClaudeSession("6543", "s6", SessionStatus.ApiError, @"C:\src\web", "web", now,
-                ApiFailure: new ApiFailure(529, "API Error: 529 Overloaded.")),
-            // A background/SDK session (Entrypoint != "cli") -> grouped under the Autonomous section.
-            new ClaudeSession("7788", "s5", SessionStatus.Running, @"C:\src\bot", "nightly-bot", now,
-                Entrypoint: "sdk-py"),
-        ];
-    }
 }
