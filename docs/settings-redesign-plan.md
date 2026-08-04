@@ -193,8 +193,9 @@ preview coexist in one window; nothing is unreachable.
 - [x] Physically excised the now-dead page-builder methods (~650 lines: Usage, Integrations, Music,
       Microphone, Indicators, Monitoring) + orphaned fields; the out-of-band display sync now rebuilds the
       catalogue via `SettingsCatalogView.Sync()`.
-- [x] Hover→spotlight: hovering a card pulses the docked preview (`PreviewPane.Highlight`, an accent-ring
-      pulse — a pane-level cue, not per-glyph).
+- [~] Hover→spotlight: tried a pane-level accent-ring pulse on card hover, but it read as a glitch rather
+      than a cue, so it was removed. A real cue would need per-glyph highlighting (canvas exposing glyph
+      rects) — deferred as its own task.
 - [x] Migrated Agent Teams into the catalogue (raw env-var accessors on `SettingDescriptor`) and retired the
       Experimental tab.
 - [ ] **Won't migrate (by design):** Session Stats, Achievements, Notifications and Quick Links keep their
