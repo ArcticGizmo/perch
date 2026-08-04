@@ -168,6 +168,10 @@ their existing pages until the shell consolidates them.
 - [x] Live update: `SettingsCatalogView.Changed` → `preview.Apply(_settings)`, so an edit shows on the
       miniature overlay immediately.
 - [x] Commit path unchanged: `Save()` writes the real `AppSettings` and applies live via `SettingsLiveApply`.
+- [x] Inline editors for every card kind (no dead chips): dropdowns (start mode → also registers the login
+      item, reopen terminal), ntfy text fields, the context-threshold slider and hotkey capture all edit in
+      place; quick links links out to its manager. Window enlarged ~30%; the preview now reacts to the
+      daemon/mic/now-playing settings (seed data + a new daemon display gate).
 - [ ] **Pending:** hover/focus a card → `PreviewPane.Highlight(previewTarget)` pulses the affected glyph
       (`Highlight` is still a stub).
 - [ ] **Pending:** migrate the genuinely-different pages (Getting started, Export, About, Changelog) into the
