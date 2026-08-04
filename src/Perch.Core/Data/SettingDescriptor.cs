@@ -74,6 +74,12 @@ internal enum PreviewTarget
 /// <param name="Kind">Which control edits it.</param>
 /// <param name="Keywords">Extra search terms/synonyms so "sound"/"beep" find a chime, "cost" finds pricing, etc.</param>
 /// <param name="Preview">The overlay glyph the live preview should spotlight when this changes.</param>
+/// <param name="Backing">
+/// The <see cref="AppSettings"/> property name(s) this descriptor governs — one for most, several for a
+/// grouped control (the context slider spans three thresholds). Used by the registry-coverage test to
+/// prove every user-facing setting has an entry; leave empty for a descriptor not backed by an
+/// <see cref="AppSettings"/> property (e.g. the Agent Teams env var).
+/// </param>
 internal sealed record SettingDescriptor(
     string Id,
     string Name,
@@ -82,6 +88,7 @@ internal sealed record SettingDescriptor(
     SettingKind Kind,
     string[] Keywords,
     PreviewTarget Preview = PreviewTarget.None,
+    string[]? Backing = null,
     Func<AppSettings, bool>? GetBool = null,
     Action<AppSettings, bool>? SetBool = null,
     Func<AppSettings, int>? GetInt = null,
