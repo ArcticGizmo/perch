@@ -1,4 +1,5 @@
 using Perch.Data;
+using Perch.Platform;
 
 namespace Perch.Avalonia.Rendering;
 
@@ -95,4 +96,28 @@ internal static class SampleData
             ["1234"] = new(CpuPercent: 24.0, RamBytes: 1_800_000_000, ProcessCount: 5),
             ["7788"] = new(CpuPercent: 8.0,  RamBytes: 600_000_000,   ProcessCount: 2),
         };
+
+    /// <summary>Something playing, for the now-playing strip — only drawn when the media setting is on.</summary>
+    public static MediaSnapshot Media() =>
+        new(Title: "Weightless (Ambient Transmission, Pt. 3)", Artist: "Marconi Union",
+            IsPlaying: true, CanPlayPause: true, CanNext: true, CanPrevious: false,
+            Position: TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(14), Duration: TimeSpan.FromMinutes(8));
+
+    /// <summary>An app holding the mic, for the microphone strip — only drawn when the mic setting is on.</summary>
+    public static MicSnapshot Mic() =>
+        new([new MicUser("91750D7E.Slack_8she8kybcnzg4", "Slack", 4242, true, DateTimeOffset.Now.AddMinutes(-7))],
+            DeviceName: "Microphone (Logitech Webcam C930e)");
+
+    /// <summary>A couple of daemon workers, for the daemon strip — hidden when the daemon setting is off.</summary>
+    public static IReadOnlyList<DaemonWorker> DaemonWorkers()
+    {
+        var now = DateTime.Now;
+        return
+        [
+            new("f7d0b5fc", "f7d0b5fc-e679-492f-9fee-18a29f41602a", 61112, @"C:\src\hypertree", "hypertree",
+                "slash", "Implement streamlined PowerShell install pathway", now.AddMinutes(-12)),
+            new("c0ffee01", "c0ffee01-0000-4000-8000-000000000001", 70001, @"C:\src\api", "api",
+                "slash", "Sweep flaky test batch 1", now.AddMinutes(-9)),
+        ];
+    }
 }

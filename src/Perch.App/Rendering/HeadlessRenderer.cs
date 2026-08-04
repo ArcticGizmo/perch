@@ -411,7 +411,9 @@ internal static class HeadlessRenderer
         Grid.SetColumn(catalog, 0);
 
         var preview = new PreviewPane();
-        preview.Apply(new AppSettings());
+        // Turn on the opt-in strips so the daemon/mic/now-playing sections all render in the probe.
+        var seeded = new AppSettings { ShowMediaController = true, ShowMicPresence = true };
+        preview.Apply(seeded);
         var dockStack = new StackPanel { Margin = new Thickness(14, 16, 16, 16) };
         dockStack.Children.Add(new TextBlock
         {
@@ -448,6 +450,8 @@ internal static class HeadlessRenderer
             s.ShowPullRequests = true;
             s.ShowSystemMetrics = true;
             s.ShowSessionMetrics = true;
+            s.ShowMediaController = true;
+            s.ShowMicPresence = true;
         }
         else
         {

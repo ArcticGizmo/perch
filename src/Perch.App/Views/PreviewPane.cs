@@ -34,6 +34,9 @@ internal sealed class PreviewPane : Border
         _canvas.UpdateUsage(SampleData.Usage());
         _canvas.UpdateSystemMetrics(SampleData.SystemMetrics());
         _canvas.UpdateSessionMetrics(SampleData.SessionMetrics());
+        _canvas.SetDaemonWorkers(SampleData.DaemonWorkers());
+        _canvas.UpdateMedia(SampleData.Media());
+        _canvas.UpdateMic(SampleData.Mic());
         _canvas.IsHitTestVisible = false;   // display-only: no clicks, no dense drag, no hovers
 
         Child = new Viewbox

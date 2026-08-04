@@ -133,10 +133,12 @@ internal sealed class SettingsWindow : Window
         _icons = icons;
 
         Title = "Perch Settings";
-        Width = 880;
-        Height = 660;
-        MinWidth = 748;
-        MinHeight = 560;
+        // Sized for the unified shell: the surface catalogue plus the docked live preview want more room
+        // than the old single-column window (~30% larger by default).
+        Width = 1144;
+        Height = 858;
+        MinWidth = 920;
+        MinHeight = 620;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Palette.FormBgBrush;
         try { Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://perch/Assets/icon.ico"))); } catch { }
@@ -230,7 +232,7 @@ internal sealed class SettingsWindow : Window
     // a two-column layout with its own card scroller rather than a single scrolling StackPanel.
     private void AddFeaturesPage(StackPanel nav)
     {
-        var catalog = new SettingsCatalogView(_settings, _hooks);
+        var catalog = new SettingsCatalogView(_settings, _hooks) { Navigate = SelectPage };
         var preview = new PreviewPane();
         preview.Apply(_settings);
         catalog.Changed += () => preview.Apply(_settings);

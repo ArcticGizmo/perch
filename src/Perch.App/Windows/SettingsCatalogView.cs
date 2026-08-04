@@ -36,6 +36,9 @@ internal sealed class SettingsCatalogView : StackPanel
     /// <summary>Raised after any inline edit persists, so a docked live preview can re-apply the settings.</summary>
     public event Action? Changed;
 
+    /// <summary>Navigate to another settings page by key (for the few settings edited on a dedicated page).</summary>
+    public Action<string>? Navigate;
+
     public SettingsCatalogView(AppSettings settings, SettingsHooks hooks)
     {
         _settings = settings;
@@ -165,16 +168,23 @@ internal sealed class SettingsCatalogView : StackPanel
         Grid.SetColumn(text, 0);
         head.Children.Add(text);
 
-        Control control = d switch
+        // Compact controls (toggle / stepper) sit to the right of the name; richer editors (dropdown, text
+        // field, slider, hotkey, quick-links) render full-width below it so they have room to be used.
+        var compact = CompactControl(d);
+        if (compact is not null)
         {
-            { Kind: SettingKind.Toggle, GetBool: not null, SetBool: not null }  => LiveToggle(d),
-            { Kind: SettingKind.Stepper, GetInt: not null, SetInt: not null }    => LiveStepper(d),
-            _                                                                     => KindChip(d.Kind),
-        };
-        control.VerticalAlignment = VerticalAlignment.Top;
-        Grid.SetColumn(control, 1);
-        head.Children.Add(control);
+            compact.VerticalAlignment = VerticalAlignment.Top;
+            Grid.SetColumn(compact, 1);
+            head.Children.Add(compact);
+        }
         stack.Children.Add(head);
+
+        var editor = WideEditor(d);
+        if (editor is not null)
+        {
+            editor.Margin = new Thickness(0, 4, 0, 0);
+            stack.Children.Add(editor);
+        }
 
         return new Border
         {
@@ -182,6 +192,106 @@ internal sealed class SettingsCatalogView : StackPanel
             Padding = new Thickness(14, 13), CornerRadius = new CornerRadius(10),
             Background = Palette.ButtonBgBrush, BorderThickness = new Thickness(1), BorderBrush = Palette.BorderBrush,
         };
+    }
+
+    private Control? CompactControl(SettingDescriptor d) => d switch
+    {
+        { Kind: SettingKind.Toggle, GetBool: not null, SetBool: not null }  => LiveToggle(d),
+        { Kind: SettingKind.Stepper, GetInt: not null, SetInt: not null }    => LiveStepper(d),
+        _                                                                     => null,
+    };
+
+    // The full-width editor for a non-compact setting, so no card is a dead end.
+    private Control? WideEditor(SettingDescriptor d) => d.Kind switch
+    {
+        SettingKind.Dropdown => DropdownEditor(d),
+        SettingKind.Field    => FieldEditor(d),
+        SettingKind.Slider   => SliderEditor(),
+        SettingKind.Hotkey   => HotkeyEditor(d),
+        SettingKind.List     => ManageButton(d),
+        _                    => null,
+    };
+
+    private Control DropdownEditor(SettingDescriptor d)
+    {
+        if (d.Id == "start-mode")
+        {
+            // Order matches the StartMode enum ordinals (Off, OnSessionStart, OnLogin).
+            var combo = SettingsUi.Dropdown(["Never", "On session start", "At login"], (int)_settings.StartMode);
+            combo.SelectionChanged += (_, _) =>
+            {
+                if (combo.SelectedIndex < 0) return;
+                _settings.StartMode = (StartMode)combo.SelectedIndex;
+                _settings.Save();
+                App.SyncLoginItem(_settings.StartMode);   // "at login" also registers with the OS
+            };
+            return combo;
+        }
+
+        // reopen-terminal — order matches the TerminalApp enum ordinals.
+        var term = SettingsUi.Dropdown(
+            ["Auto", "Windows Terminal", "PowerShell", "Command Prompt"], (int)_settings.ReopenTerminal);
+        term.SelectionChanged += (_, _) =>
+        {
+            if (term.SelectedIndex < 0) return;
+            _settings.ReopenTerminal = (TerminalApp)term.SelectedIndex;
+            _settings.Save();
+        };
+        return term;
+    }
+
+    private Control FieldEditor(SettingDescriptor d)
+    {
+        bool host = d.Id == "ntfy-host";
+        var box = SettingsUi.ThemedTextBox((host ? _settings.NtfyHost : _settings.NtfyTopic) ?? "");
+        box.PlaceholderText = host ? "https://ntfy.sh" : "your-topic-name";
+        box.TextChanged += (_, _) =>
+        {
+            if (host) _settings.NtfyHost = box.Text;
+            else _settings.NtfyTopic = box.Text;
+            _settings.Save();
+        };
+        return box;
+    }
+
+    private Control SliderEditor()
+    {
+        var slider = new ContextThresholdSliderView { HorizontalAlignment = HorizontalAlignment.Stretch };
+        slider.SetValues(_settings.ContextPressureYellowPercent,
+            _settings.ContextPressureOrangePercent, _settings.ContextPressureRedPercent);
+        slider.ShowGreenSegment = _settings.ShowContextGreenSegment;
+        slider.RangeChanged += (yellow, orange, red) =>
+        {
+            _settings.ContextPressureYellowPercent = yellow;
+            _settings.ContextPressureOrangePercent = orange;
+            _settings.ContextPressureRedPercent = red;
+            _settings.Save();
+            _hooks.DisplayChanged?.Invoke();   // re-push the thresholds onto the overlay + preview
+            Changed?.Invoke();
+        };
+        return slider;
+    }
+
+    private Control HotkeyEditor(SettingDescriptor d)
+    {
+        var binding = d.Id switch
+        {
+            "hotkey-cycle"    => _settings.HotkeyCycleSessions,
+            "hotkey-switcher" => _settings.HotkeyOpenSwitcher,
+            _                 => _settings.HotkeyToggleDense,
+        };
+        var btn = new HotkeyCaptureButton(binding) { HorizontalAlignment = HorizontalAlignment.Left };
+        btn.Changed += () => { _settings.Save(); _hooks.HotkeysChanged?.Invoke(); };
+        return btn;
+    }
+
+    // Quick-links editing (add/remove/reorder/icon resolution) is its own surface; the card links to it.
+    private Control ManageButton(SettingDescriptor _)
+    {
+        var btn = SettingsUi.FlatButton("Manage quick links  →");
+        btn.HorizontalAlignment = HorizontalAlignment.Left;
+        btn.Click += (_, _) => Navigate?.Invoke("quicklinks");
+        return btn;
     }
 
     private PerchToggle LiveToggle(SettingDescriptor d)
@@ -237,25 +347,6 @@ internal sealed class SettingsCatalogView : StackPanel
         };
         b.Click += (_, _) => onClick();
         return b;
-    }
-
-    private static Border KindChip(SettingKind kind)
-    {
-        var text = kind switch
-        {
-            SettingKind.Slider   => "slider",
-            SettingKind.Stepper  => "stepper",
-            SettingKind.Dropdown => "dropdown",
-            SettingKind.Field    => "text",
-            SettingKind.Hotkey   => "shortcut",
-            SettingKind.List     => "list",
-            _                    => kind.ToString().ToLowerInvariant(),
-        };
-        return new Border
-        {
-            Background = Palette.FormBgBrush, CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 3),
-            Child = new TextBlock { Text = text, FontSize = 11, Foreground = Palette.MutedBrush },
-        };
     }
 
     // A small representative glyph for the card — a taste of what the setting draws on the overlay. Static

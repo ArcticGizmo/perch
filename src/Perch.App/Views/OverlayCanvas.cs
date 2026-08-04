@@ -584,13 +584,17 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // (_daemonWorkers) still drives the normal-row dedupe, and the full-list window shows spares too.
     private IReadOnlyList<DaemonWorker> _stripDaemonWorkers = [];
     private int _hoveredDaemonRow = -1;
+    // Display gate for the daemon strip (the "Daemon workers" setting). On by default; when off the strip is
+    // hidden even if a roster is still in hand, so the setting reads live on the overlay (and in the Settings
+    // preview) rather than only via the monitor dropping the roster.
+    private bool _daemonEnabled = true;
 
     // At most this many workers on the strip itself; anything beyond collapses behind a "show +N more"
     // line that opens the full-list window (DaemonListRequested) — the overlay must stay a glance, not
     // scroll, when a busy daemon has a dozen workers.
     private const int MaxDaemonRows = 5;
 
-    private bool DaemonStripVisible => _stripDaemonWorkers.Count > 0;
+    private bool DaemonStripVisible => _daemonEnabled && _stripDaemonWorkers.Count > 0;
     private int VisibleDaemonCount => Math.Min(_stripDaemonWorkers.Count, MaxDaemonRows);
     private bool DaemonOverflow => _stripDaemonWorkers.Count > MaxDaemonRows;
     // Lines the strip actually paints: the capped workers plus the "show +N more" line when it overflows.
@@ -611,6 +615,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// <summary>Replaces the daemon strip's contents. Called on the UI thread by
     /// <c>DaemonMonitorHost</c>. Roster membership also decides which sessions render as normal rows
     /// (a daemon session must not show twice), so rebuild the render list — which relayouts.</summary>
+    /// <summary>Show/hide the whole daemon-workers strip. Toggling it can change the panel height (when a
+    /// roster is present), so relayout in that case; otherwise nothing visible changes.</summary>
+    public void SetShowDaemonProcesses(bool enabled)
+    {
+        if (_daemonEnabled == enabled) return;
+        bool before = DaemonStripVisible;
+        _daemonEnabled = enabled;
+        if (DaemonStripVisible != before) RemeasurePanel();
+    }
+
     internal void SetDaemonWorkers(IReadOnlyList<DaemonWorker> workers)
     {
         _daemonWorkers = workers;
