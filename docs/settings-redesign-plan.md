@@ -88,19 +88,23 @@ sealed record SettingDescriptor(
 
 Each milestone is landable on its own and committed as it lands.
 
-### M0 — Foundations & the de-risk spike
+### M0 — Foundations & the de-risk spike ✅ *done*
 **Objective:** prove the hard part before building UI.
 
-- [ ] Add the `SettingDescriptor` record + `SettingSurface` / `SettingKind` / `PreviewTarget` enums.
-- [ ] Extract the canvas-gate block of `App.ApplyDisplaySettings` (`App.axaml.cs` ~505–528) into a shared
+- [x] Add the `SettingDescriptor` record + `SettingSurface` / `SettingKind` / `PreviewTarget` enums.
+      *(Core-side: `src/Perch.Core/Data/SettingDescriptor.cs`.)*
+- [x] Extract the canvas-gate block of `App.ApplyDisplaySettings` into a shared
       `OverlaySettingsGates.Apply(OverlayCanvas, AppSettings)`; have the live path call it — **no behaviour change**.
-- [ ] Add `AppSettings.Clone()` via the existing JSON round-trip for a detached preview snapshot.
-- [ ] Promote `HeadlessRenderer.Sample*` builders into a shared `SampleData` class (the preview seed).
-- [ ] Spike: a scratch surface hosting a seeded `OverlayCanvas`; toggle a gate on a clone and watch it repaint
-      (verify via `render` mode).
+      *(`src/Perch.App/Services/OverlaySettingsGates.cs`.)*
+- [x] Add `AppSettings.Clone()` via the existing JSON round-trip for a detached preview snapshot.
+- [x] Promote `HeadlessRenderer.Sample*` builders into a shared `SampleData` class (the preview seed).
+      *(`src/Perch.App/Rendering/SampleData.cs`.)*
+- [x] Spike: drive a seeded `OverlayCanvas` purely through `OverlaySettingsGates.Apply` with a mutated clone
+      and render it — added as a durable probe in `render` mode (`overlay_preview_on/off_1x.png`).
 
-**Exit:** the overlay behaves identically after the gate extraction (regression check), and the spike shows a
-mini-overlay that visibly changes when a gate flips on a clone.
+**Exit — met:** the gate extraction is a byte-identical move (live overlay unchanged); the render probe shows
+the overlay visibly re-gate (system strip, usage bars and row glyphs appear/disappear) from a cloned settings
+snapshot, validating the M1 preview approach.
 **Effort:** low–med · **Risk:** med · **Depends on:** nothing.
 
 ### M1 — The live preview pane
