@@ -107,18 +107,18 @@ the overlay visibly re-gate (system strip, usage bars and row glyphs appear/disa
 snapshot, validating the M1 preview approach.
 **Effort:** low–med · **Risk:** med · **Depends on:** nothing.
 
-### M1 — The live preview pane
+### M1 — The live preview pane ✅ *done*
 **Objective:** highest technical risk — build it early.
 
-- [ ] Build `PreviewPane`: owns an embedded `OverlayCanvas` (`OwnerWindow` null, never dense — keeps the
-      window-coupled relayout paths inert), seeded once from `SampleData`.
-- [ ] `PreviewPane.Apply(AppSettings snapshot)` → `OverlaySettingsGates.Apply` + invalidate; scale to a fixed
-      miniature width via a `Viewbox`, scroll if taller.
-- [ ] Scaffold `Highlight(PreviewTarget)` (a real spotlight lands in M4; a stub is fine here).
-- [ ] Verify crispness at 1× and 1.5× through `render` mode.
+- [x] Build `PreviewPane`: owns an embedded `OverlayCanvas` (`OwnerWindow` null, never dense — keeps the
+      window-coupled relayout paths inert), seeded once from `SampleData`. *(`src/Perch.App/Views/PreviewPane.cs`.)*
+- [x] `PreviewPane.Apply(AppSettings snapshot)` → `OverlaySettingsGates.Apply`; scale to a fixed miniature
+      width via a `Viewbox` (`DownOnly`, so it never upscales/blurs). Canvas is hit-test-off (display-only).
+- [x] Scaffold `Highlight(PreviewTarget)` (a real spotlight lands in M4; a stub is in place).
+- [x] Verify crispness at 1× and 1.5× through `render` mode (`preview_pane_1x/1.5x.png`).
 
-**Exit:** dropping `PreviewPane` in a harness reflects clone toggles within a frame, never touches the real
-overlay, and renders cleanly at both scales.
+**Exit — met:** `PreviewPane` reflects the snapshot it's applied, renders crisply at both DPIs in a framed
+pane, and is a wholly separate canvas instance — it never touches the real overlay.
 **Effort:** med · **Risk:** med · **Depends on:** M0.
 
 ### M2 — Registry population + search
