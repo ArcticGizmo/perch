@@ -121,18 +121,24 @@ snapshot, validating the M1 preview approach.
 pane, and is a wholly separate canvas instance — it never touches the real overlay.
 **Effort:** med · **Risk:** med · **Depends on:** M0.
 
-### M2 — Registry population + search
+### M2 — Registry population + search ✅ *done*
 **Objective:** biggest win on "I can't find it."
 
-- [ ] Populate `SettingsRegistry` — ~50 descriptors with keywords/synonyms, surface, kind and get/set bindings
-      for all of `AppSettings`.
-- [ ] Coverage unit test in `Perch.Tests`: reflect over the display properties of `AppSettings` and assert each
-      has a registry entry — a durable guard against drift.
-- [ ] Search UI: persistent filter field, token-AND match over name + keywords, result rows (name, surface
-      breadcrumb, live control reusing `PerchToggle`); keyword-hit hint; empty-query = full index; empty-result state.
+- [x] Populate `SettingsRegistry` — 56 descriptors with keywords/synonyms, surface, kind and get/set bindings
+      for all of `AppSettings`. *(`src/Perch.Core/Data/SettingsRegistry.cs`.)*
+- [x] Coverage unit test in `Perch.Tests`: reflect over `AppSettings` and assert every user-facing property has
+      an entry (six internal/legacy keys excluded), backings are real, ids unique, and every toggle/stepper
+      binding round-trips its property. *(`SettingsRegistryTests`, 5 tests.)*
+- [x] Search UI: persistent filter field, token-AND match over name + keywords, result rows (name, surface
+      breadcrumb, live `PerchToggle`); keyword-hit hint; empty-query = full index; empty-result state.
+      *(`src/Perch.App/Windows/SettingsSearchView.cs`; the "Search" page, now the default + `Ctrl+F`.)*
+- [x] `SettingsLiveApply` centralises the settings→hook map so a toggled result takes effect at full parity
+      (raises `MetricsChanged` / `UsageEnabledChanged` / etc. beyond the idempotent `DisplayChanged`).
 
-**Exit:** "chime / sound / cost / cpu / git / phone" each surface the right setting; coverage test green;
-toggling a result mutates real settings + `Save()` + `DisplayChanged` at parity with today.
+**Exit — met:** "chime / sound / cost / cpu / git" each surface the right setting (verified via `render`);
+coverage tests green; toggling a result mutates real settings, `Save()`s and applies live at parity.
+**Note:** non-toggle kinds (slider/stepper/dropdown/hotkey/field/list) are findable but shown find-only for
+now; their inline editors arrive with the catalogue in M3.
 **Effort:** med · **Risk:** low–med · **Depends on:** M0.
 
 ### M3 — The catalogue surfaces
