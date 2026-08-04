@@ -1,8 +1,10 @@
 namespace Perch.Data;
 
-/// <summary>A newly-reached achievement rung, ready to announce — the level's name/emoji/tier plus a
-/// short detail line ("Tokens · Lvl 3" for a levelled family, or the criteria for a one-off).</summary>
-internal sealed record AchievementUnlock(string Name, string Emoji, string Detail, AchievementTier Tier);
+/// <summary>A newly-reached achievement rung, ready to announce — the level's name/emoji/tier, the
+/// criteria that fired it ("10M input tokens", "Activity in all 24 hours"), and a short level-context
+/// detail ("Tokens · Lvl 3" for a levelled family; empty for a one-off, which has no rungs to count).</summary>
+internal sealed record AchievementUnlock(
+    string Name, string Emoji, string Detail, string Criteria, AchievementTier Tier);
 
 /// <summary>
 /// Ties the (stateless) <see cref="AchievementCatalog"/> to the durable <see cref="AchievementStore"/>:
@@ -36,8 +38,8 @@ internal sealed class AchievementService
                 var level = fam.Levels[i];
                 if (!level.Earned || !_store.Add(level.Id))
                     continue;
-                string detail = fam.Category.Length > 0 ? $"{fam.Category} · Lvl {i + 1}" : level.Criteria;
-                newlyUnlocked.Add(new AchievementUnlock(level.Name, level.Emoji, detail, level.Tier));
+                string detail = fam.Category.Length > 0 ? $"{fam.Category} · Lvl {i + 1}" : "";
+                newlyUnlocked.Add(new AchievementUnlock(level.Name, level.Emoji, detail, level.Criteria, level.Tier));
             }
         }
 

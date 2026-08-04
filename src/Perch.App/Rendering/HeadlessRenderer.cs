@@ -205,17 +205,17 @@ internal static class HeadlessRenderer
         // Achievement unlock reveal, single card: the vignette + coin-flip card (frozen at its settled,
         // face-up frame) under the "Achievement Unlocked!" heading with the OK / Don't-show-again buttons.
         var reveal = Windows.AchievementCardWindow.BuildStaticSurface(
-            [new AchievementUnlock("Token Titan", "🏆", "Tokens · Lvl 5", AchievementTier.Gold)], 900, 680);
+            [new AchievementUnlock("Token Titan", "🏆", "Tokens · Lvl 5", "1B input tokens", AchievementTier.Gold)], 900, 680);
         RenderControl(reveal, Path.Combine(outDir, "achievement_reveal_1x.png"), 96);
         RenderControl(reveal, Path.Combine(outDir, "achievement_reveal_1.5x.png"), 144);
 
         // Achievement unlock reveal, batch: four unlocks → three cards side by side plus a "+1 more" card.
         var revealBatch = Windows.AchievementCardWindow.BuildStaticSurface(
         [
-            new AchievementUnlock("Token Titan", "🏆", "Tokens · Lvl 5", AchievementTier.Gold),
-            new AchievementUnlock("Tool Master", "🛠", "Tools · Lvl 4", AchievementTier.Gold),
-            new AchievementUnlock("Night Owl", "🦉", "Sessions · Lvl 3", AchievementTier.Silver),
-            new AchievementUnlock("Streak Keeper", "🔥", "Streak · Lvl 2", AchievementTier.Bronze),
+            new AchievementUnlock("Token Titan", "🏆", "Tokens · Lvl 5", "1B input tokens", AchievementTier.Gold),
+            new AchievementUnlock("Tool Master", "🛠", "Tools · Lvl 4", "100,000 tool calls", AchievementTier.Gold),
+            new AchievementUnlock("Night Owl", "🦉", "Sessions · Lvl 3", "100 sessions", AchievementTier.Silver),
+            new AchievementUnlock("Streak Keeper", "🔥", "Streak · Lvl 2", "7-day streak", AchievementTier.Bronze),
         ], 1280, 680);
         RenderControl(revealBatch, Path.Combine(outDir, "achievement_reveal_batch_1x.png"), 96);
         RenderControl(revealBatch, Path.Combine(outDir, "achievement_reveal_batch_1.5x.png"), 144);

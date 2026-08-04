@@ -52,6 +52,28 @@ public class AchievementServiceTests
     }
 
     [Fact]
+    public void Unlock_CarriesTheCriteriaThatFired()
+    {
+        var path = TempPath();
+        try
+        {
+            var svc = new AchievementService(AchievementStore.LoadFrom(path));
+            var announced = svc.Sync(Report(sessions: 1, tokens: 1_000_000), null, includeCost: true);
+
+            // Each levelled unlock carries the rung's threshold as its criteria, with the level as
+            // separate context — the criteria is what the card and toast now lead with.
+            var wordsmith = Assert.Single(announced, u => u.Name == "Wordsmith");
+            Assert.Equal("1M input tokens", wordsmith.Criteria);
+            Assert.Equal("Input · Lvl 2", wordsmith.Detail);
+
+            var firstFlight = Assert.Single(announced, u => u.Name == "First Flight");
+            Assert.Equal("1 session", firstFlight.Criteria);
+            Assert.Equal("Sessions · Lvl 1", firstFlight.Detail);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void OnceCommitted_ASubsequentRunIsQuiet()
     {
         var path = TempPath();

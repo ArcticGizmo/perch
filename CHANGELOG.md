@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.2.38] - 2026-08-04
+
+- Achievement cards and toasts now spell out the criteria that fired them ("1M input tokens")
+- The level number moves to a dimmer second line, no longer the whole story
+
+---
+
 ## [v0.2.37] - 2026-08-03
 
 - GitHub pull-request glyph on session rows, coloured by state (open, draft, merged, closed)

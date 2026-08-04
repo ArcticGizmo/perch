@@ -601,7 +601,7 @@ public partial class App : Application
                     $"You've earned {unlocks.Count} achievements — open Achievements to see them.", ToastLevel.Info);
             else
                 foreach (var u in unlocks)
-                    n.ShowInfo("🏆 Achievement unlocked", $"{u.Emoji} {u.Name} — {u.Detail}", ToastLevel.Info);
+                    n.ShowInfo("🏆 Achievement unlocked", $"{u.Emoji} {u.Name} — {u.Criteria}", ToastLevel.Info);
         }
 
         // The reveal stays reserved for a notable batch — one that crossed a rare gold-tier rung — so a lone
@@ -751,10 +751,10 @@ public partial class App : Application
     // announce path, to test the post-update / first-run batch case (a single summary toast, no cards).
     private static IReadOnlyList<AchievementUnlock> SampleAchievementBatch() =>
     [
-        new("Token Titan", "🏆", "Tokens · Lvl 5", AchievementTier.Gold),
-        new("Night Owl", "🦉", "Sessions · Lvl 3", AchievementTier.Silver),
-        new("Streak Keeper", "🔥", "Streak · Lvl 2", AchievementTier.Bronze),
-        new("Tool Master", "🛠", "Tools · Lvl 4", AchievementTier.Gold),
+        new("Token Titan", "🏆", "Tokens · Lvl 5", "1B input tokens", AchievementTier.Gold),
+        new("Night Owl", "🦉", "Sessions · Lvl 3", "100 sessions", AchievementTier.Silver),
+        new("Streak Keeper", "🔥", "Streak · Lvl 2", "7-day streak", AchievementTier.Bronze),
+        new("Tool Master", "🛠", "Tools · Lvl 4", "100,000 tool calls", AchievementTier.Gold),
     ];
 #endif
 

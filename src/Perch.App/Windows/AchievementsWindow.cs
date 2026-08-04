@@ -42,8 +42,10 @@ internal sealed class AchievementsWindow : Window
 #if DEBUG
         _dashboard.BadgeActivated += a =>
         {
-            string detail = a.Category.Length > 0 ? $"{a.Category} · Lvl {Math.Max(1, a.Level)}" : a.Description;
-            PreviewReveal?.Invoke(new AchievementUnlock(a.Name, a.Emoji, detail, a.Tier));
+            string detail = a.Category.Length > 0 ? $"{a.Category} · Lvl {Math.Max(1, a.Level)}" : "";
+            // The rung actually reached (or the first, as the goal, when none are) supplies the criteria line.
+            string criteria = a.Levels.Count > 0 ? a.Levels[Math.Max(0, a.Level - 1)].Criteria : a.Description;
+            PreviewReveal?.Invoke(new AchievementUnlock(a.Name, a.Emoji, detail, criteria, a.Tier));
         };
 #endif
     }

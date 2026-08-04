@@ -396,14 +396,29 @@ internal sealed class AchievementCard : Control
         ctx.DrawText(name, new Point(r.X + 18 * _scale, cyc));
         cyc += name.Height + 12 * _scale;
 
-        // Detail line ("Tokens · Lvl 3" or the one-off criteria), muted and centred.
-        var detail = new FormattedText(u.Detail, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+        // Criteria line — the threshold/condition that fired this badge ("10M input tokens", "Activity in
+        // all 24 hours"). This is the "why it unlocked" the card leads with, muted and centred.
+        var criteria = new FormattedText(u.Criteria, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
             OverlayDraw.Face(), 13 * _scale, new SolidColorBrush(Palette.Muted))
         {
-            MaxTextWidth = r.Width - 36 * _scale, MaxTextHeight = 44 * _scale,
+            MaxTextWidth = r.Width - 36 * _scale, MaxTextHeight = 40 * _scale,
             TextAlignment = TextAlignment.Center, Trimming = TextTrimming.WordEllipsis,
         };
-        ctx.DrawText(detail, new Point(r.X + 18 * _scale, cyc));
+        ctx.DrawText(criteria, new Point(r.X + 18 * _scale, cyc));
+        cyc += criteria.Height + 6 * _scale;
+
+        // Level context ("Tokens · Lvl 3"), dimmer and smaller beneath the criteria — only levelled
+        // families carry it; one-offs leave it empty and stop at the criteria.
+        if (u.Detail.Length > 0)
+        {
+            var detail = new FormattedText(u.Detail, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+                OverlayDraw.Face(), 11 * _scale, new SolidColorBrush(Color.FromArgb(150, Palette.Muted.R, Palette.Muted.G, Palette.Muted.B)))
+            {
+                MaxTextWidth = r.Width - 36 * _scale, MaxTextHeight = 20 * _scale,
+                TextAlignment = TextAlignment.Center, Trimming = TextTrimming.WordEllipsis,
+            };
+            ctx.DrawText(detail, new Point(r.X + 18 * _scale, cyc));
+        }
     }
 
     // The "+N more" card: a big "+N" over a "more" label, centred as a group.
