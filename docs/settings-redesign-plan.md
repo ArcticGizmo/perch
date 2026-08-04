@@ -190,16 +190,20 @@ preview coexist in one window; nothing is unreachable.
       `settings_shell`, `preview_pane`).
 - [x] Update the CLAUDE.md settings notes (registry-driven architecture).
 - [x] Keyboard: `Ctrl+F` to search, `Esc` to close (done in M2/M4).
-- [ ] **Pending:** physically excise the now-dead page-builder methods from `SettingsWindow.cs` (safe once
-      verified in the running app — the compiler catches any shared-helper reference).
-- [ ] **Pending:** hover→spotlight (`PreviewPane.Highlight` pulse) and `prefers-reduced-motion` for it.
-- [ ] **Pending:** migrate the few remaining unique actions (open Stats/Achievements, notification tests,
-      Agent Teams, Quick Links editor) into the shell so the last old pages can go too.
+- [x] Physically excised the now-dead page-builder methods (~650 lines: Usage, Integrations, Music,
+      Microphone, Indicators, Monitoring) + orphaned fields; the out-of-band display sync now rebuilds the
+      catalogue via `SettingsCatalogView.Sync()`.
+- [x] Hover→spotlight: hovering a card pulses the docked preview (`PreviewPane.Highlight`, an accent-ring
+      pulse — a pane-level cue, not per-glyph).
+- [x] Migrated Agent Teams into the catalogue (raw env-var accessors on `SettingDescriptor`) and retired the
+      Experimental tab.
+- [ ] **Won't migrate (by design):** Session Stats, Achievements, Notifications and Quick Links keep their
+      tabs — they carry actions (open windows, test notifications) and a complex list editor that belong on
+      dedicated tabs, not cards.
 - [ ] **Pending (release-time):** version bump + changelog entry (`/bump-version`) when the branch merges.
 
-**Exit — partially met:** `render` emits the new UI, the redundant pages are gone from the UI, and docs
-describe the new architecture. Remaining items are dead-code excision, the hover polish, and merge-time
-release chores.
+**Exit — met:** `render` emits the new UI, the redundant pages are gone (from the UI *and* the code), hover
+spotlights the preview, and docs describe the new architecture. Only the merge-time release chore remains.
 **Effort:** med · **Risk:** low · **Depends on:** M4.
 
 ---
