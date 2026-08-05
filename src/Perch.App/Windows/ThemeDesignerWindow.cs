@@ -1,7 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
-using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Perch.Avalonia.Services;
@@ -13,36 +12,47 @@ using Perch.Theming;
 namespace Perch.Avalonia.Windows;
 
 /// <summary>
-/// The theme designer — Perch's "accessibility is built in" showpiece. Clones the active theme into an
-/// editable draft, applied live across the whole app as you edit (so the real overlay + windows preview it),
-/// with a running WCAG contrast readout for every text/glyph pair and a one-click "Fix" that nudges a
-/// failing colour until it passes. A saved theme lands in <see cref="AppSettings.CustomThemes"/> and becomes
-/// selectable on the Appearance page.
+/// The theme designer — Perch's "accessibility is built in" showpiece. Starts from any built-in theme,
+/// clones it into a draft applied live across the whole app as you edit (so the real overlay + windows
+/// preview it), with a running WCAG contrast readout for every text/glyph pair and a one-click "Fix" that
+/// nudges a failing colour until it passes. A saved theme lands in <see cref="AppSettings.CustomThemes"/>
+/// and becomes selectable on the Appearance page.
 ///
 /// <para>Editing is deliberately gentle: a single neutral-tint control (hue + strength) re-tints the whole
-/// chrome ramp at once — the "make my theme a bit more Perch-red" slider — over the base theme's lightness
-/// structure, plus an accent picker and a name. The semantic status hues are inherited unchanged, keeping
-/// the overlay glanceable.</para>
+/// chrome ramp over the base's lightness structure — the "make my theme a bit more Perch-red" slider — plus
+/// an HSL accent picker and a name. The semantic status hues are inherited unchanged, keeping the overlay
+/// glanceable.</para>
 /// </summary>
 internal sealed class ThemeDesignerWindow : Window
 {
     private readonly AppSettings _settings;
-    private readonly Theme _base;         // the seed's lightness structure + inherited (status/brand) roles
-    private readonly Theme _restore;      // the theme to revert to if the designer is cancelled/closed
+    private readonly Theme _restore;      // reverted to if the designer is cancelled/closed
     private readonly Action _onSaved;
 
-    private double _hue;
-    private double _chroma;
+    private Theme _base;                  // the starting theme (its lightness ramp + inherited roles)
+    private double _hue, _chroma;
     private Rgb _accent;
-    private string _name;
+    private string _name = "My Theme";
     private bool _saved;
+    private bool _sync;                   // guards programmatic control updates from re-triggering handlers
+
+    private Theme _draft;
+    // Absolute colours pinned by a "Fix" (keyed by pair label); applied after the retint so the tint slider
+    // can't overwrite a fix the user asked for.
+    private readonly Dictionary<string, (Func<Theme, Rgb, Theme> Set, Rgb Value)> _overrides = new();
 
     private readonly StackPanel _readout = new() { Spacing = 6 };
-    private readonly Border _accentSwatch = new() { Width = 26, Height = 26, CornerRadius = new CornerRadius(4) };
-    private readonly TextBox _accentHex;
+    private readonly PreviewPane _preview = new();
+    private readonly Border _accentSwatch = new()
+    {
+        Width = 28, Height = 28, CornerRadius = new CornerRadius(4),
+        BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
+    };
+    private readonly TextBox _accentHex = SettingsUi.ThemedTextBox("");
+    private Slider _hueSlider = null!, _chromaSlider = null!, _aH = null!, _aS = null!, _aL = null!;
 
-    // The six pairs the readout audits: label, the draft role it reads as foreground (+ how to rewrite it
-    // when "Fix" is pressed), the background role, and the target ratio (AA for text, 3:1 for glyphs).
+    // The six pairs the readout audits: label, the draft role read as foreground (+ how to rewrite it when
+    // "Fix" is pressed), the background role, and the target ratio (AA for text, 3:1 for glyphs).
     private readonly record struct Pair(
         string Label, Func<Theme, Rgb> Fg, Func<Theme, Rgb, Theme> WithFg, Func<Theme, Rgb> Bg,
         double Target, bool NonText);
@@ -57,57 +67,90 @@ internal sealed class ThemeDesignerWindow : Window
         new("Borders",               t => t.Border,      (t, c) => t with { Border = c },      t => t.Surface,        Contrast.NonText, true),
     ];
 
-    private Theme _draft;
-    private readonly PreviewPane _preview = new();
-
-    // Absolute colours pinned by a "Fix" (keyed by pair label); applied after the retint so the tint slider
-    // can't overwrite a fix the user asked for.
-    private readonly Dictionary<string, (Func<Theme, Rgb, Theme> Set, Rgb Value)> _overrides = new();
-
     public ThemeDesignerWindow(AppSettings settings, Theme seed, Action onSaved)
     {
         _settings = settings;
-        _base = seed;
         _restore = seed;
         _onSaved = onSaved;
-
-        var (h, s, _) = ColorMath.ToHsl(seed.Surface);
-        _hue = h;
-        _chroma = s;
-        _accent = seed.Accent;
-        _name = "My Theme";
+        _base = seed;
         _draft = seed;
+        _accent = seed.Accent;
 
         Title = "Theme designer";
-        Width = 860;
-        Height = 640;
+        Width = 900;
+        Height = 780;
+        MinWidth = 760;
+        MinHeight = 560;
         Background = Palette.FormBgBrush;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         CanResize = true;
 
-        _accentHex = SettingsUi.ThemedTextBox(_accent.ToHex());
-        _accentHex.Width = 100;
-        _accentHex.TextChanged += (_, _) =>
-        {
-            if (TryParseHex(_accentHex.Text, out var c)) { _accent = c; Recompute(); }
-        };
-
         Content = BuildLayout();
-        Recompute();
+        SeedFrom(seed);   // sets base, sliders, accent controls + draft, and applies live
 
         Closed += (_, _) => { if (!_saved) ThemeService.ApplyLive(_restore); };
     }
 
     private Control BuildLayout()
     {
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(16) };
+        var root = new DockPanel { Margin = new Thickness(16) };
 
-        // ── Left: editing controls + the WCAG readout ──
-        var left = new StackPanel { Spacing = 12, Margin = new Thickness(0, 0, 16, 0) };
+        // Bottom bar — always visible, so Save/Cancel never scroll off.
+        var save = SettingsUi.FlatButton("Save theme");
+        save.Background = Palette.AccentBrush;
+        save.Click += (_, _) => Save();
+        var cancel = SettingsUi.FlatButton("Cancel");
+        cancel.Click += (_, _) => Close();
+        var bottom = new Border
+        {
+            BorderThickness = new Thickness(0, 1, 0, 0), BorderBrush = Palette.BorderBrush,
+            Padding = new Thickness(0, 10, 0, 0), Margin = new Thickness(0, 8, 0, 0),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right,
+                Children = { save, cancel },
+            },
+        };
+        DockPanel.SetDock(bottom, Dock.Bottom);
+        root.Children.Add(bottom);
+
+        // Centre — controls on the left, live preview on the right.
+        var center = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        Grid.SetColumn(BuildControls(out var controlsScroll), 0);
+        center.Children.Add(controlsScroll);
+
+        var right = new StackPanel { Spacing = 10, Width = 280, Margin = new Thickness(16, 0, 0, 0) };
+        right.Children.Add(new TextBlock
+        {
+            Text = "LIVE PREVIEW", FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = Palette.MutedBrush,
+        });
+        _preview.Apply(_settings);
+        right.Children.Add(_preview);
+        Grid.SetColumn(right, 1);
+        center.Children.Add(right);
+
+        root.Children.Add(center);
+        return root;
+    }
+
+    private Control BuildControls(out ScrollViewer scroll)
+    {
+        var left = new StackPanel { Spacing = 10, Margin = new Thickness(0, 0, 4, 0) };
         left.Children.Add(SettingsUi.SectionTitle("Design a theme"));
         left.Children.Add(SettingsUi.BodyText(
-            "Re-tint the chrome and pick an accent. The status colours stay put so the overlay stays " +
-            "readable. Every change is applied live and checked against WCAG contrast below."));
+            "Start from a theme, re-tint the chrome and pick an accent. The status colours stay put so the " +
+            "overlay stays readable. Every change is applied live and checked against WCAG contrast below."));
+
+        left.Children.Add(SettingsUi.FieldCaption("Start from"));
+        var baseNames = Themes.BuiltIn.Select(t => t.Name).ToList();
+        var basePicker = SettingsUi.Dropdown(baseNames, Math.Max(0, Themes.BuiltIn.ToList().FindIndex(t => t.Id == _base.Id)));
+        basePicker.SelectionChanged += (_, _) =>
+        {
+            if (_sync) return;
+            var i = basePicker.SelectedIndex;
+            if (i >= 0 && i < Themes.BuiltIn.Count) SeedFrom(Themes.BuiltIn[i]);
+        };
+        left.Children.Add(basePicker);
 
         left.Children.Add(SettingsUi.FieldCaption("Name"));
         var nameBox = SettingsUi.ThemedTextBox(_name);
@@ -115,15 +158,30 @@ internal sealed class ThemeDesignerWindow : Window
         left.Children.Add(nameBox);
 
         left.Children.Add(SettingsUi.FieldCaption("Chrome tint — hue"));
-        left.Children.Add(MakeSlider(0, 360, _hue, v => { _hue = v; Recompute(); }));
+        _hueSlider = MakeSlider(0, 360, _hue, v => { if (_sync) return; _hue = v; Recompute(); });
+        left.Children.Add(_hueSlider);
         left.Children.Add(SettingsUi.FieldCaption("Chrome tint — strength"));
-        left.Children.Add(MakeSlider(0, 0.30, _chroma, v => { _chroma = v; Recompute(); }));
+        _chromaSlider = MakeSlider(0, 0.30, _chroma, v => { if (_sync) return; _chroma = v; Recompute(); });
+        left.Children.Add(_chromaSlider);
 
         left.Children.Add(SettingsUi.FieldCaption("Accent colour"));
         var accentRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         accentRow.Children.Add(_accentSwatch);
+        _accentHex.Width = 100;
+        _accentHex.TextChanged += (_, _) =>
+        {
+            if (_sync) return;
+            if (TryParseHex(_accentHex.Text, out var c)) OnAccentEdited(c);
+        };
         accentRow.Children.Add(_accentHex);
         left.Children.Add(accentRow);
+
+        _aH = MakeSlider(0, 360, 0, _ => OnAccentSliderChanged());
+        _aS = MakeSlider(0, 1, 0, _ => OnAccentSliderChanged());
+        _aL = MakeSlider(0, 1, 0, _ => OnAccentSliderChanged());
+        left.Children.Add(LabeledSlider("Hue", _aH));
+        left.Children.Add(LabeledSlider("Saturation", _aS));
+        left.Children.Add(LabeledSlider("Lightness", _aL));
 
         left.Children.Add(SettingsUi.Separator());
         left.Children.Add(new TextBlock
@@ -133,37 +191,55 @@ internal sealed class ThemeDesignerWindow : Window
         });
         left.Children.Add(_readout);
 
-        var leftScroll = new ScrollViewer
+        scroll = new ScrollViewer
         {
             Content = left, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
-        Grid.SetColumn(leftScroll, 0);
+        return scroll;
+    }
 
-        // ── Right: live preview + save/cancel ──
-        var right = new StackPanel { Spacing = 12, Width = 280 };
-        right.Children.Add(new TextBlock
-        {
-            Text = "LIVE PREVIEW", FontSize = 11, FontWeight = FontWeight.SemiBold,
-            Foreground = Palette.MutedBrush,
-        });
-        _preview.Apply(_settings);
-        right.Children.Add(_preview);
+    // Reset every control to a starting theme, then apply.
+    private void SeedFrom(Theme t)
+    {
+        _sync = true;
+        _base = t;
+        _overrides.Clear();
+        var (h, s, _) = ColorMath.ToHsl(t.Surface);
+        _hue = h;
+        _chroma = s;
+        _hueSlider.Value = h;
+        _chromaSlider.Value = Math.Min(0.30, s);
+        SetAccentControls(t.Accent);
+        _sync = false;
+        Recompute();
+    }
 
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
-        var save = SettingsUi.FlatButton("Save theme");
-        save.Background = Palette.AccentBrush;
-        save.Click += (_, _) => Save();
-        var cancel = SettingsUi.FlatButton("Cancel");
-        cancel.Click += (_, _) => Close();
-        buttons.Children.Add(save);
-        buttons.Children.Add(cancel);
-        right.Children.Add(buttons);
-        Grid.SetColumn(right, 1);
+    private void OnAccentSliderChanged()
+    {
+        if (_sync) return;
+        OnAccentEdited(ColorMath.FromHsl(_aH.Value, _aS.Value, _aL.Value));
+    }
 
-        grid.Children.Add(leftScroll);
-        grid.Children.Add(right);
-        return grid;
+    // A single accent edit from any control: sync every accent control to it, then recompute.
+    private void OnAccentEdited(Rgb c)
+    {
+        _sync = true;
+        SetAccentControls(c);
+        _sync = false;
+        Recompute();
+    }
+
+    // Push an accent colour into all its controls (caller holds the _sync guard).
+    private void SetAccentControls(Rgb c)
+    {
+        _accent = c;
+        var (h, s, l) = ColorMath.ToHsl(c);
+        _aH.Value = h;
+        _aS.Value = s;
+        _aL.Value = l;
+        _accentHex.Text = c.ToHex();
+        _accentSwatch.Background = c.ToBrush();
     }
 
     // Rebuild the draft from the tint/accent controls, apply it live, and refresh the readout.
@@ -172,7 +248,6 @@ internal sealed class ThemeDesignerWindow : Window
         _draft = _base with
         {
             Name = _name,
-            // Neutral chrome: re-hued over the base's lightness ramp.
             Surface            = ColorMath.Retint(_base.Surface, _hue, _chroma),
             SurfaceSunken      = ColorMath.Retint(_base.SurfaceSunken, _hue, _chroma),
             SurfaceRaised      = ColorMath.Retint(_base.SurfaceRaised, _hue, _chroma),
@@ -189,15 +264,12 @@ internal sealed class ThemeDesignerWindow : Window
             TextMuted    = ColorMath.Retint(_base.TextMuted, _hue, _chroma * 0.25),
             ExpectedMark = ColorMath.Retint(_base.ExpectedMark, _hue, _chroma * 0.25),
             Accent       = _accent,
-            AccentHover  = ColorMath.FromHsl(ColorMath.ToHsl(_accent).H, ColorMath.ToHsl(_accent).S,
-                               Math.Min(1, ColorMath.ToHsl(_accent).L + 0.12)),
+            AccentHover  = Lighten(_accent, 0.12),
         };
 
-        // Re-apply any pinned "Fix" colours over the retint.
         foreach (var (set, value) in _overrides.Values)
             _draft = set(_draft, value);
 
-        _accentSwatch.Background = _accent.ToBrush();
         ThemeService.ApplyLive(_draft);   // repaints the whole app + this window + the embedded preview
         RefreshReadout();
     }
@@ -219,8 +291,7 @@ internal sealed class ThemeDesignerWindow : Window
 
         var label = new TextBlock
         {
-            Text = p.Label, FontSize = 12, Foreground = Palette.FgBrush,
-            VerticalAlignment = VerticalAlignment.Center,
+            Text = p.Label, FontSize = 12, Foreground = Palette.FgBrush, VerticalAlignment = VerticalAlignment.Center,
         };
         Grid.SetColumn(label, 0);
 
@@ -230,8 +301,7 @@ internal sealed class ThemeDesignerWindow : Window
         var chip = new Border
         {
             Background = new SolidColorBrush(chipColor), CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(6, 1), VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(6, 0, 0, 0),
+            Padding = new Thickness(6, 1), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0),
             Child = new TextBlock
             {
                 Text = $"{ratio:0.0}:1  {chipText}", FontSize = 11, FontWeight = FontWeight.SemiBold,
@@ -251,8 +321,7 @@ internal sealed class ThemeDesignerWindow : Window
                 var fixedFg = ColorMath.NudgeToContrast(p.Fg(_draft), p.Bg(_draft), p.Target);
                 if (p.Label == "Links / accent")
                 {
-                    _accent = fixedFg;
-                    _accentHex.Text = fixedFg.ToHex();   // TextChanged → Recompute
+                    OnAccentEdited(fixedFg);
                 }
                 else
                 {
@@ -298,6 +367,12 @@ internal sealed class ThemeDesignerWindow : Window
         return $"{baseId}-{n}";
     }
 
+    private static Rgb Lighten(Rgb c, double by)
+    {
+        var (h, s, l) = ColorMath.ToHsl(c);
+        return ColorMath.FromHsl(h, s, Math.Min(1, l + by));
+    }
+
     private static bool TryParseHex(string? s, out Rgb c)
     {
         try { c = Rgb.FromHex(s ?? ""); return true; }
@@ -307,10 +382,22 @@ internal sealed class ThemeDesignerWindow : Window
     private static Slider MakeSlider(double min, double max, double value, Action<double> onChange)
     {
         var s = new Slider { Minimum = min, Maximum = max, Value = value, Foreground = Palette.AccentBrush };
-        s.PropertyChanged += (_, e) =>
-        {
-            if (e.Property == RangeBase.ValueProperty) onChange(s.Value);
-        };
+        s.PropertyChanged += (_, e) => { if (e.Property == RangeBase.ValueProperty) onChange(s.Value); };
         return s;
+    }
+
+    // A compact "caption : slider" row for the accent HSL controls.
+    private static Control LabeledSlider(string caption, Slider slider)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("70,*"), Margin = new Thickness(0, 0, 0, 0) };
+        var cap = new TextBlock
+        {
+            Text = caption, FontSize = 11, Foreground = Palette.MutedBrush, VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(cap, 0);
+        Grid.SetColumn(slider, 1);
+        grid.Children.Add(cap);
+        grid.Children.Add(slider);
+        return grid;
     }
 }
