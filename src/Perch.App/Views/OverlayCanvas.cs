@@ -94,7 +94,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // hotkey user can see which session they've cycled to. Blue reads as navigation, distinct from the
     // green/orange/yellow status hues.
     private static readonly Color  CycleColor     = Color.FromRgb(96, 165, 250);
-    private static readonly IBrush MutedBrush     = new SolidColorBrush(Color.FromRgb(110, 110, 130));
+    // Secondary/status text. Lifted from (110,110,130) — which was ~3.8:1 on this bg, under the WCAG AA
+    // floor — to (140,140,160), ~5.8:1 here and matching the settings surface's Palette.Muted exactly.
+    private static readonly IBrush MutedBrush     = new SolidColorBrush(Color.FromRgb(140, 140, 160));
     private static readonly IBrush FgBrush        = new SolidColorBrush(FgColor);
     private static readonly Color  RunningColor   = Color.FromRgb(34, 197, 94);
     private static readonly Color  AttentionColor = Color.FromRgb(251, 146, 60);
@@ -153,7 +155,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     ];
     private static readonly IBrush ThermoGlassFill = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
     private static readonly IPen   ThermoOutline  = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
-    private static readonly Color  MutedColor     = Color.FromRgb(110, 110, 130);
+    private static readonly Color  MutedColor     = Color.FromRgb(140, 140, 160);  // AA-lifted; see MutedBrush
     private static readonly IBrush UpdateBrush    = new SolidColorBrush(Color.FromRgb(255, 68, 45));   // perch-logo red-orange — the update badge
     private static readonly IBrush UpdateHover     = new SolidColorBrush(Color.FromRgb(255, 104, 84));  // brightened while hovered
     private static readonly Color  SepColor       = Color.FromRgb(35, 35, 50);
