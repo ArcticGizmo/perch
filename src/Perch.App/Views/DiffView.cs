@@ -43,6 +43,8 @@ internal sealed class DiffView : Border
     private static readonly IBrush SelectionBrush = new SolidColorBrush(Color.FromArgb(90, 96, 165, 250));
     private static readonly IBrush AddedBandBg = new SolidColorBrush(Color.FromArgb(36, 34, 197, 94));
     private static readonly IBrush RemovedBandBg = new SolidColorBrush(Color.FromArgb(36, 239, 68, 68));
+    private static readonly IBrush MatchBg = new SolidColorBrush(Color.FromArgb(85, 250, 204, 21));        // all matches (yellow)
+    private static readonly IBrush CurrentMatchBg = new SolidColorBrush(Color.FromArgb(190, 255, 158, 40)); // current match (orange)
 
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
     private const double LineSize = 12.5, PathSize = 13, HunkSize = 12;
@@ -69,7 +71,7 @@ internal sealed class DiffView : Border
     private readonly List<(SelectableTextBlock Tb, int Start, int Len)> _matches = new();
     private string _query = "";
     private int _matchIdx = -1;
-    private SelectableTextBlock? _highlighted;
+    private HighlightLayer? _highlightLayer; // owner-drawn layer behind the text that paints all matches
 
     // Line-range selection (GitHub-style): click a gutter line number to select that line, shift-click or
     // drag to extend a contiguous range, Ctrl+C copies the lines' content. Lines are grouped into streams
@@ -168,7 +170,7 @@ internal sealed class DiffView : Border
         _query = "";
         _matches.Clear();
         _matchIdx = -1;
-        ClearHighlight();
+        _highlightLayer?.InvalidateVisual();
         RaiseResults();
     }
 
@@ -205,18 +207,13 @@ internal sealed class DiffView : Border
         else if (_matchIdx >= _matches.Count) _matchIdx = _matches.Count - 1;
     }
 
-    // Selects the current match (using the built-in selection highlight) and scrolls it to the centre of
-    // the viewport. Centring runs at Background priority so the layout is current (e.g. right after a
-    // rebuild) when we measure the match's position.
+    // Repaints all match highlights and scrolls the current match to the centre of the viewport. Centring
+    // runs at Background priority so the layout is current (e.g. right after a rebuild) when measured.
     private void Highlight()
     {
-        ClearHighlight();
-        if (_matchIdx < 0 || _matchIdx >= _matches.Count) return;
-        var (tb, start, len) = _matches[_matchIdx];
-        tb.SelectionStart = start;
-        tb.SelectionEnd = start + len;
-        _highlighted = tb;
-        Dispatcher.UIThread.Post(() => CenterOn(tb), DispatcherPriority.Background);
+        _highlightLayer?.InvalidateVisual();
+        if (_matchIdx >= 0 && _matchIdx < _matches.Count)
+            Dispatcher.UIThread.Post(() => CenterOn(_matches[_matchIdx].Tb), DispatcherPriority.Background);
     }
 
     // Scrolls the enclosing ScrollViewer so that target is vertically centred (clamped to the extent).
@@ -230,14 +227,19 @@ internal sealed class DiffView : Border
         sv.Offset = sv.Offset.WithY(y);
     }
 
-    private void ClearHighlight()
+    // Paints every match (subtle) and the current match (prominent) behind the diff text, locating each
+    // match's rectangle from its line's text layout. Called by the HighlightLayer at render time.
+    private void RenderHighlights(DrawingContext ctx, Control layer)
     {
-        if (_highlighted is { } prev)
+        for (int i = 0; i < _matches.Count; i++)
         {
-            prev.SelectionStart = 0;
-            prev.SelectionEnd = 0;
+            var (tb, start, len) = _matches[i];
+            if (!tb.IsEffectivelyVisible || tb.TextLayout is not { } layout) continue;
+            if (tb.TranslatePoint(new Point(tb.Padding.Left, tb.Padding.Top), layer) is not { } origin) continue;
+            var brush = i == _matchIdx ? CurrentMatchBg : MatchBg;
+            foreach (var r in layout.HitTestTextRange(start, len))
+                ctx.FillRectangle(brush, new Rect(origin.X + r.X, origin.Y + r.Y, r.Width, r.Height));
         }
-        _highlighted = null;
     }
 
     private void RaiseResults() =>
@@ -264,7 +266,10 @@ internal sealed class DiffView : Border
                     root.Children.Add(FileSection(section.Label, file));
             }
 
-        Child = root;
+        // The match-highlight layer sits behind the content (first child) so highlights paint behind the
+        // text; it reads the live match list at paint time.
+        _highlightLayer = new HighlightLayer(this);
+        Child = new Grid { Children = { _highlightLayer, root } };
 
         // The line controls are new after a rebuild, so recompute matches against them (keeping the query
         // and, where possible, the current position) and re-highlight.
@@ -575,6 +580,24 @@ internal sealed class DiffView : Border
     }
 
     private sealed record LineEntry(int Stream, int Pos, string Content, TextBlock Number, SelectableTextBlock Text);
+
+    // A transparent, non-interactive layer behind the diff text that paints the find-match highlights. It
+    // re-paints on layout changes (wrap reflow, collapse) and whenever the owner invalidates it (search /
+    // navigation). Highlights are computed in the layer's own coordinate space, which it shares with the
+    // scrolled content, so they stay aligned as the diff scrolls.
+    private sealed class HighlightLayer : Control
+    {
+        private readonly DiffView _owner;
+
+        public HighlightLayer(DiffView owner)
+        {
+            _owner = owner;
+            IsHitTestVisible = false;
+            LayoutUpdated += (_, _) => InvalidateVisual();
+        }
+
+        public override void Render(DrawingContext ctx) => _owner.RenderHighlights(ctx, this);
+    }
 
     private static string NextContext(ref int oldNo, ref int newNo)
     {

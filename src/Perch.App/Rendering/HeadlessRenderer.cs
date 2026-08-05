@@ -211,6 +211,13 @@ internal static class HeadlessRenderer
         RenderControl(diffSplit, Path.Combine(outDir, "change_review_split_1x.png"), 96);
         RenderControl(diffSplit, Path.Combine(outDir, "change_review_split_1.5x.png"), 144);
 
+        // Find state: every "the" match highlighted (yellow) with the current one prominent (orange).
+        var diffFind = new Views.DiffView { Width = 760 };
+        diffFind.SetDiff(SampleDiff(), null);
+        diffFind.SetSearch("the");
+        RenderControl(diffFind, Path.Combine(outDir, "change_review_find_1x.png"), 96);
+        RenderControl(diffFind, Path.Combine(outDir, "change_review_find_1.5x.png"), 144);
+
         // Dedicated Achievements window (the "trophy cabinet"): the roomy grid variant with per-badge
         // criteria lines, fed the same all-time sample so earned + locked tiles both show.
         var cabinet = new Views.AchievementsDashboard { Width = 840 };
