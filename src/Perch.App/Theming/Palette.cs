@@ -55,6 +55,7 @@ public static class Palette
         TealBrush.Color        = theme.Teal.ToColor();
         BurnBrush.Color        = theme.Burn.ToColor();
         TeamGrayBrush.Color    = theme.TeamGray.ToColor();
+        FocusRingBrush.Color   = theme.FocusRing.ToColor();
     }
 
     // The overlay panel is painted as a translucent scrim over the desktop; this is its fixed alpha.
@@ -72,6 +73,7 @@ public static class Palette
     public static Color ButtonHover => Active.SurfaceRaisedHover.ToColor();
     public static Color Sunken      => Active.SurfaceSunken.ToColor();
     public static Color Danger      => Active.Danger.ToColor();
+    public static Color FocusRing   => Active.FocusRing.ToColor();
 
     // The perch-logo red-orange, used to draw attention to the update affordances so they read as one accent.
     public static Color Brand       => Active.Brand.ToColor();
@@ -154,4 +156,5 @@ public static class Palette
     public static readonly SolidColorBrush TealBrush      = new(Themes.Midnight.Teal.ToColor());
     public static readonly SolidColorBrush BurnBrush      = new(Themes.Midnight.Burn.ToColor());
     public static readonly SolidColorBrush TeamGrayBrush  = new(Themes.Midnight.TeamGray.ToColor());
+    public static readonly SolidColorBrush FocusRingBrush = new(Themes.Midnight.FocusRing.ToColor());
 }

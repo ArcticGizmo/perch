@@ -39,6 +39,7 @@ public static class Themes
         Brand       = new(255, 68, 45),
         BrandHover  = new(255, 104, 84),
         Danger      = new(248, 113, 113),
+        FocusRing   = new(147, 197, 253),
 
         // Semantic status
         StatusRunning   = new(34, 197, 94),
@@ -165,6 +166,7 @@ public static class Themes
         TextTitle    = new(255, 255, 255),
         TextMuted    = new(192, 192, 202),
         ExpectedMark = new(212, 212, 220),
+        FocusRing    = new(255, 255, 255),   // maximum-visibility focus outline
     };
 
     /// <summary>

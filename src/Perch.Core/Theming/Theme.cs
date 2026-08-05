@@ -71,6 +71,8 @@ public sealed record Theme
     public Rgb BrandHover { get; init; }
     /// <summary>Destructive-action colour (delete/reset text and buttons).</summary>
     public Rgb Danger { get; init; }
+    /// <summary>Keyboard-focus ring — a bright, high-contrast outline drawn on the focused control.</summary>
+    public Rgb FocusRing { get; init; }
 
     // ── Semantic status (theme-stable identity) ────────────────────────────────
     /// <summary>Session running / usage healthy (green).</summary>

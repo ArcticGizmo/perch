@@ -35,6 +35,8 @@ internal sealed class ThemeDesignerWindow : Window
     private string _name = "My Theme";
     private bool _saved;
     private bool _sync;                   // guards programmatic control updates from re-triggering handlers
+    private CvdType _cvd = CvdType.None;  // colour-blind simulation applied to the live preview only
+    private readonly List<(CvdType type, Button btn)> _cvdButtons = new();
 
     private Theme _draft;
     // Absolute colours pinned by a "Fix" (keyed by pair label); applied after the retint so the tint slider
@@ -184,6 +186,10 @@ internal sealed class ThemeDesignerWindow : Window
         left.Children.Add(LabeledSlider("Lightness", _aL));
 
         left.Children.Add(SettingsUi.Separator());
+        left.Children.Add(SettingsUi.FieldCaption("Colour-blind preview"));
+        left.Children.Add(BuildCvdRow());
+
+        left.Children.Add(SettingsUi.Separator());
         left.Children.Add(new TextBlock
         {
             Text = "CONTRAST (WCAG)", FontSize = 11, FontWeight = FontWeight.SemiBold,
@@ -197,6 +203,37 @@ internal sealed class ThemeDesignerWindow : Window
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
         return scroll;
+    }
+
+    // A row of buttons that run the live preview through a colour-vision-deficiency simulation, so a
+    // designer can check the status hues stay distinguishable. Only the preview is simulated; the saved
+    // theme and the contrast readout use the real colours.
+    private Control BuildCvdRow()
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        (CvdType type, string label)[] opts =
+        [
+            (CvdType.None, "Normal"), (CvdType.Protanopia, "Protan"),
+            (CvdType.Deuteranopia, "Deutan"), (CvdType.Tritanopia, "Tritan"),
+        ];
+        foreach (var (type, label) in opts)
+        {
+            var btn = SettingsUi.FlatButton(label);
+            btn.FontSize = 11;
+            btn.Padding = new Thickness(8, 3);
+            var t = type;
+            btn.Click += (_, _) => { _cvd = t; RestyleCvd(); ApplyDraft(); };
+            _cvdButtons.Add((type, btn));
+            row.Children.Add(btn);
+        }
+        RestyleCvd();
+        return row;
+    }
+
+    private void RestyleCvd()
+    {
+        foreach (var (type, btn) in _cvdButtons)
+            btn.Background = type == _cvd ? Palette.AccentBrush : Palette.ButtonBgBrush;
     }
 
     // Reset every control to a starting theme, then apply.
@@ -270,9 +307,12 @@ internal sealed class ThemeDesignerWindow : Window
         foreach (var (set, value) in _overrides.Values)
             _draft = set(_draft, value);
 
-        ThemeService.ApplyLive(_draft);   // repaints the whole app + this window + the embedded preview
-        RefreshReadout();
+        ApplyDraft();      // repaints the whole app + this window + the embedded preview
+        RefreshReadout();  // ratios are always computed from the *real* draft, never the CVD simulation
     }
+
+    // Apply the draft live, run through the current colour-blind simulation (None = the real draft).
+    private void ApplyDraft() => ThemeService.ApplyLive(CvdSim.Simulate(_draft, _cvd));
 
     private void RefreshReadout()
     {

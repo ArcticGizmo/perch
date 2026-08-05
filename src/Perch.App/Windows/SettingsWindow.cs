@@ -322,6 +322,63 @@ internal sealed class SettingsWindow : Window
             _ = new ThemeDesignerWindow(_settings, seed, onSaved: RebuildThemeList).ShowDialog(this);
         };
         _themeList.Children.Add(design);
+
+        // Import / export / share the active theme as a compact code (also QR-able).
+        var shareRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 2, 0, 0) };
+        var import = SettingsUi.FlatButton("Import from clipboard");
+        import.Click += async (_, _) =>
+        {
+            try
+            {
+                var text = Clipboard is null ? null : await Clipboard.TryGetTextAsync();
+                if (ThemeCodec.Decode(text) is not { } imported) return;   // not a Perch theme code — ignore
+                var id = UniqueThemeId(imported.Name);
+                _settings.CustomThemes ??= new();
+                _settings.CustomThemes.Add(imported with { Id = id });
+                _settings.ActiveThemeId = id;
+                _settings.Save();
+                _hooks.ThemeChanged?.Invoke();
+                RebuildThemeList();
+            }
+            catch { /* clipboard unavailable / bad data — no-op */ }
+        };
+        var export = SettingsUi.FlatButton("Copy active as code");
+        export.Click += async (_, _) =>
+        {
+            try
+            {
+                if (Clipboard is not null)
+                    await Clipboard.SetTextAsync(ThemeCodec.Encode(ActiveTheme()));
+            }
+            catch { }
+        };
+        var qr = SettingsUi.FlatButton("Share as QR");
+        qr.Click += (_, _) =>
+        {
+            var t = ActiveTheme();
+            new QrWindow($"Share theme — {t.Name}", ThemeCodec.Encode(t)).Show();
+        };
+        shareRow.Children.Add(import);
+        shareRow.Children.Add(export);
+        shareRow.Children.Add(qr);
+        _themeList.Children.Add(shareRow);
+    }
+
+    private Theme ActiveTheme() => ThemeCatalog.Resolve(_settings.ActiveThemeId, _settings.CustomThemes);
+
+    // A unique custom-theme id from a display name (mirrors the designer's), so an imported theme doesn't
+    // collide with an existing custom one or a built-in.
+    private string UniqueThemeId(string name)
+    {
+        var slug = new string((name ?? "theme").ToLowerInvariant()
+            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '-').ToArray()).Trim('-');
+        if (string.IsNullOrEmpty(slug)) slug = "theme";
+        var baseId = "custom-" + slug;
+        var taken = _settings.CustomThemes?.Select(t => t.Id).ToHashSet() ?? new();
+        if (!taken.Contains(baseId) && !ThemeCatalog.IsBuiltIn(baseId)) return baseId;
+        int n = 2;
+        while (taken.Contains($"{baseId}-{n}")) n++;
+        return $"{baseId}-{n}";
     }
 
     private void RestyleThemeCards()
