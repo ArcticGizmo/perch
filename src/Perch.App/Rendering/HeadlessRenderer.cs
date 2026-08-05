@@ -198,11 +198,18 @@ internal static class HeadlessRenderer
         RenderControl(statsAll, Path.Combine(outDir, "stats_alltime_1.5x.png"), 144);
 
         // Change Review diff (git-review M1): a synthetic multi-file diff so the added/removed/context
-        // colours, the file-separator bars, and the monospace alignment can be eyeballed without a repo.
-        var diff = new Views.DiffView { Width = 720 };
-        diff.SetDiff(SampleDiff(), null);
-        RenderControl(diff, Path.Combine(outDir, "change_review_1x.png"), 96);
-        RenderControl(diff, Path.Combine(outDir, "change_review_1.5x.png"), 144);
+        // colours, the file bars, and the monospace alignment can be eyeballed without a repo — in both
+        // the unified and side-by-side split layouts.
+        var diffUnified = new Views.DiffView { Width = 760 };
+        diffUnified.SetDiff(SampleDiff(), null);
+        RenderControl(diffUnified, Path.Combine(outDir, "change_review_unified_1x.png"), 96);
+        RenderControl(diffUnified, Path.Combine(outDir, "change_review_unified_1.5x.png"), 144);
+
+        var diffSplit = new Views.DiffView { Width = 760 };
+        diffSplit.SetDiff(SampleDiff(), null);
+        diffSplit.SetSplit(true);
+        RenderControl(diffSplit, Path.Combine(outDir, "change_review_split_1x.png"), 96);
+        RenderControl(diffSplit, Path.Combine(outDir, "change_review_split_1.5x.png"), 144);
 
         // Dedicated Achievements window (the "trophy cabinet"): the roomy grid variant with per-badge
         // criteria lines, fed the same all-time sample so earned + locked tiles both show.

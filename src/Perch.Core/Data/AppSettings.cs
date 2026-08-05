@@ -242,6 +242,11 @@ internal sealed class AppSettings
     // on demand while the window is open), so it costs nothing when disabled. A missing key keeps it off.
     public bool ShowGitReview { get; set; }
 
+    // The Change Review window's diff layout: false = unified (one column), true = side-by-side split.
+    // Persisted so the choice sticks between openings; toggled from the window's own toolbar. A missing key
+    // defaults to unified.
+    public bool GitReviewSplitView { get; set; }
+
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
     // MigrateQuickLinks) with the well-known presets, honouring the legacy switches below. An empty

@@ -750,7 +750,7 @@ public partial class App : Application
     {
         var pr = session.PullRequest;
         _reviewWindow = WindowHost.ShowOrFocus(_reviewWindow,
-            () => new GitReviewWindow(),
+            () => new GitReviewWindow(_appSettings ?? AppSettings.Load()),
             () => _reviewWindow = null,
             w => w.Retarget(session.Cwd, session.DisplayName, pr));
     }

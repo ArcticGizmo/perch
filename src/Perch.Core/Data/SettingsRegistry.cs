@@ -91,6 +91,12 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.ShowGitReview),
             s => s.ShowGitReview, (s, v) => s.ShowGitReview = v),
 
+        Toggle("git-review-split", "Change review: split diff",
+            "Show the Change Review diff side-by-side (old vs new) instead of unified. Also toggled from the window's own toolbar.",
+            SettingSurface.Advanced, ["git", "diff", "split", "side", "unified", "review"],
+            PreviewTarget.None, nameof(AppSettings.GitReviewSplitView),
+            s => s.GitReviewSplitView, (s, v) => s.GitReviewSplitView = v),
+
         Toggle("media-controller", "Now-playing media",
             "The media controller strip - track plus previous / play-pause / next.",
             SettingSurface.SessionRow, ["media", "music", "now", "playing", "spotify", "track", "controller", "sound"],

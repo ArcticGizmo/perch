@@ -31,21 +31,27 @@ internal sealed class GitReviewWindow : Window
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
 
     private readonly GitRepoService _git = new();
+    private readonly AppSettings _settings;
 
     private readonly TextBlock _titleText;
     private readonly TextBlock _subText;
     private readonly Button _prChip;
+    private readonly Button _unifiedBtn;
+    private readonly Button _splitBtn;
     private readonly ListBox _filesList;
     private readonly ListBox _commitsList;
     private readonly DiffView _diff;
 
     private string? _cwd;
     private string? _prUrl;
+    private bool _split;
     private int _gen;            // bumped on every retarget/refresh; async results check they're still current
     private bool _suppressSelect; // guards the "selecting in one list clears the other" cross-update
 
-    public GitReviewWindow()
+    public GitReviewWindow(AppSettings settings)
     {
+        _settings = settings;
+        _split = settings.GitReviewSplitView;
         Title = "Review changes";
         Width = 1040;
         Height = 680;
@@ -75,12 +81,22 @@ internal sealed class GitReviewWindow : Window
         };
         refreshBtn.Click += (_, _) => RefreshStatus();
 
+        // Unified / Split toggle (GitHub/GitKraken-style side-by-side), persisted to AppSettings.
+        _unifiedBtn = ModeButton("Unified", split: false);
+        _splitBtn = ModeButton("Split", split: true);
+        var modeGroup = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
+            Children = { _unifiedBtn, _splitBtn },
+        };
+
         var headerText = new StackPanel { Orientation = Orientation.Vertical, Children = { _titleText, _subText } };
         var header = new Border
         {
             Background = Palette.FormBgBrush, Padding = new Thickness(14, 10),
             [DockPanel.DockProperty] = Dock.Top,
-            Child = new DockPanel { LastChildFill = true, Children = { _prChip, refreshBtn, headerText } },
+            Child = new DockPanel { LastChildFill = true, Children = { _prChip, refreshBtn, modeGroup, headerText } },
         };
 
         // ---- left column: two lists ----
@@ -102,10 +118,12 @@ internal sealed class GitReviewWindow : Window
 
         // ---- right: diff ----
         _diff = new DiffView();
+        _diff.SetSplit(_split);
+        UpdateModeButtons();
         var diffScroll = new ScrollViewer
         {
             Content = _diff,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
             [Grid.ColumnProperty] = 1,
         };
 
@@ -236,6 +254,37 @@ internal sealed class GitReviewWindow : Window
 
     private static string? DiffNote(GitDiff? diff, string emptyNote) =>
         diff is { Files.Count: > 0 } ? null : emptyNote;
+
+    // ---- diff layout mode (unified / split) ----
+
+    private Button ModeButton(string label, bool split)
+    {
+        var b = new Button { Content = label, VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(10, 4) };
+        b.Click += (_, _) => SetMode(split);
+        return b;
+    }
+
+    private void SetMode(bool split)
+    {
+        if (_split == split) return;
+        _split = split;
+        _diff.SetSplit(split);
+        _settings.GitReviewSplitView = split;
+        _settings.Save();
+        UpdateModeButtons();
+    }
+
+    private void UpdateModeButtons()
+    {
+        Style(_unifiedBtn, !_split);
+        Style(_splitBtn, _split);
+
+        static void Style(Button b, bool active)
+        {
+            b.Background = active ? new SolidColorBrush(Palette.Accent) : Palette.ButtonBgBrush;
+            b.Foreground = active ? Brushes.White : Palette.FgBrush;
+        }
+    }
 
     // ---- small UI helpers ----
 
