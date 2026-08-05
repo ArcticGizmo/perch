@@ -29,6 +29,9 @@ public sealed record Theme
     // ── Surfaces & chrome ──────────────────────────────────────────────────────
     /// <summary>Solid window background (settings and the other windows).</summary>
     public required Rgb Surface { get; init; }
+    /// <summary>Recessed surface: nav rails, list/body backgrounds, toolbars (darker than
+    /// <see cref="Surface"/>).</summary>
+    public required Rgb SurfaceSunken { get; init; }
     /// <summary>Raised surface: cards, flat buttons, text inputs, badges.</summary>
     public required Rgb SurfaceRaised { get; init; }
     /// <summary>Hover state of a raised surface / button.</summary>

@@ -25,7 +25,7 @@ namespace Perch.Avalonia.Windows;
 /// </summary>
 internal sealed class HistoryWindow : Window
 {
-    private static readonly Color BodyBg = Color.FromRgb(18, 18, 24);
+    private static Color BodyBg => Palette.Sunken;
     private static readonly IBrush UserBrush   = new SolidColorBrush(Palette.Green);
     private static readonly IBrush AsstBrush   = new SolidColorBrush(Palette.Accent);
     private static readonly IBrush ToolBrush   = new SolidColorBrush(Color.FromRgb(56, 189, 248));

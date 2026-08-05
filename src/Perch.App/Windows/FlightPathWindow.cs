@@ -32,7 +32,7 @@ internal sealed class FlightPathWindow : Window
         Height = 620;
         MinWidth = 620;
         MinHeight = 460;
-        Background = new SolidColorBrush(Color.FromRgb(18, 18, 24));
+        Background = Palette.SurfaceSunkenBrush;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
         var prev = NavButton("‹", () => StepDay(-1));

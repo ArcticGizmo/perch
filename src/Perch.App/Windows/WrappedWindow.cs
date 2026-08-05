@@ -8,6 +8,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
 using Perch.Data;
 
@@ -21,11 +22,12 @@ namespace Perch.Avalonia.Windows;
 /// </summary>
 internal sealed class WrappedWindow : Window
 {
-    private static readonly IBrush Bg = new SolidColorBrush(Color.FromRgb(15, 15, 22));
-    private static readonly IBrush Stroke = new SolidColorBrush(Color.FromRgb(60, 60, 90));
-    private static readonly IBrush Fg = new SolidColorBrush(Color.FromRgb(225, 225, 235));
-    private static readonly IBrush Muted = new SolidColorBrush(Color.FromRgb(150, 150, 170));
-    private static readonly IBrush BtnBg = new SolidColorBrush(Color.FromRgb(30, 30, 44));
+    // Window chrome follows the active theme; the shareable poster (WrappedPoster) keeps its own fixed look.
+    private static readonly IBrush Bg = Palette.OverlaySurfaceBrush;
+    private static readonly IBrush Stroke = Palette.BorderBrush;
+    private static readonly IBrush Fg = Palette.FgBrush;
+    private static readonly IBrush Muted = Palette.MutedBrush;
+    private static readonly IBrush BtnBg = Palette.ButtonBgBrush;
 
     private readonly RenderTargetBitmap _poster;
     private readonly string _suggestedName;

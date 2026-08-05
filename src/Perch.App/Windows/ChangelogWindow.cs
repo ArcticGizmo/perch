@@ -18,10 +18,12 @@ namespace Perch.Avalonia.Windows;
 /// </summary>
 internal sealed class ChangelogWindow : Window
 {
-    private static readonly IBrush Bg     = new SolidColorBrush(Color.FromRgb(15, 15, 20));
-    private static readonly IBrush Stroke = new SolidColorBrush(Color.FromRgb(45, 45, 60));
-    private static readonly IBrush Fg     = new SolidColorBrush(Color.FromRgb(225, 225, 235));
-    private static readonly IBrush Muted  = new SolidColorBrush(Color.FromRgb(120, 120, 140));
+    // Chrome aliased to the shared Palette so the window follows the active theme (and its muted text is
+    // AA-lifted from the old (120,120,140)).
+    private static readonly IBrush Bg     = Palette.OverlaySurfaceBrush;
+    private static readonly IBrush Stroke = Palette.BorderBrush;
+    private static readonly IBrush Fg     = Palette.FgBrush;
+    private static readonly IBrush Muted  = Palette.MutedBrush;
 
     private readonly Action _onSuppress;
 

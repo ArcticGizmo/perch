@@ -17,6 +17,7 @@ public static class Themes
 
         // Surfaces & chrome
         Surface            = new(24, 24, 32),
+        SurfaceSunken      = new(18, 18, 24),
         SurfaceRaised      = new(45, 45, 60),
         SurfaceRaisedHover = new(60, 60, 80),
         OverlaySurface     = new(15, 15, 20),
@@ -65,22 +66,24 @@ public static class Themes
         Id = "ember",
         Name = "Ember",
 
-        // Warm charcoal ramp (hue ~15°, low chroma).
-        Surface            = new(27, 21, 19),
-        SurfaceRaised      = new(48, 37, 33),
-        SurfaceRaisedHover = new(62, 48, 43),
-        OverlaySurface     = new(20, 15, 13),
-        OverlayRowHover    = new(38, 27, 23),
-        Track              = new(46, 36, 33),
-        Border             = new(60, 44, 39),
-        Separator          = new(44, 32, 29),
-        TreeLine           = new(76, 55, 48),
+        // Restrained warm charcoal: only a faint warm bias (R a few points over B), not an obvious red —
+        // near-neutral chrome that reads as "warm" beside Midnight's cool blue-grey without shouting.
+        Surface            = new(24, 22, 21),
+        SurfaceSunken      = new(20, 18, 17),
+        SurfaceRaised      = new(43, 40, 38),
+        SurfaceRaisedHover = new(56, 52, 49),
+        OverlaySurface     = new(17, 15, 14),
+        OverlayRowHover    = new(29, 25, 23),
+        Track              = new(40, 37, 35),
+        Border             = new(51, 46, 43),
+        Separator          = new(37, 33, 31),
+        TreeLine           = new(60, 54, 50),
 
-        // Warm-tinted neutrals for text.
-        TextPrimary  = new(237, 228, 223),
-        TextTitle    = new(250, 244, 240),
-        TextMuted    = new(179, 164, 156),
-        ExpectedMark = new(198, 182, 174),
+        // Faintly warm neutrals for text.
+        TextPrimary  = new(231, 227, 224),
+        TextTitle    = new(248, 245, 243),
+        TextMuted    = new(165, 158, 153),
+        ExpectedMark = new(189, 182, 177),
     };
 
     /// <summary>Every built-in theme, in display order. Custom themes are appended by the UI.</summary>

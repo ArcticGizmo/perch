@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Perch.Avalonia.Theming;
 using Perch.Data;
 
 namespace Perch.Avalonia.Windows;
@@ -21,18 +22,18 @@ namespace Perch.Avalonia.Windows;
 /// </summary>
 internal sealed class DaemonListWindow : Window
 {
-    private static readonly IBrush Bg     = new SolidColorBrush(Color.FromRgb(15, 15, 20));
-    private static readonly IBrush Stroke = new SolidColorBrush(Color.FromRgb(45, 45, 60));
-    private static readonly IBrush Fg     = new SolidColorBrush(Color.FromRgb(225, 225, 235));
-    private static readonly IBrush Muted  = new SolidColorBrush(Color.FromRgb(120, 120, 140));
+    private static readonly IBrush Bg     = Palette.OverlaySurfaceBrush;
+    private static readonly IBrush Stroke = Palette.BorderBrush;
+    private static readonly IBrush Fg     = Palette.FgBrush;
+    private static readonly IBrush Muted  = Palette.MutedBrush;
     private static readonly IBrush RowHover = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255));
 
     // Status dot colours, matching the overlay's palette so the two surfaces read as one.
-    private static readonly Color Running   = Color.FromRgb(34, 197, 94);
-    private static readonly Color Attention = Color.FromRgb(251, 146, 60);
-    private static readonly Color Awaiting  = Color.FromRgb(250, 204, 21);
-    private static readonly Color ApiError  = Color.FromRgb(239, 68, 68);
-    private static readonly Color Idle      = Color.FromRgb(100, 116, 139);
+    private static Color Running   => Palette.Green;
+    private static Color Attention => Palette.Orange;
+    private static Color Awaiting  => Palette.Yellow;
+    private static Color ApiError  => Palette.Red;
+    private static Color Idle      => Palette.Idle;
 
     private readonly Action<string> _openHistory;
     private readonly Func<string, SessionStatus?> _statusOf;

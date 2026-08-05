@@ -7,6 +7,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using Perch.Avalonia.Theming;
 using QRCoder;
 
 namespace Perch.Avalonia.Windows;
@@ -20,12 +21,12 @@ namespace Perch.Avalonia.Windows;
 public sealed class QrWindow : Window
 {
     // Palette mirrors the overlay so the popup reads as part of the same app.
-    private static readonly IBrush Bg     = new SolidColorBrush(Color.FromRgb(15, 15, 20));
-    private static readonly IBrush Stroke = new SolidColorBrush(Color.FromRgb(45, 45, 60));
-    private static readonly IBrush Fg     = new SolidColorBrush(Color.FromRgb(225, 225, 235));
-    private static readonly IBrush Muted  = new SolidColorBrush(Color.FromRgb(110, 110, 130));
-    private static readonly IBrush Remote = new SolidColorBrush(Color.FromRgb(96, 165, 250));
-    private static readonly IBrush BtnBg  = new SolidColorBrush(Color.FromRgb(30, 30, 44));
+    private static readonly IBrush Bg     = Palette.OverlaySurfaceBrush;
+    private static readonly IBrush Stroke = Palette.BorderBrush;
+    private static readonly IBrush Fg     = Palette.FgBrush;
+    private static readonly IBrush Muted  = Palette.MutedBrush;
+    private static readonly IBrush Remote = Palette.AccentBrush;
+    private static readonly IBrush BtnBg  = Palette.ButtonBgBrush;
 
     private const int QrSize = 240, Quiet = 14;
 

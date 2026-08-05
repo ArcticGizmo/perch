@@ -110,7 +110,7 @@ internal sealed class SettingsWindow : Window
 {
     private const double NavWidth = 178;
 
-    private static readonly IBrush NavBg = new SolidColorBrush(Color.FromRgb(18, 18, 24));
+    private static readonly IBrush NavBg = Palette.SurfaceSunkenBrush;
 
     private readonly AppSettings _settings;
     private readonly UsageMonitorHost _usageHost;

@@ -40,7 +40,7 @@ internal sealed class StatsWindow : Window
         Height = 720;
         MinWidth = 560;
         MinHeight = 520;
-        Background = new SolidColorBrush(Color.FromRgb(18, 18, 24));
+        Background = Palette.SurfaceSunkenBrush;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
         _showCost = settings.ShowEstimatedCost;

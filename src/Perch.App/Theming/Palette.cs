@@ -39,6 +39,7 @@ public static class Palette
         TrackBrush.Color    = theme.Track.ToColor();
         BrandBrush.Color    = theme.Brand.ToColor();
         // Extended roles (overlay chrome + status), aliased by the overlay/windows.
+        SurfaceSunkenBrush.Color  = theme.SurfaceSunken.ToColor();
         OverlaySurfaceBrush.Color = theme.OverlaySurface.ToColor();
         OverlayScrimBrush.Color   = theme.OverlaySurface.ToColor(ScrimAlpha);
         OverlayRowHoverBrush.Color = theme.OverlayRowHover.ToColor();
@@ -69,6 +70,7 @@ public static class Palette
     public static Color Border      => Active.Border.ToColor();
     public static Color ButtonBg    => Active.SurfaceRaised.ToColor();
     public static Color ButtonHover => Active.SurfaceRaisedHover.ToColor();
+    public static Color Sunken      => Active.SurfaceSunken.ToColor();
     public static Color Danger      => Active.Danger.ToColor();
 
     // The perch-logo red-orange, used to draw attention to the update affordances so they read as one accent.
@@ -81,6 +83,7 @@ public static class Palette
     public static Color Red          => Active.StatusError.ToColor();
     public static Color Track        => Active.Track.ToColor();
     public static Color ExpectedMark => Active.ExpectedMark.ToColor();
+    public static Color Idle         => Active.StatusIdle.ToColor();
 
     // A neutral accent for teammates with no (or an unknown) colour — the overlay's sub-agent purple.
     public static Color TeamDefault  => Active.SubAgent.ToColor();
@@ -135,6 +138,7 @@ public static class Palette
     public static readonly SolidColorBrush BrandBrush    = new(Themes.Midnight.Brand.ToColor());
 
     // ── Extended role brushes (aliased by the overlay + windows so one Apply() re-colours everything) ──
+    public static readonly SolidColorBrush SurfaceSunkenBrush   = new(Themes.Midnight.SurfaceSunken.ToColor());
     public static readonly SolidColorBrush OverlaySurfaceBrush  = new(Themes.Midnight.OverlaySurface.ToColor());
     public static readonly SolidColorBrush OverlayScrimBrush    = new(Themes.Midnight.OverlaySurface.ToColor(ScrimAlpha));
     public static readonly SolidColorBrush OverlayRowHoverBrush = new(Themes.Midnight.OverlayRowHover.ToColor());
