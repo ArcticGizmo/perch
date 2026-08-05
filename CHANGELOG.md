@@ -16,7 +16,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   until it does
 - A colour-blind preview (protanopia / deuteranopia / tritanopia) so you can check the status colours don't
   blur together
-- Custom themes save, and share as a compact code or a QR — import one from your clipboard
+- Custom themes save, and copy to your clipboard as a compact code — paste one back in to import it
 - The overlay's muted text was quietly failing contrast; it isn't anymore
 - Keyboard focus is finally visible on the settings toggles (Space/Enter flips them, too)
 

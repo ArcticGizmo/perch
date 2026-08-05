@@ -352,15 +352,8 @@ internal sealed class SettingsWindow : Window
             }
             catch { }
         };
-        var qr = SettingsUi.FlatButton("Share as QR");
-        qr.Click += (_, _) =>
-        {
-            var t = ActiveTheme();
-            new QrWindow($"Share theme — {t.Name}", ThemeCodec.Encode(t)).Show();
-        };
         shareRow.Children.Add(import);
         shareRow.Children.Add(export);
-        shareRow.Children.Add(qr);
         _themeList.Children.Add(shareRow);
     }
 
