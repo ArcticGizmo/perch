@@ -1,4 +1,6 @@
 using System.IO;
+using System.Linq;
+using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -56,6 +58,12 @@ internal sealed class GitReviewWindow : Window
     // one reload. Both are torn down when the window closes.
     private FileSystemWatcher? _watcher;
     private DispatcherTimer? _debounce;
+
+    // What the lists and diff currently show, so an auto-refresh can update ONLY what actually changed —
+    // and in particular leave the diff (and its scroll position) untouched when nothing changed.
+    private GitRepoStatus? _lastStatus;
+    private IReadOnlyList<GitCommit> _lastCommits = [];
+    private string _shownDiffSig = "";
 
     public GitReviewWindow(AppSettings settings)
     {
@@ -215,18 +223,14 @@ internal sealed class GitReviewWindow : Window
                     _filesList.SelectedIndex = -1;
                     _commitsList.SelectedIndex = -1;
                     _suppressSelect = false;
+                    _lastStatus = status;
+                    _lastCommits = commits;
 
                     // Restore the prior selection (fires the selection handler, which reloads the diff).
                     if (keepPath is not null)
-                    {
-                        for (int i = 0; i < changes.Count; i++)
-                            if (changes[i].Path == keepPath) { _filesList.SelectedIndex = i; break; }
-                    }
+                        _filesList.SelectedIndex = IndexOfPath(changes, keepPath);
                     else if (keepHash is not null)
-                    {
-                        for (int i = 0; i < commits.Count; i++)
-                            if (commits[i].Hash == keepHash) { _commitsList.SelectedIndex = i; break; }
-                    }
+                        _commitsList.SelectedIndex = IndexOfHash(commits, keepHash);
                 });
             });
     }
@@ -269,7 +273,7 @@ internal sealed class GitReviewWindow : Window
         t.Tick += (_, _) =>
         {
             _debounce?.Stop();
-            if (IsVisible) RefreshStatus(preserveSelection: true);
+            if (IsVisible) AutoRefresh();
         };
         return t;
     }
@@ -306,13 +310,14 @@ internal sealed class GitReviewWindow : Window
 
         int gen = ++_gen;
         _diff.SetLoading();
+        _shownDiffSig = ""; // a real diff always differs from this, so the pending load will render
         System.Threading.Tasks.Task.Run(() => LoadFileDiff(cwd, fc)).ContinueWith(t =>
         {
             if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
                 if (!IsVisible || gen != _gen) return;
-                _diff.SetSections(t.Result.sections, t.Result.note);
+                ShowSections(t.Result.sections, t.Result.note);
             });
         });
     }
@@ -324,13 +329,83 @@ internal sealed class GitReviewWindow : Window
 
         int gen = ++_gen;
         _diff.SetLoading();
+        _shownDiffSig = ""; // a real diff always differs from this, so the pending load will render
         System.Threading.Tasks.Task.Run(() => _git.GetCommitDiff(cwd, c.Hash)).ContinueWith(t =>
         {
             if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
                 if (!IsVisible || gen != _gen) return;
-                _diff.SetDiff(t.Result, DiffNote(t.Result, $"No diff for {c.ShortHash}."));
+                ShowSections(CommitSections(t.Result), DiffNote(t.Result, $"No diff for {c.ShortHash}."));
+            });
+        });
+    }
+
+    // Shows diff sections and records a signature of what's now displayed, so an auto-refresh can tell
+    // whether the diff actually changed before re-rendering it (which would otherwise reset the scroll).
+    private void ShowSections(IReadOnlyList<DiffSection> sections, string? note)
+    {
+        _diff.SetSections(sections, note);
+        _shownDiffSig = DiffSig(sections);
+    }
+
+    private static IReadOnlyList<DiffSection> CommitSections(GitDiff? diff) =>
+        diff is { Files.Count: > 0 } d ? [new DiffSection(null, d)] : [];
+
+    // A debounced filesystem event fired. Re-read status/log (and the selected file's diff) off the UI
+    // thread, then update ONLY the parts that actually changed: an unchanged diff is left exactly as it is,
+    // so the view doesn't jump when a watcher event didn't correspond to a real change. Commit diffs are
+    // immutable, so a selected commit's diff is never re-fetched.
+    private void AutoRefresh()
+    {
+        if (_cwd is not { } cwd) return;
+        int gen = ++_gen;
+        string? selPath = _filesList.SelectedItem is GitFileChange f ? f.Path : null;
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var status = _git.GetStatus(cwd);
+            var commits = _git.GetLog(cwd, 50);
+            (IReadOnlyList<DiffSection> sections, string? note)? sel = null;
+            if (selPath is not null)
+                sel = FindByPath(status, selPath) is { } fc
+                    ? LoadFileDiff(cwd, fc)
+                    : ((IReadOnlyList<DiffSection>)[], $"No diff for {selPath}.");
+            return (status, commits, sel);
+        }).ContinueWith(t =>
+        {
+            if (!t.IsCompletedSuccessfully) return;
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!IsVisible || gen != _gen) return;
+                var (status, commits, sel) = t.Result;
+
+                if (!CommitsEqual(commits, _lastCommits))
+                {
+                    string? keepHash = _commitsList.SelectedItem is GitCommit c ? c.Hash : null;
+                    _suppressSelect = true;
+                    _commitsList.ItemsSource = commits;
+                    _commitsList.SelectedIndex = IndexOfHash(commits, keepHash);
+                    _suppressSelect = false;
+                    _lastCommits = commits;
+                }
+
+                if (!StatusEqual(status, _lastStatus))
+                {
+                    ApplyStatus(status, cwd);
+                    var changes = status?.Changes ?? [];
+                    string? keepPath = _filesList.SelectedItem is GitFileChange f ? f.Path : null;
+                    _suppressSelect = true;
+                    _filesList.ItemsSource = changes;
+                    _filesList.SelectedIndex = IndexOfPath(changes, keepPath);
+                    _suppressSelect = false;
+                    _lastStatus = status;
+                }
+
+                // Only touch the diff when its content actually changed (a selected working file only —
+                // commit diffs can't change). This is what keeps the scroll position stable.
+                if (sel is { } s && DiffSig(s.sections) != _shownDiffSig)
+                    ShowSections(s.sections, s.note);
             });
         });
     }
@@ -366,6 +441,69 @@ internal sealed class GitReviewWindow : Window
 
     private static string? DiffNote(GitDiff? diff, string emptyNote) =>
         diff is { Files.Count: > 0 } ? null : emptyNote;
+
+    // ---- change detection for auto-refresh ----
+
+    // Value-compares two statuses (record-struct fields + a sequence-compare of the changed-file list,
+    // whose elements are record structs with value equality).
+    private static bool StatusEqual(GitRepoStatus? a, GitRepoStatus? b)
+    {
+        if (a is null) return b is null;
+        if (b is null) return false;
+        var x = a.Value;
+        var y = b.Value;
+        return x.Branch == y.Branch && x.Upstream == y.Upstream && x.Ahead == y.Ahead && x.Behind == y.Behind
+            && x.Changes.SequenceEqual(y.Changes);
+    }
+
+    private static bool CommitsEqual(IReadOnlyList<GitCommit> a, IReadOnlyList<GitCommit> b) => a.SequenceEqual(b);
+
+    private static GitFileChange? FindByPath(GitRepoStatus? status, string path)
+    {
+        if (status is { } s)
+            foreach (var c in s.Changes)
+                if (c.Path == path) return c;
+        return null;
+    }
+
+    private static int IndexOfPath(IReadOnlyList<GitFileChange> list, string? path)
+    {
+        if (path is not null)
+            for (int i = 0; i < list.Count; i++)
+                if (list[i].Path == path) return i;
+        return -1;
+    }
+
+    private static int IndexOfHash(IReadOnlyList<GitCommit> list, string? hash)
+    {
+        if (hash is not null)
+            for (int i = 0; i < list.Count; i++)
+                if (list[i].Hash == hash) return i;
+        return -1;
+    }
+
+    // A compact, order-preserving signature of the rendered diff — labels, per-file paths/binary flag, and
+    // every hunk header + typed line. Cheap to compute and compare; two diffs with the same signature render
+    // identically, so an auto-refresh can skip re-rendering (and leave the scroll position alone).
+    private static string DiffSig(IReadOnlyList<DiffSection> sections)
+    {
+        var sb = new StringBuilder();
+        foreach (var s in sections)
+        {
+            sb.Append(s.Label).Append('\u241e');
+            foreach (var f in s.Diff.Files)
+            {
+                sb.Append(f.OldPath).Append('>').Append(f.NewPath).Append(f.IsBinary ? '#' : '.').Append('\u241e');
+                foreach (var h in f.Hunks)
+                {
+                    sb.Append(h.Header).Append('\u241e');
+                    foreach (var l in h.Lines)
+                        sb.Append((char)('0' + (int)l.Kind)).Append(l.Text).Append('\n');
+                }
+            }
+        }
+        return sb.ToString();
+    }
 
     // ---- diff layout mode (unified / split) ----
 
