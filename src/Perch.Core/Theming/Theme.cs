@@ -28,72 +28,72 @@ public sealed record Theme
 
     // ── Surfaces & chrome ──────────────────────────────────────────────────────
     /// <summary>Solid window background (settings and the other windows).</summary>
-    public required Rgb Surface { get; init; }
+    public Rgb Surface { get; init; }
     /// <summary>Recessed surface: nav rails, list/body backgrounds, toolbars (darker than
     /// <see cref="Surface"/>).</summary>
-    public required Rgb SurfaceSunken { get; init; }
+    public Rgb SurfaceSunken { get; init; }
     /// <summary>Raised surface: cards, flat buttons, text inputs, badges.</summary>
-    public required Rgb SurfaceRaised { get; init; }
+    public Rgb SurfaceRaised { get; init; }
     /// <summary>Hover state of a raised surface / button.</summary>
-    public required Rgb SurfaceRaisedHover { get; init; }
+    public Rgb SurfaceRaisedHover { get; init; }
     /// <summary>The floating overlay panel's background (darker than <see cref="Surface"/>; painted
     /// translucent at the draw site).</summary>
-    public required Rgb OverlaySurface { get; init; }
+    public Rgb OverlaySurface { get; init; }
     /// <summary>Hover wash on an overlay session row.</summary>
-    public required Rgb OverlayRowHover { get; init; }
+    public Rgb OverlayRowHover { get; init; }
     /// <summary>Trough behind usage / metric bars (and the small count badges).</summary>
-    public required Rgb Track { get; init; }
+    public Rgb Track { get; init; }
     /// <summary>Control and panel border.</summary>
-    public required Rgb Border { get; init; }
+    public Rgb Border { get; init; }
     /// <summary>Hairline separator between rows / sections.</summary>
-    public required Rgb Separator { get; init; }
+    public Rgb Separator { get; init; }
     /// <summary>The sub-agent / teammate tree connector line.</summary>
-    public required Rgb TreeLine { get; init; }
+    public Rgb TreeLine { get; init; }
 
     // ── Text ───────────────────────────────────────────────────────────────────
     /// <summary>Primary body text.</summary>
-    public required Rgb TextPrimary { get; init; }
+    public Rgb TextPrimary { get; init; }
     /// <summary>Emphasised heading text.</summary>
-    public required Rgb TextTitle { get; init; }
+    public Rgb TextTitle { get; init; }
     /// <summary>Secondary / muted text (must clear WCAG AA on its surface).</summary>
-    public required Rgb TextMuted { get; init; }
+    public Rgb TextMuted { get; init; }
     /// <summary>The light neutral tick marking expected usage on a bar.</summary>
-    public required Rgb ExpectedMark { get; init; }
+    public Rgb ExpectedMark { get; init; }
 
     // ── Accent & brand ─────────────────────────────────────────────────────────
     /// <summary>Primary accent (links, selection, nav/cycle, remote).</summary>
-    public required Rgb Accent { get; init; }
+    public Rgb Accent { get; init; }
     /// <summary>Hover/brightened accent.</summary>
-    public required Rgb AccentHover { get; init; }
+    public Rgb AccentHover { get; init; }
     /// <summary>The Perch brand red-orange (update affordances).</summary>
-    public required Rgb Brand { get; init; }
+    public Rgb Brand { get; init; }
     /// <summary>Hover/brightened brand.</summary>
-    public required Rgb BrandHover { get; init; }
+    public Rgb BrandHover { get; init; }
     /// <summary>Destructive-action colour (delete/reset text and buttons).</summary>
-    public required Rgb Danger { get; init; }
+    public Rgb Danger { get; init; }
 
     // ── Semantic status (theme-stable identity) ────────────────────────────────
     /// <summary>Session running / usage healthy (green).</summary>
-    public required Rgb StatusRunning { get; init; }
+    public Rgb StatusRunning { get; init; }
     /// <summary>Session needs attention / done (orange).</summary>
-    public required Rgb StatusAttention { get; init; }
+    public Rgb StatusAttention { get; init; }
     /// <summary>Session awaiting input / usage warning (yellow).</summary>
-    public required Rgb StatusAwaiting { get; init; }
+    public Rgb StatusAwaiting { get; init; }
     /// <summary>Session idle (slate).</summary>
-    public required Rgb StatusIdle { get; init; }
+    public Rgb StatusIdle { get; init; }
     /// <summary>Error / API failure / usage critical (red).</summary>
-    public required Rgb StatusError { get; init; }
+    public Rgb StatusError { get; init; }
     /// <summary>Stuck / caution glyph (amber).</summary>
-    public required Rgb StatusWarn { get; init; }
+    public Rgb StatusWarn { get; init; }
     /// <summary>Sub-agent / unknown-teammate accent (purple).</summary>
-    public required Rgb SubAgent { get; init; }
+    public Rgb SubAgent { get; init; }
     /// <summary>Mail / teal-teammate accent.</summary>
-    public required Rgb Teal { get; init; }
+    public Rgb Teal { get; init; }
     /// <summary>Token burn-rate readout (blue).</summary>
-    public required Rgb Burn { get; init; }
+    public Rgb Burn { get; init; }
     /// <summary>Bot / grey-teammate neutral accent.</summary>
-    public required Rgb TeamGray { get; init; }
+    public Rgb TeamGray { get; init; }
     /// <summary>The "Accept edits" permission-mode badge (blue-purple); the other modes reuse
     /// <see cref="Accent"/> / <see cref="StatusAwaiting"/> / <see cref="StatusError"/>.</summary>
-    public required Rgb ModeAcceptEdits { get; init; }
+    public Rgb ModeAcceptEdits { get; init; }
 }

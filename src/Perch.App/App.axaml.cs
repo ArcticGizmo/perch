@@ -133,7 +133,7 @@ public partial class App : Application
             _appSettings = settings;
 
             // Colour theme first, before anything paints, so the overlay's first frame is already themed.
-            Palette.Apply(ThemeService.Resolve(settings.ActiveThemeId));
+            Palette.Apply(Perch.Theming.ThemeCatalog.Resolve(settings.ActiveThemeId, settings.CustomThemes));
 
             // First launch after an update: grab the changelog entries newer than the version that last
             // ran here, then stamp the current version so they're only ever shown once. A null last-seen is
@@ -1133,7 +1133,8 @@ public partial class App : Application
         var hooks = new SettingsHooks
         {
             DisplayChanged = () => ApplyDisplaySettings(settings),
-            ThemeChanged = () => ThemeService.Apply(ThemeService.Resolve(settings.ActiveThemeId), _desktop),
+            ThemeChanged = () => ThemeService.Apply(
+                Perch.Theming.ThemeCatalog.Resolve(settings.ActiveThemeId, settings.CustomThemes), _desktop),
             UsageEnabledChanged = on => { if (on) _usageHost?.Start(); else _usageHost?.Stop(); },
             ServiceStatusEnabledChanged = on => { if (on) _statusHost?.Start(); else _statusHost?.Stop(); },
             ServiceStatusIntervalChanged = () => _statusHost?.SetInterval(settings.ServiceStatusIntervalMinutes),

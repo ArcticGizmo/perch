@@ -44,6 +44,12 @@ internal sealed class AppSettings
     // settings file (or a custom theme that's since been deleted) never leaves the app uncoloured.
     public string ActiveThemeId { get; set; } = "midnight";
 
+    // User-designed themes from the Appearance page's designer, appended to the built-in catalogue and
+    // resolvable by id (see Perch.Theming.ThemeCatalog). Null/empty means none. Kept resilient: a saved
+    // theme missing a role added in a later version simply degrades that one role (not the whole load).
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<Theming.Theme>? CustomThemes { get; set; }
+
     // Whether to show (and fetch, via the OAuth /usage endpoint) the session/weekly usage bars.
     // Defaults to true; a missing key in an older settings file keeps this default.
     public bool ShowUsage { get; set; } = true;
