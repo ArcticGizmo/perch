@@ -212,6 +212,12 @@ internal sealed class GitReviewWindow : Window
             OpenFind();
             e.Handled = true;
         }
+        else if (e.Key == Key.C && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            // Copy a line-range selection if one is active; otherwise let the focused control copy its own
+            // (within-line) text selection.
+            if (_diff.TryCopyLineSelection()) e.Handled = true;
+        }
         else if (e.Key == Key.Escape)
         {
             if (_findBar.IsVisible) CloseFind();

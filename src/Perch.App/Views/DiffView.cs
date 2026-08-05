@@ -2,6 +2,8 @@ using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -69,6 +71,15 @@ internal sealed class DiffView : Border
     private int _matchIdx = -1;
     private SelectableTextBlock? _highlighted;
 
+    // Line-range selection (GitHub-style): click a gutter line number to select that line, shift-click or
+    // drag to extend a contiguous range, Ctrl+C copies the lines' content. Lines are grouped into streams
+    // (unified: one; split: 0 = left/old, 1 = right/new) so a range stays within one side. Anchor/focus are
+    // positions within the active stream.
+    private readonly Dictionary<int, List<LineEntry>> _streams = new();
+    private int _selStream = -1, _selAnchor = -1, _selFocus = -1;
+    private bool _dragging;
+    private static readonly IBrush LineSelBg = new SolidColorBrush(Color.FromArgb(70, 96, 165, 250));
+
     /// <summary>Raised after a search/navigation changes the match set — (current 1-based index or 0, total).</summary>
     public event Action<int, int>? SearchResultsChanged;
 
@@ -76,6 +87,17 @@ internal sealed class DiffView : Border
     {
         Background = new SolidColorBrush(BodyBg);
         Padding = new Thickness(0, 0, 0, 12);
+        // A pointer release anywhere ends a line-range drag (handledEventsToo so a child handling the release
+        // still ends the drag).
+        AddHandler(PointerReleasedEvent, (_, _) => _dragging = false, handledEventsToo: true);
+        // Tunnelled Ctrl+C: when a line-range selection is active, copy it before a focused text cell can
+        // copy its own within-line selection. (When focus is outside the diff, the window's handler catches
+        // it instead.)
+        AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (e.Key == Key.C && e.KeyModifiers.HasFlag(KeyModifiers.Control) && TryCopyLineSelection())
+                e.Handled = true;
+        }, RoutingStrategies.Tunnel);
         Rebuild();
     }
 
@@ -224,6 +246,9 @@ internal sealed class DiffView : Border
     private void Rebuild()
     {
         _lines.Clear();
+        _streams.Clear();
+        _selStream = _selAnchor = _selFocus = -1;
+        _dragging = false;
         var root = new StackPanel { Orientation = Orientation.Vertical };
 
         if (_loading)
@@ -343,8 +368,9 @@ internal sealed class DiffView : Border
                 _ => (ContextBrush, (IBrush?)null, "  ", NextContext(ref oldNo, ref newNo)),
             };
             AddRow(grid, row, band, 0, 2);
-            AddNumber(grid, row, 0, num);
-            AddText(grid, row, 1, marker + line.Text, brush);
+            var number = AddNumber(grid, row, 0, num);
+            var text = AddText(grid, row, 1, marker + line.Text, brush);
+            if (num.Length > 0) RegisterLine(0, line.Text, number, text);
             row++;
         }
         return grid;
@@ -368,14 +394,16 @@ internal sealed class DiffView : Border
                 if (i < pendingR.Count)
                 {
                     AddRow(grid, row, RemovedBandBg, 0, 2);
-                    AddNumber(grid, row, 0, pendingR[i].num);
-                    AddText(grid, row, 1, pendingR[i].text, RemovedBrush);
+                    var num = AddNumber(grid, row, 0, pendingR[i].num);
+                    var txt = AddText(grid, row, 1, pendingR[i].text, RemovedBrush);
+                    RegisterLine(0, pendingR[i].text, num, txt);
                 }
                 if (i < pendingA.Count)
                 {
                     AddRow(grid, row, AddedBandBg, 2, 2);
-                    AddNumber(grid, row, 2, pendingA[i].num);
-                    AddText(grid, row, 3, pendingA[i].text, AddedBrush);
+                    var num = AddNumber(grid, row, 2, pendingA[i].num);
+                    var txt = AddText(grid, row, 3, pendingA[i].text, AddedBrush);
+                    RegisterLine(1, pendingA[i].text, num, txt);
                 }
                 row++;
             }
@@ -395,11 +423,16 @@ internal sealed class DiffView : Border
                     var brush = line.Kind == GitDiffLineKind.Meta ? MutedBrush : ContextBrush;
                     string ln = line.Kind == GitDiffLineKind.Meta ? "" : (newNo).ToString();
                     string lo = line.Kind == GitDiffLineKind.Meta ? "" : (oldNo).ToString();
-                    AddNumber(grid, row, 0, lo);
-                    AddText(grid, row, 1, line.Text, brush);
-                    AddNumber(grid, row, 2, ln);
-                    AddText(grid, row, 3, line.Text, brush);
-                    if (line.Kind != GitDiffLineKind.Meta) { oldNo++; newNo++; }
+                    var lNum = AddNumber(grid, row, 0, lo);
+                    var lTxt = AddText(grid, row, 1, line.Text, brush);
+                    var rNum = AddNumber(grid, row, 2, ln);
+                    var rTxt = AddText(grid, row, 3, line.Text, brush);
+                    if (line.Kind != GitDiffLineKind.Meta)
+                    {
+                        RegisterLine(0, line.Text, lNum, lTxt);
+                        RegisterLine(1, line.Text, rNum, rTxt);
+                        oldNo++; newNo++;
+                    }
                     row++;
                     break;
             }
@@ -435,7 +468,7 @@ internal sealed class DiffView : Border
         grid.Children.Add(b);
     }
 
-    private void AddNumber(Grid grid, int row, int col, string num)
+    private TextBlock AddNumber(Grid grid, int row, int col, string num)
     {
         EnsureRow(grid, row);
         var tb = new TextBlock
@@ -452,9 +485,10 @@ internal sealed class DiffView : Border
         tb.SetValue(Grid.RowProperty, row);
         tb.SetValue(Grid.ColumnProperty, col);
         grid.Children.Add(tb);
+        return tb;
     }
 
-    private void AddText(Grid grid, int row, int col, string text, IBrush brush)
+    private SelectableTextBlock AddText(Grid grid, int row, int col, string text, IBrush brush)
     {
         EnsureRow(grid, row);
         var tb = new SelectableTextBlock
@@ -471,7 +505,76 @@ internal sealed class DiffView : Border
         tb.SetValue(Grid.ColumnProperty, col);
         grid.Children.Add(tb);
         _lines.Add((tb, _currentFileKey)); // in render order → search order is by line number
+        return tb;
     }
+
+    // ---- line-range selection ----
+
+    // Registers one selectable diff line (a gutter number + its text) in a stream, and wires the gutter to
+    // start/extend a line-range selection. Clicking sets the anchor; Shift-click or drag extends it.
+    private void RegisterLine(int stream, string content, TextBlock number, SelectableTextBlock text)
+    {
+        if (!_streams.TryGetValue(stream, out var list)) { list = new(); _streams[stream] = list; }
+        var entry = new LineEntry(stream, list.Count, content, number, text);
+        list.Add(entry);
+
+        number.Cursor = new Cursor(StandardCursorType.Hand);
+        number.PointerPressed += (_, e) =>
+        {
+            bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            if (shift && _selStream == stream && _selAnchor >= 0)
+                _selFocus = entry.Pos;
+            else
+                { _selStream = stream; _selAnchor = _selFocus = entry.Pos; }
+            _dragging = true;
+            ApplyLineHighlight();
+            e.Handled = true;
+        };
+        number.PointerEntered += (_, _) =>
+        {
+            if (_dragging && _selStream == stream) { _selFocus = entry.Pos; ApplyLineHighlight(); }
+        };
+    }
+
+    // Tints the selected line range (number + text cells) in the active stream; clears the rest.
+    private void ApplyLineHighlight()
+    {
+        foreach (var (stream, list) in _streams)
+        {
+            int lo = -1, hi = -1;
+            if (stream == _selStream && _selAnchor >= 0)
+            {
+                lo = Math.Min(_selAnchor, _selFocus);
+                hi = Math.Max(_selAnchor, _selFocus);
+            }
+            foreach (var e in list)
+            {
+                bool sel = e.Pos >= lo && e.Pos <= hi;
+                e.Number.Background = sel ? LineSelBg : null;
+                e.Text.Background = sel ? LineSelBg : null;
+            }
+        }
+    }
+
+    /// <summary>Copies the current line-range selection's content to the clipboard (one line per row, no
+    /// markers or line numbers). Returns false when nothing is line-selected, so Ctrl+C can fall through to
+    /// the normal within-line text copy.</summary>
+    public bool TryCopyLineSelection()
+    {
+        if (_selStream < 0 || _selAnchor < 0 || !_streams.TryGetValue(_selStream, out var list)) return false;
+        int lo = Math.Min(_selAnchor, _selFocus), hi = Math.Max(_selAnchor, _selFocus);
+        if (lo < 0 || hi < lo) return false;
+        var sb = new System.Text.StringBuilder();
+        for (int i = lo; i <= hi && i < list.Count; i++)
+        {
+            if (i > lo) sb.Append('\n');
+            sb.Append(list[i].Content);
+        }
+        TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(sb.ToString());
+        return true;
+    }
+
+    private sealed record LineEntry(int Stream, int Pos, string Content, TextBlock Number, SelectableTextBlock Text);
 
     private static string NextContext(ref int oldNo, ref int newNo)
     {
