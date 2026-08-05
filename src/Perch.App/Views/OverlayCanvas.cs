@@ -190,7 +190,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // In dense mode, if the list preview has popped open (e.g. a session needs attention surfaced it),
         // the hotkey dismisses that preview back to the slim strip rather than leaving dense mode. A second
         // press then exits dense as usual. (The header's side-collapse glyph still leaves dense directly.)
-        if (_denseCtl.IsDense && _denseCtl.IsOpen) { _denseCtl.ClosePreview(); return; }
+        // But not while the pointer is over the popup: there it's open *because* it's being hovered, so
+        // collapsing it would only pop straight back open on the next mouse move — fall through to a normal
+        // toggle (exit dense) instead.
+        if (_denseCtl.IsDense && _denseCtl.IsOpen && !IsPointerOver) { _denseCtl.ClosePreview(); return; }
 
         _denseCtl.Toggle(); EnsureFloatingOnScreen(); BringWindowToTop();
     }

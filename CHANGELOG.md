@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.3] - 2026-08-05
+
+- Dense-mode hotkey no longer collapses the preview while you're hovering it (it would just pop back)
+
+---
+
 ## [v0.3.2] - 2026-08-05
 
 - Flight path now tells "waiting for input" apart from "done and idle" (the old bar meant either)
