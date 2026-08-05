@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2025-06-17T09:00:00Z","cwd":"C:\\fixtures\\proj","gitBranch":"open","message":{"role":"user","content":"rm the temp dir"}}
+{"type":"assistant","timestamp":"2025-06-17T09:00:30Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","name":"Bash","id":"o1","input":{"command":"rm -rf tmp"}}]}}

@@ -642,22 +642,27 @@ internal static class HeadlessRenderer
         DateTime At(int h, int m) => day.ToDateTime(new TimeOnly(h, m));
         var lanes = new List<FlightLane>
         {
-            new("s1", "perch", "avalonia-port", At(9, 10), At(12, 30), TimeSpan.FromHours(2), TimeSpan.FromMinutes(30),
+            new("s1", "perch", "avalonia-port", At(9, 10), At(12, 30), TimeSpan.FromHours(2), TimeSpan.FromMinutes(30), TimeSpan.Zero,
             [
                 new FlightSegment(At(9, 10), At(10, 20), FlightState.Active),
-                new FlightSegment(At(10, 20), At(10, 50), FlightState.Waiting),
+                new FlightSegment(At(10, 20), At(10, 50), FlightState.AwaitingInput),
                 new FlightSegment(At(10, 50), At(12, 30), FlightState.Active),
-            ]),
-            new("s2", "api", "main", At(11, 0), At(15, 0), TimeSpan.FromMinutes(90), TimeSpan.FromMinutes(20),
+            ],
+            []),
+            new("s2", "api", "main", At(11, 0), At(15, 0), TimeSpan.FromMinutes(90), TimeSpan.Zero, TimeSpan.FromMinutes(30),
             [
                 new FlightSegment(At(11, 0), At(11, 40), FlightState.Active),
                 new FlightSegment(At(13, 0), At(13, 30), FlightState.Stuck),
-                new FlightSegment(At(14, 0), At(15, 0), FlightState.Active),
-            ]),
-            new("s3", "docs-site", "", At(16, 0), At(17, 30), TimeSpan.FromMinutes(45), TimeSpan.Zero,
+                new FlightSegment(At(14, 0), At(14, 30), FlightState.Active),
+                new FlightSegment(At(14, 30), At(15, 0), FlightState.Idle),
+            ],
+            [new ApiErrorMark(At(13, 0), 529), new ApiErrorMark(At(13, 15), 429)]),
+            new("s3", "docs-site", "", At(16, 0), At(17, 30), TimeSpan.FromMinutes(45), TimeSpan.Zero, TimeSpan.FromMinutes(45),
             [
                 new FlightSegment(At(16, 0), At(16, 45), FlightState.Active),
-            ]),
+                new FlightSegment(At(16, 45), At(17, 30), FlightState.Idle),
+            ],
+            []),
         };
         return new FlightPathReport(day, At(9, 0), At(18, 0), lanes);
     }

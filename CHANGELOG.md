@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.2] - 2026-08-05
+
+- Flight path now tells "waiting for input" apart from "done and idle" (the old bar meant either)
+- Flight path lanes show active, waiting, and idle time, plus a day total
+- API errors marked on the flight path, status code and all (529, an old friend)
+
+---
+
 ## [v0.3.1] - 2026-08-05
 
 - Dense-mode hotkey now dismisses the popped-open list preview before leaving dense (a second press still exits)

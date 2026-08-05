@@ -10,8 +10,8 @@ namespace Perch.Avalonia.Views;
 /// <summary>
 /// The owner-drawn daily "flight path" — the Avalonia port of <c>FlightPathForm.DrawTimeline</c>. A
 /// horizontal Gantt of one day, one lane per session, each lane's time coloured by state (active /
-/// waiting-on-you / stuck) over a faint idle track. A single <see cref="Draw"/> routine measures
-/// (null context → returns height) and paints, so the two never drift. Hosted, scrolled, by
+/// waiting-for-input / idle-done / stuck) over a faint track. A single <see cref="Draw"/> routine
+/// measures (null context → returns height) and paints, so the two never drift. Hosted, scrolled, by
 /// <c>FlightPathWindow</c>, which owns the day navigation + off-thread loading.
 /// </summary>
 internal sealed class FlightPathTimeline : Control
@@ -22,12 +22,18 @@ internal sealed class FlightPathTimeline : Control
     private static readonly IBrush AccentBrush = new SolidColorBrush(Palette.Accent);
     private static readonly IBrush OrangeBrush = new SolidColorBrush(Palette.Orange);
     private static readonly IBrush RedBrush    = new SolidColorBrush(Palette.Red);
+    // A cool, dim slate for done-and-idle time: present enough to read as a state, quiet enough not to
+    // compete with the warm "waiting for input" amber or the active-blue.
+    private static readonly IBrush IdleBrush   = new SolidColorBrush(Color.FromRgb(96, 108, 132));
+    // A point-event marker for API failures (529/429/…) — gold, distinct from the warm "waiting" amber
+    // and the "stuck" red, and read as a marker (tick + status number) rather than a track-fill state.
+    private static readonly IBrush ApiErrorBrush = new SolidColorBrush(Palette.Yellow);
     private static readonly IBrush TrackBrush  = new SolidColorBrush(Palette.Track);
     private static readonly IPen   BorderPen   = new Pen(new SolidColorBrush(Palette.Border), 1);
     private static readonly IPen   NowPen       = new Pen(new SolidColorBrush(Palette.Brand), 1) { DashStyle = DashStyle.Dash };
 
     private const double H1Size = 20, BodySize = 13, LaneSize = 13, LabelSize = 11;
-    private const double Pad = 22, GutterW = 168, RowH = 42, TrackH = 18, AxisH = 20;
+    private const double Pad = 22, GutterW = 214, RowH = 50, TrackH = 18, AxisH = 20;
 
     private FlightPathReport? _report;
     private bool _loading = true;
@@ -76,13 +82,14 @@ internal sealed class FlightPathTimeline : Control
         var report = _report ?? FlightPathReport.Empty(DateOnly.FromDateTime(DateTime.Now));
         if (report.IsEmpty)
         {
-            bool isToday = report.Day == DateOnly.FromDateTime(DateTime.Now);
-            Text(ctx, isToday ? "No sessions recorded yet today." : "No sessions recorded on this day.",
+            bool isTodayEmpty = report.Day == DateOnly.FromDateTime(DateTime.Now);
+            Text(ctx, isTodayEmpty ? "No sessions recorded yet today." : "No sessions recorded on this day.",
                 BodySize, MutedBrush, x, y);
             return y + 40;
         }
 
-        y = Legend(ctx, x, y) + 6;
+        y = Legend(ctx, x, y);
+        y = DaySummary(ctx, report, x, y) + 6;
 
         double trackX = x + GutterW;
         double trackW = Math.Max(1, innerW - GutterW);
@@ -127,9 +134,35 @@ internal sealed class FlightPathTimeline : Control
         if (ctx == null) return y + 22;
         double cx = x;
         cx = LegendChip(ctx, cx, y, AccentBrush, "Active");
-        cx = LegendChip(ctx, cx, y, OrangeBrush, "Waiting on you");
-        LegendChip(ctx, cx, y, RedBrush, "Stuck");
+        cx = LegendChip(ctx, cx, y, OrangeBrush, "Waiting for input");
+        cx = LegendChip(ctx, cx, y, IdleBrush, "Idle (done)");
+        cx = LegendChip(ctx, cx, y, RedBrush, "Stuck");
+        LegendChip(ctx, cx, y, ApiErrorBrush, "API error");
         return y + 22;
+    }
+
+    // A muted day-level roll-up under the legend, summing the lanes so the split reads as numbers, not
+    // only as colour on the track.
+    private double DaySummary(DrawingContext? ctx, FlightPathReport report, double x, double y)
+    {
+        if (ctx == null) return y + 18;
+        TimeSpan active = TimeSpan.Zero, waiting = TimeSpan.Zero, idle = TimeSpan.Zero;
+        int apiErrors = 0;
+        foreach (var lane in report.Lanes)
+        {
+            active  += lane.ActiveTime;
+            waiting += lane.AwaitingInputTime;
+            idle    += lane.IdleTime;
+            apiErrors += lane.ApiErrors.Count;
+        }
+
+        string label = report.Day == DateOnly.FromDateTime(DateTime.Now) ? "Today" : report.Day.ToString("ddd d MMM");
+        string summary = $"{label} · {report.Lanes.Count} session{(report.Lanes.Count == 1 ? "" : "s")} · " +
+                         $"active {StatsFormat.Duration(active)} · waiting {StatsFormat.Duration(waiting)} · idle {StatsFormat.Duration(idle)}";
+        if (apiErrors > 0)
+            summary += $" · {apiErrors} API error{(apiErrors == 1 ? "" : "s")}";
+        Text(ctx, summary, LabelSize, MutedBrush, x, y);
+        return y + 18;
     }
 
     private double LegendChip(DrawingContext ctx, double x, double y, IBrush color, string label)
@@ -148,11 +181,16 @@ internal sealed class FlightPathTimeline : Control
         double rowMid = y + RowH / 2;
         double trackY = rowMid - TrackH / 2;
 
+        // Gutter: project, branch, then the active / waiting / idle breakdown.
         var proj = OverlayDraw.Text(OverlayDraw.Truncate(lane.Project, LaneSize, GutterW - 10), LaneSize, TitleBrush, FontWeight.SemiBold);
-        ctx.DrawText(proj, new Point(x, y + 4));
-        string sub = lane.Branch.Length > 0 ? $"{lane.Branch} · {StatsFormat.Duration(lane.ActiveTime)}" : StatsFormat.Duration(lane.ActiveTime);
-        var subFt = OverlayDraw.Text(OverlayDraw.Truncate(sub, LabelSize, GutterW - 10), LabelSize, MutedBrush);
-        ctx.DrawText(subFt, new Point(x, y + 22));
+        ctx.DrawText(proj, new Point(x, y + 3));
+        if (lane.Branch.Length > 0)
+        {
+            var branch = OverlayDraw.Text(OverlayDraw.Truncate(lane.Branch, LabelSize, GutterW - 10), LabelSize, MutedBrush);
+            ctx.DrawText(branch, new Point(x, y + 19));
+        }
+        var durFt = OverlayDraw.Text(OverlayDraw.Truncate(DurationBreakdown(lane), LabelSize, GutterW - 10), LabelSize, MutedBrush);
+        ctx.DrawText(durFt, new Point(x, y + 32));
 
         OverlayDraw.Pill(ctx, TrackBrush, new Rect(trackX, trackY, trackW, TrackH));
         foreach (var seg in lane.Segments)
@@ -161,13 +199,46 @@ internal sealed class FlightPathTimeline : Control
             double w = Math.Max(3, x1 - x0);
             OverlayDraw.Panel(ctx, new Rect(x0, trackY, w, TrackH), SegmentColor(seg.State), null, 3);
         }
+
+        // API failures overlay the segments: a gold tick poking through the track with the status code
+        // (529, 429, …) sitting just above it, so the exact spot — and which error — is readable. Every
+        // failure gets a tick (a retry storm should read as a dense cluster), but the status label is
+        // drawn only when it clears the last one, so overlapping labels never smear into nonsense. Marks
+        // arrive time-ordered from the service.
+        double lastLabelRight = double.NegativeInfinity;
+        foreach (var mark in lane.ApiErrors)
+        {
+            double mx = XOf(mark.Time);
+            ctx.FillRectangle(ApiErrorBrush, new Rect(mx - 1, trackY - 3, 2, TrackH + 6));
+            string label = mark.Status > 0 ? mark.Status.ToString() : "API";
+            var ft = OverlayDraw.Text(label, 9, ApiErrorBrush, FontWeight.SemiBold);
+            double left = mx - ft.Width / 2;
+            if (left > lastLabelRight + 3)
+            {
+                ctx.DrawText(ft, new Point(left, y));
+                lastLabelRight = left + ft.Width;
+            }
+        }
+    }
+
+    // The lane's engaged / blocked / idle times, joined compactly. Active always shows; waiting and idle
+    // only when the session actually spent time there, so a clean lane stays uncluttered.
+    private static string DurationBreakdown(FlightLane lane)
+    {
+        var parts = new List<string> { $"active {StatsFormat.Duration(lane.ActiveTime)}" };
+        if (lane.AwaitingInputTime > TimeSpan.Zero)
+            parts.Add($"waiting {StatsFormat.Duration(lane.AwaitingInputTime)}");
+        if (lane.IdleTime > TimeSpan.Zero)
+            parts.Add($"idle {StatsFormat.Duration(lane.IdleTime)}");
+        return string.Join(" · ", parts);
     }
 
     private static IBrush SegmentColor(FlightState state) => state switch
     {
-        FlightState.Waiting => OrangeBrush,
-        FlightState.Stuck   => RedBrush,
-        _                   => AccentBrush,
+        FlightState.AwaitingInput => OrangeBrush,
+        FlightState.Idle          => IdleBrush,
+        FlightState.Stuck         => RedBrush,
+        _                         => AccentBrush,
     };
 
     private static void Text(DrawingContext? ctx, string s, double size, IBrush brush, double x, double y,
