@@ -1,8 +1,11 @@
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Perch.Avalonia.Theming;
 using Perch.Data;
 
@@ -180,7 +183,9 @@ internal sealed class DiffView : Border
         else if (_matchIdx >= _matches.Count) _matchIdx = _matches.Count - 1;
     }
 
-    // Selects the current match (using the built-in selection highlight) and scrolls it into view.
+    // Selects the current match (using the built-in selection highlight) and scrolls it to the centre of
+    // the viewport. Centring runs at Background priority so the layout is current (e.g. right after a
+    // rebuild) when we measure the match's position.
     private void Highlight()
     {
         ClearHighlight();
@@ -188,8 +193,19 @@ internal sealed class DiffView : Border
         var (tb, start, len) = _matches[_matchIdx];
         tb.SelectionStart = start;
         tb.SelectionEnd = start + len;
-        tb.BringIntoView();
         _highlighted = tb;
+        Dispatcher.UIThread.Post(() => CenterOn(tb), DispatcherPriority.Background);
+    }
+
+    // Scrolls the enclosing ScrollViewer so that target is vertically centred (clamped to the extent).
+    private void CenterOn(Control target)
+    {
+        if (this.GetVisualAncestors().OfType<ScrollViewer>().FirstOrDefault() is not { } sv) return;
+        if (target.TranslatePoint(new Point(0, 0), this) is not { } p) return;
+        double targetCentre = p.Y + target.Bounds.Height / 2;
+        double max = Math.Max(0, sv.Extent.Height - sv.Viewport.Height);
+        double y = Math.Clamp(targetCentre - sv.Viewport.Height / 2, 0, max);
+        sv.Offset = sv.Offset.WithY(y);
     }
 
     private void ClearHighlight()
