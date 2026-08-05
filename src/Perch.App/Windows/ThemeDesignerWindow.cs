@@ -45,13 +45,8 @@ internal sealed class ThemeDesignerWindow : Window
 
     private readonly StackPanel _readout = new() { Spacing = 6 };
     private readonly PreviewPane _preview = new();
-    private readonly Border _accentSwatch = new()
-    {
-        Width = 28, Height = 28, CornerRadius = new CornerRadius(4),
-        BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
-    };
-    private readonly TextBox _accentHex = SettingsUi.ThemedTextBox("");
-    private Slider _hueSlider = null!, _chromaSlider = null!, _aH = null!, _aS = null!, _aL = null!;
+    private Slider _hueSlider = null!, _chromaSlider = null!;
+    private ColorPicker _accentPicker = null!;
 
     // The six pairs the readout audits: label, the draft role read as foreground (+ how to rewrite it when
     // "Fix" is pressed), the background role, and the target ratio (AA for text, 3:1 for glyphs).
@@ -167,23 +162,17 @@ internal sealed class ThemeDesignerWindow : Window
         left.Children.Add(_chromaSlider);
 
         left.Children.Add(SettingsUi.FieldCaption("Accent colour"));
-        var accentRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        accentRow.Children.Add(_accentSwatch);
-        _accentHex.Width = 100;
-        _accentHex.TextChanged += (_, _) =>
+        _accentPicker = new ColorPicker
+        {
+            Color = _accent.ToColor(), HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        _accentPicker.ColorChanged += (_, e) =>
         {
             if (_sync) return;
-            if (TryParseHex(_accentHex.Text, out var c)) OnAccentEdited(c);
+            _accent = new Rgb(e.NewColor.R, e.NewColor.G, e.NewColor.B);
+            Recompute();
         };
-        accentRow.Children.Add(_accentHex);
-        left.Children.Add(accentRow);
-
-        _aH = MakeSlider(0, 360, 0, _ => OnAccentSliderChanged());
-        _aS = MakeSlider(0, 1, 0, _ => OnAccentSliderChanged());
-        _aL = MakeSlider(0, 1, 0, _ => OnAccentSliderChanged());
-        left.Children.Add(LabeledSlider("Hue", _aH));
-        left.Children.Add(LabeledSlider("Saturation", _aS));
-        left.Children.Add(LabeledSlider("Lightness", _aL));
+        left.Children.Add(_accentPicker);
 
         left.Children.Add(SettingsUi.Separator());
         left.Children.Add(SettingsUi.FieldCaption("Colour-blind preview"));
@@ -252,13 +241,7 @@ internal sealed class ThemeDesignerWindow : Window
         Recompute();
     }
 
-    private void OnAccentSliderChanged()
-    {
-        if (_sync) return;
-        OnAccentEdited(ColorMath.FromHsl(_aH.Value, _aS.Value, _aL.Value));
-    }
-
-    // A single accent edit from any control: sync every accent control to it, then recompute.
+    // A single accent edit (from the picker, a preset seed, or a "Fix"): sync the picker to it, recompute.
     private void OnAccentEdited(Rgb c)
     {
         _sync = true;
@@ -267,16 +250,11 @@ internal sealed class ThemeDesignerWindow : Window
         Recompute();
     }
 
-    // Push an accent colour into all its controls (caller holds the _sync guard).
+    // Push an accent colour into the picker (caller holds the _sync guard so it doesn't re-enter).
     private void SetAccentControls(Rgb c)
     {
         _accent = c;
-        var (h, s, l) = ColorMath.ToHsl(c);
-        _aH.Value = h;
-        _aS.Value = s;
-        _aL.Value = l;
-        _accentHex.Text = c.ToHex();
-        _accentSwatch.Background = c.ToBrush();
+        _accentPicker.Color = c.ToColor();
     }
 
     // Rebuild the draft from the tint/accent controls, apply it live, and refresh the readout.
@@ -413,31 +391,10 @@ internal sealed class ThemeDesignerWindow : Window
         return ColorMath.FromHsl(h, s, Math.Min(1, l + by));
     }
 
-    private static bool TryParseHex(string? s, out Rgb c)
-    {
-        try { c = Rgb.FromHex(s ?? ""); return true; }
-        catch { c = default; return false; }
-    }
-
     private static Slider MakeSlider(double min, double max, double value, Action<double> onChange)
     {
         var s = new Slider { Minimum = min, Maximum = max, Value = value, Foreground = Palette.AccentBrush };
         s.PropertyChanged += (_, e) => { if (e.Property == RangeBase.ValueProperty) onChange(s.Value); };
         return s;
-    }
-
-    // A compact "caption : slider" row for the accent HSL controls.
-    private static Control LabeledSlider(string caption, Slider slider)
-    {
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("70,*"), Margin = new Thickness(0, 0, 0, 0) };
-        var cap = new TextBlock
-        {
-            Text = caption, FontSize = 11, Foreground = Palette.MutedBrush, VerticalAlignment = VerticalAlignment.Center,
-        };
-        Grid.SetColumn(cap, 0);
-        Grid.SetColumn(slider, 1);
-        grid.Children.Add(cap);
-        grid.Children.Add(slider);
-        return grid;
     }
 }
