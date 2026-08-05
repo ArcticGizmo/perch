@@ -237,10 +237,10 @@ internal sealed class AppSettings
     public bool ShowGitStats { get; set; }
 
     // Whether the per-session right-click menu offers "Review changes…", which opens the read-only git
-    // Change Review window for that session's working directory. Off by default (experimental). Purely
-    // gates the menu action — nothing runs in the background while off (and even on, git is only invoked
-    // on demand while the window is open), so it costs nothing when disabled. A missing key keeps it off.
-    public bool ShowGitReview { get; set; }
+    // Change Review window for that session's working directory. On by default. Purely gates the menu
+    // action — nothing runs in the background either way (and even when used, git is only invoked on demand
+    // while the window is open), so it's cheap. A missing key defaults it on.
+    public bool ShowGitReview { get; set; } = true;
 
     // The Change Review window's diff layout: false = unified (one column), true = side-by-side split.
     // Persisted so the choice sticks between openings; toggled from the window's own toolbar. A missing key
