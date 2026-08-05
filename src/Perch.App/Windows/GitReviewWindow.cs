@@ -49,6 +49,9 @@ internal sealed class GitReviewWindow : Window
     private readonly Border _findBar;
     private readonly TextBox _findBox;
     private readonly TextBlock _findLabel;
+    private readonly TextBlock _filesEmpty;
+    private readonly TextBlock _commitsEmpty;
+    private readonly TextBlock _diffPlaceholder;
 
     private string? _cwd;
     private string? _prUrl;
@@ -141,10 +144,14 @@ internal sealed class GitReviewWindow : Window
             Width = 320,
             [Grid.ColumnProperty] = 0,
         };
+        _filesEmpty = EmptyHint("No changes", 1);
+        _commitsEmpty = EmptyHint("No recent commits", 3);
         left.Children.Add(SectionLabel("Changes", 0));
         left.Children.Add(Place(_filesList, 1));
+        left.Children.Add(_filesEmpty);       // overlays the (empty) list cell
         left.Children.Add(SectionLabel("Recent commits", 2));
         left.Children.Add(Place(_commitsList, 3));
+        left.Children.Add(_commitsEmpty);
 
         // ---- right: find bar (hidden until Ctrl+F) over the diff ----
         _diff = new DiffView();
@@ -179,7 +186,16 @@ internal sealed class GitReviewWindow : Window
             Child = new DockPanel { LastChildFill = true, Children = { findClose, findNext, findPrev, _findLabel, _findBox } },
         };
 
-        var diffColumn = new DockPanel { LastChildFill = true, [Grid.ColumnProperty] = 1, Children = { _findBar, _diffScroll } };
+        // The diff scroller plus a centered placeholder shown when nothing is selected.
+        _diffPlaceholder = new TextBlock
+        {
+            Text = "Select a change or recent commit",
+            Foreground = Palette.MutedBrush, FontSize = 14,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+        };
+        var diffArea = new Grid { Children = { _diffScroll, _diffPlaceholder } };
+        var diffColumn = new DockPanel { LastChildFill = true, [Grid.ColumnProperty] = 1, Children = { _findBar, diffArea } };
 
         var body = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
         body.Children.Add(left);
@@ -272,7 +288,7 @@ internal sealed class GitReviewWindow : Window
         if (!preserveSelection)
         {
             _subText.Text = "Loading…";
-            _diff.SetDiff(null, "Select a file or commit to see its diff.");
+            _diff.SetDiff(null, ""); // blank — the centered placeholder shows the "nothing selected" hint
         }
 
         System.Threading.Tasks.Task.Run(() => (status: _git.GetStatus(cwd), commits: _git.GetLog(cwd, 50)))
@@ -300,6 +316,9 @@ internal sealed class GitReviewWindow : Window
                         _filesList.SelectedIndex = IndexOfPath(changes, keepPath);
                     else if (keepHash is not null)
                         _commitsList.SelectedIndex = IndexOfHash(commits, keepHash);
+
+                    UpdateEmptyStates();
+                    UpdateDiffPlaceholder();
                 });
             });
     }
@@ -376,6 +395,7 @@ internal sealed class GitReviewWindow : Window
     {
         if (_suppressSelect || _filesList.SelectedItem is not GitFileChange fc || _cwd is not { } cwd) return;
         _suppressSelect = true; _commitsList.SelectedItem = null; _suppressSelect = false;
+        _diffPlaceholder.IsVisible = false;
 
         int gen = ++_gen;
         _diff.SetLoading();
@@ -395,6 +415,7 @@ internal sealed class GitReviewWindow : Window
     {
         if (_suppressSelect || _commitsList.SelectedItem is not GitCommit c || _cwd is not { } cwd) return;
         _suppressSelect = true; _filesList.SelectedItem = null; _suppressSelect = false;
+        _diffPlaceholder.IsVisible = false;
 
         int gen = ++_gen;
         _diff.SetLoading();
@@ -475,6 +496,9 @@ internal sealed class GitReviewWindow : Window
                 // commit diffs can't change). This is what keeps the scroll position stable.
                 if (sel is { } s && DiffSig(s.sections) != _shownDiffSig)
                     ShowSections(s.sections, s.note);
+
+                UpdateEmptyStates();
+                UpdateDiffPlaceholder();
             });
         });
     }
@@ -640,6 +664,29 @@ internal sealed class GitReviewWindow : Window
         tb.SetValue(Grid.RowProperty, row);
         return tb;
     }
+
+    // A dim "empty list" hint overlaid in a list's grid row; shown only while that list has no items.
+    private static TextBlock EmptyHint(string text, int row)
+    {
+        var tb = new TextBlock
+        {
+            Text = text, Foreground = Palette.MutedBrush, FontSize = 12, FontStyle = FontStyle.Italic,
+            Margin = new Thickness(12, 6, 12, 0), IsVisible = false, IsHitTestVisible = false,
+        };
+        tb.SetValue(Grid.RowProperty, row);
+        return tb;
+    }
+
+    // Shows each list's empty hint only when that list has no items.
+    private void UpdateEmptyStates()
+    {
+        _filesEmpty.IsVisible = _filesList.ItemCount == 0;
+        _commitsEmpty.IsVisible = _commitsList.ItemCount == 0;
+    }
+
+    // Shows the centered "nothing selected" hint in the diff area when neither list has a selection.
+    private void UpdateDiffPlaceholder() =>
+        _diffPlaceholder.IsVisible = _filesList.SelectedItem is null && _commitsList.SelectedItem is null;
 
     // ListBox item templates. Both guard a null item — Avalonia invokes the template with null on a
     // measure pass and an unguarded dereference inside a layout pass crashes the process (see HistoryWindow).
