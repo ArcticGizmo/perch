@@ -22,10 +22,13 @@ public static class Palette
     /// via <see cref="Apply"/>.</summary>
     public static Theme Active { get; private set; } = Themes.Midnight;
 
-    /// <summary>Switch the active theme and re-point every cached brush at its new colour. Idempotent.</summary>
+    /// <summary>Switch the active theme and re-point every cached brush at its new colour. Idempotent.
+    /// This is the single mutation point for the whole app's cached fills — the overlay and windows alias
+    /// these brushes, so one call re-colours them all (surfaces then invalidate to repaint).</summary>
     public static void Apply(Theme theme)
     {
         Active = theme;
+        // Core chrome / text.
         FormBgBrush.Color   = theme.Surface.ToColor();
         FgBrush.Color       = theme.TextPrimary.ToColor();
         TitleBrush.Color    = theme.TextTitle.ToColor();
@@ -35,7 +38,26 @@ public static class Palette
         ButtonBgBrush.Color = theme.SurfaceRaised.ToColor();
         TrackBrush.Color    = theme.Track.ToColor();
         BrandBrush.Color    = theme.Brand.ToColor();
+        // Extended roles (overlay chrome + status), aliased by the overlay/windows.
+        OverlaySurfaceBrush.Color = theme.OverlaySurface.ToColor();
+        OverlayScrimBrush.Color   = theme.OverlaySurface.ToColor(ScrimAlpha);
+        OverlayRowHoverBrush.Color = theme.OverlayRowHover.ToColor();
+        SeparatorBrush.Color   = theme.Separator.ToColor();
+        TreeLineBrush.Color    = theme.TreeLine.ToColor();
+        BrandHoverBrush.Color  = theme.BrandHover.ToColor();
+        RunningBrush.Color     = theme.StatusRunning.ToColor();
+        AttentionBrush.Color   = theme.StatusAttention.ToColor();
+        AwaitingBrush.Color    = theme.StatusAwaiting.ToColor();
+        ErrorBrush.Color       = theme.StatusError.ToColor();
+        WarnBrush.Color        = theme.StatusWarn.ToColor();
+        SubAgentBrush.Color    = theme.SubAgent.ToColor();
+        TealBrush.Color        = theme.Teal.ToColor();
+        BurnBrush.Color        = theme.Burn.ToColor();
+        TeamGrayBrush.Color    = theme.TeamGray.ToColor();
     }
+
+    // The overlay panel is painted as a translucent scrim over the desktop; this is its fixed alpha.
+    private const byte ScrimAlpha = 245;
 
     // ── Chrome / text ──────────────────────────────────────────────────────────
     public static Color FormBg      => Active.Surface.ToColor();
@@ -111,4 +133,21 @@ public static class Palette
     public static readonly SolidColorBrush ButtonBgBrush = new(Themes.Midnight.SurfaceRaised.ToColor());
     public static readonly SolidColorBrush TrackBrush    = new(Themes.Midnight.Track.ToColor());
     public static readonly SolidColorBrush BrandBrush    = new(Themes.Midnight.Brand.ToColor());
+
+    // ── Extended role brushes (aliased by the overlay + windows so one Apply() re-colours everything) ──
+    public static readonly SolidColorBrush OverlaySurfaceBrush  = new(Themes.Midnight.OverlaySurface.ToColor());
+    public static readonly SolidColorBrush OverlayScrimBrush    = new(Themes.Midnight.OverlaySurface.ToColor(ScrimAlpha));
+    public static readonly SolidColorBrush OverlayRowHoverBrush = new(Themes.Midnight.OverlayRowHover.ToColor());
+    public static readonly SolidColorBrush SeparatorBrush = new(Themes.Midnight.Separator.ToColor());
+    public static readonly SolidColorBrush TreeLineBrush  = new(Themes.Midnight.TreeLine.ToColor());
+    public static readonly SolidColorBrush BrandHoverBrush = new(Themes.Midnight.BrandHover.ToColor());
+    public static readonly SolidColorBrush RunningBrush   = new(Themes.Midnight.StatusRunning.ToColor());
+    public static readonly SolidColorBrush AttentionBrush = new(Themes.Midnight.StatusAttention.ToColor());
+    public static readonly SolidColorBrush AwaitingBrush  = new(Themes.Midnight.StatusAwaiting.ToColor());
+    public static readonly SolidColorBrush ErrorBrush     = new(Themes.Midnight.StatusError.ToColor());
+    public static readonly SolidColorBrush WarnBrush      = new(Themes.Midnight.StatusWarn.ToColor());
+    public static readonly SolidColorBrush SubAgentBrush  = new(Themes.Midnight.SubAgent.ToColor());
+    public static readonly SolidColorBrush TealBrush      = new(Themes.Midnight.Teal.ToColor());
+    public static readonly SolidColorBrush BurnBrush      = new(Themes.Midnight.Burn.ToColor());
+    public static readonly SolidColorBrush TeamGrayBrush  = new(Themes.Midnight.TeamGray.ToColor());
 }
