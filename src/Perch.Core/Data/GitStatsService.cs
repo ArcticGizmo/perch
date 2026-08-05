@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -124,6 +124,9 @@ internal sealed class GitStatsService : IDisposable
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                // Decode git's output as UTF-8, not the console/ANSI code page. See GitRepoService.RunGit.
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
             };
 
             using var proc = Process.Start(psi);

@@ -1,7 +1,8 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 
 /// <summary>
 /// Read-only git queries for a single working tree — status, recent log, and unified diffs — by shelling
@@ -63,6 +64,20 @@ internal sealed class GitRepoService
         return exit == 0 ? ParseUnifiedDiff(stdout) : null;
     }
 
+    /// <summary>The whole working tree's unified diff — staged (index vs HEAD) when <paramref name="staged"/>,
+    /// else unstaged (worktree vs index); null on any failure. One call for every changed path, so a caller
+    /// can classify the whole change set (e.g. which paths carry no net text change) without a diff per
+    /// file.</summary>
+    public GitDiff? GetWorkingTreeDiff(string cwd, bool staged)
+    {
+        if (!IsRepo(cwd))
+            return null;
+        var (exit, stdout) = staged
+            ? RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "diff", "--cached")
+            : RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "diff");
+        return exit == 0 ? ParseUnifiedDiff(stdout) : null;
+    }
+
     /// <summary>The unified diff introduced by a single commit; null on any failure. Runs
     /// <c>git show &lt;hash&gt; --format= --patch</c> so only the patch (no commit header) is parsed.</summary>
     public GitDiff? GetCommitDiff(string cwd, string hash)
@@ -87,6 +102,31 @@ internal sealed class GitRepoService
         var (exit, stdout) = RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "diff", "--no-index", "--", "/dev/null", path);
         return exit >= 0 ? ParseUnifiedDiff(stdout) : null;
     }
+
+    // ---- change classification (pure) -----------------------------------------------------------------
+
+    /// <summary>
+    /// True when one file's diff carries no net text change — every removed line reappears, in order, as an
+    /// identical added line (the parser having already stripped a leading BOM and trailing CR). That is what
+    /// a byte-order-mark-only or line-ending-only edit reduces to. A binary change is never "no change".
+    /// </summary>
+    internal static bool FileHasNoTextChange(GitDiffFile file)
+    {
+        if (file.IsBinary)
+            return false;
+        var lines = file.Hunks.SelectMany(h => h.Lines);
+        var removed = lines.Where(l => l.Kind == GitDiffLineKind.Removed).Select(l => l.Text);
+        var added = file.Hunks.SelectMany(h => h.Lines)
+            .Where(l => l.Kind == GitDiffLineKind.Added).Select(l => l.Text);
+        return removed.SequenceEqual(added);
+    }
+
+    /// <summary>
+    /// True when a whole parsed diff carries no net text change (see <see cref="FileHasNoTextChange"/>). An
+    /// empty diff — git emitted nothing, e.g. a line-ending-only change it normalised away under
+    /// <c>core.autocrlf</c> — counts as no change.
+    /// </summary>
+    public static bool HasNoTextChange(GitDiff diff) => diff.Files.All(FileHasNoTextChange);
 
     // ---- parsers (internal static, pure, unit-tested) -------------------------------------------------
 
@@ -323,15 +363,20 @@ internal sealed class GitRepoService
             if (hunkHeader == null)
                 continue; // other metadata lines (index, mode, similarity) before the first hunk
 
-            // Body of an open hunk.
+            // Body of an open hunk. Strip a leading UTF-8 BOM from the content: a file whose first line is
+            // shown carries U+FEFF at the start of that line, and it should neither render nor be copied.
             switch (line[0])
             {
-                case ' ': hunkLines!.Add(new GitDiffLine(GitDiffLineKind.Context, line[1..])); break;
-                case '+': hunkLines!.Add(new GitDiffLine(GitDiffLineKind.Added, line[1..])); break;
-                case '-': hunkLines!.Add(new GitDiffLine(GitDiffLineKind.Removed, line[1..])); break;
+                case ' ': hunkLines!.Add(new GitDiffLine(GitDiffLineKind.Context, Body(line))); break;
+                case '+': hunkLines!.Add(new GitDiffLine(GitDiffLineKind.Added, Body(line))); break;
+                case '-': hunkLines!.Add(new GitDiffLine(GitDiffLineKind.Removed, Body(line))); break;
                 case '\\': hunkLines!.Add(new GitDiffLine(GitDiffLineKind.Meta, line)); break; // "\ No newline…"
                 default: hunkLines!.Add(new GitDiffLine(GitDiffLineKind.Meta, line)); break;
             }
+
+            // Drop the +/- prefix, then a leading UTF-8 BOM (U+FEFF) if the file's first line is shown.
+            // (char)0xFEFF keeps this source pure ASCII - no invisible BOM glyph in the literal.
+            static string Body(string l) => l[1..].TrimStart((char)0xFEFF);
         }
 
         FlushFile();
@@ -366,6 +411,11 @@ internal sealed class GitRepoService
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                // Git emits UTF-8 (file bytes, commit messages, paths); without this .NET would decode the
+                // child's output with the console/ANSI code page (CP1252 on Windows), mangling non-ASCII and
+                // rendering a file's UTF-8 BOM as "ï»¿".
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
             };
             foreach (var a in args)
                 psi.ArgumentList.Add(a);

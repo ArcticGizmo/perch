@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Linq;
 using System.Text;
 using Avalonia;
@@ -70,6 +70,11 @@ internal sealed class GitReviewWindow : Window
     private GitRepoStatus? _lastStatus;
     private IReadOnlyList<GitCommit> _lastCommits = [];
     private string _shownDiffSig = "";
+
+    // Paths whose working-tree change carries no net text — only a BOM or line ending differs. Git still
+    // reports them changed (so they must show as committable), but their diff is empty or a same-text
+    // add/remove; they're badged "≈" and their diff pane explains rather than showing an empty/duplicate hunk.
+    private HashSet<string> _invisiblePaths = new(StringComparer.Ordinal);
 
     public GitReviewWindow(AppSettings settings)
     {
@@ -297,17 +302,22 @@ internal sealed class GitReviewWindow : Window
             _diff.SetDiff(null, ""); // blank — the centered placeholder shows the "nothing selected" hint
         }
 
-        System.Threading.Tasks.Task.Run(() => (status: _git.GetStatus(cwd), commits: _git.GetLog(cwd, 50)))
+        System.Threading.Tasks.Task.Run(() =>
+            {
+                var status = _git.GetStatus(cwd);
+                return (status, commits: _git.GetLog(cwd, 50), invisible: ComputeInvisible(cwd, status));
+            })
             .ContinueWith(t =>
             {
                 if (!t.IsCompletedSuccessfully) return;
                 Dispatcher.UIThread.Post(() =>
                 {
                     if (!IsVisible || gen != _gen) return; // window closed or re-pointed since we started
-                    var (status, commits) = t.Result;
+                    var (status, commits, invisible) = t.Result;
                     ApplyStatus(status, cwd);
                     var changes = status?.Changes ?? [];
 
+                    _invisiblePaths = invisible; // set before the list binds so the template badges correctly
                     _suppressSelect = true;
                     _filesList.ItemsSource = changes;
                     _commitsList.ItemsSource = commits;
@@ -462,19 +472,20 @@ internal sealed class GitReviewWindow : Window
         {
             var status = _git.GetStatus(cwd);
             var commits = _git.GetLog(cwd, 50);
+            var invisible = ComputeInvisible(cwd, status);
             (IReadOnlyList<DiffSection> sections, string? note)? sel = null;
             if (selPath is not null)
                 sel = FindByPath(status, selPath) is { } fc
                     ? LoadFileDiff(cwd, fc)
                     : ((IReadOnlyList<DiffSection>)[], $"No diff for {selPath}.");
-            return (status, commits, sel);
+            return (status, commits, invisible, sel);
         }).ContinueWith(t =>
         {
             if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
                 if (!IsVisible || gen != _gen) return;
-                var (status, commits, sel) = t.Result;
+                var (status, commits, invisible, sel) = t.Result;
 
                 if (!CommitsEqual(commits, _lastCommits))
                 {
@@ -486,9 +497,14 @@ internal sealed class GitReviewWindow : Window
                     _lastCommits = commits;
                 }
 
-                if (!StatusEqual(status, _lastStatus))
+                // Rebuild the file list if the status changed OR only the invisible-change set did (e.g. a
+                // BOM-only file was edited into a real change — same "M" status, different badge).
+                bool statusChanged = !StatusEqual(status, _lastStatus);
+                bool invisChanged = !invisible.SetEquals(_invisiblePaths);
+                _invisiblePaths = invisible;
+                if (statusChanged || invisChanged)
                 {
-                    ApplyStatus(status, cwd);
+                    if (statusChanged) ApplyStatus(status, cwd);
                     var changes = status?.Changes ?? [];
                     string? keepPath = _filesList.SelectedItem is GitFileChange f ? f.Path : null;
                     _suppressSelect = true;
@@ -519,18 +535,27 @@ internal sealed class GitReviewWindow : Window
         bool hasStaged = fc.Staged != GitChangeKind.None;
         bool hasUnstaged = fc.Unstaged != GitChangeKind.None;
 
+        // Gather the relevant diff(s): both slots (labelled) when a file is staged AND further modified,
+        // otherwise the single relevant one.
+        var diffs = new List<(string? Label, GitDiff Diff)>();
         if (hasStaged && hasUnstaged)
         {
-            var list = new List<DiffSection>();
-            if (_git.GetWorkingDiff(cwd, fc.Path, staged: true) is { Files.Count: > 0 } staged)
-                list.Add(new DiffSection("Staged", staged));
-            if (_git.GetWorkingDiff(cwd, fc.Path, staged: false) is { Files.Count: > 0 } unstaged)
-                list.Add(new DiffSection("Unstaged", unstaged));
-            return (list, list.Count == 0 ? $"No diff for {fc.Path}." : null);
+            if (_git.GetWorkingDiff(cwd, fc.Path, staged: true) is { } staged) diffs.Add(("Staged", staged));
+            if (_git.GetWorkingDiff(cwd, fc.Path, staged: false) is { } unstaged) diffs.Add(("Unstaged", unstaged));
+        }
+        else if (_git.GetWorkingDiff(cwd, fc.Path, staged: hasStaged) is { } d)
+        {
+            diffs.Add((null, d));
         }
 
-        return Single(hasUnstaged ? _git.GetWorkingDiff(cwd, fc.Path, staged: false)
-                                  : _git.GetWorkingDiff(cwd, fc.Path, staged: true), fc.Path);
+        // Invisible change: a plain modification whose diff carries no net text (a BOM or line-ending edit).
+        // Explain it rather than showing an empty pane or a confusingly-identical add/remove hunk.
+        if (IsPlainModified(fc) && diffs.Count > 0 && diffs.All(x => GitRepoService.HasNoTextChange(x.Diff)))
+            return ([], "Content unchanged — only a line ending or byte-order mark (BOM) differs.");
+
+        var sections = diffs.Where(x => x.Diff.Files.Count > 0)
+                            .Select(x => new DiffSection(x.Label, x.Diff)).ToList();
+        return sections.Count > 0 ? (sections, null) : ([], $"No diff for {fc.Path}.");
 
         static (IReadOnlyList<DiffSection>, string?) Single(GitDiff? diff, string path) =>
             diff is { Files.Count: > 0 } d
@@ -540,6 +565,50 @@ internal sealed class GitReviewWindow : Window
 
     private static string? DiffNote(GitDiff? diff, string emptyNote) =>
         diff is { Files.Count: > 0 } ? null : emptyNote;
+
+    // ---- invisible-change classification ("≈") ----
+
+    // The set of changed paths whose edit carries no net text (only a BOM or line ending). Runs at most two
+    // whole-tree diffs (staged + unstaged), and only when there are plain-Modified candidates — so a clean
+    // tree, or a change set of pure adds/deletes/renames, costs nothing. A candidate is "invisible" when it
+    // shows no real text change in either whole-tree diff: files git normalises to nothing (line-ending-only)
+    // never appear in the diff at all; BOM-only files appear as a same-text add/remove.
+    private HashSet<string> ComputeInvisible(string cwd, GitRepoStatus? status)
+    {
+        var invisible = new HashSet<string>(StringComparer.Ordinal);
+        if (status is not { } s || s.IsClean) return invisible;
+
+        var candidates = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var c in s.Changes)
+            if (!c.Untracked && IsPlainModified(c)) candidates.Add(c.Path);
+        if (candidates.Count == 0) return invisible;
+
+        var visible = new HashSet<string>(StringComparer.Ordinal);
+        void ScanForRealChanges(GitDiff? d)
+        {
+            if (d is not { } diff) return;
+            foreach (var f in diff.Files)
+                if (!GitRepoService.FileHasNoTextChange(f))
+                {
+                    if (f.NewPath is { } n) visible.Add(n);
+                    if (f.OldPath is { } o) visible.Add(o);
+                }
+        }
+        ScanForRealChanges(_git.GetWorkingTreeDiff(cwd, staged: false));
+        ScanForRealChanges(_git.GetWorkingTreeDiff(cwd, staged: true));
+
+        foreach (var p in candidates)
+            if (!visible.Contains(p)) invisible.Add(p);
+        return invisible;
+    }
+
+    // A plain content modification (not an add/delete/rename/copy/type-change/conflict/untracked) on either
+    // slot — the only kind that can turn out to be a BOM/line-ending-only "invisible" change.
+    private static bool IsPlainModified(GitFileChange c) =>
+        !c.Untracked
+        && c.Staged is GitChangeKind.None or GitChangeKind.Modified
+        && c.Unstaged is GitChangeKind.None or GitChangeKind.Modified
+        && (c.Staged == GitChangeKind.Modified || c.Unstaged == GitChangeKind.Modified);
 
     // ---- change detection for auto-refresh ----
 
@@ -696,7 +765,7 @@ internal sealed class GitReviewWindow : Window
 
     // ListBox item templates. Both guard a null item — Avalonia invokes the template with null on a
     // measure pass and an unguarded dereference inside a layout pass crashes the process (see HistoryWindow).
-    private static FuncDataTemplate<GitFileChange> FileTemplate() => new((fc, _) => new TextBlock
+    private FuncDataTemplate<GitFileChange> FileTemplate() => new((fc, _) => new TextBlock
     {
         Text = FileLabel(fc),
         FontFamily = Mono, FontSize = 12,
@@ -721,10 +790,12 @@ internal sealed class GitReviewWindow : Window
         return tb;
     }, supportsRecycling: true);
 
-    private static string FileLabel(GitFileChange fc)
+    private string FileLabel(GitFileChange fc)
     {
         if (fc.Path is null) return "";
-        char code = fc.Untracked ? '?' : CodeOf(fc.Unstaged != GitChangeKind.None ? fc.Unstaged : fc.Staged);
+        char code = fc.Untracked ? '?'
+                  : _invisiblePaths.Contains(fc.Path) ? '≈' // unchanged text — only a BOM/line ending differs
+                  : CodeOf(fc.Unstaged != GitChangeKind.None ? fc.Unstaged : fc.Staged);
         return fc.OrigPath is { } o ? $"{code}  {o} → {fc.Path}" : $"{code}  {fc.Path}";
     }
 
@@ -740,11 +811,13 @@ internal sealed class GitReviewWindow : Window
         _ => ' ',
     };
 
-    // Green for additions (incl. untracked new files), red for deletions, orange for everything else that
-    // is a modification (modify / rename / copy / type-change / conflict).
-    private static Color FileColor(GitFileChange fc)
+    // Green for additions (incl. untracked new files), red for deletions, muted grey for an invisible
+    // (BOM/line-ending-only) change, orange for everything else that is a modification (modify / rename /
+    // copy / type-change / conflict).
+    private Color FileColor(GitFileChange fc)
     {
         if (fc.Untracked) return Palette.Green;
+        if (fc.Path is not null && _invisiblePaths.Contains(fc.Path)) return Palette.Muted;
         var k = fc.Unstaged != GitChangeKind.None ? fc.Unstaged : fc.Staged;
         return k switch
         {

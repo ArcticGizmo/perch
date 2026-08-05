@@ -1,4 +1,4 @@
-using Perch.Data;
+﻿using Perch.Data;
 using Xunit;
 
 namespace Perch.Tests;
@@ -211,6 +211,55 @@ public class GitRepoServiceTests
         Assert.Equal(GitDiffLineKind.Added, h.Lines[2].Kind);
         Assert.Equal("new line", h.Lines[2].Text);
         Assert.Equal(GitDiffLineKind.Meta, h.Lines[3].Kind);
+    }
+
+    [Fact]
+    public void Diff_StripsLeadingBomFromFirstLineContent()
+    {
+        // A UTF-8 file carries a BOM (U+FEFF) at the very start; when its first line shows in a diff, that
+        // BOM rides along on the line content. It must not survive into the parsed text (else it renders as
+        // a stray glyph and gets copied). Built via (char)0xFEFF so this test's own source stays pure ASCII.
+        var bom = ((char)0xFEFF).ToString();
+        var output =
+            "diff --git a/src/Foo.cs b/src/Foo.cs\n" +
+            "index 1111111..2222222 100644\n" +
+            "--- a/src/Foo.cs\n" +
+            "+++ b/src/Foo.cs\n" +
+            "@@ -1,2 +1,2 @@\n" +
+            "-" + bom + "using System;\n" +
+            "+" + bom + "using System.Linq;\n" +
+            " namespace Foo\n";
+
+        var h = Assert.Single(Assert.Single(GitRepoService.ParseUnifiedDiff(output).Files).Hunks);
+        Assert.Equal("using System;", h.Lines[0].Text);       // removed - BOM stripped
+        Assert.Equal("using System.Linq;", h.Lines[1].Text);  // added   - BOM stripped
+        Assert.Equal("namespace Foo", h.Lines[2].Text);       // context - untouched
+        Assert.DoesNotContain(h.Lines, l => l.Text.Contains((char)0xFEFF));
+    }
+
+    [Fact]
+    public void HasNoTextChange_TrueForBomOnlyAndEmpty_FalseForRealAndBinary()
+    {
+        var bom = ((char)0xFEFF).ToString();
+
+        // BOM-only: line 1's sole difference is a leading BOM the parser strips -> removed == added.
+        var bomOnly = GitRepoService.ParseUnifiedDiff(
+            "diff --git a/A.cs b/A.cs\n--- a/A.cs\n+++ b/A.cs\n@@ -1,2 +1,2 @@\n" +
+            "-" + bom + "line one\n+" + bom + "line one\n line two\n");
+        Assert.True(GitRepoService.HasNoTextChange(bomOnly));
+
+        // Empty diff (git normalised a line-ending-only change to nothing).
+        Assert.True(GitRepoService.HasNoTextChange(GitRepoService.ParseUnifiedDiff("")));
+
+        // A genuine one-line edit -> real change.
+        var real = GitRepoService.ParseUnifiedDiff(
+            "diff --git a/A.cs b/A.cs\n--- a/A.cs\n+++ b/A.cs\n@@ -1 +1 @@\n-old line\n+new line\n");
+        Assert.False(GitRepoService.HasNoTextChange(real));
+
+        // Binary changes are never "no change".
+        var binary = GitRepoService.ParseUnifiedDiff(
+            "diff --git a/img.png b/img.png\nindex 111..222 100644\nBinary files a/img.png and b/img.png differ\n");
+        Assert.False(GitRepoService.HasNoTextChange(binary));
     }
 
     [Fact]
