@@ -204,6 +204,11 @@ internal sealed class DenseController : IDisposable
         _host.Invalidate();
     }
 
+    // Collapse the hover/attention popup back to the closed strip without leaving dense mode. The
+    // dense-toggle hotkey uses this to dismiss a preview that popped open (e.g. when a session needs
+    // attention) rather than exiting dense outright.
+    public void ClosePreview() => ClosePopup();
+
     private void ClosePopup()
     {
         if (!_dense || !_denseOpen) return;

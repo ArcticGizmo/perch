@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.1] - 2026-08-05
+
+- Dense-mode hotkey now dismisses the popped-open list preview before leaving dense (a second press still exits)
+
+---
+
 ## [v0.3.0] - 2026-08-04
 
 - Rebuilt Settings around a searchable catalogue of every feature

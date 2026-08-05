@@ -185,7 +185,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Toggling between the slim strip and the full panel is a deliberate user action and a natural moment
     // to self-correct: re-snap the floating window onto a live screen (dense docks itself) and re-assert
     // topmost, in case a display change (e.g. undocking) left it stranded or buried.
-    public void ToggleDense() { _denseCtl.Toggle(); EnsureFloatingOnScreen(); BringWindowToTop(); }
+    public void ToggleDense()
+    {
+        // In dense mode, if the list preview has popped open (e.g. a session needs attention surfaced it),
+        // the hotkey dismisses that preview back to the slim strip rather than leaving dense mode. A second
+        // press then exits dense as usual. (The header's side-collapse glyph still leaves dense directly.)
+        if (_denseCtl.IsDense && _denseCtl.IsOpen) { _denseCtl.ClosePreview(); return; }
+
+        _denseCtl.Toggle(); EnsureFloatingOnScreen(); BringWindowToTop();
+    }
 
     // Monitors added/removed. Dense self-heals to a live edge (ApplyGeometry); the floating window has no
     // such logic on its own, so re-validate it here — this is what rescues the overlay after an undock.
