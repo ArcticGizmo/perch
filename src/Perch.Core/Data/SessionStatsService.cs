@@ -47,6 +47,7 @@ internal sealed record StatsReport(
     int SessionCount,
     TimeSpan ActiveTime,
     int Prompts,
+    int Swears,                   // profane words counted across this window's user prompts
     int ToolCalls,
     int SubAgents,
     int Teammates,                // distinct Agent-Teams members that ran in this window
@@ -61,7 +62,7 @@ internal sealed record StatsReport(
     int[] HourlyActiveSeconds)    // 24 bins, local hour -> estimated active seconds
 {
     public static StatsReport Empty(DateOnly day) => new(
-        day, 0, TimeSpan.Zero, 0, 0, 0, 0, TokenTotals.Zero, TokenTotals.Zero, 0m, true,
+        day, 0, TimeSpan.Zero, 0, 0, 0, 0, 0, TokenTotals.Zero, TokenTotals.Zero, 0m, true,
         [], [], [], [], new int[24]);
 }
 
@@ -327,7 +328,16 @@ internal static class SessionStatsService
                 var content = message?["content"];
 
                 if (type == "user" && !isMeta && IsUserPrompt(content))
+                {
                     data.Prompts++;
+                    // Tally profanity in the authored text (plain string, or the text blocks of an array).
+                    if (content is JsonValue pv && pv.TryGetValue<string>(out var ptext))
+                        data.Swears += SwearFilter.Count(ptext);
+                    else if (content is JsonArray parr)
+                        foreach (var block in parr)
+                            if (block?["type"]?.GetValue<string>() == "text")
+                                data.Swears += SwearFilter.Count(block["text"]?.GetValue<string>());
+                }
 
                 // Token usage rides on assistant records; attribute it to the record's model.
                 if (message?["usage"] is { } usage)
@@ -378,6 +388,7 @@ internal static class SessionStatsService
         if (span > bucket.LongestSession)
             bucket.LongestSession = span;
         bucket.Prompts += s.Prompts;
+        bucket.Swears += s.Swears;
         bucket.ToolCalls += s.ToolCalls;
         bucket.SubAgents += s.SubAgents;
         bucket.Tokens += s.Tokens;
@@ -418,7 +429,7 @@ internal static class SessionStatsService
     {
         var sessions = new HashSet<string>();
         var active = TimeSpan.Zero;
-        int prompts = 0, toolCalls = 0, subAgents = 0, teammates = 0;
+        int prompts = 0, swears = 0, toolCalls = 0, subAgents = 0, teammates = 0;
         var tokens = TokenTotals.Zero;
         var teammateTokens = TokenTotals.Zero;
         var hourly = new int[24];
@@ -432,6 +443,7 @@ internal static class SessionStatsService
             sessions.UnionWith(bk.Sessions);
             active += bk.Active;
             prompts += bk.Prompts;
+            swears += bk.Swears;
             toolCalls += bk.ToolCalls;
             subAgents += bk.SubAgents;
             teammates += bk.Teammates;
@@ -464,7 +476,7 @@ internal static class SessionStatsService
             .OrderByDescending(t => t.Count)
             .ToList();
 
-        return new StatsReport(day, sessions.Count, active, prompts, toolCalls, subAgents, teammates,
+        return new StatsReport(day, sessions.Count, active, prompts, swears, toolCalls, subAgents, teammates,
             tokens, teammateTokens, totalCost, costComplete, ToStats(projects), toolStats, models, ToStats(branches), hourly);
     }
 
@@ -563,6 +575,7 @@ internal static class SessionStatsService
         public string Branch = "";
         public readonly List<DateTime> Times = new();
         public int Prompts;
+        public int Swears;
         public int ToolCalls;
         public int SubAgents;
         public TokenTotals Tokens = TokenTotals.Zero;
@@ -576,6 +589,7 @@ internal static class SessionStatsService
         public readonly HashSet<string> Sessions = new();
         public TimeSpan Active;
         public int Prompts;
+        public int Swears;
         public int ToolCalls;
         public int SubAgents;
         public int Teammates;                         // Agent-Teams members that ran this day

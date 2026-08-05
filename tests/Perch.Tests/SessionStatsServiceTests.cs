@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Perch.Data;
 using Xunit;
 
@@ -6,6 +7,38 @@ namespace Perch.Tests;
 public class SessionStatsServiceTests
 {
     private const string Cwd = TestEnvironment.FixtureCwd;
+
+    [Fact]
+    public void ParseSession_CountsSwearsFromBothPromptShapes()
+    {
+        // The transcript is built at runtime from ROT13 so no plaintext profanity is committed. Two authored
+        // prompts (a plain-string body and a text-block array), plus a tool_result whose text must be ignored.
+        var plain = TestText.Rot13("shpx guvf");          // "fuck this" -> 1
+        var blocky = TestText.Rot13("qnza gung penc");    // "damn that crap" -> 2
+        var toolResultText = TestText.Rot13("qnza");      // "damn" — inside a tool_result, must NOT count
+
+        var lines = new[]
+        {
+            $"{{\"type\":\"user\",\"timestamp\":\"2025-03-10T12:00:00Z\",\"cwd\":\"C:/x\",\"message\":{{\"role\":\"user\",\"content\":{JsonSerializer.Serialize(plain)}}}}}",
+            $"{{\"type\":\"user\",\"timestamp\":\"2025-03-10T12:01:00Z\",\"cwd\":\"C:/x\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":{JsonSerializer.Serialize(blocky)}}}]}}}}",
+            $"{{\"type\":\"user\",\"timestamp\":\"2025-03-10T12:02:00Z\",\"cwd\":\"C:/x\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":{JsonSerializer.Serialize(toolResultText)}}}]}}}}",
+        };
+
+        var dir = Path.Combine(Path.GetTempPath(), $"perch-swear-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var file = Path.Combine(dir, "sess.jsonl");
+        try
+        {
+            File.WriteAllLines(file, lines);
+            var data = Assert.Single(SessionStatsService.ParseSession(file, null, DateTime.MaxValue).Values);
+            Assert.Equal(2, data.Prompts);   // the two authored prompts; the tool_result isn't a prompt
+            Assert.Equal(3, data.Swears);    // 1 + 2; the "damn" buried in the tool_result is not counted
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 
     private static SessionStatsService.SessionDayData ParseSingleDay(string sessionId)
     {

@@ -17,7 +17,7 @@ public class WrappedSummaryTests
             : new List<ModelStat>();
         return new StatsReport(
             DateOnly.FromDateTime(DateTime.Now), sessions, TimeSpan.FromMinutes(activeMinutes),
-            prompts, toolCalls, subAgents, 0, new TokenTotals(tokens, 0, 0, 0), TokenTotals.Zero, 0m, true,
+            prompts, 0, toolCalls, subAgents, 0, new TokenTotals(tokens, 0, 0, 0), TokenTotals.Zero, 0m, true,
             new List<ProjectStat>(), new List<ToolStat>(), models, new List<ProjectStat>(), hourly);
     }
 

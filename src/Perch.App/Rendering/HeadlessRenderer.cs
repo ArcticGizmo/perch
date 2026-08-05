@@ -580,7 +580,7 @@ internal static class HeadlessRenderer
         hourly[9] = 900; hourly[10] = 2400; hourly[11] = 1800; hourly[14] = 3000; hourly[15] = 2100; hourly[20] = 1200;
         return new StatsReport(
             Day: today, SessionCount: 7, ActiveTime: TimeSpan.FromHours(3) + TimeSpan.FromMinutes(42),
-            Prompts: 58, ToolCalls: 214, SubAgents: 4, Teammates: 2,
+            Prompts: 58, Swears: 12, ToolCalls: 214, SubAgents: 4, Teammates: 2,
             Tokens: tk, TeammateTokens: new TokenTotals(5_000, 2_000, 0, 10_000),
             EstimatedCost: 4.37m, CostComplete: true,
             Projects:
@@ -612,7 +612,7 @@ internal static class HeadlessRenderer
         hourly[23] = 40_000;                                       // clear late-night peak → Night Owl
         var report = new StatsReport(
             Day: today, SessionCount: 340, ActiveTime: TimeSpan.FromHours(126),
-            Prompts: 3400, ToolCalls: 12_000, SubAgents: 140, Teammates: 3,
+            Prompts: 3400, Swears: 140, ToolCalls: 12_000, SubAgents: 140, Teammates: 3,
             Tokens: tk, TeammateTokens: TokenTotals.Zero, EstimatedCost: 260m, CostComplete: true,
             Projects: Enumerable.Range(1, 12).Select(i => new ProjectStat($"proj-{i}", 4, TimeSpan.FromHours(3), 1_000_000)).ToList(),
             Tools:

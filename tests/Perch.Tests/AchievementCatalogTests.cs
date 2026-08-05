@@ -6,7 +6,7 @@ namespace Perch.Tests;
 public class AchievementCatalogTests
 {
     private static StatsReport Report(
-        int sessions = 0, int activeHours = 0, int prompts = 0, int toolCalls = 0,
+        int sessions = 0, int activeHours = 0, int prompts = 0, int swears = 0, int toolCalls = 0,
         int subAgents = 0, int teammates = 0, TokenTotals tokens = default, decimal cost = 0,
         int? peakHour = null, bool allHours = false,
         IReadOnlyList<ProjectStat>? projects = null, IReadOnlyList<ProjectStat>? branches = null,
@@ -17,7 +17,7 @@ public class AchievementCatalogTests
         if (peakHour is { } h) hourly[h] = 9000;
         return new StatsReport(
             DateOnly.FromDateTime(DateTime.Now), sessions, TimeSpan.FromHours(activeHours),
-            prompts, toolCalls, subAgents, teammates, tokens, TokenTotals.Zero, cost, true,
+            prompts, swears, toolCalls, subAgents, teammates, tokens, TokenTotals.Zero, cost, true,
             projects ?? [], tools ?? [], models ?? [], branches ?? [], hourly);
     }
 
@@ -189,6 +189,25 @@ public class AchievementCatalogTests
 
         var sixDays = fullWeek.Take(6).ToList();
         Assert.False(Fam(Eval(report, Range(report, trend: sixDays)), "groundhog-day").Earned);
+    }
+
+    [Fact]
+    public void Swearing_LevelsUpFromFowlMouthedToSailor()
+    {
+        Assert.False(Fam(Eval(Report(swears: 9)), "swearing").Earned);   // one short of the first rung
+
+        var fowl = Fam(Eval(Report(swears: 10)), "swearing");
+        Assert.True(fowl.Earned);
+        Assert.Equal(1, fowl.Level);
+        Assert.Equal("Fowl Mouthed", fowl.Name);
+        Assert.Equal("🐔", fowl.Emoji);
+        Assert.Equal("Swears", fowl.Category);
+
+        var sailor = Fam(Eval(Report(swears: 100)), "swearing");
+        Assert.Equal(2, sailor.Level);
+        Assert.Equal(sailor.MaxLevel, sailor.Level);      // maxed → no progress bar
+        Assert.Null(sailor.Progress);
+        Assert.Equal("Like a Sailor", sailor.Name);
     }
 
     [Fact]

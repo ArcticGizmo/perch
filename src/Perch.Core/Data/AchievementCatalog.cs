@@ -131,6 +131,11 @@ internal static class AchievementCatalog
                 R("filibuster",        "Filibuster",        "📢", AchievementTier.Silver, 10_000,   "10,000 prompts"),
                 R("motormouth",        "Motormouth",        "🎤", AchievementTier.Gold,   100_000,  "100,000 prompts")),
 
+            // What you count is in SwearFilter, not here — the thresholds are all this tile knows about.
+            Family.Levelled("swearing", "Swears", c => c.Swears,
+                R("fowlmouthed", "Fowl Mouthed",  "🐔", AchievementTier.Bronze, 10,  "Swear 10 times in your prompts"),
+                R("likeasailor", "Like a Sailor", "⚓", AchievementTier.Silver, 100, "Swear 100 times in your prompts")),
+
             Family.Levelled("activetime", "Active time", c => c.ActiveHours,
                 R("clockingin",  "Clocking In",     "⏰", AchievementTier.Bronze, 24,    "24 hours active"),
                 R("timesink",    "Time Sink",       "🕳️", AchievementTier.Silver, 100,   "100 hours active"),
@@ -386,6 +391,7 @@ internal static class AchievementCatalog
         // "Cached" is the whole cache footprint — reads (served from cache) plus writes (cache creation).
         public long Cached => _r.Tokens.CacheRead + _r.Tokens.CacheWrite;
         public int Prompts => _r.Prompts;
+        public int Swears => _r.Swears;
         public int ToolCalls => _r.ToolCalls;
         public int SubAgents => _r.SubAgents;
         public int Teammates => _r.Teammates;

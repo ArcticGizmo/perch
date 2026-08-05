@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.4] - 2026-08-05
+
+- New achievement: swear in your prompts 10 times for Fowl Mouthed, 100 for Like a Sailor (it counts; it does not judge)
+
+---
+
 ## [v0.3.3] - 2026-08-05
 
 - Dense-mode hotkey no longer collapses the preview while you're hovering it (it would just pop back)
