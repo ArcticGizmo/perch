@@ -126,12 +126,15 @@ public class GitRepoServiceTests
 
     // ---- ParseLog -------------------------------------------------------------------------------------
 
+    // git log -z separates commits with NUL; the last field is %B (the full multi-line message).
+    private const char Nul = '\0';
+
     [Fact]
-    public void Log_ParsesRecordsNewestFirst()
+    public void Log_ParsesRecordsNewestFirstWithBody()
     {
         var output =
-            $"aaaaaaaaaaaa{Us}aaaaaaa{Us}Ada Lovelace{Us}2026-08-05T10:30:00+10:00{Us}Add the widget\n" +
-            $"bbbbbbbbbbbb{Us}bbbbbbb{Us}Alan Turing{Us}2026-08-04T09:00:00Z{Us}Fix the thing\n";
+            $"aaaaaaaaaaaa{Us}aaaaaaa{Us}Ada Lovelace{Us}2026-08-05T10:30:00+10:00{Us}Add the widget{Us}Add the widget\n\nWith a longer body.\n{Nul}" +
+            $"bbbbbbbbbbbb{Us}bbbbbbb{Us}Alan Turing{Us}2026-08-04T09:00:00Z{Us}Fix the thing{Us}Fix the thing\n{Nul}";
 
         var log = GitRepoService.ParseLog(output);
 
@@ -140,17 +143,28 @@ public class GitRepoServiceTests
         Assert.Equal("aaaaaaa", log[0].ShortHash);
         Assert.Equal("Ada Lovelace", log[0].Author);
         Assert.Equal("Add the widget", log[0].Subject);
+        Assert.Equal("Add the widget\n\nWith a longer body.", log[0].Body); // trailing newline trimmed, body kept
         Assert.Equal(new DateTimeOffset(2026, 8, 5, 10, 30, 0, TimeSpan.FromHours(10)), log[0].Date);
         Assert.Equal("Fix the thing", log[1].Subject);
+    }
+
+    [Fact]
+    public void Log_BodyFallsBackToSubjectWhenAbsent()
+    {
+        // Five-field record (no %B captured) still parses; Body falls back to Subject.
+        var output = $"h{Us}sh{Us}Auth{Us}2026-01-02T03:04:05Z{Us}Only a subject{Nul}";
+        var c = Assert.Single(GitRepoService.ParseLog(output));
+        Assert.Equal("Only a subject", c.Subject);
+        Assert.Equal("Only a subject", c.Body);
     }
 
     [Fact]
     public void Log_SkipsShortAndUndatedRecords()
     {
         var output =
-            $"hash{Us}short{Us}Author\n" +                              // too few fields -> skipped
-            $"hash2{Us}short2{Us}Author2{Us}not-a-date{Us}Subject\n" +  // bad date -> skipped
-            $"hash3{Us}short3{Us}Author3{Us}2026-01-02T03:04:05Z{Us}Good\n";
+            $"hash{Us}short{Us}Author{Nul}" +                                      // too few fields -> skipped
+            $"hash2{Us}short2{Us}Author2{Us}not-a-date{Us}Subject{Us}Subject{Nul}" + // bad date -> skipped
+            $"hash3{Us}short3{Us}Author3{Us}2026-01-02T03:04:05Z{Us}Good{Us}Good{Nul}";
 
         var log = GitRepoService.ParseLog(output);
 

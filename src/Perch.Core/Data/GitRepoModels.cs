@@ -57,14 +57,16 @@ public readonly record struct GitRepoStatus(
     public bool IsClean => Changes.Count == 0;
 }
 
-/// <summary>One entry from <c>git log</c>: full and abbreviated hash, author name, author date, and the
-/// commit subject (first line of the message).</summary>
+/// <summary>One entry from <c>git log</c>: full and abbreviated hash, author name, author date, the commit
+/// subject (first line of the message), and the full raw message <see cref="Body"/> (subject + body, for a
+/// hover tooltip). <see cref="Body"/> falls back to <see cref="Subject"/> when no body was captured.</summary>
 public readonly record struct GitCommit(
     string Hash,
     string ShortHash,
     string Author,
     DateTimeOffset Date,
-    string Subject);
+    string Subject,
+    string Body);
 
 /// <summary>One line of a unified diff — its <see cref="Kind"/> and text with the leading git marker
 /// (<c> </c>/<c>+</c>/<c>-</c>) stripped for payload lines; <see cref="GitDiffLineKind.Meta"/> keeps the

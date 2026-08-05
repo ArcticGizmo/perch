@@ -1,3 +1,4 @@
+using System.IO;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -38,23 +39,32 @@ internal sealed class GitReviewWindow : Window
     private readonly Button _prChip;
     private readonly Button _unifiedBtn;
     private readonly Button _splitBtn;
+    private readonly CheckBox _wrapCheck;
     private readonly ListBox _filesList;
     private readonly ListBox _commitsList;
     private readonly DiffView _diff;
+    private readonly ScrollViewer _diffScroll;
 
     private string? _cwd;
     private string? _prUrl;
     private bool _split;
+    private bool _wrap;
     private int _gen;            // bumped on every retarget/refresh; async results check they're still current
     private bool _suppressSelect; // guards the "selecting in one list clears the other" cross-update
+
+    // Auto-refresh: a filesystem watcher on the working tree, debounced so a burst of edits collapses into
+    // one reload. Both are torn down when the window closes.
+    private FileSystemWatcher? _watcher;
+    private DispatcherTimer? _debounce;
 
     public GitReviewWindow(AppSettings settings)
     {
         _settings = settings;
         _split = settings.GitReviewSplitView;
+        _wrap = settings.GitReviewWrap;
         Title = "Review changes";
-        Width = 1040;
-        Height = 680;
+        Width = 1560;
+        Height = 1020;
         MinWidth = 720;
         MinHeight = 420;
         Background = new SolidColorBrush(BodyBg);
@@ -79,7 +89,7 @@ internal sealed class GitReviewWindow : Window
             Content = "Refresh", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0),
             [DockPanel.DockProperty] = Dock.Right,
         };
-        refreshBtn.Click += (_, _) => RefreshStatus();
+        refreshBtn.Click += (_, _) => RefreshStatus(preserveSelection: true);
 
         // Unified / Split toggle (GitHub/GitKraken-style side-by-side), persisted to AppSettings.
         _unifiedBtn = ModeButton("Unified", split: false);
@@ -91,12 +101,21 @@ internal sealed class GitReviewWindow : Window
             Children = { _unifiedBtn, _splitBtn },
         };
 
+        // Wrap toggle — checked by default; also persisted. Flips the diff body's wrapping and the diff
+        // scroller's horizontal scrollbar (wrapped text needs no horizontal scroll).
+        _wrapCheck = new CheckBox
+        {
+            Content = "Wrap", IsChecked = _wrap, VerticalAlignment = VerticalAlignment.Center,
+            Foreground = Palette.FgBrush, Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
+        };
+        _wrapCheck.IsCheckedChanged += (_, _) => SetWrap(_wrapCheck.IsChecked == true);
+
         var headerText = new StackPanel { Orientation = Orientation.Vertical, Children = { _titleText, _subText } };
         var header = new Border
         {
             Background = Palette.FormBgBrush, Padding = new Thickness(14, 10),
             [DockPanel.DockProperty] = Dock.Top,
-            Child = new DockPanel { LastChildFill = true, Children = { _prChip, refreshBtn, modeGroup, headerText } },
+            Child = new DockPanel { LastChildFill = true, Children = { _prChip, refreshBtn, modeGroup, _wrapCheck, headerText } },
         };
 
         // ---- left column: two lists ----
@@ -119,17 +138,18 @@ internal sealed class GitReviewWindow : Window
         // ---- right: diff ----
         _diff = new DiffView();
         _diff.SetSplit(_split);
+        _diff.SetWrap(_wrap);
         UpdateModeButtons();
-        var diffScroll = new ScrollViewer
+        _diffScroll = new ScrollViewer
         {
             Content = _diff,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = _wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto,
             [Grid.ColumnProperty] = 1,
         };
 
         var body = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
         body.Children.Add(left);
-        body.Children.Add(diffScroll);
+        body.Children.Add(_diffScroll);
 
         Content = new DockPanel { Children = { header, body } };
     }
@@ -157,16 +177,26 @@ internal sealed class GitReviewWindow : Window
             _prUrl = null;
             _prChip.IsVisible = false;
         }
+        SetupWatcher(cwd);
         RefreshStatus();
     }
 
-    // Loads status + log off the UI thread, then repopulates the header and both lists.
-    private void RefreshStatus()
+    // Loads status + log off the UI thread, then repopulates the header and both lists. When
+    // <paramref name="preserveSelection"/> (a manual Refresh or an auto-refresh tick), the currently selected
+    // file/commit is reselected after reload — which re-runs its diff — so the view doesn't jump on the user.
+    private void RefreshStatus(bool preserveSelection = false)
     {
         if (_cwd is not { } cwd) return;
         int gen = ++_gen;
-        _subText.Text = "Loading…";
-        _diff.SetDiff(null, "Select a file or commit to see its diff.");
+
+        string? keepPath = preserveSelection && _filesList.SelectedItem is GitFileChange sf ? sf.Path : null;
+        string? keepHash = preserveSelection && _commitsList.SelectedItem is GitCommit sc ? sc.Hash : null;
+
+        if (!preserveSelection)
+        {
+            _subText.Text = "Loading…";
+            _diff.SetDiff(null, "Select a file or commit to see its diff.");
+        }
 
         System.Threading.Tasks.Task.Run(() => (status: _git.GetStatus(cwd), commits: _git.GetLog(cwd, 50)))
             .ContinueWith(t =>
@@ -177,14 +207,79 @@ internal sealed class GitReviewWindow : Window
                     if (!IsVisible || gen != _gen) return; // window closed or re-pointed since we started
                     var (status, commits) = t.Result;
                     ApplyStatus(status, cwd);
+                    var changes = status?.Changes ?? [];
+
                     _suppressSelect = true;
-                    _filesList.ItemsSource = status?.Changes ?? [];
+                    _filesList.ItemsSource = changes;
                     _commitsList.ItemsSource = commits;
-                    _filesList.SelectedItem = null;
-                    _commitsList.SelectedItem = null;
+                    _filesList.SelectedIndex = -1;
+                    _commitsList.SelectedIndex = -1;
                     _suppressSelect = false;
+
+                    // Restore the prior selection (fires the selection handler, which reloads the diff).
+                    if (keepPath is not null)
+                    {
+                        for (int i = 0; i < changes.Count; i++)
+                            if (changes[i].Path == keepPath) { _filesList.SelectedIndex = i; break; }
+                    }
+                    else if (keepHash is not null)
+                    {
+                        for (int i = 0; i < commits.Count; i++)
+                            if (commits[i].Hash == keepHash) { _commitsList.SelectedIndex = i; break; }
+                    }
                 });
             });
+    }
+
+    // (Re)creates the filesystem watcher for the current working tree. A burst of edits (a session saving
+    // several files, a commit touching .git) is debounced into a single preserve-selection refresh.
+    private void SetupWatcher(string cwd)
+    {
+        _watcher?.Dispose();
+        _watcher = null;
+        if (!Directory.Exists(cwd)) return;
+        try
+        {
+            var w = new FileSystemWatcher(cwd)
+            {
+                IncludeSubdirectories = true,
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.Size,
+            };
+            void Bump(object? _, FileSystemEventArgs __) => Dispatcher.UIThread.Post(RestartDebounce);
+            w.Changed += Bump;
+            w.Created += Bump;
+            w.Deleted += Bump;
+            w.Renamed += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+            w.EnableRaisingEvents = true;
+            _watcher = w;
+        }
+        catch { /* best-effort: no auto-refresh if the watcher can't attach */ }
+    }
+
+    private void RestartDebounce()
+    {
+        _debounce ??= CreateDebounce();
+        _debounce.Stop();
+        _debounce.Start();
+    }
+
+    private DispatcherTimer CreateDebounce()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+        t.Tick += (_, _) =>
+        {
+            _debounce?.Stop();
+            if (IsVisible) RefreshStatus(preserveSelection: true);
+        };
+        return t;
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _watcher?.Dispose();
+        _watcher = null;
+        _debounce?.Stop();
+        base.OnClosed(e);
     }
 
     private void ApplyStatus(GitRepoStatus? status, string cwd)
@@ -217,7 +312,7 @@ internal sealed class GitReviewWindow : Window
             Dispatcher.UIThread.Post(() =>
             {
                 if (!IsVisible || gen != _gen) return;
-                _diff.SetDiff(t.Result.diff, t.Result.note);
+                _diff.SetSections(t.Result.sections, t.Result.note);
             });
         });
     }
@@ -240,16 +335,33 @@ internal sealed class GitReviewWindow : Window
         });
     }
 
-    // Picks the right diff for a working-tree change: untracked files show their full contents; a file with
-    // unstaged edits shows the worktree diff; otherwise the staged diff.
-    private (GitDiff? diff, string? note) LoadFileDiff(string cwd, GitFileChange fc)
+    // Picks the diff(s) for a working-tree change: untracked files show their full contents; a file with
+    // BOTH staged and unstaged edits shows two labelled sections; otherwise the single relevant diff.
+    private (IReadOnlyList<DiffSection> sections, string? note) LoadFileDiff(string cwd, GitFileChange fc)
     {
-        GitDiff? diff = fc.Untracked
-            ? _git.GetUntrackedDiff(cwd, fc.Path)
-            : fc.Unstaged != GitChangeKind.None
-                ? _git.GetWorkingDiff(cwd, fc.Path, staged: false)
-                : _git.GetWorkingDiff(cwd, fc.Path, staged: true);
-        return (diff, DiffNote(diff, $"No diff for {fc.Path}."));
+        if (fc.Untracked)
+            return Single(_git.GetUntrackedDiff(cwd, fc.Path), fc.Path);
+
+        bool hasStaged = fc.Staged != GitChangeKind.None;
+        bool hasUnstaged = fc.Unstaged != GitChangeKind.None;
+
+        if (hasStaged && hasUnstaged)
+        {
+            var list = new List<DiffSection>();
+            if (_git.GetWorkingDiff(cwd, fc.Path, staged: true) is { Files.Count: > 0 } staged)
+                list.Add(new DiffSection("Staged", staged));
+            if (_git.GetWorkingDiff(cwd, fc.Path, staged: false) is { Files.Count: > 0 } unstaged)
+                list.Add(new DiffSection("Unstaged", unstaged));
+            return (list, list.Count == 0 ? $"No diff for {fc.Path}." : null);
+        }
+
+        return Single(hasUnstaged ? _git.GetWorkingDiff(cwd, fc.Path, staged: false)
+                                  : _git.GetWorkingDiff(cwd, fc.Path, staged: true), fc.Path);
+
+        static (IReadOnlyList<DiffSection>, string?) Single(GitDiff? diff, string path) =>
+            diff is { Files.Count: > 0 } d
+                ? (new[] { new DiffSection(null, d) }, null)
+                : ([], $"No diff for {path}.");
     }
 
     private static string? DiffNote(GitDiff? diff, string emptyNote) =>
@@ -284,6 +396,16 @@ internal sealed class GitReviewWindow : Window
             b.Background = active ? new SolidColorBrush(Palette.Accent) : Palette.ButtonBgBrush;
             b.Foreground = active ? Brushes.White : Palette.FgBrush;
         }
+    }
+
+    private void SetWrap(bool wrap)
+    {
+        if (_wrap == wrap) return;
+        _wrap = wrap;
+        _diff.SetWrap(wrap);
+        _diffScroll.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+        _settings.GitReviewWrap = wrap;
+        _settings.Save();
     }
 
     // ---- small UI helpers ----
@@ -322,11 +444,21 @@ internal sealed class GitReviewWindow : Window
         TextTrimming = TextTrimming.CharacterEllipsis,
     }, supportsRecycling: true);
 
-    private static FuncDataTemplate<GitCommit> CommitTemplate() => new((c, _) => new TextBlock
+    private static FuncDataTemplate<GitCommit> CommitTemplate() => new((c, _) =>
     {
-        Text = c.Hash is null ? "" : $"{c.ShortHash}  {c.Subject}",
-        FontSize = 12, Foreground = Palette.FgBrush,
-        TextTrimming = TextTrimming.CharacterEllipsis,
+        var tb = new TextBlock
+        {
+            Text = c.Hash is null ? "" : $"{c.ShortHash} - {c.Subject}",
+            FontFamily = Mono, FontSize = 12, Foreground = Palette.FgBrush,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        if (c.Hash is not null)
+        {
+            // Hover shows the full commit message after a short dwell.
+            ToolTip.SetTip(tb, c.Body);
+            ToolTip.SetShowDelay(tb, 750);
+        }
+        return tb;
     }, supportsRecycling: true);
 
     private static string FileLabel(GitFileChange fc)
@@ -348,17 +480,17 @@ internal sealed class GitReviewWindow : Window
         _ => ' ',
     };
 
+    // Green for additions (incl. untracked new files), red for deletions, orange for everything else that
+    // is a modification (modify / rename / copy / type-change / conflict).
     private static Color FileColor(GitFileChange fc)
     {
-        if (fc.Untracked) return Palette.Muted;
+        if (fc.Untracked) return Palette.Green;
         var k = fc.Unstaged != GitChangeKind.None ? fc.Unstaged : fc.Staged;
         return k switch
         {
             GitChangeKind.Added => Palette.Green,
             GitChangeKind.Deleted => Palette.Red,
-            GitChangeKind.Renamed or GitChangeKind.Copied => Palette.Accent,
-            GitChangeKind.Unmerged => Palette.Orange,
-            _ => Palette.Fg,
+            _ => Palette.Orange,
         };
     }
 }

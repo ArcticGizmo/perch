@@ -247,6 +247,10 @@ internal sealed class AppSettings
     // defaults to unified.
     public bool GitReviewSplitView { get; set; }
 
+    // Whether the Change Review diff wraps long lines. On by default; toggled from the window's "Wrap"
+    // checkbox and persisted. A missing key keeps wrapping on.
+    public bool GitReviewWrap { get; set; } = true;
+
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
     // MigrateQuickLinks) with the well-known presets, honouring the legacy switches below. An empty

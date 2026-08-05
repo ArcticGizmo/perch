@@ -97,6 +97,12 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.GitReviewSplitView),
             s => s.GitReviewSplitView, (s, v) => s.GitReviewSplitView = v),
 
+        Toggle("git-review-wrap", "Change review: wrap lines",
+            "Wrap long lines in the Change Review diff. Also toggled from the window's own toolbar.",
+            SettingSurface.Advanced, ["git", "diff", "wrap", "lines", "review"],
+            PreviewTarget.None, nameof(AppSettings.GitReviewWrap),
+            s => s.GitReviewWrap, (s, v) => s.GitReviewWrap = v),
+
         Toggle("media-controller", "Now-playing media",
             "The media controller strip - track plus previous / play-pause / next.",
             SettingSurface.SessionRow, ["media", "music", "now", "playing", "spotify", "track", "controller", "sound"],

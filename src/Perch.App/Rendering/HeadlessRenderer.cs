@@ -614,7 +614,7 @@ internal static class HeadlessRenderer
             [
                 A("# Change review"),
                 A(""),
-                A("Read-only git review, launched from a session's right-click menu."),
+                A("Read-only git review, launched from a session's right-click menu. This line is intentionally long so the wrap-text option and the aligned line-number gutter can both be eyeballed when it soft-wraps across several visual rows."),
                 A("Experimental."),
             ]),
         ]);

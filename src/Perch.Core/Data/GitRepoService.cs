@@ -28,7 +28,7 @@ internal sealed class GitRepoService
     // The field delimiter for `git log --format` — the ASCII unit separator (U+001F). It can't appear in a
     // hash/name/date and, since we only use %s (subject, single line), records split cleanly on newline.
     private const char Us = '\u001f';
-    private static readonly string LogFormat = $"--format=%H{Us}%h{Us}%an{Us}%aI{Us}%s";
+    private static readonly string LogFormat = $"--format=%H{Us}%h{Us}%an{Us}%aI{Us}%s{Us}%B";
 
     /// <summary>The working tree's status (branch, ahead/behind, changed paths), or null when
     /// <paramref name="cwd"/> isn't a readable git repo. Runs <c>git status --porcelain=v2 --branch</c>.</summary>
@@ -47,7 +47,7 @@ internal sealed class GitRepoService
         if (maxCount <= 0 || !IsRepo(cwd))
             return [];
         var (exit, stdout) = RunGit(cwd, LogTimeoutMs,
-            "--no-optional-locks", "log", $"--max-count={maxCount}", LogFormat);
+            "--no-optional-locks", "log", "-z", $"--max-count={maxCount}", LogFormat);
         return exit == 0 ? ParseLog(stdout) : [];
     }
 
@@ -213,18 +213,24 @@ internal sealed class GitRepoService
     internal static IReadOnlyList<GitCommit> ParseLog(string output)
     {
         var commits = new List<GitCommit>();
-        foreach (var raw in output.Split('\n'))
+        // `-z` separates commits with NUL, so a record can hold a multi-line %B body without ambiguity.
+        foreach (var record in output.Split('\0'))
         {
-            var line = raw.TrimEnd('\r');
-            if (line.Length == 0)
+            if (record.Length == 0)
                 continue;
-            var f = line.Split(Us);
+            var f = record.Split(Us);
             if (f.Length < 5)
                 continue;
             if (!DateTimeOffset.TryParse(f[3], CultureInfo.InvariantCulture,
                     DateTimeStyles.RoundtripKind, out var date))
                 continue;
-            commits.Add(new GitCommit(f[0], f[1], f[2], date, f[4]));
+            string subject = f[4];
+            // %B (full message) is the last field; it carries its own trailing newline(s). Fall back to the
+            // subject when it wasn't captured.
+            string body = f.Length >= 6 ? f[5].Replace("\r\n", "\n").Trim('\n', '\r') : subject;
+            if (body.Length == 0)
+                body = subject;
+            commits.Add(new GitCommit(f[0], f[1], f[2], date, subject, body));
         }
         return commits;
     }

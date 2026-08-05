@@ -1,6 +1,5 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Documents;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Perch.Avalonia.Theming;
@@ -8,41 +7,49 @@ using Perch.Data;
 
 namespace Perch.Avalonia.Views;
 
+/// <summary>One labelled diff to render — e.g. ("Staged", …) / ("Unstaged", …) when a file has both, or a
+/// single unlabelled section for a commit or a plain file diff.</summary>
+internal readonly record struct DiffSection(string? Label, GitDiff Diff);
+
 /// <summary>
-/// The unified-or-split diff surface for the Change Review window. Built from real text controls
-/// (<see cref="SelectableTextBlock"/>) rather than owner-drawn glyphs, so the text is selectable and
-/// copyable (Ctrl+C). Each hunk body is a single selectable block, so selection spans the lines within a
-/// hunk. Diff lines are monospace; added lines are <see cref="Palette.Green"/>, removed
-/// <see cref="Palette.Red"/>, context muted.
+/// The unified-or-split diff surface for the Change Review window. Each hunk is laid out as a grid with one
+/// row per source line: a line-number gutter column and a selectable text column (a
+/// <see cref="SelectableTextBlock"/>, so text can be selected and copied). One row per logical line means
+/// the gutter stays aligned and lines wrap cleanly (the row grows, the number top-aligns) without depending
+/// on any text-layout introspection. Added lines are tinted <see cref="Palette.Green"/>, removed
+/// <see cref="Palette.Red"/>, context muted, with a faint full-width row band.
 ///
-/// Two layouts, toggled by <see cref="SetSplit"/>: <b>Unified</b> (one column, +/- markers) and
-/// <b>Split</b> (side-by-side old|new like GitHub/GitKraken — removed lines pair with the following added
-/// lines, blanks pad the shorter side so rows line up). Rebuilds its visual tree on
-/// <see cref="SetDiff"/>/<see cref="SetSplit"/>; hosted in a <c>ScrollViewer</c>.
+/// Layouts toggle via <see cref="SetSplit"/> (unified vs side-by-side) and wrapping via
+/// <see cref="SetWrap"/>. Rebuilds its visual tree on any change; hosted in a <c>ScrollViewer</c>.
 /// </summary>
 internal sealed class DiffView : Border
 {
     private static readonly Color BodyBg = Color.FromRgb(18, 18, 24);
     private static readonly IBrush FileBarBg = new SolidColorBrush(Color.FromRgb(30, 30, 42));
+    private static readonly IBrush SectionBarBg = new SolidColorBrush(Color.FromRgb(40, 40, 56));
     private static readonly IBrush TitleBrush = new SolidColorBrush(Palette.Title);
     private static readonly IBrush MutedBrush = new SolidColorBrush(Palette.Muted);
-    private static readonly IBrush ContextBrush = new SolidColorBrush(Color.FromRgb(180, 180, 198));
+    private static readonly IBrush GutterBrush = new SolidColorBrush(Color.FromRgb(110, 110, 132));
+    private static readonly IBrush ContextBrush = new SolidColorBrush(Color.FromRgb(190, 190, 205));
     private static readonly IBrush AddedBrush = new SolidColorBrush(Palette.Green);
     private static readonly IBrush RemovedBrush = new SolidColorBrush(Palette.Red);
     private static readonly IBrush HunkBrush = new SolidColorBrush(Palette.Accent);
     private static readonly IBrush SelectionBrush = new SolidColorBrush(Color.FromArgb(90, 96, 165, 250));
+    private static readonly IBrush AddedBandBg = new SolidColorBrush(Color.FromArgb(36, 34, 197, 94));
+    private static readonly IBrush RemovedBandBg = new SolidColorBrush(Color.FromArgb(36, 239, 68, 68));
 
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
     private const double LineSize = 12.5, PathSize = 13, HunkSize = 12;
 
-    // Above this many lines, a single file's diff is truncated with a note — an owner-drawn safety valve so
-    // a pathological (e.g. generated / minified) file can't spawn tens of thousands of inline runs.
+    // Above this many lines a single file's diff is truncated with a note — a safety valve so a pathological
+    // (generated / minified) file can't spawn tens of thousands of row controls.
     private const int MaxLinesPerFile = 4000;
 
-    private GitDiff? _diff;
+    private IReadOnlyList<DiffSection> _sections = [];
     private string? _note = "Select a file or commit to see its diff.";
     private bool _loading;
     private bool _split;
+    private bool _wrap = true;
 
     public DiffView()
     {
@@ -54,26 +61,41 @@ internal sealed class DiffView : Border
     public void SetLoading()
     {
         _loading = true;
-        _diff = null;
+        _sections = [];
         Rebuild();
     }
 
-    /// <summary>Show a diff, or clear it to a placeholder <paramref name="note"/> (e.g. "Binary file",
-    /// nothing selected). A non-null <paramref name="diff"/> with no files also falls back to the note.</summary>
+    /// <summary>Show a single diff (commit or plain file), or clear to a placeholder <paramref name="note"/>.</summary>
     public void SetDiff(GitDiff? diff, string? note)
     {
         _loading = false;
-        _diff = diff;
+        _sections = diff is { Files.Count: > 0 } d ? [new DiffSection(null, d)] : [];
         _note = note;
         Rebuild();
     }
 
-    /// <summary>Switch between unified (false) and side-by-side split (true) layout, re-rendering the
-    /// current diff. A no-op if the mode is unchanged.</summary>
+    /// <summary>Show one or more labelled diff sections (e.g. Staged + Unstaged for one file).</summary>
+    public void SetSections(IReadOnlyList<DiffSection> sections, string? note)
+    {
+        _loading = false;
+        _sections = sections;
+        _note = note;
+        Rebuild();
+    }
+
+    /// <summary>Switch between unified (false) and side-by-side split (true) layout.</summary>
     public void SetSplit(bool split)
     {
         if (_split == split) return;
         _split = split;
+        Rebuild();
+    }
+
+    /// <summary>Wrap long lines (true) or let them run off the right edge (false).</summary>
+    public void SetWrap(bool wrap)
+    {
+        if (_wrap == wrap) return;
+        _wrap = wrap;
         Rebuild();
     }
 
@@ -83,11 +105,16 @@ internal sealed class DiffView : Border
 
         if (_loading)
             root.Children.Add(Message("Loading…"));
-        else if (_diff is not { Files.Count: > 0 })
+        else if (_sections.Count == 0)
             root.Children.Add(Message(_note ?? "No changes."));
         else
-            foreach (var file in _diff.Value.Files)
-                root.Children.Add(FileSection(file));
+            foreach (var section in _sections)
+            {
+                if (section.Label is { } label)
+                    root.Children.Add(SectionHeader(label));
+                foreach (var file in section.Diff.Files)
+                    root.Children.Add(FileSection(file));
+            }
 
         Child = root;
     }
@@ -112,8 +139,11 @@ internal sealed class DiffView : Border
             int budget = MaxLinesPerFile;
             foreach (var hunk in file.Hunks)
             {
+                var (oldStart, newStart) = HunkStarts(hunk.Header);
                 panel.Children.Add(HunkHeader(hunk.Header));
-                panel.Children.Add(_split ? SplitBody(hunk, ref budget) : UnifiedBody(hunk, ref budget));
+                panel.Children.Add(_split
+                    ? SplitHunk(hunk, oldStart, newStart, ref budget)
+                    : UnifiedHunk(hunk, oldStart, newStart, ref budget));
                 if (budget <= 0)
                 {
                     panel.Children.Add(Message("… diff truncated (file too large)."));
@@ -125,44 +155,62 @@ internal sealed class DiffView : Border
         return panel;
     }
 
-    // Unified: one selectable block, each line prefixed by its +/- marker and coloured by kind.
-    private Control UnifiedBody(GitDiffHunk hunk, ref int budget)
+    // One row per source line: [number gutter | text]. The number is new# (old# for removed lines); a faint
+    // band tints added/removed rows. A single grid per hunk shares the gutter column width, so numbers line
+    // up; each text cell is its own SelectableTextBlock (selection is per line).
+    private Control UnifiedHunk(GitDiffHunk hunk, int oldNo, int newNo, ref int budget)
     {
-        var inlines = new InlineCollection();
+        var grid = NewGrid("Auto,*");
+        int row = 0;
         foreach (var line in hunk.Lines)
         {
             if (budget-- <= 0) break;
-            var (brush, marker) = line.Kind switch
+            var (brush, band, marker, num) = line.Kind switch
             {
-                GitDiffLineKind.Added => (AddedBrush, "+ "),
-                GitDiffLineKind.Removed => (RemovedBrush, "- "),
-                GitDiffLineKind.Meta => (MutedBrush, ""),
-                _ => (ContextBrush, "  "),
+                GitDiffLineKind.Added => (AddedBrush, AddedBandBg, "+ ", (newNo++).ToString()),
+                GitDiffLineKind.Removed => (RemovedBrush, RemovedBandBg, "- ", (oldNo++).ToString()),
+                GitDiffLineKind.Meta => (MutedBrush, null, "", ""),
+                _ => (ContextBrush, (IBrush?)null, "  ", NextContext(ref oldNo, ref newNo)),
             };
-            AppendLine(inlines, marker + line.Text, brush);
+            AddRow(grid, row, band, 0, 2);
+            AddNumber(grid, row, 0, num);
+            AddText(grid, row, 1, marker + line.Text, brush);
+            row++;
         }
-        return Body(inlines);
+        return grid;
     }
 
-    // Split: removed lines (left) pair with the following added lines (right); context sits on both sides;
-    // blanks pad the shorter side so the two columns stay row-aligned.
-    private Control SplitBody(GitDiffHunk hunk, ref int budget)
+    // Side-by-side: removed lines (left, old#) pair with the following added lines (right, new#); context
+    // echoes on both sides; blanks pad the shorter side so paired rows line up. Columns: leftNum, leftText,
+    // rightNum, rightText.
+    private Control SplitHunk(GitDiffHunk hunk, int oldNo, int newNo, ref int budget)
     {
-        var left = new InlineCollection();
-        var right = new InlineCollection();
-        var pendingRemoved = new List<string>();
-        var pendingAdded = new List<string>();
+        var grid = NewGrid("Auto,*,Auto,*");
+        int row = 0;
+        var pendingR = new List<(string text, string num)>();
+        var pendingA = new List<(string text, string num)>();
 
         void Flush()
         {
-            int rows = Math.Max(pendingRemoved.Count, pendingAdded.Count);
-            for (int i = 0; i < rows; i++)
+            int n = Math.Max(pendingR.Count, pendingA.Count);
+            for (int i = 0; i < n; i++)
             {
-                AppendLine(left, i < pendingRemoved.Count ? pendingRemoved[i] : "", RemovedBrush);
-                AppendLine(right, i < pendingAdded.Count ? pendingAdded[i] : "", AddedBrush);
+                if (i < pendingR.Count)
+                {
+                    AddRow(grid, row, RemovedBandBg, 0, 2);
+                    AddNumber(grid, row, 0, pendingR[i].num);
+                    AddText(grid, row, 1, pendingR[i].text, RemovedBrush);
+                }
+                if (i < pendingA.Count)
+                {
+                    AddRow(grid, row, AddedBandBg, 2, 2);
+                    AddNumber(grid, row, 2, pendingA[i].num);
+                    AddText(grid, row, 3, pendingA[i].text, AddedBrush);
+                }
+                row++;
             }
-            pendingRemoved.Clear();
-            pendingAdded.Clear();
+            pendingR.Clear();
+            pendingA.Clear();
         }
 
         foreach (var line in hunk.Lines)
@@ -170,43 +218,104 @@ internal sealed class DiffView : Border
             if (budget-- <= 0) break;
             switch (line.Kind)
             {
-                case GitDiffLineKind.Removed: pendingRemoved.Add(line.Text); break;
-                case GitDiffLineKind.Added: pendingAdded.Add(line.Text); break;
-                default: // context / meta — flush the pending change block, then echo on both sides
+                case GitDiffLineKind.Removed: pendingR.Add((line.Text, (oldNo++).ToString())); break;
+                case GitDiffLineKind.Added: pendingA.Add((line.Text, (newNo++).ToString())); break;
+                default: // context / meta — flush pending change block, then echo on both sides
                     Flush();
                     var brush = line.Kind == GitDiffLineKind.Meta ? MutedBrush : ContextBrush;
-                    AppendLine(left, line.Text, brush);
-                    AppendLine(right, line.Text, brush);
+                    string ln = line.Kind == GitDiffLineKind.Meta ? "" : (newNo).ToString();
+                    string lo = line.Kind == GitDiffLineKind.Meta ? "" : (oldNo).ToString();
+                    AddNumber(grid, row, 0, lo);
+                    AddText(grid, row, 1, line.Text, brush);
+                    AddNumber(grid, row, 2, ln);
+                    AddText(grid, row, 3, line.Text, brush);
+                    if (line.Kind != GitDiffLineKind.Meta) { oldNo++; newNo++; }
+                    row++;
                     break;
             }
         }
         Flush();
-
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
-        var l = Body(left); l.SetValue(Grid.ColumnProperty, 0);
-        var r = Body(right); r.SetValue(Grid.ColumnProperty, 1); r.Margin = new Thickness(10, 0, 0, 0);
-        grid.Children.Add(l);
-        grid.Children.Add(r);
         return grid;
     }
 
-    // A selectable monospace block from a prepared inline collection (one Run + LineBreak per line).
-    private static SelectableTextBlock Body(InlineCollection inlines) => new()
+    // ---- row/grid helpers ----
+
+    private static Grid NewGrid(string cols) => new()
     {
-        Inlines = inlines,
-        FontFamily = Mono,
-        FontSize = LineSize,
-        TextWrapping = TextWrapping.NoWrap,
-        SelectionBrush = SelectionBrush,
-        Padding = new Thickness(10, 2),
+        ColumnDefinitions = new ColumnDefinitions(cols),
     };
 
-    private static void AppendLine(InlineCollection inlines, string text, IBrush brush)
+    // Ensures the grid has a row at index and returns after growing RowDefinitions as needed.
+    private static void EnsureRow(Grid grid, int row)
     {
-        if (text.Length > 0)
-            inlines.Add(new Run(text) { Foreground = brush });
-        inlines.Add(new LineBreak());
+        while (grid.RowDefinitions.Count <= row)
+            grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
     }
+
+    // A faint full-width band behind a row, spanning from column start for span columns. Added first so it
+    // sits behind the number/text.
+    private static void AddRow(Grid grid, int row, IBrush? band, int col, int span)
+    {
+        EnsureRow(grid, row);
+        if (band is null) return;
+        var b = new Border { Background = band };
+        b.SetValue(Grid.RowProperty, row);
+        b.SetValue(Grid.ColumnProperty, col);
+        b.SetValue(Grid.ColumnSpanProperty, span);
+        grid.Children.Add(b);
+    }
+
+    private void AddNumber(Grid grid, int row, int col, string num)
+    {
+        EnsureRow(grid, row);
+        var tb = new TextBlock
+        {
+            Text = num,
+            FontFamily = Mono,
+            FontSize = LineSize,
+            Foreground = GutterBrush,
+            TextAlignment = TextAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Padding = new Thickness(8, 1, 8, 1),
+            MinWidth = 34,
+        };
+        tb.SetValue(Grid.RowProperty, row);
+        tb.SetValue(Grid.ColumnProperty, col);
+        grid.Children.Add(tb);
+    }
+
+    private void AddText(Grid grid, int row, int col, string text, IBrush brush)
+    {
+        EnsureRow(grid, row);
+        var tb = new SelectableTextBlock
+        {
+            Text = text,
+            FontFamily = Mono,
+            FontSize = LineSize,
+            Foreground = brush,
+            TextWrapping = _wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
+            SelectionBrush = SelectionBrush,
+            Padding = new Thickness(2, 1, 8, 1),
+        };
+        tb.SetValue(Grid.RowProperty, row);
+        tb.SetValue(Grid.ColumnProperty, col);
+        grid.Children.Add(tb);
+    }
+
+    private static string NextContext(ref int oldNo, ref int newNo)
+    {
+        string n = newNo.ToString();
+        oldNo++;
+        newNo++;
+        return n;
+    }
+
+    private static Control SectionHeader(string label) => new Border
+    {
+        Background = SectionBarBg,
+        Padding = new Thickness(10, 5),
+        Child = new TextBlock { Text = label, Foreground = TitleBrush, FontSize = 12, FontWeight = FontWeight.Bold },
+    };
 
     private static Control HunkHeader(string header) => new SelectableTextBlock
     {
@@ -215,7 +324,7 @@ internal sealed class DiffView : Border
         FontSize = HunkSize,
         Foreground = HunkBrush,
         SelectionBrush = SelectionBrush,
-        Padding = new Thickness(10, 4, 10, 2),
+        Padding = new Thickness(8, 6, 8, 2),
     };
 
     private static SelectableTextBlock Selectable(string text, double size, IBrush brush, FontWeight weight) => new()
@@ -243,4 +352,24 @@ internal sealed class DiffView : Border
         ({ } o, _) => o,
         _ => "(unknown)",
     };
+
+    // Parses the start line numbers from a hunk header "@@ -<oldStart>[,n] +<newStart>[,n] @@ …".
+    private static (int OldStart, int NewStart) HunkStarts(string header)
+    {
+        int oldStart = 1, newStart = 1;
+        foreach (var tok in header.Split(' '))
+        {
+            if (tok.Length < 2) continue;
+            if (tok[0] == '-') oldStart = LeadingInt(tok.AsSpan(1), oldStart);
+            else if (tok[0] == '+') newStart = LeadingInt(tok.AsSpan(1), newStart);
+        }
+        return (oldStart, newStart);
+
+        static int LeadingInt(ReadOnlySpan<char> s, int fallback)
+        {
+            int comma = s.IndexOf(',');
+            var num = comma >= 0 ? s[..comma] : s;
+            return int.TryParse(num, out var v) ? v : fallback;
+        }
+    }
 }
