@@ -19,6 +19,11 @@ internal static class ThemeService
     /// <summary>The built-in theme for <paramref name="id"/>, or Midnight for an unknown/missing id.</summary>
     public static Theme Resolve(string? id) => Themes.ById(id) ?? Themes.Midnight;
 
+    /// <summary>Apply a theme app-wide, resolving the desktop lifetime itself — for callers (like the theme
+    /// designer's live preview) that don't hold a reference to it.</summary>
+    public static void ApplyLive(Theme theme) =>
+        Apply(theme, Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime);
+
     /// <summary>Swap the active theme and repaint every open window. <paramref name="desktop"/> may be null
     /// at startup (nothing shown yet) — the swap still updates <see cref="Palette"/> for the first paint.</summary>
     public static void Apply(Theme theme, IClassicDesktopStyleApplicationLifetime? desktop)

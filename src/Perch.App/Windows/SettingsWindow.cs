@@ -262,52 +262,24 @@ internal sealed class SettingsWindow : Window
         AddNavItem(nav, "features", "Features");
     }
 
-    // The Appearance page: pick a colour theme from a list of swatch cards, with the same docked live
-    // overlay preview the Features page uses. Selecting a theme applies it app-wide immediately (via the
-    // ThemeChanged hook), which repaints this window and the preview too — so the choice is seen at once.
+    private StackPanel _themeList = null!;
+    private readonly List<(string id, Button card)> _themeCards = new();
+
+    // The Appearance page: pick a colour theme from a list of swatch cards (built-ins + your custom themes),
+    // with the same docked live overlay preview the Features page uses, and a "Design a new theme…" button
+    // that opens the designer. Selecting a theme applies it app-wide immediately (via the ThemeChanged hook),
+    // repainting this window and the preview too — so the choice is seen at once.
     private void AddAppearancePage(StackPanel nav)
     {
         var preview = new PreviewPane();
         preview.Apply(_settings);
 
-        var list = new StackPanel { Margin = new Thickness(16), Spacing = 10 };
-        list.Children.Add(SettingsUi.SectionTitle("Theme"));
-        list.Children.Add(SettingsUi.BodyText(
-            "Pick a colour theme. Every theme keeps the status colours (running, waiting, error) identical, " +
-            "so the overlay stays glanceable — only the chrome and text are re-tinted. Contrast is checked " +
-            "against WCAG AA for every theme."));
-
-        var cards = new List<(string id, Button card)>();
-        void Restyle()
-        {
-            foreach (var (id, card) in cards)
-            {
-                bool active = id == _settings.ActiveThemeId;
-                card.BorderBrush = active ? Palette.AccentBrush : Palette.BorderBrush;
-                card.BorderThickness = new Thickness(active ? 2 : 1);
-            }
-        }
-
-        foreach (var theme in Themes.BuiltIn)
-        {
-            var card = BuildThemeCard(theme);
-            var id = theme.Id;
-            card.Click += (_, _) =>
-            {
-                if (_settings.ActiveThemeId == id) return;
-                _settings.ActiveThemeId = id;
-                _settings.Save();
-                _hooks.ThemeChanged?.Invoke();   // repaints the whole app, including this window + preview
-                Restyle();
-            };
-            cards.Add((id, card));
-            list.Children.Add(card);
-        }
-        Restyle();
+        _themeList = new StackPanel { Margin = new Thickness(16), Spacing = 10 };
+        RebuildThemeList();
 
         var cardsScroll = new ScrollViewer
         {
-            Content = list, IsVisible = true,
+            Content = _themeList, IsVisible = true,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
@@ -323,6 +295,79 @@ internal sealed class SettingsWindow : Window
         _pages["appearance"] = grid;
         _contentHost.Children.Add(grid);
         AddNavItem(nav, "appearance", "Appearance");
+    }
+
+    // (Re)populate the theme list — called on open and after a save/delete so custom themes stay in sync.
+    private void RebuildThemeList()
+    {
+        _themeList.Children.Clear();
+        _themeCards.Clear();
+
+        _themeList.Children.Add(SettingsUi.SectionTitle("Theme"));
+        _themeList.Children.Add(SettingsUi.BodyText(
+            "Pick a colour theme. Every theme keeps the status colours (running, waiting, error) identical, " +
+            "so the overlay stays glanceable — only the chrome and text are re-tinted. Contrast is checked " +
+            "against WCAG AA for every theme."));
+
+        foreach (var theme in ThemeCatalog.All(_settings.CustomThemes))
+            _themeList.Children.Add(BuildThemeRow(theme));
+        RestyleThemeCards();
+
+        var design = SettingsUi.FlatButton("+  Design a new theme…");
+        design.HorizontalAlignment = HorizontalAlignment.Left;
+        design.Margin = new Thickness(0, 6, 0, 0);
+        design.Click += (_, _) =>
+        {
+            var seed = ThemeCatalog.Resolve(_settings.ActiveThemeId, _settings.CustomThemes);
+            _ = new ThemeDesignerWindow(_settings, seed, onSaved: RebuildThemeList).ShowDialog(this);
+        };
+        _themeList.Children.Add(design);
+    }
+
+    private void RestyleThemeCards()
+    {
+        foreach (var (id, card) in _themeCards)
+        {
+            bool active = id == _settings.ActiveThemeId;
+            card.BorderBrush = active ? Palette.AccentBrush : Palette.BorderBrush;
+            card.BorderThickness = new Thickness(active ? 2 : 1);
+        }
+    }
+
+    // A theme row: the swatch card, plus a Delete button for custom (non-built-in) themes.
+    private Control BuildThemeRow(Theme theme)
+    {
+        var id = theme.Id;
+        var card = BuildThemeCard(theme);
+        card.Click += (_, _) =>
+        {
+            if (_settings.ActiveThemeId == id) return;
+            _settings.ActiveThemeId = id;
+            _settings.Save();
+            _hooks.ThemeChanged?.Invoke();   // repaints the whole app, including this window + preview
+            RestyleThemeCards();
+        };
+        _themeCards.Add((id, card));
+
+        if (ThemeCatalog.IsBuiltIn(id)) return card;
+
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        Grid.SetColumn(card, 0);
+        var del = SettingsUi.FlatButton("Delete");
+        del.VerticalAlignment = VerticalAlignment.Center;
+        del.Margin = new Thickness(8, 0, 0, 0);
+        del.Click += (_, _) =>
+        {
+            _settings.CustomThemes?.RemoveAll(t => t.Id == id);
+            if (_settings.ActiveThemeId == id) _settings.ActiveThemeId = "midnight";
+            _settings.Save();
+            _hooks.ThemeChanged?.Invoke();
+            RebuildThemeList();
+        };
+        Grid.SetColumn(del, 1);
+        row.Children.Add(card);
+        row.Children.Add(del);
+        return row;
     }
 
     // One theme option: its name over a strip of swatches (surface, raised, text, accent + the semantic
