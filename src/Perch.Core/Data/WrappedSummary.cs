@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>The personality archetype a Wrapped poster celebrates. Derived from the shape of the
 /// stats (when you work, how much you delegate, how tool-heavy you are) rather than raw size — so two

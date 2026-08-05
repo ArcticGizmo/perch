@@ -1,4 +1,4 @@
-using Perch.Avalonia.Views;
+﻿using Perch.Avalonia.Views;
 using Perch.Data;
 
 namespace Perch.Avalonia.Services;
@@ -43,5 +43,6 @@ internal static class OverlaySettingsGates
         c.SetUpsideDownQuickLinks(s.UpsideDownQuickLinks);
         c.SetConfettiFinishAvailable(s.ConfettiFinish);
         c.SetExternalNotificationsAvailable(s.ExternalNotificationsEnabled);
+        c.SetReviewChangesAvailable(s.ShowGitReview);
     }
 }

@@ -1,4 +1,4 @@
-namespace Perch.Data.Replay;
+﻿namespace Perch.Data.Replay;
 
 /// <summary>
 /// The on-disk shape of a <c>.perchreplay</c> recording: the entry names inside the zip and the format

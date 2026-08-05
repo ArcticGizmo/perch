@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// Extracts the last segment of a path splitting on <b>both</b> separators, regardless of host OS.

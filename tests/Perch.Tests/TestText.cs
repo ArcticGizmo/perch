@@ -1,4 +1,4 @@
-namespace Perch.Tests;
+﻿namespace Perch.Tests;
 
 /// <summary>Test helpers for text the committed source shouldn't spell out verbatim (profanity corpora for
 /// the swear-filter tests). ROT13 is enough to keep it out of a casual grep while staying trivially

@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>Severity of a desktop notification, driving the toast's accent (and, on platforms with a
 /// native toast, its icon).</summary>

@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>
 /// Brings a session's terminal (or an arbitrary process's main window) to the foreground. Inherently

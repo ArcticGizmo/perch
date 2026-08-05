@@ -1,0 +1,20 @@
+root = true
+
+# Encoding policy. See CLAUDE.md ("Release-pipeline scripts stay pure ASCII").
+#
+# Source files carry non-ASCII (em dashes, arrows, the overlay glyphs) and ship without a BOM,
+# so any tool that assumes the system codepage (CP1252 on Windows) for a BOM-less file mojibakes
+# them. Writing a UTF-8 BOM makes every reader detect UTF-8 unambiguously. BOM-on-.cs is the
+# .NET norm (Visual Studio writes it by default; Roslyn/MSBuild read it fine).
+[*.{cs,csproj}]
+charset = utf-8-bom
+
+# Release-pipeline scripts and docs stay UTF-8 *without* a BOM. A BOM would break
+# `install.ps1 | iex` and Windows PowerShell 5.1 parsing; the scripts are held to pure ASCII
+# anyway, and Markdown is read by renderers that already assume UTF-8.
+[*.{ps1,psm1,bat,cmd,sh,yml,yaml,md}]
+charset = utf-8
+
+# Shell scripts must stay LF (a CRLF shebang fails on macOS).
+[*.sh]
+end_of_line = lf

@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// The single place that turns a platform capture identity into something human. Everything else — the platform

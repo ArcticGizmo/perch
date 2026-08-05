@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>
 /// Adds/removes the install directory to the user's shell search path so the <c>perch</c> command (and

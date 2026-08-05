@@ -1,4 +1,4 @@
-using Perch.Data;
+﻿using Perch.Data;
 
 namespace Perch.Avalonia.Services;
 

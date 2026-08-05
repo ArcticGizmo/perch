@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// Selects the app "profile" so a development instance can run alongside an installed one without

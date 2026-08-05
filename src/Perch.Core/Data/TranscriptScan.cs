@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// Shared, best-effort reading of a session transcript. Centralises the boilerplate every reader

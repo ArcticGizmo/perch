@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// Tallies profanity in user-prompt text for the "Fowl Mouthed" achievement family. The word list is

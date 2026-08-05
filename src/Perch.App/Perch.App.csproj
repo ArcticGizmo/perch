@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
      <PropertyGroup>
           <!-- Two heads from one project. The Windows head (net10.0-windows) uses real Action Center
          toasts via the UWP notifications compat shim, so it needs the Windows-10 TFM. The cross-platform
@@ -15,7 +15,7 @@
           <RootNamespace>Perch.Avalonia</RootNamespace>
           <AssemblyName>perch</AssemblyName>
           <Product>Perch</Product>
-          <Version>0.3.4</Version>
+          <Version>0.3.5</Version>
           <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
      </PropertyGroup>
 

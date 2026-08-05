@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.5] - 2026-08-05
+
+- New read-only Change Review, from a session's right-click menu (on by default)
+- Working-tree changes and recent commits, each with its own diff
+- Unified or split diffs, with a wrap toggle and line numbers
+- Ctrl+F find highlights every match, the current one loudest
+- Collapsible file sections, for folding a big diff away
+- Select text across lines, or whole line ranges by number, and copy
+- Auto-refreshes as the working tree changes, keeping your scroll position
+- Flags BOM- or line-ending-only changes with ≈ (git sees them; you can't)
+
+---
+
 ## [v0.3.4] - 2026-08-05
 
 - New achievement: swear in your prompts 10 times for Fowl Mouthed, 100 for Like a Sailor (it counts; it does not judge)

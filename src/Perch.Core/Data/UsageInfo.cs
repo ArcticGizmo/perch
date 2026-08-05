@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// One model-scoped weekly window (the endpoint's <c>weekly_scoped</c> limits — e.g. Fable's own

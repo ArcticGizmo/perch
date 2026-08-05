@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// A per-file memoiser keyed by (length, last-write-time): it returns the cached value while the file on

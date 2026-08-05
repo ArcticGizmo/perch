@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -235,6 +235,21 @@ internal sealed class AppSettings
     // (experimental) and, importantly, load-bearing: while off no git process is ever launched, so the
     // feature costs nothing when disabled. A missing key keeps it off.
     public bool ShowGitStats { get; set; }
+
+    // Whether the per-session right-click menu offers "Review changes…", which opens the read-only git
+    // Change Review window for that session's working directory. On by default. Purely gates the menu
+    // action — nothing runs in the background either way (and even when used, git is only invoked on demand
+    // while the window is open), so it's cheap. A missing key defaults it on.
+    public bool ShowGitReview { get; set; } = true;
+
+    // The Change Review window's diff layout: false = unified (one column), true = side-by-side split.
+    // Persisted so the choice sticks between openings; toggled from the window's own toolbar. A missing key
+    // defaults to unified.
+    public bool GitReviewSplitView { get; set; }
+
+    // Whether the Change Review diff wraps long lines. On by default; toggled from the window's "Wrap"
+    // checkbox and persisted. A missing key keeps wrapping on.
+    public bool GitReviewWrap { get; set; } = true;
 
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see

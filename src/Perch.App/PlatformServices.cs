@@ -1,4 +1,4 @@
-using Perch.Platform;
+﻿using Perch.Platform;
 #if WINDOWS
 using Impl = Perch.Platform.Windows;
 #else

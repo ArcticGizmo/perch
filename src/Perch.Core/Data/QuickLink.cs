@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// A user-configured shortcut shown in the overlay's quick-links row (the icon strip below the

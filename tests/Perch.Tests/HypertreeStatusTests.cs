@@ -1,4 +1,4 @@
-using Perch.Data.Hypertree;
+﻿using Perch.Data.Hypertree;
 using Xunit;
 
 namespace Perch.Tests;

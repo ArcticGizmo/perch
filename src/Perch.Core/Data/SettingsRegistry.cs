@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// The single description of every user-facing setting — the spine the redesigned Settings window is built
@@ -84,6 +84,24 @@ internal static class SettingsRegistry
             SettingSurface.SessionRow, ["git", "diff", "lines", "added", "removed", "churn", "numstat"],
             PreviewTarget.GitStats, nameof(AppSettings.ShowGitStats),
             s => s.ShowGitStats, (s, v) => s.ShowGitStats = v),
+
+        Toggle("git-review", "Change review",
+            "Adds a \"Review changes…\" item to a session's right-click menu that opens a read-only git diff / history window for its directory.",
+            SettingSurface.Advanced, ["git", "diff", "review", "changes", "commit", "history", "audit"],
+            PreviewTarget.None, nameof(AppSettings.ShowGitReview),
+            s => s.ShowGitReview, (s, v) => s.ShowGitReview = v),
+
+        Toggle("git-review-split", "Change review: split diff",
+            "Show the Change Review diff side-by-side (old vs new) instead of unified. Also toggled from the window's own toolbar.",
+            SettingSurface.Advanced, ["git", "diff", "split", "side", "unified", "review"],
+            PreviewTarget.None, nameof(AppSettings.GitReviewSplitView),
+            s => s.GitReviewSplitView, (s, v) => s.GitReviewSplitView = v),
+
+        Toggle("git-review-wrap", "Change review: wrap lines",
+            "Wrap long lines in the Change Review diff. Also toggled from the window's own toolbar.",
+            SettingSurface.Advanced, ["git", "diff", "wrap", "lines", "review"],
+            PreviewTarget.None, nameof(AppSettings.GitReviewWrap),
+            s => s.GitReviewWrap, (s, v) => s.GitReviewWrap = v),
 
         Toggle("media-controller", "Now-playing media",
             "The media controller strip - track plus previous / play-pause / next.",

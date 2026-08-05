@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <!-- Plain net10.0: the tests exercise only the portable Perch.Core data layer (no WinForms, no
          Win32), so they build and run on macOS/Linux as well as Windows. -->

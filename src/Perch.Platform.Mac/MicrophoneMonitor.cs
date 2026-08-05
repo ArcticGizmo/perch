@@ -1,4 +1,4 @@
-namespace Perch.Platform.Mac;
+﻿namespace Perch.Platform.Mac;
 
 /// <summary>
 /// macOS <see cref="IMicrophoneMonitor"/> — a stub for now, like the other unfinished members of this

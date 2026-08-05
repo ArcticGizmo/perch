@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>
 /// A point-in-time snapshot of the system's current media session — what's playing, which transport

@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>
 /// Puts a rendered raster image onto the system clipboard so it can be pasted into other apps (chat,

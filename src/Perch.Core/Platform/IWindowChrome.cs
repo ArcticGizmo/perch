@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>
 /// Applies the native window styles Avalonia doesn't expose directly, on the OS window handle Avalonia

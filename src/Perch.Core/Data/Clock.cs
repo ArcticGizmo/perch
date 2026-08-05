@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// Supplies "now" to the parts of Perch that compare against on-disk timestamps. Abstracted so replay

@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>How shiny a badge is — drives ordering and colour in the grid. Bronze is a warm-up, Gold is a
 /// genuine feat (or a genuine cry for help).</summary>

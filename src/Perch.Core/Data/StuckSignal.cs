@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>Which heuristic flagged a session as possibly stuck. Surfaced in the overlay's
 /// warning-glyph tooltip so the user knows <em>why</em> Perch is worried.</summary>

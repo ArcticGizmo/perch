@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
@@ -196,6 +196,27 @@ internal static class HeadlessRenderer
         statsAll.SetReport(allReport, allRange);
         RenderControl(statsAll, Path.Combine(outDir, "stats_alltime_1x.png"), 96);
         RenderControl(statsAll, Path.Combine(outDir, "stats_alltime_1.5x.png"), 144);
+
+        // Change Review diff (git-review M1): a synthetic multi-file diff so the added/removed/context
+        // colours, the file bars, and the monospace alignment can be eyeballed without a repo — in both
+        // the unified and side-by-side split layouts.
+        var diffUnified = new Views.DiffView { Width = 760 };
+        diffUnified.SetDiff(SampleDiff(), null);
+        RenderControl(diffUnified, Path.Combine(outDir, "change_review_unified_1x.png"), 96);
+        RenderControl(diffUnified, Path.Combine(outDir, "change_review_unified_1.5x.png"), 144);
+
+        var diffSplit = new Views.DiffView { Width = 760 };
+        diffSplit.SetDiff(SampleDiff(), null);
+        diffSplit.SetSplit(true);
+        RenderControl(diffSplit, Path.Combine(outDir, "change_review_split_1x.png"), 96);
+        RenderControl(diffSplit, Path.Combine(outDir, "change_review_split_1.5x.png"), 144);
+
+        // Find state: every "the" match highlighted (yellow) with the current one prominent (orange).
+        var diffFind = new Views.DiffView { Width = 760 };
+        diffFind.SetDiff(SampleDiff(), null);
+        diffFind.SetSearch("the");
+        RenderControl(diffFind, Path.Combine(outDir, "change_review_find_1x.png"), 96);
+        RenderControl(diffFind, Path.Combine(outDir, "change_review_find_1.5x.png"), 144);
 
         // Dedicated Achievements window (the "trophy cabinet"): the roomy grid variant with per-badge
         // criteria lines, fed the same all-time sample so earned + locked tiles both show.
@@ -570,6 +591,44 @@ internal static class HeadlessRenderer
         };
         var icons = new string?[] { brandPng, null, null };
         return (links, icons);
+    }
+
+    // A synthetic unified diff for the Change Review surface: a modified file (context + add + remove),
+    // an added file (all-green), and a binary file — enough to exercise every DiffView branch.
+    private static GitDiff SampleDiff()
+    {
+        GitDiffLine C(string t) => new(GitDiffLineKind.Context, t);
+        GitDiffLine A(string t) => new(GitDiffLineKind.Added, t);
+        GitDiffLine R(string t) => new(GitDiffLineKind.Removed, t);
+
+        var modified = new GitDiffFile("src/Overlay/SessionRow.cs", "src/Overlay/SessionRow.cs", false,
+        [
+            new GitDiffHunk("@@ -18,7 +18,8 @@ internal sealed class SessionRow",
+            [
+                C("    public string Title { get; init; }"),
+                C(""),
+                R("    private int _height = 24;"),
+                A("    private int _height = 28;"),
+                A("    private bool _dense;"),
+                C(""),
+                C("    public void Measure()"),
+            ]),
+        ]);
+
+        var added = new GitDiffFile(null, "docs/change-review.md", false,
+        [
+            new GitDiffHunk("@@ -0,0 +1,4 @@",
+            [
+                A("# Change review"),
+                A(""),
+                A("Read-only git review, launched from a session's right-click menu. This line is intentionally long so the wrap-text option and the aligned line-number gutter can both be eyeballed when it soft-wraps across several visual rows."),
+                A("Experimental."),
+            ]),
+        ]);
+
+        var binary = new GitDiffFile("assets/icon.png", "assets/icon.png", true, []);
+
+        return new GitDiff([modified, added, binary]);
     }
 
     private static StatsReport SampleStatsReport()

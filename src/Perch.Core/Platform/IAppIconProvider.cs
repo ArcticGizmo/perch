@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>
 /// The platform's application-shell seam for the overlay's quick-links strip: resolving an installed
