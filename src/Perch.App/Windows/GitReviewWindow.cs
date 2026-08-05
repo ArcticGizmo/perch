@@ -46,6 +46,9 @@ internal sealed class GitReviewWindow : Window
     private readonly ListBox _commitsList;
     private readonly DiffView _diff;
     private readonly ScrollViewer _diffScroll;
+    private readonly Border _findBar;
+    private readonly TextBox _findBox;
+    private readonly TextBlock _findLabel;
 
     private string? _cwd;
     private string? _prUrl;
@@ -143,21 +146,44 @@ internal sealed class GitReviewWindow : Window
         left.Children.Add(SectionLabel("Recent commits", 2));
         left.Children.Add(Place(_commitsList, 3));
 
-        // ---- right: diff ----
+        // ---- right: find bar (hidden until Ctrl+F) over the diff ----
         _diff = new DiffView();
         _diff.SetSplit(_split);
         _diff.SetWrap(_wrap);
+        _diff.SearchResultsChanged += OnSearchResults;
         UpdateModeButtons();
         _diffScroll = new ScrollViewer
         {
             Content = _diff,
             HorizontalScrollBarVisibility = _wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto,
-            [Grid.ColumnProperty] = 1,
         };
+
+        _findBox = new TextBox { PlaceholderText = "Find in diff", MinWidth = 220, VerticalAlignment = VerticalAlignment.Center };
+        _findBox.TextChanged += (_, _) => _diff.SetSearch(_findBox.Text ?? "");
+        _findBox.KeyDown += OnFindBoxKeyDown;
+        _findLabel = new TextBlock
+        {
+            Text = "", Foreground = Palette.MutedBrush, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0), MinWidth = 48, [DockPanel.DockProperty] = Dock.Right,
+        };
+        var findPrev = new Button { Content = "‹", VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right };
+        findPrev.Click += (_, _) => _diff.PrevMatch();
+        var findNext = new Button { Content = "›", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right };
+        findNext.Click += (_, _) => _diff.NextMatch();
+        var findClose = new Button { Content = "✕", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right };
+        findClose.Click += (_, _) => CloseFind();
+        _findBar = new Border
+        {
+            Background = Palette.FormBgBrush, Padding = new Thickness(10, 6), IsVisible = false,
+            [DockPanel.DockProperty] = Dock.Top,
+            Child = new DockPanel { LastChildFill = true, Children = { findClose, findNext, findPrev, _findLabel, _findBox } },
+        };
+
+        var diffColumn = new DockPanel { LastChildFill = true, [Grid.ColumnProperty] = 1, Children = { _findBar, _diffScroll } };
 
         var body = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
         body.Children.Add(left);
-        body.Children.Add(_diffScroll);
+        body.Children.Add(diffColumn);
 
         Content = new DockPanel { Children = { header, body } };
     }
@@ -165,8 +191,51 @@ internal sealed class GitReviewWindow : Window
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (e.Key == Key.Escape) Close();
+        if (e.Key == Key.F && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            OpenFind();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            if (_findBar.IsVisible) CloseFind();
+            else Close();
+        }
     }
+
+    // ---- find bar ----
+
+    private void OpenFind()
+    {
+        _findBar.IsVisible = true;
+        _findBox.Focus();
+        _findBox.SelectAll();
+        if (!string.IsNullOrEmpty(_findBox.Text)) _diff.SetSearch(_findBox.Text!);
+    }
+
+    private void CloseFind()
+    {
+        _findBar.IsVisible = false;
+        _diff.ClearSearch();
+        _filesList.Focus();
+    }
+
+    private void OnFindBoxKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) _diff.PrevMatch(); else _diff.NextMatch();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            CloseFind();
+            e.Handled = true;
+        }
+    }
+
+    private void OnSearchResults(int current, int total) =>
+        _findLabel.Text = string.IsNullOrEmpty(_findBox.Text) ? "" : total == 0 ? "No results" : $"{current}/{total}";
 
     /// <summary>Point the window at a session's repo and (re)load it. Safe to call on the already-open
     /// window (the reused-window refresh path) — it bumps the generation so any in-flight load is ignored.</summary>

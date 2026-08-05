@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Perch.Avalonia.Theming;
@@ -51,6 +52,23 @@ internal sealed class DiffView : Border
     private bool _split;
     private bool _wrap = true;
 
+    // Collapsed file sections, keyed per file so the state survives a rebuild (wrap/split toggle). The key
+    // being built for the file currently under construction, so AddText can tag each line with it.
+    private readonly HashSet<string> _collapsed = new();
+    private string _currentFileKey = "";
+
+    // Find state. _lines is every body line control in render order (for split: row0-left, row0-right,
+    // row1-left, … — i.e. by line number, not whole-left-column-then-right), each tagged with its file key
+    // so collapsed files are skipped. _matches indexes into those in the same order.
+    private readonly List<(SelectableTextBlock Tb, string Key)> _lines = new();
+    private readonly List<(SelectableTextBlock Tb, int Start, int Len)> _matches = new();
+    private string _query = "";
+    private int _matchIdx = -1;
+    private SelectableTextBlock? _highlighted;
+
+    /// <summary>Raised after a search/navigation changes the match set — (current 1-based index or 0, total).</summary>
+    public event Action<int, int>? SearchResultsChanged;
+
     public DiffView()
     {
         Background = new SolidColorBrush(BodyBg);
@@ -99,8 +117,97 @@ internal sealed class DiffView : Border
         Rebuild();
     }
 
+    // ---- find (Ctrl+F) ----
+
+    /// <summary>Set the case-insensitive find query over the current diff, select+scroll to the first match,
+    /// and report the result count. Matches are ordered by line number (for split: interleaved by row, not
+    /// whole-left-column-then-right). An empty query clears the search.</summary>
+    public void SetSearch(string query)
+    {
+        _query = query ?? "";
+        _matchIdx = 0;
+        RecomputeMatches();
+        Highlight();
+        RaiseResults();
+    }
+
+    /// <summary>Move to the next match (wraps around).</summary>
+    public void NextMatch() => Move(1);
+
+    /// <summary>Move to the previous match (wraps around).</summary>
+    public void PrevMatch() => Move(-1);
+
+    /// <summary>Clear the find query and any match highlight.</summary>
+    public void ClearSearch()
+    {
+        _query = "";
+        _matches.Clear();
+        _matchIdx = -1;
+        ClearHighlight();
+        RaiseResults();
+    }
+
+    private void Move(int delta)
+    {
+        if (_matches.Count > 0)
+        {
+            _matchIdx = ((_matchIdx + delta) % _matches.Count + _matches.Count) % _matches.Count;
+            Highlight();
+        }
+        RaiseResults();
+    }
+
+    // Rebuilds the match list by scanning the body lines (in render/line order), skipping lines in collapsed
+    // files. Clamps the current index into range.
+    private void RecomputeMatches()
+    {
+        _matches.Clear();
+        if (_query.Length > 0)
+            foreach (var (tb, keyOfLine) in _lines)
+            {
+                if (_collapsed.Contains(keyOfLine)) continue;
+                var text = tb.Text ?? "";
+                int i = 0;
+                while ((i = text.IndexOf(_query, i, StringComparison.OrdinalIgnoreCase)) >= 0)
+                {
+                    _matches.Add((tb, i, _query.Length));
+                    i += _query.Length;
+                }
+            }
+
+        if (_matches.Count == 0) _matchIdx = -1;
+        else if (_matchIdx < 0) _matchIdx = 0;
+        else if (_matchIdx >= _matches.Count) _matchIdx = _matches.Count - 1;
+    }
+
+    // Selects the current match (using the built-in selection highlight) and scrolls it into view.
+    private void Highlight()
+    {
+        ClearHighlight();
+        if (_matchIdx < 0 || _matchIdx >= _matches.Count) return;
+        var (tb, start, len) = _matches[_matchIdx];
+        tb.SelectionStart = start;
+        tb.SelectionEnd = start + len;
+        tb.BringIntoView();
+        _highlighted = tb;
+    }
+
+    private void ClearHighlight()
+    {
+        if (_highlighted is { } prev)
+        {
+            prev.SelectionStart = 0;
+            prev.SelectionEnd = 0;
+        }
+        _highlighted = null;
+    }
+
+    private void RaiseResults() =>
+        SearchResultsChanged?.Invoke(_matches.Count == 0 ? 0 : _matchIdx + 1, _matches.Count);
+
     private void Rebuild()
     {
+        _lines.Clear();
         var root = new StackPanel { Orientation = Orientation.Vertical };
 
         if (_loading)
@@ -113,46 +220,93 @@ internal sealed class DiffView : Border
                 if (section.Label is { } label)
                     root.Children.Add(SectionHeader(label));
                 foreach (var file in section.Diff.Files)
-                    root.Children.Add(FileSection(file));
+                    root.Children.Add(FileSection(section.Label, file));
             }
 
         Child = root;
+
+        // The line controls are new after a rebuild, so recompute matches against them (keeping the query
+        // and, where possible, the current position) and re-highlight.
+        if (_query.Length > 0)
+        {
+            RecomputeMatches();
+            Highlight();
+            RaiseResults();
+        }
     }
 
-    private Control FileSection(GitDiffFile file)
+    private Control FileSection(string? sectionLabel, GitDiffFile file)
     {
-        var panel = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(0, 0, 0, 10) };
+        string key = (sectionLabel ?? "") + "\n" + FileLabel(file);
+        bool collapsed = _collapsed.Contains(key);
+        _currentFileKey = key;
 
-        panel.Children.Add(new Border
+        var chevron = new TextBlock
+        {
+            Text = collapsed ? "▸" : "▾",
+            Foreground = MutedBrush, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0),
+        };
+        var header = new Border
         {
             Background = FileBarBg,
             Padding = new Thickness(10, 6),
-            Child = Selectable(FileLabel(file), PathSize, TitleBrush, FontWeight.SemiBold),
-        });
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Children =
+                {
+                    chevron,
+                    new TextBlock
+                    {
+                        Text = FileLabel(file), Foreground = TitleBrush, FontSize = PathSize,
+                        FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    },
+                },
+            },
+        };
 
+        var content = new StackPanel { Orientation = Orientation.Vertical, IsVisible = !collapsed };
         if (file.IsBinary)
-            panel.Children.Add(Message("Binary file — not shown."));
+            content.Children.Add(Message("Binary file — not shown."));
         else if (file.Hunks.Count == 0)
-            panel.Children.Add(Message("No textual changes (mode/rename only)."));
+            content.Children.Add(Message("No textual changes (mode/rename only)."));
         else
         {
             int budget = MaxLinesPerFile;
             foreach (var hunk in file.Hunks)
             {
                 var (oldStart, newStart) = HunkStarts(hunk.Header);
-                panel.Children.Add(HunkHeader(hunk.Header));
-                panel.Children.Add(_split
+                content.Children.Add(HunkHeader(hunk.Header));
+                content.Children.Add(_split
                     ? SplitHunk(hunk, oldStart, newStart, ref budget)
                     : UnifiedHunk(hunk, oldStart, newStart, ref budget));
                 if (budget <= 0)
                 {
-                    panel.Children.Add(Message("… diff truncated (file too large)."));
+                    content.Children.Add(Message("… diff truncated (file too large)."));
                     break;
                 }
             }
         }
 
-        return panel;
+        // Click the header bar to collapse/expand this file (persisted via _collapsed). Toggled in place so
+        // the diff scroll position is preserved; matches are recomputed since collapsed lines aren't searched.
+        header.PointerPressed += (_, _) =>
+        {
+            bool nowCollapsed = !_collapsed.Remove(key); // Remove returns false when it wasn't there → now collapse
+            if (nowCollapsed) _collapsed.Add(key);
+            content.IsVisible = !nowCollapsed;
+            chevron.Text = nowCollapsed ? "▸" : "▾";
+            if (_query.Length > 0) { RecomputeMatches(); Highlight(); RaiseResults(); }
+        };
+
+        return new StackPanel
+        {
+            Orientation = Orientation.Vertical, Margin = new Thickness(0, 0, 0, 10),
+            Children = { header, content },
+        };
     }
 
     // One row per source line: [number gutter | text]. The number is new# (old# for removed lines); a faint
@@ -300,6 +454,7 @@ internal sealed class DiffView : Border
         tb.SetValue(Grid.RowProperty, row);
         tb.SetValue(Grid.ColumnProperty, col);
         grid.Children.Add(tb);
+        _lines.Add((tb, _currentFileKey)); // in render order → search order is by line number
     }
 
     private static string NextContext(ref int oldNo, ref int newNo)
