@@ -92,9 +92,18 @@ running the tray app.
   Guard the callback against a window that closed mid-flight (`IsVisible` / disposed checks) and swallow
   the resulting exceptions. See the `*MonitorHost` services, `HistoryWindow`, `StatsWindow`, and
   `UpdateService` for the pattern.
-- **Use the shared `Theming.Palette`** for colours (and the overlay's own palette constants in
-  `OverlayCanvas`) — don't hand-code `Color.FromArgb` in new UI; the overlay, settings, history, and stats
-  windows are meant to read as one app.
+- **Colour comes from the active theme, via `Theming.Palette`.** There is one source of truth: a
+  `Perch.Theming.Theme` (a table of named colour *roles* — surfaces, text, accent, semantic status — in
+  `Perch.Core`, kept UI-free as `Rgb`). `Palette` is the app-side façade over the *active* theme; use
+  `Palette.X` colours and `Palette.XBrush` cached fills — don't hand-code `Color.FromArgb` in new UI. A theme
+  swap (`ThemeService.Apply`) mutates every cached brush in one place, so the overlay and every window
+  re-colour together. When adding UI that needs a colour: reach for an existing role; add a new role
+  (`Theme` + all presets in `Theming.Themes` + a `Palette` accessor/brush + the `Palette.Apply` line) only if
+  nothing fits. Semantic **status hues stay stable across themes** (running=green, error=red, …) — themes
+  tint neutrals/chrome/accent only, so the overlay stays glanceable. New/changed text colours must clear
+  WCAG AA on their surface — `PresetContrastTests` gates every built-in theme, and `Theming.Contrast` is the
+  helper. Presets live in `Theming.Themes`; the in-app designer (Settings → Appearance) writes custom themes
+  to `AppSettings.CustomThemes`. Eyeball changes with `dotnet run … -- render <dir> [themeId]`.
 - **Data sources are files under `~/.claude/`**, read best-effort:
   - Live session state: `~/.claude/sessions/{sessionId}.json` plus sidecars (`.mode`, `.notify`, `.history`).
   - Transcripts: `~/.claude/projects/{enc-cwd}/{sessionId}.jsonl` (append-only, one JSON record per line,

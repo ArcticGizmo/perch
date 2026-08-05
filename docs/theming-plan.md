@@ -2,6 +2,14 @@
 
 Branch: `themes`
 
+> **Status (delivered):** M0–M6 implemented on `themes`. One `Theme` token model in `Perch.Core`
+> (`Theming/`), `Palette` as its app-side façade, six built-in presets (Midnight, Ember, Blush, Dim, High
+> Contrast, Winamp), runtime switching via `ThemeService`, a Settings **Appearance** page, the theme
+> **designer** (tint slider + accent picker + live WCAG readout with "Fix" + colour-blind preview), custom
+> themes persisted to `AppSettings.CustomThemes` with import/export + QR share, focus rings, and
+> contrast-gated tests. Per-preset rendering: `dotnet run … -- render <dir> [themeId]`. The section below is
+> the original plan/research, kept for context.
+
 ## 1. Goal
 
 Improve the **contrast, legibility and eye-comfort** of Perch's UI (settings surface first,
