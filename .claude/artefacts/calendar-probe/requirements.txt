@@ -1,0 +1,7 @@
+# Runtime libs for the probe. NOTE: dfindexeddb itself is installed separately with
+# --no-deps (see run.cmd) because it pins python-snappy==0.6.1, which has no Windows
+# wheel for Python 3.11+ and would trigger a C-compiler build. The modern python-snappy
+# below is cramjam-backed (pure wheels) and exposes the same raw snappy decompress that
+# dfindexeddb's LevelDB reader calls.
+python-snappy>=0.7
+zstd
