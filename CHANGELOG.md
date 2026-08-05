@@ -7,18 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Themes: a new Appearance page in Settings, with six built-in themes — Midnight (the original), a
-  warm-charcoal Ember, a pink-tinted Blush, a Monokai-ish Dim, a stark High Contrast, and a Winamp tribute
-  that has no business looking this good
-- Switching themes recolours the whole app at once — overlay, settings, every window
-- A theme designer: re-tint the chrome with one slider, pick an accent, and watch a live WCAG contrast
-  readout tell you (per text pair) whether it passes AA — with a "Fix" button that nudges a failing colour
-  until it does
-- A colour-blind preview (protanopia / deuteranopia / tritanopia) so you can check the status colours don't
-  blur together
-- Custom themes save, and copy to your clipboard as a compact code — paste one back in to import it
+---
+
+## [v0.3.6] - 2026-08-05
+
+- Six colour themes on a new Appearance page — Midnight, Ember, Blush, Dim, High Contrast, and a Winamp tribute that has no business looking this good
+- Switching theme recolours the whole app at once: overlay, settings, every window
+- A theme designer — re-tint the chrome, pick an accent, live WCAG contrast readout with a one-click "Fix"
+- Accent picker is a proper spectrum-and-hue colour map
+- Colour-blind preview (protanopia / deuteranopia / tritanopia), so status colours don't blur into one
+- Save custom themes, and copy one to the clipboard as a code you can paste back to import
+- Keyboard focus is finally visible on the settings toggles (Space or Enter flips them)
 - The overlay's muted text was quietly failing contrast; it isn't anymore
-- Keyboard focus is finally visible on the settings toggles (Space/Enter flips them, too)
 
 ---
 
