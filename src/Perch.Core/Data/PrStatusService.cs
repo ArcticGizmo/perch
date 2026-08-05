@@ -2,18 +2,56 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Linq;
 using System.Text.Json;
 
 /// <summary>The lifecycle state of a pull request, as reported by <c>gh</c> — an <c>OPEN</c> PR that is a
 /// draft is surfaced as its own <see cref="Draft"/> state so the overlay can dim it.</summary>
 public enum PrState { Open, Draft, Merged, Closed }
 
+/// <summary>The outcome of a single CI check on a PR, folded into the three buckets the overlay renders
+/// (a green / red / blue dot): still <see cref="Pending"/>, a <see cref="Success"/>, or a
+/// <see cref="Failure"/>. Neutral/skipped runs count as success (non-blocking); cancelled/timed-out/
+/// action-required count as failure.</summary>
+public enum PrCheckState { Pending, Success, Failure }
+
+/// <summary>The aggregate CI status across a PR's checks, driving the small status dot on the overlay's PR
+/// glyph. <see cref="None"/> = no checks reported (no dot); otherwise: any failure ⇒ <see cref="Failing"/>,
+/// else any still-running ⇒ <see cref="Pending"/>, else all green ⇒ <see cref="Passing"/>.</summary>
+public enum PrChecksRollup { None, Pending, Passing, Failing }
+
+/// <summary>A single CI check on a pull request: its name (the check-run name or legacy status context), the
+/// <see cref="PrCheckState"/> it folds down to, and the browser URL for its detail/logs page (empty when
+/// <c>gh</c> reports none). Listed as children in the PR hover tooltip and the click flyout.</summary>
+public readonly record struct PrCheck(string Name, PrCheckState State, string Url = "");
+
 /// <summary>
 /// A pull request associated with a working directory's current branch, as read from the GitHub CLI
 /// (<c>gh pr view</c>). Only the fields the overlay needs: the number, the browser URL, a title for the
-/// hover/flyout, and the <see cref="PrState"/> that drives its colour.
+/// hover/flyout, the <see cref="PrState"/> that drives its colour, and the <see cref="Checks"/> read from
+/// <c>statusCheckRollup</c> (surfaced as tooltip children + an aggregate status dot).
 /// </summary>
-public readonly record struct PullRequestInfo(int Number, string Url, string Title, PrState State);
+/// <remarks>Equality is by value including the check list (sequence-compared), so a background refresh that
+/// returns identical checks doesn't count as a change — see <see cref="PrStatusService"/>'s change gate.</remarks>
+public readonly record struct PullRequestInfo(int Number, string Url, string Title, PrState State)
+{
+    /// <summary>The CI checks reported for the PR's head commit, in the order <c>gh</c> lists them. Empty
+    /// when the PR has no checks or they weren't fetched.</summary>
+    public IReadOnlyList<PrCheck> Checks { get; init; } = Array.Empty<PrCheck>();
+
+    /// <summary>The aggregate check status driving the overlay's status dot, folded from <see cref="Checks"/>.</summary>
+    public PrChecksRollup ChecksRollup =>
+        Checks.Count == 0                             ? PrChecksRollup.None
+      : Checks.Any(c => c.State == PrCheckState.Failure) ? PrChecksRollup.Failing
+      : Checks.Any(c => c.State == PrCheckState.Pending) ? PrChecksRollup.Pending
+      :                                                    PrChecksRollup.Passing;
+
+    public bool Equals(PullRequestInfo other) =>
+        Number == other.Number && Url == other.Url && Title == other.Title && State == other.State
+        && Checks.SequenceEqual(other.Checks);
+
+    public override int GetHashCode() => HashCode.Combine(Number, Url, Title, State, Checks.Count);
+}
 
 /// <summary>
 /// Resolves the pull request for a working directory's current branch by shelling out to the GitHub CLI
@@ -141,7 +179,7 @@ internal sealed class PrStatusService : IDisposable
         if (!Directory.Exists(cwd) || !HasGitRepo(cwd))
             return null;
 
-        var (exit, stdout) = RunGh("pr view --json number,url,title,state,isDraft", cwd, GhTimeoutMs);
+        var (exit, stdout) = RunGh("pr view --json number,url,title,state,isDraft,statusCheckRollup", cwd, GhTimeoutMs);
         if (exit != 0 || string.IsNullOrWhiteSpace(stdout))
             return null; // non-zero == no PR for the branch (or an error) — either way, no glyph.
 
@@ -149,9 +187,10 @@ internal sealed class PrStatusService : IDisposable
     }
 
     /// <summary>
-    /// Parses the JSON object <c>gh pr view --json number,url,title,state,isDraft</c> emits into a
-    /// <see cref="PullRequestInfo"/>, mapping <c>state</c> + <c>isDraft</c> onto <see cref="PrState"/>.
-    /// Returns null for empty/malformed output or a missing number. Internal for unit testing.
+    /// Parses the JSON object <c>gh pr view --json number,url,title,state,isDraft,statusCheckRollup</c> emits
+    /// into a <see cref="PullRequestInfo"/>, mapping <c>state</c> + <c>isDraft</c> onto <see cref="PrState"/>
+    /// and folding each <c>statusCheckRollup</c> entry into a <see cref="PrCheck"/>. Returns null for
+    /// empty/malformed output or a missing number. Internal for unit testing.
     /// </summary>
     internal static PullRequestInfo? ParsePrJson(string json)
     {
@@ -169,13 +208,79 @@ internal sealed class PrStatusService : IDisposable
             string state = root.TryGetProperty("state", out var s) ? s.GetString() ?? "" : "";
             bool isDraft = root.TryGetProperty("isDraft", out var d) && d.ValueKind == JsonValueKind.True;
 
-            return new PullRequestInfo(number, url, title, MapState(state, isDraft));
+            return new PullRequestInfo(number, url, title, MapState(state, isDraft)) { Checks = ParseChecks(root) };
         }
         catch (JsonException)
         {
             return null;
         }
     }
+
+    /// <summary>
+    /// Reads the <c>statusCheckRollup</c> array <c>gh</c> emits into a list of <see cref="PrCheck"/>. The
+    /// array mixes two shapes: modern <c>CheckRun</c> objects (<c>name</c> + <c>status</c> + <c>conclusion</c>)
+    /// and legacy <c>StatusContext</c> commit statuses (<c>context</c> + <c>state</c>); each is folded onto a
+    /// <see cref="PrCheckState"/>. A missing/non-array field yields an empty list (a PR with no checks).
+    /// Internal for unit testing.
+    /// </summary>
+    internal static IReadOnlyList<PrCheck> ParseChecks(JsonElement root)
+    {
+        if (!root.TryGetProperty("statusCheckRollup", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return Array.Empty<PrCheck>();
+
+        var checks = new List<PrCheck>();
+        foreach (var el in arr.EnumerateArray())
+        {
+            if (el.ValueKind != JsonValueKind.Object)
+                continue;
+
+            string typename = el.TryGetProperty("__typename", out var tn) ? tn.GetString() ?? "" : "";
+            if (string.Equals(typename, "StatusContext", StringComparison.Ordinal))
+            {
+                // Legacy commit-status context: a single `state`, keyed by `context`, linking to `targetUrl`.
+                string name  = el.TryGetProperty("context", out var c) ? c.GetString() ?? "" : "";
+                string cstate = el.TryGetProperty("state", out var st) ? st.GetString() ?? "" : "";
+                string url    = el.TryGetProperty("targetUrl", out var tu) ? tu.GetString() ?? "" : "";
+                checks.Add(new PrCheck(name, MapStatusContextState(cstate), url));
+            }
+            else
+            {
+                // A CheckRun (GitHub Actions / most integrations): `status` is the lifecycle, `conclusion`
+                // the outcome once it reaches COMPLETED, `detailsUrl` its logs page.
+                string name       = el.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                string rstatus    = el.TryGetProperty("status", out var s) ? s.GetString() ?? "" : "";
+                string conclusion = el.TryGetProperty("conclusion", out var cc) ? cc.GetString() ?? "" : "";
+                string url        = el.TryGetProperty("detailsUrl", out var du) ? du.GetString() ?? "" : "";
+                checks.Add(new PrCheck(name, MapCheckRunState(rstatus, conclusion), url));
+            }
+        }
+        return checks;
+    }
+
+    // A CheckRun is only decided once status is COMPLETED; before that it's queued/in-progress ⇒ Pending.
+    // On completion the conclusion buckets it: SUCCESS/NEUTRAL/SKIPPED are non-blocking greens; everything
+    // else (FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED, STARTUP_FAILURE, STALE) is a red.
+    private static PrCheckState MapCheckRunState(string status, string conclusion)
+    {
+        if (!string.Equals(status, "COMPLETED", StringComparison.OrdinalIgnoreCase))
+            return PrCheckState.Pending;
+        return conclusion.ToUpperInvariant() switch
+        {
+            "SUCCESS" or "NEUTRAL" or "SKIPPED" => PrCheckState.Success,
+            "" => PrCheckState.Pending, // completed but no conclusion reported yet — treat as still-settling
+            _  => PrCheckState.Failure,
+        };
+    }
+
+    // A legacy commit-status context reports a single state: SUCCESS green, PENDING/EXPECTED still-running,
+    // FAILURE/ERROR (or anything unexpected) red.
+    private static PrCheckState MapStatusContextState(string state) =>
+        state.ToUpperInvariant() switch
+        {
+            "SUCCESS"               => PrCheckState.Success,
+            "PENDING" or "EXPECTED" => PrCheckState.Pending,
+            _                       => PrCheckState.Failure,
+        };
 
     // gh reports state as OPEN / CLOSED / MERGED; a draft is an OPEN PR flagged isDraft, which we surface as
     // its own state so the overlay can dim it. Anything unexpected falls back to Open.

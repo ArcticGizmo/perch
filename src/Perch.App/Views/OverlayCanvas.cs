@@ -135,6 +135,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private static readonly IBrush PrMergedHover  = new SolidColorBrush(Color.FromRgb(192, 132, 252));
     private static readonly IBrush PrClosedBrush  = new SolidColorBrush(Color.FromRgb(239, 68, 68));
     private static readonly IBrush PrClosedHover  = new SolidColorBrush(Color.FromRgb(248, 113, 113));
+    // Aggregate CI-check dot tucked bottom-right of the PR glyph: green all-passing, red any-failure, blue
+    // still-running. The *Color values (a touch brighter) double as the check-line text in the PR tooltip,
+    // where they sit on the dark tooltip panel rather than the glyph strip.
+    private static readonly Color  PrCheckPassColor    = Color.FromRgb(74, 222, 128);
+    private static readonly Color  PrCheckFailColor    = Color.FromRgb(248, 113, 113);
+    private static readonly Color  PrCheckPendingColor = Color.FromRgb(96, 165, 250);
+    private static readonly IBrush PrCheckPassBrush    = new SolidColorBrush(Color.FromRgb(34, 197, 94));
+    private static readonly IBrush PrCheckFailBrush    = new SolidColorBrush(Color.FromRgb(239, 68, 68));
+    private static readonly IBrush PrCheckPendingBrush = new SolidColorBrush(Color.FromRgb(59, 130, 246));
     private static readonly IBrush RunningBrush   = Palette.RunningBrush;
     private static readonly IBrush ArtifactBrush  = new SolidColorBrush(Color.FromRgb(251, 191, 36));
     private static readonly IBrush ArtifactHover  = new SolidColorBrush(Color.FromRgb(255, 224, 140));
@@ -389,6 +398,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showBurnRate = true;
     private bool _showGitStats = true;
     private bool _showPullRequests;
+    private bool _showPullRequestChecks = true;
     private bool _showNoteLine = true;
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
@@ -762,7 +772,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (_showPullRequests == show) return;
         _showPullRequests = show;
-        InvalidateVisual();
+        Update(_sessions); // PR checks may add/remove child rows — rebuild the render list
+    }
+
+    /// <summary>Show/hide a PR's CI checks as indented child rows under its session. Rebuilds the render
+    /// list (it adds rows). Only ever shows rows when <see cref="SetShowPullRequests"/> is also on.</summary>
+    public void SetShowPullRequestChecks(bool show)
+    {
+        if (_showPullRequestChecks == show) return;
+        _showPullRequestChecks = show;
+        Update(_sessions);
     }
 
     /// <summary>Show/hide the pinned-note glyph on a session row (session note and/or project note). Off ⇒
@@ -1019,9 +1038,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
-    // or the usage strip for ~150ms pops a hint. A single timer serves whichever the cursor last
+    // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1030,10 +1049,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // A flat render row: a parent session, one of its sub-agents, or the "Autonomous" section header.
     // Depth is the sub-agent's nesting level (1 = a session's direct child, 2 = a sub-agent's own child,
     // …), driving its indent in the tree; 0 for session and section rows.
-    private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1, int Depth = 0)
+    private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1, int Depth = 0, PrCheck? Check = null)
     {
         public bool IsSubAgent => Sub != null;
         public bool IsSectionHeader => SectionCount >= 0;
+        public bool IsPrCheck => Check != null;
     }
 
     /// <summary>When on, idle teammates are dropped from the roster (only working ones show). Wired to
@@ -1100,6 +1120,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         rows.Add(new DisplayRow(session, null));
         AddSubTree(rows, session, session.SubAgents, 1);
+
+        // PR checks trail the session's live sub-agent subtree as their own depth-1 children — one row per
+        // CI check, gated by both the PR feature and the checks-in-overlay toggle. The compact status dot +
+        // hover tooltip carry the same information when this is off.
+        if (_showPullRequests && _showPullRequestChecks && session.PullRequest is { Checks.Count: > 0 } pr)
+            foreach (var chk in pr.Checks)
+                rows.Add(new DisplayRow(session, null, Depth: 1, Check: chk));
     }
 
     // Appends one level of the sub-agent tree, then recurses into each node's children unless the node is
@@ -1135,7 +1162,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     private double HeightOf(DisplayRow row) =>
         row.IsSectionHeader ? SectionRowHeight :
-        row.IsSubAgent ? SubRowHeight :
+        row.IsSubAgent || row.IsPrCheck ? SubRowHeight :
         SessionRowHeight(row.Session!);
 
     // A session row is a fixed RowHeight: the name plus one optional sub-line (activity/elapsed). A note is
@@ -1251,6 +1278,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     var r = _rows[i];
                     if (r.IsSectionHeader) DrawSectionHeaderRow(ctx, r, top, width);
                     else if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, top, width);
+                    else if (r.IsPrCheck) DrawPrCheckRow(ctx, r, top, width);
                     else DrawSessionRow(ctx, i, r.Session!, top, width);
                     top += HeightOf(r);
                 }
@@ -2004,7 +2032,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (showPr)
         {
             double prGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW + noteW;
-            DrawPrIcon(ctx, prGlyphX, nameMidY, session.PullRequest!.Value.State, hovered: _hoveredPrRow == rowIndex);
+            DrawPrIcon(ctx, prGlyphX, nameMidY, session.PullRequest!.Value.State,
+                session.PullRequest!.Value.ChecksRollup, hovered: _hoveredPrRow == rowIndex);
             _prRects[rowIndex] = new Rect(prGlyphX - 2, nameMidY - 9, PrIconWidth + 2, 18);
         }
 
@@ -2143,6 +2172,39 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int hidden = collapsed ? HiddenDescendantCount(sub) : 0;
         if (sub.IsTeammate) DrawTeammateRow(ctx, sub, markerX, midY, width, hidden);
         else DrawPlainSubAgentRow(ctx, sub, markerX, midY, width, hidden);
+    }
+
+    // A single PR check as a tree child under its session: the same connector + marker geometry as a
+    // sub-agent leaf, a status-coloured dot (green passed / red failed / blue running), the check name,
+    // and a right-aligned status word in the matching colour.
+    private void DrawPrCheckRow(DrawingContext ctx, DisplayRow row, double top, double width)
+    {
+        var chk = row.Check!.Value;
+        int depth = Math.Max(1, row.Depth);
+        double midY = top + SubRowHeight / 2;
+
+        double branchX = HorizPad + SubIndent * (depth - 1) + 4;
+        double markerX = HorizPad + SubIndent * depth;
+        ctx.DrawLine(TreeLinePen, new Point(branchX, top - SubRowHeight / 2), new Point(branchX, midY));
+        ctx.DrawLine(TreeLinePen, new Point(branchX, midY), new Point(markerX - 2, midY));
+
+        (IBrush brush, string statusText) = chk.State switch
+        {
+            PrCheckState.Success => (PrCheckPassBrush,    "passed"),
+            PrCheckState.Failure => (PrCheckFailBrush,    "failed"),
+            _                    => (PrCheckPendingBrush, "running"),
+        };
+        ctx.DrawEllipse(brush, null, new Point(markerX + 3, midY), 3, 3);
+
+        double statusW = OverlayDraw.MeasureWidth(statusText, SubStatusSize);
+        double labelX = markerX + 12;
+        double labelMaxW = width - labelX - HorizPad - statusW - 6;
+        string name = chk.Name.Length > 0 ? chk.Name : "(unnamed check)";
+        string nameTrunc = OverlayDraw.Truncate(name, SubNameSize, labelMaxW);
+        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, SubNameSize, FgBrush), labelX, midY);
+
+        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(statusText, SubStatusSize, brush),
+            width - HorizPad - statusW, midY);
     }
 
     // The "+N" muted hidden-count badge on a collapsed node, drawn just left of the row's status text.
@@ -2358,7 +2420,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // GitHub pull-request glyph: the git-merge octicon — a left "base" branch (two nodes joined by a
     // vertical line) with a "source" node on the right curving down to merge into it. Coloured by the PR's
     // state (open/draft/merged/closed); hover brightens. The nodes are filled dots, the lines stroked.
-    private static void DrawPrIcon(DrawingContext ctx, double x, double midY, PrState state, bool hovered)
+    private static void DrawPrIcon(DrawingContext ctx, double x, double midY, PrState state, PrChecksRollup checks, bool hovered)
     {
         IBrush brush = state switch
         {
@@ -2390,6 +2452,23 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             gc.EndFigure(false);
         }
         ctx.DrawGeometry(null, pen, merge);
+
+        // Aggregate CI-check dot, bottom-right of the glyph — a subtle hint at the checks' state (green
+        // passing / red failing / blue running). Nothing is drawn when the PR reports no checks. A ring in
+        // the panel background sets the dot off from the merge strokes it overlaps.
+        IBrush? dotBrush = checks switch
+        {
+            PrChecksRollup.Passing => PrCheckPassBrush,
+            PrChecksRollup.Failing => PrCheckFailBrush,
+            PrChecksRollup.Pending => PrCheckPendingBrush,
+            _                      => null,
+        };
+        if (dotBrush != null)
+        {
+            var dot = new Point(rx + 1.5, bot + 0.5);
+            ctx.DrawEllipse(BgFillBrush, null, dot, 3.1, 3.1);
+            ctx.DrawEllipse(dotBrush, null, dot, 2.1, 2.1);
+        }
     }
 
     // Stuck-detection warning: an amber triangle with an exclamation mark punched out of the panel bg.
@@ -2625,6 +2704,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitTestWarnIcon(p)   is var wa && wa >= 0 ? (TipKind.Warn, wa) :
             HitTestTaskCount(p)  is var ta && ta >= 0 ? (TipKind.Task, ta) :
             HitTestMetrics(p)    is var me && me >= 0 ? (TipKind.Metrics, me) :
+            HitRect(_prRects, p) is var pr && pr >= 0 ? (TipKind.Pr, pr) :
             _mediaTitleRect.Contains(p)               ? (TipKind.Media, -1) :
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             InUsageStrip(p)                           ? (TipKind.Usage, -1) :
@@ -2637,7 +2717,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _tooltip?.HideTip();
         if (kind == TipKind.None) return;
 
-        _dwellTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _dwellTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
         _dwellTimer.Tick -= OnDwellTick;
         _dwellTimer.Tick += OnDwellTick;
         _dwellTimer.Start();
@@ -2655,6 +2735,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Metrics: ShowMetricsTooltip(_tipRow); break;
             case TipKind.Media:   ShowMediaTooltip();          break;
             case TipKind.Mic:     ShowMicTooltip();            break;
+            case TipKind.Pr:      ShowPrTooltip(_tipRow);      break;
         }
     }
 
@@ -3071,9 +3152,52 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         ShowFlyout(items);
     }
 
-    // Pops the PR summary at the cursor: a header line (state · #number) and the title, either of which
-    // opens the PR in the browser. A single flyout item keeps the "click to open" behaviour consistent
-    // with the artifact glyph. An empty URL (shouldn't happen) just does nothing.
+    // Hover tooltip for the PR glyph: a bold header (#number · state · title) with each CI check listed
+    // beneath it as an indented, status-coloured child — the same parent/children shape the sub-agent rows
+    // use, but in the reusable multi-line tooltip. Reads the checks straight off the session's PR.
+    private void ShowPrTooltip(int row)
+    {
+        if (row < 0 || row >= _rows.Count || _rows[row].Session?.PullRequest is not { } pr) return;
+        if (!_prRects.TryGetValue(row, out var r)) return;
+
+        string stateWord = pr.State switch
+        {
+            PrState.Merged => "Merged",
+            PrState.Closed => "Closed",
+            PrState.Draft  => "Draft",
+            _              => "Open",
+        };
+        string title = string.IsNullOrWhiteSpace(pr.Title) ? "(untitled)" : pr.Title;
+        if (title.Length > 60) title = title[..59].TrimEnd() + "…";
+
+        var lines = new List<OverlayTooltip.Line>
+        {
+            new($"#{pr.Number} · {stateWord} · {title}", OverlayTooltip.FgColor, true),
+        };
+
+        if (pr.Checks.Count == 0)
+        {
+            lines.Add(new("No checks reported", OverlayTooltip.MutedColor, false));
+        }
+        else
+        {
+            foreach (var chk in pr.Checks)
+            {
+                (char glyph, Color color) = chk.State switch
+                {
+                    PrCheckState.Success => ('✓', PrCheckPassColor),
+                    PrCheckState.Failure => ('✗', PrCheckFailColor),
+                    _                    => ('•', PrCheckPendingColor),
+                };
+                string name = chk.Name.Length > 0 ? chk.Name : "(unnamed check)";
+                if (name.Length > 48) name = name[..47].TrimEnd() + "…";
+                lines.Add(new($"    {glyph}  {name}", color, false));
+            }
+        }
+
+        Tooltip().ShowLines(lines, ToScreen(r.Left, r.Bottom + 4));
+    }
+
     private void ShowPrFlyout(PullRequestInfo pr)
     {
         string stateWord = pr.State switch
@@ -3086,7 +3210,40 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         string title = string.IsNullOrWhiteSpace(pr.Title) ? "(untitled)" : pr.Title;
         // A menu header treats "_" as an access-key mnemonic, so double it to keep a literal underscore.
         string label = $"#{pr.Number} - {stateWord}: {title}".Replace("_", "__");
-        ShowFlyout([MenuItem(label, () => { if (!string.IsNullOrEmpty(pr.Url)) OpenUrl(pr.Url); })]);
+
+        var items = new List<Control>
+        {
+            MenuItem(label, () => { if (!string.IsNullOrEmpty(pr.Url)) OpenUrl(pr.Url); }),
+        };
+
+        // The same checks the hover tooltip lists, each as a status-coloured item that opens its own
+        // logs/detail page (falling back to the PR itself when gh reports no URL).
+        if (pr.Checks.Count > 0)
+        {
+            items.Add(new Separator());
+            foreach (var chk in pr.Checks)
+                items.Add(PrCheckMenuItem(chk, pr.Url));
+        }
+        ShowFlyout(items);
+    }
+
+    // One PR-check flyout item: a status glyph + name in the check's colour (green passed / red failed /
+    // blue running), opening the check's detail URL — or the PR when it has none. Mirrors the tooltip's
+    // children; the glyph keeps it legible without relying on colour alone.
+    private MenuItem PrCheckMenuItem(PrCheck chk, string prUrl)
+    {
+        (char glyph, IBrush brush) = chk.State switch
+        {
+            PrCheckState.Success => ('✓', PrCheckPassBrush),
+            PrCheckState.Failure => ('✗', PrCheckFailBrush),
+            _                    => ('•', PrCheckPendingBrush),
+        };
+        string name = chk.Name.Length > 0 ? chk.Name : "(unnamed check)";
+        var item = new MenuItem { Header = new TextBlock { Text = $"{glyph}  {name}", Foreground = brush } };
+        string target = string.IsNullOrEmpty(chk.Url) ? prUrl : chk.Url;
+        if (!string.IsNullOrEmpty(target))
+            item.Click += (_, _) => OpenUrl(target);
+        return item;
     }
 
     /// <summary>

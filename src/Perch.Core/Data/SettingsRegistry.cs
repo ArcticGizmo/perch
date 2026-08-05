@@ -329,6 +329,12 @@ internal static class SettingsRegistry
             PreviewTarget.PullRequest, nameof(AppSettings.ShowPullRequests),
             s => s.ShowPullRequests, (s, v) => s.ShowPullRequests = v),
 
+        Toggle("pull-request-checks", "PR checks",
+            "List a PR's CI checks as child rows under its session, each with a status dot.",
+            SettingSurface.Integrations, ["github", "pr", "pull", "request", "checks", "ci", "status"],
+            PreviewTarget.PullRequest, nameof(AppSettings.ShowPullRequestChecks),
+            s => s.ShowPullRequestChecks, (s, v) => s.ShowPullRequestChecks = v),
+
         Stepper("pull-request-interval", "PR re-check interval",
             "How often (minutes) to re-check a branch's PR with the gh CLI.",
             SettingSurface.Integrations, ["pr", "pull", "request", "interval", "minutes", "recheck"],

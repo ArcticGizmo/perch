@@ -288,6 +288,12 @@ internal sealed class AppSettings
     // cached just as long, so gh runs rarely. A missing key keeps it off. See Perch.Data.PrStatusService.
     public bool ShowPullRequests { get; set; }
 
+    // When on (and ShowPullRequests is too), a session's PR checks are listed as indented child rows under
+    // its overlay row — one per CI check, with a green/red/blue status dot mirroring the glyph's rollup dot.
+    // Independent of the always-on hover tooltip, so a user who wants the compact glyph but not the extra
+    // rows can leave this off. Defaults on; ignored entirely while ShowPullRequests is off (no checks then).
+    public bool ShowPullRequestChecks { get; set; } = true;
+
     // How often (minutes) to re-check a working directory's PR with gh; also how long a "no PR" answer is
     // cached before the next check. Clamped to a sane floor when applied. Defaults to 5; a missing key
     // keeps that.

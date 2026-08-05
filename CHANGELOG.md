@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.7] - 2026-08-05
+
+- A status dot on the PR glyph — green, red, or blue — for its CI checks
+- Hover it for each check, coloured by pass / fail / still-running
+- Click it to open any check's logs straight from the menu
+- Or list the checks inline as session child rows — new "PR checks" toggle
+- Glyph tooltips wait a beat longer before popping (brushing past no longer flickers)
+
+---
+
 ## [v0.3.6] - 2026-08-05
 
 - Six colour themes on a new Appearance page — Midnight, Ember, Blush, Dim, High Contrast, and a Winamp tribute that has no business looking this good

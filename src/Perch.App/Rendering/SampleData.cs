@@ -51,14 +51,28 @@ internal static class SampleData
                 ExternalNotify: true,
                 // No session note, but a project note — so the row still shows the note glyph.
                 ProjectNote: "API freeze — ship v0.9 before merging anything",
-                PullRequest: new PullRequestInfo(1135, "https://github.com/o/r/pull/1135", "Surface PRs on the overlay", PrState.Open),
+                PullRequest: new PullRequestInfo(1135, "https://github.com/o/r/pull/1135", "Surface PRs on the overlay", PrState.Open)
+                {
+                    Checks =
+                    [
+                        new("build", PrCheckState.Success),
+                        new("unit-tests", PrCheckState.Failure),
+                        new("lint", PrCheckState.Success),
+                    ],
+                },
                 Artifacts: new List<Artifact> { new("https://claude.ai/code/artifact/1", "API report") }),
             new ClaudeSession("9012", "s3", SessionStatus.NeedsAttention, @"C:\src\docs", "docs-site", now,
                 BridgeSessionId: "bridge-xyz", Stuck: new StuckSignal(StuckKind.FailingLoop, "repeating build"),
-                PullRequest: new PullRequestInfo(88, "https://github.com/o/r/pull/88", "Draft: docs restructure", PrState.Draft)),
+                PullRequest: new PullRequestInfo(88, "https://github.com/o/r/pull/88", "Draft: docs restructure", PrState.Draft)
+                {
+                    Checks = [new("build", PrCheckState.Pending), new("deploy-preview", PrCheckState.Pending)],
+                }),
             new ClaudeSession("3456", "s4", SessionStatus.Idle, @"C:\src\scratch", "scratch", now,
                 Note: "don't touch — bisecting a flaky test",
-                PullRequest: new PullRequestInfo(74, "https://github.com/o/r/pull/74", "Ship v0.9", PrState.Merged)),
+                PullRequest: new PullRequestInfo(74, "https://github.com/o/r/pull/74", "Ship v0.9", PrState.Merged)
+                {
+                    Checks = [new("build", PrCheckState.Success), new("e2e", PrCheckState.Success)],
+                }),
             // A session whose last request to the API failed (529 Overloaded) — the red ApiError alert.
             new ClaudeSession("6543", "s6", SessionStatus.ApiError, @"C:\src\web", "web", now,
                 ApiFailure: new ApiFailure(529, "API Error: 529 Overloaded.")),

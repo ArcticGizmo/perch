@@ -283,6 +283,20 @@ internal static class HeadlessRenderer
             ],
         };
         RenderOnBackdrop(tipUsage, Path.Combine(outDir, "tooltip_usage_1x.png"), Color.FromRgb(40, 40, 52));
+        // PR hover tooltip: a bold header with each CI check listed beneath it as a status-coloured child
+        // (green pass / red fail / blue running) — mirrors OverlayCanvas.ShowPrTooltip.
+        var tipPr = new Views.OverlayTooltip.Body
+        {
+            Lines =
+            [
+                new Views.OverlayTooltip.Line("#1135 · Open · Surface PRs on the overlay", Views.OverlayTooltip.FgColor, true),
+                new Views.OverlayTooltip.Line("    ✓  build",          Color.FromRgb(74, 222, 128), false),
+                new Views.OverlayTooltip.Line("    ✗  unit-tests",     Color.FromRgb(248, 113, 113), false),
+                new Views.OverlayTooltip.Line("    •  deploy-preview", Color.FromRgb(96, 165, 250), false),
+                new Views.OverlayTooltip.Line("    ✓  lint",           Color.FromRgb(74, 222, 128), false),
+            ],
+        };
+        RenderOnBackdrop(tipPr, Path.Combine(outDir, "tooltip_pr_1x.png"), Color.FromRgb(40, 40, 52));
 
         // Flight path (5.6): synthetic day with active / waiting / stuck segments across a few lanes.
         var flight = new Views.FlightPathTimeline();
