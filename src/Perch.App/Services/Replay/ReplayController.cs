@@ -1,4 +1,4 @@
-using Avalonia.Threading;
+﻿using Avalonia.Threading;
 using Perch.Data.Replay;
 
 namespace Perch.Avalonia.Services.Replay;

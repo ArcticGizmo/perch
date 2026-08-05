@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// The single description of every user-facing setting — the spine the redesigned Settings window is built

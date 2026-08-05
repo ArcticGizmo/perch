@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>
 /// Reads Claude Code's stored OAuth credentials as the raw JSON blob

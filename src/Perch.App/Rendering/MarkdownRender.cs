@@ -1,4 +1,4 @@
-using Avalonia.Controls.Documents;
+﻿using Avalonia.Controls.Documents;
 using Avalonia.Media;
 using Markdig;
 using Markdig.Extensions.Tables;

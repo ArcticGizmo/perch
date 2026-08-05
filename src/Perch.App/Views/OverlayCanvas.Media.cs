@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Media;
 using Perch.Avalonia.Rendering;
 using Perch.Platform;

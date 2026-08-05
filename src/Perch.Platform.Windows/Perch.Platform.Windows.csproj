@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <!--
     Windows implementations of the platform-service interfaces declared in Perch.Core. Targets
     net10.0-windows for the Win32 / shell / SystemEvents surface, but deliberately does NOT enable

@@ -1,4 +1,4 @@
-using Perch.Platform;
+﻿using Perch.Platform;
 
 namespace Perch.Platform.Mac;
 

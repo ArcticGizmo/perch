@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>A newly-reached achievement rung, ready to announce — the level's name/emoji/tier, the
 /// criteria that fired it ("10M input tokens", "Activity in all 24 hours"), and a short level-context

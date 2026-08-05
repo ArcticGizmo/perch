@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// A trailing API failure at the tail of a session's transcript — Claude Code writes each failed request

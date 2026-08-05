@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>The severity of the current Claude service status, mirroring the Statuspage
 /// <c>status.indicator</c> field ("none" → all-clear, up through "critical", plus "maintenance").</summary>

@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// Small helpers for constructing Claude Code CLI invocations, shared so the terminal launcher

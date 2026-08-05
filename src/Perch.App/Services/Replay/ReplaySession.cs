@@ -1,4 +1,4 @@
-using Perch.Data.Replay;
+﻿using Perch.Data.Replay;
 
 namespace Perch.Avalonia.Services.Replay;
 

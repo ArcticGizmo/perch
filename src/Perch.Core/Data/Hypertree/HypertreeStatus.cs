@@ -1,4 +1,4 @@
-namespace Perch.Data.Hypertree;
+﻿namespace Perch.Data.Hypertree;
 
 /// <summary>
 /// Perch's mirror of Hypertree's published status contract — the shape of

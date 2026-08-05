@@ -1,4 +1,4 @@
-using Avalonia.Threading;
+﻿using Avalonia.Threading;
 using Microsoft.Toolkit.Uwp.Notifications;
 using Perch.Platform;
 

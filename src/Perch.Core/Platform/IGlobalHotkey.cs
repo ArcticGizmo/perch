@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>
 /// A process-wide keyboard shortcut, registered with the OS so it fires even when Perch has no focused

@@ -1,4 +1,4 @@
-using Perch.Data;
+﻿using Perch.Data;
 using Velopack;
 using Velopack.Sources;
 

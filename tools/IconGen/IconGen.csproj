@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <!--
     Rasterises the project's single source-of-truth logo (perch.svg) into every PNG/ICO asset
     the app and README need. Run with `dotnet run` here (or tools/gen-icons.ps1).

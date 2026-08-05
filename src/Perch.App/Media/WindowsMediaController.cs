@@ -1,4 +1,4 @@
-using System.Runtime.Versioning;
+﻿using System.Runtime.Versioning;
 using Perch.Platform;
 using Windows.Foundation;
 using Windows.Media.Control;

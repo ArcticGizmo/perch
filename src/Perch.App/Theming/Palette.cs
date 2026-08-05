@@ -1,4 +1,4 @@
-using Avalonia.Media;
+﻿using Avalonia.Media;
 using Perch.Data;
 
 namespace Perch.Avalonia.Theming;

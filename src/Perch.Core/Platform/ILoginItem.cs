@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>
 /// Registers (and removes) Perch as a login item, so the OS starts the tray when the user logs in —

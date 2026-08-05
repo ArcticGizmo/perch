@@ -1,4 +1,4 @@
-using Perch.Data;
+﻿using Perch.Data;
 using System.Runtime.CompilerServices;
 using Xunit;
 

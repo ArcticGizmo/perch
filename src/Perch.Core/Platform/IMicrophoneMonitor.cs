@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>
 /// One application currently holding the microphone, as reported by the platform's capture stack. Kept

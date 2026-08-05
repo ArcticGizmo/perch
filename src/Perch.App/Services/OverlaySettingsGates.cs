@@ -1,4 +1,4 @@
-using Perch.Avalonia.Views;
+﻿using Perch.Avalonia.Views;
 using Perch.Data;
 
 namespace Perch.Avalonia.Services;

@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>
 /// The platform-specific whole-machine sampling behind a seam, so Perch.Core's <c>MetricsMonitor</c>

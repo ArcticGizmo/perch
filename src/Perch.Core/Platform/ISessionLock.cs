@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>
 /// Tracks whether the desktop session is currently locked, so alerts can be pushed externally when the

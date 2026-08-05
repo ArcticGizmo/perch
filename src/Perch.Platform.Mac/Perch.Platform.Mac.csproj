@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <!--
     macOS implementations of the platform-service interfaces declared in Perch.Core. Targets plain
     net10.0 (NOT net10.0-macos) and reaches AppKit / CoreGraphics / libSystem through P/Invoke

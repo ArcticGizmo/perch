@@ -1,4 +1,4 @@
-using Microsoft.Win32;
+﻿using Microsoft.Win32;
 using Perch.Platform;
 
 namespace Perch.Platform.Windows;

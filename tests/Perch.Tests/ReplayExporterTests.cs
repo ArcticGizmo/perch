@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.Text.Json.Nodes;
 using Perch.Data.Replay;
 using Xunit;

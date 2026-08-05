@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <!--
     perch-hook: a tiny, fast Claude Code hook writer, NativeAOT-compiled so its cold start is competitive
     with (or better than) the current `powershell.exe invoke.ps1` path. The hot-path events (mode) fire on

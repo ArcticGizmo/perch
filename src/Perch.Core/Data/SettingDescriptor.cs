@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// Where a setting shows up in the app — the overlay surface (or general area) it governs. The redesigned

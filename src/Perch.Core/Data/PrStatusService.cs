@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 using System.Collections.Concurrent;
 using System.Diagnostics;

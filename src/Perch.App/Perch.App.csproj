@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
      <PropertyGroup>
           <!-- Two heads from one project. The Windows head (net10.0-windows) uses real Action Center
          toasts via the UWP notifications compat shim, so it needs the Windows-10 TFM. The cross-platform

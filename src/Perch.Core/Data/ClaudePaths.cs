@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// The single owner of every Claude Code config-directory location Perch reads. Centralised so

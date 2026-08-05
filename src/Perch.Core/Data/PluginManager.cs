@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 using System.Diagnostics;
 using System.Text.Json;

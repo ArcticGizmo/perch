@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 /// <summary>
 /// How a single path changed, in one of git's index/worktree slots. Mirrors the status codes git reports
