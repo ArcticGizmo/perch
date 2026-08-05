@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -67,19 +67,30 @@ internal sealed class DiffView : Border
     // Find state. _lines is every body line control in render order (for split: row0-left, row0-right,
     // row1-left, … — i.e. by line number, not whole-left-column-then-right), each tagged with its file key
     // so collapsed files are skipped. _matches indexes into those in the same order.
-    private readonly List<(SelectableTextBlock Tb, string Key)> _lines = new();
-    private readonly List<(SelectableTextBlock Tb, int Start, int Len)> _matches = new();
+    private readonly List<(TextBlock Tb, string Key)> _lines = new();
+    private readonly List<(TextBlock Tb, int Start, int Len)> _matches = new();
     private string _query = "";
     private int _matchIdx = -1;
-    private HighlightLayer? _highlightLayer; // owner-drawn layer behind the text that paints all matches
+    private HighlightLayer? _highlightLayer; // owner-drawn layer behind the text that paints matches + selection
 
-    // Line-range selection (GitHub-style): click a gutter line number to select that line, shift-click or
-    // drag to extend a contiguous range, Ctrl+C copies the lines' content. Lines are grouped into streams
-    // (unified: one; split: 0 = left/old, 1 = right/new) so a range stays within one side. Anchor/focus are
-    // positions within the active stream.
+    // Two mutually-exclusive selection modes, distinguished by _selKind:
+    //  - Line: GitHub-style whole-line range - click a gutter line number, shift-click or drag over numbers
+    //    to extend a contiguous range. Painted via the row cells' Background.
+    //  - Char: character-level selection that can span lines - press+drag over the text body. Painted by the
+    //    HighlightLayer (same HitTestTextRange machinery as find), so it can cross line boundaries which a
+    //    per-line SelectableTextBlock never could.
+    // Both are keyed to a "stream" (unified: one; split: 0 = left/old, 1 = right/new) so a range stays within
+    // one side. Anchor/focus are positions within the active stream.
+    private enum SelKind { None, Line, Char }
+    private SelKind _selKind = SelKind.None;
     private readonly Dictionary<int, List<LineEntry>> _streams = new();
-    private int _selStream = -1, _selAnchor = -1, _selFocus = -1;
+    private int _selStream = -1, _selAnchor = -1, _selFocus = -1;               // line mode: line positions
+    private int _charStream = -1;                                               // char mode: active stream...
+    private int _charAnchorPos = -1, _charAnchorCh = -1;                        // ...anchor (line pos, char)...
+    private int _charFocusPos = -1, _charFocusCh = -1;                          // ...and focus (line pos, char)
     private bool _dragging;
+    private Point _dragPtViewport;                                             // last drag point, in ScrollViewer space
+    private DispatcherTimer? _autoScroll;                                       // edge auto-scroll while char-dragging
     private static readonly IBrush LineSelBg = new SolidColorBrush(Color.FromArgb(70, 96, 165, 250));
 
     /// <summary>Raised after a search/navigation changes the match set — (current 1-based index or 0, total).</summary>
@@ -89,17 +100,26 @@ internal sealed class DiffView : Border
     {
         Background = new SolidColorBrush(BodyBg);
         Padding = new Thickness(0, 0, 0, 12);
-        // A pointer release anywhere ends a line-range drag (handledEventsToo so a child handling the release
-        // still ends the drag).
-        AddHandler(PointerReleasedEvent, (_, _) => _dragging = false, handledEventsToo: true);
-        // Tunnelled Ctrl+C: when a line-range selection is active, copy it before a focused text cell can
-        // copy its own within-line selection. (When focus is outside the diff, the window's handler catches
-        // it instead.)
+        // A pointer release anywhere ends a drag and releases any capture we took for a char-selection drag
+        // (handledEventsToo so a child handling the release still ends the drag).
+        AddHandler(PointerReleasedEvent, (_, e) =>
+        {
+            _dragging = false;
+            _autoScroll?.Stop();
+            e.Pointer.Capture(null);
+        }, handledEventsToo: true);
+        // While a char-selection drag is active the pointer is captured to this control, so every move lands
+        // here; we resolve the line+char under it globally (across line controls) to extend the selection.
+        AddHandler(PointerMovedEvent, OnPointerMoved, handledEventsToo: true);
+        // Tunnelled Ctrl+C: when a diff selection is active, copy it before a focused cell can copy its own
+        // selection. (When focus is outside the diff, the window's handler catches it instead.)
         AddHandler(KeyDownEvent, (_, e) =>
         {
-            if (e.Key == Key.C && e.KeyModifiers.HasFlag(KeyModifiers.Control) && TryCopyLineSelection())
+            if (e.Key == Key.C && e.KeyModifiers.HasFlag(KeyModifiers.Control) && TryCopySelection())
                 e.Handled = true;
         }, RoutingStrategies.Tunnel);
+        _autoScroll = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        _autoScroll.Tick += (_, _) => AutoScrollTick();
         Rebuild();
     }
 
@@ -227,10 +247,11 @@ internal sealed class DiffView : Border
         sv.Offset = sv.Offset.WithY(y);
     }
 
-    // Paints every match (subtle) and the current match (prominent) behind the diff text, locating each
-    // match's rectangle from its line's text layout. Called by the HighlightLayer at render time.
+    // Paints the char selection (behind) plus every match (subtle) and the current match (prominent) behind
+    // the diff text, locating each rectangle from its line's text layout. Called by the layer at render time.
     private void RenderHighlights(DrawingContext ctx, Control layer)
     {
+        RenderCharSelection(ctx, layer);
         for (int i = 0; i < _matches.Count; i++)
         {
             var (tb, start, len) = _matches[i];
@@ -242,6 +263,28 @@ internal sealed class DiffView : Border
         }
     }
 
+    // Paints the character selection across every line in its range: the first line from the start char, the
+    // last line up to the end char, and any lines between in full - each via the same HitTestTextRange the
+    // matches use, so wrapped lines yield one rect per visual row and the selection tracks the wrap.
+    private void RenderCharSelection(DrawingContext ctx, Control layer)
+    {
+        var (sp, sc, ep, ec) = NormalizedCharRange();
+        if (sp < 0 || !_streams.TryGetValue(_charStream, out var list)) return;
+        foreach (var e in list)
+        {
+            if (e.Pos < sp || e.Pos > ep) continue;
+            var tb = e.Text;
+            if (!tb.IsEffectivelyVisible || tb.TextLayout is not { } layout) continue;
+            int len = tb.Text?.Length ?? 0;
+            int start = e.Pos == sp ? Math.Clamp(sc, 0, len) : 0;
+            int end = e.Pos == ep ? Math.Clamp(ec, 0, len) : len;
+            if (end <= start) continue;
+            if (tb.TranslatePoint(new Point(tb.Padding.Left, tb.Padding.Top), layer) is not { } origin) continue;
+            foreach (var r in layout.HitTestTextRange(start, end - start))
+                ctx.FillRectangle(LineSelBg, new Rect(origin.X + r.X, origin.Y + r.Y, r.Width, r.Height));
+        }
+    }
+
     private void RaiseResults() =>
         SearchResultsChanged?.Invoke(_matches.Count == 0 ? 0 : _matchIdx + 1, _matches.Count);
 
@@ -249,8 +292,11 @@ internal sealed class DiffView : Border
     {
         _lines.Clear();
         _streams.Clear();
+        _selKind = SelKind.None;
         _selStream = _selAnchor = _selFocus = -1;
+        _charStream = _charAnchorPos = _charAnchorCh = _charFocusPos = _charFocusCh = -1;
         _dragging = false;
+        _autoScroll?.Stop();
         var root = new StackPanel { Orientation = Orientation.Vertical };
 
         if (_loading)
@@ -355,26 +401,28 @@ internal sealed class DiffView : Border
         };
     }
 
-    // One row per source line: [number gutter | text]. The number is new# (old# for removed lines); a faint
-    // band tints added/removed rows. A single grid per hunk shares the gutter column width, so numbers line
-    // up; each text cell is its own SelectableTextBlock (selection is per line).
+    // One row per source line: [number gutter | +/- marker | text]. The number is new# (old# for removed
+    // lines); a faint band tints added/removed rows. The marker sits in its own non-selectable column so the
+    // text cell holds pure code - char selection and copy then map straight to the line's content, with no
+    // marker to strip. A single grid per hunk shares the gutter/marker column widths, so everything lines up.
     private Control UnifiedHunk(GitDiffHunk hunk, int oldNo, int newNo, ref int budget)
     {
-        var grid = NewGrid("Auto,*");
+        var grid = NewGrid("Auto,Auto,*");
         int row = 0;
         foreach (var line in hunk.Lines)
         {
             if (budget-- <= 0) break;
             var (brush, band, marker, num) = line.Kind switch
             {
-                GitDiffLineKind.Added => (AddedBrush, AddedBandBg, "+ ", (newNo++).ToString()),
-                GitDiffLineKind.Removed => (RemovedBrush, RemovedBandBg, "- ", (oldNo++).ToString()),
+                GitDiffLineKind.Added => (AddedBrush, AddedBandBg, "+", (newNo++).ToString()),
+                GitDiffLineKind.Removed => (RemovedBrush, RemovedBandBg, "-", (oldNo++).ToString()),
                 GitDiffLineKind.Meta => (MutedBrush, null, "", ""),
-                _ => (ContextBrush, (IBrush?)null, "  ", NextContext(ref oldNo, ref newNo)),
+                _ => (ContextBrush, (IBrush?)null, "", NextContext(ref oldNo, ref newNo)),
             };
-            AddRow(grid, row, band, 0, 2);
+            AddRow(grid, row, band, 0, 3);
             var number = AddNumber(grid, row, 0, num);
-            var text = AddText(grid, row, 1, marker + line.Text, brush);
+            AddMarker(grid, row, 1, marker, brush);
+            var text = AddText(grid, row, 2, line.Text, brush);
             if (num.Length > 0) RegisterLine(0, line.Text, number, text);
             row++;
         }
@@ -493,17 +541,39 @@ internal sealed class DiffView : Border
         return tb;
     }
 
-    private SelectableTextBlock AddText(Grid grid, int row, int col, string text, IBrush brush)
+    // The +/- marker cell - its own non-selectable column so the adjacent text cell stays pure code.
+    private TextBlock AddMarker(Grid grid, int row, int col, string marker, IBrush brush)
     {
         EnsureRow(grid, row);
-        var tb = new SelectableTextBlock
+        var tb = new TextBlock
+        {
+            Text = marker,
+            FontFamily = Mono,
+            FontSize = LineSize,
+            Foreground = brush,
+            TextAlignment = TextAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Top,
+            Padding = new Thickness(2, 1, 2, 1),
+            MinWidth = 14,
+        };
+        tb.SetValue(Grid.RowProperty, row);
+        tb.SetValue(Grid.ColumnProperty, col);
+        grid.Children.Add(tb);
+        return tb;
+    }
+
+    // The code cell. A plain TextBlock (not SelectableTextBlock): selection is done ourselves through the
+    // HighlightLayer so it can span lines, which native per-control selection can't.
+    private TextBlock AddText(Grid grid, int row, int col, string text, IBrush brush)
+    {
+        EnsureRow(grid, row);
+        var tb = new TextBlock
         {
             Text = text,
             FontFamily = Mono,
             FontSize = LineSize,
             Foreground = brush,
             TextWrapping = _wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
-            SelectionBrush = SelectionBrush,
             Padding = new Thickness(2, 1, 8, 1),
         };
         tb.SetValue(Grid.RowProperty, row);
@@ -513,33 +583,58 @@ internal sealed class DiffView : Border
         return tb;
     }
 
-    // ---- line-range selection ----
+    // ---- selection ----
 
-    // Registers one selectable diff line (a gutter number + its text) in a stream, and wires the gutter to
-    // start/extend a line-range selection. Clicking sets the anchor; Shift-click or drag extends it.
-    private void RegisterLine(int stream, string content, TextBlock number, SelectableTextBlock text)
+    // Registers one selectable diff line (a gutter number + its text) in a stream, and wires both selection
+    // modes: the gutter number starts/extends a whole-line range (Line mode); the text cell starts a
+    // character-level drag (Char mode) that can span lines.
+    private void RegisterLine(int stream, string content, TextBlock number, TextBlock text)
     {
         if (!_streams.TryGetValue(stream, out var list)) { list = new(); _streams[stream] = list; }
         var entry = new LineEntry(stream, list.Count, content, number, text);
         list.Add(entry);
 
+        // Line mode - gutter number.
         number.Cursor = new Cursor(StandardCursorType.Hand);
         number.PointerPressed += (_, e) =>
         {
             bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-            if (shift && _selStream == stream && _selAnchor >= 0)
+            if (shift && _selKind == SelKind.Line && _selStream == stream && _selAnchor >= 0)
                 _selFocus = entry.Pos;
             else
                 { _selStream = stream; _selAnchor = _selFocus = entry.Pos; }
+            _selKind = SelKind.Line;
+            ClearCharSelection();
             _dragging = true;
             ApplyLineHighlight();
             e.Handled = true;
         };
         number.PointerEntered += (_, _) =>
         {
-            if (_dragging && _selStream == stream) { _selFocus = entry.Pos; ApplyLineHighlight(); }
+            if (_dragging && _selKind == SelKind.Line && _selStream == stream)
+                { _selFocus = entry.Pos; ApplyLineHighlight(); }
+        };
+
+        // Char mode - text body. Press anchors, then the pointer is captured to the DiffView so the drag can
+        // be resolved across line controls in OnPointerMoved.
+        text.Cursor = new Cursor(StandardCursorType.Ibeam);
+        text.PointerPressed += (_, e) =>
+        {
+            int ch = CharIndexAt(text, e.GetPosition(text));
+            ClearLineSelection();
+            _selKind = SelKind.Char;
+            _charStream = stream;
+            _charAnchorPos = _charFocusPos = entry.Pos;
+            _charAnchorCh = _charFocusCh = ch;
+            _dragging = true;
+            _autoScroll?.Start();
+            e.Pointer.Capture(this);
+            _highlightLayer?.InvalidateVisual();
+            e.Handled = true;
         };
     }
+
+    // ---- line mode ----
 
     // Tints the selected line range (number + text cells) in the active stream; clears the rest.
     private void ApplyLineHighlight()
@@ -547,7 +642,7 @@ internal sealed class DiffView : Border
         foreach (var (stream, list) in _streams)
         {
             int lo = -1, hi = -1;
-            if (stream == _selStream && _selAnchor >= 0)
+            if (_selKind == SelKind.Line && stream == _selStream && _selAnchor >= 0)
             {
                 lo = Math.Min(_selAnchor, _selFocus);
                 hi = Math.Max(_selAnchor, _selFocus);
@@ -561,10 +656,132 @@ internal sealed class DiffView : Border
         }
     }
 
-    /// <summary>Copies the current line-range selection's content to the clipboard (one line per row, no
-    /// markers or line numbers). Returns false when nothing is line-selected, so Ctrl+C can fall through to
-    /// the normal within-line text copy.</summary>
-    public bool TryCopyLineSelection()
+    private void ClearLineSelection()
+    {
+        _selStream = _selAnchor = _selFocus = -1;
+        ApplyLineHighlight();
+    }
+
+    // ---- char mode ----
+
+    // The caret index within a text cell for a point in the cell's own coordinate space. The TextLayout is
+    // laid out without the control's padding, so subtract it (mirrors the origin offset used when painting).
+    private static int CharIndexAt(TextBlock tb, Point p)
+    {
+        if (tb.TextLayout is not { } layout) return 0;
+        var hit = layout.HitTestPoint(new Point(p.X - tb.Padding.Left, p.Y - tb.Padding.Top));
+        int idx = hit.TextPosition + (hit.IsTrailing ? 1 : 0);
+        return Math.Clamp(idx, 0, tb.Text?.Length ?? 0);
+    }
+
+    // Extends the char selection to a point in this control's (the scrolled content's) coordinate space:
+    // pick the line in the active stream whose vertical band contains the point (clamping past either end),
+    // then the caret within it.
+    private void ExtendCharTo(Point pView)
+    {
+        if (!_streams.TryGetValue(_charStream, out var list) || list.Count == 0) return;
+
+        LineEntry chosen = list[0];
+        double bestAboveTop = double.NegativeInfinity;
+        bool inside = false;
+        foreach (var ent in list)
+        {
+            if (ent.Text.TranslatePoint(new Point(0, 0), this) is not { } top) continue;
+            double bottom = top.Y + ent.Text.Bounds.Height;
+            if (pView.Y >= top.Y && pView.Y <= bottom) { chosen = ent; inside = true; break; }
+            if (top.Y <= pView.Y && top.Y > bestAboveTop) { bestAboveTop = top.Y; chosen = ent; inside = true; }
+        }
+        // pView above every line -> chosen stays list[0]; HitTestPoint clamps the caret to 0. Below every
+        // line -> chosen is the last, caret clamps to its end.
+        _ = inside;
+
+        int ch = this.TranslatePoint(pView, chosen.Text) is { } pInText ? CharIndexAt(chosen.Text, pInText) : 0;
+        if (_charFocusPos != chosen.Pos || _charFocusCh != ch)
+        {
+            _charFocusPos = chosen.Pos;
+            _charFocusCh = ch;
+            _highlightLayer?.InvalidateVisual();
+        }
+    }
+
+    // While char-dragging, scroll the viewport when the pointer nears its top/bottom edge, then re-resolve
+    // the focus against the (fixed-on-screen) pointer so the selection keeps growing as content scrolls.
+    private void AutoScrollTick()
+    {
+        if (!_dragging || _selKind != SelKind.Char) { _autoScroll?.Stop(); return; }
+        if (ScrollViewer is not { } sv) return;
+        const double edge = 24, step = 14;
+        double max = Math.Max(0, sv.Extent.Height - sv.Viewport.Height);
+        double y = _dragPtViewport.Y;
+        if (y < edge && sv.Offset.Y > 0)
+            sv.Offset = sv.Offset.WithY(Math.Max(0, sv.Offset.Y - step));
+        else if (y > sv.Viewport.Height - edge && sv.Offset.Y < max)
+            sv.Offset = sv.Offset.WithY(Math.Min(max, sv.Offset.Y + step));
+        else
+            return;
+        if (sv.TranslatePoint(_dragPtViewport, this) is { } pv) ExtendCharTo(pv);
+    }
+
+    private void OnPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_dragging || _selKind != SelKind.Char) return;
+        if (ScrollViewer is { } sv) _dragPtViewport = e.GetPosition(sv);
+        ExtendCharTo(e.GetPosition(this));
+    }
+
+    private void ClearCharSelection()
+    {
+        _charStream = _charAnchorPos = _charAnchorCh = _charFocusPos = _charFocusCh = -1;
+        _highlightLayer?.InvalidateVisual();
+    }
+
+    // The char range in document order: (startPos, startChar, endPos, endChar). startPos < 0 when there is
+    // no char selection.
+    private (int SP, int SC, int EP, int EC) NormalizedCharRange()
+    {
+        if (_selKind != SelKind.Char || _charAnchorPos < 0 || _charFocusPos < 0) return (-1, -1, -1, -1);
+        bool anchorFirst = _charAnchorPos < _charFocusPos ||
+                           (_charAnchorPos == _charFocusPos && _charAnchorCh <= _charFocusCh);
+        return anchorFirst
+            ? (_charAnchorPos, _charAnchorCh, _charFocusPos, _charFocusCh)
+            : (_charFocusPos, _charFocusCh, _charAnchorPos, _charAnchorCh);
+    }
+
+    private ScrollViewer? ScrollViewer => this.GetVisualAncestors().OfType<ScrollViewer>().FirstOrDefault();
+
+    // ---- copy ----
+
+    /// <summary>Copies the active diff selection to the clipboard (char range, or whole-line range - one line
+    /// per row, no markers or numbers). Returns false when nothing is selected, so Ctrl+C can fall through.</summary>
+    public bool TryCopySelection() => _selKind switch
+    {
+        SelKind.Char => TryCopyCharSelection(),
+        SelKind.Line => TryCopyLineSelection(),
+        _ => false,
+    };
+
+    private bool TryCopyCharSelection()
+    {
+        if (!_streams.TryGetValue(_charStream, out var list)) return false;
+        var (sp, sc, ep, ec) = NormalizedCharRange();
+        if (sp < 0 || (sp == ep && sc == ec)) return false; // nothing, or a bare caret
+        var sb = new System.Text.StringBuilder();
+        bool first = true;
+        foreach (var e in list)
+        {
+            if (e.Pos < sp || e.Pos > ep) continue;
+            string c = e.Content ?? "";
+            int start = e.Pos == sp ? Math.Clamp(sc, 0, c.Length) : 0;
+            int end = e.Pos == ep ? Math.Clamp(ec, 0, c.Length) : c.Length;
+            if (!first) sb.Append('\n');
+            first = false;
+            if (end > start) sb.Append(c, start, end - start);
+        }
+        TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(sb.ToString());
+        return true;
+    }
+
+    private bool TryCopyLineSelection()
     {
         if (_selStream < 0 || _selAnchor < 0 || !_streams.TryGetValue(_selStream, out var list)) return false;
         int lo = Math.Min(_selAnchor, _selFocus), hi = Math.Max(_selAnchor, _selFocus);
@@ -579,7 +796,7 @@ internal sealed class DiffView : Border
         return true;
     }
 
-    private sealed record LineEntry(int Stream, int Pos, string Content, TextBlock Number, SelectableTextBlock Text);
+    private sealed record LineEntry(int Stream, int Pos, string Content, TextBlock Number, TextBlock Text);
 
     // A transparent, non-interactive layer behind the diff text that paints the find-match highlights. It
     // re-paints on layout changes (wrap reflow, collapse) and whenever the owner invalidates it (search /
