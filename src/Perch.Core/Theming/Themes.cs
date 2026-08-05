@@ -86,8 +86,121 @@ public static class Themes
         ExpectedMark = new(189, 182, 177),
     };
 
+    /// <summary>
+    /// Soft pink-tinted dark: the neutral ramp rotated toward magenta (~330°) at low chroma (R and B a
+    /// touch over G, for a mauve-grey). The "very slightly pink" flavour — restrained, like Ember. Accent,
+    /// brand and status hues inherited from Midnight.
+    /// </summary>
+    public static readonly Theme Blush = Midnight with
+    {
+        Id = "blush",
+        Name = "Blush",
+
+        Surface            = new(25, 21, 24),
+        SurfaceSunken      = new(20, 17, 20),
+        SurfaceRaised      = new(44, 38, 43),
+        SurfaceRaisedHover = new(57, 50, 55),
+        OverlaySurface     = new(18, 14, 17),
+        OverlayRowHover    = new(30, 24, 28),
+        Track              = new(41, 35, 40),
+        Border             = new(52, 44, 50),
+        Separator          = new(38, 32, 36),
+        TreeLine           = new(61, 52, 58),
+
+        TextPrimary  = new(231, 225, 228),
+        TextTitle    = new(248, 243, 246),
+        TextMuted    = new(167, 157, 163),
+        ExpectedMark = new(190, 181, 186),
+    };
+
+    /// <summary>
+    /// Monokai-inspired warm dark: an olive-brown neutral ramp (Monokai's #272822 family) with crisp
+    /// near-white text, for the high-contrast-code crowd. Accent, brand and status hues inherited from
+    /// Midnight.
+    /// </summary>
+    public static readonly Theme Dim = Midnight with
+    {
+        Id = "dim",
+        Name = "Dim",
+
+        Surface            = new(39, 40, 34),
+        SurfaceSunken      = new(32, 33, 28),
+        SurfaceRaised      = new(62, 63, 54),
+        SurfaceRaisedHover = new(78, 79, 68),
+        OverlaySurface     = new(30, 31, 26),
+        OverlayRowHover    = new(48, 49, 42),
+        Track              = new(55, 56, 48),
+        Border             = new(68, 69, 58),
+        Separator          = new(52, 53, 45),
+        TreeLine           = new(85, 84, 70),
+
+        TextPrimary  = new(248, 248, 242),
+        TextTitle    = new(253, 253, 248),
+        TextMuted    = new(176, 173, 156),
+        ExpectedMark = new(202, 199, 182),
+    };
+
+    /// <summary>
+    /// High-contrast dark for maximum legibility: a near-black surface with bright text (well past AAA) and
+    /// deliberately brighter borders so control boundaries clear the non-text floor with room to spare. The
+    /// accessibility flagship. (Thicker borders / focus rings are a rendering concern layered on in M5.)
+    /// </summary>
+    public static readonly Theme HighContrast = Midnight with
+    {
+        Id = "high-contrast",
+        Name = "High Contrast",
+
+        Surface            = new(10, 10, 12),
+        SurfaceSunken      = new(5, 5, 7),
+        SurfaceRaised      = new(32, 32, 38),
+        SurfaceRaisedHover = new(48, 48, 56),
+        OverlaySurface     = new(4, 4, 6),
+        OverlayRowHover    = new(28, 28, 34),
+        Track              = new(30, 30, 36),
+        Border             = new(96, 96, 112),
+        Separator          = new(74, 74, 88),
+        TreeLine           = new(104, 104, 120),
+
+        TextPrimary  = new(246, 246, 249),
+        TextTitle    = new(255, 255, 255),
+        TextMuted    = new(192, 192, 202),
+        ExpectedMark = new(212, 212, 220),
+    };
+
+    /// <summary>
+    /// A nod to classic Winamp: dark metallic surfaces with a faint LCD-green cast to the text and a bright
+    /// lime-green accent (links / selection / nav). Deliberately retro and playful. The accent green is
+    /// limier and brighter than the deeper status "running" green, so the two stay distinguishable. Brand
+    /// and status hues inherited from Midnight.
+    /// </summary>
+    public static readonly Theme Winamp = Midnight with
+    {
+        Id = "winamp",
+        Name = "Winamp",
+
+        Surface            = new(20, 21, 20),
+        SurfaceSunken      = new(14, 15, 14),
+        SurfaceRaised      = new(38, 40, 38),
+        SurfaceRaisedHover = new(50, 53, 50),
+        OverlaySurface     = new(12, 13, 12),
+        OverlayRowHover    = new(24, 27, 24),
+        Track              = new(34, 37, 34),
+        Border             = new(52, 56, 52),
+        Separator          = new(36, 39, 36),
+        TreeLine           = new(60, 66, 60),
+
+        TextPrimary  = new(223, 233, 223),
+        TextTitle    = new(240, 250, 240),
+        TextMuted    = new(158, 173, 158),
+        ExpectedMark = new(184, 199, 184),
+
+        // The iconic Winamp visualiser green as the accent.
+        Accent      = new(110, 240, 120),
+        AccentHover = new(150, 250, 160),
+    };
+
     /// <summary>Every built-in theme, in display order. Custom themes are appended by the UI.</summary>
-    public static readonly IReadOnlyList<Theme> BuiltIn = [Midnight, Ember];
+    public static readonly IReadOnlyList<Theme> BuiltIn = [Midnight, Ember, Blush, Dim, HighContrast, Winamp];
 
     /// <summary>Finds a built-in theme by id, or null.</summary>
     public static Theme? ById(string? id)
