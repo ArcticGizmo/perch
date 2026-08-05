@@ -6,6 +6,7 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using Perch.Avalonia.Services;
+using Perch.Avalonia.Theming;
 using Perch.Avalonia.Windows;
 using Perch.Data;
 using Perch.Data.Hypertree;
@@ -130,6 +131,9 @@ public partial class App : Application
             _overlay.Canvas.ReplayMode = Services.Replay.ReplaySession.IsActive;
             var settings = AppSettings.Load();
             _appSettings = settings;
+
+            // Colour theme first, before anything paints, so the overlay's first frame is already themed.
+            Palette.Apply(ThemeService.Resolve(settings.ActiveThemeId));
 
             // First launch after an update: grab the changelog entries newer than the version that last
             // ran here, then stamp the current version so they're only ever shown once. A null last-seen is
@@ -1129,6 +1133,7 @@ public partial class App : Application
         var hooks = new SettingsHooks
         {
             DisplayChanged = () => ApplyDisplaySettings(settings),
+            ThemeChanged = () => ThemeService.Apply(ThemeService.Resolve(settings.ActiveThemeId), _desktop),
             UsageEnabledChanged = on => { if (on) _usageHost?.Start(); else _usageHost?.Stop(); },
             ServiceStatusEnabledChanged = on => { if (on) _statusHost?.Start(); else _statusHost?.Stop(); },
             ServiceStatusIntervalChanged = () => _statusHost?.SetInterval(settings.ServiceStatusIntervalMinutes),

@@ -26,7 +26,7 @@ namespace Perch.Avalonia.Rendering;
 /// </summary>
 internal static class HeadlessRenderer
 {
-    public static int RenderAll(string outDir)
+    public static int RenderAll(string outDir, string? themeId = null)
     {
         Directory.CreateDirectory(outDir);
 
@@ -35,6 +35,9 @@ internal static class HeadlessRenderer
             .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false })
             .WithInterFont()
             .SetupWithoutStarting();
+
+        // Render under the requested theme (default Midnight). Palette drives every owner-drawn surface.
+        Theming.Palette.Apply(ThemeService.Resolve(themeId));
 
         var canvas = new OverlayCanvas();
         canvas.SetShowPullRequests(true);

@@ -16,6 +16,7 @@ using Perch.Data;
 using Perch.Data.Hypertree;
 using Perch.Data.Replay;
 using Perch.Platform;
+using Perch.Theming;
 
 namespace Perch.Avalonia.Windows;
 
@@ -31,6 +32,10 @@ internal sealed class SettingsHooks
     /// <summary>Re-apply every overlay display gate + the monitor's data-layer flags (the App reads the
     /// mutated <see cref="AppSettings"/> back). Cheap and idempotent, so raised after any display change.</summary>
     public Action? DisplayChanged;
+
+    /// <summary>Re-resolve and apply the active colour theme app-wide (the App reads the mutated
+    /// <see cref="AppSettings.ActiveThemeId"/> back). Raised by the Appearance page after a theme is picked.</summary>
+    public Action? ThemeChanged;
 
     /// <summary>Start (true) or stop (false) the account-usage poll.</summary>
     public Action<bool>? UsageEnabledChanged;
@@ -181,6 +186,7 @@ internal sealed class SettingsWindow : Window
         // non-settings content (Getting started, Export, About, Changelog). Their builders are now
         // unreachable dead code, excised in a follow-up once verified in the running app.
         AddPage(nav, "search",       "Search",          BuildSearchPage);
+        AddAppearancePage(nav);
         AddFeaturesPage(nav);
         AddPage(nav, "start",        "Getting started", BuildGettingStartedPage);
         AddPage(nav, "stats",        "Session Stats",   BuildStatsPage);
@@ -254,6 +260,108 @@ internal sealed class SettingsWindow : Window
         _pages["features"] = grid;
         _contentHost.Children.Add(grid);
         AddNavItem(nav, "features", "Features");
+    }
+
+    // The Appearance page: pick a colour theme from a list of swatch cards, with the same docked live
+    // overlay preview the Features page uses. Selecting a theme applies it app-wide immediately (via the
+    // ThemeChanged hook), which repaints this window and the preview too — so the choice is seen at once.
+    private void AddAppearancePage(StackPanel nav)
+    {
+        var preview = new PreviewPane();
+        preview.Apply(_settings);
+
+        var list = new StackPanel { Margin = new Thickness(16), Spacing = 10 };
+        list.Children.Add(SettingsUi.SectionTitle("Theme"));
+        list.Children.Add(SettingsUi.BodyText(
+            "Pick a colour theme. Every theme keeps the status colours (running, waiting, error) identical, " +
+            "so the overlay stays glanceable — only the chrome and text are re-tinted. Contrast is checked " +
+            "against WCAG AA for every theme."));
+
+        var cards = new List<(string id, Button card)>();
+        void Restyle()
+        {
+            foreach (var (id, card) in cards)
+            {
+                bool active = id == _settings.ActiveThemeId;
+                card.BorderBrush = active ? Palette.AccentBrush : Palette.BorderBrush;
+                card.BorderThickness = new Thickness(active ? 2 : 1);
+            }
+        }
+
+        foreach (var theme in Themes.BuiltIn)
+        {
+            var card = BuildThemeCard(theme);
+            var id = theme.Id;
+            card.Click += (_, _) =>
+            {
+                if (_settings.ActiveThemeId == id) return;
+                _settings.ActiveThemeId = id;
+                _settings.Save();
+                _hooks.ThemeChanged?.Invoke();   // repaints the whole app, including this window + preview
+                Restyle();
+            };
+            cards.Add((id, card));
+            list.Children.Add(card);
+        }
+        Restyle();
+
+        var cardsScroll = new ScrollViewer
+        {
+            Content = list, IsVisible = true,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        Grid.SetColumn(cardsScroll, 0);
+
+        var dock = BuildPreviewDock(preview);
+        Grid.SetColumn(dock, 1);
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), IsVisible = false };
+        grid.Children.Add(cardsScroll);
+        grid.Children.Add(dock);
+
+        _pages["appearance"] = grid;
+        _contentHost.Children.Add(grid);
+        AddNavItem(nav, "appearance", "Appearance");
+    }
+
+    // One theme option: its name over a strip of swatches (surface, raised, text, accent + the semantic
+    // status hues + brand) so its character reads at a glance. The swatches show that theme's own colours,
+    // independent of which theme is currently active.
+    private static Button BuildThemeCard(Theme t)
+    {
+        var swatches = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 8, 0, 0),
+        };
+        foreach (var rgb in new[]
+                 {
+                     t.Surface, t.SurfaceRaised, t.TextPrimary, t.Accent,
+                     t.StatusRunning, t.StatusAwaiting, t.StatusError, t.Brand,
+                 })
+        {
+            swatches.Children.Add(new Border
+            {
+                Width = 22, Height = 22, CornerRadius = new CornerRadius(4),
+                Background = rgb.ToBrush(),
+                BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
+            });
+        }
+
+        var name = new TextBlock
+        {
+            Text = t.Name, FontSize = 14, FontWeight = FontWeight.SemiBold, Foreground = Palette.TitleBrush,
+        };
+
+        return new Button
+        {
+            Content = new StackPanel { Children = { name, swatches } },
+            Background = Palette.ButtonBgBrush,
+            BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6), Padding = new Thickness(12, 10),
+            HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left,
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
     }
 
     private static Control BuildPreviewDock(PreviewPane preview)

@@ -53,8 +53,38 @@ public static class Themes
         ModeAcceptEdits = new(167, 139, 250),
     };
 
+    /// <summary>
+    /// Perch-flavoured warm dark: the neutral ramp rotated off cool-blue toward the brand's red-orange
+    /// (~15°) at low chroma, so the surfaces read as warm charcoal with a faint red undertone. Only the
+    /// neutrals and text are re-tinted — the accent, brand and semantic status hues are inherited from
+    /// <see cref="Midnight"/> unchanged, so the overlay's glanceable meaning (running/awaiting/error) is
+    /// untouched. Text roles are verified against WCAG AA on the warm surfaces by the preset-contrast test.
+    /// </summary>
+    public static readonly Theme Ember = Midnight with
+    {
+        Id = "ember",
+        Name = "Ember",
+
+        // Warm charcoal ramp (hue ~15°, low chroma).
+        Surface            = new(27, 21, 19),
+        SurfaceRaised      = new(48, 37, 33),
+        SurfaceRaisedHover = new(62, 48, 43),
+        OverlaySurface     = new(20, 15, 13),
+        OverlayRowHover    = new(38, 27, 23),
+        Track              = new(46, 36, 33),
+        Border             = new(60, 44, 39),
+        Separator          = new(44, 32, 29),
+        TreeLine           = new(76, 55, 48),
+
+        // Warm-tinted neutrals for text.
+        TextPrimary  = new(237, 228, 223),
+        TextTitle    = new(250, 244, 240),
+        TextMuted    = new(179, 164, 156),
+        ExpectedMark = new(198, 182, 174),
+    };
+
     /// <summary>Every built-in theme, in display order. Custom themes are appended by the UI.</summary>
-    public static readonly IReadOnlyList<Theme> BuiltIn = [Midnight];
+    public static readonly IReadOnlyList<Theme> BuiltIn = [Midnight, Ember];
 
     /// <summary>Finds a built-in theme by id, or null.</summary>
     public static Theme? ById(string? id)
