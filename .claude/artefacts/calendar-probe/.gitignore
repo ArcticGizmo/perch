@@ -1,0 +1,4 @@
+# Probe outputs - never commit these.
+# meetings-local.txt contains real calendar data (PII).
+schema-report.txt
+meetings-local.txt

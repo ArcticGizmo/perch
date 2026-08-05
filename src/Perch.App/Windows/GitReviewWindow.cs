@@ -30,7 +30,7 @@ namespace Perch.Avalonia.Windows;
 /// </summary>
 internal sealed class GitReviewWindow : Window
 {
-    private static readonly Color BodyBg = Color.FromRgb(18, 18, 24);
+    private static Color BodyBg => Palette.Sunken;
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
 
     private readonly GitRepoService _git = new();

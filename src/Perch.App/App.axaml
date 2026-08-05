@@ -5,6 +5,8 @@
     <!-- Perch is a dark app; force the dark Fluent variant rather than following the system. -->
     <Application.Styles>
         <FluentTheme />
+        <!-- Material-style colour picker (Avalonia.Controls.ColorPicker) used by the theme designer. -->
+        <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml" />
     </Application.Styles>
 
     <Application.Resources>

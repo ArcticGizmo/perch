@@ -2,6 +2,7 @@
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -169,6 +170,22 @@ internal sealed class PerchToggle : Control
         Width = 46;
         Height = 26;
         Cursor = new Cursor(StandardCursorType.Hand);
+        Focusable = true;   // keyboard users can tab to it (and see the focus ring below)
+        // Repaint when focus enters/leaves so the keyboard-focus ring tracks it.
+        GotFocus += (_, _) => InvalidateVisual();
+        LostFocus += (_, _) => InvalidateVisual();
+    }
+
+    // Space / Enter toggles the focused switch, matching a standard checkbox.
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (IsEnabled && e.Key is Key.Space or Key.Enter)
+        {
+            IsChecked = !IsChecked;
+            e.Handled = true;
+            return;
+        }
+        base.OnKeyDown(e);
     }
 
     public bool IsChecked
@@ -222,6 +239,14 @@ internal sealed class PerchToggle : Control
         double r = knobD / 2;
         ctx.DrawEllipse(new SolidColorBrush(knob), null,
             new Point(knobX + r, rect.Top + 3 + r), r, r);
+
+        // Keyboard-focus ring: a themed outline around the whole pill when focused.
+        if (IsFocused)
+        {
+            var pen = new Pen(new SolidColorBrush(Palette.FocusRing), 2);
+            var ring = new Rect(0, 0, Bounds.Width, Bounds.Height).Deflate(1);
+            ctx.DrawRectangle(null, pen, new RoundedRect(ring, ring.Height / 2));
+        }
     }
 }
 

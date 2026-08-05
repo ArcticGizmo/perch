@@ -29,9 +29,10 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        // `perch render <outDir>` dumps views to PNG (headless) for visual verification.
+        // `perch render <outDir> [themeId]` dumps views to PNG (headless) for visual verification, under
+        // the given colour theme (default Midnight) — so a preset can be eyeballed / diffed per theme.
         if (args.Length > 0 && args[0] == "render")
-            return HeadlessRenderer.RenderAll(args.Length > 1 ? args[1] : ".");
+            return HeadlessRenderer.RenderAll(args.Length > 1 ? args[1] : ".", args.Length > 2 ? args[2] : null);
 
         // A stale older plugin might still invoke `perch handle <event>` — short-circuit to a no-op
         // so it never launches a second tray. (Matches the WinForms entry point.)

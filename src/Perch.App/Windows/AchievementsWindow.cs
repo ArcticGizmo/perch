@@ -21,8 +21,8 @@ namespace Perch.Avalonia.Windows;
 /// </summary>
 internal sealed class AchievementsWindow : Window
 {
-    private static readonly IBrush BodyBg   = new SolidColorBrush(Color.FromRgb(18, 18, 24));
-    private static readonly IBrush SearchBg = new SolidColorBrush(Color.FromRgb(24, 24, 34));
+    private static readonly IBrush BodyBg   = Palette.SurfaceSunkenBrush;
+    private static readonly IBrush SearchBg = Palette.FormBgBrush;
 
     private readonly AchievementsDashboard _dashboard = new();
     private readonly TextBox _search;

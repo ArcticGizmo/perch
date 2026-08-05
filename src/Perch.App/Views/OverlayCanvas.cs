@@ -70,11 +70,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double HyperRowSize   = 10.5; // a branch line's name
     private const double HyperMetaSize  = 9;    // a branch line's trailing desktop label
 
-    // ── Palette (the overlay's own; matches OverlayForm) ──────────────────────
-    private static readonly Color  BgColor        = Color.FromRgb(15, 15, 20);
-    private static readonly Color  FgColor        = Color.FromRgb(225, 225, 235);
-    private static readonly IBrush BgBrush        = new SolidColorBrush(Color.FromArgb(245, 15, 15, 20));
-    private static readonly IPen   BorderPen      = new Pen(new SolidColorBrush(Color.FromRgb(45, 45, 60)), 1);
+    // ── Palette ────────────────────────────────────────────────────────────────
+    // Overlay chrome now resolves through the active Theme (Palette.Active) instead of literals: colours are
+    // properties reading the theme, brushes/pens alias Palette's cached fills, so one Palette.Apply() swap
+    // re-colours the overlay too. The Dev/Replay markers below deliberately stay fixed (they're branding).
+    private static Color BgColor => Palette.Active.OverlaySurface.ToColor();
+    private static Color FgColor => Palette.Active.TextPrimary.ToColor();
+    private static readonly IBrush BgBrush   = Palette.OverlayScrimBrush;       // translucent panel scrim
+    private static readonly IPen   BorderPen = new Pen(Palette.BorderBrush, 1);
     // Dev-instance marker: a hot-pink brand so an isolated dev build is unmistakable next to a running
     // installed Perch — a 2px border around the panel plus a "Perch - DEV" header label. Only ever used
     // when AppProfile.IsDev, so a normal build never pays for it.
@@ -93,31 +96,33 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // "Jump to next session" landed here: a blue selection wash + left bar that holds then fades, so the
     // hotkey user can see which session they've cycled to. Blue reads as navigation, distinct from the
     // green/orange/yellow status hues.
-    private static readonly Color  CycleColor     = Color.FromRgb(96, 165, 250);
-    private static readonly IBrush MutedBrush     = new SolidColorBrush(Color.FromRgb(110, 110, 130));
-    private static readonly IBrush FgBrush        = new SolidColorBrush(FgColor);
-    private static readonly Color  RunningColor   = Color.FromRgb(34, 197, 94);
-    private static readonly Color  AttentionColor = Color.FromRgb(251, 146, 60);
-    private static readonly Color  AwaitingColor  = Color.FromRgb(250, 204, 21);
-    private static readonly Color  IdleColor      = Color.FromRgb(100, 116, 139);
-    private static readonly Color  ApiErrorColor  = Color.FromRgb(239, 68, 68);   // red — a failed run, distinct from the orange "done"
-    private static readonly IBrush AttentionBrush = new SolidColorBrush(AttentionColor);
-    private static readonly IBrush AwaitingBrush  = new SolidColorBrush(AwaitingColor);
-    private static readonly IBrush ApiErrorBrush  = new SolidColorBrush(ApiErrorColor);
-    private static readonly IPen   SepPen         = new Pen(new SolidColorBrush(Color.FromRgb(35, 35, 50)), 1);
-    private static readonly Color  SubAgentColor  = Color.FromRgb(168, 85, 247);
-    private static readonly IBrush SubAgentBrush  = new SolidColorBrush(SubAgentColor);
-    private static readonly IPen   TreeLinePen    = new Pen(new SolidColorBrush(Color.FromRgb(55, 55, 72)), 1);
-    private static readonly IBrush BotBrush       = new SolidColorBrush(Color.FromRgb(148, 163, 184));
-    private static readonly IBrush BadgeBrush     = new SolidColorBrush(Color.FromRgb(38, 38, 52));
-    private static readonly Color  MailColor      = Color.FromRgb(94, 234, 212);
-    private static readonly IBrush MailBrush      = new SolidColorBrush(MailColor);
-    private static readonly Color  RemoteColor    = Color.FromRgb(96, 165, 250);
-    private static readonly IBrush RemoteBrush    = new SolidColorBrush(RemoteColor);
-    private static readonly Color  WarnColor      = Color.FromRgb(245, 158, 11);
-    private static readonly IBrush WarnBrush      = new SolidColorBrush(WarnColor);
-    private static readonly IBrush BgFillBrush    = new SolidColorBrush(BgColor);
-    private static readonly IBrush BurnBrush      = new SolidColorBrush(Color.FromRgb(125, 185, 232));
+    private static Color CycleColor => Palette.Active.Accent.ToColor();
+    // Secondary/status text — the theme's TextMuted (140,140,160), ~5.8:1 on the overlay bg (the old
+    // (110,110,130) was ~3.8:1, under WCAG AA) and identical to the settings surface's muted.
+    private static readonly IBrush MutedBrush     = Palette.MutedBrush;
+    private static readonly IBrush FgBrush        = Palette.FgBrush;
+    private static Color RunningColor   => Palette.Active.StatusRunning.ToColor();
+    private static Color AttentionColor => Palette.Active.StatusAttention.ToColor();
+    private static Color AwaitingColor  => Palette.Active.StatusAwaiting.ToColor();
+    private static Color IdleColor      => Palette.Active.StatusIdle.ToColor();
+    private static Color ApiErrorColor  => Palette.Active.StatusError.ToColor();   // red — a failed run, distinct from the orange "done"
+    private static readonly IBrush AttentionBrush = Palette.AttentionBrush;
+    private static readonly IBrush AwaitingBrush  = Palette.AwaitingBrush;
+    private static readonly IBrush ApiErrorBrush  = Palette.ErrorBrush;
+    private static readonly IPen   SepPen         = new Pen(Palette.SeparatorBrush, 1);
+    private static Color SubAgentColor  => Palette.Active.SubAgent.ToColor();
+    private static readonly IBrush SubAgentBrush  = Palette.SubAgentBrush;
+    private static readonly IPen   TreeLinePen    = new Pen(Palette.TreeLineBrush, 1);
+    private static readonly IBrush BotBrush       = Palette.TeamGrayBrush;
+    private static readonly IBrush BadgeBrush     = Palette.TrackBrush;
+    private static Color MailColor      => Palette.Active.Teal.ToColor();
+    private static readonly IBrush MailBrush      = Palette.TealBrush;
+    private static Color RemoteColor    => Palette.Active.Accent.ToColor();
+    private static readonly IBrush RemoteBrush    = Palette.AccentBrush;
+    private static Color WarnColor      => Palette.Active.StatusWarn.ToColor();
+    private static readonly IBrush WarnBrush      = Palette.WarnBrush;
+    private static readonly IBrush BgFillBrush    = Palette.OverlaySurfaceBrush;
+    private static readonly IBrush BurnBrush      = Palette.BurnBrush;
     private static readonly IBrush GitAddBrush    = new SolidColorBrush(Color.FromRgb(34, 197, 94));
     private static readonly IBrush GitDelBrush    = new SolidColorBrush(Color.FromRgb(239, 68, 68));
     // Pull-request glyph colours, keyed to the PR's state (open green, draft grey, merged purple, closed
@@ -130,7 +135,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private static readonly IBrush PrMergedHover  = new SolidColorBrush(Color.FromRgb(192, 132, 252));
     private static readonly IBrush PrClosedBrush  = new SolidColorBrush(Color.FromRgb(239, 68, 68));
     private static readonly IBrush PrClosedHover  = new SolidColorBrush(Color.FromRgb(248, 113, 113));
-    private static readonly IBrush RunningBrush   = new SolidColorBrush(RunningColor);
+    private static readonly IBrush RunningBrush   = Palette.RunningBrush;
     private static readonly IBrush ArtifactBrush  = new SolidColorBrush(Color.FromRgb(251, 191, 36));
     private static readonly IBrush ArtifactHover  = new SolidColorBrush(Color.FromRgb(255, 224, 140));
     // Pinned-note glyph: a sticky-note amber, so a note reads as a deliberate human annotation. The note's
@@ -153,13 +158,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     ];
     private static readonly IBrush ThermoGlassFill = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
     private static readonly IPen   ThermoOutline  = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
-    private static readonly Color  MutedColor     = Color.FromRgb(110, 110, 130);
-    private static readonly IBrush UpdateBrush    = new SolidColorBrush(Color.FromRgb(255, 68, 45));   // perch-logo red-orange — the update badge
-    private static readonly IBrush UpdateHover     = new SolidColorBrush(Color.FromRgb(255, 104, 84));  // brightened while hovered
-    private static readonly Color  SepColor       = Color.FromRgb(35, 35, 50);
-    private static readonly IBrush RowHoverBrush  = new SolidColorBrush(Color.FromRgb(25, 25, 38));
-    private static readonly Color  UsageTrackColor = Color.FromRgb(38, 38, 52);
-    private static readonly Color  ExpectedMarkColor = Color.FromRgb(180, 180, 195);
+    private static Color MutedColor => Palette.Active.TextMuted.ToColor();
+    private static readonly IBrush UpdateBrush   = Palette.BrandBrush;       // perch-logo red-orange — the update badge
+    private static readonly IBrush UpdateHover   = Palette.BrandHoverBrush;  // brightened while hovered
+    private static Color SepColor          => Palette.Active.Separator.ToColor();
+    private static readonly IBrush RowHoverBrush = Palette.OverlayRowHoverBrush;
+    private static Color UsageTrackColor   => Palette.Active.Track.ToColor();
+    private static Color ExpectedMarkColor => Palette.Active.ExpectedMark.ToColor();
 
     // Brand mark (the app icon), loaded once.
     private static readonly Bitmap? Brand = LoadBrand();

@@ -18,6 +18,8 @@ public class SettingsRegistryTests
     private static readonly HashSet<string> NotSettings = new()
     {
         nameof(AppSettings.ScratchText),
+        // Custom themes are managed by the Appearance page's designer, not a catalogue control.
+        nameof(AppSettings.CustomThemes),
         nameof(AppSettings.PendingUpdateVersion),
         nameof(AppSettings.LastSeenVersion),
         nameof(AppSettings.AutoStartOnFirstSession),

@@ -32,16 +32,16 @@ namespace Perch.Avalonia.Windows;
 internal sealed class SessionSwitcherWindow : Window
 {
     // Same status colours the overlay uses, so a session reads the same everywhere.
-    private static readonly Color RunningColor   = Color.FromRgb(34, 197, 94);
-    private static readonly Color AttentionColor = Color.FromRgb(251, 146, 60);
-    private static readonly Color AwaitingColor  = Color.FromRgb(250, 204, 21);
-    private static readonly Color ApiErrorColor  = Color.FromRgb(239, 68, 68);
-    private static readonly Color IdleColor      = Color.FromRgb(100, 116, 139);
+    private static Color RunningColor   => Palette.Green;
+    private static Color AttentionColor => Palette.Orange;
+    private static Color AwaitingColor  => Palette.Yellow;
+    private static Color ApiErrorColor  => Palette.Red;
+    private static Color IdleColor      => Palette.Idle;
 
-    private static readonly IBrush CardBg   = new SolidColorBrush(Color.FromRgb(15, 15, 20));
-    private static readonly IBrush Stroke   = new SolidColorBrush(Color.FromRgb(45, 45, 60));
-    private static readonly IBrush RowSel    = new SolidColorBrush(Color.FromRgb(40, 44, 62));
-    private static readonly IBrush SearchBg  = new SolidColorBrush(Color.FromRgb(24, 24, 34));
+    private static readonly IBrush CardBg   = Palette.OverlaySurfaceBrush;
+    private static readonly IBrush Stroke   = Palette.BorderBrush;
+    private static readonly IBrush RowSel    = new SolidColorBrush(Color.FromRgb(40, 44, 62));  // selection wash
+    private static readonly IBrush SearchBg  = Palette.FormBgBrush;
 
     private const string HintText = "↵ focus / reopen        Ctrl+↵ copy resume command";
 

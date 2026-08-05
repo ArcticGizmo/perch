@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.6] - 2026-08-05
+
+- Six colour themes on a new Appearance page — Midnight, Ember, Blush, Dim, High Contrast, and a Winamp tribute that has no business looking this good
+- Switching theme recolours the whole app at once: overlay, settings, every window
+- A theme designer — re-tint the chrome, pick an accent, live WCAG contrast readout with a one-click "Fix"
+- Accent picker is a proper spectrum-and-hue colour map
+- Colour-blind preview (protanopia / deuteranopia / tritanopia), so status colours don't blur into one
+- Save custom themes, and copy one to the clipboard as a code you can paste back to import
+- Keyboard focus is finally visible on the settings toggles (Space or Enter flips them)
+- The overlay's muted text was quietly failing contrast; it isn't anymore
+
+---
+
 ## [v0.3.5] - 2026-08-05
 
 - New read-only Change Review, from a session's right-click menu (on by default)

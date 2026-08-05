@@ -16,6 +16,7 @@ using Perch.Data;
 using Perch.Data.Hypertree;
 using Perch.Data.Replay;
 using Perch.Platform;
+using Perch.Theming;
 
 namespace Perch.Avalonia.Windows;
 
@@ -31,6 +32,10 @@ internal sealed class SettingsHooks
     /// <summary>Re-apply every overlay display gate + the monitor's data-layer flags (the App reads the
     /// mutated <see cref="AppSettings"/> back). Cheap and idempotent, so raised after any display change.</summary>
     public Action? DisplayChanged;
+
+    /// <summary>Re-resolve and apply the active colour theme app-wide (the App reads the mutated
+    /// <see cref="AppSettings.ActiveThemeId"/> back). Raised by the Appearance page after a theme is picked.</summary>
+    public Action? ThemeChanged;
 
     /// <summary>Start (true) or stop (false) the account-usage poll.</summary>
     public Action<bool>? UsageEnabledChanged;
@@ -105,7 +110,7 @@ internal sealed class SettingsWindow : Window
 {
     private const double NavWidth = 178;
 
-    private static readonly IBrush NavBg = new SolidColorBrush(Color.FromRgb(18, 18, 24));
+    private static readonly IBrush NavBg = Palette.SurfaceSunkenBrush;
 
     private readonly AppSettings _settings;
     private readonly UsageMonitorHost _usageHost;
@@ -181,6 +186,7 @@ internal sealed class SettingsWindow : Window
         // non-settings content (Getting started, Export, About, Changelog). Their builders are now
         // unreachable dead code, excised in a follow-up once verified in the running app.
         AddPage(nav, "search",       "Search",          BuildSearchPage);
+        AddAppearancePage(nav);
         AddFeaturesPage(nav);
         AddPage(nav, "start",        "Getting started", BuildGettingStartedPage);
         AddPage(nav, "stats",        "Session Stats",   BuildStatsPage);
@@ -254,6 +260,203 @@ internal sealed class SettingsWindow : Window
         _pages["features"] = grid;
         _contentHost.Children.Add(grid);
         AddNavItem(nav, "features", "Features");
+    }
+
+    private StackPanel _themeList = null!;
+    private readonly List<(string id, Button card)> _themeCards = new();
+
+    // The Appearance page: pick a colour theme from a list of swatch cards (built-ins + your custom themes),
+    // with the same docked live overlay preview the Features page uses, and a "Design a new theme…" button
+    // that opens the designer. Selecting a theme applies it app-wide immediately (via the ThemeChanged hook),
+    // repainting this window and the preview too — so the choice is seen at once.
+    private void AddAppearancePage(StackPanel nav)
+    {
+        var preview = new PreviewPane();
+        preview.Apply(_settings);
+
+        _themeList = new StackPanel { Margin = new Thickness(16), Spacing = 10 };
+        RebuildThemeList();
+
+        var cardsScroll = new ScrollViewer
+        {
+            Content = _themeList, IsVisible = true,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        Grid.SetColumn(cardsScroll, 0);
+
+        var dock = BuildPreviewDock(preview);
+        Grid.SetColumn(dock, 1);
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), IsVisible = false };
+        grid.Children.Add(cardsScroll);
+        grid.Children.Add(dock);
+
+        _pages["appearance"] = grid;
+        _contentHost.Children.Add(grid);
+        AddNavItem(nav, "appearance", "Appearance");
+    }
+
+    // (Re)populate the theme list — called on open and after a save/delete so custom themes stay in sync.
+    private void RebuildThemeList()
+    {
+        _themeList.Children.Clear();
+        _themeCards.Clear();
+
+        _themeList.Children.Add(SettingsUi.SectionTitle("Theme"));
+        _themeList.Children.Add(SettingsUi.BodyText(
+            "Pick a colour theme. Every theme keeps the status colours (running, waiting, error) identical, " +
+            "so the overlay stays glanceable — only the chrome and text are re-tinted. Contrast is checked " +
+            "against WCAG AA for every theme."));
+
+        foreach (var theme in ThemeCatalog.All(_settings.CustomThemes))
+            _themeList.Children.Add(BuildThemeRow(theme));
+        RestyleThemeCards();
+
+        var design = SettingsUi.FlatButton("+  Design a new theme…");
+        design.HorizontalAlignment = HorizontalAlignment.Left;
+        design.Margin = new Thickness(0, 6, 0, 0);
+        design.Click += (_, _) =>
+        {
+            var seed = ThemeCatalog.Resolve(_settings.ActiveThemeId, _settings.CustomThemes);
+            _ = new ThemeDesignerWindow(_settings, seed, onSaved: RebuildThemeList).ShowDialog(this);
+        };
+        _themeList.Children.Add(design);
+
+        // Import / export / share the active theme as a compact code (also QR-able).
+        var shareRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 2, 0, 0) };
+        var import = SettingsUi.FlatButton("Import from clipboard");
+        import.Click += async (_, _) =>
+        {
+            try
+            {
+                var text = Clipboard is null ? null : await Clipboard.TryGetTextAsync();
+                if (ThemeCodec.Decode(text) is not { } imported) return;   // not a Perch theme code — ignore
+                var id = UniqueThemeId(imported.Name);
+                _settings.CustomThemes ??= new();
+                _settings.CustomThemes.Add(imported with { Id = id });
+                _settings.ActiveThemeId = id;
+                _settings.Save();
+                _hooks.ThemeChanged?.Invoke();
+                RebuildThemeList();
+            }
+            catch { /* clipboard unavailable / bad data — no-op */ }
+        };
+        var export = SettingsUi.FlatButton("Copy active as code");
+        export.Click += async (_, _) =>
+        {
+            try
+            {
+                if (Clipboard is not null)
+                    await Clipboard.SetTextAsync(ThemeCodec.Encode(ActiveTheme()));
+            }
+            catch { }
+        };
+        shareRow.Children.Add(import);
+        shareRow.Children.Add(export);
+        _themeList.Children.Add(shareRow);
+    }
+
+    private Theme ActiveTheme() => ThemeCatalog.Resolve(_settings.ActiveThemeId, _settings.CustomThemes);
+
+    // A unique custom-theme id from a display name (mirrors the designer's), so an imported theme doesn't
+    // collide with an existing custom one or a built-in.
+    private string UniqueThemeId(string name)
+    {
+        var slug = new string((name ?? "theme").ToLowerInvariant()
+            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '-').ToArray()).Trim('-');
+        if (string.IsNullOrEmpty(slug)) slug = "theme";
+        var baseId = "custom-" + slug;
+        var taken = _settings.CustomThemes?.Select(t => t.Id).ToHashSet() ?? new();
+        if (!taken.Contains(baseId) && !ThemeCatalog.IsBuiltIn(baseId)) return baseId;
+        int n = 2;
+        while (taken.Contains($"{baseId}-{n}")) n++;
+        return $"{baseId}-{n}";
+    }
+
+    private void RestyleThemeCards()
+    {
+        foreach (var (id, card) in _themeCards)
+        {
+            bool active = id == _settings.ActiveThemeId;
+            card.BorderBrush = active ? Palette.AccentBrush : Palette.BorderBrush;
+            card.BorderThickness = new Thickness(active ? 2 : 1);
+        }
+    }
+
+    // A theme row: the swatch card, plus a Delete button for custom (non-built-in) themes.
+    private Control BuildThemeRow(Theme theme)
+    {
+        var id = theme.Id;
+        var card = BuildThemeCard(theme);
+        card.Click += (_, _) =>
+        {
+            if (_settings.ActiveThemeId == id) return;
+            _settings.ActiveThemeId = id;
+            _settings.Save();
+            _hooks.ThemeChanged?.Invoke();   // repaints the whole app, including this window + preview
+            RestyleThemeCards();
+        };
+        _themeCards.Add((id, card));
+
+        if (ThemeCatalog.IsBuiltIn(id)) return card;
+
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        Grid.SetColumn(card, 0);
+        var del = SettingsUi.FlatButton("Delete");
+        del.VerticalAlignment = VerticalAlignment.Center;
+        del.Margin = new Thickness(8, 0, 0, 0);
+        del.Click += (_, _) =>
+        {
+            _settings.CustomThemes?.RemoveAll(t => t.Id == id);
+            if (_settings.ActiveThemeId == id) _settings.ActiveThemeId = "midnight";
+            _settings.Save();
+            _hooks.ThemeChanged?.Invoke();
+            RebuildThemeList();
+        };
+        Grid.SetColumn(del, 1);
+        row.Children.Add(card);
+        row.Children.Add(del);
+        return row;
+    }
+
+    // One theme option: its name over a strip of swatches (surface, raised, text, accent + the semantic
+    // status hues + brand) so its character reads at a glance. The swatches show that theme's own colours,
+    // independent of which theme is currently active.
+    private static Button BuildThemeCard(Theme t)
+    {
+        var swatches = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 8, 0, 0),
+        };
+        foreach (var rgb in new[]
+                 {
+                     t.Surface, t.SurfaceRaised, t.TextPrimary, t.Accent,
+                     t.StatusRunning, t.StatusAwaiting, t.StatusError, t.Brand,
+                 })
+        {
+            swatches.Children.Add(new Border
+            {
+                Width = 22, Height = 22, CornerRadius = new CornerRadius(4),
+                Background = rgb.ToBrush(),
+                BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
+            });
+        }
+
+        var name = new TextBlock
+        {
+            Text = t.Name, FontSize = 14, FontWeight = FontWeight.SemiBold, Foreground = Palette.TitleBrush,
+        };
+
+        return new Button
+        {
+            Content = new StackPanel { Children = { name, swatches } },
+            Background = Palette.ButtonBgBrush,
+            BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6), Padding = new Thickness(12, 10),
+            HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left,
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
     }
 
     private static Control BuildPreviewDock(PreviewPane preview)
