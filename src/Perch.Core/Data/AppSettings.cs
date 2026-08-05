@@ -236,6 +236,12 @@ internal sealed class AppSettings
     // feature costs nothing when disabled. A missing key keeps it off.
     public bool ShowGitStats { get; set; }
 
+    // Whether the per-session right-click menu offers "Review changes…", which opens the read-only git
+    // Change Review window for that session's working directory. Off by default (experimental). Purely
+    // gates the menu action — nothing runs in the background while off (and even on, git is only invoked
+    // on demand while the window is open), so it costs nothing when disabled. A missing key keeps it off.
+    public bool ShowGitReview { get; set; }
+
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
     // MigrateQuickLinks) with the well-known presets, honouring the legacy switches below. An empty

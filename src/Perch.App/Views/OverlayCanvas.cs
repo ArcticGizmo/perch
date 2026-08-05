@@ -916,6 +916,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // wires only their triggers.
     private bool _externalNotifyAvailable;
     private bool _confettiAvailable;
+    private bool _reviewChangesAvailable;
     private readonly HashSet<string> _confettiSessions = new();
 
     /// <summary>Raised when the user picks "Exit Perch" from the header's right-click menu.</summary>
@@ -960,6 +961,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// is Phase 5; this wires only the trigger. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
     internal event Action<ClaudeSession>? QrRequested;
 
+    /// <summary>Raised when the user picks "Review changes…" for a session. The app opens the read-only git
+    /// Change Review window on the session's working directory. Gated by <see cref="_reviewChangesAvailable"/>
+    /// and a cheap repo check. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
+    internal event Action<ClaudeSession>? ReviewChangesRequested;
+
     /// <summary>Whether external (ntfy) notifications are switched on globally — gates the right-click
     /// enable/disable item. (The per-row mail glyph reads the session's own state.)</summary>
     public void SetExternalNotificationsAvailable(bool available)
@@ -976,6 +982,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (_confettiAvailable == available) return;
         _confettiAvailable = available;
         if (!available) _confettiSessions.Clear();
+        InvalidateVisual();
+    }
+
+    /// <summary>Whether the experimental git Change Review feature is switched on globally — gates the
+    /// right-click "Review changes…" item (which also requires the session's cwd to be a git repo).</summary>
+    public void SetReviewChangesAvailable(bool available)
+    {
+        if (_reviewChangesAvailable == available) return;
+        _reviewChangesAvailable = available;
         InvalidateVisual();
     }
 
@@ -2980,6 +2995,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 string label = ConfettiArmed(s) ? "Cancel confetti finish" : "Confetti finish";
                 items.Add(MenuItem(label, () => ToggleConfetti(s.SessionId)));
             }
+
+            // Git change review applies to a real session row whose cwd is a git working tree, and only
+            // while switched on globally. The repo check is a cheap filesystem walk (no process spawn).
+            if (!subRow && _reviewChangesAvailable && GitRepoService.IsRepo(s.Cwd))
+                items.Add(MenuItem("Review changes…", () => ReviewChangesRequested?.Invoke(s)));
 
             // Terminate goes last and behind a separator — it's the only destructive item here, and a
             // mis-click costs the user a running session. Sub-agent rows are excluded: they have no

@@ -40,6 +40,7 @@ public partial class App : Application
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
     private HistoryWindow? _historyWindow;
+    private GitReviewWindow? _reviewWindow;
     // Open sticky notes, keyed so a second request for the same note focuses the existing one rather than
     // stacking a duplicate: "__scratch__" for the global pad, the sessionId for a session's row note. They
     // are non-modal and owned by the overlay (see StickyNoteWindow); closed together in CloseAuxWindows.
@@ -213,6 +214,7 @@ public partial class App : Application
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
             _overlay.Canvas.NoteEditRequested += OnEditNote;
+            _overlay.Canvas.ReviewChangesRequested += OnReviewChanges;
             _overlay.Canvas.NoteClearRequested += sessionId => _monitorHost?.SetNote(sessionId, null);
             _overlay.Canvas.TerminateRequested += OnTerminateSession;
             _overlay.Canvas.ScratchPadRequested += OnOpenScratchPad;
@@ -377,6 +379,7 @@ public partial class App : Application
     {
         _settings?.Close();
         _historyWindow?.Close();
+        _reviewWindow?.Close();
         _statsWindow?.Close();
         _daemonListWindow?.Close();
         _achievementsWindow?.Close();
@@ -739,6 +742,18 @@ public partial class App : Application
     private void OpenStats() =>
         _statsWindow = WindowHost.ShowOrFocus(_statsWindow,
             () => new StatsWindow(_appSettings ?? AppSettings.Load()), () => _statsWindow = null);
+
+    // "Review changes…" (overlay row) — opens/focuses the one read-only git Change Review window and points
+    // it at the clicked session's working directory. The menu item only appears when the feature is on and
+    // the cwd is a git repo (see OverlayCanvas), so this just re-points the reused window.
+    private void OnReviewChanges(ClaudeSession session)
+    {
+        var pr = session.PullRequest;
+        _reviewWindow = WindowHost.ShowOrFocus(_reviewWindow,
+            () => new GitReviewWindow(),
+            () => _reviewWindow = null,
+            w => w.Retarget(session.Cwd, session.DisplayName, pr));
+    }
 
     private void OpenAchievements() =>
         _achievementsWindow = WindowHost.ShowOrFocus(_achievementsWindow,
