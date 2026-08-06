@@ -7,10 +7,14 @@
 - **Phase 1 — consume at startup** ✅ done (`PlaceAtInitialFloating`, `DenseController.SeedPlacement`).
 - **Phase 2 — header menu + editor shell** ✅ done (`SetPlacementsRequested`, `PlacementEditorWindow`).
 - **Phase 3 — drag + HUD + guides + live apply** ✅ done (single-monitor MVP).
+- **Phase 5 — polish / discoverability / docs** ✅ done (the "Initial overlay placement" setting under
+  Advanced — Features card + search — opens the editor via the `OpenPlacements` hook; `CLAUDE.md` note;
+  headless render of the settings surfaces stays clean). The editor window itself is standard Avalonia
+  controls, not an owner-drawn surface, so it isn't part of `render`; verify it by running the tray app.
 - **Phase 4 — multi-monitor** ⏳ not started.
-- **Phase 5 — polish / tests / docs** ⏳ not started.
 
-Not yet visually verified in the running app — build + unit tests green; a live eyeball is pending.
+The editor UI is not yet eyeballed in the running app — build + unit tests + settings-surface render are
+green; a live look at the editor window is pending.
 
 ## Goal
 

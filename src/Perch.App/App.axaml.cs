@@ -1242,6 +1242,7 @@ public partial class App : Application
             OpenStats = OpenStats,
             OpenFlightPath = OpenFlightPath,
             OpenAchievements = OpenAchievements,
+            OpenPlacements = OpenPlacementEditor,
         };
         _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);
