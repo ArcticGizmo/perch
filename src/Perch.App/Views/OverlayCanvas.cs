@@ -233,6 +233,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _denseCtl.SeedPlacement(dense);
     }
 
+    /// <summary>Adopts new placements from the editor and applies them to the running overlay: the floating
+    /// one re-positions the window now (when floating), the dense one moves the strip now (when dense) and
+    /// otherwise takes effect on the next dense entry. Null on either resets that mode to its default.</summary>
+    public void ApplyPlacementsLive(OverlayPlacement? floating, OverlayPlacement? dense)
+    {
+        _floatingPlacement = floating;
+        _denseCtl.ApplyPlacement(dense);
+        if (!_denseCtl.IsDense) PlaceAtInitialFloating();
+    }
+
     // ── IDenseHost (geometry lives on the window) ──
     // The owning window, set by LiveOverlayWindow. VisualRoot resolves to an internal TopLevelHost (not
     // the Window), so we can't reach Position / Screens / BeginMoveDrag through it — hold a direct ref.

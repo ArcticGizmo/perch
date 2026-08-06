@@ -788,11 +788,7 @@ public partial class App : Application
         s.FloatingPlacement = floating;
         s.DensePlacement = dense;
         s.Save();
-        if (_overlay is { } o)
-        {
-            o.Canvas.SetInitialPlacements(floating, dense);
-            if (!o.Canvas.IsDense) o.Canvas.PlaceAtInitialFloating();
-        }
+        _overlay?.Canvas.ApplyPlacementsLive(floating, dense);
     }
 
     // "Review changes…" (overlay row) — opens/focuses the one read-only git Change Review window and points

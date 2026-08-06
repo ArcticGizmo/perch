@@ -1,5 +1,7 @@
 using Avalonia;
+using Avalonia.Collections;
 using Avalonia.Controls;
+using Avalonia.Controls.Shapes;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -57,6 +59,20 @@ internal sealed class PlacementEditorWindow : Window
     private Button _floatingModeBtn = null!;
     private Button _denseModeBtn = null!;
 
+    // The two dashed guides from the preview's anchored corner out to the nearest screen edges, and the
+    // pill that reads back the live distances.
+    private readonly Line _guideH = MakeGuide();
+    private readonly Line _guideV = MakeGuide();
+    private readonly Border _hud;
+    private readonly TextBlock _hudText = new()
+    {
+        Foreground = Palette.FgBrush, FontSize = 12, FontWeight = FontWeight.Bold,
+    };
+
+    // Drag state: whether a drag is in progress and the pointer's grab offset within the preview (DIP).
+    private bool _dragging;
+    private Point _grab;
+
     public PlacementEditorWindow(PlacementEditorContext ctx)
     {
         _ctx = ctx;
@@ -85,13 +101,35 @@ internal sealed class PlacementEditorWindow : Window
             BorderBrush = Palette.AccentBrush,
             BorderThickness = new Thickness(2),
             CornerRadius = new CornerRadius(8),
+            Cursor = new Cursor(StandardCursorType.SizeAll),
             Child = _mockLabel,
         };
+        _mock.PointerPressed += OnMockPressed;
+        _mock.PointerMoved += OnMockMoved;
+        _mock.PointerReleased += OnMockReleased;
+
+        _hud = new Border
+        {
+            Background = Palette.ButtonBgBrush, BorderBrush = Palette.BorderBrush,
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(8, 4), Child = _hudText, IsHitTestVisible = false,
+        };
+
+        // Guides sit under the preview; the preview and HUD over them.
+        _canvas.Children.Add(_guideH);
+        _canvas.Children.Add(_guideV);
         _canvas.Children.Add(_mock);
+        _canvas.Children.Add(_hud);
 
         Content = BuildContent();
         RefreshMock();
     }
+
+    private static Line MakeGuide() => new()
+    {
+        Stroke = Palette.AccentBrush, StrokeThickness = 1,
+        StrokeDashArray = new AvaloniaList<double> { 4, 3 }, IsHitTestVisible = false,
+    };
 
     private Control BuildContent()
     {
@@ -100,7 +138,7 @@ internal sealed class PlacementEditorWindow : Window
 
         var instructions = new TextBlock
         {
-            Text = "Position the preview where the overlay should first appear, then choose Done.\n" +
+            Text = "Drag the preview to where the overlay should first appear, then choose Done.\n" +
                    "Placement is measured from the nearest corner, so it sticks if your resolution changes.",
             Foreground = Palette.FgBrush, FontSize = 14, TextAlignment = TextAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top,
@@ -166,9 +204,84 @@ internal sealed class PlacementEditorWindow : Window
     private (double W, double H) CurrentSizeDip() =>
         _mode == EditMode.Floating ? _ctx.FloatSizeDip : _ctx.DenseSizeDip;
 
-    // Positions and sizes the preview for the current mode, and reflects the mode in the toolbar. The mock's
-    // Canvas coordinates are DIP relative to the window's top-left, which maps to the screen's bounds origin.
+    // Positions and sizes the preview for the current mode, draws the guides to the anchored edges, updates
+    // the distance HUD, and reflects the mode in the toolbar. Canvas coordinates are DIP relative to the
+    // window's top-left, which maps to the screen's bounds origin.
     private void RefreshMock()
+    {
+        var screen = _ctx.TargetScreen;
+        var wa = screen.WorkingArea;
+        var bounds = screen.Bounds;
+        double scale = screen.Scaling;
+        var p = CurrentPlacement();
+
+        var (dipW, dipH) = CurrentSizeDip();
+        int physW = Math.Max(1, (int)(dipW * scale));
+        int physH = Math.Max(1, (int)(dipH * scale));
+
+        var (px, py) = PlacementMath.ToPosition(p, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
+        double leftDip = (px - bounds.X) / scale;
+        double topDip = (py - bounds.Y) / scale;
+
+        _mock.Width = dipW;
+        _mock.Height = dipH;
+        Canvas.SetLeft(_mock, leftDip);
+        Canvas.SetTop(_mock, topDip);
+        _mockLabel.Text = _mode == EditMode.Floating ? "Overlay\npreview" : "Dense";
+
+        // Guides run from the preview's anchored corner out to the two nearest work-area edges.
+        double cornerX = p.HAnchor == HAnchor.Left ? leftDip : leftDip + dipW;
+        double cornerY = p.VAnchor == VAnchor.Top ? topDip : topDip + dipH;
+        double edgeX = ((p.HAnchor == HAnchor.Left ? wa.X : wa.X + wa.Width) - bounds.X) / scale;
+        double edgeY = ((p.VAnchor == VAnchor.Top ? wa.Y : wa.Y + wa.Height) - bounds.Y) / scale;
+        _guideH.StartPoint = new Point(cornerX, cornerY);
+        _guideH.EndPoint = new Point(edgeX, cornerY);
+        _guideV.StartPoint = new Point(cornerX, cornerY);
+        _guideV.EndPoint = new Point(cornerX, edgeY);
+
+        string hLabel = p.HAnchor == HAnchor.Left ? "Left" : "Right";
+        string vLabel = p.VAnchor == VAnchor.Top ? "Top" : "Bottom";
+        _hudText.Text = _mode == EditMode.Dense
+            ? $"{hLabel} edge  ·  {vLabel} {p.OffsetY:0} px"
+            : $"{vLabel} {p.OffsetY:0} px  ·  {hLabel} {p.OffsetX:0} px";
+
+        // Park the HUD just below the preview, or above it if that would run off the bottom.
+        _hud.Measure(Size.Infinity);
+        double hudY = topDip + dipH + 6;
+        if (hudY + _hud.DesiredSize.Height > Height) hudY = topDip - _hud.DesiredSize.Height - 6;
+        Canvas.SetLeft(_hud, Math.Max(0, leftDip));
+        Canvas.SetTop(_hud, Math.Max(0, hudY));
+
+        // Highlight the active mode button.
+        _floatingModeBtn.FontWeight = _mode == EditMode.Floating ? FontWeight.Bold : FontWeight.Normal;
+        _denseModeBtn.FontWeight = _mode == EditMode.Dense ? FontWeight.Bold : FontWeight.Normal;
+    }
+
+    private void OnMockPressed(object? sender, PointerPressedEventArgs e)
+    {
+        var pos = e.GetPosition(_canvas);
+        _grab = new Point(pos.X - Canvas.GetLeft(_mock), pos.Y - Canvas.GetTop(_mock));
+        _dragging = true;
+        e.Pointer.Capture(_mock);
+    }
+
+    private void OnMockMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_dragging) return;
+        var pos = e.GetPosition(_canvas);
+        UpdateFromDipTopLeft(pos.X - _grab.X, pos.Y - _grab.Y);
+    }
+
+    private void OnMockReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _dragging = false;
+        e.Pointer.Capture(null);
+    }
+
+    // Turns a dragged DIP top-left into a stored, corner-anchored placement for the current mode: clamp
+    // on-screen, snap dense to the nearer edge (its X is edge-locked), then re-derive via PlacementMath and
+    // stamp the target monitor. RefreshMock then re-lays everything out from the stored value.
+    private void UpdateFromDipTopLeft(double leftDip, double topDip)
     {
         var screen = _ctx.TargetScreen;
         var wa = screen.WorkingArea;
@@ -179,18 +292,27 @@ internal sealed class PlacementEditorWindow : Window
         int physW = Math.Max(1, (int)(dipW * scale));
         int physH = Math.Max(1, (int)(dipH * scale));
 
-        var (px, py) = PlacementMath.ToPosition(CurrentPlacement(),
-            wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
+        int physX = bounds.X + (int)Math.Round(leftDip * scale);
+        int physY = bounds.Y + (int)Math.Round(topDip * scale);
+        (physX, physY) = PlacementMath.Clamp(physX, physY, wa.X, wa.Y, wa.Width, wa.Height, physW, physH);
 
-        _mock.Width = dipW;
-        _mock.Height = dipH;
-        Canvas.SetLeft(_mock, (px - bounds.X) / scale);
-        Canvas.SetTop(_mock, (py - bounds.Y) / scale);
-        _mockLabel.Text = _mode == EditMode.Floating ? "Overlay\npreview" : "Dense";
+        if (_mode == EditMode.Dense)
+        {
+            // Dense is edge-docked: snap horizontally to whichever edge is nearer.
+            bool left = physX - wa.X <= wa.X + wa.Width - (physX + physW);
+            physX = left ? wa.X : wa.X + wa.Width - physW;
+        }
 
-        // Highlight the active mode button.
-        _floatingModeBtn.FontWeight = _mode == EditMode.Floating ? FontWeight.Bold : FontWeight.Normal;
-        _denseModeBtn.FontWeight = _mode == EditMode.Dense ? FontWeight.Bold : FontWeight.Normal;
+        var placement = PlacementMath.FromPosition(physX, physY, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
+        placement.MonitorX = bounds.X;
+        placement.MonitorY = bounds.Y;
+        placement.MonitorW = bounds.Width;
+        placement.MonitorH = bounds.Height;
+
+        if (_mode == EditMode.Floating) _floating = placement;
+        else { placement.OffsetX = 0; _dense = placement; }
+
+        RefreshMock();
     }
 
     private void Commit()

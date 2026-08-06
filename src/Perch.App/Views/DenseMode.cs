@@ -179,14 +179,36 @@ internal sealed class DenseController : IDisposable
     // Seeds the user-defined initial dense placement before the window is shown. The edge and monitor
     // apply straight away (pure data); the vertical position is resolved lazily on first Enter, when a
     // live screen and scale exist. Null leaves the built-in default (right edge, primary, top-gap Y).
-    public void SeedPlacement(OverlayPlacement? p)
+    public void SeedPlacement(OverlayPlacement? p) => AdoptPlacement(p, reposition: false);
+
+    // Live adoption from the placement editor: like SeedPlacement, but re-derives the strip Y from the new
+    // placement (or default) and moves the strip immediately when dense mode is currently showing.
+    public void ApplyPlacement(OverlayPlacement? p) => AdoptPlacement(p, reposition: true);
+
+    private void AdoptPlacement(OverlayPlacement? p, bool reposition)
     {
-        if (p is null) return;
         _seededPlacement = p;
-        _denseSide = p.HAnchor == HAnchor.Left ? DenseSide.Left : DenseSide.Right;
-        if (p.MonitorX is { } mx && p.MonitorY is { } my && p.MonitorW is { } mw && p.MonitorH is { } mh)
-            _denseScreenBounds = new PixelRect(mx, my, mw, mh);
+        _denseSide = p is { HAnchor: HAnchor.Left } ? DenseSide.Left : DenseSide.Right;
+        _denseScreenBounds = ScreenBoundsOf(p);
+        if (!reposition) return;
+
+        _denseYInit = false; // re-derive Y from the new placement (or default) on next entry
+        if (_dense)
+        {
+            var s = DenseScreen();
+            _denseY = _seededPlacement is { } sp
+                ? SeededDenseY(sp, s)
+                : s.WorkingArea.Y + (int)(DenseTopGapDefault * s.Scaling);
+            _denseYInit = true;
+            _host.RelayoutWindow();
+            _host.Invalidate();
+        }
     }
+
+    private static PixelRect? ScreenBoundsOf(OverlayPlacement? p) =>
+        p is { MonitorX: { } mx, MonitorY: { } my, MonitorW: { } mw, MonitorH: { } mh }
+            ? new PixelRect(mx, my, mw, mh)
+            : null;
 
     // Physical Y for a seeded placement: its DIP vertical offset from the anchored (top/bottom) work-area
     // edge, using the current strip height, clamped on-screen. Mirrors PlacementMath's vertical axis (X is
