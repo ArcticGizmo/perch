@@ -96,7 +96,7 @@ internal sealed class SettingsCatalogView : StackPanel
         {
             bool on = Nullable.Equals(surface, _active);
             chip.Background = on ? Palette.AccentBrush : Palette.ButtonBgBrush;
-            chip.Foreground = on ? Brushes.Black : Palette.MutedBrush;
+            chip.Foreground = on ? Palette.OnAccentBrush : Palette.MutedBrush;
             chip.BorderBrush = on ? Palette.AccentBrush : Palette.BorderBrush;
         }
     }

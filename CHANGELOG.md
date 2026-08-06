@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.9] - 2026-08-06
+
+- Edit a custom theme after saving it (creating one is no longer a one-way door)
+- Theme designer's Save/Cancel stay pinned; the preview scrolls instead of shoving them off-screen
+- Text on accent-coloured buttons flips black or white, whichever you can actually read
+
+---
+
 ## [v0.3.8] - 2026-08-06
 
 - Right-click the note button to search across all your projects

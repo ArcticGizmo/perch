@@ -132,7 +132,7 @@ internal sealed class WrappedWindow : Window
     {
         Content = text, Height = 38, MinWidth = 128, Padding = new Thickness(14, 0),
         Background = primary ? new SolidColorBrush(Theming.Palette.Accent) : BtnBg,
-        Foreground = primary ? Brushes.White : Fg,
+        Foreground = primary ? Theming.Palette.OnAccentBrush : Fg,
         BorderBrush = Stroke, BorderThickness = new Thickness(1),
         HorizontalContentAlignment = HorizontalAlignment.Center,
         VerticalContentAlignment = VerticalAlignment.Center,

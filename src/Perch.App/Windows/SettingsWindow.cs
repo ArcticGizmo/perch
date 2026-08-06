@@ -401,8 +401,17 @@ internal sealed class SettingsWindow : Window
 
         if (ThemeCatalog.IsBuiltIn(id)) return card;
 
-        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto") };
         Grid.SetColumn(card, 0);
+
+        // Edit re-opens the designer seeded from this custom theme; saving replaces it in place.
+        var edit = SettingsUi.FlatButton("Edit");
+        edit.VerticalAlignment = VerticalAlignment.Center;
+        edit.Margin = new Thickness(8, 0, 0, 0);
+        edit.Click += (_, _) =>
+            _ = new ThemeDesignerWindow(_settings, theme, onSaved: RebuildThemeList, editingId: id).ShowDialog(this);
+        Grid.SetColumn(edit, 1);
+
         var del = SettingsUi.FlatButton("Delete");
         del.VerticalAlignment = VerticalAlignment.Center;
         del.Margin = new Thickness(8, 0, 0, 0);
@@ -414,8 +423,9 @@ internal sealed class SettingsWindow : Window
             _hooks.ThemeChanged?.Invoke();
             RebuildThemeList();
         };
-        Grid.SetColumn(del, 1);
+        Grid.SetColumn(del, 2);
         row.Children.Add(card);
+        row.Children.Add(edit);
         row.Children.Add(del);
         return row;
     }

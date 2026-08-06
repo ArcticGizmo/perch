@@ -34,6 +34,7 @@ public static class Palette
         TitleBrush.Color    = theme.TextTitle.ToColor();
         MutedBrush.Color    = theme.TextMuted.ToColor();
         AccentBrush.Color   = theme.Accent.ToColor();
+        OnAccentBrush.Color = Contrast.BestForeground(theme.Accent).ToColor();
         BorderBrush.Color   = theme.Border.ToColor();
         ButtonBgBrush.Color = theme.SurfaceRaised.ToColor();
         TrackBrush.Color    = theme.Track.ToColor();
@@ -68,6 +69,8 @@ public static class Palette
     public static Color Muted       => Active.TextMuted.ToColor();
     public static Color Accent      => Active.Accent.ToColor();
     public static Color AccentHover => Active.AccentHover.ToColor();
+    // Black or white, whichever reads on the current accent — the foreground for accent-filled buttons/chips.
+    public static Color OnAccent    => Contrast.BestForeground(Active.Accent).ToColor();
     public static Color Border      => Active.Border.ToColor();
     public static Color ButtonBg    => Active.SurfaceRaised.ToColor();
     public static Color ButtonHover => Active.SurfaceRaisedHover.ToColor();
@@ -134,6 +137,7 @@ public static class Palette
     public static readonly SolidColorBrush TitleBrush    = new(Themes.Midnight.TextTitle.ToColor());
     public static readonly SolidColorBrush MutedBrush    = new(Themes.Midnight.TextMuted.ToColor());
     public static readonly SolidColorBrush AccentBrush   = new(Themes.Midnight.Accent.ToColor());
+    public static readonly SolidColorBrush OnAccentBrush = new(Contrast.BestForeground(Themes.Midnight.Accent).ToColor());
     public static readonly SolidColorBrush BorderBrush   = new(Themes.Midnight.Border.ToColor());
     public static readonly SolidColorBrush ButtonBgBrush = new(Themes.Midnight.SurfaceRaised.ToColor());
     public static readonly SolidColorBrush TrackBrush    = new(Themes.Midnight.Track.ToColor());

@@ -91,6 +91,7 @@ internal sealed class ChangelogWindow : Window
 
         var close = SettingsUi.FlatButton("Close");
         close.Background = Palette.AccentBrush;
+        close.Foreground = Palette.OnAccentBrush;
         close.MinWidth = 84;
         close.Click += (_, _) => Close();
 

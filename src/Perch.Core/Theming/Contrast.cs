@@ -44,6 +44,17 @@ public static class Contrast
     /// <summary>True when the pair meets the AAA body-text floor.</summary>
     public static bool PassesAAA(Rgb fg, Rgb bg) => Ratio(fg, bg) >= AaaText;
 
+    /// <summary>Picks black or white — whichever has the higher contrast ratio on
+    /// <paramref name="bg"/> — for legible text/glyphs painted over a solid fill (e.g. an accent-tinted
+    /// button). The standard "readable on any background" choice; on a mid-tone it leans white, matching the
+    /// WCAG note that white wins until the background is fairly light.</summary>
+    public static Rgb BestForeground(Rgb bg)
+    {
+        var white = new Rgb(255, 255, 255);
+        var black = new Rgb(0, 0, 0);
+        return Ratio(white, bg) >= Ratio(black, bg) ? white : black;
+    }
+
     // sRGB -> linear for one channel (the WCAG piecewise transfer function).
     private static double Linearise(byte channel)
     {

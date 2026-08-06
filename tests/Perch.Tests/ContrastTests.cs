@@ -35,6 +35,28 @@ public class ContrastTests
     }
 
     [Fact]
+    public void BestForeground_PicksWhiteOnDark_BlackOnLight()
+    {
+        var white = new Rgb(255, 255, 255);
+        var black = new Rgb(0, 0, 0);
+        Assert.Equal(white, Contrast.BestForeground(new Rgb(20, 24, 40)));    // dark navy accent -> white text
+        Assert.Equal(black, Contrast.BestForeground(new Rgb(250, 220, 90)));  // light yellow accent -> black text
+    }
+
+    [Fact]
+    public void BestForeground_AlwaysBeatsTheOtherChoice()
+    {
+        // Whatever it returns must have at least the contrast of the alternative, for any background.
+        foreach (var bg in new[] { new Rgb(0, 0, 0), new Rgb(255, 255, 255), new Rgb(128, 128, 128),
+                                    new Rgb(255, 68, 45), new Rgb(56, 189, 248), new Rgb(120, 200, 120) })
+        {
+            var pick = Contrast.BestForeground(bg);
+            var other = pick == new Rgb(255, 255, 255) ? new Rgb(0, 0, 0) : new Rgb(255, 255, 255);
+            Assert.True(Contrast.Ratio(pick, bg) >= Contrast.Ratio(other, bg));
+        }
+    }
+
+    [Fact]
     public void Hex_RoundTrips()
     {
         Assert.Equal(new Rgb(255, 68, 45), Rgb.FromHex("#ff442d"));

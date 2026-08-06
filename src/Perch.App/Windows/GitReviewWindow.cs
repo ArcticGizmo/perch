@@ -95,7 +95,7 @@ internal sealed class GitReviewWindow : Window
         _prChip = new Button
         {
             IsVisible = false, VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(10, 4),
-            Background = new SolidColorBrush(Palette.Accent), Foreground = Brushes.White,
+            Background = new SolidColorBrush(Palette.Accent), Foreground = Palette.OnAccentBrush,
             [DockPanel.DockProperty] = Dock.Right,
         };
         _prChip.Click += (_, _) =>
@@ -700,7 +700,7 @@ internal sealed class GitReviewWindow : Window
         static void Style(Button b, bool active)
         {
             b.Background = active ? new SolidColorBrush(Palette.Accent) : Palette.ButtonBgBrush;
-            b.Foreground = active ? Brushes.White : Palette.FgBrush;
+            b.Foreground = active ? Palette.OnAccentBrush : Palette.FgBrush;
         }
     }
 

@@ -137,7 +137,7 @@ internal sealed class AchievementCardWindow : Window
     {
         Content = text, Height = 40, MinWidth = 132, Padding = new Thickness(16, 0),
         Background = primary ? new SolidColorBrush(Palette.Accent) : new SolidColorBrush(Palette.ButtonBg),
-        Foreground = primary ? Brushes.White : new SolidColorBrush(Palette.Fg),
+        Foreground = primary ? Palette.OnAccentBrush : new SolidColorBrush(Palette.Fg),
         BorderBrush = new SolidColorBrush(Palette.Border), BorderThickness = new Thickness(1),
         HorizontalContentAlignment = HorizontalAlignment.Center,
         VerticalContentAlignment = VerticalAlignment.Center,

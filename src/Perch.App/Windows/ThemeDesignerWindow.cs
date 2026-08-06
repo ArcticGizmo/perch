@@ -28,6 +28,7 @@ internal sealed class ThemeDesignerWindow : Window
     private readonly AppSettings _settings;
     private readonly Theme _restore;      // reverted to if the designer is cancelled/closed
     private readonly Action _onSaved;
+    private readonly string? _editingId;  // non-null when editing an existing custom theme (replace, don't add)
 
     private Theme _base;                  // the starting theme (its lightness ramp + inherited roles)
     private double _hue, _chroma;
@@ -64,16 +65,25 @@ internal sealed class ThemeDesignerWindow : Window
         new("Borders",               t => t.Border,      (t, c) => t with { Border = c },      t => t.Surface,        Contrast.NonText, true),
     ];
 
-    public ThemeDesignerWindow(AppSettings settings, Theme seed, Action onSaved)
+    /// <param name="seed">The theme the draft starts from — the active theme when creating, or the theme
+    /// being edited when <paramref name="editingId"/> is set.</param>
+    /// <param name="editingId">When non-null, the designer edits that existing custom theme: it opens seeded
+    /// from it (name and all), and saving replaces the matching <see cref="AppSettings.CustomThemes"/> entry
+    /// in place rather than appending a new one.</param>
+    public ThemeDesignerWindow(AppSettings settings, Theme seed, Action onSaved, string? editingId = null)
     {
         _settings = settings;
-        _restore = seed;
+        // Cancelling reverts to whatever was genuinely active before the designer opened — not the seed,
+        // which for an edit may be a non-active theme.
+        _restore = ThemeCatalog.Resolve(settings.ActiveThemeId, settings.CustomThemes);
         _onSaved = onSaved;
+        _editingId = editingId;
         _base = seed;
         _draft = seed;
         _accent = seed.Accent;
+        if (editingId is not null) _name = seed.Name;
 
-        Title = "Theme designer";
+        Title = editingId is null ? "Theme designer" : "Edit theme";
         Width = 900;
         Height = 780;
         MinWidth = 760;
@@ -95,6 +105,7 @@ internal sealed class ThemeDesignerWindow : Window
         // Bottom bar — always visible, so Save/Cancel never scroll off.
         var save = SettingsUi.FlatButton("Save theme");
         save.Background = Palette.AccentBrush;
+        save.Foreground = Palette.OnAccentBrush;
         save.Click += (_, _) => Save();
         var cancel = SettingsUi.FlatButton("Cancel");
         cancel.Click += (_, _) => Close();
@@ -116,13 +127,24 @@ internal sealed class ThemeDesignerWindow : Window
         Grid.SetColumn(BuildControls(out var controlsScroll), 0);
         center.Children.Add(controlsScroll);
 
-        var right = new StackPanel { Spacing = 10, Width = 280, Margin = new Thickness(16, 0, 0, 0) };
-        right.Children.Add(new TextBlock
+        // The preview can be taller than the window, so it scrolls inside its own column — otherwise its
+        // height would drive the whole layout and shove the docked footer (Save/Cancel) off-screen.
+        var right = new DockPanel { Width = 280, Margin = new Thickness(16, 0, 0, 0) };
+        var previewLabel = new TextBlock
         {
             Text = "LIVE PREVIEW", FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = Palette.MutedBrush,
-        });
+            Margin = new Thickness(0, 0, 0, 10),
+        };
+        DockPanel.SetDock(previewLabel, Dock.Top);
+        right.Children.Add(previewLabel);
+
         _preview.Apply(_settings);
-        right.Children.Add(_preview);
+        right.Children.Add(new ScrollViewer
+        {
+            Content = _preview,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        });
         Grid.SetColumn(right, 1);
         center.Children.Add(right);
 
@@ -222,7 +244,11 @@ internal sealed class ThemeDesignerWindow : Window
     private void RestyleCvd()
     {
         foreach (var (type, btn) in _cvdButtons)
-            btn.Background = type == _cvd ? Palette.AccentBrush : Palette.ButtonBgBrush;
+        {
+            bool on = type == _cvd;
+            btn.Background = on ? Palette.AccentBrush : Palette.ButtonBgBrush;
+            btn.Foreground = on ? Palette.OnAccentBrush : Palette.FgBrush;
+        }
     }
 
     // Reset every control to a starting theme, then apply.
@@ -358,12 +384,24 @@ internal sealed class ThemeDesignerWindow : Window
 
     private void Save()
     {
-        var id = UniqueId(_name);
-        var toSave = _draft with { Id = id, Name = string.IsNullOrWhiteSpace(_name) ? "My Theme" : _name.Trim() };
+        var name = string.IsNullOrWhiteSpace(_name) ? "My Theme" : _name.Trim();
+        var list = _settings.CustomThemes ??= new();
 
-        _settings.CustomThemes ??= new();
-        _settings.CustomThemes.Add(toSave);
-        _settings.ActiveThemeId = id;
+        Theme toSave;
+        if (_editingId is { } editId)
+        {
+            toSave = _draft with { Id = editId, Name = name };
+            var idx = list.FindIndex(t => t.Id == editId);
+            if (idx >= 0) list[idx] = toSave; else list.Add(toSave);   // add if it vanished under us
+            _settings.ActiveThemeId = editId;
+        }
+        else
+        {
+            var id = UniqueId(name);
+            toSave = _draft with { Id = id, Name = name };
+            list.Add(toSave);
+            _settings.ActiveThemeId = id;
+        }
         _settings.Save();
 
         _saved = true;

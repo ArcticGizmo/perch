@@ -119,7 +119,7 @@ internal sealed class StatsWindow : Window
         {
             bool active = scope == _scope;
             b.Background = active ? new SolidColorBrush(Palette.Accent) : new SolidColorBrush(Palette.ButtonBg);
-            b.Foreground = active ? Brushes.White : Palette.FgBrush;
+            b.Foreground = active ? Palette.OnAccentBrush : Palette.FgBrush;
         }
     }
 
