@@ -133,7 +133,15 @@ running the tray app.
   so heads share it; `OverlayCanvas.PlaceAtInitialFloating` / `DenseController` consume it at launch and
   `ApplyPlacementsLive` on edit. Users set it by dragging a preview in `Windows/PlacementEditorWindow`,
   opened from the overlay header's right-click menu or the "Initial overlay placement" setting. A manual
-  drag of the overlay is deliberately **not** persisted — the editor is the sole source of truth. See
+  drag of the overlay is deliberately **not** persisted to disk — the editor is the sole *on-disk* source of
+  truth. It **is**, however, remembered at runtime: `OverlayCanvas._effectiveFloating` (and the dense twin
+  `_denseVAnchor`/`_denseVOffsetDip`) capture wherever the overlay currently sits, corner-relative, after
+  each placement and each drag, so a **display change re-derives the same distance from the borders** rather
+  than clamping the window toward the centre (the fix for large→small→large monitor drift). The signal is
+  Avalonia's `Screens.Changed` → `OverlayCanvas.OnScreensChanged` → `RestoreOrEnsureFloating` /
+  `DenseController.OnScreensChanged`; the monitor is resolved by exact bounds, else most-overlap
+  (`PlacementMath.PickMostOverlapping`, survives a resolution change), else primary. **Screen-change
+  re-heals must never write back into that memory** — a clamp-to-a-shrunken-screen would poison it. See
   `docs/initial-placement-plan.md`.
 - **Don't assume a Velopack install.** Perch also ships as Velopack's portable zip, extracted wherever the
   user likes. `Services/InstallChannel` classifies the running copy (`Setup` / `Portable` / `Unpackaged`);

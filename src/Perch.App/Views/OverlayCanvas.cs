@@ -186,6 +186,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // equivalent is seeded into the controller. See SetInitialPlacements.
     private OverlayPlacement? _floatingPlacement;
 
+    // Where the floating window *currently* lives, remembered corner-relative (nearest corner + DIP edge
+    // distances) so a display change can restore the same distance from the borders instead of leaving it
+    // stranded. Unlike _floatingPlacement (the persisted editor value) this tracks reality — it's re-captured
+    // after the initial placement and after every manual drag, so a dragged spot is honoured too. Runtime-only
+    // by design: a drag is never written to AppSettings (the editor stays the on-disk source of truth). Screen
+    // changes MUST NOT write here — restoring reads it, and a clamp-to-a-shrunken-screen would poison it.
+    private OverlayPlacement? _effectiveFloating;
+
     public OverlayCanvas()
     {
         // The brand mark and quick-link icons are 256px sources drawn at ~16–18px; the default sampler
@@ -214,12 +222,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // toggle (exit dense) instead.
         if (_denseCtl.IsDense && _denseCtl.IsOpen && !IsPointerOver) { _denseCtl.ClosePreview(); return; }
 
-        _denseCtl.Toggle(); EnsureFloatingOnScreen(); BringWindowToTop();
+        _denseCtl.Toggle(); RestoreOrEnsureFloating(); BringWindowToTop();
     }
 
-    // Monitors added/removed. Dense self-heals to a live edge (ApplyGeometry); the floating window has no
-    // such logic on its own, so re-validate it here — this is what rescues the overlay after an undock.
-    public void OnScreensChanged() { _denseCtl.OnScreensChanged(); EnsureFloatingOnScreen(); }
+    // Monitors added/removed, or a resolution/work-area change. Dense self-heals to a live edge
+    // (ApplyGeometry); the floating window re-derives its remembered corner-relative spot against the new
+    // geometry — this both rescues it after an undock and restores the same distance from the borders when a
+    // monitor grows back (a plain clamp would leave it drifted toward the centre). Re-lift topmost too, since
+    // a display change can drop even a Topmost window behind others.
+    public void OnScreensChanged() { _denseCtl.OnScreensChanged(); RestoreOrEnsureFloating(); BringWindowToTop(); }
 
     public void DisposeDense() => _denseCtl.Dispose();
 
@@ -274,7 +285,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         w.Width = FormWidth;
         w.SizeToContent = SizeToContent.Height; // recomputes height from content, keeps the 280 width
         w.Position = position;
-        EnsureFloatingOnScreen(); // the remembered floating spot may have been on a since-removed monitor
+        RestoreOrEnsureFloating(); // prefer the remembered corner-relative spot; the raw position may be on a since-removed monitor
     }
 
     double IDenseHost.FullPanelWidthDip => FormWidth;
@@ -319,8 +330,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// the default top-right float. Called once from <c>LiveOverlayWindow.OnOpened</c>.</summary>
     public void PlaceAtInitialFloating()
     {
-        if (_floatingPlacement is { } p && TryPlaceFloating(p)) return;
-        PlaceAtDefaultFloating();
+        if (_floatingPlacement is not { } p || !TryPlaceFloating(p)) PlaceAtDefaultFloating();
+        CaptureFloatingPlacement(); // seed the runtime memory (even the default) so screen changes can restore it
     }
 
     // Positions the floating window from a persisted placement. Returns false (so the caller falls back to
@@ -418,6 +429,83 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             w.Position = new PixelPoint(x, y);
         }
         catch { /* best-effort re-anchoring; never throw out of a toggle/screen-change */ }
+    }
+
+    // Records where the floating window currently sits as a corner-relative placement (nearest corner + DIP
+    // edge distances), stamped with the monitor it's on. Called after the initial placement and after a manual
+    // drag — never on a screen change, whose clamp-to-fit would otherwise overwrite the real spot. No-op in
+    // dense mode (the controller owns geometry there) so a dense session can't clobber the floating memory.
+    private void CaptureFloatingPlacement()
+    {
+        if (_denseCtl.IsDense) return;
+        if (HostWindow is not { Screens: { } screens } w) return;
+        try
+        {
+            double wscale = w.RenderScaling <= 0 ? 1.0 : w.RenderScaling;
+            int physW = Math.Max(1, (int)(w.Width * wscale));
+            int physH = Math.Max(1, (int)(w.Height * wscale));
+            var screen = OverlappedScreen(screens, w.Position, physW, physH);
+            if (screen is null) return;
+
+            var wa = screen.WorkingArea;
+            double scale = screen.Scaling;
+            physW = Math.Max(1, (int)(w.Width * scale));
+            physH = Math.Max(1, (int)(w.Height * scale));
+            var p = PlacementMath.FromPosition(
+                w.Position.X, w.Position.Y, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
+            p.MonitorX = screen.Bounds.X; p.MonitorY = screen.Bounds.Y;
+            p.MonitorW = screen.Bounds.Width; p.MonitorH = screen.Bounds.Height;
+            _effectiveFloating = p;
+        }
+        catch { /* best-effort; a missed capture just means the next drag/placement re-seeds it */ }
+    }
+
+    // Restores the floating window to its remembered corner-relative spot against a live screen's *current*
+    // work area, so it keeps the same distance from the borders across resolution/layout changes. Prefers the
+    // monitor the placement was captured on (exact bounds), else the monitor the window physically overlaps
+    // now (survives a resolution change), else primary. Returns false when there's nothing remembered or no
+    // window/screen — the caller then falls back to the plain clamp. Never writes _effectiveFloating.
+    private bool RestoreFloatingPlacement()
+    {
+        if (_effectiveFloating is not { } p) return false;
+        if (_denseCtl.IsDense) return true; // dense owns geometry; floating restores when it exits
+        if (HostWindow is not { Screens: { } screens } w) return false;
+
+        double wscale = w.RenderScaling <= 0 ? 1.0 : w.RenderScaling;
+        int probeW = Math.Max(1, (int)(w.Width * wscale));
+        int probeH = Math.Max(1, (int)(w.Height * wscale));
+        var screen = ResolveScreen(screens, p)
+                     ?? OverlappedScreen(screens, w.Position, probeW, probeH)
+                     ?? screens.Primary ?? (screens.All.Count > 0 ? screens.All[0] : null);
+        if (screen is null) return false;
+
+        var wa = screen.WorkingArea;
+        double scale = screen.Scaling;
+        int physW = Math.Max(1, (int)(w.Width * scale));
+        int physH = Math.Max(1, (int)(w.Height * scale));
+        var (x, y) = PlacementMath.ToPosition(p, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
+        w.Position = new PixelPoint(x, y);
+        return true;
+    }
+
+    // Screen-change / dense-exit re-heal for the floating window: restore its remembered corner-relative spot
+    // if we have one, otherwise fall back to the legacy clamp-onto-a-live-screen rescue.
+    private void RestoreOrEnsureFloating() { if (!RestoreFloatingPlacement()) EnsureFloatingOnScreen(); }
+
+    // The live screen a physical window rect belongs to, via PlacementMath.PickMostOverlapping (most overlap,
+    // else nearest) — null only when there are no screens.
+    private static Screen? OverlappedScreen(Screens screens, PixelPoint pos, int physW, int physH)
+    {
+        var all = screens.All;
+        if (all.Count == 0) return null;
+        var rects = new (int, int, int, int)[all.Count];
+        for (int i = 0; i < all.Count; i++)
+        {
+            var b = all[i].Bounds;
+            rects[i] = (b.X, b.Y, b.Width, b.Height);
+        }
+        int idx = PlacementMath.PickMostOverlapping(rects, pos.X, pos.Y, physW, physH);
+        return idx >= 0 ? all[idx] : null;
     }
 
     // Re-asserts the overlay at the top of the always-on-top band without stealing focus. A display change
@@ -2672,6 +2760,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 if (OwnerWindow is { } w && _headerPressArgs is { } pa)
                 {
                     w.BeginMoveDrag(pa);     // OS-native move (blocks on Windows until the button is released)
+                    // Remember the dropped spot corner-relative so a later display change restores this exact
+                    // distance from the borders. On Windows the move loop above has finished, so w.Position is
+                    // now the final location. (On a head where BeginMoveDrag returns early this captures the
+                    // pre-move spot — harmless; a subsequent screen change just restores where it started.)
+                    CaptureFloatingPlacement();
                 }
             }
             base.OnPointerMoved(e);

@@ -56,6 +56,46 @@ public static class PlacementMath
         };
     }
 
+    /// <summary>
+    /// Picks the screen a window rect belongs to, for re-deriving position after a display change: the one
+    /// it overlaps most, falling back to the nearest by centre-to-centre distance when it overlaps none
+    /// (e.g. the window was stranded off every monitor by an undock). Returns -1 only for an empty screen
+    /// list. Each screen is its full physical bounds <c>(X, Y, W, H)</c>; the rect is physical pixels too.
+    /// <para>
+    /// Overlap tolerates a resolution change on the same physical monitor — the bounds differ but the
+    /// window still sits over that monitor — which exact-bounds matching cannot, so this is how the
+    /// "restore to the same corner distance" path finds the monitor to restore against.
+    /// </para>
+    /// </summary>
+    public static int PickMostOverlapping(
+        IReadOnlyList<(int X, int Y, int W, int H)> screens, int rx, int ry, int rw, int rh)
+    {
+        int best = -1;
+        long bestArea = 0;
+        for (int i = 0; i < screens.Count; i++)
+        {
+            var s = screens[i];
+            long ox = Math.Max(0L, Math.Min(rx + rw, s.X + s.W) - Math.Max(rx, s.X));
+            long oy = Math.Max(0L, Math.Min(ry + rh, s.Y + s.H) - Math.Max(ry, s.Y));
+            long area = ox * oy;
+            if (area > bestArea) { bestArea = area; best = i; }
+        }
+        if (best >= 0 || screens.Count == 0) return best;
+
+        // Overlaps nothing — pick the nearest monitor by squared centre distance so the window still
+        // lands somewhere sensible rather than off-screen.
+        long rcx = rx + rw / 2, rcy = ry + rh / 2;
+        long bestDist = long.MaxValue;
+        for (int i = 0; i < screens.Count; i++)
+        {
+            var s = screens[i];
+            long dx = (s.X + s.W / 2) - rcx, dy = (s.Y + s.H / 2) - rcy;
+            long dist = dx * dx + dy * dy;
+            if (dist < bestDist) { bestDist = dist; best = i; }
+        }
+        return best;
+    }
+
     /// <summary>Keeps the window fully inside the work area; on overflow it pins to the top-left edge.</summary>
     public static (int X, int Y) Clamp(
         int x, int y, int waX, int waY, int waW, int waH, int physW, int physH)

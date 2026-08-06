@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.13] - 2026-08-06
+
+- Overlay keeps its distance from the screen edges when you dock, undock, or change resolution
+- No longer drifts toward the middle after a large-to-small-to-large monitor swap (it liked it there)
+
+---
+
 ## [v0.3.12] - 2026-08-06
 
 - The app holding your mic no longer doubles as "now playing" media

@@ -117,6 +117,51 @@ public class PlacementMathTests
     }
 
     [Fact]
+    public void PickMostOverlapping_ChoosesTheScreenTheWindowSitsOnMost()
+    {
+        // Two side-by-side 1920-wide monitors; the window straddles the seam but sits mostly on #1.
+        var screens = new (int, int, int, int)[] { (0, 0, 1920, 1080), (1920, 0, 1920, 1080) };
+        Assert.Equal(1, PlacementMath.PickMostOverlapping(screens, 1900, 100, 280, 400));
+        Assert.Equal(0, PlacementMath.PickMostOverlapping(screens, 1700, 100, 280, 400));
+    }
+
+    [Fact]
+    public void PickMostOverlapping_ResolutionChangeStillResolvesSameMonitor()
+    {
+        // The same physical monitor after it shrank 1920x1080 -> 1280x720: exact bounds no longer match,
+        // but the window (still parked near the old top-right) overlaps it and nothing else.
+        var shrunk = new (int, int, int, int)[] { (0, 0, 1280, 720) };
+        Assert.Equal(0, PlacementMath.PickMostOverlapping(shrunk, 1000, 40, 280, 400));
+    }
+
+    [Fact]
+    public void PickMostOverlapping_StrandedOffEveryScreen_FallsBackToNearest()
+    {
+        // Window way off to the right of every monitor (its home was unplugged): nearest wins, not -1.
+        var screens = new (int, int, int, int)[] { (0, 0, 1920, 1080), (-1920, 0, 1920, 1080) };
+        Assert.Equal(0, PlacementMath.PickMostOverlapping(screens, 5000, 100, 280, 400));
+        Assert.Equal(-1, PlacementMath.PickMostOverlapping(System.Array.Empty<(int, int, int, int)>(), 0, 0, 1, 1));
+    }
+
+    [Fact]
+    public void CornerRelative_SurvivesLargeToSmallToLarge()
+    {
+        // The reported bug, at the geometry layer: a panel 16 DIP in from the top-right of a large monitor.
+        const int bigW = 3840, bigH = 2120, smallW = 1280, smallH = 680;
+        var placement = PlacementMath.FromPosition(
+            bigW - PhysW - 16, 24, 0, 0, bigW, bigH, 1.0, PhysW, PhysH);
+
+        // On the small monitor the same corner distance is honoured (it fits: 16 px in from the right).
+        var (sx, _) = PlacementMath.ToPosition(placement, 0, 0, smallW, smallH, 1.0, PhysW, PhysH);
+        Assert.Equal(smallW - PhysW - 16, sx);
+
+        // Back on the large monitor it returns to exactly the original spot — not stranded toward centre.
+        var (bx, by) = PlacementMath.ToPosition(placement, 0, 0, bigW, bigH, 1.0, PhysW, PhysH);
+        Assert.Equal(bigW - PhysW - 16, bx);
+        Assert.Equal(24, by);
+    }
+
+    [Fact]
     public void OverlayPlacement_SurvivesSettingsCloneRoundTrip()
     {
         var settings = new AppSettings

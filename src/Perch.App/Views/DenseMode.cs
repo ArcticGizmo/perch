@@ -80,6 +80,14 @@ internal sealed class DenseController : IDisposable
     private bool  _denseYInit;
     private PixelPoint _floatingLoc;
 
+    // The dense strip's Y remembered corner-relative (which vertical edge + DIP distance from it), the
+    // vertical twin of the floating window's _effectiveFloating. _denseY is a concrete physical Y for the
+    // current screen; this survives a resolution/work-area change so OnScreensChanged can re-derive _denseY
+    // and keep the strip the same distance from its anchored edge instead of drifting. Updated on every
+    // gesture that sets _denseY (seed, first entry, vertical drag, drop-zone re-pin).
+    private VAnchor _denseVAnchor = VAnchor.Top;
+    private double  _denseVOffsetDip = DenseTopGapDefault;
+
     private DenseSide _denseSide = DenseSide.Right;
 
     // Which monitor the dense strip docks to, identified by its physical bounds so a stale reference can't
@@ -195,10 +203,7 @@ internal sealed class DenseController : IDisposable
         _denseYInit = false; // re-derive Y from the new placement (or default) on next entry
         if (_dense)
         {
-            var s = DenseScreen();
-            _denseY = _seededPlacement is { } sp
-                ? SeededDenseY(sp, s)
-                : s.WorkingArea.Y + (int)(DenseTopGapDefault * s.Scaling);
+            _denseY = SeedDenseVertical(DenseScreen());
             _denseYInit = true;
             _host.RelayoutWindow();
             _host.Invalidate();
@@ -210,17 +215,40 @@ internal sealed class DenseController : IDisposable
             ? new PixelRect(mx, my, mw, mh)
             : null;
 
-    // Physical Y for a seeded placement: its DIP vertical offset from the anchored (top/bottom) work-area
-    // edge, using the current strip height, clamped on-screen. Mirrors PlacementMath's vertical axis (X is
-    // edge-locked in dense mode, so only Y is derived here).
-    private int SeededDenseY(OverlayPlacement p, Screen s)
+    // Sets the remembered corner-relative vertical (anchored edge + DIP offset) from the seeded placement, or
+    // the built-in default when none, then returns the concrete physical Y for the given screen.
+    private int SeedDenseVertical(Screen s)
+    {
+        if (_seededPlacement is { } sp) { _denseVAnchor = sp.VAnchor; _denseVOffsetDip = sp.OffsetY; }
+        else { _denseVAnchor = VAnchor.Top; _denseVOffsetDip = DenseTopGapDefault; }
+        return DeriveDenseY(s);
+    }
+
+    // Physical Y from the remembered corner-relative vertical: its DIP offset from the anchored (top/bottom)
+    // work-area edge, using the current strip height, clamped on-screen. Mirrors PlacementMath's vertical
+    // axis (X is edge-locked in dense mode, so only Y is derived here).
+    private int DeriveDenseY(Screen s)
     {
         var wa = s.WorkingArea;
         double scale = s.Scaling;
         int physH = (int)(StripHeightDip() * scale);
-        int offY = (int)Math.Round(p.OffsetY * scale);
-        int y = p.VAnchor == VAnchor.Top ? wa.Y + offY : wa.Y + wa.Height - physH - offY;
+        int offY = (int)Math.Round(_denseVOffsetDip * scale);
+        int y = _denseVAnchor == VAnchor.Top ? wa.Y + offY : wa.Y + wa.Height - physH - offY;
         return ClampDenseY(y, physH, wa);
+    }
+
+    // Records the current _denseY as a corner-relative vertical (nearest vertical edge + DIP distance from it)
+    // after a drag or drop-zone re-pin, so a later screen change re-derives the same distance instead of a
+    // stale absolute Y. The vertical twin of the floating window's CaptureFloatingPlacement.
+    private void CaptureDenseVertical(Screen s)
+    {
+        var wa = s.WorkingArea;
+        double scale = s.Scaling;
+        int physH = (int)(StripHeightDip() * scale);
+        int distTop = _denseY - wa.Y;
+        int distBottom = wa.Y + wa.Height - (_denseY + physH);
+        if (distTop <= distBottom) { _denseVAnchor = VAnchor.Top; _denseVOffsetDip = Math.Max(0, distTop) / scale; }
+        else { _denseVAnchor = VAnchor.Bottom; _denseVOffsetDip = Math.Max(0, distBottom) / scale; }
     }
 
     private void Enter()
@@ -229,10 +257,7 @@ internal sealed class DenseController : IDisposable
         _floatingLoc = _host.WindowPosition;            // remember where floating lives
         if (!_denseYInit)
         {
-            var s = DenseScreen();
-            _denseY = _seededPlacement is { } sp
-                ? SeededDenseY(sp, s)
-                : s.WorkingArea.Y + (int)(DenseTopGapDefault * s.Scaling);
+            _denseY = SeedDenseVertical(DenseScreen());
             _denseYInit = true;
         }
         _dense = true;
@@ -294,9 +319,15 @@ internal sealed class DenseController : IDisposable
     // popup being open and no drag in progress.
     public void SchedulePopupClose() { _closeTimer.Stop(); _closeTimer.Start(); }
 
-    // Re-evaluate docking when a monitor is added/removed (DenseScreen self-heals to primary).
+    // Re-evaluate docking when a monitor is added/removed or a resolution/work-area changes. DenseScreen
+    // self-heals to primary if the docked monitor vanished; re-deriving _denseY from the remembered
+    // corner-relative vertical keeps the strip the same distance from its anchored edge across the change
+    // (a bare relayout would leave a bottom-anchored or origin-shifted strip drifted).
     public void OnScreensChanged()
     {
+        if (!_denseYInit && !_dense) return; // nothing positioned yet; the first Enter will seed it
+        if (_host.Screens is null) return;
+        _denseY = DeriveDenseY(DenseScreen());
         if (_dense) { _host.RelayoutWindow(); _host.Invalidate(); }
     }
 
@@ -330,6 +361,7 @@ internal sealed class DenseController : IDisposable
         int newY = ClampDenseY(targetTop, physH, wa);
         _host.WindowPosition = new PixelPoint(DenseX(physW, wa), newY);
         _denseY = newY;
+        CaptureDenseVertical(screen); // remember the dragged height corner-relative for later screen changes
         UpdateActiveDropZone(cursorScreen);
     }
 
@@ -363,6 +395,8 @@ internal sealed class DenseController : IDisposable
         double scale = screen.Scaling;
         int physH = (int)((_denseOpen ? _host.FullPanelHeightDip : StripHeightDip()) * scale);
         _denseY = ClampDenseY(releaseScreen.Y - physH / 2, physH, screen.WorkingArea);
+        _denseYInit = true;
+        CaptureDenseVertical(screen); // remember the re-pinned height corner-relative on the new monitor
         _host.RelayoutWindow();
         _host.Invalidate();
     }
