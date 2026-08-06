@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.14] - 2026-08-06
+
+- Locked-screen ntfy pushes now start with "AFK" (so you know why your phone buzzed)
+
+---
+
 ## [v0.3.13] - 2026-08-06
 
 - Overlay keeps its distance from the screen edges when you dock, undock, or change resolution

@@ -135,6 +135,13 @@ internal sealed class NotificationService
                 ("Claude Code — Waiting for Input", $"{session.DisplayName} needs your response", "bell"),
         };
 
+        // When the screen is locked, prefix the title with "AFK" so the reason you got a push (you're
+        // away, not that this session opted in) is obvious at a glance on the phone. Plain ASCII on
+        // purpose: NtfyNotifier strips non-ASCII from the title, so a dash/colon here survives where an
+        // em dash would blank out.
+        if (afkActive)
+            title = $"AFK: {title}";
+
         var host = _settings.NtfyHost;
         var topic = _settings.NtfyTopic;
         if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(topic))
