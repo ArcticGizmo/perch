@@ -75,6 +75,20 @@ internal sealed class StickyNoteWindow : Window
         return w;
     }
 
+    /// <summary>A project's note, opened from the project-note picker for a project that has no live
+    /// session. One project section — there is no session to pin a second note to. <paramref name="onSave"/>
+    /// receives the trimmed text (empty = clear).</summary>
+    public static StickyNoteWindow ForProject(string projectName, string? projectText, Action<string> onSave)
+    {
+        var w = new StickyNoteWindow(
+            $"Note — {projectName}", SingleHeight,
+            [new Section(
+                $"Project · {projectName}",
+                projectText, "Shared by every session in this project…", ProjectAccent)]);
+        w.SetPersist(() => onSave(w.SectionText(0)));
+        return w;
+    }
+
     /// <summary>A session row's note: a project section over a session section, at double height.
     /// <paramref name="onSave"/> receives (projectText, sessionText), each trimmed (empty = clear).</summary>
     public static StickyNoteWindow ForSessionRow(

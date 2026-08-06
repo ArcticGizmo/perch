@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.8] - 2026-08-06
+
+- Right-click the note button to search across all your projects
+- Pin a note to any of them without starting a session first
+- Ones already carrying a note float to the top, previewed
+- Same spotlight chrome as the session switcher (they're cousins now)
+
+---
+
 ## [v0.3.7] - 2026-08-05
 
 - A status dot on the PR glyph — green, red, or blue — for its CI checks

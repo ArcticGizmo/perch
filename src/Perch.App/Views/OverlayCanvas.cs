@@ -973,6 +973,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// opens the global scratch pad (prefilled from <c>AppSettings.ScratchText</c>) and persists it.</summary>
     public event Action? ScratchPadRequested;
 
+    /// <summary>Raised when the user right-clicks the note button leading the quick-links row. The app opens
+    /// a searchable picker of every known project so a note can be attached to one without a live session.</summary>
+    public event Action? ProjectNotesRequested;
+
     /// <summary>Raised when the user toggles the whole-machine metrics strip from the right-click menu;
     /// carries the desired new enabled state for the app to persist and apply.</summary>
     public event Action<bool>? SystemMetricsToggleRequested;
@@ -1040,7 +1044,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, NoteButton }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -2707,6 +2711,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitRect(_prRects, p) is var pr && pr >= 0 ? (TipKind.Pr, pr) :
             _mediaTitleRect.Contains(p)               ? (TipKind.Media, -1) :
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
+            _noteButtonRect.Width > 0
+                && _noteButtonRect.Contains(p)        ? (TipKind.NoteButton, -1) :
             InUsageStrip(p)                           ? (TipKind.Usage, -1) :
                                                         (TipKind.None, -1);
 
@@ -2736,7 +2742,22 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Media:   ShowMediaTooltip();          break;
             case TipKind.Mic:     ShowMicTooltip();            break;
             case TipKind.Pr:      ShowPrTooltip(_tipRow);      break;
+            case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
         }
+    }
+
+    // The note button leading the quick-links row carries two actions; a dwell tooltip surfaces the
+    // right-click one (the searchable project-note picker), which is otherwise unadvertised.
+    private void ShowNoteButtonTooltip()
+    {
+        if (_noteButtonRect.Width <= 0) return;
+        var lines = new List<OverlayTooltip.Line>
+        {
+            new("Notes", OverlayTooltip.FgColor, true),
+            new("Click: scratch pad", OverlayTooltip.MutedColor, false),
+            new("Right-click: note a project", OverlayTooltip.MutedColor, false),
+        };
+        Tooltip().ShowLines(lines, ToScreen(_noteButtonRect.Left, _noteButtonRect.Bottom + 4));
     }
 
     private bool InUsageStrip(Point p) =>
@@ -3039,6 +3060,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             if (DaemonOverflow && daemonRow == VisibleDaemonCount) DaemonListRequested?.Invoke();
             else ShowDaemonMenu(daemonRow);
+            return;
+        }
+
+        // The note button leading the quick-links row: a right-click opens the searchable project-note
+        // picker (its left-click still opens the global scratch pad). Tested before the generic menu so the
+        // button gets its own action rather than a strip/header menu.
+        if (_noteButtonRect.Width > 0 && _noteButtonRect.Contains(p))
+        {
+            ProjectNotesRequested?.Invoke();
             return;
         }
 

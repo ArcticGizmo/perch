@@ -47,6 +47,9 @@ public partial class App : Application
     // are non-modal and owned by the overlay (see StickyNoteWindow); closed together in CloseAuxWindows.
     private readonly Dictionary<string, StickyNoteWindow> _noteWindows = new();
     private const string ScratchNoteKey = "__scratch__";
+    // The searchable project-note picker (right-click the note button). A single reused instance, owned by
+    // the overlay like the sticky notes; torn down in CloseAuxWindows.
+    private ProjectNotePickerWindow? _projectPicker;
     private AppSettings? _appSettings;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
 
@@ -222,6 +225,7 @@ public partial class App : Application
             _overlay.Canvas.NoteClearRequested += sessionId => _monitorHost?.SetNote(sessionId, null);
             _overlay.Canvas.TerminateRequested += OnTerminateSession;
             _overlay.Canvas.ScratchPadRequested += OnOpenScratchPad;
+            _overlay.Canvas.ProjectNotesRequested += OnOpenProjectNotePicker;
 
             // Quick-links strip: launch/focus goes through the platform seams; icons resolve off-thread.
             _quickLinkLauncher = new QuickLinkLauncher(PlatformServices.WindowActivator, PlatformServices.AppIconProvider);
@@ -392,6 +396,7 @@ public partial class App : Application
         _qrWindow?.Close();
         _changelogWindow?.Close();
         _switcher?.Close();
+        _projectPicker?.Close();
         foreach (var note in _noteWindows.Values.ToList())
             note.CloseWithoutPrompt();
     }
@@ -875,6 +880,46 @@ public partial class App : Application
                 settings.ScratchText = string.IsNullOrWhiteSpace(text) ? null : text;
                 settings.Save();
             }));
+    }
+
+    // Right-clicking the note button: a searchable list of every known project, so a note can be pinned to
+    // one that has no live session. Enumerating reads a transcript head per project (the project-folder name
+    // is a lossy encoding of the cwd, and a project note is keyed by the real cwd), so it runs off the UI
+    // thread; the picker then shows on it. A single reused instance — a repeat request re-focuses it.
+    private void OnOpenProjectNotePicker()
+    {
+        if (_overlay is not { } overlay) return;
+        if (_projectPicker is { } existing)
+        {
+            if (existing.WindowState == WindowState.Minimized) existing.WindowState = WindowState.Normal;
+            existing.Activate();
+            return;
+        }
+
+        System.Threading.Tasks.Task.Run(ProjectNoteCatalog.Enumerate)
+            .ContinueWith(t =>
+            {
+                if (_overlay is not { } live) return; // overlay torn down mid-flight
+                var picker = new ProjectNotePickerWindow(t.Result);
+                picker.ProjectChosen += OnEditProjectNote;
+                picker.Closed += (_, _) => { if (ReferenceEquals(_projectPicker, picker)) _projectPicker = null; };
+                _projectPicker = picker;
+                picker.Show(live);   // owned + non-modal, like the sticky notes
+                picker.Activate();   // take focus so the search box is ready to type
+            }, System.Threading.CancellationToken.None, System.Threading.Tasks.TaskContinuationOptions.OnlyOnRanToCompletion,
+               System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    // A project chosen from the picker: open the sticky-note editor on its project note (prefilled from the
+    // current note, re-read for freshness) and persist to the project's project.note sidecar. Keyed by cwd
+    // so picking the same project again focuses the open note rather than stacking a duplicate.
+    private void OnEditProjectNote(ProjectEntry entry)
+    {
+        if (_monitorHost is not { } host) return;
+        OpenStickyNote("projnote:" + entry.Cwd, () =>
+            StickyNoteWindow.ForProject(
+                entry.ProjectName, host.ReadProjectNote(entry.Cwd),
+                text => host.SetProjectNote(entry.Cwd, text)));
     }
 
     // Opens (or re-focuses) a sticky note, owned by the overlay so it stays above it and never falls
