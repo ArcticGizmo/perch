@@ -168,6 +168,22 @@ internal sealed class AppSettings
     // "ApiFailed" fires when a session's last request to the API errored (e.g. 529 Overloaded) and it
     // stopped — on by default, since a failed run is exactly the moment the user wants pulled to.
     public bool NotifyOnApiError { get; set; } = true;
+    // "PrFinished" fires when a pull request Perch tracks for a session's directory reaches a finalised
+    // state — merged or closed. On by default: a PR landing (or being closed) is a natural "you can move
+    // on" moment. Only observable while the GitHub PR integration (ShowPullRequests) is on.
+    public bool NotifyOnPrFinished { get; set; } = true;
+    // "PrReviewed" fires when a new review (a comment or changes-requested) is added to a tracked PR;
+    // "PrApproved" when someone approves it. Both name the reviewer/approver. On by default. Like the other
+    // PR alerts, only observable while the GitHub PR integration (ShowPullRequests) is on.
+    public bool NotifyOnPrReviewed { get; set; } = true;
+    public bool NotifyOnPrApproved { get; set; } = true;
+
+    // A second, independent surface for the PR state-change events (finished / reviewed / approved): a
+    // transient banner flashed over the overlay row itself (the "front and centre" indicator), separate
+    // from the desktop toasts above so either can be used alone. Like the attention flash it is an overlay
+    // behaviour, so it is NOT gated by NotificationsEnabled — only by this toggle (and the PR integration
+    // being on). On by default.
+    public bool PrFinishedOverlayBanner { get; set; } = true;
 
     // Per-type sound switches: play the built-in Windows system chime when that notification type
     // fires (Done -> Asterisk, WaitingForInput -> Exclamation). Independent of the balloon switches
@@ -176,6 +192,9 @@ internal sealed class AppSettings
     public bool ChimeOnDone { get; set; }
     public bool ChimeOnWaitingInput { get; set; }
     public bool ChimeOnApiError { get; set; }
+    public bool ChimeOnPrFinished { get; set; }
+    public bool ChimeOnPrReviewed { get; set; }
+    public bool ChimeOnPrApproved { get; set; }
 
     // External notifications via ntfy (https://ntfy.sh). The master switch gates whether any
     // external push is sent and whether the per-session toggle is offered in the overlay; the

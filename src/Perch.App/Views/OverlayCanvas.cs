@@ -131,9 +131,17 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private static readonly IBrush PrOpenHover    = new SolidColorBrush(Color.FromRgb(74, 222, 128));
     private static readonly IBrush PrDraftBrush   = new SolidColorBrush(Color.FromRgb(148, 163, 184));
     private static readonly IBrush PrDraftHover   = new SolidColorBrush(Color.FromRgb(203, 213, 225));
-    private static readonly IBrush PrMergedBrush  = new SolidColorBrush(Color.FromRgb(168, 85, 247));
+    // Merged = GitHub purple, Closed = red; the Color is the single source so the PR banner can tint itself
+    // to match the glyph exactly (see ShowPrBanner). The review hues below are banner-only: approved green,
+    // changes-requested amber, plain review blue.
+    private static readonly Color PrMergedColor   = Color.FromRgb(168, 85, 247);
+    private static readonly Color PrClosedColor   = Color.FromRgb(239, 68, 68);
+    private static readonly Color PrApprovedColor = Color.FromRgb(34, 197, 94);
+    private static readonly Color PrChangesColor  = Color.FromRgb(245, 158, 11);
+    private static readonly Color PrReviewedColor = Color.FromRgb(96, 165, 250);
+    private static readonly IBrush PrMergedBrush  = new SolidColorBrush(PrMergedColor);
     private static readonly IBrush PrMergedHover  = new SolidColorBrush(Color.FromRgb(192, 132, 252));
-    private static readonly IBrush PrClosedBrush  = new SolidColorBrush(Color.FromRgb(239, 68, 68));
+    private static readonly IBrush PrClosedBrush  = new SolidColorBrush(PrClosedColor);
     private static readonly IBrush PrClosedHover  = new SolidColorBrush(Color.FromRgb(248, 113, 113));
     // Aggregate CI-check dot tucked bottom-right of the PR glyph: green all-passing, red any-failure, blue
     // still-running. The *Color values (a touch brighter) double as the check-line text in the PR tooltip,
@@ -1154,6 +1162,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// and a cheap repo check. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
     internal event Action<ClaudeSession>? ReviewChangesRequested;
 
+#if DEBUG
+    /// <summary>DEBUG-only: raised when the developer picks one of the PR-glyph right-click test items. The
+    /// carried session already has its <see cref="ClaudeSession.PullRequest"/> forced to the state/reviews to
+    /// preview, and the <see cref="NotificationKind"/> says which alert to drive, so the app can exercise the
+    /// real PR notification + banner path on demand. Never present in a release build.</summary>
+    internal event Action<ClaudeSession, NotificationKind>? DebugTestPrEventRequested;
+#endif
+
     /// <summary>Whether external (ntfy) notifications are switched on globally — gates the right-click
     /// enable/disable item. (The per-row mail glyph reads the session's own state.)</summary>
     public void SetExternalNotificationsAvailable(bool available)
@@ -2066,6 +2082,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 new Rect(1, top + 1, 3, rowH - 1));
         }
 
+
         bool running = session.Status == SessionStatus.Running;
         // When the waiting timer is off, an awaiting row keeps its "input ↩" status but drops the "waiting
         // on you" activity + elapsed line (see SecondLineContent), so it renders single-line.
@@ -2258,6 +2275,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             }
         }
 
+        // PR state-change banner: drawn last so it covers the WHOLE row (dot, name, glyphs, status) with a
+        // solid colour block + label, holding then fading to draw maximum focus. See ShowPrBanner.
+        if (session.SessionId == _prBannerId && PrBannerOpacity() is > 0 and var prOp)
+            DrawPrBanner(ctx, top, rowH, width, prOp);
     }
 
     private Color WarmWaitingColor(TimeSpan waited)
@@ -3197,6 +3218,34 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+#if DEBUG
+        // Debug affordance: right-clicking the PR glyph offers to fire each PR alert (finished / approved /
+        // reviewed) for this session's PR, with the state/reviews synthesised, so the notification + banner
+        // path can be exercised on demand without a real merge/review. Its own early-return menu (like the
+        // artifact/daemon branches), and DEBUG-only — it never ships in a release build.
+        int prDebugRow = HitRect(_prRects, p);
+        if (prDebugRow >= 0 && _rows[prDebugRow].Session is { PullRequest: { } dpr } prSession)
+        {
+            ClaudeSession WithState(PrState st) => prSession with { PullRequest = dpr with { State = st } };
+            ClaudeSession WithReview(PrReviewState st) =>
+                prSession with { PullRequest = dpr with { LatestReviews = [new PrReview("octocat", st, DateTime.Now)] } };
+            ShowFlyout(new List<Control>
+            {
+                MenuItem("Debug: test 'PR merged' alert",
+                    () => DebugTestPrEventRequested?.Invoke(WithState(PrState.Merged), NotificationKind.PrFinished)),
+                MenuItem("Debug: test 'PR closed' alert",
+                    () => DebugTestPrEventRequested?.Invoke(WithState(PrState.Closed), NotificationKind.PrFinished)),
+                MenuItem("Debug: test 'PR approved' alert",
+                    () => DebugTestPrEventRequested?.Invoke(WithReview(PrReviewState.Approved), NotificationKind.PrApproved)),
+                MenuItem("Debug: test 'changes requested' alert",
+                    () => DebugTestPrEventRequested?.Invoke(WithReview(PrReviewState.ChangesRequested), NotificationKind.PrReviewed)),
+                MenuItem("Debug: test 'PR reviewed' alert",
+                    () => DebugTestPrEventRequested?.Invoke(WithReview(PrReviewState.Commented), NotificationKind.PrReviewed)),
+            });
+            return;
+        }
+#endif
+
         var items = new List<Control>();
 
         int row = HitTestRow(p);
@@ -3589,6 +3638,100 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         return Math.Clamp(1 - (elapsed - CycleHoldMs) / CycleFadeMs, 0, 1);
     }
 
+    // ── PR state-change banner (the "front and centre" indicator) ──────────────
+    // A transient banner flashed over a session's WHOLE row on a PR state change (merged / closed / reviewed
+    // / approved): a solid colour block covering the row's content with a bold label (e.g. "Approved by
+    // alice"), held then fading. The overlay-side twin of the PR toasts — gated by its own setting
+    // (AppSettings.PrFinishedOverlayBanner), which the App checks before calling in. Mirrors the
+    // cycle-highlight machinery below.
+    private string? _prBannerId;
+    private string _prBannerText = "";
+    private Color _prBannerColor;
+    private DateTime _prBannerStart;
+    private DispatcherTimer? _prBannerTimer;
+    private const double PrBannerHoldMs = 3500;
+    private const double PrBannerFadeMs = 900;
+
+    /// <summary>The kind of PR state change a banner announces — drives its colour (label text is supplied by
+    /// the caller so it can name the reviewer/approver).</summary>
+    public enum PrBannerKind { Merged, Closed, Approved, ChangesRequested, Reviewed }
+
+    /// <summary>Flashes a full-row PR banner on <paramref name="sessionId"/>'s row for a few seconds, then
+    /// fades it. Surfaces the panel first (pops the dense popup / expands a collapsed float) so it's visible.
+    /// <paramref name="text"/> is the label (e.g. "Merged", "Approved by alice"); <paramref name="kind"/>
+    /// picks the colour. Called on the UI thread from the App when a PR changes state and the banner setting
+    /// is on.</summary>
+    public void ShowPrBanner(string sessionId, string text, PrBannerKind kind)
+    {
+        if (_denseCtl.IsDense) _denseCtl.OpenPopup();
+        else if (!_expanded && _rows.Count > 0)
+        {
+            _expanded = true;
+            UpdateTickTimer();
+            InvalidateMeasure();
+        }
+
+        _prBannerId = sessionId;
+        _prBannerText = text;
+        _prBannerColor = kind switch
+        {
+            PrBannerKind.Merged           => PrMergedColor,
+            PrBannerKind.Closed           => PrClosedColor,
+            PrBannerKind.Approved         => PrApprovedColor,
+            PrBannerKind.ChangesRequested => PrChangesColor,
+            _                             => PrReviewedColor,
+        };
+        _prBannerStart = DateTime.Now;
+        (_prBannerTimer ??= CreatePrBannerTimer()).Stop();
+        _prBannerTimer.Start();
+        InvalidateVisual();
+    }
+
+    private DispatcherTimer CreatePrBannerTimer()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+        t.Tick += (_, _) =>
+        {
+            if ((DateTime.Now - _prBannerStart).TotalMilliseconds >= PrBannerHoldMs + PrBannerFadeMs)
+            {
+                _prBannerId = null;
+                _prBannerTimer?.Stop();
+            }
+            InvalidateVisual();
+        };
+        return t;
+    }
+
+    // Opacity (0..1) of the banner: full through the hold window, then a linear fade out.
+    private double PrBannerOpacity()
+    {
+        if (_prBannerId is null) return 0;
+        double elapsed = (DateTime.Now - _prBannerStart).TotalMilliseconds;
+        if (elapsed <= PrBannerHoldMs) return 1;
+        return Math.Clamp(1 - (elapsed - PrBannerHoldMs) / PrBannerFadeMs, 0, 1);
+    }
+
+    // Draws the banner over the ENTIRE row: a solid colour block covering all the row's content, a slightly
+    // brighter left accent bar, and the bold label centred vertically and left-aligned where the name sits.
+    // Drawn last (after the row content) so it fully hides the text beneath while it holds; the fade reveals
+    // the row again as the alpha drops.
+    private void DrawPrBanner(DrawingContext ctx, double top, double rowH, double width, double op)
+    {
+        var c = _prBannerColor;
+        var rowRect = new Rect(1, top + 1, width - 2, rowH - 1);
+        // A dark base first, so at partial (fading) alpha the colour reads true rather than letting the row's
+        // text bleed through the tint.
+        ctx.FillRectangle(new SolidColorBrush(Color.FromArgb((byte)(255 * op), BgColor.R, BgColor.G, BgColor.B)), rowRect);
+        ctx.FillRectangle(new SolidColorBrush(Color.FromArgb((byte)(235 * op), c.R, c.G, c.B)), rowRect);
+        ctx.FillRectangle(new SolidColorBrush(Color.FromArgb((byte)(255 * op), c.R, c.G, c.B)),
+            new Rect(1, top + 1, 4, rowH - 1));
+
+        double midY = top + rowH / 2;
+        var label = OverlayDraw.Text(_prBannerText, NameSize,
+            new SolidColorBrush(Color.FromArgb((byte)(255 * op), 255, 255, 255)), FontWeight.SemiBold);
+        OverlayDraw.TextLeftMid(ctx, label, HorizPad + 14, midY);
+    }
+
     // Stop the animation timers if the canvas leaves the visual tree (belt-and-braces; the overlay
     // normally lives for the whole app session).
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -3596,6 +3739,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _chaseTimer?.Stop();
         _chaseStopTimer?.Stop();
         _cycleTimer?.Stop();
+        _prBannerTimer?.Stop();
         _dwellTimer?.Stop();
         _tickTimer?.Stop();
         _autoCloseBarTimer?.Stop();

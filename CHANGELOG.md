@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.15] - 2026-08-06
+
+- Alerts when a tracked PR is merged, closed, reviewed, or approved
+- Review and approval alerts name who did it (credit where due)
+- A full-row overlay banner for the same, for when a toast is too easy to miss
+- Toast, chime, and banner are each their own toggle (all on by default)
+- Every PR alert leads with "PR:", in case the giant coloured banner was unclear
+
+---
+
 ## [v0.3.14] - 2026-08-06
 
 - Locked-screen ntfy pushes now start with "AFK" (so you know why your phone buzzed)

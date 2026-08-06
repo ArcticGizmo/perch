@@ -19,6 +19,14 @@ public enum NotificationKind
     Done = 0,
     WaitingForInput = 1,
     ApiFailed = 2,
+    /// <summary>A pull request Perch tracks for a session's working directory reached a finalised
+    /// state — merged or closed. Fires once on the open/draft → merged/closed transition.</summary>
+    PrFinished = 3,
+    /// <summary>A new review (a comment or a changes-requested) was added to a tracked PR. Names the
+    /// reviewer. Fires once per newly-submitted review; an approval fires <see cref="PrApproved"/> instead.</summary>
+    PrReviewed = 4,
+    /// <summary>A tracked PR was approved. Names the approver.</summary>
+    PrApproved = 5,
 }
 
 public enum PermissionMode

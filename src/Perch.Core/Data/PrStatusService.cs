@@ -2,6 +2,7 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 
@@ -14,6 +15,14 @@ public enum PrState { Open, Draft, Merged, Closed }
 /// <see cref="Failure"/>. Neutral/skipped runs count as success (non-blocking); cancelled/timed-out/
 /// action-required count as failure.</summary>
 public enum PrCheckState { Pending, Success, Failure }
+
+/// <summary>The state of a single reviewer's latest review on a PR, as reported by <c>gh</c>'s
+/// <c>latestReviews[].state</c>. Drives the "review added" / "approved" alerts.</summary>
+public enum PrReviewState { Pending, Commented, ChangesRequested, Approved, Dismissed }
+
+/// <summary>A reviewer's latest review on a pull request: who left it, its <see cref="PrReviewState"/>, and
+/// when it was submitted (used to pick the newest one when an alert needs a single "who").</summary>
+public readonly record struct PrReview(string Author, PrReviewState State, DateTime SubmittedAt);
 
 /// <summary>The aggregate CI status across a PR's checks, driving the small status dot on the overlay's PR
 /// glyph. <see cref="None"/> = no checks reported (no dot); otherwise: any failure ⇒ <see cref="Failing"/>,
@@ -39,6 +48,10 @@ public readonly record struct PullRequestInfo(int Number, string Url, string Tit
     /// when the PR has no checks or they weren't fetched.</summary>
     public IReadOnlyList<PrCheck> Checks { get; init; } = Array.Empty<PrCheck>();
 
+    /// <summary>The latest review from each reviewer (<c>gh</c>'s <c>latestReviews</c>). Empty when the PR
+    /// has no reviews or they weren't fetched. Drives the "review added" / "approved" alerts.</summary>
+    public IReadOnlyList<PrReview> LatestReviews { get; init; } = Array.Empty<PrReview>();
+
     /// <summary>The aggregate check status driving the overlay's status dot, folded from <see cref="Checks"/>.</summary>
     public PrChecksRollup ChecksRollup =>
         Checks.Count == 0                             ? PrChecksRollup.None
@@ -46,11 +59,31 @@ public readonly record struct PullRequestInfo(int Number, string Url, string Tit
       : Checks.Any(c => c.State == PrCheckState.Pending) ? PrChecksRollup.Pending
       :                                                    PrChecksRollup.Passing;
 
+    /// <summary>The most recently submitted review overall (the one that triggered a "review added"), or
+    /// null when there are none. Used to name "who" in the alert.</summary>
+    public PrReview? NewestReview =>
+        LatestReviews.Count == 0 ? null : LatestReviews.Aggregate((a, b) => b.SubmittedAt > a.SubmittedAt ? b : a);
+
+    /// <summary>The most recently submitted <em>approving</em> review, or null when none — names the approver
+    /// in the "approved" alert.</summary>
+    public PrReview? NewestApproval
+    {
+        get
+        {
+            PrReview? best = null;
+            foreach (var r in LatestReviews)
+                if (r.State == PrReviewState.Approved && (best is null || r.SubmittedAt > best.Value.SubmittedAt))
+                    best = r;
+            return best;
+        }
+    }
+
     public bool Equals(PullRequestInfo other) =>
         Number == other.Number && Url == other.Url && Title == other.Title && State == other.State
-        && Checks.SequenceEqual(other.Checks);
+        && Checks.SequenceEqual(other.Checks) && LatestReviews.SequenceEqual(other.LatestReviews);
 
-    public override int GetHashCode() => HashCode.Combine(Number, Url, Title, State, Checks.Count);
+    public override int GetHashCode() =>
+        HashCode.Combine(Number, Url, Title, State, Checks.Count, LatestReviews.Count);
 }
 
 /// <summary>
@@ -179,7 +212,7 @@ internal sealed class PrStatusService : IDisposable
         if (!Directory.Exists(cwd) || !HasGitRepo(cwd))
             return null;
 
-        var (exit, stdout) = RunGh("pr view --json number,url,title,state,isDraft,statusCheckRollup", cwd, GhTimeoutMs);
+        var (exit, stdout) = RunGh("pr view --json number,url,title,state,isDraft,statusCheckRollup,latestReviews", cwd, GhTimeoutMs);
         if (exit != 0 || string.IsNullOrWhiteSpace(stdout))
             return null; // non-zero == no PR for the branch (or an error) — either way, no glyph.
 
@@ -208,7 +241,8 @@ internal sealed class PrStatusService : IDisposable
             string state = root.TryGetProperty("state", out var s) ? s.GetString() ?? "" : "";
             bool isDraft = root.TryGetProperty("isDraft", out var d) && d.ValueKind == JsonValueKind.True;
 
-            return new PullRequestInfo(number, url, title, MapState(state, isDraft)) { Checks = ParseChecks(root) };
+            return new PullRequestInfo(number, url, title, MapState(state, isDraft))
+                { Checks = ParseChecks(root), LatestReviews = ParseReviews(root) };
         }
         catch (JsonException)
         {
@@ -256,6 +290,52 @@ internal sealed class PrStatusService : IDisposable
         }
         return checks;
     }
+
+    /// <summary>
+    /// Reads the <c>latestReviews</c> array <c>gh</c> emits into a list of <see cref="PrReview"/> — each the
+    /// latest review from one reviewer: <c>author.login</c>, <c>state</c> folded onto <see cref="PrReviewState"/>,
+    /// and <c>submittedAt</c> (parsed to UTC; <see cref="DateTime.MinValue"/> when absent/unparseable). A
+    /// missing/non-array field yields an empty list. Internal for unit testing.
+    /// </summary>
+    internal static IReadOnlyList<PrReview> ParseReviews(JsonElement root)
+    {
+        if (!root.TryGetProperty("latestReviews", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return Array.Empty<PrReview>();
+
+        var reviews = new List<PrReview>();
+        foreach (var el in arr.EnumerateArray())
+        {
+            if (el.ValueKind != JsonValueKind.Object)
+                continue;
+
+            string author = "";
+            if (el.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.Object
+                && a.TryGetProperty("login", out var l))
+                author = l.GetString() ?? "";
+
+            string state = el.TryGetProperty("state", out var s) ? s.GetString() ?? "" : "";
+
+            DateTime submitted = DateTime.MinValue;
+            if (el.TryGetProperty("submittedAt", out var sa) && sa.ValueKind == JsonValueKind.String
+                && DateTime.TryParse(sa.GetString(), CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var dt))
+                submitted = dt;
+
+            reviews.Add(new PrReview(author, MapReviewState(state), submitted));
+        }
+        return reviews;
+    }
+
+    // Folds gh's review state onto PrReviewState. Anything unexpected is treated as a plain comment.
+    private static PrReviewState MapReviewState(string state) =>
+        state.ToUpperInvariant() switch
+        {
+            "APPROVED"          => PrReviewState.Approved,
+            "CHANGES_REQUESTED" => PrReviewState.ChangesRequested,
+            "DISMISSED"         => PrReviewState.Dismissed,
+            "PENDING"           => PrReviewState.Pending,
+            _                   => PrReviewState.Commented,
+        };
 
     // A CheckRun is only decided once status is COMPLETED; before that it's queued/in-progress ⇒ Pending.
     // On completion the conclusion buckets it: SUCCESS/NEUTRAL/SKIPPED are non-blocking greens; everything

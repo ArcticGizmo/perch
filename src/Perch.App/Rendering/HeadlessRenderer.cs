@@ -157,6 +157,27 @@ internal static class HeadlessRenderer
         cycleProbe.HighlightCycledSession(SampleData.Sessions()[1].SessionId);
         RenderControl(cycleProbe, Path.Combine(outDir, "overlay_cycle_1x.png"), 96);
 
+        // PR state-change banner: the transient full-row banner flashed over a session's row on a PR event.
+        // Rendered right after triggering (the fade timer hasn't run, so full strength) — one per colourway
+        // (merged purple, closed red, approved green, changes-requested amber, reviewed blue) so the full-row
+        // cover + label read can be eyeballed.
+        (string id, string text, OverlayCanvas.PrBannerKind kind, string file)[] prBanners =
+        [
+            (SampleData.Sessions()[0].SessionId, "Merged",                 OverlayCanvas.PrBannerKind.Merged,           "overlay_pr_merged"),
+            (SampleData.Sessions()[1].SessionId, "Closed",                 OverlayCanvas.PrBannerKind.Closed,           "overlay_pr_closed"),
+            (SampleData.Sessions()[0].SessionId, "Approved by octocat",    OverlayCanvas.PrBannerKind.Approved,         "overlay_pr_approved"),
+            (SampleData.Sessions()[1].SessionId, "octocat requested changes", OverlayCanvas.PrBannerKind.ChangesRequested, "overlay_pr_changes"),
+            (SampleData.Sessions()[0].SessionId, "Reviewed by octocat",    OverlayCanvas.PrBannerKind.Reviewed,         "overlay_pr_reviewed"),
+        ];
+        foreach (var (id, text, kind, file) in prBanners)
+        {
+            var prProbe = new OverlayCanvas();
+            prProbe.SetShowPullRequests(true);
+            prProbe.Update(SampleData.Sessions());
+            prProbe.ShowPrBanner(id, text, kind);
+            RenderControl(prProbe, Path.Combine(outDir, $"{file}_1x.png"), 96);
+        }
+
         // Replay branding: the light-blue "Perch - Replay" header label + 2px border shown under
         // `perch replay`, so a recording can't be mistaken for live sessions.
         var replayProbe = new OverlayCanvas { ReplayMode = true };

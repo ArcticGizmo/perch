@@ -214,6 +214,30 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.NotifyOnApiError),
             s => s.NotifyOnApiError, (s, v) => s.NotifyOnApiError = v),
 
+        Toggle("notify-pr-finished", "Notify when a PR finishes",
+            "Toast when a tracked pull request is merged or closed.",
+            SettingSurface.Notifications, ["notify", "pr", "pull request", "merged", "closed", "github"],
+            PreviewTarget.None, nameof(AppSettings.NotifyOnPrFinished),
+            s => s.NotifyOnPrFinished, (s, v) => s.NotifyOnPrFinished = v),
+
+        Toggle("notify-pr-reviewed", "Notify when a PR is reviewed",
+            "Toast when a new review is added to a tracked pull request.",
+            SettingSurface.Notifications, ["notify", "pr", "pull request", "review", "reviewed", "comment", "changes"],
+            PreviewTarget.None, nameof(AppSettings.NotifyOnPrReviewed),
+            s => s.NotifyOnPrReviewed, (s, v) => s.NotifyOnPrReviewed = v),
+
+        Toggle("notify-pr-approved", "Notify when a PR is approved",
+            "Toast when a tracked pull request is approved.",
+            SettingSurface.Notifications, ["notify", "pr", "pull request", "approved", "review", "lgtm"],
+            PreviewTarget.None, nameof(AppSettings.NotifyOnPrApproved),
+            s => s.NotifyOnPrApproved, (s, v) => s.NotifyOnPrApproved = v),
+
+        Toggle("pr-finished-banner", "Flash a PR state banner",
+            "Flash a banner over the overlay row on a PR state change (merged, closed, reviewed, approved).",
+            SettingSurface.Notifications, ["pr", "pull request", "merged", "closed", "approved", "banner", "overlay", "indicator"],
+            PreviewTarget.None, nameof(AppSettings.PrFinishedOverlayBanner),
+            s => s.PrFinishedOverlayBanner, (s, v) => s.PrFinishedOverlayBanner = v),
+
         Toggle("chime-done", "Chime when done",
             "Play a sound when a session finishes.",
             SettingSurface.Notifications, ["chime", "sound", "beep", "audio", "bell", "done"],
@@ -231,6 +255,24 @@ internal static class SettingsRegistry
             SettingSurface.Notifications, ["chime", "sound", "beep", "audio", "bell", "error"],
             PreviewTarget.None, nameof(AppSettings.ChimeOnApiError),
             s => s.ChimeOnApiError, (s, v) => s.ChimeOnApiError = v),
+
+        Toggle("chime-pr-finished", "Chime when a PR finishes",
+            "Play a sound when a pull request is merged or closed.",
+            SettingSurface.Notifications, ["chime", "sound", "beep", "audio", "bell", "pr", "merged", "closed"],
+            PreviewTarget.None, nameof(AppSettings.ChimeOnPrFinished),
+            s => s.ChimeOnPrFinished, (s, v) => s.ChimeOnPrFinished = v),
+
+        Toggle("chime-pr-reviewed", "Chime when a PR is reviewed",
+            "Play a sound when a review is added to a pull request.",
+            SettingSurface.Notifications, ["chime", "sound", "beep", "audio", "bell", "pr", "review", "reviewed"],
+            PreviewTarget.None, nameof(AppSettings.ChimeOnPrReviewed),
+            s => s.ChimeOnPrReviewed, (s, v) => s.ChimeOnPrReviewed = v),
+
+        Toggle("chime-pr-approved", "Chime when a PR is approved",
+            "Play a sound when a pull request is approved.",
+            SettingSurface.Notifications, ["chime", "sound", "beep", "audio", "bell", "pr", "approved"],
+            PreviewTarget.None, nameof(AppSettings.ChimeOnPrApproved),
+            s => s.ChimeOnPrApproved, (s, v) => s.ChimeOnPrApproved = v),
 
         Toggle("external-notifications", "External push (ntfy)",
             "Send pushes to your phone via ntfy.",

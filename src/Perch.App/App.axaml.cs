@@ -7,6 +7,7 @@ using Avalonia.Platform;
 using Avalonia.Threading;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
+using Perch.Avalonia.Views;
 using Perch.Avalonia.Windows;
 using Perch.Data;
 using Perch.Data.Hypertree;
@@ -200,6 +201,9 @@ public partial class App : Application
             _monitorHost.NeedsAttention += OnNeedsAttention;
             _monitorHost.AwaitingInput += OnAwaitingInput;
             _monitorHost.ApiError += OnApiError;
+            _monitorHost.PrFinished += OnPrFinished;
+            _monitorHost.PrReviewed += OnPrReviewed;
+            _monitorHost.PrApproved += OnPrApproved;
             _monitorHost.OpenHistoryRequested += OpenHistory; // the plugin's jump-to-session
 
             // Row click focuses the session's terminal; the artifact glyph always pops a picker list, and
@@ -228,6 +232,12 @@ public partial class App : Application
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
             _overlay.Canvas.NoteEditRequested += OnEditNote;
             _overlay.Canvas.ReviewChangesRequested += OnReviewChanges;
+#if DEBUG
+            // DEBUG-only: the PR glyph's right-click test items drive the real PR alert path (toast/chime/push
+            // + banner) with the PR state/reviews synthesised, so any of them can be previewed without a real
+            // merge/review. The overlay banner is forced (bypassing its setting) so both surfaces always show.
+            _overlay.Canvas.DebugTestPrEventRequested += (s, kind) => FirePrEvent(s, kind, forceBanner: true);
+#endif
             _overlay.Canvas.NoteClearRequested += sessionId => _monitorHost?.SetNote(sessionId, null);
             _overlay.Canvas.TerminateRequested += OnTerminateSession;
             _overlay.Canvas.ScratchPadRequested += OnOpenScratchPad;
@@ -623,6 +633,41 @@ public partial class App : Application
         _overlay!.Canvas.TriggerAttention();
         _notifications?.Notify(NotificationKind.ApiFailed, session);
     }
+
+    // A tracked PR changed state (merged/closed, reviewed, approved): fire the matching desktop alert (toast/
+    // chime/push, each gated inside NotificationService) and — if the banner setting is on — the overlay
+    // banner, two independent surfaces for the same event.
+    private void OnPrFinished(ClaudeSession session) => FirePrEvent(session, NotificationKind.PrFinished, forceBanner: false);
+    private void OnPrReviewed(ClaudeSession session) => FirePrEvent(session, NotificationKind.PrReviewed, forceBanner: false);
+    private void OnPrApproved(ClaudeSession session) => FirePrEvent(session, NotificationKind.PrApproved, forceBanner: false);
+
+    private void FirePrEvent(ClaudeSession session, NotificationKind kind, bool forceBanner)
+    {
+        if (IsDaemonSession(session)) return;
+        _notifications?.Notify(kind, session);
+        if ((forceBanner || _appSettings?.PrFinishedOverlayBanner == true) && session.PullRequest is { } pr)
+            _overlay?.Canvas.ShowPrBanner(session.SessionId, PrBannerText(kind, pr), PrBannerKindOf(kind, pr));
+    }
+
+    // The banner's label — concise, naming the reviewer/approver where relevant (the toast carries the
+    // fuller wording).
+    private static string PrBannerText(NotificationKind kind, PullRequestInfo pr) => kind switch
+    {
+        NotificationKind.PrFinished => pr.State == PrState.Closed ? "Closed" : "Merged",
+        NotificationKind.PrApproved => pr.NewestApproval?.Author is { Length: > 0 } a ? $"Approved by {a}" : "Approved",
+        _ => pr.NewestReview is { State: PrReviewState.ChangesRequested, Author: { Length: > 0 } cr } ? $"{cr} requested changes"
+           : pr.NewestReview?.Author is { Length: > 0 } r ? $"Reviewed by {r}"
+           : "Reviewed",
+    };
+
+    // The banner's colour, from the event kind (and, for reviews, the review's state).
+    private static OverlayCanvas.PrBannerKind PrBannerKindOf(NotificationKind kind, PullRequestInfo pr) => kind switch
+    {
+        NotificationKind.PrFinished => pr.State == PrState.Closed ? OverlayCanvas.PrBannerKind.Closed : OverlayCanvas.PrBannerKind.Merged,
+        NotificationKind.PrApproved => OverlayCanvas.PrBannerKind.Approved,
+        _ => pr.NewestReview?.State == PrReviewState.ChangesRequested
+            ? OverlayCanvas.PrBannerKind.ChangesRequested : OverlayCanvas.PrBannerKind.Reviewed,
+    };
 
     // A toast was clicked: focus the session's terminal and acknowledge it (clears the "done" badge) —
     // the Avalonia counterpart of the WinForms balloon-click handler.

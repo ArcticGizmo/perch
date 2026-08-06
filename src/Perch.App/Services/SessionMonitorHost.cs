@@ -36,6 +36,16 @@ internal sealed class SessionMonitorHost : IDisposable
     /// overlay and raises the API-error notification.</summary>
     public event Action<ClaudeSession>? ApiError;
 
+    /// <summary>Raised when a pull request tracked for a session's directory was merged or closed — the app
+    /// raises the "PR finished" notification.</summary>
+    public event Action<ClaudeSession>? PrFinished;
+
+    /// <summary>Raised when a new review is added to a tracked PR — the app raises the "PR reviewed" alert.</summary>
+    public event Action<ClaudeSession>? PrReviewed;
+
+    /// <summary>Raised when a tracked PR is approved — the app raises the "PR approved" alert.</summary>
+    public event Action<ClaudeSession>? PrApproved;
+
     /// <summary>Raised when the plugin asks to open the history viewer on a session (carries its id).</summary>
     public event Action<string>? OpenHistoryRequested;
 
@@ -52,6 +62,9 @@ internal sealed class SessionMonitorHost : IDisposable
         _monitor.NeedsAttention += s => NeedsAttention?.Invoke(s);
         _monitor.AwaitingInput += s => AwaitingInput?.Invoke(s);
         _monitor.ApiError += s => ApiError?.Invoke(s);
+        _monitor.PrFinished += s => PrFinished?.Invoke(s);
+        _monitor.PrReviewed += s => PrReviewed?.Invoke(s);
+        _monitor.PrApproved += s => PrApproved?.Invoke(s);
         _monitor.OpenHistoryRequested += id => OpenHistoryRequested?.Invoke(id);
         // FileSystemWatcher/debounce fire on background threads; hop to the UI thread and re-scan there
         // (matches the WinForms BeginInvoke(Scan) pattern) so the callback only runs on the UI thread.

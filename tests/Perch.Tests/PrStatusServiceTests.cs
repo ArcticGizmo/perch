@@ -233,4 +233,69 @@ public class PrStatusServiceTests
         Assert.Single(pr!.Value.Checks);
         Assert.Equal("build", pr.Value.Checks[0].Name);
     }
+
+    [Fact]
+    public void ParsesLatestReviewsAuthorStateAndTime()
+    {
+        var pr = PrStatusService.ParsePrJson(
+            """
+            {"number":1,"state":"OPEN","latestReviews":[
+              {"author":{"login":"octocat"},"state":"APPROVED","submittedAt":"2026-01-01T09:00:00Z"},
+              {"author":{"login":"hubot"},"state":"CHANGES_REQUESTED","submittedAt":"2026-01-01T09:05:00Z"},
+              {"author":{"login":"ghost"},"state":"COMMENTED","submittedAt":"2026-01-01T08:00:00Z"}
+            ]}
+            """);
+
+        var reviews = pr!.Value.LatestReviews;
+        Assert.Equal(3, reviews.Count);
+        Assert.Equal("octocat", reviews[0].Author);
+        Assert.Equal(PrReviewState.Approved, reviews[0].State);
+        Assert.Equal(PrReviewState.ChangesRequested, reviews[1].State);
+        Assert.Equal(PrReviewState.Commented, reviews[2].State);
+    }
+
+    [Fact]
+    public void NewestReviewAndApprovalPickByTime()
+    {
+        var pr = PrStatusService.ParsePrJson(
+            """
+            {"number":1,"state":"OPEN","latestReviews":[
+              {"author":{"login":"octocat"},"state":"APPROVED","submittedAt":"2026-01-01T09:00:00Z"},
+              {"author":{"login":"hubot"},"state":"CHANGES_REQUESTED","submittedAt":"2026-01-01T09:05:00Z"}
+            ]}
+            """);
+
+        // Newest overall is hubot (later time); newest approval is octocat (the only approver).
+        Assert.Equal("hubot", pr!.Value.NewestReview!.Value.Author);
+        Assert.Equal("octocat", pr.Value.NewestApproval!.Value.Author);
+    }
+
+    [Fact]
+    public void NoLatestReviewsYieldsNoneAndDoesNotThrow()
+    {
+        var pr = PrStatusService.ParsePrJson("""{"number":1,"state":"OPEN"}""");
+        Assert.Empty(pr!.Value.LatestReviews);
+        Assert.Null(pr.Value.NewestReview);
+        Assert.Null(pr.Value.NewestApproval);
+    }
+
+    [Fact]
+    public void ReviewEqualityFoldsIntoPullRequestInfoEquality()
+    {
+        const string json =
+            """
+            {"number":1,"state":"OPEN","latestReviews":[
+              {"author":{"login":"octocat"},"state":"APPROVED","submittedAt":"2026-01-01T09:00:00Z"}
+            ]}
+            """;
+        Assert.Equal(PrStatusService.ParsePrJson(json), PrStatusService.ParsePrJson(json));
+
+        var changed = PrStatusService.ParsePrJson(
+            """
+            {"number":1,"state":"OPEN","latestReviews":[
+              {"author":{"login":"octocat"},"state":"CHANGES_REQUESTED","submittedAt":"2026-01-01T09:00:00Z"}
+            ]}
+            """);
+        Assert.NotEqual(PrStatusService.ParsePrJson(json), changed);
+    }
 }

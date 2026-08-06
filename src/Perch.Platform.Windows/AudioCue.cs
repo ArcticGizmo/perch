@@ -26,6 +26,15 @@ public sealed class AudioCue : IAudioCue
                 // The system "error" tone — the sharpest of the three, matching a failed run.
                 SystemSounds.Hand.Play();
                 break;
+            case NotificationKind.PrFinished:
+            case NotificationKind.PrApproved:
+                // The soft "information" tone — a PR landing or approval is good news, not an alarm.
+                SystemSounds.Asterisk.Play();
+                break;
+            case NotificationKind.PrReviewed:
+                // A review arriving is a nudge to look — the sharper "attention" tone, like waiting-for-input.
+                SystemSounds.Exclamation.Play();
+                break;
         }
     }
 }

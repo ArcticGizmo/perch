@@ -1066,6 +1066,32 @@ internal sealed class SettingsWindow : Window
             _settings.ChimeOnApiError, v => { _settings.ChimeOnApiError = v; _settings.Save(); },
             NotificationKind.ApiFailed));
 
+        page.Children.Add(BuildNotifyRow(
+            "PR finished — a tracked pull request was merged or closed",
+            _settings.NotifyOnPrFinished, v => { _settings.NotifyOnPrFinished = v; _settings.Save(); },
+            _settings.ChimeOnPrFinished, v => { _settings.ChimeOnPrFinished = v; _settings.Save(); },
+            NotificationKind.PrFinished));
+
+        page.Children.Add(BuildNotifyRow(
+            "PR reviewed — a new review was added to a tracked PR",
+            _settings.NotifyOnPrReviewed, v => { _settings.NotifyOnPrReviewed = v; _settings.Save(); },
+            _settings.ChimeOnPrReviewed, v => { _settings.ChimeOnPrReviewed = v; _settings.Save(); },
+            NotificationKind.PrReviewed));
+
+        page.Children.Add(BuildNotifyRow(
+            "PR approved — a tracked PR was approved",
+            _settings.NotifyOnPrApproved, v => { _settings.NotifyOnPrApproved = v; _settings.Save(); },
+            _settings.ChimeOnPrApproved, v => { _settings.ChimeOnPrApproved = v; _settings.Save(); },
+            NotificationKind.PrApproved));
+
+        // The PR banner is a second, independent surface for the PR state-change events — a full-row overlay
+        // flash rather than a desktop toast — so it sits as a sub-row and stays live even when the master
+        // toggle above is off (like the attention flash, it isn't a "desktop notification").
+        var prBannerToggle = Toggle(_settings.PrFinishedOverlayBanner);
+        prBannerToggle.CheckedChanged += (_, _) => { _settings.PrFinishedOverlayBanner = prBannerToggle.IsChecked; _settings.Save(); };
+        page.Children.Add(SettingsUi.SubRow(
+            "Also flash a full-row banner on the overlay for these PR events", prBannerToggle, out _));
+
         ApplyNotifyEnabled();
 
         page.Children.Add(SettingsUi.Separator());

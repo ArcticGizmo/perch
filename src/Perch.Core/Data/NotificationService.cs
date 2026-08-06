@@ -36,7 +36,7 @@ internal sealed class NotificationService
     {
         if (_settings.NotificationsEnabled && ToastEnabled(kind))
         {
-            var (title, body, level) = Describe(kind, session.DisplayName, session.ApiFailure?.Status ?? 0);
+            var (title, body, level) = Describe(kind, session.DisplayName, session.ApiFailure?.Status ?? 0, session.PullRequest);
             _notifier.Show(title, body, level, session.Pid, session.ProjectName);
         }
 
@@ -50,7 +50,18 @@ internal sealed class NotificationService
     /// toggles, so the user can preview exactly what a notification looks and sounds like.</summary>
     public void ShowTest(NotificationKind kind)
     {
-        var (title, body, level) = Describe(kind, "example-project", 529);
+        // A sample PR with reviews so the PR-related previews (finished / reviewed / approved) read like the
+        // real toast; ignored by the non-PR kinds. octocat approves; hubot (newer) requests changes — so the
+        // approved preview names octocat and the reviewed preview names hubot.
+        var samplePr = new PullRequestInfo(123, "", "example", PrState.Merged)
+        {
+            LatestReviews =
+            [
+                new PrReview("octocat", PrReviewState.Approved, new DateTime(2026, 1, 1, 9, 0, 0, DateTimeKind.Utc)),
+                new PrReview("hubot", PrReviewState.ChangesRequested, new DateTime(2026, 1, 1, 9, 5, 0, DateTimeKind.Utc)),
+            ],
+        };
+        var (title, body, level) = Describe(kind, "example-project", 529, samplePr);
         _notifier.Show(title, body, level, null, null); // null pid — a preview, not a real session
         _audio.Play(kind);
     }
@@ -88,6 +99,9 @@ internal sealed class NotificationService
     {
         NotificationKind.Done => _settings.NotifyOnDone,
         NotificationKind.ApiFailed => _settings.NotifyOnApiError,
+        NotificationKind.PrFinished => _settings.NotifyOnPrFinished,
+        NotificationKind.PrReviewed => _settings.NotifyOnPrReviewed,
+        NotificationKind.PrApproved => _settings.NotifyOnPrApproved,
         _ => _settings.NotifyOnWaitingInput,
     };
 
@@ -95,11 +109,15 @@ internal sealed class NotificationService
     {
         NotificationKind.Done => _settings.ChimeOnDone,
         NotificationKind.ApiFailed => _settings.ChimeOnApiError,
+        NotificationKind.PrFinished => _settings.ChimeOnPrFinished,
+        NotificationKind.PrReviewed => _settings.ChimeOnPrReviewed,
+        NotificationKind.PrApproved => _settings.ChimeOnPrApproved,
         _ => _settings.ChimeOnWaitingInput,
     };
 
     // The API status code is folded into the body when known (0 = unknown, so a bare "API error").
-    private static (string title, string body, ToastLevel level) Describe(NotificationKind kind, string project, int apiStatus) => kind switch
+    private static (string title, string body, ToastLevel level) Describe(
+        NotificationKind kind, string project, int apiStatus, PullRequestInfo? pr = null) => kind switch
     {
         NotificationKind.Done =>
             ("Claude Code — Done", $"Waiting for you in {project}", ToastLevel.Info),
@@ -107,9 +125,44 @@ internal sealed class NotificationService
             ("Claude Code — API Error",
              apiStatus > 0 ? $"API {apiStatus} error in {project} — try again" : $"API error in {project} — try again",
              ToastLevel.Error),
+        NotificationKind.PrFinished => DescribePrFinished(project, pr),
+        NotificationKind.PrApproved => DescribePrApproved(project, pr),
+        NotificationKind.PrReviewed => DescribePrReviewed(project, pr),
         _ =>
             ("Claude Code — Waiting for Input", $"{project} needs your response", ToastLevel.Warning),
     };
+
+    // The PR-finished toast reflects the terminal state: a merge is the good outcome (info), a close
+    // without merge is the "it didn't land" outcome (warning). Falls back to the merge wording if the
+    // PR detail somehow isn't attached (PrFinished only ever fires with a PR present).
+    private static (string title, string body, ToastLevel level) DescribePrFinished(string project, PullRequestInfo? pr) =>
+        pr?.State == PrState.Closed
+            ? ("PR: Closed", $"{PrLabel(pr)} closed in {project}", ToastLevel.Warning)
+            : ("PR: Merged", $"{PrLabel(pr)} merged in {project}", ToastLevel.Info);
+
+    // "approved by {who} in {project}" — the who is the most recent approver.
+    private static (string title, string body, ToastLevel level) DescribePrApproved(string project, PullRequestInfo? pr)
+    {
+        string by = By(pr?.NewestApproval?.Author);
+        return ("PR: Approved", $"{PrLabel(pr)} approved{by} in {project}", ToastLevel.Info);
+    }
+
+    // A new review that isn't an approval: changes-requested reads as a warning, a plain comment as info.
+    private static (string title, string body, ToastLevel level) DescribePrReviewed(string project, PullRequestInfo? pr) =>
+        pr?.NewestReview?.State == PrReviewState.ChangesRequested
+            ? ("PR: Changes requested", $"{Reviewer(pr)} requested changes on {PrLabel(pr)} in {project}", ToastLevel.Warning)
+            : ("PR: Reviewed", $"{Reviewer(pr)} reviewed {PrLabel(pr)} in {project}", ToastLevel.Info);
+
+    // "PR #123" when the number is known, else a neutral "A PR" (the PR alerts always carry one, but the
+    // ntfy/preview paths stay safe if it doesn't).
+    private static string PrLabel(PullRequestInfo? pr) => pr is { Number: > 0 } p ? $"PR #{p.Number}" : "A PR";
+
+    // " by alice" when a login is known, else "" — so bodies read naturally either way.
+    private static string By(string? login) => string.IsNullOrEmpty(login) ? "" : $" by {login}";
+
+    // The newest reviewer's login, or "Someone" when unknown — the subject of the "reviewed" alert.
+    private static string Reviewer(PullRequestInfo? pr) =>
+        string.IsNullOrEmpty(pr?.NewestReview?.Author) ? "Someone" : pr!.Value.NewestReview!.Value.Author;
 
     // Pushes an external notification for a session, but only when the feature is on and that session
     // has opted in (or the account-wide AFK override is on and the screen is locked). Independent of the
@@ -131,6 +184,24 @@ internal sealed class NotificationService
                      ? $"API {f.Status} error in {session.DisplayName} — try again"
                      : $"API error in {session.DisplayName} — try again",
                  "warning"),
+            NotificationKind.PrFinished =>
+                session.PullRequest?.State == PrState.Closed
+                    ? ("PR: Closed",
+                       $"{PrLabel(session.PullRequest)} closed in {session.DisplayName}", "wastebasket")
+                    : ("PR: Merged",
+                       $"{PrLabel(session.PullRequest)} merged in {session.DisplayName}", "tada"),
+            NotificationKind.PrApproved =>
+                ("PR: Approved",
+                 $"{PrLabel(session.PullRequest)} approved{By(session.PullRequest?.NewestApproval?.Author)} in {session.DisplayName}",
+                 "white_check_mark"),
+            NotificationKind.PrReviewed =>
+                session.PullRequest?.NewestReview?.State == PrReviewState.ChangesRequested
+                    ? ("PR: Changes requested",
+                       $"{Reviewer(session.PullRequest)} requested changes on {PrLabel(session.PullRequest)} in {session.DisplayName}",
+                       "warning")
+                    : ("PR: Reviewed",
+                       $"{Reviewer(session.PullRequest)} reviewed {PrLabel(session.PullRequest)} in {session.DisplayName}",
+                       "eyes"),
             _ =>
                 ("Claude Code — Waiting for Input", $"{session.DisplayName} needs your response", "bell"),
         };

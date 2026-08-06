@@ -112,6 +112,14 @@ internal sealed class SessionMonitor : IDisposable
     private readonly GitStatsService _gitStats = new();
     private readonly PrStatusService _pr = new();
 
+    // Last-known PR (number + state) per working directory, so a transition into a finalised state
+    // (open/draft -> merged/closed) fires the "PR finished" alert exactly once. Keyed by cwd because a
+    // PR belongs to a directory's branch, not a single session; the first session in a scan to observe
+    // the flip records it, so sibling sessions in the same cwd don't re-alert. Only written from a
+    // non-null read, so a transient "no PR" (a gh hiccup) never wipes the memory. Bounded by the number
+    // of distinct working directories seen — never pruned, but tiny in practice.
+    private readonly Dictionary<string, PullRequestInfo> _lastPr = new();
+
     // How we decide a session's pid is still alive. Defaults to the real OS probe; replay swaps in one
     // backed by the projector so recorded (dead) pids read as alive within their active window.
     private readonly IProcessProbe _processProbe;
@@ -131,6 +139,21 @@ internal sealed class SessionMonitor : IDisposable
     /// the "done" <see cref="NeedsAttention"/> for that session, so an API failure never reads as a
     /// successful completion.</summary>
     public event Action<ClaudeSession>? ApiError;
+
+    /// <summary>Raised once when a pull request tracked for a session's working directory transitions into
+    /// a finalised state — merged or closed — from an open/draft one Perch actually witnessed. Fires at
+    /// most once per PR (keyed by working directory + PR number); a PR already finalised the first time
+    /// it is seen (Perch started after the merge), or the integration being off, never fires it.</summary>
+    public event Action<ClaudeSession>? PrFinished;
+
+    /// <summary>Raised when a new review (a comment or changes-requested) is added to a tracked PR — the
+    /// session carries the PR whose <see cref="PullRequestInfo.NewestReview"/> is the one that arrived. An
+    /// approval raises <see cref="PrApproved"/> instead. Same once-per-change, same-PR gating as the rest.</summary>
+    public event Action<ClaudeSession>? PrReviewed;
+
+    /// <summary>Raised when a new approving review is added to a tracked PR — the session carries the PR
+    /// whose <see cref="PullRequestInfo.NewestApproval"/> names the approver.</summary>
+    public event Action<ClaudeSession>? PrApproved;
 
     /// <summary>
     /// Raised when a session asks (via the plugin's <c>/history</c> command, which drops a one-shot
@@ -763,12 +786,67 @@ internal sealed class SessionMonitor : IDisposable
             else
                 _apiErrorPids.Remove(pid);
 
+            // A PR tracked for this directory just went from open/draft to finalised (merged or closed):
+            // fire the "PR finished" alert once. Keyed by cwd + number so sibling sessions and later scans
+            // don't re-alert, and a PR already finalised the first time we see it (Perch started after the
+            // merge, or the branch was switched to a landed PR) is recorded silently rather than announced.
+            if (pullRequest is { } pr)
+            {
+                PullRequestInfo? prev = _lastPr.TryGetValue(cwd, out var prevPr) ? prevPr : null;
+                if (IsPrFinishTransition(prev, pr))
+                    PrFinished?.Invoke(session);
+
+                // A newly-submitted review on the same PR we already knew about: an approval fires the
+                // "approved" alert, anything else (comment / changes-requested) the "reviewed" one. Gated
+                // on prev existing + same PR number, so the first sighting of a reviewed PR (Perch started
+                // after the review) or a branch switch doesn't spuriously alert — mirrors the finish gate.
+                if (prev is { } p0 && p0.Number == pr.Number
+                    && NewestNewReview(p0.LatestReviews, pr.LatestReviews) is { } added)
+                {
+                    if (added.State == PrReviewState.Approved)
+                        PrApproved?.Invoke(session);
+                    else if (added.State is PrReviewState.ChangesRequested or PrReviewState.Commented)
+                        PrReviewed?.Invoke(session);
+                }
+
+                _lastPr[cwd] = pr;
+            }
+
             return session;
         }
         catch
         {
             return null;
         }
+    }
+
+    /// <summary>Whether observing <paramref name="current"/> after <paramref name="previous"/> (the last
+    /// PR seen for the same working directory) is the open/draft → merged/closed transition that fires the
+    /// "PR finished" alert. True only when the finalised PR is the <em>same</em> PR (by number) we last saw
+    /// still open — so a PR already finalised the first time it is seen (no <paramref name="previous"/>), or
+    /// a branch switch onto a different, already-landed PR, doesn't count. Pure; unit-tested.</summary>
+    internal static bool IsPrFinishTransition(PullRequestInfo? previous, PullRequestInfo current) =>
+        current.State is PrState.Merged or PrState.Closed
+        && previous is { } p
+        && p.Number == current.Number
+        && p.State is PrState.Open or PrState.Draft;
+
+    /// <summary>The most recently-submitted review in <paramref name="current"/> that wasn't in
+    /// <paramref name="previous"/> (matched by author + submit time), or null when nothing new arrived. This
+    /// is what a "review added" / "approved" alert fires on — the newest of the fresh reviews, so a single
+    /// scan that surfaces several only alerts once. Pure; unit-tested.</summary>
+    internal static PrReview? NewestNewReview(IReadOnlyList<PrReview> previous, IReadOnlyList<PrReview> current)
+    {
+        PrReview? newest = null;
+        foreach (var r in current)
+        {
+            bool seen = false;
+            foreach (var p in previous)
+                if (p.Author == r.Author && p.SubmittedAt == r.SubmittedAt) { seen = true; break; }
+            if (seen) continue;
+            if (newest is null || r.SubmittedAt > newest.Value.SubmittedAt) newest = r;
+        }
+        return newest;
     }
 
     // Consumes one-shot {sessionId}.history trigger files dropped by the plugin's /history command:
