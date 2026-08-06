@@ -1,5 +1,17 @@
 # Initial Placement Editor — Implementation Plan
 
+## Status
+
+- **Phase 0 — data model + math + persistence** ✅ done (`OverlayPlacement`, `PlacementMath`,
+  `AppSettings.Floating/DensePlacement`, `PlacementMathTests`).
+- **Phase 1 — consume at startup** ✅ done (`PlaceAtInitialFloating`, `DenseController.SeedPlacement`).
+- **Phase 2 — header menu + editor shell** ✅ done (`SetPlacementsRequested`, `PlacementEditorWindow`).
+- **Phase 3 — drag + HUD + guides + live apply** ✅ done (single-monitor MVP).
+- **Phase 4 — multi-monitor** ⏳ not started.
+- **Phase 5 — polish / tests / docs** ⏳ not started.
+
+Not yet visually verified in the running app — build + unit tests green; a live eyeball is pending.
+
 ## Goal
 
 Let users define the **initial on-screen placement** for both overlay presentations —
