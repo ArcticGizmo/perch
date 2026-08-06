@@ -118,6 +118,19 @@ public static class MicApps
             && path.Contains($@"__{publisherId}\", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Whether two capture/source identities name the same app, compared by their reduced <see cref="Token"/>.
+    /// The join that lets the overlay tell that a media session's source app is the same product as an app
+    /// holding the microphone — a media <c>SourceAppUserModelId</c> such as <c>MSTeams_8wekyb3d8bbwe!App</c>
+    /// and a mic identity <c>MSTeams_8wekyb3d8bbwe</c> both reduce to the token <c>MSTeams</c>. Blank or
+    /// tokenless identities never match, so a source that doesn't report an app id can't suppress anything.
+    /// </summary>
+    public static bool IsSameApp(string? identityA, string? identityB)
+    {
+        var a = Token(identityA);
+        return a.Length > 0 && a.Equals(Token(identityB), StringComparison.OrdinalIgnoreCase);
+    }
+
     // Last-resort name for an app with no version info and no table entry: split a CamelCase/kebab token
     // into words and capitalise. "voicemeeter-vban" -> "Voicemeeter Vban", "SoundRecorder" -> "Sound Recorder".
     private static string Prettify(string token)

@@ -9,6 +9,13 @@
 /// <see cref="Artist"/> may be blank (a browser tab, a podcast, …), and <see cref="Duration"/> is
 /// <see cref="TimeSpan.Zero"/> when the source doesn't report a timeline (a live stream, most browser
 /// media) — in which case there's no progress to draw.
+///
+/// <para><see cref="SourceAppId"/> identifies the app that owns the session — on Windows the SMTC
+/// <c>SourceAppUserModelId</c> (an AUMID such as <c>MSTeams_8wekyb3d8bbwe!App</c> or a plain exe name).
+/// It exists so the overlay can tell that a "now playing" session is really a call app that has grabbed
+/// the media controls (Teams, Zoom, Webex, Discord all do this during a call) and is the same app already
+/// shown on the mic strip — matched product-agnostically through <see cref="Perch.Data.MicApps"/>. May be
+/// blank when the platform can't report it.</para>
 /// </summary>
 public sealed record MediaSnapshot(
     string Title,
@@ -18,7 +25,8 @@ public sealed record MediaSnapshot(
     bool CanNext,
     bool CanPrevious,
     TimeSpan Position = default,
-    TimeSpan Duration = default);
+    TimeSpan Duration = default,
+    string SourceAppId = "");
 
 /// <summary>
 /// The platform-specific "what's playing" service behind a seam, so the overlay can show a currently-playing

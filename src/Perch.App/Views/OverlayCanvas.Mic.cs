@@ -62,12 +62,15 @@ public sealed partial class OverlayCanvas
     }
 
     /// <summary>Feeds the latest microphone snapshot (on the UI thread), or null when the platform can't
-    /// report. Relayouts when the strip's visibility flips, otherwise just repaints.</summary>
+    /// report. The mic holder also drives whether the media strip suppresses a call app that grabbed the
+    /// media controls, so a change here can flip <em>either</em> strip's visibility — relayout when it does,
+    /// otherwise just repaint.</summary>
     public void UpdateMic(MicSnapshot? mic)
     {
-        bool before = MicStripVisible;
+        bool micBefore = MicStripVisible;
+        bool mediaBefore = MediaStripVisible;
         _mic = mic;
-        if (MicStripVisible != before) RemeasurePanel();
+        if (MicStripVisible != micBefore || MediaStripVisible != mediaBefore) RemeasurePanel();
         else if (_micEnabled) InvalidateVisual();
     }
 

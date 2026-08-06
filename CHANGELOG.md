@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.12] - 2026-08-06
+
+- The app holding your mic no longer doubles as "now playing" media
+- Teams stops moonlighting as a music player mid-call (Zoom and Webex too)
+
+---
+
 ## [v0.3.11] - 2026-08-06
 
 - PR checks no longer clutter the session list as child rows

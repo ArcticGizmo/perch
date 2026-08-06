@@ -107,6 +107,30 @@ public class MicAppsTests
     public void IdentityMatchesPath_RejectsUnusableInput(string? identity, string? path)
         => Assert.False(MicApps.IdentityMatchesPath(identity, path));
 
+    // ── IsSameApp: matching a media session's source app to a mic holder ──────
+
+    [Theory]
+    // A media SMTC SourceAppUserModelId (AUMID, "!"-suffixed) vs the mic ledger identity for the same app.
+    // Packaged Teams is reported both places by its package family name, so both reduce to "MSTeams".
+    [InlineData("MSTeams_8wekyb3d8bbwe!App", "MSTeams_8wekyb3d8bbwe")]
+    // Store Slack's AUMID vs its package family name.
+    [InlineData("91750D7E.Slack_8she8kybcnzg4!Slack", "91750D7E.Slack_8she8kybcnzg4")]
+    // A plain win32 source (Chrome media tab) reported as an exe name vs the mic's exe path.
+    [InlineData("chrome.exe", @"C:\Program Files\Google\Chrome\Application\chrome.exe")]
+    public void IsSameApp_MatchesTheSameProductAcrossIdentityShapes(string a, string b)
+        => Assert.True(MicApps.IsSameApp(a, b));
+
+    [Theory]
+    // Different products never match, so a real media player during a call isn't suppressed.
+    [InlineData("SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify", "MSTeams_8wekyb3d8bbwe")]
+    [InlineData("chrome.exe", @"C:\Program Files\Mozilla Firefox\firefox.exe")]
+    // A blank/tokenless source app id must never match — a source that can't report an app id can't suppress.
+    [InlineData("", "MSTeams_8wekyb3d8bbwe")]
+    [InlineData(null, "MSTeams_8wekyb3d8bbwe")]
+    [InlineData("MSTeams_8wekyb3d8bbwe!App", null)]
+    public void IsSameApp_RejectsDifferentOrBlankApps(string? a, string? b)
+        => Assert.False(MicApps.IsSameApp(a, b));
+
     // ── MicSnapshot: value equality is what suppresses no-op repaints ──────────
 
     [Fact]

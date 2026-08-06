@@ -294,7 +294,7 @@ public partial class App : Application
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
             if (settings.ShowServiceStatus) _statusHost.Start(); // initial fetch (polls every 2 min thereafter)
             if (settings.ShowMediaController) _mediaHost.Start(); // begin listening to the system media session
-            if (settings.ShowMicPresence) _micHost.Start();       // begin watching which app holds the mic
+            SyncMicMonitor();                                     // watch the mic if either strip needs it
             if (settings.HypertreeEnabled) _hypertreeHost.Start(); // begin polling Hypertree's status file
             // Begin watching the daemon roster (a no-op until the directory exists); off with the setting.
             if (settings.ShowDaemonProcesses) _daemonHost.Start();
@@ -699,6 +699,17 @@ public partial class App : Application
         _overlay.Canvas.SetShowUsage(enabled);
         if (enabled) _usageHost?.Start(); else _usageHost?.Stop();
         _settings?.SyncDisplayToggles();
+    }
+
+    // The mic monitor backs two things: the mic strip itself, and the media strip's suppression of a call app
+    // that grabbed the media controls (which needs to know who holds the mic). So it runs whenever either
+    // strip is enabled and stops only when neither does. Start/Stop are idempotent, so this is safe to call
+    // on every relevant settings change.
+    private void SyncMicMonitor()
+    {
+        if (_appSettings is not { } s || _micHost is null) return;
+        if (s.ShowMicPresence || s.ShowMediaController) _micHost.Start();
+        else _micHost.Stop();
     }
 
     // "Take me back to the call I'm talking into": focus the window of whatever app currently holds the
@@ -1222,8 +1233,10 @@ public partial class App : Application
             UsageEnabledChanged = on => { if (on) _usageHost?.Start(); else _usageHost?.Stop(); },
             ServiceStatusEnabledChanged = on => { if (on) _statusHost?.Start(); else _statusHost?.Stop(); },
             ServiceStatusIntervalChanged = () => _statusHost?.SetInterval(settings.ServiceStatusIntervalMinutes),
-            MediaEnabledChanged = on => { if (on) _mediaHost?.Start(); else _mediaHost?.Stop(); },
-            MicEnabledChanged = on => { if (on) _micHost?.Start(); else _micHost?.Stop(); },
+            // The media strip's call-app suppression reads the mic holder, so turning either strip on or off
+            // re-evaluates whether the shared mic monitor needs to run.
+            MediaEnabledChanged = on => { if (on) _mediaHost?.Start(); else _mediaHost?.Stop(); SyncMicMonitor(); },
+            MicEnabledChanged = _ => SyncMicMonitor(),
             HypertreeEnabledChanged = on => { if (on) _hypertreeHost?.Start(); else _hypertreeHost?.Stop(); },
             DaemonProcessesEnabledChanged = on => { if (on) _daemonHost?.Start(); else _daemonHost?.Stop(); },
 #if DEBUG

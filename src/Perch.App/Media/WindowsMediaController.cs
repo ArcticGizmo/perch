@@ -124,6 +124,12 @@ internal sealed class WindowsMediaController : IMediaController
             // doesn't repaint the overlay faster than the bar visibly moves.
             var (position, duration) = ReadTimeline(session);
 
+            // The app that owns the session (an AUMID, or a plain exe name for a win32 source). Best-effort:
+            // some sources report it as empty. Lets the overlay recognise a call app that's grabbed the media
+            // controls and suppress it when that same app is already on the mic strip.
+            string sourceAppId = "";
+            try { sourceAppId = session.SourceAppUserModelId ?? ""; } catch { /* not all sources report it */ }
+
             var snapshot = new MediaSnapshot(
                 Title: title.Trim(),
                 Artist: (props?.Artist ?? "").Trim(),
@@ -132,7 +138,8 @@ internal sealed class WindowsMediaController : IMediaController
                 CanNext: controls.IsNextEnabled,
                 CanPrevious: controls.IsPreviousEnabled,
                 Position: position,
-                Duration: duration);
+                Duration: duration,
+                SourceAppId: sourceAppId.Trim());
             Publish(snapshot);
         }
         catch { /* best-effort — a torn read just skips this update */ }

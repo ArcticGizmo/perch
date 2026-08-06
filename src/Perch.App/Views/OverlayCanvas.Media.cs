@@ -1,6 +1,7 @@
 ﻿using Avalonia;
 using Avalonia.Media;
 using Perch.Avalonia.Rendering;
+using Perch.Data;
 using Perch.Platform;
 
 namespace Perch.Avalonia.Views;
@@ -38,8 +39,20 @@ public sealed partial class OverlayCanvas
     // tooltip. The tooltip text is rebuilt from the current snapshot, so no need to stash the full string.
     private Rect _mediaTitleRect;
 
-    // The strip is on screen only when the feature is enabled and there's something playing.
-    private bool MediaStripVisible => _mediaEnabled && _media is not null;
+    // The strip is on screen only when the feature is enabled, there's something playing, and that "now
+    // playing" isn't really a call app that grabbed the media controls while it's already on the mic strip.
+    private bool MediaStripVisible => _mediaEnabled && _media is not null && !MediaIsMicHolder;
+
+    // A call app (Teams, Zoom, Webex, Discord, …) registers an SMTC session during a call so the media keys
+    // can mute it, so Windows honestly reports it as "now playing" — but showing it as media is noise when
+    // the same app is already named on the mic strip. Suppress the media strip when its source app matches an
+    // app currently holding the mic. Product-agnostic: the match is a token compare via MicApps, no app is
+    // hard-coded. Needs a source app id from the platform and the mic monitor running (it runs whenever
+    // either strip is enabled) — absent either, nothing is suppressed.
+    private bool MediaIsMicHolder =>
+        _media is { SourceAppId: { Length: > 0 } appId }
+        && _mic is { InUse: true, Users: var users }
+        && users.Any(u => MicApps.IsSameApp(appId, u.Identity));
 
     /// <summary>Raised when the user clicks the play/pause button; the App relays it to the controller.</summary>
     public event Action? MediaPlayPauseRequested;
