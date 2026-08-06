@@ -134,6 +134,13 @@ internal sealed class DenseController : IDisposable
         _host.PlaceWindow(new PixelPoint(DenseX(physW, wa), ClampDenseY(_denseY, physH, wa)), dipW, dipH);
     }
 
+    // The closed dense strip's DIP size, for the placement editor's mock (width is the fixed strip width).
+    public (double W, double H) StripSizeDip() => (DenseClosedWidth, StripHeightDip());
+
+    // The built-in default dense placement: docked to the right edge, DenseTopGapDefault below the top.
+    public static OverlayPlacement DefaultPlacement() =>
+        new() { HAnchor = HAnchor.Right, VAnchor = VAnchor.Top, OffsetY = DenseTopGapDefault };
+
     // Height (DIP) of the closed dense strip: the icon plus one row per non-zero status.
     public double StripHeightDip()
     {

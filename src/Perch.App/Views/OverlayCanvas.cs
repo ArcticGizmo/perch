@@ -345,6 +345,19 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         return null;
     }
 
+    // ── Placement-editor support ────────────────────────────────────────────────
+    // The real DIP size of each presentation's mock, so the editor's test window matches what will
+    // actually appear (and thus its corner offsets mean the same thing when applied).
+    public (double W, double H) FloatingMockSizeDip() => (FormWidth, FullPanelHeight());
+    public (double W, double H) DenseMockSizeDip() => _denseCtl.StripSizeDip();
+
+    // The built-in default placements, expressed as OverlayPlacements so "Reset to defaults" in the editor
+    // can move the mock to exactly where each mode lands with no saved placement. Kept next to the concrete
+    // defaults they mirror (DefaultFloatingPosition / DenseController's top-gap default).
+    public static OverlayPlacement DefaultFloatingPlacement() =>
+        new() { HAnchor = HAnchor.Right, VAnchor = VAnchor.Top, OffsetX = FloatRightMargin, OffsetY = FloatTopGap };
+    public OverlayPlacement DefaultDensePlacement() => DenseController.DefaultPlacement();
+
     /// <summary>Places the owning floating window at its default top-right float on the primary screen.
     /// The fallback when no initial placement is set or the window's monitor has vanished.</summary>
     public void PlaceAtDefaultFloating()
@@ -1000,6 +1013,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     /// <summary>Raised when the user picks "Exit Perch" from the header's right-click menu.</summary>
     public event Action? ExitRequested;
+
+    /// <summary>Raised when the user picks "Set initial placements…" from the header's right-click menu;
+    /// the app opens the placement editor.</summary>
+    public event Action? SetPlacementsRequested;
 
     /// <summary>Raised when the user picks "View history" for a session; carries the session id so the
     /// app can open the history viewer on it.</summary>
@@ -3199,6 +3216,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 () => SystemMetricsToggleRequested?.Invoke(!_showSystemMetrics)));
             items.Add(MenuItem(_usageEnabled ? "Hide usage" : "Show usage",
                 () => UsageToggleRequested?.Invoke(!_usageEnabled)));
+            items.Add(new Separator());
+            items.Add(MenuItem("Set initial placements…", () => SetPlacementsRequested?.Invoke()));
+            items.Add(new Separator());
             items.Add(MenuItem("Exit Perch", () => ExitRequested?.Invoke()));
         }
 
