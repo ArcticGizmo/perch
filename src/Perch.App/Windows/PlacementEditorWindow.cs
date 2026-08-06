@@ -145,8 +145,21 @@ internal sealed class PlacementEditorWindow : Window
             Margin = new Thickness(0, 40, 0, 0),
         };
 
-        _floatingModeBtn = MakeButton("Overlay", () => SetMode(EditMode.Floating));
-        _denseModeBtn = MakeButton("Dense", () => SetMode(EditMode.Dense));
+        // Overlay / Dense is a one-or-the-other choice, so present it as a joined segmented control (the
+        // selected half fills with the accent) rather than two independent buttons.
+        _floatingModeBtn = MakeSegment("Overlay", EditMode.Floating);
+        _denseModeBtn = MakeSegment("Dense", EditMode.Dense);
+        var segmented = new Border
+        {
+            BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8), ClipToBounds = true, Background = Palette.ButtonBgBrush,
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 0,
+                Children = { _floatingModeBtn, new Border { Width = 1, Background = Palette.BorderBrush }, _denseModeBtn },
+            },
+        };
+
         var resetBtn = MakeButton("Reset to defaults", ResetCurrent);
         var doneBtn = MakeButton("Done", Commit);
         var cancelBtn = MakeButton("Cancel", Close);
@@ -160,12 +173,40 @@ internal sealed class PlacementEditorWindow : Window
             Margin = new Thickness(0, 0, 0, 48),
             Child = new StackPanel
             {
-                Orientation = Orientation.Horizontal, Spacing = 10,
-                Children = { _floatingModeBtn, _denseModeBtn, new Border { Width = 12 }, resetBtn, doneBtn, cancelBtn },
+                Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center,
+                Children = { segmented, new Border { Width = 12 }, resetBtn, doneBtn, cancelBtn },
             },
         };
 
-        return new Grid { Children = { dim, _canvas, instructions, toolbar } };
+        var root = new Grid { Children = { dim, _canvas, instructions, toolbar } };
+        // The window is transparent/layered, so ClearType's subpixel antialiasing fringes text with colour.
+        // Force grayscale antialiasing for the whole surface (inherited by every TextBlock below).
+        TextOptions.SetTextRenderingMode(root, TextRenderingMode.Antialias);
+        return root;
+    }
+
+    // One half of the Overlay/Dense segmented control: a flat, borderless button; RefreshMock fills the
+    // selected one with the accent (StyleSegment).
+    private Button MakeSegment(string text, EditMode mode)
+    {
+        var btn = new Button
+        {
+            Content = text, Height = 32, MinWidth = 78, Padding = new Thickness(14, 0),
+            Background = Brushes.Transparent, Foreground = Palette.FgBrush,
+            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            FontSize = 12, Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        btn.Click += (_, _) => SetMode(mode);
+        return btn;
+    }
+
+    private static void StyleSegment(Button btn, bool selected)
+    {
+        btn.Background = selected ? Palette.AccentBrush : Brushes.Transparent;
+        btn.Foreground = selected ? Palette.OnAccentBrush : Palette.FgBrush;
+        btn.FontWeight = selected ? FontWeight.Bold : FontWeight.Normal;
     }
 
     private Button MakeButton(string text, Action onClick)
@@ -252,9 +293,9 @@ internal sealed class PlacementEditorWindow : Window
         Canvas.SetLeft(_hud, Math.Max(0, leftDip));
         Canvas.SetTop(_hud, Math.Max(0, hudY));
 
-        // Highlight the active mode button.
-        _floatingModeBtn.FontWeight = _mode == EditMode.Floating ? FontWeight.Bold : FontWeight.Normal;
-        _denseModeBtn.FontWeight = _mode == EditMode.Dense ? FontWeight.Bold : FontWeight.Normal;
+        // Fill the selected half of the segmented control with the accent.
+        StyleSegment(_floatingModeBtn, _mode == EditMode.Floating);
+        StyleSegment(_denseModeBtn, _mode == EditMode.Dense);
     }
 
     private void OnMockPressed(object? sender, PointerPressedEventArgs e)
