@@ -181,6 +181,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Owns dense mode (the slim edge strip that expands on hover) and its geometry/painting.
     private readonly DenseController _denseCtl;
 
+    // The persisted initial floating placement (from the "Set initial placements…" editor), or null to
+    // use the computed default top-right. Consumed by PlaceAtInitialFloating at window open; the dense
+    // equivalent is seeded into the controller. See SetInitialPlacements.
+    private OverlayPlacement? _floatingPlacement;
+
     public OverlayCanvas()
     {
         // The brand mark and quick-link icons are 256px sources drawn at ~16–18px; the default sampler
@@ -217,6 +222,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     public void OnScreensChanged() { _denseCtl.OnScreensChanged(); EnsureFloatingOnScreen(); }
 
     public void DisposeDense() => _denseCtl.Dispose();
+
+    /// <summary>Seeds the user-defined initial placements (from the placement editor) before the window is
+    /// shown: the floating one is applied by <see cref="PlaceAtInitialFloating"/> at open, the dense one is
+    /// handed to the controller so its first entry docks where the user asked. Null on either keeps that
+    /// mode's computed default.</summary>
+    public void SetInitialPlacements(OverlayPlacement? floating, OverlayPlacement? dense)
+    {
+        _floatingPlacement = floating;
+        _denseCtl.SeedPlacement(dense);
+    }
 
     // ── IDenseHost (geometry lives on the window) ──
     // The owning window, set by LiveOverlayWindow. VisualRoot resolves to an internal TopLevelHost (not
@@ -289,9 +304,49 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             wa.Y + (int)(FloatTopGap * scale));
     }
 
+    /// <summary>Places the owning floating window at the user-defined initial placement if one is set
+    /// (resolved against its saved monitor, self-healing to primary if that monitor is gone), otherwise at
+    /// the default top-right float. Called once from <c>LiveOverlayWindow.OnOpened</c>.</summary>
+    public void PlaceAtInitialFloating()
+    {
+        if (_floatingPlacement is { } p && TryPlaceFloating(p)) return;
+        PlaceAtDefaultFloating();
+    }
+
+    // Positions the floating window from a persisted placement. Returns false (so the caller falls back to
+    // the default) only when there's no window/screen to place onto — a vanished saved monitor self-heals
+    // to the primary rather than failing.
+    private bool TryPlaceFloating(OverlayPlacement p)
+    {
+        if (HostWindow is not { Screens: { } screens } w) return false;
+        var screen = ResolveScreen(screens, p)
+                     ?? screens.Primary ?? (screens.All.Count > 0 ? screens.All[0] : null);
+        if (screen is null) return false;
+
+        var wa = screen.WorkingArea;
+        double scale = screen.Scaling;
+        int physW = Math.Max(1, (int)(w.Width * scale));
+        int physH = Math.Max(1, (int)(w.Height * scale));
+        var (x, y) = PlacementMath.ToPosition(p, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
+        w.Position = new PixelPoint(x, y);
+        return true;
+    }
+
+    // Finds the screen matching a placement's saved physical bounds; null if it names no monitor or that
+    // monitor is no longer connected (the caller then falls back to primary).
+    private static Screen? ResolveScreen(Screens screens, OverlayPlacement p)
+    {
+        if (p.MonitorX is { } mx && p.MonitorY is { } my && p.MonitorW is { } mw && p.MonitorH is { } mh)
+        {
+            var bounds = new PixelRect(mx, my, mw, mh);
+            foreach (var s in screens.All)
+                if (s.Bounds == bounds) return s;
+        }
+        return null;
+    }
+
     /// <summary>Places the owning floating window at its default top-right float on the primary screen.
-    /// Called for the initial placement (from <c>LiveOverlayWindow.OnOpened</c>) and as the fallback when
-    /// the window's monitor has vanished.</summary>
+    /// The fallback when no initial placement is set or the window's monitor has vanished.</summary>
     public void PlaceAtDefaultFloating()
     {
         if (HostWindow is not { Screens: { } screens } w) return;

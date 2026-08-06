@@ -135,6 +135,10 @@ public partial class App : Application
             var settings = AppSettings.Load();
             _appSettings = settings;
 
+            // Seed the user-defined initial placements before the window is shown (OnOpened applies the
+            // floating one; the dense one is used on first dense entry). Null on either keeps the default.
+            _overlay.Canvas.SetInitialPlacements(settings.FloatingPlacement, settings.DensePlacement);
+
             // Colour theme first, before anything paints, so the overlay's first frame is already themed.
             Palette.Apply(Perch.Theming.ThemeCatalog.Resolve(settings.ActiveThemeId, settings.CustomThemes));
 
