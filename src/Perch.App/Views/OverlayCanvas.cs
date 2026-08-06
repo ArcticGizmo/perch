@@ -476,7 +476,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showBurnRate = true;
     private bool _showGitStats = true;
     private bool _showPullRequests;
-    private bool _showPullRequestChecks = true;
     private bool _showNoteLine = true;
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
@@ -850,16 +849,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (_showPullRequests == show) return;
         _showPullRequests = show;
-        Update(_sessions); // PR checks may add/remove child rows — rebuild the render list
-    }
-
-    /// <summary>Show/hide a PR's CI checks as indented child rows under its session. Rebuilds the render
-    /// list (it adds rows). Only ever shows rows when <see cref="SetShowPullRequests"/> is also on.</summary>
-    public void SetShowPullRequestChecks(bool show)
-    {
-        if (_showPullRequestChecks == show) return;
-        _showPullRequestChecks = show;
-        Update(_sessions);
+        InvalidateVisual();
     }
 
     /// <summary>Show/hide the pinned-note glyph on a session row (session note and/or project note). Off ⇒
@@ -1135,11 +1125,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // A flat render row: a parent session, one of its sub-agents, or the "Autonomous" section header.
     // Depth is the sub-agent's nesting level (1 = a session's direct child, 2 = a sub-agent's own child,
     // …), driving its indent in the tree; 0 for session and section rows.
-    private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1, int Depth = 0, PrCheck? Check = null)
+    private readonly record struct DisplayRow(ClaudeSession? Session, SubAgent? Sub, int SectionCount = -1, int Depth = 0)
     {
         public bool IsSubAgent => Sub != null;
         public bool IsSectionHeader => SectionCount >= 0;
-        public bool IsPrCheck => Check != null;
     }
 
     /// <summary>When on, idle teammates are dropped from the roster (only working ones show). Wired to
@@ -1206,13 +1195,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         rows.Add(new DisplayRow(session, null));
         AddSubTree(rows, session, session.SubAgents, 1);
-
-        // PR checks trail the session's live sub-agent subtree as their own depth-1 children — one row per
-        // CI check, gated by both the PR feature and the checks-in-overlay toggle. The compact status dot +
-        // hover tooltip carry the same information when this is off.
-        if (_showPullRequests && _showPullRequestChecks && session.PullRequest is { Checks.Count: > 0 } pr)
-            foreach (var chk in pr.Checks)
-                rows.Add(new DisplayRow(session, null, Depth: 1, Check: chk));
+        // PR checks are surfaced only in the glyph's aggregate dot, hover tooltip, and click flyout — never
+        // as overlay child rows.
     }
 
     // Appends one level of the sub-agent tree, then recurses into each node's children unless the node is
@@ -1248,7 +1232,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     private double HeightOf(DisplayRow row) =>
         row.IsSectionHeader ? SectionRowHeight :
-        row.IsSubAgent || row.IsPrCheck ? SubRowHeight :
+        row.IsSubAgent ? SubRowHeight :
         SessionRowHeight(row.Session!);
 
     // A session row is a fixed RowHeight: the name plus one optional sub-line (activity/elapsed). A note is
@@ -1364,7 +1348,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     var r = _rows[i];
                     if (r.IsSectionHeader) DrawSectionHeaderRow(ctx, r, top, width);
                     else if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, top, width);
-                    else if (r.IsPrCheck) DrawPrCheckRow(ctx, r, top, width);
                     else DrawSessionRow(ctx, i, r.Session!, top, width);
                     top += HeightOf(r);
                 }
@@ -2258,39 +2241,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int hidden = collapsed ? HiddenDescendantCount(sub) : 0;
         if (sub.IsTeammate) DrawTeammateRow(ctx, sub, markerX, midY, width, hidden);
         else DrawPlainSubAgentRow(ctx, sub, markerX, midY, width, hidden);
-    }
-
-    // A single PR check as a tree child under its session: the same connector + marker geometry as a
-    // sub-agent leaf, a status-coloured dot (green passed / red failed / blue running), the check name,
-    // and a right-aligned status word in the matching colour.
-    private void DrawPrCheckRow(DrawingContext ctx, DisplayRow row, double top, double width)
-    {
-        var chk = row.Check!.Value;
-        int depth = Math.Max(1, row.Depth);
-        double midY = top + SubRowHeight / 2;
-
-        double branchX = HorizPad + SubIndent * (depth - 1) + 4;
-        double markerX = HorizPad + SubIndent * depth;
-        ctx.DrawLine(TreeLinePen, new Point(branchX, top - SubRowHeight / 2), new Point(branchX, midY));
-        ctx.DrawLine(TreeLinePen, new Point(branchX, midY), new Point(markerX - 2, midY));
-
-        (IBrush brush, string statusText) = chk.State switch
-        {
-            PrCheckState.Success => (PrCheckPassBrush,    "passed"),
-            PrCheckState.Failure => (PrCheckFailBrush,    "failed"),
-            _                    => (PrCheckPendingBrush, "running"),
-        };
-        ctx.DrawEllipse(brush, null, new Point(markerX + 3, midY), 3, 3);
-
-        double statusW = OverlayDraw.MeasureWidth(statusText, SubStatusSize);
-        double labelX = markerX + 12;
-        double labelMaxW = width - labelX - HorizPad - statusW - 6;
-        string name = chk.Name.Length > 0 ? chk.Name : "(unnamed check)";
-        string nameTrunc = OverlayDraw.Truncate(name, SubNameSize, labelMaxW);
-        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, SubNameSize, FgBrush), labelX, midY);
-
-        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(statusText, SubStatusSize, brush),
-            width - HorizPad - statusW, midY);
     }
 
     // The "+N" muted hidden-count badge on a collapsed node, drawn just left of the row's status text.

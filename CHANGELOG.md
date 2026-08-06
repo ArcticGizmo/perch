@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.11] - 2026-08-06
+
+- PR checks no longer clutter the session list as child rows
+- They live in the PR glyph's dot, its hover tooltip, and its click menu (where they belonged all along)
+
+---
+
 ## [v0.3.10] - 2026-08-06
 
 - Set where the overlay first appears by dragging a preview around
