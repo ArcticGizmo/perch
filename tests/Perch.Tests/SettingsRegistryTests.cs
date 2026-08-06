@@ -31,6 +31,10 @@ public class SettingsRegistryTests
         nameof(AppSettings.HotkeyCycleSessions),
         nameof(AppSettings.HotkeyOpenSwitcher),
         nameof(AppSettings.ReopenTerminal),
+        // Set from the "Set initial placements…" editor (overlay header right-click), not a catalogue
+        // control; null means "use the computed default".
+        nameof(AppSettings.FloatingPlacement),
+        nameof(AppSettings.DensePlacement),
     };
 
     private static IEnumerable<PropertyInfo> UserFacingProperties() =>
