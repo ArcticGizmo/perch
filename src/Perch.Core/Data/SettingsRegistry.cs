@@ -354,6 +354,15 @@ internal static class SettingsRegistry
             ["start", "startup", "launch", "login", "boot", "autostart", "session"], PreviewTarget.None,
             nameof(AppSettings.StartMode)),
 
+        // Opens the drag-to-place editor (also reachable from the overlay header's right-click menu).
+        // Backs both placement properties so the coverage test is satisfied without a NotSettings entry.
+        Info("overlay-placement", "Initial overlay placement",
+            "Choose where the overlay and the dense strip first appear, by dragging a preview.",
+            SettingSurface.Advanced, SettingKind.List,
+            ["placement", "position", "corner", "dock", "move", "initial", "location", "overlay", "dense", "where"],
+            PreviewTarget.None,
+            nameof(AppSettings.FloatingPlacement), nameof(AppSettings.DensePlacement)),
+
         Toggle("auto-close", "Auto-close after last session",
             "Exit a short while after the last session ends (only when auto-started).",
             SettingSurface.Advanced, ["auto", "close", "exit", "quit", "shutdown", "last", "session"],

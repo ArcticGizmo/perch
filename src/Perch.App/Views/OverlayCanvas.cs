@@ -181,6 +181,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Owns dense mode (the slim edge strip that expands on hover) and its geometry/painting.
     private readonly DenseController _denseCtl;
 
+    // The persisted initial floating placement (from the "Set initial placements…" editor), or null to
+    // use the computed default top-right. Consumed by PlaceAtInitialFloating at window open; the dense
+    // equivalent is seeded into the controller. See SetInitialPlacements.
+    private OverlayPlacement? _floatingPlacement;
+
     public OverlayCanvas()
     {
         // The brand mark and quick-link icons are 256px sources drawn at ~16–18px; the default sampler
@@ -217,6 +222,26 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     public void OnScreensChanged() { _denseCtl.OnScreensChanged(); EnsureFloatingOnScreen(); }
 
     public void DisposeDense() => _denseCtl.Dispose();
+
+    /// <summary>Seeds the user-defined initial placements (from the placement editor) before the window is
+    /// shown: the floating one is applied by <see cref="PlaceAtInitialFloating"/> at open, the dense one is
+    /// handed to the controller so its first entry docks where the user asked. Null on either keeps that
+    /// mode's computed default.</summary>
+    public void SetInitialPlacements(OverlayPlacement? floating, OverlayPlacement? dense)
+    {
+        _floatingPlacement = floating;
+        _denseCtl.SeedPlacement(dense);
+    }
+
+    /// <summary>Adopts new placements from the editor and applies them to the running overlay: the floating
+    /// one re-positions the window now (when floating), the dense one moves the strip now (when dense) and
+    /// otherwise takes effect on the next dense entry. Null on either resets that mode to its default.</summary>
+    public void ApplyPlacementsLive(OverlayPlacement? floating, OverlayPlacement? dense)
+    {
+        _floatingPlacement = floating;
+        _denseCtl.ApplyPlacement(dense);
+        if (!_denseCtl.IsDense) PlaceAtInitialFloating();
+    }
 
     // ── IDenseHost (geometry lives on the window) ──
     // The owning window, set by LiveOverlayWindow. VisualRoot resolves to an internal TopLevelHost (not
@@ -289,9 +314,62 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             wa.Y + (int)(FloatTopGap * scale));
     }
 
+    /// <summary>Places the owning floating window at the user-defined initial placement if one is set
+    /// (resolved against its saved monitor, self-healing to primary if that monitor is gone), otherwise at
+    /// the default top-right float. Called once from <c>LiveOverlayWindow.OnOpened</c>.</summary>
+    public void PlaceAtInitialFloating()
+    {
+        if (_floatingPlacement is { } p && TryPlaceFloating(p)) return;
+        PlaceAtDefaultFloating();
+    }
+
+    // Positions the floating window from a persisted placement. Returns false (so the caller falls back to
+    // the default) only when there's no window/screen to place onto — a vanished saved monitor self-heals
+    // to the primary rather than failing.
+    private bool TryPlaceFloating(OverlayPlacement p)
+    {
+        if (HostWindow is not { Screens: { } screens } w) return false;
+        var screen = ResolveScreen(screens, p)
+                     ?? screens.Primary ?? (screens.All.Count > 0 ? screens.All[0] : null);
+        if (screen is null) return false;
+
+        var wa = screen.WorkingArea;
+        double scale = screen.Scaling;
+        int physW = Math.Max(1, (int)(w.Width * scale));
+        int physH = Math.Max(1, (int)(w.Height * scale));
+        var (x, y) = PlacementMath.ToPosition(p, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
+        w.Position = new PixelPoint(x, y);
+        return true;
+    }
+
+    // Finds the screen matching a placement's saved physical bounds; null if it names no monitor or that
+    // monitor is no longer connected (the caller then falls back to primary).
+    private static Screen? ResolveScreen(Screens screens, OverlayPlacement p)
+    {
+        if (p.MonitorX is { } mx && p.MonitorY is { } my && p.MonitorW is { } mw && p.MonitorH is { } mh)
+        {
+            var bounds = new PixelRect(mx, my, mw, mh);
+            foreach (var s in screens.All)
+                if (s.Bounds == bounds) return s;
+        }
+        return null;
+    }
+
+    // ── Placement-editor support ────────────────────────────────────────────────
+    // The real DIP size of each presentation's mock, so the editor's test window matches what will
+    // actually appear (and thus its corner offsets mean the same thing when applied).
+    public (double W, double H) FloatingMockSizeDip() => (FormWidth, FullPanelHeight());
+    public (double W, double H) DenseMockSizeDip() => _denseCtl.StripSizeDip();
+
+    // The built-in default placements, expressed as OverlayPlacements so "Reset to defaults" in the editor
+    // can move the mock to exactly where each mode lands with no saved placement. Kept next to the concrete
+    // defaults they mirror (DefaultFloatingPosition / DenseController's top-gap default).
+    public static OverlayPlacement DefaultFloatingPlacement() =>
+        new() { HAnchor = HAnchor.Right, VAnchor = VAnchor.Top, OffsetX = FloatRightMargin, OffsetY = FloatTopGap };
+    public OverlayPlacement DefaultDensePlacement() => DenseController.DefaultPlacement();
+
     /// <summary>Places the owning floating window at its default top-right float on the primary screen.
-    /// Called for the initial placement (from <c>LiveOverlayWindow.OnOpened</c>) and as the fallback when
-    /// the window's monitor has vanished.</summary>
+    /// The fallback when no initial placement is set or the window's monitor has vanished.</summary>
     public void PlaceAtDefaultFloating()
     {
         if (HostWindow is not { Screens: { } screens } w) return;
@@ -945,6 +1023,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     /// <summary>Raised when the user picks "Exit Perch" from the header's right-click menu.</summary>
     public event Action? ExitRequested;
+
+    /// <summary>Raised when the user picks "Set initial placements…" from the header's right-click menu;
+    /// the app opens the placement editor.</summary>
+    public event Action? SetPlacementsRequested;
 
     /// <summary>Raised when the user picks "View history" for a session; carries the session id so the
     /// app can open the history viewer on it.</summary>
@@ -3144,6 +3226,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 () => SystemMetricsToggleRequested?.Invoke(!_showSystemMetrics)));
             items.Add(MenuItem(_usageEnabled ? "Hide usage" : "Show usage",
                 () => UsageToggleRequested?.Invoke(!_usageEnabled)));
+            items.Add(new Separator());
+            items.Add(MenuItem("Set initial placements…", () => SetPlacementsRequested?.Invoke()));
+            items.Add(new Separator());
             items.Add(MenuItem("Exit Perch", () => ExitRequested?.Invoke()));
         }
 

@@ -296,8 +296,16 @@ internal sealed class SettingsCatalogView : StackPanel
     }
 
     // Quick-links editing (add/remove/reorder/icon resolution) is its own surface; the card links to it.
-    private Control ManageButton(SettingDescriptor _)
+    private Control ManageButton(SettingDescriptor d)
     {
+        if (d.Id == "overlay-placement")
+        {
+            var place = SettingsUi.FlatButton("Set initial placements  →");
+            place.HorizontalAlignment = HorizontalAlignment.Left;
+            place.Click += (_, _) => _hooks.OpenPlacements?.Invoke();
+            return place;
+        }
+
         var btn = SettingsUi.FlatButton("Manage quick links  →");
         btn.HorizontalAlignment = HorizontalAlignment.Left;
         btn.Click += (_, _) => Navigate?.Invoke("quicklinks");

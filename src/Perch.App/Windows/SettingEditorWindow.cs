@@ -17,15 +17,27 @@ namespace Perch.Avalonia.Windows;
 /// </summary>
 internal static class SettingEditors
 {
-    public static Control Build(SettingDescriptor d, AppSettings s, SettingsHooks h) => d.Kind switch
+    public static Control Build(SettingDescriptor d, AppSettings s, SettingsHooks h)
     {
-        SettingKind.Dropdown => Dropdown(d, s),
-        SettingKind.Field    => Field(d, s),
-        SettingKind.Slider   => Slider(s, h),
-        SettingKind.Stepper  => Stepper(d, s, h),
-        SettingKind.Hotkey   => Hotkey(d, s, h),
-        _                    => new TextBlock { Text = "Edited elsewhere.", Foreground = Palette.MutedBrush, FontSize = 13 },
-    };
+        // The placement editor is a separate top-level window, opened via a hook rather than edited in place.
+        if (d.Id == "overlay-placement")
+        {
+            var btn = SettingsUi.FlatButton("Set initial placements…");
+            btn.HorizontalAlignment = HorizontalAlignment.Left;
+            btn.Click += (_, _) => h.OpenPlacements?.Invoke();
+            return btn;
+        }
+
+        return d.Kind switch
+        {
+            SettingKind.Dropdown => Dropdown(d, s),
+            SettingKind.Field    => Field(d, s),
+            SettingKind.Slider   => Slider(s, h),
+            SettingKind.Stepper  => Stepper(d, s, h),
+            SettingKind.Hotkey   => Hotkey(d, s, h),
+            _                    => new TextBlock { Text = "Edited elsewhere.", Foreground = Palette.MutedBrush, FontSize = 13 },
+        };
+    }
 
     private static Control Dropdown(SettingDescriptor d, AppSettings s)
     {

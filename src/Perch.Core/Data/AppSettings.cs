@@ -272,6 +272,18 @@ internal sealed class AppSettings
     // already, so this leans in. Off by default.
     public bool UpsideDownQuickLinks { get; set; }
 
+    // User-defined initial placement for the two overlay presentations, set from the "Set initial
+    // placements…" editor (header right-click). Each is stored relative to the nearest monitor corner
+    // (anchor + DIP offset; see OverlayPlacement) so it survives a resolution change. Null means "use
+    // the computed default" — floating pins to the primary monitor's top-right, dense docks to the
+    // right edge — so a settings file predating the feature simply keeps today's behaviour. The editor
+    // is the sole source of truth: a normal drag of the overlay is not persisted here. See
+    // PlacementMath, OverlayCanvas.PlaceAtDefaultFloating and DenseController.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OverlayPlacement? FloatingPlacement { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OverlayPlacement? DensePlacement { get; set; }
+
     // Integrations. Hypertree (the virtual-desktop branch manager) — when on, the overlay grows a
     // "Hypertree" section under the quick links listing its branches (main included), marking the one
     // you're on and jumping to any of them on click. Off by default and load-bearing while off: nothing

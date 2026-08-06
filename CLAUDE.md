@@ -125,6 +125,16 @@ running the tray app.
   idempotent `DisplayChanged` (a poll/sampler), extend `SettingsLiveApply`. The pre-registry per-topic
   pages (Indicators, Monitoring, Usage, …) are retired; a handful of pages with unique actions/editors
   remain (Stats, Notifications, Quick Links, Export, About, Changelog, …).
+- **Overlay placement is corner-relative and persisted.** The floating panel's and the dense strip's
+  *initial* positions are stored in `AppSettings.FloatingPlacement` / `DensePlacement` as an
+  `OverlayPlacement` (UI-free `Perch.Core`): a nearest-corner anchor (`HAnchor`/`VAnchor`) + DIP offsets +
+  the target monitor's physical bounds. Null means "use the computed default" (floating → primary
+  top-right; dense → right edge). All the geometry lives in `Perch.Core/Data/PlacementMath` (pure, tested)
+  so heads share it; `OverlayCanvas.PlaceAtInitialFloating` / `DenseController` consume it at launch and
+  `ApplyPlacementsLive` on edit. Users set it by dragging a preview in `Windows/PlacementEditorWindow`,
+  opened from the overlay header's right-click menu or the "Initial overlay placement" setting. A manual
+  drag of the overlay is deliberately **not** persisted — the editor is the sole source of truth. See
+  `docs/initial-placement-plan.md`.
 - **Don't assume a Velopack install.** Perch also ships as Velopack's portable zip, extracted wherever the
   user likes. `Services/InstallChannel` classifies the running copy (`Setup` / `Portable` / `Unpackaged`);
   anything that *writes to the install dir or applies an update* must gate on `InstallChannel.SelfUpdates`.

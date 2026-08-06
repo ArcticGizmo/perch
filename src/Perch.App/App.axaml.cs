@@ -42,6 +42,7 @@ public partial class App : Application
     private FlightPathWindow? _flightWindow;
     private HistoryWindow? _historyWindow;
     private GitReviewWindow? _reviewWindow;
+    private PlacementEditorWindow? _placementEditor;
     // Open sticky notes, keyed so a second request for the same note focuses the existing one rather than
     // stacking a duplicate: "__scratch__" for the global pad, the sessionId for a session's row note. They
     // are non-modal and owned by the overlay (see StickyNoteWindow); closed together in CloseAuxWindows.
@@ -135,6 +136,10 @@ public partial class App : Application
             var settings = AppSettings.Load();
             _appSettings = settings;
 
+            // Seed the user-defined initial placements before the window is shown (OnOpened applies the
+            // floating one; the dense one is used on first dense entry). Null on either keeps the default.
+            _overlay.Canvas.SetInitialPlacements(settings.FloatingPlacement, settings.DensePlacement);
+
             // Colour theme first, before anything paints, so the overlay's first frame is already themed.
             Palette.Apply(Perch.Theming.ThemeCatalog.Resolve(settings.ActiveThemeId, settings.CustomThemes));
 
@@ -215,6 +220,7 @@ public partial class App : Application
             // down. History / QR / external-notify / confetti are Phase-5 concerns — their triggers are
             // wired here so the menu is complete, with best-effort/stub handlers until those windows land.
             _overlay.Canvas.ExitRequested += () => desktop.Shutdown();
+            _overlay.Canvas.SetPlacementsRequested += OpenPlacementEditor;
             _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
             _overlay.Canvas.UsageToggleRequested += SetUsageEnabled;
             _overlay.Canvas.HistoryRequested += OpenHistory;
@@ -388,6 +394,7 @@ public partial class App : Application
         _settings?.Close();
         _historyWindow?.Close();
         _reviewWindow?.Close();
+        _placementEditor?.Close();
         _statsWindow?.Close();
         _daemonListWindow?.Close();
         _achievementsWindow?.Close();
@@ -751,6 +758,38 @@ public partial class App : Application
     private void OpenStats() =>
         _statsWindow = WindowHost.ShowOrFocus(_statsWindow,
             () => new StatsWindow(_appSettings ?? AppSettings.Load()), () => _statsWindow = null);
+
+    // "Set initial placements…" (overlay header) — opens/focuses the placement editor on the overlay's
+    // current monitor, seeded with the saved placements and the real preview sizes so what's dragged
+    // matches what will appear. Commit persists via ApplyPlacements.
+    private void OpenPlacementEditor()
+    {
+        if (_overlay is not { } o || o.Screens is not { } screens) return;
+        var screen = screens.ScreenFromWindow(o) ?? screens.Primary
+                     ?? (screens.All.Count > 0 ? screens.All[0] : null);
+        if (screen is null) return;
+
+        var ctx = new PlacementEditorContext(
+            screen,
+            _appSettings?.FloatingPlacement, _appSettings?.DensePlacement,
+            Views.OverlayCanvas.DefaultFloatingPlacement(), o.Canvas.DefaultDensePlacement(),
+            o.Canvas.FloatingMockSizeDip(), o.Canvas.DenseMockSizeDip(),
+            ApplyPlacements);
+
+        _placementEditor = WindowHost.ShowOrFocus(_placementEditor,
+            () => new PlacementEditorWindow(ctx), () => _placementEditor = null);
+    }
+
+    // Persists the chosen placements (null = "use the default") and applies them: the floating one lands
+    // live now; the dense one takes effect on the next dense entry / launch. See OverlayCanvas.
+    private void ApplyPlacements(OverlayPlacement? floating, OverlayPlacement? dense)
+    {
+        if (_appSettings is not { } s) return;
+        s.FloatingPlacement = floating;
+        s.DensePlacement = dense;
+        s.Save();
+        _overlay?.Canvas.ApplyPlacementsLive(floating, dense);
+    }
 
     // "Review changes…" (overlay row) — opens/focuses the one read-only git Change Review window and points
     // it at the clicked session's working directory. The menu item only appears when the feature is on and
@@ -1203,6 +1242,7 @@ public partial class App : Application
             OpenStats = OpenStats,
             OpenFlightPath = OpenFlightPath,
             OpenAchievements = OpenAchievements,
+            OpenPlacements = OpenPlacementEditor,
         };
         _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);

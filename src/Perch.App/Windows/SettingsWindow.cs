@@ -96,6 +96,9 @@ internal sealed class SettingsHooks
     public Action? OpenStats;
     public Action? OpenFlightPath;
     public Action? OpenAchievements;
+
+    /// <summary>Open the drag-to-place initial-placement editor (also on the overlay header menu).</summary>
+    public Action? OpenPlacements;
 }
 
 /// <summary>

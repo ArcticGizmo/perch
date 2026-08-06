@@ -86,6 +86,11 @@ internal sealed class DenseController : IDisposable
     // pin us to a disconnected monitor. Null means the primary screen.
     private PixelRect? _denseScreenBounds;
 
+    // The user-defined initial dense placement (from the placement editor), seeded before the window is
+    // shown. Its edge/monitor are applied immediately; its vertical offset is resolved into _denseY the
+    // first time dense mode is entered (when a live screen + scale are available). Null keeps the default.
+    private OverlayPlacement? _seededPlacement;
+
     private readonly List<DenseDropZoneWindow> _dropZones = [];
     private DenseDropZoneWindow? _activeDropZone;
 
@@ -129,6 +134,13 @@ internal sealed class DenseController : IDisposable
         _host.PlaceWindow(new PixelPoint(DenseX(physW, wa), ClampDenseY(_denseY, physH, wa)), dipW, dipH);
     }
 
+    // The closed dense strip's DIP size, for the placement editor's mock (width is the fixed strip width).
+    public (double W, double H) StripSizeDip() => (DenseClosedWidth, StripHeightDip());
+
+    // The built-in default dense placement: docked to the right edge, DenseTopGapDefault below the top.
+    public static OverlayPlacement DefaultPlacement() =>
+        new() { HAnchor = HAnchor.Right, VAnchor = VAnchor.Top, OffsetY = DenseTopGapDefault };
+
     // Height (DIP) of the closed dense strip: the icon plus one row per non-zero status.
     public double StripHeightDip()
     {
@@ -164,6 +176,53 @@ internal sealed class DenseController : IDisposable
     // ── Transitions ─────────────────────────────────────────────────────────────
     public void Toggle() { if (_dense) Exit(); else Enter(); }
 
+    // Seeds the user-defined initial dense placement before the window is shown. The edge and monitor
+    // apply straight away (pure data); the vertical position is resolved lazily on first Enter, when a
+    // live screen and scale exist. Null leaves the built-in default (right edge, primary, top-gap Y).
+    public void SeedPlacement(OverlayPlacement? p) => AdoptPlacement(p, reposition: false);
+
+    // Live adoption from the placement editor: like SeedPlacement, but re-derives the strip Y from the new
+    // placement (or default) and moves the strip immediately when dense mode is currently showing.
+    public void ApplyPlacement(OverlayPlacement? p) => AdoptPlacement(p, reposition: true);
+
+    private void AdoptPlacement(OverlayPlacement? p, bool reposition)
+    {
+        _seededPlacement = p;
+        _denseSide = p is { HAnchor: HAnchor.Left } ? DenseSide.Left : DenseSide.Right;
+        _denseScreenBounds = ScreenBoundsOf(p);
+        if (!reposition) return;
+
+        _denseYInit = false; // re-derive Y from the new placement (or default) on next entry
+        if (_dense)
+        {
+            var s = DenseScreen();
+            _denseY = _seededPlacement is { } sp
+                ? SeededDenseY(sp, s)
+                : s.WorkingArea.Y + (int)(DenseTopGapDefault * s.Scaling);
+            _denseYInit = true;
+            _host.RelayoutWindow();
+            _host.Invalidate();
+        }
+    }
+
+    private static PixelRect? ScreenBoundsOf(OverlayPlacement? p) =>
+        p is { MonitorX: { } mx, MonitorY: { } my, MonitorW: { } mw, MonitorH: { } mh }
+            ? new PixelRect(mx, my, mw, mh)
+            : null;
+
+    // Physical Y for a seeded placement: its DIP vertical offset from the anchored (top/bottom) work-area
+    // edge, using the current strip height, clamped on-screen. Mirrors PlacementMath's vertical axis (X is
+    // edge-locked in dense mode, so only Y is derived here).
+    private int SeededDenseY(OverlayPlacement p, Screen s)
+    {
+        var wa = s.WorkingArea;
+        double scale = s.Scaling;
+        int physH = (int)(StripHeightDip() * scale);
+        int offY = (int)Math.Round(p.OffsetY * scale);
+        int y = p.VAnchor == VAnchor.Top ? wa.Y + offY : wa.Y + wa.Height - physH - offY;
+        return ClampDenseY(y, physH, wa);
+    }
+
     private void Enter()
     {
         if (_dense) return;
@@ -171,7 +230,9 @@ internal sealed class DenseController : IDisposable
         if (!_denseYInit)
         {
             var s = DenseScreen();
-            _denseY = s.WorkingArea.Y + (int)(DenseTopGapDefault * s.Scaling);
+            _denseY = _seededPlacement is { } sp
+                ? SeededDenseY(sp, s)
+                : s.WorkingArea.Y + (int)(DenseTopGapDefault * s.Scaling);
             _denseYInit = true;
         }
         _dense = true;

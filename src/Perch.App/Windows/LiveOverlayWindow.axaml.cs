@@ -35,10 +35,11 @@ public partial class LiveOverlayWindow : Window
     {
         base.OnOpened(e);
 
-        // Auto-position at the top-right of the primary screen's work area (below any top-docked bar),
+        // Position at the user-defined initial placement if one was set (see SetInitialPlacements),
+        // otherwise the default top-right of the primary screen's work area (below any top-docked bar),
         // matching the WinForms overlay's default float. The canvas owns floating placement so the initial
         // spot and the undock re-anchoring stay in one place.
-        Canvas.PlaceAtDefaultFloating();
+        Canvas.PlaceAtInitialFloating();
 
         // No Alt+Tab entry and never take activation (showing must not steal focus from the terminal).
         if (TryGetPlatformHandle() is { } handle)

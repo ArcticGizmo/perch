@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.10] - 2026-08-06
+
+- Set where the overlay first appears by dragging a preview around
+- Place the floating panel and the dense strip separately
+- Measured from the nearest corner, so it survives a resolution change
+- Reset to defaults per mode, when the dragging gets away from you
+- Open it from the header right-click menu or the new placement setting
+
+---
+
 ## [v0.3.9] - 2026-08-06
 
 - Edit a custom theme after saving it (creating one is no longer a one-way door)
