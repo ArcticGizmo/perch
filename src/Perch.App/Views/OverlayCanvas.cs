@@ -2,6 +2,7 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
 using Avalonia.Media.Imaging;
@@ -1126,7 +1127,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     /// <summary>Raised when the user picks an artifact from the artifact glyph's popover list; the app
     /// opens it. The list is always shown (even for a single artifact), so this is the only artifact path.</summary>
-    internal event Action<Artifact>? ArtifactChosen;
+    internal event Action<Artifact, bool>? ArtifactChosen; // bool: open in a new browser window (middle-click)
 
     // ── Right-click context menu (4.13) ───────────────────────────────────────
     // External (ntfy) notifications + the experimental confetti-finish are gated by global settings that
@@ -3356,11 +3357,34 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         ShowFlyout(items);
     }
 
-    private static MenuItem MenuItem(string header, Action onClick)
+    private MenuItem MenuItem(string header, Action onClick, Action? onMiddleClick = null)
     {
         var item = new MenuItem { Header = header };
         item.Click += (_, _) => onClick();
+        if (onMiddleClick is not null) WireMiddleClick(item, onMiddleClick);
         return item;
+    }
+
+    // A flyout item that opens a URL: left-click uses the running browser (fast, reuses a tab); middle-click
+    // forces a fresh default-browser window, which the OS creates on the current virtual desktop instead of
+    // yanking focus to an existing window somewhere else.
+    private MenuItem UrlMenuItem(string header, string url) =>
+        MenuItem(header,
+            () => PlatformServices.UrlOpener.Open(url),
+            () => PlatformServices.UrlOpener.OpenInNewWindow(url));
+
+    // Avalonia's MenuItem only raises Click for the left button, and a MenuFlyout stays open on any other
+    // button — so a middle click is ours to handle. Catch it on the tunnel (before MenuItem's own release
+    // handling), dismiss the flyout as a left click would, then run the action.
+    private void WireMiddleClick(MenuItem item, Action onMiddleClick)
+    {
+        item.AddHandler(PointerReleasedEvent, (_, e) =>
+        {
+            if (e.InitialPressMouseButton != MouseButton.Middle) return;
+            _openFlyout?.Hide();
+            onMiddleClick();
+            e.Handled = true;
+        }, RoutingStrategies.Tunnel);
     }
 
     // The one place every context/flyout menu is shown. Tracks the open menu in _openFlyout so a press
@@ -3383,7 +3407,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         var items = new List<Control>(artifacts.Count);
         foreach (var a in artifacts)
-            items.Add(MenuItem(string.IsNullOrWhiteSpace(a.Title) ? a.Url : a.Title, () => ArtifactChosen?.Invoke(a)));
+        {
+            var artifact = a; // captured per item — the click fires long after this loop
+            items.Add(MenuItem(string.IsNullOrWhiteSpace(artifact.Title) ? artifact.Url : artifact.Title,
+                () => ArtifactChosen?.Invoke(artifact, false),
+                () => ArtifactChosen?.Invoke(artifact, true)));
+        }
         ShowFlyout(items);
     }
 
@@ -3448,7 +3477,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         var items = new List<Control>
         {
-            MenuItem(label, () => { if (!string.IsNullOrEmpty(pr.Url)) OpenUrl(pr.Url); }),
+            UrlMenuItem(label, pr.Url),
         };
 
         // The same checks the hover tooltip lists, each as a status-coloured item that opens its own
@@ -3477,7 +3506,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         var item = new MenuItem { Header = new TextBlock { Text = $"{glyph}  {name}", Foreground = brush } };
         string target = string.IsNullOrEmpty(chk.Url) ? prUrl : chk.Url;
         if (!string.IsNullOrEmpty(target))
-            item.Click += (_, _) => OpenUrl(target);
+        {
+            item.Click += (_, _) => PlatformServices.UrlOpener.Open(target);
+            WireMiddleClick(item, () => PlatformServices.UrlOpener.OpenInNewWindow(target));
+        }
         return item;
     }
 
@@ -3933,20 +3965,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 : inc.Name;
             if (header.Length > 72) header = header[..71].TrimEnd() + "…";
             string url = inc.Url;
-            items.Add(MenuItem(header, () => OpenUrl(url)));
+            items.Add(UrlMenuItem(header, url));
         }
 
         if (items.Count > 0) items.Add(new Separator());
-        items.Add(MenuItem("Open status.claude.com", () => OpenUrl(_status.PageUrl)));
+        items.Add(UrlMenuItem("Open status.claude.com", _status.PageUrl));
 
         ShowFlyout(items);
-    }
-
-    private static void OpenUrl(string url)
-    {
-        if (string.IsNullOrWhiteSpace(url)) return;
-        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
-        catch { /* best-effort — no default browser, etc. */ }
     }
 
     // Draws the attention border as an animated neon "chase": a bright comet head with a trailing tail

@@ -93,7 +93,14 @@ public sealed class QrWindow : Window
             HorizontalAlignment = HorizontalAlignment.Center, TextAlignment = TextAlignment.Center,
             Cursor = new Cursor(StandardCursorType.Hand),
         };
-        link.PointerPressed += (_, _) => OpenLink();
+        // Middle-click forces a fresh browser window (on the current virtual desktop); left-click reuses one.
+        link.PointerPressed += (_, e) =>
+        {
+            if (e.GetCurrentPoint(link).Properties.IsMiddleButtonPressed)
+                PlatformServices.UrlOpener.OpenInNewWindow(_url);
+            else
+                OpenLink();
+        };
 
         _copyButton = MakeButton("Copy link");
         _copyButton.Click += (_, _) => CopyLink();
@@ -154,11 +161,7 @@ public sealed class QrWindow : Window
         return rtb;
     }
 
-    private void OpenLink()
-    {
-        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(_url) { UseShellExecute = true }); }
-        catch { /* no browser / blocked — stay open */ }
-    }
+    private void OpenLink() => PlatformServices.UrlOpener.Open(_url);
 
     private void CopyLink()
     {

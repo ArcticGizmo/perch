@@ -100,8 +100,7 @@ internal sealed class GitReviewWindow : Window
         };
         _prChip.Click += (_, _) =>
         {
-            if (_prUrl is { } url)
-                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); } catch { }
+            if (_prUrl is { } url) PlatformServices.UrlOpener.Open(url);
         };
         var refreshBtn = new Button
         {

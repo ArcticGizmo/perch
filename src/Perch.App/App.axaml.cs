@@ -478,12 +478,12 @@ public partial class App : Application
         _notifier?.Show(title, body, level, null, null);
     }
 
-    // Opens the artifact the user picked from the overlay's artifact-glyph list.
-    private static void OpenArtifact(Artifact artifact)
+    // Opens the artifact the user picked from the overlay's artifact-glyph list. Middle-click asks for a
+    // fresh browser window (lands on the current virtual desktop) instead of reusing a running instance.
+    private static void OpenArtifact(Artifact artifact, bool newWindow)
     {
-        if (string.IsNullOrWhiteSpace(artifact.Url)) return;
-        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(artifact.Url) { UseShellExecute = true }); }
-        catch { /* best-effort */ }
+        if (newWindow) PlatformServices.UrlOpener.OpenInNewWindow(artifact.Url);
+        else PlatformServices.UrlOpener.Open(artifact.Url);
     }
 
     // Auto-close: only an --autostarted tray with the setting on ever closes itself, so a manually

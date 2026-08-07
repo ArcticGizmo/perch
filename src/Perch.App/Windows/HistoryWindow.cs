@@ -448,11 +448,8 @@ internal sealed class HistoryWindow : Window
     private static string OneLine(string s) { int nl = s.IndexOf('\n'); return nl >= 0 ? s[..nl] : s; }
     private static string ClipText(string s, int max) => s.Length > max ? s[..max].TrimEnd() + "\n… (truncated)" : s;
 
-    private static void OpenUrl(string url)
-    {
-        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
-        catch { /* best-effort */ }
-    }
+    // Also opens local files (e.g. a decoded image) — the shell open handles both.
+    private static void OpenUrl(string url) => PlatformServices.UrlOpener.Open(url);
 
     // Decodes an inline base64 image to a temp file and opens it in the default viewer.
     private static void OpenImageData(string base64, string media)

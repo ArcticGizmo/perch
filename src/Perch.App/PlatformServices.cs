@@ -23,6 +23,7 @@ internal static class PlatformServices
     public static IAudioCue AudioCue { get; } = new Impl.AudioCue();
     public static IWindowChrome WindowChrome { get; } = new Impl.WindowChrome();
     public static IImageClipboard ImageClipboard { get; } = new Impl.ImageClipboard();
+    public static IUrlOpener UrlOpener { get; } = new Impl.UrlOpener();
 #if WINDOWS
     public static IAppIconProvider AppIconProvider { get; } = new Impl.WindowsAppIconProvider();
     public static ISystemMetrics SystemMetrics { get; } = new Impl.WindowsSystemMetrics();

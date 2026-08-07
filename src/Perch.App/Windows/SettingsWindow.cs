@@ -1482,7 +1482,14 @@ internal sealed class SettingsWindow : Window
             Cursor = new Cursor(StandardCursorType.Hand), Margin = new Thickness(0, 0, 0, 4),
             TextDecorations = TextDecorations.Underline,
         };
-        link.PointerPressed += (_, _) => OpenUrl(url);
+        // Middle-click forces a fresh browser window (on the current virtual desktop); left-click reuses one.
+        link.PointerPressed += (_, e) =>
+        {
+            if (e.GetCurrentPoint(link).Properties.IsMiddleButtonPressed)
+                PlatformServices.UrlOpener.OpenInNewWindow(url);
+            else
+                OpenUrl(url);
+        };
         return link;
     }
 
@@ -1528,9 +1535,5 @@ internal sealed class SettingsWindow : Window
         ChangelogMarkdown.Render(page, markdown.Split('\n'));
     }
 
-    private static void OpenUrl(string url)
-    {
-        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
-        catch { }
-    }
+    private static void OpenUrl(string url) => PlatformServices.UrlOpener.Open(url);
 }
