@@ -44,5 +44,6 @@ internal static class OverlaySettingsGates
         c.SetConfettiFinishAvailable(s.ConfettiFinish);
         c.SetExternalNotificationsAvailable(s.ExternalNotificationsEnabled);
         c.SetReviewChangesAvailable(s.ShowGitReview);
+        c.SetDenseStatusChangeStyle(s.DenseStatusChangeStyle);
     }
 }

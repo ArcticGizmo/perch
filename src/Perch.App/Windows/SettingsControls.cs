@@ -104,6 +104,62 @@ internal static class SettingsUi
         HorizontalAlignment = HorizontalAlignment.Stretch,
     };
 
+    // A joined, one-of-N segmented toggle (the selected segment fills with the accent) — the settings-surface
+    // twin of the Overlay/Dense picker in PlacementEditorWindow, for a small mutually-exclusive choice where a
+    // combo would be overkill. Selection is owned internally; <paramref name="onSelected"/> fires only on an
+    // actual change. <paramref name="selected"/> seeds the initial segment (its enum ordinal).
+    public static Control Segmented(IReadOnlyList<string> labels, int selected, Action<int> onSelected)
+    {
+        var buttons = new List<Button>();
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0 };
+
+        void Restyle()
+        {
+            for (int i = 0; i < buttons.Count; i++) StyleSegment(buttons[i], i == selected);
+        }
+
+        for (int i = 0; i < labels.Count; i++)
+        {
+            if (i > 0) panel.Children.Add(new Border { Width = 1, Background = Palette.BorderBrush });
+
+            int idx = i;
+            var btn = new Button
+            {
+                Content = labels[i], Height = 32, MinWidth = 88, Padding = new Thickness(14, 0),
+                Background = Brushes.Transparent, Foreground = Palette.FgBrush,
+                BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(0),
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                FontSize = 12, Cursor = new Cursor(StandardCursorType.Hand),
+            };
+            btn.Click += (_, _) =>
+            {
+                if (selected == idx) return;
+                selected = idx;
+                Restyle();
+                onSelected(idx);
+            };
+            buttons.Add(btn);
+            panel.Children.Add(btn);
+        }
+
+        Restyle();
+        return new Border
+        {
+            BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8), ClipToBounds = true, Background = Palette.ButtonBgBrush,
+            HorizontalAlignment = HorizontalAlignment.Left, Child = panel,
+        };
+    }
+
+    // One segment's resting vs selected look: the selected half fills with the accent (bold, on-accent text).
+    private static void StyleSegment(Button btn, bool selected)
+    {
+        btn.Background = selected ? Palette.AccentBrush : Brushes.Transparent;
+        btn.Foreground = selected ? Palette.OnAccentBrush : Palette.FgBrush;
+        btn.FontWeight = selected ? FontWeight.Bold : FontWeight.Normal;
+    }
+
     // A horizontal row of buttons (LeftToRight, small gap), for the action rows on each page.
     public static StackPanel ButtonRow() => new()
     {

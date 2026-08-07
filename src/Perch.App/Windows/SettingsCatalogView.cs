@@ -223,6 +223,18 @@ internal sealed class SettingsCatalogView : StackPanel
 
     private Control DropdownEditor(SettingDescriptor d)
     {
+        if (d.Id == "dense-status-style")
+        {
+            // A segmented toggle rather than a combo (a binary choice). Order matches the
+            // DenseStatusChangeStyle enum ordinals (Expand, Bubble).
+            return SettingsUi.Segmented(["Expand", "Bubble"], (int)_settings.DenseStatusChangeStyle, i =>
+            {
+                _settings.DenseStatusChangeStyle = (DenseStatusChangeStyle)i;
+                _settings.Save();
+                _hooks.DisplayChanged?.Invoke();   // push the new style onto the live overlay + preview
+            });
+        }
+
         if (d.Id == "start-mode")
         {
             // Order matches the StartMode enum ordinals (Off, OnSessionStart, OnLogin).

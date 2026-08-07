@@ -3563,13 +3563,30 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private DispatcherTimer? _chaseTimer;
     private DispatcherTimer? _chaseStopTimer;
 
+    // How the collapsed dense strip announces a status change: Expand pops the hover panel (the original
+    // behaviour); Bubble floats a fading speech bubble off the logo and leaves the strip collapsed. Pushed
+    // from AppSettings via OverlaySettingsGates.
+    private DenseStatusChangeStyle _denseStatusStyle = DenseStatusChangeStyle.Expand;
+    public void SetDenseStatusChangeStyle(DenseStatusChangeStyle style) => _denseStatusStyle = style;
+
     /// <summary>Flashes the attention chase-border and, if collapsed, expands the panel so the session
     /// that needs attention is visible. Called on the UI thread when a session finishes or blocks. The
-    /// flash self-stops after ~10s, or as soon as nothing needs attention (see <see cref="Update"/>).</summary>
-    public void TriggerAttention()
+    /// flash self-stops after ~10s, or as soon as nothing needs attention (see <see cref="Update"/>).
+    /// <paramref name="status"/> is the change that fired it — it picks the dense bubble's colour and label
+    /// when the strip is in bubble mode.</summary>
+    public void TriggerAttention(SessionStatus status = SessionStatus.NeedsAttention)
     {
-        // Surface the session that needs attention: in dense mode pop the hover panel open; floating,
-        // expand if collapsed.
+        // In dense "bubble" mode a collapsed strip floats a fading bubble off the logo instead of expanding
+        // (and skips the chase, which needs the panel). Otherwise: surface the session — pop the dense hover
+        // panel open, or expand a collapsed float.
+        bool bubble = _denseCtl.IsDense && _denseStatusStyle == DenseStatusChangeStyle.Bubble
+                      && _denseCtl.IsClosedStrip;
+        if (bubble)
+        {
+            _denseCtl.ShowBubble(status);
+            return;
+        }
+
         if (_denseCtl.IsDense) _denseCtl.OpenPopup();
         else if (!_expanded && _rows.Count > 0)
         {

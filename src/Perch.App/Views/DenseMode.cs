@@ -102,6 +102,10 @@ internal sealed class DenseController : IDisposable
     private readonly List<DenseDropZoneWindow> _dropZones = [];
     private DenseDropZoneWindow? _activeDropZone;
 
+    // The transient status-change speech bubble (AppSettings.DenseStatusChangeStyle = Bubble). Lives only
+    // while showing; it fades itself out and nulls this back via the closed-callback.
+    private DenseBubbleWindow? _bubble;
+
     // Collapses the hover-opened dense popup once the pointer has been away for 750ms. Pointer re-entry
     // (OnPointerEntered → OnMouseEntered) cancels it, so a quick out-and-back keeps it open.
     private readonly DispatcherTimer _closeTimer;
@@ -276,6 +280,7 @@ internal sealed class DenseController : IDisposable
         _dense = false;
         _denseOpen = false;
         _closeTimer.Stop();
+        DismissBubble();
         _host.HideTooltips();
         _host.RestoreFloating(_floatingLoc);            // restore the floating position + auto-size
         _host.UpdateTickTimer();
@@ -285,6 +290,7 @@ internal sealed class DenseController : IDisposable
     public void OpenPopup()
     {
         if (!_dense || _denseOpen) return;
+        DismissBubble();            // the panel takes over — no floating bubble over it
         _denseOpen = true;
         _host.RelayoutWindow();
         _host.UpdateTickTimer();
@@ -308,6 +314,52 @@ internal sealed class DenseController : IDisposable
         _host.Invalidate();
     }
 
+    // ── Status-change speech bubble ───────────────────────────────────────────────
+    // Floats a small speech bubble off the perch-logo row announcing a status change (a session finished,
+    // blocked, or errored), then fades it out — the collapsed strip's alternative to expanding the hover
+    // panel (AppSettings.DenseStatusChangeStyle = Bubble). No-op unless the closed strip is showing.
+    public void ShowBubble(SessionStatus status)
+    {
+        if (!IsClosedStrip || _host.Screens is null) return;
+
+        var (color, label) = BubbleContent(status);
+        var screen = DenseScreen();
+        var wa = screen.WorkingArea;
+        double scale = screen.Scaling;
+
+        _bubble ??= new DenseBubbleWindow(() => _bubble = null);
+        _bubble.Configure(_denseSide, color, label);
+
+        int stripPhysW  = (int)(DenseClosedWidth * scale);
+        int bubblePhysW = (int)(_bubble.Width * scale);
+        int bubblePhysH = (int)(_bubble.Height * scale);
+
+        // Centre the bubble vertically on the logo, hugging the strip's docked edge so its tail meets it.
+        int logoCenterY = _denseY + (int)((DenseTopPad + DenseIconSize / 2) * scale);
+        int top  = ClampDenseY(logoCenterY - bubblePhysH / 2, bubblePhysH, wa);
+        int left = _denseSide == DenseSide.Right
+            ? wa.X + wa.Width - stripPhysW - bubblePhysW
+            : wa.X + stripPhysW;
+
+        _bubble.Position = new PixelPoint(left, top);
+        _bubble.Present();
+    }
+
+    // The dot colour + short label the bubble shows for each status change, matching the overlay's language.
+    private (Color color, string label) BubbleContent(SessionStatus status) => status switch
+    {
+        SessionStatus.NeedsAttention => (_attention, "done"),
+        SessionStatus.AwaitingInput  => (_awaiting,  "input"),
+        SessionStatus.ApiError       => (_apiError,  "api error"),
+        _                            => (_running,   "update"),
+    };
+
+    private void DismissBubble()
+    {
+        _bubble?.Close();
+        _bubble = null;
+    }
+
     // ── Pointer / hover plumbing the overlay forwards ─────────────────────────────
     // Hovering the strip pops the full panel open; any re-entry cancels a pending auto-close.
     public void OnPointerEntered()
@@ -328,6 +380,7 @@ internal sealed class DenseController : IDisposable
     {
         if (!_denseYInit && !_dense) return; // nothing positioned yet; the first Enter will seed it
         if (_host.Screens is null) return;
+        DismissBubble();                     // its position would be stale against the new geometry
         _denseY = DeriveDenseY(DenseScreen());
         if (_dense) { _host.RelayoutWindow(); _host.Invalidate(); }
     }
@@ -440,6 +493,7 @@ internal sealed class DenseController : IDisposable
     public void Dispose()
     {
         HideDropZones();
+        DismissBubble();
         _closeTimer.Stop();
     }
 }

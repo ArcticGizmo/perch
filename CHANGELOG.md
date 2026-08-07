@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.19] - 2026-08-07
+
+- Dense-strip status changes can be a fading speech bubble instead of an expand
+- The bubble drifts off the perch logo with a status dot and label
+- Hover or click to dismiss it early
+- Expand stays the default (your strip won't start blowing bubbles unasked)
+
+---
+
 ## [v0.3.18] - 2026-08-07
 
 - A bottom-parked overlay anchors by its header, so it stops leaping about as sessions come and go

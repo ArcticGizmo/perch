@@ -32,6 +32,20 @@ public enum StartMode
     OnLogin = 2,
 }
 
+/// <summary>
+/// How the dense strip announces a session status change (finished / awaiting input / API error).
+/// Persisted by <em>name</em> so the member order can change without breaking an older settings file.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum DenseStatusChangeStyle
+{
+    /// <summary>Pop the hover panel open (the original behaviour) so the changed session is visible.</summary>
+    Expand = 0,
+    /// <summary>Float a small speech bubble off the perch-logo row that fades away after a couple of seconds,
+    /// leaving the strip collapsed.</summary>
+    Bubble = 1,
+}
+
 internal sealed class AppSettings
 {
     // Per-profile so a dev instance doesn't read/write the installed Perch's settings (see AppProfile).
@@ -302,6 +316,12 @@ internal sealed class AppSettings
     public OverlayPlacement? FloatingPlacement { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public OverlayPlacement? DensePlacement { get; set; }
+
+    // How the dense strip surfaces a session status change: Expand pops the hover panel open (the original
+    // behaviour); Bubble floats a small speech bubble off the perch-logo row that fades after a couple of
+    // seconds, leaving the strip collapsed. Defaults to Expand, so an older settings file keeps today's
+    // behaviour. See OverlayCanvas.TriggerAttention and DenseController.ShowBubble.
+    public DenseStatusChangeStyle DenseStatusChangeStyle { get; set; } = DenseStatusChangeStyle.Expand;
 
     // Integrations. Hypertree (the virtual-desktop branch manager) — when on, the overlay grows a
     // "Hypertree" section under the quick links listing its branches (main included), marking the one

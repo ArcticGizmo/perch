@@ -399,6 +399,13 @@ internal static class SettingsRegistry
             PreviewTarget.None,
             nameof(AppSettings.FloatingPlacement), nameof(AppSettings.DensePlacement)),
 
+        // Rendered as a two-option segmented toggle (see SettingsCatalogView.DropdownEditor), not a combo.
+        Info("dense-status-style", "Dense strip status changes",
+            "How the collapsed dense strip reacts when a session finishes, blocks, or errors: expand the panel, or float a fading speech bubble off the logo.",
+            SettingSurface.Advanced, SettingKind.Dropdown,
+            ["dense", "strip", "status", "change", "expand", "bubble", "speech", "popup", "notification", "toast"],
+            PreviewTarget.None, nameof(AppSettings.DenseStatusChangeStyle)),
+
         Toggle("auto-close", "Auto-close after last session",
             "Exit a short while after the last session ends (only when auto-started).",
             SettingSurface.Advanced, ["auto", "close", "exit", "quit", "shutdown", "last", "session"],

@@ -30,7 +30,7 @@ internal static class SettingEditors
 
         return d.Kind switch
         {
-            SettingKind.Dropdown => Dropdown(d, s),
+            SettingKind.Dropdown => Dropdown(d, s, h),
             SettingKind.Field    => Field(d, s),
             SettingKind.Slider   => Slider(s, h),
             SettingKind.Stepper  => Stepper(d, s, h),
@@ -39,8 +39,19 @@ internal static class SettingEditors
         };
     }
 
-    private static Control Dropdown(SettingDescriptor d, AppSettings s)
+    private static Control Dropdown(SettingDescriptor d, AppSettings s, SettingsHooks h)
     {
+        if (d.Id == "dense-status-style")
+        {
+            // Order matches the DenseStatusChangeStyle enum ordinals (Expand, Bubble).
+            return SettingsUi.Segmented(["Expand", "Bubble"], (int)s.DenseStatusChangeStyle, i =>
+            {
+                s.DenseStatusChangeStyle = (DenseStatusChangeStyle)i;
+                s.Save();
+                h.DisplayChanged?.Invoke();
+            });
+        }
+
         if (d.Id == "start-mode")
         {
             var combo = SettingsUi.Dropdown(["Never", "On session start", "At login"], (int)s.StartMode);

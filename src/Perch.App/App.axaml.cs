@@ -557,7 +557,7 @@ public partial class App : Application
     private void OnNeedsAttention(ClaudeSession session)
     {
         if (IsDaemonSession(session)) return;
-        _overlay!.Canvas.TriggerAttention();
+        _overlay!.Canvas.TriggerAttention(SessionStatus.NeedsAttention);
         _notifications?.Notify(NotificationKind.Done, session);
         if (_overlay.Canvas.ConsumeConfetti(session.SessionId))
             LaunchConfetti();
@@ -621,7 +621,7 @@ public partial class App : Application
     private void OnAwaitingInput(ClaudeSession session)
     {
         if (IsDaemonSession(session)) return;
-        _overlay!.Canvas.TriggerAttention();
+        _overlay!.Canvas.TriggerAttention(SessionStatus.AwaitingInput);
         _notifications?.Notify(NotificationKind.WaitingForInput, session);
     }
 
@@ -630,7 +630,7 @@ public partial class App : Application
     private void OnApiError(ClaudeSession session)
     {
         if (IsDaemonSession(session)) return;
-        _overlay!.Canvas.TriggerAttention();
+        _overlay!.Canvas.TriggerAttention(SessionStatus.ApiError);
         _notifications?.Notify(NotificationKind.ApiFailed, session);
     }
 

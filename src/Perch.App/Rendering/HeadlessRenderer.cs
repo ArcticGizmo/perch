@@ -8,6 +8,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Perch.Avalonia.Services;
+using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
 using Perch.Avalonia.Windows;
 using Perch.Data;
@@ -63,6 +64,20 @@ internal static class HeadlessRenderer
         // captures the comet at phase 0 over its faint inward-glow base outline).
         canvas.TriggerAttention();
         RenderControl(canvas, Path.Combine(outDir, "overlay_attention_1x.png"), 96);
+
+        // Dense status-change bubble (AppSettings.DenseStatusChangeStyle = Bubble): the fading speech bubble
+        // that floats off the strip's logo. It's a separate top-level window at runtime, so render it
+        // standalone — one per status colour/label, plus a left-docked variant to check the tail flips.
+        RenderControl(DenseBubbleWindow.CreateForRender(DenseSide.Right, Palette.Active.StatusAttention.ToColor(), "done"),
+            Path.Combine(outDir, "dense_bubble_done_1x.png"), 96);
+        RenderControl(DenseBubbleWindow.CreateForRender(DenseSide.Right, Palette.Active.StatusAttention.ToColor(), "done"),
+            Path.Combine(outDir, "dense_bubble_done_1.5x.png"), 144);
+        RenderControl(DenseBubbleWindow.CreateForRender(DenseSide.Right, Palette.Active.StatusAwaiting.ToColor(), "input"),
+            Path.Combine(outDir, "dense_bubble_input_1x.png"), 96);
+        RenderControl(DenseBubbleWindow.CreateForRender(DenseSide.Right, Palette.Active.StatusError.ToColor(), "api error"),
+            Path.Combine(outDir, "dense_bubble_apierror_1x.png"), 96);
+        RenderControl(DenseBubbleWindow.CreateForRender(DenseSide.Left, Palette.Active.StatusAwaiting.ToColor(), "input"),
+            Path.Combine(outDir, "dense_bubble_left_1x.png"), 96);
 
         // Update badge: the perch-orange download disc in the header cluster, shown while an update is
         // pending. Rendered at both DPIs so the owner-drawn disc + arrow stay crisp.
