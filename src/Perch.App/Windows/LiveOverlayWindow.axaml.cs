@@ -24,6 +24,11 @@ public partial class LiveOverlayWindow : Window
         Canvas.OwnerWindow = this; // the canvas reaches Position / Screens / BeginMoveDrag through this
         Content = canvas;
 
+        // The canvas remembers a user drag corner-relative so display changes and dense toggles restore it.
+        // A drag moves the window through the OS, not our code, so the window's own PositionChanged is the
+        // reliable signal — it fires for the drag's final spot regardless of whether BeginMoveDrag blocks.
+        PositionChanged += (_, _) => Canvas.OnWindowPositionChanged();
+
         // Borderless, transparent, manually-placed chrome. (In Avalonia 12 the decorations enum is
         // only reachable in code, so it's set here rather than in XAML.)
         WindowDecorations = WindowDecorations.None;

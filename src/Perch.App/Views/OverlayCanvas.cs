@@ -202,6 +202,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // changes MUST NOT write here — restoring reads it, and a clamp-to-a-shrunken-screen would poison it.
     private OverlayPlacement? _effectiveFloating;
 
+    // The last spot we placed the floating window at *ourselves*. The window's PositionChanged fires for
+    // both our programmatic moves and the user's drags; a report equal to this is our own move and must be
+    // ignored (else a screen-change re-heal or clamp would be recaptured as if the user had dragged there).
+    // Anything else is a genuine drag — that's what refreshes _effectiveFloating. Null until first placed,
+    // so a stray pre-placement move can't be mistaken for a drag. See OnWindowPositionChanged.
+    private PixelPoint? _lastPlacedFloatingPos;
+
     public OverlayCanvas()
     {
         // The brand mark and quick-link icons are 256px sources drawn at ~16–18px; the default sampler
@@ -292,7 +299,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (HostWindow is not { } w) return;
         w.Width = FormWidth;
         w.SizeToContent = SizeToContent.Height; // recomputes height from content, keeps the 280 width
-        w.Position = position;
+        SetFloatingPosition(w, position);
         RestoreOrEnsureFloating(); // prefer the remembered corner-relative spot; the raw position may be on a since-removed monitor
     }
 
@@ -332,6 +339,27 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private (int W, int H) FloatingPhysicalSize(double scale) =>
         (Math.Max(1, (int)(FormWidth * scale)), Math.Max(1, (int)(Draw(null, FormWidth) * scale)));
 
+    // Every programmatic floating move routes through here so OnWindowPositionChanged can tell our own moves
+    // from a user drag. (Dense geometry is exempt — dense moves are ignored wholesale while IsDense.)
+    private void SetFloatingPosition(Window w, PixelPoint pos)
+    {
+        _lastPlacedFloatingPos = pos;
+        w.Position = pos;
+    }
+
+    /// <summary>The owning window moved. Distinguishes a user drag (which we remember, corner-relative, in
+    /// <see cref="_effectiveFloating"/>) from our own programmatic placement (ignored). Capturing here rather
+    /// than right after <c>BeginMoveDrag</c> is reliable regardless of whether the platform's move loop blocks
+    /// — the drag's final position is always reported through this event.</summary>
+    internal void OnWindowPositionChanged()
+    {
+        if (_denseCtl.IsDense) return;                          // dense owns its geometry
+        if (_lastPlacedFloatingPos is not { } placed) return;   // not placed yet — nothing to compare against
+        if (HostWindow is not { } w) return;
+        if (placed == w.Position) return;                       // our own programmatic move, not a user drag
+        CaptureFloatingPlacement();                             // a real drag — remember it corner-relative
+    }
+
     // Physical top-left that puts the floating window at the top-right of the given screen's work area.
     private static PixelPoint DefaultFloatingPosition(Screen screen, int physWidth)
     {
@@ -363,10 +391,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         var wa = screen.WorkingArea;
         double scale = screen.Scaling;
-        int physW = Math.Max(1, (int)(w.Width * scale));
-        int physH = Math.Max(1, (int)(w.Height * scale));
+        var (physW, physH) = FloatingPhysicalSize(scale);
         var (x, y) = PlacementMath.ToPosition(p, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
-        w.Position = new PixelPoint(x, y);
+        SetFloatingPosition(w, new PixelPoint(x, y));
         return true;
     }
 
@@ -403,7 +430,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (HostWindow is not { Screens: { } screens } w) return;
         var home = screens.Primary ?? (screens.All.Count > 0 ? screens.All[0] : null);
         if (home is null) return;
-        w.Position = DefaultFloatingPosition(home, (int)(w.Width * home.Scaling));
+        SetFloatingPosition(w, DefaultFloatingPosition(home, (int)(w.Width * home.Scaling)));
     }
 
     // Guarantees the floating window sits on a currently-connected screen. Its position is otherwise only
@@ -442,15 +469,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             var wa = best.WorkingArea;
             int x = Math.Clamp(w.Position.X, wa.X, Math.Max(wa.X, wa.X + wa.Width - physW));
             int y = Math.Clamp(w.Position.Y, wa.Y, Math.Max(wa.Y, wa.Y + wa.Height - physH));
-            w.Position = new PixelPoint(x, y);
+            SetFloatingPosition(w, new PixelPoint(x, y));
         }
         catch { /* best-effort re-anchoring; never throw out of a toggle/screen-change */ }
     }
 
     // Records where the floating window currently sits as a corner-relative placement (nearest corner + DIP
-    // edge distances), stamped with the monitor it's on. Called after the initial placement and after a manual
-    // drag — never on a screen change, whose clamp-to-fit would otherwise overwrite the real spot. No-op in
-    // dense mode (the controller owns geometry there) so a dense session can't clobber the floating memory.
+    // edge distances), stamped with the monitor it's on. Called after the initial placement and, via
+    // OnWindowPositionChanged, after every user drag — never on a screen-change re-heal, whose clamp-to-fit
+    // would otherwise overwrite the real spot. No-op in dense mode (the controller owns geometry there) so a
+    // dense session can't clobber the floating memory.
     private void CaptureFloatingPlacement()
     {
         if (_denseCtl.IsDense) return;
@@ -496,7 +524,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double scale = screen.Scaling;
         var (physW, physH) = FloatingPhysicalSize(scale);
         var (x, y) = PlacementMath.ToPosition(p, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
-        w.Position = new PixelPoint(x, y);
+        SetFloatingPosition(w, new PixelPoint(x, y));
         return true;
     }
 
@@ -2783,14 +2811,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _headerArmed = false;
                 e.Pointer.Capture(null); // release our capture so the OS can drive the move
                 if (OwnerWindow is { } w && _headerPressArgs is { } pa)
-                {
-                    w.BeginMoveDrag(pa);     // OS-native move (blocks on Windows until the button is released)
-                    // Remember the dropped spot corner-relative so a later display change restores this exact
-                    // distance from the borders. On Windows the move loop above has finished, so w.Position is
-                    // now the final location. (On a head where BeginMoveDrag returns early this captures the
-                    // pre-move spot — harmless; a subsequent screen change just restores where it started.)
-                    CaptureFloatingPlacement();
-                }
+                    w.BeginMoveDrag(pa);     // OS-native move; the resulting window moves are remembered
+                                             // corner-relative in OnWindowPositionChanged as they happen, so
+                                             // there's no need to capture here (and no reliance on whether
+                                             // BeginMoveDrag blocks until the button is released).
             }
             base.OnPointerMoved(e);
             return;

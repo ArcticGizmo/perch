@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.17] - 2026-08-07
+
+- Overlay drags now actually stick, so a dense-mode toggle returns it where you left it (v0.3.16 meant well)
+- Screen and resolution changes hold the overlay's distance from its nearest corner, clamped so the header stays reachable
+
+---
+
 ## [v0.3.16] - 2026-08-07
 
 - Fixed the overlay jumping to an old spot when you toggle dense mode on a small screen (it now stays where you left it)
