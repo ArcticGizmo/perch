@@ -323,6 +323,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const int FloatTopGap = 32;
     private const int FloatRightMargin = 16;
 
+    // The floating window's intended physical footprint at a given scale, measured from content rather than
+    // read off the live window. Right after leaving dense mode the window is still at its dense size
+    // (SizeToContent.Height hasn't re-run yet), so w.Width/w.Height are stale; the corner-relative restore
+    // needs the real floating size or a bottom/right-anchored spot recomputes against the wrong height and
+    // jumps — the "toggle to dense and back reverts the position" bug on small screens. FormWidth is fixed;
+    // the height is the measure pass's content height (honours the current collapsed/expanded state).
+    private (int W, int H) FloatingPhysicalSize(double scale) =>
+        (Math.Max(1, (int)(FormWidth * scale)), Math.Max(1, (int)(Draw(null, FormWidth) * scale)));
+
     // Physical top-left that puts the floating window at the top-right of the given screen's work area.
     private static PixelPoint DefaultFloatingPosition(Screen screen, int physWidth)
     {
@@ -410,8 +419,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         try
         {
             double scale = w.RenderScaling <= 0 ? 1.0 : w.RenderScaling;
-            int physW = Math.Max(1, (int)(w.Width * scale));
-            int physH = Math.Max(1, (int)(w.Height * scale));
+            var (physW, physH) = FloatingPhysicalSize(scale);
             var rect = new PixelRect(w.Position, new PixelSize(physW, physH));
 
             // The screen the window overlaps most; none → its monitor was disconnected.
@@ -450,15 +458,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         try
         {
             double wscale = w.RenderScaling <= 0 ? 1.0 : w.RenderScaling;
-            int physW = Math.Max(1, (int)(w.Width * wscale));
-            int physH = Math.Max(1, (int)(w.Height * wscale));
+            var (physW, physH) = FloatingPhysicalSize(wscale);
             var screen = OverlappedScreen(screens, w.Position, physW, physH);
             if (screen is null) return;
 
             var wa = screen.WorkingArea;
             double scale = screen.Scaling;
-            physW = Math.Max(1, (int)(w.Width * scale));
-            physH = Math.Max(1, (int)(w.Height * scale));
+            (physW, physH) = FloatingPhysicalSize(scale);
             var p = PlacementMath.FromPosition(
                 w.Position.X, w.Position.Y, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
             p.MonitorX = screen.Bounds.X; p.MonitorY = screen.Bounds.Y;
@@ -480,8 +486,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (HostWindow is not { Screens: { } screens } w) return false;
 
         double wscale = w.RenderScaling <= 0 ? 1.0 : w.RenderScaling;
-        int probeW = Math.Max(1, (int)(w.Width * wscale));
-        int probeH = Math.Max(1, (int)(w.Height * wscale));
+        var (probeW, probeH) = FloatingPhysicalSize(wscale);
         var screen = ResolveScreen(screens, p)
                      ?? OverlappedScreen(screens, w.Position, probeW, probeH)
                      ?? screens.Primary ?? (screens.All.Count > 0 ? screens.All[0] : null);
@@ -489,8 +494,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         var wa = screen.WorkingArea;
         double scale = screen.Scaling;
-        int physW = Math.Max(1, (int)(w.Width * scale));
-        int physH = Math.Max(1, (int)(w.Height * scale));
+        var (physW, physH) = FloatingPhysicalSize(scale);
         var (x, y) = PlacementMath.ToPosition(p, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
         w.Position = new PixelPoint(x, y);
         return true;

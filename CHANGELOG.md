@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.16] - 2026-08-07
+
+- Fixed the overlay jumping to an old spot when you toggle dense mode on a small screen (it now stays where you left it)
+
+---
+
 ## [v0.3.15] - 2026-08-06
 
 - Alerts when a tracked PR is merged, closed, reviewed, or approved
