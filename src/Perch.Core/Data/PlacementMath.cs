@@ -10,10 +10,21 @@ namespace Perch.Data;
 /// pixels; the placement offsets are <b>DIP</b>, converted with <paramref name="scale"/>
 /// (physical = DIP × scale).
 /// </para>
+/// <para>
+/// The two axes are deliberately asymmetric because the overlay's <b>width is fixed but its height grows
+/// and shrinks with content</b>. Horizontally we anchor the window's <em>near</em> edge (left→left gap,
+/// right→right gap, so <c>physW</c> matters). Vertically we anchor the window's <b>top edge — the header —
+/// to the nearest horizontal work-area edge and ignore <c>physH</c> entirely</b>. A bottom-anchored
+/// overlay therefore keeps its header a fixed distance above the work-area bottom regardless of how many
+/// sessions are showing (the panel grows downward from there, clamped on-screen), instead of pinning the
+/// dynamic <em>bottom</em> edge and letting the header jump around as the session count changes.
+/// </para>
 /// </summary>
 public static class PlacementMath
 {
-    /// <summary>Anchor + DIP offset → clamped physical top-left position of the window.</summary>
+    /// <summary>Anchor + DIP offset → clamped physical top-left position of the window. The vertical offset
+    /// is the header (top-edge) distance from the anchored horizontal edge — height-independent by design;
+    /// see the type remarks.</summary>
     public static (int X, int Y) ToPosition(
         OverlayPlacement p, int waX, int waY, int waW, int waH, double scale, int physW, int physH)
     {
@@ -21,7 +32,8 @@ public static class PlacementMath
         var offY = (int)Math.Round(p.OffsetY * scale);
 
         var x = p.HAnchor == HAnchor.Left ? waX + offX : waX + waW - physW - offX;
-        var y = p.VAnchor == VAnchor.Top ? waY + offY : waY + waH - physH - offY;
+        // Vertical anchors the top edge (the header), not the height-dependent bottom edge.
+        var y = p.VAnchor == VAnchor.Top ? waY + offY : waY + waH - offY;
 
         return Clamp(x, y, waX, waY, waW, waH, physW, physH);
     }
@@ -30,6 +42,8 @@ public static class PlacementMath
     /// Physical top-left position → an <see cref="OverlayPlacement"/> anchored to whichever corner is
     /// nearest, with DIP offsets from those two edges. The position is clamped on-screen first, so the
     /// offsets are never negative. The monitor fields are left unset — the caller records those.
+    /// Vertically the header (top edge) is what's anchored, so the offset doesn't depend on the panel
+    /// height; the horizontal axis still measures the window's near edge (see the type remarks).
     /// </summary>
     public static OverlayPlacement FromPosition(
         int x, int y, int waX, int waY, int waW, int waH, double scale, int physW, int physH)
@@ -38,8 +52,10 @@ public static class PlacementMath
 
         var distLeft = x - waX;
         var distRight = waX + waW - (x + physW);
+        // Vertical distances are both to the window's *top* edge, so which one is smaller simply asks
+        // "is the header in the top or bottom half of the work area?" — independent of the panel height.
         var distTop = y - waY;
-        var distBottom = waY + waH - (y + physH);
+        var distBottom = waY + waH - y;
 
         var hAnchor = distLeft <= distRight ? HAnchor.Left : HAnchor.Right;
         var vAnchor = distTop <= distBottom ? VAnchor.Top : VAnchor.Bottom;

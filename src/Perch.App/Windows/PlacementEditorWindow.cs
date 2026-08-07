@@ -270,9 +270,11 @@ internal sealed class PlacementEditorWindow : Window
         Canvas.SetTop(_mock, topDip);
         _mockLabel.Text = _mode == EditMode.Floating ? "Overlay\npreview" : "Dense";
 
-        // Guides run from the preview's anchored corner out to the two nearest work-area edges.
+        // Guides run from the preview's anchored point out to the two nearest work-area edges. The vertical
+        // anchor is always the mock's top edge (the header) — OffsetY measures from there regardless of
+        // Top/Bottom — since the real panel's height is dynamic; only the horizontal uses the near edge.
         double cornerX = p.HAnchor == HAnchor.Left ? leftDip : leftDip + dipW;
-        double cornerY = p.VAnchor == VAnchor.Top ? topDip : topDip + dipH;
+        double cornerY = topDip;
         double edgeX = ((p.HAnchor == HAnchor.Left ? wa.X : wa.X + wa.Width) - bounds.X) / scale;
         double edgeY = ((p.VAnchor == VAnchor.Top ? wa.Y : wa.Y + wa.Height) - bounds.Y) / scale;
         _guideH.StartPoint = new Point(cornerX, cornerY);

@@ -21,8 +21,8 @@ public class PlacementMathTests
     [InlineData(200, 150, 1.5)]
     [InlineData(200, 150, 2.0)]
     [InlineData(1920 - 280 - 200, 150, 1.5)]        // near right edge
-    [InlineData(200, 1040 - 400 - 150, 1.5)]        // near bottom edge
-    [InlineData(1920 - 280 - 200, 1040 - 400 - 150, 1.25)] // bottom-right
+    [InlineData(200, 600, 1.5)]                     // lower half -> bottom (header) anchored
+    [InlineData(1920 - 280 - 200, 600, 1.25)]       // bottom-right
     public void FromPosition_ThenToPosition_RoundTrips(int x, int y, double scale)
     {
         var placement = PlacementMath.FromPosition(x, y, 0, 0, PrimW, PrimH, scale, PhysW, PhysH);
@@ -42,14 +42,15 @@ public class PlacementMathTests
         Assert.Equal(40, tl.OffsetX);
         Assert.Equal(30, tl.OffsetY);
 
-        // Bottom-right quadrant: offsets are measured from the right/bottom edges.
-        var brX = PrimW - PhysW - 60; // 60 DIP from the right edge (scale 1.0)
-        var brY = PrimH - PhysH - 25; // 25 DIP from the bottom edge
+        // Bottom-right quadrant: X measures the window's right edge from the right; Y measures the header
+        // (top edge) from the bottom, independent of panel height.
+        var brX = PrimW - PhysW - 60; // window right edge 60 DIP from the right edge (scale 1.0)
+        var brY = PrimH - 425;        // header 425 DIP above the bottom edge -> bottom half, anchors bottom
         var br = PlacementMath.FromPosition(brX, brY, 0, 0, PrimW, PrimH, 1.0, PhysW, PhysH);
         Assert.Equal(HAnchor.Right, br.HAnchor);
         Assert.Equal(VAnchor.Bottom, br.VAnchor);
         Assert.Equal(60, br.OffsetX);
-        Assert.Equal(25, br.OffsetY);
+        Assert.Equal(425, br.OffsetY);
     }
 
     [Fact]
@@ -65,10 +66,35 @@ public class PlacementMathTests
     [Fact]
     public void ToPosition_RightBottomAnchorsMeasureFromFarEdges()
     {
-        var p = new OverlayPlacement { HAnchor = HAnchor.Right, VAnchor = VAnchor.Bottom, OffsetX = 16, OffsetY = 32 };
+        // X: window right edge 16 DIP from the right. Y: header (top edge) 432 DIP above the bottom edge —
+        // with a 400px panel that leaves the window's bottom 32 px above the work-area bottom.
+        var p = new OverlayPlacement { HAnchor = HAnchor.Right, VAnchor = VAnchor.Bottom, OffsetX = 16, OffsetY = 432 };
         var (x, y) = PlacementMath.ToPosition(p, 0, 0, PrimW, PrimH, 1.0, PhysW, PhysH);
         Assert.Equal(PrimW - PhysW - 16, x);
         Assert.Equal(PrimH - PhysH - 32, y);
+    }
+
+    [Fact]
+    public void ToPosition_BottomAnchor_HeaderYIndependentOfPanelHeight()
+    {
+        // The point of anchoring the header: a bottom-anchored overlay keeps the same top-edge Y no matter
+        // how tall the panel is (2 sessions vs 5), as long as it still fits on screen.
+        var p = new OverlayPlacement { HAnchor = HAnchor.Right, VAnchor = VAnchor.Bottom, OffsetY = 300 };
+        var (_, yShort) = PlacementMath.ToPosition(p, 0, 0, PrimW, PrimH, 1.0, PhysW, 120);
+        var (_, yTall)  = PlacementMath.ToPosition(p, 0, 0, PrimW, PrimH, 1.0, PhysW, 260);
+        Assert.Equal(PrimH - 300, yShort); // 740: header 300 above the bottom edge
+        Assert.Equal(yShort, yTall);       // header didn't move when the panel grew
+    }
+
+    [Fact]
+    public void ToPosition_BottomAnchor_TooTallPanelClampsBottomFlush()
+    {
+        // A panel too tall to sit at the requested header spot is clamped fully on-screen (bottom-flush),
+        // keeping the header reachable instead of hanging off the bottom.
+        var p = new OverlayPlacement { HAnchor = HAnchor.Right, VAnchor = VAnchor.Bottom, OffsetY = 100 };
+        var (_, y) = PlacementMath.ToPosition(p, 0, 0, PrimW, PrimH, 1.0, PhysW, PhysH); // PhysH = 400
+        // Header 100 above the bottom would push the bottom 300px off-screen; clamp pulls it up.
+        Assert.Equal(PrimH - PhysH, y); // 640
     }
 
     [Fact]

@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.18] - 2026-08-07
+
+- A bottom-parked overlay anchors by its header, so it stops leaping about as sessions come and go
+
+---
+
 ## [v0.3.17] - 2026-08-07
 
 - Overlay drags now actually stick, so a dense-mode toggle returns it where you left it (v0.3.16 meant well)

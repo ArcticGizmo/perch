@@ -30,10 +30,14 @@ public sealed class OverlayPlacement
     public HAnchor HAnchor { get; set; } = HAnchor.Right;
     public VAnchor VAnchor { get; set; } = VAnchor.Top;
 
-    /// <summary>DIP distance from the anchored horizontal edge (ignored in dense mode).</summary>
+    /// <summary>DIP distance from the anchored horizontal edge to the window's near (left/right) edge —
+    /// the width is fixed, so this measures the window edge (ignored in dense mode).</summary>
     public double OffsetX { get; set; }
 
-    /// <summary>DIP distance from the anchored vertical edge.</summary>
+    /// <summary>DIP distance from the anchored vertical edge to the window's <b>top</b> edge (the header).
+    /// The panel height is deliberately not part of this: a taller/shorter panel keeps the same header
+    /// position and simply grows downward (clamped on-screen), so the header doesn't jump as the session
+    /// count changes. See <see cref="PlacementMath"/>.</summary>
     public double OffsetY { get; set; }
 
     public OverlayPlacement Clone() => new()

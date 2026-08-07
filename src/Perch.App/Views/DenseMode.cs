@@ -224,29 +224,30 @@ internal sealed class DenseController : IDisposable
         return DeriveDenseY(s);
     }
 
-    // Physical Y from the remembered corner-relative vertical: its DIP offset from the anchored (top/bottom)
-    // work-area edge, using the current strip height, clamped on-screen. Mirrors PlacementMath's vertical
-    // axis (X is edge-locked in dense mode, so only Y is derived here).
+    // Physical Y from the remembered corner-relative vertical: the DIP offset from the anchored (top/bottom)
+    // work-area edge to the strip's *top* edge, clamped on-screen. Mirrors PlacementMath's vertical axis —
+    // the top edge is anchored (not the height-dependent bottom), so the strip's top stays put as its row
+    // count changes; the strip grows downward and is clamped. (X is edge-locked in dense mode.)
     private int DeriveDenseY(Screen s)
     {
         var wa = s.WorkingArea;
         double scale = s.Scaling;
         int physH = (int)(StripHeightDip() * scale);
         int offY = (int)Math.Round(_denseVOffsetDip * scale);
-        int y = _denseVAnchor == VAnchor.Top ? wa.Y + offY : wa.Y + wa.Height - physH - offY;
+        int y = _denseVAnchor == VAnchor.Top ? wa.Y + offY : wa.Y + wa.Height - offY;
         return ClampDenseY(y, physH, wa);
     }
 
-    // Records the current _denseY as a corner-relative vertical (nearest vertical edge + DIP distance from it)
-    // after a drag or drop-zone re-pin, so a later screen change re-derives the same distance instead of a
-    // stale absolute Y. The vertical twin of the floating window's CaptureFloatingPlacement.
+    // Records the current _denseY as a corner-relative vertical (nearest vertical edge + DIP distance to the
+    // strip's top edge) after a drag or drop-zone re-pin, so a later screen change re-derives the same
+    // distance instead of a stale absolute Y. The vertical twin of the floating window's
+    // CaptureFloatingPlacement — height-independent, matching PlacementMath.
     private void CaptureDenseVertical(Screen s)
     {
         var wa = s.WorkingArea;
         double scale = s.Scaling;
-        int physH = (int)(StripHeightDip() * scale);
         int distTop = _denseY - wa.Y;
-        int distBottom = wa.Y + wa.Height - (_denseY + physH);
+        int distBottom = wa.Y + wa.Height - _denseY;
         if (distTop <= distBottom) { _denseVAnchor = VAnchor.Top; _denseVOffsetDip = Math.Max(0, distTop) / scale; }
         else { _denseVAnchor = VAnchor.Bottom; _denseVOffsetDip = Math.Max(0, distBottom) / scale; }
     }
