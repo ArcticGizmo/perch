@@ -105,11 +105,23 @@ internal sealed class GitTreeWindow : Window
     private string _shownDiffSig = "";
     private HashSet<string> _invisiblePaths = new(StringComparer.Ordinal);
 
-    /// <summary>A row in the left graph: either the working-tree (WIP) node or one commit. Internal so the
-    /// headless render harness can build sample rows via <see cref="NodeRow"/>.</summary>
-    internal sealed record TreeNode(bool IsWip, bool IsHead, GitCommit Commit, int ChangeCount)
+    internal enum NodeKind { Wip, Commit, Base }
+
+    /// <summary>A row in the left graph: the working-tree (WIP) node, one commit, or the terminal base node
+    /// (the ref the branch is scoped against, e.g. <c>origin/main</c>). <see cref="IsFirst"/>/<see cref="IsLast"/>
+    /// trim the lane rail so it doesn't run past the top of the first knot or below the last one. Internal so
+    /// the headless render harness can build sample rows via <see cref="NodeRow"/>.</summary>
+    internal sealed record TreeNode(
+        NodeKind Kind, bool IsHead, bool IsFirst, bool IsLast, GitCommit Commit, int ChangeCount, string? Label)
     {
-        public string Key => IsWip ? "\0wip" : Commit.Hash;
+        public bool IsWip => Kind == NodeKind.Wip;
+        public bool IsBase => Kind == NodeKind.Base;
+        public string Key => Kind switch
+        {
+            NodeKind.Wip => "\0wip",
+            NodeKind.Base => "\0base",
+            _ => Commit.Hash,
+        };
     }
 
     public GitTreeWindow(AppSettings settings)
@@ -198,6 +210,13 @@ internal sealed class GitTreeWindow : Window
         // ---- pane 1: graph nodes ----
         _nodesList = MakeList(_nodeTemplate);
         _nodesList.SelectionChanged += OnNodeSelected;
+        // The terminal base node is a reference marker, not a destination — disable its container so it can't
+        // be clicked or keyboard-selected.
+        _nodesList.ContainerPrepared += (_, e) =>
+        {
+            if (e.Container is ListBoxItem lbi && e.Index >= 0 && e.Index < _nodes.Count)
+                lbi.IsEnabled = !_nodes[e.Index].IsBase;
+        };
         _nodesEmpty = EmptyHint("No commits");
         var graphPane = LabeledPane("Commits · this branch", _nodesList, _nodesEmpty);
 
@@ -468,15 +487,15 @@ internal sealed class GitTreeWindow : Window
                     ApplyStatus(status, cwd);
                     RebuildBaseMenu();
 
-                    _nodes = BuildNodes(status, commits);
+                    _nodes = BuildNodes(status, commits, baseRef);
                     _suppressSelect = true;
                     _nodesList.ItemsSource = _nodes;
                     _nodesList.SelectedIndex = -1;
                     _suppressSelect = false;
 
                     int idx = keepNode is not null ? IndexOfNodeKey(_nodes, keepNode) : -1;
-                    if (idx < 0 && _nodes.Count > 0) idx = 0; // default: select the tip
-                    _pendingFilePath = keepFile;              // OnNodeSelected reselects this file after load
+                    if (idx < 0) idx = FirstSelectable(_nodes); // default: the tip (never the base node)
+                    _pendingFilePath = keepFile;                // OnNodeSelected reselects this file after load
                     _nodesList.SelectedIndex = idx;
 
                     UpdateEmptyStates();
@@ -484,14 +503,33 @@ internal sealed class GitTreeWindow : Window
             });
     }
 
-    private static IReadOnlyList<TreeNode> BuildNodes(GitRepoStatus? status, IReadOnlyList<GitCommit> commits)
+    private static IReadOnlyList<TreeNode> BuildNodes(
+        GitRepoStatus? status, IReadOnlyList<GitCommit> commits, string? baseRef)
     {
         var nodes = new List<TreeNode>();
         if (status is { IsClean: false } s)
-            nodes.Add(new TreeNode(IsWip: true, IsHead: false, default, s.Changes.Count));
+            nodes.Add(new TreeNode(NodeKind.Wip, false, false, false, default, s.Changes.Count, null));
         for (int i = 0; i < commits.Count; i++)
-            nodes.Add(new TreeNode(false, IsHead: i == 0, commits[i], 0));
+            nodes.Add(new TreeNode(NodeKind.Commit, i == 0, false, false, commits[i], 0, null));
+        // The terminal base node: where this branch left its base. Non-selectable, no lane below it.
+        if (baseRef is { } b)
+            nodes.Add(new TreeNode(NodeKind.Base, false, false, false, default, 0, b));
+
+        // Trim the rail at the ends: no line above the first knot, none below the last.
+        if (nodes.Count > 0)
+        {
+            nodes[0] = nodes[0] with { IsFirst = true };
+            nodes[^1] = nodes[^1] with { IsLast = true };
+        }
         return nodes;
+    }
+
+    // The index of the first row a user can actually land on (skips the non-selectable base node).
+    private static int FirstSelectable(IReadOnlyList<TreeNode> nodes)
+    {
+        for (int i = 0; i < nodes.Count; i++)
+            if (!nodes[i].IsBase) return i;
+        return -1;
     }
 
     // ---- node selection -> files pane ----
@@ -501,6 +539,7 @@ internal sealed class GitTreeWindow : Window
     private void OnNodeSelected(object? sender, SelectionChangedEventArgs e)
     {
         if (_suppressSelect || _nodesList.SelectedItem is not TreeNode node || _cwd is not { } cwd) return;
+        if (node.IsBase) return; // the base marker isn't a destination
 
         string? wantFile = _pendingFilePath;
         _pendingFilePath = null;
@@ -814,13 +853,13 @@ internal sealed class GitTreeWindow : Window
                 {
                     string? keepNode = _nodesList.SelectedItem is TreeNode n ? n.Key : null;
                     string? keepFile = SelectedFilePath();
-                    _nodes = BuildNodes(status, commits);
+                    _nodes = BuildNodes(status, commits, baseRef);
                     _suppressSelect = true;
                     _nodesList.ItemsSource = _nodes;
                     _nodesList.SelectedIndex = -1;
                     _suppressSelect = false;
                     int idx = keepNode is not null ? IndexOfNodeKey(_nodes, keepNode) : -1;
-                    if (idx < 0 && _nodes.Count > 0) idx = 0;
+                    if (idx < 0) idx = FirstSelectable(_nodes);
                     // If the same WIP node stays selected, let the diff-signature guard below decide whether to
                     // repaint; reselecting would rebuild the files list. Only drive a reselect when the target
                     // node actually changed identity.
@@ -1072,32 +1111,24 @@ internal sealed class GitTreeWindow : Window
     private FuncDataTemplate<TreeNode> NodeTemplate() =>
         new((node, _) => node is null ? new Control() : NodeRow(node), supportsRecycling: false);
 
-    /// <summary>Builds one graph-node row (the lane rail + knot beside the commit / working-tree summary).
-    /// Static and self-contained so the render harness can eyeball it with sample data.</summary>
+    /// <summary>Builds one graph-node row (the lane rail + knot beside the commit / working-tree / base
+    /// summary). The rail is split into an upper and a lower segment so the line can be trimmed at the ends —
+    /// no line above the first knot, none below the last. Static and self-contained so the render harness can
+    /// eyeball it with sample data.</summary>
     internal static Control NodeRow(TreeNode node)
     {
-        var rail = new Grid { Width = 26 };
-        rail.Children.Add(new Rectangle
-        {
-            Width = 2, Fill = Palette.AccentBrush, Opacity = 0.5,
-            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Stretch,
-        });
-        Shape knot = node.IsWip
-            ? new Ellipse
-            {
-                Width = 13, Height = 13, StrokeThickness = 2,
-                Stroke = new SolidColorBrush(Palette.Brand), Fill = new SolidColorBrush(Palette.Sunken),
-                StrokeDashArray = new AvaloniaList<double> { 2, 1.4 },
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-            }
-            : new Ellipse
-            {
-                Width = 12, Height = 12,
-                Fill = new SolidColorBrush(Palette.Accent),
-                Stroke = node.IsHead ? new SolidColorBrush(Palette.AccentHover) : null,
-                StrokeThickness = node.IsHead ? 3 : 0,
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-            };
+        // Rail: [upper segment | knot | lower segment]. Upper is hidden on the first row, lower on the last.
+        var rail = new Grid { Width = 26, RowDefinitions = new RowDefinitions("*,Auto,*") };
+        var upper = LaneSegment();
+        upper.SetValue(Grid.RowProperty, 0);
+        upper.IsVisible = !node.IsFirst;
+        var lower = LaneSegment();
+        lower.SetValue(Grid.RowProperty, 2);
+        lower.IsVisible = !node.IsLast;
+        Shape knot = Knot(node);
+        knot.SetValue(Grid.RowProperty, 1);
+        rail.Children.Add(upper);
+        rail.Children.Add(lower);
         rail.Children.Add(knot);
 
         var content = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(6, 10, 10, 10) };
@@ -1106,7 +1137,7 @@ internal sealed class GitTreeWindow : Window
             content.Children.Add(new TextBlock
             {
                 Text = "Working tree", Foreground = new SolidColorBrush(Palette.Brand),
-                FontSize = 13, FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis,
+                FontSize = 13, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap,
             });
             content.Children.Add(new TextBlock
             {
@@ -1114,24 +1145,40 @@ internal sealed class GitTreeWindow : Window
                 Foreground = Palette.MutedBrush, FontFamily = Mono, FontSize = 11, Margin = new Thickness(0, 3, 0, 0),
             });
         }
+        else if (node.IsBase)
+        {
+            // The base marker: where this branch left its base ref. Not a destination.
+            content.Children.Add(new TextBlock
+            {
+                Text = node.Label ?? "base", Foreground = Palette.FgBrush, FontFamily = Mono, FontSize = 12,
+                FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap,
+            });
+            content.Children.Add(new TextBlock
+            {
+                Text = "branch base", Foreground = Palette.MutedBrush, FontSize = 11, Margin = new Thickness(0, 3, 0, 0),
+            });
+        }
         else
         {
             var c = node.Commit;
-            var subj = new StackPanel { Orientation = Orientation.Horizontal };
-            subj.Children.Add(new TextBlock
-            {
-                Text = c.Subject, Foreground = Palette.TitleBrush, FontSize = 13,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-            });
+            // Subject wraps; the HEAD tag docks top-right so a long subject flows beneath it.
+            var subjRow = new DockPanel { LastChildFill = true };
             if (node.IsHead)
-                subj.Children.Add(new Border
+            {
+                var tag = new Border
                 {
                     Background = new SolidColorBrush(Palette.Accent), CornerRadius = new CornerRadius(3),
                     Padding = new Thickness(5, 0, 5, 1), Margin = new Thickness(6, 1, 0, 0),
-                    VerticalAlignment = VerticalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Top, [DockPanel.DockProperty] = Dock.Right,
                     Child = new TextBlock { Text = "HEAD", Foreground = Palette.OnAccentBrush, FontSize = 9, FontFamily = Mono },
-                });
-            content.Children.Add(subj);
+                };
+                subjRow.Children.Add(tag);
+            }
+            subjRow.Children.Add(new TextBlock
+            {
+                Text = c.Subject, Foreground = Palette.TitleBrush, FontSize = 13, TextWrapping = TextWrapping.Wrap,
+            });
+            content.Children.Add(subjRow);
             content.Children.Add(new TextBlock
             {
                 Text = $"{c.ShortHash} · {c.Author} · {RelTime(c.Date)}",
@@ -1148,6 +1195,41 @@ internal sealed class GitTreeWindow : Window
         grid.Children.Add(content);
         return grid;
     }
+
+    // One half of the lane line. Its own brush instance (not the shared cached one) so the 0.5 opacity can't
+    // leak into other accent-coloured UI.
+    private static Rectangle LaneSegment() => new()
+    {
+        Width = 2, Fill = new SolidColorBrush(Palette.Accent) { Opacity = 0.5 },
+        HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Stretch,
+    };
+
+    // The knot on the rail: a dashed brand ring for WIP, a hollow muted ring for the base marker, else a
+    // filled accent dot (with a ring on HEAD).
+    private static Shape Knot(TreeNode node) => node.Kind switch
+    {
+        NodeKind.Wip => new Ellipse
+        {
+            Width = 13, Height = 13, StrokeThickness = 2,
+            Stroke = new SolidColorBrush(Palette.Brand), Fill = new SolidColorBrush(Palette.Sunken),
+            StrokeDashArray = new AvaloniaList<double> { 2, 1.4 },
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        },
+        NodeKind.Base => new Ellipse
+        {
+            Width = 11, Height = 11, StrokeThickness = 2,
+            Stroke = new SolidColorBrush(Palette.Muted), Fill = new SolidColorBrush(Palette.Sunken),
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        },
+        _ => new Ellipse
+        {
+            Width = 12, Height = 12,
+            Fill = new SolidColorBrush(Palette.Accent),
+            Stroke = node.IsHead ? new SolidColorBrush(Palette.AccentHover) : null,
+            StrokeThickness = node.IsHead ? 3 : 0,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+        },
+    };
 
     // A WIP file row: a stage checkbox (ticked when the file has staged content) beside the coloured
     // status + path. Ticking stages the whole file (git add); unticking unstages it (git restore --staged).

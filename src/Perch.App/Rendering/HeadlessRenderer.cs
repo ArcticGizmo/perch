@@ -696,13 +696,17 @@ internal static class HeadlessRenderer
     {
         var now = DateTimeOffset.Now;
         GitTreeWindow.TreeNode Commit(string hash, string subj, int hoursAgo, bool head) =>
-            new(false, head, new GitCommit(hash + "0000000", hash, "Jon Howell", now.AddHours(-hoursAgo), subj, subj, "p"), 0);
+            new(GitTreeWindow.NodeKind.Commit, head, false, false,
+                new GitCommit(hash + "0000000", hash, "Jon Howell", now.AddHours(-hoursAgo), subj, subj, "p"), 0, null);
 
         var nodes = new StackPanel();
-        nodes.Children.Add(GitTreeWindow.NodeRow(new GitTreeWindow.TreeNode(true, false, default, 3)));
+        nodes.Children.Add(GitTreeWindow.NodeRow(
+            new GitTreeWindow.TreeNode(GitTreeWindow.NodeKind.Wip, false, IsFirst: true, IsLast: false, default, 3, null)));
         nodes.Children.Add(GitTreeWindow.NodeRow(Commit("1c448d9", "middle click to open in new browser for links", 2, head: true)));
         nodes.Children.Add(GitTreeWindow.NodeRow(Commit("754fd60", "add more subtle bubble alert while in dense mode", 5, head: false)));
         nodes.Children.Add(GitTreeWindow.NodeRow(Commit("ebdb3ce", "Stronger handling of lower screen relative positioning", 27, head: false)));
+        nodes.Children.Add(GitTreeWindow.NodeRow(
+            new GitTreeWindow.TreeNode(GitTreeWindow.NodeKind.Base, false, IsFirst: false, IsLast: true, default, 0, "origin/main")));
 
         var mono = new FontFamily("Cascadia Code, Consolas, Menlo, monospace");
         TextBlock FileRow(string t, Color c) => new()
