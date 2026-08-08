@@ -37,6 +37,10 @@ internal readonly record struct LineStageState(bool Available, HunkStageAction A
 /// 0-based indices (into the hunk's body lines) of the selected lines.</summary>
 internal readonly record struct LineStageRequest(HunkStageAction Action, string? Path, string HunkHeader, int[] Indices);
 
+/// <summary>Raised when the user clicks a file's whole-file stage/discard/unstage button (the file-scope
+/// staging surface shown in Unified/Split modes, where there are no per-hunk buttons).</summary>
+internal readonly record struct FileStageRequest(HunkStageAction Action, string? Path);
+
 /// <summary>
 /// The unified-or-split diff surface for the Change Review window. Each hunk is laid out as a grid with one
 /// row per source line: a line-number gutter column and a selectable text column (a
@@ -82,6 +86,9 @@ internal sealed class DiffView : Border
     private bool _loading;
     private bool _split;
     private bool _wrap = true;
+    // Hunk mode: staging buttons render per hunk (+ line staging). Otherwise (Unified/Split) staging renders
+    // once per file, on the file header bar — set via SetPerHunk.
+    private bool _perHunkButtons;
 
     // Collapsed file sections, keyed per file so the state survives a rebuild (wrap/split toggle). The key
     // being built for the file currently under construction, so AddText can tag each line with it.
@@ -129,6 +136,10 @@ internal sealed class DiffView : Border
 
     /// <summary>Raised when the user asks to stage/unstage the current line selection.</summary>
     public event Action<LineStageRequest>? LineStageRequested;
+
+    /// <summary>Raised when the user clicks a whole-file stage/discard/unstage button (file-scope staging, in
+    /// Unified/Split modes).</summary>
+    public event Action<FileStageRequest>? FileStageRequested;
 
     public DiffView()
     {
@@ -248,6 +259,15 @@ internal sealed class DiffView : Border
     {
         if (_split == split) return;
         _split = split;
+        Rebuild();
+    }
+
+    /// <summary>Choose the staging granularity: per-hunk buttons on each hunk header plus line-level staging
+    /// (true, "Hunk" mode), or a single whole-file button set on each file header (false, "Unified"/"Split").</summary>
+    public void SetPerHunk(bool perHunk)
+    {
+        if (_perHunkButtons == perHunk) return;
+        _perHunkButtons = perHunk;
         Rebuild();
     }
 
@@ -427,6 +447,11 @@ internal sealed class DiffView : Border
         string key = (sectionLabel ?? "") + "\n" + FileLabel(file);
         bool collapsed = _collapsed.Contains(key);
         _currentFileKey = key;
+        string? filePath = file.NewPath ?? file.OldPath;
+
+        // In Hunk mode the staging buttons live on each hunk header; otherwise they render once, at file
+        // scope, on this file's header bar.
+        var hunkAction = _perHunkButtons ? action : HunkStageAction.None;
 
         var chevron = new TextBlock
         {
@@ -434,25 +459,30 @@ internal sealed class DiffView : Border
             Foreground = MutedBrush, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 6, 0),
         };
+        var headerLabel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                chevron,
+                new TextBlock
+                {
+                    Text = FileLabel(file), Foreground = TitleBrush, FontSize = PathSize,
+                    FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis,
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+            },
+        };
+        // File-scope stage/discard/unstage buttons (Unified/Split modes). Docked right of the file bar.
+        Control headerChild = !_perHunkButtons && action != HunkStageAction.None
+            ? new DockPanel { LastChildFill = true, Children = { FileStageButtons(action, filePath), headerLabel } }
+            : headerLabel;
         var header = new Border
         {
             Background = FileBarBg,
             Padding = new Thickness(10, 6),
             Cursor = new Cursor(StandardCursorType.Hand),
-            Child = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Children =
-                {
-                    chevron,
-                    new TextBlock
-                    {
-                        Text = FileLabel(file), Foreground = TitleBrush, FontSize = PathSize,
-                        FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis,
-                        VerticalAlignment = VerticalAlignment.Center,
-                    },
-                },
-            },
+            Child = headerChild,
         };
 
         var content = new StackPanel { Orientation = Orientation.Vertical, IsVisible = !collapsed };
@@ -463,14 +493,14 @@ internal sealed class DiffView : Border
         else
         {
             int budget = MaxLinesPerFile;
-            string? path = file.NewPath ?? file.OldPath;
+            string? path = filePath;
             foreach (var hunk in file.Hunks)
             {
                 var (oldStart, newStart) = HunkStarts(hunk.Header);
-                content.Children.Add(HunkHeader(hunk.Header, action, path));
+                content.Children.Add(HunkHeader(hunk.Header, hunkAction, path));
                 var hunkBody = _split
-                    ? SplitHunk(hunk, oldStart, newStart, ref budget, action, path)
-                    : UnifiedHunk(hunk, oldStart, newStart, ref budget, action, path);
+                    ? SplitHunk(hunk, oldStart, newStart, ref budget, hunkAction, path)
+                    : UnifiedHunk(hunk, oldStart, newStart, ref budget, hunkAction, path);
                 hunkBody.Margin = new Thickness(0, 0, 0, 18); // breathing room between hunks
                 content.Children.Add(hunkBody);
                 if (budget <= 0)
@@ -1084,6 +1114,48 @@ internal sealed class DiffView : Border
         {
             HunkStageRequested?.Invoke(new HunkStageRequest(action, path, header));
             e.Handled = true;
+        };
+        return b;
+    }
+
+    // Whole-file stage/discard/unstage buttons for a file header bar (Unified/Split modes). Mirrors the
+    // per-hunk buttons' colours and layout, but acts on the whole file via FileStageRequested.
+    private Control FileStageButtons(HunkStageAction action, string? path)
+    {
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
+        };
+        if (action == HunkStageAction.Stage)
+        {
+            actions.Children.Add(FileStageButton("Stage file", AddedBrush, HunkStageAction.Stage, path));
+            actions.Children.Add(FileStageButton("Discard file", RemovedBrush, HunkStageAction.Discard, path));
+        }
+        else // Unstage
+        {
+            actions.Children.Add(FileStageButton("Unstage file", HunkBrush, HunkStageAction.Unstage, path));
+        }
+        return actions;
+    }
+
+    private Button FileStageButton(string label, IBrush bg, HunkStageAction action, string? path)
+    {
+        var b = new Button
+        {
+            Content = label,
+            FontSize = 12.5,
+            FontWeight = FontWeight.SemiBold,
+            Padding = new Thickness(12, 5),
+            Foreground = Brushes.White,
+            Background = bg,
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        b.Click += (_, e) =>
+        {
+            FileStageRequested?.Invoke(new FileStageRequest(action, path));
+            e.Handled = true; // don't let the header's collapse toggle fire
         };
         return b;
     }

@@ -58,17 +58,23 @@ internal sealed class GitTreeWindow : Window
     private readonly MenuFlyout _baseFlyout;
     private readonly Button _unifiedBtn;
     private readonly Button _splitBtn;
+    private readonly Button _hunkBtn;
     private readonly Button _themeBtn;
     private readonly Button _expandBtn;
     private readonly Button _stageLinesBtn;
     private readonly CheckBox _wrapCheck;
-    private readonly CheckBox _hunkStageCheck;
     private readonly Border _headerBorder;
     private readonly TextBlock _graphLabel;
     private readonly TextBlock _filesLabel;
+    private readonly TextBlock _unstagedLabel;
+    private readonly TextBlock _stagedLabel;
     private readonly TextBlock _composerLabel;
     private readonly ListBox _nodesList;
-    private readonly ListBox _filesList;
+    private readonly ListBox _filesList;      // commit-node files (read-only)
+    private readonly ListBox _unstagedList;   // WIP: unstaged changes ("Changes")
+    private readonly ListBox _stagedList;     // WIP: staged changes ("Staged · pending commit")
+    private readonly Grid _commitAreaHost;    // toggled visible for a commit node
+    private readonly DockPanel _wipPanel;     // toggled visible for the working-tree (WIP) node
     private readonly Border _composer;
     private readonly TextBox _msgBox;
     private readonly Button _commitBtn;
@@ -89,18 +95,23 @@ internal sealed class GitTreeWindow : Window
     private bool _light;
 
     private readonly FuncDataTemplate<TreeNode> _nodeTemplate;
-    private readonly FuncDataTemplate<GitFileChange> _wipFileTemplate;
+    private readonly FuncDataTemplate<GitFileChange> _unstagedRowTemplate;
+    private readonly FuncDataTemplate<GitFileChange> _stagedRowTemplate;
     private readonly FuncDataTemplate<GitDiffFile> _commitFileTemplate;
 
     private string? _cwd;
     private string? _prUrl;
     private string? _branch;
     private bool _isActive; // the session was working (Running/AwaitingInput) at last Retarget — commit guard
-    private bool _split;
+    private DiffViewMode _mode;
     private bool _wrap;
-    private bool _hunkStaging; // per-hunk / per-line staging controls in the diff (off = whole-file only)
     private int _gen;
     private bool _suppressSelect;
+
+    // The working-tree file currently shown in the diff — its path and which side (staged/unstaged), so a
+    // refresh can reselect it in the right group. Null when no WIP file is shown.
+    private (string Path, bool Staged)? _shownWip;
+    private bool _pendingWipStaged; // side to reselect once the WIP lists reload (mirrors _pendingFilePath)
 
     // Base-ref scoping. _baseOverride: null = auto-pick, "" = explicitly unscoped ("recent"), else a ref.
     private string? _baseOverride;
@@ -122,6 +133,12 @@ internal sealed class GitTreeWindow : Window
 
     internal enum NodeKind { Wip, Commit, Base }
 
+    /// <summary>The three mutually-exclusive diff view modes. <see cref="Unified"/> and <see cref="Split"/>
+    /// stage whole files (buttons on the file header); <see cref="Hunk"/> builds on the split layout and adds
+    /// per-hunk and per-line staging. Persisted across the existing <c>GitReviewSplitView</c> +
+    /// <c>GitTreeHunkStaging</c> settings (Hunk ⇒ both; Split ⇒ split only; Unified ⇒ neither).</summary>
+    internal enum DiffViewMode { Unified, Split, Hunk }
+
     /// <summary>A row in the left graph: the working-tree (WIP) node, one commit, or the terminal base node
     /// (the ref the branch is scoped against, e.g. <c>origin/main</c>). <see cref="IsFirst"/>/<see cref="IsLast"/>
     /// trim the lane rail so it doesn't run past the top of the first knot or below the last one. Internal so
@@ -142,9 +159,10 @@ internal sealed class GitTreeWindow : Window
     public GitTreeWindow(AppSettings settings)
     {
         _settings = settings;
-        _split = settings.GitReviewSplitView;
+        _mode = settings.GitTreeHunkStaging ? DiffViewMode.Hunk
+              : settings.GitReviewSplitView ? DiffViewMode.Split
+              : DiffViewMode.Unified;
         _wrap = settings.GitReviewWrap;
-        _hunkStaging = settings.GitTreeHunkStaging;
         _light = settings.GitTreeLight;
         _pal = _light ? TreePalette.Light() : TreePalette.Dark();
         Title = "Tree";
@@ -155,7 +173,8 @@ internal sealed class GitTreeWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
         _nodeTemplate = NodeTemplate();
-        _wipFileTemplate = WipFileTemplate();
+        _unstagedRowTemplate = WipRowTemplate(staged: false);
+        _stagedRowTemplate = WipRowTemplate(staged: true);
         _commitFileTemplate = CommitFileTemplate();
 
         // ---- header ----
@@ -186,13 +205,14 @@ internal sealed class GitTreeWindow : Window
         };
         refreshBtn.Click += (_, _) => RefreshStatus(preserveSelection: true);
 
-        _unifiedBtn = ModeButton("Unified", split: false);
-        _splitBtn = ModeButton("Split", split: true);
+        _unifiedBtn = ModeButton("Unified", DiffViewMode.Unified);
+        _splitBtn = ModeButton("Split", DiffViewMode.Split);
+        _hunkBtn = ModeButton("Hunk", DiffViewMode.Hunk);
         var modeGroup = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
-            Children = { _unifiedBtn, _splitBtn },
+            Children = { _unifiedBtn, _splitBtn, _hunkBtn },
         };
 
         _wrapCheck = new CheckBox
@@ -202,20 +222,11 @@ internal sealed class GitTreeWindow : Window
         };
         _wrapCheck.IsCheckedChanged += (_, _) => SetWrap(_wrapCheck.IsChecked == true);
 
-        // Hunk staging toggle — off by default (whole-file staging is the common case). When on, the diff
-        // shows per-hunk stage/discard/unstage buttons and enables line-level staging.
-        _hunkStageCheck = new CheckBox
-        {
-            Content = "Hunk staging", IsChecked = _hunkStaging, VerticalAlignment = VerticalAlignment.Center,
-            Foreground = Palette.FgBrush, Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
-        };
-        _hunkStageCheck.IsCheckedChanged += (_, _) => SetHunkStaging(_hunkStageCheck.IsChecked == true);
-
-        // Stage/unstage the selected diff lines. Only shown in hunk-staging mode; disabled until a line
-        // selection sits within one stageable hunk (select line numbers in a working-tree section, then click).
+        // Stage/unstage the selected diff lines. Only shown in Hunk mode; disabled until a line selection
+        // sits within one stageable hunk (select line numbers in a working-tree section, then click).
         _stageLinesBtn = new Button
         {
-            Content = "Stage lines", IsEnabled = false, IsVisible = _hunkStaging,
+            Content = "Stage lines", IsEnabled = false, IsVisible = _mode == DiffViewMode.Hunk,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
         };
@@ -250,7 +261,7 @@ internal sealed class GitTreeWindow : Window
             Child = new DockPanel
             {
                 LastChildFill = true,
-                Children = { _prChip, refreshBtn, modeGroup, _wrapCheck, _hunkStageCheck, _stageLinesBtn, _themeBtn, _expandBtn, _baseBtn, headerText },
+                Children = { _prChip, refreshBtn, modeGroup, _wrapCheck, _stageLinesBtn, _themeBtn, _expandBtn, _baseBtn, headerText },
             },
         };
 
@@ -272,10 +283,17 @@ internal sealed class GitTreeWindow : Window
             Children = { _graphLabel, new Grid { Children = { _nodesList, _nodesEmpty } } },
         };
 
-        // ---- pane 2: files in the selected node, plus the WIP commit composer docked at the bottom ----
-        _filesList = MakeList(_wipFileTemplate);
-        _filesList.SelectionChanged += OnFileSelected;
+        // ---- pane 2: files in the selected node ----
+        // A commit node shows one read-only list; the working-tree (WIP) node shows two groups — unstaged
+        // "Changes" over "Staged · pending commit" — with the commit composer docked under the staged group.
+        _filesList = MakeList(_commitFileTemplate);
+        _filesList.SelectionChanged += OnCommitFileSelected;
         _filesEmpty = EmptyHint("Select a node");
+
+        _unstagedList = MakeList(_unstagedRowTemplate);
+        _unstagedList.SelectionChanged += (_, _) => OnWipFileSelected(_unstagedList, staged: false);
+        _stagedList = MakeList(_stagedRowTemplate);
+        _stagedList.SelectionChanged += (_, _) => OnWipFileSelected(_stagedList, staged: true);
 
         _msgBox = new TextBox
         {
@@ -308,21 +326,36 @@ internal sealed class GitTreeWindow : Window
         };
         _composer = new Border
         {
-            Padding = new Thickness(12), IsVisible = false,
+            Padding = new Thickness(12),
             [DockPanel.DockProperty] = Dock.Bottom,
             Child = new StackPanel { Children = { _composerLabel, _msgBox, commitRow } },
         };
 
+        // WIP two-group panel: "Changes" (unstaged) over "Staged · pending commit", composer docked bottom.
+        _unstagedLabel = GroupLabel("Changes");
+        _stagedLabel = GroupLabel("Staged · pending commit");
+        var unstagedGroup = new DockPanel { LastChildFill = true, Children = { _unstagedLabel, _unstagedList } };
+        var stagedGroup = new DockPanel { LastChildFill = true, Children = { _stagedLabel, _stagedList } };
+        var groups = new Grid { RowDefinitions = new RowDefinitions("*,Auto,*") };
+        groups.Children.Add(WithRow(unstagedGroup, 0));
+        groups.Children.Add(WithRow(GroupSeparator(), 1));
+        groups.Children.Add(WithRow(stagedGroup, 2));
+        _wipPanel = new DockPanel { LastChildFill = true, IsVisible = false, Children = { _composer, groups } };
+
+        _commitAreaHost = new Grid { Children = { _filesList, _filesEmpty } };
+
         _filesLabel = PaneLabel("Files");
-        var filesArea = new Grid { Children = { _filesList, _filesEmpty } };
-        var filesPane = new DockPanel { LastChildFill = true, Children = { _filesLabel, _composer, filesArea } };
+        var filesBody = new Grid { Children = { _commitAreaHost, _wipPanel } };
+        var filesPane = new DockPanel { LastChildFill = true, Children = { _filesLabel, filesBody } };
 
         // ---- pane 3: find bar + diff ----
         _diff = new DiffView();
-        _diff.SetSplit(_split);
+        _diff.SetSplit(_mode != DiffViewMode.Unified);
+        _diff.SetPerHunk(_mode == DiffViewMode.Hunk);
         _diff.SetWrap(_wrap);
         _diff.SearchResultsChanged += OnSearchResults;
         _diff.HunkStageRequested += OnHunkStage;
+        _diff.FileStageRequested += OnFileStage;
         _diff.LineStageStateChanged += OnLineStageState;
         _diff.LineStageRequested += OnLineStageRequest;
         _stageLinesBtn.Click += (_, _) => _diff.RequestStageSelection();
@@ -412,6 +445,29 @@ internal sealed class GitTreeWindow : Window
         c.SetValue(Grid.ColumnProperty, col);
         return c;
     }
+
+    private static Control WithRow(Control c, int row)
+    {
+        c.SetValue(Grid.RowProperty, row);
+        return c;
+    }
+
+    // A WIP group's header ("Changes" / "Staged · pending commit"); its count is appended live and its
+    // colour is applied by ApplyPalette (like PaneLabel, but kept as a field so the count can be updated).
+    private static TextBlock GroupLabel(string text) => new()
+    {
+        Text = text, Foreground = Palette.MutedBrush, FontSize = 11, FontWeight = FontWeight.SemiBold,
+        Margin = new Thickness(12, 10, 12, 6), [DockPanel.DockProperty] = Dock.Top,
+    };
+
+    // The thin horizontal rule between the two WIP groups (recoloured with the window's palette).
+    private Border GroupSeparator()
+    {
+        var b = new Border { Height = 1, Background = _pal.Separator, Margin = new Thickness(12, 2) };
+        _groupSeparators.Add(b);
+        return b;
+    }
+    private readonly List<Border> _groupSeparators = new();
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -511,7 +567,8 @@ internal sealed class GitTreeWindow : Window
         int gen = ++_gen;
 
         string? keepNode = preserveSelection && _nodesList.SelectedItem is TreeNode n ? n.Key : null;
-        string? keepFile = preserveSelection ? SelectedFilePath() : null;
+        string? keepFile = preserveSelection ? CurrentFilePath() : null;
+        bool keepStaged = _shownWip?.Staged ?? false;
 
         if (!preserveSelection)
         {
@@ -556,6 +613,7 @@ internal sealed class GitTreeWindow : Window
                     int idx = keepNode is not null ? IndexOfNodeKey(_nodes, keepNode) : -1;
                     if (idx < 0) idx = FirstSelectable(_nodes); // default: the tip (never the base node)
                     _pendingFilePath = keepFile;                // OnNodeSelected reselects this file after load
+                    _pendingWipStaged = keepStaged;             // …on the same side (staged/unstaged)
                     _nodesList.SelectedIndex = idx;
 
                     UpdateEmptyStates();
@@ -602,26 +660,32 @@ internal sealed class GitTreeWindow : Window
         if (node.IsBase) return; // the base marker isn't a destination
 
         string? wantFile = _pendingFilePath;
+        bool wantStaged = _pendingWipStaged;
         _pendingFilePath = null;
 
         int gen = ++_gen;
         _selectedCommitDiff = null;
-        _filesList.ItemsSource = null;
         _diff.SetLoading();
         _diffPlaceholder.IsVisible = false;
         _shownDiffSig = "";
 
         if (node.IsWip)
         {
-            var changes = _lastStatus?.Changes ?? [];
-            _filesList.ItemTemplate = _wipFileTemplate;
-            _composer.IsVisible = true;
-            UpdateComposer();
-            PopulateFiles(changes, wantFile is null ? null : IndexOfPath(changes, wantFile));
+            _wipPanel.IsVisible = true;
+            _commitAreaHost.IsVisible = false;
+            _filesList.ItemsSource = null;
+            PopulateWip(_lastStatus?.Changes ?? [], wantFile, wantStaged);
         }
         else
         {
-            _composer.IsVisible = false;
+            _wipPanel.IsVisible = false;
+            _commitAreaHost.IsVisible = true;
+            _shownWip = null;
+            _suppressSelect = true;
+            _unstagedList.ItemsSource = null;
+            _stagedList.ItemsSource = null;
+            _suppressSelect = false;
+
             string hash = node.Commit.Hash;
             System.Threading.Tasks.Task.Run(() => _git.GetCommitDiff(cwd, hash)).ContinueWith(t =>
             {
@@ -631,7 +695,6 @@ internal sealed class GitTreeWindow : Window
                     if (!IsVisible || gen != _gen) return;
                     _selectedCommitDiff = t.Result;
                     var files = t.Result?.Files ?? [];
-                    _filesList.ItemTemplate = _commitFileTemplate;
                     int sel = wantFile is null ? (files.Count > 0 ? 0 : -1) : IndexOfDiffFile(files, wantFile);
                     PopulateFiles(files, sel);
                 });
@@ -639,7 +702,84 @@ internal sealed class GitTreeWindow : Window
         }
     }
 
-    // Sets the files list and selects a row (default first), which fires OnFileSelected to load the diff.
+    // ---- WIP two-group population & selection ----
+
+    // Splits the working-tree changes into the unstaged ("Changes") and staged ("pending commit") groups —
+    // a file with both appears in both — updates the group counts and composer, and selects the requested
+    // file+side (else the first unstaged, else the first staged).
+    // <paramref name="quiet"/> (the auto-refresh path): when the same file+side is still present, restore its
+    // selection highlight without re-selecting it — so the diff (and its scroll position) is left untouched
+    // for the caller's content-signature guard to repaint only if it actually changed.
+    private void PopulateWip(IReadOnlyList<GitFileChange> changes, string? wantPath, bool wantStaged, bool quiet = false)
+    {
+        var unstaged = changes.Where(c => c.Untracked || c.Unstaged != GitChangeKind.None).ToList();
+        var staged = changes.Where(c => c.Staged != GitChangeKind.None).ToList();
+
+        _suppressSelect = true;
+        _unstagedList.ItemsSource = unstaged;
+        _stagedList.ItemsSource = staged;
+        _unstagedList.SelectedIndex = -1;
+        _stagedList.SelectedIndex = -1;
+
+        _unstagedLabel.Text = $"Changes ({unstaged.Count})";
+        _stagedLabel.Text = $"Staged · pending commit ({staged.Count})";
+        UpdateComposer();
+
+        int uidx = wantPath is not null && !wantStaged ? IndexOfPath(unstaged, wantPath) : -1;
+        int sidx = wantPath is not null && wantStaged ? IndexOfPath(staged, wantPath) : -1;
+
+        // Quiet + the shown file/side survives: reselect it under suppression (no diff reload).
+        if (quiet && (uidx >= 0 || sidx >= 0))
+        {
+            if (uidx >= 0) _unstagedList.SelectedIndex = uidx; else _stagedList.SelectedIndex = sidx;
+            _suppressSelect = false;
+            UpdateEmptyStates();
+            return;
+        }
+
+        _suppressSelect = false;
+        if (uidx >= 0) _unstagedList.SelectedIndex = uidx;
+        else if (sidx >= 0) _stagedList.SelectedIndex = sidx;
+        else if (unstaged.Count > 0) _unstagedList.SelectedIndex = 0;
+        else if (staged.Count > 0) _stagedList.SelectedIndex = 0;
+        else
+        {
+            _shownWip = null;
+            _diff.SetDiff(null, "");
+            _diffPlaceholder.IsVisible = true;
+        }
+        UpdateEmptyStates();
+    }
+
+    // A file was selected in one of the two WIP lists: clear the other list's selection and show that side's
+    // diff (unstaged → stageable/discardable; staged → unstageable).
+    private void OnWipFileSelected(ListBox list, bool staged)
+    {
+        if (_suppressSelect || _cwd is not { } cwd) return;
+        if (list.SelectedItem is not GitFileChange fc || fc.Path is null) return;
+
+        _suppressSelect = true;
+        (staged ? _unstagedList : _stagedList).SelectedIndex = -1;
+        _suppressSelect = false;
+
+        _diffPlaceholder.IsVisible = false;
+        _shownWip = (fc.Path, staged);
+        int gen = ++_gen;
+        _diff.SetLoading();
+        _shownDiffSig = "";
+        System.Threading.Tasks.Task.Run(() => LoadWipSideDiff(cwd, fc, staged)).ContinueWith(t =>
+        {
+            if (!t.IsCompletedSuccessfully) return;
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!IsVisible || gen != _gen) return;
+                ShowSections(t.Result.sections, t.Result.note);
+            });
+        });
+    }
+
+    // Sets the commit-node files list and selects a row (default first), which fires OnCommitFileSelected to
+    // load the diff.
     private void PopulateFiles<T>(IReadOnlyList<T> items, int? select)
     {
         _suppressSelect = true;
@@ -661,38 +801,19 @@ internal sealed class GitTreeWindow : Window
 
     // ---- file selection -> diff ----
 
-    private void OnFileSelected(object? sender, SelectionChangedEventArgs e)
+    private void OnCommitFileSelected(object? sender, SelectionChangedEventArgs e)
     {
-        if (_suppressSelect || _cwd is not { } cwd) return;
-        object? item = _filesList.SelectedItem;
-        if (item is null) return;
+        if (_suppressSelect || _cwd is null) return;
+        if (_filesList.SelectedItem is not GitDiffFile gf) return;
         _diffPlaceholder.IsVisible = false;
 
-        if (item is GitFileChange fc)
-        {
-            int gen = ++_gen;
-            _diff.SetLoading();
-            _shownDiffSig = "";
-            System.Threading.Tasks.Task.Run(() => LoadFileDiff(cwd, fc)).ContinueWith(t =>
-            {
-                if (!t.IsCompletedSuccessfully) return;
-                Dispatcher.UIThread.Post(() =>
-                {
-                    if (!IsVisible || gen != _gen) return;
-                    ShowSections(t.Result.sections, t.Result.note);
-                });
-            });
-        }
-        else if (item is GitDiffFile gf)
-        {
-            // The commit's whole diff is already in hand — no git call, just isolate this file.
-            var one = new GitDiff([gf]);
-            IReadOnlyList<DiffSection> sections = gf.Hunks.Count > 0 || gf.IsBinary
-                ? [new DiffSection(null, one)]
-                : [];
-            string? note = sections.Count > 0 ? null : $"No textual diff for {gf.NewPath ?? gf.OldPath}.";
-            ShowSections(sections, note);
-        }
+        // The commit's whole diff is already in hand — no git call, just isolate this file.
+        var one = new GitDiff([gf]);
+        IReadOnlyList<DiffSection> sections = gf.Hunks.Count > 0 || gf.IsBinary
+            ? [new DiffSection(null, one)]
+            : [];
+        string? note = sections.Count > 0 ? null : $"No textual diff for {gf.NewPath ?? gf.OldPath}.";
+        ShowSections(sections, note);
     }
 
     private void ShowSections(IReadOnlyList<DiffSection> sections, string? note)
@@ -702,43 +823,28 @@ internal sealed class GitTreeWindow : Window
         _diffPlaceholder.IsVisible = false;
     }
 
-    // Picks the diff(s) for a working-tree change: untracked files show their full contents; a file with
-    // BOTH staged and unstaged edits shows two labelled sections; otherwise the single relevant diff. Mirrors
-    // GitReviewWindow's proven logic (the WIP node is the old Review window's job).
-    private (IReadOnlyList<DiffSection> sections, string? note) LoadFileDiff(string cwd, GitFileChange fc)
+    // The diff for one side of a working-tree change: the staged side (index vs HEAD, unstageable) or the
+    // unstaged side (worktree vs index — untracked files show their full contents — stageable/discardable).
+    // The section carries the direction so the diff pane shows the right stage/discard/unstage buttons.
+    private (IReadOnlyList<DiffSection> sections, string? note) LoadWipSideDiff(string cwd, GitFileChange fc, bool staged)
     {
+        if (staged)
+            return _git.GetWorkingDiff(cwd, fc.Path, staged: true) is { Files.Count: > 0 } d
+                ? (new[] { new DiffSection(null, d, HunkStageAction.Unstage) }, null)
+                : ([], $"No staged diff for {fc.Path}.");
+
         if (fc.Untracked)
-            return Single(_git.GetUntrackedDiff(cwd, fc.Path), fc.Path);
+            return _git.GetUntrackedDiff(cwd, fc.Path) is { Files.Count: > 0 } u
+                ? (new[] { new DiffSection(null, u, HunkStageAction.Stage) }, null)
+                : ([], $"No diff for {fc.Path}.");
 
-        bool hasStaged = fc.Staged != GitChangeKind.None;
-        bool hasUnstaged = fc.Unstaged != GitChangeKind.None;
-
-        // Each diff carries whether its hunks can be staged (an unstaged worktree diff) or unstaged (a staged
-        // index diff), so the diff pane shows the right per-hunk buttons — but only in hunk-staging mode;
-        // otherwise the diff is read-only (whole-file staging via the file checkboxes).
-        HunkStageAction Act(HunkStageAction a) => _hunkStaging ? a : HunkStageAction.None;
-        var diffs = new List<(string? Label, GitDiff Diff, HunkStageAction Action)>();
-        if (hasStaged && hasUnstaged)
+        if (_git.GetWorkingDiff(cwd, fc.Path, staged: false) is { Files.Count: > 0 } w)
         {
-            if (_git.GetWorkingDiff(cwd, fc.Path, staged: true) is { } staged) diffs.Add(("Staged", staged, Act(HunkStageAction.Unstage)));
-            if (_git.GetWorkingDiff(cwd, fc.Path, staged: false) is { } unstaged) diffs.Add(("Unstaged", unstaged, Act(HunkStageAction.Stage)));
+            if (IsPlainModified(fc) && GitRepoService.HasNoTextChange(w))
+                return ([], "Content unchanged — only a line ending or byte-order mark (BOM) differs.");
+            return (new[] { new DiffSection(null, w, HunkStageAction.Stage) }, null);
         }
-        else if (_git.GetWorkingDiff(cwd, fc.Path, staged: hasStaged) is { } d)
-        {
-            diffs.Add((null, d, Act(hasStaged ? HunkStageAction.Unstage : HunkStageAction.Stage)));
-        }
-
-        if (IsPlainModified(fc) && diffs.Count > 0 && diffs.All(x => GitRepoService.HasNoTextChange(x.Diff)))
-            return ([], "Content unchanged — only a line ending or byte-order mark (BOM) differs.");
-
-        var sections = diffs.Where(x => x.Diff.Files.Count > 0)
-                            .Select(x => new DiffSection(x.Label, x.Diff, x.Action)).ToList();
-        return sections.Count > 0 ? (sections, null) : ([], $"No diff for {fc.Path}.");
-
-        static (IReadOnlyList<DiffSection>, string?) Single(GitDiff? diff, string path) =>
-            diff is { Files.Count: > 0 } d
-                ? (new[] { new DiffSection(null, d) }, null)
-                : ([], $"No diff for {path}.");
+        return ([], $"No diff for {fc.Path}.");
     }
 
     // ---- commit authoring (Phase 2) ----
@@ -798,6 +904,35 @@ internal sealed class GitTreeWindow : Window
             HunkStageAction.Stage => _git.StageHunk(cwd, path, req.HunkHeader),
             HunkStageAction.Unstage => _git.UnstageHunk(cwd, path, req.HunkHeader),
             HunkStageAction.Discard => _git.DiscardHunk(cwd, path, req.HunkHeader),
+            _ => (false, ""),
+        });
+        if (!IsVisible) return;
+        if (!ok) { SetHint(FirstLine(err), warn: true); return; }
+        RefreshStatus(preserveSelection: true);
+    }
+
+    // Stage, unstage, or discard a whole file from the diff pane's file-scope buttons (Unified/Split modes),
+    // then refresh. Discard is destructive (drops unstaged edits / removes an untracked file), so it's
+    // confirmed first.
+    private async void OnFileStage(FileStageRequest req)
+    {
+        if (_cwd is not { } cwd || req.Path is not { } path) return;
+
+        bool untracked = FindByPath(_lastStatus, path)?.Untracked ?? false;
+        if (req.Action == HunkStageAction.Discard)
+        {
+            string what = untracked ? "Delete" : "Discard changes to";
+            bool go = await ConfirmDialog.ShowAsync(this, "Discard file",
+                $"{what} {System.IO.Path.GetFileName(path)}? This can't be undone.",
+                untracked ? "Delete" : "Discard", "Cancel");
+            if (!go) return;
+        }
+
+        var (ok, err) = await System.Threading.Tasks.Task.Run(() => req.Action switch
+        {
+            HunkStageAction.Stage => _git.StageFile(cwd, path),
+            HunkStageAction.Unstage => _git.UnstageFile(cwd, path),
+            HunkStageAction.Discard => _git.DiscardFile(cwd, path, untracked),
             _ => (false, ""),
         });
         if (!IsVisible) return;
@@ -928,7 +1063,7 @@ internal sealed class GitTreeWindow : Window
         int gen = ++_gen;
 
         bool wipSelected = _nodesList.SelectedItem is TreeNode { IsWip: true };
-        string? selPath = wipSelected ? SelectedFilePath() : null;
+        var shown = wipSelected ? _shownWip : null;
 
         System.Threading.Tasks.Task.Run(() =>
         {
@@ -941,10 +1076,10 @@ internal sealed class GitTreeWindow : Window
                 : _git.GetBranchLog(cwd, baseRef, ScopedCount) ?? _git.GetLog(cwd, RecentCount);
             var invisible = ComputeInvisible(cwd, status);
             (IReadOnlyList<DiffSection> sections, string? note)? sel = null;
-            if (selPath is not null)
-                sel = FindByPath(status, selPath) is { } fc
-                    ? LoadFileDiff(cwd, fc)
-                    : ((IReadOnlyList<DiffSection>)[], $"No diff for {selPath}.");
+            if (shown is { } sw)
+                sel = FindByPath(status, sw.Path) is { } fc
+                    ? LoadWipSideDiff(cwd, fc, sw.Staged)
+                    : ((IReadOnlyList<DiffSection>)[], $"No diff for {sw.Path}.");
             return (status, branch, candidates, baseRef, commits, invisible, sel);
         }).ContinueWith(t =>
         {
@@ -968,10 +1103,12 @@ internal sealed class GitTreeWindow : Window
                 ApplyStatus(status, cwd);
                 RebuildBaseMenu();
 
+                bool reselected = false;
                 if (changed)
                 {
                     string? keepNode = _nodesList.SelectedItem is TreeNode n ? n.Key : null;
-                    string? keepFile = SelectedFilePath();
+                    string? keepFile = CurrentFilePath();
+                    bool keepStaged = _shownWip?.Staged ?? false;
                     _nodes = BuildNodes(status, commits, baseRef);
                     _suppressSelect = true;
                     _nodesList.ItemsSource = _nodes;
@@ -979,19 +1116,26 @@ internal sealed class GitTreeWindow : Window
                     _suppressSelect = false;
                     int idx = keepNode is not null ? IndexOfNodeKey(_nodes, keepNode) : -1;
                     if (idx < 0) idx = FirstSelectable(_nodes);
-                    // If the same WIP node stays selected, let the diff-signature guard below decide whether to
-                    // repaint; reselecting would rebuild the files list. Only drive a reselect when the target
-                    // node actually changed identity.
+                    // If the same WIP node stays selected, keep it and refresh its groups quietly below;
+                    // reselecting would reload the diff. Only drive a reselect when the node changed identity.
                     if (_nodesList.SelectedIndex != idx || keepNode is null)
                     {
                         _pendingFilePath = keepFile;
+                        _pendingWipStaged = keepStaged;
                         _nodesList.SelectedIndex = idx;
+                        reselected = true;
                     }
                     UpdateEmptyStates();
+
+                    // Same WIP node stayed selected → repopulate its two groups (a file may have been staged/
+                    // added/removed externally), quietly so the shown diff & scroll survive.
+                    if (!reselected && _nodesList.SelectedItem is TreeNode { IsWip: true })
+                        PopulateWip(status?.Changes ?? [], _shownWip?.Path, _shownWip?.Staged ?? false, quiet: true);
                 }
 
-                // Only touch a selected WIP file's diff when its content actually changed.
-                if (sel is { } s && wipSelected && DiffSig(s.sections) != _shownDiffSig)
+                // Repaint a still-shown WIP file's diff only when its content actually changed (skipped when a
+                // reselect above already reloaded it).
+                if (!reselected && sel is { } s && wipSelected && DiffSig(s.sections) != _shownDiffSig)
                     ShowSections(s.sections, s.note);
             });
         });
@@ -1098,12 +1242,13 @@ internal sealed class GitTreeWindow : Window
         return null;
     }
 
-    private string? SelectedFilePath() => _filesList.SelectedItem switch
+    // The file whose diff is currently shown: the shown WIP side for the working-tree node, else the selected
+    // commit file. Used to reselect the same file across a refresh.
+    private string? CurrentFilePath()
     {
-        GitFileChange fc => fc.Path,
-        GitDiffFile gf => gf.NewPath ?? gf.OldPath,
-        _ => null,
-    };
+        if (_nodesList.SelectedItem is TreeNode { IsWip: true }) return _shownWip?.Path;
+        return _filesList.SelectedItem is GitDiffFile gf ? gf.NewPath ?? gf.OldPath : null;
+    }
 
     private static int IndexOfNodeKey(IReadOnlyList<TreeNode> nodes, string key)
     {
@@ -1150,27 +1295,34 @@ internal sealed class GitTreeWindow : Window
 
     // ---- diff mode / wrap ----
 
-    private Button ModeButton(string label, bool split)
+    private Button ModeButton(string label, DiffViewMode mode)
     {
         var b = new Button { Content = label, VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(10, 4) };
-        b.Click += (_, _) => SetMode(split);
+        b.Click += (_, _) => SetMode(mode);
         return b;
     }
 
-    private void SetMode(bool split)
+    // Switch view mode. Unified/Split stage whole files; Hunk builds on the split layout and adds per-hunk +
+    // per-line staging. The DiffView rebuilds itself, so no diff reload is needed. Persisted across the two
+    // legacy bools (Hunk ⇒ both; Split ⇒ split only; Unified ⇒ neither).
+    private void SetMode(DiffViewMode mode)
     {
-        if (_split == split) return;
-        _split = split;
-        _diff.SetSplit(split);
-        _settings.GitReviewSplitView = split;
+        if (_mode == mode) return;
+        _mode = mode;
+        _diff.SetSplit(mode != DiffViewMode.Unified);
+        _diff.SetPerHunk(mode == DiffViewMode.Hunk);
+        _stageLinesBtn.IsVisible = mode == DiffViewMode.Hunk;
+        _settings.GitReviewSplitView = mode is DiffViewMode.Split or DiffViewMode.Hunk;
+        _settings.GitTreeHunkStaging = mode == DiffViewMode.Hunk;
         _settings.Save();
         UpdateModeButtons();
     }
 
     private void UpdateModeButtons()
     {
-        Style(_unifiedBtn, !_split);
-        Style(_splitBtn, _split);
+        Style(_unifiedBtn, _mode == DiffViewMode.Unified);
+        Style(_splitBtn, _mode == DiffViewMode.Split);
+        Style(_hunkBtn, _mode == DiffViewMode.Hunk);
 
         void Style(Button b, bool active)
         {
@@ -1196,13 +1348,14 @@ internal sealed class GitTreeWindow : Window
         _subText.Foreground = _pal.Muted;
         _graphLabel.Foreground = _pal.Muted;
         _filesLabel.Foreground = _pal.Muted;
+        _unstagedLabel.Foreground = _pal.Muted;
+        _stagedLabel.Foreground = _pal.Muted;
         _composerLabel.Foreground = _pal.Muted;
         _findLabel.Foreground = _pal.Muted;
         _diffPlaceholder.Foreground = _pal.Muted;
         _nodesEmpty.Foreground = _pal.Muted;
         _filesEmpty.Foreground = _pal.Muted;
         _wrapCheck.Foreground = _pal.Fg;
-        _hunkStageCheck.Foreground = _pal.Fg;
         _expandBtn.Foreground = _pal.Muted;
 
         _prChip.Background = _pal.Accent;
@@ -1211,6 +1364,7 @@ internal sealed class GitTreeWindow : Window
         _commitBtn.Foreground = _pal.OnAccent;
 
         foreach (var s in _splitters) s.Background = _pal.Separator;
+        foreach (var s in _groupSeparators) s.Background = _pal.Separator;
 
         _themeBtn.Content = _light ? "Dark" : "Light";
         UpdateModeButtons();
@@ -1238,16 +1392,6 @@ internal sealed class GitTreeWindow : Window
         _settings.Save();
     }
 
-    private void SetHunkStaging(bool on)
-    {
-        if (_hunkStaging == on) return;
-        _hunkStaging = on;
-        _stageLinesBtn.IsVisible = on;
-        _settings.GitTreeHunkStaging = on;
-        _settings.Save();
-        RefreshStatus(preserveSelection: true); // re-render the diff with/without hunk buttons
-    }
-
     // ---- small UI helpers ----
 
     private static ListBox MakeList(IDataTemplate template) => new()
@@ -1267,7 +1411,8 @@ internal sealed class GitTreeWindow : Window
     private void UpdateEmptyStates()
     {
         _nodesEmpty.IsVisible = _nodesList.ItemCount == 0;
-        _filesEmpty.IsVisible = _filesList.ItemCount == 0;
+        // _filesEmpty covers the commit-node list only; the WIP node uses its per-group counts instead.
+        _filesEmpty.IsVisible = _commitAreaHost.IsVisible && _filesList.ItemCount == 0;
         _filesEmpty.Text = _nodesList.SelectedItem is null ? "Select a node" : "No files";
     }
 
@@ -1445,34 +1590,39 @@ internal sealed class GitTreeWindow : Window
         private static IBrush B(byte r, byte g, byte b) => new SolidColorBrush(Color.FromRgb(r, g, b));
     }
 
-    // A WIP file row: a stage checkbox (ticked when the file has staged content) beside the coloured
-    // status + path. Ticking stages the whole file (git add); unticking unstages it (git restore --staged).
-    private FuncDataTemplate<GitFileChange> WipFileTemplate() => new((fc, _) =>
-    {
-        if (fc.Path is null) return new Control();
+    // A WIP file row for one group: the coloured status + path, with a stage ("+") button on unstaged rows
+    // and an unstage ("−") button on staged rows docked to the right. The button moves the whole file between
+    // the two groups (git add / git restore --staged).
+    private FuncDataTemplate<GitFileChange> WipRowTemplate(bool staged) =>
+        new((fc, _) => fc.Path is null ? new Control() : WipRow(fc, staged), supportsRecycling: false);
 
-        var check = new CheckBox
+    private Control WipRow(GitFileChange fc, bool staged)
+    {
+        string path = fc.Path!;
+        var btn = new Button
         {
-            IsChecked = fc.Staged != GitChangeKind.None,
-            VerticalAlignment = VerticalAlignment.Center, MinWidth = 0, Margin = new Thickness(0, 0, 4, 0),
+            Content = staged ? "−" : "+",
+            FontFamily = Mono, FontSize = 14, FontWeight = FontWeight.SemiBold,
+            Padding = new Thickness(9, 0), MinWidth = 0,
+            VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right,
+            Cursor = new Cursor(StandardCursorType.Hand),
         };
-        ToolTip.SetTip(check, "Stage / unstage this file");
-        string path = fc.Path;
-        check.Click += (_, _) => ToggleStage(path, check.IsChecked == true);
+        ToolTip.SetTip(btn, staged ? "Unstage this file" : "Stage this file");
+        btn.Click += (_, e) => { ToggleStage(path, !staged); e.Handled = true; };
 
         var text = new TextBlock
         {
-            Text = WipFileLabel(fc), FontFamily = Mono, FontSize = 12,
+            Text = WipFileLabel(fc, staged), FontFamily = Mono, FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = WipFileColor(fc),
+            Foreground = WipFileColor(fc, staged),
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
-        return new StackPanel
+        return new DockPanel
         {
-            Orientation = Orientation.Horizontal, Margin = new Thickness(10, 5, 8, 5),
-            Children = { check, text },
+            LastChildFill = true, Margin = new Thickness(10, 5, 8, 5),
+            Children = { btn, text },
         };
-    }, supportsRecycling: false);
+    }
 
     private FuncDataTemplate<GitDiffFile> CommitFileTemplate() => new((gf, _) =>
     {
@@ -1486,19 +1636,21 @@ internal sealed class GitTreeWindow : Window
         };
     }, supportsRecycling: true);
 
-    private string WipFileLabel(GitFileChange fc)
+    // The status code + path for a WIP row, reflecting the relevant side: the staged kind in the staged
+    // group, else the unstaged kind (with '?' for untracked and '≈' for a BOM/EOL-only change).
+    private string WipFileLabel(GitFileChange fc, bool staged)
     {
-        char code = fc.Untracked ? '?'
-                  : _invisiblePaths.Contains(fc.Path) ? '≈'
-                  : CodeOf(fc.Unstaged != GitChangeKind.None ? fc.Unstaged : fc.Staged);
+        char code = !staged && fc.Untracked ? '?'
+                  : !staged && _invisiblePaths.Contains(fc.Path) ? '≈'
+                  : CodeOf(staged ? fc.Staged : fc.Unstaged);
         return fc.OrigPath is { } o ? $"{code}  {o} → {fc.Path}" : $"{code}  {fc.Path}";
     }
 
-    private IBrush WipFileColor(GitFileChange fc)
+    private IBrush WipFileColor(GitFileChange fc, bool staged)
     {
-        if (fc.Untracked) return _pal.Green;
-        if (_invisiblePaths.Contains(fc.Path)) return _pal.Muted;
-        var k = fc.Unstaged != GitChangeKind.None ? fc.Unstaged : fc.Staged;
+        if (!staged && fc.Untracked) return _pal.Green;
+        if (!staged && _invisiblePaths.Contains(fc.Path)) return _pal.Muted;
+        var k = staged ? fc.Staged : fc.Unstaged;
         return k switch
         {
             GitChangeKind.Added => _pal.Green,

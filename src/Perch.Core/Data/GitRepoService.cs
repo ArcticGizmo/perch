@@ -183,6 +183,20 @@ internal sealed class GitRepoService
         return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
     }
 
+    /// <summary>Discards a whole file's <b>unstaged</b> working-tree changes. Destructive: the edits are
+    /// gone. An untracked file is removed from disk (<c>git clean -f -d</c>); a tracked file is reverted to
+    /// its index content (<c>git restore --worktree</c>), so any staged part is kept. Returns whether it
+    /// succeeded and, on failure, git's error text.</summary>
+    public (bool Ok, string Error) DiscardFile(string cwd, string path, bool untracked)
+    {
+        if (string.IsNullOrEmpty(path)) return (false, "No path.");
+        if (!IsRepo(cwd)) return (false, "Not a git repository.");
+        var r = untracked
+            ? RunGitCore(cwd, GitTimeoutMs, null, "clean", "-f", "-d", "--", path)
+            : RunGitCore(cwd, GitTimeoutMs, null, "restore", "--worktree", "--", path);
+        return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
+    }
+
     /// <summary>Commits the staged changes with <paramref name="message"/>. Returns whether it succeeded
     /// and, on failure, git's error text (e.g. "nothing to commit"). The message may span multiple lines —
     /// it is passed as a single <c>-m</c> argument.</summary>

@@ -257,6 +257,21 @@ internal static class HeadlessRenderer
         RenderControl(diffFind, Path.Combine(outDir, "change_review_find_1x.png"), 96);
         RenderControl(diffFind, Path.Combine(outDir, "change_review_find_1.5x.png"), 144);
 
+        // Staging surfaces. Unified/Split modes (SetPerHunk false) put a whole-file "Stage file"/"Discard
+        // file" button set on each file header; Hunk mode (SetPerHunk true) puts stage/discard buttons on
+        // each hunk header instead. A stageable ("Unstaged") section drives which buttons show.
+        var diffFileStage = new Views.DiffView { Width = 760 };
+        diffFileStage.SetSections([new Views.DiffSection("Unstaged", SampleDiff(), Views.HunkStageAction.Stage)], null);
+        RenderControl(diffFileStage, Path.Combine(outDir, "change_review_stage_file_1x.png"), 96);
+        RenderControl(diffFileStage, Path.Combine(outDir, "change_review_stage_file_1.5x.png"), 144);
+
+        var diffHunkStage = new Views.DiffView { Width = 760 };
+        diffHunkStage.SetPerHunk(true);
+        diffHunkStage.SetSplit(true);
+        diffHunkStage.SetSections([new Views.DiffSection("Unstaged", SampleDiff(), Views.HunkStageAction.Stage)], null);
+        RenderControl(diffHunkStage, Path.Combine(outDir, "change_review_stage_hunk_1x.png"), 96);
+        RenderControl(diffHunkStage, Path.Combine(outDir, "change_review_stage_hunk_1.5x.png"), 144);
+
         // Git tree window: the three panes — the commit-graph nodes (WIP knot + lane rail + HEAD tag + the
         // terminal base node), the files the selected node touched, and the diff — composed as a static
         // surface (the live window's async loads + ListBox virtualisation don't realise in a one-shot bitmap).
@@ -725,7 +740,8 @@ internal static class HeadlessRenderer
 
         var diff = new Views.DiffView { Width = 600 };
         diff.SetLight(light);
-        // A working-tree ("Unstaged") section so the per-hunk "Stage hunk" buttons show in the eyeball.
+        // A working-tree ("Unstaged") section so the whole-file "Stage file"/"Discard file" buttons show on
+        // the file header in the eyeball (the default Unified mode; Hunk mode moves them onto each hunk).
         diff.SetSections([new Views.DiffSection("Unstaged", SampleDiff(), Views.HunkStageAction.Stage)], null);
 
         Control Pane(string title, Control body)

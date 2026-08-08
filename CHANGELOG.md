@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Git tree: Unified, Split, and Hunk are now one mutually-exclusive view mode (Hunk builds on the split layout)
+- Every mode stages from the diff: Unified/Split get whole-file Stage/Discard buttons on each file header; Hunk keeps per-hunk and per-line staging
+- The working-tree files pane splits into two groups — "Changes" and "Staged · pending commit" — with the commit box under the staged set
+- Stage a file with "+", unstage with "−"; discard drops unstaged edits (or deletes an untracked file)
+
 ---
 
 ## [v0.3.20] - 2026-08-07
@@ -110,6 +115,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Same spotlight chrome as the session switcher (they're cousins now)
 
 ---
+
+
 
 ## [v0.3.7] - 2026-08-05
 
