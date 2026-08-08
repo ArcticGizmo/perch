@@ -1,0 +1,960 @@
+<title>The Tree — Perch git-flow interaction design</title>
+<style>
+  :root {
+    color-scheme: light dark;
+
+    /* neutrals — cool, biased toward the accent blue */
+    --ground: #f3f4f8;
+    --surface: #ffffff;
+    --raised: #fbfcfe;
+    --sunken: #eceef3;
+    --border: #d9dde6;
+    --border-soft: #e6e9f0;
+    --ink: #1a1b26;
+    --ink-title: #0d0e16;
+    --muted: #5c6072;
+    --faint: #8b8fa3;
+
+    /* accent + brand */
+    --accent: #2f68e0;
+    --accent-soft: #e6edfc;
+    --brand: #e8471f;         /* perch red-orange — reserved for the future/vision */
+    --brand-soft: #fdece7;
+
+    /* git semantics — stable across themes */
+    --add: #1f883d;
+    --add-band: rgba(63,185,80,.14);
+    --del: #cf222e;
+    --del-band: rgba(240,86,74,.13);
+    --mod: #bf8700;
+    --wip: #e8471f;
+
+    --shadow: 0 1px 2px rgba(20,22,40,.06), 0 12px 32px -12px rgba(20,22,40,.18);
+
+    --mono: "Cascadia Code", "Cascadia Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+
+    --maxw: 1180px;
+    --r: 8px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0e0f17;
+      --surface: #171825;
+      --raised: #1e2030;
+      --sunken: #101019;
+      --border: #2a2c3d;
+      --border-soft: #242634;
+      --ink: #d7dae7;
+      --ink-title: #f1f3fb;
+      --muted: #9195aa;
+      --faint: #6c7086;
+      --accent: #5b93f7;
+      --accent-soft: #17233f;
+      --brand: #ff5a34;
+      --brand-soft: #2c1712;
+      --add: #3fb950;
+      --add-band: rgba(63,185,80,.16);
+      --del: #f0564a;
+      --del-band: rgba(240,86,74,.16);
+      --mod: #e3b341;
+      --wip: #ff5a34;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 20px 46px -18px rgba(0,0,0,.7);
+    }
+  }
+  /* explicit toggle overrides — must win in both directions */
+  :root[data-theme="light"] {
+    --ground:#f3f4f8; --surface:#fff; --raised:#fbfcfe; --sunken:#eceef3; --border:#d9dde6; --border-soft:#e6e9f0;
+    --ink:#1a1b26; --ink-title:#0d0e16; --muted:#5c6072; --faint:#8b8fa3;
+    --accent:#2f68e0; --accent-soft:#e6edfc; --brand:#e8471f; --brand-soft:#fdece7;
+    --add:#1f883d; --add-band:rgba(63,185,80,.14); --del:#cf222e; --del-band:rgba(240,86,74,.13); --mod:#bf8700; --wip:#e8471f;
+    --shadow:0 1px 2px rgba(20,22,40,.06), 0 12px 32px -12px rgba(20,22,40,.18);
+  }
+  :root[data-theme="dark"] {
+    --ground:#0e0f17; --surface:#171825; --raised:#1e2030; --sunken:#101019; --border:#2a2c3d; --border-soft:#242634;
+    --ink:#d7dae7; --ink-title:#f1f3fb; --muted:#9195aa; --faint:#6c7086;
+    --accent:#5b93f7; --accent-soft:#17233f; --brand:#ff5a34; --brand-soft:#2c1712;
+    --add:#3fb950; --add-band:rgba(63,185,80,.16); --del:#f0564a; --del-band:rgba(240,86,74,.16); --mod:#e3b341; --wip:#ff5a34;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 20px 46px -18px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  h1,h2,h3 { color: var(--ink-title); text-wrap: balance; letter-spacing: -.01em; }
+  a { color: var(--accent); }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0;
+  }
+  .lead { color: var(--muted); font-size: 17px; max-width: 62ch; }
+
+  /* ---- theme toggle ---- */
+  .toggle {
+    position: fixed; top: 16px; right: 16px; z-index: 40;
+    font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    background: var(--surface); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 7px 13px; cursor: pointer;
+  }
+  .toggle:hover { color: var(--ink-title); border-color: var(--accent); }
+
+  /* ---- hero ---- */
+  header.hero { padding: 76px 0 30px; border-bottom: 1px solid var(--border-soft); }
+  .hero h1 {
+    font-size: clamp(38px, 6vw, 58px);
+    line-height: 1.02;
+    margin: 14px 0 18px;
+    font-weight: 720;
+  }
+  .hero h1 .mark { color: var(--brand); }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--muted); padding: 5px 11px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  .chip b { color: var(--ink-title); font-weight: 600; }
+  .chip .dot { width: 7px; height: 7px; border-radius: 50%; }
+
+  section { padding: 54px 0; border-bottom: 1px solid var(--border-soft); }
+  .sec-head { margin-bottom: 26px; }
+  .sec-head h2 { font-size: 27px; margin: 8px 0 6px; }
+  .sec-head p { margin: 0; color: var(--muted); max-width: 66ch; }
+
+  /* =========================================================
+     THE INTERACTIVE MOCK
+     ========================================================= */
+  .mock-shell {
+    background: var(--sunken);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  /* title bar */
+  .titlebar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 14px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .traffic { display: flex; gap: 6px; }
+  .traffic i { width: 11px; height: 11px; border-radius: 50%; background: var(--border); display: block; }
+  .titlebar .tt {
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+  }
+  .titlebar .tt b { color: var(--ink-title); }
+
+  /* toolbar */
+  .toolbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 14px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .toolbar .grp { display: flex; align-items: center; gap: 8px; }
+  .toolbar .spring { flex: 1; }
+  .branch-pill {
+    font-family: var(--mono); font-size: 12.5px;
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--accent-soft); color: var(--accent);
+    border: 1px solid transparent; padding: 5px 11px; border-radius: 6px; font-weight: 600;
+  }
+  .btn {
+    font-family: var(--sans); font-size: 12.5px;
+    background: var(--raised); color: var(--ink);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 5px 11px; cursor: pointer; white-space: nowrap;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--ink-title); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg button {
+    font-family: var(--sans); font-size: 12px; border: 0; background: var(--raised);
+    color: var(--muted); padding: 5px 12px; cursor: pointer;
+  }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .btn-future {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12.5px; font-family: var(--sans);
+    background: transparent; color: var(--brand);
+    border: 1px dashed var(--brand); border-radius: 6px; padding: 5px 12px; cursor: not-allowed;
+  }
+  .tag-soon {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+    background: var(--brand); color: #fff; border-radius: 4px; padding: 2px 6px;
+  }
+
+  /* body grid: graph | files | diff */
+  .panes { display: grid; grid-template-columns: 264px 232px 1fr; min-height: 470px; }
+  .pane { min-width: 0; display: flex; flex-direction: column; }
+  .pane + .pane { border-left: 1px solid var(--border); }
+  .pane-hd {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--faint); padding: 11px 14px 9px; border-bottom: 1px solid var(--border-soft);
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .pane-body { overflow: auto; flex: 1; }
+  .pane-body::-webkit-scrollbar { width: 10px; height: 10px; }
+  .pane-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; border: 2px solid var(--surface); }
+  .pane-graph .pane-body, .pane-files .pane-body { background: var(--surface); }
+  .pane-diff .pane-body { background: var(--sunken); }
+
+  /* ---- graph nodes ---- */
+  .node {
+    display: grid; grid-template-columns: 30px 1fr; align-items: stretch;
+    cursor: pointer; position: relative;
+  }
+  .node .rail { position: relative; }
+  /* vertical lane line */
+  .node .rail::before {
+    content: ""; position: absolute; left: 50%; transform: translateX(-50%);
+    top: 0; bottom: 0; width: 2px; background: var(--accent); opacity: .55;
+  }
+  .node:first-child .rail::before { top: 50%; }
+  .node:last-child .rail::before { bottom: 50%; }
+  .node .knot {
+    position: absolute; left: 50%; top: 22px; transform: translate(-50%,-50%);
+    width: 11px; height: 11px; border-radius: 50%;
+    background: var(--accent); border: 2px solid var(--surface); z-index: 2;
+  }
+  .node.head .knot { box-shadow: 0 0 0 3px var(--accent-soft); }
+  .node.wip .rail::before { background: var(--wip); opacity: .5; border-left: 0; }
+  .node.wip .knot {
+    background: var(--surface); border: 2px dashed var(--wip); width: 13px; height: 13px;
+  }
+  .node .body { padding: 12px 12px 12px 2px; border-bottom: 1px solid var(--border-soft); }
+  .node:hover .body { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .node.sel .body { background: var(--accent-soft); }
+  .node.sel { }
+  .node.sel::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent);
+  }
+  .node.wip.sel::before { background: var(--wip); }
+  .node .subj { color: var(--ink-title); font-size: 13px; line-height: 1.35; }
+  .node.wip .subj { color: var(--wip); font-weight: 600; }
+  .node .sub {
+    font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 4px;
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .node .sub .hash { color: var(--accent); }
+  .node .head-tag {
+    font-family: var(--mono); font-size: 9px; letter-spacing: .08em; text-transform: uppercase;
+    background: var(--accent); color: #fff; padding: 1px 5px; border-radius: 3px; margin-left: 6px;
+  }
+  .wip-count {
+    font-family: var(--mono); font-size: 10px; background: var(--brand-soft); color: var(--wip);
+    border: 1px solid color-mix(in srgb, var(--wip) 40%, transparent); border-radius: 999px; padding: 1px 7px;
+  }
+
+  /* ---- file list ---- */
+  .file {
+    display: flex; align-items: center; gap: 9px; padding: 9px 14px; cursor: pointer;
+    border-bottom: 1px solid var(--border-soft); font-size: 12.5px;
+  }
+  .file:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .file.sel { background: var(--accent-soft); }
+  .file .st {
+    font-family: var(--mono); font-weight: 700; font-size: 11px; width: 16px; text-align: center; flex: none;
+  }
+  .file .st.A { color: var(--add); }
+  .file .st.M { color: var(--mod); }
+  .file .st.D { color: var(--del); }
+  .file .fp { font-family: var(--mono); font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  .file .ck { flex: none; width: 15px; height: 15px; border: 1px solid var(--border); border-radius: 4px; display: none; align-items: center; justify-content: center; background: var(--raised); }
+  .composing .file .ck { display: inline-flex; }
+  .file .ck.on { background: var(--accent); border-color: var(--accent); }
+  .file .ck.on::after { content: "✓"; color: #fff; font-size: 10px; }
+
+  .empty { padding: 20px 14px; color: var(--faint); font-size: 12.5px; font-style: italic; }
+
+  /* ---- diff pane ---- */
+  .diff-file-hd {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    padding: 9px 14px; border-bottom: 1px solid var(--border-soft); background: var(--surface);
+    position: sticky; top: 0;
+  }
+  .diff-file-hd b { color: var(--ink-title); }
+  pre.diff { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.55; }
+  .dl { display: grid; grid-template-columns: 42px 42px 1fr; white-space: pre; }
+  .dl .g { color: var(--faint); text-align: right; padding: 0 8px; user-select: none; font-variant-numeric: tabular-nums; }
+  .dl .c { padding: 0 12px 0 8px; color: var(--ink); overflow-x: auto; }
+  .dl.add { background: var(--add-band); }
+  .dl.add .c { color: var(--add); }
+  .dl.del { background: var(--del-band); }
+  .dl.del .c { color: var(--del); }
+  .dl.hunk .c { color: var(--accent); }
+  .dl.hunk { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+  /* ---- WIP composer ---- */
+  .composer { border-top: 1px solid var(--border); background: var(--surface); padding: 12px 14px 14px; display: none; }
+  .composing .composer { display: block; }
+  .composer textarea {
+    width: 100%; resize: vertical; min-height: 64px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+    background: var(--sunken); color: var(--ink);
+    border: 1px solid var(--border); border-radius: 6px; padding: 9px 11px;
+  }
+  .composer textarea:focus { outline: none; border-color: var(--accent); }
+  .composer .row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .btn-commit {
+    background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+    font-family: var(--sans); font-size: 13px; font-weight: 600; padding: 7px 16px; cursor: pointer;
+  }
+  .btn-commit:hover { filter: brightness(1.06); }
+  .composer .hint { font-size: 12px; color: var(--muted); }
+
+  /* active-session guard banner */
+  .guard {
+    display: none; align-items: flex-start; gap: 10px; margin-top: 10px;
+    background: var(--brand-soft); border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent);
+    border-radius: 6px; padding: 10px 12px; font-size: 12.5px; color: var(--ink);
+  }
+  .guard.show { display: flex; }
+  .guard b { color: var(--brand); }
+  .guard .g-actions { margin-top: 8px; display: flex; gap: 8px; }
+  .guard .g-actions button { font-size: 12px; padding: 4px 12px; border-radius: 5px; cursor: pointer; }
+  .g-yes { background: var(--brand); color: #fff; border: 0; }
+  .g-no { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+
+  /* toast */
+  .toast {
+    position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(10px);
+    background: var(--ink-title); color: var(--ground);
+    font-family: var(--mono); font-size: 12px; padding: 8px 16px; border-radius: 8px;
+    opacity: 0; pointer-events: none; transition: opacity .25s, transform .25s; z-index: 30;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* active-session switch above the mock */
+  .mock-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 0 0 16px; }
+  .mock-controls .note { font-size: 13px; color: var(--muted); }
+  .switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; font-size: 13px; color: var(--ink); }
+  .switch .track { width: 38px; height: 21px; border-radius: 999px; background: var(--border); position: relative; transition: background .18s; }
+  .switch .track i { position: absolute; top: 2px; left: 2px; width: 17px; height: 17px; border-radius: 50%; background: #fff; transition: left .18s; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+  .switch.on .track { background: var(--brand); }
+  .switch.on .track i { left: 19px; }
+
+  .callouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 14px; margin-top: 22px; }
+  .callout { background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--r); padding: 14px 16px; }
+  .callout .k { font-family: var(--mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+  .callout p { margin: 6px 0 0; font-size: 13.5px; color: var(--muted); }
+
+  /* =========================================================
+     interaction catalogue
+     ========================================================= */
+  .verbs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .verb { background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--r); padding: 20px; position: relative; overflow: hidden; }
+  .verb::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
+  .verb.future::before { background: var(--brand); }
+  .verb .label { font-family: var(--mono); font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: var(--accent); }
+  .verb.future .label { color: var(--brand); }
+  .verb h3 { font-size: 17px; margin: 8px 0 8px; }
+  .verb p { margin: 0 0 10px; font-size: 13.5px; color: var(--muted); }
+  .verb .flow { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
+  .verb .flow li { padding: 4px 0 4px 20px; position: relative; color: var(--ink); }
+  .verb .flow li::before { content: "→"; position: absolute; left: 0; color: var(--faint); }
+  .verb code, code.i { font-family: var(--mono); font-size: 11.5px; background: var(--sunken); border: 1px solid var(--border-soft); border-radius: 4px; padding: 1px 5px; color: var(--ink-title); }
+
+  /* =========================================================
+     build map table
+     ========================================================= */
+  .map-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r); }
+  table.map { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 13px; }
+  table.map th, table.map td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  table.map th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); background: var(--surface); position: sticky; top: 0; }
+  table.map tr:last-child td { border-bottom: 0; }
+  table.map td:first-child { color: var(--ink-title); font-weight: 600; width: 22%; }
+  table.map code { font-family: var(--mono); font-size: 12px; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 5px; }
+  .reuse { display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; }
+  .reuse.have { background: var(--add-band); color: var(--add); }
+  .reuse.extend { background: var(--accent-soft); color: var(--accent); }
+  .reuse.new { background: var(--brand-soft); color: var(--brand); }
+
+  /* =========================================================
+     phasing
+     ========================================================= */
+  .phases { display: grid; gap: 16px; }
+  .phase { display: grid; grid-template-columns: 96px 1fr; gap: 20px; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--r); padding: 22px 24px; }
+  .phase .n { font-family: var(--mono); font-size: 13px; }
+  .phase .n .big { display: block; font-size: 34px; color: var(--accent); font-weight: 700; line-height: 1; }
+  .phase.p3 .n .big { color: var(--brand); }
+  .phase .m { display: block; font-size: 11px; color: var(--faint); letter-spacing: .1em; text-transform: uppercase; margin-top: 6px; }
+  .phase h3 { margin: 0 0 6px; font-size: 18px; }
+  .phase p { margin: 0 0 10px; color: var(--muted); font-size: 13.5px; }
+  .phase ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink); }
+  .phase ul li { margin: 3px 0; }
+  .phase .gate { margin-top: 12px; font-size: 12.5px; color: var(--muted); font-style: italic; border-left: 2px solid var(--border); padding-left: 12px; }
+
+  /* multi-lane preview for phase 3 */
+  .lanes { display: flex; gap: 2px; align-items: center; margin-top: 12px; }
+  .lanes svg { width: 100%; max-width: 320px; height: auto; }
+
+  /* open questions */
+  .oq { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap: 14px; }
+  .oq div { background: var(--surface); border: 1px solid var(--border-soft); border-left: 3px solid var(--add); border-radius: var(--r); padding: 14px 16px; }
+  .oq div.open { border-left-color: var(--mod); }
+  .oq .q { color: var(--ink-title); font-weight: 600; font-size: 13.5px; display: flex; align-items: baseline; gap: 8px; }
+  .oq .tag { font-family: var(--mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; background: var(--add-band); color: var(--add); flex: none; }
+  .oq div.open .tag { background: color-mix(in srgb, var(--mod) 20%, transparent); color: var(--mod); }
+  .oq p { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+
+  footer { padding: 40px 0 70px; color: var(--faint); font-size: 12.5px; font-family: var(--mono); }
+
+  @media (max-width: 860px) {
+    .panes { grid-template-columns: 1fr; }
+    .pane + .pane { border-left: 0; border-top: 1px solid var(--border); }
+    .pane-graph .pane-body { max-height: 260px; }
+    .pane-diff .pane-body { max-height: 340px; }
+    .phase { grid-template-columns: 1fr; gap: 8px; }
+  }
+</style>
+
+<button class="toggle" id="themeBtn" aria-label="Toggle theme">◐ theme</button>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Perch · Interaction design · branch <span style="color:var(--accent)">git-tree</span></p>
+    <h1>The <span class="mark">Tree</span>.<br>A scoped git flow, built on what already ships.</h1>
+    <p class="lead">A resizable window that focuses on <em>this</em> branch — from HEAD back to where it diverged from main — as a graph on the left, the files each node touched in the middle, the diff on the right, and a live working-tree node at the top where you author commits inline. It <strong>replaces</strong> Review changes, reusing that feature's plumbing almost wholesale. This is Perch stepping deliberately toward a lightweight git client.</p>
+    <div class="meta-row">
+      <span class="chip"><span class="dot" style="background:var(--add)"></span>Builds on <b>M0 + M1</b> (shipped)</span>
+      <span class="chip"><span class="dot" style="background:var(--accent)"></span>Reuses <b>DiffView</b>, <b>GitRepoService</b></span>
+      <span class="chip"><span class="dot" style="background:var(--wip)"></span><b>Replaces</b> Review changes…</span>
+      <span class="chip"><span class="dot" style="background:var(--brand)"></span>Full-tree view = <b>Phase 3</b> / later</span>
+    </div>
+  </div>
+</header>
+
+<!-- ============================ THE WINDOW ============================ -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">The window</p>
+      <h2>A working prototype, not a screenshot</h2>
+      <p>This is live — click the nodes on the left, click a file, and read the diff. Select the dashed <span style="color:var(--wip);font-weight:600">Working tree</span> node at the top to open the inline commit composer. Everything is dressed in Perch's Midnight palette so it doubles as a visual preview of the real surface.</p>
+    </div>
+
+    <div class="mock-controls">
+      <div class="switch" id="activeSwitch" role="switch" aria-checked="false" tabindex="0">
+        <span class="track"><i></i></span>
+        <span>Session is <b id="activeLbl">idle</b></span>
+      </div>
+      <span class="note">Flip this on to see the commit guard — committing while Claude is actively editing the same tree is a documented hazard, so the composer challenges you first.</span>
+    </div>
+
+    <div class="mock-shell" id="mock">
+      <div class="titlebar">
+        <span class="traffic"><i></i><i></i><i></i></span>
+        <span class="tt">Perch — Tree · <b>perch</b> · <span id="ttBranch">git-tree</span></span>
+      </div>
+      <div class="toolbar">
+        <div class="grp"><span class="branch-pill">⑂ git-tree <span style="opacity:.6">↑2</span></span></div>
+        <div class="grp"><button class="btn" id="baseBtn" title="Base ref — the graph shows commits back to the merge-base with this ref">since ⑂ <b style="color:var(--ink-title)">main</b> ▾</button></div>
+        <div class="grp"><button class="btn" onclick="Tree.refresh()">↻ Refresh</button></div>
+        <div class="spring"></div>
+        <div class="grp seg">
+          <button id="segU" class="on" onclick="Tree.setSplit(false)">Unified</button>
+          <button id="segS" onclick="Tree.setSplit(true)">Split</button>
+        </div>
+        <div class="grp"><button class="btn-future" title="Phase 3 — the GitKraken-style all-branches graph">⤢ Expand to full tree <span class="tag-soon">soon</span></button></div>
+      </div>
+
+      <div class="panes">
+        <!-- graph -->
+        <div class="pane pane-graph">
+          <div class="pane-hd"><span>Commits · this branch</span><span id="graphCount" style="color:var(--faint)"></span></div>
+          <div class="pane-body" id="graph"></div>
+        </div>
+        <!-- files -->
+        <div class="pane pane-files">
+          <div class="pane-hd"><span id="filesHd">Files</span></div>
+          <div class="pane-body" id="files"></div>
+          <div class="composer" id="composer">
+            <textarea id="msg" placeholder="Commit message… (first line = summary)"></textarea>
+            <div class="row">
+              <button class="btn-commit" id="commitBtn">✓ Commit <span id="commitN"></span></button>
+              <span class="hint" id="composerHint">Tick the files to include, above.</span>
+            </div>
+            <div class="guard" id="guard">
+              <div>
+                <b>Session is active.</b> Claude Code may be editing or running git in this same tree right now. Committing now can race its writes.
+                <div class="g-actions">
+                  <button class="g-yes" onclick="Tree.confirmCommit()">Commit anyway</button>
+                  <button class="g-no" onclick="Tree.cancelGuard()">Wait</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- diff -->
+        <div class="pane pane-diff">
+          <div class="pane-hd"><span id="diffHd">Diff</span><span style="color:var(--faint)" id="diffMeta"></span></div>
+          <div class="pane-body" id="diff"></div>
+        </div>
+      </div>
+      <div class="toast" id="toast"></div>
+    </div>
+
+    <div class="callouts">
+      <div class="callout"><div class="k">Left · scrollable</div><p>First-parent commit list for the current branch. The <span style="color:var(--wip)">dashed WIP node</span> always sits at HEAD's tip. One lane in Phase 1; owner-drawn lanes come with the full tree.</p></div>
+      <div class="callout"><div class="k">Middle · node-scoped</div><p>The files that node touched. For a commit that's <code style="font-size:11px">git show</code>; for the WIP node it's <code style="font-size:11px">git status</code> — with A / M / D chips.</p></div>
+      <div class="callout"><div class="k">Right · reused</div><p>The existing <b>DiffView</b> verbatim — green/red bands, unified/split, find, line &amp; char selection. Zero new diff code.</p></div>
+      <div class="callout"><div class="k">Resizable</div><p>Windows are already resizable (only <code style="font-size:11px">Min*</code> is set). Panels get real <b>GridSplitter</b>s — the one deviation from the current fixed-320 columns.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ INTERACTIONS ============================ -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">The interactions</p>
+      <h2>Five verbs</h2>
+      <p>Each is a discrete action, not a step in a wizard — you drop into any of them at will. Only the last one waits for Phase 3.</p>
+    </div>
+    <div class="verbs">
+      <div class="verb">
+        <div class="label">Open</div>
+        <h3>Right-click → View tree</h3>
+        <p>The session flyout's <em>Review changes…</em> item <strong>becomes</strong> <em>View tree…</em> — the tree is a superset, so Review folds into the WIP node.</p>
+        <ul class="flow">
+          <li>Right-click a session row on the overlay</li>
+          <li><code class="i">MenuItem("View tree…")</code>, gated by <code class="i">GitRepoService.IsRepo(cwd)</code></li>
+          <li>Fires <code class="i">ViewTreeRequested</code> → <code class="i">WindowHost.ShowOrFocus</code> → single reused <code class="i">TreeWindow</code></li>
+        </ul>
+      </div>
+      <div class="verb">
+        <div class="label">Inspect</div>
+        <h3>Click a node → its files</h3>
+        <p>Selecting a commit (or the WIP node) loads what it changed into the middle pane and clears the diff.</p>
+        <ul class="flow">
+          <li>Commit node → <code class="i">GetCommitDiff(cwd, hash)</code></li>
+          <li>WIP node → <code class="i">GetStatus(cwd)</code> → A / M / D list</li>
+          <li>Off-thread + generation token; middle pane repopulates</li>
+        </ul>
+      </div>
+      <div class="verb">
+        <div class="label">Diff</div>
+        <h3>Click a file → the diff</h3>
+        <p>Exactly the Review-changes experience, because it is literally the same control.</p>
+        <ul class="flow">
+          <li><code class="i">DiffView.SetSections(...)</code> with the file's hunks</li>
+          <li>Unified / Split / Wrap / Ctrl-F all come free</li>
+          <li>WIP files that are staged <em>and</em> unstaged show two labelled sections</li>
+        </ul>
+      </div>
+      <div class="verb">
+        <div class="label">Commit</div>
+        <h3>Author at the WIP node</h3>
+        <p>Selecting the working-tree node opens an inline composer — tick files, write a message, commit. This is the unstarted <b>M2</b>, surfaced in the tree.</p>
+        <ul class="flow">
+          <li>Per-file stage toggle → <code class="i">git add</code> / <code class="i">restore --staged</code></li>
+          <li>Message box (StickyNote-style) → <code class="i">git commit</code></li>
+          <li>Active session → <code class="i">ConfirmDialog</code> guard first</li>
+        </ul>
+      </div>
+      <div class="verb future">
+        <div class="label">Expand · later</div>
+        <h3>The full GitKraken tree</h3>
+        <p>The toolbar button that unfolds every branch and remote into a lane-routed graph. Known destination, not first-pass work.</p>
+        <ul class="flow">
+          <li>Owner-drawn lanes (the measure-or-paint / HighlightLayer pattern)</li>
+          <li>Merge routing, branch &amp; remote heads, history search</li>
+          <li>Eventually: push. This is <b>M3</b>.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ BUILD MAP ============================ -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">How it's built</p>
+      <h2>Mostly assembly, not invention</h2>
+      <p>The Session Change Review feature already gave us the read data layer, the diff surface, the reused-window idiom and the flyout entry point. Here's what each piece contributes and what's genuinely new.</p>
+    </div>
+    <div class="map-wrap">
+      <table class="map">
+        <thead><tr><th>Piece</th><th>Status</th><th>What it does here</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Right-click entry</td>
+            <td><span class="reuse extend">replace</span></td>
+            <td>Rename the existing <em>Review changes…</em> flyout item to <code>MenuItem("View tree…")</code> and swap <code>ReviewChangesRequested</code> for <code>ViewTreeRequested</code> — same <code>IsRepo</code> gate, same <code>ShowGitReview</code> switch. The old <code>GitReviewWindow</code> retires once the WIP node covers it.</td>
+          </tr>
+          <tr>
+            <td>Window lifecycle</td>
+            <td><span class="reuse have">reuse</span></td>
+            <td><code>WindowHost.ShowOrFocus</code> + a <code>_treeWindow</code> field nulled on close and torn down in <code>CloseAuxWindows</code> — identical to <code>GitReviewWindow</code>. New <code>TreeWindow</code> copies its async-load + generation-token + FileSystemWatcher scaffolding.</td>
+          </tr>
+          <tr>
+            <td>Diff surface</td>
+            <td><span class="reuse have">reuse</span></td>
+            <td><code>DiffView</code> unchanged — bands, unified/split, wrap, find, selection, copy. It already accepts <code>DiffSection[]</code>, which is exactly the shape a node produces.</td>
+          </tr>
+          <tr>
+            <td>Read data layer</td>
+            <td><span class="reuse extend">extend</span></td>
+            <td><code>GitRepoService</code> already has <code>GetStatus</code>, <code>GetLog</code>, <code>GetCommitDiff</code>, <code>GetWorkingDiff</code>. Add: <code>%P</code> parent hashes on <code>GitCommit</code>; a <code>MergeBase(cwd, baseRef)</code> call (<code>git merge-base</code>) so the log scopes to the divergence point; and remote/base-ref discovery (<code>upstream</code> → <code>origin</code> → local default) for the fork case.</td>
+          </tr>
+          <tr>
+            <td>Commit graph (left)</td>
+            <td><span class="reuse new">new</span></td>
+            <td>Phase 1: a plain <code>ListBox</code> of nodes with a one-lane CSS-style rail — cheap, glanceable. Phase 3: owner-drawn lanes behind the list via the <code>StatsDashboard</code> measure-or-paint routine and the <code>DiffView.HighlightLayer</code> "paint behind the rows" trick.</td>
+          </tr>
+          <tr>
+            <td>Commit authoring</td>
+            <td><span class="reuse new">new</span></td>
+            <td>The planned <b>M2</b>: <code>git add</code> / <code>restore --staged</code> / <code>commit</code> on <code>GitRepoService</code> (surfacing failures, unlike the read path), a StickyNote-style editor, and the <code>ConfirmDialog</code> guard when the session is Active.</td>
+          </tr>
+          <tr>
+            <td>Panel resizing</td>
+            <td><span class="reuse new">new</span></td>
+            <td>Swap the fixed <code>Width = 320</code> columns for <code>GridSplitter</code>s so graph / files / diff are user-adjustable. Small, self-contained.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ PHASING ============================ -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Phasing</p>
+      <h2>Three phases, mapped to the existing plan</h2>
+      <p>These line up with the Session Change Review milestones already in <code style="font-family:var(--mono);font-size:12px">docs/git-review-plan.md</code>, so the tree is a continuation of that roadmap rather than a fork of it.</p>
+    </div>
+    <div class="phases">
+      <div class="phase p1">
+        <div class="n"><span class="big">1</span><span class="m">≈ M1 done</span></div>
+        <div>
+          <h3>Scoped branch tree — read-only</h3>
+          <p>The window, the first-parent commit list, the WIP node, node → files → diff. Everything reuses shipped code; the only new pieces are the node list, the parent-hash log tweak, and the splitters.</p>
+          <ul>
+            <li>New <code style="font-family:var(--mono);font-size:12px">TreeWindow</code> off the <code style="font-family:var(--mono);font-size:12px">GitReviewWindow</code> template; retires <em>Review changes…</em></li>
+            <li>One-lane node list, WIP node at HEAD's tip, scoped to <code style="font-family:var(--mono);font-size:12px">merge-base(HEAD, main)</code></li>
+            <li>Base-ref control + fork detection (<code style="font-family:var(--mono);font-size:12px">upstream</code> → <code style="font-family:var(--mono);font-size:12px">origin</code>)</li>
+            <li><code style="font-family:var(--mono);font-size:12px">%P</code> parents on <code style="font-family:var(--mono);font-size:12px">GitCommit</code>; <code style="font-family:var(--mono);font-size:12px">GridSplitter</code> panels</li>
+          </ul>
+          <p class="gate">Exit: usable for a week as a read-only branch inspector before any write path lands.</p>
+        </div>
+      </div>
+      <div class="phase p2">
+        <div class="n"><span class="big">2</span><span class="m">= M2 next</span></div>
+        <div>
+          <h3>Inline commit authoring at WIP</h3>
+          <p>The working-tree node becomes interactive: stage per file, write a message, commit. This is the real M2 — the only difference is it's surfaced in the tree instead of a separate button.</p>
+          <ul>
+            <li>Stage / unstage <b>whole files</b> → <code style="font-family:var(--mono);font-size:12px">git add</code> · <code style="font-family:var(--mono);font-size:12px">git restore --staged</code></li>
+            <li>Composer → <code style="font-family:var(--mono);font-size:12px">git commit</code>, surfacing failures</li>
+            <li><b>Active-session guard</b> via <code style="font-family:var(--mono);font-size:12px">ConfirmDialog</code> — refuse-or-confirm</li>
+          </ul>
+          <p class="gate">Whole-file granularity only. Push and hunk/line staging stay out of scope for now.</p>
+        </div>
+      </div>
+      <div class="phase p3">
+        <div class="n"><span class="big">3</span><span class="m">= M3 vision</span></div>
+        <div>
+          <h3>Expand to the full tree</h3>
+          <p>The GitKraken destination: every branch and remote in one lane-routed graph. Cuttable, expensive, and the reason the graph starts owner-drawable in Phase 1's structure.</p>
+          <ul>
+            <li>Lane routing across merges, branch &amp; remote heads</li>
+            <li>Owner-drawn lanes (measure-or-paint + paint-behind-rows)</li>
+            <li><b>Hunk / line-by-line staging</b> in the diff pane</li>
+            <li>History search; eventually push</li>
+          </ul>
+          <div class="lanes">
+            <svg viewBox="0 0 300 96" role="img" aria-label="Preview of a multi-lane commit graph">
+              <line x1="20" y1="8" x2="20" y2="88" stroke="var(--accent)" stroke-width="2.5"/>
+              <line x1="56" y1="30" x2="56" y2="88" stroke="var(--add)" stroke-width="2.5"/>
+              <path d="M20 30 C 20 30, 56 30, 56 52" fill="none" stroke="var(--add)" stroke-width="2.5"/>
+              <path d="M56 74 C 56 74, 20 74, 20 74" fill="none" stroke="var(--brand)" stroke-width="2.5"/>
+              <line x1="92" y1="52" x2="92" y2="88" stroke="var(--brand)" stroke-width="2.5"/>
+              <path d="M20 52 C 20 52, 92 52, 92 52" fill="none" stroke="var(--brand)" stroke-width="2.5"/>
+              <circle cx="20" cy="14" r="6" fill="var(--accent)"/>
+              <circle cx="20" cy="30" r="6" fill="var(--accent)"/>
+              <circle cx="56" cy="52" r="6" fill="var(--add)"/>
+              <circle cx="20" cy="74" r="6" fill="var(--accent)"/>
+              <circle cx="92" cy="74" r="6" fill="var(--brand)"/>
+              <text x="112" y="18" font-family="var(--mono)" font-size="11" fill="var(--muted)">main</text>
+              <text x="112" y="56" font-family="var(--mono)" font-size="11" fill="var(--muted)">feature merge</text>
+              <text x="112" y="78" font-family="var(--mono)" font-size="11" fill="var(--muted)">origin/…</text>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ OPEN QUESTIONS ============================ -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Now settled</p>
+      <h2>Decisions</h2>
+      <p>The four open questions, answered — plus the one detail that still needs designing.</p>
+    </div>
+    <div class="oq">
+      <div><div class="q"><span class="tag">decided</span>One window</div><p>View tree <strong>replaces</strong> Review changes. The tree is a superset, so Review folds into the WIP node and <code style="font-family:var(--mono);font-size:11px">GitReviewWindow</code> retires.</p></div>
+      <div><div class="q"><span class="tag">decided</span>Scope = the divergence</div><p>The graph runs from HEAD back to <code style="font-family:var(--mono);font-size:11px">merge-base(HEAD, main)</code> — where the branch left main. No arbitrary commit cap.</p></div>
+      <div><div class="q"><span class="tag">decided</span>Toward a git client</div><p>The audit-vs-client hesitation is resolved: this is Perch becoming a lightweight git client, on purpose.</p></div>
+      <div><div class="q"><span class="tag">decided</span>Whole-file staging first</div><p>Phase 2 stages whole files. Hunk / line-by-line staging is a wanted future capability, deferred to Phase 3.</p></div>
+      <div class="open"><div class="q"><span class="tag">to design</span>The fork base-ref</div><p>Best practice is branch from origin and commit to a fork, so "main" may live on a different remote. The base-ref control needs a sane default — prefer an <code style="font-family:var(--mono);font-size:11px">upstream</code> remote's default branch, fall back to <code style="font-family:var(--mono);font-size:11px">origin</code>, then local <code style="font-family:var(--mono);font-size:11px">main</code>/<code style="font-family:var(--mono);font-size:11px">master</code> — with a manual override for the odd layout.</p></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    perch/docs/git-tree-window-design.html · interaction design · continues docs/git-review-plan.md (M1 done · M2 next · M3 = the full tree)
+  </div>
+</footer>
+
+<script>
+(function () {
+  // ---------- theme toggle ----------
+  var btn = document.getElementById('themeBtn');
+  btn.addEventListener('click', function () {
+    var root = document.documentElement;
+    var cur = root.getAttribute('data-theme');
+    if (!cur) {
+      var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      cur = dark ? 'dark' : 'light';
+    }
+    root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+  });
+
+  // ---------- fake but plausible data ----------
+  function D(rows){ return rows; } // rows: [kind, oldNo, newNo, text]
+  var diffMenu = D([
+    ['hunk','','','@@ -3316,6 +3316,11 @@ void BuildSessionMenu(ClaudeSession s)'],
+    ['ctx','3316','3316','    if (!subRow && _reviewChangesAvailable && GitRepoService.IsRepo(s.Cwd))'],
+    ['ctx','3317','3317','        items.Add(MenuItem("Review changes…", () => ReviewChangesRequested?.Invoke(s)));'],
+    ['add','','3318','    if (!subRow && _viewTreeAvailable && GitRepoService.IsRepo(s.Cwd))'],
+    ['add','','3319','        items.Add(MenuItem("View tree…", () => ViewTreeRequested?.Invoke(s)));'],
+    ['ctx','3318','3320',''],
+    ['ctx','3319','3321','    items.Add(new Separator());']
+  ]);
+  var diffTreeWin = D([
+    ['hunk','','','@@ -0,0 +1,9 @@'],
+    ['add','','1','internal sealed class TreeWindow : Window'],
+    ['add','','2','{'],
+    ['add','','3','    private readonly GitRepoService _git = new();'],
+    ['add','','4','    private int _gen;'],
+    ['add','','5','    public void Retarget(string cwd, string title) { /* mirrors GitReviewWindow */ }'],
+    ['add','','6','}']
+  ]);
+  var diffLog = D([
+    ['hunk','','','@@ -14,7 +14,7 @@ internal sealed class GitRepoService'],
+    ['del','41','','    const string LogFormat = "--format=%H\\x1f%h\\x1f%an\\x1f%aI\\x1f%s\\x1f%B";'],
+    ['add','','41','    const string LogFormat = "--format=%H\\x1f%h\\x1f%P\\x1f%an\\x1f%aI\\x1f%s\\x1f%B";'],
+    ['ctx','42','42',''],
+    ['ctx','43','43','    public IReadOnlyList<GitCommit> GetLog(string cwd, int maxCount)']
+  ]);
+  var diffPlace = D([
+    ['hunk','','','@@ -128,6 +128,8 @@ void BuildPanes()'],
+    ['ctx','128','128','    var body = new Grid { ColumnDefinitions = new("Auto,*,Auto,*") };'],
+    ['del','129','','    left.Width = 320;'],
+    ['add','','129','    body.Children.Add(new GridSplitter { Width = 4 });'],
+    ['add','','130','    body.Children.Add(new GridSplitter { Width = 4 });'],
+    ['ctx','130','131','    body.Children.Add(diffColumn);']
+  ]);
+
+  var NODES = [
+    { id:'wip', kind:'wip', subj:'Working tree', hash:'', author:'', when:'uncommitted', files:[
+        { st:'M', path:'src/Perch.App/Views/OverlayCanvas.cs', diff:diffMenu },
+        { st:'A', path:'src/Perch.App/Windows/TreeWindow.cs', diff:diffTreeWin },
+        { st:'A', path:'docs/git-tree-window-design.html', diff:D([['hunk','','','@@ -0,0 +1 @@'],['add','','1','<!-- you are looking at it -->']]) }
+    ]},
+    { id:'1c448d9', kind:'commit', head:true, subj:'middle click to open in new browser for links', hash:'1c448d9', author:'Jon', when:'2h ago', files:[
+        { st:'M', path:'src/Perch.App/Views/OverlayCanvas.cs', diff:D([
+          ['hunk','','','@@ -3360,6 +3360,9 @@ MenuItem(string header, Action onClick)'],
+          ['add','','3361','    void WireMiddleClick(MenuItem mi, Action? onMiddle) { /* tunneled */ }'],
+          ['ctx','3361','3364','    return mi;']
+        ]) }
+    ]},
+    { id:'754fd60', kind:'commit', subj:'add more subtle bubble alert while in dense mode', hash:'754fd60', author:'Jon', when:'5h ago', files:[
+        { st:'M', path:'src/Perch.App/Views/OverlayCanvas.cs', diff:D([
+          ['hunk','','','@@ -880,3 +880,6 @@ void DrawDenseStrip(DrawingContext ctx)'],
+          ['add','','881','    if (alerting) OverlayDraw.Pill(ctx, Palette.AttentionBrush, bubbleRect);'],
+          ['ctx','881','884','']
+        ]) }
+    ]},
+    { id:'ebdb3ce', kind:'commit', subj:'Stronger handling of lower screen relative positioning', hash:'ebdb3ce', author:'Jon', when:'1d ago', files:[
+        { st:'M', path:'src/Perch.Core/Data/PlacementMath.cs', diff:diffLog },
+        { st:'M', path:'src/Perch.App/Views/OverlayCanvas.cs', diff:diffPlace }
+    ]},
+    { id:'eaa175d', kind:'commit', subj:'More fixes for toggled placement', hash:'eaa175d', author:'Jon', when:'1d ago', files:[
+        { st:'M', path:'src/Perch.Core/Data/PlacementMath.cs', diff:diffLog }
+    ]},
+    { id:'5cff7ee', kind:'commit', subj:'Fix overlay jumping', hash:'5cff7ee', author:'Jon', when:'2d ago', files:[
+        { st:'M', path:'src/Perch.App/Views/OverlayCanvas.cs', diff:diffPlace }
+    ]}
+  ];
+
+  var state = { node:null, file:0, split:false, active:false, composing:false, staged:{} };
+
+  // ---------- render: graph ----------
+  var graph = document.getElementById('graph');
+  function renderGraph() {
+    graph.innerHTML = '';
+    NODES.forEach(function (n) {
+      var el = document.createElement('div');
+      el.className = 'node' + (n.kind==='wip'?' wip':'') + (n.head?' head':'') + (state.node && state.node.id===n.id?' sel':'');
+      var sub = n.kind==='wip'
+        ? '<span class="wip-count">'+n.files.length+' changes</span>'
+        : '<span class="hash">'+n.hash+'</span><span>'+n.author+'</span><span>'+n.when+'</span>';
+      el.innerHTML =
+        '<div class="rail"><span class="knot"></span></div>' +
+        '<div class="body"><div class="subj">'+n.subj+(n.head?'<span class="head-tag">head</span>':'')+'</div><div class="sub">'+sub+'</div></div>';
+      el.addEventListener('click', function(){ selectNode(n); });
+      graph.appendChild(el);
+    });
+    document.getElementById('graphCount').textContent = (NODES.length-1) + ' + wip';
+  }
+
+  // ---------- render: files ----------
+  var filesEl = document.getElementById('files');
+  function renderFiles() {
+    var n = state.node;
+    document.getElementById('filesHd').textContent = !n ? 'Files'
+      : (n.kind==='wip' ? 'Working tree · ' + n.files.length + ' changed' : 'Files in ' + n.hash);
+    filesEl.innerHTML = '';
+    if (!n) { filesEl.innerHTML = '<div class="empty">Select a node on the left.</div>'; return; }
+    n.files.forEach(function (f, i) {
+      var el = document.createElement('div');
+      el.className = 'file' + (state.file===i?' sel':'');
+      var on = state.staged[n.id+':'+i];
+      el.innerHTML =
+        '<span class="ck'+(on?' on':'')+'" data-ck="'+i+'"></span>' +
+        '<span class="st '+f.st+'">'+f.st+'</span>' +
+        '<span class="fp">'+f.path+'</span>';
+      el.addEventListener('click', function(e){
+        if (e.target.getAttribute('data-ck')!==null) { toggleStage(i); e.stopPropagation(); return; }
+        state.file = i; renderFiles(); renderDiff();
+      });
+      filesEl.appendChild(el);
+    });
+  }
+
+  // ---------- render: diff ----------
+  var diffEl = document.getElementById('diff');
+  function renderDiff() {
+    var n = state.node;
+    if (!n) { diffEl.innerHTML = '<div class="empty">A diff shows here when you pick a file.</div>'; setDiffHd('Diff',''); return; }
+    var f = n.files[state.file];
+    if (!f) { diffEl.innerHTML = '<div class="empty">No file selected.</div>'; setDiffHd('Diff',''); return; }
+    var adds=0, dels=0;
+    f.diff.forEach(function(r){ if(r[0]==='add')adds++; if(r[0]==='del')dels++; });
+    var html = '<div class="diff-file-hd"><b>'+f.path+'</b></div><pre class="diff">';
+    f.diff.forEach(function(r){
+      var kind=r[0], txt=esc(r[3]);
+      var cls = kind==='add'?'add':kind==='del'?'del':kind==='hunk'?'hunk':'';
+      html += '<div class="dl '+cls+'"><span class="g">'+r[1]+'</span><span class="g">'+r[2]+'</span><span class="c">'+txt+'</span></div>';
+    });
+    html += '</pre>';
+    diffEl.innerHTML = html;
+    setDiffHd(f.path.split('/').pop(), (state.split?'split · ':'') + '+'+adds+' −'+dels);
+  }
+  function setDiffHd(a,b){ document.getElementById('diffHd').textContent=a; document.getElementById('diffMeta').textContent=b; }
+
+  // ---------- selection ----------
+  function selectNode(n) {
+    state.node = n; state.file = 0;
+    state.composing = (n.kind==='wip');
+    document.getElementById('mock').classList.toggle('composing', state.composing);
+    if (n.kind==='wip') { // default: stage all
+      n.files.forEach(function(_,i){ state.staged['wip:'+i] = true; });
+    }
+    renderGraph(); renderFiles(); renderDiff(); updateComposer();
+  }
+
+  function toggleStage(i) {
+    var key = state.node.id+':'+i;
+    state.staged[key] = !state.staged[key];
+    renderFiles(); updateComposer();
+  }
+
+  // ---------- composer ----------
+  function stagedCount(){ var n=state.node, c=0; if(!n)return 0; n.files.forEach(function(_,i){ if(state.staged[n.id+':'+i]) c++; }); return c; }
+  function updateComposer(){
+    var c = stagedCount();
+    document.getElementById('commitN').textContent = c ? '('+c+')' : '';
+    document.getElementById('composerHint').textContent = c ? c+' file'+(c>1?'s':'')+' staged' : 'Tick files to include, above.';
+  }
+  document.getElementById('commitBtn').addEventListener('click', function(){
+    if (stagedCount()===0) { toast('Nothing staged'); return; }
+    if (document.getElementById('msg').value.trim()==='') { toast('Write a commit message'); return; }
+    if (state.active) { document.getElementById('guard').classList.add('show'); return; }
+    doCommit();
+  });
+
+  window.Tree = {
+    refresh: function(){ toast('git status · refreshed'); },
+    setSplit: function(s){ state.split=s;
+      document.getElementById('segU').classList.toggle('on',!s);
+      document.getElementById('segS').classList.toggle('on',s);
+      renderDiff(); },
+    confirmCommit: function(){ document.getElementById('guard').classList.remove('show'); doCommit(); },
+    cancelGuard: function(){ document.getElementById('guard').classList.remove('show'); toast('Held off — good call'); }
+  };
+  function doCommit(){
+    var c = stagedCount();
+    toast('✓ Committed '+c+' file'+(c>1?'s':''));
+    document.getElementById('msg').value='';
+  }
+
+  // ---------- base-ref control (fork case) ----------
+  var BASES = ['main','origin/main','upstream/main'];
+  var baseIx = 0;
+  var baseBtn = document.getElementById('baseBtn');
+  baseBtn.addEventListener('click', function(){
+    baseIx = (baseIx+1) % BASES.length;
+    baseBtn.innerHTML = 'since ⑂ <b style="color:var(--ink-title)">'+BASES[baseIx]+'</b> ▾';
+    document.getElementById('graphCount').textContent = (NODES.length-1) + ' commits · from ' + BASES[baseIx];
+    toast('Base → merge-base with ' + BASES[baseIx]);
+  });
+
+  // ---------- active switch ----------
+  var sw = document.getElementById('activeSwitch');
+  function setActive(v){ state.active=v; sw.classList.toggle('on',v); sw.setAttribute('aria-checked',v);
+    document.getElementById('activeLbl').textContent = v?'active':'idle';
+    document.getElementById('ttBranch').innerHTML = v ? 'git-tree <span style="color:var(--wip)">● active</span>' : 'git-tree';
+    if(!v) document.getElementById('guard').classList.remove('show');
+  }
+  sw.addEventListener('click', function(){ setActive(!state.active); });
+  sw.addEventListener('keydown', function(e){ if(e.key===' '||e.key==='Enter'){ e.preventDefault(); setActive(!state.active); } });
+
+  // ---------- toast ----------
+  var toastEl = document.getElementById('toast'), toastT;
+  function toast(m){ toastEl.textContent=m; toastEl.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(function(){ toastEl.classList.remove('show'); },1900); }
+
+  function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // ---------- boot ----------
+  renderGraph();
+  selectNode(NODES[1]); // land on HEAD commit
+})();
+</script>

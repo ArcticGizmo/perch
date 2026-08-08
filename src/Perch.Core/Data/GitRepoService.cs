@@ -29,7 +29,10 @@ internal sealed class GitRepoService
     // The field delimiter for `git log --format` — the ASCII unit separator (U+001F). It can't appear in a
     // hash/name/date and, since we only use %s (subject, single line), records split cleanly on newline.
     private const char Us = '\u001f';
-    private static readonly string LogFormat = $"--format=%H{Us}%h{Us}%an{Us}%aI{Us}%s{Us}%B";
+    // %P (space-separated parent hashes) sits second-to-last so the multi-line %B stays last, and so the
+    // first five fields (H, h, an, aI, s) keep their indices — the date/subject positions and the
+    // short-record fallbacks in ParseLog are unchanged by adding it.
+    private static readonly string LogFormat = $"--format=%H{Us}%h{Us}%an{Us}%aI{Us}%s{Us}%P{Us}%B";
 
     /// <summary>The working tree's status (branch, ahead/behind, changed paths), or null when
     /// <paramref name="cwd"/> isn't a readable git repo. Runs <c>git status --porcelain=v2 --branch</c>.</summary>
@@ -50,6 +53,56 @@ internal sealed class GitRepoService
         var (exit, stdout) = RunGit(cwd, LogTimeoutMs,
             "--no-optional-locks", "log", "-z", $"--max-count={maxCount}", LogFormat);
         return exit == 0 ? ParseLog(stdout) : [];
+    }
+
+    /// <summary>
+    /// The commits on the current branch since it diverged from <paramref name="baseRef"/> — git's
+    /// <c>&lt;baseRef&gt;..HEAD</c> range, first-parent only (so a merge from the base doesn't drag the
+    /// base's commits into the branch view), newest first. Returns null on any git failure (so a caller can
+    /// fall back to an unscoped <see cref="GetLog"/>); an empty list means the branch genuinely has no
+    /// commits since the divergence point. A null/empty <paramref name="baseRef"/> falls back to plain HEAD.
+    /// </summary>
+    public IReadOnlyList<GitCommit>? GetBranchLog(string cwd, string? baseRef, int maxCount)
+    {
+        if (maxCount <= 0 || !IsRepo(cwd))
+            return null;
+        string range = string.IsNullOrEmpty(baseRef) ? "HEAD" : $"{baseRef}..HEAD";
+        var (exit, stdout) = RunGit(cwd, LogTimeoutMs,
+            "--no-optional-locks", "log", range, "--first-parent", "-z", $"--max-count={maxCount}", LogFormat);
+        return exit == 0 ? ParseLog(stdout) : null;
+    }
+
+    /// <summary>The merge-base (common ancestor) of HEAD and <paramref name="baseRef"/> — where the current
+    /// branch left <paramref name="baseRef"/> — as a full hash, or null on any failure. Runs
+    /// <c>git merge-base HEAD &lt;baseRef&gt;</c>.</summary>
+    public string? GetMergeBase(string cwd, string baseRef)
+    {
+        if (string.IsNullOrEmpty(baseRef) || !IsRepo(cwd))
+            return null;
+        var (exit, stdout) = RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "merge-base", "HEAD", baseRef);
+        if (exit != 0)
+            return null;
+        var hash = stdout.Trim();
+        return hash.Length == 0 ? null : hash;
+    }
+
+    /// <summary>
+    /// The candidate "base branches" to scope this branch against, best first — a fork setup's
+    /// <c>upstream/main</c> before <c>origin/main</c> before a local <c>main</c>. Enumerates local and
+    /// remote refs with <c>git for-each-ref</c> and ranks them with <see cref="PickBaseRefCandidates"/>.
+    /// Empty when nothing plausible exists. <paramref name="currentBranch"/> is excluded from the local tier
+    /// so a branch can't be its own base.
+    /// </summary>
+    public IReadOnlyList<string> GetBaseRefCandidates(string cwd, string? currentBranch)
+    {
+        if (!IsRepo(cwd))
+            return [];
+        var (exit, stdout) = RunGit(cwd, GitTimeoutMs,
+            "--no-optional-locks", "for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes");
+        if (exit != 0)
+            return [];
+        var refs = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return PickBaseRefCandidates(currentBranch, refs);
     }
 
     /// <summary>The unified diff of one path in the working tree — staged (index vs HEAD) when
@@ -127,6 +180,58 @@ internal sealed class GitRepoService
     /// <c>core.autocrlf</c> — counts as no change.
     /// </summary>
     public static bool HasNoTextChange(GitDiff diff) => diff.Files.All(FileHasNoTextChange);
+
+    // ---- base-ref ranking (pure) ----------------------------------------------------------------------
+
+    // The branch names we recognise as a "trunk" to scope against, most-likely first. A ref only becomes a
+    // base candidate if its leaf name is one of these.
+    private static readonly string[] TrunkNames = ["main", "master", "trunk", "develop"];
+
+    /// <summary>
+    /// Ranks branch refs into the plausible base branches to measure the current branch against, best first.
+    /// Preference is by tier — a remote literally named <c>upstream</c> (the fork convention) first, then
+    /// <c>origin</c>, then local branches, then any other remote — and within a tier by trunk name
+    /// (<c>main</c> &gt; <c>master</c> &gt; <c>trunk</c> &gt; <c>develop</c>). Only refs whose leaf name is a
+    /// known trunk qualify; <c>*/HEAD</c> pseudo-refs and the <paramref name="currentBranch"/> itself (in the
+    /// local tier) are dropped; the result is de-duplicated preserving order. Pure and unit-tested.
+    /// </summary>
+    internal static IReadOnlyList<string> PickBaseRefCandidates(string? currentBranch, IReadOnlyList<string> refs)
+    {
+        var ranked = new List<(int Tier, int Name, string Ref)>();
+        foreach (var r in refs)
+        {
+            if (string.IsNullOrEmpty(r))
+                continue;
+            int slash = r.IndexOf('/');
+            string leaf = slash >= 0 ? r[(slash + 1)..] : r;
+            if (leaf == "HEAD")
+                continue; // origin/HEAD and friends are symbolic pointers, not a base
+            int name = Array.IndexOf(TrunkNames, leaf);
+            if (name < 0)
+                continue; // not a trunk-shaped name — never a base candidate
+
+            int tier;
+            if (slash < 0)
+            {
+                if (r == currentBranch)
+                    continue; // a branch can't be its own base
+                tier = 2; // local branch
+            }
+            else
+            {
+                string remote = r[..slash];
+                tier = remote switch { "upstream" => 0, "origin" => 1, _ => 3 };
+            }
+            ranked.Add((tier, name, r));
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        return ranked
+            .OrderBy(x => x.Tier).ThenBy(x => x.Name)
+            .Select(x => x.Ref)
+            .Where(seen.Add)
+            .ToList();
+    }
 
     // ---- parsers (internal static, pure, unit-tested) -------------------------------------------------
 
@@ -265,12 +370,14 @@ internal sealed class GitRepoService
                     DateTimeStyles.RoundtripKind, out var date))
                 continue;
             string subject = f[4];
+            // %P (parent hashes) is second-to-last; empty for a root commit or an old five-field record.
+            string parents = f.Length >= 6 ? f[5].Trim() : "";
             // %B (full message) is the last field; it carries its own trailing newline(s). Fall back to the
             // subject when it wasn't captured.
-            string body = f.Length >= 6 ? f[5].Replace("\r\n", "\n").Trim('\n', '\r') : subject;
+            string body = f.Length >= 7 ? f[6].Replace("\r\n", "\n").Trim('\n', '\r') : subject;
             if (body.Length == 0)
                 body = subject;
-            commits.Add(new GitCommit(f[0], f[1], f[2], date, subject, body));
+            commits.Add(new GitCommit(f[0], f[1], f[2], date, subject, body, parents));
         }
         return commits;
     }
