@@ -340,12 +340,6 @@ internal static class SettingsRegistry
             PreviewTarget.PerchReacts, nameof(AppSettings.PerchReacts),
             s => s.PerchReacts, (s, v) => s.PerchReacts = v),
 
-        Toggle("confetti-finish", "Confetti finish",
-            "Adds a per-session 'confetti finish' arming to the right-click menu.",
-            SettingSurface.Whimsy, ["confetti", "celebrate", "finish", "party", "fun"],
-            PreviewTarget.None, nameof(AppSettings.ConfettiFinish),
-            s => s.ConfettiFinish, (s, v) => s.ConfettiFinish = v),
-
         Toggle("notify-achievement", "Achievement reveal card",
             "Full-screen card reveal when new achievement badges unlock.",
             SettingSurface.Whimsy, ["achievement", "unlock", "badge", "reveal", "card", "trophy"],

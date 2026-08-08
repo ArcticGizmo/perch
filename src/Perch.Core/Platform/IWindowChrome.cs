@@ -4,7 +4,7 @@
 /// Applies the native window styles Avalonia doesn't expose directly, on the OS window handle Avalonia
 /// hands back from <c>TryGetPlatformHandle()</c>: a tool window that never takes activation (so showing
 /// an overlay never steals focus from the terminal the user is typing in), and a fully click-through
-/// variant for the ambient overlays (glow, confetti, dense drop-zone) that must never intercept the mouse.
+/// variant for the ambient overlays (glow, dense drop-zone) that must never intercept the mouse.
 ///
 /// On Windows these map to <c>WS_EX_*</c> extended styles; other platforms use their own window flags
 /// (macOS: <c>NSWindow</c> level / <c>collectionBehavior</c> / <c>ignoresMouseEvents</c>). Every method is

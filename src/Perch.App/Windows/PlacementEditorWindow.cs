@@ -88,7 +88,7 @@ internal sealed class PlacementEditorWindow : Window
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.Manual;
 
-        // Cover the target monitor's full bounds (physical → DIP via its scaling), matching ConfettiWindow.
+        // Cover the target monitor's full bounds (physical → DIP via its scaling).
         var b = ctx.TargetScreen.Bounds;
         double scale = ctx.TargetScreen.Scaling;
         Position = b.Position;

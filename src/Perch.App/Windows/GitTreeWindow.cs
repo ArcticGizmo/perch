@@ -686,7 +686,9 @@ internal sealed class GitTreeWindow : Window
     // work of RefreshStatus and reuses the cached commits — it just re-reads status (one git call) and lets
     // the reselected file reload its own diff. Falls back to a full refresh if the tree went clean (the WIP
     // node must then disappear).
-    private void RefreshWorkingTree()
+    // <paramref name="advanceUnstaged"/> (after "Stage file"): land on the topmost remaining "Changes" file
+    // instead of following the just-staged file over to the staged group (blank if nothing is left unstaged).
+    private void RefreshWorkingTree(bool advanceUnstaged = false)
     {
         if (_cwd is not { } cwd) return;
         if (_nodesList.SelectedItem is not TreeNode { IsWip: true }) { RefreshStatus(preserveSelection: true); return; }
@@ -731,8 +733,9 @@ internal sealed class GitTreeWindow : Window
                 }
 
                 // Same file set: repopulate the two groups (follows the file to its new side if it moved) and
-                // repaint the diff only if its content actually changed.
-                PopulateWip(s.Changes, keepPath, keepStaged);
+                // repaint the diff only if its content actually changed. After "Stage file", advance to the
+                // topmost remaining Changes file instead of following the staged one.
+                PopulateWip(s.Changes, keepPath, keepStaged, preferUnstagedTop: advanceUnstaged);
             });
         });
     }
@@ -829,7 +832,11 @@ internal sealed class GitTreeWindow : Window
     // <paramref name="quiet"/> (the auto-refresh path): when the same file+side is still present, restore its
     // selection highlight without re-selecting it — so the diff (and its scroll position) is left untouched
     // for the caller's content-signature guard to repaint only if it actually changed.
-    private void PopulateWip(IReadOnlyList<GitFileChange> changes, string? wantPath, bool wantStaged, bool quiet = false)
+    // <paramref name="preferUnstagedTop"/> (after "Stage file"): ignore <paramref name="wantPath"/> and land
+    // on the topmost remaining "Changes" row so the user keeps working down the list — or, if nothing is left
+    // unstaged, clear to the placeholder rather than jumping over to the staged group.
+    private void PopulateWip(IReadOnlyList<GitFileChange> changes, string? wantPath, bool wantStaged,
+        bool quiet = false, bool preferUnstagedTop = false)
     {
         var unstaged = changes.Where(c => c.Untracked || c.Unstaged != GitChangeKind.None).ToList();
         var staged = changes.Where(c => c.Staged != GitChangeKind.None).ToList();
@@ -845,6 +852,23 @@ internal sealed class GitTreeWindow : Window
         _stageAllBtn.IsEnabled = unstaged.Count > 0;
         _unstageAllBtn.IsEnabled = staged.Count > 0;
         UpdateComposer();
+
+        if (preferUnstagedTop)
+        {
+            _suppressSelect = false;
+            if (unstaged.Count > 0)
+            {
+                _unstagedList.SelectedIndex = 0; // fires OnWipFileSelected → loads the topmost Changes diff
+            }
+            else
+            {
+                _shownWip = null;
+                _diff.SetDiff(null, "");
+                _diffPlaceholder.IsVisible = true;
+            }
+            UpdateEmptyStates();
+            return;
+        }
 
         int uidx = wantPath is not null ? IndexOfPath(unstaged, wantPath) : -1;
         int sidx = wantPath is not null ? IndexOfPath(staged, wantPath) : -1;
@@ -1172,7 +1196,9 @@ internal sealed class GitTreeWindow : Window
         });
         if (!IsVisible) return;
         if (!ok) { SetHint(FirstLine(err), warn: true); return; }
-        RefreshWorkingTree();
+        // Staging the whole file moves it out of "Changes" → advance to the topmost remaining Changes file
+        // (or a blank preview if none is left), rather than following it into the staged group.
+        RefreshWorkingTree(advanceUnstaged: req.Action == HunkStageAction.Stage);
     }
 
     // Enables/labels the "Stage lines" button as the diff's line selection changes.
@@ -1795,14 +1821,19 @@ internal sealed class GitTreeWindow : Window
                 Foreground = pal.Muted, FontFamily = Mono, FontSize = 11, Margin = new Thickness(0, 3, 0, 0),
                 TextTrimming = TextTrimming.CharacterEllipsis,
             });
-            ToolTip.SetTip(content, c.Body);
-            ToolTip.SetShowDelay(content, 750);
         }
 
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        // A transparent background makes the whole row (rail column + any gaps around the text) hit-testable,
+        // so the commit-body tooltip opens from anywhere on the card — not just over the text.
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), Background = Brushes.Transparent };
         grid.Children.Add(rail);
         content.SetValue(Grid.ColumnProperty, 1);
         grid.Children.Add(content);
+        if (node.Kind == NodeKind.Commit)
+        {
+            ToolTip.SetTip(grid, node.Commit.Body);
+            ToolTip.SetShowDelay(grid, 750);
+        }
         return grid;
     }
 

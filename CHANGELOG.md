@@ -7,15 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Git tree: Unified, Split, and Hunk are now one mutually-exclusive view mode (Hunk builds on the split layout)
-- Every mode stages from the diff: Unified/Split get whole-file Stage/Discard buttons on each file header; Hunk keeps per-hunk and per-line staging
-- The working-tree files pane splits into two groups — "Changes" and "Staged · pending commit" — with the commit box under the staged set
-- Stage a file with "+", unstage with "−"; discard drops unstaged edits (or deletes an untracked file)
-- "Stage all" / "Unstage all" buttons on the Changes and Staged group headers
-- Staging a hunk, line, or file is now snappy — it refreshes just the working tree instead of re-walking the whole branch, and no longer double-refreshes off its own index write
-- The diff view controls moved to a floating bar at the bottom of the diff: a sun/moon light-dark toggle and two segmented selectors
-- Unified / Split / Hunk is now a segmented control (defaults to Split, remembered between sessions); the Wrap toggle is gone — lines always wrap
-- A new Diff / Previous / Current selector: Diff shows the change (default), Previous shows the whole file before it, Current shows the whole file with it — both as plain listings, no deltas
+---
+
+## [v0.3.21] - 2026-08-08
+
+- New git-tree window replaces "Review changes": a branch-scoped commit graph, its files, and the diff (from a session's "View git history…")
+- Stage, unstage, or discard by whole file, hunk, or selected lines
+- Working tree splits into "Changes" and "Staged · pending commit" — commit inline, with Stage all / Unstage all
+- Floating diff bar: Unified / Split / Hunk layout (defaults to Split), Diff / Previous / Current views, and a per-window light/dark toggle
+- Select diff text from anywhere — line ends, gutters, the dead space past a short line
+- Session right-click menu reorganised around everyday actions; "View tree…" is now "View git history…"
+- Removed the confetti finish feature (the party, briefly fun, is over)
 
 ---
 

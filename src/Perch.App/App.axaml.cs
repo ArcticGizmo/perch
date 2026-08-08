@@ -196,8 +196,8 @@ public partial class App : Application
             };
 
             // A session finishing or blocking flashes the overlay's attention chase-border (and expands
-            // it if collapsed). A finish also spends any armed confetti. Both fire the desktop
-            // toast + chime + external push (gated per settings) via the notification dispatcher.
+            // it if collapsed). Both fire the desktop toast + chime + external push (gated per settings)
+            // via the notification dispatcher.
             _monitorHost.NeedsAttention += OnNeedsAttention;
             _monitorHost.AwaitingInput += OnAwaitingInput;
             _monitorHost.ApiError += OnApiError;
@@ -221,8 +221,8 @@ public partial class App : Application
             _overlay.Canvas.MicJumpRequested += JumpToMicApp;
 
             // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
-            // down. History / QR / external-notify / confetti are Phase-5 concerns — their triggers are
-            // wired here so the menu is complete, with best-effort/stub handlers until those windows land.
+            // down. History / QR / external-notify are Phase-5 concerns — their triggers are wired here so
+            // the menu is complete, with best-effort/stub handlers until those windows land.
             _overlay.Canvas.ExitRequested += () => desktop.Shutdown();
             _overlay.Canvas.SetPlacementsRequested += OpenPlacementEditor;
             _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
@@ -543,10 +543,8 @@ public partial class App : Application
         }
     }
 
-    // A session finished (NeedsAttention): flash the overlay, fire the notification (toast/chime/external,
-    // gated per settings), and if it was armed for a confetti finish, spend the arming and set off the
-    // celebration on the overlay's current screen.
-    private ConfettiWindow? _confetti;
+    // A session finished (NeedsAttention): flash the overlay and fire the notification (toast/chime/external,
+    // gated per settings).
     // True when the session is one of the daemon's headless background workers. Those are deliberately
     // silent: no attention flash, no toast/chime/external push — they have no terminal to jump to, so an
     // alert would only lead to a dead click. Read from the roster watcher's latest list, which is empty
@@ -559,8 +557,6 @@ public partial class App : Application
         if (IsDaemonSession(session)) return;
         _overlay!.Canvas.TriggerAttention(SessionStatus.NeedsAttention);
         _notifications?.Notify(NotificationKind.Done, session);
-        if (_overlay.Canvas.ConsumeConfetti(session.SessionId))
-            LaunchConfetti();
         CheckAchievements(force: false); // a finish is a natural moment to have crossed a threshold
     }
 
@@ -678,14 +674,6 @@ public partial class App : Application
         if (int.TryParse(pid, out int p))
             _ = PlatformServices.WindowActivator.FocusTerminalForProcess(p, project);
         _monitorHost?.Acknowledge(pid);
-    }
-
-    private void LaunchConfetti()
-    {
-        if (_overlay is null) return;
-        var screen = _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
-        if (screen is null) return;
-        (_confetti ??= new ConfettiWindow()).Launch(screen);
     }
 
     // Reveals the achievement card(s) — a vignette + coin-flip reveal in the middle of the overlay's

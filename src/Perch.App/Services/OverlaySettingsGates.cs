@@ -41,7 +41,6 @@ internal static class OverlaySettingsGates
         c.SetShowMicPresence(s.ShowMicPresence);
         c.SetHideInactiveTeamMembers(s.HideInactiveTeamMembers);
         c.SetUpsideDownQuickLinks(s.UpsideDownQuickLinks);
-        c.SetConfettiFinishAvailable(s.ConfettiFinish);
         c.SetExternalNotificationsAvailable(s.ExternalNotificationsEnabled);
         c.SetViewTreeAvailable(s.ShowGitReview);
         c.SetDenseStatusChangeStyle(s.DenseStatusChangeStyle);
