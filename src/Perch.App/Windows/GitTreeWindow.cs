@@ -68,6 +68,8 @@ internal sealed class GitTreeWindow : Window
     private readonly TextBlock _filesLabel;
     private readonly TextBlock _unstagedLabel;
     private readonly TextBlock _stagedLabel;
+    private readonly Button _stageAllBtn;
+    private readonly Button _unstageAllBtn;
     private readonly TextBlock _composerLabel;
     private readonly ListBox _nodesList;
     private readonly ListBox _filesList;      // commit-node files (read-only)
@@ -121,6 +123,9 @@ internal sealed class GitTreeWindow : Window
     // Auto-refresh (filesystem watcher, debounced).
     private FileSystemWatcher? _watcher;
     private DispatcherTimer? _debounce;
+    // When we perform our own staging write, the .git/index change trips the watcher into a redundant full
+    // refresh. This timestamp (Environment.TickCount64) lets the debounce swallow that self-induced fire.
+    private long _lastSelfRefresh;
 
     // What is currently shown, so an auto-refresh updates only what changed and leaves the diff (and its
     // scroll) untouched otherwise.
@@ -332,10 +337,21 @@ internal sealed class GitTreeWindow : Window
         };
 
         // WIP two-group panel: "Changes" (unstaged) over "Staged · pending commit", composer docked bottom.
+        // Each group header carries a bulk action on the right: Stage all / Unstage all.
         _unstagedLabel = GroupLabel("Changes");
         _stagedLabel = GroupLabel("Staged · pending commit");
-        var unstagedGroup = new DockPanel { LastChildFill = true, Children = { _unstagedLabel, _unstagedList } };
-        var stagedGroup = new DockPanel { LastChildFill = true, Children = { _stagedLabel, _stagedList } };
+        _stageAllBtn = HeaderActionButton("Stage all");
+        _stageAllBtn.Click += (_, _) => StageAll();
+        _unstageAllBtn = HeaderActionButton("Unstage all");
+        _unstageAllBtn.Click += (_, _) => UnstageAll();
+        var unstagedGroup = new DockPanel
+        {
+            LastChildFill = true, Children = { GroupHeader(_unstagedLabel, _stageAllBtn), _unstagedList },
+        };
+        var stagedGroup = new DockPanel
+        {
+            LastChildFill = true, Children = { GroupHeader(_stagedLabel, _unstageAllBtn), _stagedList },
+        };
         var groups = new Grid { RowDefinitions = new RowDefinitions("*,Auto,*") };
         groups.Children.Add(WithRow(unstagedGroup, 0));
         groups.Children.Add(WithRow(GroupSeparator(), 1));
@@ -457,7 +473,21 @@ internal sealed class GitTreeWindow : Window
     private static TextBlock GroupLabel(string text) => new()
     {
         Text = text, Foreground = Palette.MutedBrush, FontSize = 11, FontWeight = FontWeight.SemiBold,
-        Margin = new Thickness(12, 10, 12, 6), [DockPanel.DockProperty] = Dock.Top,
+        Margin = new Thickness(12, 10, 12, 6), VerticalAlignment = VerticalAlignment.Center,
+    };
+
+    // A group's header row: the label filling, a bulk-action button ("Stage all"/"Unstage all") docked right.
+    private static Control GroupHeader(TextBlock label, Button action)
+    {
+        action.SetValue(DockPanel.DockProperty, Dock.Right);
+        return new DockPanel { LastChildFill = true, [DockPanel.DockProperty] = Dock.Top, Children = { action, label } };
+    }
+
+    private static Button HeaderActionButton(string text) => new()
+    {
+        Content = text, FontSize = 11, Padding = new Thickness(8, 2),
+        VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0),
+        Cursor = new Cursor(StandardCursorType.Hand),
     };
 
     // The thin horizontal rule between the two WIP groups (recoloured with the window's palette).
@@ -621,6 +651,62 @@ internal sealed class GitTreeWindow : Window
             });
     }
 
+    // A fast refresh after a working-tree staging action (stage/unstage/discard a hunk, line, or file, or
+    // Stage/Unstage all). Staging never touches the commit graph, so this skips the base-ref + branch-log
+    // work of RefreshStatus and reuses the cached commits — it just re-reads status (one git call) and lets
+    // the reselected file reload its own diff. Falls back to a full refresh if the tree went clean (the WIP
+    // node must then disappear).
+    private void RefreshWorkingTree()
+    {
+        if (_cwd is not { } cwd) return;
+        if (_nodesList.SelectedItem is not TreeNode { IsWip: true }) { RefreshStatus(preserveSelection: true); return; }
+
+        int gen = ++_gen;
+        string? keepPath = _shownWip?.Path;
+        bool keepStaged = _shownWip?.Staged ?? false;
+
+        System.Threading.Tasks.Task.Run(() => _git.GetStatus(cwd)).ContinueWith(t =>
+        {
+            if (!t.IsCompletedSuccessfully) return;
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!IsVisible || gen != _gen) return;
+                _lastSelfRefresh = Environment.TickCount64;
+                var status = t.Result;
+
+                // Tree went clean → the WIP node is gone; a full refresh rebuilds the graph and lands on HEAD.
+                if (status is not { IsClean: false } s) { RefreshStatus(preserveSelection: false); return; }
+
+                bool countChanged = _lastStatus is not { } ls || ls.Changes.Count != s.Changes.Count;
+                _lastStatus = status;
+                ApplyStatus(status, cwd);
+
+                if (countChanged)
+                {
+                    // A file entered/left the change set → rebuild the node list (WIP count) from the cached
+                    // commits — no git — and reselect the WIP node, which repopulates its groups + diff.
+                    string? keepNode = _nodesList.SelectedItem is TreeNode n ? n.Key : null;
+                    _nodes = BuildNodes(status, _lastCommits, _effectiveBase);
+                    _suppressSelect = true;
+                    _nodesList.ItemsSource = _nodes;
+                    _nodesList.SelectedIndex = -1;
+                    _suppressSelect = false;
+                    int idx = keepNode is not null ? IndexOfNodeKey(_nodes, keepNode) : -1;
+                    if (idx < 0) idx = FirstSelectable(_nodes);
+                    _pendingFilePath = keepPath;
+                    _pendingWipStaged = keepStaged;
+                    _nodesList.SelectedIndex = idx;
+                    UpdateEmptyStates();
+                    return;
+                }
+
+                // Same file set: repopulate the two groups (follows the file to its new side if it moved) and
+                // repaint the diff only if its content actually changed.
+                PopulateWip(s.Changes, keepPath, keepStaged);
+            });
+        });
+    }
+
     private static IReadOnlyList<TreeNode> BuildNodes(
         GitRepoStatus? status, IReadOnlyList<GitCommit> commits, string? baseRef)
     {
@@ -723,31 +809,46 @@ internal sealed class GitTreeWindow : Window
 
         _unstagedLabel.Text = $"Changes ({unstaged.Count})";
         _stagedLabel.Text = $"Staged · pending commit ({staged.Count})";
+        _stageAllBtn.IsEnabled = unstaged.Count > 0;
+        _unstageAllBtn.IsEnabled = staged.Count > 0;
         UpdateComposer();
 
-        int uidx = wantPath is not null && !wantStaged ? IndexOfPath(unstaged, wantPath) : -1;
-        int sidx = wantPath is not null && wantStaged ? IndexOfPath(staged, wantPath) : -1;
+        int uidx = wantPath is not null ? IndexOfPath(unstaged, wantPath) : -1;
+        int sidx = wantPath is not null ? IndexOfPath(staged, wantPath) : -1;
 
-        // Quiet + the shown file/side survives: reselect it under suppression (no diff reload).
-        if (quiet && (uidx >= 0 || sidx >= 0))
+        // Choose the row to select: the requested side first, then the other side (the file may have moved
+        // sides — e.g. its last unstaged hunk was staged), then the first row of either group.
+        (ListBox list, int idx, bool side) =
+            !wantStaged && uidx >= 0 ? (_unstagedList, uidx, false)
+          : wantStaged && sidx >= 0 ? (_stagedList, sidx, true)
+          : uidx >= 0 ? (_unstagedList, uidx, false)
+          : sidx >= 0 ? (_stagedList, sidx, true)
+          : unstaged.Count > 0 ? (_unstagedList, 0, false)
+          : staged.Count > 0 ? (_stagedList, 0, true)
+          : (_unstagedList, -1, false);
+
+        if (idx < 0)
         {
-            if (uidx >= 0) _unstagedList.SelectedIndex = uidx; else _stagedList.SelectedIndex = sidx;
+            _suppressSelect = false;
+            _shownWip = null;
+            _diff.SetDiff(null, "");
+            _diffPlaceholder.IsVisible = true;
+            UpdateEmptyStates();
+            return;
+        }
+
+        // Quiet + the shown file stayed on the same side: reselect under suppression so the diff (and its
+        // scroll) survive — the caller's content-signature guard repaints only if it actually changed.
+        if (quiet && side == wantStaged && (side ? sidx : uidx) >= 0)
+        {
+            list.SelectedIndex = idx;
             _suppressSelect = false;
             UpdateEmptyStates();
             return;
         }
 
         _suppressSelect = false;
-        if (uidx >= 0) _unstagedList.SelectedIndex = uidx;
-        else if (sidx >= 0) _stagedList.SelectedIndex = sidx;
-        else if (unstaged.Count > 0) _unstagedList.SelectedIndex = 0;
-        else if (staged.Count > 0) _stagedList.SelectedIndex = 0;
-        else
-        {
-            _shownWip = null;
-            _diff.SetDiff(null, "");
-            _diffPlaceholder.IsVisible = true;
-        }
+        list.SelectedIndex = idx; // fires OnWipFileSelected → loads the diff and sets _shownWip
         UpdateEmptyStates();
     }
 
@@ -857,7 +958,7 @@ internal sealed class GitTreeWindow : Window
         int staged = StagedCount();
         _commitBtn.IsEnabled = staged > 0;
         SetHint(staged == 0
-            ? "Tick files to stage, then commit."
+            ? "Stage changes (＋ / Stage all), then commit."
             : $"{staged} file{(staged == 1 ? "" : "s")} staged.", warn: false);
     }
 
@@ -867,22 +968,29 @@ internal sealed class GitTreeWindow : Window
         _composerHint.Foreground = warn ? _pal.Orange : _pal.Muted;
     }
 
-    // Stage or unstage a whole file, then refresh so the checkbox and staged count reflect the new index.
-    private void ToggleStage(string path, bool stage)
+    // Stage or unstage a whole file (the row +/− button), then refresh so it moves between the two groups.
+    private void ToggleStage(string path, bool stage) =>
+        RunWorkingTreeOp(cwd => stage ? _git.StageFile(cwd, path) : _git.UnstageFile(cwd, path));
+
+    // Runs a working-tree write off the UI thread, then does a fast working-tree refresh (or reports git's
+    // error inline). The shared path for the row +/− buttons and the Stage/Unstage-all header buttons.
+    private void RunWorkingTreeOp(Func<string, (bool Ok, string Error)> op)
     {
         if (_cwd is not { } cwd) return;
-        System.Threading.Tasks.Task.Run(() => stage ? _git.StageFile(cwd, path) : _git.UnstageFile(cwd, path))
-            .ContinueWith(t =>
+        System.Threading.Tasks.Task.Run(() => op(cwd)).ContinueWith(t =>
+        {
+            if (!t.IsCompletedSuccessfully) return;
+            Dispatcher.UIThread.Post(() =>
             {
-                if (!t.IsCompletedSuccessfully) return;
-                Dispatcher.UIThread.Post(() =>
-                {
-                    if (!IsVisible) return;
-                    if (!t.Result.Ok) SetHint(FirstLine(t.Result.Error), warn: true);
-                    RefreshStatus(preserveSelection: true);
-                });
+                if (!IsVisible) return;
+                if (!t.Result.Ok) { SetHint(FirstLine(t.Result.Error), warn: true); return; }
+                RefreshWorkingTree();
             });
+        });
     }
+
+    private void StageAll() => RunWorkingTreeOp(cwd => _git.StageAll(cwd));
+    private void UnstageAll() => RunWorkingTreeOp(cwd => _git.UnstageAll(cwd));
 
     // Stage, unstage, or discard a single hunk (from its button in the diff pane), then refresh so the file
     // list, staged count, and the diff's staged/unstaged split reflect the change. Discard is destructive, so
@@ -908,7 +1016,7 @@ internal sealed class GitTreeWindow : Window
         });
         if (!IsVisible) return;
         if (!ok) { SetHint(FirstLine(err), warn: true); return; }
-        RefreshStatus(preserveSelection: true);
+        RefreshWorkingTree();
     }
 
     // Stage, unstage, or discard a whole file from the diff pane's file-scope buttons (Unified/Split modes),
@@ -937,7 +1045,7 @@ internal sealed class GitTreeWindow : Window
         });
         if (!IsVisible) return;
         if (!ok) { SetHint(FirstLine(err), warn: true); return; }
-        RefreshStatus(preserveSelection: true);
+        RefreshWorkingTree();
     }
 
     // Enables/labels the "Stage lines" button as the diff's line selection changes.
@@ -963,7 +1071,7 @@ internal sealed class GitTreeWindow : Window
                 {
                     if (!IsVisible) return;
                     if (!t.Result.Ok) { SetHint(FirstLine(t.Result.Error), warn: true); return; }
-                    RefreshStatus(preserveSelection: true);
+                    RefreshWorkingTree();
                 });
             });
     }
@@ -973,7 +1081,7 @@ internal sealed class GitTreeWindow : Window
         if (_cwd is not { } cwd) return;
         string msg = _msgBox.Text?.Trim() ?? "";
         if (msg.Length == 0) { SetHint("Write a commit message.", warn: true); _msgBox.Focus(); return; }
-        if (StagedCount() == 0) { SetHint("Tick files to stage first.", warn: true); return; }
+        if (StagedCount() == 0) { SetHint("Stage some changes first.", warn: true); return; }
 
         // Guard: committing while the session is live can race Claude's own edits/git in this same tree.
         if (_isActive)
@@ -1040,6 +1148,9 @@ internal sealed class GitTreeWindow : Window
         t.Tick += (_, _) =>
         {
             _debounce?.Stop();
+            // Swallow the watcher fire our own staging write just triggered — RefreshWorkingTree already
+            // re-read the tree, so a full AutoRefresh here would only re-spawn git for nothing.
+            if (Environment.TickCount64 - _lastSelfRefresh < 900) return;
             if (IsVisible) AutoRefresh();
         };
         return t;

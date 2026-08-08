@@ -11,6 +11,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Every mode stages from the diff: Unified/Split get whole-file Stage/Discard buttons on each file header; Hunk keeps per-hunk and per-line staging
 - The working-tree files pane splits into two groups — "Changes" and "Staged · pending commit" — with the commit box under the staged set
 - Stage a file with "+", unstage with "−"; discard drops unstaged edits (or deletes an untracked file)
+- "Stage all" / "Unstage all" buttons on the Changes and Staged group headers
+- Staging a hunk, line, or file is now snappy — it refreshes just the working tree instead of re-walking the whole branch, and no longer double-refreshes off its own index write
 
 ---
 

@@ -183,6 +183,24 @@ internal sealed class GitRepoService
         return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
     }
 
+    /// <summary>Stages everything (<c>git add -A</c>): all modifications, new files, and deletions across the
+    /// working tree. Returns whether it succeeded and, on failure, git's error text.</summary>
+    public (bool Ok, string Error) StageAll(string cwd)
+    {
+        if (!IsRepo(cwd)) return (false, "Not a git repository.");
+        var r = RunGitCore(cwd, GitTimeoutMs, null, "add", "-A");
+        return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
+    }
+
+    /// <summary>Unstages everything (<c>git reset</c> — a mixed reset of the index to HEAD), leaving the
+    /// working tree intact. Returns whether it succeeded and, on failure, git's error text.</summary>
+    public (bool Ok, string Error) UnstageAll(string cwd)
+    {
+        if (!IsRepo(cwd)) return (false, "Not a git repository.");
+        var r = RunGitCore(cwd, GitTimeoutMs, null, "reset", "--quiet");
+        return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
+    }
+
     /// <summary>Discards a whole file's <b>unstaged</b> working-tree changes. Destructive: the edits are
     /// gone. An untracked file is removed from disk (<c>git clean -f -d</c>); a tracked file is reverted to
     /// its index content (<c>git restore --worktree</c>), so any staged part is kept. Returns whether it
