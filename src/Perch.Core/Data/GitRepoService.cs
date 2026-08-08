@@ -3,6 +3,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 
 /// <summary>
 /// Read-only git queries for a single working tree — status, recent log, and unified diffs — by shelling
@@ -168,7 +169,7 @@ internal sealed class GitRepoService
     {
         if (string.IsNullOrEmpty(path)) return (false, "No path.");
         if (!IsRepo(cwd)) return (false, "Not a git repository.");
-        var r = RunGitCore(cwd, GitTimeoutMs, "add", "--", path);
+        var r = RunGitCore(cwd, GitTimeoutMs, null, "add", "--", path);
         return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
     }
 
@@ -178,7 +179,7 @@ internal sealed class GitRepoService
     {
         if (string.IsNullOrEmpty(path)) return (false, "No path.");
         if (!IsRepo(cwd)) return (false, "Not a git repository.");
-        var r = RunGitCore(cwd, GitTimeoutMs, "restore", "--staged", "--", path);
+        var r = RunGitCore(cwd, GitTimeoutMs, null, "restore", "--staged", "--", path);
         return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
     }
 
@@ -189,7 +190,7 @@ internal sealed class GitRepoService
     {
         if (string.IsNullOrWhiteSpace(message)) return (false, "Empty commit message.");
         if (!IsRepo(cwd)) return (false, "Not a git repository.");
-        var r = RunGitCore(cwd, LogTimeoutMs, "commit", "-m", message);
+        var r = RunGitCore(cwd, LogTimeoutMs, null, "commit", "-m", message);
         return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
     }
 
@@ -200,6 +201,94 @@ internal sealed class GitRepoService
         if (err.Length > 0) return err;
         var outp = r.Stdout.Trim();
         return outp.Length > 0 ? outp : $"git exited with code {r.Exit}.";
+    }
+
+    // ---- hunk staging (git apply --cached) ------------------------------------------------------------
+
+    /// <summary>Stages one hunk of a working-tree change: takes the file's <b>unstaged</b> raw diff, slices
+    /// out just that hunk, and <c>git apply --cached</c>s it into the index. The hunk is identified by its
+    /// header (as shown in the diff). Returns success + git's error text on failure.</summary>
+    public (bool Ok, string Error) StageHunk(string cwd, string path, string hunkHeader)
+    {
+        var patch = ExtractHunkPatch(GetFileDiffRawText(cwd, path, staged: false), hunkHeader);
+        if (patch is null) return (false, "Could not isolate that hunk (it may have changed).");
+        return ApplyCached(cwd, patch, reverse: false);
+    }
+
+    /// <summary>Unstages one hunk: takes the file's <b>staged</b> raw diff, slices out that hunk, and
+    /// reverse-applies it to the index (<c>git apply --cached --reverse</c>). Returns success + error.</summary>
+    public (bool Ok, string Error) UnstageHunk(string cwd, string path, string hunkHeader)
+    {
+        var patch = ExtractHunkPatch(GetFileDiffRawText(cwd, path, staged: true), hunkHeader);
+        if (patch is null) return (false, "Could not isolate that hunk (it may have changed).");
+        return ApplyCached(cwd, patch, reverse: true);
+    }
+
+    /// <summary>The raw (unparsed) unified diff text for one path — staged (index vs HEAD) or unstaged
+    /// (worktree vs index). The source text a hunk patch is sliced from, so it stays byte-accurate for
+    /// <c>git apply</c>. Empty on failure.</summary>
+    public string GetFileDiffRawText(string cwd, string path, bool staged)
+    {
+        if (string.IsNullOrEmpty(path) || !IsRepo(cwd)) return "";
+        var (exit, stdout) = staged
+            ? RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "diff", "--cached", "--", path)
+            : RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "diff", "--", path);
+        return exit == 0 ? stdout : "";
+    }
+
+    // Feeds a patch to `git apply --cached` (optionally reversed) via stdin. Surfaces git's error text.
+    private (bool Ok, string Error) ApplyCached(string cwd, string patch, bool reverse)
+    {
+        if (!IsRepo(cwd)) return (false, "Not a git repository.");
+        var r = reverse
+            ? RunGitCore(cwd, GitTimeoutMs, patch, "apply", "--cached", "--reverse", "-")
+            : RunGitCore(cwd, GitTimeoutMs, patch, "apply", "--cached", "-");
+        return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
+    }
+
+    /// <summary>
+    /// Slices a single hunk out of one file's raw unified diff, returning a standalone patch — the file
+    /// header (<c>diff --git</c> … <c>---</c>/<c>+++</c>) plus just that one hunk — that <c>git apply</c>
+    /// accepts. The hunk is matched by the range part of its header (<c>@@ -a,b +c,d @@</c>), which is unique
+    /// within a file's diff, so a trailing function-context suffix git may append doesn't matter. Null when
+    /// the diff has no file header or the hunk isn't found. Pure and unit-tested.
+    /// </summary>
+    internal static string? ExtractHunkPatch(string rawFileDiff, string hunkHeader)
+    {
+        if (string.IsNullOrEmpty(rawFileDiff)) return null;
+        string want = HunkRange(hunkHeader);
+        if (want.Length == 0) return null;
+
+        var lines = rawFileDiff.Replace("\r\n", "\n").Split('\n');
+        int firstHunk = Array.FindIndex(lines, l => l.StartsWith("@@", StringComparison.Ordinal));
+        if (firstHunk < 0) return null;
+
+        int start = -1;
+        for (int i = firstHunk; i < lines.Length; i++)
+            if (lines[i].StartsWith("@@", StringComparison.Ordinal) && HunkRange(lines[i]) == want) { start = i; break; }
+        if (start < 0) return null;
+
+        int end = lines.Length;
+        for (int i = start + 1; i < lines.Length; i++)
+            if (lines[i].StartsWith("@@", StringComparison.Ordinal) || lines[i].StartsWith("diff --git ", StringComparison.Ordinal))
+            { end = i; break; }
+
+        var sb = new StringBuilder();
+        for (int i = 0; i < firstHunk; i++) sb.Append(lines[i]).Append('\n');           // file header
+        for (int i = start; i < end; i++)
+        {
+            if (i == lines.Length - 1 && lines[i].Length == 0) break;                    // trailing split artifact
+            sb.Append(lines[i]).Append('\n');
+        }
+        return sb.ToString();
+    }
+
+    // The "@@ -a,b +c,d @@" prefix of a hunk header (through the second "@@"), or "" if not a hunk header.
+    private static string HunkRange(string header)
+    {
+        if (!header.StartsWith("@@", StringComparison.Ordinal)) return "";
+        int second = header.IndexOf("@@", 2, StringComparison.Ordinal);
+        return second < 0 ? header : header[..(second + 2)];
     }
 
     // ---- change classification (pure) -----------------------------------------------------------------
@@ -552,13 +641,15 @@ internal sealed class GitRepoService
     // stderr. Takes an argument list so paths/hashes with spaces are passed safely.
     private static (int Exit, string Stdout) RunGit(string cwd, int timeoutMs, params string[] args)
     {
-        var r = RunGitCore(cwd, timeoutMs, args);
+        var r = RunGitCore(cwd, timeoutMs, null, args);
         return (r.Exit, r.Stdout);
     }
 
-    // As RunGit, but also returns stderr — the write operations surface it as the failure message. Exit is
-    // -1 on any failure to launch/complete.
-    private static (int Exit, string Stdout, string Stderr) RunGitCore(string cwd, int timeoutMs, params string[] args)
+    // As RunGit, but also returns stderr — the write operations surface it as the failure message. When
+    // <paramref name="stdin"/> is non-null it is written to the child's standard input then closed (for
+    // `git apply`, which reads a patch from stdin). Exit is -1 on any failure to launch/complete.
+    private static (int Exit, string Stdout, string Stderr) RunGitCore(
+        string cwd, int timeoutMs, string? stdin = null, params string[] args)
     {
         try
         {
@@ -568,6 +659,7 @@ internal sealed class GitRepoService
                 WorkingDirectory = cwd,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                RedirectStandardInput = stdin is not null,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 // Git emits UTF-8 (file bytes, commit messages, paths); without this .NET would decode the
@@ -575,6 +667,7 @@ internal sealed class GitRepoService
                 // rendering a file's UTF-8 BOM as "ï»¿".
                 StandardOutputEncoding = System.Text.Encoding.UTF8,
                 StandardErrorEncoding = System.Text.Encoding.UTF8,
+                StandardInputEncoding = stdin is not null ? new System.Text.UTF8Encoding(false) : null,
             };
             foreach (var a in args)
                 psi.ArgumentList.Add(a);
@@ -586,6 +679,11 @@ internal sealed class GitRepoService
             // Drain both pipes async so a large diff (or a chatty stderr) can't deadlock the child.
             var stdout = proc.StandardOutput.ReadToEndAsync();
             var stderr = proc.StandardError.ReadToEndAsync();
+
+            if (stdin is not null)
+            {
+                try { proc.StandardInput.Write(stdin); proc.StandardInput.Close(); } catch { }
+            }
 
             if (!proc.WaitForExit(timeoutMs))
             {

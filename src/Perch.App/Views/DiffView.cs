@@ -13,9 +13,18 @@ using Perch.Data;
 
 namespace Perch.Avalonia.Views;
 
+/// <summary>Whether a diff section's hunks can be staged/unstaged, and which way — drives the per-hunk
+/// button in the diff pane. <see cref="None"/> for read-only sections (a commit, or a clean file).</summary>
+internal enum HunkStageAction { None, Stage, Unstage }
+
 /// <summary>One labelled diff to render — e.g. ("Staged", …) / ("Unstaged", …) when a file has both, or a
-/// single unlabelled section for a commit or a plain file diff.</summary>
-internal readonly record struct DiffSection(string? Label, GitDiff Diff);
+/// single unlabelled section for a commit or a plain file diff. <see cref="Action"/> makes the section's
+/// hunks stage- or unstage-able (the working-tree sections of the Tree window's WIP node).</summary>
+internal readonly record struct DiffSection(string? Label, GitDiff Diff, HunkStageAction Action = HunkStageAction.None);
+
+/// <summary>Raised when the user clicks a hunk's stage/unstage button — carries which way, the file path,
+/// and the hunk's header (the range identifies it for <c>git apply</c>).</summary>
+internal readonly record struct HunkStageRequest(HunkStageAction Action, string? Path, string HunkHeader);
 
 /// <summary>
 /// The unified-or-split diff surface for the Change Review window. Each hunk is laid out as a grid with one
@@ -98,6 +107,10 @@ internal sealed class DiffView : Border
 
     /// <summary>Raised after a search/navigation changes the match set — (current 1-based index or 0, total).</summary>
     public event Action<int, int>? SearchResultsChanged;
+
+    /// <summary>Raised when the user clicks a hunk's stage/unstage button (only present on sections whose
+    /// <see cref="DiffSection.Action"/> isn't <see cref="HunkStageAction.None"/>).</summary>
+    public event Action<HunkStageRequest>? HunkStageRequested;
 
     public DiffView()
     {
@@ -373,7 +386,7 @@ internal sealed class DiffView : Border
                 if (section.Label is { } label)
                     root.Children.Add(SectionHeader(label));
                 foreach (var file in section.Diff.Files)
-                    root.Children.Add(FileSection(section.Label, file));
+                    root.Children.Add(FileSection(section.Label, file, section.Action));
             }
 
         // The match-highlight layer sits behind the content (first child) so highlights paint behind the
@@ -391,7 +404,7 @@ internal sealed class DiffView : Border
         }
     }
 
-    private Control FileSection(string? sectionLabel, GitDiffFile file)
+    private Control FileSection(string? sectionLabel, GitDiffFile file, HunkStageAction action)
     {
         string key = (sectionLabel ?? "") + "\n" + FileLabel(file);
         bool collapsed = _collapsed.Contains(key);
@@ -432,10 +445,11 @@ internal sealed class DiffView : Border
         else
         {
             int budget = MaxLinesPerFile;
+            string? path = file.NewPath ?? file.OldPath;
             foreach (var hunk in file.Hunks)
             {
                 var (oldStart, newStart) = HunkStarts(hunk.Header);
-                content.Children.Add(HunkHeader(hunk.Header));
+                content.Children.Add(HunkHeader(hunk.Header, action, path));
                 content.Children.Add(_split
                     ? SplitHunk(hunk, oldStart, newStart, ref budget)
                     : UnifiedHunk(hunk, oldStart, newStart, ref budget));
@@ -946,15 +960,38 @@ internal sealed class DiffView : Border
         Child = new TextBlock { Text = label, Foreground = TitleBrush, FontSize = 12, FontWeight = FontWeight.Bold },
     };
 
-    private Control HunkHeader(string header) => new SelectableTextBlock
+    private Control HunkHeader(string header, HunkStageAction action, string? path)
     {
-        Text = header,
-        FontFamily = Mono,
-        FontSize = HunkSize,
-        Foreground = HunkBrush,
-        SelectionBrush = SelectionBrush,
-        Padding = new Thickness(8, 6, 8, 2),
-    };
+        var text = new SelectableTextBlock
+        {
+            Text = header,
+            FontFamily = Mono,
+            FontSize = HunkSize,
+            Foreground = HunkBrush,
+            SelectionBrush = SelectionBrush,
+            Padding = new Thickness(8, 6, 8, 2),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        if (action == HunkStageAction.None)
+            return text;
+
+        // A small stage/unstage button on the right of the hunk header.
+        var btn = new Button
+        {
+            Content = action == HunkStageAction.Stage ? "Stage hunk" : "Unstage hunk",
+            FontSize = 11,
+            Padding = new Thickness(8, 1),
+            Margin = new Thickness(8, 2, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            [DockPanel.DockProperty] = Dock.Right,
+        };
+        btn.Click += (_, e) =>
+        {
+            HunkStageRequested?.Invoke(new HunkStageRequest(action, path, header));
+            e.Handled = true;
+        };
+        return new DockPanel { LastChildFill = true, Children = { btn, text } };
+    }
 
     private SelectableTextBlock Selectable(string text, double size, IBrush brush, FontWeight weight) => new()
     {

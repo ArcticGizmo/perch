@@ -298,6 +298,7 @@ internal sealed class GitTreeWindow : Window
         _diff.SetSplit(_split);
         _diff.SetWrap(_wrap);
         _diff.SearchResultsChanged += OnSearchResults;
+        _diff.HunkStageRequested += OnHunkStage;
         UpdateModeButtons();
         _diffScroll = new ScrollViewer
         {
@@ -685,22 +686,24 @@ internal sealed class GitTreeWindow : Window
         bool hasStaged = fc.Staged != GitChangeKind.None;
         bool hasUnstaged = fc.Unstaged != GitChangeKind.None;
 
-        var diffs = new List<(string? Label, GitDiff Diff)>();
+        // Each diff carries whether its hunks can be staged (an unstaged worktree diff) or unstaged (a staged
+        // index diff), so the diff pane shows the right per-hunk button.
+        var diffs = new List<(string? Label, GitDiff Diff, HunkStageAction Action)>();
         if (hasStaged && hasUnstaged)
         {
-            if (_git.GetWorkingDiff(cwd, fc.Path, staged: true) is { } staged) diffs.Add(("Staged", staged));
-            if (_git.GetWorkingDiff(cwd, fc.Path, staged: false) is { } unstaged) diffs.Add(("Unstaged", unstaged));
+            if (_git.GetWorkingDiff(cwd, fc.Path, staged: true) is { } staged) diffs.Add(("Staged", staged, HunkStageAction.Unstage));
+            if (_git.GetWorkingDiff(cwd, fc.Path, staged: false) is { } unstaged) diffs.Add(("Unstaged", unstaged, HunkStageAction.Stage));
         }
         else if (_git.GetWorkingDiff(cwd, fc.Path, staged: hasStaged) is { } d)
         {
-            diffs.Add((null, d));
+            diffs.Add((null, d, hasStaged ? HunkStageAction.Unstage : HunkStageAction.Stage));
         }
 
         if (IsPlainModified(fc) && diffs.Count > 0 && diffs.All(x => GitRepoService.HasNoTextChange(x.Diff)))
             return ([], "Content unchanged — only a line ending or byte-order mark (BOM) differs.");
 
         var sections = diffs.Where(x => x.Diff.Files.Count > 0)
-                            .Select(x => new DiffSection(x.Label, x.Diff)).ToList();
+                            .Select(x => new DiffSection(x.Label, x.Diff, x.Action)).ToList();
         return sections.Count > 0 ? (sections, null) : ([], $"No diff for {fc.Path}.");
 
         static (IReadOnlyList<DiffSection>, string?) Single(GitDiff? diff, string path) =>
@@ -741,6 +744,26 @@ internal sealed class GitTreeWindow : Window
                 {
                     if (!IsVisible) return;
                     if (!t.Result.Ok) SetHint(FirstLine(t.Result.Error), warn: true);
+                    RefreshStatus(preserveSelection: true);
+                });
+            });
+    }
+
+    // Stage or unstage a single hunk (from its stage/unstage button in the diff pane), then refresh so the
+    // file list, staged count, and the diff's staged/unstaged split reflect the new index.
+    private void OnHunkStage(HunkStageRequest req)
+    {
+        if (_cwd is not { } cwd || req.Path is not { } path) return;
+        System.Threading.Tasks.Task.Run(() => req.Action == HunkStageAction.Stage
+                ? _git.StageHunk(cwd, path, req.HunkHeader)
+                : _git.UnstageHunk(cwd, path, req.HunkHeader))
+            .ContinueWith(t =>
+            {
+                if (!t.IsCompletedSuccessfully) return;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!IsVisible) return;
+                    if (!t.Result.Ok) { SetHint(FirstLine(t.Result.Error), warn: true); return; }
                     RefreshStatus(preserveSelection: true);
                 });
             });

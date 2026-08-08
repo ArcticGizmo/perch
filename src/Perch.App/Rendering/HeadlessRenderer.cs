@@ -725,7 +725,8 @@ internal static class HeadlessRenderer
 
         var diff = new Views.DiffView { Width = 600 };
         diff.SetLight(light);
-        diff.SetDiff(SampleDiff(), null);
+        // A working-tree ("Unstaged") section so the per-hunk "Stage hunk" buttons show in the eyeball.
+        diff.SetSections([new Views.DiffSection("Unstaged", SampleDiff(), Views.HunkStageAction.Stage)], null);
 
         Control Pane(string title, Control body)
         {

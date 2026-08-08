@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq;
 using Perch.Data;
 using Xunit;
 
@@ -114,6 +115,44 @@ public sealed class GitRepoServiceIntegrationTests : IDisposable
         var picks = _git.GetBaseRefCandidates(_repo, "feature");
         Assert.Contains("main", picks);           // local main is a candidate base
         Assert.DoesNotContain("feature", picks);  // never its own base
+    }
+
+    [Fact]
+    public void StageHunk_ThenUnstageHunk_PartialStagesOneRegion()
+    {
+        if (!_ready) return;
+        // A 20-line file, committed, then edited at the top and bottom so the working diff has two hunks
+        // (the changed regions are far enough apart that git doesn't merge them).
+        var lines = Enumerable.Range(1, 20).Select(i => $"line {i}").ToArray();
+        File.WriteAllText(Path.Combine(_repo, "multi.txt"), string.Join("\n", lines) + "\n");
+        _git.StageFile(_repo, "multi.txt");
+        Assert.True(_git.Commit(_repo, "add multi").Ok);
+
+        lines[0] = "LINE ONE";
+        lines[19] = "LINE TWENTY";
+        File.WriteAllText(Path.Combine(_repo, "multi.txt"), string.Join("\n", lines) + "\n");
+
+        var diff = _git.GetWorkingDiff(_repo, "multi.txt", staged: false);
+        Assert.NotNull(diff);
+        var file = Assert.Single(diff!.Value.Files);
+        Assert.Equal(2, file.Hunks.Count);            // two separate hunks
+        string firstHeader = file.Hunks[0].Header;
+
+        // Stage just the first hunk → the file is now partially staged (both slots Modified).
+        Assert.True(_git.StageHunk(_repo, "multi.txt", firstHeader).Ok);
+        var fc = FindChange("multi.txt");
+        Assert.Equal(GitChangeKind.Modified, fc.Staged);
+        Assert.Equal(GitChangeKind.Modified, fc.Unstaged);
+
+        // The staged diff has exactly one hunk (the top edit); the bottom edit is still unstaged.
+        var staged = _git.GetWorkingDiff(_repo, "multi.txt", staged: true);
+        Assert.Single(staged!.Value.Files[0].Hunks);
+
+        // Unstage that hunk → nothing staged, the change is back in the worktree only.
+        Assert.True(_git.UnstageHunk(_repo, "multi.txt", firstHeader).Ok);
+        var fc2 = FindChange("multi.txt");
+        Assert.Equal(GitChangeKind.None, fc2.Staged);
+        Assert.Equal(GitChangeKind.Modified, fc2.Unstaged);
     }
 
     // The one change record for a path in the current status.

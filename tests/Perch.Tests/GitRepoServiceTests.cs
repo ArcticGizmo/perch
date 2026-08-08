@@ -443,4 +443,51 @@ public class GitRepoServiceTests
         string[] refs = ["feature/a", "topic/b", "origin/feature/a"];
         Assert.Empty(GitRepoService.PickBaseRefCandidates("feature/a", refs));
     }
+
+    // ---- ExtractHunkPatch -----------------------------------------------------------------------------
+
+    [Fact]
+    public void ExtractHunkPatch_SlicesMatchingHunkWithFileHeaderOnly()
+    {
+        var raw =
+            "diff --git a/f.txt b/f.txt\n" +
+            "index 1111111..2222222 100644\n" +
+            "--- a/f.txt\n" +
+            "+++ b/f.txt\n" +
+            "@@ -1,3 +1,3 @@ ctx one\n" +
+            " a\n-b\n+B\n c\n" +
+            "@@ -10,3 +10,4 @@ ctx two\n" +
+            " x\n+Y\n z\n w\n";
+
+        var patch = GitRepoService.ExtractHunkPatch(raw, "@@ -10,3 +10,4 @@ ctx two");
+
+        Assert.NotNull(patch);
+        Assert.Contains("diff --git a/f.txt b/f.txt", patch);
+        Assert.Contains("--- a/f.txt", patch);
+        Assert.Contains("+++ b/f.txt", patch);
+        Assert.Contains("@@ -10,3 +10,4 @@ ctx two", patch);
+        Assert.Contains("+Y", patch);
+        Assert.DoesNotContain("ctx one", patch); // the other hunk is excluded
+        Assert.DoesNotContain("+B", patch);
+        Assert.EndsWith("\n", patch);            // git apply wants a trailing newline
+    }
+
+    [Fact]
+    public void ExtractHunkPatch_MatchesByRangeIgnoringContextSuffix()
+    {
+        // The caller may pass the header without git's trailing function-context; matching is on the range.
+        var raw = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@ int main()\n-a\n+b\n";
+        var patch = GitRepoService.ExtractHunkPatch(raw, "@@ -1 +1 @@");
+        Assert.NotNull(patch);
+        Assert.Contains("@@ -1 +1 @@ int main()", patch); // the full raw header is preserved in the slice
+    }
+
+    [Fact]
+    public void ExtractHunkPatch_NullWhenMissingOrNoHeader()
+    {
+        var raw = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n";
+        Assert.Null(GitRepoService.ExtractHunkPatch(raw, "@@ -99,1 +99,1 @@")); // no such hunk
+        Assert.Null(GitRepoService.ExtractHunkPatch("", "@@ -1 +1 @@"));         // empty input
+        Assert.Null(GitRepoService.ExtractHunkPatch("just some text", "@@ -1 +1 @@")); // no file header
+    }
 }
