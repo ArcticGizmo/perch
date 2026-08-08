@@ -43,7 +43,7 @@ internal static class OverlaySettingsGates
         c.SetUpsideDownQuickLinks(s.UpsideDownQuickLinks);
         c.SetConfettiFinishAvailable(s.ConfettiFinish);
         c.SetExternalNotificationsAvailable(s.ExternalNotificationsEnabled);
-        c.SetReviewChangesAvailable(s.ShowGitReview);
+        c.SetViewTreeAvailable(s.ShowGitReview);
         c.SetDenseStatusChangeStyle(s.DenseStatusChangeStyle);
     }
 }

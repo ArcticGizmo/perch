@@ -1137,7 +1137,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // wires only their triggers.
     private bool _externalNotifyAvailable;
     private bool _confettiAvailable;
-    private bool _reviewChangesAvailable;
+    private bool _viewTreeAvailable;
     private readonly HashSet<string> _confettiSessions = new();
 
     /// <summary>Raised when the user picks "Exit Perch" from the header's right-click menu.</summary>
@@ -1190,10 +1190,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// is Phase 5; this wires only the trigger. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
     internal event Action<ClaudeSession>? QrRequested;
 
-    /// <summary>Raised when the user picks "Review changes…" for a session. The app opens the read-only git
-    /// Change Review window on the session's working directory. Gated by <see cref="_reviewChangesAvailable"/>
-    /// and a cheap repo check. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
-    internal event Action<ClaudeSession>? ReviewChangesRequested;
+    /// <summary>Raised when the user picks "View tree…" for a session. The app opens the git Tree window on
+    /// the session's working directory. Gated by <see cref="_viewTreeAvailable"/> and a cheap repo check.
+    /// Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
+    internal event Action<ClaudeSession>? ViewTreeRequested;
 
 #if DEBUG
     /// <summary>DEBUG-only: raised when the developer picks one of the PR-glyph right-click test items. The
@@ -1222,12 +1222,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
-    /// <summary>Whether the experimental git Change Review feature is switched on globally — gates the
-    /// right-click "Review changes…" item (which also requires the session's cwd to be a git repo).</summary>
-    public void SetReviewChangesAvailable(bool available)
+    /// <summary>Whether the git Tree feature is switched on globally — gates the right-click "View tree…"
+    /// item (which also requires the session's cwd to be a git repo).</summary>
+    public void SetViewTreeAvailable(bool available)
     {
-        if (_reviewChangesAvailable == available) return;
-        _reviewChangesAvailable = available;
+        if (_viewTreeAvailable == available) return;
+        _viewTreeAvailable = available;
         InvalidateVisual();
     }
 
@@ -3315,10 +3315,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 items.Add(MenuItem(label, () => ToggleConfetti(s.SessionId)));
             }
 
-            // Git change review applies to a real session row whose cwd is a git working tree, and only
+            // The git Tree window applies to a real session row whose cwd is a git working tree, and only
             // while switched on globally. The repo check is a cheap filesystem walk (no process spawn).
-            if (!subRow && _reviewChangesAvailable && GitRepoService.IsRepo(s.Cwd))
-                items.Add(MenuItem("Review changes…", () => ReviewChangesRequested?.Invoke(s)));
+            if (!subRow && _viewTreeAvailable && GitRepoService.IsRepo(s.Cwd))
+                items.Add(MenuItem("View tree…", () => ViewTreeRequested?.Invoke(s)));
 
             // Terminate goes last and behind a separator — it's the only destructive item here, and a
             // mis-click costs the user a running session. Sub-agent rows are excluded: they have no

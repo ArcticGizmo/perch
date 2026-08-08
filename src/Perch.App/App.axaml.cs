@@ -42,7 +42,7 @@ public partial class App : Application
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
     private HistoryWindow? _historyWindow;
-    private GitReviewWindow? _reviewWindow;
+    private GitTreeWindow? _treeWindow;
     private PlacementEditorWindow? _placementEditor;
     // Open sticky notes, keyed so a second request for the same note focuses the existing one rather than
     // stacking a duplicate: "__scratch__" for the global pad, the sessionId for a session's row note. They
@@ -231,7 +231,7 @@ public partial class App : Application
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
             _overlay.Canvas.NoteEditRequested += OnEditNote;
-            _overlay.Canvas.ReviewChangesRequested += OnReviewChanges;
+            _overlay.Canvas.ViewTreeRequested += OnViewTree;
 #if DEBUG
             // DEBUG-only: the PR glyph's right-click test items drive the real PR alert path (toast/chime/push
             // + banner) with the PR state/reviews synthesised, so any of them can be previewed without a real
@@ -403,7 +403,7 @@ public partial class App : Application
     {
         _settings?.Close();
         _historyWindow?.Close();
-        _reviewWindow?.Close();
+        _treeWindow?.Close();
         _placementEditor?.Close();
         _statsWindow?.Close();
         _daemonListWindow?.Close();
@@ -847,15 +847,15 @@ public partial class App : Application
         _overlay?.Canvas.ApplyPlacementsLive(floating, dense);
     }
 
-    // "Review changes…" (overlay row) — opens/focuses the one read-only git Change Review window and points
-    // it at the clicked session's working directory. The menu item only appears when the feature is on and
-    // the cwd is a git repo (see OverlayCanvas), so this just re-points the reused window.
-    private void OnReviewChanges(ClaudeSession session)
+    // "View tree…" (overlay row) — opens/focuses the one git Tree window and points it at the clicked
+    // session's working directory. The menu item only appears when the feature is on and the cwd is a git
+    // repo (see OverlayCanvas), so this just re-points the reused window.
+    private void OnViewTree(ClaudeSession session)
     {
         var pr = session.PullRequest;
-        _reviewWindow = WindowHost.ShowOrFocus(_reviewWindow,
-            () => new GitReviewWindow(_appSettings ?? AppSettings.Load()),
-            () => _reviewWindow = null,
+        _treeWindow = WindowHost.ShowOrFocus(_treeWindow,
+            () => new GitTreeWindow(_appSettings ?? AppSettings.Load()),
+            () => _treeWindow = null,
             w => w.Retarget(session.Cwd, session.DisplayName, pr));
     }
 
