@@ -272,6 +272,17 @@ internal static class HeadlessRenderer
         RenderControl(diffHunkStage, Path.Combine(outDir, "change_review_stage_hunk_1x.png"), 96);
         RenderControl(diffHunkStage, Path.Combine(outDir, "change_review_stage_hunk_1.5x.png"), 144);
 
+        // Plain content view (the floating bar's "Previous"/"Current"): a whole file as an all-context,
+        // single-column numbered listing — no deltas, no bands, no staging buttons.
+        string[] plainLines = ["using System;", "", "namespace Perch;", "", "class Sample", "{", "    public int N = 42;", "}"];
+        var plainHunk = new GitDiffHunk($"@@ -1,{plainLines.Length} +1,{plainLines.Length} @@",
+            [.. plainLines.Select(l => new GitDiffLine(GitDiffLineKind.Context, l))]);
+        var plainFile = new GitDiffFile("src/Sample.cs", "src/Sample.cs", false, [plainHunk]);
+        var diffPlain = new Views.DiffView { Width = 760 };
+        diffPlain.SetSections([new Views.DiffSection(null, new GitDiff([plainFile]))], null, plain: true);
+        RenderControl(diffPlain, Path.Combine(outDir, "change_review_plain_1x.png"), 96);
+        RenderControl(diffPlain, Path.Combine(outDir, "change_review_plain_1.5x.png"), 144);
+
         // Git tree window: the three panes — the commit-graph nodes (WIP knot + lane rail + HEAD tag + the
         // terminal base node), the files the selected node touched, and the diff — composed as a static
         // surface (the live window's async loads + ListBox virtualisation don't realise in a one-shot bitmap).

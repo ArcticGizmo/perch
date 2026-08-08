@@ -278,6 +278,16 @@ internal sealed class GitRepoService
         return exit == 0 ? stdout : "";
     }
 
+    /// <summary>The full text of a path at a git ref — <c>HEAD</c>, a commit hash, a parent (<c>hash^</c>),
+    /// or the index (<paramref name="gitRef"/> = <c>""</c>, i.e. <c>git show :path</c>). Null when the path
+    /// doesn't exist at that ref (a new/deleted file) or on error, so the caller can show an "empty" note.</summary>
+    public string? GetFileAtRef(string cwd, string path, string gitRef)
+    {
+        if (string.IsNullOrEmpty(path) || !IsRepo(cwd)) return null;
+        var (exit, stdout) = RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "show", $"{gitRef}:{path}");
+        return exit == 0 ? stdout : null;
+    }
+
     // Stages/unstages a patch against the index (git apply --cached [--reverse]) via stdin.
     private (bool Ok, string Error) ApplyCached(string cwd, string patch, bool reverse) =>
         ApplyPatch(cwd, patch, cached: true, reverse: reverse);

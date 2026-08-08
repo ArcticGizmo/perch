@@ -13,6 +13,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Stage a file with "+", unstage with "−"; discard drops unstaged edits (or deletes an untracked file)
 - "Stage all" / "Unstage all" buttons on the Changes and Staged group headers
 - Staging a hunk, line, or file is now snappy — it refreshes just the working tree instead of re-walking the whole branch, and no longer double-refreshes off its own index write
+- The diff view controls moved to a floating bar at the bottom of the diff: a sun/moon light-dark toggle and two segmented selectors
+- Unified / Split / Hunk is now a segmented control (defaults to Split, remembered between sessions); the Wrap toggle is gone — lines always wrap
+- A new Diff / Previous / Current selector: Diff shows the change (default), Previous shows the whole file before it, Current shows the whole file with it — both as plain listings, no deltas
 
 ---
 

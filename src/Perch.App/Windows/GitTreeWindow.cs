@@ -59,10 +59,14 @@ internal sealed class GitTreeWindow : Window
     private readonly Button _unifiedBtn;
     private readonly Button _splitBtn;
     private readonly Button _hunkBtn;
-    private readonly Button _themeBtn;
+    private readonly Button _diffBtn;
+    private readonly Button _prevBtn;
+    private readonly Button _currBtn;
+    private readonly Border _modeSegment;   // Unified/Split/Hunk segment — hidden unless content mode is Diff
+    private readonly Border _floatingBar;    // floating control bar over the bottom of the diff pane
+    private readonly Button _themeBtn;       // sun/moon light-dark glyph, lives in the floating bar
     private readonly Button _expandBtn;
     private readonly Button _stageLinesBtn;
-    private readonly CheckBox _wrapCheck;
     private readonly Border _headerBorder;
     private readonly TextBlock _graphLabel;
     private readonly TextBlock _filesLabel;
@@ -106,14 +110,20 @@ internal sealed class GitTreeWindow : Window
     private string? _branch;
     private bool _isActive; // the session was working (Running/AwaitingInput) at last Retarget — commit guard
     private DiffViewMode _mode;
-    private bool _wrap;
+    private ContentMode _contentMode = ContentMode.Diff; // Diff / Previous / Current — not persisted
     private int _gen;
     private bool _suppressSelect;
 
     // The working-tree file currently shown in the diff — its path and which side (staged/unstaged), so a
     // refresh can reselect it in the right group. Null when no WIP file is shown.
     private (string Path, bool Staged)? _shownWip;
+    private (string Hash, GitDiffFile File)? _shownCommit; // the shown commit file, for Previous/Current reloads
+    private string _selectedCommitHash = "";
     private bool _pendingWipStaged; // side to reselect once the WIP lists reload (mirrors _pendingFilePath)
+
+    // Segmented-control chrome (container borders + inner dividers), recoloured on the light/dark toggle.
+    private readonly List<Border> _segmentContainers = new();
+    private readonly List<Border> _segmentDividers = new();
 
     // Base-ref scoping. _baseOverride: null = auto-pick, "" = explicitly unscoped ("recent"), else a ref.
     private string? _baseOverride;
@@ -144,6 +154,12 @@ internal sealed class GitTreeWindow : Window
     /// <c>GitTreeHunkStaging</c> settings (Hunk ⇒ both; Split ⇒ split only; Unified ⇒ neither).</summary>
     internal enum DiffViewMode { Unified, Split, Hunk }
 
+    /// <summary>What the diff pane shows for the selected file. <see cref="Diff"/> is the delta (the default,
+    /// not persisted, and the only mode that offers the Unified/Split/Hunk layouts + staging).
+    /// <see cref="Previous"/> and <see cref="Current"/> show the whole file — as it was before the change, or
+    /// with the change applied — as a plain listing with no deltas.</summary>
+    internal enum ContentMode { Diff, Previous, Current }
+
     /// <summary>A row in the left graph: the working-tree (WIP) node, one commit, or the terminal base node
     /// (the ref the branch is scoped against, e.g. <c>origin/main</c>). <see cref="IsFirst"/>/<see cref="IsLast"/>
     /// trim the lane rail so it doesn't run past the top of the first knot or below the last one. Internal so
@@ -167,7 +183,6 @@ internal sealed class GitTreeWindow : Window
         _mode = settings.GitTreeHunkStaging ? DiffViewMode.Hunk
               : settings.GitReviewSplitView ? DiffViewMode.Split
               : DiffViewMode.Unified;
-        _wrap = settings.GitReviewWrap;
         _light = settings.GitTreeLight;
         _pal = _light ? TreePalette.Light() : TreePalette.Dark();
         Title = "Tree";
@@ -210,40 +225,33 @@ internal sealed class GitTreeWindow : Window
         };
         refreshBtn.Click += (_, _) => RefreshStatus(preserveSelection: true);
 
+        // View controls live in a floating bar over the diff (built below): the layout segment
+        // (Unified/Split/Hunk) and the content segment (Diff/Previous/Current).
         _unifiedBtn = ModeButton("Unified", DiffViewMode.Unified);
         _splitBtn = ModeButton("Split", DiffViewMode.Split);
         _hunkBtn = ModeButton("Hunk", DiffViewMode.Hunk);
-        var modeGroup = new StackPanel
-        {
-            Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
-            Children = { _unifiedBtn, _splitBtn, _hunkBtn },
-        };
+        _diffBtn = ContentButton("Diff", ContentMode.Diff);
+        _prevBtn = ContentButton("Previous", ContentMode.Previous);
+        _currBtn = ContentButton("Current", ContentMode.Current);
 
-        _wrapCheck = new CheckBox
-        {
-            Content = "Wrap", IsChecked = _wrap, VerticalAlignment = VerticalAlignment.Center,
-            Foreground = Palette.FgBrush, Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
-        };
-        _wrapCheck.IsCheckedChanged += (_, _) => SetWrap(_wrapCheck.IsChecked == true);
-
-        // Stage/unstage the selected diff lines. Only shown in Hunk mode; disabled until a line selection
-        // sits within one stageable hunk (select line numbers in a working-tree section, then click).
+        // Stage/unstage the selected diff lines. Only shown in Hunk + Diff mode; disabled until a line
+        // selection sits within one stageable hunk (select line numbers in a working-tree section, then click).
         _stageLinesBtn = new Button
         {
-            Content = "Stage lines", IsEnabled = false, IsVisible = _mode == DiffViewMode.Hunk,
+            Content = "Stage lines", IsEnabled = false, IsVisible = false,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
         };
         ToolTip.SetTip(_stageLinesBtn, "Select line numbers in the working-tree diff, then stage/unstage just those lines");
         // Click wired after _diff is constructed (below), so it can't dereference a not-yet-set field.
 
-        // Per-window light/dark toggle — reading a lot of diff/commit text is easier when this window can go
-        // light without flipping the always-on-top overlay.
+        // Per-window light/dark toggle — a sun/moon glyph in the floating bar. Reading a lot of diff/commit
+        // text is easier when this window can go light without flipping the always-on-top overlay.
         _themeBtn = new Button
         {
-            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0),
-            [DockPanel.DockProperty] = Dock.Right,
+            FontSize = 16, Padding = new Thickness(8, 2), VerticalAlignment = VerticalAlignment.Center,
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+            Cursor = new Cursor(StandardCursorType.Hand),
         };
         _themeBtn.Click += (_, _) => ToggleLight();
         ToolTip.SetTip(_themeBtn, "Light / dark — affects this window only");
@@ -266,7 +274,7 @@ internal sealed class GitTreeWindow : Window
             Child = new DockPanel
             {
                 LastChildFill = true,
-                Children = { _prChip, refreshBtn, modeGroup, _wrapCheck, _stageLinesBtn, _themeBtn, _expandBtn, _baseBtn, headerText },
+                Children = { _prChip, refreshBtn, _stageLinesBtn, _expandBtn, _baseBtn, headerText },
             },
         };
 
@@ -365,10 +373,10 @@ internal sealed class GitTreeWindow : Window
         var filesPane = new DockPanel { LastChildFill = true, Children = { _filesLabel, filesBody } };
 
         // ---- pane 3: find bar + diff ----
-        _diff = new DiffView();
+        _diff = new DiffView { Padding = new Thickness(0, 0, 0, 64) }; // clear space for the floating bar
         _diff.SetSplit(_mode != DiffViewMode.Unified);
         _diff.SetPerHunk(_mode == DiffViewMode.Hunk);
-        _diff.SetWrap(_wrap);
+        _diff.SetWrap(true); // always wrap (the wrap toggle was retired)
         _diff.SearchResultsChanged += OnSearchResults;
         _diff.HunkStageRequested += OnHunkStage;
         _diff.FileStageRequested += OnFileStage;
@@ -376,10 +384,32 @@ internal sealed class GitTreeWindow : Window
         _diff.LineStageRequested += OnLineStageRequest;
         _stageLinesBtn.Click += (_, _) => _diff.RequestStageSelection();
         UpdateModeButtons();
+        UpdateContentButtons();
+        UpdateStageLinesVisibility();
         _diffScroll = new ScrollViewer
         {
             Content = _diff,
-            HorizontalScrollBarVisibility = _wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+
+        // Floating control bar: [☀/☾]  [Previous|Diff|Current]  [Unified|Split|Hunk]. Overlays the bottom of
+        // the diff pane, centred. Diff sits between the two whole-file views; the content segment comes before
+        // the layout segment because it gates whether the layout segment shows.
+        _modeSegment = Segment(_unifiedBtn, _splitBtn, _hunkBtn);
+        _modeSegment.IsVisible = _contentMode == ContentMode.Diff;
+        var contentSegment = Segment(_prevBtn, _diffBtn, _currBtn);
+        var barContent = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center,
+            Children = { _themeBtn, contentSegment, _modeSegment },
+        };
+        _floatingBar = new Border
+        {
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 0, 18), Padding = new Thickness(10, 6),
+            CornerRadius = new CornerRadius(12), BorderThickness = new Thickness(1),
+            BoxShadow = new BoxShadows(new BoxShadow { Blur = 16, OffsetY = 3, Color = Color.FromArgb(90, 0, 0, 0) }),
+            Child = barContent,
         };
 
         _findBox = new TextBox { PlaceholderText = "Find in diff", MinWidth = 220, VerticalAlignment = VerticalAlignment.Center };
@@ -409,7 +439,7 @@ internal sealed class GitTreeWindow : Window
             HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
             IsHitTestVisible = false,
         };
-        var diffArea = new Grid { Children = { _diffScroll, _diffPlaceholder } };
+        var diffArea = new Grid { Children = { _diffScroll, _diffPlaceholder, _floatingBar } };
         var diffPane = new DockPanel { LastChildFill = true, Children = { _findBar, diffArea } };
 
         // ---- three resizable panes: graph | files | diff, split by GridSplitters ----
@@ -759,6 +789,7 @@ internal sealed class GitTreeWindow : Window
         {
             _wipPanel.IsVisible = true;
             _commitAreaHost.IsVisible = false;
+            _shownCommit = null;
             _filesList.ItemsSource = null;
             PopulateWip(_lastStatus?.Changes ?? [], wantFile, wantStaged);
         }
@@ -767,6 +798,8 @@ internal sealed class GitTreeWindow : Window
             _wipPanel.IsVisible = false;
             _commitAreaHost.IsVisible = true;
             _shownWip = null;
+            _shownCommit = null;
+            _selectedCommitHash = node.Commit.Hash;
             _suppressSelect = true;
             _unstagedList.ItemsSource = null;
             _stagedList.ItemsSource = null;
@@ -852,8 +885,8 @@ internal sealed class GitTreeWindow : Window
         UpdateEmptyStates();
     }
 
-    // A file was selected in one of the two WIP lists: clear the other list's selection and show that side's
-    // diff (unstaged → stageable/discardable; staged → unstageable).
+    // A file was selected in one of the two WIP lists: clear the other list's selection and show it according
+    // to the current content mode (Diff / Previous / Current).
     private void OnWipFileSelected(ListBox list, bool staged)
     {
         if (_suppressSelect || _cwd is not { } cwd) return;
@@ -865,18 +898,47 @@ internal sealed class GitTreeWindow : Window
 
         _diffPlaceholder.IsVisible = false;
         _shownWip = (fc.Path, staged);
+        _shownCommit = null;
+        LoadWipContent(cwd, fc.Path, staged);
+    }
+
+    // Loads the shown working-tree file per the current content mode (off-thread), then paints it.
+    private void LoadWipContent(string cwd, string path, bool staged)
+    {
+        var status = _lastStatus;
+        var mode = _contentMode;
         int gen = ++_gen;
         _diff.SetLoading();
         _shownDiffSig = "";
-        System.Threading.Tasks.Task.Run(() => LoadWipSideDiff(cwd, fc, staged)).ContinueWith(t =>
+        System.Threading.Tasks.Task.Run(() => WipContentSections(cwd, status, path, staged, mode)).ContinueWith(t =>
         {
             if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
                 if (!IsVisible || gen != _gen) return;
-                ShowSections(t.Result.sections, t.Result.note);
+                ShowContent(mode, t.Result.sections, t.Result.note);
             });
         });
+    }
+
+    // The sections for a working-tree file in a given content mode. Diff → the delta for that side; Previous →
+    // the file before the change (unstaged: the index; staged: HEAD); Current → the file with the change
+    // (unstaged: the worktree; staged: the index). Pure of UI — used by both selection and auto-refresh.
+    private (IReadOnlyList<DiffSection> sections, string? note) WipContentSections(
+        string cwd, GitRepoStatus? status, string path, bool staged, ContentMode mode)
+    {
+        var fc = FindByPath(status, path);
+        if (mode == ContentMode.Diff)
+            return fc is { } f ? LoadWipSideDiff(cwd, f, staged) : ([], $"No diff for {path}.");
+
+        bool untracked = fc?.Untracked ?? false;
+        if (mode == ContentMode.Previous)
+        {
+            string? content = untracked && !staged ? "" : _git.GetFileAtRef(cwd, path, staged ? "HEAD" : "");
+            return PlainSections(path, content, "No previous version — this file is new.");
+        }
+        string? cur = staged ? _git.GetFileAtRef(cwd, path, "") : ReadWorktree(cwd, path);
+        return PlainSections(path, cur, "This file is empty or missing.");
     }
 
     // Sets the commit-node files list and selects a row (default first), which fires OnCommitFileSelected to
@@ -904,24 +966,89 @@ internal sealed class GitTreeWindow : Window
 
     private void OnCommitFileSelected(object? sender, SelectionChangedEventArgs e)
     {
-        if (_suppressSelect || _cwd is null) return;
+        if (_suppressSelect || _cwd is not { } cwd) return;
         if (_filesList.SelectedItem is not GitDiffFile gf) return;
         _diffPlaceholder.IsVisible = false;
-
-        // The commit's whole diff is already in hand — no git call, just isolate this file.
-        var one = new GitDiff([gf]);
-        IReadOnlyList<DiffSection> sections = gf.Hunks.Count > 0 || gf.IsBinary
-            ? [new DiffSection(null, one)]
-            : [];
-        string? note = sections.Count > 0 ? null : $"No textual diff for {gf.NewPath ?? gf.OldPath}.";
-        ShowSections(sections, note);
+        _shownWip = null;
+        _shownCommit = (_selectedCommitHash, gf);
+        LoadCommitContent(cwd, _selectedCommitHash, gf);
     }
 
-    private void ShowSections(IReadOnlyList<DiffSection> sections, string? note)
+    // Loads the shown commit file per the current content mode. Diff is already in hand (no git); Previous/
+    // Current read the file at the commit's parent / the commit itself.
+    private void LoadCommitContent(string cwd, string hash, GitDiffFile gf)
     {
-        _diff.SetSections(sections, note);
+        var mode = _contentMode;
+        if (mode == ContentMode.Diff)
+        {
+            var one = new GitDiff([gf]);
+            IReadOnlyList<DiffSection> sections = gf.Hunks.Count > 0 || gf.IsBinary ? [new DiffSection(null, one)] : [];
+            string? note = sections.Count > 0 ? null : $"No textual diff for {gf.NewPath ?? gf.OldPath}.";
+            ShowContent(mode, sections, note);
+            return;
+        }
+        int gen = ++_gen;
+        _diff.SetLoading();
+        _shownDiffSig = "";
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            if (mode == ContentMode.Previous)
+            {
+                string? content = gf.OldPath is { } o ? _git.GetFileAtRef(cwd, o, hash + "^") : "";
+                return PlainSections(gf.NewPath ?? gf.OldPath ?? "", content, "No previous version — added in this commit.");
+            }
+            string? cur = gf.NewPath is { } n ? _git.GetFileAtRef(cwd, n, hash) : "";
+            return PlainSections(gf.NewPath ?? gf.OldPath ?? "", cur, "No current version — deleted in this commit.");
+        }).ContinueWith(t =>
+        {
+            if (!t.IsCompletedSuccessfully) return;
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!IsVisible || gen != _gen) return;
+                ShowContent(mode, t.Result.sections, t.Result.note);
+            });
+        });
+    }
+
+    // Reloads whatever file is currently shown (WIP side or commit file) in the current content mode — used
+    // when the content mode changes.
+    private void ReloadShownContent()
+    {
+        if (_cwd is not { } cwd) return;
+        if (_shownWip is { } w) LoadWipContent(cwd, w.Path, w.Staged);
+        else if (_shownCommit is { } c) LoadCommitContent(cwd, c.Hash, c.File);
+    }
+
+    private void ShowContent(ContentMode mode, IReadOnlyList<DiffSection> sections, string? note)
+    {
+        _diff.SetSections(sections, note, plain: mode != ContentMode.Diff);
         _shownDiffSig = DiffSig(sections);
         _diffPlaceholder.IsVisible = false;
+    }
+
+    // Reads a worktree file's text (for the "Current" view of an unstaged change). Null on any IO error.
+    private static string? ReadWorktree(string cwd, string path)
+    {
+        try { return File.ReadAllText(System.IO.Path.Combine(cwd, path)); }
+        catch { return null; }
+    }
+
+    // Builds a plain, all-context "whole file" section (the Previous/Current views): one file, one hunk whose
+    // every line is context, so DiffView renders a numbered listing with no deltas. Null content (missing /
+    // errored) or an empty file yields the note instead.
+    private static (IReadOnlyList<DiffSection> sections, string? note) PlainSections(string path, string? content, string emptyNote)
+    {
+        if (content is null) return ([], emptyNote);
+        var norm = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        var arr = norm.Split('\n');
+        int n = arr.Length;
+        if (n > 0 && arr[^1].Length == 0) n--; // drop the trailing empty from a final newline
+        if (n <= 0) return ([], emptyNote);
+        var lines = new List<GitDiffLine>(n);
+        for (int i = 0; i < n; i++) lines.Add(new GitDiffLine(GitDiffLineKind.Context, arr[i]));
+        var hunk = new GitDiffHunk($"@@ -1,{n} +1,{n} @@", lines);
+        var file = new GitDiffFile(path, path, false, new[] { hunk });
+        return (new[] { new DiffSection(null, new GitDiff(new[] { file })) }, null);
     }
 
     // The diff for one side of a working-tree change: the staged side (index vs HEAD, unstageable) or the
@@ -1175,6 +1302,7 @@ internal sealed class GitTreeWindow : Window
 
         bool wipSelected = _nodesList.SelectedItem is TreeNode { IsWip: true };
         var shown = wipSelected ? _shownWip : null;
+        var contentMode = _contentMode;
 
         System.Threading.Tasks.Task.Run(() =>
         {
@@ -1186,11 +1314,10 @@ internal sealed class GitTreeWindow : Window
                 ? _git.GetLog(cwd, RecentCount)
                 : _git.GetBranchLog(cwd, baseRef, ScopedCount) ?? _git.GetLog(cwd, RecentCount);
             var invisible = ComputeInvisible(cwd, status);
-            (IReadOnlyList<DiffSection> sections, string? note)? sel = null;
-            if (shown is { } sw)
-                sel = FindByPath(status, sw.Path) is { } fc
-                    ? LoadWipSideDiff(cwd, fc, sw.Staged)
-                    : ((IReadOnlyList<DiffSection>)[], $"No diff for {sw.Path}.");
+            // The shown working-tree file's content in the active content mode, for the repaint-if-changed
+            // guard. (Commit content is immutable, so only a WIP file is ever re-fetched.)
+            (IReadOnlyList<DiffSection> sections, string? note)? sel =
+                shown is { } sw ? WipContentSections(cwd, status, sw.Path, sw.Staged, contentMode) : null;
             return (status, branch, candidates, baseRef, commits, invisible, sel);
         }).ContinueWith(t =>
         {
@@ -1244,10 +1371,10 @@ internal sealed class GitTreeWindow : Window
                         PopulateWip(status?.Changes ?? [], _shownWip?.Path, _shownWip?.Staged ?? false, quiet: true);
                 }
 
-                // Repaint a still-shown WIP file's diff only when its content actually changed (skipped when a
+                // Repaint a still-shown WIP file only when its content actually changed (skipped when a
                 // reselect above already reloaded it).
                 if (!reselected && sel is { } s && wipSelected && DiffSig(s.sections) != _shownDiffSig)
-                    ShowSections(s.sections, s.note);
+                    ShowContent(contentMode, s.sections, s.note);
             });
         });
     }
@@ -1404,13 +1531,54 @@ internal sealed class GitTreeWindow : Window
         return sb.ToString();
     }
 
-    // ---- diff mode / wrap ----
+    // ---- floating bar: segmented view controls ----
 
     private Button ModeButton(string label, DiffViewMode mode)
     {
-        var b = new Button { Content = label, VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(10, 4) };
+        var b = SegButton(label);
         b.Click += (_, _) => SetMode(mode);
         return b;
+    }
+
+    private Button ContentButton(string label, ContentMode mode)
+    {
+        var b = SegButton(label);
+        b.Click += (_, _) => SetContentMode(mode);
+        return b;
+    }
+
+    // A segmented-control button: square corners so adjacent buttons share an edge; its fill is set by the
+    // Update*Buttons routines (accent when active).
+    private static Button SegButton(string label) => new()
+    {
+        Content = label, Padding = new Thickness(13, 6), CornerRadius = new CornerRadius(0),
+        BorderThickness = new Thickness(0), VerticalAlignment = VerticalAlignment.Center,
+        Cursor = new Cursor(StandardCursorType.Hand),
+    };
+
+    // Joins buttons into one rounded, clipped control with 1px dividers between them (the "shared edge" look).
+    // The container border + dividers are tracked so the light/dark toggle can recolour them.
+    private Border Segment(params Button[] buttons)
+    {
+        var sp = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0 };
+        for (int i = 0; i < buttons.Length; i++)
+        {
+            if (i > 0)
+            {
+                var div = new Border { Width = 1, Background = _pal.Separator };
+                _segmentDividers.Add(div);
+                sp.Children.Add(div);
+            }
+            sp.Children.Add(buttons[i]);
+        }
+        var container = new Border
+        {
+            CornerRadius = new CornerRadius(8), ClipToBounds = true,
+            BorderThickness = new Thickness(1), BorderBrush = _pal.Separator,
+            VerticalAlignment = VerticalAlignment.Center, Child = sp,
+        };
+        _segmentContainers.Add(container);
+        return container;
     }
 
     // Switch view mode. Unified/Split stage whole files; Hunk builds on the split layout and adds per-hunk +
@@ -1422,24 +1590,46 @@ internal sealed class GitTreeWindow : Window
         _mode = mode;
         _diff.SetSplit(mode != DiffViewMode.Unified);
         _diff.SetPerHunk(mode == DiffViewMode.Hunk);
-        _stageLinesBtn.IsVisible = mode == DiffViewMode.Hunk;
         _settings.GitReviewSplitView = mode is DiffViewMode.Split or DiffViewMode.Hunk;
         _settings.GitTreeHunkStaging = mode == DiffViewMode.Hunk;
         _settings.Save();
         UpdateModeButtons();
+        UpdateStageLinesVisibility();
     }
+
+    // Switch content mode. Previous/Current show the whole file (no deltas) and hide the layout segment;
+    // reloads the shown file in the new mode. Not persisted (always starts on Diff).
+    private void SetContentMode(ContentMode mode)
+    {
+        if (_contentMode == mode) return;
+        _contentMode = mode;
+        _modeSegment.IsVisible = mode == ContentMode.Diff;
+        UpdateContentButtons();
+        UpdateStageLinesVisibility();
+        ReloadShownContent();
+    }
+
+    private void UpdateStageLinesVisibility() =>
+        _stageLinesBtn.IsVisible = _mode == DiffViewMode.Hunk && _contentMode == ContentMode.Diff;
 
     private void UpdateModeButtons()
     {
-        Style(_unifiedBtn, _mode == DiffViewMode.Unified);
-        Style(_splitBtn, _mode == DiffViewMode.Split);
-        Style(_hunkBtn, _mode == DiffViewMode.Hunk);
+        StyleSeg(_unifiedBtn, _mode == DiffViewMode.Unified);
+        StyleSeg(_splitBtn, _mode == DiffViewMode.Split);
+        StyleSeg(_hunkBtn, _mode == DiffViewMode.Hunk);
+    }
 
-        void Style(Button b, bool active)
-        {
-            b.Background = active ? _pal.Accent : _pal.ButtonBg;
-            b.Foreground = active ? _pal.OnAccent : _pal.Fg;
-        }
+    private void UpdateContentButtons()
+    {
+        StyleSeg(_diffBtn, _contentMode == ContentMode.Diff);
+        StyleSeg(_prevBtn, _contentMode == ContentMode.Previous);
+        StyleSeg(_currBtn, _contentMode == ContentMode.Current);
+    }
+
+    private void StyleSeg(Button b, bool active)
+    {
+        b.Background = active ? _pal.Accent : _pal.ButtonBg;
+        b.Foreground = active ? _pal.OnAccent : _pal.Fg;
     }
 
     // ---- per-window light / dark ----
@@ -1466,7 +1656,6 @@ internal sealed class GitTreeWindow : Window
         _diffPlaceholder.Foreground = _pal.Muted;
         _nodesEmpty.Foreground = _pal.Muted;
         _filesEmpty.Foreground = _pal.Muted;
-        _wrapCheck.Foreground = _pal.Fg;
         _expandBtn.Foreground = _pal.Muted;
 
         _prChip.Background = _pal.Accent;
@@ -1477,8 +1666,17 @@ internal sealed class GitTreeWindow : Window
         foreach (var s in _splitters) s.Background = _pal.Separator;
         foreach (var s in _groupSeparators) s.Background = _pal.Separator;
 
-        _themeBtn.Content = _light ? "Dark" : "Light";
+        // Floating bar + segmented controls.
+        _floatingBar.Background = _pal.HeaderBg;
+        _floatingBar.BorderBrush = _pal.Separator;
+        foreach (var c in _segmentContainers) c.BorderBrush = _pal.Separator;
+        foreach (var d in _segmentDividers) d.Background = _pal.Separator;
+        // Sun (go light) when dark, moon (go dark) when light.
+        _themeBtn.Content = _light ? "☾" : "☀";
+        _themeBtn.Foreground = _pal.Fg;
+
         UpdateModeButtons();
+        UpdateContentButtons();
         _diff.SetLight(_light);
     }
 
@@ -1491,16 +1689,6 @@ internal sealed class GitTreeWindow : Window
         ApplyPalette();
         UpdateComposer();                       // re-tint the composer hint
         RefreshStatus(preserveSelection: true); // rebuild node/file rows through the new palette
-    }
-
-    private void SetWrap(bool wrap)
-    {
-        if (_wrap == wrap) return;
-        _wrap = wrap;
-        _diff.SetWrap(wrap);
-        _diffScroll.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
-        _settings.GitReviewWrap = wrap;
-        _settings.Save();
     }
 
     // ---- small UI helpers ----

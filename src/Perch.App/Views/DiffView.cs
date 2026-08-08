@@ -89,6 +89,9 @@ internal sealed class DiffView : Border
     // Hunk mode: staging buttons render per hunk (+ line staging). Otherwise (Unified/Split) staging renders
     // once per file, on the file header bar — set via SetPerHunk.
     private bool _perHunkButtons;
+    // Plain-file mode (the "Previous"/"Current" content views): the sections are whole files rendered as
+    // all-context lines. Forces a single column and suppresses all staging buttons regardless of split/hunk.
+    private bool _plain;
 
     // Collapsed file sections, keyed per file so the state survives a rebuild (wrap/split toggle). The key
     // being built for the file currently under construction, so AddText can tag each line with it.
@@ -246,11 +249,16 @@ internal sealed class DiffView : Border
     }
 
     /// <summary>Show one or more labelled diff sections (e.g. Staged + Unstaged for one file).</summary>
-    public void SetSections(IReadOnlyList<DiffSection> sections, string? note)
+    public void SetSections(IReadOnlyList<DiffSection> sections, string? note) => SetSections(sections, note, plain: false);
+
+    /// <summary>Show diff sections, or (<paramref name="plain"/>) whole files rendered as plain, all-context
+    /// listings — the "Previous"/"Current" content views: a single numbered column, no deltas, no staging.</summary>
+    public void SetSections(IReadOnlyList<DiffSection> sections, string? note, bool plain)
     {
         _loading = false;
         _sections = sections;
         _note = note;
+        _plain = plain;
         Rebuild();
     }
 
@@ -449,9 +457,11 @@ internal sealed class DiffView : Border
         _currentFileKey = key;
         string? filePath = file.NewPath ?? file.OldPath;
 
-        // In Hunk mode the staging buttons live on each hunk header; otherwise they render once, at file
-        // scope, on this file's header bar.
-        var hunkAction = _perHunkButtons ? action : HunkStageAction.None;
+        // Plain (Previous/Current) forces a single column and no staging buttons. Otherwise: in Hunk mode the
+        // staging buttons live on each hunk header; in Unified/Split they render once, at file scope.
+        bool split = _split && !_plain;
+        bool perHunk = _perHunkButtons && !_plain;
+        var hunkAction = perHunk ? action : HunkStageAction.None;
 
         var chevron = new TextBlock
         {
@@ -474,7 +484,7 @@ internal sealed class DiffView : Border
             },
         };
         // File-scope stage/discard/unstage buttons (Unified/Split modes). Docked right of the file bar.
-        Control headerChild = !_perHunkButtons && action != HunkStageAction.None
+        Control headerChild = !perHunk && !_plain && action != HunkStageAction.None
             ? new DockPanel { LastChildFill = true, Children = { FileStageButtons(action, filePath), headerLabel } }
             : headerLabel;
         var header = new Border
@@ -497,8 +507,8 @@ internal sealed class DiffView : Border
             foreach (var hunk in file.Hunks)
             {
                 var (oldStart, newStart) = HunkStarts(hunk.Header);
-                content.Children.Add(HunkHeader(hunk.Header, hunkAction, path));
-                var hunkBody = _split
+                if (!_plain) content.Children.Add(HunkHeader(hunk.Header, hunkAction, path));
+                var hunkBody = split
                     ? SplitHunk(hunk, oldStart, newStart, ref budget, hunkAction, path)
                     : UnifiedHunk(hunk, oldStart, newStart, ref budget, hunkAction, path);
                 hunkBody.Margin = new Thickness(0, 0, 0, 18); // breathing room between hunks

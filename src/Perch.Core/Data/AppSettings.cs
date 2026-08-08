@@ -286,10 +286,10 @@ internal sealed class AppSettings
     // while the window is open), so it's cheap. A missing key defaults it on.
     public bool ShowGitReview { get; set; } = true;
 
-    // The Change Review window's diff layout: false = unified (one column), true = side-by-side split.
-    // Persisted so the choice sticks between openings; toggled from the window's own toolbar. A missing key
-    // defaults to unified.
-    public bool GitReviewSplitView { get; set; }
+    // The git Tree diff layout: false = unified (one column), true = side-by-side split. Persisted so the
+    // choice sticks between openings; set from the window's floating mode selector. A missing key defaults to
+    // split (with GitTreeHunkStaging, this pair encodes the three-way Unified/Split/Hunk mode).
+    public bool GitReviewSplitView { get; set; } = true;
 
     // Whether the Change Review diff wraps long lines. On by default; toggled from the window's "Wrap"
     // checkbox and persisted. A missing key keeps wrapping on.
