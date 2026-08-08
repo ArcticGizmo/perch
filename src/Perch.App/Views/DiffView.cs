@@ -26,6 +26,15 @@ internal readonly record struct DiffSection(string? Label, GitDiff Diff, HunkSta
 /// and the hunk's header (the range identifies it for <c>git apply</c>).</summary>
 internal readonly record struct HunkStageRequest(HunkStageAction Action, string? Path, string HunkHeader);
 
+/// <summary>Whether the current line selection can be staged/unstaged, which way, and how many lines — drives
+/// the window's "Stage/Unstage lines" button. <see cref="Available"/> is false unless the whole line
+/// selection sits in one stageable hunk.</summary>
+internal readonly record struct LineStageState(bool Available, HunkStageAction Action, int Count);
+
+/// <summary>Raised when the user stages/unstages the selected lines — the file path, the hunk header, and the
+/// 0-based indices (into the hunk's body lines) of the selected lines.</summary>
+internal readonly record struct LineStageRequest(HunkStageAction Action, string? Path, string HunkHeader, int[] Indices);
+
 /// <summary>
 /// The unified-or-split diff surface for the Change Review window. Each hunk is laid out as a grid with one
 /// row per source line: a line-number gutter column and a selectable text column (a
@@ -111,6 +120,13 @@ internal sealed class DiffView : Border
     /// <summary>Raised when the user clicks a hunk's stage/unstage button (only present on sections whose
     /// <see cref="DiffSection.Action"/> isn't <see cref="HunkStageAction.None"/>).</summary>
     public event Action<HunkStageRequest>? HunkStageRequested;
+
+    /// <summary>Raised as the line selection changes, so the window can enable/label its "Stage/Unstage
+    /// lines" button.</summary>
+    public event Action<LineStageState>? LineStageStateChanged;
+
+    /// <summary>Raised when the user asks to stage/unstage the current line selection.</summary>
+    public event Action<LineStageRequest>? LineStageRequested;
 
     public DiffView()
     {
@@ -451,8 +467,8 @@ internal sealed class DiffView : Border
                 var (oldStart, newStart) = HunkStarts(hunk.Header);
                 content.Children.Add(HunkHeader(hunk.Header, action, path));
                 content.Children.Add(_split
-                    ? SplitHunk(hunk, oldStart, newStart, ref budget)
-                    : UnifiedHunk(hunk, oldStart, newStart, ref budget));
+                    ? SplitHunk(hunk, oldStart, newStart, ref budget, action, path)
+                    : UnifiedHunk(hunk, oldStart, newStart, ref budget, action, path));
                 if (budget <= 0)
                 {
                     content.Children.Add(Message("… diff truncated (file too large)."));
@@ -484,13 +500,14 @@ internal sealed class DiffView : Border
     // lines); a faint band tints added/removed rows. The marker sits in its own non-selectable column so the
     // text cell holds pure code - char selection and copy then map straight to the line's content, with no
     // marker to strip. A single grid per hunk shares the gutter/marker column widths, so everything lines up.
-    private Control UnifiedHunk(GitDiffHunk hunk, int oldNo, int newNo, ref int budget)
+    private Control UnifiedHunk(GitDiffHunk hunk, int oldNo, int newNo, ref int budget, HunkStageAction action, string? path)
     {
         var grid = NewGrid("Auto,Auto,*");
         int row = 0;
-        foreach (var line in hunk.Lines)
+        for (int i = 0; i < hunk.Lines.Count; i++)
         {
             if (budget-- <= 0) break;
+            var line = hunk.Lines[i];
             var (brush, band, marker, num) = line.Kind switch
             {
                 GitDiffLineKind.Added => (AddedBrush, AddedBandBg, "+", (newNo++).ToString()),
@@ -502,7 +519,7 @@ internal sealed class DiffView : Border
             var number = AddNumber(grid, row, 0, num);
             AddMarker(grid, row, 1, marker, brush);
             var text = AddText(grid, row, 2, line.Text, brush);
-            if (num.Length > 0) RegisterLine(0, line.Text, number, text);
+            if (num.Length > 0) RegisterLine(0, line.Text, number, text, hunk.Header, i, action, path);
             row++;
         }
         return grid;
@@ -511,12 +528,12 @@ internal sealed class DiffView : Border
     // Side-by-side: removed lines (left, old#) pair with the following added lines (right, new#); context
     // echoes on both sides; blanks pad the shorter side so paired rows line up. Columns: leftNum, leftText,
     // rightNum, rightText.
-    private Control SplitHunk(GitDiffHunk hunk, int oldNo, int newNo, ref int budget)
+    private Control SplitHunk(GitDiffHunk hunk, int oldNo, int newNo, ref int budget, HunkStageAction action, string? path)
     {
         var grid = NewGrid("Auto,*,Auto,*");
         int row = 0;
-        var pendingR = new List<(string text, string num)>();
-        var pendingA = new List<(string text, string num)>();
+        var pendingR = new List<(string text, string num, int idx)>();
+        var pendingA = new List<(string text, string num, int idx)>();
 
         void Flush()
         {
@@ -528,14 +545,14 @@ internal sealed class DiffView : Border
                     AddRow(grid, row, RemovedBandBg, 0, 2);
                     var num = AddNumber(grid, row, 0, pendingR[i].num);
                     var txt = AddText(grid, row, 1, pendingR[i].text, RemovedBrush);
-                    RegisterLine(0, pendingR[i].text, num, txt);
+                    RegisterLine(0, pendingR[i].text, num, txt, hunk.Header, pendingR[i].idx, action, path);
                 }
                 if (i < pendingA.Count)
                 {
                     AddRow(grid, row, AddedBandBg, 2, 2);
                     var num = AddNumber(grid, row, 2, pendingA[i].num);
                     var txt = AddText(grid, row, 3, pendingA[i].text, AddedBrush);
-                    RegisterLine(1, pendingA[i].text, num, txt);
+                    RegisterLine(1, pendingA[i].text, num, txt, hunk.Header, pendingA[i].idx, action, path);
                 }
                 row++;
             }
@@ -543,13 +560,14 @@ internal sealed class DiffView : Border
             pendingA.Clear();
         }
 
-        foreach (var line in hunk.Lines)
+        for (int i = 0; i < hunk.Lines.Count; i++)
         {
             if (budget-- <= 0) break;
+            var line = hunk.Lines[i];
             switch (line.Kind)
             {
-                case GitDiffLineKind.Removed: pendingR.Add((line.Text, (oldNo++).ToString())); break;
-                case GitDiffLineKind.Added: pendingA.Add((line.Text, (newNo++).ToString())); break;
+                case GitDiffLineKind.Removed: pendingR.Add((line.Text, (oldNo++).ToString(), i)); break;
+                case GitDiffLineKind.Added: pendingA.Add((line.Text, (newNo++).ToString(), i)); break;
                 default: // context / meta — flush pending change block, then echo on both sides
                     Flush();
                     var brush = line.Kind == GitDiffLineKind.Meta ? MutedBrush : ContextBrush;
@@ -561,8 +579,8 @@ internal sealed class DiffView : Border
                     var rTxt = AddText(grid, row, 3, line.Text, brush);
                     if (line.Kind != GitDiffLineKind.Meta)
                     {
-                        RegisterLine(0, line.Text, lNum, lTxt);
-                        RegisterLine(1, line.Text, rNum, rTxt);
+                        RegisterLine(0, line.Text, lNum, lTxt, hunk.Header, i, action, path);
+                        RegisterLine(1, line.Text, rNum, rTxt, hunk.Header, i, action, path);
                         oldNo++; newNo++;
                     }
                     row++;
@@ -667,10 +685,11 @@ internal sealed class DiffView : Border
     // Registers one selectable diff line (a gutter number + its text) in a stream, and wires both selection
     // modes: the gutter number starts/extends a whole-line range (Line mode); the text cell starts a
     // character-level drag (Char mode) that can span lines.
-    private void RegisterLine(int stream, string content, TextBlock number, TextBlock text)
+    private void RegisterLine(int stream, string content, TextBlock number, TextBlock text,
+        string hunkHeader, int hunkIndex, HunkStageAction action, string? path)
     {
         if (!_streams.TryGetValue(stream, out var list)) { list = new(); _streams[stream] = list; }
-        var entry = new LineEntry(stream, list.Count, content, number, text);
+        var entry = new LineEntry(stream, list.Count, content, number, text, hunkHeader, hunkIndex, action, path);
         list.Add(entry);
 
         // Line mode - gutter number.
@@ -733,12 +752,58 @@ internal sealed class DiffView : Border
                 e.Text.Background = sel ? LineSelBg : null;
             }
         }
+        RaiseLineStageState();
     }
 
     private void ClearLineSelection()
     {
         _selStream = _selAnchor = _selFocus = -1;
         ApplyLineHighlight();
+    }
+
+    // The stage state of the current line selection: available only when every selected line sits in one
+    // stageable hunk of one file (same path, hunk, and direction).
+    private LineStageState ComputeLineStageState()
+    {
+        if (_selKind != SelKind.Line || _selStream < 0 || _selAnchor < 0 || _selFocus < 0) return default;
+        if (!_streams.TryGetValue(_selStream, out var list)) return default;
+        int lo = Math.Min(_selAnchor, _selFocus), hi = Math.Max(_selAnchor, _selFocus);
+        HunkStageAction action = HunkStageAction.None;
+        string? header = null, path = null;
+        int count = 0;
+        foreach (var e in list)
+        {
+            if (e.Pos < lo || e.Pos > hi) continue;
+            if (e.Action == HunkStageAction.None) return default;
+            if (action == HunkStageAction.None) { action = e.Action; header = e.HunkHeader; path = e.Path; }
+            else if (e.Action != action || e.HunkHeader != header || e.Path != path) return default;
+            count++;
+        }
+        return count > 0 ? new LineStageState(true, action, count) : default;
+    }
+
+    private void RaiseLineStageState() => LineStageStateChanged?.Invoke(ComputeLineStageState());
+
+    /// <summary>Stages/unstages the current line selection (if it's a single stageable hunk) by raising
+    /// <see cref="LineStageRequested"/> with the selected lines' hunk-body indices.</summary>
+    public void RequestStageSelection()
+    {
+        if (_selKind != SelKind.Line || _selStream < 0 || _selAnchor < 0
+            || !_streams.TryGetValue(_selStream, out var list)) return;
+        int lo = Math.Min(_selAnchor, _selFocus), hi = Math.Max(_selAnchor, _selFocus);
+        HunkStageAction action = HunkStageAction.None;
+        string? header = null, path = null;
+        var indices = new List<int>();
+        foreach (var e in list)
+        {
+            if (e.Pos < lo || e.Pos > hi) continue;
+            if (e.Action == HunkStageAction.None) return;
+            if (action == HunkStageAction.None) { action = e.Action; header = e.HunkHeader; path = e.Path; }
+            else if (e.Action != action || e.HunkHeader != header || e.Path != path) return;
+            indices.Add(e.HunkIndex);
+        }
+        if (indices.Count > 0 && header is not null)
+            LineStageRequested?.Invoke(new LineStageRequest(action, path, header, indices.ToArray()));
     }
 
     // ---- char mode ----
@@ -923,7 +988,9 @@ internal sealed class DiffView : Border
         return true;
     }
 
-    private sealed record LineEntry(int Stream, int Pos, string Content, TextBlock Number, TextBlock Text);
+    private sealed record LineEntry(
+        int Stream, int Pos, string Content, TextBlock Number, TextBlock Text,
+        string HunkHeader, int HunkIndex, HunkStageAction Action, string? Path);
 
     // A transparent, non-interactive layer behind the diff text that paints the find-match highlights. It
     // re-paints on layout changes (wrap reflow, collapse) and whenever the owner invalidates it (search /

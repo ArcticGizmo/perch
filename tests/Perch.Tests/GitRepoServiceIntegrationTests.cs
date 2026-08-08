@@ -155,6 +155,38 @@ public sealed class GitRepoServiceIntegrationTests : IDisposable
         Assert.Equal(GitChangeKind.Modified, fc2.Unstaged);
     }
 
+    [Fact]
+    public void StageLines_StagesOnlyTheSelectedAddedLine()
+    {
+        if (!_ready) return;
+        File.WriteAllText(Path.Combine(_repo, "ins.txt"), "a\nb\n");
+        _git.StageFile(_repo, "ins.txt");
+        Assert.True(_git.Commit(_repo, "base").Ok);
+
+        // Insert two lines → one hunk: context a, +X, +Y, context b.
+        File.WriteAllText(Path.Combine(_repo, "ins.txt"), "a\nX\nY\nb\n");
+        var hunk = _git.GetWorkingDiff(_repo, "ins.txt", staged: false)!.Value.Files[0].Hunks[0];
+        int xIdx = -1;
+        for (int i = 0; i < hunk.Lines.Count; i++)
+            if (hunk.Lines[i].Kind == GitDiffLineKind.Added && hunk.Lines[i].Text == "X") { xIdx = i; break; }
+        Assert.True(xIdx >= 0);
+
+        // Stage just the "+X" line.
+        Assert.True(_git.StageLines(_repo, "ins.txt", hunk.Header, new[] { xIdx }).Ok);
+
+        var fc = FindChange("ins.txt");
+        Assert.Equal(GitChangeKind.Modified, fc.Staged);
+        Assert.Equal(GitChangeKind.Modified, fc.Unstaged);
+        Assert.Equal(new[] { "X" }, AddedTexts(_git.GetWorkingDiff(_repo, "ins.txt", staged: true)));   // only X staged
+        Assert.Equal(new[] { "Y" }, AddedTexts(_git.GetWorkingDiff(_repo, "ins.txt", staged: false)));  // Y still unstaged
+    }
+
+    private static string[] AddedTexts(GitDiff? diff) =>
+        diff is { } d
+            ? d.Files.SelectMany(f => f.Hunks).SelectMany(h => h.Lines)
+                 .Where(l => l.Kind == GitDiffLineKind.Added).Select(l => l.Text).ToArray()
+            : System.Array.Empty<string>();
+
     // The one change record for a path in the current status.
     private GitFileChange FindChange(string path)
     {

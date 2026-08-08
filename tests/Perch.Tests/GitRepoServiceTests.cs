@@ -490,4 +490,55 @@ public class GitRepoServiceTests
         Assert.Null(GitRepoService.ExtractHunkPatch("", "@@ -1 +1 @@"));         // empty input
         Assert.Null(GitRepoService.ExtractHunkPatch("just some text", "@@ -1 +1 @@")); // no file header
     }
+
+    // ---- BuildLineSubsetPatch -------------------------------------------------------------------------
+
+    [Fact]
+    public void LineSubset_Stage_KeepsSelectedAddition_DropsUnselected()
+    {
+        // Body indices: 0=" a", 1="+X", 2="+Y", 3=" b". Stage only +X.
+        var raw = "diff --git a/f b/f\nindex 1..2 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1,4 @@\n a\n+X\n+Y\n b\n";
+        var patch = GitRepoService.BuildLineSubsetPatch(raw, "@@ -1,2 +1,4 @@", new[] { 1 }, stage: true);
+
+        Assert.NotNull(patch);
+        Assert.Contains("@@ -1,2 +1,3 @@", patch); // old a,b = 2; new a,X,b = 3
+        Assert.Contains("\n+X\n", patch);
+        Assert.DoesNotContain("+Y", patch);         // unselected addition dropped
+        Assert.Contains("diff --git a/f b/f", patch);
+    }
+
+    [Fact]
+    public void LineSubset_Stage_KeepsSelectedRemoval_UnselectedBecomesContext()
+    {
+        // Body: 0="-a", 1="-b", 2=" c". Stage only the removal of a.
+        var raw = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,3 +1,1 @@\n-a\n-b\n c\n";
+        var patch = GitRepoService.BuildLineSubsetPatch(raw, "@@ -1,3 +1,1 @@", new[] { 0 }, stage: true);
+
+        Assert.NotNull(patch);
+        Assert.Contains("@@ -1,3 +1,2 @@", patch); // old a,b,c = 3; new b,c = 2
+        Assert.Contains("\n-a\n", patch);           // selected removal kept
+        Assert.Contains("\n b\n", patch);           // unselected removal kept as context
+        Assert.Contains("\n c\n", patch);
+    }
+
+    [Fact]
+    public void LineSubset_Unstage_KeepsSelectedAddition_UnselectedBecomesContext()
+    {
+        // A staged hunk: context a, +X, +Y. Unstage only X (index 1). Built forward, applied with --reverse.
+        var raw = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,1 +1,3 @@\n a\n+X\n+Y\n";
+        var patch = GitRepoService.BuildLineSubsetPatch(raw, "@@ -1,1 +1,3 @@", new[] { 1 }, stage: false);
+
+        Assert.NotNull(patch);
+        Assert.Contains("@@ -1,2 +1,3 @@", patch); // old a,Y = 2; new a,X,Y = 3
+        Assert.Contains("\n+X\n", patch);           // selected add kept (reverse removes it from index)
+        Assert.Contains("\n Y\n", patch);           // unselected add kept as context (reverse leaves it)
+    }
+
+    [Fact]
+    public void LineSubset_NullWhenNothingOrOnlyContextSelected()
+    {
+        var raw = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,1 +1,3 @@\n a\n+X\n+Y\n";
+        Assert.Null(GitRepoService.BuildLineSubsetPatch(raw, "@@ -1,1 +1,3 @@", System.Array.Empty<int>(), stage: true));
+        Assert.Null(GitRepoService.BuildLineSubsetPatch(raw, "@@ -1,1 +1,3 @@", new[] { 0 }, stage: true)); // index 0 is context
+    }
 }

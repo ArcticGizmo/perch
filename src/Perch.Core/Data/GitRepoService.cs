@@ -291,6 +291,127 @@ internal sealed class GitRepoService
         return second < 0 ? header : header[..(second + 2)];
     }
 
+    // ---- line staging (partial-hunk git apply --cached) -----------------------------------------------
+
+    /// <summary>Stages only the selected lines of a hunk (<paramref name="selectedBodyIndices"/> are 0-based
+    /// indices over the hunk's body lines, same order as the parsed <see cref="GitDiffHunk.Lines"/>). Builds
+    /// a subset patch from the file's unstaged diff and <c>git apply --cached</c>s it. Returns success +
+    /// error; the error is set when the selection contains no actual change.</summary>
+    public (bool Ok, string Error) StageLines(string cwd, string path, string hunkHeader, IReadOnlyCollection<int> selectedBodyIndices)
+    {
+        var patch = BuildLineSubsetPatch(GetFileDiffRawText(cwd, path, staged: false), hunkHeader, selectedBodyIndices, stage: true);
+        if (patch is null) return (false, "No stageable change in the selection.");
+        return ApplyCached(cwd, patch, reverse: false);
+    }
+
+    /// <summary>Unstages only the selected lines of a hunk (indices as in <see cref="StageLines"/>). Builds a
+    /// subset patch from the file's staged diff and reverse-applies it to the index.</summary>
+    public (bool Ok, string Error) UnstageLines(string cwd, string path, string hunkHeader, IReadOnlyCollection<int> selectedBodyIndices)
+    {
+        var patch = BuildLineSubsetPatch(GetFileDiffRawText(cwd, path, staged: true), hunkHeader, selectedBodyIndices, stage: false);
+        if (patch is null) return (false, "No unstageable change in the selection.");
+        return ApplyCached(cwd, patch, reverse: true);
+    }
+
+    /// <summary>
+    /// Builds a patch that applies only the selected lines of one hunk — the core of line-level staging. From
+    /// the file's raw diff it slices the file header and target hunk, then rewrites the hunk body to keep only
+    /// the selected changes and recomputes the <c>@@</c> counts: an unselected addition is dropped when
+    /// staging / kept as context when unstaging; an unselected removal is kept as context when staging /
+    /// dropped when unstaging (the mirror, because an unstage patch is built forward and applied with
+    /// <c>--reverse</c>). All context is preserved so <c>git apply</c> can still locate the hunk. A trailing
+    /// "\ No newline" marker is kept only when the line it annotates is kept. Returns null when the diff/hunk
+    /// isn't found or the selection leaves no change. Pure and unit-tested. <paramref name="stage"/> true =
+    /// forward (stage); false = the forward-form patch to apply reversed (unstage).
+    /// </summary>
+    internal static string? BuildLineSubsetPatch(
+        string rawFileDiff, string hunkHeader, IReadOnlyCollection<int> selectedBodyIndices, bool stage)
+    {
+        if (string.IsNullOrEmpty(rawFileDiff) || selectedBodyIndices.Count == 0) return null;
+        string want = HunkRange(hunkHeader);
+        if (want.Length == 0) return null;
+
+        var lines = rawFileDiff.Replace("\r\n", "\n").Split('\n');
+        int firstHunk = Array.FindIndex(lines, l => l.StartsWith("@@", StringComparison.Ordinal));
+        if (firstHunk < 0) return null;
+        int start = -1;
+        for (int i = firstHunk; i < lines.Length; i++)
+            if (lines[i].StartsWith("@@", StringComparison.Ordinal) && HunkRange(lines[i]) == want) { start = i; break; }
+        if (start < 0) return null;
+        int end = lines.Length;
+        for (int i = start + 1; i < lines.Length; i++)
+            if (lines[i].StartsWith("@@", StringComparison.Ordinal) || lines[i].StartsWith("diff --git ", StringComparison.Ordinal))
+            { end = i; break; }
+
+        var body = new List<string>();
+        for (int i = start + 1; i < end; i++)
+        {
+            if (i == lines.Length - 1 && lines[i].Length == 0) continue; // trailing split artifact
+            body.Add(lines[i]);
+        }
+
+        var sel = selectedBodyIndices as ISet<int> ?? new HashSet<int>(selectedBodyIndices);
+        var outBody = new List<string>();
+        int oldCount = 0, newCount = 0, changes = 0;
+        bool prevKept = false;
+        for (int i = 0; i < body.Count; i++)
+        {
+            string ln = body[i];
+            char c = ln.Length > 0 ? ln[0] : ' ';
+            string rest = ln.Length > 0 ? ln[1..] : "";
+            bool isSel = sel.Contains(i);
+            switch (c)
+            {
+                case '\\': // "\ No newline at end of file": keep iff the line it annotates was kept.
+                    if (prevKept) outBody.Add(ln);
+                    break;
+                case '+':
+                    if (isSel) { outBody.Add("+" + rest); newCount++; changes++; prevKept = true; }
+                    else if (stage) { prevKept = false; }                                  // drop
+                    else { outBody.Add(" " + rest); oldCount++; newCount++; prevKept = true; } // keep as context
+                    break;
+                case '-':
+                    if (isSel) { outBody.Add("-" + rest); oldCount++; changes++; prevKept = true; }
+                    else if (stage) { outBody.Add(" " + rest); oldCount++; newCount++; prevKept = true; } // keep as context
+                    else { prevKept = false; }                                            // drop
+                    break;
+                default: // ' ' context (and any unexpected line)
+                    outBody.Add(" " + rest);
+                    oldCount++; newCount++; prevKept = true;
+                    break;
+            }
+        }
+        if (changes == 0) return null;
+
+        int oldStart = ParseOldStart(lines[start]);
+        string suffix = HunkSuffix(lines[start]);
+        string header = $"@@ -{oldStart},{oldCount} +{oldStart},{newCount} @@{suffix}";
+
+        var sb = new StringBuilder();
+        for (int i = 0; i < firstHunk; i++) sb.Append(lines[i]).Append('\n'); // file header
+        sb.Append(header).Append('\n');
+        foreach (var b in outBody) sb.Append(b).Append('\n');
+        return sb.ToString();
+    }
+
+    // The old-side start line of a hunk header ("@@ -A,B +C,D @@" → A), or 1 if unparseable.
+    private static int ParseOldStart(string header)
+    {
+        int dash = header.IndexOf('-');
+        if (dash < 0) return 1;
+        int e = dash + 1;
+        while (e < header.Length && char.IsDigit(header[e])) e++;
+        return int.TryParse(header.AsSpan(dash + 1, e - (dash + 1)), out var v) ? v : 1;
+    }
+
+    // Whatever git appended after the second "@@" (a leading space + function context, or ""); preserved so
+    // the rebuilt header reads naturally.
+    private static string HunkSuffix(string header)
+    {
+        int second = header.IndexOf("@@", 2, StringComparison.Ordinal);
+        return second < 0 ? "" : header[(second + 2)..];
+    }
+
     // ---- change classification (pure) -----------------------------------------------------------------
 
     /// <summary>

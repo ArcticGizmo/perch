@@ -60,6 +60,7 @@ internal sealed class GitTreeWindow : Window
     private readonly Button _splitBtn;
     private readonly Button _themeBtn;
     private readonly Button _expandBtn;
+    private readonly Button _stageLinesBtn;
     private readonly CheckBox _wrapCheck;
     private readonly Border _headerBorder;
     private readonly TextBlock _graphLabel;
@@ -198,6 +199,16 @@ internal sealed class GitTreeWindow : Window
         };
         _wrapCheck.IsCheckedChanged += (_, _) => SetWrap(_wrapCheck.IsChecked == true);
 
+        // Stage/unstage the selected diff lines. Disabled until a line selection sits within one stageable
+        // hunk (select line numbers in a working-tree section, then click).
+        _stageLinesBtn = new Button
+        {
+            Content = "Stage lines", IsEnabled = false, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
+        };
+        ToolTip.SetTip(_stageLinesBtn, "Select line numbers in the working-tree diff, then stage/unstage just those lines");
+        // Click wired after _diff is constructed (below), so it can't dereference a not-yet-set field.
+
         // Per-window light/dark toggle — reading a lot of diff/commit text is easier when this window can go
         // light without flipping the always-on-top overlay.
         _themeBtn = new Button
@@ -226,7 +237,7 @@ internal sealed class GitTreeWindow : Window
             Child = new DockPanel
             {
                 LastChildFill = true,
-                Children = { _prChip, refreshBtn, modeGroup, _wrapCheck, _themeBtn, _expandBtn, _baseBtn, headerText },
+                Children = { _prChip, refreshBtn, modeGroup, _wrapCheck, _stageLinesBtn, _themeBtn, _expandBtn, _baseBtn, headerText },
             },
         };
 
@@ -299,6 +310,9 @@ internal sealed class GitTreeWindow : Window
         _diff.SetWrap(_wrap);
         _diff.SearchResultsChanged += OnSearchResults;
         _diff.HunkStageRequested += OnHunkStage;
+        _diff.LineStageStateChanged += OnLineStageState;
+        _diff.LineStageRequested += OnLineStageRequest;
+        _stageLinesBtn.Click += (_, _) => _diff.RequestStageSelection();
         UpdateModeButtons();
         _diffScroll = new ScrollViewer
         {
@@ -757,6 +771,34 @@ internal sealed class GitTreeWindow : Window
         System.Threading.Tasks.Task.Run(() => req.Action == HunkStageAction.Stage
                 ? _git.StageHunk(cwd, path, req.HunkHeader)
                 : _git.UnstageHunk(cwd, path, req.HunkHeader))
+            .ContinueWith(t =>
+            {
+                if (!t.IsCompletedSuccessfully) return;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!IsVisible) return;
+                    if (!t.Result.Ok) { SetHint(FirstLine(t.Result.Error), warn: true); return; }
+                    RefreshStatus(preserveSelection: true);
+                });
+            });
+    }
+
+    // Enables/labels the "Stage lines" button as the diff's line selection changes.
+    private void OnLineStageState(LineStageState s)
+    {
+        _stageLinesBtn.IsEnabled = s.Available;
+        _stageLinesBtn.Content = s.Available
+            ? $"{(s.Action == HunkStageAction.Stage ? "Stage" : "Unstage")} {s.Count} line{(s.Count == 1 ? "" : "s")}"
+            : "Stage lines";
+    }
+
+    // Stage or unstage the selected lines of a hunk, then refresh.
+    private void OnLineStageRequest(LineStageRequest req)
+    {
+        if (_cwd is not { } cwd || req.Path is not { } path) return;
+        System.Threading.Tasks.Task.Run(() => req.Action == HunkStageAction.Stage
+                ? _git.StageLines(cwd, path, req.HunkHeader, req.Indices)
+                : _git.UnstageLines(cwd, path, req.HunkHeader, req.Indices))
             .ContinueWith(t =>
             {
                 if (!t.IsCompletedSuccessfully) return;
