@@ -14,8 +14,10 @@ using Perch.Data;
 namespace Perch.Avalonia.Views;
 
 /// <summary>Whether a diff section's hunks can be staged/unstaged, and which way — drives the per-hunk
-/// button in the diff pane. <see cref="None"/> for read-only sections (a commit, or a clean file).</summary>
-internal enum HunkStageAction { None, Stage, Unstage }
+/// buttons in the diff pane. <see cref="None"/> for read-only sections (a commit, or a clean file).
+/// <see cref="Discard"/> is only ever a request (from the Discard button on a stageable section), never a
+/// section's own action.</summary>
+internal enum HunkStageAction { None, Stage, Unstage, Discard }
 
 /// <summary>One labelled diff to render — e.g. ("Staged", …) / ("Unstaged", …) when a file has both, or a
 /// single unlabelled section for a commit or a plain file diff. <see cref="Action"/> makes the section's
@@ -466,9 +468,11 @@ internal sealed class DiffView : Border
             {
                 var (oldStart, newStart) = HunkStarts(hunk.Header);
                 content.Children.Add(HunkHeader(hunk.Header, action, path));
-                content.Children.Add(_split
+                var hunkBody = _split
                     ? SplitHunk(hunk, oldStart, newStart, ref budget, action, path)
-                    : UnifiedHunk(hunk, oldStart, newStart, ref budget, action, path));
+                    : UnifiedHunk(hunk, oldStart, newStart, ref budget, action, path);
+                hunkBody.Margin = new Thickness(0, 0, 0, 18); // breathing room between hunks
+                content.Children.Add(hunkBody);
                 if (budget <= 0)
                 {
                     content.Children.Add(Message("… diff truncated (file too large)."));
@@ -491,7 +495,7 @@ internal sealed class DiffView : Border
 
         return new StackPanel
         {
-            Orientation = Orientation.Vertical, Margin = new Thickness(0, 0, 0, 10),
+            Orientation = Orientation.Vertical, Margin = new Thickness(0, 0, 0, 22),
             Children = { header, content },
         };
     }
@@ -1023,7 +1027,8 @@ internal sealed class DiffView : Border
     private Control SectionHeader(string label) => new Border
     {
         Background = SectionBarBg,
-        Padding = new Thickness(10, 5),
+        Padding = new Thickness(10, 6),
+        Margin = new Thickness(0, 6, 0, 8),
         Child = new TextBlock { Text = label, Foreground = TitleBrush, FontSize = 12, FontWeight = FontWeight.Bold },
     };
 
@@ -1042,22 +1047,45 @@ internal sealed class DiffView : Border
         if (action == HunkStageAction.None)
             return text;
 
-        // A small stage/unstage button on the right of the hunk header.
-        var btn = new Button
+        // Colored, roomy stage/unstage (+ discard) buttons docked on the right, so they're easy to find.
+        var actions = new StackPanel
         {
-            Content = action == HunkStageAction.Stage ? "Stage hunk" : "Unstage hunk",
-            FontSize = 11,
-            Padding = new Thickness(8, 1),
-            Margin = new Thickness(8, 2, 8, 0),
-            VerticalAlignment = VerticalAlignment.Center,
-            [DockPanel.DockProperty] = Dock.Right,
+            Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 4, 8, 4), [DockPanel.DockProperty] = Dock.Right,
         };
-        btn.Click += (_, e) =>
+        if (action == HunkStageAction.Stage)
+        {
+            actions.Children.Add(HunkButton("Stage hunk", AddedBrush, HunkStageAction.Stage, path, header));
+            actions.Children.Add(HunkButton("Discard hunk", RemovedBrush, HunkStageAction.Discard, path, header));
+        }
+        else // Unstage
+        {
+            actions.Children.Add(HunkButton("Unstage hunk", HunkBrush, HunkStageAction.Unstage, path, header));
+        }
+        return new DockPanel { LastChildFill = true, Children = { actions, text } };
+    }
+
+    // A colored hunk-action button. Larger than the default so it's easy to hit; white text on the action's
+    // semantic colour (green stage / red discard / blue unstage).
+    private Button HunkButton(string label, IBrush bg, HunkStageAction action, string? path, string header)
+    {
+        var b = new Button
+        {
+            Content = label,
+            FontSize = 12.5,
+            FontWeight = FontWeight.SemiBold,
+            Padding = new Thickness(12, 5),
+            Foreground = Brushes.White,
+            Background = bg,
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        b.Click += (_, e) =>
         {
             HunkStageRequested?.Invoke(new HunkStageRequest(action, path, header));
             e.Handled = true;
         };
-        return new DockPanel { LastChildFill = true, Children = { btn, text } };
+        return b;
     }
 
     private SelectableTextBlock Selectable(string text, double size, IBrush brush, FontWeight weight) => new()

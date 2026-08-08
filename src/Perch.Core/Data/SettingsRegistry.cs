@@ -109,6 +109,12 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.GitTreeLight),
             s => s.GitTreeLight, (s, v) => s.GitTreeLight = v),
 
+        Toggle("git-tree-hunk-staging", "Git tree: hunk staging",
+            "Show per-hunk and per-line stage / unstage / discard controls in the git tree diff. Off stages whole files. Also toggled from the window's own toolbar.",
+            SettingSurface.Advanced, ["git", "tree", "hunk", "line", "stage", "discard", "partial"],
+            PreviewTarget.None, nameof(AppSettings.GitTreeHunkStaging),
+            s => s.GitTreeHunkStaging, (s, v) => s.GitTreeHunkStaging = v),
+
         Toggle("media-controller", "Now-playing media",
             "The media controller strip - track plus previous / play-pause / next.",
             SettingSurface.SessionRow, ["media", "music", "now", "playing", "spotify", "track", "controller", "sound"],

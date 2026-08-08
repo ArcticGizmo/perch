@@ -300,6 +300,11 @@ internal sealed class AppSettings
     // keeps it dark.
     public bool GitTreeLight { get; set; }
 
+    // Whether the git Tree diff shows per-hunk (and line) staging controls. Off by default — staging a whole
+    // file is the common case; hunk/line staging is opt-in. Toggled from the window's "Hunk staging"
+    // checkbox and persisted. A missing key keeps it off.
+    public bool GitTreeHunkStaging { get; set; }
+
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
     // MigrateQuickLinks) with the well-known presets, honouring the legacy switches below. An empty

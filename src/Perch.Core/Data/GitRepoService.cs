@@ -224,6 +224,16 @@ internal sealed class GitRepoService
         return ApplyCached(cwd, patch, reverse: true);
     }
 
+    /// <summary>Discards one hunk of a working-tree change — reverts just that hunk in the working tree
+    /// (like <c>git checkout -p</c>). Destructive: the change is gone. Slices the hunk from the file's
+    /// unstaged diff and reverse-applies it to the worktree (not the index).</summary>
+    public (bool Ok, string Error) DiscardHunk(string cwd, string path, string hunkHeader)
+    {
+        var patch = ExtractHunkPatch(GetFileDiffRawText(cwd, path, staged: false), hunkHeader);
+        if (patch is null) return (false, "Could not isolate that hunk (it may have changed).");
+        return ApplyPatch(cwd, patch, cached: false, reverse: true);
+    }
+
     /// <summary>The raw (unparsed) unified diff text for one path — staged (index vs HEAD) or unstaged
     /// (worktree vs index). The source text a hunk patch is sliced from, so it stays byte-accurate for
     /// <c>git apply</c>. Empty on failure.</summary>
@@ -236,13 +246,20 @@ internal sealed class GitRepoService
         return exit == 0 ? stdout : "";
     }
 
-    // Feeds a patch to `git apply --cached` (optionally reversed) via stdin. Surfaces git's error text.
-    private (bool Ok, string Error) ApplyCached(string cwd, string patch, bool reverse)
+    // Stages/unstages a patch against the index (git apply --cached [--reverse]) via stdin.
+    private (bool Ok, string Error) ApplyCached(string cwd, string patch, bool reverse) =>
+        ApplyPatch(cwd, patch, cached: true, reverse: reverse);
+
+    // Feeds a patch to `git apply` via stdin — to the index (cached) or the worktree, optionally reversed.
+    // Surfaces git's error text.
+    private (bool Ok, string Error) ApplyPatch(string cwd, string patch, bool cached, bool reverse)
     {
         if (!IsRepo(cwd)) return (false, "Not a git repository.");
-        var r = reverse
-            ? RunGitCore(cwd, GitTimeoutMs, patch, "apply", "--cached", "--reverse", "-")
-            : RunGitCore(cwd, GitTimeoutMs, patch, "apply", "--cached", "-");
+        var args = new List<string> { "apply" };
+        if (cached) args.Add("--cached");
+        if (reverse) args.Add("--reverse");
+        args.Add("-");
+        var r = RunGitCore(cwd, GitTimeoutMs, patch, args.ToArray());
         return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
     }
 

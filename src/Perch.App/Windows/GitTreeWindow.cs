@@ -62,6 +62,7 @@ internal sealed class GitTreeWindow : Window
     private readonly Button _expandBtn;
     private readonly Button _stageLinesBtn;
     private readonly CheckBox _wrapCheck;
+    private readonly CheckBox _hunkStageCheck;
     private readonly Border _headerBorder;
     private readonly TextBlock _graphLabel;
     private readonly TextBlock _filesLabel;
@@ -97,6 +98,7 @@ internal sealed class GitTreeWindow : Window
     private bool _isActive; // the session was working (Running/AwaitingInput) at last Retarget — commit guard
     private bool _split;
     private bool _wrap;
+    private bool _hunkStaging; // per-hunk / per-line staging controls in the diff (off = whole-file only)
     private int _gen;
     private bool _suppressSelect;
 
@@ -142,6 +144,7 @@ internal sealed class GitTreeWindow : Window
         _settings = settings;
         _split = settings.GitReviewSplitView;
         _wrap = settings.GitReviewWrap;
+        _hunkStaging = settings.GitTreeHunkStaging;
         _light = settings.GitTreeLight;
         _pal = _light ? TreePalette.Light() : TreePalette.Dark();
         Title = "Tree";
@@ -199,11 +202,21 @@ internal sealed class GitTreeWindow : Window
         };
         _wrapCheck.IsCheckedChanged += (_, _) => SetWrap(_wrapCheck.IsChecked == true);
 
-        // Stage/unstage the selected diff lines. Disabled until a line selection sits within one stageable
-        // hunk (select line numbers in a working-tree section, then click).
+        // Hunk staging toggle — off by default (whole-file staging is the common case). When on, the diff
+        // shows per-hunk stage/discard/unstage buttons and enables line-level staging.
+        _hunkStageCheck = new CheckBox
+        {
+            Content = "Hunk staging", IsChecked = _hunkStaging, VerticalAlignment = VerticalAlignment.Center,
+            Foreground = Palette.FgBrush, Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
+        };
+        _hunkStageCheck.IsCheckedChanged += (_, _) => SetHunkStaging(_hunkStageCheck.IsChecked == true);
+
+        // Stage/unstage the selected diff lines. Only shown in hunk-staging mode; disabled until a line
+        // selection sits within one stageable hunk (select line numbers in a working-tree section, then click).
         _stageLinesBtn = new Button
         {
-            Content = "Stage lines", IsEnabled = false, VerticalAlignment = VerticalAlignment.Center,
+            Content = "Stage lines", IsEnabled = false, IsVisible = _hunkStaging,
+            VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
         };
         ToolTip.SetTip(_stageLinesBtn, "Select line numbers in the working-tree diff, then stage/unstage just those lines");
@@ -237,7 +250,7 @@ internal sealed class GitTreeWindow : Window
             Child = new DockPanel
             {
                 LastChildFill = true,
-                Children = { _prChip, refreshBtn, modeGroup, _wrapCheck, _stageLinesBtn, _themeBtn, _expandBtn, _baseBtn, headerText },
+                Children = { _prChip, refreshBtn, modeGroup, _wrapCheck, _hunkStageCheck, _stageLinesBtn, _themeBtn, _expandBtn, _baseBtn, headerText },
             },
         };
 
@@ -701,16 +714,18 @@ internal sealed class GitTreeWindow : Window
         bool hasUnstaged = fc.Unstaged != GitChangeKind.None;
 
         // Each diff carries whether its hunks can be staged (an unstaged worktree diff) or unstaged (a staged
-        // index diff), so the diff pane shows the right per-hunk button.
+        // index diff), so the diff pane shows the right per-hunk buttons — but only in hunk-staging mode;
+        // otherwise the diff is read-only (whole-file staging via the file checkboxes).
+        HunkStageAction Act(HunkStageAction a) => _hunkStaging ? a : HunkStageAction.None;
         var diffs = new List<(string? Label, GitDiff Diff, HunkStageAction Action)>();
         if (hasStaged && hasUnstaged)
         {
-            if (_git.GetWorkingDiff(cwd, fc.Path, staged: true) is { } staged) diffs.Add(("Staged", staged, HunkStageAction.Unstage));
-            if (_git.GetWorkingDiff(cwd, fc.Path, staged: false) is { } unstaged) diffs.Add(("Unstaged", unstaged, HunkStageAction.Stage));
+            if (_git.GetWorkingDiff(cwd, fc.Path, staged: true) is { } staged) diffs.Add(("Staged", staged, Act(HunkStageAction.Unstage)));
+            if (_git.GetWorkingDiff(cwd, fc.Path, staged: false) is { } unstaged) diffs.Add(("Unstaged", unstaged, Act(HunkStageAction.Stage)));
         }
         else if (_git.GetWorkingDiff(cwd, fc.Path, staged: hasStaged) is { } d)
         {
-            diffs.Add((null, d, hasStaged ? HunkStageAction.Unstage : HunkStageAction.Stage));
+            diffs.Add((null, d, Act(hasStaged ? HunkStageAction.Unstage : HunkStageAction.Stage)));
         }
 
         if (IsPlainModified(fc) && diffs.Count > 0 && diffs.All(x => GitRepoService.HasNoTextChange(x.Diff)))
@@ -763,24 +778,31 @@ internal sealed class GitTreeWindow : Window
             });
     }
 
-    // Stage or unstage a single hunk (from its stage/unstage button in the diff pane), then refresh so the
-    // file list, staged count, and the diff's staged/unstaged split reflect the new index.
-    private void OnHunkStage(HunkStageRequest req)
+    // Stage, unstage, or discard a single hunk (from its button in the diff pane), then refresh so the file
+    // list, staged count, and the diff's staged/unstaged split reflect the change. Discard is destructive, so
+    // it's confirmed first.
+    private async void OnHunkStage(HunkStageRequest req)
     {
         if (_cwd is not { } cwd || req.Path is not { } path) return;
-        System.Threading.Tasks.Task.Run(() => req.Action == HunkStageAction.Stage
-                ? _git.StageHunk(cwd, path, req.HunkHeader)
-                : _git.UnstageHunk(cwd, path, req.HunkHeader))
-            .ContinueWith(t =>
-            {
-                if (!t.IsCompletedSuccessfully) return;
-                Dispatcher.UIThread.Post(() =>
-                {
-                    if (!IsVisible) return;
-                    if (!t.Result.Ok) { SetHint(FirstLine(t.Result.Error), warn: true); return; }
-                    RefreshStatus(preserveSelection: true);
-                });
-            });
+
+        if (req.Action == HunkStageAction.Discard)
+        {
+            bool go = await ConfirmDialog.ShowAsync(this, "Discard hunk",
+                $"Discard this hunk's changes to {System.IO.Path.GetFileName(path)}? This can't be undone.",
+                "Discard", "Cancel");
+            if (!go) return;
+        }
+
+        var (ok, err) = await System.Threading.Tasks.Task.Run(() => req.Action switch
+        {
+            HunkStageAction.Stage => _git.StageHunk(cwd, path, req.HunkHeader),
+            HunkStageAction.Unstage => _git.UnstageHunk(cwd, path, req.HunkHeader),
+            HunkStageAction.Discard => _git.DiscardHunk(cwd, path, req.HunkHeader),
+            _ => (false, ""),
+        });
+        if (!IsVisible) return;
+        if (!ok) { SetHint(FirstLine(err), warn: true); return; }
+        RefreshStatus(preserveSelection: true);
     }
 
     // Enables/labels the "Stage lines" button as the diff's line selection changes.
@@ -1180,6 +1202,7 @@ internal sealed class GitTreeWindow : Window
         _nodesEmpty.Foreground = _pal.Muted;
         _filesEmpty.Foreground = _pal.Muted;
         _wrapCheck.Foreground = _pal.Fg;
+        _hunkStageCheck.Foreground = _pal.Fg;
         _expandBtn.Foreground = _pal.Muted;
 
         _prChip.Background = _pal.Accent;
@@ -1213,6 +1236,16 @@ internal sealed class GitTreeWindow : Window
         _diffScroll.HorizontalScrollBarVisibility = wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
         _settings.GitReviewWrap = wrap;
         _settings.Save();
+    }
+
+    private void SetHunkStaging(bool on)
+    {
+        if (_hunkStaging == on) return;
+        _hunkStaging = on;
+        _stageLinesBtn.IsVisible = on;
+        _settings.GitTreeHunkStaging = on;
+        _settings.Save();
+        RefreshStatus(preserveSelection: true); // re-render the diff with/without hunk buttons
     }
 
     // ---- small UI helpers ----
