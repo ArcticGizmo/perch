@@ -7,7 +7,7 @@ namespace Perch.Platform.Mac;
 /// doesn't expose directly. The macOS analogue of the Windows "no-activate tool window" is a window that
 /// floats above normal windows, joins every Space, stays put during Mission Control, and is skipped by
 /// Cmd-` window cycling — set via <c>collectionBehavior</c> and the window <c>level</c>. Click-through
-/// (for the ambient glow/confetti overlays) maps to <c>setIgnoresMouseEvents:</c>.
+/// (for the ambient glow overlay) maps to <c>setIgnoresMouseEvents:</c>.
 ///
 /// Avalonia's platform handle for a window on macOS is the <c>NSWindow</c> itself (its native window class
 /// is <c>AvnWindow</c>, an <c>NSWindow</c> subclass) — <em>not</em> the top-level <c>NSView</c> as the AppKit

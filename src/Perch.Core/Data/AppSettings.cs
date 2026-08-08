@@ -286,14 +286,24 @@ internal sealed class AppSettings
     // while the window is open), so it's cheap. A missing key defaults it on.
     public bool ShowGitReview { get; set; } = true;
 
-    // The Change Review window's diff layout: false = unified (one column), true = side-by-side split.
-    // Persisted so the choice sticks between openings; toggled from the window's own toolbar. A missing key
-    // defaults to unified.
-    public bool GitReviewSplitView { get; set; }
+    // The git Tree diff layout: false = unified (one column), true = side-by-side split. Persisted so the
+    // choice sticks between openings; set from the window's floating mode selector. A missing key defaults to
+    // split (with GitTreeHunkStaging, this pair encodes the three-way Unified/Split/Hunk mode).
+    public bool GitReviewSplitView { get; set; } = true;
 
     // Whether the Change Review diff wraps long lines. On by default; toggled from the window's "Wrap"
     // checkbox and persisted. A missing key keeps wrapping on.
     public bool GitReviewWrap { get; set; } = true;
+
+    // Whether the git Tree window renders in light mode (just that window — the rest of the app keeps its
+    // theme). Off by default; toggled from the window's own light/dark button and persisted. A missing key
+    // keeps it dark.
+    public bool GitTreeLight { get; set; }
+
+    // Whether the git Tree diff shows per-hunk (and line) staging controls. Off by default — staging a whole
+    // file is the common case; hunk/line staging is opt-in. Toggled from the window's "Hunk staging"
+    // checkbox and persisted. A missing key keeps it off.
+    public bool GitTreeHunkStaging { get; set; }
 
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
@@ -367,13 +377,6 @@ internal sealed class AppSettings
     // needs you, and visibly panicking (red bang + flying sweat) when a session looks stuck. Pure
     // whimsy layered over the existing status cues. On by default; a missing key keeps it on.
     public bool PerchReacts { get; set; } = true;
-
-    // "Confetti finish": when on, a session's right-click menu gains a "Confetti finish 🎉" toggle.
-    // Arm a session and, the instant it next finishes, a burst of confetti erupts across the screen — then
-    // the arming is spent (it fires exactly once, and disarms itself). Only this master switch is
-    // persisted; the per-session arming is deliberately in-memory only, so a celebration can never go off
-    // by surprise after a restart. Off by default (experimental); a missing key keeps it off.
-    public bool ConfettiFinish { get; set; }
 
     // "Celebrate new unlocks": when on, unlocking new achievement badges plays the full-screen card reveal
     // (up to a few cards side by side, plus a "+N more" card for a big batch). Off unlocks silently (the

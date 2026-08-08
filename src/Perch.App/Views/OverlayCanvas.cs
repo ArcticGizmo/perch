@@ -55,7 +55,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double WarnIconWidth    = 14;
     private const double ThermoIconWidth  = 12;
     private const double ArtifactIconWidth = 16;
-    private const double PartyIconWidth   = 16; // the "confetti finish" party-popper glyph on an armed row
     private const double NoteIconWidth    = 15; // the pinned-note glyph shown on a row that has a note
     private const double PrIconWidth      = 16; // the GitHub pull-request (merge) glyph on a row with a PR
 
@@ -163,17 +162,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // recedes — a project note is ambient context, not something demanding attention like a session note.
     private static readonly IBrush NoteDimBrush   = new SolidColorBrush(Color.FromArgb(105, 244, 193, 79));
 
-    // Party-popper glyph: a gold cone spraying a fan of festive confetti dots (shared with the confetti
-    // window's palette so the armed-row hint and the finish burst read as one feature).
-    private static readonly IBrush PartyConeBrush = new SolidColorBrush(Color.FromRgb(255, 190, 70));
-    private static readonly (double dx, double dy, double r, IBrush brush)[] PartyBits =
-    [
-        (13, -6, 1.8, new SolidColorBrush(Color.FromRgb(255, 92, 92))),   // red
-        (11, -2, 1.5, new SolidColorBrush(Color.FromRgb(94, 234, 212))),  // teal
-        (14, -1, 1.6, new SolidColorBrush(Color.FromRgb(178, 120, 255))), // purple
-        (10, -7, 1.4, new SolidColorBrush(Color.FromRgb(255, 236, 92))),  // yellow
-        (13, -9, 1.5, new SolidColorBrush(Color.FromRgb(92, 214, 122))),  // green
-    ];
     private static readonly IBrush ThermoGlassFill = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
     private static readonly IPen   ThermoOutline  = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
     private static Color MutedColor => Palette.Active.TextMuted.ToColor();
@@ -1130,15 +1118,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     internal event Action<Artifact, bool>? ArtifactChosen; // bool: open in a new browser window (middle-click)
 
     // ── Right-click context menu (4.13) ───────────────────────────────────────
-    // External (ntfy) notifications + the experimental confetti-finish are gated by global settings that
-    // decide whether their per-session items appear at all. Confetti arming is in-memory only (never
-    // persisted, so a celebration can't fire by surprise after a restart) and is spent the moment the
-    // session next finishes (ConsumeConfetti). The QR / history windows themselves are Phase 5; the menu
-    // wires only their triggers.
+    // External (ntfy) notifications and the git-history ("View tree") item are gated by global settings that
+    // decide whether their per-session items appear at all. The QR / history windows themselves are Phase 5;
+    // the menu wires only their triggers.
     private bool _externalNotifyAvailable;
-    private bool _confettiAvailable;
-    private bool _reviewChangesAvailable;
-    private readonly HashSet<string> _confettiSessions = new();
+    private bool _viewTreeAvailable;
 
     /// <summary>Raised when the user picks "Exit Perch" from the header's right-click menu.</summary>
     public event Action? ExitRequested;
@@ -1190,10 +1174,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// is Phase 5; this wires only the trigger. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
     internal event Action<ClaudeSession>? QrRequested;
 
-    /// <summary>Raised when the user picks "Review changes…" for a session. The app opens the read-only git
-    /// Change Review window on the session's working directory. Gated by <see cref="_reviewChangesAvailable"/>
-    /// and a cheap repo check. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
-    internal event Action<ClaudeSession>? ReviewChangesRequested;
+    /// <summary>Raised when the user picks "View tree…" for a session. The app opens the git Tree window on
+    /// the session's working directory. Gated by <see cref="_viewTreeAvailable"/> and a cheap repo check.
+    /// Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
+    internal event Action<ClaudeSession>? ViewTreeRequested;
 
 #if DEBUG
     /// <summary>DEBUG-only: raised when the developer picks one of the PR-glyph right-click test items. The
@@ -1212,41 +1196,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
-    /// <summary>Whether the experimental confetti-finish is switched on globally — gates the right-click
-    /// arm/disarm item. Turning it off clears every armed session so nothing stays primed.</summary>
-    public void SetConfettiFinishAvailable(bool available)
+    /// <summary>Whether the git Tree feature is switched on globally — gates the right-click "View tree…"
+    /// item (which also requires the session's cwd to be a git repo).</summary>
+    public void SetViewTreeAvailable(bool available)
     {
-        if (_confettiAvailable == available) return;
-        _confettiAvailable = available;
-        if (!available) _confettiSessions.Clear();
-        InvalidateVisual();
-    }
-
-    /// <summary>Whether the experimental git Change Review feature is switched on globally — gates the
-    /// right-click "Review changes…" item (which also requires the session's cwd to be a git repo).</summary>
-    public void SetReviewChangesAvailable(bool available)
-    {
-        if (_reviewChangesAvailable == available) return;
-        _reviewChangesAvailable = available;
-        InvalidateVisual();
-    }
-
-    /// <summary>If the session was armed for a confetti finish, disarm it and report true so the app can
-    /// set off the celebration. Arming is one-shot: a finish spends it. Returns false otherwise.</summary>
-    public bool ConsumeConfetti(string sessionId)
-    {
-        if (!_confettiAvailable || !_confettiSessions.Remove(sessionId)) return false;
-        InvalidateVisual();
-        return true;
-    }
-
-    private bool ConfettiArmed(ClaudeSession s) => _confettiAvailable && _confettiSessions.Contains(s.SessionId);
-
-    // Flips a session's confetti arming from the right-click menu (in-memory only). Internal (not
-    // private) so the headless render harness can arm a row the same way the menu does.
-    internal void ToggleConfetti(string sessionId)
-    {
-        if (!_confettiSessions.Remove(sessionId)) _confettiSessions.Add(sessionId);
+        if (_viewTreeAvailable == available) return;
+        _viewTreeAvailable = available;
         InvalidateVisual();
     }
 
@@ -2165,12 +2120,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         double statusW = OverlayDraw.MeasureWidth(statusText, StatusSize);
 
-        // Left-of-name glyph cluster: warn, artifact, mail, remote-control, party (confetti armed), bot.
+        // Left-of-name glyph cluster: warn, artifact, mail, remote-control, bot.
         bool stuck = _showStuckWarnings && session.IsStuck;
         double warnW = stuck ? WarnIconWidth : 0;
         bool hasArtifacts = _showArtifacts && session.HasArtifacts;
         double artW = hasArtifacts ? ArtifactIconWidth : 0;
-        double partyW = ConfettiArmed(session) ? PartyIconWidth : 0;
         double mailW = session.ExternalNotify ? MailIconWidth : 0;
         double rcW   = session.RemoteControlled ? RcIconWidth : 0;
         double botW  = session.IsBackground ? BotIconWidth : 0;
@@ -2209,7 +2163,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         const double GitGap = 4;
         double gitW = showGit ? gitAddW + GitGap + gitDelW + 8 : 0;
 
-        double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - botW - partyW - mailW
+        double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - botW - mailW
                          - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
@@ -2227,24 +2181,23 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
         if (mailW > 0)    DrawMailIcon(ctx, HorizPad + 14 + warnW + artW, nameMidY);
         if (rcW > 0)   DrawRemoteIcon(ctx, HorizPad + 16 + warnW + artW + mailW, nameMidY);
-        if (partyW > 0) DrawPartyIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW, nameMidY);
-        if (botW > 0)  DrawBotIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW + partyW, nameMidY);
+        if (botW > 0)  DrawBotIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW, nameMidY);
         if (noteW > 0)
         {
-            double noteGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW;
+            double noteGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + botW;
             // Full amber for a session note; dimmed for a project-only note so it stays ambient.
             DrawNoteIcon(ctx, noteGlyphX, nameMidY, session.HasNote ? NoteBrush : NoteDimBrush);
             _noteRects[rowIndex] = new Rect(noteGlyphX - 2, nameMidY - 9, NoteIconWidth + 2, 18);
         }
         if (showPr)
         {
-            double prGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW + noteW;
+            double prGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW;
             DrawPrIcon(ctx, prGlyphX, nameMidY, session.PullRequest!.Value.State,
                 session.PullRequest!.Value.ChecksRollup, hovered: _hoveredPrRow == rowIndex);
             _prRects[rowIndex] = new Rect(prGlyphX - 2, nameMidY - 9, PrIconWidth + 2, 18);
         }
 
-        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + partyW + botW + noteW + prW;
+        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
         // Git churn immediately right of the name: "+added" green, "-deleted" red.
@@ -2488,26 +2441,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // The background-session robot glyph: antenna + rounded-square face + two dot eyes.
-    // The "confetti finish" indicator: a little party popper — a gold cone spraying a fan of coloured
-    // confetti up and to the right — drawn on a session that's armed to celebrate when it next finishes.
-    private static void DrawPartyIcon(DrawingContext ctx, double x, double midY)
-    {
-        // Cone: a narrow gold triangle, apex at the bottom-left, mouth opening toward the upper-right.
-        var cone = new StreamGeometry();
-        using (var gc = cone.Open())
-        {
-            gc.BeginFigure(new Point(x + 2, midY + 6), isFilled: true);   // apex
-            gc.LineTo(new Point(x + 11, midY - 4));                       // mouth top
-            gc.LineTo(new Point(x + 6, midY + 3));                        // mouth bottom
-            gc.EndFigure(true);
-        }
-        ctx.DrawGeometry(PartyConeBrush, null, cone);
-
-        // Confetti: a few small dots sprayed out from the cone's mouth, each a different festive colour.
-        foreach (var (dx, dy, r, brush) in PartyBits)
-            ctx.DrawEllipse(brush, null, new Point(x + dx, midY + dy), r, r);
-    }
-
     private static void DrawBotIcon(DrawingContext ctx, double x, double midY)
     {
         var pen = new Pen(BotBrush, 1.3, lineCap: PenLineCap.Round);
@@ -3284,50 +3217,47 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         if (sessionRow && _rows[row].Session is { } s)
         {
-            // View history / copy id / open transcript work on any session row — sub-agent rows resolve
-            // to their parent session, which owns the transcript.
-            items.Add(MenuItem("View history", () => HistoryRequested?.Invoke(s.SessionId)));
-            items.Add(MenuItem("Copy session ID", () => CopyToClipboard(s.SessionId)));
-            items.Add(MenuItem("Open transcript in VS Code", () => OpenTranscriptInVsCode(s)));
+            // The menu is grouped by everyday use, most-used first, with the technical (copy id / transcript)
+            // items tucked at the bottom. Groups are separated only when non-empty (AddMenuGroups), so a
+            // sub-agent row — which has no note/terminate/git-history items — collapses cleanly.
 
+            // 1. Primary view. History works on any row (a sub-agent resolves to its parent). QR for a
+            //    remote-controlled session.
+            var view = new List<Control> { MenuItem("View history", () => HistoryRequested?.Invoke(s.SessionId)) };
             if (s.RemoteControlled)
-                items.Add(MenuItem("Show QR code", () => QrRequested?.Invoke(s)));
+                view.Add(MenuItem("Show QR code", () => QrRequested?.Invoke(s)));
 
-            // Pinned notes apply to a real session row (not its sub-agents). Always available — notes are
-            // a core, ungated feature like history/copy-id.
-            if (!subRow)
+            // 2. Session actions on a real row: git history, note (only when the notes feature is on),
+            //    external notifications. Each gated by its global switch / a cheap repo check.
+            var actions = new List<Control>();
+            if (!subRow && _viewTreeAvailable && GitRepoService.IsRepo(s.Cwd))
+                actions.Add(MenuItem("View git history…", () => ViewTreeRequested?.Invoke(s)));
+            if (!subRow && _showNoteLine)
             {
-                items.Add(MenuItem(s.HasAnyNote ? "Edit note…" : "Add note…", () => NoteEditRequested?.Invoke(s)));
+                actions.Add(MenuItem(s.HasAnyNote ? "Edit note…" : "Add note…", () => NoteEditRequested?.Invoke(s)));
                 if (s.HasNote)
-                    items.Add(MenuItem("Clear note", () => NoteClearRequested?.Invoke(s.SessionId)));
+                    actions.Add(MenuItem("Clear note", () => NoteClearRequested?.Invoke(s.SessionId)));
             }
-
-            // External-notify + confetti apply only to a real session row (not its sub-agents), and only
-            // while switched on globally.
             if (!subRow && _externalNotifyAvailable)
             {
                 string label = s.ExternalNotify ? "Disable external notifications" : "Enable external notifications";
-                items.Add(MenuItem(label, () => ExternalNotifyToggleRequested?.Invoke(s.SessionId)));
-            }
-            if (!subRow && _confettiAvailable)
-            {
-                string label = ConfettiArmed(s) ? "Cancel confetti finish" : "Confetti finish";
-                items.Add(MenuItem(label, () => ToggleConfetti(s.SessionId)));
+                actions.Add(MenuItem(label, () => ExternalNotifyToggleRequested?.Invoke(s.SessionId)));
             }
 
-            // Git change review applies to a real session row whose cwd is a git working tree, and only
-            // while switched on globally. The repo check is a cheap filesystem walk (no process spawn).
-            if (!subRow && _reviewChangesAvailable && GitRepoService.IsRepo(s.Cwd))
-                items.Add(MenuItem("Review changes…", () => ReviewChangesRequested?.Invoke(s)));
-
-            // Terminate goes last and behind a separator — it's the only destructive item here, and a
-            // mis-click costs the user a running session. Sub-agent rows are excluded: they have no
-            // process of their own (they run inside the parent), so there is nothing to kill.
+            // 3. Terminate — the one destructive item, isolated in its own group. Sub-agent rows have no
+            //    process of their own, so nothing to kill.
+            var danger = new List<Control>();
             if (!subRow)
+                danger.Add(MenuItem("Terminate session…", () => TerminateRequested?.Invoke(s)));
+
+            // 4. Technical actions, out of the way at the bottom.
+            var tech = new List<Control>
             {
-                items.Add(new Separator());
-                items.Add(MenuItem("Terminate session…", () => TerminateRequested?.Invoke(s)));
-            }
+                MenuItem("Copy session ID", () => CopyToClipboard(s.SessionId)),
+                MenuItem("Open transcript in VS Code", () => OpenTranscriptInVsCode(s)),
+            };
+
+            AddMenuGroups(items, view, actions, danger, tech);
         }
 
         // Right-clicking a strip toggles just that strip off (only when it's actually showing); the
@@ -3363,6 +3293,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         item.Click += (_, _) => onClick();
         if (onMiddleClick is not null) WireMiddleClick(item, onMiddleClick);
         return item;
+    }
+
+    // Appends each non-empty group to the menu, inserting a separator before a group only when something is
+    // already there — so empty groups (e.g. a sub-agent row's note/terminate) never leave stray separators.
+    private static void AddMenuGroups(List<Control> items, params IReadOnlyList<Control>[] groups)
+    {
+        foreach (var g in groups)
+        {
+            if (g.Count == 0) continue;
+            if (items.Count > 0) items.Add(new Separator());
+            items.AddRange(g);
+        }
     }
 
     // A flyout item that opens a URL: left-click uses the running browser (fast, reuses a tab); middle-click

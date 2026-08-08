@@ -42,7 +42,7 @@ public partial class App : Application
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
     private HistoryWindow? _historyWindow;
-    private GitReviewWindow? _reviewWindow;
+    private GitTreeWindow? _treeWindow;
     private PlacementEditorWindow? _placementEditor;
     // Open sticky notes, keyed so a second request for the same note focuses the existing one rather than
     // stacking a duplicate: "__scratch__" for the global pad, the sessionId for a session's row note. They
@@ -196,8 +196,8 @@ public partial class App : Application
             };
 
             // A session finishing or blocking flashes the overlay's attention chase-border (and expands
-            // it if collapsed). A finish also spends any armed confetti. Both fire the desktop
-            // toast + chime + external push (gated per settings) via the notification dispatcher.
+            // it if collapsed). Both fire the desktop toast + chime + external push (gated per settings)
+            // via the notification dispatcher.
             _monitorHost.NeedsAttention += OnNeedsAttention;
             _monitorHost.AwaitingInput += OnAwaitingInput;
             _monitorHost.ApiError += OnApiError;
@@ -221,8 +221,8 @@ public partial class App : Application
             _overlay.Canvas.MicJumpRequested += JumpToMicApp;
 
             // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
-            // down. History / QR / external-notify / confetti are Phase-5 concerns — their triggers are
-            // wired here so the menu is complete, with best-effort/stub handlers until those windows land.
+            // down. History / QR / external-notify are Phase-5 concerns — their triggers are wired here so
+            // the menu is complete, with best-effort/stub handlers until those windows land.
             _overlay.Canvas.ExitRequested += () => desktop.Shutdown();
             _overlay.Canvas.SetPlacementsRequested += OpenPlacementEditor;
             _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
@@ -231,7 +231,7 @@ public partial class App : Application
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
             _overlay.Canvas.NoteEditRequested += OnEditNote;
-            _overlay.Canvas.ReviewChangesRequested += OnReviewChanges;
+            _overlay.Canvas.ViewTreeRequested += OnViewTree;
 #if DEBUG
             // DEBUG-only: the PR glyph's right-click test items drive the real PR alert path (toast/chime/push
             // + banner) with the PR state/reviews synthesised, so any of them can be previewed without a real
@@ -403,7 +403,7 @@ public partial class App : Application
     {
         _settings?.Close();
         _historyWindow?.Close();
-        _reviewWindow?.Close();
+        _treeWindow?.Close();
         _placementEditor?.Close();
         _statsWindow?.Close();
         _daemonListWindow?.Close();
@@ -543,10 +543,8 @@ public partial class App : Application
         }
     }
 
-    // A session finished (NeedsAttention): flash the overlay, fire the notification (toast/chime/external,
-    // gated per settings), and if it was armed for a confetti finish, spend the arming and set off the
-    // celebration on the overlay's current screen.
-    private ConfettiWindow? _confetti;
+    // A session finished (NeedsAttention): flash the overlay and fire the notification (toast/chime/external,
+    // gated per settings).
     // True when the session is one of the daemon's headless background workers. Those are deliberately
     // silent: no attention flash, no toast/chime/external push — they have no terminal to jump to, so an
     // alert would only lead to a dead click. Read from the roster watcher's latest list, which is empty
@@ -559,8 +557,6 @@ public partial class App : Application
         if (IsDaemonSession(session)) return;
         _overlay!.Canvas.TriggerAttention(SessionStatus.NeedsAttention);
         _notifications?.Notify(NotificationKind.Done, session);
-        if (_overlay.Canvas.ConsumeConfetti(session.SessionId))
-            LaunchConfetti();
         CheckAchievements(force: false); // a finish is a natural moment to have crossed a threshold
     }
 
@@ -678,14 +674,6 @@ public partial class App : Application
         if (int.TryParse(pid, out int p))
             _ = PlatformServices.WindowActivator.FocusTerminalForProcess(p, project);
         _monitorHost?.Acknowledge(pid);
-    }
-
-    private void LaunchConfetti()
-    {
-        if (_overlay is null) return;
-        var screen = _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
-        if (screen is null) return;
-        (_confetti ??= new ConfettiWindow()).Launch(screen);
     }
 
     // Reveals the achievement card(s) — a vignette + coin-flip reveal in the middle of the overlay's
@@ -847,16 +835,19 @@ public partial class App : Application
         _overlay?.Canvas.ApplyPlacementsLive(floating, dense);
     }
 
-    // "Review changes…" (overlay row) — opens/focuses the one read-only git Change Review window and points
-    // it at the clicked session's working directory. The menu item only appears when the feature is on and
-    // the cwd is a git repo (see OverlayCanvas), so this just re-points the reused window.
-    private void OnReviewChanges(ClaudeSession session)
+    // "View tree…" (overlay row) — opens/focuses the one git Tree window and points it at the clicked
+    // session's working directory. The menu item only appears when the feature is on and the cwd is a git
+    // repo (see OverlayCanvas), so this just re-points the reused window.
+    private void OnViewTree(ClaudeSession session)
     {
         var pr = session.PullRequest;
-        _reviewWindow = WindowHost.ShowOrFocus(_reviewWindow,
-            () => new GitReviewWindow(_appSettings ?? AppSettings.Load()),
-            () => _reviewWindow = null,
-            w => w.Retarget(session.Cwd, session.DisplayName, pr));
+        // "Active" = the session is live and may be writing to this tree (working or waiting to resume), so
+        // the Tree window guards a commit behind a confirm. Idle / finished / errored sessions don't.
+        bool isActive = session.Status is SessionStatus.Running or SessionStatus.AwaitingInput;
+        _treeWindow = WindowHost.ShowOrFocus(_treeWindow,
+            () => new GitTreeWindow(_appSettings ?? AppSettings.Load()),
+            () => _treeWindow = null,
+            w => w.Retarget(session.Cwd, session.DisplayName, pr, isActive));
     }
 
     private void OpenAchievements() =>

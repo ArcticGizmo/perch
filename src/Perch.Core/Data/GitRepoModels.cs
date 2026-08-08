@@ -58,15 +58,27 @@ public readonly record struct GitRepoStatus(
 }
 
 /// <summary>One entry from <c>git log</c>: full and abbreviated hash, author name, author date, the commit
-/// subject (first line of the message), and the full raw message <see cref="Body"/> (subject + body, for a
-/// hover tooltip). <see cref="Body"/> falls back to <see cref="Subject"/> when no body was captured.</summary>
+/// subject (first line of the message), the full raw message <see cref="Body"/> (subject + body, for a
+/// hover tooltip), and the space-separated parent hashes (git's <c>%P</c>). <see cref="Body"/> falls back to
+/// <see cref="Subject"/> when no body was captured; <see cref="Parents"/> is empty for a root commit.
+/// It is kept as the raw string (not a list) so this record retains value equality — the auto-refresh
+/// diffing in the tree/review windows compares whole commit lists by value.</summary>
 public readonly record struct GitCommit(
     string Hash,
     string ShortHash,
     string Author,
     DateTimeOffset Date,
     string Subject,
-    string Body);
+    string Body,
+    string Parents = "")
+{
+    /// <summary>The parent commit hashes, split from <see cref="Parents"/>; empty for a root commit.</summary>
+    public IReadOnlyList<string> ParentHashes =>
+        Parents.Length == 0 ? [] : Parents.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+    /// <summary>True when this commit has more than one parent (a merge commit).</summary>
+    public bool IsMerge => Parents.IndexOf(' ') >= 0;
+}
 
 /// <summary>One line of a unified diff — its <see cref="Kind"/> and text with the leading git marker
 /// (<c> </c>/<c>+</c>/<c>-</c>) stripped for payload lines; <see cref="GitDiffLineKind.Meta"/> keeps the

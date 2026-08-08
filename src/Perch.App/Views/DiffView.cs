@@ -13,9 +13,33 @@ using Perch.Data;
 
 namespace Perch.Avalonia.Views;
 
+/// <summary>Whether a diff section's hunks can be staged/unstaged, and which way — drives the per-hunk
+/// buttons in the diff pane. <see cref="None"/> for read-only sections (a commit, or a clean file).
+/// <see cref="Discard"/> is only ever a request (from the Discard button on a stageable section), never a
+/// section's own action.</summary>
+internal enum HunkStageAction { None, Stage, Unstage, Discard }
+
 /// <summary>One labelled diff to render — e.g. ("Staged", …) / ("Unstaged", …) when a file has both, or a
-/// single unlabelled section for a commit or a plain file diff.</summary>
-internal readonly record struct DiffSection(string? Label, GitDiff Diff);
+/// single unlabelled section for a commit or a plain file diff. <see cref="Action"/> makes the section's
+/// hunks stage- or unstage-able (the working-tree sections of the Tree window's WIP node).</summary>
+internal readonly record struct DiffSection(string? Label, GitDiff Diff, HunkStageAction Action = HunkStageAction.None);
+
+/// <summary>Raised when the user clicks a hunk's stage/unstage button — carries which way, the file path,
+/// and the hunk's header (the range identifies it for <c>git apply</c>).</summary>
+internal readonly record struct HunkStageRequest(HunkStageAction Action, string? Path, string HunkHeader);
+
+/// <summary>Whether the current line selection can be staged/unstaged, which way, and how many lines — drives
+/// the window's "Stage/Unstage lines" button. <see cref="Available"/> is false unless the whole line
+/// selection sits in one stageable hunk.</summary>
+internal readonly record struct LineStageState(bool Available, HunkStageAction Action, int Count);
+
+/// <summary>Raised when the user stages/unstages the selected lines — the file path, the hunk header, and the
+/// 0-based indices (into the hunk's body lines) of the selected lines.</summary>
+internal readonly record struct LineStageRequest(HunkStageAction Action, string? Path, string HunkHeader, int[] Indices);
+
+/// <summary>Raised when the user clicks a file's whole-file stage/discard/unstage button (the file-scope
+/// staging surface shown in Unified/Split modes, where there are no per-hunk buttons).</summary>
+internal readonly record struct FileStageRequest(HunkStageAction Action, string? Path);
 
 /// <summary>
 /// The unified-or-split diff surface for the Change Review window. Each hunk is laid out as a grid with one
@@ -30,21 +54,25 @@ internal readonly record struct DiffSection(string? Label, GitDiff Diff);
 /// </summary>
 internal sealed class DiffView : Border
 {
-    private static readonly Color BodyBg = Color.FromRgb(18, 18, 24);
-    private static readonly IBrush FileBarBg = new SolidColorBrush(Color.FromRgb(30, 30, 42));
-    private static readonly IBrush SectionBarBg = new SolidColorBrush(Color.FromRgb(40, 40, 56));
-    private static readonly IBrush TitleBrush = new SolidColorBrush(Palette.Title);
-    private static readonly IBrush MutedBrush = new SolidColorBrush(Palette.Muted);
-    private static readonly IBrush GutterBrush = new SolidColorBrush(Color.FromRgb(110, 110, 132));
-    private static readonly IBrush ContextBrush = new SolidColorBrush(Color.FromRgb(190, 190, 205));
-    private static readonly IBrush AddedBrush = new SolidColorBrush(Palette.Green);
-    private static readonly IBrush RemovedBrush = new SolidColorBrush(Palette.Red);
-    private static readonly IBrush HunkBrush = new SolidColorBrush(Palette.Accent);
-    private static readonly IBrush SelectionBrush = new SolidColorBrush(Color.FromArgb(90, 96, 165, 250));
-    private static readonly IBrush AddedBandBg = new SolidColorBrush(Color.FromArgb(36, 34, 197, 94));
-    private static readonly IBrush RemovedBandBg = new SolidColorBrush(Color.FromArgb(36, 239, 68, 68));
-    private static readonly IBrush MatchBg = new SolidColorBrush(Color.FromArgb(85, 250, 204, 21));        // all matches (yellow)
-    private static readonly IBrush CurrentMatchBg = new SolidColorBrush(Color.FromArgb(190, 255, 158, 40)); // current match (orange)
+    // Palette-driven brushes. Instance (not static) so the diff can render light or dark independently of the
+    // rest of the app (the Tree window's per-window light toggle) — SetLight swaps the whole set and rebuilds.
+    private Color BodyBg;
+    private IBrush FileBarBg = null!;
+    private IBrush SectionBarBg = null!;
+    private IBrush TitleBrush = null!;
+    private IBrush MutedBrush = null!;
+    private IBrush GutterBrush = null!;
+    private IBrush ContextBrush = null!;
+    private IBrush AddedBrush = null!;
+    private IBrush RemovedBrush = null!;
+    private IBrush HunkBrush = null!;
+    private IBrush SelectionBrush = null!;
+    private IBrush AddedBandBg = null!;
+    private IBrush RemovedBandBg = null!;
+    private IBrush MatchBg = null!;         // all matches (yellow)
+    private IBrush CurrentMatchBg = null!;  // current match (orange)
+    private IBrush LineSelBg = null!;       // whole-line selection wash
+    private bool _light;
 
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
     private const double LineSize = 12.5, PathSize = 13, HunkSize = 12;
@@ -58,6 +86,12 @@ internal sealed class DiffView : Border
     private bool _loading;
     private bool _split;
     private bool _wrap = true;
+    // Hunk mode: staging buttons render per hunk (+ line staging). Otherwise (Unified/Split) staging renders
+    // once per file, on the file header bar — set via SetPerHunk.
+    private bool _perHunkButtons;
+    // Plain-file mode (the "Previous"/"Current" content views): the sections are whole files rendered as
+    // all-context lines. Forces a single column and suppresses all staging buttons regardless of split/hunk.
+    private bool _plain;
 
     // Collapsed file sections, keyed per file so the state survives a rebuild (wrap/split toggle). The key
     // being built for the file currently under construction, so AddText can tag each line with it.
@@ -91,15 +125,33 @@ internal sealed class DiffView : Border
     private bool _dragging;
     private Point _dragPtViewport;                                             // last drag point, in ScrollViewer space
     private DispatcherTimer? _autoScroll;                                       // edge auto-scroll while char-dragging
-    private static readonly IBrush LineSelBg = new SolidColorBrush(Color.FromArgb(70, 96, 165, 250));
 
     /// <summary>Raised after a search/navigation changes the match set — (current 1-based index or 0, total).</summary>
     public event Action<int, int>? SearchResultsChanged;
 
+    /// <summary>Raised when the user clicks a hunk's stage/unstage button (only present on sections whose
+    /// <see cref="DiffSection.Action"/> isn't <see cref="HunkStageAction.None"/>).</summary>
+    public event Action<HunkStageRequest>? HunkStageRequested;
+
+    /// <summary>Raised as the line selection changes, so the window can enable/label its "Stage/Unstage
+    /// lines" button.</summary>
+    public event Action<LineStageState>? LineStageStateChanged;
+
+    /// <summary>Raised when the user asks to stage/unstage the current line selection.</summary>
+    public event Action<LineStageRequest>? LineStageRequested;
+
+    /// <summary>Raised when the user clicks a whole-file stage/discard/unstage button (file-scope staging, in
+    /// Unified/Split modes).</summary>
+    public event Action<FileStageRequest>? FileStageRequested;
+
     public DiffView()
     {
-        Background = new SolidColorBrush(BodyBg);
+        ApplyDiffPalette(); // sets every brush + Background for the current (default dark) mode
         Padding = new Thickness(0, 0, 0, 12);
+        Cursor = new Cursor(StandardCursorType.Ibeam); // the body reads as selectable text; gutter overrides to Hand
+        // Click anywhere in the body (line ends, marker gutter, gaps) to start a char selection. Bubbling, so
+        // it only fires for presses a child (gutter number / text cell / header) didn't already handle.
+        AddHandler(PointerPressedEvent, OnBodyPointerPressed, RoutingStrategies.Bubble);
         // A pointer release anywhere ends a drag and releases any capture we took for a char-selection drag
         // (handledEventsToo so a child handling the release still ends the drag).
         AddHandler(PointerReleasedEvent, (_, e) =>
@@ -123,6 +175,63 @@ internal sealed class DiffView : Border
         Rebuild();
     }
 
+    /// <summary>Switches the diff between light and dark rendering, independent of the app theme (the Tree
+    /// window's per-window toggle). Swaps the whole brush set and rebuilds.</summary>
+    public void SetLight(bool light)
+    {
+        if (_light == light) return;
+        _light = light;
+        ApplyDiffPalette();
+        Rebuild();
+    }
+
+    // Fills every colour field for the current mode and sets the surface background. Dark mirrors the original
+    // literals (and the Palette-derived add/remove/hunk hues); light uses darker, print-legible variants.
+    private void ApplyDiffPalette()
+    {
+        IBrush B(byte r, byte g, byte b) => new SolidColorBrush(Color.FromRgb(r, g, b));
+        IBrush A(byte a, byte r, byte g, byte b) => new SolidColorBrush(Color.FromArgb(a, r, g, b));
+        if (_light)
+        {
+            BodyBg = Color.FromRgb(0xFB, 0xFC, 0xFE);
+            FileBarBg = B(0xF1, 0xF2, 0xF5);
+            SectionBarBg = B(0xE6, 0xE9, 0xF0);
+            TitleBrush = B(0x0D, 0x0E, 0x16);
+            MutedBrush = B(0x5C, 0x60, 0x72);
+            GutterBrush = B(0x9A, 0xA0, 0xAE);
+            ContextBrush = B(0x24, 0x29, 0x2F);
+            AddedBrush = B(0x1F, 0x88, 0x3D);
+            RemovedBrush = B(0xCF, 0x22, 0x2E);
+            HunkBrush = B(0x2F, 0x68, 0xE0);
+            SelectionBrush = A(70, 0x2F, 0x68, 0xE0);
+            AddedBandBg = A(30, 0x1F, 0x88, 0x3D);
+            RemovedBandBg = A(28, 0xCF, 0x22, 0x2E);
+            MatchBg = A(96, 0xF5, 0xD0, 0x00);
+            CurrentMatchBg = A(200, 0xF0, 0x8A, 0x00);
+            LineSelBg = A(55, 0x2F, 0x68, 0xE0);
+        }
+        else
+        {
+            BodyBg = Color.FromRgb(18, 18, 24);
+            FileBarBg = B(30, 30, 42);
+            SectionBarBg = B(40, 40, 56);
+            TitleBrush = new SolidColorBrush(Palette.Title);
+            MutedBrush = new SolidColorBrush(Palette.Muted);
+            GutterBrush = B(110, 110, 132);
+            ContextBrush = B(190, 190, 205);
+            AddedBrush = new SolidColorBrush(Palette.Green);
+            RemovedBrush = new SolidColorBrush(Palette.Red);
+            HunkBrush = new SolidColorBrush(Palette.Accent);
+            SelectionBrush = A(90, 96, 165, 250);
+            AddedBandBg = A(36, 34, 197, 94);
+            RemovedBandBg = A(36, 239, 68, 68);
+            MatchBg = A(85, 250, 204, 21);
+            CurrentMatchBg = A(190, 255, 158, 40);
+            LineSelBg = A(70, 96, 165, 250);
+        }
+        Background = new SolidColorBrush(BodyBg);
+    }
+
     public void SetLoading()
     {
         _loading = true;
@@ -140,11 +249,16 @@ internal sealed class DiffView : Border
     }
 
     /// <summary>Show one or more labelled diff sections (e.g. Staged + Unstaged for one file).</summary>
-    public void SetSections(IReadOnlyList<DiffSection> sections, string? note)
+    public void SetSections(IReadOnlyList<DiffSection> sections, string? note) => SetSections(sections, note, plain: false);
+
+    /// <summary>Show diff sections, or (<paramref name="plain"/>) whole files rendered as plain, all-context
+    /// listings — the "Previous"/"Current" content views: a single numbered column, no deltas, no staging.</summary>
+    public void SetSections(IReadOnlyList<DiffSection> sections, string? note, bool plain)
     {
         _loading = false;
         _sections = sections;
         _note = note;
+        _plain = plain;
         Rebuild();
     }
 
@@ -153,6 +267,15 @@ internal sealed class DiffView : Border
     {
         if (_split == split) return;
         _split = split;
+        Rebuild();
+    }
+
+    /// <summary>Choose the staging granularity: per-hunk buttons on each hunk header plus line-level staging
+    /// (true, "Hunk" mode), or a single whole-file button set on each file header (false, "Unified"/"Split").</summary>
+    public void SetPerHunk(bool perHunk)
+    {
+        if (_perHunkButtons == perHunk) return;
+        _perHunkButtons = perHunk;
         Rebuild();
     }
 
@@ -309,7 +432,7 @@ internal sealed class DiffView : Border
                 if (section.Label is { } label)
                     root.Children.Add(SectionHeader(label));
                 foreach (var file in section.Diff.Files)
-                    root.Children.Add(FileSection(section.Label, file));
+                    root.Children.Add(FileSection(section.Label, file, section.Action));
             }
 
         // The match-highlight layer sits behind the content (first child) so highlights paint behind the
@@ -327,11 +450,18 @@ internal sealed class DiffView : Border
         }
     }
 
-    private Control FileSection(string? sectionLabel, GitDiffFile file)
+    private Control FileSection(string? sectionLabel, GitDiffFile file, HunkStageAction action)
     {
         string key = (sectionLabel ?? "") + "\n" + FileLabel(file);
         bool collapsed = _collapsed.Contains(key);
         _currentFileKey = key;
+        string? filePath = file.NewPath ?? file.OldPath;
+
+        // Plain (Previous/Current) forces a single column and no staging buttons. Otherwise: in Hunk mode the
+        // staging buttons live on each hunk header; in Unified/Split they render once, at file scope.
+        bool split = _split && !_plain;
+        bool perHunk = _perHunkButtons && !_plain;
+        var hunkAction = perHunk ? action : HunkStageAction.None;
 
         var chevron = new TextBlock
         {
@@ -339,25 +469,30 @@ internal sealed class DiffView : Border
             Foreground = MutedBrush, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 6, 0),
         };
+        var headerLabel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                chevron,
+                new TextBlock
+                {
+                    Text = FileLabel(file), Foreground = TitleBrush, FontSize = PathSize,
+                    FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis,
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+            },
+        };
+        // File-scope stage/discard/unstage buttons (Unified/Split modes). Docked right of the file bar.
+        Control headerChild = !perHunk && !_plain && action != HunkStageAction.None
+            ? new DockPanel { LastChildFill = true, Children = { FileStageButtons(action, filePath), headerLabel } }
+            : headerLabel;
         var header = new Border
         {
             Background = FileBarBg,
             Padding = new Thickness(10, 6),
             Cursor = new Cursor(StandardCursorType.Hand),
-            Child = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Children =
-                {
-                    chevron,
-                    new TextBlock
-                    {
-                        Text = FileLabel(file), Foreground = TitleBrush, FontSize = PathSize,
-                        FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis,
-                        VerticalAlignment = VerticalAlignment.Center,
-                    },
-                },
-            },
+            Child = headerChild,
         };
 
         var content = new StackPanel { Orientation = Orientation.Vertical, IsVisible = !collapsed };
@@ -368,13 +503,16 @@ internal sealed class DiffView : Border
         else
         {
             int budget = MaxLinesPerFile;
+            string? path = filePath;
             foreach (var hunk in file.Hunks)
             {
                 var (oldStart, newStart) = HunkStarts(hunk.Header);
-                content.Children.Add(HunkHeader(hunk.Header));
-                content.Children.Add(_split
-                    ? SplitHunk(hunk, oldStart, newStart, ref budget)
-                    : UnifiedHunk(hunk, oldStart, newStart, ref budget));
+                if (!_plain) content.Children.Add(HunkHeader(hunk.Header, hunkAction, path));
+                var hunkBody = split
+                    ? SplitHunk(hunk, oldStart, newStart, ref budget, hunkAction, path)
+                    : UnifiedHunk(hunk, oldStart, newStart, ref budget, hunkAction, path);
+                hunkBody.Margin = new Thickness(0, 0, 0, 18); // breathing room between hunks
+                content.Children.Add(hunkBody);
                 if (budget <= 0)
                 {
                     content.Children.Add(Message("… diff truncated (file too large)."));
@@ -385,18 +523,19 @@ internal sealed class DiffView : Border
 
         // Click the header bar to collapse/expand this file (persisted via _collapsed). Toggled in place so
         // the diff scroll position is preserved; matches are recomputed since collapsed lines aren't searched.
-        header.PointerPressed += (_, _) =>
+        header.PointerPressed += (_, e) =>
         {
             bool nowCollapsed = !_collapsed.Remove(key); // Remove returns false when it wasn't there → now collapse
             if (nowCollapsed) _collapsed.Add(key);
             content.IsVisible = !nowCollapsed;
             chevron.Text = nowCollapsed ? "▸" : "▾";
             if (_query.Length > 0) { RecomputeMatches(); Highlight(); RaiseResults(); }
+            e.Handled = true; // consume, so the body's click-to-select doesn't fire on the header
         };
 
         return new StackPanel
         {
-            Orientation = Orientation.Vertical, Margin = new Thickness(0, 0, 0, 10),
+            Orientation = Orientation.Vertical, Margin = new Thickness(0, 0, 0, 22),
             Children = { header, content },
         };
     }
@@ -405,13 +544,14 @@ internal sealed class DiffView : Border
     // lines); a faint band tints added/removed rows. The marker sits in its own non-selectable column so the
     // text cell holds pure code - char selection and copy then map straight to the line's content, with no
     // marker to strip. A single grid per hunk shares the gutter/marker column widths, so everything lines up.
-    private Control UnifiedHunk(GitDiffHunk hunk, int oldNo, int newNo, ref int budget)
+    private Control UnifiedHunk(GitDiffHunk hunk, int oldNo, int newNo, ref int budget, HunkStageAction action, string? path)
     {
         var grid = NewGrid("Auto,Auto,*");
         int row = 0;
-        foreach (var line in hunk.Lines)
+        for (int i = 0; i < hunk.Lines.Count; i++)
         {
             if (budget-- <= 0) break;
+            var line = hunk.Lines[i];
             var (brush, band, marker, num) = line.Kind switch
             {
                 GitDiffLineKind.Added => (AddedBrush, AddedBandBg, "+", (newNo++).ToString()),
@@ -423,7 +563,7 @@ internal sealed class DiffView : Border
             var number = AddNumber(grid, row, 0, num);
             AddMarker(grid, row, 1, marker, brush);
             var text = AddText(grid, row, 2, line.Text, brush);
-            if (num.Length > 0) RegisterLine(0, line.Text, number, text);
+            if (num.Length > 0) RegisterLine(0, line.Text, number, text, hunk.Header, i, action, path);
             row++;
         }
         return grid;
@@ -432,12 +572,12 @@ internal sealed class DiffView : Border
     // Side-by-side: removed lines (left, old#) pair with the following added lines (right, new#); context
     // echoes on both sides; blanks pad the shorter side so paired rows line up. Columns: leftNum, leftText,
     // rightNum, rightText.
-    private Control SplitHunk(GitDiffHunk hunk, int oldNo, int newNo, ref int budget)
+    private Control SplitHunk(GitDiffHunk hunk, int oldNo, int newNo, ref int budget, HunkStageAction action, string? path)
     {
         var grid = NewGrid("Auto,*,Auto,*");
         int row = 0;
-        var pendingR = new List<(string text, string num)>();
-        var pendingA = new List<(string text, string num)>();
+        var pendingR = new List<(string text, string num, int idx)>();
+        var pendingA = new List<(string text, string num, int idx)>();
 
         void Flush()
         {
@@ -449,14 +589,14 @@ internal sealed class DiffView : Border
                     AddRow(grid, row, RemovedBandBg, 0, 2);
                     var num = AddNumber(grid, row, 0, pendingR[i].num);
                     var txt = AddText(grid, row, 1, pendingR[i].text, RemovedBrush);
-                    RegisterLine(0, pendingR[i].text, num, txt);
+                    RegisterLine(0, pendingR[i].text, num, txt, hunk.Header, pendingR[i].idx, action, path);
                 }
                 if (i < pendingA.Count)
                 {
                     AddRow(grid, row, AddedBandBg, 2, 2);
                     var num = AddNumber(grid, row, 2, pendingA[i].num);
                     var txt = AddText(grid, row, 3, pendingA[i].text, AddedBrush);
-                    RegisterLine(1, pendingA[i].text, num, txt);
+                    RegisterLine(1, pendingA[i].text, num, txt, hunk.Header, pendingA[i].idx, action, path);
                 }
                 row++;
             }
@@ -464,13 +604,14 @@ internal sealed class DiffView : Border
             pendingA.Clear();
         }
 
-        foreach (var line in hunk.Lines)
+        for (int i = 0; i < hunk.Lines.Count; i++)
         {
             if (budget-- <= 0) break;
+            var line = hunk.Lines[i];
             switch (line.Kind)
             {
-                case GitDiffLineKind.Removed: pendingR.Add((line.Text, (oldNo++).ToString())); break;
-                case GitDiffLineKind.Added: pendingA.Add((line.Text, (newNo++).ToString())); break;
+                case GitDiffLineKind.Removed: pendingR.Add((line.Text, (oldNo++).ToString(), i)); break;
+                case GitDiffLineKind.Added: pendingA.Add((line.Text, (newNo++).ToString(), i)); break;
                 default: // context / meta — flush pending change block, then echo on both sides
                     Flush();
                     var brush = line.Kind == GitDiffLineKind.Meta ? MutedBrush : ContextBrush;
@@ -482,8 +623,8 @@ internal sealed class DiffView : Border
                     var rTxt = AddText(grid, row, 3, line.Text, brush);
                     if (line.Kind != GitDiffLineKind.Meta)
                     {
-                        RegisterLine(0, line.Text, lNum, lTxt);
-                        RegisterLine(1, line.Text, rNum, rTxt);
+                        RegisterLine(0, line.Text, lNum, lTxt, hunk.Header, i, action, path);
+                        RegisterLine(1, line.Text, rNum, rTxt, hunk.Header, i, action, path);
                         oldNo++; newNo++;
                     }
                     row++;
@@ -588,10 +729,11 @@ internal sealed class DiffView : Border
     // Registers one selectable diff line (a gutter number + its text) in a stream, and wires both selection
     // modes: the gutter number starts/extends a whole-line range (Line mode); the text cell starts a
     // character-level drag (Char mode) that can span lines.
-    private void RegisterLine(int stream, string content, TextBlock number, TextBlock text)
+    private void RegisterLine(int stream, string content, TextBlock number, TextBlock text,
+        string hunkHeader, int hunkIndex, HunkStageAction action, string? path)
     {
         if (!_streams.TryGetValue(stream, out var list)) { list = new(); _streams[stream] = list; }
-        var entry = new LineEntry(stream, list.Count, content, number, text);
+        var entry = new LineEntry(stream, list.Count, content, number, text, hunkHeader, hunkIndex, action, path);
         list.Add(entry);
 
         // Line mode - gutter number.
@@ -654,12 +796,58 @@ internal sealed class DiffView : Border
                 e.Text.Background = sel ? LineSelBg : null;
             }
         }
+        RaiseLineStageState();
     }
 
     private void ClearLineSelection()
     {
         _selStream = _selAnchor = _selFocus = -1;
         ApplyLineHighlight();
+    }
+
+    // The stage state of the current line selection: available only when every selected line sits in one
+    // stageable hunk of one file (same path, hunk, and direction).
+    private LineStageState ComputeLineStageState()
+    {
+        if (_selKind != SelKind.Line || _selStream < 0 || _selAnchor < 0 || _selFocus < 0) return default;
+        if (!_streams.TryGetValue(_selStream, out var list)) return default;
+        int lo = Math.Min(_selAnchor, _selFocus), hi = Math.Max(_selAnchor, _selFocus);
+        HunkStageAction action = HunkStageAction.None;
+        string? header = null, path = null;
+        int count = 0;
+        foreach (var e in list)
+        {
+            if (e.Pos < lo || e.Pos > hi) continue;
+            if (e.Action == HunkStageAction.None) return default;
+            if (action == HunkStageAction.None) { action = e.Action; header = e.HunkHeader; path = e.Path; }
+            else if (e.Action != action || e.HunkHeader != header || e.Path != path) return default;
+            count++;
+        }
+        return count > 0 ? new LineStageState(true, action, count) : default;
+    }
+
+    private void RaiseLineStageState() => LineStageStateChanged?.Invoke(ComputeLineStageState());
+
+    /// <summary>Stages/unstages the current line selection (if it's a single stageable hunk) by raising
+    /// <see cref="LineStageRequested"/> with the selected lines' hunk-body indices.</summary>
+    public void RequestStageSelection()
+    {
+        if (_selKind != SelKind.Line || _selStream < 0 || _selAnchor < 0
+            || !_streams.TryGetValue(_selStream, out var list)) return;
+        int lo = Math.Min(_selAnchor, _selFocus), hi = Math.Max(_selAnchor, _selFocus);
+        HunkStageAction action = HunkStageAction.None;
+        string? header = null, path = null;
+        var indices = new List<int>();
+        foreach (var e in list)
+        {
+            if (e.Pos < lo || e.Pos > hi) continue;
+            if (e.Action == HunkStageAction.None) return;
+            if (action == HunkStageAction.None) { action = e.Action; header = e.HunkHeader; path = e.Path; }
+            else if (e.Action != action || e.HunkHeader != header || e.Path != path) return;
+            indices.Add(e.HunkIndex);
+        }
+        if (indices.Count > 0 && header is not null)
+            LineStageRequested?.Invoke(new LineStageRequest(action, path, header, indices.ToArray()));
     }
 
     // ---- char mode ----
@@ -674,34 +862,82 @@ internal sealed class DiffView : Border
         return Math.Clamp(idx, 0, tb.Text?.Length ?? 0);
     }
 
-    // Extends the char selection to a point in this control's (the scrolled content's) coordinate space:
-    // pick the line in the active stream whose vertical band contains the point (clamping past either end),
-    // then the caret within it.
-    private void ExtendCharTo(Point pView)
+    // The line in <paramref name="stream"/> nearest a point in this control's (the scrolled content's)
+    // coordinate space — the line whose vertical band contains the point, else the last line above it (so a
+    // click in the empty space at the end of a line, in the marker gutter, or between rows still resolves to
+    // a real caret) — plus the caret within it. Collapsed (hidden) lines are skipped. Null when the stream is
+    // empty. This is the shared resolver for both starting (click anywhere) and extending (drag) a selection.
+    private (LineEntry Line, int Ch)? NearestInStream(int stream, Point pView)
     {
-        if (!_streams.TryGetValue(_charStream, out var list) || list.Count == 0) return;
+        if (!_streams.TryGetValue(stream, out var list) || list.Count == 0) return null;
 
-        LineEntry chosen = list[0];
-        double bestAboveTop = double.NegativeInfinity;
-        bool inside = false;
+        LineEntry? chosen = null;
         foreach (var ent in list)
         {
+            if (!ent.Text.IsEffectivelyVisible) continue;
             if (ent.Text.TranslatePoint(new Point(0, 0), this) is not { } top) continue;
             double bottom = top.Y + ent.Text.Bounds.Height;
-            if (pView.Y >= top.Y && pView.Y <= bottom) { chosen = ent; inside = true; break; }
-            if (top.Y <= pView.Y && top.Y > bestAboveTop) { bestAboveTop = top.Y; chosen = ent; inside = true; }
+            if (pView.Y >= top.Y && pView.Y <= bottom) { chosen = ent; break; } // inside this line's band
+            if (top.Y <= pView.Y) chosen = ent;                                  // last line above the point
         }
-        // pView above every line -> chosen stays list[0]; HitTestPoint clamps the caret to 0. Below every
-        // line -> chosen is the last, caret clamps to its end.
-        _ = inside;
+        chosen ??= list.FirstOrDefault(l => l.Text.IsEffectivelyVisible) ?? list[0];
 
         int ch = this.TranslatePoint(pView, chosen.Text) is { } pInText ? CharIndexAt(chosen.Text, pInText) : 0;
-        if (_charFocusPos != chosen.Pos || _charFocusCh != ch)
+        return (chosen, ch);
+    }
+
+    // Which stream's text column a horizontal position falls in (unified: always the one stream; split: left
+    // vs right by nearest column). Lets a click choose the side before a line is resolved.
+    private int StreamAtX(double x)
+    {
+        int best = -1;
+        double bestDx = double.PositiveInfinity;
+        foreach (var (stream, list) in _streams)
         {
-            _charFocusPos = chosen.Pos;
-            _charFocusCh = ch;
+            LineEntry? rep = list.FirstOrDefault(e => e.Text.IsEffectivelyVisible) ?? (list.Count > 0 ? list[0] : null);
+            if (rep is null || rep.Text.TranslatePoint(new Point(0, 0), this) is not { } tl) continue;
+            double left = tl.X, right = tl.X + rep.Text.Bounds.Width;
+            double dx = x < left ? left - x : x > right ? x - right : 0;
+            if (dx < bestDx) { bestDx = dx; best = stream; }
+        }
+        return best;
+    }
+
+    // Extends the char selection to a point (drag), via the shared line/caret resolver.
+    private void ExtendCharTo(Point pView)
+    {
+        if (NearestInStream(_charStream, pView) is not { } hit) return;
+        if (_charFocusPos != hit.Line.Pos || _charFocusCh != hit.Ch)
+        {
+            _charFocusPos = hit.Line.Pos;
+            _charFocusCh = hit.Ch;
             _highlightLayer?.InvalidateVisual();
         }
+    }
+
+    // Click anywhere in the diff body (empty space at line ends, the marker gutter, between rows) starts a
+    // character selection at the nearest caret — the GitKraken-style "click empty space to select" behaviour.
+    // Only reached for presses no child handled (a gutter number starts line mode; the text cell and headers
+    // consume their own), so those keep precedence.
+    private void OnBodyPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.Handled || _streams.Count == 0) return;
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+
+        var pView = e.GetPosition(this);
+        int stream = StreamAtX(pView.X);
+        if (stream < 0 || NearestInStream(stream, pView) is not { } hit) return;
+
+        ClearLineSelection();
+        _selKind = SelKind.Char;
+        _charStream = stream;
+        _charAnchorPos = _charFocusPos = hit.Line.Pos;
+        _charAnchorCh = _charFocusCh = hit.Ch;
+        _dragging = true;
+        _autoScroll?.Start();
+        e.Pointer.Capture(this);
+        _highlightLayer?.InvalidateVisual();
+        e.Handled = true;
     }
 
     // While char-dragging, scroll the viewport when the pointer nears its top/bottom edge, then re-resolve
@@ -796,7 +1032,9 @@ internal sealed class DiffView : Border
         return true;
     }
 
-    private sealed record LineEntry(int Stream, int Pos, string Content, TextBlock Number, TextBlock Text);
+    private sealed record LineEntry(
+        int Stream, int Pos, string Content, TextBlock Number, TextBlock Text,
+        string HunkHeader, int HunkIndex, HunkStageAction Action, string? Path);
 
     // A transparent, non-interactive layer behind the diff text that paints the find-match highlights. It
     // re-paints on layout changes (wrap reflow, collapse) and whenever the owner invalidates it (search /
@@ -824,24 +1062,115 @@ internal sealed class DiffView : Border
         return n;
     }
 
-    private static Control SectionHeader(string label) => new Border
+    // These build coloured controls, so they read the instance brush set (not static — the brushes flip with
+    // the light/dark toggle).
+    private Control SectionHeader(string label) => new Border
     {
         Background = SectionBarBg,
-        Padding = new Thickness(10, 5),
+        Padding = new Thickness(10, 6),
+        Margin = new Thickness(0, 6, 0, 8),
         Child = new TextBlock { Text = label, Foreground = TitleBrush, FontSize = 12, FontWeight = FontWeight.Bold },
     };
 
-    private static Control HunkHeader(string header) => new SelectableTextBlock
+    private Control HunkHeader(string header, HunkStageAction action, string? path)
     {
-        Text = header,
-        FontFamily = Mono,
-        FontSize = HunkSize,
-        Foreground = HunkBrush,
-        SelectionBrush = SelectionBrush,
-        Padding = new Thickness(8, 6, 8, 2),
-    };
+        var text = new SelectableTextBlock
+        {
+            Text = header,
+            FontFamily = Mono,
+            FontSize = HunkSize,
+            Foreground = HunkBrush,
+            SelectionBrush = SelectionBrush,
+            Padding = new Thickness(8, 6, 8, 2),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        if (action == HunkStageAction.None)
+            return text;
 
-    private static SelectableTextBlock Selectable(string text, double size, IBrush brush, FontWeight weight) => new()
+        // Colored, roomy stage/unstage (+ discard) buttons docked on the right, so they're easy to find.
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 4, 8, 4), [DockPanel.DockProperty] = Dock.Right,
+        };
+        if (action == HunkStageAction.Stage)
+        {
+            actions.Children.Add(HunkButton("Stage hunk", AddedBrush, HunkStageAction.Stage, path, header));
+            actions.Children.Add(HunkButton("Discard hunk", RemovedBrush, HunkStageAction.Discard, path, header));
+        }
+        else // Unstage
+        {
+            actions.Children.Add(HunkButton("Unstage hunk", HunkBrush, HunkStageAction.Unstage, path, header));
+        }
+        return new DockPanel { LastChildFill = true, Children = { actions, text } };
+    }
+
+    // A colored hunk-action button. Larger than the default so it's easy to hit; white text on the action's
+    // semantic colour (green stage / red discard / blue unstage).
+    private Button HunkButton(string label, IBrush bg, HunkStageAction action, string? path, string header)
+    {
+        var b = new Button
+        {
+            Content = label,
+            FontSize = 12.5,
+            FontWeight = FontWeight.SemiBold,
+            Padding = new Thickness(12, 5),
+            Foreground = Brushes.White,
+            Background = bg,
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        b.Click += (_, e) =>
+        {
+            HunkStageRequested?.Invoke(new HunkStageRequest(action, path, header));
+            e.Handled = true;
+        };
+        return b;
+    }
+
+    // Whole-file stage/discard/unstage buttons for a file header bar (Unified/Split modes). Mirrors the
+    // per-hunk buttons' colours and layout, but acts on the whole file via FileStageRequested.
+    private Control FileStageButtons(HunkStageAction action, string? path)
+    {
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
+        };
+        if (action == HunkStageAction.Stage)
+        {
+            actions.Children.Add(FileStageButton("Stage file", AddedBrush, HunkStageAction.Stage, path));
+            actions.Children.Add(FileStageButton("Discard file", RemovedBrush, HunkStageAction.Discard, path));
+        }
+        else // Unstage
+        {
+            actions.Children.Add(FileStageButton("Unstage file", HunkBrush, HunkStageAction.Unstage, path));
+        }
+        return actions;
+    }
+
+    private Button FileStageButton(string label, IBrush bg, HunkStageAction action, string? path)
+    {
+        var b = new Button
+        {
+            Content = label,
+            FontSize = 12.5,
+            FontWeight = FontWeight.SemiBold,
+            Padding = new Thickness(12, 5),
+            Foreground = Brushes.White,
+            Background = bg,
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        b.Click += (_, e) =>
+        {
+            FileStageRequested?.Invoke(new FileStageRequest(action, path));
+            e.Handled = true; // don't let the header's collapse toggle fire
+        };
+        return b;
+    }
+
+    private SelectableTextBlock Selectable(string text, double size, IBrush brush, FontWeight weight) => new()
     {
         Text = text,
         FontSize = size,
@@ -850,7 +1179,7 @@ internal sealed class DiffView : Border
         SelectionBrush = SelectionBrush,
     };
 
-    private static Control Message(string text) => new TextBlock
+    private Control Message(string text) => new TextBlock
     {
         Text = text,
         Foreground = MutedBrush,

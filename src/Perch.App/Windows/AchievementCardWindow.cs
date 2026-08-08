@@ -17,8 +17,8 @@ namespace Perch.Avalonia.Windows;
 /// The pay-off for unlocking achievements: a full-screen, topmost overlay that dims the desktop under a
 /// black vignette and reveals the earned badges on cards in the middle of the screen with a coin-flip
 /// "coming out of the screen" animation, under an "Achievement Unlocked!" heading, with <b>OK</b> and
-/// <b>Don't show again</b> buttons. This replaces the old confetti burst for achievement unlocks (the
-/// manual "confetti finish" still uses <see cref="ConfettiWindow"/>). A batch shows up to
+/// <b>Don't show again</b> buttons. This replaces the old confetti burst for achievement unlocks. A batch
+/// shows up to
 /// <see cref="MaxCards"/> cards side by side (shiniest first), plus a "+N more" card for the remainder,
 /// each flipping in with a small stagger. Batches that arrive while one is up are shown after it.
 /// <b>Don't show again</b> raises <see cref="DoNotShowAgain"/> so the app can persist the opt-out.

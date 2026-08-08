@@ -9,7 +9,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.21] - 2026-08-08
+
+- New git-tree window replaces "Review changes": a branch-scoped commit graph, its files, and the diff (from a session's "View git history…")
+- Stage, unstage, or discard by whole file, hunk, or selected lines
+- Working tree splits into "Changes" and "Staged · pending commit" — commit inline, with Stage all / Unstage all
+- Floating diff bar: Unified / Split / Hunk layout (defaults to Split), Diff / Previous / Current views, and a per-window light/dark toggle
+- Select diff text from anywhere — line ends, gutters, the dead space past a short line
+- Session right-click menu reorganised around everyday actions; "View tree…" is now "View git history…"
+- Removed the confetti finish feature (the party, briefly fun, is over)
+
+---
+
 ## [v0.3.20] - 2026-08-07
+
+
+
 
 - Middle-click a link (PR, incident, artifact, status, QR) to open it in a fresh browser window
 - That window lands on your current virtual desktop, instead of teleporting you to wherever the last one was
@@ -108,7 +123,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+
+
 ## [v0.3.7] - 2026-08-05
+
+
 
 - A status dot on the PR glyph — green, red, or blue — for its CI checks
 - Hover it for each check, coloured by pass / fail / still-running

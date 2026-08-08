@@ -7,7 +7,7 @@ namespace Perch.Platform.Windows;
 /// Windows <see cref="IWindowChrome"/>: applies the overlay windows' Win32 extended styles that Avalonia
 /// doesn't expose directly. A tool window (no Alt+Tab entry) that never takes activation (so showing it
 /// never steals focus from the terminal the user is typing in), plus a click-through variant for the
-/// ambient overlays (confetti, glow, dense drop-zone). The WinForms overlay got the tool-window bit from
+/// ambient overlays (glow, dense drop-zone). The WinForms overlay got the tool-window bit from
 /// <c>CreateParams</c>; here we set the bits on the window handle once it exists.
 /// </summary>
 public sealed class WindowChrome : IWindowChrome
@@ -52,7 +52,7 @@ public sealed class WindowChrome : IWindowChrome
     }
 
     /// <summary>Marks the window click-through (transparent to mouse), plus tool-window + no-activate —
-    /// for the ambient overlays (confetti, glow) that must never intercept input or take focus.
+    /// for the ambient overlays (glow) that must never intercept input or take focus.
     /// Best-effort; a zero handle is ignored.
     /// <para>
     /// Both <c>WS_EX_LAYERED</c> and <c>WS_EX_TRANSPARENT</c> are required for click-through: on a

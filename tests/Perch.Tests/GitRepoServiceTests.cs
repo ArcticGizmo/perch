@@ -130,11 +130,12 @@ public class GitRepoServiceTests
     private const char Nul = '\0';
 
     [Fact]
-    public void Log_ParsesRecordsNewestFirstWithBody()
+    public void Log_ParsesRecordsNewestFirstWithBodyAndParents()
     {
+        // Format is H h an aI s P B: %P (space-separated parents) sits before the multi-line %B body.
         var output =
-            $"aaaaaaaaaaaa{Us}aaaaaaa{Us}Ada Lovelace{Us}2026-08-05T10:30:00+10:00{Us}Add the widget{Us}Add the widget\n\nWith a longer body.\n{Nul}" +
-            $"bbbbbbbbbbbb{Us}bbbbbbb{Us}Alan Turing{Us}2026-08-04T09:00:00Z{Us}Fix the thing{Us}Fix the thing\n{Nul}";
+            $"aaaaaaaaaaaa{Us}aaaaaaa{Us}Ada Lovelace{Us}2026-08-05T10:30:00+10:00{Us}Add the widget{Us}bbbbbbbbbbbb{Us}Add the widget\n\nWith a longer body.\n{Nul}" +
+            $"bbbbbbbbbbbb{Us}bbbbbbb{Us}Alan Turing{Us}2026-08-04T09:00:00Z{Us}Merge branch 'x'{Us}cccccccccccc dddddddddddd{Us}Merge branch 'x'\n{Nul}";
 
         var log = GitRepoService.ParseLog(output);
 
@@ -145,7 +146,22 @@ public class GitRepoServiceTests
         Assert.Equal("Add the widget", log[0].Subject);
         Assert.Equal("Add the widget\n\nWith a longer body.", log[0].Body); // trailing newline trimmed, body kept
         Assert.Equal(new DateTimeOffset(2026, 8, 5, 10, 30, 0, TimeSpan.FromHours(10)), log[0].Date);
-        Assert.Equal("Fix the thing", log[1].Subject);
+
+        Assert.Equal(["bbbbbbbbbbbb"], log[0].ParentHashes);      // single parent
+        Assert.False(log[0].IsMerge);
+        Assert.Equal("Merge branch 'x'", log[1].Subject);
+        Assert.Equal(["cccccccccccc", "dddddddddddd"], log[1].ParentHashes); // two parents
+        Assert.True(log[1].IsMerge);
+    }
+
+    [Fact]
+    public void Log_RootCommitHasNoParents()
+    {
+        // A root commit's %P is empty — the field is present but blank.
+        var output = $"h{Us}sh{Us}Auth{Us}2026-01-02T03:04:05Z{Us}Initial commit{Us}{Us}Initial commit{Nul}";
+        var c = Assert.Single(GitRepoService.ParseLog(output));
+        Assert.Empty(c.ParentHashes);
+        Assert.False(c.IsMerge);
     }
 
     [Fact]
@@ -386,5 +402,143 @@ public class GitRepoServiceTests
         var lines = Assert.Single(f.Hunks).Lines;
         Assert.Equal("ctx", lines[0].Text);   // trailing \r stripped
         Assert.Equal("add", lines[1].Text);
+    }
+
+    // ---- PickBaseRefCandidates ------------------------------------------------------------------------
+
+    [Fact]
+    public void BaseRef_ForkPrefersUpstreamThenOriginThenLocal()
+    {
+        // The fork convention: branch from upstream, commit to origin (your fork). upstream/main should win.
+        string[] refs = ["feature/x", "main", "origin/main", "origin/feature/x", "upstream/main", "origin/HEAD"];
+        var picks = GitRepoService.PickBaseRefCandidates("feature/x", refs);
+
+        Assert.Equal(["upstream/main", "origin/main", "main"], picks);
+    }
+
+    [Fact]
+    public void BaseRef_RanksTrunkNamesWithinATier()
+    {
+        // Within one tier, main beats master beats develop; non-trunk names never qualify.
+        string[] refs = ["develop", "master", "main", "some-feature", "topic/work"];
+        var picks = GitRepoService.PickBaseRefCandidates("some-feature", refs);
+
+        Assert.Equal(["main", "master", "develop"], picks);
+    }
+
+    [Fact]
+    public void BaseRef_ExcludesCurrentBranchAndHeadPseudoRefs()
+    {
+        // A branch can't be its own base; */HEAD symbolic refs are dropped.
+        string[] refs = ["main", "origin/main", "origin/HEAD", "upstream/HEAD"];
+        var picks = GitRepoService.PickBaseRefCandidates("main", refs);
+
+        // Local "main" excluded (it's the current branch); origin/main survives; the HEAD refs are dropped.
+        Assert.Equal(["origin/main"], picks);
+    }
+
+    [Fact]
+    public void BaseRef_EmptyWhenNoTrunkRefsExist()
+    {
+        string[] refs = ["feature/a", "topic/b", "origin/feature/a"];
+        Assert.Empty(GitRepoService.PickBaseRefCandidates("feature/a", refs));
+    }
+
+    // ---- ExtractHunkPatch -----------------------------------------------------------------------------
+
+    [Fact]
+    public void ExtractHunkPatch_SlicesMatchingHunkWithFileHeaderOnly()
+    {
+        var raw =
+            "diff --git a/f.txt b/f.txt\n" +
+            "index 1111111..2222222 100644\n" +
+            "--- a/f.txt\n" +
+            "+++ b/f.txt\n" +
+            "@@ -1,3 +1,3 @@ ctx one\n" +
+            " a\n-b\n+B\n c\n" +
+            "@@ -10,3 +10,4 @@ ctx two\n" +
+            " x\n+Y\n z\n w\n";
+
+        var patch = GitRepoService.ExtractHunkPatch(raw, "@@ -10,3 +10,4 @@ ctx two");
+
+        Assert.NotNull(patch);
+        Assert.Contains("diff --git a/f.txt b/f.txt", patch);
+        Assert.Contains("--- a/f.txt", patch);
+        Assert.Contains("+++ b/f.txt", patch);
+        Assert.Contains("@@ -10,3 +10,4 @@ ctx two", patch);
+        Assert.Contains("+Y", patch);
+        Assert.DoesNotContain("ctx one", patch); // the other hunk is excluded
+        Assert.DoesNotContain("+B", patch);
+        Assert.EndsWith("\n", patch);            // git apply wants a trailing newline
+    }
+
+    [Fact]
+    public void ExtractHunkPatch_MatchesByRangeIgnoringContextSuffix()
+    {
+        // The caller may pass the header without git's trailing function-context; matching is on the range.
+        var raw = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@ int main()\n-a\n+b\n";
+        var patch = GitRepoService.ExtractHunkPatch(raw, "@@ -1 +1 @@");
+        Assert.NotNull(patch);
+        Assert.Contains("@@ -1 +1 @@ int main()", patch); // the full raw header is preserved in the slice
+    }
+
+    [Fact]
+    public void ExtractHunkPatch_NullWhenMissingOrNoHeader()
+    {
+        var raw = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n";
+        Assert.Null(GitRepoService.ExtractHunkPatch(raw, "@@ -99,1 +99,1 @@")); // no such hunk
+        Assert.Null(GitRepoService.ExtractHunkPatch("", "@@ -1 +1 @@"));         // empty input
+        Assert.Null(GitRepoService.ExtractHunkPatch("just some text", "@@ -1 +1 @@")); // no file header
+    }
+
+    // ---- BuildLineSubsetPatch -------------------------------------------------------------------------
+
+    [Fact]
+    public void LineSubset_Stage_KeepsSelectedAddition_DropsUnselected()
+    {
+        // Body indices: 0=" a", 1="+X", 2="+Y", 3=" b". Stage only +X.
+        var raw = "diff --git a/f b/f\nindex 1..2 100644\n--- a/f\n+++ b/f\n@@ -1,2 +1,4 @@\n a\n+X\n+Y\n b\n";
+        var patch = GitRepoService.BuildLineSubsetPatch(raw, "@@ -1,2 +1,4 @@", new[] { 1 }, stage: true);
+
+        Assert.NotNull(patch);
+        Assert.Contains("@@ -1,2 +1,3 @@", patch); // old a,b = 2; new a,X,b = 3
+        Assert.Contains("\n+X\n", patch);
+        Assert.DoesNotContain("+Y", patch);         // unselected addition dropped
+        Assert.Contains("diff --git a/f b/f", patch);
+    }
+
+    [Fact]
+    public void LineSubset_Stage_KeepsSelectedRemoval_UnselectedBecomesContext()
+    {
+        // Body: 0="-a", 1="-b", 2=" c". Stage only the removal of a.
+        var raw = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,3 +1,1 @@\n-a\n-b\n c\n";
+        var patch = GitRepoService.BuildLineSubsetPatch(raw, "@@ -1,3 +1,1 @@", new[] { 0 }, stage: true);
+
+        Assert.NotNull(patch);
+        Assert.Contains("@@ -1,3 +1,2 @@", patch); // old a,b,c = 3; new b,c = 2
+        Assert.Contains("\n-a\n", patch);           // selected removal kept
+        Assert.Contains("\n b\n", patch);           // unselected removal kept as context
+        Assert.Contains("\n c\n", patch);
+    }
+
+    [Fact]
+    public void LineSubset_Unstage_KeepsSelectedAddition_UnselectedBecomesContext()
+    {
+        // A staged hunk: context a, +X, +Y. Unstage only X (index 1). Built forward, applied with --reverse.
+        var raw = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,1 +1,3 @@\n a\n+X\n+Y\n";
+        var patch = GitRepoService.BuildLineSubsetPatch(raw, "@@ -1,1 +1,3 @@", new[] { 1 }, stage: false);
+
+        Assert.NotNull(patch);
+        Assert.Contains("@@ -1,2 +1,3 @@", patch); // old a,Y = 2; new a,X,Y = 3
+        Assert.Contains("\n+X\n", patch);           // selected add kept (reverse removes it from index)
+        Assert.Contains("\n Y\n", patch);           // unselected add kept as context (reverse leaves it)
+    }
+
+    [Fact]
+    public void LineSubset_NullWhenNothingOrOnlyContextSelected()
+    {
+        var raw = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,1 +1,3 @@\n a\n+X\n+Y\n";
+        Assert.Null(GitRepoService.BuildLineSubsetPatch(raw, "@@ -1,1 +1,3 @@", System.Array.Empty<int>(), stage: true));
+        Assert.Null(GitRepoService.BuildLineSubsetPatch(raw, "@@ -1,1 +1,3 @@", new[] { 0 }, stage: true)); // index 0 is context
     }
 }
