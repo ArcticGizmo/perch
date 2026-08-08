@@ -257,6 +257,12 @@ internal static class HeadlessRenderer
         RenderControl(diffFind, Path.Combine(outDir, "change_review_find_1x.png"), 96);
         RenderControl(diffFind, Path.Combine(outDir, "change_review_find_1.5x.png"), 144);
 
+        // Git tree window (Phase 1): the three panes — the commit-graph nodes (WIP knot + lane rail + the
+        // HEAD tag), the files the selected node touched, and the diff — composed as a static surface (the
+        // live window's async loads + ListBox virtualisation don't realise in a one-shot bitmap).
+        RenderControl(BuildTreeSurface(), Path.Combine(outDir, "git_tree_1x.png"), 96);
+        RenderControl(BuildTreeSurface(), Path.Combine(outDir, "git_tree_1.5x.png"), 144);
+
         // Dedicated Achievements window (the "trophy cabinet"): the roomy grid variant with per-badge
         // criteria lines, fed the same all-time sample so earned + locked tiles both show.
         var cabinet = new Views.AchievementsDashboard { Width = 840 };
@@ -682,6 +688,65 @@ internal static class HeadlessRenderer
         var binary = new GitDiffFile("assets/icon.png", "assets/icon.png", true, []);
 
         return new GitDiff([modified, added, binary]);
+    }
+
+    // Composes the git Tree window's three panes into one static surface for eyeballing: the commit-graph
+    // node rows (built by the real GitTreeWindow.NodeRow), a sample files list, and the diff view.
+    private static Control BuildTreeSurface()
+    {
+        var now = DateTimeOffset.Now;
+        GitTreeWindow.TreeNode Commit(string hash, string subj, int hoursAgo, bool head) =>
+            new(false, head, new GitCommit(hash + "0000000", hash, "Jon Howell", now.AddHours(-hoursAgo), subj, subj, "p"), 0);
+
+        var nodes = new StackPanel();
+        nodes.Children.Add(GitTreeWindow.NodeRow(new GitTreeWindow.TreeNode(true, false, default, 3)));
+        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("1c448d9", "middle click to open in new browser for links", 2, head: true)));
+        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("754fd60", "add more subtle bubble alert while in dense mode", 5, head: false)));
+        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("ebdb3ce", "Stronger handling of lower screen relative positioning", 27, head: false)));
+
+        var mono = new FontFamily("Cascadia Code, Consolas, Menlo, monospace");
+        TextBlock FileRow(string t, Color c) => new()
+        {
+            Text = t, FontFamily = mono, FontSize = 12, Margin = new Thickness(12, 6, 12, 6),
+            Foreground = new SolidColorBrush(c),
+        };
+        var files = new StackPanel();
+        files.Children.Add(FileRow("M  src/Perch.App/Views/OverlayCanvas.cs", Palette.Orange));
+        files.Children.Add(FileRow("A  src/Perch.App/Windows/GitTreeWindow.cs", Palette.Green));
+        files.Children.Add(FileRow("A  docs/git-tree-window-design.html", Palette.Green));
+
+        var diff = new Views.DiffView { Width = 600 };
+        diff.SetDiff(SampleDiff(), null);
+
+        static Control Pane(string title, Control body)
+        {
+            var label = new TextBlock
+            {
+                Text = title, Foreground = Palette.MutedBrush, FontSize = 11, FontWeight = FontWeight.SemiBold,
+                Margin = new Thickness(12, 10, 12, 6),
+            };
+            var dp = new DockPanel { LastChildFill = true };
+            DockPanel.SetDock(label, Dock.Top);
+            dp.Children.Add(label);
+            dp.Children.Add(body);
+            return dp;
+        }
+
+        Control Sep() => new Border { Background = Palette.SeparatorBrush };
+
+        var grid = new Grid
+        {
+            Width = 1180, Height = 340,
+            Background = new SolidColorBrush(Palette.Sunken),
+            ColumnDefinitions = new ColumnDefinitions("300,1,254,1,*"),
+        };
+        void Add(Control c, int col) { c.SetValue(Grid.ColumnProperty, col); grid.Children.Add(c); }
+        Add(Pane("Commits · this branch", nodes), 0);
+        Add(Sep(), 1);
+        Add(Pane("Files", files), 2);
+        Add(Sep(), 3);
+        Add(Pane("Diff", diff), 4);
+        return grid;
     }
 
     private static StatsReport SampleStatsReport()

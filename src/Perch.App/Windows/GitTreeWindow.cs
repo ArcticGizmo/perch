@@ -99,8 +99,9 @@ internal sealed class GitTreeWindow : Window
     private string _shownDiffSig = "";
     private HashSet<string> _invisiblePaths = new(StringComparer.Ordinal);
 
-    /// <summary>A row in the left graph: either the working-tree (WIP) node or one commit.</summary>
-    private sealed record TreeNode(bool IsWip, bool IsHead, GitCommit Commit, int ChangeCount)
+    /// <summary>A row in the left graph: either the working-tree (WIP) node or one commit. Internal so the
+    /// headless render harness can build sample rows via <see cref="NodeRow"/>.</summary>
+    internal sealed record TreeNode(bool IsWip, bool IsHead, GitCommit Commit, int ChangeCount)
     {
         public string Key => IsWip ? "\0wip" : Commit.Hash;
     }
@@ -938,10 +939,13 @@ internal sealed class GitTreeWindow : Window
     // ---- templates ----
 
     // A graph node row: a lane rail (vertical line + a knot) beside the commit / working-tree summary.
-    private FuncDataTemplate<TreeNode> NodeTemplate() => new((node, _) =>
-    {
-        if (node is null) return new Control();
+    private FuncDataTemplate<TreeNode> NodeTemplate() =>
+        new((node, _) => node is null ? new Control() : NodeRow(node), supportsRecycling: false);
 
+    /// <summary>Builds one graph-node row (the lane rail + knot beside the commit / working-tree summary).
+    /// Static and self-contained so the render harness can eyeball it with sample data.</summary>
+    internal static Control NodeRow(TreeNode node)
+    {
         var rail = new Grid { Width = 26 };
         rail.Children.Add(new Rectangle
         {
@@ -1013,7 +1017,7 @@ internal sealed class GitTreeWindow : Window
         content.SetValue(Grid.ColumnProperty, 1);
         grid.Children.Add(content);
         return grid;
-    }, supportsRecycling: false);
+    }
 
     private FuncDataTemplate<GitFileChange> WipFileTemplate() => new((fc, _) => new TextBlock
     {
