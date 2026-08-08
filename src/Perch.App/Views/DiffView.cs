@@ -103,6 +103,10 @@ internal sealed class DiffView : Border
     {
         ApplyDiffPalette(); // sets every brush + Background for the current (default dark) mode
         Padding = new Thickness(0, 0, 0, 12);
+        Cursor = new Cursor(StandardCursorType.Ibeam); // the body reads as selectable text; gutter overrides to Hand
+        // Click anywhere in the body (line ends, marker gutter, gaps) to start a char selection. Bubbling, so
+        // it only fires for presses a child (gutter number / text cell / header) didn't already handle.
+        AddHandler(PointerPressedEvent, OnBodyPointerPressed, RoutingStrategies.Bubble);
         // A pointer release anywhere ends a drag and releases any capture we took for a char-selection drag
         // (handledEventsToo so a child handling the release still ends the drag).
         AddHandler(PointerReleasedEvent, (_, e) =>
@@ -445,13 +449,14 @@ internal sealed class DiffView : Border
 
         // Click the header bar to collapse/expand this file (persisted via _collapsed). Toggled in place so
         // the diff scroll position is preserved; matches are recomputed since collapsed lines aren't searched.
-        header.PointerPressed += (_, _) =>
+        header.PointerPressed += (_, e) =>
         {
             bool nowCollapsed = !_collapsed.Remove(key); // Remove returns false when it wasn't there → now collapse
             if (nowCollapsed) _collapsed.Add(key);
             content.IsVisible = !nowCollapsed;
             chevron.Text = nowCollapsed ? "▸" : "▾";
             if (_query.Length > 0) { RecomputeMatches(); Highlight(); RaiseResults(); }
+            e.Handled = true; // consume, so the body's click-to-select doesn't fire on the header
         };
 
         return new StackPanel
@@ -734,34 +739,82 @@ internal sealed class DiffView : Border
         return Math.Clamp(idx, 0, tb.Text?.Length ?? 0);
     }
 
-    // Extends the char selection to a point in this control's (the scrolled content's) coordinate space:
-    // pick the line in the active stream whose vertical band contains the point (clamping past either end),
-    // then the caret within it.
-    private void ExtendCharTo(Point pView)
+    // The line in <paramref name="stream"/> nearest a point in this control's (the scrolled content's)
+    // coordinate space — the line whose vertical band contains the point, else the last line above it (so a
+    // click in the empty space at the end of a line, in the marker gutter, or between rows still resolves to
+    // a real caret) — plus the caret within it. Collapsed (hidden) lines are skipped. Null when the stream is
+    // empty. This is the shared resolver for both starting (click anywhere) and extending (drag) a selection.
+    private (LineEntry Line, int Ch)? NearestInStream(int stream, Point pView)
     {
-        if (!_streams.TryGetValue(_charStream, out var list) || list.Count == 0) return;
+        if (!_streams.TryGetValue(stream, out var list) || list.Count == 0) return null;
 
-        LineEntry chosen = list[0];
-        double bestAboveTop = double.NegativeInfinity;
-        bool inside = false;
+        LineEntry? chosen = null;
         foreach (var ent in list)
         {
+            if (!ent.Text.IsEffectivelyVisible) continue;
             if (ent.Text.TranslatePoint(new Point(0, 0), this) is not { } top) continue;
             double bottom = top.Y + ent.Text.Bounds.Height;
-            if (pView.Y >= top.Y && pView.Y <= bottom) { chosen = ent; inside = true; break; }
-            if (top.Y <= pView.Y && top.Y > bestAboveTop) { bestAboveTop = top.Y; chosen = ent; inside = true; }
+            if (pView.Y >= top.Y && pView.Y <= bottom) { chosen = ent; break; } // inside this line's band
+            if (top.Y <= pView.Y) chosen = ent;                                  // last line above the point
         }
-        // pView above every line -> chosen stays list[0]; HitTestPoint clamps the caret to 0. Below every
-        // line -> chosen is the last, caret clamps to its end.
-        _ = inside;
+        chosen ??= list.FirstOrDefault(l => l.Text.IsEffectivelyVisible) ?? list[0];
 
         int ch = this.TranslatePoint(pView, chosen.Text) is { } pInText ? CharIndexAt(chosen.Text, pInText) : 0;
-        if (_charFocusPos != chosen.Pos || _charFocusCh != ch)
+        return (chosen, ch);
+    }
+
+    // Which stream's text column a horizontal position falls in (unified: always the one stream; split: left
+    // vs right by nearest column). Lets a click choose the side before a line is resolved.
+    private int StreamAtX(double x)
+    {
+        int best = -1;
+        double bestDx = double.PositiveInfinity;
+        foreach (var (stream, list) in _streams)
         {
-            _charFocusPos = chosen.Pos;
-            _charFocusCh = ch;
+            LineEntry? rep = list.FirstOrDefault(e => e.Text.IsEffectivelyVisible) ?? (list.Count > 0 ? list[0] : null);
+            if (rep is null || rep.Text.TranslatePoint(new Point(0, 0), this) is not { } tl) continue;
+            double left = tl.X, right = tl.X + rep.Text.Bounds.Width;
+            double dx = x < left ? left - x : x > right ? x - right : 0;
+            if (dx < bestDx) { bestDx = dx; best = stream; }
+        }
+        return best;
+    }
+
+    // Extends the char selection to a point (drag), via the shared line/caret resolver.
+    private void ExtendCharTo(Point pView)
+    {
+        if (NearestInStream(_charStream, pView) is not { } hit) return;
+        if (_charFocusPos != hit.Line.Pos || _charFocusCh != hit.Ch)
+        {
+            _charFocusPos = hit.Line.Pos;
+            _charFocusCh = hit.Ch;
             _highlightLayer?.InvalidateVisual();
         }
+    }
+
+    // Click anywhere in the diff body (empty space at line ends, the marker gutter, between rows) starts a
+    // character selection at the nearest caret — the GitKraken-style "click empty space to select" behaviour.
+    // Only reached for presses no child handled (a gutter number starts line mode; the text cell and headers
+    // consume their own), so those keep precedence.
+    private void OnBodyPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.Handled || _streams.Count == 0) return;
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+
+        var pView = e.GetPosition(this);
+        int stream = StreamAtX(pView.X);
+        if (stream < 0 || NearestInStream(stream, pView) is not { } hit) return;
+
+        ClearLineSelection();
+        _selKind = SelKind.Char;
+        _charStream = stream;
+        _charAnchorPos = _charFocusPos = hit.Line.Pos;
+        _charAnchorCh = _charFocusCh = hit.Ch;
+        _dragging = true;
+        _autoScroll?.Start();
+        e.Pointer.Capture(this);
+        _highlightLayer?.InvalidateVisual();
+        e.Handled = true;
     }
 
     // While char-dragging, scroll the viewport when the pointer nears its top/bottom edge, then re-resolve
