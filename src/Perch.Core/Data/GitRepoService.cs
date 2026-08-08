@@ -156,6 +156,52 @@ internal sealed class GitRepoService
         return exit >= 0 ? ParseUnifiedDiff(stdout) : null;
     }
 
+    // ---- write operations (Phase 2 commit authoring) --------------------------------------------------
+    //
+    // Unlike the read side, these intentionally take git's index lock (no --no-optional-locks) and surface
+    // failure text to the caller, so the Tree window can report why a stage/commit didn't happen. Whole-file
+    // granularity only — hunk/line staging is a later phase.
+
+    /// <summary>Stages a path (git's index-add), covering a modified, new, or deleted file. Returns whether
+    /// it succeeded and, on failure, git's error text.</summary>
+    public (bool Ok, string Error) StageFile(string cwd, string path)
+    {
+        if (string.IsNullOrEmpty(path)) return (false, "No path.");
+        if (!IsRepo(cwd)) return (false, "Not a git repository.");
+        var r = RunGitCore(cwd, GitTimeoutMs, "add", "--", path);
+        return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
+    }
+
+    /// <summary>Unstages a path (git restore --staged), leaving the working-tree change intact. Returns
+    /// whether it succeeded and, on failure, git's error text.</summary>
+    public (bool Ok, string Error) UnstageFile(string cwd, string path)
+    {
+        if (string.IsNullOrEmpty(path)) return (false, "No path.");
+        if (!IsRepo(cwd)) return (false, "Not a git repository.");
+        var r = RunGitCore(cwd, GitTimeoutMs, "restore", "--staged", "--", path);
+        return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
+    }
+
+    /// <summary>Commits the staged changes with <paramref name="message"/>. Returns whether it succeeded
+    /// and, on failure, git's error text (e.g. "nothing to commit"). The message may span multiple lines —
+    /// it is passed as a single <c>-m</c> argument.</summary>
+    public (bool Ok, string Error) Commit(string cwd, string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return (false, "Empty commit message.");
+        if (!IsRepo(cwd)) return (false, "Not a git repository.");
+        var r = RunGitCore(cwd, LogTimeoutMs, "commit", "-m", message);
+        return r.Exit == 0 ? (true, "") : (false, ErrorText(r));
+    }
+
+    // Prefers git's stderr for the human-facing message, falling back to stdout, then a generic line.
+    private static string ErrorText((int Exit, string Stdout, string Stderr) r)
+    {
+        var err = r.Stderr.Trim();
+        if (err.Length > 0) return err;
+        var outp = r.Stdout.Trim();
+        return outp.Length > 0 ? outp : $"git exited with code {r.Exit}.";
+    }
+
     // ---- change classification (pure) -----------------------------------------------------------------
 
     /// <summary>
@@ -502,11 +548,17 @@ internal sealed class GitRepoService
 
     // ---- process plumbing -----------------------------------------------------------------------------
 
-    // Runs `git <args>` in cwd, returning (exitCode, stdout). Exit is -1 on any failure to launch/complete
-    // (git not on PATH, timeout, …). Both pipes are drained async so a large diff can't deadlock the child;
-    // stderr is discarded. Mirrors GitStatsService.RunGitDiff, but takes an argument list so paths/hashes
-    // with spaces are passed safely.
+    // Runs `git <args>` in cwd, returning (exitCode, stdout) — the read-side convenience wrapper that drops
+    // stderr. Takes an argument list so paths/hashes with spaces are passed safely.
     private static (int Exit, string Stdout) RunGit(string cwd, int timeoutMs, params string[] args)
+    {
+        var r = RunGitCore(cwd, timeoutMs, args);
+        return (r.Exit, r.Stdout);
+    }
+
+    // As RunGit, but also returns stderr — the write operations surface it as the failure message. Exit is
+    // -1 on any failure to launch/complete.
+    private static (int Exit, string Stdout, string Stderr) RunGitCore(string cwd, int timeoutMs, params string[] args)
     {
         try
         {
@@ -529,21 +581,22 @@ internal sealed class GitRepoService
 
             using var proc = Process.Start(psi);
             if (proc == null)
-                return (-1, "");
+                return (-1, "", "");
 
+            // Drain both pipes async so a large diff (or a chatty stderr) can't deadlock the child.
             var stdout = proc.StandardOutput.ReadToEndAsync();
-            _ = proc.StandardError.ReadToEndAsync();
+            var stderr = proc.StandardError.ReadToEndAsync();
 
             if (!proc.WaitForExit(timeoutMs))
             {
                 try { proc.Kill(entireProcessTree: true); } catch { }
-                return (-1, "");
+                return (-1, "", "");
             }
-            return (proc.ExitCode, stdout.GetAwaiter().GetResult());
+            return (proc.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
         }
         catch
         {
-            return (-1, "");
+            return (-1, "", "");
         }
     }
 

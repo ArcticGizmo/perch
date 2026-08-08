@@ -708,7 +708,7 @@ internal static class HeadlessRenderer
         TextBlock FileRow(string t, Color c) => new()
         {
             Text = t, FontFamily = mono, FontSize = 12, Margin = new Thickness(12, 6, 12, 6),
-            Foreground = new SolidColorBrush(c),
+            Foreground = new SolidColorBrush(c), TextTrimming = TextTrimming.CharacterEllipsis,
         };
         var files = new StackPanel();
         files.Children.Add(FileRow("M  src/Perch.App/Views/OverlayCanvas.cs", Palette.Orange));

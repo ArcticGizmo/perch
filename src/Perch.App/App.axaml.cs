@@ -853,10 +853,13 @@ public partial class App : Application
     private void OnViewTree(ClaudeSession session)
     {
         var pr = session.PullRequest;
+        // "Active" = the session is live and may be writing to this tree (working or waiting to resume), so
+        // the Tree window guards a commit behind a confirm. Idle / finished / errored sessions don't.
+        bool isActive = session.Status is SessionStatus.Running or SessionStatus.AwaitingInput;
         _treeWindow = WindowHost.ShowOrFocus(_treeWindow,
             () => new GitTreeWindow(_appSettings ?? AppSettings.Load()),
             () => _treeWindow = null,
-            w => w.Retarget(session.Cwd, session.DisplayName, pr));
+            w => w.Retarget(session.Cwd, session.DisplayName, pr, isActive));
     }
 
     private void OpenAchievements() =>

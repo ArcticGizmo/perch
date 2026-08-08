@@ -8,6 +8,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -60,6 +61,10 @@ internal sealed class GitTreeWindow : Window
     private readonly CheckBox _wrapCheck;
     private readonly ListBox _nodesList;
     private readonly ListBox _filesList;
+    private readonly Border _composer;
+    private readonly TextBox _msgBox;
+    private readonly Button _commitBtn;
+    private readonly TextBlock _composerHint;
     private readonly DiffView _diff;
     private readonly ScrollViewer _diffScroll;
     private readonly Border _findBar;
@@ -76,6 +81,7 @@ internal sealed class GitTreeWindow : Window
     private string? _cwd;
     private string? _prUrl;
     private string? _branch;
+    private bool _isActive; // the session was working (Running/AwaitingInput) at last Retarget — commit guard
     private bool _split;
     private bool _wrap;
     private int _gen;
@@ -195,11 +201,60 @@ internal sealed class GitTreeWindow : Window
         _nodesEmpty = EmptyHint("No commits");
         var graphPane = LabeledPane("Commits · this branch", _nodesList, _nodesEmpty);
 
-        // ---- pane 2: files in the selected node ----
+        // ---- pane 2: files in the selected node, plus the WIP commit composer docked at the bottom ----
         _filesList = MakeList(_wipFileTemplate);
         _filesList.SelectionChanged += OnFileSelected;
         _filesEmpty = EmptyHint("Select a node");
-        var filesPane = LabeledPane("Files", _filesList, _filesEmpty);
+
+        _msgBox = new TextBox
+        {
+            PlaceholderText = "Commit message… (first line = summary)",
+            AcceptsReturn = true, AcceptsTab = false, TextWrapping = TextWrapping.Wrap,
+            MinHeight = 60, MaxHeight = 160, FontFamily = Mono, FontSize = 12.5,
+            VerticalContentAlignment = VerticalAlignment.Top,
+            [ScrollViewer.VerticalScrollBarVisibilityProperty] = ScrollBarVisibility.Auto,
+        };
+        _commitBtn = new Button
+        {
+            Content = "Commit", Background = new SolidColorBrush(Palette.Accent), Foreground = Palette.OnAccentBrush,
+            Padding = new Thickness(14, 5), VerticalAlignment = VerticalAlignment.Center,
+        };
+        _commitBtn.Click += OnCommitClick;
+        _composerHint = new TextBlock
+        {
+            Text = "", Foreground = Palette.MutedBrush, FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var commitRow = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 8, 0, 0) };
+        DockPanel.SetDock(_commitBtn, Dock.Left);
+        commitRow.Children.Add(_commitBtn);
+        commitRow.Children.Add(_composerHint);
+        _composer = new Border
+        {
+            Background = Palette.FormBgBrush, Padding = new Thickness(12), IsVisible = false,
+            [DockPanel.DockProperty] = Dock.Bottom,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "Commit staged changes", Foreground = Palette.MutedBrush, FontSize = 11,
+                        FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 0, 0, 6),
+                    },
+                    _msgBox, commitRow,
+                },
+            },
+        };
+
+        var filesLabel = new TextBlock
+        {
+            Text = "Files", Foreground = Palette.MutedBrush, FontSize = 11, FontWeight = FontWeight.SemiBold,
+            Margin = new Thickness(12, 10, 12, 6), [DockPanel.DockProperty] = Dock.Top,
+        };
+        var filesArea = new Grid { Children = { _filesList, _filesEmpty } };
+        var filesPane = new DockPanel { LastChildFill = true, Children = { filesLabel, _composer, filesArea } };
 
         // ---- pane 3: find bar + diff ----
         _diff = new DiffView();
@@ -335,11 +390,12 @@ internal sealed class GitTreeWindow : Window
     /// <summary>Point the window at a session's repo and (re)load it. Safe to call on the already-open
     /// window (the reused-window refresh path); it bumps the generation so any in-flight load is ignored.
     /// Re-targeting a different repo resets the base-ref override to auto.</summary>
-    public void Retarget(string cwd, string title, PullRequestInfo? pr)
+    public void Retarget(string cwd, string title, PullRequestInfo? pr, bool isActive)
     {
         if (!string.Equals(cwd, _cwd, StringComparison.Ordinal))
             _baseOverride = null; // a new repo: re-decide the base automatically
         _cwd = cwd;
+        _isActive = isActive;
         _titleText.Text = title;
         if (pr is { } p)
         {
@@ -460,10 +516,13 @@ internal sealed class GitTreeWindow : Window
         {
             var changes = _lastStatus?.Changes ?? [];
             _filesList.ItemTemplate = _wipFileTemplate;
+            _composer.IsVisible = true;
+            UpdateComposer();
             PopulateFiles(changes, wantFile is null ? null : IndexOfPath(changes, wantFile));
         }
         else
         {
+            _composer.IsVisible = false;
             string hash = node.Commit.Hash;
             System.Threading.Tasks.Task.Run(() => _git.GetCommitDiff(cwd, hash)).ContinueWith(t =>
             {
@@ -577,6 +636,77 @@ internal sealed class GitTreeWindow : Window
             diff is { Files.Count: > 0 } d
                 ? (new[] { new DiffSection(null, d) }, null)
                 : ([], $"No diff for {path}.");
+    }
+
+    // ---- commit authoring (Phase 2) ----
+
+    private int StagedCount() => _lastStatus?.Changes.Count(c => c.Staged != GitChangeKind.None) ?? 0;
+
+    // Reflects the staged count in the composer hint and enables the Commit button accordingly.
+    private void UpdateComposer()
+    {
+        int staged = StagedCount();
+        _commitBtn.IsEnabled = staged > 0;
+        SetHint(staged == 0
+            ? "Tick files to stage, then commit."
+            : $"{staged} file{(staged == 1 ? "" : "s")} staged.", warn: false);
+    }
+
+    private void SetHint(string text, bool warn)
+    {
+        _composerHint.Text = text;
+        _composerHint.Foreground = warn ? new SolidColorBrush(Palette.Orange) : Palette.MutedBrush;
+    }
+
+    // Stage or unstage a whole file, then refresh so the checkbox and staged count reflect the new index.
+    private void ToggleStage(string path, bool stage)
+    {
+        if (_cwd is not { } cwd) return;
+        System.Threading.Tasks.Task.Run(() => stage ? _git.StageFile(cwd, path) : _git.UnstageFile(cwd, path))
+            .ContinueWith(t =>
+            {
+                if (!t.IsCompletedSuccessfully) return;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!IsVisible) return;
+                    if (!t.Result.Ok) SetHint(FirstLine(t.Result.Error), warn: true);
+                    RefreshStatus(preserveSelection: true);
+                });
+            });
+    }
+
+    private async void OnCommitClick(object? sender, RoutedEventArgs e)
+    {
+        if (_cwd is not { } cwd) return;
+        string msg = _msgBox.Text?.Trim() ?? "";
+        if (msg.Length == 0) { SetHint("Write a commit message.", warn: true); _msgBox.Focus(); return; }
+        if (StagedCount() == 0) { SetHint("Tick files to stage first.", warn: true); return; }
+
+        // Guard: committing while the session is live can race Claude's own edits/git in this same tree.
+        if (_isActive)
+        {
+            bool go = await ConfirmDialog.ShowAsync(this, "Session is active",
+                "Claude may be editing or running git in this working tree right now, so committing can race its writes. Commit anyway?",
+                "Commit anyway", "Wait");
+            if (!go) { SetHint("Held off — session still active.", warn: false); return; }
+        }
+
+        _commitBtn.IsEnabled = false;
+        var (ok, err) = await System.Threading.Tasks.Task.Run(() => _git.Commit(cwd, msg));
+        if (!IsVisible) return;
+        _commitBtn.IsEnabled = true;
+        if (!ok) { SetHint(FirstLine(err), warn: true); return; }
+
+        _msgBox.Text = "";
+        SetHint("Committed.", warn: false);
+        RefreshStatus(preserveSelection: false); // WIP node may vanish → lands on the new HEAD commit
+    }
+
+    // Collapses git's (often multi-line) error text to a single tidy line for the inline hint.
+    private static string FirstLine(string s)
+    {
+        var line = s.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        return string.IsNullOrEmpty(line) ? "git command failed." : line;
     }
 
     // ---- auto-refresh ----
@@ -1019,13 +1149,34 @@ internal sealed class GitTreeWindow : Window
         return grid;
     }
 
-    private FuncDataTemplate<GitFileChange> WipFileTemplate() => new((fc, _) => new TextBlock
+    // A WIP file row: a stage checkbox (ticked when the file has staged content) beside the coloured
+    // status + path. Ticking stages the whole file (git add); unticking unstages it (git restore --staged).
+    private FuncDataTemplate<GitFileChange> WipFileTemplate() => new((fc, _) =>
     {
-        Text = fc.Path is null ? "" : WipFileLabel(fc),
-        FontFamily = Mono, FontSize = 12, Margin = new Thickness(12, 6, 12, 6),
-        Foreground = new SolidColorBrush(fc.Path is null ? Palette.Muted : WipFileColor(fc)),
-        TextTrimming = TextTrimming.CharacterEllipsis,
-    }, supportsRecycling: true);
+        if (fc.Path is null) return new Control();
+
+        var check = new CheckBox
+        {
+            IsChecked = fc.Staged != GitChangeKind.None,
+            VerticalAlignment = VerticalAlignment.Center, MinWidth = 0, Margin = new Thickness(0, 0, 4, 0),
+        };
+        ToolTip.SetTip(check, "Stage / unstage this file");
+        string path = fc.Path;
+        check.Click += (_, _) => ToggleStage(path, check.IsChecked == true);
+
+        var text = new TextBlock
+        {
+            Text = WipFileLabel(fc), FontFamily = Mono, FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = new SolidColorBrush(WipFileColor(fc)),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        return new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Margin = new Thickness(10, 5, 8, 5),
+            Children = { check, text },
+        };
+    }, supportsRecycling: false);
 
     private FuncDataTemplate<GitDiffFile> CommitFileTemplate() => new((gf, _) =>
     {
