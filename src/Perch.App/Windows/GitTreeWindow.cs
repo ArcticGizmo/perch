@@ -11,6 +11,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
@@ -38,7 +39,6 @@ namespace Perch.Avalonia.Windows;
 /// </summary>
 internal sealed class GitTreeWindow : Window
 {
-    private static Color BodyBg => Palette.Sunken;
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
 
     // The branch names treated as a trunk: on one of these we show recent history unscoped rather than
@@ -58,7 +58,13 @@ internal sealed class GitTreeWindow : Window
     private readonly MenuFlyout _baseFlyout;
     private readonly Button _unifiedBtn;
     private readonly Button _splitBtn;
+    private readonly Button _themeBtn;
+    private readonly Button _expandBtn;
     private readonly CheckBox _wrapCheck;
+    private readonly Border _headerBorder;
+    private readonly TextBlock _graphLabel;
+    private readonly TextBlock _filesLabel;
+    private readonly TextBlock _composerLabel;
     private readonly ListBox _nodesList;
     private readonly ListBox _filesList;
     private readonly Border _composer;
@@ -73,6 +79,12 @@ internal sealed class GitTreeWindow : Window
     private readonly TextBlock _nodesEmpty;
     private readonly TextBlock _filesEmpty;
     private readonly TextBlock _diffPlaceholder;
+    private readonly List<GridSplitter> _splitters = new();
+
+    // Per-window light/dark. _pal is the local palette every colour in this window (and its DiffView) reads
+    // from, so the toggle re-themes just this window — the overlay and other windows keep the app theme.
+    private TreePalette _pal;
+    private bool _light;
 
     private readonly FuncDataTemplate<TreeNode> _nodeTemplate;
     private readonly FuncDataTemplate<GitFileChange> _wipFileTemplate;
@@ -129,12 +141,13 @@ internal sealed class GitTreeWindow : Window
         _settings = settings;
         _split = settings.GitReviewSplitView;
         _wrap = settings.GitReviewWrap;
+        _light = settings.GitTreeLight;
+        _pal = _light ? TreePalette.Light() : TreePalette.Dark();
         Title = "Tree";
         Width = 1560;
         Height = 1020;
         MinWidth = 820;
         MinHeight = 460;
-        Background = new SolidColorBrush(BodyBg);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
         _nodeTemplate = NodeTemplate();
@@ -185,25 +198,35 @@ internal sealed class GitTreeWindow : Window
         };
         _wrapCheck.IsCheckedChanged += (_, _) => SetWrap(_wrapCheck.IsChecked == true);
 
+        // Per-window light/dark toggle — reading a lot of diff/commit text is easier when this window can go
+        // light without flipping the always-on-top overlay.
+        _themeBtn = new Button
+        {
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0),
+            [DockPanel.DockProperty] = Dock.Right,
+        };
+        _themeBtn.Click += (_, _) => ToggleLight();
+        ToolTip.SetTip(_themeBtn, "Light / dark — affects this window only");
+
         // Ghosted Phase-3 affordance: the full multi-branch graph. Present so the destination is visible; a
         // tooltip says why it's disabled.
-        var expandBtn = new Button
+        _expandBtn = new Button
         {
             Content = "⤢ Expand to full tree", IsEnabled = false, VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0), Foreground = Palette.MutedBrush,
             [DockPanel.DockProperty] = Dock.Right,
         };
-        ToolTip.SetTip(expandBtn, "The all-branches graph is coming in a later pass.");
+        ToolTip.SetTip(_expandBtn, "The all-branches graph is coming in a later pass.");
 
         var headerText = new StackPanel { Orientation = Orientation.Vertical, Children = { _titleText, _subText } };
-        var header = new Border
+        _headerBorder = new Border
         {
-            Background = Palette.FormBgBrush, Padding = new Thickness(14, 10),
+            Padding = new Thickness(14, 10),
             [DockPanel.DockProperty] = Dock.Top,
             Child = new DockPanel
             {
                 LastChildFill = true,
-                Children = { _prChip, refreshBtn, modeGroup, _wrapCheck, expandBtn, _baseBtn, headerText },
+                Children = { _prChip, refreshBtn, modeGroup, _wrapCheck, _themeBtn, _expandBtn, _baseBtn, headerText },
             },
         };
 
@@ -218,7 +241,12 @@ internal sealed class GitTreeWindow : Window
                 lbi.IsEnabled = !_nodes[e.Index].IsBase;
         };
         _nodesEmpty = EmptyHint("No commits");
-        var graphPane = LabeledPane("Commits · this branch", _nodesList, _nodesEmpty);
+        _graphLabel = PaneLabel("Commits · this branch");
+        var graphPane = new DockPanel
+        {
+            LastChildFill = true,
+            Children = { _graphLabel, new Grid { Children = { _nodesList, _nodesEmpty } } },
+        };
 
         // ---- pane 2: files in the selected node, plus the WIP commit composer docked at the bottom ----
         _filesList = MakeList(_wipFileTemplate);
@@ -249,31 +277,21 @@ internal sealed class GitTreeWindow : Window
         DockPanel.SetDock(_commitBtn, Dock.Left);
         commitRow.Children.Add(_commitBtn);
         commitRow.Children.Add(_composerHint);
+        _composerLabel = new TextBlock
+        {
+            Text = "Commit staged changes", Foreground = Palette.MutedBrush, FontSize = 11,
+            FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 0, 0, 6),
+        };
         _composer = new Border
         {
-            Background = Palette.FormBgBrush, Padding = new Thickness(12), IsVisible = false,
+            Padding = new Thickness(12), IsVisible = false,
             [DockPanel.DockProperty] = Dock.Bottom,
-            Child = new StackPanel
-            {
-                Children =
-                {
-                    new TextBlock
-                    {
-                        Text = "Commit staged changes", Foreground = Palette.MutedBrush, FontSize = 11,
-                        FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 0, 0, 6),
-                    },
-                    _msgBox, commitRow,
-                },
-            },
+            Child = new StackPanel { Children = { _composerLabel, _msgBox, commitRow } },
         };
 
-        var filesLabel = new TextBlock
-        {
-            Text = "Files", Foreground = Palette.MutedBrush, FontSize = 11, FontWeight = FontWeight.SemiBold,
-            Margin = new Thickness(12, 10, 12, 6), [DockPanel.DockProperty] = Dock.Top,
-        };
+        _filesLabel = PaneLabel("Files");
         var filesArea = new Grid { Children = { _filesList, _filesEmpty } };
-        var filesPane = new DockPanel { LastChildFill = true, Children = { filesLabel, _composer, filesArea } };
+        var filesPane = new DockPanel { LastChildFill = true, Children = { _filesLabel, _composer, filesArea } };
 
         // ---- pane 3: find bar + diff ----
         _diff = new DiffView();
@@ -335,16 +353,30 @@ internal sealed class GitTreeWindow : Window
         body.Children.Add(WithColumn(Splitter(), 3));
         body.Children.Add(WithColumn(diffPane, 4));
 
-        Content = new DockPanel { Children = { header, body } };
+        Content = new DockPanel { Children = { _headerBorder, body } };
+
+        ApplyPalette(); // paint every element from the local palette (light or dark)
     }
 
-    // A vertical drag handle between two panes.
-    private static GridSplitter Splitter() => new()
+    // A vertical drag handle between two panes; recorded so the light/dark toggle can recolour it.
+    private GridSplitter Splitter()
     {
-        Width = 6,
-        Background = Palette.SeparatorBrush,
-        ResizeDirection = GridResizeDirection.Columns,
-        HorizontalAlignment = HorizontalAlignment.Stretch,
+        var s = new GridSplitter
+        {
+            Width = 6,
+            Background = _pal.Separator,
+            ResizeDirection = GridResizeDirection.Columns,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        _splitters.Add(s);
+        return s;
+    }
+
+    // A pane's section-header label (its colour is applied by ApplyPalette).
+    private static TextBlock PaneLabel(string text) => new()
+    {
+        Text = text, Foreground = Palette.MutedBrush, FontSize = 11, FontWeight = FontWeight.SemiBold,
+        Margin = new Thickness(12, 10, 12, 6), [DockPanel.DockProperty] = Dock.Top,
     };
 
     private static Control WithColumn(Control c, int col)
@@ -694,7 +726,7 @@ internal sealed class GitTreeWindow : Window
     private void SetHint(string text, bool warn)
     {
         _composerHint.Text = text;
-        _composerHint.Foreground = warn ? new SolidColorBrush(Palette.Orange) : Palette.MutedBrush;
+        _composerHint.Foreground = warn ? _pal.Orange : _pal.Muted;
     }
 
     // Stage or unstage a whole file, then refresh so the checkbox and staged count reflect the new index.
@@ -1053,11 +1085,59 @@ internal sealed class GitTreeWindow : Window
         Style(_unifiedBtn, !_split);
         Style(_splitBtn, _split);
 
-        static void Style(Button b, bool active)
+        void Style(Button b, bool active)
         {
-            b.Background = active ? new SolidColorBrush(Palette.Accent) : Palette.ButtonBgBrush;
-            b.Foreground = active ? Palette.OnAccentBrush : Palette.FgBrush;
+            b.Background = active ? _pal.Accent : _pal.ButtonBg;
+            b.Foreground = active ? _pal.OnAccent : _pal.Fg;
         }
+    }
+
+    // ---- per-window light / dark ----
+
+    // Repaints every explicitly-coloured element in this window (and its diff) from the local palette, and
+    // flips the Fluent theme variant so the templated chrome (buttons, checkbox, text box, scrollbars, list
+    // selection) matches. Called at construction and on every toggle.
+    private void ApplyPalette()
+    {
+        RequestedThemeVariant = _light ? ThemeVariant.Light : ThemeVariant.Dark;
+        Background = _pal.WindowBg;
+        _headerBorder.Background = _pal.HeaderBg;
+        _findBar.Background = _pal.HeaderBg;
+        _composer.Background = _pal.HeaderBg;
+
+        _titleText.Foreground = _pal.Title;
+        _subText.Foreground = _pal.Muted;
+        _graphLabel.Foreground = _pal.Muted;
+        _filesLabel.Foreground = _pal.Muted;
+        _composerLabel.Foreground = _pal.Muted;
+        _findLabel.Foreground = _pal.Muted;
+        _diffPlaceholder.Foreground = _pal.Muted;
+        _nodesEmpty.Foreground = _pal.Muted;
+        _filesEmpty.Foreground = _pal.Muted;
+        _wrapCheck.Foreground = _pal.Fg;
+        _expandBtn.Foreground = _pal.Muted;
+
+        _prChip.Background = _pal.Accent;
+        _prChip.Foreground = _pal.OnAccent;
+        _commitBtn.Background = _pal.Accent;
+        _commitBtn.Foreground = _pal.OnAccent;
+
+        foreach (var s in _splitters) s.Background = _pal.Separator;
+
+        _themeBtn.Content = _light ? "Dark" : "Light";
+        UpdateModeButtons();
+        _diff.SetLight(_light);
+    }
+
+    private void ToggleLight()
+    {
+        _light = !_light;
+        _pal = _light ? TreePalette.Light() : TreePalette.Dark();
+        _settings.GitTreeLight = _light;
+        _settings.Save();
+        ApplyPalette();
+        UpdateComposer();                       // re-tint the composer hint
+        RefreshStatus(preserveSelection: true); // rebuild node/file rows through the new palette
     }
 
     private void SetWrap(bool wrap)
@@ -1079,18 +1159,6 @@ internal sealed class GitTreeWindow : Window
         BorderThickness = new Thickness(0),
     };
 
-    // A titled pane: a section label over a scrolling list, with a dim empty-state hint overlaid on the list.
-    private static Control LabeledPane(string title, ListBox list, TextBlock empty)
-    {
-        var label = new TextBlock
-        {
-            Text = title, Foreground = Palette.MutedBrush, FontSize = 11, FontWeight = FontWeight.SemiBold,
-            Margin = new Thickness(12, 10, 12, 6), [DockPanel.DockProperty] = Dock.Top,
-        };
-        var listArea = new Grid { Children = { list, empty } };
-        return new DockPanel { LastChildFill = true, Children = { label, listArea } };
-    }
-
     private static TextBlock EmptyHint(string text) => new()
     {
         Text = text, Foreground = Palette.MutedBrush, FontSize = 12, FontStyle = FontStyle.Italic,
@@ -1109,23 +1177,23 @@ internal sealed class GitTreeWindow : Window
 
     // A graph node row: a lane rail (vertical line + a knot) beside the commit / working-tree summary.
     private FuncDataTemplate<TreeNode> NodeTemplate() =>
-        new((node, _) => node is null ? new Control() : NodeRow(node), supportsRecycling: false);
+        new((node, _) => node is null ? new Control() : NodeRow(node, _pal), supportsRecycling: false);
 
     /// <summary>Builds one graph-node row (the lane rail + knot beside the commit / working-tree / base
-    /// summary). The rail is split into an upper and a lower segment so the line can be trimmed at the ends —
-    /// no line above the first knot, none below the last. Static and self-contained so the render harness can
-    /// eyeball it with sample data.</summary>
-    internal static Control NodeRow(TreeNode node)
+    /// summary), painted from <paramref name="pal"/>. The rail is split into an upper and a lower segment so
+    /// the line can be trimmed at the ends — no line above the first knot, none below the last. Static and
+    /// self-contained so the render harness can eyeball it with sample data.</summary>
+    internal static Control NodeRow(TreeNode node, TreePalette pal)
     {
         // Rail: [upper segment | knot | lower segment]. Upper is hidden on the first row, lower on the last.
         var rail = new Grid { Width = 26, RowDefinitions = new RowDefinitions("*,Auto,*") };
-        var upper = LaneSegment();
+        var upper = LaneSegment(pal);
         upper.SetValue(Grid.RowProperty, 0);
         upper.IsVisible = !node.IsFirst;
-        var lower = LaneSegment();
+        var lower = LaneSegment(pal);
         lower.SetValue(Grid.RowProperty, 2);
         lower.IsVisible = !node.IsLast;
-        Shape knot = Knot(node);
+        Shape knot = Knot(node, pal);
         knot.SetValue(Grid.RowProperty, 1);
         rail.Children.Add(upper);
         rail.Children.Add(lower);
@@ -1136,13 +1204,13 @@ internal sealed class GitTreeWindow : Window
         {
             content.Children.Add(new TextBlock
             {
-                Text = "Working tree", Foreground = new SolidColorBrush(Palette.Brand),
+                Text = "Working tree", Foreground = pal.Brand,
                 FontSize = 13, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap,
             });
             content.Children.Add(new TextBlock
             {
                 Text = $"{node.ChangeCount} uncommitted change{(node.ChangeCount == 1 ? "" : "s")}",
-                Foreground = Palette.MutedBrush, FontFamily = Mono, FontSize = 11, Margin = new Thickness(0, 3, 0, 0),
+                Foreground = pal.Muted, FontFamily = Mono, FontSize = 11, Margin = new Thickness(0, 3, 0, 0),
             });
         }
         else if (node.IsBase)
@@ -1150,12 +1218,12 @@ internal sealed class GitTreeWindow : Window
             // The base marker: where this branch left its base ref. Not a destination.
             content.Children.Add(new TextBlock
             {
-                Text = node.Label ?? "base", Foreground = Palette.FgBrush, FontFamily = Mono, FontSize = 12,
+                Text = node.Label ?? "base", Foreground = pal.Fg, FontFamily = Mono, FontSize = 12,
                 FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap,
             });
             content.Children.Add(new TextBlock
             {
-                Text = "branch base", Foreground = Palette.MutedBrush, FontSize = 11, Margin = new Thickness(0, 3, 0, 0),
+                Text = "branch base", Foreground = pal.Muted, FontSize = 11, Margin = new Thickness(0, 3, 0, 0),
             });
         }
         else
@@ -1167,22 +1235,22 @@ internal sealed class GitTreeWindow : Window
             {
                 var tag = new Border
                 {
-                    Background = new SolidColorBrush(Palette.Accent), CornerRadius = new CornerRadius(3),
+                    Background = pal.Accent, CornerRadius = new CornerRadius(3),
                     Padding = new Thickness(5, 0, 5, 1), Margin = new Thickness(6, 1, 0, 0),
                     VerticalAlignment = VerticalAlignment.Top, [DockPanel.DockProperty] = Dock.Right,
-                    Child = new TextBlock { Text = "HEAD", Foreground = Palette.OnAccentBrush, FontSize = 9, FontFamily = Mono },
+                    Child = new TextBlock { Text = "HEAD", Foreground = pal.OnAccent, FontSize = 9, FontFamily = Mono },
                 };
                 subjRow.Children.Add(tag);
             }
             subjRow.Children.Add(new TextBlock
             {
-                Text = c.Subject, Foreground = Palette.TitleBrush, FontSize = 13, TextWrapping = TextWrapping.Wrap,
+                Text = c.Subject, Foreground = pal.Title, FontSize = 13, TextWrapping = TextWrapping.Wrap,
             });
             content.Children.Add(subjRow);
             content.Children.Add(new TextBlock
             {
                 Text = $"{c.ShortHash} · {c.Author} · {RelTime(c.Date)}",
-                Foreground = Palette.MutedBrush, FontFamily = Mono, FontSize = 11, Margin = new Thickness(0, 3, 0, 0),
+                Foreground = pal.Muted, FontFamily = Mono, FontSize = 11, Margin = new Thickness(0, 3, 0, 0),
                 TextTrimming = TextTrimming.CharacterEllipsis,
             });
             ToolTip.SetTip(content, c.Body);
@@ -1196,40 +1264,88 @@ internal sealed class GitTreeWindow : Window
         return grid;
     }
 
-    // One half of the lane line. Its own brush instance (not the shared cached one) so the 0.5 opacity can't
-    // leak into other accent-coloured UI.
-    private static Rectangle LaneSegment() => new()
+    // One half of the lane line, painted from the palette's accent at half strength.
+    private static Rectangle LaneSegment(TreePalette pal) => new()
     {
-        Width = 2, Fill = new SolidColorBrush(Palette.Accent) { Opacity = 0.5 },
+        Width = 2, Fill = pal.Accent, Opacity = 0.5,
         HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Stretch,
     };
 
     // The knot on the rail: a dashed brand ring for WIP, a hollow muted ring for the base marker, else a
     // filled accent dot (with a ring on HEAD).
-    private static Shape Knot(TreeNode node) => node.Kind switch
+    private static Shape Knot(TreeNode node, TreePalette pal) => node.Kind switch
     {
         NodeKind.Wip => new Ellipse
         {
             Width = 13, Height = 13, StrokeThickness = 2,
-            Stroke = new SolidColorBrush(Palette.Brand), Fill = new SolidColorBrush(Palette.Sunken),
+            Stroke = pal.Brand, Fill = pal.HollowFill,
             StrokeDashArray = new AvaloniaList<double> { 2, 1.4 },
             HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
         },
         NodeKind.Base => new Ellipse
         {
             Width = 11, Height = 11, StrokeThickness = 2,
-            Stroke = new SolidColorBrush(Palette.Muted), Fill = new SolidColorBrush(Palette.Sunken),
+            Stroke = pal.Muted, Fill = pal.HollowFill,
             HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
         },
         _ => new Ellipse
         {
             Width = 12, Height = 12,
-            Fill = new SolidColorBrush(Palette.Accent),
-            Stroke = node.IsHead ? new SolidColorBrush(Palette.AccentHover) : null,
+            Fill = pal.Accent,
+            Stroke = node.IsHead ? pal.AccentHover : null,
             StrokeThickness = node.IsHead ? 3 : 0,
             HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
         },
     };
+
+    /// <summary>The window-local colour set the Tree window and its diff paint from, so light/dark applies to
+    /// just this window. <see cref="Dark"/> mirrors the app's active theme (via <see cref="Palette"/>); light
+    /// uses fixed, print-legible values with darkened status hues.</summary>
+    internal sealed class TreePalette
+    {
+        public required IBrush WindowBg, HeaderBg, Title, Fg, Muted, Accent, AccentHover, OnAccent, Brand,
+            ButtonBg, Separator, HollowFill, Green, Red, Orange;
+
+        public static TreePalette Dark() => new()
+        {
+            WindowBg = new SolidColorBrush(Palette.Sunken),
+            HeaderBg = Palette.FormBgBrush,
+            Title = Palette.TitleBrush,
+            Fg = Palette.FgBrush,
+            Muted = Palette.MutedBrush,
+            Accent = Palette.AccentBrush,
+            AccentHover = new SolidColorBrush(Palette.AccentHover),
+            OnAccent = Palette.OnAccentBrush,
+            Brand = Palette.BrandBrush,
+            ButtonBg = Palette.ButtonBgBrush,
+            Separator = Palette.SeparatorBrush,
+            HollowFill = new SolidColorBrush(Palette.Sunken),
+            Green = new SolidColorBrush(Palette.Green),
+            Red = new SolidColorBrush(Palette.Red),
+            Orange = new SolidColorBrush(Palette.Orange),
+        };
+
+        public static TreePalette Light() => new()
+        {
+            WindowBg = B(0xEC, 0xEE, 0xF3),
+            HeaderBg = B(0xFF, 0xFF, 0xFF),
+            Title = B(0x0D, 0x0E, 0x16),
+            Fg = B(0x1A, 0x1B, 0x26),
+            Muted = B(0x5C, 0x60, 0x72),
+            Accent = B(0x2F, 0x68, 0xE0),
+            AccentHover = B(0x1F, 0x58, 0xD0),
+            OnAccent = B(0xFF, 0xFF, 0xFF),
+            Brand = B(0xD2, 0x43, 0x27),
+            ButtonBg = B(0xF1, 0xF2, 0xF5),
+            Separator = B(0xDD, 0xE0, 0xE8),
+            HollowFill = B(0xFF, 0xFF, 0xFF),
+            Green = B(0x1F, 0x88, 0x3D),
+            Red = B(0xCF, 0x22, 0x2E),
+            Orange = B(0xB3, 0x6B, 0x00),
+        };
+
+        private static IBrush B(byte r, byte g, byte b) => new SolidColorBrush(Color.FromRgb(r, g, b));
+    }
 
     // A WIP file row: a stage checkbox (ticked when the file has staged content) beside the coloured
     // status + path. Ticking stages the whole file (git add); unticking unstages it (git restore --staged).
@@ -1250,7 +1366,7 @@ internal sealed class GitTreeWindow : Window
         {
             Text = WipFileLabel(fc), FontFamily = Mono, FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = new SolidColorBrush(WipFileColor(fc)),
+            Foreground = WipFileColor(fc),
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
         return new StackPanel
@@ -1267,7 +1383,7 @@ internal sealed class GitTreeWindow : Window
         {
             Text = path is null ? "" : $"{CommitFileCode(gf)}  {(gf.OldPath is { } o && gf.NewPath is { } n && o != n ? $"{o} → {n}" : path)}",
             FontFamily = Mono, FontSize = 12, Margin = new Thickness(12, 6, 12, 6),
-            Foreground = new SolidColorBrush(path is null ? Palette.Muted : CommitFileColor(gf)),
+            Foreground = path is null ? _pal.Muted : CommitFileColor(gf),
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
     }, supportsRecycling: true);
@@ -1280,16 +1396,16 @@ internal sealed class GitTreeWindow : Window
         return fc.OrigPath is { } o ? $"{code}  {o} → {fc.Path}" : $"{code}  {fc.Path}";
     }
 
-    private Color WipFileColor(GitFileChange fc)
+    private IBrush WipFileColor(GitFileChange fc)
     {
-        if (fc.Untracked) return Palette.Green;
-        if (_invisiblePaths.Contains(fc.Path)) return Palette.Muted;
+        if (fc.Untracked) return _pal.Green;
+        if (_invisiblePaths.Contains(fc.Path)) return _pal.Muted;
         var k = fc.Unstaged != GitChangeKind.None ? fc.Unstaged : fc.Staged;
         return k switch
         {
-            GitChangeKind.Added => Palette.Green,
-            GitChangeKind.Deleted => Palette.Red,
-            _ => Palette.Orange,
+            GitChangeKind.Added => _pal.Green,
+            GitChangeKind.Deleted => _pal.Red,
+            _ => _pal.Orange,
         };
     }
 
@@ -1299,10 +1415,10 @@ internal sealed class GitTreeWindow : Window
         : gf.OldPath != gf.NewPath ? 'R'
         : 'M';
 
-    private static Color CommitFileColor(GitDiffFile gf) =>
-        gf.OldPath is null ? Palette.Green
-        : gf.NewPath is null ? Palette.Red
-        : Palette.Orange;
+    private IBrush CommitFileColor(GitDiffFile gf) =>
+        gf.OldPath is null ? _pal.Green
+        : gf.NewPath is null ? _pal.Red
+        : _pal.Orange;
 
     private static char CodeOf(GitChangeKind k) => k switch
     {

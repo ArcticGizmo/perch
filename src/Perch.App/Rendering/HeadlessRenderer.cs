@@ -257,11 +257,13 @@ internal static class HeadlessRenderer
         RenderControl(diffFind, Path.Combine(outDir, "change_review_find_1x.png"), 96);
         RenderControl(diffFind, Path.Combine(outDir, "change_review_find_1.5x.png"), 144);
 
-        // Git tree window (Phase 1): the three panes — the commit-graph nodes (WIP knot + lane rail + the
-        // HEAD tag), the files the selected node touched, and the diff — composed as a static surface (the
-        // live window's async loads + ListBox virtualisation don't realise in a one-shot bitmap).
-        RenderControl(BuildTreeSurface(), Path.Combine(outDir, "git_tree_1x.png"), 96);
-        RenderControl(BuildTreeSurface(), Path.Combine(outDir, "git_tree_1.5x.png"), 144);
+        // Git tree window: the three panes — the commit-graph nodes (WIP knot + lane rail + HEAD tag + the
+        // terminal base node), the files the selected node touched, and the diff — composed as a static
+        // surface (the live window's async loads + ListBox virtualisation don't realise in a one-shot bitmap).
+        // Rendered in both the window's own dark and light modes (the per-window light toggle).
+        RenderControl(BuildTreeSurface(light: false), Path.Combine(outDir, "git_tree_1x.png"), 96);
+        RenderControl(BuildTreeSurface(light: false), Path.Combine(outDir, "git_tree_1.5x.png"), 144);
+        RenderControl(BuildTreeSurface(light: true), Path.Combine(outDir, "git_tree_light_1x.png"), 96);
 
         // Dedicated Achievements window (the "trophy cabinet"): the roomy grid variant with per-badge
         // criteria lines, fed the same all-time sample so earned + locked tiles both show.
@@ -691,9 +693,11 @@ internal static class HeadlessRenderer
     }
 
     // Composes the git Tree window's three panes into one static surface for eyeballing: the commit-graph
-    // node rows (built by the real GitTreeWindow.NodeRow), a sample files list, and the diff view.
-    private static Control BuildTreeSurface()
+    // node rows (built by the real GitTreeWindow.NodeRow), a sample files list, and the diff view. Painted
+    // from the window's own light/dark palette so both modes can be eyeballed.
+    private static Control BuildTreeSurface(bool light)
     {
+        var pal = light ? GitTreeWindow.TreePalette.Light() : GitTreeWindow.TreePalette.Dark();
         var now = DateTimeOffset.Now;
         GitTreeWindow.TreeNode Commit(string hash, string subj, int hoursAgo, bool head) =>
             new(GitTreeWindow.NodeKind.Commit, head, false, false,
@@ -701,32 +705,33 @@ internal static class HeadlessRenderer
 
         var nodes = new StackPanel();
         nodes.Children.Add(GitTreeWindow.NodeRow(
-            new GitTreeWindow.TreeNode(GitTreeWindow.NodeKind.Wip, false, IsFirst: true, IsLast: false, default, 3, null)));
-        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("1c448d9", "middle click to open in new browser for links", 2, head: true)));
-        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("754fd60", "add more subtle bubble alert while in dense mode", 5, head: false)));
-        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("ebdb3ce", "Stronger handling of lower screen relative positioning", 27, head: false)));
+            new GitTreeWindow.TreeNode(GitTreeWindow.NodeKind.Wip, false, IsFirst: true, IsLast: false, default, 3, null), pal));
+        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("1c448d9", "middle click to open in new browser for links", 2, head: true), pal));
+        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("754fd60", "add more subtle bubble alert while in dense mode", 5, head: false), pal));
+        nodes.Children.Add(GitTreeWindow.NodeRow(Commit("ebdb3ce", "Stronger handling of lower screen relative positioning", 27, head: false), pal));
         nodes.Children.Add(GitTreeWindow.NodeRow(
-            new GitTreeWindow.TreeNode(GitTreeWindow.NodeKind.Base, false, IsFirst: false, IsLast: true, default, 0, "origin/main")));
+            new GitTreeWindow.TreeNode(GitTreeWindow.NodeKind.Base, false, IsFirst: false, IsLast: true, default, 0, "origin/main"), pal));
 
         var mono = new FontFamily("Cascadia Code, Consolas, Menlo, monospace");
-        TextBlock FileRow(string t, Color c) => new()
+        TextBlock FileRow(string t, IBrush c) => new()
         {
             Text = t, FontFamily = mono, FontSize = 12, Margin = new Thickness(12, 6, 12, 6),
-            Foreground = new SolidColorBrush(c), TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = c, TextTrimming = TextTrimming.CharacterEllipsis,
         };
         var files = new StackPanel();
-        files.Children.Add(FileRow("M  src/Perch.App/Views/OverlayCanvas.cs", Palette.Orange));
-        files.Children.Add(FileRow("A  src/Perch.App/Windows/GitTreeWindow.cs", Palette.Green));
-        files.Children.Add(FileRow("A  docs/git-tree-window-design.html", Palette.Green));
+        files.Children.Add(FileRow("M  src/Perch.App/Views/OverlayCanvas.cs", pal.Orange));
+        files.Children.Add(FileRow("A  src/Perch.App/Windows/GitTreeWindow.cs", pal.Green));
+        files.Children.Add(FileRow("A  docs/git-tree-window-design.html", pal.Green));
 
         var diff = new Views.DiffView { Width = 600 };
+        diff.SetLight(light);
         diff.SetDiff(SampleDiff(), null);
 
-        static Control Pane(string title, Control body)
+        Control Pane(string title, Control body)
         {
             var label = new TextBlock
             {
-                Text = title, Foreground = Palette.MutedBrush, FontSize = 11, FontWeight = FontWeight.SemiBold,
+                Text = title, Foreground = pal.Muted, FontSize = 11, FontWeight = FontWeight.SemiBold,
                 Margin = new Thickness(12, 10, 12, 6),
             };
             var dp = new DockPanel { LastChildFill = true };
@@ -736,12 +741,12 @@ internal static class HeadlessRenderer
             return dp;
         }
 
-        Control Sep() => new Border { Background = Palette.SeparatorBrush };
+        Control Sep() => new Border { Background = pal.Separator };
 
         var grid = new Grid
         {
             Width = 1180, Height = 340,
-            Background = new SolidColorBrush(Palette.Sunken),
+            Background = pal.WindowBg,
             ColumnDefinitions = new ColumnDefinitions("300,1,254,1,*"),
         };
         void Add(Control c, int col) { c.SetValue(Grid.ColumnProperty, col); grid.Children.Add(c); }

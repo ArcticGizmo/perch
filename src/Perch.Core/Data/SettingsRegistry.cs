@@ -103,6 +103,12 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.GitReviewWrap),
             s => s.GitReviewWrap, (s, v) => s.GitReviewWrap = v),
 
+        Toggle("git-tree-light", "Git tree: light mode",
+            "Render the git tree window in light mode (just that window). Also toggled from the window's own toolbar.",
+            SettingSurface.Advanced, ["git", "tree", "light", "dark", "theme", "mode"],
+            PreviewTarget.None, nameof(AppSettings.GitTreeLight),
+            s => s.GitTreeLight, (s, v) => s.GitTreeLight = v),
+
         Toggle("media-controller", "Now-playing media",
             "The media controller strip - track plus previous / play-pause / next.",
             SettingSurface.SessionRow, ["media", "music", "now", "playing", "spotify", "track", "controller", "sound"],

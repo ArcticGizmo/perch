@@ -11,6 +11,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [v0.3.20] - 2026-08-07
 
+
 - Middle-click a link (PR, incident, artifact, status, QR) to open it in a fresh browser window
 - That window lands on your current virtual desktop, instead of teleporting you to wherever the last one was
 

@@ -30,21 +30,25 @@ internal readonly record struct DiffSection(string? Label, GitDiff Diff);
 /// </summary>
 internal sealed class DiffView : Border
 {
-    private static readonly Color BodyBg = Color.FromRgb(18, 18, 24);
-    private static readonly IBrush FileBarBg = new SolidColorBrush(Color.FromRgb(30, 30, 42));
-    private static readonly IBrush SectionBarBg = new SolidColorBrush(Color.FromRgb(40, 40, 56));
-    private static readonly IBrush TitleBrush = new SolidColorBrush(Palette.Title);
-    private static readonly IBrush MutedBrush = new SolidColorBrush(Palette.Muted);
-    private static readonly IBrush GutterBrush = new SolidColorBrush(Color.FromRgb(110, 110, 132));
-    private static readonly IBrush ContextBrush = new SolidColorBrush(Color.FromRgb(190, 190, 205));
-    private static readonly IBrush AddedBrush = new SolidColorBrush(Palette.Green);
-    private static readonly IBrush RemovedBrush = new SolidColorBrush(Palette.Red);
-    private static readonly IBrush HunkBrush = new SolidColorBrush(Palette.Accent);
-    private static readonly IBrush SelectionBrush = new SolidColorBrush(Color.FromArgb(90, 96, 165, 250));
-    private static readonly IBrush AddedBandBg = new SolidColorBrush(Color.FromArgb(36, 34, 197, 94));
-    private static readonly IBrush RemovedBandBg = new SolidColorBrush(Color.FromArgb(36, 239, 68, 68));
-    private static readonly IBrush MatchBg = new SolidColorBrush(Color.FromArgb(85, 250, 204, 21));        // all matches (yellow)
-    private static readonly IBrush CurrentMatchBg = new SolidColorBrush(Color.FromArgb(190, 255, 158, 40)); // current match (orange)
+    // Palette-driven brushes. Instance (not static) so the diff can render light or dark independently of the
+    // rest of the app (the Tree window's per-window light toggle) — SetLight swaps the whole set and rebuilds.
+    private Color BodyBg;
+    private IBrush FileBarBg = null!;
+    private IBrush SectionBarBg = null!;
+    private IBrush TitleBrush = null!;
+    private IBrush MutedBrush = null!;
+    private IBrush GutterBrush = null!;
+    private IBrush ContextBrush = null!;
+    private IBrush AddedBrush = null!;
+    private IBrush RemovedBrush = null!;
+    private IBrush HunkBrush = null!;
+    private IBrush SelectionBrush = null!;
+    private IBrush AddedBandBg = null!;
+    private IBrush RemovedBandBg = null!;
+    private IBrush MatchBg = null!;         // all matches (yellow)
+    private IBrush CurrentMatchBg = null!;  // current match (orange)
+    private IBrush LineSelBg = null!;       // whole-line selection wash
+    private bool _light;
 
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
     private const double LineSize = 12.5, PathSize = 13, HunkSize = 12;
@@ -91,14 +95,13 @@ internal sealed class DiffView : Border
     private bool _dragging;
     private Point _dragPtViewport;                                             // last drag point, in ScrollViewer space
     private DispatcherTimer? _autoScroll;                                       // edge auto-scroll while char-dragging
-    private static readonly IBrush LineSelBg = new SolidColorBrush(Color.FromArgb(70, 96, 165, 250));
 
     /// <summary>Raised after a search/navigation changes the match set — (current 1-based index or 0, total).</summary>
     public event Action<int, int>? SearchResultsChanged;
 
     public DiffView()
     {
-        Background = new SolidColorBrush(BodyBg);
+        ApplyDiffPalette(); // sets every brush + Background for the current (default dark) mode
         Padding = new Thickness(0, 0, 0, 12);
         // A pointer release anywhere ends a drag and releases any capture we took for a char-selection drag
         // (handledEventsToo so a child handling the release still ends the drag).
@@ -121,6 +124,63 @@ internal sealed class DiffView : Border
         _autoScroll = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         _autoScroll.Tick += (_, _) => AutoScrollTick();
         Rebuild();
+    }
+
+    /// <summary>Switches the diff between light and dark rendering, independent of the app theme (the Tree
+    /// window's per-window toggle). Swaps the whole brush set and rebuilds.</summary>
+    public void SetLight(bool light)
+    {
+        if (_light == light) return;
+        _light = light;
+        ApplyDiffPalette();
+        Rebuild();
+    }
+
+    // Fills every colour field for the current mode and sets the surface background. Dark mirrors the original
+    // literals (and the Palette-derived add/remove/hunk hues); light uses darker, print-legible variants.
+    private void ApplyDiffPalette()
+    {
+        IBrush B(byte r, byte g, byte b) => new SolidColorBrush(Color.FromRgb(r, g, b));
+        IBrush A(byte a, byte r, byte g, byte b) => new SolidColorBrush(Color.FromArgb(a, r, g, b));
+        if (_light)
+        {
+            BodyBg = Color.FromRgb(0xFB, 0xFC, 0xFE);
+            FileBarBg = B(0xF1, 0xF2, 0xF5);
+            SectionBarBg = B(0xE6, 0xE9, 0xF0);
+            TitleBrush = B(0x0D, 0x0E, 0x16);
+            MutedBrush = B(0x5C, 0x60, 0x72);
+            GutterBrush = B(0x9A, 0xA0, 0xAE);
+            ContextBrush = B(0x24, 0x29, 0x2F);
+            AddedBrush = B(0x1F, 0x88, 0x3D);
+            RemovedBrush = B(0xCF, 0x22, 0x2E);
+            HunkBrush = B(0x2F, 0x68, 0xE0);
+            SelectionBrush = A(70, 0x2F, 0x68, 0xE0);
+            AddedBandBg = A(30, 0x1F, 0x88, 0x3D);
+            RemovedBandBg = A(28, 0xCF, 0x22, 0x2E);
+            MatchBg = A(96, 0xF5, 0xD0, 0x00);
+            CurrentMatchBg = A(200, 0xF0, 0x8A, 0x00);
+            LineSelBg = A(55, 0x2F, 0x68, 0xE0);
+        }
+        else
+        {
+            BodyBg = Color.FromRgb(18, 18, 24);
+            FileBarBg = B(30, 30, 42);
+            SectionBarBg = B(40, 40, 56);
+            TitleBrush = new SolidColorBrush(Palette.Title);
+            MutedBrush = new SolidColorBrush(Palette.Muted);
+            GutterBrush = B(110, 110, 132);
+            ContextBrush = B(190, 190, 205);
+            AddedBrush = new SolidColorBrush(Palette.Green);
+            RemovedBrush = new SolidColorBrush(Palette.Red);
+            HunkBrush = new SolidColorBrush(Palette.Accent);
+            SelectionBrush = A(90, 96, 165, 250);
+            AddedBandBg = A(36, 34, 197, 94);
+            RemovedBandBg = A(36, 239, 68, 68);
+            MatchBg = A(85, 250, 204, 21);
+            CurrentMatchBg = A(190, 255, 158, 40);
+            LineSelBg = A(70, 96, 165, 250);
+        }
+        Background = new SolidColorBrush(BodyBg);
     }
 
     public void SetLoading()
@@ -824,14 +884,16 @@ internal sealed class DiffView : Border
         return n;
     }
 
-    private static Control SectionHeader(string label) => new Border
+    // These build coloured controls, so they read the instance brush set (not static — the brushes flip with
+    // the light/dark toggle).
+    private Control SectionHeader(string label) => new Border
     {
         Background = SectionBarBg,
         Padding = new Thickness(10, 5),
         Child = new TextBlock { Text = label, Foreground = TitleBrush, FontSize = 12, FontWeight = FontWeight.Bold },
     };
 
-    private static Control HunkHeader(string header) => new SelectableTextBlock
+    private Control HunkHeader(string header) => new SelectableTextBlock
     {
         Text = header,
         FontFamily = Mono,
@@ -841,7 +903,7 @@ internal sealed class DiffView : Border
         Padding = new Thickness(8, 6, 8, 2),
     };
 
-    private static SelectableTextBlock Selectable(string text, double size, IBrush brush, FontWeight weight) => new()
+    private SelectableTextBlock Selectable(string text, double size, IBrush brush, FontWeight weight) => new()
     {
         Text = text,
         FontSize = size,
@@ -850,7 +912,7 @@ internal sealed class DiffView : Border
         SelectionBrush = SelectionBrush,
     };
 
-    private static Control Message(string text) => new TextBlock
+    private Control Message(string text) => new TextBlock
     {
         Text = text,
         Foreground = MutedBrush,

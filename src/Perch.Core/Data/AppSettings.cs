@@ -295,6 +295,11 @@ internal sealed class AppSettings
     // checkbox and persisted. A missing key keeps wrapping on.
     public bool GitReviewWrap { get; set; } = true;
 
+    // Whether the git Tree window renders in light mode (just that window — the rest of the app keeps its
+    // theme). Off by default; toggled from the window's own light/dark button and persisted. A missing key
+    // keeps it dark.
+    public bool GitTreeLight { get; set; }
+
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list
     // is the source of truth; null means "never configured" and triggers a one-time seed (see
     // MigrateQuickLinks) with the well-known presets, honouring the legacy switches below. An empty
