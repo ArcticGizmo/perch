@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.22] - 2026-08-09
+
+- PR status now follows branch switches, dropping the old branch's PR immediately (no more clinging to it for five minutes)
+
+---
+
 ## [v0.3.21] - 2026-08-08
 
 - New git-tree window replaces "Review changes": a branch-scoped commit graph, its files, and the diff (from a session's "View git history…")

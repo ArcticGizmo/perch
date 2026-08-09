@@ -98,6 +98,12 @@ public readonly record struct PullRequestInfo(int Number, string Url, string Tit
 /// off. A directory with no PR (or no GitHub remote, or no <c>gh</c>) caches a <c>null</c> for the full
 /// interval, so a repo that will never have a PR isn't re-probed on every scan. Concurrent refreshes are
 /// capped so opening Perch on a dozen sessions can't spawn a dozen <c>gh</c> processes at once.
+///
+/// The cache key is the PR's true identity: the current branch within a specific working tree (its git
+/// dir). Worktrees — and the main checkout — of one repo resolve distinct git dirs, so their PRs never
+/// bleed together; a branch switch produces a different key, so the overlay drops the old branch's PR at
+/// once and refetches (and hopping back to a branch still cached within the interval is an instant hit).
+/// Both halves of the key come from cheap filesystem reads on the scan — no process spawn.
 /// </summary>
 internal sealed class PrStatusService : IDisposable
 {
@@ -109,9 +115,9 @@ internal sealed class PrStatusService : IDisposable
     // lookups instead of forking a process per row simultaneously.
     private const int MaxConcurrent = 3;
 
-    private readonly ConcurrentDictionary<string, Entry> _cache = new();
-    // Directories with a refresh in flight, so concurrent scans don't pile up duplicate gh processes.
-    private readonly ConcurrentDictionary<string, byte> _fetching = new();
+    private readonly ConcurrentDictionary<PrKey, Entry> _cache = new();
+    // Keys with a refresh in flight, so concurrent scans don't pile up duplicate gh processes.
+    private readonly ConcurrentDictionary<PrKey, byte> _fetching = new();
     private readonly SemaphoreSlim _gate = new(MaxConcurrent);
 
     private volatile bool _enabled;
@@ -159,20 +165,30 @@ internal sealed class PrStatusService : IDisposable
         if (!_enabled || _disposed || string.IsNullOrEmpty(cwd))
             return null;
 
-        bool cached = _cache.TryGetValue(cwd, out var entry);
+        // Resolve the working tree's git dir (distinct per worktree) and its current branch — both cheap
+        // filesystem reads, no process spawn. Together they are the PR's true identity and the cache key: a
+        // branch switch, or a hop to a sibling worktree of the same repo, lands on a different key, so the
+        // previous PR is never shown for the new state. A non-repo can never have a PR — skip it entirely.
+        var gitDir = FindGitDir(cwd);
+        if (gitDir == null)
+            return null;
+
+        var key = new PrKey(gitDir, ReadHead(gitDir) ?? "");
+
+        bool cached = _cache.TryGetValue(key, out var entry);
         if (cached && DateTime.UtcNow - entry.FetchedAt < Ttl)
             return entry.Pr;
 
-        ScheduleRefresh(cwd);
+        ScheduleRefresh(key, cwd);
         return cached ? entry.Pr : null;
     }
 
-    // Kicks off a single background gh run for this directory (a no-op if one is already in flight),
-    // updates the cache when it returns, and raises Updated only when the PR actually changed. The gate
-    // caps how many run at once; a queued run still holds its _fetching slot so no duplicate is scheduled.
-    private void ScheduleRefresh(string cwd)
+    // Kicks off a single background gh run for this (worktree, branch) key (a no-op if one is already in
+    // flight), updates the cache when it returns, and raises Updated only when the PR actually changed. The
+    // gate caps how many run at once; a queued run still holds its _fetching slot so no duplicate is scheduled.
+    private void ScheduleRefresh(PrKey key, string cwd)
     {
-        if (!_fetching.TryAdd(cwd, 0))
+        if (!_fetching.TryAdd(key, 0))
             return;
 
         Task.Run(() =>
@@ -184,11 +200,13 @@ internal sealed class PrStatusService : IDisposable
                 {
                     if (_disposed || !_enabled)
                         return;
+                    // Any session directory under the worktree resolves the same PR, so cwd is just where
+                    // gh runs; the (worktree, branch) key is what the result is filed under.
                     PullRequestInfo? result = RunGhPrView(cwd);
                     if (_disposed || !_enabled)
                         return;
-                    bool changed = !_cache.TryGetValue(cwd, out var old) || !Nullable.Equals(old.Pr, result);
-                    _cache[cwd] = new Entry(result, DateTime.UtcNow);
+                    bool changed = !_cache.TryGetValue(key, out var old) || !Nullable.Equals(old.Pr, result);
+                    _cache[key] = new Entry(result, DateTime.UtcNow);
                     if (changed)
                         Updated?.Invoke();
                 }
@@ -199,7 +217,7 @@ internal sealed class PrStatusService : IDisposable
             }
             finally
             {
-                _fetching.TryRemove(cwd, out _);
+                _fetching.TryRemove(key, out _);
             }
         });
     }
@@ -421,22 +439,72 @@ internal sealed class PrStatusService : IDisposable
         }
     }
 
-    // Cheap filesystem check: is cwd inside a git working tree? Walks up looking for a ".git" entry (a dir
-    // in a normal clone, a file in a worktree/submodule). Lets us skip spawning gh for plain directories.
-    private static bool HasGitRepo(string cwd)
+    // Cheap filesystem check: is cwd inside a git working tree? True when a git directory is found.
+    private static bool HasGitRepo(string cwd) => FindGitDir(cwd) != null;
+
+    /// <summary>
+    /// Walks up from <paramref name="cwd"/> to the repo's git directory: the <c>.git</c> folder in a normal
+    /// clone, or — in a worktree or submodule, where <c>.git</c> is a file reading
+    /// <c>gitdir: &lt;path&gt;</c> — the directory that file points at (resolved relative to the
+    /// <c>.git</c> file's folder). Null when <paramref name="cwd"/> isn't inside a git working tree. Lets us
+    /// both skip gh for plain directories and read HEAD without spawning git. Internal for unit testing.
+    /// </summary>
+    internal static string? FindGitDir(string cwd)
     {
         try
         {
-            var dir = new DirectoryInfo(cwd);
-            for (var d = dir; d != null; d = d.Parent)
+            for (var d = new DirectoryInfo(cwd); d != null; d = d.Parent)
             {
                 var git = Path.Combine(d.FullName, ".git");
-                if (Directory.Exists(git) || File.Exists(git))
-                    return true;
+                if (Directory.Exists(git))
+                    return git;
+                if (File.Exists(git))
+                {
+                    const string prefix = "gitdir:";
+                    var line = File.ReadAllText(git).Trim();
+                    if (!line.StartsWith(prefix, StringComparison.Ordinal))
+                        return null;
+                    var p = line[prefix.Length..].Trim();
+                    return Path.IsPathRooted(p) ? p : Path.GetFullPath(Path.Combine(d.FullName, p));
+                }
             }
         }
         catch { }
-        return false;
+        return null;
+    }
+
+    /// <summary>
+    /// The current branch identity for <paramref name="cwd"/>: <see cref="FindGitDir"/> followed by
+    /// <see cref="ReadHead"/>. On a normal checkout this is <c>ref: refs/heads/&lt;branch&gt;</c> — stable
+    /// across commits, changing only when the branch is switched — which makes it the ideal cache-key half
+    /// for a branch-scoped PR. Null when <paramref name="cwd"/> isn't a repo or HEAD is unreadable. Internal
+    /// for unit testing.
+    /// </summary>
+    internal static string? ReadHeadRef(string cwd)
+    {
+        var gitDir = FindGitDir(cwd);
+        return gitDir == null ? null : ReadHead(gitDir);
+    }
+
+    /// <summary>
+    /// The trimmed contents of <paramref name="gitDir"/>'s HEAD file — <c>ref: refs/heads/&lt;branch&gt;</c>
+    /// on a normal checkout, or the raw commit SHA when detached (rare; it simply re-probes per commit).
+    /// Null when HEAD is unreadable. Opened shared: git rewrites HEAD via an atomic rename, so a concurrent
+    /// switch reads either the old or new value whole, never a torn one.
+    /// </summary>
+    private static string? ReadHead(string gitDir)
+    {
+        try
+        {
+            var head = Path.Combine(gitDir, "HEAD");
+            using var fs = new FileStream(head, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var sr = new StreamReader(fs);
+            return sr.ReadToEnd().Trim();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public void Dispose()
@@ -446,6 +514,16 @@ internal sealed class PrStatusService : IDisposable
         _gate.Dispose();
     }
 
-    // One cached directory result: the PR (null = no PR / not GitHub / unreadable) and when it was fetched.
+    // The identity a pull request actually depends on: a branch, within a specific working tree. Each
+    // worktree of a repo (and the main checkout) resolves a distinct git dir — <root>/.git for the main
+    // tree, <root>/.git/worktrees/<name> for a linked one — so keying by (gitDir, branch) keeps each
+    // worktree's PR separate, while a branch switch yields a different key that drops the old branch's PR at
+    // once. Sessions in different sub-directories of one worktree collapse onto a single key (one gh fetch).
+    // Stale keys (branches since left) simply age past their TTL and sit unused — bounded by branches
+    // visited, and cleared wholesale when the feature is toggled off.
+    private readonly record struct PrKey(string GitDir, string Branch);
+
+    // One cached result: the PR (null = no PR / not GitHub / unreadable) and when it was fetched. The
+    // branch and worktree it belongs to are carried by the cache key, not stored here.
     private readonly record struct Entry(PullRequestInfo? Pr, DateTime FetchedAt);
 }

@@ -299,3 +299,119 @@ public class PrStatusServiceTests
         Assert.NotEqual(PrStatusService.ParsePrJson(json), changed);
     }
 }
+
+/// <summary>
+/// Covers <see cref="PrStatusService.ReadHeadRef"/> / <see cref="PrStatusService.FindGitDir"/> — the cheap
+/// per-scan branch identity that invalidates the (directory-keyed) PR cache on a branch switch. The gh
+/// spawning and TTL caching around it stay manual, but the git-dir resolution (normal clone, sub-directory
+/// walk, and the <c>.git</c>-file indirection worktrees/submodules use) is fiddly enough to pin here: a
+/// regression would either miss branch switches (stale PR) or spuriously re-invalidate every scan.
+/// </summary>
+public sealed class PrStatusServiceBranchTests : IDisposable
+{
+    private readonly string _root =
+        Path.Combine(Path.GetTempPath(), "perch-pr-branch-" + Guid.NewGuid().ToString("N"));
+
+    private string Make(string relative)
+    {
+        var full = Path.Combine(_root, relative);
+        Directory.CreateDirectory(full);
+        return full;
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); } catch { }
+    }
+
+    [Fact]
+    public void ReadsSymbolicRefFromRepoRoot()
+    {
+        var repo = Make("repo");
+        Directory.CreateDirectory(Path.Combine(repo, ".git"));
+        File.WriteAllText(Path.Combine(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+        Assert.Equal("ref: refs/heads/main", PrStatusService.ReadHeadRef(repo));
+    }
+
+    [Fact]
+    public void WalksUpFromSubdirectory()
+    {
+        var repo = Make("repo");
+        Directory.CreateDirectory(Path.Combine(repo, ".git"));
+        File.WriteAllText(Path.Combine(repo, ".git", "HEAD"), "ref: refs/heads/feature/x\n");
+        var sub = Make(Path.Combine("repo", "src", "deep"));
+
+        Assert.Equal("ref: refs/heads/feature/x", PrStatusService.ReadHeadRef(sub));
+    }
+
+    [Fact]
+    public void SwitchingBranchChangesTheIdentity()
+    {
+        var repo = Make("repo");
+        var head = Path.Combine(repo, ".git", "HEAD");
+        Directory.CreateDirectory(Path.Combine(repo, ".git"));
+
+        File.WriteAllText(head, "ref: refs/heads/main\n");
+        var before = PrStatusService.ReadHeadRef(repo);
+        File.WriteAllText(head, "ref: refs/heads/other\n");
+        var after = PrStatusService.ReadHeadRef(repo);
+
+        Assert.NotEqual(before, after);
+    }
+
+    [Fact]
+    public void DetachedHeadYieldsTheCommitSha()
+    {
+        var repo = Make("repo");
+        Directory.CreateDirectory(Path.Combine(repo, ".git"));
+        File.WriteAllText(Path.Combine(repo, ".git", "HEAD"), "0123456789abcdef0123456789abcdef01234567\n");
+
+        Assert.Equal("0123456789abcdef0123456789abcdef01234567", PrStatusService.ReadHeadRef(repo));
+    }
+
+    [Fact]
+    public void MainRepoAndLinkedWorktreeResolveDistinctGitDirs()
+    {
+        // Isolation crux: the main checkout and a linked worktree of the *same* project must map to
+        // different git dirs, so PR status caches separately per (gitDir, branch) and never bleeds across.
+        var main = Make("proj");
+        var mainGit = Path.Combine(main, ".git");
+        var wtGit = Path.Combine(mainGit, "worktrees", "wt");
+        Directory.CreateDirectory(wtGit);
+        File.WriteAllText(Path.Combine(mainGit, "HEAD"), "ref: refs/heads/main\n");
+        File.WriteAllText(Path.Combine(wtGit, "HEAD"), "ref: refs/heads/feature\n");
+
+        var wt = Make("proj-wt");
+        var rel = Path.GetRelativePath(wt, wtGit);
+        File.WriteAllText(Path.Combine(wt, ".git"), $"gitdir: {rel}\n");
+
+        Assert.NotEqual(PrStatusService.FindGitDir(main), PrStatusService.FindGitDir(wt));
+        Assert.Equal("ref: refs/heads/main", PrStatusService.ReadHeadRef(main));
+        Assert.Equal("ref: refs/heads/feature", PrStatusService.ReadHeadRef(wt));
+    }
+
+    [Fact]
+    public void ResolvesWorktreeGitdirFile()
+    {
+        // A linked worktree/submodule has ".git" as a *file* pointing at the real git dir, whose HEAD is
+        // the worktree's own. FindGitDir must follow that indirection (relative to the .git file's folder).
+        var wt = Make("worktree");
+        var gitDir = Make(Path.Combine("realgit", "worktrees", "wt"));
+        File.WriteAllText(Path.Combine(gitDir, "HEAD"), "ref: refs/heads/wt-branch\n");
+        // Relative pointer, as git actually writes it.
+        var rel = Path.GetRelativePath(wt, gitDir);
+        File.WriteAllText(Path.Combine(wt, ".git"), $"gitdir: {rel}\n");
+
+        Assert.Equal(gitDir, PrStatusService.FindGitDir(wt));
+        Assert.Equal("ref: refs/heads/wt-branch", PrStatusService.ReadHeadRef(wt));
+    }
+
+    [Fact]
+    public void NonRepoYieldsNull()
+    {
+        var plain = Make("plain");
+        Assert.Null(PrStatusService.FindGitDir(plain));
+        Assert.Null(PrStatusService.ReadHeadRef(plain));
+    }
+}
