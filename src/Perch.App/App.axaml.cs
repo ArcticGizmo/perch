@@ -36,6 +36,7 @@ public partial class App : Application
     private IReadOnlyList<DaemonWorker> _lastDaemonWorkers = [];
     private DaemonListWindow? _daemonListWindow;
     private QuickLinkLauncher? _quickLinkLauncher;
+    private GitKrakenLauncher? _gitKrakenLauncher;
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
     private StatsWindow? _statsWindow;
@@ -232,6 +233,11 @@ public partial class App : Application
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
             _overlay.Canvas.NoteEditRequested += OnEditNote;
             _overlay.Canvas.ViewTreeRequested += OnViewTree;
+            // "Open in GitKraken" — only offered when GitKraken's CLI is on PATH (detected once). The launch
+            // + window-focus runs off-thread through the platform activator (see GitKrakenLauncher).
+            _gitKrakenLauncher = new GitKrakenLauncher(PlatformServices.WindowActivator);
+            _overlay.Canvas.SetGitKrakenAvailable(GitKrakenLauncher.CliPath.Value is not null);
+            _overlay.Canvas.OpenInGitKrakenRequested += s => _gitKrakenLauncher.Open(s.Cwd);
 #if DEBUG
             // DEBUG-only: the PR glyph's right-click test items drive the real PR alert path (toast/chime/push
             // + banner) with the PR state/reviews synthesised, so any of them can be previewed without a real

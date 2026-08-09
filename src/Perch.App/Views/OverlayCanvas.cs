@@ -1123,6 +1123,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // the menu wires only their triggers.
     private bool _externalNotifyAvailable;
     private bool _viewTreeAvailable;
+    private bool _gitKrakenAvailable;
 
     /// <summary>Raised when the user picks "Exit Perch" from the header's right-click menu.</summary>
     public event Action? ExitRequested;
@@ -1179,6 +1180,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
     internal event Action<ClaudeSession>? ViewTreeRequested;
 
+    /// <summary>Raised when the user picks "Open in GitKraken" for a session. The app opens the session's
+    /// working directory in GitKraken (via its CLI) and brings the GitKraken window forward. Gated by
+    /// <see cref="_gitKrakenAvailable"/> and a cheap repo check. Internal — <see cref="ClaudeSession"/> is
+    /// Core-internal.</summary>
+    internal event Action<ClaudeSession>? OpenInGitKrakenRequested;
+
 #if DEBUG
     /// <summary>DEBUG-only: raised when the developer picks one of the PR-glyph right-click test items. The
     /// carried session already has its <see cref="ClaudeSession.PullRequest"/> forced to the state/reviews to
@@ -1202,6 +1209,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (_viewTreeAvailable == available) return;
         _viewTreeAvailable = available;
+        InvalidateVisual();
+    }
+
+    /// <summary>Whether GitKraken's CLI was found on PATH — gates the right-click "Open in GitKraken" item
+    /// (which also requires the session's cwd to be a git repo). Set once at startup; GitKraken installs
+    /// its CLI onto PATH via Preferences → CLI.</summary>
+    public void SetGitKrakenAvailable(bool available)
+    {
+        if (_gitKrakenAvailable == available) return;
+        _gitKrakenAvailable = available;
         InvalidateVisual();
     }
 
@@ -3230,8 +3247,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // 2. Session actions on a real row: git history, note (only when the notes feature is on),
             //    external notifications. Each gated by its global switch / a cheap repo check.
             var actions = new List<Control>();
-            if (!subRow && _viewTreeAvailable && GitRepoService.IsRepo(s.Cwd))
+            bool isRepo = !subRow && GitRepoService.IsRepo(s.Cwd);
+            if (isRepo && _viewTreeAvailable)
                 actions.Add(MenuItem("View git history…", () => ViewTreeRequested?.Invoke(s)));
+            if (isRepo && _gitKrakenAvailable)
+                actions.Add(MenuItem("Open in GitKraken", () => OpenInGitKrakenRequested?.Invoke(s)));
             if (!subRow && _showNoteLine)
             {
                 actions.Add(MenuItem(s.HasAnyNote ? "Edit note…" : "Add note…", () => NoteEditRequested?.Invoke(s)));
