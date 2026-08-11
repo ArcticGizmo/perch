@@ -90,6 +90,15 @@ internal sealed class SessionMonitorHost : IDisposable
     /// <summary>How often (minutes) each working directory's PR is re-checked with gh.</summary>
     public int PrIntervalMinutes { set => _monitor.PrIntervalMinutes = value; }
 
+    /// <summary>Turns the per-session Jira ticket glyph on/off in the data layer (off ⇒ no branch is read).</summary>
+    public bool JiraEnabled { set => _monitor.JiraEnabled = value; }
+
+    /// <summary>The Jira site branch tickets deep-link into (bare sub-domain or full host).</summary>
+    public string? JiraSubdomain { set => _monitor.JiraSubdomain = value; }
+
+    /// <summary>Optional comma-separated Jira project keys a branch key must match; blank matches any.</summary>
+    public string? JiraProjectFilter { set => _monitor.JiraProjectFilter = value; }
+
     /// <summary>Reads the initial session state and starts the safety-net reconcile timer. Call on the
     /// UI thread (Scan raises SessionsChanged).</summary>
     public void Start()

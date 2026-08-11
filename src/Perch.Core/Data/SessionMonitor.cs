@@ -78,6 +78,35 @@ internal sealed class SessionMonitor : IDisposable
         set => _pr.IntervalMinutes = value;
     }
 
+    /// <summary>Master switch for the per-session Jira ticket glyph. Off by construction; the owning context
+    /// sets it from settings. Unlike the PR lookup this launches no process and hits no network — the ticket
+    /// is parsed from the branch name — so it's resolved inline on the scan. Turning it on fires
+    /// <see cref="ChangeDetected"/> so a scan runs immediately and the glyph appears without waiting out the
+    /// reconcile tick.</summary>
+    public bool JiraEnabled
+    {
+        get => _jiraEnabled;
+        set
+        {
+            if (_jiraEnabled == value)
+                return;
+            _jiraEnabled = value;
+            if (value)
+                ChangeDetected?.Invoke();
+        }
+    }
+
+    /// <summary>The Jira site branch tickets deep-link into, as a bare sub-domain ("acme") or full host
+    /// ("acme.atlassian.net"). Normalised when consumed (see <see cref="JiraLink.NormalizeSubdomain"/>);
+    /// null/empty leaves the glyph inert even while <see cref="JiraEnabled"/> is on.</summary>
+    public string? JiraSubdomain { get; set; }
+
+    /// <summary>Optional comma-separated Jira project keys ("SFTY, PROJ") a branch key must belong to;
+    /// empty matches any standard key. See <see cref="JiraLink.Resolve"/>.</summary>
+    public string? JiraProjectFilter { get; set; }
+
+    private bool _jiraEnabled;
+
     private readonly string _sessionsDir = ClaudePaths.SessionsDir;
 
     private readonly Dictionary<string, string> _lastRawStatus = new();
@@ -739,6 +768,14 @@ internal sealed class SessionMonitor : IDisposable
             // from a long (poll-interval) cache so a scan never blocks on gh.
             var pullRequest = _pr.Get(cwd);
 
+            // The Jira ticket deep-linked from this working tree's branch name. Pure and offline — a cheap
+            // HEAD read (reused from the PR service's helper) plus a regex — so it's resolved inline rather
+            // than behind a service: while the glyph is off, or no site is configured, nothing is read.
+            JiraTicketInfo? jiraTicket = null;
+            if (_jiraEnabled && !string.IsNullOrWhiteSpace(JiraSubdomain))
+                jiraTicket = JiraLink.Resolve(
+                    JiraLink.BranchFromHeadRef(PrStatusService.ReadHeadRef(cwd)), JiraSubdomain, JiraProjectFilter);
+
             var session = new ClaudeSession(
                 pid,
                 sessionId,
@@ -767,7 +804,8 @@ internal sealed class SessionMonitor : IDisposable
                 context.Model,
                 context.Source,
                 apiFailure,
-                pullRequest
+                pullRequest,
+                jiraTicket
             );
 
             if (status == SessionStatus.NeedsAttention

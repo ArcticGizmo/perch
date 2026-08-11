@@ -354,6 +354,25 @@ internal sealed class AppSettings
     // keeps that.
     public int PullRequestIntervalMinutes { get; set; } = 5;
 
+    // Jira ticket deep-link. When on, a session whose git branch carries a Jira issue key (e.g.
+    // SFTY-1234-add-audit-log) grows a small ticket glyph on its overlay row; clicking it opens the ticket at
+    // https://{JiraSubdomain}.atlassian.net/browse/{KEY}. Pure and offline — the key is parsed from the branch
+    // name and the URL string-built — so nothing ever calls the Jira API and no credentials are needed. Off by
+    // default, and inert until JiraSubdomain is set; a missing key keeps it off. See Perch.Data.JiraLink.
+    public bool ShowJiraTicket { get; set; }
+
+    // The Jira site the ticket glyph links into, entered as a bare sub-domain ("acme") or the full host
+    // ("acme.atlassian.net" / "https://acme.atlassian.net/"). Stored raw; normalised when consumed
+    // (JiraLink.NormalizeSubdomain). Null/empty leaves the glyph inert even when ShowJiraTicket is on.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? JiraSubdomain { get; set; }
+
+    // Optional comma-separated Jira project keys ("SFTY, PROJ") the branch key must belong to, so an unrelated
+    // key elsewhere in a branch name isn't mistaken for a ticket. Empty/null matches any standard Jira key.
+    // Stored raw.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? JiraProjectFilter { get; set; }
+
     // Global keyboard shortcuts (system-wide, work even when Perch isn't focused). Each is registered on
     // startup and re-registered live when the Hotkeys settings page edits it. A binding that's disabled or
     // invalid simply isn't registered; the OS refusing a combo (another app owns it) is ignored. The

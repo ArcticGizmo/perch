@@ -546,6 +546,9 @@ public partial class App : Application
             _monitorHost.StuckDetectionEnabled = s.StuckDetectionEnabled;
             _monitorHost.PrEnabled = s.ShowPullRequests;
             _monitorHost.PrIntervalMinutes = s.PullRequestIntervalMinutes;
+            _monitorHost.JiraEnabled = s.ShowJiraTicket;
+            _monitorHost.JiraSubdomain = s.JiraSubdomain;
+            _monitorHost.JiraProjectFilter = s.JiraProjectFilter;
         }
     }
 

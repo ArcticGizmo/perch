@@ -63,6 +63,7 @@ internal static class SampleData
                 Artifacts: new List<Artifact> { new("https://claude.ai/code/artifact/1", "API report") }),
             new ClaudeSession("9012", "s3", SessionStatus.NeedsAttention, @"C:\src\docs", "docs-site", now,
                 BridgeSessionId: "bridge-xyz", Stuck: new StuckSignal(StuckKind.FailingLoop, "repeating build"),
+                JiraTicket: new JiraTicketInfo("SFTY-1234", "https://acme.atlassian.net/browse/SFTY-1234"),
                 PullRequest: new PullRequestInfo(88, "https://github.com/o/r/pull/88", "Draft: docs restructure", PrState.Draft)
                 {
                     Checks = [new("build", PrCheckState.Pending), new("deploy-preview", PrCheckState.Pending)],

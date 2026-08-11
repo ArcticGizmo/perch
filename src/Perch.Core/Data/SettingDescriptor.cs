@@ -49,6 +49,7 @@ internal enum PreviewTarget
     Artifacts,
     GitStats,
     PullRequest,
+    JiraTicket,
     Stuck,
     ServiceStatus,
     SystemMetrics,
