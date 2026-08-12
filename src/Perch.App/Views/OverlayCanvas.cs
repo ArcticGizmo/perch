@@ -1440,6 +1440,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
             if (showBody)
             {
+                // Clip the body to the panel's rounded rect so the bottom-most element (a hovered last row
+                // with no strip beneath it, or a daemon/mic/media strip) follows the rounded corners instead
+                // of squaring off past them. Same trick the outage footer uses for its bottom corners.
+                using var _bodyClip = ctx.PushClip(new RoundedRect(panelRect, Corner));
+
                 // Glyph hit-rects are rebuilt from scratch each paint; DrawSessionRow repopulates them
                 // for any row that actually shows the glyph.
                 _artifactRects.Clear();

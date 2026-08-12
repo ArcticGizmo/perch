@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.24] - 2026-08-11
+
+- Hovering the last session row no longer pokes its corners past the panel's rounded edge
+
+---
+
 ## [v0.3.23] - 2026-08-09
 
 - Open a session's repo in GitKraken from its right-click menu, when GitKraken's CLI is on PATH (it comes forward on its own, no console in tow)
