@@ -301,6 +301,29 @@ public class TranscriptReaderTests
     }
 
     [Fact]
+    public void GetTasks_ReadsLiveToolSchema_ContentAndTaskId()
+    {
+        // Regression: the real Claude Code tool *input* names the fields "content" (TaskCreate) and
+        // "task_id" (TaskUpdate). "subject"/"taskId" only appear in the tool *result*. Reading the
+        // result-shaped names off the input left every subject blank and every status update dropped,
+        // so a 6/7-done checklist surfaced as "0/7" (all pending). This fixture uses the live schema.
+        var reader = new TranscriptReader();
+        var tasks = reader.GetTasks("sessTasksRealSchema", Cwd);
+
+        Assert.Equal(3, tasks.Count);
+
+        // Subject comes from the input's "content" field, not a (never-present) "subject".
+        Assert.Equal("Git layer: AddWorktreeDetached, SwitchNewBranch, DetachTo", tasks[0].Subject);
+        Assert.Equal(TaskState.Completed, tasks[0].State);
+
+        // Status updates key off "task_id" and must resolve.
+        Assert.Equal(TaskState.Completed, tasks[1].State);
+        Assert.Equal(TaskState.InProgress, tasks[2].State);
+
+        Assert.Equal(2, tasks.Count(t => t.State == TaskState.Completed));
+    }
+
+    [Fact]
     public void GetTasks_CompletedCountAndCurrentTaskReflectProgress()
     {
         var reader = new TranscriptReader();

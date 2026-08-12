@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.27] - 2026-08-12
+
+- Fixed task checklists reading 0-done when they weren't (the tool renamed its fields; we hadn't noticed)
+
+---
+
 ## [v0.3.26] - 2026-08-12
 
 - Fixed brand, status and Jira colours rendering black on older custom themes

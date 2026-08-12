@@ -366,7 +366,10 @@ internal sealed class TranscriptReader
                             byId.Clear();
                             promptSinceTask = false;
                         }
-                        var subject = input?["subject"]?.GetValue<string>()?.Trim() ?? "";
+                        // The tool_use *input* carries the task text in "content" (the "subject"/"id"
+                        // names only appear in the tool *result*). Accept "subject" as a fallback so a
+                        // future schema tweak can't silently blank the list.
+                        var subject = (input?["content"] ?? input?["subject"])?.GetValue<string>()?.Trim() ?? "";
                         var activeForm = input?["activeForm"]?.GetValue<string>()?.Trim() ?? "";
                         byId[id] = (subject, activeForm, TaskState.Pending);
                         batchIds.Add(id);
@@ -374,9 +377,10 @@ internal sealed class TranscriptReader
                     }
                     else if (name == "TaskUpdate")
                     {
-                        // taskId/status come through as JSON strings; ToString() is robust whether the
+                        // task_id/status come through as JSON strings; ToString() is robust whether the
                         // id is encoded as a string ("1") or a bare number, where GetValue<string> throws.
-                        var idStr = input?["taskId"]?.ToString();
+                        // The input field is "task_id" ("taskId" is the *result* field — kept as a fallback).
+                        var idStr = (input?["task_id"] ?? input?["taskId"])?.ToString();
                         var status = input?["status"]?.ToString();
                         // Only updates to a task in the current batch matter; ids from a dropped batch
                         // are absent from byId and harmlessly ignored.
