@@ -57,6 +57,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double ArtifactIconWidth = 16;
     private const double NoteIconWidth    = 15; // the pinned-note glyph shown on a row that has a note
     private const double PrIconWidth      = 16; // the GitHub pull-request (merge) glyph on a row with a PR
+    private const double JiraIconWidth    = 15; // the Jira ticket (tag) glyph on a row whose branch has a key
 
     // Font sizes (px ~= the WinForms point sizes).
     private const double NameSize       = 11.5;
@@ -593,6 +594,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showBurnRate = true;
     private bool _showGitStats = true;
     private bool _showPullRequests;
+    private bool _showJiraTickets;
     private bool _showNoteLine = true;
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
@@ -969,6 +971,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
+    /// <summary>Show/hide the Jira ticket (tag) glyph on a session row. Display only — the branch parse that
+    /// resolves the ticket is gated separately in the data layer (see <c>JiraEnabled</c>), so both are set
+    /// together.</summary>
+    public void SetShowJiraTickets(bool show)
+    {
+        if (_showJiraTickets == show) return;
+        _showJiraTickets = show;
+        InvalidateVisual();
+    }
+
     /// <summary>Show/hide the pinned-note glyph on a session row (session note and/or project note). Off ⇒
     /// the note is still stored and editable from the right-click menu, just no glyph. The note's text is
     /// never previewed inline — hover the glyph or open the editor — so this doesn't change row height.</summary>
@@ -1046,6 +1058,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private readonly Dictionary<int, Rect> _metricsRects = new();
     private readonly Dictionary<int, Rect> _noteRects = new();
     private readonly Dictionary<int, Rect> _prRects = new();
+    private readonly Dictionary<int, Rect> _jiraRects = new();
     // The expand/collapse chevron on a sub-agent row that has children — captured at paint time so a
     // click can toggle that node (see RouteClick). Only rows with children get an entry.
     private readonly Dictionary<int, Rect> _subChevronRects = new();
@@ -1225,7 +1238,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, NoteButton }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, NoteButton }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1454,6 +1467,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _metricsRects.Clear();
                 _noteRects.Clear();
                 _prRects.Clear();
+                _jiraRects.Clear();
                 _subChevronRects.Clear();
 
                 double top = RowsTop;
@@ -2153,6 +2167,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double noteW = showNote ? NoteIconWidth : 0;
         bool showPr = _showPullRequests && session.PullRequest is not null;
         double prW  = showPr ? PrIconWidth : 0;
+        bool showJira = _showJiraTickets && session.JiraTicket is not null;
+        double jiraW  = showJira ? JiraIconWidth : 0;
 
         // Right-side cluster (right→left from the status text): thermometer, mode badge, task count,
         // metrics bars (4.9), burn rate.
@@ -2186,7 +2202,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double gitW = showGit ? gitAddW + GitGap + gitDelW + 8 : 0;
 
         double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - botW - mailW
-                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW;
+                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW - jiraW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
 
@@ -2218,8 +2234,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 session.PullRequest!.Value.ChecksRollup, hovered: _hoveredPrRow == rowIndex);
             _prRects[rowIndex] = new Rect(prGlyphX - 2, nameMidY - 9, PrIconWidth + 2, 18);
         }
+        if (showJira)
+        {
+            double jiraGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW;
+            DrawJiraIcon(ctx, jiraGlyphX, nameMidY);
+            _jiraRects[rowIndex] = new Rect(jiraGlyphX - 2, nameMidY - 9, JiraIconWidth + 2, 18);
+        }
 
-        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW;
+        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW + jiraW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
         // Git churn immediately right of the name: "+added" green, "-deleted" red.
@@ -2604,6 +2626,33 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
     }
 
+    // Jira ticket glyph: a small luggage-tag pointing left, drawn in Jira's brand blue so it reads as a
+    // deep-link rather than a status. The click affordance is the hand cursor + the dwell tooltip (which
+    // names the key); the glyph itself doesn't change on hover, matching the other single-action markers.
+    private static void DrawJiraIcon(DrawingContext ctx, double x, double midY)
+    {
+        var brush = Palette.JiraBrush;
+        var pen = new Pen(brush, 1.4, null, PenLineCap.Round, PenLineJoin.Round);
+
+        double top = midY - 4.5, bot = midY + 4.5;
+        double tipX = x + 2, bodyX = x + 6, rightX = x + 13;
+
+        var tag = new StreamGeometry();
+        using (var gc = tag.Open())
+        {
+            gc.BeginFigure(new Point(tipX, midY), isFilled: false); // the pointed tip on the left
+            gc.LineTo(new Point(bodyX, top));
+            gc.LineTo(new Point(rightX, top));
+            gc.LineTo(new Point(rightX, bot));
+            gc.LineTo(new Point(bodyX, bot));
+            gc.EndFigure(true);                                     // close the body back to the tip
+        }
+        ctx.DrawGeometry(null, pen, tag);
+
+        // The tag's eyelet, a small ring near the tip.
+        ctx.DrawEllipse(null, pen, new Point(bodyX + 0.5, midY), 1.0, 1.0);
+    }
+
     // Stuck-detection warning: an amber triangle with an exclamation mark punched out of the panel bg.
     private static void DrawWarnIcon(DrawingContext ctx, double x, double midY)
     {
@@ -2798,6 +2847,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int prIcon = HitRect(_prRects, p);
         if (prIcon != _hoveredPrRow) { _hoveredPrRow = prIcon; InvalidateVisual(); }
 
+        // The Jira glyph doesn't change on hover, so it needs no repaint — just the hand cursor + tooltip.
+        int jiraIcon = HitRect(_jiraRects, p);
+
         bool overUpdate = _updateAvailable && _updateIconRect.Width > 0 && _updateIconRect.Contains(p);
         if (overUpdate != _hoveredUpdateIcon) { _hoveredUpdateIcon = overUpdate; InvalidateVisual(); }
 
@@ -2822,8 +2874,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + daemon worker lines +
         // artifacts + the update badge + outage footer + the scratch-pad note button + a row's note glyph +
         // the media buttons + the mic strip's app name); rows show only the highlight.
-        Cursor = (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || prIcon >= 0 || overUpdate || overFooter
-                  || overNote || overRowNote || media >= 0 || overMicLabel)
+        Cursor = (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
+                  || overFooter || overNote || overRowNote || media >= 0 || overMicLabel)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -2839,6 +2891,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitTestTaskCount(p)  is var ta && ta >= 0 ? (TipKind.Task, ta) :
             HitTestMetrics(p)    is var me && me >= 0 ? (TipKind.Metrics, me) :
             HitRect(_prRects, p) is var pr && pr >= 0 ? (TipKind.Pr, pr) :
+            HitRect(_jiraRects, p) is var jr && jr >= 0 ? (TipKind.Jira, jr) :
             _mediaTitleRect.Contains(p)               ? (TipKind.Media, -1) :
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             _noteButtonRect.Width > 0
@@ -2872,6 +2925,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Media:   ShowMediaTooltip();          break;
             case TipKind.Mic:     ShowMicTooltip();            break;
             case TipKind.Pr:      ShowPrTooltip(_tipRow);      break;
+            case TipKind.Jira:    ShowJiraTooltip(_tipRow);    break;
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
         }
     }
@@ -2941,6 +2995,22 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             e.Handled = true;
             return;
         }
+
+        // Middle-click the Jira glyph to open the ticket in a fresh browser window (mirrors the middle-click
+        // "open in new window" the URL menu items offer). Only the Jira glyph takes a middle click today.
+        if (props.IsMiddleButtonPressed)
+        {
+            int jiraMid = HitRect(_jiraRects, e.GetPosition(this));
+            if (jiraMid >= 0 && _rows[jiraMid].Session is { JiraTicket: { } jira })
+            {
+                PlatformServices.UrlOpener.OpenInNewWindow(jira.Url);
+                e.Handled = true;
+                return;
+            }
+            base.OnPointerPressed(e);
+            return;
+        }
+
         if (!props.IsLeftButtonPressed) { base.OnPointerPressed(e); return; }
 
         var p = e.GetPosition(this);
@@ -3076,6 +3146,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (prRow >= 0 && _rows[prRow].Session is { PullRequest: { } pr })
         {
             ShowPrFlyout(pr);
+            return;
+        }
+
+        // The Jira glyph is a single deterministic deep-link (unlike the PR/artifact pickers), so a left
+        // click opens it directly — the dwell tooltip has already shown which key that is. Middle-click for
+        // a fresh browser window is handled in OnPointerPressed.
+        int jiraRow = HitRect(_jiraRects, p);
+        if (jiraRow >= 0 && _rows[jiraRow].Session is { JiraTicket: { } jira })
+        {
+            PlatformServices.UrlOpener.Open(jira.Url);
             return;
         }
 
@@ -3426,6 +3506,21 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             }
         }
 
+        Tooltip().ShowLines(lines, ToScreen(r.Left, r.Bottom + 4));
+    }
+
+    // Hover tooltip for the Jira glyph: the ticket key on a bold line with a "click to open" hint beneath,
+    // so the destination is confirmed before a click ever navigates.
+    private void ShowJiraTooltip(int row)
+    {
+        if (row < 0 || row >= _rows.Count || _rows[row].Session?.JiraTicket is not { } jira) return;
+        if (!_jiraRects.TryGetValue(row, out var r)) return;
+
+        var lines = new List<OverlayTooltip.Line>
+        {
+            new(jira.Key, OverlayTooltip.FgColor, true),
+            new("Click to open in Jira", OverlayTooltip.MutedColor, false),
+        };
         Tooltip().ShowLines(lines, ToScreen(r.Left, r.Bottom + 4));
     }
 

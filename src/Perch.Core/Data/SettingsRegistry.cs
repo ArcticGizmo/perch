@@ -383,6 +383,24 @@ internal static class SettingsRegistry
             PreviewTarget.PullRequest, nameof(AppSettings.PullRequestIntervalMinutes),
             s => s.PullRequestIntervalMinutes, (s, v) => s.PullRequestIntervalMinutes = v),
 
+        Toggle("jira-ticket", "Jira ticket",
+            "A ticket glyph on a session whose branch name carries a Jira key (e.g. SFTY-1234), linking to the issue.",
+            SettingSurface.Integrations, ["jira", "ticket", "issue", "atlassian", "branch", "link", "sfty"],
+            PreviewTarget.JiraTicket, nameof(AppSettings.ShowJiraTicket),
+            s => s.ShowJiraTicket, (s, v) => s.ShowJiraTicket = v),
+
+        Info("jira-subdomain", "Jira site",
+            "Your Jira sub-domain - \"acme\" or \"acme.atlassian.net\" - that branch tickets link into.",
+            SettingSurface.Integrations, SettingKind.Field,
+            ["jira", "site", "subdomain", "domain", "atlassian", "host", "url"], PreviewTarget.JiraTicket,
+            nameof(AppSettings.JiraSubdomain)),
+
+        Info("jira-project-filter", "Jira project keys",
+            "Optional comma-separated project keys (e.g. \"SFTY, PROJ\") to match; blank matches any key.",
+            SettingSurface.Integrations, SettingKind.Field,
+            ["jira", "project", "key", "filter", "prefix", "sfty"], PreviewTarget.JiraTicket,
+            nameof(AppSettings.JiraProjectFilter)),
+
         // ── Advanced ─────────────────────────────────────────────────────────
         Info("theme", "Theme",
             "The app's colour theme — pick a preset or design your own on the Appearance page.",

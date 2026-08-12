@@ -263,14 +263,39 @@ internal sealed class SettingsCatalogView : StackPanel
 
     private Control FieldEditor(SettingDescriptor d)
     {
-        bool host = d.Id == "ntfy-host";
-        var box = SettingsUi.ThemedTextBox((host ? _settings.NtfyHost : _settings.NtfyTopic) ?? "");
-        box.PlaceholderText = host ? "https://ntfy.sh" : "your-topic-name";
+        // Each free-text setting names its getter/setter + placeholder here, keyed by the descriptor id.
+        Func<string?> get;
+        Action<string?> set;
+        string placeholder;
+        switch (d.Id)
+        {
+            case "ntfy-host":
+                get = () => _settings.NtfyHost; set = v => _settings.NtfyHost = v;
+                placeholder = "https://ntfy.sh"; break;
+            case "ntfy-topic":
+                get = () => _settings.NtfyTopic; set = v => _settings.NtfyTopic = v;
+                placeholder = "your-topic-name"; break;
+            case "jira-subdomain":
+                get = () => _settings.JiraSubdomain; set = v => _settings.JiraSubdomain = v;
+                placeholder = "acme  (or acme.atlassian.net)"; break;
+            case "jira-project-filter":
+                get = () => _settings.JiraProjectFilter; set = v => _settings.JiraProjectFilter = v;
+                placeholder = "SFTY, PROJ  (optional)"; break;
+            default:
+                get = () => null; set = _ => { }; placeholder = ""; break;
+        }
+
+        // The Jira fields feed the data layer (site + filter) via ApplyDisplaySettings, so re-push on edit;
+        // the ntfy fields are read on demand at send time and need no live re-apply.
+        bool live = d.Id is "jira-subdomain" or "jira-project-filter";
+
+        var box = SettingsUi.ThemedTextBox(get() ?? "");
+        box.PlaceholderText = placeholder;
         box.TextChanged += (_, _) =>
         {
-            if (host) _settings.NtfyHost = box.Text;
-            else _settings.NtfyTopic = box.Text;
+            set(box.Text);
             _settings.Save();
+            if (live) _hooks.DisplayChanged?.Invoke();
         };
         return box;
     }

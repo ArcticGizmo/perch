@@ -93,6 +93,8 @@ public sealed record Theme
     public Rgb Teal { get; init; }
     /// <summary>Token burn-rate readout (blue).</summary>
     public Rgb Burn { get; init; }
+    /// <summary>The Jira ticket deep-link glyph — Jira's brand blue, held stable across themes.</summary>
+    public Rgb Jira { get; init; }
     /// <summary>Bot / grey-teammate neutral accent.</summary>
     public Rgb TeamGray { get; init; }
     /// <summary>The "Accept edits" permission-mode badge (blue-purple); the other modes reuse

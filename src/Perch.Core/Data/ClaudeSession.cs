@@ -146,7 +146,8 @@ public record ClaudeSession(
     string? Model = null,                                              // model behind ContextWindow
     ContextWindowSource ContextSource = ContextWindowSource.Assumed,   // how ContextWindow was decided
     ApiFailure? ApiFailure = null,                                     // set iff Status == ApiError
-    PullRequestInfo? PullRequest = null                               // the PR for Cwd's branch, if any
+    PullRequestInfo? PullRequest = null,                              // the PR for Cwd's branch, if any
+    JiraTicketInfo? JiraTicket = null                                // the Jira ticket for Cwd's branch, if any
 )
 {
     /// <summary>
@@ -199,6 +200,16 @@ public record ClaudeSession(
 
     /// <summary>True when this session's branch has a pull request to surface.</summary>
     public bool HasPullRequest => PullRequest != null;
+
+    /// <summary>
+    /// The Jira ticket deep-linked from this session's branch name (see <see cref="Cwd"/>), when the Jira
+    /// glyph is on, a site is configured, and the branch carries a matching issue key. Null otherwise.
+    /// Derived purely from the branch name — no Jira API call. See <see cref="JiraLink"/>.
+    /// </summary>
+    public JiraTicketInfo? JiraTicket { get; init; } = JiraTicket;
+
+    /// <summary>True when this session's branch resolves to a Jira ticket to surface.</summary>
+    public bool HasJiraTicket => JiraTicket != null;
 
     /// <summary>How many tasks in the checklist are completed.</summary>
     public int CompletedTaskCount => Tasks.Count(t => t.State == TaskState.Completed);

@@ -93,6 +93,7 @@ public static class CvdSim
             SubAgent = Simulate(theme.SubAgent, type),
             Teal = Simulate(theme.Teal, type),
             Burn = Simulate(theme.Burn, type),
+            Jira = Simulate(theme.Jira, type),
             TeamGray = Simulate(theme.TeamGray, type),
             ModeAcceptEdits = Simulate(theme.ModeAcceptEdits, type),
         };

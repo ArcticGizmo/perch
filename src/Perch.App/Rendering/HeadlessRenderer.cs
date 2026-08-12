@@ -42,6 +42,7 @@ internal static class HeadlessRenderer
 
         var canvas = new OverlayCanvas();
         canvas.SetShowPullRequests(true);
+        canvas.SetShowJiraTickets(true);
         canvas.Update(SampleData.Sessions());
         canvas.UpdateUsage(SampleData.Usage());
         canvas.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));

@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.25] - 2026-08-12
+
+- Jira ticket glyph on sessions whose branch carries a key like SFTY-1234, linking straight to the issue
+- Derived from the branch name alone - no Jira API, no credentials, no cache
+- Point it at your Jira site and optionally filter to specific project keys
+- Painted in Jira's brand blue, so it reads as a link rather than a status
+
+---
+
 ## [v0.3.24] - 2026-08-11
 
 - Hovering the last session row no longer pokes its corners past the panel's rounded edge

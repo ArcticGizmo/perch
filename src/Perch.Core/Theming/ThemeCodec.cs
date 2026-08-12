@@ -45,6 +45,8 @@ public static class ThemeCodec
         (t => t.Burn,               (t, c) => t with { Burn = c }),
         (t => t.TeamGray,           (t, c) => t with { TeamGray = c }),
         (t => t.ModeAcceptEdits,    (t, c) => t with { ModeAcceptEdits = c }),
+        // Appended (never reordered) so older share codes keep decoding — new roles go on the end only.
+        (t => t.Jira,               (t, c) => t with { Jira = c }),
     ];
 
     public static string Encode(Theme t)
