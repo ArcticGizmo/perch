@@ -33,36 +33,19 @@ public static class Themes
         TextMuted    = new(140, 140, 160),
         ExpectedMark = new(180, 180, 195),
 
-        // Accent & brand
+        // Accent (the one tintable brand-ish colour; brand/status/semantic hues live in FixedColors)
         Accent      = new(96, 165, 250),
         AccentHover = new(147, 197, 253),
-        Brand       = new(255, 68, 45),
-        BrandHover  = new(255, 104, 84),
-        Danger      = new(248, 113, 113),
         FocusRing   = new(147, 197, 253),
-
-        // Semantic status
-        StatusRunning   = new(34, 197, 94),
-        StatusAttention = new(251, 146, 60),
-        StatusAwaiting  = new(250, 204, 21),
-        StatusIdle      = new(100, 116, 139),
-        StatusError     = new(239, 68, 68),
-        StatusWarn      = new(245, 158, 11),
-        SubAgent        = new(168, 85, 247),
-        Teal            = new(94, 234, 212),
-        Burn            = new(125, 185, 232),
-        Jira            = new(38, 132, 255),   // Jira brand blue (#2684FF), stable across themes
-
-        TeamGray        = new(148, 163, 184),
-        ModeAcceptEdits = new(167, 139, 250),
     };
 
     /// <summary>
     /// Perch-flavoured warm dark: the neutral ramp rotated off cool-blue toward the brand's red-orange
     /// (~15°) at low chroma, so the surfaces read as warm charcoal with a faint red undertone. Only the
-    /// neutrals and text are re-tinted — the accent, brand and semantic status hues are inherited from
-    /// <see cref="Midnight"/> unchanged, so the overlay's glanceable meaning (running/awaiting/error) is
-    /// untouched. Text roles are verified against WCAG AA on the warm surfaces by the preset-contrast test.
+    /// neutrals and text are re-tinted — the accent is inherited from <see cref="Midnight"/> unchanged, and
+    /// the brand/status hues are theme-independent (<see cref="FixedColors"/>), so the overlay's glanceable
+    /// meaning (running/awaiting/error) is untouched. Text roles are verified against WCAG AA on the warm
+    /// surfaces by the preset-contrast test.
     /// </summary>
     public static readonly Theme Ember = Midnight with
     {
@@ -91,8 +74,8 @@ public static class Themes
 
     /// <summary>
     /// Soft pink-tinted dark: the neutral ramp rotated toward magenta (~330°) at low chroma (R and B a
-    /// touch over G, for a mauve-grey). The "very slightly pink" flavour — restrained, like Ember. Accent,
-    /// brand and status hues inherited from Midnight.
+    /// touch over G, for a mauve-grey). The "very slightly pink" flavour — restrained, like Ember. Accent
+    /// inherited from Midnight; brand/status hues are theme-independent (FixedColors).
     /// </summary>
     public static readonly Theme Blush = Midnight with
     {
@@ -118,8 +101,8 @@ public static class Themes
 
     /// <summary>
     /// Monokai-inspired warm dark: an olive-brown neutral ramp (Monokai's #272822 family) with crisp
-    /// near-white text, for the high-contrast-code crowd. Accent, brand and status hues inherited from
-    /// Midnight.
+    /// near-white text, for the high-contrast-code crowd. Accent inherited from Midnight; brand/status hues
+    /// are theme-independent (FixedColors).
     /// </summary>
     public static readonly Theme Dim = Midnight with
     {
@@ -175,7 +158,7 @@ public static class Themes
     /// A nod to classic Winamp: dark metallic surfaces with a faint LCD-green cast to the text and a bright
     /// lime-green accent (links / selection / nav). Deliberately retro and playful. The accent green is
     /// limier and brighter than the deeper status "running" green, so the two stay distinguishable. Brand
-    /// and status hues inherited from Midnight.
+    /// and status hues are theme-independent (FixedColors).
     /// </summary>
     public static readonly Theme Winamp = Midnight with
     {

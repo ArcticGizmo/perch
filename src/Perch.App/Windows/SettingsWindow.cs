@@ -442,10 +442,13 @@ internal sealed class SettingsWindow : Window
         {
             Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 8, 0, 0),
         };
+        // Chrome/text/accent come from the theme; the trailing status/brand swatches are theme-independent
+        // (FixedColors), so every card shows the same fixed hues there.
         foreach (var rgb in new[]
                  {
                      t.Surface, t.SurfaceRaised, t.TextPrimary, t.Accent,
-                     t.StatusRunning, t.StatusAwaiting, t.StatusError, t.Brand,
+                     FixedColors.Default.StatusRunning, FixedColors.Default.StatusAwaiting,
+                     FixedColors.Default.StatusError, FixedColors.Default.Brand,
                  })
         {
             swatches.Children.Add(new Border

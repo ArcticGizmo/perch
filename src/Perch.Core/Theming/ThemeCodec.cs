@@ -12,7 +12,11 @@ public static class ThemeCodec
 {
     private const string Prefix = "perch1:";
 
-    // The role read/write pairs, in a fixed order shared by encode and decode.
+    // The role read/write pairs, in a fixed order shared by encode and decode. Only the tintable theme
+    // roles are here — the brand/status/semantic palette is theme-independent (FixedColors) and isn't
+    // shared. These roles are all that ever varied; the order is stable, so a pre-refactor share code
+    // (which also carried the now-fixed roles after AccentHover) still decodes its chrome/text/accent
+    // correctly — Decode reads the leading roles it knows and ignores the trailing extras.
     private static readonly (Func<Theme, Rgb> Get, Func<Theme, Rgb, Theme> Set)[] Roles =
     [
         (t => t.Surface,            (t, c) => t with { Surface = c }),
@@ -31,22 +35,6 @@ public static class ThemeCodec
         (t => t.ExpectedMark,       (t, c) => t with { ExpectedMark = c }),
         (t => t.Accent,             (t, c) => t with { Accent = c }),
         (t => t.AccentHover,        (t, c) => t with { AccentHover = c }),
-        (t => t.Brand,              (t, c) => t with { Brand = c }),
-        (t => t.BrandHover,         (t, c) => t with { BrandHover = c }),
-        (t => t.Danger,             (t, c) => t with { Danger = c }),
-        (t => t.StatusRunning,      (t, c) => t with { StatusRunning = c }),
-        (t => t.StatusAttention,    (t, c) => t with { StatusAttention = c }),
-        (t => t.StatusAwaiting,     (t, c) => t with { StatusAwaiting = c }),
-        (t => t.StatusIdle,         (t, c) => t with { StatusIdle = c }),
-        (t => t.StatusError,        (t, c) => t with { StatusError = c }),
-        (t => t.StatusWarn,         (t, c) => t with { StatusWarn = c }),
-        (t => t.SubAgent,           (t, c) => t with { SubAgent = c }),
-        (t => t.Teal,               (t, c) => t with { Teal = c }),
-        (t => t.Burn,               (t, c) => t with { Burn = c }),
-        (t => t.TeamGray,           (t, c) => t with { TeamGray = c }),
-        (t => t.ModeAcceptEdits,    (t, c) => t with { ModeAcceptEdits = c }),
-        // Appended (never reordered) so older share codes keep decoding — new roles go on the end only.
-        (t => t.Jira,               (t, c) => t with { Jira = c }),
     ];
 
     public static string Encode(Theme t)

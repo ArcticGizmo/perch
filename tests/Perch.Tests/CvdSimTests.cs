@@ -41,6 +41,15 @@ public class CvdSimTests
     {
         var sim = CvdSim.Simulate(Themes.Midnight, CvdType.Deuteranopia);
         Assert.Equal(Themes.Midnight.Id, sim.Id);
-        Assert.NotEqual(Themes.Midnight.StatusRunning, sim.StatusRunning); // green shifts under deutan
+        Assert.NotEqual(Themes.Midnight.Accent, sim.Accent); // the blue accent shifts under deutan
+    }
+
+    [Fact]
+    public void SimulatingFixedColours_ChangesStatusHues()
+    {
+        // The status/brand palette is theme-independent, so it simulates itself for the designer preview.
+        var sim = FixedColors.Default.Simulate(CvdType.Deuteranopia);
+        Assert.NotEqual(FixedColors.Default.StatusRunning, sim.StatusRunning); // green shifts under deutan
+        Assert.Equal(FixedColors.Default, FixedColors.Default.Simulate(CvdType.None)); // identity
     }
 }

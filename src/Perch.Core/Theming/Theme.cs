@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Perch.Theming;
 
 /// <summary>
@@ -10,11 +12,12 @@ namespace Perch.Theming;
 /// role to an Avalonia brush. A theme is immutable — build variants with a <c>with</c> expression off an
 /// existing one (see <c>Themes</c>), and only override the roles that actually differ.</para>
 ///
-/// <para><b>Design rule:</b> a theme tints <em>neutrals, chrome and the accent</em>. The semantic status
-/// hues (running/attention/awaiting/idle/error) carry the overlay's glanceable meaning and keep their
-/// identity across themes — a preset may nudge their lightness to hold contrast on a darker base, but not
-/// their hue.</para>
+/// <para><b>Design rule:</b> a theme tints <em>neutrals, chrome and the accent</em> — and nothing else. The
+/// brand, the semantic status hues (running/attention/awaiting/idle/error) and the teammate/mode accents
+/// carry fixed meaning across every theme, so they don't live here at all: see <see cref="FixedColors"/>.
+/// A theme therefore stores only what a user can actually change.</para>
 /// </summary>
+[JsonConverter(typeof(ThemeJsonConverter))]
 public sealed record Theme
 {
     /// <summary>Stable id persisted in settings; keep it kebab-case and never reuse across meanings.</summary>
@@ -60,44 +63,14 @@ public sealed record Theme
     /// <summary>The light neutral tick marking expected usage on a bar.</summary>
     public Rgb ExpectedMark { get; init; }
 
-    // ── Accent & brand ─────────────────────────────────────────────────────────
+    // ── Accent ───────────────────────────────────────────────────────────────
     /// <summary>Primary accent (links, selection, nav/cycle, remote).</summary>
     public Rgb Accent { get; init; }
     /// <summary>Hover/brightened accent.</summary>
     public Rgb AccentHover { get; init; }
-    /// <summary>The Perch brand red-orange (update affordances).</summary>
-    public Rgb Brand { get; init; }
-    /// <summary>Hover/brightened brand.</summary>
-    public Rgb BrandHover { get; init; }
-    /// <summary>Destructive-action colour (delete/reset text and buttons).</summary>
-    public Rgb Danger { get; init; }
     /// <summary>Keyboard-focus ring — a bright, high-contrast outline drawn on the focused control.</summary>
     public Rgb FocusRing { get; init; }
 
-    // ── Semantic status (theme-stable identity) ────────────────────────────────
-    /// <summary>Session running / usage healthy (green).</summary>
-    public Rgb StatusRunning { get; init; }
-    /// <summary>Session needs attention / done (orange).</summary>
-    public Rgb StatusAttention { get; init; }
-    /// <summary>Session awaiting input / usage warning (yellow).</summary>
-    public Rgb StatusAwaiting { get; init; }
-    /// <summary>Session idle (slate).</summary>
-    public Rgb StatusIdle { get; init; }
-    /// <summary>Error / API failure / usage critical (red).</summary>
-    public Rgb StatusError { get; init; }
-    /// <summary>Stuck / caution glyph (amber).</summary>
-    public Rgb StatusWarn { get; init; }
-    /// <summary>Sub-agent / unknown-teammate accent (purple).</summary>
-    public Rgb SubAgent { get; init; }
-    /// <summary>Mail / teal-teammate accent.</summary>
-    public Rgb Teal { get; init; }
-    /// <summary>Token burn-rate readout (blue).</summary>
-    public Rgb Burn { get; init; }
-    /// <summary>The Jira ticket deep-link glyph — Jira's brand blue, held stable across themes.</summary>
-    public Rgb Jira { get; init; }
-    /// <summary>Bot / grey-teammate neutral accent.</summary>
-    public Rgb TeamGray { get; init; }
-    /// <summary>The "Accept edits" permission-mode badge (blue-purple); the other modes reuse
-    /// <see cref="Accent"/> / <see cref="StatusAwaiting"/> / <see cref="StatusError"/>.</summary>
-    public Rgb ModeAcceptEdits { get; init; }
+    // The brand red-orange, the destructive-action red, the semantic status hues and the teammate/mode
+    // accents are theme-independent — they live in FixedColors, not here (see the design rule above).
 }

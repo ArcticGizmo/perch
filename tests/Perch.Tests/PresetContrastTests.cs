@@ -50,13 +50,15 @@ public class PresetContrastTests
     public void StatusGlyphsClearNonTextFloor(string themeId)
     {
         var t = Themes.ById(themeId)!;
-        // Status dots/glyphs are non-text UI (WCAG 1.4.11, 3:1) on the overlay surface.
-        AssertNonText(t.StatusRunning, t.OverlaySurface, themeId, "StatusRunning");
-        AssertNonText(t.StatusAttention, t.OverlaySurface, themeId, "StatusAttention");
-        AssertNonText(t.StatusAwaiting, t.OverlaySurface, themeId, "StatusAwaiting");
-        AssertNonText(t.StatusError, t.OverlaySurface, themeId, "StatusError");
+        var fx = FixedColors.Default;
+        // Status dots/glyphs are non-text UI (WCAG 1.4.11, 3:1) on the overlay surface. The status/brand
+        // hues are theme-independent (FixedColors) but still checked against every theme's overlay surface.
+        AssertNonText(fx.StatusRunning, t.OverlaySurface, themeId, "StatusRunning");
+        AssertNonText(fx.StatusAttention, t.OverlaySurface, themeId, "StatusAttention");
+        AssertNonText(fx.StatusAwaiting, t.OverlaySurface, themeId, "StatusAwaiting");
+        AssertNonText(fx.StatusError, t.OverlaySurface, themeId, "StatusError");
         AssertNonText(t.Accent, t.OverlaySurface, themeId, "Accent");
-        AssertNonText(t.Jira, t.OverlaySurface, themeId, "Jira");
+        AssertNonText(fx.Jira, t.OverlaySurface, themeId, "Jira");
     }
 
     private static void AssertAA(Rgb fg, Rgb bg, string themeId, string pair) =>

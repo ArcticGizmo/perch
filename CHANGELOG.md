@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.26] - 2026-08-12
+
+- Fixed brand, status and Jira colours rendering black on older custom themes
+- Themes only store the colours you can actually change now (the fixed ones moved out)
+
+---
+
 ## [v0.3.25] - 2026-08-12
 
 - Jira ticket glyph on sessions whose branch carries a key like SFTY-1234, linking straight to the issue

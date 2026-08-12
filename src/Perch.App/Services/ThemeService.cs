@@ -20,15 +20,16 @@ internal static class ThemeService
     public static Theme Resolve(string? id) => Themes.ById(id) ?? Themes.Midnight;
 
     /// <summary>Apply a theme app-wide, resolving the desktop lifetime itself — for callers (like the theme
-    /// designer's live preview) that don't hold a reference to it.</summary>
-    public static void ApplyLive(Theme theme) =>
-        Apply(theme, Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime);
+    /// designer's live preview) that don't hold a reference to it. Pass a <paramref name="cvd"/> other than
+    /// <see cref="CvdType.None"/> to preview the theme under a colour-vision deficiency.</summary>
+    public static void ApplyLive(Theme theme, CvdType cvd = CvdType.None) =>
+        Apply(theme, Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime, cvd);
 
     /// <summary>Swap the active theme and repaint every open window. <paramref name="desktop"/> may be null
     /// at startup (nothing shown yet) — the swap still updates <see cref="Palette"/> for the first paint.</summary>
-    public static void Apply(Theme theme, IClassicDesktopStyleApplicationLifetime? desktop)
+    public static void Apply(Theme theme, IClassicDesktopStyleApplicationLifetime? desktop, CvdType cvd = CvdType.None)
     {
-        Palette.Apply(theme);
+        Palette.Apply(theme, cvd);
         if (desktop is null) return;
         foreach (var window in desktop.Windows)
             Repaint(window);

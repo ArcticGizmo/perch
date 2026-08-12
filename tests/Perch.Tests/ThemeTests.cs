@@ -46,6 +46,25 @@ public class ThemeTests
     }
 
     [Fact]
+    public void Deserialize_AbsentRole_InheritsMidnight_NotBlack()
+    {
+        // A custom theme persisted before a role existed has no key for it (here, no "FocusRing"). It must
+        // inherit Midnight's value (as the built-in presets do via `with`), not deserialise to black.
+        var json = """
+            { "Id": "old-custom", "Name": "Legacy", "IsDark": true,
+              "Accent": { "R": 1, "G": 2, "B": 3 } }
+            """;
+
+        var back = System.Text.Json.JsonSerializer.Deserialize<Theme>(json)!;
+
+        Assert.Equal("old-custom", back.Id);
+        Assert.Equal(new Rgb(1, 2, 3), back.Accent);                 // present roles still win
+        Assert.Equal(Themes.Midnight.FocusRing, back.FocusRing);     // absent role inherits Midnight
+        Assert.NotEqual(new Rgb(0, 0, 0), back.FocusRing);           // and is not the struct default (black)
+        Assert.Equal(Themes.Midnight.Surface, back.Surface);         // every other absent role, too
+    }
+
+    [Fact]
     public void Catalog_ResolvesCustomThenFallsBack()
     {
         var custom = new List<Theme> { Themes.Midnight with { Id = "custom-1", Name = "Mine" } };

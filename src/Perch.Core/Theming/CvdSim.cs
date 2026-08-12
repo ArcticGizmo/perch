@@ -58,8 +58,10 @@ public static class CvdSim
             Clamp(m[2][0] * r + m[2][1] * g + m[2][2] * b));
     }
 
-    /// <summary>Every role of <paramref name="theme"/> run through <see cref="Simulate(Rgb, CvdType)"/>, so
-    /// applying the result previews the whole UI as that viewer would see it. Id/Name are preserved.</summary>
+    /// <summary>Every <em>theme</em> role of <paramref name="theme"/> run through
+    /// <see cref="Simulate(Rgb, CvdType)"/> (the fixed brand/status palette simulates itself via
+    /// <see cref="FixedColors.Simulate"/>), so applying both previews the whole UI as that viewer would see
+    /// it. Id/Name are preserved.</summary>
     public static Theme Simulate(Theme theme, CvdType type)
     {
         if (type == CvdType.None) return theme;
@@ -81,21 +83,9 @@ public static class CvdSim
             ExpectedMark = Simulate(theme.ExpectedMark, type),
             Accent = Simulate(theme.Accent, type),
             AccentHover = Simulate(theme.AccentHover, type),
-            Brand = Simulate(theme.Brand, type),
-            BrandHover = Simulate(theme.BrandHover, type),
-            Danger = Simulate(theme.Danger, type),
-            StatusRunning = Simulate(theme.StatusRunning, type),
-            StatusAttention = Simulate(theme.StatusAttention, type),
-            StatusAwaiting = Simulate(theme.StatusAwaiting, type),
-            StatusIdle = Simulate(theme.StatusIdle, type),
-            StatusError = Simulate(theme.StatusError, type),
-            StatusWarn = Simulate(theme.StatusWarn, type),
-            SubAgent = Simulate(theme.SubAgent, type),
-            Teal = Simulate(theme.Teal, type),
-            Burn = Simulate(theme.Burn, type),
-            Jira = Simulate(theme.Jira, type),
-            TeamGray = Simulate(theme.TeamGray, type),
-            ModeAcceptEdits = Simulate(theme.ModeAcceptEdits, type),
+            FocusRing = Simulate(theme.FocusRing, type),
+            // Brand/status/semantic hues aren't theme roles — the fixed palette simulates itself
+            // (see FixedColors.Simulate), driven from the same CvdType at the Palette apply site.
         };
     }
 

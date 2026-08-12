@@ -315,8 +315,9 @@ internal sealed class ThemeDesignerWindow : Window
         RefreshReadout();  // ratios are always computed from the *real* draft, never the CVD simulation
     }
 
-    // Apply the draft live, run through the current colour-blind simulation (None = the real draft).
-    private void ApplyDraft() => ThemeService.ApplyLive(CvdSim.Simulate(_draft, _cvd));
+    // Apply the draft live under the current colour-blind simulation (None = the real draft). The service
+    // threads the CvdType through so both the theme roles and the fixed brand/status palette are simulated.
+    private void ApplyDraft() => ThemeService.ApplyLive(_draft, _cvd);
 
     private void RefreshReadout()
     {

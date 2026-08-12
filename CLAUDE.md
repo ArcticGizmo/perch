@@ -92,18 +92,28 @@ running the tray app.
   Guard the callback against a window that closed mid-flight (`IsVisible` / disposed checks) and swallow
   the resulting exceptions. See the `*MonitorHost` services, `HistoryWindow`, `StatsWindow`, and
   `UpdateService` for the pattern.
-- **Colour comes from the active theme, via `Theming.Palette`.** There is one source of truth: a
-  `Perch.Theming.Theme` (a table of named colour *roles* — surfaces, text, accent, semantic status — in
-  `Perch.Core`, kept UI-free as `Rgb`). `Palette` is the app-side façade over the *active* theme; use
-  `Palette.X` colours and `Palette.XBrush` cached fills — don't hand-code `Color.FromArgb` in new UI. A theme
-  swap (`ThemeService.Apply`) mutates every cached brush in one place, so the overlay and every window
-  re-colour together. When adding UI that needs a colour: reach for an existing role; add a new role
-  (`Theme` + all presets in `Theming.Themes` + a `Palette` accessor/brush + the `Palette.Apply` line) only if
-  nothing fits. Semantic **status hues stay stable across themes** (running=green, error=red, …) — themes
-  tint neutrals/chrome/accent only, so the overlay stays glanceable. New/changed text colours must clear
-  WCAG AA on their surface — `PresetContrastTests` gates every built-in theme, and `Theming.Contrast` is the
-  helper. Presets live in `Theming.Themes`; the in-app designer (Settings → Appearance) writes custom themes
-  to `AppSettings.CustomThemes`. Eyeball changes with `dotnet run … -- render <dir> [themeId]`.
+- **Colour comes through `Theming.Palette`, but from one of two sources — pick the right one.** Colours in
+  `Perch.Core` are kept UI-free as `Rgb`, split by whether a user can change them:
+  - **`Perch.Theming.Theme`** — the *tintable* roles a theme actually varies: surfaces/chrome, text,
+    `Accent`/`AccentHover`, `FocusRing`. These are what the designer edits and what gets persisted/shared. A
+    theme swap (`ThemeService.Apply`) mutates the cached chrome brushes; `Palette.Active` is the active theme.
+  - **`Perch.Theming.FixedColors`** — the *theme-independent* palette: brand, danger, the semantic status
+    hues (running=green, error=red, …), and the teammate/mode accents. These carry fixed meaning and never
+    vary by theme, so they are **not** part of `Theme` and are **never persisted** (`FixedColors.Default` is
+    the one source; `Palette.Fixed` exposes it — only the designer's colour-blind preview swaps in a
+    simulated copy). This is why the overlay stays glanceable across themes.
+
+  Use `Palette.X` colours and `Palette.XBrush` cached fills — don't hand-code `Color.FromArgb` in new UI, and
+  don't read colour off a raw `Theme`/`FixedColors` outside `Palette`. When adding UI that needs a colour:
+  reach for an existing accessor first. If nothing fits, add the role to the **correct** home — a *fixed*
+  brand/semantic hue goes in `FixedColors` (+ its `Simulate`) and a `Palette` accessor/brush; a *tintable*
+  chrome/text role goes in `Theme` + `Themes.Midnight` (presets inherit via `with`) + `ThemeCodec.Roles`
+  (append only — order is the share-code wire format) + `CvdSim.Simulate(Theme)` + a `Palette` accessor/brush
+  + `Palette.Apply`. New/changed text colours must clear WCAG AA on their surface — `PresetContrastTests`
+  gates every built-in theme, and `Theming.Contrast` is the helper. The in-app designer (Settings →
+  Appearance) writes custom themes to `AppSettings.CustomThemes`; those deserialise through
+  `ThemeJsonConverter`, which seeds absent roles from Midnight (so a future `Theme` role never reads back as
+  black on an old file). Eyeball changes with `dotnet run … -- render <dir> [themeId]`.
 - **Data sources are files under `~/.claude/`**, read best-effort:
   - Live session state: `~/.claude/sessions/{sessionId}.json` plus sidecars (`.mode`, `.notify`, `.history`).
   - Transcripts: `~/.claude/projects/{enc-cwd}/{sessionId}.jsonl` (append-only, one JSON record per line,
