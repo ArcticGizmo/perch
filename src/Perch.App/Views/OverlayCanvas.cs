@@ -2626,12 +2626,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
     }
 
-    // Jira ticket glyph: a small luggage-tag pointing left, drawn in the theme accent so it reads as a
+    // Jira ticket glyph: a small luggage-tag pointing left, drawn in Jira's brand blue so it reads as a
     // deep-link rather than a status. The click affordance is the hand cursor + the dwell tooltip (which
     // names the key); the glyph itself doesn't change on hover, matching the other single-action markers.
     private static void DrawJiraIcon(DrawingContext ctx, double x, double midY)
     {
-        var brush = Palette.AccentBrush;
+        var brush = Palette.JiraBrush;
         var pen = new Pen(brush, 1.4, null, PenLineCap.Round, PenLineJoin.Round);
 
         double top = midY - 4.5, bot = midY + 4.5;

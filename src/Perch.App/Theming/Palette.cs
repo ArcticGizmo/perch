@@ -55,6 +55,7 @@ public static class Palette
         SubAgentBrush.Color    = theme.SubAgent.ToColor();
         TealBrush.Color        = theme.Teal.ToColor();
         BurnBrush.Color        = theme.Burn.ToColor();
+        JiraBrush.Color        = theme.Jira.ToColor();
         TeamGrayBrush.Color    = theme.TeamGray.ToColor();
         FocusRingBrush.Color   = theme.FocusRing.ToColor();
     }
@@ -80,6 +81,9 @@ public static class Palette
 
     // The perch-logo red-orange, used to draw attention to the update affordances so they read as one accent.
     public static Color Brand       => Active.Brand.ToColor();
+
+    // Jira brand blue for the ticket deep-link glyph; a fixed brand hue, stable across themes.
+    public static Color Jira        => Active.Jira.ToColor();
 
     // Usage bar / status palette (same thresholds the overlay uses).
     public static Color Green        => Active.StatusRunning.ToColor();
@@ -159,6 +163,7 @@ public static class Palette
     public static readonly SolidColorBrush SubAgentBrush  = new(Themes.Midnight.SubAgent.ToColor());
     public static readonly SolidColorBrush TealBrush      = new(Themes.Midnight.Teal.ToColor());
     public static readonly SolidColorBrush BurnBrush      = new(Themes.Midnight.Burn.ToColor());
+    public static readonly SolidColorBrush JiraBrush      = new(Themes.Midnight.Jira.ToColor());
     public static readonly SolidColorBrush TeamGrayBrush  = new(Themes.Midnight.TeamGray.ToColor());
     public static readonly SolidColorBrush FocusRingBrush = new(Themes.Midnight.FocusRing.ToColor());
 }

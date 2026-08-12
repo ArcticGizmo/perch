@@ -51,6 +51,8 @@ public static class Themes
         SubAgent        = new(168, 85, 247),
         Teal            = new(94, 234, 212),
         Burn            = new(125, 185, 232),
+        Jira            = new(38, 132, 255),   // Jira brand blue (#2684FF), stable across themes
+
         TeamGray        = new(148, 163, 184),
         ModeAcceptEdits = new(167, 139, 250),
     };

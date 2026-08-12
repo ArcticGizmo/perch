@@ -56,6 +56,7 @@ public class PresetContrastTests
         AssertNonText(t.StatusAwaiting, t.OverlaySurface, themeId, "StatusAwaiting");
         AssertNonText(t.StatusError, t.OverlaySurface, themeId, "StatusError");
         AssertNonText(t.Accent, t.OverlaySurface, themeId, "Accent");
+        AssertNonText(t.Jira, t.OverlaySurface, themeId, "Jira");
     }
 
     private static void AssertAA(Rgb fg, Rgb bg, string themeId, string pair) =>
