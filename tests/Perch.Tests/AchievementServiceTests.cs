@@ -9,7 +9,7 @@ public class AchievementServiceTests
 
     // Minimal all-time report earning a controllable set of levels (sessions + input-token families).
     private static StatsReport Report(int sessions = 0, long tokens = 0) =>
-        new(DateOnly.FromDateTime(DateTime.Now), sessions, TimeSpan.Zero, 0, 0, 0, 0, 0,
+        new(DateOnly.FromDateTime(DateTime.Now), sessions, TimeSpan.Zero, 0, 0, 0, 0, 0, 0,
             new TokenTotals(tokens, 0, 0, 0), TokenTotals.Zero, 0m, true, [], [], [], [], new int[24]);
 
     [Fact]

@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.28] - 2026-08-12
+
+- Added "Whoops" achievements for prompts you cancel and re-type (we all do it)
+
+---
+
 ## [v0.3.27] - 2026-08-12
 
 - Fixed task checklists reading 0-done when they weren't (the tool renamed its fields; we hadn't noticed)

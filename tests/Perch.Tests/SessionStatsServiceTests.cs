@@ -40,6 +40,44 @@ public class SessionStatsServiceTests
         }
     }
 
+    [Fact]
+    public void ParseSession_CountsWhoopsFromForkedPrompts()
+    {
+        // A "whoops" is a prompt submitted then cancelled and re-typed: two genuine prompts sharing one
+        // parentUuid (a fork). Each shared parent contributes (siblings - 1). Command echoes and the
+        // interrupt marker are synthetic user records and must never count as a fork sibling.
+        static string Prompt(string uuid, string parent, string text) =>
+            $"{{\"type\":\"user\",\"timestamp\":\"2025-03-10T12:00:00Z\",\"cwd\":\"C:/x\",\"parentUuid\":\"{parent}\",\"uuid\":\"{uuid}\",\"message\":{{\"role\":\"user\",\"content\":{JsonSerializer.Serialize(text)}}}}}";
+
+        var lines = new[]
+        {
+            Prompt("u1", "pA", "first attempt"),               // pA: two genuine siblings -> 1 whoops
+            Prompt("u2", "pA", "first attempt, edited"),
+            Prompt("u3", "pB", "try again"),                   // pB: three genuine siblings -> 2 whoops
+            Prompt("u4", "pB", "try again v2"),
+            Prompt("u5", "pB", "try again v3"),
+            Prompt("u6", "u5", "a normal follow-up"),          // linear, its own parent -> not a whoops
+            Prompt("c1", "pC", "<command-name>/clear</command-name>"),  // command echoes: excluded,
+            Prompt("c2", "pC", "<command-name>/clear</command-name>"),  // so pC is not a fork
+            Prompt("u7", "pD", "a real prompt"),               // pD: one genuine + one interrupt marker
+            Prompt("i1", "pD", "[Request interrupted by user]"),        // excluded -> pD not a fork
+        };
+
+        var dir = Path.Combine(Path.GetTempPath(), $"perch-whoops-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var file = Path.Combine(dir, "sess.jsonl");
+        try
+        {
+            File.WriteAllLines(file, lines);
+            var data = Assert.Single(SessionStatsService.ParseSession(file, null, DateTime.MaxValue).Values);
+            Assert.Equal(3, data.Whoops);   // 1 (pA) + 2 (pB); pC/pD forks are synthetic and don't count
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     private static SessionStatsService.SessionDayData ParseSingleDay(string sessionId)
     {
         var path = TranscriptLocator.Resolve(sessionId, Cwd);

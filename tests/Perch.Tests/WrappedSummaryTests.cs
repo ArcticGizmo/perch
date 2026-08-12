@@ -17,7 +17,7 @@ public class WrappedSummaryTests
             : new List<ModelStat>();
         return new StatsReport(
             DateOnly.FromDateTime(DateTime.Now), sessions, TimeSpan.FromMinutes(activeMinutes),
-            prompts, 0, toolCalls, subAgents, 0, new TokenTotals(tokens, 0, 0, 0), TokenTotals.Zero, 0m, true,
+            prompts, 0, 0, toolCalls, subAgents, 0, new TokenTotals(tokens, 0, 0, 0), TokenTotals.Zero, 0m, true,
             new List<ProjectStat>(), new List<ToolStat>(), models, new List<ProjectStat>(), hourly);
     }
 
@@ -77,7 +77,8 @@ public class WrappedSummaryTests
         var range = new RangeReport("All time", "Active per day", report,
             new List<DayPoint>(), ActiveDays: 30, StreakDays: 12,
             BusiestDay: new DateOnly(2026, 3, 14), BusiestDayActive: TimeSpan.FromHours(6),
-            LongestSession: TimeSpan.FromHours(4), FirstActiveDay: new DateOnly(2025, 9, 1));
+            LongestSession: TimeSpan.FromHours(4), FirstActiveDay: new DateOnly(2025, 9, 1),
+            MaxSessionWhoops: 0);
         var s = Build(report, range);
         Assert.True(s.Highlights.Count <= 3);
     }

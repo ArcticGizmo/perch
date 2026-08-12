@@ -6,7 +6,7 @@ namespace Perch.Tests;
 public class AchievementCatalogTests
 {
     private static StatsReport Report(
-        int sessions = 0, int activeHours = 0, int prompts = 0, int swears = 0, int toolCalls = 0,
+        int sessions = 0, int activeHours = 0, int prompts = 0, int swears = 0, int whoops = 0, int toolCalls = 0,
         int subAgents = 0, int teammates = 0, TokenTotals tokens = default, decimal cost = 0,
         int? peakHour = null, bool allHours = false,
         IReadOnlyList<ProjectStat>? projects = null, IReadOnlyList<ProjectStat>? branches = null,
@@ -17,13 +17,13 @@ public class AchievementCatalogTests
         if (peakHour is { } h) hourly[h] = 9000;
         return new StatsReport(
             DateOnly.FromDateTime(DateTime.Now), sessions, TimeSpan.FromHours(activeHours),
-            prompts, swears, toolCalls, subAgents, teammates, tokens, TokenTotals.Zero, cost, true,
+            prompts, swears, whoops, toolCalls, subAgents, teammates, tokens, TokenTotals.Zero, cost, true,
             projects ?? [], tools ?? [], models ?? [], branches ?? [], hourly);
     }
 
     private static RangeReport Range(StatsReport totals, int activeDays = 0, int? streak = null,
-        TimeSpan longest = default, IReadOnlyList<DayPoint>? trend = null)
-        => new("All time", "Active per day", totals, trend ?? [], activeDays, streak, null, TimeSpan.Zero, longest, null);
+        TimeSpan longest = default, IReadOnlyList<DayPoint>? trend = null, int maxSessionWhoops = 0)
+        => new("All time", "Active per day", totals, trend ?? [], activeDays, streak, null, TimeSpan.Zero, longest, null, maxSessionWhoops);
 
     private static IReadOnlyList<Achievement> Eval(StatsReport r, RangeReport? range = null, bool cost = true)
         => AchievementCatalog.Evaluate(r, range, cost);
@@ -211,11 +211,48 @@ public class AchievementCatalogTests
     }
 
     [Fact]
+    public void Whoops_LevelsUpThroughTheLadder()
+    {
+        Assert.False(Fam(Eval(Report(whoops: 4)), "whoops").Earned);   // one short of the first rung
+
+        var second = Fam(Eval(Report(whoops: 5)), "whoops");
+        Assert.True(second.Earned);
+        Assert.Equal(1, second.Level);
+        Assert.Equal("Second Thoughts", second.Name);
+        Assert.Equal("💭", second.Emoji);
+        Assert.Equal("Whoops", second.Category);
+
+        Assert.Equal(2, Fam(Eval(Report(whoops: 25)), "whoops").Level);    // Backspace Bandit
+        Assert.Equal(3, Fam(Eval(Report(whoops: 100)), "whoops").Level);   // Measure Twice
+
+        var maxed = Fam(Eval(Report(whoops: 250)), "whoops");
+        Assert.Equal(maxed.MaxLevel, maxed.Level);
+        Assert.Null(maxed.Progress);                                       // maxed → no bar
+        Assert.Equal("The Eternal Redo", maxed.Name);
+    }
+
+    [Fact]
+    public void Indecisive_IsSecretAndEarnedAtFiveWhoopsInOneSession()
+    {
+        var report = Report(whoops: 3);   // plenty lifetime, but the secret is about a single session
+        var locked = Fam(Eval(report, Range(report, maxSessionWhoops: 4)), "indecisive");
+        Assert.True(locked.Secret);
+        Assert.False(locked.Earned);
+        Assert.Equal("Five whoops, one session. Everything's fine.", locked.Description);   // cryptic hint
+        Assert.Null(locked.Progress);                                                        // no leak
+
+        var earned = Fam(Eval(report, Range(report, maxSessionWhoops: 5)), "indecisive");
+        Assert.True(earned.Earned);
+        Assert.Equal("🫠", earned.Emoji);
+        Assert.Equal("Cancel and re-type 5 prompts in one session", earned.Description);     // revealed
+    }
+
+    [Fact]
     public void EveryBadge_IsFiledUnderAKnownGroup()
     {
         // Guards against a new family being added outside a Group(...) batch (which would leave it
         // ungrouped, so the trophy cabinet would drop it into an empty-named section).
-        string[] known = ["Tokens", "Activity", "Tools", "Collaboration", "Rhythm", "Special"];
+        string[] known = ["Tokens", "Activity", "Tools", "Collaboration", "Rhythm", "Whoops", "Special"];
         Assert.All(Eval(Report()), f => Assert.Contains(f.Group, known));
     }
 
@@ -226,6 +263,8 @@ public class AchievementCatalogTests
     [InlineData("grep-goblin", "Tools")]
     [InlineData("teammates", "Collaboration")]
     [InlineData("night-owl", "Rhythm")]
+    [InlineData("whoops", "Whoops")]
+    [InlineData("indecisive", "Whoops")]
     [InlineData("elite", "Special")]
     [InlineData("completionist", "Special")]
     public void Badge_IsInExpectedGroup(string id, string group) =>

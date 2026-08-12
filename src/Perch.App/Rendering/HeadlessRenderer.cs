@@ -788,7 +788,7 @@ internal static class HeadlessRenderer
         hourly[9] = 900; hourly[10] = 2400; hourly[11] = 1800; hourly[14] = 3000; hourly[15] = 2100; hourly[20] = 1200;
         return new StatsReport(
             Day: today, SessionCount: 7, ActiveTime: TimeSpan.FromHours(3) + TimeSpan.FromMinutes(42),
-            Prompts: 58, Swears: 12, ToolCalls: 214, SubAgents: 4, Teammates: 2,
+            Prompts: 58, Swears: 12, Whoops: 6, ToolCalls: 214, SubAgents: 4, Teammates: 2,
             Tokens: tk, TeammateTokens: new TokenTotals(5_000, 2_000, 0, 10_000),
             EstimatedCost: 4.37m, CostComplete: true,
             Projects:
@@ -820,7 +820,7 @@ internal static class HeadlessRenderer
         hourly[23] = 40_000;                                       // clear late-night peak → Night Owl
         var report = new StatsReport(
             Day: today, SessionCount: 340, ActiveTime: TimeSpan.FromHours(126),
-            Prompts: 3400, Swears: 140, ToolCalls: 12_000, SubAgents: 140, Teammates: 3,
+            Prompts: 3400, Swears: 140, Whoops: 120, ToolCalls: 12_000, SubAgents: 140, Teammates: 3,
             Tokens: tk, TeammateTokens: TokenTotals.Zero, EstimatedCost: 260m, CostComplete: true,
             Projects: Enumerable.Range(1, 12).Select(i => new ProjectStat($"proj-{i}", 4, TimeSpan.FromHours(3), 1_000_000)).ToList(),
             Tools:
@@ -840,7 +840,7 @@ internal static class HeadlessRenderer
         var range = new RangeReport("All time", "Active per day (last 30 days)", report,
             Trend: [], ActiveDays: 140, StreakDays: 9, BusiestDay: today.AddDays(-3),
             BusiestDayActive: TimeSpan.FromHours(7), LongestSession: TimeSpan.FromHours(5),
-            FirstActiveDay: today.AddDays(-300));
+            FirstActiveDay: today.AddDays(-300), MaxSessionWhoops: 5);
         return (report, range);
     }
 

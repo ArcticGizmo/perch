@@ -240,6 +240,19 @@ internal static class AchievementCatalog
                 "It keeps happening. All of it.", "Active every day of one calendar week (Mon–Sun)",
                 AchievementTier.Gold, c => c.PerfectCalendarWeek));
 
+        // ── Whoops: prompts you submitted, thought better of, and re-typed (ctrl+c, take two) ──
+        Group("Whoops",
+            Family.Levelled("whoops", "Whoops", c => c.Whoops,
+                R("secondthoughts",  "Second Thoughts",  "💭", AchievementTier.Bronze, 5,   "Cancel and re-type 5 prompts"),
+                R("backspacebandit", "Backspace Bandit", "🔄", AchievementTier.Bronze, 25,  "Cancel and re-type 25 prompts"),
+                R("measuretwice",    "Measure Twice",    "📏", AchievementTier.Silver, 100, "Cancel and re-type 100 prompts"),
+                R("eternalredo",     "The Eternal Redo", "🌀", AchievementTier.Gold,   250, "Cancel and re-type 250 prompts")),
+
+            // Secret: a rough session — five re-types in a single one. Masked until it happens to you.
+            Family.Hidden("indecisive", "Indecisive", "🫠",
+                "Five whoops, one session. Everything's fine.", "Cancel and re-type 5 prompts in one session",
+                AchievementTier.Silver, c => c.MaxSessionWhoops >= 5));
+
         // ── Special: the number-nerd secrets and the capstone (Completionist is appended in Evaluate) ──
         Group("Special",
             Family.Hidden("elite", "Elite", "🔢",
@@ -382,6 +395,7 @@ internal static class AchievementCatalog
             Streak = range?.StreakDays ?? 0;
             ActiveDays = range?.ActiveDays ?? 0;
             LongestSessionHours = (range?.LongestSession ?? TimeSpan.Zero).TotalHours;
+            MaxSessionWhoops = range?.MaxSessionWhoops ?? 0;
         }
 
         public int Sessions => _r.SessionCount;
@@ -392,6 +406,7 @@ internal static class AchievementCatalog
         public long Cached => _r.Tokens.CacheRead + _r.Tokens.CacheWrite;
         public int Prompts => _r.Prompts;
         public int Swears => _r.Swears;
+        public int Whoops => _r.Whoops;
         public int ToolCalls => _r.ToolCalls;
         public int SubAgents => _r.SubAgents;
         public int Teammates => _r.Teammates;
@@ -411,6 +426,7 @@ internal static class AchievementCatalog
         public int Streak { get; }
         public int ActiveDays { get; }
         public double LongestSessionHours { get; }
+        public int MaxSessionWhoops { get; }
 
         public int Tool(string name) => _tools.GetValueOrDefault(name);
         public bool HourActive(int hour) => hour >= 0 && hour < _r.HourlyActiveSeconds.Length && _r.HourlyActiveSeconds[hour] > 0;

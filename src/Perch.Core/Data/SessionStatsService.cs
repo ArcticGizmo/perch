@@ -48,6 +48,7 @@ internal sealed record StatsReport(
     TimeSpan ActiveTime,
     int Prompts,
     int Swears,                   // profane words counted across this window's user prompts
+    int Whoops,                   // prompts submitted then cancelled and re-typed (see ParseSession)
     int ToolCalls,
     int SubAgents,
     int Teammates,                // distinct Agent-Teams members that ran in this window
@@ -62,7 +63,7 @@ internal sealed record StatsReport(
     int[] HourlyActiveSeconds)    // 24 bins, local hour -> estimated active seconds
 {
     public static StatsReport Empty(DateOnly day) => new(
-        day, 0, TimeSpan.Zero, 0, 0, 0, 0, 0, TokenTotals.Zero, TokenTotals.Zero, 0m, true,
+        day, 0, TimeSpan.Zero, 0, 0, 0, 0, 0, 0, TokenTotals.Zero, TokenTotals.Zero, 0m, true,
         [], [], [], [], new int[24]);
 }
 
@@ -81,7 +82,8 @@ internal sealed record RangeReport(
     DateOnly? BusiestDay,
     TimeSpan BusiestDayActive,
     TimeSpan LongestSession,
-    DateOnly? FirstActiveDay);
+    DateOnly? FirstActiveDay,
+    int MaxSessionWhoops);   // most whoops in any single session-day (drives the "Indecisive" secret)
 
 /// <summary>Shared formatting for stat values, so the tray line and the Stats window read identically.</summary>
 internal static class StatsFormat
@@ -327,6 +329,16 @@ internal static class SessionStatsService
                 var message = node["message"];
                 var content = message?["content"];
 
+                // Whoops detection: a genuine typed prompt that was submitted, cancelled (ctrl+c) and
+                // re-typed leaves *two* user prompts sharing one parentUuid — a fork in the append-only
+                // tree, since both branch from the same prior leaf. Tally genuine prompts per parent here;
+                // the count-minus-one per shared parent becomes the whoops total below.
+                if (type == "user" && !isMeta && IsGenuineTypedPrompt(content)
+                    && node["parentUuid"]?.GetValue<string>() is { Length: > 0 } parent)
+                {
+                    data.PromptsByParent[parent] = data.PromptsByParent.GetValueOrDefault(parent) + 1;
+                }
+
                 if (type == "user" && !isMeta && IsUserPrompt(content))
                 {
                     data.Prompts++;
@@ -373,6 +385,11 @@ internal static class SessionStatsService
         {
             d.Project = project;
             d.Branch = branch;
+            // Each parent shared by N genuine prompts contributed N-1 abandoned (re-typed) prompts; the
+            // surviving branch is not a whoops. Summed over every fork this session-day.
+            foreach (var count in d.PromptsByParent.Values)
+                if (count > 1)
+                    d.Whoops += count - 1;
         }
         return perDay;
     }
@@ -389,6 +406,9 @@ internal static class SessionStatsService
             bucket.LongestSession = span;
         bucket.Prompts += s.Prompts;
         bucket.Swears += s.Swears;
+        bucket.Whoops += s.Whoops;
+        if (s.Whoops > bucket.MaxSessionWhoops)
+            bucket.MaxSessionWhoops = s.Whoops;
         bucket.ToolCalls += s.ToolCalls;
         bucket.SubAgents += s.SubAgents;
         bucket.Tokens += s.Tokens;
@@ -423,13 +443,35 @@ internal static class SessionStatsService
         return false;
     }
 
+    // Stricter than IsUserPrompt, for whoops detection: a *genuinely typed* prompt. Excludes the synthetic
+    // user records Claude Code injects — slash-command echoes (<command-name>/<command-message>/
+    // <local-command-stdout>) and the "[Request interrupted by user…]" marker — so those can't masquerade as
+    // a fork sibling and inflate the count. (Validated against the full transcript corpus.)
+    private static bool IsGenuineTypedPrompt(JsonNode? content)
+    {
+        if (content is JsonValue v && v.TryGetValue<string>(out var s))
+            return IsAuthoredText(s);
+        if (content is JsonArray arr)
+            foreach (var b in arr)
+                if (b?["type"]?.GetValue<string>() == "text" && IsAuthoredText(b["text"]?.GetValue<string>()))
+                    return true;
+        return false;
+    }
+
+    private static bool IsAuthoredText(string? s) =>
+        !string.IsNullOrWhiteSpace(s)
+        && !s.StartsWith("<command-name>", StringComparison.Ordinal)
+        && !s.StartsWith("<command-message>", StringComparison.Ordinal)
+        && !s.StartsWith("<local-command-stdout>", StringComparison.Ordinal)
+        && !s.Contains("[Request interrupted by user", StringComparison.Ordinal);
+
     // Merges a set of day-buckets into one StatsReport. SessionCount is the distinct union of session ids
     // across the buckets, so a session resumed on several days counts once.
     private static StatsReport ComposeReport(DateOnly day, IEnumerable<DayBucket> buckets)
     {
         var sessions = new HashSet<string>();
         var active = TimeSpan.Zero;
-        int prompts = 0, swears = 0, toolCalls = 0, subAgents = 0, teammates = 0;
+        int prompts = 0, swears = 0, whoops = 0, toolCalls = 0, subAgents = 0, teammates = 0;
         var tokens = TokenTotals.Zero;
         var teammateTokens = TokenTotals.Zero;
         var hourly = new int[24];
@@ -444,6 +486,7 @@ internal static class SessionStatsService
             active += bk.Active;
             prompts += bk.Prompts;
             swears += bk.Swears;
+            whoops += bk.Whoops;
             toolCalls += bk.ToolCalls;
             subAgents += bk.SubAgents;
             teammates += bk.Teammates;
@@ -476,7 +519,7 @@ internal static class SessionStatsService
             .OrderByDescending(t => t.Count)
             .ToList();
 
-        return new StatsReport(day, sessions.Count, active, prompts, swears, toolCalls, subAgents, teammates,
+        return new StatsReport(day, sessions.Count, active, prompts, swears, whoops, toolCalls, subAgents, teammates,
             tokens, teammateTokens, totalCost, costComplete, ToStats(projects), toolStats, models, ToStats(branches), hourly);
     }
 
@@ -524,16 +567,18 @@ internal static class SessionStatsService
         DateOnly? busiest = null;
         var busiestActive = TimeSpan.Zero;
         var longest = TimeSpan.Zero;
+        int maxSessionWhoops = 0;
         foreach (var (d, bk) in map)
         {
             if (bk.Active > busiestActive) { busiestActive = bk.Active; busiest = d; }
             if (bk.LongestSession > longest) longest = bk.LongestSession;
+            if (bk.MaxSessionWhoops > maxSessionWhoops) maxSessionWhoops = bk.MaxSessionWhoops;
         }
         DateOnly? first = map.Count > 0 ? map.Keys.Min() : null;
 
         string trendLabel = streakMeaningful ? "Active per day (last 30 days)" : "Active per day";
         return new RangeReport(scopeLabel, trendLabel, totals, trend, activeDays, streak,
-            busiest, busiestActive, longest, first);
+            busiest, busiestActive, longest, first, maxSessionWhoops);
     }
 
     // Attributes each capped inter-record gap to the hour the gap started in, so the histogram reflects
@@ -576,11 +621,14 @@ internal static class SessionStatsService
         public readonly List<DateTime> Times = new();
         public int Prompts;
         public int Swears;
+        public int Whoops;
         public int ToolCalls;
         public int SubAgents;
         public TokenTotals Tokens = TokenTotals.Zero;
         public readonly Dictionary<string, int> ToolCounts = new();
         public readonly Dictionary<string, TokenTotals> Models = new();
+        // Genuine typed prompts keyed by parentUuid, to spot forks (a shared parent = a cancelled re-type).
+        public readonly Dictionary<string, int> PromptsByParent = new();
     }
 
     // Aggregated stats for one calendar day, accumulated across every session active that day.
@@ -590,6 +638,8 @@ internal static class SessionStatsService
         public TimeSpan Active;
         public int Prompts;
         public int Swears;
+        public int Whoops;
+        public int MaxSessionWhoops;                  // most whoops any one session contributed this day
         public int ToolCalls;
         public int SubAgents;
         public int Teammates;                         // Agent-Teams members that ran this day
