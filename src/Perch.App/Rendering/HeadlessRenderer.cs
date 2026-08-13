@@ -557,6 +557,7 @@ internal static class HeadlessRenderer
             s.ShowSessionMetrics = true;
             s.ShowMediaController = true;
             s.ShowMicPresence = true;
+            s.ShowMonthlySpend = true;
         }
         else
         {

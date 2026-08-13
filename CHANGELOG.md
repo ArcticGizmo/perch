@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.30] - 2026-08-13
+
+- Optional "Monthly spend" bar tracking this month's extra-usage spend against your limit
+- Off by default, and only appears when your account has extra usage switched on
+
+---
+
 ## [v0.3.29] - 2026-08-13
 
 - Fixed the floating overlay clipping its bottom rows after a drag (the drag never knew it had ended)

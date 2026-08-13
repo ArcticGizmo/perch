@@ -20,13 +20,16 @@ internal static class UsageBarRenderer
     /// percentage text <paramref name="pctW"/> on the right; the track fills the gap. A null
     /// <paramref name="percent"/> renders an em-dash; a null <paramref name="expectedPct"/> hides the
     /// marker. When <paramref name="stale"/>, every colour is blended toward <paramref name="bgBlend"/>.
+    /// <paramref name="valueText"/>, when supplied, replaces the right-column percentage with an arbitrary
+    /// caption (the spend bar's dollar figure) — the fill still tracks <paramref name="percent"/>.
     /// </summary>
     public static void Draw(
         DrawingContext ctx, double left, double right, double midY,
         string caption, double? percent, double? expectedPct, bool stale,
         double capSize, double pctSize,
         Color muted, Color track, Color expectedMark, Color bgBlend,
-        double captionW, double pctW, double trackH)
+        double captionW, double pctW, double trackH,
+        string? valueText = null)
     {
         // Caption (left). Clamped to its column with an ellipsis: captions are fixed strings for the
         // Session/Weekly bars, but a scoped bar is captioned with the model's display name from the
@@ -59,12 +62,14 @@ internal static class UsageBarRenderer
             if (fillW > 0)
                 OverlayDraw.Pill(ctx, new SolidColorBrush(barColor), new Rect(trackLeft, trackY, fillW, trackH));
 
-            pctText   = $"{(int)Math.Round(clamped)}%";
+            // The spend bar passes a dollar caption (valueText) for the right column; the rate bars leave it
+            // null and show the percentage. The fill and colour still come from the percentage either way.
+            pctText   = valueText ?? $"{(int)Math.Round(clamped)}%";
             textColor = barColor;
         }
         else
         {
-            pctText   = "—";
+            pctText   = valueText ?? "—";
             textColor = capColor;
         }
 

@@ -73,6 +73,12 @@ internal sealed class AppSettings
     // at ~28%). Defaults to true; only visible while ShowUsage is also true.
     public bool ShowExpectedUsageRate { get; set; } = true;
 
+    // Whether to show a monthly "extra usage" spend bar in the usage strip — this billing month's overage
+    // spend against the account's monthly cap (dollars, from the /usage endpoint's extra_usage block).
+    // Off by default: many accounts never enable extra usage, and even when on it only appears while the
+    // account itself has extra usage switched on. Independent of ShowUsage — the strip appears for either.
+    public bool ShowMonthlySpend { get; set; } = false;
+
     // Whether to surface per-session context-window pressure — the thermometer glyph that appears on
     // a session row once its context fill crosses the warning threshold. Off hides the glyph entirely
     // (the fill is still computed; it just isn't drawn). Defaults to true; a missing key keeps it on.

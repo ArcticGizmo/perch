@@ -97,6 +97,10 @@ internal static class SampleData
             LastUpdated: now, Ok: true, Error: null)
         {
             Scoped = [new ScopedUsage("Fable", 41, now.AddDays(4))],
+            // Extra usage enabled with a partial monthly spend, so the (off-by-default) spend bar has
+            // something to show when a preview or render turns it on.
+            ExtraUsage = new ExtraUsageInfo(
+                Enabled: true, Used: 24.80m, Limit: 100m, Currency: "AUD", DecimalPlaces: 2, LimitReached: false),
         };
     }
 

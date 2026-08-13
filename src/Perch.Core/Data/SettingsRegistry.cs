@@ -170,6 +170,13 @@ internal static class SettingsRegistry
             PreviewTarget.ExpectedRate, nameof(AppSettings.ShowExpectedUsageRate),
             s => s.ShowExpectedUsageRate, (s, v) => s.ShowExpectedUsageRate = v),
 
+        Toggle("monthly-spend", "Monthly spend",
+            "A bar showing this month's extra-usage spend against your monthly limit.",
+            SettingSurface.UsageBars,
+            ["monthly", "spend", "extra", "usage", "credits", "overage", "cost", "dollars", "budget", "limit", "mtd", "bill"],
+            PreviewTarget.UsageBars, nameof(AppSettings.ShowMonthlySpend),
+            s => s.ShowMonthlySpend, (s, v) => s.ShowMonthlySpend = v),
+
         // ── System & metrics ─────────────────────────────────────────────────
         Toggle("system-metrics", "System metrics",
             "Whole-machine CPU + RAM strip at the top of the panel.",

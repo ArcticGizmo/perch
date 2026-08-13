@@ -88,8 +88,39 @@ internal sealed class UsageMonitor
         return new UsageInfo(fivePct, sevenPct, fiveReset, sevenReset, Clock.Now, true, null)
         {
             Scoped = ReadScoped(root, sevenReset),
+            ExtraUsage = ReadExtraUsage(root),
         };
     }
+
+    /// <summary>
+    /// Reads the <c>extra_usage</c> block — the monthly overage spend against the account's cap. Both amounts
+    /// come from this block in major currency units (<c>used_credits</c> / <c>monthly_limit</c>); the sibling
+    /// <c>spend</c> block carries the same figures but with an ambiguous minor-unit scaling, so we take the
+    /// self-describing one. Returns null when the block is absent (older shape / no such account feature).
+    /// </summary>
+    private static ExtraUsageInfo? ReadExtraUsage(JsonObject root)
+    {
+        if (root["extra_usage"] is not JsonObject e)
+            return null;
+
+        int places = e["decimal_places"] is { } dp && int.TryParse(dp.ToString(), out var n) ? n : 2;
+        return new ExtraUsageInfo(
+            Enabled: AsBool(e["is_enabled"]),
+            Used: AsDecimal(e["used_credits"]),
+            Limit: AsDecimal(e["monthly_limit"]),
+            Currency: e["currency"]?.ToString() is { Length: > 0 } c ? c : "USD",
+            DecimalPlaces: Math.Clamp(places, 0, 4),
+            LimitReached: AsBool(e["spend_limit_reached"]));
+    }
+
+    // Defensive JSON scalar reads — the Parse path is unit-tested directly, so these never throw on a
+    // missing/oddly-typed node; they fall back to a sane default instead.
+    private static bool AsBool(JsonNode? n) => n is not null && bool.TryParse(n.ToString(), out var b) && b;
+
+    private static decimal AsDecimal(JsonNode? n) =>
+        n is not null && decimal.TryParse(n.ToString(),
+            System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var v)
+            ? v : 0m;
 
     /// <summary>
     /// Walks the response's <c>limits</c> array for <c>weekly_scoped</c> entries — the per-model weekly

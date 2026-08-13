@@ -20,6 +20,7 @@ internal static class OverlaySettingsGates
     {
         c.SetShowUsage(s.ShowUsage);
         c.SetShowExpectedRate(s.ShowExpectedUsageRate);
+        c.SetShowMonthlySpend(s.ShowMonthlySpend);
         c.SetShowSystemMetrics(s.ShowSystemMetrics);
         c.SetShowSessionMetrics(s.ShowSessionMetrics);
         c.SetShowContextPressure(s.ShowContextPressure);

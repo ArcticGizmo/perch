@@ -18,6 +18,10 @@ public class UsageMonitorTests
       "seven_day": {"utilization": 100.0, "resets_at": "2026-07-25T01:59:59.643405+00:00"},
       "seven_day_opus": null,
       "seven_day_sonnet": null,
+      "extra_usage": {
+        "is_enabled": true, "monthly_limit": 100, "used_credits": 12.5,
+        "currency": "AUD", "decimal_places": 2, "spend_limit_reached": false
+      },
       "limits": [
         {"kind": "session", "group": "session", "percent": 14, "resets_at": "2026-07-25T05:49:59.643379+00:00", "scope": null},
         {"kind": "weekly_all", "group": "weekly", "percent": 100, "resets_at": "2026-07-25T01:59:59.643405+00:00", "scope": null},
@@ -106,6 +110,28 @@ public class UsageMonitorTests
         Assert.Empty(Parse("""
         {"limits": [{"kind": "weekly_scoped", "percent": 5, "scope": {"model": {"display_name": null}}}]}
         """).Scoped);
+    }
+
+    [Fact]
+    public void ReadsTheMonthlyExtraUsageSpendWindow()
+    {
+        var e = Parse(FullPayload).ExtraUsage;
+
+        Assert.NotNull(e);
+        Assert.True(e!.Enabled);
+        Assert.Equal(12.5m, e.Used);
+        Assert.Equal(100m, e.Limit);
+        Assert.Equal("AUD", e.Currency);
+        Assert.False(e.LimitReached);
+        // 12.5 of 100 → 12.5%; the whole limit drops its ".00" but the fractional spend keeps precision.
+        Assert.Equal(12.5, e.Percent);
+        Assert.Equal("$12.5/$100", e.Compact);
+    }
+
+    [Fact]
+    public void ExtraUsageIsNullWhenTheBlockIsAbsent()
+    {
+        Assert.Null(Parse("""{"five_hour": {"utilization": 1.0}}""").ExtraUsage);
     }
 
     [Fact]
