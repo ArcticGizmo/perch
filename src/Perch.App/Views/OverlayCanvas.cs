@@ -1761,7 +1761,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             UsageBarRenderer.Draw(ctx, HorizPad, width - HorizPad, rowTop + BarRowHeight / 2,
                 "Credits", e.Percent, expectedPct: null, stale, 10, 10,
                 MutedColor, UsageTrackColor, ExpectedMarkColor, BgColor,
-                captionW: 46, pctW: 60, trackH: 7, valueText: e.Compact);
+                captionW: 46, pctW: 90, trackH: 7, valueText: e.Compact);
         }
     }
 

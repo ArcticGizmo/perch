@@ -103,14 +103,30 @@ internal sealed class UsageMonitor
         if (root["extra_usage"] is not JsonObject e)
             return null;
 
-        int places = e["decimal_places"] is { } dp && int.TryParse(dp.ToString(), out var n) ? n : 2;
+        int places = Math.Clamp(
+            e["decimal_places"] is { } dp && int.TryParse(dp.ToString(), out var n) ? n : 2, 0, 4);
+
+        // Both amounts arrive in the currency's *minor* units (matching the sibling spend block's
+        // amount_minor): a $14,000.00 cap is reported as 1_400_000 with decimal_places=2. Shift by
+        // decimal_places to get major units. Used and limit share the scale, so the fill ratio is
+        // unaffected — only the displayed dollar figures were wrong before this.
+        decimal scale = Pow10(places);
         return new ExtraUsageInfo(
             Enabled: AsBool(e["is_enabled"]),
-            Used: AsDecimal(e["used_credits"]),
-            Limit: AsDecimal(e["monthly_limit"]),
+            Used: AsDecimal(e["used_credits"]) / scale,
+            Limit: AsDecimal(e["monthly_limit"]) / scale,
             Currency: e["currency"]?.ToString() is { Length: > 0 } c ? c : "USD",
-            DecimalPlaces: Math.Clamp(places, 0, 4),
+            DecimalPlaces: places,
             LimitReached: AsBool(e["spend_limit_reached"]));
+    }
+
+    // 10^n as a decimal, for the minor→major unit shift. n is already clamped to 0–4, so this is a
+    // handful of multiplies (and Pow10(0) == 1, i.e. no shift for zero-decimal currencies like JPY).
+    private static decimal Pow10(int n)
+    {
+        decimal r = 1m;
+        for (int i = 0; i < n; i++) r *= 10m;
+        return r;
     }
 
     // Defensive JSON scalar reads — the Parse path is unit-tested directly, so these never throw on a

@@ -36,13 +36,24 @@ internal sealed record ExtraUsageInfo(
         _ => Currency + " ",
     };
 
-    // Whole amounts drop the ".00" so the compact bar caption stays tight ("$0/$100"); fractional
-    // amounts keep up to DecimalPlaces of precision ("$12.50/$100").
-    private string Amount(decimal v) =>
-        v == decimal.Truncate(v) ? $"{Symbol}{v:0}" : $"{Symbol}{v.ToString("0." + new string('#', Math.Max(1, DecimalPlaces)))}";
+    // Compact caption amount. Five- and six-figure limits scale to k/M so the bar stays legible
+    // ($140,000 → $140k, $1,400,000 → $1.4M), trailing zeros dropped. Below 1,000 the raw amount shows:
+    // whole numbers without a decimal ("$100"), fractional ones to DecimalPlaces ("$12.50").
+    private string Amount(decimal v)
+    {
+        decimal a = Math.Abs(v);
+        string body = a switch
+        {
+            >= 1_000_000m => (a / 1_000_000m).ToString("0.#") + "M",
+            >= 1_000m     => (a / 1_000m).ToString("0.#") + "k",
+            _ => a == decimal.Truncate(a) ? a.ToString("0") : a.ToString("0." + new string('#', Math.Max(1, DecimalPlaces))),
+        };
+        return $"{(v < 0 ? "-" : "")}{Symbol}{body}";
+    }
 
-    /// <summary>The right-column caption for the spend bar, e.g. <c>$0/$100</c>.</summary>
-    public string Compact => $"{Amount(Used)}/{Amount(Limit)}";
+    /// <summary>The right-column caption for the spend bar, e.g. <c>$0/$100 AUD</c>. The ISO code is
+    /// appended because the bare "$" is shared by AUD/USD/CAD/… — the reader needs to know which.</summary>
+    public string Compact => $"{Amount(Used)}/{Amount(Limit)} {Currency.ToUpperInvariant()}";
 
     /// <summary>The fuller phrasing for the tooltip, e.g. <c>$0.00 of $100.00 AUD</c>.</summary>
     public string Detailed =>
