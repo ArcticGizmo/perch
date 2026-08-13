@@ -287,8 +287,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     void IDenseHost.RestoreFloating(PixelPoint position)
     {
         if (HostWindow is not { } w) return;
-        w.Width = FormWidth;
-        w.SizeToContent = SizeToContent.Height; // recomputes height from content, keeps the 280 width
+        SizeFloatingToContent(); // back to floating: size the window to content by hand (dense left it Manual)
         SetFloatingPosition(w, position);
         RestoreOrEnsureFloating(); // prefer the remembered corner-relative spot; the raw position may be on a since-removed monitor
     }
@@ -310,7 +309,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (HostWindow is not { } w) return;
         if (_denseCtl.IsDense) _denseCtl.ApplyGeometry();
-        else { w.Width = FormWidth; w.SizeToContent = SizeToContent.Height; }
+        else SizeFloatingToContent();
         InvalidateMeasure();
         InvalidateVisual();
     }
@@ -338,9 +337,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     /// <summary>The owning window moved. Distinguishes a user drag (which we remember, corner-relative, in
-    /// <see cref="_effectiveFloating"/>) from our own programmatic placement (ignored). Capturing here rather
-    /// than right after <c>BeginMoveDrag</c> is reliable regardless of whether the platform's move loop blocks
-    /// — the drag's final position is always reported through this event.</summary>
+    /// <see cref="_effectiveFloating"/>) from our own programmatic placement (ignored). The manual header drag
+    /// sets <c>Position</c> as the pointer moves, so each drag step is reported through this event and the
+    /// remembered spot stays current.</summary>
     internal void OnWindowPositionChanged()
     {
         if (_denseCtl.IsDense) return;                          // dense owns its geometry
@@ -546,16 +545,31 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             PlatformServices.WindowChrome.BringToTopNoActivate(h.Handle);
     }
 
-    // Re-applies the window footprint after a change that may alter the panel's content height. The floating
-    // window auto-sizes through SizeToContent, so invalidating the measure is enough. The dense strip/popup
-    // is sized manually (its MeasureOverride returns the size the controller placed), so a bare remeasure
-    // repaints the now-shorter content but leaves the window at its old, taller size — an invisible region
-    // that keeps eating clicks where the removed rows used to be. In dense mode we must re-run the geometry
-    // so the window actually shrinks to match. Use this anywhere a toggle/update can change the panel height.
+    // Re-applies the window footprint after a change that may alter the panel's content height. Floating sizes
+    // the window to content by hand (see SizeFloatingToContent); the dense strip/popup is sized by the
+    // controller, so we re-run its geometry so the window actually grows/shrinks to match (a bare remeasure
+    // would repaint the new content but leave the window at its old size — an invisible region that keeps
+    // eating clicks where rows used to be). Use this anywhere a toggle/update can change the panel height.
     private void RemeasurePanel()
     {
         if (_denseCtl.IsDense) RelayoutWindow();
-        else { InvalidateMeasure(); InvalidateVisual(); }
+        else { InvalidateMeasure(); SizeFloatingToContent(); InvalidateVisual(); }
+    }
+
+    // Sizes the floating window to its measured content height, by hand. The window declares
+    // SizeToContent="Height" so it fits itself on first open, but relying on that auto-fit to re-run on later
+    // child InvalidateMeasure proved unreliable: on Windows a header drag runs through a non-blocking OS move
+    // (BeginMoveDrag returns immediately and delivers no PointerReleased), and while/after the OS owns the
+    // geometry the auto-fit never lands — the window stays stuck at its old height and clips the new rows. So
+    // we own the height explicitly (the same deterministic Manual + explicit-Height mechanism dense mode uses).
+    // No-op in dense mode, whose geometry the controller owns, or before the window exists.
+    private void SizeFloatingToContent()
+    {
+        if (_denseCtl.IsDense || HostWindow is not { } w) return;
+        double h = Draw(null, FormWidth); // content height in DIPs, honouring the current expand/collapse state
+        if (w.SizeToContent != SizeToContent.Manual) w.SizeToContent = SizeToContent.Manual;
+        if (Math.Abs(w.Width - FormWidth) > 0.5) w.Width = FormWidth;
+        if (double.IsNaN(w.Height) || Math.Abs(w.Height - h) > 0.5) w.Height = h;
     }
 
     // Height of the full panel (header + optional strips + all session rows), computed as if expanded —
@@ -2770,13 +2784,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private static readonly Cursor HandCursor = new(StandardCursorType.Hand);
 
     // Drag state. A left press in the header arms a potential drag; once the pointer moves past a small
-    // threshold the gesture is handed to the OS move loop (BeginMoveDrag). A press that never moves is a
+    // threshold we move the window ourselves (manual drag, see OnPointerMoved). A press that never moves is a
     // click, routed on release (header toggle, row focus, artifact / quick-link open).
     private bool _leftPressed;
     private bool _headerArmed;
     private bool _headerDragged;
-    private Point _headerPressPoint;
-    private PointerPressedEventArgs? _headerPressArgs;
+    // The floating header drag is manual (we move the window ourselves on pointer-move), mirroring the dense
+    // drag below. It used to hand off to the OS via BeginMoveDrag, but on Windows that returns immediately,
+    // delivers no PointerReleased, and streams moves only through the window's PositionChanged — so the drag
+    // never cleanly ended: _headerDragged leaked true and the window was never re-fitted after a session
+    // arrived mid-drag (it clipped). Owning the move keeps pointer capture, so a real mouse-up ends it.
+    private PixelPoint _headerDragStartScreen; // cursor screen pos at press (physical px)
+    private PixelPoint _headerStartWindowPos;  // window top-left at press (physical px)
 
     // Dense-mode drag is manual (constrained to the docked edge, vertical, with drop lanes) — the OS move
     // loop can't do that, so it can't use BeginMoveDrag. The closed strip drags from anywhere; the open
@@ -2805,26 +2824,20 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
-        // Header press waiting to become a drag: once past the threshold, hand off to the OS move loop.
-        // A borderless window can't use the title bar, so BeginMoveDrag is the cross-platform way to move
-        // it — far more reliable than repositioning by hand on every pointer move.
-        if (_headerArmed && !_headerDragged)
+        // Floating header drag: manual, so we keep pointer capture and a real mouse-up ends it (see the field
+        // comment on _headerDragStartScreen for why the old OS BeginMoveDrag path was abandoned). We move the
+        // window by the cursor's total screen displacement since the press — PointToScreen recovers the true
+        // cursor position regardless of how far the window has already moved, so there's no drift.
+        if (_headerArmed)
         {
-            if (Math.Abs(p.X - _headerPressPoint.X) > 4 || Math.Abs(p.Y - _headerPressPoint.Y) > 4)
-            {
-                _headerDragged = true;
-                _headerArmed = false;
-                e.Pointer.Capture(null); // release our capture so the OS can drive the move
-                if (OwnerWindow is { } w && _headerPressArgs is { } pa)
-                    w.BeginMoveDrag(pa);     // OS-native move; the resulting window moves are remembered
-                                             // corner-relative in OnWindowPositionChanged as they happen, so
-                                             // there's no need to capture here (and no reliance on whether
-                                             // BeginMoveDrag blocks until the button is released).
-            }
+            var cur = this.PointToScreen(p);
+            int dx = cur.X - _headerDragStartScreen.X, dy = cur.Y - _headerDragStartScreen.Y;
+            if (!_headerDragged && (Math.Abs(dx) > 4 || Math.Abs(dy) > 4)) _headerDragged = true;
+            if (_headerDragged && OwnerWindow is { } w)
+                w.Position = new PixelPoint(_headerStartWindowPos.X + dx, _headerStartWindowPos.Y + dy);
             base.OnPointerMoved(e);
             return;
         }
-        if (_headerDragged) { base.OnPointerMoved(e); return; } // gesture owned by the OS move loop
 
         int row = HitTestRow(p);
         if (row != _hoveredRow) { _hoveredRow = row; InvalidateVisual(); }
@@ -3017,7 +3030,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _leftPressed = true;
         _headerArmed = false;
         _headerDragged = false;
-        _headerPressArgs = null;
         _denseArmed = false;
         _denseWasDrag = false;
 
@@ -3037,14 +3049,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
-        // Floating: the header is the drag handle — arm a potential OS move (started in OnPointerMoved
-        // once the pointer actually moves). Keep the press args — BeginMoveDrag needs them. A press that
-        // never moves falls through to RouteClick on release (header toggle).
-        if (p.Y < HeaderHeight && OwnerWindow is not null)
+        // Floating: the header is the drag handle — arm a manual move (started in OnPointerMoved once the
+        // pointer passes the threshold). Record the cursor's screen position and the window's top-left so the
+        // move tracks the cursor's total displacement. A press that never moves falls through to RouteClick on
+        // release (header toggle).
+        if (p.Y < HeaderHeight && OwnerWindow is { } fw)
         {
             _headerArmed = true;
-            _headerPressPoint = p;
-            _headerPressArgs = e;
+            _headerDragStartScreen = this.PointToScreen(p);
+            _headerStartWindowPos = fw.Position;
         }
 
         e.Pointer.Capture(this);
@@ -3083,9 +3096,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool dragged = _headerDragged;
         _headerArmed = false;
         _headerDragged = false;
-        _headerPressArgs = null;
 
-        if (!dragged) RouteClick(e.GetPosition(this)); // a real drag already handed off to the OS
+        if (!dragged) RouteClick(e.GetPosition(this)); // a plain click (never moved) — header toggle etc.
+        // The manual drag ended with a real mouse-up: re-fit the window now, in case a session grew the roster
+        // mid-drag (the panel couldn't be resized while the drag was in flight).
+        else SizeFloatingToContent();
 
         base.OnPointerReleased(e);
     }
@@ -3237,10 +3252,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         if (!_denseCtl.IsDense && p.Y < HeaderHeight)
         {
-            // Header click toggles expand/collapse (floating only); SizeToContent resizes to match.
+            // Header click toggles expand/collapse (floating only); size the window to match by hand.
             _expanded = !_expanded;
             UpdateTickTimer();
             InvalidateMeasure();
+            SizeFloatingToContent();
             InvalidateVisual();
             // Expanding can push the panel's bottom off-screen; re-anchor and re-lift on this deliberate toggle.
             EnsureFloatingOnScreen();
@@ -3687,6 +3703,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _expanded = true;
             UpdateTickTimer();
             InvalidateMeasure();
+            SizeFloatingToContent();
         }
 
         _attentionFlash = true;
@@ -3744,6 +3761,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _expanded = true;
             UpdateTickTimer();
             InvalidateMeasure();
+            SizeFloatingToContent();
         }
 
         _cycleHighlightId = sessionId;
@@ -3808,6 +3826,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _expanded = true;
             UpdateTickTimer();
             InvalidateMeasure();
+            SizeFloatingToContent();
         }
 
         _prBannerId = sessionId;

@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.29] - 2026-08-13
+
+- Fixed the floating overlay clipping its bottom rows after a drag (the drag never knew it had ended)
+
+---
+
 ## [v0.3.28] - 2026-08-12
 
 - Added "Whoops" achievements for prompts you cancel and re-type (we all do it)
