@@ -9,10 +9,12 @@ using Avalonia.Controls.Shapes;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
 using Perch.Data;
@@ -195,6 +197,9 @@ internal sealed class MarkdownWindow : Window
             Setters = { new Setter(TreeViewItem.IsExpandedProperty, true) },
         });
         _tree.SelectionChanged += OnTreeSelectionChanged;
+        // Right-click handled at the tree level (not on each node visual) so the whole row — the full-width
+        // TreeViewItem, not just its text — is the target.
+        _tree.AddHandler(ContextRequestedEvent, OnTreeContextRequested, RoutingStrategies.Bubble);
 
         _paneContent = new DockPanel { LastChildFill = true, Children = { _searchBox, _tree } };
 
@@ -569,11 +574,21 @@ internal sealed class MarkdownWindow : Window
             };
             var sp = new StackPanel { Orientation = Orientation.Horizontal, Children = { dot, text } };
             ToolTip.SetTip(sp, n.FullPath);
-            sp.ContextFlyout = BuildFileMenu(n.FullPath!);
-            return sp;
+            return sp;   // right-click is handled at the tree level (OnTreeContextRequested)
         }
 
         return text;
+    }
+
+    // Right-click on the tree: resolve the file leaf under the pointer (the whole row is the target, since
+    // the event bubbles up from the full-width TreeViewItem) and pop its menu at the pointer.
+    private void OnTreeContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        var node = (e.Source as Visual)?.FindAncestorOfType<TreeViewItem>(includeSelf: true)?.DataContext as FileNode;
+        if (node?.FullPath is not { } path)
+            return;   // a group/folder row (or empty space) — no file menu
+        BuildFileMenu(path).ShowAt(_tree, showAtPointer: true);
+        e.Handled = true;
     }
 
     // The right-click menu for a file leaf: copy its relative/absolute path, and (when a `code` launcher
