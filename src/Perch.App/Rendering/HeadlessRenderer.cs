@@ -746,7 +746,7 @@ internal static class HeadlessRenderer
             "## Editing\n\nAn editable split (source + preview) with save lands in Phase 4.";
 
         var w = new MarkdownWindow(new AppSettings()) { Width = 1000, Height = 620 };
-        w.SeedForRender(cwd, sets, project, "markdown-viewer-plan.md", sampleMd);
+        w.SeedForRender(cwd, sets, project, @"C:\src\perch\docs\markdown-viewer-plan.md", sampleMd);
         w.Show();
         Dispatcher.UIThread.RunJobs();
         AvaloniaHeadlessPlatform.ForceRenderTimerTick();

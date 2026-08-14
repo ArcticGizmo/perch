@@ -415,7 +415,7 @@ public partial class App : Application
         _settings?.Close();
         _historyWindow?.Close();
         _treeWindow?.Close();
-        _markdownWindow?.Close();
+        _markdownWindow?.CloseWithoutPrompt();
         _placementEditor?.Close();
         _statsWindow?.Close();
         _daemonListWindow?.Close();
