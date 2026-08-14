@@ -741,9 +741,18 @@ internal static class HeadlessRenderer
              "docs/markdown-viewer-plan.md", "docs/theming-plan.md"],
             Truncated: false);
         const string sampleMd =
-            "# Markdown viewer\n\nA **rich** view of `*.md`, with:\n\n- the files this session produced or referenced\n" +
-            "- a `.gitignore`-aware project tree\n- a live rendered preview\n\n> Rendered through the in-house MarkdownRender.\n\n" +
-            "## Editing\n\nAn editable split (source + preview) with save lands in Phase 4.";
+            "# Markdown viewer\n\nA **rich**, VS Code-style view of `*.md` with real block styling — " +
+            "headings, code panels, tables and quotes.\n\n" +
+            "## Features\n\n" +
+            "- the files this session *produced* or *referenced*\n" +
+            "- a `.gitignore`-aware project tree\n" +
+            "- a live rendered preview with its own light/dark theme\n\n" +
+            "> Rendered through the in-house MarkdownView, so it no longer reads as flat text.\n\n" +
+            "### A code block\n\n" +
+            "```csharp\npublic static Control Build(string md, MarkdownStyle style)\n{\n    return new MarkdownView(style).Document(md);\n}\n```\n\n" +
+            "### A table\n\n" +
+            "| Block   | Rendered as            |\n|---------|------------------------|\n" +
+            "| Heading | sized + underlined rule |\n| Code    | rounded panel          |\n| Quote   | left bar + muted text  |\n";
 
         // Default: dark window chrome with a light "paper" preview. Plus the inverse (light window, dark
         // preview) to eyeball both per-window palettes and the independent preview override.

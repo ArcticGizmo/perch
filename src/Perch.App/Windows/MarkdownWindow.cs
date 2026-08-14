@@ -95,12 +95,12 @@ internal sealed class MarkdownWindow : Window
     private readonly Border _editorToolbar;
     private readonly GridSplitter _innerSplitter;
     private readonly Border _previewPane;          // wraps the preview scroll so its "paper" bg can retint
+    private readonly ScrollViewer _previewScroll;  // holds the rendered MarkdownView document
     private readonly TextBlock _editorPlaceholder;
     private readonly TextBlock _editorFileLabel;
     private readonly TextBlock _editorStatus;
     private readonly Button _saveBtn;
     private readonly TextBox _sourceBox;
-    private readonly SelectableTextBlock _previewBlock;
     private readonly DispatcherTimer _previewTimer;
 
     private string? _cwd;
@@ -245,9 +245,12 @@ internal sealed class MarkdownWindow : Window
         };
         _sourceBox.TextChanged += OnSourceTextChanged;
 
-        _previewBlock = new SelectableTextBlock
+        _previewScroll = new ScrollViewer
         {
-            TextWrapping = TextWrapping.Wrap, FontSize = 13, Margin = new Thickness(18, 14),
+            // Horizontal scrolling off so the rendered document is constrained to the pane width and wraps
+            // (code blocks carry their own inner horizontal scroll).
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
         _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
         _previewTimer.Tick += (_, _) => { _previewTimer.Stop(); RenderPreview(_sourceBox.Text ?? ""); };
@@ -286,15 +289,7 @@ internal sealed class MarkdownWindow : Window
         toolbarPanel.Children.Add(_editorFileLabel);   // fills the remaining width
         _editorToolbar.Child = toolbarPanel;
 
-        var previewScroll = new ScrollViewer
-        {
-            // Horizontal scrolling off so the (wrap-enabled) preview is constrained to the pane width and
-            // wraps rather than growing sideways.
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Content = _previewBlock,
-        };
-        _previewPane.Child = previewScroll;
+        _previewPane.Child = _previewScroll;
 
         var split = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,*") };
         Grid.SetColumn(_sourceBox, 0);
@@ -715,10 +710,11 @@ internal sealed class MarkdownWindow : Window
     private void RenderPreview(string md)
     {
         var p = _previewTheme;
-        _previewBlock.Foreground = p.Fg;
-        var inlines = new InlineCollection();
-        MarkdownRender.Append(inlines, md, p.Fg, p.Muted, p.Code, p.Accent, p.Title);
-        _previewBlock.Inlines = inlines;
+        var style = new MarkdownStyle(
+            Fg: p.Fg, Muted: p.Muted, Title: p.Title, Link: p.Accent,
+            CodeFg: p.Code, CodeBg: p.CodeBg, QuoteBar: p.Border, Rule: p.Separator,
+            TableBorder: p.Border, TableHeaderBg: p.CodeBg);
+        _previewScroll.Content = MarkdownView.Build(md, style);
     }
 
     private void UpdateEditorChrome()
@@ -926,8 +922,8 @@ internal sealed class MarkdownWindow : Window
     // the preview pane. Kept local so the toggles retint just this window rather than the app theme.
     private readonly record struct MdTheme(
         IBrush WindowBg, IBrush PaneBg, IBrush EditorBg, IBrush Paper, IBrush Separator, IBrush Border,
-        IBrush Fg, IBrush Muted, IBrush Title, IBrush Accent, IBrush Code, IBrush Warn, IBrush Error,
-        IBrush ButtonBg, IBrush Selection)
+        IBrush Fg, IBrush Muted, IBrush Title, IBrush Accent, IBrush Code, IBrush CodeBg, IBrush Warn,
+        IBrush Error, IBrush ButtonBg, IBrush Selection)
     {
         private static SolidColorBrush B(byte r, byte g, byte b) => new(Color.FromRgb(r, g, b));
         private static SolidColorBrush A(byte a, byte r, byte g, byte b) => new(Color.FromArgb(a, r, g, b));
@@ -936,8 +932,8 @@ internal sealed class MarkdownWindow : Window
             WindowBg: B(0x1A, 0x1B, 0x24), PaneBg: B(0x22, 0x24, 0x2E), EditorBg: B(0x1E, 0x1F, 0x29),
             Paper: B(0x1E, 0x1F, 0x29), Separator: B(0x33, 0x35, 0x40), Border: B(0x44, 0x47, 0x54),
             Fg: B(0xE6, 0xE8, 0xF0), Muted: B(0x9A, 0x9E, 0xAD), Title: B(0xF2, 0xF4, 0xFA),
-            Accent: B(0x6E, 0x9B, 0xF0), Code: B(0x5E, 0xD6, 0xC5), Warn: B(0xF5, 0x9E, 0x0B),
-            Error: B(0xEF, 0x44, 0x44), ButtonBg: B(0x2A, 0x2C, 0x38),
+            Accent: B(0x6E, 0x9B, 0xF0), Code: B(0x5E, 0xD6, 0xC5), CodeBg: B(0x2A, 0x2D, 0x39),
+            Warn: B(0xF5, 0x9E, 0x0B), Error: B(0xEF, 0x44, 0x44), ButtonBg: B(0x2A, 0x2C, 0x38),
             // A soft translucent blue selection instead of the stark default, so selected text stays legible.
             Selection: A(90, 0x6E, 0x9B, 0xF0));
 
@@ -945,8 +941,8 @@ internal sealed class MarkdownWindow : Window
             WindowBg: B(0xEC, 0xED, 0xF1), PaneBg: B(0xF4, 0xF5, 0xF8), EditorBg: B(0xFB, 0xFB, 0xFD),
             Paper: B(0xFF, 0xFF, 0xFF), Separator: B(0xD6, 0xD8, 0xDF), Border: B(0xC2, 0xC6, 0xD0),
             Fg: B(0x22, 0x24, 0x2B), Muted: B(0x66, 0x6A, 0x76), Title: B(0x14, 0x16, 0x1C),
-            Accent: B(0x2B, 0x63, 0xC7), Code: B(0x0E, 0x7C, 0x66), Warn: B(0xB4, 0x6A, 0x00),
-            Error: B(0xC0, 0x2B, 0x2B), ButtonBg: B(0xE2, 0xE4, 0xEA),
+            Accent: B(0x2B, 0x63, 0xC7), Code: B(0x0E, 0x7C, 0x66), CodeBg: B(0xF0, 0xF1, 0xF4),
+            Warn: B(0xB4, 0x6A, 0x00), Error: B(0xC0, 0x2B, 0x2B), ButtonBg: B(0xE2, 0xE4, 0xEA),
             Selection: A(60, 0x2B, 0x63, 0xC7));
     }
 }

@@ -1,0 +1,330 @@
+using System.Linq;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Documents;
+using Avalonia.Controls.Primitives;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Markdig;
+using Markdig.Extensions.Tables;
+using Markdig.Extensions.TaskLists;
+using Markdig.Syntax;
+using Markdig.Syntax.Inlines;
+
+namespace Perch.Avalonia.Rendering;
+
+/// <summary>The colours a <see cref="MarkdownView"/> paints with — supplied by the caller so the preview
+/// can carry its own (light-by-default) theme independent of the surrounding window.</summary>
+internal sealed record MarkdownStyle(
+    IBrush Fg, IBrush Muted, IBrush Title, IBrush Link,
+    IBrush CodeFg, IBrush CodeBg, IBrush QuoteBar, IBrush Rule, IBrush TableBorder, IBrush TableHeaderBg);
+
+/// <summary>
+/// A richer Markdown renderer than <see cref="MarkdownRender"/>: instead of flattening everything into one
+/// <c>SelectableTextBlock</c> of inline runs, it walks the Markdig AST into a tree of real Avalonia
+/// controls — headings with an underline rule, fenced code in a rounded panel, block quotes with a left
+/// bar, bordered tables, styled lists and inline-code chips — for a VS Code-style enhanced-preview look.
+/// Blocks stay selectable/copyable. Best-effort: a parse failure falls back to the raw text.
+/// </summary>
+internal sealed class MarkdownView
+{
+    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
+        .UsePipeTables().UseEmphasisExtras().UseTaskLists().UseAutoLinks().Build();
+    private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
+
+    private const double BodySize = 13.5;
+    private const double BlockGap = 12;   // vertical space below a block
+
+    private readonly MarkdownStyle _s;
+
+    private MarkdownView(MarkdownStyle s) => _s = s;
+
+    /// <summary>Parses <paramref name="md"/> and returns a control tree ready to drop into a scroll viewer.</summary>
+    public static Control Build(string md, MarkdownStyle style)
+    {
+        var view = new MarkdownView(style);
+        var root = new StackPanel { Margin = new Thickness(22, 16) };
+        if (string.IsNullOrWhiteSpace(md))
+            return root;
+
+        MarkdownDocument doc;
+        try { doc = Markdown.Parse(md, Pipeline); }
+        catch { root.Children.Add(view.Paragraph(md, style.Fg)); return root; }
+
+        foreach (var block in doc)
+            if (view.RenderBlock(block, style.Fg) is { } c)
+                root.Children.Add(c);
+        return root;
+    }
+
+    private Control? RenderBlock(Block block, IBrush fg) => block switch
+    {
+        HeadingBlock h        => Heading(h),
+        ParagraphBlock p      => Paragraph(p, fg),
+        ListBlock list        => List(list, fg),
+        QuoteBlock q          => Quote(q),
+        Table table           => TableView(table),
+        CodeBlock code        => Code(code),   // FencedCodeBlock derives from this
+        ThematicBreakBlock    => Rule(),
+        HtmlBlock html        => RawHtml(html),
+        ContainerBlock cb     => Stack(cb, fg),
+        _                     => null,
+    };
+
+    private Control Heading(HeadingBlock h)
+    {
+        double size = h.Level switch { 1 => 24, 2 => 19, 3 => 16, 4 => 14.5, 5 => 13.5, _ => 12.5 };
+        var text = new SelectableTextBlock
+        {
+            FontSize = size, FontWeight = FontWeight.SemiBold, Foreground = _s.Title,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var inlines = new InlineCollection();
+        if (h.Inline != null) AppendInlines(inlines, h.Inline, new Run2(size, _s.Title, Bold: true));
+        text.Inlines = inlines;
+
+        // h1/h2 carry a bottom rule, like the GitHub/VS Code preview. Extra space above to set them apart.
+        if (h.Level <= 2)
+            return new Border
+            {
+                BorderBrush = _s.Rule, BorderThickness = new Thickness(0, 0, 0, 1),
+                Padding = new Thickness(0, 0, 0, 5), Margin = new Thickness(0, 18, 0, 10),
+                Child = text,
+            };
+        text.Margin = new Thickness(0, 14, 0, 6);
+        return text;
+    }
+
+    private SelectableTextBlock Paragraph(ParagraphBlock p, IBrush fg)
+    {
+        var tb = Paragraph("", fg);
+        if (p.Inline != null)
+        {
+            var inlines = new InlineCollection();
+            AppendInlines(inlines, p.Inline, new Run2(BodySize, fg));
+            tb.Inlines = inlines;
+        }
+        return tb;
+    }
+
+    private SelectableTextBlock Paragraph(string text, IBrush fg) => new()
+    {
+        Text = text, Foreground = fg, FontSize = BodySize, TextWrapping = TextWrapping.Wrap,
+        LineHeight = BodySize * 1.55, Margin = new Thickness(0, 0, 0, BlockGap),
+    };
+
+    private Control List(ListBlock list, IBrush fg)
+    {
+        var panel = new StackPanel { Margin = new Thickness(2, 0, 0, BlockGap), Spacing = 3 };
+        int number = list.OrderedStart != null && int.TryParse(list.OrderedStart, out var s) ? s : 1;
+
+        foreach (var itemObj in list)
+        {
+            if (itemObj is not ListItemBlock item)
+                continue;
+
+            var content = new StackPanel();
+            foreach (var child in item)
+                if (RenderBlock(child, fg) is { } c)
+                {
+                    // Tighten the paragraph spacing inside a list item; nested lists keep their own gap.
+                    if (c is SelectableTextBlock stb) stb.Margin = new Thickness(0);
+                    content.Children.Add(c);
+                }
+
+            var marker = new TextBlock
+            {
+                Text = list.IsOrdered ? $"{number}." : "•",
+                Foreground = _s.Muted, FontSize = BodySize,
+                Margin = new Thickness(0, 0, 8, 0), MinWidth = list.IsOrdered ? 18 : 10,
+                TextAlignment = list.IsOrdered ? TextAlignment.Right : TextAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+            };
+
+            var rowGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+            Grid.SetColumn(marker, 0);
+            Grid.SetColumn(content, 1);
+            rowGrid.Children.Add(marker);
+            rowGrid.Children.Add(content);
+            panel.Children.Add(rowGrid);
+            number++;
+        }
+        return panel;
+    }
+
+    private Control Quote(QuoteBlock q)
+    {
+        var inner = new StackPanel();
+        foreach (var child in q)
+            if (RenderBlock(child, _s.Muted) is { } c)
+            {
+                if (c is SelectableTextBlock stb) stb.Margin = new Thickness(0, 0, 0, 4);
+                inner.Children.Add(c);
+            }
+        return new Border
+        {
+            BorderBrush = _s.QuoteBar, BorderThickness = new Thickness(3, 0, 0, 0),
+            Padding = new Thickness(12, 4, 8, 4), Margin = new Thickness(0, 0, 0, BlockGap),
+            Child = inner,
+        };
+    }
+
+    private Control Code(CodeBlock code)
+    {
+        var lines = code.Lines.ToString().Replace("\r", "").TrimEnd('\n');
+        var text = new SelectableTextBlock
+        {
+            Text = lines, FontFamily = Mono, FontSize = 12.5, Foreground = _s.CodeFg,
+            TextWrapping = TextWrapping.NoWrap,
+        };
+        return new Border
+        {
+            Background = _s.CodeBg, CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(12, 10), Margin = new Thickness(0, 0, 0, BlockGap),
+            Child = new ScrollViewer
+            {
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Content = text,
+            },
+        };
+    }
+
+    private Control Rule() => new Border
+    {
+        Height = 1, Background = _s.Rule, Margin = new Thickness(0, 6, 0, 14),
+    };
+
+    private Control RawHtml(HtmlBlock html) => new SelectableTextBlock
+    {
+        Text = html.Lines.ToString().Replace("\r", "").TrimEnd('\n'),
+        FontFamily = Mono, FontSize = 12, Foreground = _s.Muted, TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(0, 0, 0, BlockGap),
+    };
+
+    private Control Stack(ContainerBlock cb, IBrush fg)
+    {
+        var panel = new StackPanel();
+        foreach (var child in cb)
+            if (RenderBlock(child, fg) is { } c)
+                panel.Children.Add(c);
+        return panel;
+    }
+
+    private Control TableView(Table table)
+    {
+        var rows = table.OfType<TableRow>().ToList();
+        if (rows.Count == 0)
+            return new StackPanel();
+        int cols = rows.Max(r => r.Count());
+
+        var grid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions(string.Join(",", Enumerable.Repeat("*", cols))),
+        };
+        for (int r = 0; r < rows.Count; r++)
+            grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+
+        for (int r = 0; r < rows.Count; r++)
+        {
+            var row = rows[r];
+            bool header = row.IsHeader;
+            int ci = 0;
+            foreach (var cellObj in row)
+            {
+                if (cellObj is not TableCell cell) { ci++; continue; }
+                var tb = new SelectableTextBlock
+                {
+                    FontSize = BodySize, Foreground = _s.Fg, TextWrapping = TextWrapping.Wrap,
+                    FontWeight = header ? FontWeight.SemiBold : FontWeight.Normal,
+                };
+                var inlines = new InlineCollection();
+                foreach (var b in cell)
+                    if (b is LeafBlock { Inline: { } inl })
+                        AppendInlines(inlines, inl, new Run2(BodySize, _s.Fg, Bold: header));
+                tb.Inlines = inlines;
+
+                var cellBorder = new Border
+                {
+                    BorderBrush = _s.TableBorder, BorderThickness = new Thickness(0, 0, 1, 1),
+                    Background = header ? _s.TableHeaderBg : null,
+                    Padding = new Thickness(9, 5), Child = tb,
+                };
+                Grid.SetRow(cellBorder, r);
+                Grid.SetColumn(cellBorder, ci);
+                grid.Children.Add(cellBorder);
+                ci++;
+            }
+        }
+
+        return new Border
+        {
+            BorderBrush = _s.TableBorder, BorderThickness = new Thickness(1, 1, 0, 0),
+            Margin = new Thickness(0, 0, 0, BlockGap), HorizontalAlignment = HorizontalAlignment.Left,
+            Child = grid,
+        };
+    }
+
+    // ── Inlines ────────────────────────────────────────────────────────────────────────────────────
+
+    private readonly record struct Run2(double Size, IBrush Brush, bool Bold = false, bool Italic = false,
+        bool Strike = false, bool Link = false);
+
+    private void AppendInlines(InlineCollection sink, ContainerInline container, Run2 style)
+    {
+        foreach (var inline in container)
+        {
+            switch (inline)
+            {
+                case LiteralInline lit:
+                    sink.Add(Styled(lit.Content.ToString(), style));
+                    break;
+                case CodeInline code:
+                    sink.Add(new Run(code.Content)
+                    {
+                        FontFamily = Mono, Foreground = _s.CodeFg, Background = _s.CodeBg, FontSize = style.Size,
+                    });
+                    break;
+                case EmphasisInline em:
+                    var s = em.DelimiterChar == '~' ? style with { Strike = true }
+                          : em.DelimiterCount >= 2 ? style with { Bold = true }
+                          : style with { Italic = true };
+                    AppendInlines(sink, em, s);
+                    break;
+                case LinkInline link:
+                    if (link.IsImage)
+                        sink.Add(Styled($"🖼 {link.Url}", style with { Brush = _s.Link, Link = true }));
+                    else
+                        AppendInlines(sink, link, style with { Brush = _s.Link, Link = true, Strike = false });
+                    break;
+                case AutolinkInline auto:
+                    sink.Add(Styled(auto.Url, style with { Brush = _s.Link, Link = true }));
+                    break;
+                case TaskList task:
+                    sink.Add(new Run(task.Checked ? "☑ " : "☐ ") { Foreground = _s.Muted, FontSize = style.Size });
+                    break;
+                case LineBreakInline br:
+                    sink.Add(new Run(br.IsHard ? "\n" : " ") { Foreground = style.Brush });
+                    break;
+                case ContainerInline cc:
+                    AppendInlines(sink, cc, style);
+                    break;
+            }
+        }
+    }
+
+    private static Run Styled(string text, Run2 style)
+    {
+        var run = new Run(text)
+        {
+            Foreground = style.Brush, FontSize = style.Size,
+            FontWeight = style.Bold ? FontWeight.Bold : FontWeight.Normal,
+            FontStyle = style.Italic ? FontStyle.Italic : FontStyle.Normal,
+        };
+        var deco = new TextDecorationCollection();
+        if (style.Strike) deco.Add(new TextDecoration { Location = TextDecorationLocation.Strikethrough });
+        if (style.Link) deco.Add(new TextDecoration { Location = TextDecorationLocation.Underline });
+        if (deco.Count > 0) run.TextDecorations = deco;
+        return run;
+    }
+}
