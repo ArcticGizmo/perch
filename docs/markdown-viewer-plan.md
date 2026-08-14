@@ -1,5 +1,14 @@
 # Markdown viewer/editor plan
 
+> **Status: shipped (2026-08-14, branch `md`).** All five phases landed as code on `md`. Detection
+> (`MarkdownFilesReader`), the produced-only glyph, the "Markdown files…" menu item, `MarkdownWindow`
+> (session-file groups + `.gitignore`-aware project tree via `MarkdownProjectScan`), and the split
+> source/live-preview editor with save (mtime-conflict guard, watcher reload, dirty-close prompt) are all
+> in. Verified by `dotnet test` (630 pass, incl. `MarkdownFilesReaderTests` + `MarkdownProjectScanTests`),
+> the overlay `render` capture (rose M↓ glyph), and a `HeadlessRenderer` capture of the populated window
+> (`markdown_window_1x.png`). The section below is the original plan, kept for context.
+
+
 A per-session Markdown experience: a **glyph** on a session row that lights up when the session
 *produced* a `.md` file, a **right-click menu item** to open a **viewer/editor window**, and a
 `.gitignore`-aware **project `.md` browser** inside that window. Renders and edits Markdown with a live
