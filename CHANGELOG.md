@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.34] - 2026-08-14
+
+- Fixed black fringing around the "Achievement Unlocked!" text (ClearType, meet transparency)
+
+---
+
 ## [v0.3.33] - 2026-08-14
 
 - Try clicking the perch icon a few times (no, we won't say why)

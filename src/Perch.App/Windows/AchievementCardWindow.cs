@@ -109,7 +109,11 @@ internal sealed class AchievementCardWindow : Window
         // read with plenty of contrast. The window itself is transparent, so this blends over the desktop.
         // Dismissal is deliberately only via the buttons (or the keyboard) — a stray backdrop click won't
         // close it, so you always make an explicit OK / Don't-show-again choice.
-        return new Grid { Background = Vignette(), Children = { stack } };
+        var root = new Grid { Background = Vignette(), Children = { stack } };
+        // The window is transparent/layered, so ClearType would fringe the text (title, buttons, cards) with
+        // black — force grayscale AA. Inherits down to the owner-drawn cards' DrawText too.
+        TextOptions.SetTextRenderingMode(root, TextRenderingMode.Antialias);
+        return root;
     }
 
     private static StackPanel NewCardsHost() => new()
