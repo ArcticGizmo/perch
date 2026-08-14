@@ -16,7 +16,7 @@ internal static class SampleData
     /// A cross-section of session states, chosen to light up every overlay glyph at once: a running
     /// session with a sub-agent/teammate tree, mode badge, note, context fill, burn rate, git churn and a
     /// task checklist; an awaiting-input session with a project note, an open PR and a published artifact;
-    /// a needs-attention session that's stuck and remote-controlled; an idle session; an API-error row; and
+    /// a needs-attention session that's stuck, remote-controlled and has produced Markdown docs; an idle session; an API-error row; and
     /// a background/SDK session that groups under the Autonomous section.
     /// </summary>
     public static IReadOnlyList<ClaudeSession> Sessions()
@@ -63,6 +63,7 @@ internal static class SampleData
                 Artifacts: new List<Artifact> { new("https://claude.ai/code/artifact/1", "API report") }),
             new ClaudeSession("9012", "s3", SessionStatus.NeedsAttention, @"C:\src\docs", "docs-site", now,
                 BridgeSessionId: "bridge-xyz", Stuck: new StuckSignal(StuckKind.FailingLoop, "repeating build"),
+                HasProducedMarkdown: true,
                 JiraTicket: new JiraTicketInfo("SFTY-1234", "https://acme.atlassian.net/browse/SFTY-1234"),
                 PullRequest: new PullRequestInfo(88, "https://github.com/o/r/pull/88", "Draft: docs restructure", PrState.Draft)
                 {

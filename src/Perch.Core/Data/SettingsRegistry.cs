@@ -79,6 +79,12 @@ internal static class SettingsRegistry
             PreviewTarget.Artifacts, nameof(AppSettings.ShowArtifacts),
             s => s.ShowArtifacts, (s, v) => s.ShowArtifacts = v),
 
+        Toggle("markdown", "Markdown files",
+            "Glyph for a session that produced a .md file, plus a \"Markdown files...\" right-click item that opens a viewer/editor for the project's Markdown.",
+            SettingSurface.SessionRow, ["markdown", "md", "docs", "readme", "notes", "editor", "viewer"],
+            PreviewTarget.Markdown, nameof(AppSettings.ShowMarkdown),
+            s => s.ShowMarkdown, (s, v) => s.ShowMarkdown = v),
+
         Toggle("git-stats", "Git line churn",
             "The +added / -removed chip from git diff in a session's directory.",
             SettingSurface.SessionRow, ["git", "diff", "lines", "added", "removed", "churn", "numstat"],

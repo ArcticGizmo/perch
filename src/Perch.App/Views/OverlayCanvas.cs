@@ -58,6 +58,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double NoteIconWidth    = 15; // the pinned-note glyph shown on a row that has a note
     private const double PrIconWidth      = 16; // the GitHub pull-request (merge) glyph on a row with a PR
     private const double JiraIconWidth    = 15; // the Jira ticket (tag) glyph on a row whose branch has a key
+    private const double MdIconWidth      = 18; // the Markdown glyph on a row whose session produced a .md file
 
     // Font sizes (px ~= the WinForms point sizes).
     private const double NameSize       = 11.5;
@@ -162,6 +163,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // A note that's only inherited from the project (no per-session note) draws in a dimmed amber so it
     // recedes — a project note is ambient context, not something demanding attention like a session note.
     private static readonly IBrush NoteDimBrush   = new SolidColorBrush(Color.FromArgb(105, 244, 193, 79));
+    // The Markdown glyph: a teal document mark, deliberately distinct from the amber artifact/note glyphs
+    // and the status hues (running-green, error-red), marking a session that produced a .md file.
+    // Informational only (no hover/click), like a category indicator rather than a status colour — so it
+    // follows the artifact/note precedent of a fixed literal rather than a themed Palette role.
+    private static readonly IBrush MarkdownBrush  = new SolidColorBrush(Color.FromRgb(80, 200, 190));
 
     private static readonly IBrush ThermoGlassFill = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
     private static readonly IPen   ThermoOutline  = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
@@ -612,6 +618,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showNoteLine = true;
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
+    private bool _showMarkdown = true;
     private bool _showWaitingTimer = true;
     private float _ctxYellow = 0.60f, _ctxOrange = 0.75f, _ctxRed = 0.90f;
 
@@ -929,6 +936,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (_showArtifacts == show) return;
         _showArtifacts = show;
+        InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the Markdown glyph on rows whose session produced a .md file (the session still
+    /// tracks its Markdown files regardless — this only gates the glyph).</summary>
+    public void SetShowMarkdown(bool show)
+    {
+        if (_showMarkdown == show) return;
+        _showMarkdown = show;
         InvalidateVisual();
     }
 
@@ -2244,6 +2260,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double prW  = showPr ? PrIconWidth : 0;
         bool showJira = _showJiraTickets && session.JiraTicket is not null;
         double jiraW  = showJira ? JiraIconWidth : 0;
+        bool showMd = _showMarkdown && session.HasProducedMarkdown;
+        double mdW  = showMd ? MdIconWidth : 0;
 
         // Right-side cluster (right→left from the status text): thermometer, mode badge, task count,
         // metrics bars (4.9), burn rate.
@@ -2277,7 +2295,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double gitW = showGit ? gitAddW + GitGap + gitDelW + 8 : 0;
 
         double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - botW - mailW
-                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW - jiraW;
+                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW - jiraW - mdW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
 
@@ -2315,8 +2333,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             DrawJiraIcon(ctx, jiraGlyphX, nameMidY);
             _jiraRects[rowIndex] = new Rect(jiraGlyphX - 2, nameMidY - 9, JiraIconWidth + 2, 18);
         }
+        if (showMd)
+            DrawMdIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW + jiraW, nameMidY);
 
-        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW + jiraW;
+        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW + jiraW + mdW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
         // Git churn immediately right of the name: "+added" green, "-deleted" red.
@@ -2645,6 +2665,45 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double top = midY - (side + offset) / 2;
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(x, top, side, side), radius));
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(x + offset, top + offset, side, side), radius));
+    }
+
+    // The Markdown glyph: the canonical Markdown mark — a rounded-rect badge holding an "M" and a
+    // down-arrow — marking a session that produced a .md file. Informational only (no hover/click), so it
+    // reads as a category indicator sitting after the other left-cluster glyphs.
+    private static void DrawMdIcon(DrawingContext ctx, double x, double midY)
+    {
+        var pen = new Pen(MarkdownBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        const double w = 16, h = 11, radius = 2.5;
+        double left = x, top = midY - h / 2;
+        ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(left, top, w, h), radius));
+
+        double iTop = top + 3, iBot = top + h - 3;   // inner glyph band the M/arrow sit within
+
+        // "M": a down-up-down polyline on the left half.
+        var m = new StreamGeometry();
+        using (var gc = m.Open())
+        {
+            gc.BeginFigure(new Point(left + 3, iBot), isFilled: false);
+            gc.LineTo(new Point(left + 3, iTop));
+            gc.LineTo(new Point(left + 5.5, iTop + 2.6));
+            gc.LineTo(new Point(left + 8, iTop));
+            gc.LineTo(new Point(left + 8, iBot));
+            gc.EndFigure(false);
+        }
+        ctx.DrawGeometry(null, pen, m);
+
+        // Down-arrow on the right half: a stem topped nothing, with a chevron head at the foot.
+        double ax = left + 11.5;
+        ctx.DrawLine(pen, new Point(ax, iTop), new Point(ax, iBot));
+        var arrow = new StreamGeometry();
+        using (var gc = arrow.Open())
+        {
+            gc.BeginFigure(new Point(ax - 2, iBot - 2.6), isFilled: false);
+            gc.LineTo(new Point(ax, iBot));
+            gc.LineTo(new Point(ax + 2, iBot - 2.6));
+            gc.EndFigure(false);
+        }
+        ctx.DrawGeometry(null, pen, arrow);
     }
 
     // GitHub pull-request glyph: the git-merge octicon — a left "base" branch (two nodes joined by a

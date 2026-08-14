@@ -47,6 +47,7 @@ internal enum PreviewTarget
     BurnRate,
     WaitingTimer,
     Artifacts,
+    Markdown,
     GitStats,
     PullRequest,
     JiraTicket,
