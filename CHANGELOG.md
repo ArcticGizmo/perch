@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.32] - 2026-08-14
+
+- Fixed quick-link icons rendering mirror-image (they were being rotated, not un-flipped)
+
+---
+
 ## [v0.3.31] - 2026-08-13
 
 - Fixed the monthly spend bar reading 100x too high (it was counting cents as dollars)

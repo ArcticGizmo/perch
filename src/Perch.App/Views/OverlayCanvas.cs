@@ -1777,7 +1777,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // ── Quick-links row ────────────────────────────────────────────────────────
     // The enabled quick-link icons side-by-side, centred horizontally. Each slot shows its pre-decoded
     // icon, or drawn initials over a name-derived colour when no icon resolved. The source icons render
-    // upside-down, so each is flipped 180° about its own centre unless the user opts into upside-down.
+    // upside-down, so each is mirrored vertically about its own centre unless the user opts into upside-down.
     private void DrawQuickLinksRow(DrawingContext ctx, double width)
     {
         const double IconSize = 16, IconGap = 14, HitPad = 4;
@@ -1818,10 +1818,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 }
                 else
                 {
-                    double cx = iconX + IconSize / 2, cy = iconY + IconSize / 2;
-                    var flip = Matrix.CreateTranslation(-cx, -cy)
-                             * Matrix.CreateRotation(Math.PI)
-                             * Matrix.CreateTranslation(cx, cy);
+                    // Source icons are vertically flipped (upside-down); mirror about the horizontal
+                    // axis to right them. A full 180° rotation would also flip them horizontally.
+                    double cy = iconY + IconSize / 2;
+                    var flip = Matrix.CreateTranslation(0, -cy)
+                             * Matrix.CreateScale(1, -1)
+                             * Matrix.CreateTranslation(0, cy);
                     using (ctx.PushTransform(flip))
                         ctx.DrawImage(icon, iconRect);
                 }
