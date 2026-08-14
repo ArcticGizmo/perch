@@ -311,6 +311,14 @@ internal static class HeadlessRenderer
         RenderControl(revealBatch, Path.Combine(outDir, "achievement_reveal_batch_1x.png"), 96);
         RenderControl(revealBatch, Path.Combine(outDir, "achievement_reveal_batch_1.5x.png"), 144);
 
+        // The secret Space Invaders clone: the title frame (full swarm + prompt) and a posed in-play frame
+        // (a shot rising, bombs falling, a few invaders cleared). Timers don't tick headless, so both frames
+        // are static poses.
+        RenderControl(new Windows.InvadersField(), Path.Combine(outDir, "invaders_title_1x.png"), 96);
+        var invadersPlay = new Windows.InvadersField();
+        invadersPlay.SnapshotPlaying();
+        RenderControl(invadersPlay, Path.Combine(outDir, "invaders_play_1x.png"), 96);
+
         // Perch Wrapped poster: a shareable Spotify-Wrapped-style card built from the sample report.
         // Rendered with the bundled bird icon so the header/footer icon paths are exercised too.
         IImage? brandIcon = null;

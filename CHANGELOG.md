@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.33] - 2026-08-14
+
+- Try clicking the perch icon a few times (no, we won't say why)
+
+---
+
 ## [v0.3.32] - 2026-08-14
 
 - Fixed quick-link icons rendering mirror-image (they were being rotated, not un-flipped)

@@ -1105,6 +1105,30 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// apply the pending update.</summary>
     public event Action? UpdateRequested;
 
+    // A completely-secret easter egg: click the brand mark ten times in quick succession to summon a
+    // Space Invaders clone (see SpaceInvadersWindow). The brand icon's hit-rect is captured in DrawHeader;
+    // the counter resets if a click lands more than a short window after the last.
+    private Rect _brandRect;
+    private int _brandClicks;
+    private DateTime _lastBrandClick;
+
+    /// <summary>Raised after the brand mark is clicked ten times in quick succession. Shh.</summary>
+    public event Action? EasterEggTriggered;
+
+    // Counts a click on the brand mark toward the easter egg, resetting the streak on too long a gap and
+    // firing (then resetting) on the tenth. Deliberately non-committal — the click still toggles the header.
+    private void RegisterBrandClick()
+    {
+        var now = DateTime.UtcNow;
+        if ((now - _lastBrandClick).TotalMilliseconds > 1200) _brandClicks = 0;
+        _lastBrandClick = now;
+        if (++_brandClicks >= 10)
+        {
+            _brandClicks = 0;
+            EasterEggTriggered?.Invoke();
+        }
+    }
+
     /// <summary>Shows or hides the header's update badge (repaint only — the badge lives in the header
     /// glyph cluster and is drawn each frame from this flag).</summary>
     public void SetUpdateAvailable(bool available)
@@ -1563,7 +1587,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (Brand is { })
         {
             const double iconSize = 18;
-            ctx.DrawImage(Brand, new Rect(HorizPad, midY - iconSize / 2, iconSize, iconSize));
+            _brandRect = new Rect(HorizPad, midY - iconSize / 2, iconSize, iconSize);
+            ctx.DrawImage(Brand, _brandRect);
             brandRight = HorizPad + iconSize + 5;
         }
 
@@ -3288,6 +3313,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         if (!_denseCtl.IsDense && p.Y < HeaderHeight)
         {
+            // Secret: repeatedly clicking the brand mark itself feeds the easter egg. It still falls through
+            // to the toggle below, so the behaviour is indistinguishable from any other header click.
+            if (_brandRect.Contains(p)) RegisterBrandClick();
+
             // Header click toggles expand/collapse (floating only); size the window to match by hand.
             _expanded = !_expanded;
             UpdateTickTimer();

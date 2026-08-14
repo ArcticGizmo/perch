@@ -42,6 +42,7 @@ public partial class App : Application
     private StatsWindow? _statsWindow;
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
+    private SpaceInvadersWindow? _invadersWindow;   // shhh
     private HistoryWindow? _historyWindow;
     private GitTreeWindow? _treeWindow;
     private PlacementEditorWindow? _placementEditor;
@@ -279,6 +280,8 @@ public partial class App : Application
             _updateService = new UpdateService(settings, _notifications);
             _updateService.AvailabilityChanged += OnUpdateAvailabilityChanged;
             _overlay.Canvas.UpdateRequested += () => _updateService!.PerformUpdate(CloseAuxWindows);
+            // Secret: ten quick clicks on the brand mark launch a little Space Invaders clone.
+            _overlay.Canvas.EasterEggTriggered += OpenInvaders;
             // Clicking the "update available" toast starts the update, same as the update button.
             _notifier.UpdateActivated += () => _updateService!.PerformUpdate(CloseAuxWindows);
 
@@ -416,6 +419,7 @@ public partial class App : Application
         _achievementsWindow?.Close();
         _achievementCard?.Close();
         _flightWindow?.Close();
+        _invadersWindow?.Close();
         _qrWindow?.Close();
         _changelogWindow?.Close();
         _switcher?.Close();
@@ -872,6 +876,10 @@ public partial class App : Application
 
     private void OpenFlightPath() =>
         _flightWindow = WindowHost.ShowOrFocus(_flightWindow, () => new FlightPathWindow(), () => _flightWindow = null);
+
+    // The reward for clicking the brand mark ten times: Perch Invaders. Reused like every other aux window.
+    private void OpenInvaders() =>
+        _invadersWindow = WindowHost.ShowOrFocus(_invadersWindow, () => new SpaceInvadersWindow(), () => _invadersWindow = null);
 
     // "Show QR code" — a centred card with the session's remote-control deep-link QR. Only one is shown
     // at a time; opening another (or clicking away) closes the previous.
