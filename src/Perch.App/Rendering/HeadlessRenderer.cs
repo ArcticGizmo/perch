@@ -766,8 +766,6 @@ internal static class HeadlessRenderer
                 windowLight, previewLight);
             w.Show();
             Dispatcher.UIThread.RunJobs();
-            w.FocusSourceForRender();   // show the source editor's focused-state background
-            Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
             var frame = w.CaptureRenderedFrame();
             if (frame != null)
