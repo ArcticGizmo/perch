@@ -7,6 +7,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
@@ -284,6 +285,12 @@ internal static class HeadlessRenderer
         RenderControl(BuildTreeSurface(light: false), Path.Combine(outDir, "git_tree_1x.png"), 96);
         RenderControl(BuildTreeSurface(light: false), Path.Combine(outDir, "git_tree_1.5x.png"), 144);
         RenderControl(BuildTreeSurface(light: true), Path.Combine(outDir, "git_tree_light_1x.png"), 96);
+
+        // Markdown viewer window: the file tree (session produced/referenced groups + the project folder
+        // tree) beside the rendered preview. Unlike the owner-drawn surfaces this uses templated controls
+        // (TreeView/ScrollViewer/SelectableTextBlock) that only realise inside a shown window, so it's
+        // captured via CaptureRenderedFrame rather than a detached one-shot bitmap.
+        RenderMarkdownWindow(outDir);
 
         // Dedicated Achievements window (the "trophy cabinet"): the roomy grid variant with per-badge
         // criteria lines, fed the same all-time sample so earned + locked tiles both show.
@@ -719,6 +726,37 @@ internal static class HeadlessRenderer
         var binary = new GitDiffFile("assets/icon.png", "assets/icon.png", true, []);
 
         return new GitDiff([modified, added, binary]);
+    }
+
+    // Shows a real MarkdownWindow seeded with sample data (session file groups + a project folder tree on
+    // the left, a rendered preview on the right) and captures its rendered frame.
+    private static void RenderMarkdownWindow(string outDir)
+    {
+        const string cwd = @"C:\src\perch";
+        var sets = new MarkdownFileSets(
+            [@"C:\src\perch\docs\markdown-viewer-plan.md"],
+            [@"C:\src\perch\README.md", @"C:\src\perch\CLAUDE.md"]);
+        var project = new MarkdownProjectFiles(
+            ["CHANGELOG.md", "README.md", "docs/distribution-plan.md", "docs/macos-port-plan.md",
+             "docs/markdown-viewer-plan.md", "docs/theming-plan.md"],
+            Truncated: false);
+        const string sampleMd =
+            "# Markdown viewer\n\nA **rich** view of `*.md`, with:\n\n- the files this session produced or referenced\n" +
+            "- a `.gitignore`-aware project tree\n- a live rendered preview\n\n> Rendered through the in-house MarkdownRender.\n\n" +
+            "## Editing\n\nAn editable split (source + preview) with save lands in Phase 4.";
+
+        var w = new MarkdownWindow(new AppSettings()) { Width = 1000, Height = 620 };
+        w.SeedForRender(cwd, sets, project, "markdown-viewer-plan.md", sampleMd);
+        w.Show();
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        var frame = w.CaptureRenderedFrame();
+        if (frame != null)
+        {
+            using var fs = File.Create(Path.Combine(outDir, "markdown_window_1x.png"));
+            frame.Save(fs);
+        }
+        w.Close();
     }
 
     // Composes the git Tree window's three panes into one static surface for eyeballing: the commit-graph
