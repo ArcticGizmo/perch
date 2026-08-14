@@ -745,18 +745,27 @@ internal static class HeadlessRenderer
             "- a `.gitignore`-aware project tree\n- a live rendered preview\n\n> Rendered through the in-house MarkdownRender.\n\n" +
             "## Editing\n\nAn editable split (source + preview) with save lands in Phase 4.";
 
-        var w = new MarkdownWindow(new AppSettings()) { Width = 1000, Height = 620 };
-        w.SeedForRender(cwd, sets, project, @"C:\src\perch\docs\markdown-viewer-plan.md", sampleMd);
-        w.Show();
-        Dispatcher.UIThread.RunJobs();
-        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
-        var frame = w.CaptureRenderedFrame();
-        if (frame != null)
+        // Default: dark window chrome with a light "paper" preview. Plus the inverse (light window, dark
+        // preview) to eyeball both per-window palettes and the independent preview override.
+        Capture("markdown_window_1x.png", windowLight: false, previewLight: true);
+        Capture("markdown_window_light_1x.png", windowLight: true, previewLight: false);
+
+        void Capture(string file, bool windowLight, bool previewLight)
         {
-            using var fs = File.Create(Path.Combine(outDir, "markdown_window_1x.png"));
-            frame.Save(fs);
+            var w = new MarkdownWindow(new AppSettings()) { Width = 1000, Height = 620 };
+            w.SeedForRender(cwd, sets, project, @"C:\src\perch\docs\markdown-viewer-plan.md", sampleMd,
+                windowLight, previewLight);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
         }
-        w.Close();
     }
 
     // Composes the git Tree window's three panes into one static surface for eyeballing: the commit-graph

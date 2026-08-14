@@ -20,35 +20,55 @@ using Path = System.IO.Path;   // disambiguate from Avalonia.Controls.Shapes.Pat
 namespace Perch.Avalonia.Windows;
 
 /// <summary>
-/// The Markdown viewer/editor. Opened from a session's right-click "Markdown files…" item, it lists the
-/// <c>.md</c> files that session produced (rose) or referenced (muted) plus a <c>.gitignore</c>-respecting
-/// tree of the project's Markdown, and edits the selected file in a split view — a source editor on the
-/// left, a live rendered preview on the right — with save.
+/// The Markdown viewer/editor. Opened from a session's right-click "Markdown files…" item (or a click on
+/// its overlay glyph), it lists the <c>.md</c> files that session produced (rose) or referenced (muted)
+/// plus a <c>.gitignore</c>-respecting tree of the project's Markdown, filterable by a search box, and
+/// edits the selected file in a split view — a source editor on the left, a live rendered preview on the
+/// right — with save.
+///
+/// It carries its own light/dark theme, independent of the app theme, and a <em>separate</em> theme for the
+/// preview pane (defaulting to light, so rendered Markdown reads like paper) — both toggled from the header.
 ///
 /// A single reused instance via <c>WindowHost.ShowOrFocus</c>; <see cref="Retarget"/> re-points it at a
 /// different session without reopening. File IO runs off the UI thread and marshals back guarded by
 /// <see cref="Visual.IsVisible"/> and a generation token, so a result arriving after the window closed or
-/// was re-pointed is dropped (the <c>StatsWindow</c>/<c>GitTreeWindow</c> idiom). Built in code, themed
-/// through <see cref="Palette"/>. Save guards an on-disk change (an mtime conflict — the session may still
-/// be editing the file) behind a confirm; an external edit while the buffer is clean reloads silently.
+/// was re-pointed is dropped (the <c>StatsWindow</c>/<c>GitTreeWindow</c> idiom). Save guards an on-disk
+/// change (an mtime conflict — the session may still be editing the file) behind a confirm; an external
+/// edit while the buffer is clean reloads silently.
 /// </summary>
 internal sealed class MarkdownWindow : Window
 {
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
-    // The rose that marks "produced" files, matching the overlay's Markdown glyph.
+    // The rose that marks "produced" files, matching the overlay's Markdown glyph. Fixed across themes.
     private static readonly IBrush ProducedDotBrush = new SolidColorBrush(Color.FromRgb(244, 114, 182));
 
     private readonly AppSettings _settings;
 
+    // Per-window themes. _theme is the window chrome (dark by default, matching the app); _previewTheme is
+    // the preview pane's own theme (light by default — Markdown reads better on paper). Both toggle freely.
+    private MdTheme _theme = MdTheme.Dark();
+    private MdTheme _previewTheme = MdTheme.Light();
+    private bool _windowLight;
+    private bool _previewLight = true;
+
     private readonly TextBlock _titleText;
     private readonly TextBlock _subText;
-    private readonly Border _filePaneHost;         // left: session groups + project tree
+    private readonly Border _header;
+    private readonly Button _windowThemeBtn;
+    private readonly Button _previewThemeBtn;
+
+    private readonly Border _filePaneHost;         // left: search + tree, or a placeholder
+    private readonly Control _paneContent;         // search box over the tree
+    private readonly TextBox _searchBox;
     private readonly TreeView _tree;
     private readonly TextBlock _filesPlaceholder;
-    private readonly Border _editorHost;           // right: split editor / placeholder
+    private readonly GridSplitter _bodySplitter;
 
-    // Editor (right pane), built once and swapped in on first file open.
+    private readonly Border _editorHost;           // right: split editor / placeholder
     private readonly Control _editorRoot;
+    private readonly Border _editorToolbar;
+    private readonly GridSplitter _innerSplitter;
+    private readonly Border _previewPane;          // wraps the preview scroll so its "paper" bg can retint
     private readonly TextBlock _editorPlaceholder;
     private readonly TextBlock _editorFileLabel;
     private readonly TextBlock _editorStatus;
@@ -63,6 +83,11 @@ internal sealed class MarkdownWindow : Window
     // Bumped on every Retarget/close so an in-flight off-thread load knows its results are stale and drops
     // them rather than painting into a window that has moved on.
     private int _gen;
+
+    // Cached pane data, so the search box can re-filter without re-scanning.
+    private string? _paneCwd;
+    private MarkdownFileSets? _paneSets;
+    private MarkdownProjectFiles? _paneProject;
 
     // Open-file / edit state.
     private string? _openFilePath;
@@ -83,38 +108,56 @@ internal sealed class MarkdownWindow : Window
         Title = "Markdown";
         Width = 1040;
         Height = 720;
-        MinWidth = 720;
+        MinWidth = 760;
         MinHeight = 460;
-        Background = Palette.SurfaceSunkenBrush;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        // ── Header: title + subtitle (the targeted directory) ──────────────────────────────────────
+        // ── Header: title + subtitle (left), theme toggles (right) ─────────────────────────────────
         _titleText = new TextBlock
         {
             Text = "Markdown", FontSize = 15, FontWeight = FontWeight.SemiBold,
-            Foreground = Palette.TitleBrush, VerticalAlignment = VerticalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
         };
         _subText = new TextBlock
         {
-            Text = "", FontSize = 11.5, Foreground = Palette.MutedBrush, FontFamily = Mono,
+            Text = "", FontSize = 11.5, FontFamily = Mono,
             VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0),
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
-        var header = new Border
+        _windowThemeBtn = SettingsUi.FlatButton("");
+        _windowThemeBtn.Click += (_, _) => { _windowLight = !_windowLight; ApplyWindowTheme(); };
+        _previewThemeBtn = SettingsUi.FlatButton("");
+        _previewThemeBtn.Click += (_, _) => { _previewLight = !_previewLight; ApplyPreviewTheme(); };
+
+        var titleStack = new StackPanel { Orientation = Orientation.Horizontal, Children = { _titleText, _subText } };
+        var toggles = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { _windowThemeBtn, _previewThemeBtn },
+        };
+        var headerPanel = new DockPanel();
+        DockPanel.SetDock(toggles, Dock.Right);
+        headerPanel.Children.Add(toggles);
+        headerPanel.Children.Add(titleStack);
+        _header = new Border
         {
             [DockPanel.DockProperty] = Dock.Top,
-            Background = Palette.FormBgBrush,
-            BorderBrush = Palette.SeparatorBrush,
             BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = new Thickness(16, 10),
-            Child = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Children = { _titleText, _subText },
-            },
+            Padding = new Thickness(16, 8),
+            Child = headerPanel,
         };
 
-        // ── Left: the file tree ────────────────────────────────────────────────────────────────────
+        // ── Left: search over the file tree ────────────────────────────────────────────────────────
+        _searchBox = new TextBox
+        {
+            [DockPanel.DockProperty] = Dock.Top,
+            PlaceholderText = "Search files…", FontSize = 12,
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8, 5), Margin = new Thickness(8, 8, 8, 6),
+        };
+        _searchBox.TextChanged += (_, _) => RebuildPane();
+
         _tree = new TreeView
         {
             Background = Brushes.Transparent,
@@ -129,15 +172,15 @@ internal sealed class MarkdownWindow : Window
         });
         _tree.SelectionChanged += OnTreeSelectionChanged;
 
+        _paneContent = new DockPanel { LastChildFill = true, Children = { _searchBox, _tree } };
+
         _filesPlaceholder = new TextBlock
         {
-            Text = "Loading Markdown files…", FontSize = 12, Foreground = Palette.MutedBrush,
+            Text = "Loading Markdown files…", FontSize = 12,
             Margin = new Thickness(14), TextWrapping = TextWrapping.Wrap,
         };
         _filePaneHost = new Border
         {
-            Background = Palette.FormBgBrush,
-            BorderBrush = Palette.SeparatorBrush,
             BorderThickness = new Thickness(0, 0, 1, 0),
             Child = _filesPlaceholder,
         };
@@ -145,19 +188,19 @@ internal sealed class MarkdownWindow : Window
         // ── Right: the split editor (built once, shown on first file open) ─────────────────────────
         _editorPlaceholder = new TextBlock
         {
-            Text = "Select a file to view it.", FontSize = 12.5, Foreground = Palette.MutedBrush,
+            Text = "Select a file to view it.", FontSize = 12.5,
             Margin = new Thickness(18), HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
         };
         _editorFileLabel = new TextBlock
         {
-            Text = "", FontSize = 12, Foreground = Palette.MutedBrush, FontFamily = Mono,
+            Text = "", FontSize = 12, FontFamily = Mono,
             VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
         };
         _editorStatus = new TextBlock
         {
-            Text = "", FontSize = 11.5, Foreground = Palette.MutedBrush,
-            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0),
+            Text = "", FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 0),
         };
         _saveBtn = SettingsUi.FlatButton("Save");
         _saveBtn.IsEnabled = false;
@@ -167,7 +210,6 @@ internal sealed class MarkdownWindow : Window
         {
             AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.Wrap,
             FontFamily = Mono, FontSize = 12.5,
-            Background = Palette.SurfaceSunkenBrush, Foreground = Palette.FgBrush,
             BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(0),
             Padding = new Thickness(12, 10), VerticalContentAlignment = VerticalAlignment.Top,
             [ScrollViewer.VerticalScrollBarVisibilityProperty] = ScrollBarVisibility.Auto,
@@ -176,31 +218,31 @@ internal sealed class MarkdownWindow : Window
 
         _previewBlock = new SelectableTextBlock
         {
-            TextWrapping = TextWrapping.Wrap, Foreground = Palette.FgBrush, FontSize = 13,
-            Margin = new Thickness(18, 14),
+            TextWrapping = TextWrapping.Wrap, FontSize = 13, Margin = new Thickness(18, 14),
         };
         _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
         _previewTimer.Tick += (_, _) => { _previewTimer.Stop(); RenderPreview(_sourceBox.Text ?? ""); };
 
+        _editorToolbar = new Border { [DockPanel.DockProperty] = Dock.Top, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(12, 6) };
+        _innerSplitter = new GridSplitter { Width = 4, ResizeDirection = GridResizeDirection.Columns, HorizontalAlignment = HorizontalAlignment.Center };
+        _previewPane = new Border();
         _editorRoot = BuildEditorRoot();
-        _editorHost = new Border { Background = Palette.SurfaceSunkenBrush, Child = _editorPlaceholder };
+        _editorHost = new Border { Child = _editorPlaceholder };
 
         // ── Body: file pane | splitter | editor ────────────────────────────────────────────────────
         var body = new Grid { ColumnDefinitions = new ColumnDefinitions("300,Auto,*") };
         Grid.SetColumn(_filePaneHost, 0);
-        var splitter = new GridSplitter
-        {
-            Width = 4, Background = Palette.SeparatorBrush,
-            ResizeDirection = GridResizeDirection.Columns,
-            HorizontalAlignment = HorizontalAlignment.Center,
-        };
-        Grid.SetColumn(splitter, 1);
+        _bodySplitter = new GridSplitter { Width = 4, ResizeDirection = GridResizeDirection.Columns, HorizontalAlignment = HorizontalAlignment.Center };
+        Grid.SetColumn(_bodySplitter, 1);
         Grid.SetColumn(_editorHost, 2);
         body.Children.Add(_filePaneHost);
-        body.Children.Add(splitter);
+        body.Children.Add(_bodySplitter);
         body.Children.Add(_editorHost);
 
-        Content = new DockPanel { LastChildFill = true, Children = { header, body } };
+        Content = new DockPanel { LastChildFill = true, Children = { _header, body } };
+
+        ApplyWindowTheme();
+        ApplyPreviewTheme();
     }
 
     // The editor's own layout: a thin toolbar (file name + status + Save) over a source | splitter | preview
@@ -213,37 +255,84 @@ internal sealed class MarkdownWindow : Window
         toolbarPanel.Children.Add(_saveBtn);
         toolbarPanel.Children.Add(_editorStatus);
         toolbarPanel.Children.Add(_editorFileLabel);   // fills the remaining width
-        var toolbar = new Border
-        {
-            [DockPanel.DockProperty] = Dock.Top,
-            Background = Palette.FormBgBrush,
-            BorderBrush = Palette.SeparatorBrush,
-            BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = new Thickness(12, 6),
-            Child = toolbarPanel,
-        };
+        _editorToolbar.Child = toolbarPanel;
 
-        var split = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,*") };
-        Grid.SetColumn(_sourceBox, 0);
-        var innerSplit = new GridSplitter
-        {
-            Width = 4, Background = Palette.SeparatorBrush,
-            ResizeDirection = GridResizeDirection.Columns,
-            HorizontalAlignment = HorizontalAlignment.Center,
-        };
-        Grid.SetColumn(innerSplit, 1);
         var previewScroll = new ScrollViewer
         {
             HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Content = _previewBlock,
         };
-        Grid.SetColumn(previewScroll, 2);
-        split.Children.Add(_sourceBox);
-        split.Children.Add(innerSplit);
-        split.Children.Add(previewScroll);
+        _previewPane.Child = previewScroll;
 
-        return new DockPanel { LastChildFill = true, Children = { toolbar, split } };
+        var split = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,*") };
+        Grid.SetColumn(_sourceBox, 0);
+        Grid.SetColumn(_innerSplitter, 1);
+        Grid.SetColumn(_previewPane, 2);
+        split.Children.Add(_sourceBox);
+        split.Children.Add(_innerSplitter);
+        split.Children.Add(_previewPane);
+
+        return new DockPanel { LastChildFill = true, Children = { _editorToolbar, split } };
+    }
+
+    // ── Theming ──────────────────────────────────────────────────────────────────────────────────
+
+    // Recolour every chrome control from the current window theme and rebuild the tree (its node visuals
+    // capture brushes at build time, so recolouring means re-running the pane).
+    private void ApplyWindowTheme()
+    {
+        _theme = _windowLight ? MdTheme.Light() : MdTheme.Dark();
+        var t = _theme;
+
+        Background = t.WindowBg;
+        _header.Background = t.PaneBg;
+        _header.BorderBrush = t.Separator;
+        _titleText.Foreground = t.Title;
+        _subText.Foreground = t.Muted;
+
+        _filePaneHost.Background = t.PaneBg;
+        _filePaneHost.BorderBrush = t.Separator;
+        _filesPlaceholder.Foreground = t.Muted;
+        _searchBox.Background = t.EditorBg;
+        _searchBox.Foreground = t.Fg;
+        _searchBox.BorderBrush = t.Border;
+
+        _bodySplitter.Background = t.Separator;
+        _innerSplitter.Background = t.Separator;
+
+        _editorHost.Background = t.WindowBg;
+        _editorToolbar.Background = t.PaneBg;
+        _editorToolbar.BorderBrush = t.Separator;
+        _editorFileLabel.Foreground = t.Muted;
+        _editorPlaceholder.Foreground = t.Muted;
+        _sourceBox.Background = t.EditorBg;
+        _sourceBox.Foreground = t.Fg;
+
+        StyleButton(_windowThemeBtn, t);
+        StyleButton(_previewThemeBtn, t);
+        StyleButton(_saveBtn, t);
+        _windowThemeBtn.Content = _windowLight ? "Window: Light" : "Window: Dark";
+        _previewThemeBtn.Content = _previewLight ? "Preview: Light" : "Preview: Dark";
+
+        UpdateEditorChrome();
+        RebuildPane();
+    }
+
+    // The preview pane has its own theme (default light). Retint its "paper" background and re-render.
+    private void ApplyPreviewTheme()
+    {
+        _previewTheme = _previewLight ? MdTheme.Light() : MdTheme.Dark();
+        _previewPane.Background = _previewTheme.Paper;
+        _previewThemeBtn.Content = _previewLight ? "Preview: Light" : "Preview: Dark";
+        RenderPreview(_sourceBox.Text ?? "");
+    }
+
+    private static void StyleButton(Button b, MdTheme t)
+    {
+        b.Background = t.ButtonBg;
+        b.Foreground = t.Fg;
+        b.FontSize = 12;
     }
 
     /// <summary>
@@ -280,6 +369,8 @@ internal sealed class MarkdownWindow : Window
         _currentFileNode = null;
         _dirty = false;
         _externalChange = false;
+        _paneSets = null;
+        _paneProject = null;
         _editorPlaceholder.Text = "Select a file to view it.";
         _editorHost.Child = _editorPlaceholder;
 
@@ -301,32 +392,57 @@ internal sealed class MarkdownWindow : Window
             {
                 if (!IsVisible || gen != _gen)
                     return;
-                BuildFilePane(cwd, t.Result.sets, t.Result.project);
+                _paneCwd = cwd;
+                _paneSets = t.Result.sets;
+                _paneProject = t.Result.project;
+                RebuildPane();
             });
         });
     }
 
-    private void BuildFilePane(string cwd, MarkdownFileSets sets, MarkdownProjectFiles project)
+    // (Re)build the file tree from the cached scan, applying the current search filter. Cheap — no rescan.
+    private void RebuildPane()
     {
+        if (_paneSets is not { } sets || _paneProject is not { } project || _paneCwd is not { } cwd)
+            return;
+
+        var query = (_searchBox.Text ?? "").Trim();
         var roots = new List<FileNode>();
 
-        if (sets.Produced.Count > 0)
-            roots.Add(SessionGroup($"Produced ({sets.Produced.Count})", cwd, sets.Produced, NodeKind.ProducedFile));
-        if (sets.Referenced.Count > 0)
-            roots.Add(SessionGroup($"Referenced ({sets.Referenced.Count})", cwd, sets.Referenced, NodeKind.ReferencedFile));
+        var produced = FilterSession(cwd, sets.Produced, query);
+        var referenced = FilterSession(cwd, sets.Referenced, query);
+        if (produced.Count > 0)
+            roots.Add(SessionGroup($"Produced ({produced.Count})", cwd, produced, NodeKind.ProducedFile));
+        if (referenced.Count > 0)
+            roots.Add(SessionGroup($"Referenced ({referenced.Count})", cwd, referenced, NodeKind.ReferencedFile));
 
-        roots.Add(BuildProjectTree(cwd, project));
+        var projectPaths = query.Length == 0
+            ? project.RelativePaths
+            : project.RelativePaths.Where(p => p.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (projectPaths.Count > 0)
+            roots.Add(BuildProjectTree(cwd, projectPaths, project.Truncated && query.Length == 0));
 
-        // Nothing anywhere (empty project, no session files) — say so rather than showing an empty tree.
-        if (sets.IsEmpty && project.RelativePaths.Count == 0)
+        if (roots.Count == 0)
         {
-            _filesPlaceholder.Text = "No Markdown files in this project.";
+            _filesPlaceholder.Text = query.Length > 0
+                ? $"No Markdown files match “{query}”."
+                : "No Markdown files in this project.";
             _filePaneHost.Child = _filesPlaceholder;
             return;
         }
 
         _tree.ItemsSource = roots;
-        _filePaneHost.Child = _tree;
+        _filePaneHost.Child = _paneContent;
+    }
+
+    // Session files (absolute paths) matching the query by relative label or full path.
+    private static List<string> FilterSession(string cwd, IReadOnlyList<string> paths, string query)
+    {
+        if (query.Length == 0)
+            return paths.ToList();
+        return paths.Where(p =>
+            RelativeLabel(cwd, p).Contains(query, StringComparison.OrdinalIgnoreCase)
+            || p.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
     }
 
     // A flat group of session files (produced/referenced). Labels are relative to cwd when the file lives
@@ -339,11 +455,12 @@ internal sealed class MarkdownWindow : Window
         return group;
     }
 
-    // The project's Markdown as a folder hierarchy built from the scan's relative paths.
-    private static FileNode BuildProjectTree(string cwd, MarkdownProjectFiles project)
+    // The project's Markdown as a folder hierarchy built from (already-filtered) relative paths. Folders
+    // with no surviving files are naturally absent, since only matching paths are inserted.
+    private static FileNode BuildProjectTree(string cwd, IReadOnlyList<string> rels, bool truncated)
     {
-        var root = new FileNode { Label = $"Project ({project.RelativePaths.Count})", Kind = NodeKind.Group };
-        foreach (var rel in project.RelativePaths)
+        var root = new FileNode { Label = $"Project ({rels.Count})", Kind = NodeKind.Group };
+        foreach (var rel in rels)
         {
             var parts = rel.Split('/');
             var cur = root;
@@ -366,7 +483,7 @@ internal sealed class MarkdownWindow : Window
                 }
             }
         }
-        if (project.Truncated)
+        if (truncated)
             root.Children.Add(new FileNode { Label = "…more (list truncated)", Kind = NodeKind.Info });
         return root;
     }
@@ -395,10 +512,10 @@ internal sealed class MarkdownWindow : Window
             Text = n.Label, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center,
             Foreground = n.Kind switch
             {
-                NodeKind.Group          => Palette.TitleBrush,
-                NodeKind.ReferencedFile => Palette.MutedBrush,
-                NodeKind.Info           => Palette.MutedBrush,
-                _                       => Palette.FgBrush,
+                NodeKind.Group          => _theme.Title,
+                NodeKind.ReferencedFile => _theme.Muted,
+                NodeKind.Info           => _theme.Muted,
+                _                       => _theme.Fg,
             },
             FontWeight = n.Kind == NodeKind.Group ? FontWeight.SemiBold : FontWeight.Normal,
             FontStyle = n.Kind == NodeKind.Info ? FontStyle.Italic : FontStyle.Normal,
@@ -414,8 +531,8 @@ internal sealed class MarkdownWindow : Window
                 Fill = n.Kind switch
                 {
                     NodeKind.ProducedFile   => ProducedDotBrush,
-                    NodeKind.ReferencedFile => Palette.MutedBrush,
-                    _                       => Palette.BorderBrush,
+                    NodeKind.ReferencedFile => _theme.Muted,
+                    _                       => _theme.Border,
                 },
             };
             var sp = new StackPanel { Orientation = Orientation.Horizontal, Children = { dot, text } };
@@ -518,9 +635,10 @@ internal sealed class MarkdownWindow : Window
 
     private void RenderPreview(string md)
     {
+        var p = _previewTheme;
+        _previewBlock.Foreground = p.Fg;
         var inlines = new InlineCollection();
-        MarkdownRender.Append(inlines, md,
-            Palette.FgBrush, Palette.MutedBrush, Palette.TealBrush, Palette.AccentBrush, Palette.TitleBrush);
+        MarkdownRender.Append(inlines, md, p.Fg, p.Muted, p.Code, p.Accent, p.Title);
         _previewBlock.Inlines = inlines;
     }
 
@@ -528,8 +646,8 @@ internal sealed class MarkdownWindow : Window
     {
         _saveBtn.IsEnabled = _dirty;
         (_editorStatus.Text, _editorStatus.Foreground) = _externalChange
-            ? ("changed on disk", Palette.WarnBrush)
-            : (_dirty ? "● unsaved changes" : "", Palette.MutedBrush);
+            ? ("changed on disk", _theme.Warn)
+            : (_dirty ? "● unsaved changes" : "", _theme.Muted);
     }
 
     private async void Save()
@@ -573,7 +691,7 @@ internal sealed class MarkdownWindow : Window
         else
         {
             _editorStatus.Text = "Save failed.";
-            _editorStatus.Foreground = Palette.ErrorBrush;
+            _editorStatus.Foreground = _theme.Error;
         }
     }
 
@@ -640,10 +758,17 @@ internal sealed class MarkdownWindow : Window
     /// window and captures a real rendered frame — which realises the tree/templates a detached one-shot
     /// bitmap can't. Exercises the real pane-building and editor code paths.</summary>
     internal void SeedForRender(string cwd, MarkdownFileSets sets, MarkdownProjectFiles project,
-        string samplePath, string sampleMarkdown)
+        string samplePath, string sampleMarkdown, bool windowLight = false, bool previewLight = true)
     {
+        _windowLight = windowLight;
+        _previewLight = previewLight;
+        ApplyWindowTheme();
+        ApplyPreviewTheme();
         _cwd = cwd;
-        BuildFilePane(cwd, sets, project);
+        _paneCwd = cwd;
+        _paneSets = sets;
+        _paneProject = project;
+        RebuildPane();
         OpenInEditor(samplePath, sampleMarkdown, null);
     }
 
@@ -695,6 +820,13 @@ internal sealed class MarkdownWindow : Window
         }
         if (e.Key == Key.Escape)
         {
+            // Don't steal Escape from the search box (clearing a filter shouldn't close the window).
+            if (_searchBox.IsFocused && !string.IsNullOrEmpty(_searchBox.Text))
+            {
+                _searchBox.Text = "";
+                e.Handled = true;
+                return;
+            }
             Close();
             e.Handled = true;
         }
@@ -709,5 +841,29 @@ internal sealed class MarkdownWindow : Window
         public required NodeKind Kind { get; init; }
         public string? FullPath { get; init; }   // absolute path for a file leaf; null for group/folder/info
         public List<FileNode> Children { get; } = new();
+    }
+
+    // A minimal per-window palette. Two instances (Dark/Light) drive the window chrome and, independently,
+    // the preview pane. Kept local so the toggles retint just this window rather than the app theme.
+    private readonly record struct MdTheme(
+        IBrush WindowBg, IBrush PaneBg, IBrush EditorBg, IBrush Paper, IBrush Separator, IBrush Border,
+        IBrush Fg, IBrush Muted, IBrush Title, IBrush Accent, IBrush Code, IBrush Warn, IBrush Error,
+        IBrush ButtonBg)
+    {
+        private static SolidColorBrush B(byte r, byte g, byte b) => new(Color.FromRgb(r, g, b));
+
+        public static MdTheme Dark() => new(
+            WindowBg: B(0x1A, 0x1B, 0x24), PaneBg: B(0x22, 0x24, 0x2E), EditorBg: B(0x1E, 0x1F, 0x29),
+            Paper: B(0x1E, 0x1F, 0x29), Separator: B(0x33, 0x35, 0x40), Border: B(0x44, 0x47, 0x54),
+            Fg: B(0xE6, 0xE8, 0xF0), Muted: B(0x9A, 0x9E, 0xAD), Title: B(0xF2, 0xF4, 0xFA),
+            Accent: B(0x6E, 0x9B, 0xF0), Code: B(0x5E, 0xD6, 0xC5), Warn: B(0xF5, 0x9E, 0x0B),
+            Error: B(0xEF, 0x44, 0x44), ButtonBg: B(0x2A, 0x2C, 0x38));
+
+        public static MdTheme Light() => new(
+            WindowBg: B(0xEC, 0xED, 0xF1), PaneBg: B(0xF4, 0xF5, 0xF8), EditorBg: B(0xFB, 0xFB, 0xFD),
+            Paper: B(0xFF, 0xFF, 0xFF), Separator: B(0xD6, 0xD8, 0xDF), Border: B(0xC2, 0xC6, 0xD0),
+            Fg: B(0x22, 0x24, 0x2B), Muted: B(0x66, 0x6A, 0x76), Title: B(0x14, 0x16, 0x1C),
+            Accent: B(0x2B, 0x63, 0xC7), Code: B(0x0E, 0x7C, 0x66), Warn: B(0xB4, 0x6A, 0x00),
+            Error: B(0xC0, 0x2B, 0x2B), ButtonBg: B(0xE2, 0xE4, 0xEA));
     }
 }
