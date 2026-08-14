@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.35] - 2026-08-14
+
+- New Markdown viewer/editor, from a session's "Markdown files…" right-click item
+- Lists the .md a session produced or referenced, plus a searchable project tree (it respects .gitignore)
+- Split source editor beside a live, VS Code-style rendered preview
+- Save, with a heads-up if the file changed on disk while you weren't looking
+- Per-window light/dark, and a separate preview theme (paper-white by default)
+- Right-click a file to copy its path or open it in VS Code
+- Optional glyph marking sessions that produced a .md (off by default)
+
+---
+
 ## [v0.3.34] - 2026-08-14
 
 - Fixed black fringing around the "Achievement Unlocked!" text (ClearType, meet transparency)

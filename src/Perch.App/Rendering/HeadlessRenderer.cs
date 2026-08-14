@@ -7,6 +7,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
@@ -43,6 +44,7 @@ internal static class HeadlessRenderer
         var canvas = new OverlayCanvas();
         canvas.SetShowPullRequests(true);
         canvas.SetShowJiraTickets(true);
+        canvas.SetShowMarkdown(true);   // off by default; enabled here so the sample row shows the glyph
         canvas.Update(SampleData.Sessions());
         canvas.UpdateUsage(SampleData.Usage());
         canvas.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));
@@ -284,6 +286,12 @@ internal static class HeadlessRenderer
         RenderControl(BuildTreeSurface(light: false), Path.Combine(outDir, "git_tree_1x.png"), 96);
         RenderControl(BuildTreeSurface(light: false), Path.Combine(outDir, "git_tree_1.5x.png"), 144);
         RenderControl(BuildTreeSurface(light: true), Path.Combine(outDir, "git_tree_light_1x.png"), 96);
+
+        // Markdown viewer window: the file tree (session produced/referenced groups + the project folder
+        // tree) beside the rendered preview. Unlike the owner-drawn surfaces this uses templated controls
+        // (TreeView/ScrollViewer/SelectableTextBlock) that only realise inside a shown window, so it's
+        // captured via CaptureRenderedFrame rather than a detached one-shot bitmap.
+        RenderMarkdownWindow(outDir);
 
         // Dedicated Achievements window (the "trophy cabinet"): the roomy grid variant with per-badge
         // criteria lines, fed the same all-time sample so earned + locked tiles both show.
@@ -719,6 +727,55 @@ internal static class HeadlessRenderer
         var binary = new GitDiffFile("assets/icon.png", "assets/icon.png", true, []);
 
         return new GitDiff([modified, added, binary]);
+    }
+
+    // Shows a real MarkdownWindow seeded with sample data (session file groups + a project folder tree on
+    // the left, a rendered preview on the right) and captures its rendered frame.
+    private static void RenderMarkdownWindow(string outDir)
+    {
+        const string cwd = @"C:\src\perch";
+        var sets = new MarkdownFileSets(
+            [@"C:\src\perch\docs\markdown-viewer-plan.md"],
+            [@"C:\src\perch\README.md", @"C:\src\perch\CLAUDE.md"]);
+        var project = new MarkdownProjectFiles(
+            ["CHANGELOG.md", "README.md", "docs/distribution-plan.md", "docs/macos-port-plan.md",
+             "docs/markdown-viewer-plan.md", "docs/theming-plan.md"],
+            Truncated: false);
+        const string sampleMd =
+            "# Markdown viewer\n\nA **rich**, VS Code-style view of `*.md` with real block styling — " +
+            "headings, code panels, tables and quotes.\n\n" +
+            "## Features\n\n" +
+            "- the files this session *produced* or *referenced*\n" +
+            "- a `.gitignore`-aware project tree\n" +
+            "- a live rendered preview with its own light/dark theme\n\n" +
+            "> Rendered through the in-house MarkdownView, so it no longer reads as flat text.\n\n" +
+            "### A code block\n\n" +
+            "```csharp\npublic static Control Build(string md, MarkdownStyle style)\n{\n    return new MarkdownView(style).Document(md);\n}\n```\n\n" +
+            "### A table\n\n" +
+            "| Block   | Rendered as            |\n|---------|------------------------|\n" +
+            "| Heading | sized + underlined rule |\n| Code    | rounded panel          |\n| Quote   | left bar + muted text  |\n";
+
+        // Default: dark window chrome with a light "paper" preview. Plus the inverse (light window, dark
+        // preview) to eyeball both per-window palettes and the independent preview override.
+        Capture("markdown_window_1x.png", windowLight: false, previewLight: true);
+        Capture("markdown_window_light_1x.png", windowLight: true, previewLight: false);
+
+        void Capture(string file, bool windowLight, bool previewLight)
+        {
+            var w = new MarkdownWindow(new AppSettings()) { Width = 1000, Height = 620 };
+            w.SeedForRender(cwd, sets, project, @"C:\src\perch\docs\markdown-viewer-plan.md", sampleMd,
+                windowLight, previewLight);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
     }
 
     // Composes the git Tree window's three panes into one static surface for eyeballing: the commit-graph

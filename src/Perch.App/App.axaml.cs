@@ -45,6 +45,7 @@ public partial class App : Application
     private SpaceInvadersWindow? _invadersWindow;   // shhh
     private HistoryWindow? _historyWindow;
     private GitTreeWindow? _treeWindow;
+    private MarkdownWindow? _markdownWindow;
     private PlacementEditorWindow? _placementEditor;
     // Open sticky notes, keyed so a second request for the same note focuses the existing one rather than
     // stacking a duplicate: "__scratch__" for the global pad, the sessionId for a session's row note. They
@@ -233,6 +234,7 @@ public partial class App : Application
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
             _overlay.Canvas.NoteEditRequested += OnEditNote;
+            _overlay.Canvas.MarkdownRequested += OnOpenMarkdown;
             _overlay.Canvas.ViewTreeRequested += OnViewTree;
             // "Open in GitKraken" — only offered when GitKraken's CLI is on PATH (detected once). The launch
             // + window-focus runs off-thread through the platform activator (see GitKrakenLauncher).
@@ -413,6 +415,7 @@ public partial class App : Application
         _settings?.Close();
         _historyWindow?.Close();
         _treeWindow?.Close();
+        _markdownWindow?.CloseWithoutPrompt();
         _placementEditor?.Close();
         _statsWindow?.Close();
         _daemonListWindow?.Close();
@@ -861,6 +864,17 @@ public partial class App : Application
             () => new GitTreeWindow(_appSettings ?? AppSettings.Load()),
             () => _treeWindow = null,
             w => w.Retarget(session.Cwd, session.DisplayName, pr, isActive));
+    }
+
+    private void OnOpenMarkdown(ClaudeSession session)
+    {
+        // "Active" = the session is live and may still be writing to these files, so the editor warns
+        // before overwriting one that changed on disk. Idle / finished sessions don't.
+        bool isActive = session.Status is SessionStatus.Running or SessionStatus.AwaitingInput;
+        _markdownWindow = WindowHost.ShowOrFocus(_markdownWindow,
+            () => new MarkdownWindow(_appSettings ?? AppSettings.Load()),
+            () => _markdownWindow = null,
+            w => w.Retarget(session.Cwd, session.SessionId, session.DisplayName, isActive));
     }
 
     private void OpenAchievements() =>

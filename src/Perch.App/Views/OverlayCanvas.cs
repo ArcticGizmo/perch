@@ -58,6 +58,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double NoteIconWidth    = 15; // the pinned-note glyph shown on a row that has a note
     private const double PrIconWidth      = 16; // the GitHub pull-request (merge) glyph on a row with a PR
     private const double JiraIconWidth    = 15; // the Jira ticket (tag) glyph on a row whose branch has a key
+    private const double MdIconWidth      = 18; // the Markdown glyph on a row whose session produced a .md file
 
     // Font sizes (px ~= the WinForms point sizes).
     private const double NameSize       = 11.5;
@@ -162,6 +163,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // A note that's only inherited from the project (no per-session note) draws in a dimmed amber so it
     // recedes — a project note is ambient context, not something demanding attention like a session note.
     private static readonly IBrush NoteDimBrush   = new SolidColorBrush(Color.FromArgb(105, 244, 193, 79));
+    // The Markdown glyph: a rose document mark, marking a session that produced a .md file. The hue is
+    // deliberately clear of every other glyph — amber (artifact/note/warn), teal (mail), green (running),
+    // red (error), blue (Jira/PR) and purple (sub-agent) — so it never reads as one of them on a shared
+    // row. It's clickable (opens the Markdown window) but ambient, so it rests dimmed like a project note
+    // and brightens to full rose on hover to signal it's interactive. A fixed literal, following the
+    // artifact/note precedent rather than a themed Palette role.
+    private static readonly IBrush MarkdownBrush    = new SolidColorBrush(Color.FromRgb(244, 114, 182));
+    private static readonly IBrush MarkdownDimBrush = new SolidColorBrush(Color.FromArgb(150, 244, 114, 182));
 
     private static readonly IBrush ThermoGlassFill = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
     private static readonly IPen   ThermoOutline  = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
@@ -612,6 +621,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showNoteLine = true;
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
+    private bool _showMarkdown;   // off by default; the "Markdown files…" menu item is always available
     private bool _showWaitingTimer = true;
     private float _ctxYellow = 0.60f, _ctxOrange = 0.75f, _ctxRed = 0.90f;
 
@@ -932,6 +942,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
+    /// <summary>Show/hide the Markdown glyph on rows whose session produced a .md file (the session still
+    /// tracks its Markdown files regardless — this only gates the glyph).</summary>
+    public void SetShowMarkdown(bool show)
+    {
+        if (_showMarkdown == show) return;
+        _showMarkdown = show;
+        InvalidateVisual();
+    }
+
     /// <summary>Show/hide the permission-mode badge on session rows.</summary>
     public void SetShowModeBadges(bool show)
     {
@@ -1082,8 +1101,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // thermo/warn/task/metrics rects feed the tooltips wired in 4.12.
     private int _hoveredRow = -1;
     private int _hoveredArtifactRow = -1;
+    private int _hoveredMarkdownRow = -1;
     private int _hoveredPrRow = -1;
     private readonly Dictionary<int, Rect> _artifactRects = new();
+    private readonly Dictionary<int, Rect> _mdRects = new();
     private readonly Dictionary<int, Rect> _thermoRects = new();
     private readonly Dictionary<int, Rect> _warnRects = new();
     private readonly Dictionary<int, Rect> _taskRects = new();
@@ -1213,6 +1234,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// editor (prefilled from <see cref="ClaudeSession.Note"/>) and writes the result via the monitor.
     /// Internal — <see cref="ClaudeSession"/> is a Core-internal type.</summary>
     internal event Action<ClaudeSession>? NoteEditRequested;
+
+    /// <summary>Raised when the user picks "Markdown files…" for a session; the app opens the Markdown
+    /// viewer/editor for the session's working directory (seeded with the files it produced/referenced).
+    /// Internal — <see cref="ClaudeSession"/> is a Core-internal type.</summary>
+    internal event Action<ClaudeSession>? MarkdownRequested;
 
     /// <summary>Raised when the user picks "Clear note" for a session; carries the session id for the app
     /// to delete its <c>.note</c> sidecar.</summary>
@@ -1517,6 +1543,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 // Glyph hit-rects are rebuilt from scratch each paint; DrawSessionRow repopulates them
                 // for any row that actually shows the glyph.
                 _artifactRects.Clear();
+                _mdRects.Clear();
                 _thermoRects.Clear();
                 _warnRects.Clear();
                 _taskRects.Clear();
@@ -2112,6 +2139,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // The glyph hit-tests read the rects captured at paint time, so they track exactly where each glyph
     // was drawn. Artifact routes clicks + the hand cursor; the rest feed the 4.12 tooltips.
     private int HitTestArtifactIcon(Point p) => HitRect(_artifactRects, p);
+    private int HitTestMarkdownIcon(Point p) => HitRect(_mdRects, p);
     private int HitTestThermoIcon(Point p)   => HitRect(_thermoRects, p);
     private int HitTestWarnIcon(Point p)     => HitRect(_warnRects, p);
     private int HitTestTaskCount(Point p)    => HitRect(_taskRects, p);
@@ -2244,6 +2272,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double prW  = showPr ? PrIconWidth : 0;
         bool showJira = _showJiraTickets && session.JiraTicket is not null;
         double jiraW  = showJira ? JiraIconWidth : 0;
+        bool showMd = _showMarkdown && session.HasProducedMarkdown;
+        double mdW  = showMd ? MdIconWidth : 0;
 
         // Right-side cluster (right→left from the status text): thermometer, mode badge, task count,
         // metrics bars (4.9), burn rate.
@@ -2277,7 +2307,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double gitW = showGit ? gitAddW + GitGap + gitDelW + 8 : 0;
 
         double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - botW - mailW
-                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW - jiraW;
+                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW - jiraW - mdW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
 
@@ -2315,8 +2345,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             DrawJiraIcon(ctx, jiraGlyphX, nameMidY);
             _jiraRects[rowIndex] = new Rect(jiraGlyphX - 2, nameMidY - 9, JiraIconWidth + 2, 18);
         }
+        if (showMd)
+        {
+            double mdGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW + jiraW;
+            DrawMdIcon(ctx, mdGlyphX, nameMidY, hovered: _hoveredMarkdownRow == rowIndex);
+            _mdRects[rowIndex] = new Rect(mdGlyphX - 2, nameMidY - 9, MdIconWidth + 2, 18);
+        }
 
-        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW + jiraW;
+        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW + jiraW + mdW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
         // Git churn immediately right of the name: "+added" green, "-deleted" red.
@@ -2647,6 +2683,45 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(x + offset, top + offset, side, side), radius));
     }
 
+    // The Markdown glyph: the canonical Markdown mark — a rounded-rect badge holding an "M" and a
+    // down-arrow — marking a session that produced a .md file. Clickable (opens the Markdown window); rests
+    // dimmed so it stays ambient and brightens on hover.
+    private static void DrawMdIcon(DrawingContext ctx, double x, double midY, bool hovered)
+    {
+        var pen = new Pen(hovered ? MarkdownBrush : MarkdownDimBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        const double w = 16, h = 11, radius = 2.5;
+        double left = x, top = midY - h / 2;
+        ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(left, top, w, h), radius));
+
+        double iTop = top + 3, iBot = top + h - 3;   // inner glyph band the M/arrow sit within
+
+        // "M": a down-up-down polyline on the left half.
+        var m = new StreamGeometry();
+        using (var gc = m.Open())
+        {
+            gc.BeginFigure(new Point(left + 3, iBot), isFilled: false);
+            gc.LineTo(new Point(left + 3, iTop));
+            gc.LineTo(new Point(left + 5.5, iTop + 2.6));
+            gc.LineTo(new Point(left + 8, iTop));
+            gc.LineTo(new Point(left + 8, iBot));
+            gc.EndFigure(false);
+        }
+        ctx.DrawGeometry(null, pen, m);
+
+        // Down-arrow on the right half: a stem topped nothing, with a chevron head at the foot.
+        double ax = left + 11.5;
+        ctx.DrawLine(pen, new Point(ax, iTop), new Point(ax, iBot));
+        var arrow = new StreamGeometry();
+        using (var gc = arrow.Open())
+        {
+            gc.BeginFigure(new Point(ax - 2, iBot - 2.6), isFilled: false);
+            gc.LineTo(new Point(ax, iBot));
+            gc.LineTo(new Point(ax + 2, iBot - 2.6));
+            gc.EndFigure(false);
+        }
+        ctx.DrawGeometry(null, pen, arrow);
+    }
+
     // GitHub pull-request glyph: the git-merge octicon — a left "base" branch (two nodes joined by a
     // vertical line) with a "source" node on the right curving down to merge into it. Coloured by the PR's
     // state (open/draft/merged/closed); hover brightens. The nodes are filled dots, the lines stroked.
@@ -2918,6 +2993,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int art = HitTestArtifactIcon(p);
         if (art != _hoveredArtifactRow) { _hoveredArtifactRow = art; InvalidateVisual(); }
 
+        int mdIcon = HitTestMarkdownIcon(p);
+        if (mdIcon != _hoveredMarkdownRow) { _hoveredMarkdownRow = mdIcon; InvalidateVisual(); }
+
         int prIcon = HitRect(_prRects, p);
         if (prIcon != _hoveredPrRow) { _hoveredPrRow = prIcon; InvalidateVisual(); }
 
@@ -2948,7 +3026,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + daemon worker lines +
         // artifacts + the update badge + outage footer + the scratch-pad note button + a row's note glyph +
         // the media buttons + the mic strip's app name); rows show only the highlight.
-        Cursor = (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
+        Cursor = (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
                   || overFooter || overNote || overRowNote || media >= 0 || overMicLabel)
             ? HandCursor : Cursor.Default;
 
@@ -3024,8 +3102,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredArtifactRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel;
-        _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredPrRow = -1;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel;
+        _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
         _hoveredNoteButton = false;
@@ -3213,6 +3291,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // (a click never silently opens a link; you always see and choose from the list).
             var arts = artSession.Artifacts;
             if (arts.Count > 0) ShowArtifactPicker(arts);
+            return;
+        }
+
+        // The Markdown glyph opens the Markdown viewer/editor for that session — the same window the
+        // "Markdown files…" menu item opens.
+        int mdRow = HitTestMarkdownIcon(p);
+        if (mdRow >= 0 && _rows[mdRow].Session is { } mdSession)
+        {
+            MarkdownRequested?.Invoke(mdSession);
             return;
         }
 
@@ -3429,6 +3516,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 string label = s.ExternalNotify ? "Disable external notifications" : "Enable external notifications";
                 actions.Add(MenuItem(label, () => ExternalNotifyToggleRequested?.Invoke(s.SessionId)));
             }
+            // Markdown viewer/editor: always available on a real row (its window doubles as the project's
+            // .md browser), independent of the glyph toggle — not just rows that produced Markdown.
+            if (!subRow)
+                actions.Add(MenuItem("Markdown files…", () => MarkdownRequested?.Invoke(s)));
 
             // 3. Terminate — the one destructive item, isolated in its own group. Sub-agent rows have no
             //    process of their own, so nothing to kill.

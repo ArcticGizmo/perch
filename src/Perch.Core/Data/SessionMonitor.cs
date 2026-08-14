@@ -138,6 +138,7 @@ internal sealed class SessionMonitor : IDisposable
 
     private readonly SubAgentReader _subAgents = new();
     private readonly TranscriptReader _transcripts = new();
+    private readonly MarkdownFilesReader _markdown = new();
     private readonly GitStatsService _gitStats = new();
     private readonly PrStatusService _pr = new();
 
@@ -757,6 +758,11 @@ internal sealed class SessionMonitor : IDisposable
             // the transcript and cached by mtime. Surfaced as a progress count + hover list in the overlay.
             var tasks = _transcripts.GetTasks(sessionId, cwd);
 
+            // Whether the session has produced (written/edited) any Markdown file — the signal for the
+            // overlay's Markdown glyph. Cheap and cached by mtime like the readers above; the full
+            // produced/referenced file lists are read lazily when the viewer window opens.
+            var producedMarkdown = _markdown.ProducedAnyMarkdown(sessionId, cwd);
+
             // Unstaged git line churn (+added / -deleted) for this session's working tree. Fully gated
             // inside the service: while the experimental toggle is off this returns null without ever
             // launching git. Non-blocking — a stale/missing value schedules a background refresh that
@@ -805,7 +811,8 @@ internal sealed class SessionMonitor : IDisposable
                 context.Source,
                 apiFailure,
                 pullRequest,
-                jiraTicket
+                jiraTicket,
+                producedMarkdown
             );
 
             if (status == SessionStatus.NeedsAttention

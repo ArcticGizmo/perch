@@ -147,7 +147,8 @@ public record ClaudeSession(
     ContextWindowSource ContextSource = ContextWindowSource.Assumed,   // how ContextWindow was decided
     ApiFailure? ApiFailure = null,                                     // set iff Status == ApiError
     PullRequestInfo? PullRequest = null,                              // the PR for Cwd's branch, if any
-    JiraTicketInfo? JiraTicket = null                                // the Jira ticket for Cwd's branch, if any
+    JiraTicketInfo? JiraTicket = null,                               // the Jira ticket for Cwd's branch, if any
+    bool HasProducedMarkdown = false                                 // session wrote/edited at least one .md file
 )
 {
     /// <summary>
@@ -210,6 +211,14 @@ public record ClaudeSession(
 
     /// <summary>True when this session's branch resolves to a Jira ticket to surface.</summary>
     public bool HasJiraTicket => JiraTicket != null;
+
+    /// <summary>
+    /// True when this session wrote or edited at least one Markdown file over its lifetime — the signal
+    /// behind the overlay's Markdown glyph. Merely reading a <c>.md</c> (CLAUDE.md, README) does not set
+    /// it. The full produced/referenced file lists are read lazily when the viewer window opens rather
+    /// than carried here. See <see cref="MarkdownFilesReader"/>.
+    /// </summary>
+    public bool HasProducedMarkdown { get; init; } = HasProducedMarkdown;
 
     /// <summary>How many tasks in the checklist are completed.</summary>
     public int CompletedTaskCount => Tasks.Count(t => t.State == TaskState.Completed);
