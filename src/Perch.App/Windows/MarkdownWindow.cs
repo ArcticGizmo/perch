@@ -8,6 +8,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -41,6 +42,29 @@ internal sealed class MarkdownWindow : Window
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
     // The rose that marks "produced" files, matching the overlay's Markdown glyph. Fixed across themes.
     private static readonly IBrush ProducedDotBrush = new SolidColorBrush(Color.FromRgb(244, 114, 182));
+
+    // Whether a `code` launcher is on PATH — gates the "Open in VS Code" context item. Resolved once.
+    private static readonly Lazy<bool> CodeAvailable = new(() =>
+    {
+        try
+        {
+            var pathEnv = Environment.GetEnvironmentVariable("PATH");
+            if (string.IsNullOrEmpty(pathEnv))
+                return false;
+            var exts = OperatingSystem.IsWindows() ? new[] { ".cmd", ".exe", ".bat" } : new[] { "" };
+            foreach (var dir in pathEnv.Split(Path.PathSeparator))
+            {
+                if (string.IsNullOrWhiteSpace(dir))
+                    continue;
+                foreach (var ext in exts)
+                {
+                    try { if (File.Exists(Path.Combine(dir, "code" + ext))) return true; } catch { }
+                }
+            }
+            return false;
+        }
+        catch { return false; }
+    });
 
     private readonly AppSettings _settings;
 
@@ -259,7 +283,9 @@ internal sealed class MarkdownWindow : Window
 
         var previewScroll = new ScrollViewer
         {
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            // Horizontal scrolling off so the (wrap-enabled) preview is constrained to the pane width and
+            // wraps rather than growing sideways.
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Content = _previewBlock,
         };
@@ -297,6 +323,8 @@ internal sealed class MarkdownWindow : Window
         _searchBox.Background = t.EditorBg;
         _searchBox.Foreground = t.Fg;
         _searchBox.BorderBrush = t.Border;
+        _searchBox.SelectionBrush = t.Selection;
+        _searchBox.SelectionForegroundBrush = t.Fg;
 
         _bodySplitter.Background = t.Separator;
         _innerSplitter.Background = t.Separator;
@@ -308,6 +336,10 @@ internal sealed class MarkdownWindow : Window
         _editorPlaceholder.Foreground = t.Muted;
         _sourceBox.Background = t.EditorBg;
         _sourceBox.Foreground = t.Fg;
+        // The default selection highlight reads as a harsh near-black block; use a soft translucent tint
+        // and keep the selected text its normal colour.
+        _sourceBox.SelectionBrush = t.Selection;
+        _sourceBox.SelectionForegroundBrush = t.Fg;
 
         StyleButton(_windowThemeBtn, t);
         StyleButton(_previewThemeBtn, t);
@@ -537,10 +569,42 @@ internal sealed class MarkdownWindow : Window
             };
             var sp = new StackPanel { Orientation = Orientation.Horizontal, Children = { dot, text } };
             ToolTip.SetTip(sp, n.FullPath);
+            sp.ContextFlyout = BuildFileMenu(n.FullPath!);
             return sp;
         }
 
         return text;
+    }
+
+    // The right-click menu for a file leaf: copy its relative/absolute path, and (when a `code` launcher
+    // is on PATH) open it in VS Code.
+    private MenuFlyout BuildFileMenu(string absolutePath)
+    {
+        var items = new List<Control>
+        {
+            MenuItem("Copy relative path", () => Clipboard?.SetTextAsync(RelativeLabel(_cwd ?? "", absolutePath))),
+            MenuItem("Copy absolute path", () => Clipboard?.SetTextAsync(absolutePath)),
+        };
+        if (CodeAvailable.Value)
+            items.Add(MenuItem("Open in VS Code", () => OpenInVsCode(absolutePath)));
+        return new MenuFlyout { ItemsSource = items };
+    }
+
+    private static MenuItem MenuItem(string header, Action onClick)
+    {
+        var item = new MenuItem { Header = header };
+        item.Click += (_, _) => onClick();
+        return item;
+    }
+
+    private static void OpenInVsCode(string path)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo("code", $"\"{path}\"") { UseShellExecute = true });
+        }
+        catch { /* best-effort — VS Code may have been removed from PATH since we probed */ }
     }
 
     // Selecting a different file while the buffer is dirty asks before discarding; if kept, the previous
@@ -848,22 +912,26 @@ internal sealed class MarkdownWindow : Window
     private readonly record struct MdTheme(
         IBrush WindowBg, IBrush PaneBg, IBrush EditorBg, IBrush Paper, IBrush Separator, IBrush Border,
         IBrush Fg, IBrush Muted, IBrush Title, IBrush Accent, IBrush Code, IBrush Warn, IBrush Error,
-        IBrush ButtonBg)
+        IBrush ButtonBg, IBrush Selection)
     {
         private static SolidColorBrush B(byte r, byte g, byte b) => new(Color.FromRgb(r, g, b));
+        private static SolidColorBrush A(byte a, byte r, byte g, byte b) => new(Color.FromArgb(a, r, g, b));
 
         public static MdTheme Dark() => new(
             WindowBg: B(0x1A, 0x1B, 0x24), PaneBg: B(0x22, 0x24, 0x2E), EditorBg: B(0x1E, 0x1F, 0x29),
             Paper: B(0x1E, 0x1F, 0x29), Separator: B(0x33, 0x35, 0x40), Border: B(0x44, 0x47, 0x54),
             Fg: B(0xE6, 0xE8, 0xF0), Muted: B(0x9A, 0x9E, 0xAD), Title: B(0xF2, 0xF4, 0xFA),
             Accent: B(0x6E, 0x9B, 0xF0), Code: B(0x5E, 0xD6, 0xC5), Warn: B(0xF5, 0x9E, 0x0B),
-            Error: B(0xEF, 0x44, 0x44), ButtonBg: B(0x2A, 0x2C, 0x38));
+            Error: B(0xEF, 0x44, 0x44), ButtonBg: B(0x2A, 0x2C, 0x38),
+            // A soft translucent blue selection instead of the stark default, so selected text stays legible.
+            Selection: A(90, 0x6E, 0x9B, 0xF0));
 
         public static MdTheme Light() => new(
             WindowBg: B(0xEC, 0xED, 0xF1), PaneBg: B(0xF4, 0xF5, 0xF8), EditorBg: B(0xFB, 0xFB, 0xFD),
             Paper: B(0xFF, 0xFF, 0xFF), Separator: B(0xD6, 0xD8, 0xDF), Border: B(0xC2, 0xC6, 0xD0),
             Fg: B(0x22, 0x24, 0x2B), Muted: B(0x66, 0x6A, 0x76), Title: B(0x14, 0x16, 0x1C),
             Accent: B(0x2B, 0x63, 0xC7), Code: B(0x0E, 0x7C, 0x66), Warn: B(0xB4, 0x6A, 0x00),
-            Error: B(0xC0, 0x2B, 0x2B), ButtonBg: B(0xE2, 0xE4, 0xEA));
+            Error: B(0xC0, 0x2B, 0x2B), ButtonBg: B(0xE2, 0xE4, 0xEA),
+            Selection: A(60, 0x2B, 0x63, 0xC7));
     }
 }
