@@ -163,11 +163,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // A note that's only inherited from the project (no per-session note) draws in a dimmed amber so it
     // recedes — a project note is ambient context, not something demanding attention like a session note.
     private static readonly IBrush NoteDimBrush   = new SolidColorBrush(Color.FromArgb(105, 244, 193, 79));
-    // The Markdown glyph: a teal document mark, deliberately distinct from the amber artifact/note glyphs
-    // and the status hues (running-green, error-red), marking a session that produced a .md file.
-    // Informational only (no hover/click), like a category indicator rather than a status colour — so it
+    // The Markdown glyph: a rose document mark, marking a session that produced a .md file. The hue is
+    // deliberately clear of every other glyph — amber (artifact/note/warn), teal (mail), green (running),
+    // red (error), blue (Jira/PR) and purple (sub-agent) — so it never reads as one of them on a shared
+    // row. Informational only (no hover/click), a category indicator rather than a status colour, so it
     // follows the artifact/note precedent of a fixed literal rather than a themed Palette role.
-    private static readonly IBrush MarkdownBrush  = new SolidColorBrush(Color.FromRgb(80, 200, 190));
+    private static readonly IBrush MarkdownBrush  = new SolidColorBrush(Color.FromRgb(244, 114, 182));
 
     private static readonly IBrush ThermoGlassFill = new SolidColorBrush(Color.FromArgb(30, 255, 255, 255));
     private static readonly IPen   ThermoOutline  = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
@@ -1229,6 +1230,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// editor (prefilled from <see cref="ClaudeSession.Note"/>) and writes the result via the monitor.
     /// Internal — <see cref="ClaudeSession"/> is a Core-internal type.</summary>
     internal event Action<ClaudeSession>? NoteEditRequested;
+
+    /// <summary>Raised when the user picks "Markdown files…" for a session; the app opens the Markdown
+    /// viewer/editor for the session's working directory (seeded with the files it produced/referenced).
+    /// Internal — <see cref="ClaudeSession"/> is a Core-internal type.</summary>
+    internal event Action<ClaudeSession>? MarkdownRequested;
 
     /// <summary>Raised when the user picks "Clear note" for a session; carries the session id for the app
     /// to delete its <c>.note</c> sidecar.</summary>
@@ -3488,6 +3494,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 string label = s.ExternalNotify ? "Disable external notifications" : "Enable external notifications";
                 actions.Add(MenuItem(label, () => ExternalNotifyToggleRequested?.Invoke(s.SessionId)));
             }
+            // Markdown viewer/editor: same global toggle that governs the glyph. Available on any real row
+            // (its window doubles as the project's .md browser), not just rows that produced Markdown.
+            if (!subRow && _showMarkdown)
+                actions.Add(MenuItem("Markdown files…", () => MarkdownRequested?.Invoke(s)));
 
             // 3. Terminate — the one destructive item, isolated in its own group. Sub-agent rows have no
             //    process of their own, so nothing to kill.

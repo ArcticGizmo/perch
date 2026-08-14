@@ -452,7 +452,7 @@ internal sealed class SettingsCatalogView : StackPanel
             PreviewTarget.ContextPressure => ("68%",         Palette.Orange,  Color.FromRgb(48, 40, 30)),
             PreviewTarget.WaitingTimer    => ("waiting 4m",  Palette.Yellow,  Color.FromRgb(45, 42, 28)),
             PreviewTarget.Artifacts       => ("◆ artifact", Color.FromRgb(196, 166, 255), Color.FromRgb(46, 38, 60)),
-            PreviewTarget.Markdown        => ("M↓ docs",   Color.FromRgb(80, 200, 190), Color.FromRgb(24, 42, 40)),
+            PreviewTarget.Markdown        => ("M↓ docs",   Color.FromRgb(244, 114, 182), Color.FromRgb(46, 30, 40)),
             PreviewTarget.BurnRate        => ("12.3k / m",   Palette.Fg, Color.FromRgb(38, 38, 52)),
             PreviewTarget.GitStats        => ("+142  −18", Palette.Green, Color.FromRgb(24, 40, 30)),
             PreviewTarget.PullRequest     => ("PR #1135",    Palette.Accent,  Color.FromRgb(38, 49, 74)),
