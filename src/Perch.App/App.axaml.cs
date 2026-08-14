@@ -42,7 +42,9 @@ public partial class App : Application
     private StatsWindow? _statsWindow;
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
+    private ArcadeMenuWindow? _arcadeWindow;        // shhh
     private SpaceInvadersWindow? _invadersWindow;   // shhh
+    private FroggerWindow? _froggerWindow;          // shhh
     private HistoryWindow? _historyWindow;
     private GitTreeWindow? _treeWindow;
     private MarkdownWindow? _markdownWindow;
@@ -282,8 +284,8 @@ public partial class App : Application
             _updateService = new UpdateService(settings, _notifications);
             _updateService.AvailabilityChanged += OnUpdateAvailabilityChanged;
             _overlay.Canvas.UpdateRequested += () => _updateService!.PerformUpdate(CloseAuxWindows);
-            // Secret: ten quick clicks on the brand mark launch a little Space Invaders clone.
-            _overlay.Canvas.EasterEggTriggered += OpenInvaders;
+            // Secret: ten quick clicks on the brand mark open the little arcade chooser (Invaders / Crossing).
+            _overlay.Canvas.EasterEggTriggered += OpenArcade;
             // Clicking the "update available" toast starts the update, same as the update button.
             _notifier.UpdateActivated += () => _updateService!.PerformUpdate(CloseAuxWindows);
 
@@ -422,7 +424,9 @@ public partial class App : Application
         _achievementsWindow?.Close();
         _achievementCard?.Close();
         _flightWindow?.Close();
+        _arcadeWindow?.Close();
         _invadersWindow?.Close();
+        _froggerWindow?.Close();
         _qrWindow?.Close();
         _changelogWindow?.Close();
         _switcher?.Close();
@@ -891,9 +895,17 @@ public partial class App : Application
     private void OpenFlightPath() =>
         _flightWindow = WindowHost.ShowOrFocus(_flightWindow, () => new FlightPathWindow(), () => _flightWindow = null);
 
-    // The reward for clicking the brand mark ten times: Perch Invaders. Reused like every other aux window.
+    // The reward for clicking the brand mark ten times: the arcade chooser. It hands off to one of the two
+    // toys below and closes as it does. All three are reused like every other aux window.
+    private void OpenArcade() =>
+        _arcadeWindow = WindowHost.ShowOrFocus(_arcadeWindow,
+            () => new ArcadeMenuWindow(OpenInvaders, OpenFrogger), () => _arcadeWindow = null);
+
     private void OpenInvaders() =>
         _invadersWindow = WindowHost.ShowOrFocus(_invadersWindow, () => new SpaceInvadersWindow(), () => _invadersWindow = null);
+
+    private void OpenFrogger() =>
+        _froggerWindow = WindowHost.ShowOrFocus(_froggerWindow, () => new FroggerWindow(), () => _froggerWindow = null);
 
     // "Show QR code" — a centred card with the session's remote-control deep-link QR. Only one is shown
     // at a time; opening another (or clicking away) closes the previous.

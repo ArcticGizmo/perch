@@ -327,6 +327,15 @@ internal static class HeadlessRenderer
         invadersPlay.SnapshotPlaying();
         RenderControl(invadersPlay, Path.Combine(outDir, "invaders_play_1x.png"), 96);
 
+        // The arcade chooser that now fronts both toys, plus the second toy: Perch Crossing (a bird-themed
+        // Frogger) — its title frame (full board) and a posed in-play frame (bird riding a river log, two
+        // perches already filled). Timers don't tick headless, so both game frames are static poses.
+        RenderControl(new Windows.ArcadeMenu(), Path.Combine(outDir, "arcade_menu_1x.png"), 96);
+        RenderControl(new Windows.FroggerField(), Path.Combine(outDir, "crossing_title_1x.png"), 96);
+        var crossingPlay = new Windows.FroggerField();
+        crossingPlay.SnapshotPlaying();
+        RenderControl(crossingPlay, Path.Combine(outDir, "crossing_play_1x.png"), 96);
+
         // Perch Wrapped poster: a shareable Spotify-Wrapped-style card built from the sample report.
         // Rendered with the bundled bird icon so the header/footer icon paths are exercised too.
         IImage? brandIcon = null;

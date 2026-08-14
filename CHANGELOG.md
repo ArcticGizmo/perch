@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.36] - 2026-08-14
+
+- Clicking the perch icon a few times does even more now (no, we won't say why)
+
+---
+
 ## [v0.3.35] - 2026-08-14
 
 - New Markdown viewer/editor, from a session's "Markdown files…" right-click item
