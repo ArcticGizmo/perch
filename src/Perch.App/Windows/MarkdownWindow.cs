@@ -340,6 +340,10 @@ internal sealed class MarkdownWindow : Window
         // and keep the selected text its normal colour.
         _sourceBox.SelectionBrush = t.Selection;
         _sourceBox.SelectionForegroundBrush = t.Fg;
+        // Fluent swaps a focused/hovered text field to its own (near-black) background resources, ignoring
+        // our Background. Override those resources so focus is a subtle lift, not a dark slab.
+        ApplyFieldBackgrounds(_sourceBox, t);
+        ApplyFieldBackgrounds(_searchBox, t);
 
         StyleButton(_windowThemeBtn, t);
         StyleButton(_previewThemeBtn, t);
@@ -365,6 +369,14 @@ internal sealed class MarkdownWindow : Window
         b.Background = t.ButtonBg;
         b.Foreground = t.Fg;
         b.FontSize = 12;
+    }
+
+    // Override Fluent's per-state TextBox background resources so a focused/hovered field lifts subtly
+    // (EditorFocus) instead of dropping to the theme's near-black default. Resting stays our Background.
+    private static void ApplyFieldBackgrounds(TextBox box, MdTheme t)
+    {
+        box.Resources["TextControlBackgroundFocused"] = t.EditorFocus;
+        box.Resources["TextControlBackgroundPointerOver"] = t.EditorBg;
     }
 
     /// <summary>
@@ -847,6 +859,9 @@ internal sealed class MarkdownWindow : Window
         OpenInEditor(samplePath, sampleMarkdown, null);
     }
 
+    /// <summary>Render seam: focus the source editor so a capture shows its focused-state background.</summary>
+    internal void FocusSourceForRender() => _sourceBox.Focus();
+
     /// <summary>Closes without the unsaved-changes prompt — for programmatic teardown (app exit, the update
     /// flow via <c>CloseAuxWindows</c>) where popping a modal confirm would be inappropriate.</summary>
     public void CloseWithoutPrompt()
@@ -923,7 +938,7 @@ internal sealed class MarkdownWindow : Window
     private readonly record struct MdTheme(
         IBrush WindowBg, IBrush PaneBg, IBrush EditorBg, IBrush Paper, IBrush Separator, IBrush Border,
         IBrush Fg, IBrush Muted, IBrush Title, IBrush Accent, IBrush Code, IBrush CodeBg, IBrush Warn,
-        IBrush Error, IBrush ButtonBg, IBrush Selection)
+        IBrush Error, IBrush ButtonBg, IBrush Selection, IBrush EditorFocus)
     {
         private static SolidColorBrush B(byte r, byte g, byte b) => new(Color.FromRgb(r, g, b));
         private static SolidColorBrush A(byte a, byte r, byte g, byte b) => new(Color.FromArgb(a, r, g, b));
@@ -935,7 +950,9 @@ internal sealed class MarkdownWindow : Window
             Accent: B(0x6E, 0x9B, 0xF0), Code: B(0x5E, 0xD6, 0xC5), CodeBg: B(0x2A, 0x2D, 0x39),
             Warn: B(0xF5, 0x9E, 0x0B), Error: B(0xEF, 0x44, 0x44), ButtonBg: B(0x2A, 0x2C, 0x38),
             // A soft translucent blue selection instead of the stark default, so selected text stays legible.
-            Selection: A(90, 0x6E, 0x9B, 0xF0));
+            Selection: A(90, 0x6E, 0x9B, 0xF0),
+            // Fluent darkens a focused text field to near-black; override to a subtle lift (the Separator grey).
+            EditorFocus: B(0x33, 0x35, 0x40));
 
         public static MdTheme Light() => new(
             WindowBg: B(0xEC, 0xED, 0xF1), PaneBg: B(0xF4, 0xF5, 0xF8), EditorBg: B(0xFB, 0xFB, 0xFD),
@@ -943,6 +960,6 @@ internal sealed class MarkdownWindow : Window
             Fg: B(0x22, 0x24, 0x2B), Muted: B(0x66, 0x6A, 0x76), Title: B(0x14, 0x16, 0x1C),
             Accent: B(0x2B, 0x63, 0xC7), Code: B(0x0E, 0x7C, 0x66), CodeBg: B(0xF0, 0xF1, 0xF4),
             Warn: B(0xB4, 0x6A, 0x00), Error: B(0xC0, 0x2B, 0x2B), ButtonBg: B(0xE2, 0xE4, 0xEA),
-            Selection: A(60, 0x2B, 0x63, 0xC7));
+            Selection: A(60, 0x2B, 0x63, 0xC7), EditorFocus: B(0xFF, 0xFF, 0xFF));
     }
 }
