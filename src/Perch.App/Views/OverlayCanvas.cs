@@ -621,7 +621,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showNoteLine = true;
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
-    private bool _showMarkdown = true;
+    private bool _showMarkdown;   // off by default; the "Markdown files…" menu item is always available
     private bool _showWaitingTimer = true;
     private float _ctxYellow = 0.60f, _ctxOrange = 0.75f, _ctxRed = 0.90f;
 
@@ -3516,9 +3516,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 string label = s.ExternalNotify ? "Disable external notifications" : "Enable external notifications";
                 actions.Add(MenuItem(label, () => ExternalNotifyToggleRequested?.Invoke(s.SessionId)));
             }
-            // Markdown viewer/editor: same global toggle that governs the glyph. Available on any real row
-            // (its window doubles as the project's .md browser), not just rows that produced Markdown.
-            if (!subRow && _showMarkdown)
+            // Markdown viewer/editor: always available on a real row (its window doubles as the project's
+            // .md browser), independent of the glyph toggle — not just rows that produced Markdown.
+            if (!subRow)
                 actions.Add(MenuItem("Markdown files…", () => MarkdownRequested?.Invoke(s)));
 
             // 3. Terminate — the one destructive item, isolated in its own group. Sub-agent rows have no

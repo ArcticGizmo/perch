@@ -144,9 +144,9 @@ internal sealed class AppSettings
     public bool ShowArtifacts { get; set; } = true;
 
     // Whether to draw the Markdown glyph next to a session that has produced (written/edited) one or more
-    // .md files, and offer the "Markdown files..." right-click item. Off hides the glyph and lets the
-    // session name reclaim its width; the files are still tracked. Defaults to true; a missing key keeps it on.
-    public bool ShowMarkdown { get; set; } = true;
+    // .md files. Purely the glyph: the "Markdown files..." right-click item is always available regardless.
+    // Defaults to false (off); a missing key keeps it off.
+    public bool ShowMarkdown { get; set; }
 
     // Whether to show the now-playing media controller strip on the overlay — what's currently playing
     // (from the Windows media session: Spotify, a browser media tab, etc.) plus previous / play-pause /

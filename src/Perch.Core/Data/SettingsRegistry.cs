@@ -79,9 +79,9 @@ internal static class SettingsRegistry
             PreviewTarget.Artifacts, nameof(AppSettings.ShowArtifacts),
             s => s.ShowArtifacts, (s, v) => s.ShowArtifacts = v),
 
-        Toggle("markdown", "Markdown files",
-            "Glyph for a session that produced a .md file, plus a \"Markdown files...\" right-click item that opens a viewer/editor for the project's Markdown.",
-            SettingSurface.SessionRow, ["markdown", "md", "docs", "readme", "notes", "editor", "viewer"],
+        Toggle("markdown", "Markdown glyph",
+            "Glyph on a session that produced a .md file. The \"Markdown files...\" right-click item (a viewer/editor for the project's Markdown) is always available regardless.",
+            SettingSurface.SessionRow, ["markdown", "md", "docs", "readme", "notes", "editor", "viewer", "glyph"],
             PreviewTarget.Markdown, nameof(AppSettings.ShowMarkdown),
             s => s.ShowMarkdown, (s, v) => s.ShowMarkdown = v),
 

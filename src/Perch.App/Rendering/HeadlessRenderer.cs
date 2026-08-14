@@ -44,6 +44,7 @@ internal static class HeadlessRenderer
         var canvas = new OverlayCanvas();
         canvas.SetShowPullRequests(true);
         canvas.SetShowJiraTickets(true);
+        canvas.SetShowMarkdown(true);   // off by default; enabled here so the sample row shows the glyph
         canvas.Update(SampleData.Sessions());
         canvas.UpdateUsage(SampleData.Usage());
         canvas.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));
