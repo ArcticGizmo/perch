@@ -1,0 +1,14 @@
+{"type":"user","timestamp":"2025-03-10T12:00:00Z","cwd":"C:\\fixtures\\proj","gitBranch":"main","message":{"role":"user","content":"Write the plan and read the docs"}}
+{"type":"assistant","timestamp":"2025-03-10T12:01:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Write","input":{"file_path":"C:\\fixtures\\proj\\docs\\plan.md","content":"# Plan"}}]}}
+{"type":"user","timestamp":"2025-03-10T12:01:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"ok"}]}}
+{"type":"assistant","timestamp":"2025-03-10T12:02:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu2","name":"Read","input":{"file_path":"C:\\fixtures\\proj\\README.md"}}]}}
+{"type":"user","timestamp":"2025-03-10T12:02:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu2","content":"# Readme"}]}}
+{"type":"assistant","timestamp":"2025-03-10T12:03:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu3","name":"Read","input":{"file_path":"C:\\fixtures\\proj\\Foo.cs"}}]}}
+{"type":"user","timestamp":"2025-03-10T12:03:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu3","content":"namespace Foo {}"}]}}
+{"type":"assistant","timestamp":"2025-03-10T12:04:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu4","name":"Edit","input":{"file_path":"C:\\fixtures\\proj\\notes.md","old_string":"a","new_string":"b"}}]}}
+{"type":"user","timestamp":"2025-03-10T12:04:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu4","is_error":true,"content":"File not found"}]}}
+{"type":"assistant","timestamp":"2025-03-10T12:05:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu5","name":"Edit","input":{"file_path":"C:\\fixtures\\proj\\docs\\plan.md","old_string":"# Plan","new_string":"# Plan\n\nBody"}}]}}
+{"type":"user","timestamp":"2025-03-10T12:05:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu5","content":"ok"}]}}
+{"type":"assistant","timestamp":"2025-03-10T12:06:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu6","name":"Read","input":{"file_path":"C:\\fixtures\\proj\\docs\\plan.md"}}]}}
+{"type":"user","timestamp":"2025-03-10T12:06:05Z","cwd":"C:\\fixtures\\proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu6","content":"# Plan\n\nBody"}]}}
+{"type":"assistant","timestamp":"2025-03-10T12:07:00Z","cwd":"C:\\fixtures\\proj","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}
