@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.39] - 2026-08-17
+
+- Task-list checkboxes render as rounded, ticked boxes instead of flat squares
+
+---
+
 ## [v0.3.38] - 2026-08-17
 
 - Syntax highlighting in the Markdown preview's code blocks, keyed off the fence language (bash, python, and a couple dozen friends)

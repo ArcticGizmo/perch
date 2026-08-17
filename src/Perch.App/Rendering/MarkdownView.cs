@@ -155,11 +155,15 @@ internal sealed class MarkdownView
                     content.Children.Add(c);
                 }
 
+            // A task-list item leads with a drawn checkbox (in `content`), so drop the redundant bullet and
+            // let the checkbox stand as the marker — the way GitHub/VS Code render checklists.
+            bool taskItem = IsTaskItem(item);
             var marker = new TextBlock
             {
-                Text = list.IsOrdered ? $"{number}." : "•",
+                Text = taskItem ? "" : list.IsOrdered ? $"{number}." : "•",
                 Foreground = _s.Muted, FontSize = BodySize,
-                Margin = new Thickness(0, 0, 8, 0), MinWidth = list.IsOrdered ? 18 : 10,
+                Margin = new Thickness(0, 0, taskItem ? 0 : 8, 0),
+                MinWidth = taskItem ? 0 : list.IsOrdered ? 18 : 10,
                 TextAlignment = list.IsOrdered ? TextAlignment.Right : TextAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Top,
             };
@@ -174,6 +178,10 @@ internal sealed class MarkdownView
         }
         return panel;
     }
+
+    // A list item is a task item when its first paragraph opens with a GitHub task-list marker ([ ] / [x]).
+    private static bool IsTaskItem(ListItemBlock item) =>
+        item.FirstOrDefault() is ParagraphBlock { Inline: { } inl } && inl.FirstChild is TaskList;
 
     private Control Quote(QuoteBlock q)
     {
@@ -352,7 +360,10 @@ internal sealed class MarkdownView
                     sink.Add(Styled(auto.Url, style with { Brush = _s.Link, Link = true }));
                     break;
                 case TaskList task:
-                    sink.Add(new Run(task.Checked ? "☑ " : "☐ ") { Foreground = _s.Muted, FontSize = style.Size });
+                    sink.Add(new InlineUIContainer(Checkbox(task.Checked, style.Size))
+                    {
+                        BaselineAlignment = BaselineAlignment.Center,
+                    });
                     break;
                 case LineBreakInline br:
                     sink.Add(new Run(br.IsHard ? "\n" : " ") { Foreground = style.Brush });
@@ -362,6 +373,45 @@ internal sealed class MarkdownView
                     break;
             }
         }
+    }
+
+    // A drawn task-list checkbox — a rounded, bordered box with a soft drop shadow (and a check mark when
+    // ticked), so it reads as a real control rather than the flat ☐/☑ glyphs. Sized to the surrounding text.
+    private Control Checkbox(bool isChecked, double fontSize)
+    {
+        double sz = System.Math.Round(fontSize);   // roughly the text's cap height
+        var box = new Border
+        {
+            Width = sz, Height = sz,
+            CornerRadius = new CornerRadius(4),
+            BorderThickness = new Thickness(1.4),
+            BorderBrush = isChecked ? _s.Link : _s.TableBorder,
+            Background = isChecked ? _s.Link : _s.CodeBg,
+            Margin = new Thickness(1, 0, 6, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            BoxShadow = new BoxShadows(new BoxShadow
+            {
+                OffsetX = 0, OffsetY = 1, Blur = 2, Spread = 0, Color = Color.FromArgb(64, 0, 0, 0),
+            }),
+        };
+        if (isChecked)
+        {
+            // A tick stroked white to read on the fill. Stretch=Uniform scales the geometry to fit and
+            // centres it within the box (a raw Path would centre only its geometry's bounds, sitting off-
+            // centre); a uniform margin keeps it clear of the rounded edges.
+            box.Child = new global::Avalonia.Controls.Shapes.Path
+            {
+                Data = Geometry.Parse("M 0 3.5 L 2.8 6.5 L 8 0"),
+                Stretch = Stretch.Uniform,
+                Stroke = Brushes.White, StrokeThickness = 1.5,
+                StrokeLineCap = PenLineCap.Round, StrokeJoin = PenLineJoin.Round,
+                // Slightly more headroom than footroom, so the tick settles a touch lower and reads centred
+                // (a checkmark's visual weight sits above its geometric middle).
+                Margin = new Thickness(sz * 0.22, sz * 0.28, sz * 0.22, sz * 0.16),
+                HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch,
+            };
+        }
+        return box;
     }
 
     private static Run Styled(string text, Run2 style)

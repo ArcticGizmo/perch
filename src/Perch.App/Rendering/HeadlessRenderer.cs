@@ -762,6 +762,8 @@ internal static class HeadlessRenderer
             "- a `.gitignore`-aware project tree\n" +
             "- a live rendered preview with its own light/dark theme\n\n" +
             "> Rendered through the in-house MarkdownView, so it no longer reads as flat text.\n\n" +
+            "### A checklist\n\n" +
+            "- [x] walk the AST into real controls\n- [x] syntax-highlight code blocks\n- [ ] ship it\n\n" +
             "### Code blocks\n\n" +
             "```csharp\npublic static Control Build(string md, MarkdownStyle style)\n{\n    // walk the AST\n    return new MarkdownView(style).Document(md);\n}\n```\n\n" +
             "```bash\n# build and run the tests\ndotnet test \"$REPO/tests\" && echo \"passed\"\nfor f in *.md; do\n  wc -l \"$f\"   # count lines\ndone\n```\n\n" +
