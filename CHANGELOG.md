@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.37] - 2026-08-17
+
+- Markdown viewer now leads with the files a session touched, not the whole project
+- "Search all project files…" opens a VS Code-style fuzzy quick-open (by name or path)
+
+---
+
 ## [v0.3.36] - 2026-08-14
 
 - Clicking the perch icon a few times does even more now (no, we won't say why)

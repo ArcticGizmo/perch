@@ -24,10 +24,13 @@ namespace Perch.Avalonia.Windows;
 
 /// <summary>
 /// The Markdown viewer/editor. Opened from a session's right-click "Markdown files…" item (or a click on
-/// its overlay glyph), it lists the <c>.md</c> files that session produced (rose) or referenced (muted)
-/// plus a <c>.gitignore</c>-respecting tree of the project's Markdown, filterable by a search box, and
-/// edits the selected file in a split view — a source editor on the left, a live rendered preview on the
-/// right — with save.
+/// its overlay glyph), it lists the <c>.md</c> files that session produced (rose) or referenced (muted) —
+/// the recently-touched files that are the useful default, filtered by a search box. A "Search all project
+/// files…" button opens a separate VS Code-style quick-open palette
+/// (<see cref="MarkdownProjectSearchWindow"/>) over the <em>whole</em> project's Markdown (a bigger, lazier,
+/// <c>.gitignore</c>-aware scan) so files on disk stay findable without cluttering the default view. It edits
+/// the selected file in a split view — a source editor on the left, a live rendered preview on the right —
+/// with save.
 ///
 /// It carries its own light/dark theme, independent of the app theme, and a <em>separate</em> theme for the
 /// preview pane (defaulting to light, so rendered Markdown reads like paper) — both toggled from the header.
@@ -83,9 +86,11 @@ internal sealed class MarkdownWindow : Window
     private readonly Button _windowThemeBtn;
     private readonly Button _previewThemeBtn;
 
-    private readonly Border _filePaneHost;         // left: search + tree, or a placeholder
-    private readonly Control _paneContent;         // search box over the tree
+    private readonly Border _filePaneHost;         // left: the search/button/tree stack
+    private readonly Control _paneContent;         // search box + project toggle over the tree
     private readonly TextBox _searchBox;
+    private readonly Button _projectBtn;           // toggles the project-wide scan on/off
+    private readonly Border _treeHost;             // holds either the tree or the empty/loading placeholder
     private readonly TreeView _tree;
     private readonly TextBlock _filesPlaceholder;
     private readonly GridSplitter _bodySplitter;
@@ -114,6 +119,10 @@ internal sealed class MarkdownWindow : Window
     private string? _paneCwd;
     private MarkdownFileSets? _paneSets;
     private MarkdownProjectFiles? _paneProject;
+
+    // The pane shows the session's own Markdown (recently touched, the useful case). The whole project is a
+    // bigger, .gitignore-aware scan reached through a separate quick-open palette (the "Search all project
+    // files…" button → MarkdownProjectSearchWindow); its result is cached here, per target, once scanned.
 
     // Open-file / edit state.
     private string? _openFilePath;
@@ -178,11 +187,20 @@ internal sealed class MarkdownWindow : Window
         _searchBox = new TextBox
         {
             [DockPanel.DockProperty] = Dock.Top,
-            PlaceholderText = "Search files…", FontSize = 12,
+            PlaceholderText = "Search session files…", FontSize = 12,
             BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5),
             Padding = new Thickness(8, 5), Margin = new Thickness(8, 8, 8, 6),
         };
         _searchBox.TextChanged += (_, _) => RebuildPane();
+
+        // The pane lists the session's own files; the whole project is a click away in a quick-open palette
+        // (VS Code-style fuzzy search) so files on disk stay findable without cluttering the default view.
+        _projectBtn = SettingsUi.FlatButton("Search all project files…");
+        _projectBtn[DockPanel.DockProperty] = Dock.Top;
+        _projectBtn.HorizontalAlignment = HorizontalAlignment.Stretch;
+        _projectBtn.HorizontalContentAlignment = HorizontalAlignment.Left;
+        _projectBtn.Margin = new Thickness(8, 0, 8, 6);
+        _projectBtn.Click += (_, _) => OpenProjectSearch();
 
         _tree = new TreeView
         {
@@ -201,17 +219,20 @@ internal sealed class MarkdownWindow : Window
         // TreeViewItem, not just its text — is the target.
         _tree.AddHandler(ContextRequestedEvent, OnTreeContextRequested, RoutingStrategies.Bubble);
 
-        _paneContent = new DockPanel { LastChildFill = true, Children = { _searchBox, _tree } };
-
         _filesPlaceholder = new TextBlock
         {
             Text = "Loading Markdown files…", FontSize = 12,
             Margin = new Thickness(14), TextWrapping = TextWrapping.Wrap,
         };
+        // The tree region swaps between the tree and the placeholder; the search box and project toggle above
+        // it stay put, so the toggle is reachable even when the session touched no files.
+        _treeHost = new Border { Child = _filesPlaceholder };
+        _paneContent = new DockPanel { LastChildFill = true, Children = { _searchBox, _projectBtn, _treeHost } };
+
         _filePaneHost = new Border
         {
             BorderThickness = new Thickness(0, 0, 1, 0),
-            Child = _filesPlaceholder,
+            Child = _paneContent,
         };
 
         // ── Right: the split editor (built once, shown on first file open) ─────────────────────────
@@ -351,6 +372,8 @@ internal sealed class MarkdownWindow : Window
         _windowThemeBtn.Content = _windowLight ? "Window: Light" : "Window: Dark";
         _previewThemeBtn.Content = _previewLight ? "Preview: Light" : "Preview: Dark";
 
+        _treeHost.Background = t.PaneBg;
+        StyleButton(_projectBtn, t);
         UpdateEditorChrome();
         RebuildPane();
     }
@@ -414,40 +437,37 @@ internal sealed class MarkdownWindow : Window
         _dirty = false;
         _externalChange = false;
         _paneSets = null;
-        _paneProject = null;
+        _paneProject = null;   // re-scanned lazily the next time the project-search palette is opened
         _editorPlaceholder.Text = "Select a file to view it.";
         _editorHost.Child = _editorPlaceholder;
 
         int gen = _gen;
         _tree.ItemsSource = null;
         _filesPlaceholder.Text = "Loading Markdown files…";
-        _filePaneHost.Child = _filesPlaceholder;
+        _treeHost.Child = _filesPlaceholder;
 
-        Task.Run(() =>
-        {
-            var sets = new MarkdownFilesReader().GetFileSets(sid, cwd);
-            var project = MarkdownProjectScan.Scan(cwd);
-            return (sets, project);
-        }).ContinueWith(t =>
-        {
-            if (!t.IsCompletedSuccessfully)
-                return;
-            Dispatcher.UIThread.Post(() =>
+        // Only the session's own file sets are scanned up front — the whole-project walk waits for the toggle.
+        Task.Run(() => new MarkdownFilesReader().GetFileSets(sid, cwd))
+            .ContinueWith(t =>
             {
-                if (!IsVisible || gen != _gen)
+                if (!t.IsCompletedSuccessfully)
                     return;
-                _paneCwd = cwd;
-                _paneSets = t.Result.sets;
-                _paneProject = t.Result.project;
-                RebuildPane();
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!IsVisible || gen != _gen)
+                        return;
+                    _paneCwd = cwd;
+                    _paneSets = t.Result;
+                    RebuildPane();
+                });
             });
-        });
     }
 
-    // (Re)build the file tree from the cached scan, applying the current search filter. Cheap — no rescan.
+    // (Re)build the file tree from the cached session scan, applying the current search filter. Cheap — no
+    // rescan. Only the session's own files live here; the whole project is reached via the quick-open palette.
     private void RebuildPane()
     {
-        if (_paneSets is not { } sets || _paneProject is not { } project || _paneCwd is not { } cwd)
+        if (_paneSets is not { } sets || _paneCwd is not { } cwd)
             return;
 
         var query = (_searchBox.Text ?? "").Trim();
@@ -460,23 +480,81 @@ internal sealed class MarkdownWindow : Window
         if (referenced.Count > 0)
             roots.Add(SessionGroup($"Referenced ({referenced.Count})", cwd, referenced, NodeKind.ReferencedFile));
 
-        var projectPaths = query.Length == 0
-            ? project.RelativePaths
-            : project.RelativePaths.Where(p => p.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
-        if (projectPaths.Count > 0)
-            roots.Add(BuildProjectTree(cwd, projectPaths, project.Truncated && query.Length == 0));
-
         if (roots.Count == 0)
         {
-            _filesPlaceholder.Text = query.Length > 0
-                ? $"No Markdown files match “{query}”."
-                : "No Markdown files in this project.";
-            _filePaneHost.Child = _filesPlaceholder;
+            _filesPlaceholder.Text = EmptyPaneMessage(query);
+            _treeHost.Child = _filesPlaceholder;
             return;
         }
 
         _tree.ItemsSource = roots;
-        _filePaneHost.Child = _paneContent;
+        _treeHost.Child = _tree;
+    }
+
+    // What to show when no session file matches — always pointing at the project-search button as the way out.
+    private static string EmptyPaneMessage(string query) =>
+        query.Length > 0
+            ? $"No session files match “{query}”. Use “Search all project files” to look across the project."
+            : "This session didn’t touch any Markdown files. Use “Search all project files” to find files on disk.";
+
+    // Open the project-wide quick-open palette (VS Code-style fuzzy search over the project's .md). Feeds it
+    // the cached file list if we have one, else kicks off a lazy scan and streams the result in while it shows
+    // a "Scanning…" line. When the user picks a file, open it (honouring the unsaved-changes guard).
+    private async void OpenProjectSearch()
+    {
+        var cwd = _paneCwd ?? _cwd;
+        if (string.IsNullOrEmpty(cwd))
+            return;
+
+        var palette = new MarkdownProjectSearchWindow(_theme, cwd);
+        if (_paneProject is { } cached)
+        {
+            palette.SetFiles(cached);
+        }
+        else
+        {
+            palette.SetLoading();
+            int gen = _gen;
+            _ = Task.Run(() => MarkdownProjectScan.Scan(cwd))
+                .ContinueWith(t =>
+                {
+                    if (!t.IsCompletedSuccessfully)
+                        return;
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        if (gen == _gen)
+                            _paneProject = t.Result;   // cache for next time (only if still the same target)
+                        palette.SetFiles(t.Result);    // feed the palette regardless — it was opened for this cwd
+                    });
+                });
+        }
+
+        var picked = await palette.ShowDialog<string?>(this);
+        if (picked is { } path)
+            await TryOpenPath(path);
+    }
+
+    // Open an arbitrary file path (from the project palette) in the editor, prompting first if the current
+    // buffer has unsaved edits. The tree selection is cleared since the file may live outside the session lists.
+    private async Task TryOpenPath(string path)
+    {
+        if (string.Equals(_openFilePath, path, StringComparison.OrdinalIgnoreCase))
+            return;   // already open — don't reload over any unsaved edits
+
+        if (_dirty)
+        {
+            bool discard = await ConfirmDialog.ShowAsync(this, "Discard changes?",
+                $"'{Path.GetFileName(_openFilePath ?? "this file")}' has unsaved changes. Discard them?",
+                "Discard changes", "Keep editing");
+            if (!discard)
+                return;
+        }
+
+        _suppressSelect = true;
+        _tree.SelectedItem = null;
+        _suppressSelect = false;
+        _currentFileNode = null;
+        LoadFile(path);
     }
 
     // Session files (absolute paths) matching the query by relative label or full path.
@@ -497,39 +575,6 @@ internal sealed class MarkdownWindow : Window
         foreach (var p in paths)
             group.Children.Add(new FileNode { Label = RelativeLabel(cwd, p), Kind = kind, FullPath = p });
         return group;
-    }
-
-    // The project's Markdown as a folder hierarchy built from (already-filtered) relative paths. Folders
-    // with no surviving files are naturally absent, since only matching paths are inserted.
-    private static FileNode BuildProjectTree(string cwd, IReadOnlyList<string> rels, bool truncated)
-    {
-        var root = new FileNode { Label = $"Project ({rels.Count})", Kind = NodeKind.Group };
-        foreach (var rel in rels)
-        {
-            var parts = rel.Split('/');
-            var cur = root;
-            for (int i = 0; i < parts.Length; i++)
-            {
-                if (i == parts.Length - 1)
-                {
-                    var full = Path.Combine(cwd, rel.Replace('/', Path.DirectorySeparatorChar));
-                    cur.Children.Add(new FileNode { Label = parts[i], Kind = NodeKind.ProjectFile, FullPath = full });
-                }
-                else
-                {
-                    var folder = cur.Children.FirstOrDefault(c => c.Kind == NodeKind.Folder && c.Label == parts[i]);
-                    if (folder == null)
-                    {
-                        folder = new FileNode { Label = parts[i], Kind = NodeKind.Folder };
-                        cur.Children.Add(folder);
-                    }
-                    cur = folder;
-                }
-            }
-        }
-        if (truncated)
-            root.Children.Add(new FileNode { Label = "…more (list truncated)", Kind = NodeKind.Info });
-        return root;
     }
 
     private static string RelativeLabel(string cwd, string absolutePath)
@@ -558,26 +603,19 @@ internal sealed class MarkdownWindow : Window
             {
                 NodeKind.Group          => _theme.Title,
                 NodeKind.ReferencedFile => _theme.Muted,
-                NodeKind.Info           => _theme.Muted,
                 _                       => _theme.Fg,
             },
             FontWeight = n.Kind == NodeKind.Group ? FontWeight.SemiBold : FontWeight.Normal,
-            FontStyle = n.Kind == NodeKind.Info ? FontStyle.Italic : FontStyle.Normal,
         };
 
-        // File leaves carry a small bullet: rose for produced, muted for referenced, faint for project.
-        if (n.Kind is NodeKind.ProducedFile or NodeKind.ReferencedFile or NodeKind.ProjectFile)
+        // File leaves carry a small bullet: rose for produced, muted for referenced.
+        if (n.Kind is NodeKind.ProducedFile or NodeKind.ReferencedFile)
         {
             var dot = new Ellipse
             {
                 Width = 6, Height = 6, Margin = new Thickness(0, 0, 7, 0),
                 VerticalAlignment = VerticalAlignment.Center,
-                Fill = n.Kind switch
-                {
-                    NodeKind.ProducedFile   => ProducedDotBrush,
-                    NodeKind.ReferencedFile => _theme.Muted,
-                    _                       => _theme.Border,
-                },
+                Fill = n.Kind == NodeKind.ProducedFile ? ProducedDotBrush : _theme.Muted,
             };
             var sp = new StackPanel { Orientation = Orientation.Horizontal, Children = { dot, text } };
             ToolTip.SetTip(sp, n.FullPath);
@@ -854,7 +892,7 @@ internal sealed class MarkdownWindow : Window
         _cwd = cwd;
         _paneCwd = cwd;
         _paneSets = sets;
-        _paneProject = project;
+        _paneProject = project;   // primes the project-search palette's cache (its own render is separate)
         RebuildPane();
         OpenInEditor(samplePath, sampleMarkdown, null);
     }
@@ -920,7 +958,7 @@ internal sealed class MarkdownWindow : Window
         base.OnKeyDown(e);
     }
 
-    private enum NodeKind { Group, Folder, ProducedFile, ReferencedFile, ProjectFile, Info }
+    private enum NodeKind { Group, ProducedFile, ReferencedFile }
 
     private sealed class FileNode
     {
@@ -931,8 +969,9 @@ internal sealed class MarkdownWindow : Window
     }
 
     // A minimal per-window palette. Two instances (Dark/Light) drive the window chrome and, independently,
-    // the preview pane. Kept local so the toggles retint just this window rather than the app theme.
-    private readonly record struct MdTheme(
+    // the preview pane. Kept local so the toggles retint just this window rather than the app theme. Shared
+    // with the project-search palette (MarkdownProjectSearchWindow) so it matches the parent's current theme.
+    internal readonly record struct MdTheme(
         IBrush WindowBg, IBrush PaneBg, IBrush EditorBg, IBrush Paper, IBrush Separator, IBrush Border,
         IBrush Fg, IBrush Muted, IBrush Title, IBrush Accent, IBrush Code, IBrush CodeBg, IBrush Warn,
         IBrush Error, IBrush ButtonBg, IBrush Selection)

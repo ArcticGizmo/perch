@@ -293,6 +293,10 @@ internal static class HeadlessRenderer
         // captured via CaptureRenderedFrame rather than a detached one-shot bitmap.
         RenderMarkdownWindow(outDir);
 
+        // The project-wide Markdown quick-open palette (VS Code-style fuzzy search), populated with a query so
+        // the ranked results and their highlighted matches show.
+        RenderMarkdownProjectSearch(outDir);
+
         // Dedicated Achievements window (the "trophy cabinet"): the roomy grid variant with per-badge
         // criteria lines, fed the same all-time sample so earned + locked tiles both show.
         var cabinet = new Views.AchievementsDashboard { Width = 840 };
@@ -774,6 +778,36 @@ internal static class HeadlessRenderer
             var w = new MarkdownWindow(new AppSettings()) { Width = 1000, Height = 620 };
             w.SeedForRender(cwd, sets, project, @"C:\src\perch\docs\markdown-viewer-plan.md", sampleMd,
                 windowLight, previewLight);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    // Shows the project-search quick-open palette seeded with a file list and a query, capturing the ranked,
+    // highlighted results in both the dark and light window palettes.
+    private static void RenderMarkdownProjectSearch(string outDir)
+    {
+        var project = new MarkdownProjectFiles(
+            ["CHANGELOG.md", "README.md", "docs/distribution-plan.md", "docs/macos-port-plan.md",
+             "docs/markdown-viewer-plan.md", "docs/theming-plan.md", "src/Perch.Core/README.md",
+             "tools/IconGen/notes.md"],
+            Truncated: false);
+
+        Capture("markdown_search_1x.png", MarkdownWindow.MdTheme.Dark());
+        Capture("markdown_search_light_1x.png", MarkdownWindow.MdTheme.Light());
+
+        void Capture(string file, MarkdownWindow.MdTheme theme)
+        {
+            var w = new MarkdownProjectSearchWindow(theme, @"C:\src\perch");
+            w.SeedForRender(project, "plan");
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
