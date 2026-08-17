@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
+using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Controls.Templates;
@@ -136,6 +137,21 @@ internal sealed class MarkdownWindow : Window
     private bool _suppressSelect;          // reverting a tree selection shouldn't re-trigger the handler
     private bool _closeConfirmed;          // discard already confirmed / programmatic close — skip the prompt
 
+    // ── Cursor sync (source editor ↔ preview) ──
+    private IReadOnlyList<MarkdownView.PreviewAnchor> _previewAnchors = [];
+    private Border? _activeAnchorBorder;    // the preview block whose left bar marks "where the caret is"
+    private int _lastCaretLine = -1;        // gates source→preview sync so it only fires when the line changes
+    private bool _suppressCaretSync;        // set while we move the caret programmatically (a preview click)
+
+    // Editor gutter bar: a left-margin accent bar spanning the active block's lines (the editor twin of the
+    // preview's left bar), so you can see where the caret jumped without an in-text highlight.
+    private Canvas? _gutter;
+    private Border? _gutterBar;
+    private int _activeStartLine = -1, _activeEndLine = -1;   // active block's source line range
+    private TextPresenter? _srcPresenter;   // the editor's text layout host (resolved from the template)
+    private ScrollViewer? _srcScroll;       // the editor's inner scroll (resolved from the template)
+    private bool _gutterPending;            // coalesces gutter recomputes posted after a layout pass
+
     public MarkdownWindow(AppSettings settings)
     {
         _settings = settings;
@@ -265,6 +281,15 @@ internal sealed class MarkdownWindow : Window
             [ScrollViewer.VerticalScrollBarVisibilityProperty] = ScrollBarVisibility.Auto,
         };
         _sourceBox.TextChanged += OnSourceTextChanged;
+        // Moving the caret (click, arrows, typing across a line) highlights and scrolls the matching preview
+        // block — the source→preview half of the cursor sync.
+        _sourceBox.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == TextBox.CaretIndexProperty && !_loading && !_suppressCaretSync)
+                SyncPreviewToCaret(scroll: true);
+        };
+        // The gutter bar tracks the editor's own scrolling and re-wrapping.
+        _sourceBox.LayoutUpdated += (_, _) => UpdateGutter();
 
         _previewScroll = new ScrollViewer
         {
@@ -273,6 +298,11 @@ internal sealed class MarkdownWindow : Window
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
+        // Clicking a preview block jumps the caret to its source line and focuses the editor — the
+        // preview→source half (and the "edit from the preview" gesture). handledEventsToo so a click the
+        // selectable text already handled still reaches us.
+        _previewScroll.AddHandler(PointerPressedEvent, OnPreviewPointerPressed,
+            RoutingStrategies.Bubble, handledEventsToo: true);
         _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
         _previewTimer.Tick += (_, _) => { _previewTimer.Stop(); RenderPreview(_sourceBox.Text ?? ""); };
 
@@ -312,11 +342,22 @@ internal sealed class MarkdownWindow : Window
 
         _previewPane.Child = _previewScroll;
 
+        // The source editor with a left gutter overlay: a thin accent bar (in the source box's left padding,
+        // clear of the text) marks the active block's lines. Non-interactive, clipped to the editor height.
+        _gutterBar = new Border { Width = 3, CornerRadius = new CornerRadius(1.5), IsVisible = false };
+        Canvas.SetLeft(_gutterBar, 4);
+        _gutter = new Canvas
+        {
+            Width = 12, HorizontalAlignment = HorizontalAlignment.Left, ClipToBounds = true,
+            IsHitTestVisible = false, Children = { _gutterBar },
+        };
+        var editorArea = new Grid { Children = { _sourceBox, _gutter } };
+
         var split = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,*") };
-        Grid.SetColumn(_sourceBox, 0);
+        Grid.SetColumn(editorArea, 0);
         Grid.SetColumn(_innerSplitter, 1);
         Grid.SetColumn(_previewPane, 2);
-        split.Children.Add(_sourceBox);
+        split.Children.Add(editorArea);
         split.Children.Add(_innerSplitter);
         split.Children.Add(_previewPane);
 
@@ -374,6 +415,7 @@ internal sealed class MarkdownWindow : Window
 
         _treeHost.Background = t.PaneBg;
         StyleButton(_projectBtn, t);
+        if (_gutterBar != null) _gutterBar.Background = t.Accent;
         UpdateEditorChrome();
         RebuildPane();
     }
@@ -738,6 +780,9 @@ internal sealed class MarkdownWindow : Window
         _loading = true;
         _sourceBox.Text = text;
         _loading = false;
+        _lastCaretLine = -1;   // a fresh file: let the next sync re-establish the active block
+        _activeStartLine = _activeEndLine = -1;
+        if (_gutterBar != null) _gutterBar.IsVisible = false;
 
         _editorFileLabel.Text = RelativeLabel(_cwd ?? "", path);
         UpdateEditorChrome();
@@ -765,7 +810,214 @@ internal sealed class MarkdownWindow : Window
             CodeFg: p.Code, CodeBg: p.CodeBg, QuoteBar: p.Border, Rule: p.Separator,
             TableBorder: p.Border, TableHeaderBg: p.CodeBg,
             Syntax: _previewLight ? CodeSyntax.Light() : CodeSyntax.Dark());
-        _previewScroll.Content = MarkdownView.Build(md, style);
+
+        var root = MarkdownView.Build(md, style, out var anchors);
+        _previewAnchors = anchors;
+        _activeAnchorBorder = null;   // the old wrappers are gone; re-attach the highlight below
+        _previewScroll.Content = root;
+
+        // Re-mark the block under the caret on the fresh tree (no scroll — don't yank the view while typing).
+        SyncPreviewToCaret(scroll: false, force: true);
+    }
+
+    // ── Cursor sync (source editor ↔ preview) ───────────────────────────────────────────────────────
+
+    // Source→preview: highlight (and optionally scroll to) the block containing the caret. Gated to fire
+    // only when the caret's line changes, so typing within a line doesn't churn.
+    private void SyncPreviewToCaret(bool scroll, bool force = false)
+    {
+        if (_previewAnchors.Count == 0)
+            return;
+        int line = LineOfIndex(_sourceBox.Text ?? "", _sourceBox.CaretIndex);
+        if (!force && line == _lastCaretLine)
+            return;
+        _lastCaretLine = line;
+        SetActiveAnchor(FindAnchorForLine(line), scroll);
+    }
+
+    // Preview→source: clicking maps to a precise source position and focuses the editor (ready to edit).
+    // It resolves the nearest stamped element (a list item, table row, heading, paragraph or code block) —
+    // finer than the enclosing block — and inside a verbatim code block hit-tests to the exact line/column.
+    private void OnPreviewPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(_previewScroll).Properties.IsLeftButtonPressed)
+            return;
+        for (var v = e.Source as Visual; v is not null; v = v.GetVisualParent())
+        {
+            if (v is not Control c)
+                continue;
+            int line = MarkdownView.GetSourceLine(c);
+            if (line < 0)
+                continue;
+
+            var text = _sourceBox.Text ?? "";
+            int caret = MarkdownView.GetVerbatim(c) && c is TextBlock tb
+                ? VerbatimClickOffset(tb, e.GetPosition(tb), text, line)
+                : LineStartOffset(text, line);
+            JumpEditorToCaret(caret);
+            return;
+        }
+    }
+
+    // Map a click inside a verbatim (code) block to an exact source offset via text hit-testing: the visual
+    // line the point falls on (code doesn't wrap) plus the column within it. Best-effort — any hiccup falls
+    // back to the block's first content line.
+    private static int VerbatimClickOffset(TextBlock tb, Point pt, string text, int firstContentLine)
+    {
+        try
+        {
+            var layout = tb.TextLayout;
+            var hit = layout.HitTestPoint(pt);
+            int pos = hit.TextPosition + (hit.IsTrailing ? 1 : 0);
+            var lines = layout.TextLines;
+            int lineIdx = lines.Count - 1;
+            for (int i = 0; i < lines.Count; i++)
+                if (pos < lines[i].FirstTextSourceIndex + lines[i].Length) { lineIdx = i; break; }
+            int col = Math.Max(0, pos - lines[lineIdx].FirstTextSourceIndex);
+            return Math.Clamp(LineStartOffset(text, firstContentLine + lineIdx) + col, 0, text.Length);
+        }
+        catch
+        {
+            return LineStartOffset(text, firstContentLine);
+        }
+    }
+
+    private void SetActiveAnchor(MarkdownView.PreviewAnchor? anchor, bool scroll)
+    {
+        // Preview side: a left accent bar on the active block (no in-text wash).
+        if (_activeAnchorBorder is { } prev)
+            prev.BorderBrush = Brushes.Transparent;
+        _activeAnchorBorder = anchor?.Control as Border;
+        if (_activeAnchorBorder is { } cur)
+        {
+            cur.BorderBrush = _previewTheme.Accent;
+            if (scroll)
+                cur.BringIntoView();
+        }
+
+        // Editor side: mark the same block's line range in the gutter.
+        _activeStartLine = anchor?.StartLine ?? -1;
+        _activeEndLine = anchor?.EndLine ?? -1;
+        ScheduleGutter();
+    }
+
+    // The anchor whose source-line range contains the line, else the last block starting at or before it.
+    private MarkdownView.PreviewAnchor? FindAnchorForLine(int line)
+    {
+        MarkdownView.PreviewAnchor? before = null;
+        foreach (var a in _previewAnchors)
+        {
+            if (line >= a.StartLine && line <= a.EndLine)
+                return a;
+            if (a.StartLine <= line)
+                before = a;
+        }
+        return before ?? (_previewAnchors.Count > 0 ? _previewAnchors[0] : null);
+    }
+
+    // Move the caret to an exact source offset and focus the editor (scrolls it into view, ready to type).
+    // No in-text highlight — the gutter bar marks the block; the caret marks the exact spot.
+    private void JumpEditorToCaret(int caret)
+    {
+        var text = _sourceBox.Text ?? "";
+        caret = Math.Clamp(caret, 0, text.Length);
+        int line = LineOfIndex(text, caret);
+
+        _suppressCaretSync = true;                    // we drive the preview highlight explicitly below
+        _sourceBox.SelectionStart = caret;
+        _sourceBox.SelectionEnd = caret;
+        _sourceBox.CaretIndex = caret;
+        _sourceBox.Focus();
+        _suppressCaretSync = false;
+
+        _lastCaretLine = line;
+        SetActiveAnchor(FindAnchorForLine(line), scroll: false);
+    }
+
+    // Recompute the editor gutter bar after the next layout pass (so the text layout is current). Coalesced.
+    private void ScheduleGutter()
+    {
+        if (_gutterPending)
+            return;
+        _gutterPending = true;
+        Dispatcher.UIThread.Post(() => { _gutterPending = false; UpdateGutter(); }, DispatcherPriority.Background);
+    }
+
+    // Draw the gutter bar spanning the active block's lines: find the block's start/end source offsets, map
+    // them to Y through the editor's own text layout, and place the bar (allowing for the inner scroll and
+    // the source box's top padding). Hidden when there's no active block or the layout isn't ready.
+    private void UpdateGutter()
+    {
+        if (_gutter is null || _gutterBar is null)
+            return;
+        ResolveEditorParts();
+        if (_srcPresenter?.TextLayout is not { } layout || _activeStartLine < 0)
+        {
+            _gutterBar.IsVisible = false;
+            return;
+        }
+
+        var text = _sourceBox.Text ?? "";
+        int startOff = LineStartOffset(text, _activeStartLine);
+        int endOff = _activeEndLine == int.MaxValue
+            ? text.Length
+            : LineStartOffset(text, _activeEndLine + 1);
+
+        double y = 0, top = -1, bottom = -1;
+        foreach (var tl in layout.TextLines)
+        {
+            int s = tl.FirstTextSourceIndex, e = s + tl.Length;
+            if (e > startOff && s < endOff)   // this visual line is part of the block
+            {
+                if (top < 0) top = y;
+                bottom = y + tl.Height;
+            }
+            y += tl.Height;
+        }
+        if (top < 0)
+        {
+            _gutterBar.IsVisible = false;
+            return;
+        }
+
+        double scrollY = _srcScroll?.Offset.Y ?? 0;
+        Canvas.SetTop(_gutterBar, _sourceBox.Padding.Top + top - scrollY);
+        _gutterBar.Height = Math.Max(2, bottom - top);
+        _gutterBar.IsVisible = true;
+    }
+
+    // Resolve the editor's inner text presenter + scroll from its template (once), subscribing to scroll so
+    // the gutter tracks it.
+    private void ResolveEditorParts()
+    {
+        _srcPresenter ??= _sourceBox.GetVisualDescendants().OfType<TextPresenter>().FirstOrDefault();
+        if (_srcScroll is null &&
+            _sourceBox.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault() is { } sv)
+        {
+            _srcScroll = sv;
+            sv.ScrollChanged += (_, _) => UpdateGutter();
+        }
+    }
+
+    // 0-based source line containing the character offset.
+    private static int LineOfIndex(string text, int index)
+    {
+        int line = 0, max = Math.Min(index, text.Length);
+        for (int i = 0; i < max; i++)
+            if (text[i] == '\n') line++;
+        return line;
+    }
+
+    // Character offset of the start of the 0-based line (clamped to the text length).
+    private static int LineStartOffset(string text, int line)
+    {
+        if (line <= 0)
+            return 0;
+        int seen = 0;
+        for (int i = 0; i < text.Length; i++)
+            if (text[i] == '\n' && ++seen == line)
+                return i + 1;
+        return text.Length;
     }
 
     private void UpdateEditorChrome()

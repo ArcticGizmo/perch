@@ -48,11 +48,15 @@ internal sealed record CodeSyntax(
 /// controls — headings with an underline rule, fenced code in a rounded panel, block quotes with a left
 /// bar, bordered tables, styled lists and inline-code chips — for a VS Code-style enhanced-preview look.
 /// Blocks stay selectable/copyable. Best-effort: a parse failure falls back to the raw text.
+///
+/// Each top-level block is wrapped in a thin anchor container tagged with its source line range (see
+/// <see cref="PreviewAnchor"/>), so the caller can map between the source editor and the preview — highlight
+/// the block under the caret, and jump the caret to a clicked block — for two-way cursor sync.
 /// </summary>
 internal sealed class MarkdownView
 {
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
-        .UsePipeTables().UseEmphasisExtras().UseTaskLists().UseAutoLinks().Build();
+        .UsePipeTables().UseEmphasisExtras().UseTaskLists().UseAutoLinks().UsePreciseSourceLocation().Build();
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
 
     private const double BodySize = 13.5;
@@ -62,23 +66,84 @@ internal sealed class MarkdownView
 
     private MarkdownView(MarkdownStyle s) => _s = s;
 
+    /// <summary>The 0-based source line a rendered element came from, stamped on paragraphs, headings, list
+    /// items, table rows and code blocks so a click can map to the right line (not just the enclosing block).
+    /// -1 means unset.</summary>
+    public static readonly AttachedProperty<int> SourceLineProperty =
+        AvaloniaProperty.RegisterAttached<MarkdownView, Control, int>("SourceLine", -1);
+
+    /// <summary>True on a code block's text, whose rendering is verbatim — so a click can be hit-tested to an
+    /// exact line and column, giving cursor-level (not just block-level) placement.</summary>
+    public static readonly AttachedProperty<bool> VerbatimProperty =
+        AvaloniaProperty.RegisterAttached<MarkdownView, Control, bool>("Verbatim", false);
+
+    public static int GetSourceLine(Control c) => c.GetValue(SourceLineProperty);
+    public static bool GetVerbatim(Control c) => c.GetValue(VerbatimProperty);
+
+    private static T Stamp<T>(T c, int line, bool verbatim = false) where T : Control
+    {
+        if (line >= 0) c.SetValue(SourceLineProperty, line);
+        if (verbatim) c.SetValue(VerbatimProperty, true);
+        return c;
+    }
+
+    /// <summary>Maps a rendered top-level block back to the source lines it came from. <see cref="Control"/>
+    /// is the anchor container (a transparent <c>Border</c> the caller can tint to highlight the block).</summary>
+    internal sealed class PreviewAnchor
+    {
+        public required Control Control { get; init; }
+        public required int StartLine { get; init; }   // 0-based source line where the block starts
+        public int EndLine { get; set; }               // inclusive; filled so the ranges tile the document
+    }
+
     /// <summary>Parses <paramref name="md"/> and returns a control tree ready to drop into a scroll viewer.</summary>
-    public static Control Build(string md, MarkdownStyle style)
+    public static Control Build(string md, MarkdownStyle style) => Build(md, style, out _);
+
+    /// <summary>As <see cref="Build(string, MarkdownStyle)"/>, also returning the source-line anchors for the
+    /// top-level blocks (in document order) so the caller can wire two-way cursor sync.</summary>
+    public static Control Build(string md, MarkdownStyle style, out IReadOnlyList<PreviewAnchor> anchors)
     {
         var view = new MarkdownView(style);
+        var list = new List<PreviewAnchor>();
+        anchors = list;
         var root = new StackPanel { Margin = new Thickness(22, 16) };
         if (string.IsNullOrWhiteSpace(md))
             return root;
 
         MarkdownDocument doc;
         try { doc = Markdown.Parse(md, Pipeline); }
-        catch { root.Children.Add(view.Paragraph(md, style.Fg)); return root; }
+        catch { root.Children.Add(view.Wrap(view.Paragraph(md, style.Fg))); return root; }
 
         foreach (var block in doc)
-            if (view.RenderBlock(block, style.Fg) is { } c)
-                root.Children.Add(c);
+        {
+            if (view.RenderBlock(block, style.Fg) is not { } c)
+                continue;
+            Stamp(c, block.Line);   // finer elements (list items, table rows, code) stamp themselves too
+            var wrapper = view.Wrap(c);
+            list.Add(new PreviewAnchor { Control = wrapper, StartLine = block.Line, EndLine = block.Line });
+            root.Children.Add(wrapper);
+        }
+
+        // Extend each block's range to just before the next block starts, so every source line maps to a
+        // block (the last block owns everything to the end).
+        for (int i = 0; i < list.Count; i++)
+            list[i].EndLine = i + 1 < list.Count
+                ? System.Math.Max(list[i].StartLine, list[i + 1].StartLine - 1)
+                : int.MaxValue;
+
         return root;
     }
+
+    // Wrap a top-level block in a transparent anchor with a reserved left bar (so highlighting it never
+    // shifts the layout). The caller tints BorderBrush/Background to mark the block under the caret.
+    private Border Wrap(Control child) => new()
+    {
+        Padding = new Thickness(8, 0, 0, 0),
+        BorderThickness = new Thickness(3, 0, 0, 0),
+        BorderBrush = Brushes.Transparent,
+        Background = Brushes.Transparent,
+        Child = child,
+    };
 
     private Control? RenderBlock(Block block, IBrush fg) => block switch
     {
@@ -147,6 +212,7 @@ internal sealed class MarkdownView
                 continue;
 
             var content = new StackPanel();
+            Stamp(content, item.Line);   // click maps to this item's line, not the list's first line
             foreach (var child in item)
                 if (RenderBlock(child, fg) is { } c)
                 {
@@ -208,6 +274,9 @@ internal sealed class MarkdownView
             FontFamily = Mono, FontSize = 12.5, Foreground = _s.CodeFg,
             TextWrapping = TextWrapping.NoWrap,
         };
+        // The rendered text is verbatim, so a click can be hit-tested to an exact line/column. Stamp the
+        // first content line (the line after the opening fence, for a fenced block).
+        Stamp(text, code is FencedCodeBlock ? code.Line + 1 : code.Line, verbatim: true);
 
         // Syntax-highlight by the fence's language tag (```bash → "bash"). Unknown/blank languages tokenize
         // to a single plain span, so they render exactly as before (one uncoloured block).
@@ -309,6 +378,7 @@ internal sealed class MarkdownView
                     Background = header ? _s.TableHeaderBg : null,
                     Padding = new Thickness(9, 5), Child = tb,
                 };
+                Stamp(cellBorder, row.Line);   // click maps to this row's source line
                 Grid.SetRow(cellBorder, r);
                 Grid.SetColumn(cellBorder, ci);
                 grid.Children.Add(cellBorder);

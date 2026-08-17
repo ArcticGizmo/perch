@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.40] - 2026-08-17
+
+- Two-way cursor sync between the Markdown editor and its preview
+- Click a preview block to jump the editor there, ready to edit
+- A left gutter bar marks the block you're on, in both panes
+
+---
+
 ## [v0.3.39] - 2026-08-17
 
 - Task-list checkboxes render as rounded, ticked boxes instead of flat squares
