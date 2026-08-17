@@ -10,6 +10,7 @@ using Markdig.Extensions.Tables;
 using Markdig.Extensions.TaskLists;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
+using Perch.Data;
 
 namespace Perch.Avalonia.Rendering;
 
@@ -17,7 +18,29 @@ namespace Perch.Avalonia.Rendering;
 /// can carry its own (light-by-default) theme independent of the surrounding window.</summary>
 internal sealed record MarkdownStyle(
     IBrush Fg, IBrush Muted, IBrush Title, IBrush Link,
-    IBrush CodeFg, IBrush CodeBg, IBrush QuoteBar, IBrush Rule, IBrush TableBorder, IBrush TableHeaderBg);
+    IBrush CodeFg, IBrush CodeBg, IBrush QuoteBar, IBrush Rule, IBrush TableBorder, IBrush TableHeaderBg,
+    CodeSyntax Syntax);
+
+/// <summary>The per-token-kind colours for fenced-code syntax highlighting (<see cref="CodeHighlight"/>),
+/// keyed to the preview's own light/dark palette. Modelled on VS Code's default light/dark themes; plain
+/// text falls back to <see cref="MarkdownStyle.CodeFg"/>.</summary>
+internal sealed record CodeSyntax(
+    IBrush Plain, IBrush Keyword, IBrush Type, IBrush Str, IBrush Number, IBrush Comment, IBrush Function)
+{
+    private static SolidColorBrush B(byte r, byte g, byte b) => new(Color.FromRgb(r, g, b));
+
+    // Comments read as a muted grey — deliberately the lowest-contrast span so the eye skips over
+    // decoration and lands on the code itself (rather than the usual bright comment-green).
+    public static CodeSyntax Dark() => new(
+        Plain: B(0xD4, 0xD4, 0xD4), Keyword: B(0x56, 0x9C, 0xD6), Type: B(0x4E, 0xC9, 0xB0),
+        Str: B(0xCE, 0x91, 0x78), Number: B(0xB5, 0xCE, 0xA8), Comment: B(0x76, 0x7C, 0x8A),
+        Function: B(0xDC, 0xDC, 0xAA));
+
+    public static CodeSyntax Light() => new(
+        Plain: B(0x1F, 0x23, 0x28), Keyword: B(0x00, 0x33, 0xB3), Type: B(0x1B, 0x6E, 0x8C),
+        Str: B(0xA3, 0x15, 0x15), Number: B(0x09, 0x86, 0x58), Comment: B(0x8B, 0x90, 0x9B),
+        Function: B(0x79, 0x5E, 0x26));
+}
 
 /// <summary>
 /// A richer Markdown renderer than <see cref="MarkdownRender"/>: instead of flattening everything into one
@@ -174,9 +197,26 @@ internal sealed class MarkdownView
         var lines = code.Lines.ToString().Replace("\r", "").TrimEnd('\n');
         var text = new SelectableTextBlock
         {
-            Text = lines, FontFamily = Mono, FontSize = 12.5, Foreground = _s.CodeFg,
+            FontFamily = Mono, FontSize = 12.5, Foreground = _s.CodeFg,
             TextWrapping = TextWrapping.NoWrap,
         };
+
+        // Syntax-highlight by the fence's language tag (```bash → "bash"). Unknown/blank languages tokenize
+        // to a single plain span, so they render exactly as before (one uncoloured block).
+        var lang = (code as FencedCodeBlock)?.Info;
+        var toks = CodeHighlight.Tokenize(lang, lines);
+        if (toks.Count == 1 && toks[0].Kind == CodeToken.Plain)
+        {
+            text.Text = lines;
+        }
+        else
+        {
+            var inlines = new InlineCollection();
+            foreach (var (span, kind) in toks)
+                inlines.Add(new Run(span) { Foreground = SyntaxBrush(kind) });
+            text.Inlines = inlines;
+        }
+
         return new Border
         {
             Background = _s.CodeBg, CornerRadius = new CornerRadius(6),
@@ -189,6 +229,17 @@ internal sealed class MarkdownView
             },
         };
     }
+
+    private IBrush SyntaxBrush(CodeToken kind) => kind switch
+    {
+        CodeToken.Keyword  => _s.Syntax.Keyword,
+        CodeToken.Type     => _s.Syntax.Type,
+        CodeToken.Str      => _s.Syntax.Str,
+        CodeToken.Number   => _s.Syntax.Number,
+        CodeToken.Comment  => _s.Syntax.Comment,
+        CodeToken.Function => _s.Syntax.Function,
+        _                  => _s.Syntax.Plain,
+    };
 
     private Control Rule() => new Border
     {

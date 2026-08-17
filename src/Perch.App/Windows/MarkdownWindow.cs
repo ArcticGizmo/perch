@@ -763,7 +763,8 @@ internal sealed class MarkdownWindow : Window
         var style = new MarkdownStyle(
             Fg: p.Fg, Muted: p.Muted, Title: p.Title, Link: p.Accent,
             CodeFg: p.Code, CodeBg: p.CodeBg, QuoteBar: p.Border, Rule: p.Separator,
-            TableBorder: p.Border, TableHeaderBg: p.CodeBg);
+            TableBorder: p.Border, TableHeaderBg: p.CodeBg,
+            Syntax: _previewLight ? CodeSyntax.Light() : CodeSyntax.Dark());
         _previewScroll.Content = MarkdownView.Build(md, style);
     }
 

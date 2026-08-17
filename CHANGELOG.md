@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.38] - 2026-08-17
+
+- Syntax highlighting in the Markdown preview's code blocks, keyed off the fence language (bash, python, and a couple dozen friends)
+- Comments in those blocks sit back in grey, so the eye lands on the code
+
+---
+
 ## [v0.3.37] - 2026-08-17
 
 - Markdown viewer now leads with the files a session touched, not the whole project
