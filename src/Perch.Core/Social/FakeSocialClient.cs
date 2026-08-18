@@ -1,0 +1,228 @@
+using System.Text.RegularExpressions;
+
+namespace Perch.Social;
+
+/// <summary>
+/// An in-memory <see cref="ISocialClient"/> with no network — the stand-in that unit tests drive and the
+/// <c>render</c> preview seeds, and the reference for how the real Supabase client must behave. It enforces
+/// the same rules the backend's row-level security will: the feed shows only the signed-in user's own posts
+/// and <em>accepted</em> friends' posts, handles must be well-formed and unique, and only exact-handle lookups
+/// resolve. Beyond the interface it exposes a few <c>Seed*</c>/<c>Simulate*</c> helpers so a test can stand up
+/// other users and have them act (send a request, accept, post).
+/// </summary>
+public sealed partial class FakeSocialClient : ISocialClient
+{
+    private readonly object _gate = new();
+    private readonly Dictionary<Guid, Profile> _profiles = new();
+    private readonly Dictionary<Guid, FriendshipState> _edges = new();   // other user id -> state, from "me"'s view
+    private readonly List<FeedItem> _posts = new();                       // all posts by any user; feed filters
+    private readonly List<Action<FeedItem>> _subscribers = new();
+    private Profile? _me;
+    private bool _signedIn;
+
+    public AuthState Current
+    {
+        get { lock (_gate) return new AuthState(_signedIn, _me); }
+    }
+
+    public event Action<AuthState>? AuthChanged;
+
+    public Task<AuthState> SignInAsync(CancellationToken ct = default)
+    {
+        AuthState state;
+        lock (_gate) { _signedIn = true; state = new AuthState(true, _me); }
+        AuthChanged?.Invoke(state);
+        return Task.FromResult(state);
+    }
+
+    public Task SignOutAsync(CancellationToken ct = default)
+    {
+        lock (_gate) { _signedIn = false; }
+        AuthChanged?.Invoke(AuthState.SignedOut);
+        return Task.CompletedTask;
+    }
+
+    public Task<Profile?> GetMeAsync(CancellationToken ct = default)
+    {
+        lock (_gate) return Task.FromResult(_me);
+    }
+
+    public Task<Profile> ClaimHandleAsync(string handle, string? displayName = null, string? moodEmoji = null,
+        CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            if (!_signedIn) throw new SocialException("Sign in before claiming a handle.");
+            if (!IsValidHandle(handle)) throw new SocialException("Handle must be 3–20 of a–z, 0–9 or _.");
+            var existing = FindByHandleLocked(handle);
+            if (existing is not null && existing.Id != _me?.Id)
+                throw new SocialException($"@{handle} is already taken.");
+
+            var id = _me?.Id ?? Guid.NewGuid();
+            _me = new Profile(id, handle, displayName, moodEmoji);
+            _profiles[id] = _me;
+        }
+        AuthChanged?.Invoke(new AuthState(true, _me));
+        return Task.FromResult(_me!);
+    }
+
+    public Task<Profile?> FindByHandleAsync(string handle, CancellationToken ct = default)
+    {
+        lock (_gate) return Task.FromResult(FindByHandleLocked(handle));
+    }
+
+    public Task SendRequestAsync(Guid addresseeId, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            RequireMe();
+            if (!_edges.TryGetValue(addresseeId, out var s) || s == FriendshipState.Incoming)
+                _edges[addresseeId] = FriendshipState.Pending;   // idempotent; incoming+send = accept-ish, kept pending
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task RespondAsync(Guid requesterId, bool accept, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            RequireMe();
+            if (_edges.TryGetValue(requesterId, out var s) && s == FriendshipState.Incoming)
+            {
+                if (accept) _edges[requesterId] = FriendshipState.Accepted;
+                else _edges.Remove(requesterId);   // declined: forget the edge
+            }
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<Friend>> GetFriendsAsync(CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var list = _edges
+                .Where(e => e.Value != FriendshipState.Blocked && _profiles.ContainsKey(e.Key))
+                .Select(e => new Friend(_profiles[e.Key], e.Value))
+                .ToList();
+            return Task.FromResult<IReadOnlyList<Friend>>(list);
+        }
+    }
+
+    public Task<PostId> PostAsync(string body, string? moodEmoji = null, CancellationToken ct = default)
+    {
+        FeedItem item;
+        lock (_gate)
+        {
+            RequireMe();
+            body = body?.Trim() ?? "";
+            if (body.Length == 0) throw new SocialException("A status can't be empty.");
+            if (body.Length > 280) throw new SocialException("A status can't be longer than 280 characters.");
+            item = new FeedItem(Guid.NewGuid(), _me!, body, moodEmoji, DateTimeOffset.UtcNow);
+            _posts.Add(item);
+        }
+        Notify(item);
+        return Task.FromResult(new PostId(item.Id));
+    }
+
+    public Task<IReadOnlyList<FeedItem>> GetFeedAsync(int limit = 50, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var feed = _posts
+                .Where(p => CanSeeLocked(p.Author.Id))
+                .OrderByDescending(p => p.CreatedAt)
+                .Take(Math.Max(0, limit))
+                .ToList();
+            return Task.FromResult<IReadOnlyList<FeedItem>>(feed);
+        }
+    }
+
+    public IDisposable SubscribeFeed(Action<FeedItem> onPost)
+    {
+        lock (_gate) _subscribers.Add(onPost);
+        return new Subscription(this, onPost);
+    }
+
+    // ── Test/preview seeding (not part of ISocialClient) ────────────────────────────────────────────
+
+    /// <summary>Signs in as <paramref name="handle"/> in one step (sign-in + claim), for preview/test setup.</summary>
+    public Profile SignInAs(string handle, string? displayName = null, string? moodEmoji = null)
+    {
+        SignInAsync().GetAwaiter().GetResult();
+        return ClaimHandleAsync(handle, displayName, moodEmoji).GetAwaiter().GetResult();
+    }
+
+    /// <summary>Adds another user to the directory (findable by handle), without any relationship to you.</summary>
+    public Profile SeedUser(string handle, string? displayName = null, string? moodEmoji = null)
+    {
+        lock (_gate)
+        {
+            if (!IsValidHandle(handle)) throw new SocialException("Invalid seed handle.");
+            var p = new Profile(Guid.NewGuid(), handle, displayName, moodEmoji);
+            _profiles[p.Id] = p;
+            return p;
+        }
+    }
+
+    /// <summary>Simulates <paramref name="fromUserId"/> sending you a friend request (shows as Incoming).</summary>
+    public void SimulateIncomingRequest(Guid fromUserId)
+    {
+        lock (_gate) _edges[fromUserId] = FriendshipState.Incoming;
+    }
+
+    /// <summary>Simulates <paramref name="addresseeId"/> accepting a request you sent them (Pending → Accepted).</summary>
+    public void SimulateAccept(Guid addresseeId)
+    {
+        lock (_gate) _edges[addresseeId] = FriendshipState.Accepted;
+    }
+
+    /// <summary>Simulates <paramref name="authorId"/> posting a status. Fires live subscribers if you can see it.</summary>
+    public PostId SimulatePost(Guid authorId, string body, string? moodEmoji = null)
+    {
+        FeedItem item;
+        bool visible;
+        lock (_gate)
+        {
+            if (!_profiles.TryGetValue(authorId, out var author))
+                throw new SocialException("Unknown seed author.");
+            item = new FeedItem(Guid.NewGuid(), author, body, moodEmoji, DateTimeOffset.UtcNow);
+            _posts.Add(item);
+            visible = CanSeeLocked(authorId);
+        }
+        if (visible) Notify(item);
+        return new PostId(item.Id);
+    }
+
+    // ── internals ───────────────────────────────────────────────────────────────────────────────────
+
+    private Profile? FindByHandleLocked(string handle) =>
+        _profiles.Values.FirstOrDefault(p => string.Equals(p.Handle, handle, StringComparison.OrdinalIgnoreCase));
+
+    private bool CanSeeLocked(Guid authorId) =>
+        authorId == _me?.Id || (_edges.TryGetValue(authorId, out var s) && s == FriendshipState.Accepted);
+
+    private void RequireMe()
+    {
+        if (_me is null) throw new SocialException("Claim a handle first.");
+    }
+
+    private void Notify(FeedItem item)
+    {
+        Action<FeedItem>[] subs;
+        lock (_gate) subs = _subscribers.ToArray();
+        foreach (var s in subs) s(item);
+    }
+
+    private static bool IsValidHandle(string handle) => handle is not null && HandleRegex().IsMatch(handle);
+
+    [GeneratedRegex("^[a-z0-9_]{3,20}$")]
+    private static partial Regex HandleRegex();
+
+    private sealed class Subscription : IDisposable
+    {
+        private readonly FakeSocialClient _owner;
+        private readonly Action<FeedItem> _cb;
+        public Subscription(FakeSocialClient owner, Action<FeedItem> cb) { _owner = owner; _cb = cb; }
+        public void Dispose() { lock (_owner._gate) _owner._subscribers.Remove(_cb); }
+    }
+}
