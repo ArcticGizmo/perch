@@ -757,6 +757,9 @@ internal static class HeadlessRenderer
              "docs/markdown-viewer-plan.md", "docs/theming-plan.md"],
             Truncated: false);
         const string sampleMd =
+            // A SKILL.md-style YAML frontmatter header: shown verbatim in the source editor, hidden from the
+            // rendered preview (the GitHub/VS Code convention — see MarkdownView's UseYamlFrontMatter).
+            "---\nname: markdown-viewer\ndescription: A rich, VS Code-style view of Markdown files with real block styling, syntax-highlighted code, tables and a live preview that carries its own light and dark theme\n---\n" +
             "# Markdown viewer\n\nA **rich**, VS Code-style view of `*.md` with real block styling — " +
             "headings, code panels, tables and quotes.\n\n" +
             "## Features\n\n" +

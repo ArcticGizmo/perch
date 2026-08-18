@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.45] - 2026-08-18
+
+- Markdown preview tucks SKILL.md-style frontmatter into a collapsed "Preamble" block (it used to spill out as garbled text)
+
+---
+
 ## [v0.3.44] - 2026-08-18
 
 - Redesigned the Git tree around bordered cards with room to breathe

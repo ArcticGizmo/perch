@@ -2,6 +2,7 @@
 using Avalonia.Media;
 using Markdig;
 using Markdig.Extensions.Tables;
+using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 
@@ -17,8 +18,11 @@ namespace Perch.Avalonia.Rendering;
 /// </summary>
 internal sealed class MarkdownRender
 {
+    // UseYamlFrontMatter parses a leading `---`…`---` block as a YamlFrontMatterBlock (rather than a
+    // thematic break + setext heading) so Block() can drop it — hiding the metadata header of
+    // SKILL.md-style docs, matching the GitHub/VS Code convention.
     private static readonly MarkdownPipeline Pipeline =
-        new MarkdownPipelineBuilder().UsePipeTables().UseEmphasisExtras().Build();
+        new MarkdownPipelineBuilder().UseYamlFrontMatter().UsePipeTables().UseEmphasisExtras().Build();
 
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
 
@@ -47,6 +51,9 @@ internal sealed class MarkdownRender
     {
         switch (block)
         {
+            case YamlFrontMatterBlock:  // hidden metadata header — skip it
+                break;
+
             case HeadingBlock h:
                 double size = h.Level switch { 1 => 18.5, 2 => 16.5, 3 => 15, _ => 14 };
                 Break();

@@ -3,11 +3,13 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Markdig;
 using Markdig.Extensions.Tables;
 using Markdig.Extensions.TaskLists;
+using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 using Perch.Data;
@@ -55,7 +57,11 @@ internal sealed record CodeSyntax(
 /// </summary>
 internal sealed class MarkdownView
 {
+    // UseYamlFrontMatter parses a leading `---`…`---` block as a YamlFrontMatterBlock rather than a thematic
+    // break + setext heading, so RenderBlock can drop it — the GitHub/VS Code convention of hiding the
+    // metadata header of SKILL.md-style files in the rendered view (the raw source editor still shows it).
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
+        .UseYamlFrontMatter()
         .UsePipeTables().UseEmphasisExtras().UseTaskLists().UseAutoLinks().UsePreciseSourceLocation().Build();
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
 
@@ -147,6 +153,7 @@ internal sealed class MarkdownView
 
     private Control? RenderBlock(Block block, IBrush fg) => block switch
     {
+        YamlFrontMatterBlock y => Frontmatter(y), // metadata header — a collapsed "Preamble" disclosure
         HeadingBlock h        => Heading(h),
         ParagraphBlock p      => Paragraph(p, fg),
         ListBlock list        => List(list, fg),
@@ -264,6 +271,60 @@ internal sealed class MarkdownView
             Padding = new Thickness(12, 4, 8, 4), Margin = new Thickness(0, 0, 0, BlockGap),
             Child = inner,
         };
+    }
+
+    // A SKILL.md-style YAML frontmatter header, rendered as a collapsed disclosure: a one-line, muted
+    // "Preamble" row (chevron + label) over the raw YAML in a code panel, hidden until the row is clicked.
+    // This keeps the metadata out of the way (the GitHub/VS Code convention of hiding it) while leaving it
+    // one click from view — rather than dropping it entirely. Themed from the MarkdownStyle brushes so it
+    // follows the preview's own light/dark palette (a Fluent Expander would read the window's instead).
+    private Control Frontmatter(YamlFrontMatterBlock yaml)
+    {
+        // The block's captured text; strip any surrounding `---` fences so only the YAML body shows.
+        var lines = yaml.Lines.ToString().Replace("\r", "").Split('\n').ToList();
+        while (lines.Count > 0 && lines[0].Trim() == "---") lines.RemoveAt(0);
+        while (lines.Count > 0 && (lines[^1].Trim() == "---" || lines[^1].Length == 0)) lines.RemoveAt(lines.Count - 1);
+
+        var content = new Border
+        {
+            Background = _s.CodeBg, CornerRadius = new CornerRadius(6),
+            BorderBrush = _s.TableBorder, BorderThickness = new Thickness(1),
+            Padding = new Thickness(12, 10), Margin = new Thickness(0, 6, 0, 0),
+            IsVisible = false,
+            // Wrap the YAML rather than scroll it: frontmatter lines (long descriptions especially) would
+            // otherwise force a horizontal scrollbar on the whole preview, which is awkward to use.
+            Child = new SelectableTextBlock
+            {
+                Text = string.Join("\n", lines), FontFamily = Mono, FontSize = 12.5,
+                Foreground = _s.CodeFg, TextWrapping = TextWrapping.Wrap,
+            },
+        };
+
+        var chevron = new TextBlock
+        {
+            Text = "▸",   // ▸ collapsed, ▾ expanded
+            Foreground = _s.Muted, FontSize = 11, Margin = new Thickness(0, 0, 6, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var label = new TextBlock
+        {
+            Text = "Preamble", Foreground = _s.Muted, FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var header = new Border
+        {
+            Background = Brushes.Transparent, Padding = new Thickness(2, 3),
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { chevron, label } },
+        };
+        ToolTip.SetTip(header, "Expand to see the file's preamble (YAML frontmatter)");
+        header.PointerPressed += (_, _) =>
+        {
+            content.IsVisible = !content.IsVisible;
+            chevron.Text = content.IsVisible ? "▾" : "▸";
+        };
+
+        return new StackPanel { Margin = new Thickness(0, 0, 0, BlockGap), Children = { header, content } };
     }
 
     private Control Code(CodeBlock code)
