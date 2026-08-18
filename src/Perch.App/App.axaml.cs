@@ -151,7 +151,8 @@ public partial class App : Application
             Perch.Theming.ThemeCatalog.RegisterImported(Theming.PaletteImport.All());
 
             // Colour theme first, before anything paints, so the overlay's first frame is already themed.
-            Palette.Apply(Perch.Theming.ThemeCatalog.Resolve(settings.ActiveThemeId, settings.CustomThemes));
+            // Via ThemeService so the Fluent variant is flipped for a light theme from the very first frame.
+            ThemeService.Apply(Perch.Theming.ThemeCatalog.Resolve(settings.ActiveThemeId, settings.CustomThemes), desktop);
 
             // First launch after an update: grab the changelog entries newer than the version that last
             // ran here, then stamp the current version so they're only ever shown once. A null last-seen is

@@ -45,11 +45,19 @@ public class CvdSimTests
     }
 
     [Fact]
-    public void SimulatingFixedColours_ChangesStatusHues()
+    public void SimulatingATheme_ChangesSemanticHues()
     {
-        // The status/brand palette is theme-independent, so it simulates itself for the designer preview.
+        // Semantic status hues are now theme roles, so they simulate with the theme for the designer preview.
+        var sim = CvdSim.Simulate(Themes.Midnight, CvdType.Deuteranopia);
+        Assert.NotEqual(Themes.Midnight.StatusRunning, sim.StatusRunning); // green shifts under deutan
+    }
+
+    [Fact]
+    public void SimulatingFixedColours_ChangesBrand()
+    {
+        // The fixed brand/Jira/destructive palette is theme-independent, so it simulates itself.
         var sim = FixedColors.Default.Simulate(CvdType.Deuteranopia);
-        Assert.NotEqual(FixedColors.Default.StatusRunning, sim.StatusRunning); // green shifts under deutan
+        Assert.NotEqual(FixedColors.Default.Brand, sim.Brand);
         Assert.Equal(FixedColors.Default, FixedColors.Default.Simulate(CvdType.None)); // identity
     }
 }

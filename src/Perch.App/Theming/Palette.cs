@@ -57,19 +57,20 @@ public static class Palette
         TreeLineBrush.Color    = t.TreeLine.ToColor();
         FocusRingBrush.Color   = t.FocusRing.ToColor();
 
-        // Brand / status / semantic accents (theme-independent — from the fixed palette).
+        // Themeable semantic hues — from the active theme (t), so a theme swap recolours the glyphs too.
+        RunningBrush.Color     = t.StatusRunning.ToColor();
+        AttentionBrush.Color   = t.StatusAttention.ToColor();
+        AwaitingBrush.Color    = t.StatusAwaiting.ToColor();
+        ErrorBrush.Color       = t.StatusError.ToColor();
+        WarnBrush.Color        = t.StatusWarn.ToColor();
+        SubAgentBrush.Color    = t.SubAgent.ToColor();
+        TealBrush.Color        = t.Teal.ToColor();
+        BurnBrush.Color        = t.Burn.ToColor();
+        TeamGrayBrush.Color    = t.TeamGray.ToColor();
+        // Fixed brand / destructive / Jira hues — theme-independent (from the fixed palette).
         BrandBrush.Color       = Fixed.Brand.ToColor();
         BrandHoverBrush.Color  = Fixed.BrandHover.ToColor();
-        RunningBrush.Color     = Fixed.StatusRunning.ToColor();
-        AttentionBrush.Color   = Fixed.StatusAttention.ToColor();
-        AwaitingBrush.Color    = Fixed.StatusAwaiting.ToColor();
-        ErrorBrush.Color       = Fixed.StatusError.ToColor();
-        WarnBrush.Color        = Fixed.StatusWarn.ToColor();
-        SubAgentBrush.Color    = Fixed.SubAgent.ToColor();
-        TealBrush.Color        = Fixed.Teal.ToColor();
-        BurnBrush.Color        = Fixed.Burn.ToColor();
         JiraBrush.Color        = Fixed.Jira.ToColor();
-        TeamGrayBrush.Color    = Fixed.TeamGray.ToColor();
     }
 
     // The overlay panel is painted as a translucent scrim over the desktop; this is its fixed alpha.
@@ -97,24 +98,24 @@ public static class Palette
     // Jira brand blue for the ticket deep-link glyph; a fixed brand hue, the same under every theme.
     public static Color Jira        => Fixed.Jira.ToColor();
 
-    // Usage bar / status palette (same thresholds the overlay uses).
-    public static Color Green        => Fixed.StatusRunning.ToColor();
-    public static Color Yellow       => Fixed.StatusAwaiting.ToColor();
-    public static Color Orange       => Fixed.StatusAttention.ToColor();
-    public static Color Red          => Fixed.StatusError.ToColor();
+    // Usage bar / status palette (same thresholds the overlay uses) — now themeable, from the active theme.
+    public static Color Green        => Active.StatusRunning.ToColor();
+    public static Color Yellow       => Active.StatusAwaiting.ToColor();
+    public static Color Orange       => Active.StatusAttention.ToColor();
+    public static Color Red          => Active.StatusError.ToColor();
     public static Color Track        => Active.Track.ToColor();
     public static Color ExpectedMark => Active.ExpectedMark.ToColor();
-    public static Color Idle         => Fixed.StatusIdle.ToColor();
+    public static Color Idle         => Active.StatusIdle.ToColor();
 
     // A neutral accent for teammates with no (or an unknown) colour — the overlay's sub-agent purple.
-    public static Color TeamDefault  => Fixed.SubAgent.ToColor();
+    public static Color TeamDefault  => Active.SubAgent.ToColor();
 
     public static Color ModeColor(PermissionMode m) => m switch
     {
-        PermissionMode.AcceptEdits => Fixed.ModeAcceptEdits.ToColor(),
+        PermissionMode.AcceptEdits => Active.ModeAcceptEdits.ToColor(),
         PermissionMode.Plan        => Active.Accent.ToColor(),
-        PermissionMode.Auto        => Fixed.StatusAwaiting.ToColor(),
-        PermissionMode.Bypass      => Fixed.StatusError.ToColor(),
+        PermissionMode.Auto        => Active.StatusAwaiting.ToColor(),
+        PermissionMode.Bypass      => Active.StatusError.ToColor(),
         _                          => Colors.Transparent,
     };
 
@@ -135,9 +136,9 @@ public static class Palette
         "orange"                         => Orange,
         "red"                            => Red,
         "blue"                           => Accent,
-        "cyan" or "teal"                 => Fixed.Teal.ToColor(),
-        "magenta" or "pink" or "purple"  => Fixed.SubAgent.ToColor(),
-        "gray" or "grey"                 => Fixed.TeamGray.ToColor(),
+        "cyan" or "teal"                 => Active.Teal.ToColor(),
+        "magenta" or "pink" or "purple"  => Active.SubAgent.ToColor(),
+        "gray" or "grey"                 => Active.TeamGray.ToColor(),
         _                                => TeamDefault,
     };
 
@@ -167,17 +168,19 @@ public static class Palette
     public static readonly SolidColorBrush TreeLineBrush  = new(Themes.Midnight.TreeLine.ToColor());
     public static readonly SolidColorBrush FocusRingBrush = new(Themes.Midnight.FocusRing.ToColor());
 
-    // ── Fixed brand/status/semantic brushes (theme-independent; only the CVD preview re-colours them) ──
+    // ── Themeable semantic brushes (seeded from Midnight; re-coloured from the active theme by Apply) ──
+    public static readonly SolidColorBrush RunningBrush   = new(Themes.Midnight.StatusRunning.ToColor());
+    public static readonly SolidColorBrush AttentionBrush = new(Themes.Midnight.StatusAttention.ToColor());
+    public static readonly SolidColorBrush AwaitingBrush  = new(Themes.Midnight.StatusAwaiting.ToColor());
+    public static readonly SolidColorBrush ErrorBrush     = new(Themes.Midnight.StatusError.ToColor());
+    public static readonly SolidColorBrush WarnBrush      = new(Themes.Midnight.StatusWarn.ToColor());
+    public static readonly SolidColorBrush SubAgentBrush  = new(Themes.Midnight.SubAgent.ToColor());
+    public static readonly SolidColorBrush TealBrush      = new(Themes.Midnight.Teal.ToColor());
+    public static readonly SolidColorBrush BurnBrush      = new(Themes.Midnight.Burn.ToColor());
+    public static readonly SolidColorBrush TeamGrayBrush  = new(Themes.Midnight.TeamGray.ToColor());
+
+    // ── Fixed brand / destructive / Jira brushes (theme-independent; only the CVD preview re-colours them) ──
     public static readonly SolidColorBrush BrandBrush     = new(FixedColors.Default.Brand.ToColor());
     public static readonly SolidColorBrush BrandHoverBrush = new(FixedColors.Default.BrandHover.ToColor());
-    public static readonly SolidColorBrush RunningBrush   = new(FixedColors.Default.StatusRunning.ToColor());
-    public static readonly SolidColorBrush AttentionBrush = new(FixedColors.Default.StatusAttention.ToColor());
-    public static readonly SolidColorBrush AwaitingBrush  = new(FixedColors.Default.StatusAwaiting.ToColor());
-    public static readonly SolidColorBrush ErrorBrush     = new(FixedColors.Default.StatusError.ToColor());
-    public static readonly SolidColorBrush WarnBrush      = new(FixedColors.Default.StatusWarn.ToColor());
-    public static readonly SolidColorBrush SubAgentBrush  = new(FixedColors.Default.SubAgent.ToColor());
-    public static readonly SolidColorBrush TealBrush      = new(FixedColors.Default.Teal.ToColor());
-    public static readonly SolidColorBrush BurnBrush      = new(FixedColors.Default.Burn.ToColor());
     public static readonly SolidColorBrush JiraBrush      = new(FixedColors.Default.Jira.ToColor());
-    public static readonly SolidColorBrush TeamGrayBrush  = new(FixedColors.Default.TeamGray.ToColor());
 }

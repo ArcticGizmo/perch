@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Styling;
 using Avalonia.VisualTree;
 using Perch.Avalonia.Theming;
 using Perch.Theming;
@@ -30,6 +31,11 @@ internal static class ThemeService
     public static void Apply(Theme theme, IClassicDesktopStyleApplicationLifetime? desktop, CvdType cvd = CvdType.None)
     {
         Palette.Apply(theme, cvd);
+        // Flip the Fluent variant so templated controls (buttons, textboxes, scrollbars, ColorPicker) match
+        // a light/dark theme — the owner-drawn surfaces already follow Palette. Windows that manage their own
+        // per-window variant (GitTree, Markdown) still override this locally.
+        if (Application.Current is { } app)
+            app.RequestedThemeVariant = theme.IsDark ? ThemeVariant.Dark : ThemeVariant.Light;
         if (desktop is null) return;
         foreach (var window in desktop.Windows)
             Repaint(window);

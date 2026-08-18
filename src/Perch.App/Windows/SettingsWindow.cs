@@ -308,9 +308,9 @@ internal sealed class SettingsWindow : Window
 
         _themeList.Children.Add(SettingsUi.SectionTitle("Theme"));
         _themeList.Children.Add(SettingsUi.BodyText(
-            "Pick a colour theme. Every theme keeps the status colours (running, waiting, error) identical, " +
-            "so the overlay stays glanceable — only the chrome and text are re-tinted. Contrast is checked " +
-            "against WCAG AA for every theme."));
+            "Pick a colour theme — dark or light. The status colours (running, waiting, error) are tuned to " +
+            "stay glanceable in every theme, and you can recolour them in the designer. Contrast is checked " +
+            "against WCAG AA for every built-in theme."));
 
         foreach (var theme in ThemeCatalog.All(_settings.CustomThemes))
             _themeList.Children.Add(BuildThemeRow(theme));
@@ -433,22 +433,21 @@ internal sealed class SettingsWindow : Window
         return row;
     }
 
-    // One theme option: its name over a strip of swatches (surface, raised, text, accent + the semantic
-    // status hues + brand) so its character reads at a glance. The swatches show that theme's own colours,
-    // independent of which theme is currently active.
-    private static Button BuildThemeCard(Theme t)
+    // One theme option: a header (name + a Light/Dark tag) over a strip of swatches. Imported twins carry the
+    // variant in their name too (e.g. "Nord (Dark)") so they're distinct in the tagless dropdowns as well.
+    private Button BuildThemeCard(Theme t)
     {
         var swatches = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(0, 8, 0, 0),
         };
-        // Chrome/text/accent come from the theme; the trailing status/brand swatches are theme-independent
-        // (FixedColors), so every card shows the same fixed hues there.
+        // Chrome/text/accent and the semantic status hues all come from the theme (per-glyph colouring), so
+        // a card shows that theme's own glyph colours; the trailing brand swatch stays theme-independent.
         foreach (var rgb in new[]
                  {
                      t.Surface, t.SurfaceRaised, t.TextPrimary, t.Accent,
-                     FixedColors.Default.StatusRunning, FixedColors.Default.StatusAwaiting,
-                     FixedColors.Default.StatusError, FixedColors.Default.Brand,
+                     t.StatusRunning, t.StatusAwaiting,
+                     t.StatusError, FixedColors.Default.Brand,
                  })
         {
             swatches.Children.Add(new Border
@@ -462,17 +461,38 @@ internal sealed class SettingsWindow : Window
         var name = new TextBlock
         {
             Text = t.Name, FontSize = 14, FontWeight = FontWeight.SemiBold, Foreground = Palette.TitleBrush,
+            VerticalAlignment = VerticalAlignment.Center,
         };
+
+        var tag = ThemeTag(t.IsDark ? "Dark" : "Light", Palette.MutedBrush, Palette.TrackBrush);
+        DockPanel.SetDock(tag, Dock.Right);
+
+        var header = new DockPanel();
+        header.Children.Add(tag);
+        header.Children.Add(name);
 
         return new Button
         {
-            Content = new StackPanel { Children = { name, swatches } },
+            Content = new StackPanel { Children = { header, swatches } },
             Background = Palette.ButtonBgBrush,
             BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6), Padding = new Thickness(12, 10),
-            HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left,
+            HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Cursor = new Cursor(StandardCursorType.Hand),
         };
+    }
+
+    // A small pill tag on a theme card (variant label / pair badge).
+    private static Border ThemeTag(string text, IBrush fg, IBrush bg, string? tooltip = null)
+    {
+        var pill = new Border
+        {
+            Background = bg, CornerRadius = new CornerRadius(4), Padding = new Thickness(6, 1),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock { Text = text, FontSize = 10, FontWeight = FontWeight.SemiBold, Foreground = fg },
+        };
+        if (tooltip is not null) ToolTip.SetTip(pill, tooltip);
+        return pill;
     }
 
     private static Control BuildPreviewDock(PreviewPane preview)

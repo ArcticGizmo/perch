@@ -33,10 +33,24 @@ public static class Themes
         TextMuted    = new(140, 140, 160),
         ExpectedMark = new(180, 180, 195),
 
-        // Accent (the one tintable brand-ish colour; brand/status/semantic hues live in FixedColors)
+        // Accent (the one tintable brand-ish colour; brand/Jira/destructive hues live in FixedColors)
         Accent      = new(96, 165, 250),
         AccentHover = new(147, 197, 253),
         FocusRing   = new(147, 197, 253),
+
+        // Semantic status / glyph hues — seeded from the dark default set, so Midnight (and every dark
+        // preset deriving from it) reads exactly as before per-glyph colouring landed. Editable per theme.
+        StatusRunning   = FixedColors.SemanticDark.StatusRunning,
+        StatusAttention = FixedColors.SemanticDark.StatusAttention,
+        StatusAwaiting  = FixedColors.SemanticDark.StatusAwaiting,
+        StatusIdle      = FixedColors.SemanticDark.StatusIdle,
+        StatusError     = FixedColors.SemanticDark.StatusError,
+        StatusWarn      = FixedColors.SemanticDark.StatusWarn,
+        SubAgent        = FixedColors.SemanticDark.SubAgent,
+        Teal            = FixedColors.SemanticDark.Teal,
+        Burn            = FixedColors.SemanticDark.Burn,
+        TeamGray        = FixedColors.SemanticDark.TeamGray,
+        ModeAcceptEdits = FixedColors.SemanticDark.ModeAcceptEdits,
     };
 
     /// <summary>
@@ -186,8 +200,54 @@ public static class Themes
         AccentHover = new(150, 250, 160),
     };
 
+    /// <summary>
+    /// Perch's own light theme — a calm near-white surface with dark text and a blue accent, proving the
+    /// token system isn't dark-only. Its semantic glyph hues come from the light default set (darker,
+    /// more-saturated, so they clear the 3:1 floor on a light overlay). <see cref="IsDark"/> is false, which
+    /// drives the Fluent variant flip in the theme service.
+    /// </summary>
+    public static readonly Theme Daylight = Midnight with
+    {
+        Id = "daylight",
+        Name = "Daylight",
+        IsDark = false,
+
+        Surface            = new(245, 246, 248),
+        SurfaceSunken      = new(233, 235, 239),
+        SurfaceRaised      = new(255, 255, 255),
+        SurfaceRaisedHover = new(240, 241, 244),
+        OverlaySurface     = new(247, 248, 250),
+        OverlayRowHover    = new(236, 238, 242),
+        Track              = new(226, 229, 234),
+        Border             = new(207, 212, 220),
+        Separator          = new(226, 229, 234),
+        TreeLine           = new(196, 201, 210),
+
+        TextPrimary  = new(27, 29, 36),
+        TextTitle    = new(12, 14, 20),
+        TextMuted    = new(85, 89, 106),
+        ExpectedMark = new(138, 143, 158),
+
+        Accent      = new(37, 99, 235),
+        AccentHover = new(59, 130, 246),
+        FocusRing   = new(37, 99, 235),
+
+        // Light-tuned semantic glyph hues (the dark defaults would wash out on a light overlay).
+        StatusRunning   = FixedColors.SemanticLight.StatusRunning,
+        StatusAttention = FixedColors.SemanticLight.StatusAttention,
+        StatusAwaiting  = FixedColors.SemanticLight.StatusAwaiting,
+        StatusIdle      = FixedColors.SemanticLight.StatusIdle,
+        StatusError     = FixedColors.SemanticLight.StatusError,
+        StatusWarn      = FixedColors.SemanticLight.StatusWarn,
+        SubAgent        = FixedColors.SemanticLight.SubAgent,
+        Teal            = FixedColors.SemanticLight.Teal,
+        Burn            = FixedColors.SemanticLight.Burn,
+        TeamGray        = FixedColors.SemanticLight.TeamGray,
+        ModeAcceptEdits = FixedColors.SemanticLight.ModeAcceptEdits,
+    };
+
     /// <summary>Every built-in theme, in display order. Custom themes are appended by the UI.</summary>
-    public static readonly IReadOnlyList<Theme> BuiltIn = [Midnight, Ember, Blush, Dim, HighContrast, Winamp];
+    public static readonly IReadOnlyList<Theme> BuiltIn = [Midnight, Ember, Blush, Dim, HighContrast, Winamp, Daylight];
 
     /// <summary>Finds a built-in theme by id, or null.</summary>
     public static Theme? ById(string? id)

@@ -93,27 +93,33 @@ running the tray app.
   the resulting exceptions. See the `*MonitorHost` services, `HistoryWindow`, `StatsWindow`, and
   `UpdateService` for the pattern.
 - **Colour comes through `Theming.Palette`, but from one of two sources — pick the right one.** Colours in
-  `Perch.Core` are kept UI-free as `Rgb`, split by whether a user can change them:
-  - **`Perch.Theming.Theme`** — the *tintable* roles a theme actually varies: surfaces/chrome, text,
-    `Accent`/`AccentHover`, `FocusRing`. These are what the designer edits and what gets persisted/shared. A
-    theme swap (`ThemeService.Apply`) mutates the cached chrome brushes; `Palette.Active` is the active theme.
-  - **`Perch.Theming.FixedColors`** — the *theme-independent* palette: brand, danger, the semantic status
-    hues (running=green, error=red, …), and the teammate/mode accents. These carry fixed meaning and never
-    vary by theme, so they are **not** part of `Theme` and are **never persisted** (`FixedColors.Default` is
-    the one source; `Palette.Fixed` exposes it — only the designer's colour-blind preview swaps in a
-    simulated copy). This is why the overlay stays glanceable across themes.
+  `Perch.Core` are kept UI-free as `Rgb`, split by whether they vary per theme:
+  - **`Perch.Theming.Theme`** — everything a theme varies: surfaces/chrome, text, `Accent`/`AccentHover`,
+    `FocusRing`, **and** the *semantic status/glyph hues* (running/attention/awaiting/idle/error/warn, the
+    sub-agent/mail/teammate accents, the burn readout, the accept-edits badge). Since per-glyph colouring
+    landed these are real theme roles the designer can recolour; they're seeded from `FixedColors.SemanticDark`
+    / `SemanticLight` (by the theme's `IsDark`), so a fresh theme looks unchanged until edited. A theme swap
+    (`ThemeService.Apply`) mutates the cached brushes and flips the Fluent variant on `IsDark`; `Palette.Active`
+    is the active theme. Imported light/dark twins carry the variant in their name (e.g. "Nord (Dark)").
+  - **`Perch.Theming.FixedColors`** — only the *genuinely fixed* brand hues: `Brand`/`BrandHover`, the
+    destructive `Danger` red, and the `Jira` blue. These carry a constant identity that reads on both light
+    and dark, so they're **not** theme roles and are **never persisted** (`FixedColors.Default` is the one
+    source; `Palette.Fixed` exposes it — only the designer's colour-blind preview swaps in a simulated copy).
 
   Use `Palette.X` colours and `Palette.XBrush` cached fills — don't hand-code `Color.FromArgb` in new UI, and
   don't read colour off a raw `Theme`/`FixedColors` outside `Palette`. When adding UI that needs a colour:
   reach for an existing accessor first. If nothing fits, add the role to the **correct** home — a *fixed*
-  brand/semantic hue goes in `FixedColors` (+ its `Simulate`) and a `Palette` accessor/brush; a *tintable*
-  chrome/text role goes in `Theme` + `Themes.Midnight` (presets inherit via `with`) + `ThemeCodec.Roles`
-  (append only — order is the share-code wire format) + `CvdSim.Simulate(Theme)` + a `Palette` accessor/brush
-  + `Palette.Apply`. New/changed text colours must clear WCAG AA on their surface — `PresetContrastTests`
-  gates every built-in theme, and `Theming.Contrast` is the helper. The in-app designer (Settings →
-  Appearance) writes custom themes to `AppSettings.CustomThemes`; those deserialise through
-  `ThemeJsonConverter`, which seeds absent roles from Midnight (so a future `Theme` role never reads back as
-  black on an old file). Eyeball changes with `dotnet run … -- render <dir> [themeId]`.
+  brand hue goes in `FixedColors` (+ its `Simulate`) and a `Palette` accessor/brush; a *theme* role (chrome,
+  text, **or a new semantic/glyph hue**) goes in `Theme` + `Themes.Midnight` **and** `Daylight` (dark/light
+  presets; others inherit via `with`) + `ThemeCodec.Roles` (append only — order is the share-code wire format)
+  + `CvdSim.Simulate(Theme)` (manual, no reflection) + a `Palette` accessor/brush + `Palette.Apply`; a
+  *semantic* one also needs a default in **both** `FixedColors.SemanticDark`/`SemanticLight` and a row in the
+  designer's `GlyphRoles`. New/changed text colours must clear WCAG AA (and glyphs the 3:1 non-text floor) on
+  their surface — `PresetContrastTests` gates every built-in theme (dark **and** the light `Daylight`), and
+  `Theming.Contrast` is the helper. The in-app designer (Settings → Appearance) writes custom themes to
+  `AppSettings.CustomThemes`; those deserialise through `ThemeJsonConverter`, which seeds absent roles from
+  Midnight (so a future `Theme` role never reads back as black on an old file). Eyeball changes with
+  `dotnet run … -- render <dir> [themeId]`.
 - **Data sources are files under `~/.claude/`**, read best-effort:
   - Live session state: `~/.claude/sessions/{sessionId}.json` plus sidecars (`.mode`, `.notify`, `.history`).
   - Transcripts: `~/.claude/projects/{enc-cwd}/{sessionId}.jsonl` (append-only, one JSON record per line,

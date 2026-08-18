@@ -418,7 +418,7 @@ internal static class SettingsRegistry
         Info("theme", "Theme",
             "The app's colour theme — pick a preset or design your own on the Appearance page.",
             SettingSurface.Advanced, SettingKind.Dropdown,
-            ["theme", "colour", "color", "palette", "dark", "appearance", "contrast", "accessibility", "ember", "midnight"],
+            ["theme", "colour", "color", "palette", "dark", "light", "appearance", "contrast", "accessibility", "ember", "midnight"],
             PreviewTarget.None, nameof(AppSettings.ActiveThemeId)),
 
         Info("start-mode", "Start Perch",

@@ -20,8 +20,9 @@ namespace Perch.Avalonia.Windows;
 ///
 /// <para>Editing is deliberately gentle: a single neutral-tint control (hue + strength) re-tints the whole
 /// chrome ramp over the base's lightness structure — the "make my theme a bit more Perch-red" slider — plus
-/// an HSL accent picker and a name. The semantic status hues are inherited unchanged, keeping the overlay
-/// glanceable.</para>
+/// an HSL accent picker and a name. The semantic status glyphs (running/awaiting/error/…) start from the
+/// base's hues but can be recoloured individually (per-glyph colouring); each edit is audited against the
+/// 3:1 non-text floor so the overlay stays readable.</para>
 /// </summary>
 internal sealed class ThemeDesignerWindow : Window
 {
@@ -48,6 +49,28 @@ internal sealed class ThemeDesignerWindow : Window
     private readonly PreviewPane _preview = new();
     private Slider _hueSlider = null!, _chromaSlider = null!;
     private ColorPicker _accentPicker = null!;
+    // The per-glyph colour pickers, kept so SeedFrom / a "Fix" can push the current draft colour back in.
+    private readonly List<(GlyphRole role, ColorPicker picker)> _glyphPickers = new();
+
+    // The themeable semantic glyph roles a user can recolour: a label, how to read the role off a theme, and
+    // how to rewrite it. The label doubles as the _overrides key, so a picker edit and a "Fix" of the same
+    // glyph share one entry.
+    private readonly record struct GlyphRole(string Label, Func<Theme, Rgb> Get, Func<Theme, Rgb, Theme> Set);
+
+    private static readonly GlyphRole[] GlyphRoles =
+    [
+        new("Running",      t => t.StatusRunning,   (t, c) => t with { StatusRunning = c }),
+        new("Attention",    t => t.StatusAttention, (t, c) => t with { StatusAttention = c }),
+        new("Awaiting",     t => t.StatusAwaiting,  (t, c) => t with { StatusAwaiting = c }),
+        new("Idle",         t => t.StatusIdle,      (t, c) => t with { StatusIdle = c }),
+        new("Error",        t => t.StatusError,     (t, c) => t with { StatusError = c }),
+        new("Warn",         t => t.StatusWarn,      (t, c) => t with { StatusWarn = c }),
+        new("Sub-agent",    t => t.SubAgent,        (t, c) => t with { SubAgent = c }),
+        new("Mail",         t => t.Teal,            (t, c) => t with { Teal = c }),
+        new("Burn rate",    t => t.Burn,            (t, c) => t with { Burn = c }),
+        new("Bot / team",   t => t.TeamGray,        (t, c) => t with { TeamGray = c }),
+        new("Accept edits", t => t.ModeAcceptEdits, (t, c) => t with { ModeAcceptEdits = c }),
+    ];
 
     // The six pairs the readout audits: label, the draft role read as foreground (+ how to rewrite it when
     // "Fix" is pressed), the background role, and the target ratio (AA for text, 3:1 for glyphs).
@@ -157,17 +180,18 @@ internal sealed class ThemeDesignerWindow : Window
         var left = new StackPanel { Spacing = 10, Margin = new Thickness(0, 0, 4, 0) };
         left.Children.Add(SettingsUi.SectionTitle("Design a theme"));
         left.Children.Add(SettingsUi.BodyText(
-            "Start from a theme, re-tint the chrome and pick an accent. The status colours stay put so the " +
-            "overlay stays readable. Every change is applied live and checked against WCAG contrast below."));
+            "Start from a theme, re-tint the chrome, pick an accent, and recolour the status glyphs if you " +
+            "like. Every change is applied live and checked against WCAG contrast below."));
 
         left.Children.Add(SettingsUi.FieldCaption("Start from"));
-        var baseNames = Themes.BuiltIn.Select(t => t.Name).ToList();
-        var basePicker = SettingsUi.Dropdown(baseNames, Math.Max(0, Themes.BuiltIn.ToList().FindIndex(t => t.Id == _base.Id)));
+        var baseThemes = ThemeCatalog.All(null).ToList();   // built-ins + imported palettes
+        var basePicker = SettingsUi.Dropdown(baseThemes.Select(t => t.Name).ToList(),
+            Math.Max(0, baseThemes.FindIndex(t => t.Id == _base.Id)));
         basePicker.SelectionChanged += (_, _) =>
         {
             if (_sync) return;
             var i = basePicker.SelectedIndex;
-            if (i >= 0 && i < Themes.BuiltIn.Count) SeedFrom(Themes.BuiltIn[i]);
+            if (i >= 0 && i < baseThemes.Count) SeedFrom(baseThemes[i]);
         };
         left.Children.Add(basePicker);
 
@@ -195,6 +219,12 @@ internal sealed class ThemeDesignerWindow : Window
             Recompute();
         };
         left.Children.Add(_accentPicker);
+
+        left.Children.Add(SettingsUi.Separator());
+        left.Children.Add(SettingsUi.FieldCaption("Status glyphs"));
+        left.Children.Add(SettingsUi.BodyText(
+            "The overlay's status colours. Recolour any of them; each is checked at 3:1 on the overlay below."));
+        left.Children.Add(BuildGlyphGrid());
 
         left.Children.Add(SettingsUi.Separator());
         left.Children.Add(SettingsUi.FieldCaption("Colour-blind preview"));
@@ -249,6 +279,48 @@ internal sealed class ThemeDesignerWindow : Window
             btn.Background = on ? Palette.AccentBrush : Palette.ButtonBgBrush;
             btn.Foreground = on ? Palette.OnAccentBrush : Palette.FgBrush;
         }
+    }
+
+    // A compact grid of colour pickers, one per themeable status glyph. Editing one pins an absolute colour
+    // in _overrides (keyed by the glyph's label, shared with its "Fix"), applied after the chrome retint.
+    private Control BuildGlyphGrid()
+    {
+        var wrap = new WrapPanel { Orientation = Orientation.Horizontal };
+        foreach (var role in GlyphRoles)
+        {
+            var picker = new ColorPicker { Color = role.Get(_draft).ToColor() };
+            var r = role;
+            picker.ColorChanged += (_, e) =>
+            {
+                if (_sync) return;
+                _overrides[r.Label] = (r.Set, new Rgb(e.NewColor.R, e.NewColor.G, e.NewColor.B));
+                Recompute();
+            };
+            _glyphPickers.Add((role, picker));
+            wrap.Children.Add(new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 6, Width = 150,
+                Margin = new Thickness(0, 0, 8, 8), VerticalAlignment = VerticalAlignment.Center,
+                Children =
+                {
+                    picker,
+                    new TextBlock
+                    {
+                        Text = role.Label, FontSize = 12, Foreground = Palette.FgBrush,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    },
+                },
+            });
+        }
+        return wrap;
+    }
+
+    // Push each glyph's current draft colour back into its picker (caller holds the _sync guard). Keeps the
+    // pickers in step after a base-theme change or a "Fix".
+    private void SyncGlyphPickers()
+    {
+        foreach (var (role, picker) in _glyphPickers)
+            picker.Color = role.Get(_draft).ToColor();
     }
 
     // Reset every control to a starting theme, then apply.
@@ -313,6 +385,10 @@ internal sealed class ThemeDesignerWindow : Window
 
         ApplyDraft();      // repaints the whole app + this window + the embedded preview
         RefreshReadout();  // ratios are always computed from the *real* draft, never the CVD simulation
+
+        _sync = true;      // reflect the draft's glyph colours back into their pickers without re-triggering
+        SyncGlyphPickers();
+        _sync = false;
     }
 
     // Apply the draft live under the current colour-blind simulation (None = the real draft). The service
@@ -324,6 +400,27 @@ internal sealed class ThemeDesignerWindow : Window
         _readout.Children.Clear();
         foreach (var p in Pairs)
             _readout.Children.Add(ReadoutRow(p));
+
+        // Status glyphs are non-text (3:1) on the overlay surface. Only surface the failing ones (with a
+        // "Fix"); a clean set gets a single passing summary so the readout stays short.
+        _readout.Children.Add(new TextBlock
+        {
+            Text = "STATUS GLYPHS ON OVERLAY", FontSize = 11, FontWeight = FontWeight.SemiBold,
+            Foreground = Palette.MutedBrush, Margin = new Thickness(0, 6, 0, 2),
+        });
+        var glyphPairs = GlyphRoles
+            .Select(r => new Pair(r.Label, r.Get, r.Set, t => t.OverlaySurface, Contrast.NonText, true))
+            .ToList();
+        var failing = glyphPairs.Where(p => Contrast.Ratio(p.Fg(_draft), p.Bg(_draft)) < p.Target).ToList();
+        if (failing.Count == 0)
+            _readout.Children.Add(new TextBlock
+            {
+                Text = $"All {glyphPairs.Count} glyphs clear 3:1  ✓", FontSize = 12,
+                Foreground = new SolidColorBrush(Palette.Green),
+            });
+        else
+            foreach (var p in failing)
+                _readout.Children.Add(ReadoutRow(p));
     }
 
     private Control ReadoutRow(Pair p)

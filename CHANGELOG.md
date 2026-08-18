@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.42] - 2026-08-18
+
+- Light mode: a new Daylight theme, plus light versions of every palette
+- Recolour the status glyphs (running, error, the lot) in the theme designer — contrast-checked as you go
+
+---
+
 ## [v0.3.41] - 2026-08-18
 
 - Seven new eye-friendly colour themes: Nord, Gruvbox, Solarized, One, Tokyo Night, Rosé Pine, Sepia

@@ -4,19 +4,21 @@ namespace Perch.Theming;
 
 /// <summary>
 /// A compact, copy-pasteable share code for a theme — small enough to fit a QR and tidy on the clipboard.
-/// Format <c>perch1:&lt;base64&gt;</c> where the payload is <c>name\nisDark\nhex,hex,…</c> (the 30 role
-/// colours in a fixed order). Decoding starts from <see cref="Themes.Midnight"/>, so a code from a future
-/// version with extra roles still yields a usable theme (unknown trailing roles keep Midnight's value).
+/// Format <c>perch1:&lt;base64&gt;</c> where the payload is <c>name\nisDark\nhex,hex,…</c> (the tintable +
+/// semantic role colours in a fixed, append-only order). Decoding starts from <see cref="Themes.Midnight"/>,
+/// so a code from an older/future version with fewer/extra roles still yields a usable theme (unknown
+/// trailing roles keep Midnight's value).
 /// </summary>
 public static class ThemeCodec
 {
     private const string Prefix = "perch1:";
 
-    // The role read/write pairs, in a fixed order shared by encode and decode. Only the tintable theme
-    // roles are here — the brand/status/semantic palette is theme-independent (FixedColors) and isn't
-    // shared. These roles are all that ever varied; the order is stable, so a pre-refactor share code
-    // (which also carried the now-fixed roles after AccentHover) still decodes its chrome/text/accent
-    // correctly — Decode reads the leading roles it knows and ignores the trailing extras.
+    // The role read/write pairs, in a fixed, APPEND-ONLY order shared by encode and decode: the tintable
+    // chrome/text/accent roles first, then the themeable semantic status hues (appended when per-glyph
+    // colouring landed). The only theme-independent colours (brand/Jira/destructive) live in FixedColors and
+    // aren't shared. The order is stable, so an older share code that lacks the trailing semantic roles still
+    // decodes its chrome/text/accent correctly — Decode reads the leading roles it knows and ignores/seeds
+    // the rest from Midnight.
     private static readonly (Func<Theme, Rgb> Get, Func<Theme, Rgb, Theme> Set)[] Roles =
     [
         (t => t.Surface,            (t, c) => t with { Surface = c }),
@@ -35,6 +37,19 @@ public static class ThemeCodec
         (t => t.ExpectedMark,       (t, c) => t with { ExpectedMark = c }),
         (t => t.Accent,             (t, c) => t with { Accent = c }),
         (t => t.AccentHover,        (t, c) => t with { AccentHover = c }),
+        // Themeable semantic status / glyph hues — APPENDED (per-glyph colouring). Never reorder/insert
+        // above; a pre-glyph share code simply lacks these trailing roles and inherits Midnight's for them.
+        (t => t.StatusRunning,      (t, c) => t with { StatusRunning = c }),
+        (t => t.StatusAttention,    (t, c) => t with { StatusAttention = c }),
+        (t => t.StatusAwaiting,     (t, c) => t with { StatusAwaiting = c }),
+        (t => t.StatusIdle,         (t, c) => t with { StatusIdle = c }),
+        (t => t.StatusError,        (t, c) => t with { StatusError = c }),
+        (t => t.StatusWarn,         (t, c) => t with { StatusWarn = c }),
+        (t => t.SubAgent,           (t, c) => t with { SubAgent = c }),
+        (t => t.Teal,               (t, c) => t with { Teal = c }),
+        (t => t.Burn,               (t, c) => t with { Burn = c }),
+        (t => t.TeamGray,           (t, c) => t with { TeamGray = c }),
+        (t => t.ModeAcceptEdits,    (t, c) => t with { ModeAcceptEdits = c }),
     ];
 
     public static string Encode(Theme t)

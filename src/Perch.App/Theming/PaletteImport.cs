@@ -16,42 +16,49 @@ namespace Perch.Avalonia.Theming;
 /// awaiting=yellow / error=red stay identical under every theme — the overlay's glanceable read. We import
 /// only the tintable roles; the package's status/syntax/diff/editor tokens are ignored.</para>
 ///
-/// <para><b>Dark only, for now.</b> Perch pins the dark Fluent variant (<c>App.axaml</c>), so only the dark
-/// schemes are imported; light schemes + OS-follow are a separate follow-up (see
-/// <c>docs/palette-integration-assessment.md</c>). The Aurora and High Contrast families are skipped —
-/// they duplicate Perch's own Midnight and High Contrast presets.</para>
+/// <para><b>Both polarities.</b> Dark and light schemes are imported (light seeds its semantic glyphs from
+/// the light default set via the <see cref="Themes.Daylight"/> base). The Aurora and High Contrast families
+/// are skipped — they duplicate Perch's own Midnight / High Contrast / Daylight presets.</para>
 /// </summary>
 public static class PaletteImport
 {
     private static readonly PkgRgb Black = new(0, 0, 0);
+    private static readonly PkgRgb White = new(255, 255, 255);
 
     // Families already covered by a hand-authored Perch preset — skip to avoid near-duplicates.
     private static readonly HashSet<string> SkipFamilies =
         new(StringComparer.OrdinalIgnoreCase) { "Aurora", "High Contrast" };
 
-    /// <summary>Every imported Perch theme (dark schemes only), in the package's display order.</summary>
+    /// <summary>Every imported Perch theme (both light and dark schemes), in the package's display order.</summary>
     public static IReadOnlyList<Theme> All() =>
         PaletteCatalog.All
-            .Where(p => p.Variant == PaletteVariant.Dark && !SkipFamilies.Contains(p.Family))
+            .Where(p => !SkipFamilies.Contains(p.Family))
             .Select(ToTheme)
             .ToArray();
 
-    /// <summary>Map one package <see cref="PaletteDefinition"/> onto a Perch <see cref="Theme"/>. The Perch
-    /// roles the package doesn't carry are derived in the package's own <see cref="PkgRgb"/> space (it has
-    /// the blend helpers), mirroring the package's hover/tint derivation ratios, then converted at the edge.</summary>
+    /// <summary>Map one package <see cref="PaletteDefinition"/> onto a Perch <see cref="Theme"/>. We start
+    /// from the polarity-matching Perch base (so the semantic glyph hues and any future roles inherit the
+    /// right default set — imported palettes keep Perch's stable glyphs) and overwrite the chrome/text/accent
+    /// from the package. The few Perch roles the package doesn't carry are derived in the package's own
+    /// <see cref="PkgRgb"/> space, mirroring its hover/tint ratios and honouring the palette's polarity.</summary>
     public static Theme ToTheme(PaletteDefinition p)
     {
+        // The overlay panel sits a step off the sunken surface — darker on a dark scheme, lighter on a light
+        // one (a MixWith-black would muddy a light palette).
+        var overlay     = p.SurfaceSunken.MixWith(p.IsDark ? Black : White, 0.35);
         var raisedHover = p.SurfaceRaised.MixWith(p.TextPrimary, 0.09);   // button/card hover
-        var overlay     = p.SurfaceSunken.MixWith(Black, 0.35);          // floating panel: darker than sunken
         var rowHover    = overlay.MixWith(p.TextPrimary, 0.07);          // subtle wash on a hovered session row
         var track       = p.Surface.MixWith(p.TextPrimary, 0.12);       // usage-bar trough
-        var treeLine    = p.Border.MixWith(p.TextPrimary, 0.12);        // teammate connector, lighter than border
+        var treeLine    = p.Border.MixWith(p.TextPrimary, 0.12);        // teammate connector
         var expected    = p.TextMuted.MixWith(p.TextPrimary, 0.35);     // expected-usage tick on a bar
 
-        return new Theme
+        var baseTheme = p.IsDark ? Themes.Midnight : Themes.Daylight;
+        return baseTheme with
         {
             Id     = p.Id,
-            Name   = p.Name,
+            // The variant is in the display name so the light/dark twins (which share a package name) are
+            // distinct in every picker and dropdown, e.g. "Nord (Dark)" / "Nord (Light)".
+            Name   = $"{p.Name} ({(p.IsDark ? "Dark" : "Light")})",
             IsDark = p.IsDark,
 
             Surface            = C(p.Surface),
@@ -73,6 +80,7 @@ public static class PaletteImport
             Accent      = C(p.Accent),
             AccentHover = C(p.AccentHover),
             FocusRing   = C(p.AccentHover),
+            // Semantic glyph hues inherit from baseTheme (SemanticDark / SemanticLight) — glyphs stay stable.
         };
     }
 

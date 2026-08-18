@@ -12,10 +12,13 @@ namespace Perch.Theming;
 /// role to an Avalonia brush. A theme is immutable — build variants with a <c>with</c> expression off an
 /// existing one (see <c>Themes</c>), and only override the roles that actually differ.</para>
 ///
-/// <para><b>Design rule:</b> a theme tints <em>neutrals, chrome and the accent</em> — and nothing else. The
-/// brand, the semantic status hues (running/attention/awaiting/idle/error) and the teammate/mode accents
-/// carry fixed meaning across every theme, so they don't live here at all: see <see cref="FixedColors"/>.
-/// A theme therefore stores only what a user can actually change.</para>
+/// <para><b>Design rule:</b> a theme tints <em>neutrals, chrome, the accent</em> and — since per-glyph
+/// colouring landed — the <em>semantic status hues</em> (running/attention/awaiting/idle/error/warn, the
+/// sub-agent/teammate/mail accents, the burn readout and the accept-edits badge). Those are seeded from a
+/// dark or light default set (see <see cref="FixedColors"/>) so themes look identical until edited, but they
+/// are now real theme roles a user can recolour in the designer. Only the truly fixed brand hues — the Perch
+/// brand red-orange, the destructive-action red and the Jira brand blue — stay theme-independent in
+/// <see cref="FixedColors"/>, because they carry a constant identity on both light and dark.</para>
 /// </summary>
 [JsonConverter(typeof(ThemeJsonConverter))]
 public sealed record Theme
@@ -26,7 +29,7 @@ public sealed record Theme
     /// <summary>Human-facing name shown in the picker.</summary>
     public required string Name { get; init; }
 
-    /// <summary>True for a dark theme (surface darker than text). Drives future light/dark-only logic.</summary>
+    /// <summary>True for a dark theme (surface darker than text). Drives the Fluent variant flip.</summary>
     public bool IsDark { get; init; } = true;
 
     // ── Surfaces & chrome ──────────────────────────────────────────────────────
@@ -71,6 +74,31 @@ public sealed record Theme
     /// <summary>Keyboard-focus ring — a bright, high-contrast outline drawn on the focused control.</summary>
     public Rgb FocusRing { get; init; }
 
-    // The brand red-orange, the destructive-action red, the semantic status hues and the teammate/mode
-    // accents are theme-independent — they live in FixedColors, not here (see the design rule above).
+    // ── Semantic status / glyph (themeable) ────────────────────────────────────
+    // The overlay's glanceable status hues. Seeded from FixedColors.SemanticDark / SemanticLight (so a fresh
+    // theme reads exactly as before), but editable per theme. They must clear the 3:1 non-text floor on
+    // OverlaySurface (gated by PresetContrastTests). The brand/destructive/Jira hues are NOT here — they stay
+    // fixed in FixedColors.
+    /// <summary>Session running / usage healthy (green).</summary>
+    public Rgb StatusRunning { get; init; }
+    /// <summary>Session needs attention / done (orange).</summary>
+    public Rgb StatusAttention { get; init; }
+    /// <summary>Session awaiting input / usage warning (yellow).</summary>
+    public Rgb StatusAwaiting { get; init; }
+    /// <summary>Session idle (slate).</summary>
+    public Rgb StatusIdle { get; init; }
+    /// <summary>Error / API failure / usage critical (red).</summary>
+    public Rgb StatusError { get; init; }
+    /// <summary>Stuck / caution glyph (amber).</summary>
+    public Rgb StatusWarn { get; init; }
+    /// <summary>Sub-agent / unknown-teammate accent (purple).</summary>
+    public Rgb SubAgent { get; init; }
+    /// <summary>Mail / teal-teammate accent.</summary>
+    public Rgb Teal { get; init; }
+    /// <summary>Token burn-rate readout (blue).</summary>
+    public Rgb Burn { get; init; }
+    /// <summary>Bot / grey-teammate neutral accent.</summary>
+    public Rgb TeamGray { get; init; }
+    /// <summary>The "Accept edits" permission-mode badge (blue-purple).</summary>
+    public Rgb ModeAcceptEdits { get; init; }
 }

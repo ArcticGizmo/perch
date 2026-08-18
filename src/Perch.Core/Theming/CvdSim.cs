@@ -59,9 +59,10 @@ public static class CvdSim
     }
 
     /// <summary>Every <em>theme</em> role of <paramref name="theme"/> run through
-    /// <see cref="Simulate(Rgb, CvdType)"/> (the fixed brand/status palette simulates itself via
-    /// <see cref="FixedColors.Simulate"/>), so applying both previews the whole UI as that viewer would see
-    /// it. Id/Name are preserved.</summary>
+    /// <see cref="Simulate(Rgb, CvdType)"/> — including the themeable semantic status hues, so the overlay's
+    /// glyphs preview under the deficiency too. The four fixed brand/Jira/destructive hues aren't theme roles;
+    /// they simulate themselves via <see cref="FixedColors.Simulate"/> at the Palette apply site. Id/Name are
+    /// preserved. <b>Add every new <see cref="Theme"/> role here by hand</b> — this block does not reflect.</summary>
     public static Theme Simulate(Theme theme, CvdType type)
     {
         if (type == CvdType.None) return theme;
@@ -84,8 +85,18 @@ public static class CvdSim
             Accent = Simulate(theme.Accent, type),
             AccentHover = Simulate(theme.AccentHover, type),
             FocusRing = Simulate(theme.FocusRing, type),
-            // Brand/status/semantic hues aren't theme roles — the fixed palette simulates itself
-            // (see FixedColors.Simulate), driven from the same CvdType at the Palette apply site.
+            // Themeable semantic status / glyph hues.
+            StatusRunning = Simulate(theme.StatusRunning, type),
+            StatusAttention = Simulate(theme.StatusAttention, type),
+            StatusAwaiting = Simulate(theme.StatusAwaiting, type),
+            StatusIdle = Simulate(theme.StatusIdle, type),
+            StatusError = Simulate(theme.StatusError, type),
+            StatusWarn = Simulate(theme.StatusWarn, type),
+            SubAgent = Simulate(theme.SubAgent, type),
+            Teal = Simulate(theme.Teal, type),
+            Burn = Simulate(theme.Burn, type),
+            TeamGray = Simulate(theme.TeamGray, type),
+            ModeAcceptEdits = Simulate(theme.ModeAcceptEdits, type),
         };
     }
 
