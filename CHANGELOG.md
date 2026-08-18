@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.41] - 2026-08-18
+
+- Seven new eye-friendly colour themes: Nord, Gruvbox, Solarized, One, Tokyo Night, Rosé Pine, Sepia
+- Status hues stay fixed across all of them (green still means running)
+
+---
+
 ## [v0.3.40] - 2026-08-17
 
 - Two-way cursor sync between the Markdown editor and its preview

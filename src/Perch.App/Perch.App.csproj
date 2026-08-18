@@ -15,7 +15,7 @@
           <RootNamespace>Perch.Avalonia</RootNamespace>
           <AssemblyName>perch</AssemblyName>
           <Product>Perch</Product>
-          <Version>0.3.40</Version>
+          <Version>0.3.41</Version>
           <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
      </PropertyGroup>
 
@@ -47,6 +47,13 @@
           <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.5" />
           <PackageReference Include="Avalonia.Controls.ColorPicker" Version="12.0.5" />
           <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.5" />
+          <!-- Curated, WCAG-AA colour palettes (Nord, Gruvbox, Solarized, ...). We harvest their
+               chrome/text/accent values into Perch's own Theme model (see Theming/PaletteImport.cs);
+               Perch keeps its FixedColors semantic hues, so status glyphs stay glanceable across themes.
+               We consume only the UI-free *.Core package (the palette model + catalog, no Avalonia) since
+               we harvest data rather than drive the engine. Since v0.3.0 the namespace is
+               `ArcticGizmo.Avalonia.Palette` (was a bare `Palette`), so no extern alias is needed. -->
+          <PackageReference Include="ArcticGizmo.Avalonia.Palette.Core" Version="0.3.0" />
           <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
           <PackageReference Include="Velopack" Version="1.2.0" />
           <PackageReference Include="QRCoder" Version="1.8.0" />

@@ -39,7 +39,9 @@ internal static class HeadlessRenderer
             .SetupWithoutStarting();
 
         // Render under the requested theme (default Midnight). Palette drives every owner-drawn surface.
-        Theming.Palette.Apply(ThemeService.Resolve(themeId));
+        // Register the imported palettes too, so `render <dir> nord-dark` (etc.) resolves them.
+        Perch.Theming.ThemeCatalog.RegisterImported(Theming.PaletteImport.All());
+        Theming.Palette.Apply(Perch.Theming.ThemeCatalog.Resolve(themeId, null));
 
         var canvas = new OverlayCanvas();
         canvas.SetShowPullRequests(true);

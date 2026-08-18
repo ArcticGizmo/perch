@@ -146,6 +146,10 @@ public partial class App : Application
             // floating one; the dense one is used on first dense entry). Null on either keeps the default.
             _overlay.Canvas.SetInitialPlacements(settings.FloatingPlacement, settings.DensePlacement);
 
+            // Register the curated palettes harvested from the ArcticGizmo package as built-in-like presets,
+            // so a saved ActiveThemeId that names one (e.g. "nord-dark") resolves below.
+            Perch.Theming.ThemeCatalog.RegisterImported(Theming.PaletteImport.All());
+
             // Colour theme first, before anything paints, so the overlay's first frame is already themed.
             Palette.Apply(Perch.Theming.ThemeCatalog.Resolve(settings.ActiveThemeId, settings.CustomThemes));
 
