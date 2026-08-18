@@ -602,6 +602,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         h += 2;
         if (MicStripVisible) h += MicStripHeight;
         if (MediaStripVisible) h += MediaStripHeight;
+        if (FeedStripVisible) h += FeedStripHeight;
         return h;
     }
 
@@ -1501,6 +1502,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool showDaemon = showBody && DaemonStripVisible;     // daemon background workers, below the rows
         bool showMic = showBody && MicStripVisible;           // who has the microphone, below the rows
         bool showMedia = showBody && MediaStripVisible;       // now-playing + transport strip, below that
+        bool showFeed = showBody && FeedStripVisible;         // friends' status feed, below that
 
         double height = HeaderHeight;
         if (showBody) height += PanelBodyHeight();
@@ -1578,7 +1580,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     DrawMicStrip(ctx, width, top);
                     top += MicStripHeight;
                 }
-                if (showMedia) DrawMediaStrip(ctx, width, top);
+                if (showMedia)
+                {
+                    DrawMediaStrip(ctx, width, top);
+                    top += MediaStripHeight;
+                }
+                if (showFeed) DrawFeedStrip(ctx, width, top);
             }
 
             if (!showMic) ClearMicHitRects();

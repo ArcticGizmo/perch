@@ -1,5 +1,6 @@
 ﻿using Perch.Data;
 using Perch.Platform;
+using Perch.Social;
 
 namespace Perch.Avalonia.Rendering;
 
@@ -127,6 +128,25 @@ internal static class SampleData
     public static MicSnapshot Mic() =>
         new([new MicUser("91750D7E.Slack_8she8kybcnzg4", "Slack", 4242, true, DateTimeOffset.Now.AddMinutes(-7))],
             DeviceName: "Microphone (Logitech Webcam C930e)");
+
+    /// <summary>A few friends' statuses, for the social feed strip — only drawn when the feed setting is on.
+    /// Times are offsets from "now" so the strip always reads "2m / 14m / 31m" regardless of when it renders.</summary>
+    public static FeedSnapshot Feed()
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new FeedSnapshot(
+        [
+            new(Guid.Parse("aaaaaaaa-0000-4000-8000-000000000001"),
+                new Profile(Guid.Parse("aaaaaaaa-1111-4000-8000-000000000001"), "ada", "Ada L."),
+                "refactored the whole thing. do not ask.", "🦉", now.AddMinutes(-2)),
+            new(Guid.Parse("bbbbbbbb-0000-4000-8000-000000000002"),
+                new Profile(Guid.Parse("bbbbbbbb-1111-4000-8000-000000000002"), "grace", "Grace H."),
+                "tests green on the first try", "🛠️", now.AddMinutes(-14)),
+            new(Guid.Parse("cccccccc-0000-4000-8000-000000000003"),
+                new Profile(Guid.Parse("cccccccc-1111-4000-8000-000000000003"), "linus"),
+                "coffee, then the merge conflict from hell", "☕", now.AddMinutes(-31)),
+        ]);
+    }
 
     /// <summary>A couple of daemon workers, for the daemon strip — hidden when the daemon setting is off.</summary>
     public static IReadOnlyList<DaemonWorker> DaemonWorkers()

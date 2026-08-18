@@ -45,3 +45,23 @@ public sealed record AuthState(bool SignedIn, Profile? Me)
 
 /// <summary>A newly created post's id, returned from <see cref="ISocialClient.PostAsync"/>.</summary>
 public readonly record struct PostId(Guid Value);
+
+/// <summary>
+/// The feed as pushed to the overlay strip — the recent items, newest first. A record purely so the overlay
+/// can skip a no-op repaint, but it hand-writes value equality (like <c>MicSnapshot</c>): the compiler-
+/// generated record equality compares the <see cref="Items"/> list by <em>reference</em>, which would make
+/// every fresh snapshot look different and defeat the "only relayout when it actually changed" check.
+/// </summary>
+public sealed record FeedSnapshot(IReadOnlyList<FeedItem> Items)
+{
+    public bool Any => Items.Count > 0;
+
+    public bool Equals(FeedSnapshot? other) => other is not null && Items.SequenceEqual(other.Items);
+
+    public override int GetHashCode()
+    {
+        var hc = new HashCode();
+        foreach (var i in Items) hc.Add(i);
+        return hc.ToHashCode();
+    }
+}

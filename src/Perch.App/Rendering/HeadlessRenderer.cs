@@ -128,6 +128,16 @@ internal static class HeadlessRenderer
         RenderControl(micProbe, Path.Combine(outDir, "overlay_mic_call_1x.png"), 96);
         RenderControl(micProbe, Path.Combine(outDir, "overlay_mic_call_1.5x.png"), 144);
 
+        // Social feed strip: below the session rows, a "Friends" caption then a few friends' recent statuses
+        // (avatar dot + @handle + status + relative time). Exercises the multi-row, line-height-derived height
+        // and the status truncation.
+        var feedProbe = new OverlayCanvas();
+        feedProbe.Update(SampleData.Sessions());
+        feedProbe.SetShowFeedStrip(true);
+        feedProbe.UpdateFeed(SampleData.Feed());
+        RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1x.png"), 96);
+        RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1.5x.png"), 144);
+
         // Hypertree strip: the branch list under the quick links, with the row the cursor is on marked.
         // The sample puts main mid-stack (Hypertree publishes the stack already flattened, main at its
         // slot) and gives one branch a long desktop label so the trailing-label truncation is exercised.
