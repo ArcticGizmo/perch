@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.44] - 2026-08-18
+
+- Redesigned the Git tree around bordered cards with room to breathe
+- Moved its light/dark toggle up to the header (it had been loitering in the floating bar)
+- Diffs read on a lighter paper surface in dark mode too, not just light
+
+---
+
 ## [v0.3.43] - 2026-08-18
 
 - Syntax highlighting in the Markdown source editor, not just the preview

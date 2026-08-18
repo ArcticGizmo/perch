@@ -863,6 +863,8 @@ internal static class HeadlessRenderer
         // the file header in the eyeball (the default Unified mode; Hunk mode moves them onto each hunk).
         diff.SetSections([new Views.DiffSection("Unstaged", SampleDiff(), Views.HunkStageAction.Stage)], null);
 
+        // Each pane is a rounded "card" (PaneBg + Border), a section label at its top — mirroring the window's
+        // real card-on-page layout.
         Control Pane(string title, Control body)
         {
             var label = new TextBlock
@@ -874,24 +876,29 @@ internal static class HeadlessRenderer
             DockPanel.SetDock(label, Dock.Top);
             dp.Children.Add(label);
             dp.Children.Add(body);
-            return dp;
+            return new Border
+            {
+                Background = pal.PaneBg, BorderBrush = pal.Border, BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(10), ClipToBounds = true, Child = dp,
+            };
         }
 
-        Control Sep() => new Border { Background = pal.Separator };
+        // The splitter gutters are transparent — the page shows through them.
+        Control Gutter() => new Border { Background = Brushes.Transparent };
 
         var grid = new Grid
         {
-            Width = 1180, Height = 340,
-            Background = pal.WindowBg,
-            ColumnDefinitions = new ColumnDefinitions("300,1,254,1,*"),
+            ColumnDefinitions = new ColumnDefinitions("300,16,254,16,*"),
+            Margin = new Thickness(14, 12, 14, 14),   // the padded "page"
         };
         void Add(Control c, int col) { c.SetValue(Grid.ColumnProperty, col); grid.Children.Add(c); }
         Add(Pane("Commits · this branch", nodes), 0);
-        Add(Sep(), 1);
+        Add(Gutter(), 1);
         Add(Pane("Files", files), 2);
-        Add(Sep(), 3);
+        Add(Gutter(), 3);
         Add(Pane("Diff", diff), 4);
-        return grid;
+
+        return new Border { Width = 1180, Height = 340, Background = pal.WindowBg, Child = grid };
     }
 
     private static StatsReport SampleStatsReport()

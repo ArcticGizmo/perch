@@ -214,9 +214,9 @@ internal sealed class DiffView : Border
         }
         else
         {
-            BodyBg = pal.Sunken;                 // the deepest surface behind the diff body
-            FileBarBg = new SolidColorBrush(pal.Surface);
-            SectionBarBg = B(0x2A, 0x2A, 0x38);
+            BodyBg = pal.Raised;                 // paper-like card body (matches the tree's graph/files cards)
+            FileBarBg = new SolidColorBrush(pal.Surface);  // file header, recessed a step below the body
+            SectionBarBg = new SolidColorBrush(pal.Sunken); // hunk header, the deepest strip
             TitleBrush = new SolidColorBrush(pal.Title);
             MutedBrush = new SolidColorBrush(pal.Muted);
             GutterBrush = B(110, 110, 132);

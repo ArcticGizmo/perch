@@ -245,13 +245,13 @@ internal sealed class GitTreeWindow : Window
         ToolTip.SetTip(_stageLinesBtn, "Select line numbers in the working-tree diff, then stage/unstage just those lines");
         // Click wired after _diff is constructed (below), so it can't dereference a not-yet-set field.
 
-        // Per-window light/dark toggle — a sun/moon glyph in the floating bar. Reading a lot of diff/commit
-        // text is easier when this window can go light without flipping the always-on-top overlay.
+        // Per-window light/dark toggle — a sun/moon glyph at the right of the header. Reading a lot of
+        // diff/commit text is easier when this window can go light without flipping the always-on-top overlay.
         _themeBtn = new Button
         {
             FontSize = 16, Padding = new Thickness(8, 2), VerticalAlignment = VerticalAlignment.Center,
             Background = Brushes.Transparent, BorderThickness = new Thickness(0),
-            Cursor = new Cursor(StandardCursorType.Hand),
+            Cursor = new Cursor(StandardCursorType.Hand), [DockPanel.DockProperty] = Dock.Right,
         };
         _themeBtn.Click += (_, _) => ToggleLight();
         ToolTip.SetTip(_themeBtn, "Light / dark — affects this window only");
@@ -270,11 +270,13 @@ internal sealed class GitTreeWindow : Window
         _headerBorder = new Border
         {
             Padding = new Thickness(14, 10),
+            BorderThickness = new Thickness(0, 0, 0, 1),
             [DockPanel.DockProperty] = Dock.Top,
             Child = new DockPanel
             {
                 LastChildFill = true,
-                Children = { _prChip, refreshBtn, _stageLinesBtn, _expandBtn, _baseBtn, headerText },
+                // _themeBtn is first so it sits at the far right of the header.
+                Children = { _themeBtn, _prChip, refreshBtn, _stageLinesBtn, _expandBtn, _baseBtn, headerText },
             },
         };
 
@@ -340,6 +342,7 @@ internal sealed class GitTreeWindow : Window
         _composer = new Border
         {
             Padding = new Thickness(12),
+            BorderThickness = new Thickness(0, 1, 0, 0),   // rule dividing the composer from the staged list
             [DockPanel.DockProperty] = Dock.Bottom,
             Child = new StackPanel { Children = { _composerLabel, _msgBox, commitRow } },
         };
@@ -392,16 +395,16 @@ internal sealed class GitTreeWindow : Window
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
 
-        // Floating control bar: [☀/☾]  [Previous|Diff|Current]  [Unified|Split|Hunk]. Overlays the bottom of
-        // the diff pane, centred. Diff sits between the two whole-file views; the content segment comes before
-        // the layout segment because it gates whether the layout segment shows.
+        // Floating control bar: [Previous|Diff|Current]  [Unified|Split|Hunk]. Overlays the bottom of the diff
+        // pane, centred. Diff sits between the two whole-file views; the content segment comes before the layout
+        // segment because it gates whether the layout segment shows. (The light/dark toggle now lives in the header.)
         _modeSegment = Segment(_unifiedBtn, _splitBtn, _hunkBtn);
         _modeSegment.IsVisible = _contentMode == ContentMode.Diff;
         var contentSegment = Segment(_prevBtn, _diffBtn, _currBtn);
         var barContent = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center,
-            Children = { _themeBtn, contentSegment, _modeSegment },
+            Children = { contentSegment, _modeSegment },
         };
         _floatingBar = new Border
         {
@@ -442,9 +445,11 @@ internal sealed class GitTreeWindow : Window
         var diffArea = new Grid { Children = { _diffScroll, _diffPlaceholder, _floatingBar } };
         var diffPane = new DockPanel { LastChildFill = true, Children = { _findBar, diffArea } };
 
-        // ---- three resizable panes: graph | files | diff, split by GridSplitters ----
+        // ---- three resizable panes: graph | files | diff, as rounded cards on a padded "page", with the
+        // GridSplitters as wide, transparent breathing gutters (the page shows through them). ----
         var body = new Grid
         {
+            Margin = new Thickness(14, 12, 14, 14),
             ColumnDefinitions = new ColumnDefinitions
             {
                 new(new GridLength(300, GridUnitType.Pixel)) { MinWidth = 200 },
@@ -454,30 +459,49 @@ internal sealed class GitTreeWindow : Window
                 new(new GridLength(1, GridUnitType.Star)) { MinWidth = 240 },
             },
         };
-        body.Children.Add(WithColumn(graphPane, 0));
+        body.Children.Add(WithColumn(Card(graphPane), 0));
         body.Children.Add(WithColumn(Splitter(), 1));
-        body.Children.Add(WithColumn(filesPane, 2));
+        body.Children.Add(WithColumn(Card(filesPane), 2));
         body.Children.Add(WithColumn(Splitter(), 3));
-        body.Children.Add(WithColumn(diffPane, 4));
+        body.Children.Add(WithColumn(Card(diffPane), 4));
 
         Content = new DockPanel { Children = { _headerBorder, body } };
 
         ApplyPalette(); // paint every element from the local palette (light or dark)
     }
 
-    // A vertical drag handle between two panes; recorded so the light/dark toggle can recolour it.
+    // A vertical drag handle between two panes — a wide, transparent breathing gutter so the page shows
+    // between the cards (recorded, though it stays transparent, to keep the list of window chrome complete).
     private GridSplitter Splitter()
     {
         var s = new GridSplitter
         {
-            Width = 6,
-            Background = _pal.Separator,
+            Width = 16,
+            Background = Brushes.Transparent,
             ResizeDirection = GridResizeDirection.Columns,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalAlignment = HorizontalAlignment.Center,
         };
         _splitters.Add(s);
         return s;
     }
+
+    // Wraps a pane's content in a rounded, bordered "card" on the page (the reading surface), recorded so the
+    // light/dark toggle can recolour it. Mirrors MarkdownWindow's file/source/preview cards.
+    private Border Card(Control content)
+    {
+        var b = new Border
+        {
+            Background = _pal.PaneBg,
+            BorderBrush = _pal.Border,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            ClipToBounds = true,
+            Child = content,
+        };
+        _cards.Add(b);
+        return b;
+    }
+    private readonly List<Border> _cards = new();
 
     // A pane's section-header label (its colour is applied by ApplyPalette).
     private static TextBlock PaneLabel(string text) => new()
@@ -1666,10 +1690,14 @@ internal sealed class GitTreeWindow : Window
     private void ApplyPalette()
     {
         RequestedThemeVariant = _light ? ThemeVariant.Light : ThemeVariant.Dark;
-        Background = _pal.WindowBg;
-        _headerBorder.Background = _pal.HeaderBg;
-        _findBar.Background = _pal.HeaderBg;
-        _composer.Background = _pal.HeaderBg;
+        Background = _pal.WindowBg;                       // the "page" behind the cards
+        _headerBorder.Background = _pal.WindowBg;         // header blends into the page, divided by a bottom rule
+        _headerBorder.BorderBrush = _pal.Separator;
+        // The find bar (top of the diff card) and composer (bottom of the files card) read as recessed
+        // toolbar strips in the page tone within their cards.
+        _findBar.Background = _pal.WindowBg;
+        _composer.Background = _pal.WindowBg;
+        _composer.BorderBrush = _pal.Separator;
 
         _titleText.Foreground = _pal.Title;
         _subText.Foreground = _pal.Muted;
@@ -1689,12 +1717,13 @@ internal sealed class GitTreeWindow : Window
         _commitBtn.Background = _pal.Accent;
         _commitBtn.Foreground = _pal.OnAccent;
 
-        foreach (var s in _splitters) s.Background = _pal.Separator;
+        foreach (var c in _cards) { c.Background = _pal.PaneBg; c.BorderBrush = _pal.Border; }
+        foreach (var s in _splitters) s.Background = Brushes.Transparent; // gutters stay transparent
         foreach (var s in _groupSeparators) s.Background = _pal.Separator;
 
-        // Floating bar + segmented controls.
-        _floatingBar.Background = _pal.HeaderBg;
-        _floatingBar.BorderBrush = _pal.Separator;
+        // Floating bar + segmented controls. The bar is an opaque raised card over the diff.
+        _floatingBar.Background = _pal.PaneBg;
+        _floatingBar.BorderBrush = _pal.Border;
         foreach (var c in _segmentContainers) c.BorderBrush = _pal.Separator;
         foreach (var d in _segmentDividers) d.Background = _pal.Separator;
         // Sun (go light) when dark, moon (go dark) when light.
@@ -1877,7 +1906,9 @@ internal sealed class GitTreeWindow : Window
     /// readability — with fixed, high-contrast status hues (green/red/orange) for the working-tree file states.</summary>
     internal sealed class TreePalette
     {
-        public required IBrush WindowBg, HeaderBg, Title, Fg, Muted, Accent, AccentHover, OnAccent, Brand,
+        // Card-on-page surface hierarchy (mirrors MarkdownWindow's MdTheme): WindowBg is the medium "page"
+        // behind the panes; PaneBg is the lighter "card" the graph/files/diff read on, framed by Border.
+        public required IBrush WindowBg, PaneBg, Border, Title, Fg, Muted, Accent, AccentHover, OnAccent, Brand,
             ButtonBg, Separator, HollowFill, Green, Red, Orange;
 
         public static TreePalette Dark()
@@ -1885,8 +1916,9 @@ internal sealed class GitTreeWindow : Window
             var a = AuroraPalette.Dark;
             return new()
             {
-                WindowBg = BC(a.Sunken),
-                HeaderBg = BC(a.Raised),
+                WindowBg = BC(a.Surface),    // page
+                PaneBg = BC(a.Raised),       // card
+                Border = BC(a.Border),
                 Title = BC(a.Title),
                 Fg = BC(a.Text),
                 Muted = BC(a.Muted),
@@ -1908,8 +1940,9 @@ internal sealed class GitTreeWindow : Window
             var a = AuroraPalette.Light;
             return new()
             {
-                WindowBg = BC(a.Sunken),
-                HeaderBg = BC(a.Raised),
+                WindowBg = BC(a.Sunken),     // page (a step below the white cards)
+                PaneBg = BC(a.Raised),       // card
+                Border = BC(a.Border),
                 Title = BC(a.Title),
                 Fg = BC(a.Text),
                 Muted = BC(a.Muted),
