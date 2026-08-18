@@ -414,6 +414,13 @@ internal static class SettingsRegistry
             ["jira", "project", "key", "filter", "prefix", "sfty"], PreviewTarget.JiraTicket,
             nameof(AppSettings.JiraProjectFilter)),
 
+        // ── Social ───────────────────────────────────────────────────────────
+        Toggle("social", "Social feed",
+            "The opt-in friends feed: sign in, add friends by handle, post a status, and see friends' statuses under the overlay. Off makes no network calls at all.",
+            SettingSurface.Social, ["social", "friends", "feed", "status", "post", "update", "myspace", "connect"],
+            PreviewTarget.None, nameof(AppSettings.SocialEnabled),
+            s => s.SocialEnabled, (s, v) => s.SocialEnabled = v),
+
         // ── Advanced ─────────────────────────────────────────────────────────
         Info("theme", "Theme",
             "The app's colour theme — pick a preset or design your own on the Appearance page.",

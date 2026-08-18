@@ -23,7 +23,7 @@ internal sealed class SettingsCatalogView : StackPanel
     [
         SettingSurface.SessionRow, SettingSurface.UsageBars, SettingSurface.SystemMetrics,
         SettingSurface.Notifications, SettingSurface.TrayAndStats, SettingSurface.Whimsy,
-        SettingSurface.Integrations, SettingSurface.Advanced,
+        SettingSurface.Integrations, SettingSurface.Social, SettingSurface.Advanced,
     ];
 
     private readonly AppSettings _settings;

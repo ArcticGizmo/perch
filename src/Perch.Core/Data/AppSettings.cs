@@ -402,6 +402,12 @@ internal sealed class AppSettings
     // keeps Auto. See <see cref="Perch.Platform.ISessionLauncher"/>.
     public TerminalApp ReopenTerminal { get; set; } = TerminalApp.Auto;
 
+    // Social. Master switch for the (opt-in) friends feed — sign in, add friends, post a status, and see
+    // friends' statuses under the overlay. Off by default and load-bearing while off: no account, no token,
+    // and not a single network call is made until it's turned on, so the feature costs nothing to everyone
+    // who never enables it. A missing key keeps it off. See docs/social-feed-plan.md.
+    public bool SocialEnabled { get; set; }
+
     // "Perch reacts": the tray and overlay bird wears the aggregate session mood — dozing (faded, a
     // trail of z's) when nothing's running, plainly alert while sessions work, a "!" badge when one
     // needs you, and visibly panicking (red bang + flying sweat) when a session looks stuck. Pure
