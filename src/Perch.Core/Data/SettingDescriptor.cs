@@ -61,6 +61,7 @@ internal enum PreviewTarget
     DaemonProcesses,
     QuickLinks,
     PerchReacts,
+    FeedStrip,
 }
 
 /// <summary>

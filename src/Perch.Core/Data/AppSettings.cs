@@ -408,6 +408,16 @@ internal sealed class AppSettings
     // who never enables it. A missing key keeps it off. See docs/social-feed-plan.md.
     public bool SocialEnabled { get; set; }
 
+    // Whether the friends feed strip is drawn under the overlay's session rows (a slim band listing friends'
+    // most recent statuses). Only meaningful while SocialEnabled is on and there are posts to show; the strip
+    // takes no height otherwise. On by default so enabling Social shows the feed; a missing key keeps it on.
+    public bool ShowFeedStrip { get; set; } = true;
+
+    // Whether a friend posting a status pops a desktop notification (reusing the same quiet-hours / DND rules
+    // as the session toasts). Gated by SocialEnabled. On by default; a missing key keeps it on. (The firing
+    // path is wired when live posts arrive — see the Social milestone plan M5.)
+    public bool NotifyOnFriendPost { get; set; } = true;
+
     // "Perch reacts": the tray and overlay bird wears the aggregate session mood — dozing (faded, a
     // trail of z's) when nothing's running, plainly alert while sessions work, a "!" badge when one
     // needs you, and visibly panicking (red bang + flying sweat) when a session looks stuck. Pure
