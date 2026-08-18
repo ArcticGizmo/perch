@@ -46,6 +46,7 @@ namespace Perch.Avalonia.Windows;
 internal sealed class MarkdownWindow : Window
 {
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
+    private const double SourceFontSize = 12.5;   // shared by the source editor and its syntax highlighter
     // The rose that marks "produced" files, matching the overlay's Markdown glyph. Fixed across themes.
     private static readonly IBrush ProducedDotBrush = new SolidColorBrush(Color.FromRgb(244, 114, 182));
 
@@ -108,7 +109,7 @@ internal sealed class MarkdownWindow : Window
     private readonly TextBlock _editorStatus;
     private readonly Button _saveBtn;
     private readonly Button _revertBtn;
-    private readonly TextBox _sourceBox;
+    private readonly HighlightTextBox _sourceBox;
     private readonly DispatcherTimer _previewTimer;
 
     private string? _cwd;
@@ -283,10 +284,10 @@ internal sealed class MarkdownWindow : Window
         _revertBtn.Click += (_, _) => Revert();
         ToolTip.SetTip(_revertBtn, "Discard unsaved changes and restore the last saved version");
 
-        _sourceBox = new TextBox
+        _sourceBox = new HighlightTextBox
         {
             AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.Wrap,
-            FontFamily = Mono, FontSize = 12.5,
+            FontFamily = Mono, FontSize = SourceFontSize,
             BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(0),
             Padding = new Thickness(12, 10), VerticalContentAlignment = VerticalAlignment.Top,
             [ScrollViewer.VerticalScrollBarVisibilityProperty] = ScrollBarVisibility.Auto,
@@ -404,6 +405,11 @@ internal sealed class MarkdownWindow : Window
         _theme = _windowLight ? MdTheme.Light() : MdTheme.Dark();
         var t = _theme;
 
+        // Drive the Fluent theme variant off our window toggle so every Fluent-templated control (search box,
+        // buttons, tree, scrollbars) resolves its state resources — focus/hover/placeholder — from the right
+        // polarity.
+        RequestedThemeVariant = _windowLight ? ThemeVariant.Light : ThemeVariant.Dark;
+
         Background = t.WindowBg;                 // the "page" behind the cards
         _header.Background = t.WindowBg;
         _header.BorderBrush = t.Separator;
@@ -429,15 +435,17 @@ internal sealed class MarkdownWindow : Window
         _sourceCard.BorderBrush = t.Border;
         _editorFileLabel.Foreground = t.Muted;
         _editorPlaceholder.Foreground = t.Muted;
+        // Syntax-highlight the raw Markdown source, coloured from the Aurora editor/syntax tokens for this
+        // polarity (the base foreground matches the highlighter's so unstyled text and styled runs agree).
+        var syntax = EditorSyntax.For(_windowLight);
         _sourceBox.Background = t.EditorBg;
-        _sourceBox.Foreground = t.Fg;
+        _sourceBox.Foreground = syntax.Fg;
+        _sourceBox.SetHighlighter(text => MarkdownSourceHighlighter.Highlight(text, syntax, new Typeface(Mono), SourceFontSize));
         // The default selection highlight reads as a harsh near-black block; use a soft translucent tint
         // and keep the selected text its normal colour.
         _sourceBox.SelectionBrush = t.Selection;
         _sourceBox.SelectionForegroundBrush = t.Fg;
-        // Fluent swaps a focused/hovered text field to its own (near-black) background resources, ignoring
-        // our Background. Pin those states to EditorBg so focus doesn't change the field colour.
-        ApplyFieldBackgrounds(_sourceBox, t);
+        // (The source box uses its own minimal template, so it needs no Fluent focus/hover background pinning.)
         ApplyFieldBackgrounds(_searchBox, t);
 
         StyleButton(_windowThemeBtn, t);

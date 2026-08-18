@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.43] - 2026-08-18
+
+- Syntax highlighting in the Markdown source editor, not just the preview
+- Redesigned the Markdown viewer around bordered cards with room to breathe
+- Click a block in one pane to line the other up to the same spot
+- Revert button in the Markdown editor, for when undo won't reach the whoops
+- The Markdown editor shows a text cursor now (it had been posing as a button)
+- Sharper light and dark reading colours across the Markdown viewer and Git tree
+
+---
+
 ## [v0.3.42] - 2026-08-18
 
 - Light mode: a new Daylight theme, plus light versions of every palette
