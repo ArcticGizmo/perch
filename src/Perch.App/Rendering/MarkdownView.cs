@@ -297,6 +297,7 @@ internal sealed class MarkdownView
         return new Border
         {
             Background = _s.CodeBg, CornerRadius = new CornerRadius(6),
+            BorderBrush = _s.TableBorder, BorderThickness = new Thickness(1),
             Padding = new Thickness(12, 10), Margin = new Thickness(0, 0, 0, BlockGap),
             Child = new ScrollViewer
             {

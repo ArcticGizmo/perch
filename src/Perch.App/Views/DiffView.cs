@@ -185,49 +185,51 @@ internal sealed class DiffView : Border
         Rebuild();
     }
 
-    // Fills every colour field for the current mode and sets the surface background. Dark mirrors the original
-    // literals (and the Palette-derived add/remove/hunk hues); light uses darker, print-legible variants.
+    // Fills every colour field for the current mode and sets the surface background. Both polarities are built
+    // on the shared Aurora reading palette (surfaces + title/muted/accent) so the diff reads the same regardless
+    // of the app theme; the add/remove/match hues are fixed, high-contrast values chosen for line-by-line reading.
     private void ApplyDiffPalette()
     {
         IBrush B(byte r, byte g, byte b) => new SolidColorBrush(Color.FromRgb(r, g, b));
         IBrush A(byte a, byte r, byte g, byte b) => new SolidColorBrush(Color.FromArgb(a, r, g, b));
+        var pal = AuroraPalette.For(_light);
         if (_light)
         {
-            BodyBg = Color.FromRgb(0xFB, 0xFC, 0xFE);
-            FileBarBg = B(0xF1, 0xF2, 0xF5);
-            SectionBarBg = B(0xE6, 0xE9, 0xF0);
-            TitleBrush = B(0x0D, 0x0E, 0x16);
-            MutedBrush = B(0x5C, 0x60, 0x72);
+            BodyBg = pal.Raised;                 // paper-white body for a print-legible diff
+            FileBarBg = new SolidColorBrush(pal.Sunken);
+            SectionBarBg = new SolidColorBrush(pal.Separator);
+            TitleBrush = new SolidColorBrush(pal.Title);
+            MutedBrush = new SolidColorBrush(pal.Muted);
             GutterBrush = B(0x9A, 0xA0, 0xAE);
-            ContextBrush = B(0x24, 0x29, 0x2F);
+            ContextBrush = new SolidColorBrush(pal.Text);
             AddedBrush = B(0x1F, 0x88, 0x3D);
             RemovedBrush = B(0xCF, 0x22, 0x2E);
-            HunkBrush = B(0x2F, 0x68, 0xE0);
-            SelectionBrush = A(70, 0x2F, 0x68, 0xE0);
+            HunkBrush = new SolidColorBrush(pal.Accent);
+            SelectionBrush = A(70, 0x25, 0x63, 0xEB);
             AddedBandBg = A(30, 0x1F, 0x88, 0x3D);
             RemovedBandBg = A(28, 0xCF, 0x22, 0x2E);
             MatchBg = A(96, 0xF5, 0xD0, 0x00);
             CurrentMatchBg = A(200, 0xF0, 0x8A, 0x00);
-            LineSelBg = A(55, 0x2F, 0x68, 0xE0);
+            LineSelBg = A(55, 0x25, 0x63, 0xEB);
         }
         else
         {
-            BodyBg = Color.FromRgb(18, 18, 24);
-            FileBarBg = B(30, 30, 42);
-            SectionBarBg = B(40, 40, 56);
-            TitleBrush = new SolidColorBrush(Palette.Title);
-            MutedBrush = new SolidColorBrush(Palette.Muted);
+            BodyBg = pal.Sunken;                 // the deepest surface behind the diff body
+            FileBarBg = new SolidColorBrush(pal.Surface);
+            SectionBarBg = B(0x2A, 0x2A, 0x38);
+            TitleBrush = new SolidColorBrush(pal.Title);
+            MutedBrush = new SolidColorBrush(pal.Muted);
             GutterBrush = B(110, 110, 132);
-            ContextBrush = B(190, 190, 205);
-            AddedBrush = new SolidColorBrush(Palette.Green);
-            RemovedBrush = new SolidColorBrush(Palette.Red);
-            HunkBrush = new SolidColorBrush(Palette.Accent);
-            SelectionBrush = A(90, 96, 165, 250);
-            AddedBandBg = A(36, 34, 197, 94);
-            RemovedBandBg = A(36, 239, 68, 68);
+            ContextBrush = B(0xCD, 0xCD, 0xDB);  // brighter than the old #BEC context for easier reading
+            AddedBrush = B(0x3F, 0xB9, 0x50);
+            RemovedBrush = B(0xF8, 0x51, 0x49);
+            HunkBrush = new SolidColorBrush(pal.Accent);
+            SelectionBrush = A(90, 0x60, 0xA5, 0xFA);
+            AddedBandBg = A(36, 0x3F, 0xB9, 0x50);
+            RemovedBandBg = A(36, 0xF8, 0x51, 0x49);
             MatchBg = A(85, 250, 204, 21);
             CurrentMatchBg = A(190, 255, 158, 40);
-            LineSelBg = A(70, 96, 165, 250);
+            LineSelBg = A(70, 0x60, 0xA5, 0xFA);
         }
         Background = new SolidColorBrush(BodyBg);
     }

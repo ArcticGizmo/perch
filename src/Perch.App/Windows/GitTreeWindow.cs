@@ -1872,52 +1872,62 @@ internal sealed class GitTreeWindow : Window
     };
 
     /// <summary>The window-local colour set the Tree window and its diff paint from, so light/dark applies to
-    /// just this window. <see cref="Dark"/> mirrors the app's active theme (via <see cref="Palette"/>); light
-    /// uses fixed, print-legible values with darkened status hues.</summary>
+    /// just this window. Both polarities are pinned to the shared Aurora reading palette (see
+    /// <see cref="AuroraPalette"/>) — independent of the app theme, so a decorative theme can't hurt diff/commit
+    /// readability — with fixed, high-contrast status hues (green/red/orange) for the working-tree file states.</summary>
     internal sealed class TreePalette
     {
         public required IBrush WindowBg, HeaderBg, Title, Fg, Muted, Accent, AccentHover, OnAccent, Brand,
             ButtonBg, Separator, HollowFill, Green, Red, Orange;
 
-        public static TreePalette Dark() => new()
+        public static TreePalette Dark()
         {
-            WindowBg = new SolidColorBrush(Palette.Sunken),
-            HeaderBg = Palette.FormBgBrush,
-            Title = Palette.TitleBrush,
-            Fg = Palette.FgBrush,
-            Muted = Palette.MutedBrush,
-            Accent = Palette.AccentBrush,
-            AccentHover = new SolidColorBrush(Palette.AccentHover),
-            OnAccent = Palette.OnAccentBrush,
-            Brand = Palette.BrandBrush,
-            ButtonBg = Palette.ButtonBgBrush,
-            Separator = Palette.SeparatorBrush,
-            HollowFill = new SolidColorBrush(Palette.Sunken),
-            Green = new SolidColorBrush(Palette.Green),
-            Red = new SolidColorBrush(Palette.Red),
-            Orange = new SolidColorBrush(Palette.Orange),
-        };
+            var a = AuroraPalette.Dark;
+            return new()
+            {
+                WindowBg = BC(a.Sunken),
+                HeaderBg = BC(a.Raised),
+                Title = BC(a.Title),
+                Fg = BC(a.Text),
+                Muted = BC(a.Muted),
+                Accent = BC(a.Accent),
+                AccentHover = BC(a.AccentHover),
+                OnAccent = B(0xFF, 0xFF, 0xFF),
+                Brand = B(0xE0, 0x6B, 0x4E),
+                ButtonBg = BC(a.Separator),
+                Separator = BC(a.Separator),
+                HollowFill = BC(a.Sunken),
+                Green = B(0x3F, 0xB9, 0x50),
+                Red = B(0xF8, 0x51, 0x49),
+                Orange = B(0xE3, 0xB3, 0x41),
+            };
+        }
 
-        public static TreePalette Light() => new()
+        public static TreePalette Light()
         {
-            WindowBg = B(0xEC, 0xEE, 0xF3),
-            HeaderBg = B(0xFF, 0xFF, 0xFF),
-            Title = B(0x0D, 0x0E, 0x16),
-            Fg = B(0x1A, 0x1B, 0x26),
-            Muted = B(0x5C, 0x60, 0x72),
-            Accent = B(0x2F, 0x68, 0xE0),
-            AccentHover = B(0x1F, 0x58, 0xD0),
-            OnAccent = B(0xFF, 0xFF, 0xFF),
-            Brand = B(0xD2, 0x43, 0x27),
-            ButtonBg = B(0xF1, 0xF2, 0xF5),
-            Separator = B(0xDD, 0xE0, 0xE8),
-            HollowFill = B(0xFF, 0xFF, 0xFF),
-            Green = B(0x1F, 0x88, 0x3D),
-            Red = B(0xCF, 0x22, 0x2E),
-            Orange = B(0xB3, 0x6B, 0x00),
-        };
+            var a = AuroraPalette.Light;
+            return new()
+            {
+                WindowBg = BC(a.Sunken),
+                HeaderBg = BC(a.Raised),
+                Title = BC(a.Title),
+                Fg = BC(a.Text),
+                Muted = BC(a.Muted),
+                Accent = BC(a.Accent),
+                AccentHover = BC(a.AccentHover),
+                OnAccent = B(0xFF, 0xFF, 0xFF),
+                Brand = B(0xD2, 0x43, 0x27),
+                ButtonBg = BC(a.Sunken),
+                Separator = BC(a.Separator),
+                HollowFill = BC(a.Raised),
+                Green = B(0x1F, 0x88, 0x3D),
+                Red = B(0xCF, 0x22, 0x2E),
+                Orange = B(0xB3, 0x6B, 0x00),
+            };
+        }
 
         private static IBrush B(byte r, byte g, byte b) => new SolidColorBrush(Color.FromRgb(r, g, b));
+        private static IBrush BC(Color c) => new SolidColorBrush(c);
     }
 
     // A WIP file row for one group: the coloured status + path, with a stage ("+") button on unstaged rows

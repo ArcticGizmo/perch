@@ -46,6 +46,7 @@ namespace Perch.Avalonia.Windows;
 internal sealed class MarkdownWindow : Window
 {
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
+    private const double SourceFontSize = 12.5;   // shared by the source editor and its syntax highlighter
     // The rose that marks "produced" files, matching the overlay's Markdown glyph. Fixed across themes.
     private static readonly IBrush ProducedDotBrush = new SolidColorBrush(Color.FromRgb(244, 114, 182));
 
@@ -100,13 +101,15 @@ internal sealed class MarkdownWindow : Window
     private readonly Control _editorRoot;
     private readonly Border _editorToolbar;
     private readonly GridSplitter _innerSplitter;
-    private readonly Border _previewPane;          // wraps the preview scroll so its "paper" bg can retint
+    private readonly Border _sourceCard;           // rounded card framing the source editor
+    private readonly Border _previewPane;          // card wrapping the preview scroll so its "paper" bg can retint
     private readonly ScrollViewer _previewScroll;  // holds the rendered MarkdownView document
     private readonly TextBlock _editorPlaceholder;
     private readonly TextBlock _editorFileLabel;
     private readonly TextBlock _editorStatus;
     private readonly Button _saveBtn;
-    private readonly TextBox _sourceBox;
+    private readonly Button _revertBtn;
+    private readonly HighlightTextBox _sourceBox;
     private readonly DispatcherTimer _previewTimer;
 
     private string? _cwd;
@@ -195,7 +198,7 @@ internal sealed class MarkdownWindow : Window
         {
             [DockPanel.DockProperty] = Dock.Top,
             BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = new Thickness(16, 8),
+            Padding = new Thickness(18, 10),
             Child = headerPanel,
         };
 
@@ -245,9 +248,11 @@ internal sealed class MarkdownWindow : Window
         _treeHost = new Border { Child = _filesPlaceholder };
         _paneContent = new DockPanel { LastChildFill = true, Children = { _searchBox, _projectBtn, _treeHost } };
 
+        // The file pane is a rounded, bordered "card" (like the reference's nav/panels) rather than a
+        // hard-divided pane — the gutter to the editor and the card borders do the separating.
         _filePaneHost = new Border
         {
-            BorderThickness = new Thickness(0, 0, 1, 0),
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), ClipToBounds = true,
             Child = _paneContent,
         };
 
@@ -271,11 +276,18 @@ internal sealed class MarkdownWindow : Window
         _saveBtn = SettingsUi.FlatButton("Save");
         _saveBtn.IsEnabled = false;
         _saveBtn.Click += (_, _) => Save();
+        // Revert discards every unsaved edit back to the last-saved buffer — the escape hatch when the editor's
+        // own undo history can't reach far enough back ("whoops"). Enabled only while there are unsaved changes.
+        _revertBtn = SettingsUi.FlatButton("Revert");
+        _revertBtn.IsEnabled = false;
+        _revertBtn.Margin = new Thickness(0, 0, 8, 0);
+        _revertBtn.Click += (_, _) => Revert();
+        ToolTip.SetTip(_revertBtn, "Discard unsaved changes and restore the last saved version");
 
-        _sourceBox = new TextBox
+        _sourceBox = new HighlightTextBox
         {
             AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.Wrap,
-            FontFamily = Mono, FontSize = 12.5,
+            FontFamily = Mono, FontSize = SourceFontSize,
             BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(0),
             Padding = new Thickness(12, 10), VerticalContentAlignment = VerticalAlignment.Top,
             [ScrollViewer.VerticalScrollBarVisibilityProperty] = ScrollBarVisibility.Auto,
@@ -306,16 +318,33 @@ internal sealed class MarkdownWindow : Window
         _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
         _previewTimer.Tick += (_, _) => { _previewTimer.Stop(); RenderPreview(_sourceBox.Text ?? ""); };
 
-        _editorToolbar = new Border { [DockPanel.DockProperty] = Dock.Top, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(12, 6) };
-        _innerSplitter = new GridSplitter { Width = 4, ResizeDirection = GridResizeDirection.Columns, HorizontalAlignment = HorizontalAlignment.Center };
-        _previewPane = new Border();
+        // The toolbar is a light header row above the two cards (no hard bottom rule); the inner splitter is a
+        // wide, transparent gutter so the page shows between the source and preview cards.
+        _editorToolbar = new Border { [DockPanel.DockProperty] = Dock.Top, Padding = new Thickness(4, 2, 4, 12) };
+        _innerSplitter = new GridSplitter
+        {
+            Width = 14, ResizeDirection = GridResizeDirection.Columns,
+            HorizontalAlignment = HorizontalAlignment.Center, Background = Brushes.Transparent,
+        };
+        _sourceCard = new Border { BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), ClipToBounds = true };
+        _previewPane = new Border { BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), ClipToBounds = true };
         _editorRoot = BuildEditorRoot();
         _editorHost = new Border { Child = _editorPlaceholder };
 
-        // ── Body: file pane | splitter | editor ────────────────────────────────────────────────────
-        var body = new Grid { ColumnDefinitions = new ColumnDefinitions("300,Auto,*") };
+        // ── Body: file card | gutter | editor ────────────────────────────────────────────────────────
+        // A padded "page" holds the cards, with a wide transparent splitter as the breathing gutter between
+        // the nav card and the editor (the page shows through it).
+        var body = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("300,Auto,*"),
+            Margin = new Thickness(14, 12, 14, 14),
+        };
         Grid.SetColumn(_filePaneHost, 0);
-        _bodySplitter = new GridSplitter { Width = 4, ResizeDirection = GridResizeDirection.Columns, HorizontalAlignment = HorizontalAlignment.Center };
+        _bodySplitter = new GridSplitter
+        {
+            Width = 18, ResizeDirection = GridResizeDirection.Columns,
+            HorizontalAlignment = HorizontalAlignment.Center, Background = Brushes.Transparent,
+        };
         Grid.SetColumn(_bodySplitter, 1);
         Grid.SetColumn(_editorHost, 2);
         body.Children.Add(_filePaneHost);
@@ -334,8 +363,10 @@ internal sealed class MarkdownWindow : Window
     {
         var toolbarPanel = new DockPanel();
         DockPanel.SetDock(_saveBtn, Dock.Right);
+        DockPanel.SetDock(_revertBtn, Dock.Right);
         DockPanel.SetDock(_editorStatus, Dock.Right);
-        toolbarPanel.Children.Add(_saveBtn);
+        toolbarPanel.Children.Add(_saveBtn);           // rightmost
+        toolbarPanel.Children.Add(_revertBtn);         // left of Save
         toolbarPanel.Children.Add(_editorStatus);
         toolbarPanel.Children.Add(_editorFileLabel);   // fills the remaining width
         _editorToolbar.Child = toolbarPanel;
@@ -352,12 +383,13 @@ internal sealed class MarkdownWindow : Window
             IsHitTestVisible = false, Children = { _gutterBar },
         };
         var editorArea = new Grid { Children = { _sourceBox, _gutter } };
+        _sourceCard.Child = editorArea;
 
         var split = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,*") };
-        Grid.SetColumn(editorArea, 0);
+        Grid.SetColumn(_sourceCard, 0);
         Grid.SetColumn(_innerSplitter, 1);
         Grid.SetColumn(_previewPane, 2);
-        split.Children.Add(editorArea);
+        split.Children.Add(_sourceCard);
         split.Children.Add(_innerSplitter);
         split.Children.Add(_previewPane);
 
@@ -373,14 +405,19 @@ internal sealed class MarkdownWindow : Window
         _theme = _windowLight ? MdTheme.Light() : MdTheme.Dark();
         var t = _theme;
 
-        Background = t.WindowBg;
-        _header.Background = t.PaneBg;
+        // Drive the Fluent theme variant off our window toggle so every Fluent-templated control (search box,
+        // buttons, tree, scrollbars) resolves its state resources — focus/hover/placeholder — from the right
+        // polarity.
+        RequestedThemeVariant = _windowLight ? ThemeVariant.Light : ThemeVariant.Dark;
+
+        Background = t.WindowBg;                 // the "page" behind the cards
+        _header.Background = t.WindowBg;
         _header.BorderBrush = t.Separator;
         _titleText.Foreground = t.Title;
         _subText.Foreground = t.Muted;
 
-        _filePaneHost.Background = t.PaneBg;
-        _filePaneHost.BorderBrush = t.Separator;
+        _filePaneHost.Background = t.PaneBg;      // card
+        _filePaneHost.BorderBrush = t.Border;
         _filesPlaceholder.Foreground = t.Muted;
         _searchBox.Background = t.EditorBg;
         _searchBox.Foreground = t.Fg;
@@ -388,28 +425,33 @@ internal sealed class MarkdownWindow : Window
         _searchBox.SelectionBrush = t.Selection;
         _searchBox.SelectionForegroundBrush = t.Fg;
 
-        _bodySplitter.Background = t.Separator;
-        _innerSplitter.Background = t.Separator;
+        // The splitters are the transparent gutters — the page shows through them.
+        _bodySplitter.Background = Brushes.Transparent;
+        _innerSplitter.Background = Brushes.Transparent;
 
-        _editorHost.Background = t.WindowBg;
-        _editorToolbar.Background = t.PaneBg;
-        _editorToolbar.BorderBrush = t.Separator;
+        _editorHost.Background = t.WindowBg;      // page (behind the source/preview cards)
+        _editorToolbar.Background = Brushes.Transparent;
+        _sourceCard.Background = t.EditorBg;      // card
+        _sourceCard.BorderBrush = t.Border;
         _editorFileLabel.Foreground = t.Muted;
         _editorPlaceholder.Foreground = t.Muted;
+        // Syntax-highlight the raw Markdown source, coloured from the Aurora editor/syntax tokens for this
+        // polarity (the base foreground matches the highlighter's so unstyled text and styled runs agree).
+        var syntax = EditorSyntax.For(_windowLight);
         _sourceBox.Background = t.EditorBg;
-        _sourceBox.Foreground = t.Fg;
+        _sourceBox.Foreground = syntax.Fg;
+        _sourceBox.SetHighlighter(text => MarkdownSourceHighlighter.Highlight(text, syntax, new Typeface(Mono), SourceFontSize));
         // The default selection highlight reads as a harsh near-black block; use a soft translucent tint
         // and keep the selected text its normal colour.
         _sourceBox.SelectionBrush = t.Selection;
         _sourceBox.SelectionForegroundBrush = t.Fg;
-        // Fluent swaps a focused/hovered text field to its own (near-black) background resources, ignoring
-        // our Background. Pin those states to EditorBg so focus doesn't change the field colour.
-        ApplyFieldBackgrounds(_sourceBox, t);
+        // (The source box uses its own minimal template, so it needs no Fluent focus/hover background pinning.)
         ApplyFieldBackgrounds(_searchBox, t);
 
         StyleButton(_windowThemeBtn, t);
         StyleButton(_previewThemeBtn, t);
         StyleButton(_saveBtn, t);
+        StyleButton(_revertBtn, t);
         _windowThemeBtn.Content = _windowLight ? "Window: Light" : "Window: Dark";
         _previewThemeBtn.Content = _previewLight ? "Preview: Light" : "Preview: Dark";
 
@@ -425,6 +467,9 @@ internal sealed class MarkdownWindow : Window
     {
         _previewTheme = _previewLight ? MdTheme.Light() : MdTheme.Dark();
         _previewPane.Background = _previewTheme.Paper;
+        // The card frame relates to the paper (light paper → light border), since the preview carries its own
+        // theme independent of the window chrome.
+        _previewPane.BorderBrush = _previewTheme.Border;
         _previewThemeBtn.Content = _previewLight ? "Preview: Light" : "Preview: Dark";
         RenderPreview(_sourceBox.Text ?? "");
     }
@@ -832,7 +877,11 @@ internal sealed class MarkdownWindow : Window
         if (!force && line == _lastCaretLine)
             return;
         _lastCaretLine = line;
-        SetActiveAnchor(FindAnchorForLine(line), scroll);
+        var anchor = FindAnchorForLine(line);
+        SetActiveAnchor(anchor, scroll: false);   // tint + gutter only; scrolling is the aligned kind below
+        // Same-point alignment: put the matching preview block at the same viewport height as the caret.
+        if (scroll && anchor is { } a)
+            AlignPreviewToCaret(a);
     }
 
     // Preview→source: clicking maps to a precise source position and focuses the editor (ready to edit).
@@ -854,7 +903,8 @@ internal sealed class MarkdownWindow : Window
             int caret = MarkdownView.GetVerbatim(c) && c is TextBlock tb
                 ? VerbatimClickOffset(tb, e.GetPosition(tb), text, line)
                 : LineStartOffset(text, line);
-            JumpEditorToCaret(caret);
+            // Align the editor so the clicked line lands at the same height the click did in the preview.
+            JumpEditorToCaret(caret, e.GetPosition(_previewScroll).Y);
             return;
         }
     }
@@ -916,8 +966,10 @@ internal sealed class MarkdownWindow : Window
     }
 
     // Move the caret to an exact source offset and focus the editor (scrolls it into view, ready to type).
-    // No in-text highlight — the gutter bar marks the block; the caret marks the exact spot.
-    private void JumpEditorToCaret(int caret)
+    // No in-text highlight — the gutter bar marks the block; the caret marks the exact spot. When
+    // <paramref name="alignViewportY"/> is given (a preview click), the editor is scrolled so the caret's line
+    // lands at that same viewport height — the preview→editor half of the same-point alignment.
+    private void JumpEditorToCaret(int caret, double? alignViewportY = null)
     {
         var text = _sourceBox.Text ?? "";
         caret = Math.Clamp(caret, 0, text.Length);
@@ -932,6 +984,71 @@ internal sealed class MarkdownWindow : Window
 
         _lastCaretLine = line;
         SetActiveAnchor(FindAnchorForLine(line), scroll: false);
+        // Post so the focus-induced scroll-into-view has run first; we then override it with the aligned offset.
+        if (alignViewportY is { } ay)
+            Dispatcher.UIThread.Post(() => ScrollEditorToLineAt(caret, ay), DispatcherPriority.Background);
+    }
+
+    // ── Same-point alignment: keep the clicked/edited block at the same viewport height in both panes ──
+
+    // The text-layout Y (top, in the editor's content space above its top padding) of the visual line that
+    // holds <paramref name="caret"/>. -1 when the editor layout isn't ready.
+    private double LineTopY(int caret)
+    {
+        ResolveEditorParts();
+        if (_srcPresenter?.TextLayout is not { } layout)
+            return -1;
+        var lines = layout.TextLines;
+        double y = 0;
+        for (int i = 0; i < lines.Count; i++)
+        {
+            if (caret < lines[i].FirstTextSourceIndex + lines[i].Length || i == lines.Count - 1)
+                return y;
+            y += lines[i].Height;
+        }
+        return 0;
+    }
+
+    // Scroll the editor so the visual line holding <paramref name="caret"/> sits at viewport height
+    // <paramref name="alignY"/> (where the user clicked in the preview). Clamped to the scrollable range.
+    private void ScrollEditorToLineAt(int caret, double alignY)
+    {
+        ResolveEditorParts();
+        if (_srcScroll is null)
+            return;
+        double lineY = LineTopY(caret);
+        if (lineY < 0)
+            return;
+        double target = _sourceBox.Padding.Top + lineY - alignY;
+        target = Math.Clamp(target, 0, Math.Max(0, _srcScroll.Extent.Height - _srcScroll.Viewport.Height));
+        _srcScroll.Offset = new Vector(_srcScroll.Offset.X, target);
+    }
+
+    // Scroll the preview so <paramref name="anchor"/>'s block sits at the same viewport height as the caret in
+    // the editor — the source→preview half of the same-point alignment.
+    private void AlignPreviewToCaret(MarkdownView.PreviewAnchor anchor)
+    {
+        ResolveEditorParts();
+        double alignY = 0;
+        double lineY = LineTopY(_sourceBox.CaretIndex);
+        if (_srcScroll is not null && lineY >= 0)
+            alignY = _sourceBox.Padding.Top + lineY - _srcScroll.Offset.Y;
+        // Post so a just-rebuilt preview tree has laid out before we measure the block's position.
+        Dispatcher.UIThread.Post(() => ScrollPreviewToAnchorAt(anchor, alignY), DispatcherPriority.Background);
+    }
+
+    // Scroll the preview so <paramref name="anchor"/>'s block top lands at viewport height
+    // <paramref name="alignY"/>. Falls back to BringIntoView if the block can't yet be located.
+    private void ScrollPreviewToAnchorAt(MarkdownView.PreviewAnchor anchor, double alignY)
+    {
+        if (anchor.Control.TranslatePoint(new Point(0, 0), _previewScroll) is not { } p)
+        {
+            anchor.Control.BringIntoView();
+            return;
+        }
+        double target = _previewScroll.Offset.Y + (p.Y - alignY);
+        target = Math.Clamp(target, 0, Math.Max(0, _previewScroll.Extent.Height - _previewScroll.Viewport.Height));
+        _previewScroll.Offset = new Vector(_previewScroll.Offset.X, target);
     }
 
     // Recompute the editor gutter bar after the next layout pass (so the text layout is current). Coalesced.
@@ -1023,9 +1140,33 @@ internal sealed class MarkdownWindow : Window
     private void UpdateEditorChrome()
     {
         _saveBtn.IsEnabled = _dirty;
+        _revertBtn.IsEnabled = _dirty;
         (_editorStatus.Text, _editorStatus.Foreground) = _externalChange
             ? ("changed on disk", _theme.Warn)
             : (_dirty ? "● unsaved changes" : "", _theme.Muted);
+    }
+
+    // Discard every unsaved edit back to the last-saved buffer (_loadedText) — the "whoops" escape hatch when
+    // undo can't reach far enough. Destructive, so it confirms first (matching the switch/close discard prompts).
+    private async void Revert()
+    {
+        if (_openFilePath is not { } path || !_dirty)
+            return;
+
+        bool discard = await ConfirmDialog.ShowAsync(this, "Revert changes?",
+            $"Discard all unsaved changes to '{Path.GetFileName(path)}' and restore the last saved version?",
+            "Revert", "Keep editing");
+        if (!discard || _openFilePath != path)
+            return;
+
+        _loading = true;                   // programmatic fill — don't mark dirty or kick the preview debounce
+        _sourceBox.Text = _loadedText;
+        _loading = false;
+        _dirty = false;
+        _externalChange = false;
+        _lastCaretLine = -1;               // re-establish the active block against the restored text
+        UpdateEditorChrome();
+        RenderPreview(_loadedText);
     }
 
     private async void Save()
@@ -1231,22 +1372,35 @@ internal sealed class MarkdownWindow : Window
     {
         private static SolidColorBrush B(byte r, byte g, byte b) => new(Color.FromRgb(r, g, b));
         private static SolidColorBrush A(byte a, byte r, byte g, byte b) => new(Color.FromArgb(a, r, g, b));
+        private static SolidColorBrush S(Color c) => new(c);
 
-        public static MdTheme Dark() => new(
-            WindowBg: B(0x1A, 0x1B, 0x24), PaneBg: B(0x22, 0x24, 0x2E), EditorBg: B(0x1E, 0x1F, 0x29),
-            Paper: B(0x1E, 0x1F, 0x29), Separator: B(0x33, 0x35, 0x40), Border: B(0x44, 0x47, 0x54),
-            Fg: B(0xE6, 0xE8, 0xF0), Muted: B(0x9A, 0x9E, 0xAD), Title: B(0xF2, 0xF4, 0xFA),
-            Accent: B(0x6E, 0x9B, 0xF0), Code: B(0x5E, 0xD6, 0xC5), CodeBg: B(0x2A, 0x2D, 0x39),
-            Warn: B(0xF5, 0x9E, 0x0B), Error: B(0xEF, 0x44, 0x44), ButtonBg: B(0x2A, 0x2C, 0x38),
-            // A soft translucent blue selection instead of the stark default, so selected text stays legible.
-            Selection: A(90, 0x6E, 0x9B, 0xF0));
+        // A card-on-page hierarchy (mirrors the theming-template reference): WindowBg is the medium "page"
+        // surface, and the reading areas — file pane, editor, preview paper — are the lighter "card" surface
+        // (Aurora.Raised) framed by Border. This reads softer than the old near-black chrome. Code panels sit
+        // a step *below* the card (darker than paper), like the reference's code blocks. All from AuroraPalette.
+        public static MdTheme Dark()
+        {
+            var a = AuroraPalette.Dark;
+            return new(
+                WindowBg: S(a.Surface), PaneBg: S(a.Raised), EditorBg: S(a.Raised),
+                Paper: S(a.Raised), Separator: S(a.Separator), Border: S(a.Border),
+                Fg: S(a.Text), Muted: S(a.Muted), Title: S(a.Title),
+                Accent: S(a.Accent), Code: B(0x5E, 0xD6, 0xC5), CodeBg: B(0x14, 0x14, 0x1B),
+                Warn: B(0xF5, 0x9E, 0x0B), Error: B(0xF8, 0x51, 0x49), ButtonBg: B(0x2A, 0x2A, 0x36),
+                // A soft translucent blue selection instead of the stark default, so selected text stays legible.
+                Selection: A(90, 0x60, 0xA5, 0xFA));
+        }
 
-        public static MdTheme Light() => new(
-            WindowBg: B(0xEC, 0xED, 0xF1), PaneBg: B(0xF4, 0xF5, 0xF8), EditorBg: B(0xFB, 0xFB, 0xFD),
-            Paper: B(0xFF, 0xFF, 0xFF), Separator: B(0xD6, 0xD8, 0xDF), Border: B(0xC2, 0xC6, 0xD0),
-            Fg: B(0x22, 0x24, 0x2B), Muted: B(0x66, 0x6A, 0x76), Title: B(0x14, 0x16, 0x1C),
-            Accent: B(0x2B, 0x63, 0xC7), Code: B(0x0E, 0x7C, 0x66), CodeBg: B(0xF0, 0xF1, 0xF4),
-            Warn: B(0xB4, 0x6A, 0x00), Error: B(0xC0, 0x2B, 0x2B), ButtonBg: B(0xE2, 0xE4, 0xEA),
-            Selection: A(60, 0x2B, 0x63, 0xC7));
+        public static MdTheme Light()
+        {
+            var a = AuroraPalette.Light;
+            return new(
+                WindowBg: S(a.Sunken), PaneBg: S(a.Raised), EditorBg: S(a.Raised),
+                Paper: S(a.Raised), Separator: S(a.Separator), Border: S(a.Border),
+                Fg: S(a.Text), Muted: S(a.Muted), Title: S(a.Title),
+                Accent: S(a.Accent), Code: B(0x0E, 0x7C, 0x66), CodeBg: B(0xEE, 0xF0, 0xF4),
+                Warn: B(0xB4, 0x6A, 0x00), Error: B(0xC0, 0x2B, 0x2B), ButtonBg: B(0xEC, 0xEE, 0xF3),
+                Selection: A(60, 0x25, 0x63, 0xEB));
+        }
     }
 }
