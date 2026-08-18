@@ -1,0 +1,515 @@
+<title>Perch Social</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* ---- Theme tokens: dark-first design, full light twin (three-state safe) ---- */
+  :root {
+    /* light palette (bare :root = complete light theme) */
+    --bg: #F3F0F7;
+    --surface: #FFFFFF;
+    --surface-2: #ECE7F2;
+    --text: #211C2B;
+    --muted: #6C6479;
+    --faint: #928aa0;
+    --accent: #B5611C;      /* ember, deepened for AA on light */
+    --accent-soft: #F0E1D3;
+    --live: #0E8E6D;        /* semantic: online / just posted */
+    --border: rgba(33,28,43,.12);
+    --border-strong: rgba(33,28,43,.20);
+    --shadow: 0 18px 50px -24px rgba(33,20,55,.35);
+    /* the Perch overlay mock is ALWAYS dark chrome — fixed, both themes */
+    --ov-bg: #17131f;
+    --ov-surface: #221c2e;
+    --ov-line: rgba(255,255,255,.08);
+    --ov-text: #ECE7F5;
+    --ov-muted: #9a92ab;
+    --ov-amber: #F5A25D;
+    --ov-live: #5FD3B0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #100d17;
+      --surface: #1a1622;
+      --surface-2: #231d30;
+      --text: #ECE7F5;
+      --muted: #9e96b0;
+      --faint: #746c86;
+      --accent: #F5A25D;
+      --accent-soft: #33261d;
+      --live: #5FD3B0;
+      --border: rgba(255,255,255,.09);
+      --border-strong: rgba(255,255,255,.16);
+      --shadow: 0 24px 60px -28px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #100d17;
+    --surface: #1a1622;
+    --surface-2: #231d30;
+    --text: #ECE7F5;
+    --muted: #9e96b0;
+    --faint: #746c86;
+    --accent: #F5A25D;
+    --accent-soft: #33261d;
+    --live: #5FD3B0;
+    --border: rgba(255,255,255,.09);
+    --border-strong: rgba(255,255,255,.16);
+    --shadow: 0 24px 60px -28px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    line-height: 1.6;
+    font-size: 17px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono {
+    font-family: "Cascadia Code", "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  }
+  h1, h2, h3 { text-wrap: balance; line-height: 1.12; margin: 0; }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  .eyebrow {
+    font-family: "Cascadia Code", "Consolas", ui-monospace, monospace;
+    font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600;
+  }
+
+  /* ---------------- Hero ---------------- */
+  header.hero {
+    padding: clamp(56px, 9vw, 104px) 0 clamp(40px, 6vw, 72px);
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .hero-grid {
+    display: grid; grid-template-columns: 1.05fr .95fr; gap: clamp(32px, 5vw, 64px);
+    align-items: center;
+  }
+  .hero h1 {
+    font-size: clamp(38px, 6.2vw, 68px); font-weight: 700; letter-spacing: -.02em;
+    margin: 18px 0 20px;
+  }
+  .hero h1 .amber { color: var(--accent); }
+  .hero p.lede { font-size: clamp(17px, 2vw, 21px); color: var(--muted); max-width: 30ch; margin: 0; }
+  .hero .pillrow { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 28px; }
+  .pill {
+    font-family: "Cascadia Code","Consolas",ui-monospace,monospace;
+    font-size: 12.5px; padding: 7px 13px; border-radius: 999px;
+    border: 1px solid var(--border-strong); color: var(--muted); background: var(--surface);
+  }
+  .pill b { color: var(--text); font-weight: 600; }
+
+  /* ---------------- The overlay mock (fixed dark chrome) ---------------- */
+  .perch {
+    background: var(--ov-bg);
+    border: 1px solid var(--ov-line);
+    border-radius: 18px;
+    padding: 14px;
+    box-shadow: var(--shadow);
+    color: var(--ov-text);
+    font-size: 14px;
+    animation: rise .7s cubic-bezier(.2,.7,.2,1) both;
+  }
+  .perch .bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px 12px; border-bottom: 1px solid var(--ov-line);
+  }
+  .perch .bird {
+    width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+    background: linear-gradient(150deg, #3a2c22, #241a2e); font-size: 17px;
+    border: 1px solid var(--ov-line);
+  }
+  .perch .bar .who { display: flex; flex-direction: column; gap: 1px; }
+  .perch .bar .who .t { font-weight: 600; font-size: 13px; }
+  .perch .bar .who .s { font-size: 11.5px; color: var(--ov-muted); }
+  .perch .bar .dot {
+    margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--ov-live);
+    box-shadow: 0 0 0 0 rgba(95,211,176,.55); animation: pulse 2.4s infinite;
+  }
+  .strip-label {
+    font-family: "Cascadia Code","Consolas",ui-monospace,monospace;
+    font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ov-muted); padding: 12px 10px 8px; display: flex; align-items: center; gap: 8px;
+  }
+  .strip-label::after { content:""; flex:1; height:1px; background: var(--ov-line); }
+  .feed { display: flex; flex-direction: column; }
+  .feed .item {
+    display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: start;
+    padding: 9px 10px; border-radius: 10px;
+  }
+  .feed .item + .item { margin-top: 2px; }
+  .feed .item:hover { background: var(--ov-surface); }
+  .feed .av {
+    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+    font-size: 15px; background: var(--ov-surface); border: 1px solid var(--ov-line);
+  }
+  .feed .body .h {
+    font-family: "Cascadia Code","Consolas",ui-monospace,monospace;
+    font-size: 11.5px; color: var(--ov-amber);
+  }
+  .feed .body .msg { font-size: 13px; color: var(--ov-text); margin-top: 1px; }
+  .feed .ago {
+    font-family: "Cascadia Code","Consolas",ui-monospace,monospace;
+    font-size: 10.5px; color: var(--ov-muted); white-space: nowrap; padding-top: 2px;
+  }
+  .perch .compose {
+    margin-top: 6px; display: flex; align-items: center; gap: 8px;
+    padding: 9px 10px; border-top: 1px solid var(--ov-line); color: var(--ov-muted);
+    font-size: 12.5px;
+  }
+  .perch .compose .box {
+    flex: 1; background: var(--ov-surface); border: 1px solid var(--ov-line);
+    border-radius: 8px; padding: 7px 10px;
+  }
+  .perch .compose .send {
+    background: var(--ov-amber); color: #23150a; font-weight: 700; font-size: 12px;
+    border-radius: 8px; padding: 7px 12px; border: none;
+  }
+
+  /* ---------------- Sections ---------------- */
+  section { padding: clamp(48px, 7vw, 84px) 0; }
+  .section-head { max-width: 60ch; margin-bottom: clamp(28px, 4vw, 44px); }
+  .section-head h2 { font-size: clamp(26px, 3.6vw, 38px); font-weight: 700; letter-spacing: -.015em; margin: 12px 0 0; }
+  .section-head p { color: var(--muted); font-size: 18px; margin: 12px 0 0; }
+
+  /* Steps — a genuine ordered sequence */
+  .steps { display: flex; flex-direction: column; gap: 14px; }
+  .step {
+    display: grid; grid-template-columns: 64px 1fr 300px; gap: clamp(16px,3vw,36px);
+    align-items: center;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: clamp(20px,3vw,30px);
+  }
+  .step .n {
+    font-family: "Cascadia Code","Consolas",ui-monospace,monospace;
+    font-size: 34px; font-weight: 700; color: var(--accent);
+    line-height: 1; font-variant-numeric: tabular-nums;
+  }
+  .step .txt h3 { font-size: 21px; font-weight: 650; margin-bottom: 8px; }
+  .step .txt p { color: var(--muted); margin: 0; font-size: 15.5px; }
+  .step .txt .tag {
+    display: inline-block; margin-top: 12px;
+    font-family: "Cascadia Code","Consolas",ui-monospace,monospace;
+    font-size: 11.5px; color: var(--accent);
+    background: var(--accent-soft); border-radius: 6px; padding: 3px 9px;
+  }
+  .step .demo { min-width: 0; }
+
+  /* mini-mocks inside steps */
+  .mock {
+    background: var(--ov-bg); border: 1px solid var(--ov-line); border-radius: 12px;
+    padding: 14px; color: var(--ov-text); font-size: 13px; box-shadow: var(--shadow);
+  }
+  .mock .row { display: flex; align-items: center; gap: 10px; }
+  .mock .row + .row { margin-top: 10px; }
+  .mock .gh {
+    display: flex; align-items: center; gap: 10px; justify-content: center;
+    background: #ECE7F5; color: #17131f; font-weight: 650; font-size: 13.5px;
+    border-radius: 9px; padding: 11px; width: 100%;
+  }
+  .mock .field {
+    background: var(--ov-surface); border: 1px solid var(--ov-line); border-radius: 8px;
+    padding: 10px 12px; width: 100%; color: var(--ov-muted);
+    font-family: "Cascadia Code","Consolas",ui-monospace,monospace; font-size: 12.5px;
+  }
+  .mock .field .cursor { color: var(--ov-amber); }
+  .mock .av-sm { width: 32px; height: 32px; border-radius: 8px; display:grid; place-items:center;
+    background: var(--ov-surface); border: 1px solid var(--ov-line); font-size: 16px; }
+  .mock .grow { flex: 1; min-width: 0; }
+  .mock .hh { font-family:"Cascadia Code","Consolas",ui-monospace,monospace; color: var(--ov-amber); font-size: 12px; }
+  .mock .ss { color: var(--ov-muted); font-size: 11.5px; }
+  .mock .btn {
+    background: var(--ov-amber); color: #23150a; font-weight: 700; font-size: 12px;
+    border: none; border-radius: 8px; padding: 8px 12px; white-space: nowrap;
+  }
+  .mock .btn.ghost { background: transparent; color: var(--ov-live); border: 1px solid var(--ov-line); }
+  .mock .toast {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--ov-surface); border: 1px solid var(--ov-line); border-left: 3px solid var(--ov-live);
+    border-radius: 9px; padding: 11px 13px;
+  }
+  .mock .counter { margin-left: auto; color: var(--ov-muted); font-family:"Cascadia Code","Consolas",ui-monospace,monospace; font-size: 11.5px; }
+
+  /* Privacy panel */
+  .privacy {
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 18px;
+    padding: clamp(26px,4vw,44px);
+  }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(20px,4vw,44px); margin-top: 8px; }
+  .cols h4 {
+    font-family:"Cascadia Code","Consolas",ui-monospace,monospace; font-size: 12.5px;
+    letter-spacing: .06em; text-transform: uppercase; margin: 0 0 14px;
+  }
+  .cols .yes h4 { color: var(--live); }
+  .cols .no h4 { color: var(--accent); }
+  .cols ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 11px; }
+  .cols li { display: grid; grid-template-columns: 20px 1fr; gap: 10px; font-size: 15px; }
+  .cols li .g { color: var(--live); font-weight: 700; }
+  .cols .no li .g { color: var(--accent); }
+  .cols li span.d { color: var(--muted); }
+
+  footer {
+    border-top: 1px solid var(--border); padding: 40px 0 64px; color: var(--faint);
+    font-size: 13.5px;
+  }
+  footer .mono { font-size: 12.5px; }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(95,211,176,.5); }
+    70% { box-shadow: 0 0 0 7px rgba(95,211,176,0); }
+    100% { box-shadow: 0 0 0 0 rgba(95,211,176,0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .perch, .strip .dot { animation: none; }
+    * { scroll-behavior: auto; }
+  }
+
+  @media (max-width: 860px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .hero p.lede { max-width: none; }
+    .step { grid-template-columns: 44px 1fr; }
+    .step .demo { grid-column: 1 / -1; }
+    .cols { grid-template-columns: 1fr; }
+  }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+</style>
+
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="eyebrow">Perch · concept walkthrough</span>
+      <h1>A little <span class="amber">feed</span><br>under your perch.</h1>
+      <p class="lede">Your friends run Claude Code too. Post a status, see theirs drift by beneath the overlay — a quiet, opt-in social corner for the people you actually know.</p>
+      <div class="pillrow">
+        <span class="pill"><b>Opt-in</b> · off by default</span>
+        <span class="pill">Sign in with <b>GitHub</b></span>
+        <span class="pill"><b>Friends only</b>, mutual</span>
+      </div>
+    </div>
+    <div class="perch" role="img" aria-label="Mock of the Perch overlay with a friends feed strip beneath it">
+      <div class="bar">
+        <div class="bird">🐦</div>
+        <div class="who">
+          <span class="t">you</span>
+          <span class="s mono">@jon · shipping something silly</span>
+        </div>
+        <span class="dot" title="live"></span>
+      </div>
+      <div class="strip-label">Friends</div>
+      <div class="feed">
+        <div class="item">
+          <div class="av">🦉</div>
+          <div class="body"><div class="h">@ada</div><div class="msg">refactored the whole thing. do not ask.</div></div>
+          <div class="ago">2m</div>
+        </div>
+        <div class="item">
+          <div class="av">🛠️</div>
+          <div class="body"><div class="h">@grace</div><div class="msg">tests green on the first try 😳</div></div>
+          <div class="ago">14m</div>
+        </div>
+        <div class="item">
+          <div class="av">☕</div>
+          <div class="body"><div class="h">@linus</div><div class="msg">coffee, then the merge conflict from hell</div></div>
+          <div class="ago">31m</div>
+        </div>
+      </div>
+      <div class="compose">
+        <div class="box mono">what are you working on?</div>
+        <button class="send">Post</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">How it works</span>
+      <h2>Seven small steps, in order.</h2>
+      <p>The whole thing is opt-in and lives behind one toggle. Here's the path from "off" to a live feed — nothing turns on until you ask it to.</p>
+    </div>
+
+    <div class="steps">
+
+      <div class="step">
+        <div class="n">01</div>
+        <div class="txt">
+          <h3>Turn it on</h3>
+          <p>Social is off out of the box. Flip it on in Settings → Social when you feel like it; leave it off forever and Perch is exactly as it was.</p>
+          <span class="tag">Settings · off by default</span>
+        </div>
+        <div class="demo">
+          <div class="mock">
+            <div class="row">
+              <div class="grow"><div class="hh">Social feed</div><div class="ss">Show friends' statuses under the overlay</div></div>
+              <div style="width:40px;height:23px;border-radius:999px;background:#5FD3B0;position:relative;flex:none">
+                <span style="position:absolute;top:2px;right:2px;width:19px;height:19px;border-radius:50%;background:#17131f"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="n">02</div>
+        <div class="txt">
+          <h3>Sign in with GitHub</h3>
+          <p>One tap opens your browser, GitHub confirms it's you, and you're back. No new password to invent, and your email never touches Perch's own data — it stays with the login provider.</p>
+          <span class="tag">OAuth · no password, no email stored</span>
+        </div>
+        <div class="demo">
+          <div class="mock">
+            <div class="gh"><span aria-hidden="true">⌘</span> Continue with GitHub</div>
+            <div class="row" style="margin-top:12px;justify-content:center">
+              <span class="ss">Opens your browser · returns automatically</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="n">03</div>
+        <div class="txt">
+          <h3>Claim a handle</h3>
+          <p>Pick a name your friends will recognise. That's the only identity you need — no real name, no profile to fill in. A handle and an optional mood, and you exist.</p>
+          <span class="tag">@handle · that's the whole profile</span>
+        </div>
+        <div class="demo">
+          <div class="mock">
+            <div class="ss" style="margin-bottom:8px">Your handle</div>
+            <div class="field">@jon<span class="cursor">▏</span></div>
+            <div class="row" style="margin-top:10px">
+              <span class="ss">✓ available</span>
+              <button class="btn" style="margin-left:auto">Claim</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="n">04</div>
+        <div class="txt">
+          <h3>Add friends by handle</h3>
+          <p>Search someone's exact handle and send a request. They have to accept before either of you sees the other's posts — it's mutual, always. You can't browse or stumble onto strangers.</p>
+          <span class="tag">Mutual consent · no directory to scrape</span>
+        </div>
+        <div class="demo">
+          <div class="mock">
+            <div class="row">
+              <div class="av-sm">🦉</div>
+              <div class="grow"><div class="hh">@ada</div><div class="ss">Ada L.</div></div>
+              <button class="btn">Add friend</button>
+            </div>
+            <div class="row">
+              <div class="av-sm">🛠️</div>
+              <div class="grow"><div class="hh">@grace</div><div class="ss">wants to be friends</div></div>
+              <button class="btn ghost">Accept</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="n">05</div>
+        <div class="txt">
+          <h3>Post a status</h3>
+          <p>Type up to 280 characters, pick a mood, hit post. That's it — nothing is ever posted for you. Perch never lifts a line from your transcripts, file paths, or project names; the box is always yours to fill.</p>
+          <span class="tag">Manual only · never auto-posted</span>
+        </div>
+        <div class="demo">
+          <div class="mock">
+            <div class="row" style="align-items:flex-start">
+              <div class="av-sm">😌</div>
+              <div class="field grow">shipping something silly and i regret nothing<span class="cursor">▏</span></div>
+            </div>
+            <div class="row" style="margin-top:12px">
+              <span class="counter">237 left</span>
+              <button class="btn" style="margin-left:auto">Post status</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="n">06</div>
+        <div class="txt">
+          <h3>Watch the feed</h3>
+          <p>Friends' statuses appear in a slim strip beneath the overlay, newest first. It updates live where the network allows and quietly falls back to polling behind strict office firewalls — either way it just works.</p>
+          <span class="tag">Live where it can, polling where it must</span>
+        </div>
+        <div class="demo">
+          <div class="mock">
+            <div class="row">
+              <div class="av-sm">🦉</div>
+              <div class="grow"><div class="hh">@ada · 2m</div><div class="ss">refactored the whole thing. do not ask.</div></div>
+            </div>
+            <div class="row">
+              <div class="av-sm">🛠️</div>
+              <div class="grow"><div class="hh">@grace · 14m</div><div class="ss">tests green on the first try 😳</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="n">07</div>
+        <div class="txt">
+          <h3>Get a gentle nudge</h3>
+          <p>When a friend posts, Perch can whisper a notification — reusing the same quiet-hours and do-not-disturb rules you already set. Turn it off per friend, or entirely. Never noisy.</p>
+          <span class="tag">Respects your existing DND</span>
+        </div>
+        <div class="demo">
+          <div class="mock">
+            <div class="toast">
+              <div class="av-sm" style="border:none;background:transparent">🦉</div>
+              <div class="grow"><div class="hh">@ada just posted</div><div class="ss">refactored the whole thing…</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section style="padding-top:0">
+  <div class="wrap">
+    <div class="privacy">
+      <span class="eyebrow">Where the line is</span>
+      <h2 style="font-size:clamp(24px,3.2vw,32px);font-weight:700;letter-spacing:-.015em;margin:10px 0 4px">You decide what leaves your machine.</h2>
+      <div class="cols">
+        <div class="yes">
+          <h4>Shared with friends</h4>
+          <ul>
+            <li><span class="g">→</span><div>The <b>handle</b> you chose, and a mood emoji if you set one.</div></li>
+            <li><span class="g">→</span><div>Status posts you <b>type and send yourself</b> — up to 280 characters.</div></li>
+            <li><span class="g">→</span><div>Only with people whose friend request you <span class="d">accepted</span>.</div></li>
+          </ul>
+        </div>
+        <div class="no">
+          <h4>Never leaves Perch</h4>
+          <ul>
+            <li><span class="g">×</span><div>Anything from <b>~/.claude</b> — transcripts, prompts, file paths, project names.</div></li>
+            <li><span class="g">×</span><div>Your <b>real name or email</b> — the GitHub login keeps those.</div></li>
+            <li><span class="g">×</span><div>A <b>browsable directory</b> — no one can enumerate users or find you by accident.</div></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div style="max-width:70ch">A concept walkthrough for a proposed, opt-in Perch feature — not a shipping product. Built on a managed backend (Supabase) with friends-only access enforced in the database, GitHub sign-in, and a transport that degrades to plain HTTPS polling behind restrictive firewalls.</div>
+    <div class="mono" style="margin-top:14px">design &amp; build notes → <a href="../social-feed-plan.md">social-feed-plan.md</a> · <a href="../social-feed-implementation.md">social-feed-implementation.md</a></div>
+  </div>
+</footer>
