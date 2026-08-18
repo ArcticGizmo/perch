@@ -104,6 +104,23 @@ internal sealed class MarkdownWindow : Window
     private readonly Border _sourceCard;           // rounded card framing the source editor
     private readonly Border _previewPane;          // card wrapping the preview scroll so its "paper" bg can retint
     private readonly ScrollViewer _previewScroll;  // holds the rendered MarkdownView document
+    // Find-in-page (Ctrl+F). One bar, re-parented over whichever pane is being searched: the rendered preview
+    // (_search) or the source editor (_editorFind). Both share the FindHighlighter engine; the bar targets the
+    // focused pane on open and a scope button switches between them.
+    private readonly MarkdownSearch _search;        // find over the rendered preview
+    private readonly EditorFind _editorFind;        // find over the source editor
+    private readonly Border _findBar;
+    private readonly TextBox _findBox;
+    private readonly TextBlock _findCount;
+    private readonly Button _findScope, _findPrev, _findNext, _findClose;
+    private Grid _previewOverlay = null!;           // preview scroll + (when targeted) the find bar
+    private Grid _editorOverlay = null!;            // source box + editor find layer + gutter + (when targeted) the bar
+    private bool _findOpen;
+    private FindSide _findSide = FindSide.Editor;
+    // The pane the user last interacted with (pointer press / typing), so Ctrl+F targets the right one. Focus
+    // can't tell them apart — a preview click deliberately focuses the editor (the two-way cursor sync) — so
+    // this is tracked by pointer/keyboard activity instead.
+    private FindSide _activeSide = FindSide.Editor;
     private readonly TextBlock _editorPlaceholder;
     private readonly TextBlock _editorFileLabel;
     private readonly TextBlock _editorStatus;
@@ -292,6 +309,12 @@ internal sealed class MarkdownWindow : Window
             Padding = new Thickness(12, 10), VerticalContentAlignment = VerticalAlignment.Top,
             [ScrollViewer.VerticalScrollBarVisibilityProperty] = ScrollBarVisibility.Auto,
         };
+        // Editor-side find. The presenter/scroll come from the TextBox template and are resolved lazily by the
+        // window; hand the finder accessors that ensure they're resolved before use. Built before the source
+        // box's LayoutUpdated wiring below, which repaints its highlight layer.
+        _editorFind = new EditorFind(_sourceBox,
+            () => { ResolveEditorParts(); return _srcPresenter; },
+            () => { ResolveEditorParts(); return _srcScroll; });
         _sourceBox.TextChanged += OnSourceTextChanged;
         // Moving the caret (click, arrows, typing across a line) highlights and scrolls the matching preview
         // block — the source→preview half of the cursor sync.
@@ -300,8 +323,12 @@ internal sealed class MarkdownWindow : Window
             if (e.Property == TextBox.CaretIndexProperty && !_loading && !_suppressCaretSync)
                 SyncPreviewToCaret(scroll: true);
         };
-        // The gutter bar tracks the editor's own scrolling and re-wrapping.
-        _sourceBox.LayoutUpdated += (_, _) => UpdateGutter();
+        // The gutter bar and the editor find highlights track the editor's own scrolling and re-wrapping.
+        _sourceBox.LayoutUpdated += (_, _) => { UpdateGutter(); _editorFind.OnEditorMoved(); };
+        // A press in the source box marks it the active pane for Ctrl+F (tunnelled + handledEventsToo so the
+        // TextBox's own pointer handling doesn't hide it from us).
+        _sourceBox.AddHandler(PointerPressedEvent, (_, _) => _activeSide = FindSide.Editor,
+            RoutingStrategies.Tunnel, handledEventsToo: true);
 
         _previewScroll = new ScrollViewer
         {
@@ -317,6 +344,59 @@ internal sealed class MarkdownWindow : Window
             RoutingStrategies.Bubble, handledEventsToo: true);
         _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
         _previewTimer.Tick += (_, _) => { _previewTimer.Stop(); RenderPreview(_sourceBox.Text ?? ""); };
+
+        // Find-in-page (Ctrl+F): one bar over two engines — the rendered preview and the source editor. The
+        // bar targets whichever pane holds focus on open; a scope button switches between them. Hidden until
+        // opened; it re-runs live as the query changes.
+        _search = new MarkdownSearch(_previewScroll);
+        _findScope = SettingsUi.FlatButton("Source");
+        _findScope.Padding = new Thickness(8, 3);
+        _findScope.Click += (_, _) => SwitchFindSide(_findSide == FindSide.Editor ? FindSide.Preview : FindSide.Editor);
+        ToolTip.SetTip(_findScope, "Switch between searching the source and the preview");
+        _findBox = new TextBox
+        {
+            PlaceholderText = "Find…", FontSize = 12, Width = 190,
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8, 4), VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        _findBox.TextChanged += (_, _) => { if (_findOpen) ActiveFind.SetSearch(_findBox.Text ?? ""); };
+        _findBox.AddHandler(KeyDownEvent, OnFindBoxKeyDown, RoutingStrategies.Tunnel);
+        _findCount = new TextBlock
+        {
+            Text = "", FontSize = 11.5, MinWidth = 42, VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
+        };
+        _findPrev = SettingsUi.FlatButton("‹");
+        _findPrev.Padding = new Thickness(8, 3);
+        _findPrev.Click += (_, _) => _search.Prev();
+        ToolTip.SetTip(_findPrev, "Previous match (Shift+Enter)");
+        _findNext = SettingsUi.FlatButton("›");
+        _findNext.Padding = new Thickness(8, 3);
+        _findNext.Click += (_, _) => _search.Next();
+        ToolTip.SetTip(_findNext, "Next match (Enter)");
+        _findClose = SettingsUi.FlatButton("✕");
+        _findClose.Padding = new Thickness(8, 3);
+        _findClose.Click += (_, _) => CloseFind();
+        ToolTip.SetTip(_findClose, "Close (Esc)");
+        _findBar = new Border
+        {
+            IsVisible = false,
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 10, 16, 0), Padding = new Thickness(8, 6),
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
+            BoxShadow = new BoxShadows(new BoxShadow
+            {
+                OffsetX = 0, OffsetY = 2, Blur = 10, Spread = 0, Color = Color.FromArgb(70, 0, 0, 0),
+            }),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
+                Children = { _findScope, _findBox, _findCount, _findPrev, _findNext, _findClose },
+            },
+        };
+        // Only the active engine drives the count label; the inactive one is cleared when the side switches.
+        _search.ResultsChanged += (cur, total) => OnFindResults(FindSide.Preview, cur, total);
+        _editorFind.ResultsChanged += (cur, total) => OnFindResults(FindSide.Editor, cur, total);
 
         // The toolbar is a light header row above the two cards (no hard bottom rule); the inner splitter is a
         // wide, transparent gutter so the page shows between the source and preview cards.
@@ -371,7 +451,10 @@ internal sealed class MarkdownWindow : Window
         toolbarPanel.Children.Add(_editorFileLabel);   // fills the remaining width
         _editorToolbar.Child = toolbarPanel;
 
-        _previewPane.Child = _previewScroll;
+        // The preview scroll fills the pane; the find bar (when this pane is the search target) floats over its
+        // top-right corner, outside the scroll, so it stays put while the document scrolls.
+        _previewOverlay = new Grid { Children = { _previewScroll } };
+        _previewPane.Child = _previewOverlay;
 
         // The source editor with a left gutter overlay: a thin accent bar (in the source box's left padding,
         // clear of the text) marks the active block's lines. Non-interactive, clipped to the editor height.
@@ -382,8 +465,10 @@ internal sealed class MarkdownWindow : Window
             Width = 12, HorizontalAlignment = HorizontalAlignment.Left, ClipToBounds = true,
             IsHitTestVisible = false, Children = { _gutterBar },
         };
-        var editorArea = new Grid { Children = { _sourceBox, _gutter } };
-        _sourceCard.Child = editorArea;
+        // Editor find highlights paint on a layer over the text (below the gutter bar); the find bar floats
+        // over this card when the editor is the search target.
+        _editorOverlay = new Grid { Children = { _sourceBox, _editorFind.Layer, _gutter } };
+        _sourceCard.Child = _editorOverlay;
 
         var split = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,*") };
         Grid.SetColumn(_sourceCard, 0);
@@ -440,6 +525,9 @@ internal sealed class MarkdownWindow : Window
         var syntax = EditorSyntax.For(_windowLight);
         _sourceBox.Background = t.EditorBg;
         _sourceBox.Foreground = syntax.Fg;
+        // Our minimal template dropped the Fluent theme's caret brush, so the caret defaulted to black —
+        // invisible on the dark editor. Drive it from the editor foreground so it reads on either polarity.
+        _sourceBox.CaretBrush = syntax.Fg;
         _sourceBox.SetHighlighter(text => MarkdownSourceHighlighter.Highlight(text, syntax, new Typeface(Mono), SourceFontSize));
         // The default selection highlight reads as a harsh near-black block; use a soft translucent tint
         // and keep the selected text its normal colour.
@@ -457,6 +545,25 @@ internal sealed class MarkdownWindow : Window
 
         _treeHost.Background = t.PaneBg;
         StyleButton(_projectBtn, t);
+
+        // The find bar reads as a small floating card in the window chrome (not the preview's own theme), so
+        // its controls stay legible whatever the preview polarity.
+        _findBar.Background = t.PaneBg;
+        _findBar.BorderBrush = t.Border;
+        _findBox.Background = t.EditorBg;
+        _findBox.Foreground = t.Fg;
+        _findBox.BorderBrush = t.Border;
+        _findBox.SelectionBrush = t.Selection;
+        _findBox.SelectionForegroundBrush = t.Fg;
+        ApplyFieldBackgrounds(_findBox, t);
+        _findCount.Foreground = t.Muted;
+        StyleButton(_findScope, t);
+        StyleButton(_findPrev, t);
+        StyleButton(_findNext, t);
+        StyleButton(_findClose, t);
+        // The editor's find highlights follow the window (editor) polarity, unlike the preview's own theme.
+        _editorFind.SetDark(!_windowLight);
+
         if (_gutterBar != null) _gutterBar.Background = t.Accent;
         UpdateEditorChrome();
         RebuildPane();
@@ -842,9 +949,12 @@ internal sealed class MarkdownWindow : Window
         if (_loading)
             return;
         _dirty = (_sourceBox.Text ?? "") != _loadedText;
+        _activeSide = FindSide.Editor;   // typing means the editor is the active pane for Ctrl+F
         UpdateEditorChrome();
         _previewTimer.Stop();
         _previewTimer.Start();   // debounce: re-render the preview once typing settles
+        if (_findOpen && _findSide == FindSide.Editor)
+            _editorFind.Refresh();   // re-find over the edited source (preview refreshes on its own re-render)
     }
 
     private void RenderPreview(string md)
@@ -859,7 +969,9 @@ internal sealed class MarkdownWindow : Window
         var root = MarkdownView.Build(md, style, out var anchors);
         _previewAnchors = anchors;
         _activeAnchorBorder = null;   // the old wrappers are gone; re-attach the highlight below
-        _previewScroll.Content = root;
+        // Route the fresh tree through the search engine — it wraps it with the highlight layer, re-collects
+        // the searchable blocks, and re-runs any active find (repaint only, no scroll jump).
+        _previewScroll.Content = _search.SetContent(root, previewDark: !_previewLight);
 
         // Re-mark the block under the caret on the fresh tree (no scroll — don't yank the view while typing).
         SyncPreviewToCaret(scroll: false, force: true);
@@ -889,6 +1001,7 @@ internal sealed class MarkdownWindow : Window
     // finer than the enclosing block — and inside a verbatim code block hit-tests to the exact line/column.
     private void OnPreviewPointerPressed(object? sender, PointerPressedEventArgs e)
     {
+        _activeSide = FindSide.Preview;   // interacting with the preview makes it the active pane for Ctrl+F
         if (!e.GetCurrentPoint(_previewScroll).Properties.IsLeftButtonPressed)
             return;
         for (var v = e.Source as Visual; v is not null; v = v.GetVisualParent())
@@ -1112,7 +1225,7 @@ internal sealed class MarkdownWindow : Window
             _sourceBox.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault() is { } sv)
         {
             _srcScroll = sv;
-            sv.ScrollChanged += (_, _) => UpdateGutter();
+            sv.ScrollChanged += (_, _) => { UpdateGutter(); _editorFind.OnEditorMoved(); };
         }
     }
 
@@ -1291,6 +1404,18 @@ internal sealed class MarkdownWindow : Window
         OpenInEditor(samplePath, sampleMarkdown, null);
     }
 
+    /// <summary>Render/verification seam: open the find bar over the given pane with a query and run it. Must
+    /// be called after the window is shown and laid out, so the text (preview blocks / editor presenter) is
+    /// visible and its layout exists.</summary>
+    internal void OpenFindForRender(string query, bool preview)
+    {
+        _findBox.Text = query;
+        _findOpen = true;
+        SetFindSide(preview ? FindSide.Preview : FindSide.Editor);
+        _findBar.IsVisible = true;
+        ActiveFind.SetSearch(query);
+    }
+
     /// <summary>Closes without the unsaved-changes prompt — for programmatic teardown (app exit, the update
     /// flow via <c>CloseAuxWindows</c>) where popping a modal confirm would be inappropriate.</summary>
     public void CloseWithoutPrompt()
@@ -1329,6 +1454,80 @@ internal sealed class MarkdownWindow : Window
         base.OnClosed(e);
     }
 
+    // ── Find in page (Ctrl+F) ───────────────────────────────────────────────────────────────────────
+
+    // The engine for the pane currently being searched.
+    private FindHighlighter ActiveFind => _findSide == FindSide.Editor ? _editorFind : _search;
+
+    // Open the bar, targeting whichever pane the user last interacted with, and run any existing query.
+    private void OpenFind()
+    {
+        _findOpen = true;
+        SetFindSide(_activeSide);
+        _findBar.IsVisible = true;
+        _findBox.Focus();
+        _findBox.SelectAll();
+        ActiveFind.SetSearch(_findBox.Text ?? "");
+    }
+
+    private void CloseFind()
+    {
+        _findOpen = false;
+        _findBar.IsVisible = false;
+        _search.Clear();
+        _editorFind.Clear();
+        _sourceBox.Focus();
+    }
+
+    // Switch which pane the bar searches (the scope button), clearing the pane we're leaving and re-running the
+    // query on the one we're moving to.
+    private void SwitchFindSide(FindSide side)
+    {
+        if (!_findOpen || side == _findSide)
+            return;
+        SetFindSide(side);
+        ActiveFind.SetSearch(_findBox.Text ?? "");
+        _findBox.Focus();
+    }
+
+    // Point the bar at a pane: clear the other engine, re-parent the bar over the target pane, and relabel.
+    private void SetFindSide(FindSide side)
+    {
+        (side == FindSide.Editor ? (FindHighlighter)_search : _editorFind).Clear();
+        _findSide = side;
+        _previewOverlay.Children.Remove(_findBar);
+        _editorOverlay.Children.Remove(_findBar);
+        (side == FindSide.Editor ? _editorOverlay : _previewOverlay).Children.Add(_findBar);
+        _findScope.Content = side == FindSide.Editor ? "Source" : "Preview";
+        _findBox.PlaceholderText = side == FindSide.Editor ? "Find in source…" : "Find in preview…";
+    }
+
+    // Only the active engine drives the count label (the inactive one gets cleared when the side switches).
+    private void OnFindResults(FindSide side, int cur, int total)
+    {
+        if (side != _findSide)
+            return;
+        _findCount.Text = total > 0 ? $"{cur}/{total}"
+            : string.IsNullOrEmpty(_findBox.Text) ? "" : "No results";
+    }
+
+    // Enter/Shift+Enter step through matches; Escape closes. Tunnelled so the TextBox's own handling doesn't
+    // swallow Enter first.
+    private void OnFindBoxKeyDown(object? sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Enter:
+                if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) ActiveFind.Prev(); else ActiveFind.Next();
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                CloseFind();
+                e.Handled = true;
+                break;
+        }
+    }
+
     protected override void OnKeyDown(KeyEventArgs e)
     {
         if (e.Key == Key.S && e.KeyModifiers.HasFlag(KeyModifiers.Control))
@@ -1337,8 +1536,28 @@ internal sealed class MarkdownWindow : Window
             e.Handled = true;
             return;
         }
+        // Ctrl+F opens find-in-page targeting the last-interacted pane. If it's already open, pressing it after
+        // interacting with the *other* pane moves the search there; otherwise it closes.
+        if (e.Key == Key.F && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            if (!_findOpen)
+                OpenFind();
+            else if (_activeSide != _findSide)
+                SwitchFindSide(_activeSide);
+            else
+                CloseFind();
+            e.Handled = true;
+            return;
+        }
         if (e.Key == Key.Escape)
         {
+            // Find bar wins Escape (from anywhere) before the window does.
+            if (_findOpen)
+            {
+                CloseFind();
+                e.Handled = true;
+                return;
+            }
             // Don't steal Escape from the search box (clearing a filter shouldn't close the window).
             if (_searchBox.IsFocused && !string.IsNullOrEmpty(_searchBox.Text))
             {
@@ -1353,6 +1572,9 @@ internal sealed class MarkdownWindow : Window
     }
 
     private enum NodeKind { Group, ProducedFile, ReferencedFile }
+
+    // Which pane the Ctrl+F find bar is searching.
+    private enum FindSide { Editor, Preview }
 
     private sealed class FileNode
     {

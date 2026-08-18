@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.46] - 2026-08-18
+
+- Find-in-page in the Markdown viewer (Ctrl+F), the current match picked out from the rest
+- Searches whichever pane you're in — source or preview — and switches on demand
+- The Markdown editor's text cursor is visible in dark mode now (it had been hiding)
+
+---
+
 ## [v0.3.45] - 2026-08-18
 
 - Markdown preview tucks SKILL.md-style frontmatter into a collapsed "Preamble" block (it used to spill out as garbled text)

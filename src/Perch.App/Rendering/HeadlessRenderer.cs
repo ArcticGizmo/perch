@@ -780,8 +780,14 @@ internal static class HeadlessRenderer
         // preview) to eyeball both per-window palettes and the independent preview override.
         Capture("markdown_window_1x.png", windowLight: false, previewLight: true);
         Capture("markdown_window_light_1x.png", windowLight: true, previewLight: false);
+        // Find-in-page (Ctrl+F): the current match stands out with an outline, the rest carry a subtle wash.
+        // Over the rendered preview…
+        Capture("markdown_find_1x.png", windowLight: false, previewLight: true, findQuery: "code", findPreview: true);
+        Capture("markdown_find_light_1x.png", windowLight: true, previewLight: false, findQuery: "code", findPreview: true);
+        // …and over the source editor.
+        Capture("markdown_find_editor_1x.png", windowLight: false, previewLight: true, findQuery: "code", findPreview: false);
 
-        void Capture(string file, bool windowLight, bool previewLight)
+        void Capture(string file, bool windowLight, bool previewLight, string? findQuery = null, bool findPreview = true)
         {
             var w = new MarkdownWindow(new AppSettings()) { Width = 1000, Height = 620 };
             w.SeedForRender(cwd, sets, project, @"C:\src\perch\docs\markdown-viewer-plan.md", sampleMd,
@@ -789,6 +795,13 @@ internal static class HeadlessRenderer
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (findQuery != null)
+            {
+                // Open + run find only once the pane is laid out (matches need visible text + a text layout).
+                w.OpenFindForRender(findQuery, findPreview);
+                Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            }
             var frame = w.CaptureRenderedFrame();
             if (frame != null)
             {
