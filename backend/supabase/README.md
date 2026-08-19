@@ -75,9 +75,12 @@ To add a migration later: `supabase migration new <name> --workdir backend`, edi
 they're idempotent - or run `supabase migration repair --status applied <version> --workdir backend` for
 each, where `<version>` is the file's 14-digit timestamp prefix, to mark them applied instead.)
 
-**Automated - CI (Actions):** `.github/workflows/db-migrate.yml` runs `db push` on any change under
-`backend/supabase/migrations/**` on `main` (and on demand via *Run workflow*). Add three repo secrets under
-**Settings -> Secrets and variables -> Actions**:
+**Automated - CI (Actions):** `.github/workflows/db-migrate.yml` runs `db push` when a migration changes on
+`main` (and on demand via *Run workflow*). It has two gates so an expired token/password only fails a run
+when there's genuinely something to apply: the `paths` filter (only starts on `migrations/` changes) and a
+tokenless git check that skips the link/push steps unless the push actually **added** a migration file
+(edits, renames, deletions or doc churn add no new version, so the token is never touched and the run passes
+green). Add three repo secrets under **Settings -> Secrets and variables -> Actions**:
 
 | Secret | Where to get it |
 |--------|-----------------|
