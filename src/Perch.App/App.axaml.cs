@@ -645,7 +645,7 @@ public partial class App : Application
             {
                 await _social.PostAsync(body, mood);
                 _feedHost?.RefreshSoon();
-            }),
+            }, _social.Current.Me?.MoodEmoji),   // seed the composer with your current mood
             () => _composeWindow = null);
     }
 

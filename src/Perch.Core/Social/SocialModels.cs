@@ -50,7 +50,7 @@ public sealed record ReactionGroup(string Emoji, int Count, bool Mine);
 public sealed record RosterFriend(Profile Profile, FeedItem? Latest, IReadOnlyList<ReactionGroup> Reactions)
 {
     // Compiler-generated record equality would compare Reactions by reference, so a fresh list every poll would
-    // read as "changed" and force a needless relayout. Compare it by value (like FeedSnapshot / MicSnapshot).
+    // read as "changed" and force a needless relayout. Compare it by value (like MicSnapshot).
     public bool Equals(RosterFriend? other) =>
         other is not null && Profile == other.Profile && Latest == other.Latest
         && Reactions.SequenceEqual(other.Reactions);
@@ -68,7 +68,7 @@ public sealed record RosterFriend(Profile Profile, FeedItem? Latest, IReadOnlyLi
 /// <summary>
 /// The whole social region as pushed to the overlay: the signed-in user's own profile (for the "post a status"
 /// row) and one <see cref="RosterFriend"/> per accepted friend, ordered most-recently-active first. A record so
-/// the overlay can skip a no-op repaint; value equality is hand-written for the same reason as <see cref="FeedSnapshot"/>.
+/// the overlay can skip a no-op repaint; value equality is hand-written so a fresh list per poll doesn't relayout.
 /// </summary>
 public sealed record RosterSnapshot(Profile? Me, IReadOnlyList<RosterFriend> Friends)
 {
@@ -98,23 +98,3 @@ public sealed record AuthState(bool SignedIn, Profile? Me)
 
 /// <summary>A newly created post's id, returned from <see cref="ISocialClient.PostAsync"/>.</summary>
 public readonly record struct PostId(Guid Value);
-
-/// <summary>
-/// The feed as pushed to the overlay strip — the recent items, newest first. A record purely so the overlay
-/// can skip a no-op repaint, but it hand-writes value equality (like <c>MicSnapshot</c>): the compiler-
-/// generated record equality compares the <see cref="Items"/> list by <em>reference</em>, which would make
-/// every fresh snapshot look different and defeat the "only relayout when it actually changed" check.
-/// </summary>
-public sealed record FeedSnapshot(IReadOnlyList<FeedItem> Items)
-{
-    public bool Any => Items.Count > 0;
-
-    public bool Equals(FeedSnapshot? other) => other is not null && Items.SequenceEqual(other.Items);
-
-    public override int GetHashCode()
-    {
-        var hc = new HashCode();
-        foreach (var i in Items) hc.Add(i);
-        return hc.ToHashCode();
-    }
-}

@@ -26,7 +26,7 @@ internal sealed class ComposeWindow : Window
     private readonly TextBlock _status;
     private readonly Button _postBtn;
 
-    public ComposeWindow(Func<string, string?, Task> post)
+    public ComposeWindow(Func<string, string?, Task> post, string? initialMood = null)
     {
         _post = post;
         Title = "Post a status";
@@ -42,7 +42,7 @@ internal sealed class ComposeWindow : Window
         _body.Height = 96;
         _body.TextChanged += (_, _) => UpdateCounter();
 
-        _mood = SettingsUi.ThemedTextBox("");
+        _mood = SettingsUi.ThemedTextBox(initialMood ?? "");
         _mood.Watermark = "🙂";
         _mood.Width = 56;
 
