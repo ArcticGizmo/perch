@@ -9,6 +9,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.47] - 2026-08-19
+
+- New opt-in **Social feed** — a little corner for friends who run Claude Code too
+- Off by default; not a single network call until you turn it on
+- Sign in with GitHub, claim a handle — no password, and your email never touches Perch
+- Add friends by exact handle; mutual, with no browsable directory to wander into
+- A collapsible friends roster under the overlay: each friend's mood, handle, latest status and time
+- Post your own status, mood and all, from a searchable emoji picker
+- React to a friend's status with an emoji (one each; a crowd folds into a count with the tally on hover)
+- A friend changing their status gives their row a quiet glow
+- Optional "@x just posted" nudge, and a friends-shown count you can dial down
+- Auto-collapses in Do Not Disturb (it can read the room)
+- Block and report, enforced in the database rather than politely requested
+
+---
+
 ## [v0.3.46] - 2026-08-18
 
 - Find-in-page in the Markdown viewer (Ctrl+F), the current match picked out from the rest
