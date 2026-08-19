@@ -29,6 +29,24 @@ jobs:
         id: version
         run: echo "VERSION=$($env:GITHUB_REF_NAME -replace '^v','')" >> $env:GITHUB_OUTPUT
 
+      # Bakes the Supabase project URL + anon (publishable) key into the shipped binary from repo secrets, so
+      # the public repo never carries them. Empty secrets leave the file as-is (Social simply stays inert),
+      # so a fork or a pre-secrets build still succeeds. Never the service_role key - only the anon key ships.
+      - name: Inject Supabase config
+        env:
+          PERCH_SUPABASE_URL: ${{ secrets.PERCH_SUPABASE_URL }}
+          PERCH_SUPABASE_ANON_KEY: ${{ secrets.PERCH_SUPABASE_ANON_KEY }}
+        run: |
+          $lines = @(
+            'namespace Perch.Social;',
+            'internal static class SupabaseDefaults',
+            '{',
+            "    public const string Url = `"$env:PERCH_SUPABASE_URL`";",
+            "    public const string AnonKey = `"$env:PERCH_SUPABASE_ANON_KEY`";",
+            '}'
+          )
+          Set-Content -Path src/Perch.Core/Social/SupabaseDefaults.cs -Value $lines -Encoding utf8
+
       - name: Publish
         run: |
           dotnet publish src/Perch.App/Perch.App.csproj -c Release -f net10.0-windows10.0.19041.0 -r win-x64 --self-contained true `
@@ -70,6 +88,22 @@ jobs:
         run: |
           dotnet tool install -g vpk
           echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      # Same Supabase-config injection as the Windows job (see there): bake the anon key in from secrets so
+      # the public repo carries none. Empty secrets are a no-op, so a fork still builds.
+      - name: Inject Supabase config
+        env:
+          PERCH_SUPABASE_URL: ${{ secrets.PERCH_SUPABASE_URL }}
+          PERCH_SUPABASE_ANON_KEY: ${{ secrets.PERCH_SUPABASE_ANON_KEY }}
+        run: |
+          {
+            echo 'namespace Perch.Social;'
+            echo 'internal static class SupabaseDefaults'
+            echo '{'
+            echo "    public const string Url = \"${PERCH_SUPABASE_URL}\";"
+            echo "    public const string AnonKey = \"${PERCH_SUPABASE_ANON_KEY}\";"
+            echo '}'
+          } > src/Perch.Core/Social/SupabaseDefaults.cs
 
       # Reuses the same script as a local mac build (publish perch + perch-hook for osx-arm64, pack the
       # unsigned .app, wrap it in a DMG). The version comes from the tag.

@@ -25,6 +25,33 @@ backend/supabase/
    (`http://127.0.0.1:<port>/callback`) to the allowed redirect URLs — the exact port is finalised
    in M2.
 
+## Point the app at your project
+
+Get the **Project URL** and the **anon / publishable** key from the dashboard: Project Settings -> API
+Keys (older UIs: Settings -> API). Never use the `service_role` / `secret` key in the app or repo.
+
+`SupabaseConfig.Resolve()` reads them from, in order:
+
+1. **Env vars** `PERCH_SUPABASE_URL` / `PERCH_SUPABASE_ANON_KEY` - the dev override:
+   ```powershell
+   $env:PERCH_SUPABASE_URL = "https://YOUR-REF.supabase.co"
+   $env:PERCH_SUPABASE_ANON_KEY = "eyJ..."
+   dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0
+   ```
+2. **Local file** `%AppData%\Perch\supabase.local.json` (or `Perch (Dev)`) - outside the repo, so it can't
+   be committed. Copy `supabase.local.example.json` and fill it in.
+3. **Compiled-in defaults** (`SupabaseDefaults.cs`, empty in git) - the only path that ships to end users.
+
+**Release builds** get the key baked in by the `release.yml` "Inject Supabase config" step from two repo
+secrets - add these under Settings -> Secrets and variables -> Actions:
+
+| Secret | Value |
+|--------|-------|
+| `PERCH_SUPABASE_URL` | `https://YOUR-REF.supabase.co` |
+| `PERCH_SUPABASE_ANON_KEY` | the anon / publishable key (`eyJ...` or `sb_publishable_...`) |
+
+The public repo carries neither; empty secrets are a no-op (Social just stays inert), so a fork still builds.
+
 ## Apply the migrations
 
 **Hosted (SQL editor):** paste `0001_init.sql` then `0002_rls.sql` and run, in order.
