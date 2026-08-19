@@ -307,7 +307,8 @@ public sealed class SupabaseSocialClient : ISocialClient
             .ThenBy(e => e.Profile.Handle, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        return new RosterSnapshot(_me, entries);
+        var myLatest = latestByAuthor.GetValueOrDefault(uid);
+        return new RosterSnapshot(_me, myLatest, entries);
     }
 
     public async Task ReactAsync(Guid postId, string emoji, bool on, CancellationToken ct = default)

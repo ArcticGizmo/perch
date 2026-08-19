@@ -19,6 +19,10 @@ internal sealed class ComposeWindow : Window
 {
     private const int MaxLen = 280;
 
+    // A quick palette of common coding moods — click to set the mood without hunting for the OS emoji picker.
+    private static readonly string[] MoodPalette =
+        ["😌", "🔥", "🎉", "🚀", "🧠", "🐛", "☕", "😴", "🤔", "😅", "💥", "✅"];
+
     private readonly Func<string, string?, Task> _post;
     private readonly TextBox _body;
     private readonly TextBox _mood;
@@ -31,7 +35,7 @@ internal sealed class ComposeWindow : Window
         _post = post;
         Title = "Post a status";
         Width = 400;
-        Height = 260;
+        Height = 320;
         CanResize = false;
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -58,6 +62,21 @@ internal sealed class ComposeWindow : Window
         moodRow.Children.Add(_mood);
         moodRow.Children.Add(_counter);
 
+        // A clickable emoji palette so setting a mood doesn't need the OS emoji picker; the freeform box above
+        // still accepts anything. Selecting one fills the box (and clears if you re-tap the same one).
+        var palette = new WrapPanel { Orientation = Orientation.Horizontal };
+        foreach (var emoji in MoodPalette)
+        {
+            var btn = new Button
+            {
+                Content = new TextBlock { Text = emoji, FontFamily = new FontFamily("Segoe UI Emoji"), FontSize = 16 },
+                Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+                Padding = new Thickness(6, 3), Margin = new Thickness(0, 0, 2, 2), Cursor = new Cursor(StandardCursorType.Hand),
+            };
+            btn.Click += (_, _) => { _mood.Text = _mood.Text == emoji ? "" : emoji; };
+            palette.Children.Add(btn);
+        }
+
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
         buttons.Children.Add(cancel);
         buttons.Children.Add(_postBtn);
@@ -66,6 +85,7 @@ internal sealed class ComposeWindow : Window
         panel.Children.Add(SettingsUi.SectionTitle("Post a status"));
         panel.Children.Add(_body);
         panel.Children.Add(moodRow);
+        panel.Children.Add(palette);
         panel.Children.Add(_status);
         panel.Children.Add(buttons);
         Content = panel;

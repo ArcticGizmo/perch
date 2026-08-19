@@ -66,23 +66,28 @@ public sealed record RosterFriend(Profile Profile, FeedItem? Latest, IReadOnlyLi
 }
 
 /// <summary>
-/// The whole social region as pushed to the overlay: the signed-in user's own profile (for the "post a status"
-/// row) and one <see cref="RosterFriend"/> per accepted friend, ordered most-recently-active first. A record so
-/// the overlay can skip a no-op repaint; value equality is hand-written so a fresh list per poll doesn't relayout.
+/// The whole social region as pushed to the overlay: the signed-in user's own profile and their own latest
+/// status (for the "you" row), plus one <see cref="RosterFriend"/> per accepted friend, ordered
+/// most-recently-active first. A record so the overlay can skip a no-op repaint; value equality is hand-written
+/// so a fresh list per poll doesn't relayout.
 /// </summary>
-public sealed record RosterSnapshot(Profile? Me, IReadOnlyList<RosterFriend> Friends)
+/// <param name="Me">The signed-in user's own profile, or null when not yet loaded.</param>
+/// <param name="MyLatest">The signed-in user's own most recent status, or null if they haven't posted.</param>
+/// <param name="Friends">One entry per accepted friend, most-recently-active first.</param>
+public sealed record RosterSnapshot(Profile? Me, FeedItem? MyLatest, IReadOnlyList<RosterFriend> Friends)
 {
-    public static readonly RosterSnapshot Empty = new(null, []);
+    public static readonly RosterSnapshot Empty = new(null, null, []);
 
     public bool Any => Friends.Count > 0;
 
     public bool Equals(RosterSnapshot? other) =>
-        other is not null && Me == other.Me && Friends.SequenceEqual(other.Friends);
+        other is not null && Me == other.Me && MyLatest == other.MyLatest && Friends.SequenceEqual(other.Friends);
 
     public override int GetHashCode()
     {
         var hc = new HashCode();
         hc.Add(Me);
+        hc.Add(MyLatest);
         foreach (var f in Friends) hc.Add(f);
         return hc.ToHashCode();
     }

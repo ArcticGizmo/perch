@@ -3044,7 +3044,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (overSocial != _hoveredSocial) { _hoveredSocial = overSocial; InvalidateVisual(); }
 
         if (UpdateSocialRegionHover(p)) InvalidateVisual();
-        bool overRegion = _hoveredSocialHeader || _hoveredSocialCompose || _hoveredReactAdd >= 0
+        bool overRegion = _hoveredSocialHeader || _hoveredSocialCompose || _hoveredSocialAdd || _hoveredReactAdd >= 0
                           || _reactChipRects.Any(c => c.Rect.Contains(p)) || _socialMoreRect.Contains(p);
 
         // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + daemon worker lines +

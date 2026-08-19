@@ -164,7 +164,9 @@ public sealed partial class FakeSocialClient : ISocialClient
                 .OrderByDescending(e => e.Latest?.CreatedAt ?? DateTimeOffset.MinValue)
                 .ThenBy(e => e.Profile.Handle, StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            return Task.FromResult(new RosterSnapshot(_me, entries));
+            var myLatest = _me is null ? null
+                : _posts.Where(x => x.Author.Id == _me.Id).OrderByDescending(x => x.CreatedAt).FirstOrDefault();
+            return Task.FromResult(new RosterSnapshot(_me, myLatest, entries));
         }
     }
 

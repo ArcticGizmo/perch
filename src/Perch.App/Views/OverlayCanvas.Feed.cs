@@ -86,11 +86,9 @@ public sealed partial class OverlayCanvas
 
             if (_roster is { Friends.Count: > 0 } r)
                 for (int i = 0; i < FriendRowCount; i++) h += FriendRowHeight(r.Friends[i]);
-            else
-                h += FeedLineHeight;   // "No friends yet" hint
 
             if (FriendOverflow) h += FeedCaptionHeight;
-            h += FeedLineHeight + 6;   // the compose ("what are you working on?") row
+            h += FeedLineHeight + 6;   // the "you" / compose row
             return h;
         }
     }
@@ -220,13 +218,6 @@ public sealed partial class OverlayCanvas
                 y += FeedCaptionHeight;
             }
         }
-        else
-        {
-            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("No friends yet — add some to see their statuses.",
-                FeedBodySize, MutedBrush), HorizPad + 2, y + FeedLineHeight / 2);
-            _socialMoreRect = new Rect(0, y, width, FeedLineHeight);   // clicking the hint opens Friends
-            y += FeedLineHeight;
-        }
 
         DrawComposeRow(ctx, width, y);
     }
@@ -243,12 +234,20 @@ public sealed partial class OverlayCanvas
         double x = HorizPad + 14;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("FRIENDS", FeedCaptionSize, MutedBrush), x, midY);
 
-        // Right side: a live dot + count of friends with a current status.
+        // Far right: a "+" button to add / manage friends (opens the Friends window).
+        const double addBox = 18;
+        double addCx = width - HorizPad - addBox / 2 + 2;
+        var addRect = new Rect(addCx - addBox / 2, midY - addBox / 2, addBox, addBox);
+        if (_hoveredSocialAdd) OverlayDraw.Panel(ctx, addRect, FeedHoverBrush, null, 5);
+        DrawPlusGlyph(ctx, _hoveredSocialAdd ? FgBrush : MutedBrush, addCx, midY);
+        _socialAddRect = addRect;
+
+        // Left of the "+": a live dot + count of friends with a current status.
         int online = _roster?.Friends.Count(f => f.Latest is not null) ?? 0;
         if (online > 0)
         {
             var ft = OverlayDraw.Text($"{online} active", FeedCaptionSize, MutedBrush);
-            double cx = width - HorizPad - ft.Width;
+            double cx = addRect.Left - 10 - ft.Width;
             OverlayDraw.TextLeftMid(ctx, ft, cx, midY);
             ctx.DrawEllipse(new SolidColorBrush(RunningColor), null, new Point(cx - 8, midY), 3, 3);
         }
@@ -340,6 +339,8 @@ public sealed partial class OverlayCanvas
         foreach (var (rect, emoji) in rowRects) _reactChipRects.Add((rect, postId, emoji));
     }
 
+    // The "you" row: your own avatar + current status (or the "what are you working on?" prompt when you have
+    // none), with a right-hand affordance to post/update. Clicking anywhere on it opens the composer.
     private void DrawComposeRow(DrawingContext ctx, double width, double top)
     {
         double midY = top + 3 + FeedLineHeight / 2;
@@ -348,17 +349,36 @@ public sealed partial class OverlayCanvas
                 FeedHoverBrush, null, 6);
 
         const double tile = 20;
-        string? myMood = _roster?.Me?.MoodEmoji;
-        DrawAvatarTile(ctx, HorizPad + tile / 2, midY, tile, myMood, _roster?.Me?.Handle ?? "you");
+        DrawAvatarTile(ctx, HorizPad + tile / 2, midY, tile, _roster?.Me?.MoodEmoji, _roster?.Me?.Handle ?? "you");
         double x = HorizPad + tile + 8;
 
-        // A "Post" affordance on the right, and the prompt filling the middle.
-        var postFt = OverlayDraw.Text("Post", FeedReactionSize, Palette.AccentBrush, FontWeight.SemiBold);
-        double postX = width - HorizPad - postFt.Width;
-        OverlayDraw.TextLeftMid(ctx, postFt, postX, midY);
+        bool hasStatus = _roster?.MyLatest is not null;
+        // Right affordance: "Update" when you already have a status, "Post" otherwise.
+        var actionFt = OverlayDraw.Text(hasStatus ? "Update" : "Post", FeedReactionSize, Palette.AccentBrush, FontWeight.SemiBold);
+        double actionX = width - HorizPad - actionFt.Width;
+        OverlayDraw.TextLeftMid(ctx, actionFt, actionX, midY);
+        double rightEdge = actionX;
 
-        var prompt = OverlayDraw.Text("What are you working on?", FeedReactionSize, MutedBrush);
-        OverlayDraw.TextLeftMid(ctx, prompt, x, midY);
+        // A muted "you" label so the row reads as yours, then your status (or the prompt).
+        var youFt = OverlayDraw.Text("you", FeedHandleSize, MutedBrush, FontWeight.SemiBold);
+        OverlayDraw.TextLeftMid(ctx, youFt, x, midY);
+        double bodyX = x + youFt.Width + 8;
+
+        if (_roster?.MyLatest is { } mine)
+        {
+            var agoFt = OverlayDraw.Text(FormatAgo(mine.CreatedAt), FeedTimeSize, MutedBrush);
+            double agoX = rightEdge - 8 - agoFt.Width;
+            OverlayDraw.TextLeftMid(ctx, agoFt, agoX, midY);
+            double bodyMax = agoX - 8 - bodyX;
+            if (bodyMax > 12)
+                OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(OverlayDraw.Truncate(mine.Body, FeedBodySize, bodyMax),
+                    FeedBodySize, FgBrush), bodyX, midY);
+        }
+        else
+        {
+            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("what are you working on?", FeedBodySize, MutedBrush),
+                bodyX, midY);
+        }
 
         _socialComposeRect = new Rect(0, top, width, FeedLineHeight + 6);
     }
@@ -405,19 +425,23 @@ public sealed partial class OverlayCanvas
 
     // ── hit-testing ─────────────────────────────────────────────────────────────────────────────────────
 
-    private Rect _socialHeaderRect, _socialComposeRect, _socialMoreRect;
+    private Rect _socialHeaderRect, _socialComposeRect, _socialMoreRect, _socialAddRect;
     private readonly List<(Rect Rect, Guid PostId, string Emoji)> _reactChipRects = new();
     private readonly List<(Rect Rect, Guid PostId, int Index)> _reactAddRects = new();
     private int _hoveredReactAdd = -1;
-    private bool _hoveredSocialHeader, _hoveredSocialCompose;
+    private bool _hoveredSocialHeader, _hoveredSocialCompose, _hoveredSocialAdd;
 
     // Called from OnPointerMoved to refresh the region's hover state; returns true if anything changed.
     private bool UpdateSocialRegionHover(Point p)
     {
-        bool header = _socialHeaderRect.Width > 0 && _socialHeaderRect.Contains(p);
+        bool add = _socialAddRect.Width > 0 && _socialAddRect.Contains(p);
+        // The "+" sits inside the header band, so don't also light the header when hovering it.
+        bool header = !add && _socialHeaderRect.Width > 0 && _socialHeaderRect.Contains(p);
         bool compose = _socialComposeRect.Width > 0 && _socialComposeRect.Contains(p);
         int reactAdd = HitTestReactAdd(p);
-        bool changed = header != _hoveredSocialHeader || compose != _hoveredSocialCompose || reactAdd != _hoveredReactAdd;
+        bool changed = add != _hoveredSocialAdd || header != _hoveredSocialHeader
+                       || compose != _hoveredSocialCompose || reactAdd != _hoveredReactAdd;
+        _hoveredSocialAdd = add;
         _hoveredSocialHeader = header;
         _hoveredSocialCompose = compose;
         _hoveredReactAdd = reactAdd;
@@ -426,7 +450,7 @@ public sealed partial class OverlayCanvas
 
     private void ClearSocialRegionHitRects()
     {
-        _socialHeaderRect = _socialComposeRect = _socialMoreRect = default;
+        _socialHeaderRect = _socialComposeRect = _socialMoreRect = _socialAddRect = default;
         _reactChipRects.Clear();
         _reactAddRects.Clear();
     }
@@ -447,6 +471,7 @@ public sealed partial class OverlayCanvas
         foreach (var (rect, postId, _) in _reactAddRects)
             if (rect.Contains(p)) { ShowReactionPicker(postId); return true; }
 
+        if (_socialAddRect.Width > 0 && _socialAddRect.Contains(p)) { FriendsRequested?.Invoke(); return true; }
         if (_socialComposeRect.Width > 0 && _socialComposeRect.Contains(p)) { PostStatusRequested?.Invoke(); return true; }
         if (_socialMoreRect.Width > 0 && _socialMoreRect.Contains(p)) { FriendsRequested?.Invoke(); return true; }
         if (_socialHeaderRect.Width > 0 && _socialHeaderRect.Contains(p)) { OnSocialHeaderClicked(); return true; }

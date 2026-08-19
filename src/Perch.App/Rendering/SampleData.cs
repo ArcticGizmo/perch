@@ -143,8 +143,10 @@ internal static class SampleData
             "refactored the whole thing. do not ask.", "🦉", now.AddMinutes(-2));
         var gracePost = new FeedItem(Guid.Parse("bbbbbbbb-0000-4000-8000-000000000002"), grace,
             "tests green on the first try", "🛠️", now.AddMinutes(-14));
+        var myPost = new FeedItem(Guid.Parse("dddddddd-0000-4000-8000-00000000000d"), me,
+            "shipping something silly", "😌", now.AddMinutes(-5));
 
-        return new RosterSnapshot(me,
+        return new RosterSnapshot(me, myPost,
         [
             new(ada, adaPost, [new ReactionGroup("🔥", 2, true), new ReactionGroup("🎉", 1, false)]),
             new(grace, gracePost, [new ReactionGroup("👍", 1, false)]),
