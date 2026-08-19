@@ -17,6 +17,8 @@ backend/supabase/
     <ts>_block_report.sql       # blocks + reports tables; are_friends folds in blocking (M6)
     <ts>_rate_limit.sql         # per-author post rate-limit trigger (M6)
     <ts>_moderation.sql         # suspension kill-switch; posts + find_profile respect it (M6)
+    <ts>_reactions.sql          # emoji reactions on posts (friends-only via can_see_post)
+    <ts>_reactions_one_per_user.sql # PK (post_id, reactor): one reaction per user per post
   tests/
     rls_test.sql    # pgTAP: non-friends can't read posts, blocking, rate limit, suspension, etc.
 ```

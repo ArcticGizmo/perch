@@ -8,7 +8,7 @@
 -- exactly how auth.uid() resolves a signed-in user in production.
 
 begin;
-select plan(13);
+select plan(14);
 
 -- ── fixtures (as the privileged migration role, before dropping to `authenticated`) ─────────────
 -- Three users: alice, bob (will befriend alice), carol (a stranger).
@@ -113,6 +113,21 @@ delete from public.blocks
 select is(
   (select count(*)::int from public.posts where author = '22222222-2222-2222-2222-222222222222'),
   1, 'unblock: alice can see bob''s post again');
+
+-- ── reactions: one per user per post ──────────────────────────────────────────────
+-- alice (an accepted friend) reacts to bob's post, then a second reaction with a different emoji must be
+-- rejected by the primary key — a person can hold at most one reaction on a post.
+insert into public.reactions (post_id, reactor, emoji)
+  select id, '11111111-1111-1111-1111-111111111111', '🔥'
+  from public.posts where author = '22222222-2222-2222-2222-222222222222' limit 1;
+
+-- 14) a second, different-emoji reaction on the same post from the same user violates the PK.
+select throws_ok(
+  $$insert into public.reactions (post_id, reactor, emoji)
+      select id, '11111111-1111-1111-1111-111111111111', '👍'
+      from public.posts where author = '22222222-2222-2222-2222-222222222222' limit 1$$,
+  '23505',   -- unique_violation (post_id, reactor)
+  'reactions: one reaction per user per post is enforced');
 reset role;
 
 -- ── M6: per-user post rate limit ─────────────────────────────────────────────────
