@@ -9,6 +9,10 @@ name: Supabase migrations
 #      migration file. Edits/renames/deletions of existing migrations, or doc-only churn, add no new
 #      version to apply, so the token-authenticated steps are skipped and the run passes green.
 #
+# MANUAL RUN: Actions tab -> "Supabase migrations" -> "Run workflow" applies unconditionally, bypassing
+# BOTH gates (it re-pushes all migrations; idempotent, so that's safe). Use it to apply out of band or to
+# recover after a skipped/failed run. Pick the branch in the Run-workflow dialog.
+#
 # Requires three repo secrets (Settings -> Secrets and variables -> Actions):
 #   SUPABASE_ACCESS_TOKEN  - a personal access token (supabase.com/dashboard/account/tokens)
 #   SUPABASE_DB_PASSWORD   - the project's database password (Project Settings -> Database)
@@ -54,19 +58,21 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # A manual dispatch always applies (its own guarantee, independent of the detect gate); an automatic
+      # push applies only when detect found a newly-added migration.
       - uses: supabase/setup-cli@v1
-        if: steps.detect.outputs.run == 'true'
+        if: steps.detect.outputs.run == 'true' || github.event_name == 'workflow_dispatch'
         with:
           version: latest
 
       - name: Link the project
-        if: steps.detect.outputs.run == 'true'
+        if: steps.detect.outputs.run == 'true' || github.event_name == 'workflow_dispatch'
         run: supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}" --workdir backend
 
       - name: Push migrations
-        if: steps.detect.outputs.run == 'true'
+        if: steps.detect.outputs.run == 'true' || github.event_name == 'workflow_dispatch'
         run: supabase db push --workdir backend
 
       - name: Nothing to apply
-        if: steps.detect.outputs.run != 'true'
+        if: steps.detect.outputs.run != 'true' && github.event_name != 'workflow_dispatch'
         run: echo "No new migrations in this push; the token was never used."
