@@ -274,9 +274,17 @@ public sealed class SupabaseSocialClient : ISocialClient
             r.Body, r.MoodEmoji, r.CreatedAt)).ToList();
     }
 
-    // Realtime lands in M5; until then the feed is polled (see the App's feed host), so this is a no-op that
-    // returns a disposable the caller can hold without a null-check.
-    public IDisposable SubscribeFeed(Action<FeedItem> onPost) => new NoopDisposable();
+    // Realtime (M5): open a WebSocket subscription to public.posts INSERTs. RLS scopes the change stream to
+    // what the signed-in user may see, exactly like the feed poll. Each insert is delivered as a FeedItem with
+    // a placeholder author (liveness only needs "something new landed"; the feed poll resolves the profile),
+    // so the caller can treat this purely as a nudge to re-fetch. Unconfigured → a safe no-op; the poll covers
+    // it. A blocked/unavailable socket degrades to the poll transparently (see SupabaseRealtimeConnection).
+    public IDisposable SubscribeFeed(Action<FeedItem> onPost)
+    {
+        if (!_config.IsConfigured) return new NoopDisposable();
+        return new SupabaseRealtimeConnection(BaseUrl, _config.PublishableKey, ValidAccessTokenAsync,
+            post => onPost(new FeedItem(post.Id, new Profile(post.Author, "…"), post.Body, post.Mood, post.CreatedAt)));
+    }
 
     // Batch-fetches profiles by id (RLS returns only those you may see: your own + friendship-edge shared).
     private async Task<Dictionary<Guid, Profile>> FetchProfilesAsync(IEnumerable<Guid> ids, string token, CancellationToken ct)
