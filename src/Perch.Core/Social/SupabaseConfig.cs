@@ -11,11 +11,13 @@ namespace Perch.Social;
 ///
 /// Resolution order (first that's fully populated wins):
 /// <list type="number">
-///   <item><b>Environment</b> — <c>PERCH_SUPABASE_URL</c> / <c>PERCH_SUPABASE_ANON_KEY</c>. The dev override:
-///     set them in your shell before <c>dotnet run</c>, or in CI.</item>
+///   <item><b>Environment</b> — <c>PERCH_SUPABASE_URL</c> / <c>PERCH_SUPABASE_ANON_KEY</c>. The highest
+///     override: set them in your shell before <c>dotnet run</c>, or in CI.</item>
+///   <item><b>Repo <c>.env.local</c></b> (dev builds) — <c>KEY=VALUE</c> lines in the <c>.env.local</c> beside
+///     <c>perch.slnx</c> at the repo root, found by walking up from the running binary (see <see cref="DotEnv"/>).
+///     Gitignored; the natural place to keep dev keys in a checkout. Not present in a shipped install.</item>
 ///   <item><b>Local file</b> — <c>supabase.local.json</c> in Perch's per-profile app-data folder (i.e.
-///     <em>outside</em> the repo, so it can't be committed by accident). Shape:
-///     <c>{ "url": "https://xxxx.supabase.co", "anonKey": "eyJ..." }</c>.</item>
+///     <em>outside</em> the repo). Shape: <c>{ "url": "https://xxxx.supabase.co", "anonKey": "eyJ..." }</c>.</item>
 ///   <item><b>Compiled-in defaults</b> — <see cref="SupabaseDefaults"/>, empty unless a release build embeds
 ///     them. This is the only path that ships to end users, since a distributed desktop app has no server to
 ///     inject the key at runtime.</item>
@@ -41,7 +43,21 @@ public sealed record SupabaseConfig(string Url, string AnonKey)
         if (!string.IsNullOrWhiteSpace(envUrl) && !string.IsNullOrWhiteSpace(envKey))
             return new(envUrl.Trim(), envKey.Trim());
 
-        // 2) Local file outside the repo.
+        // 2) Repo-root .env.local (dev builds — found only inside a checkout).
+        try
+        {
+            if (DotEnv.FindRepoEnvLocal(AppContext.BaseDirectory) is { } envFile)
+            {
+                var map = DotEnv.Parse(File.ReadAllText(envFile));
+                if (map.TryGetValue("PERCH_SUPABASE_URL", out var u) &&
+                    map.TryGetValue("PERCH_SUPABASE_ANON_KEY", out var k) &&
+                    !string.IsNullOrWhiteSpace(u) && !string.IsNullOrWhiteSpace(k))
+                    return new(u.Trim(), k.Trim());
+            }
+        }
+        catch { /* best-effort: fall through */ }
+
+        // 3) Local file outside the repo.
         try
         {
             if (File.Exists(LocalFilePath))
@@ -53,7 +69,7 @@ public sealed record SupabaseConfig(string Url, string AnonKey)
         }
         catch { /* best-effort: fall through to defaults */ }
 
-        // 3) Compiled-in defaults (empty in a plain checkout).
+        // 4) Compiled-in defaults (empty in a plain checkout).
         return new(SupabaseDefaults.Url, SupabaseDefaults.AnonKey);
     }
 

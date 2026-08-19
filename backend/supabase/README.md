@@ -30,17 +30,20 @@ backend/supabase/
 Get the **Project URL** and the **anon / publishable** key from the dashboard: Project Settings -> API
 Keys (older UIs: Settings -> API). Never use the `service_role` / `secret` key in the app or repo.
 
-`SupabaseConfig.Resolve()` reads them from, in order:
+`SupabaseConfig.Resolve()` reads them from, in order (first fully-populated wins):
 
-1. **Env vars** `PERCH_SUPABASE_URL` / `PERCH_SUPABASE_ANON_KEY` - the dev override:
+1. **Env vars** `PERCH_SUPABASE_URL` / `PERCH_SUPABASE_ANON_KEY` - the highest override:
    ```powershell
    $env:PERCH_SUPABASE_URL = "https://YOUR-REF.supabase.co"
    $env:PERCH_SUPABASE_ANON_KEY = "eyJ..."
    dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0
    ```
-2. **Local file** `%AppData%\Perch\supabase.local.json` (or `Perch (Dev)`) - outside the repo, so it can't
-   be committed. Copy `supabase.local.example.json` and fill it in.
-3. **Compiled-in defaults** (`SupabaseDefaults.cs`, empty in git) - the only path that ships to end users.
+2. **`.env.local` at the repo root** (dev builds) - the easiest spot in a checkout. Copy the root
+   `.env.local.example` to `.env.local` (it sits next to `perch.slnx`) and fill in the two `KEY=VALUE`
+   lines. It's gitignored, and dev builds read it automatically. Just `dotnet run` - no env vars to set.
+3. **Local file** `%AppData%\Perch\supabase.local.json` (or `Perch (Dev)`) - an alternative outside the repo.
+   Copy `backend/supabase/supabase.local.example.json`.
+4. **Compiled-in defaults** (`SupabaseDefaults.cs`, empty in git) - the only path that ships to end users.
 
 **Release builds** get the key baked in by the `release.yml` "Inject Supabase config" step from two repo
 secrets - add these under Settings -> Secrets and variables -> Actions:
