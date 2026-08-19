@@ -54,6 +54,7 @@ public partial class App : Application
     private PlacementEditorWindow? _placementEditor;
     private ComposeWindow? _composeWindow;
     private FriendsWindow? _friendsWindow;
+    private DebugSocialWindow? _debugSocialWindow;
     // Open sticky notes, keyed so a second request for the same note focuses the existing one rather than
     // stacking a duplicate: "__scratch__" for the global pad, the sessionId for a session's row note. They
     // are non-modal and owned by the overlay (see StickyNoteWindow); closed together in CloseAuxWindows.
@@ -461,6 +462,7 @@ public partial class App : Application
         _placementEditor?.Close();
         _composeWindow?.Close();
         _friendsWindow?.Close();
+        _debugSocialWindow?.Close();
         _statsWindow?.Close();
         _daemonListWindow?.Close();
         _achievementsWindow?.Close();
@@ -658,6 +660,17 @@ public partial class App : Application
             () => new FriendsWindow(_social),
             () => _friendsWindow = null,
             w => w.RefreshExternal());
+    }
+
+    // Developer testing tool: drive a puppet account (gated behind PERCH_SOCIAL_DEBUG; the Settings button
+    // that opens this only shows when that flag is set).
+    private void OpenSocialDebug()
+    {
+        if (_social is null) return;
+        _debugSocialWindow = WindowHost.ShowOrFocus(
+            _debugSocialWindow,
+            () => new DebugSocialWindow(_social, () => _feedHost?.RefreshSoon()),
+            () => _debugSocialWindow = null);
     }
 
     // A reaction chip / "+" picker in the overlay social region was used: toggle the reaction on the backend,
@@ -1458,6 +1471,7 @@ public partial class App : Application
             OpenPlacements = OpenPlacementEditor,
             OpenSocialCompose = OpenCompose,
             OpenSocialFriends = OpenFriends,
+            OpenSocialDebug = OpenSocialDebug,
         };
         _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider, _social);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);

@@ -104,6 +104,9 @@ internal sealed class SettingsHooks
     /// <summary>Open the Social compose / friends windows (also on the overlay's right-click menu).</summary>
     public Action? OpenSocialCompose;
     public Action? OpenSocialFriends;
+
+    /// <summary>Open the developer puppet-account testing tool (shown only when the debug flag is set).</summary>
+    public Action? OpenSocialDebug;
 }
 
 /// <summary>
@@ -687,6 +690,17 @@ internal sealed class SettingsWindow : Window
         actions.Children.Add(post);
         actions.Children.Add(friends);
         _socialBody.Children.Add(actions);
+
+        // Developer testing tool — only when the debug flag is set (env or .env.local PERCH_SOCIAL_DEBUG).
+        // Drives a second "puppet" account so the whole loop can be tested from one machine.
+        if (SocialDebug.Enabled)
+        {
+            _socialBody.Children.Add(SettingsUi.Separator());
+            _socialBody.Children.Add(SettingsUi.FieldCaption("Developer"));
+            var debug = SettingsUi.FlatButton("Testing tool (puppet account)…");
+            debug.Click += (_, _) => _hooks.OpenSocialDebug?.Invoke();
+            _socialBody.Children.Add(Left(debug));
+        }
 
         AddSignOut();
     }

@@ -100,6 +100,27 @@ supabase db reset --workdir backend    # applies everything in migrations/ in or
 supabase test db --workdir backend     # runs tests/ (pgTAP)
 ```
 
+## Testing from one machine (puppet account)
+
+GitHub sign-in gives you one identity, so the friends/posts/reactions loop is impossible to exercise
+solo. The app ships a hidden **developer testing tool** that drives a second "puppet" account:
+
+1. **Create the puppet user.** Supabase dashboard → **Authentication → Users → Add user**. Give it an
+   email + password and tick **Auto Confirm User** (so no email round-trip). This is an ordinary email/
+   password user — nothing special server-side.
+2. **Enable the tool.** Set `PERCH_SOCIAL_DEBUG=1` (a real env var, or add it to the repo `.env.local` —
+   see `.env.local.example`). It's off unless set, so it never appears in a normal install.
+3. **Open it.** Sign in with your real GitHub account, then **Settings → Social → "Testing tool
+   (puppet account)…"**.
+4. **Drive the loop.** In the tool: *Sign in as puppet* (the email/password above) → *Claim handle* →
+   *Send me a friend request*. Accept it in your real Friends window (the **+** in the overlay's Friends
+   region). Then *Post as puppet* and *React to my latest post* — each action re-polls your overlay so it
+   updates immediately. "Accept my requests" handles the reverse direction (a request you sent the puppet).
+
+The puppet keeps its session in memory only, so it never disturbs your real signed-in session. It's a
+normal authenticated user, so every RLS rule (friends-only posts, reactions, blocking) applies to it
+exactly as to a real friend — which is what makes it a faithful test.
+
 ## Branching (deferred)
 
 Supabase **Branching** gives each Git branch/PR its own ephemeral Supabase environment (own DB + auth) with

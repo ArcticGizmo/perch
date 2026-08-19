@@ -101,6 +101,24 @@ public sealed class SupabaseSocialClient : ISocialClient
         }
     }
 
+    /// <summary>
+    /// Signs in with an email + password (GoTrue password grant) rather than the GitHub browser flow. Not used
+    /// by the normal sign-in path — it exists for the developer testing tool, which drives a second "puppet"
+    /// account (created in the Supabase dashboard) so the whole friends/posts/reactions loop can be exercised
+    /// from a single machine. The refresh token is stored via this client's <see cref="ISecretStore"/> like any
+    /// session, so a puppet must be given its own (in-memory) store to avoid clobbering the real session.
+    /// </summary>
+    public async Task<AuthState> SignInWithPasswordAsync(string email, string password, CancellationToken ct = default)
+    {
+        if (!_config.IsConfigured)
+            throw new SocialException("Social isn't configured yet (no Supabase URL / key).");
+        var token = await ExchangeAsync("password", new { email, password }, ct);
+        ApplySession(token);
+        Raise();
+        await LoadProfileOrExplainAsync(ct);
+        return Current;
+    }
+
     /// <summary>Restores a session from the stored refresh token, if any. Returns the (possibly signed-out)
     /// state. Call at startup; never throws — a stale/rejected token just leaves you signed out.</summary>
     public async Task<AuthState> TryRestoreAsync(CancellationToken ct = default)
