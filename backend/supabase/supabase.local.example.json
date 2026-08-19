@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy this to  %AppData%\\Perch\\supabase.local.json  (or %AppData%\\Perch (Dev)\\ for a dev build) and fill in your project's values. This path is OUTSIDE the repo, so it can't be committed. Alternatively set the PERCH_SUPABASE_URL / PERCH_SUPABASE_ANON_KEY env vars. Use the anon/publishable key only — never the service_role/secret key.",
+  "url": "https://YOUR-PROJECT-REF.supabase.co",
+  "anonKey": "eyJhbGciOi...your-anon-or-publishable-key..."
+}

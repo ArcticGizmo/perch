@@ -489,3 +489,6 @@ $RECYCLE.BIN/
 
 captures
 *.perchreplay
+
+# Supabase local config (real values live in %AppData%\Perch; never commit the anon key here)
+supabase.local.json
