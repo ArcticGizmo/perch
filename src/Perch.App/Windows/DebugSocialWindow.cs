@@ -218,27 +218,15 @@ internal sealed class DebugSocialWindow : Window
         new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, Children = { c } };
 }
 
-/// <summary>Whether the Social developer testing tool is enabled — via the <c>PERCH_SOCIAL_DEBUG</c>
-/// environment variable, or the same key in the repo's <c>.env.local</c> (dev builds). Off by default, so the
-/// tool never surfaces in a normal install.</summary>
+/// <summary>Whether the Social developer testing tool is shown. Only in Debug builds, so it never surfaces in a
+/// released install; a property (not a const) so the callers don't trip the unreachable-code warning.</summary>
 internal static class SocialDebug
 {
-    public static bool Enabled { get; } = Resolve();
-
-    private static bool Resolve()
-    {
-        var v = Environment.GetEnvironmentVariable("PERCH_SOCIAL_DEBUG");
-        if (string.IsNullOrEmpty(v))
-        {
-            try
-            {
-                if (DotEnv.FindRepoEnvLocal(AppContext.BaseDirectory) is { } envFile)
-                    DotEnv.Parse(File.ReadAllText(envFile)).TryGetValue("PERCH_SOCIAL_DEBUG", out v);
-            }
-            catch { /* best-effort */ }
-        }
-        return v is "1" or "true" or "yes" or "on";
-    }
+#if DEBUG
+    public static bool Enabled => true;
+#else
+    public static bool Enabled => false;
+#endif
 }
 
 /// <summary>An <see cref="ISecretStore"/> that keeps secrets only in memory — used for the puppet client so its

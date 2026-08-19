@@ -110,8 +110,8 @@ solo. The app ships a hidden **developer testing tool** that drives a second "pu
 1. **Create the puppet user.** Supabase dashboard → **Authentication → Users → Add user**. Give it an
    email + password and tick **Auto Confirm User** (so no email round-trip). This is an ordinary email/
    password user — nothing special server-side.
-2. **Enable the tool.** Set `PERCH_SOCIAL_DEBUG=1` (a real env var, or add it to the repo `.env.local` —
-   see `.env.local.example`). It's off unless set, so it never appears in a normal install.
+2. **The tool ships only in Debug builds** (`dotnet run` / `dotnet build` default to Debug), so it never
+   appears in a released install — nothing to enable.
 3. **Open it.** Sign in with your real GitHub account, then **Settings → Social → "Testing tool
    (puppet account)…"**.
 4. **Drive the loop.** In the tool: *Sign in as puppet* (the email/password above) → *Claim handle* →
