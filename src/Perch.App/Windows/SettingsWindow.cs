@@ -620,13 +620,25 @@ internal sealed class SettingsWindow : Window
     {
         page.Children.Add(SettingsUi.SectionTitle("Social"));
         page.Children.Add(SettingsUi.BodyText(
-            "Add friends by handle and see their statuses under the overlay. Enable \"Social feed\" on the Features page first."));
+            "Add friends by handle and see their statuses under the overlay."));
 
         if (_social is null)
         {
             page.Children.Add(SettingsUi.BodyText("Social isn't available in this build."));
             return;
         }
+
+        // All the social settings gathered here (the same ones live in Features → Social), so the whole feature
+        // is configurable in one place. These persist + apply live via DisplayToggle / DisplayChanged.
+        page.Children.Add(SettingsUi.TitleRow("Social feed",
+            DisplayToggle(_settings.SocialEnabled, v => _settings.SocialEnabled = v)));
+        page.Children.Add(SettingsUi.BodyText("The opt-in friends feed. Off makes no network calls at all."));
+        page.Children.Add(SettingsUi.TitleRow("Notify when a friend posts",
+            DisplayToggle(_settings.NotifyOnFriendPost, v => _settings.NotifyOnFriendPost = v)));
+        page.Children.Add(SettingsUi.TitleRow("Close friends in Do Not Disturb",
+            DisplayToggle(_settings.CloseFeedInDoNotDisturb, v => _settings.CloseFeedInDoNotDisturb = v)));
+        page.Children.Add(SettingsUi.TitleRow("Friends shown at once", BuildFriendsShownStepper()));
+        page.Children.Add(SettingsUi.Separator());
 
         _socialBody = new StackPanel { Spacing = 10, Margin = new Thickness(0, 6, 0, 6) };
         page.Children.Add(_socialBody);
@@ -640,6 +652,38 @@ internal sealed class SettingsWindow : Window
         Closed += (_, _) => { if (_socialAuthHandler is not null) _social.AuthChanged -= _socialAuthHandler; };
 
         RefreshSocialPage();
+    }
+
+    // A compact "− value +" stepper for how many friends the roster shows, applied live like the other display gates.
+    private Control BuildFriendsShownStepper()
+    {
+        const int min = 1, max = 20;
+        var row = SettingsUi.ButtonRow();
+        var dec = SettingsUi.FlatButton("−");
+        var inc = SettingsUi.FlatButton("+");
+        dec.Width = 36; inc.Width = 36;
+        var value = new TextBlock
+        {
+            Width = 40, TextAlignment = TextAlignment.Center, Foreground = Palette.FgBrush,
+            VerticalAlignment = VerticalAlignment.Center, FontSize = 14,
+        };
+        void Render() => value.Text = _settings.MaxFriendsShown.ToString();
+        void Apply(int v)
+        {
+            v = Math.Clamp(v, min, max);
+            if (v == _settings.MaxFriendsShown) return;
+            _settings.MaxFriendsShown = v;
+            _settings.Save();
+            _hooks.DisplayChanged?.Invoke();
+            Render();
+        }
+        dec.Click += (_, _) => Apply(_settings.MaxFriendsShown - 1);
+        inc.Click += (_, _) => Apply(_settings.MaxFriendsShown + 1);
+        Render();
+        row.Children.Add(dec);
+        row.Children.Add(value);
+        row.Children.Add(inc);
+        return row;
     }
 
     private void RefreshSocialPage()

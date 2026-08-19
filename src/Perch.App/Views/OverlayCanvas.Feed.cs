@@ -36,7 +36,6 @@ public sealed partial class OverlayCanvas
     private static readonly IBrush FeedChipBrush   = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)); // reaction chip
     private static readonly IBrush FeedHoverBrush   = new SolidColorBrush(Color.FromArgb(26, 255, 255, 255)); // row/button hover
 
-    private bool _feedEnabled;
     private bool _regionExpanded = true;
     private RosterSnapshot? _roster;
 
@@ -72,9 +71,10 @@ public sealed partial class OverlayCanvas
     /// whether it should be on (add) or off (remove). The App relays it to the social client.</summary>
     public event Action<Guid, string, bool>? ReactRequested;
 
-    // Shown once Social is on, the region toggle (ShowFeedStrip) is on, and you're signed in with a handle. Its
-    // sibling — the sign-in prompt strip — shows in the complementary state, so the two never overlap.
-    private bool SocialRegionVisible => _socialEnabled && _feedEnabled && _socialSignedIn && _socialHasHandle;
+    // Shown once Social is on and you're signed in with a handle (there's just the one "Social feed" switch now
+    // — the region and the feature are the same thing). Its sibling — the sign-in prompt strip — shows in the
+    // complementary state, so the two never overlap.
+    private bool SocialRegionVisible => _socialEnabled && _socialSignedIn && _socialHasHandle;
 
     private int FriendRowCount => Math.Min(_maxFriends, _roster?.Friends.Count ?? 0);
     private bool FriendOverflow => (_roster?.Friends.Count ?? 0) > _maxFriends;
@@ -106,19 +106,9 @@ public sealed partial class OverlayCanvas
         }
     }
 
-    // Kept for the settings gate / measure code that still speaks in terms of the old "feed strip".
+    // Kept for the measure/paint code in OverlayCanvas.cs that still speaks in terms of the old "feed strip".
     private bool FeedStripVisible => SocialRegionVisible;
     private double FeedStripHeight => SocialRegionHeight;
-
-    /// <summary>Show/hide the whole social region (the ShowFeedStrip setting). Toggling changes the panel
-    /// height, so relayout when the visibility actually flips.</summary>
-    public void SetShowFeedStrip(bool enabled)
-    {
-        if (_feedEnabled == enabled) return;
-        bool before = SocialRegionVisible;
-        _feedEnabled = enabled;
-        if (SocialRegionVisible != before) RemeasurePanel();
-    }
 
     /// <summary>Sets the region's initial expand/collapse state (from AppSettings) without raising the change
     /// event. Call once at wire-up.</summary>
@@ -140,7 +130,7 @@ public sealed partial class OverlayCanvas
         _roster = roster;
 
         if (SocialRegionVisible != before || SocialRegionHeight != beforeH) RemeasurePanel();
-        else if (_feedEnabled) InvalidateVisual();
+        else if (_socialEnabled) InvalidateVisual();
     }
 
     // Marks a glow for any friend whose latest-status id changed to a new value. The first roster only primes

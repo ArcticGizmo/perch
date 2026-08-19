@@ -421,12 +421,6 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.SocialEnabled),
             s => s.SocialEnabled, (s, v) => s.SocialEnabled = v),
 
-        Toggle("feed-strip", "Feed strip",
-            "Show friends' recent statuses in a slim strip under the overlay's session rows.",
-            SettingSurface.Social, ["feed", "strip", "friends", "status", "posts", "overlay", "social"],
-            PreviewTarget.FeedStrip, nameof(AppSettings.ShowFeedStrip),
-            s => s.ShowFeedStrip, (s, v) => s.ShowFeedStrip = v),
-
         Toggle("notify-friend-post", "Notify when a friend posts",
             "Pop a desktop toast when a friend posts a status.",
             SettingSurface.Social, ["notify", "friend", "post", "status", "social", "toast", "notification"],

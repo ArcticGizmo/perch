@@ -408,11 +408,6 @@ internal sealed class AppSettings
     // who never enables it. A missing key keeps it off. See docs/social-feed-plan.md.
     public bool SocialEnabled { get; set; }
 
-    // Whether the friends feed strip is drawn under the overlay's session rows (a slim band listing friends'
-    // most recent statuses). Only meaningful while SocialEnabled is on and there are posts to show; the strip
-    // takes no height otherwise. On by default so enabling Social shows the feed; a missing key keeps it on.
-    public bool ShowFeedStrip { get; set; } = true;
-
     // Whether the overlay's social region is expanded (the full friends roster) or collapsed to just its header.
     // Toggled by the region's own chevron and persisted here so it survives a restart. Expanded by default.
     public bool SocialRegionExpanded { get; set; } = true;
@@ -423,9 +418,9 @@ internal sealed class AppSettings
     public bool NotifyOnFriendPost { get; set; } = true;
 
     // When Windows Do Not Disturb is on, collapse the friends region (and hold off friend-post toasts) so the
-    // social feature goes quiet with the rest of the system. Off by default (opt-in); collapsing is one-shot —
-    // it won't spring back open on a new post.
-    public bool CloseFeedInDoNotDisturb { get; set; }
+    // social feature goes quiet with the rest of the system. On by default; collapsing is one-shot — it won't
+    // spring back open on a new post. A missing key keeps it on.
+    public bool CloseFeedInDoNotDisturb { get; set; } = true;
 
     // How many friends the roster shows at once (most-recently-active first); the rest fold into a "+N more"
     // line. Default 3 to keep the region compact in the narrow overlay.

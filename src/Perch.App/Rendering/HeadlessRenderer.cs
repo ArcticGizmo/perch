@@ -134,7 +134,6 @@ internal static class HeadlessRenderer
         var feedProbe = new OverlayCanvas();
         feedProbe.Update(SampleData.Sessions());
         feedProbe.SetSocialEnabled(true);
-        feedProbe.SetShowFeedStrip(true);
         feedProbe.SetSocialAccount(signedIn: true, hasHandle: true);   // region shows in the signed-in state
         feedProbe.UpdateRoster(SampleData.Roster());
         RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1x.png"), 96);
