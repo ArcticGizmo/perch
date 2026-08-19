@@ -31,6 +31,7 @@ public partial class App : Application
     private MediaMonitorHost? _mediaHost;
     private MicMonitorHost? _micHost;
     private SupabaseSocialClient? _social;
+    private SocialFeedMonitorHost? _feedHost;
     private HypertreeMonitorHost? _hypertreeHost;
     private DaemonMonitorHost? _daemonHost;
     // The latest daemon roster, kept so the "show +N more" window opens on current data; the single
@@ -181,8 +182,12 @@ public partial class App : Application
             // background (a no-op when unconfigured or signed out).
             _social = new SupabaseSocialClient(SupabaseConfig.Resolve(),
                 PlatformServices.SecretStore, PlatformServices.UrlOpener);
-            _social.AuthChanged += st => Dispatcher.UIThread.Post(
-                () => _overlay?.Canvas.SetSocialAccount(st.SignedIn, st.Me is not null));
+            _feedHost = new SocialFeedMonitorHost(_social, snap => _overlay?.Canvas.UpdateFeed(snap));
+            _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
+            {
+                _overlay?.Canvas.SetSocialAccount(st.SignedIn, st.Me is not null);
+                _feedHost?.SetActive(settings.SocialEnabled && st.SignedIn);   // poll the feed while signed in
+            });
             _ = _social.TryRestoreAsync();
             // Hypertree's published status file → the overlay's branch strip (opt-in; started below).
             _hypertreeHost = new HypertreeMonitorHost(_overlay.Canvas.SetHypertree);
@@ -571,6 +576,9 @@ public partial class App : Application
         // Push every display gate onto the live canvas. The same helper drives the Settings live-preview
         // pane against a detached canvas + a cloned AppSettings, so preview and overlay can't diverge.
         OverlaySettingsGates.Apply(_overlay.Canvas, s);
+
+        // Poll the feed only while Social is enabled and signed in (turning Social off stops the poll).
+        _feedHost?.SetActive(s.SocialEnabled && (_social?.Current.SignedIn ?? false));
 
         // Data-layer sources for the git chip / stuck glyph (off in the monitor unless enabled here).
         if (_monitorHost is not null)
