@@ -128,6 +128,7 @@ public partial class App : Application
                 _statusHost?.Dispose();
                 _mediaHost?.Dispose();
                 _micHost?.Dispose();
+                _feedHost?.Dispose();
                 _hypertreeHost?.Dispose();
                 _daemonHost?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
@@ -184,7 +185,9 @@ public partial class App : Application
             // background (a no-op when unconfigured or signed out).
             _social = new SupabaseSocialClient(SupabaseConfig.Resolve(),
                 PlatformServices.SecretStore, PlatformServices.UrlOpener);
-            _feedHost = new SocialFeedMonitorHost(_social, snap => _overlay?.Canvas.UpdateFeed(snap));
+            _feedHost = new SocialFeedMonitorHost(_social,
+                snap => _overlay?.Canvas.UpdateFeed(snap),
+                OnFriendPosted);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
             {
                 _overlay?.Canvas.SetSocialAccount(st.SignedIn, st.Me is not null);
@@ -649,6 +652,16 @@ public partial class App : Application
             () => new FriendsWindow(_social),
             () => _friendsWindow = null,
             w => w.RefreshExternal());
+    }
+
+    // A friend posted a new status (surfaced by the feed poll, whether nudged live by Realtime or found on the
+    // next tick): a quiet desktop toast, gated by the master notifications switch and NotifyOnFriendPost. Never
+    // fires for your own posts or the backlog present when the feed starts (see SocialFeedMonitorHost).
+    private void OnFriendPosted(FeedItem item)
+    {
+        if (_appSettings is not { NotificationsEnabled: true, NotifyOnFriendPost: true }) return;
+        var body = item.Body.Length <= 120 ? item.Body : item.Body[..117] + "…";
+        _notifier?.Show($"@{item.Author.Handle} just posted", body, ToastLevel.Info, null, null);
     }
 
     // A session finished (NeedsAttention): flash the overlay and fire the notification (toast/chime/external,
