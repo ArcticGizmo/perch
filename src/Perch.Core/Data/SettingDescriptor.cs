@@ -15,6 +15,7 @@ internal enum SettingSurface
     SystemMetrics,
     Whimsy,
     Integrations,
+    Social,
     Advanced,
 }
 
@@ -60,6 +61,7 @@ internal enum PreviewTarget
     DaemonProcesses,
     QuickLinks,
     PerchReacts,
+    FeedStrip,
 }
 
 /// <summary>
@@ -126,6 +128,7 @@ internal sealed record SettingDescriptor(
         SettingSurface.SystemMetrics  => "System & metrics",
         SettingSurface.Whimsy         => "Whimsy",
         SettingSurface.Integrations   => "Integrations",
+        SettingSurface.Social         => "Social",
         SettingSurface.Advanced       => "Advanced",
         _                             => surface.ToString(),
     };

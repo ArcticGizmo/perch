@@ -188,6 +188,34 @@ internal static class SettingsUi
         return grid;
     }
 
+    // A settings row styled like the Search results: a name + description on the left, a control on the right,
+    // a consistent height (padding-driven), and a bottom divider — so a stack of them reads as one clean list.
+    public static Border DividerRow(string name, string description, Control right)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var left = new StackPanel { Spacing = 2, Margin = new Thickness(0, 0, 12, 0) };
+        left.Children.Add(new TextBlock
+        {
+            Text = name, FontSize = 14, FontWeight = FontWeight.SemiBold, Foreground = Palette.TitleBrush,
+        });
+        left.Children.Add(new TextBlock
+        {
+            Text = description, FontSize = 12, Foreground = Palette.MutedBrush, TextWrapping = TextWrapping.Wrap,
+        });
+        Grid.SetColumn(left, 0);
+        grid.Children.Add(left);
+        right.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(right, 1);
+        grid.Children.Add(right);
+        return new Border
+        {
+            Child = grid,
+            Padding = new Thickness(2, 11, 2, 11),
+            BorderBrush = Palette.BorderBrush,
+            BorderThickness = new Thickness(0, 0, 0, 1),
+        };
+    }
+
     // An indented sub-row: a left label (returned so callers can dim it) and a right-aligned control.
     public static Grid SubRow(string text, Control right, out TextBlock label)
     {

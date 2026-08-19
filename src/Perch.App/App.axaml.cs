@@ -5,6 +5,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Perch.Social;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
@@ -29,6 +30,8 @@ public partial class App : Application
     private StatusMonitorHost? _statusHost;
     private MediaMonitorHost? _mediaHost;
     private MicMonitorHost? _micHost;
+    private SupabaseSocialClient? _social;
+    private SocialFeedMonitorHost? _feedHost;
     private HypertreeMonitorHost? _hypertreeHost;
     private DaemonMonitorHost? _daemonHost;
     // The latest daemon roster, kept so the "show +N more" window opens on current data; the single
@@ -49,6 +52,9 @@ public partial class App : Application
     private GitTreeWindow? _treeWindow;
     private MarkdownWindow? _markdownWindow;
     private PlacementEditorWindow? _placementEditor;
+    private ComposeWindow? _composeWindow;
+    private FriendsWindow? _friendsWindow;
+    private DebugSocialWindow? _debugSocialWindow;
     // Open sticky notes, keyed so a second request for the same note focuses the existing one rather than
     // stacking a duplicate: "__scratch__" for the global pad, the sessionId for a session's row note. They
     // are non-modal and owned by the overlay (see StickyNoteWindow); closed together in CloseAuxWindows.
@@ -123,6 +129,7 @@ public partial class App : Application
                 _statusHost?.Dispose();
                 _mediaHost?.Dispose();
                 _micHost?.Dispose();
+                _feedHost?.Dispose();
                 _hypertreeHost?.Dispose();
                 _daemonHost?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
@@ -173,6 +180,22 @@ public partial class App : Application
             // Who holds the microphone → the overlay's mic strip (opt-in; started below).
             _micHost = new MicMonitorHost(
                 PlatformServices.CreateMicrophoneMonitor(), _overlay.Canvas.UpdateMic);
+            // Social feed backend (GitHub sign-in + friends/posts). Constructed always (cheap — no network
+            // until you sign in); the overlay's sign-in strip only appears when SocialEnabled is on and you're
+            // signed out. Push auth-state changes to the overlay, and restore any saved session in the
+            // background (a no-op when unconfigured or signed out).
+            _social = new SupabaseSocialClient(SupabaseConfig.Resolve(),
+                PlatformServices.SecretStore, PlatformServices.UrlOpener);
+            _feedHost = new SocialFeedMonitorHost(_social,
+                snap => { _overlay?.Canvas.UpdateRoster(snap); CheckDnd(); },   // re-check DND on each roster tick
+                OnFriendPosted);
+            _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
+            _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
+            {
+                _overlay?.Canvas.SetSocialAccount(st.SignedIn, st.Me is not null);
+                _feedHost?.SetActive(settings.SocialEnabled && st.SignedIn);   // poll the feed while signed in
+            });
+            _ = _social.TryRestoreAsync();
             // Hypertree's published status file → the overlay's branch strip (opt-in; started below).
             _hypertreeHost = new HypertreeMonitorHost(_overlay.Canvas.SetHypertree);
             // The Claude Code background daemon's worker roster → the overlay's "daemon" section. These
@@ -229,6 +252,19 @@ public partial class App : Application
 
             // Mic strip: its one control is the app's name, which focuses whatever holds the microphone.
             _overlay.Canvas.MicJumpRequested += JumpToMicApp;
+
+            // Social entry points from the overlay (strip + right-click menu) — the same actions as the
+            // Settings Social page, so Social isn't Settings-only.
+            _overlay.Canvas.SignInRequested += OnSocialSignInRequested;
+            _overlay.Canvas.SignOutRequested += () => { _ = _social?.SignOutAsync(); };
+            _overlay.Canvas.SocialManageRequested += OpenSocialSettings;
+            _overlay.Canvas.PostStatusRequested += OpenCompose;
+            _overlay.Canvas.FriendsRequested += OpenFriends;
+            _overlay.Canvas.ReactRequested += OnReactRequested;
+            _overlay.Canvas.SocialRegionExpandChanged += expanded =>
+            {
+                if (_appSettings is { } s) { s.SocialRegionExpanded = expanded; s.Save(); }
+            };
 
             // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
             // down. History / QR / external-notify are Phase-5 concerns — their triggers are wired here so
@@ -424,6 +460,9 @@ public partial class App : Application
         _treeWindow?.Close();
         _markdownWindow?.CloseWithoutPrompt();
         _placementEditor?.Close();
+        _composeWindow?.Close();
+        _friendsWindow?.Close();
+        _debugSocialWindow?.Close();
         _statsWindow?.Close();
         _daemonListWindow?.Close();
         _achievementsWindow?.Close();
@@ -555,6 +594,12 @@ public partial class App : Application
         // pane against a detached canvas + a cloned AppSettings, so preview and overlay can't diverge.
         OverlaySettingsGates.Apply(_overlay.Canvas, s);
 
+        // Poll the feed only while Social is enabled and signed in (turning Social off stops the poll).
+        _feedHost?.SetActive(s.SocialEnabled && (_social?.Current.SignedIn ?? false));
+
+        // Watch Windows Do Not Disturb only while Social is on and the auto-close option is enabled.
+        ApplyDndMonitor(s);
+
         // Data-layer sources for the git chip / stuck glyph (off in the monitor unless enabled here).
         if (_monitorHost is not null)
         {
@@ -566,6 +611,124 @@ public partial class App : Application
             _monitorHost.JiraSubdomain = s.JiraSubdomain;
             _monitorHost.JiraProjectFilter = s.JiraProjectFilter;
         }
+    }
+
+    // The overlay sign-in strip was clicked: run the GitHub sign-in (browser + loopback). SignInAsync is
+    // async throughout, so the UI stays responsive while the user completes it in the browser; AuthChanged
+    // then hides the strip. Errors surface as a toast rather than throwing out of the event handler.
+    private async void OnSocialSignInRequested()
+    {
+        if (_social is null) return;
+        try
+        {
+            await _social.SignInAsync();
+        }
+        catch (SocialException ex)
+        {
+            _notifier?.Show("Perch Social", ex.Message, ToastLevel.Info, null, null);
+        }
+        catch
+        {
+            _notifier?.Show("Perch Social", "Sign-in didn't complete. Please try again.", ToastLevel.Info, null, null);
+        }
+    }
+
+    // Open Settings on the Social page (from the overlay strip's "finish setup" click or its menu item).
+    private void OpenSocialSettings()
+    {
+        OpenSettings();
+        _settings?.NavigateTo("social");
+    }
+
+    // Compose a status — posts via the client, then refreshes the feed so it appears at once.
+    private void OpenCompose()
+    {
+        if (_social is null) return;
+        _composeWindow = WindowHost.ShowOrFocus(
+            _composeWindow,
+            () => new ComposeWindow(async (body, mood) =>
+            {
+                await _social.PostAsync(body, mood);
+                _feedHost?.RefreshSoon();
+            }, _social.Current.Me?.MoodEmoji),   // seed the composer with your current mood
+            () => _composeWindow = null);
+    }
+
+    // Manage friends (add / accept / list).
+    private void OpenFriends()
+    {
+        if (_social is null) return;
+        _friendsWindow = WindowHost.ShowOrFocus(
+            _friendsWindow,
+            () => new FriendsWindow(_social),
+            () => _friendsWindow = null,
+            w => w.RefreshExternal());
+    }
+
+    // Developer testing tool: drive a puppet account (gated behind PERCH_SOCIAL_DEBUG; the Settings button
+    // that opens this only shows when that flag is set).
+    private void OpenSocialDebug()
+    {
+        if (_social is null) return;
+        _debugSocialWindow = WindowHost.ShowOrFocus(
+            _debugSocialWindow,
+            () => new DebugSocialWindow(_social, () => _feedHost?.RefreshSoon()),
+            () => _debugSocialWindow = null);
+    }
+
+    // A reaction chip / "+" picker in the overlay social region was used: toggle the reaction on the backend,
+    // then refresh the roster so the chip settles to the server truth. Errors are swallowed (best-effort, like
+    // the other social overlay actions) — a failed reaction just leaves the chip as it was.
+    private async void OnReactRequested(Guid postId, string emoji, bool on)
+    {
+        if (_social is null) return;
+        try
+        {
+            await _social.ReactAsync(postId, emoji, on);
+            _feedHost?.RefreshSoon();
+        }
+        catch (SocialException ex)
+        {
+            // Surface it — a reaction that silently does nothing is impossible to diagnose (e.g. the reactions
+            // migration not applied yet, or an RLS denial).
+            _notifier?.Show("Perch Social", $"Couldn't react: {ex.Message}", ToastLevel.Info, null, null);
+        }
+        catch { /* transient network blip — the next poll reconciles */ }
+    }
+
+    // ── Do Not Disturb → close the friends region ────────────────────────────────────────────────────────
+    // No dedicated poll: the DND state is re-checked whenever the feed's roster stream ticks (the 60s poll, or a
+    // realtime nudge) and once when the setting changes. Lightweight for a low-stakes convenience.
+    private bool _dndActive;
+
+    private void ApplyDndMonitor(AppSettings s)
+    {
+        if (s.SocialEnabled && s.CloseFeedInDoNotDisturb) CheckDnd();   // apply immediately on enable
+        else _dndActive = false;
+    }
+
+    // On the rising edge (not-DND → DND), collapse the region once (it won't spring back open on a new post).
+    // Guarded on the setting so it's a no-op unless enabled. IsActive is a cheap OS query, safe on the UI thread.
+    private void CheckDnd()
+    {
+        if (_appSettings is not { SocialEnabled: true, CloseFeedInDoNotDisturb: true }) { _dndActive = false; return; }
+        bool now;
+        try { now = PlatformServices.DoNotDisturb.IsActive; } catch { now = false; }
+        if (now && !_dndActive) _overlay?.Canvas.SetSocialRegionExpanded(false);
+        _dndActive = now;
+    }
+
+    private bool DndSuppressing => _dndActive && (_appSettings?.CloseFeedInDoNotDisturb ?? false);
+
+    // A friend posted a new status (surfaced by the feed poll, whether nudged live by Realtime or found on the
+    // next tick): a quiet desktop toast, gated by the master notifications switch and NotifyOnFriendPost. Never
+    // fires for your own posts or the backlog present when the feed starts (see SocialFeedMonitorHost).
+    private void OnFriendPosted(FeedItem item)
+    {
+        if (_appSettings is not { NotificationsEnabled: true, NotifyOnFriendPost: true }) return;
+        if (DndSuppressing) return;   // Do Not Disturb: stay quiet
+        var body = item.Body.Length <= 120 ? item.Body : item.Body[..117] + "…";
+        _notifier?.Show($"@{item.Author.Handle} just posted", body, ToastLevel.Info, null, null);
     }
 
     // A session finished (NeedsAttention): flash the overlay and fire the notification (toast/chime/external,
@@ -1340,8 +1503,11 @@ public partial class App : Application
             OpenFlightPath = OpenFlightPath,
             OpenAchievements = OpenAchievements,
             OpenPlacements = OpenPlacementEditor,
+            OpenSocialCompose = OpenCompose,
+            OpenSocialFriends = OpenFriends,
+            OpenSocialDebug = OpenSocialDebug,
         };
-        _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider);
+        _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider, _social);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);
         _settings.Closed += (_, _) => _settings = null;
         _settings.Show();

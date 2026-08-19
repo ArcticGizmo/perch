@@ -18,6 +18,9 @@ public class SettingsRegistryTests
     private static readonly HashSet<string> NotSettings = new()
     {
         nameof(AppSettings.ScratchText),
+        // The social region's expand/collapse is UI state toggled by the region's own chevron on the overlay,
+        // not a Settings-window control.
+        nameof(AppSettings.SocialRegionExpanded),
         // Custom themes are managed by the Appearance page's designer, not a catalogue control.
         nameof(AppSettings.CustomThemes),
         nameof(AppSettings.PendingUpdateVersion),

@@ -1,0 +1,78 @@
+name: Supabase migrations
+
+# Applies not-yet-applied migrations to the linked project via the Supabase CLI (`db push`).
+#
+# Two gates keep it from touching the auth token when there's nothing to do - so an expired token or
+# password only ever fails the run when a migration genuinely needs applying:
+#   1. `paths` below - the workflow only starts when something under migrations/ changes.
+#   2. the `detect` step - a tokenless git check that skips the link/push steps unless this push ADDED a
+#      migration file. Edits/renames/deletions of existing migrations, or doc-only churn, add no new
+#      version to apply, so the token-authenticated steps are skipped and the run passes green.
+#
+# MANUAL RUN: Actions tab -> "Supabase migrations" -> "Run workflow" applies unconditionally, bypassing
+# BOTH gates (it re-pushes all migrations; idempotent, so that's safe). Use it to apply out of band or to
+# recover after a skipped/failed run. Pick the branch in the Run-workflow dialog.
+#
+# Requires three repo secrets (Settings -> Secrets and variables -> Actions):
+#   SUPABASE_ACCESS_TOKEN  - a personal access token (supabase.com/dashboard/account/tokens)
+#   SUPABASE_DB_PASSWORD   - the project's database password (Project Settings -> Database)
+#   SUPABASE_PROJECT_REF   - the project ref, e.g. ecrehwttqpgdpzroazwp (not sensitive; it's in the URL)
+on:
+  push:
+    branches: [main]
+    paths: ['backend/supabase/migrations/**']
+  workflow_dispatch:
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need history to diff this push's base against its tip
+
+      # Tokenless: decide whether any NEW migration file was added in this push. Renames are treated as an
+      # add (--no-renames) since a new timestamp is a new version. A manual dispatch, or a push with no
+      # usable base commit (new branch / first push), always runs.
+      - id: detect
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch -> run."; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          before='${{ github.event.before }}'
+          after='${{ github.sha }}'
+          if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+            echo "No usable base commit -> run."; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          added=$(git diff --no-renames --name-only --diff-filter=A "$before" "$after" \
+                    -- backend/supabase/migrations | grep -E '\.sql$' || true)
+          if [ -n "$added" ]; then
+            echo "New migration(s) in this push:"; echo "$added"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No new migration files added -> skipping the token-authenticated push."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A manual dispatch always applies (its own guarantee, independent of the detect gate); an automatic
+      # push applies only when detect found a newly-added migration.
+      - uses: supabase/setup-cli@v1
+        if: steps.detect.outputs.run == 'true' || github.event_name == 'workflow_dispatch'
+        with:
+          version: latest
+
+      - name: Link the project
+        if: steps.detect.outputs.run == 'true' || github.event_name == 'workflow_dispatch'
+        run: supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}" --workdir backend
+
+      - name: Push migrations
+        if: steps.detect.outputs.run == 'true' || github.event_name == 'workflow_dispatch'
+        run: supabase db push --workdir backend
+
+      - name: Nothing to apply
+        if: steps.detect.outputs.run != 'true' && github.event_name != 'workflow_dispatch'
+        run: echo "No new migrations in this push; the token was never used."

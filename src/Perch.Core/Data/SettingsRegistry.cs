@@ -414,6 +414,31 @@ internal static class SettingsRegistry
             ["jira", "project", "key", "filter", "prefix", "sfty"], PreviewTarget.JiraTicket,
             nameof(AppSettings.JiraProjectFilter)),
 
+        // ── Social ───────────────────────────────────────────────────────────
+        Toggle("social", "Social feed",
+            "The opt-in friends feed: sign in, add friends by handle, post a status, and see friends' statuses under the overlay. Off makes no network calls at all.",
+            SettingSurface.Social, ["social", "friends", "feed", "status", "post", "update", "myspace", "connect"],
+            PreviewTarget.None, nameof(AppSettings.SocialEnabled),
+            s => s.SocialEnabled, (s, v) => s.SocialEnabled = v),
+
+        Toggle("notify-friend-post", "Notify when a friend posts",
+            "Pop a desktop toast when a friend posts a status.",
+            SettingSurface.Social, ["notify", "friend", "post", "status", "social", "toast", "notification"],
+            PreviewTarget.None, nameof(AppSettings.NotifyOnFriendPost),
+            s => s.NotifyOnFriendPost, (s, v) => s.NotifyOnFriendPost = v),
+
+        Toggle("social-dnd-close", "Close friends in Do Not Disturb",
+            "When Windows Do Not Disturb is on, collapse the friends region and hold off friend-post toasts. It won't reopen on a new post.",
+            SettingSurface.Social, ["dnd", "do not disturb", "focus", "quiet", "close", "friends", "social"],
+            PreviewTarget.None, nameof(AppSettings.CloseFeedInDoNotDisturb),
+            s => s.CloseFeedInDoNotDisturb, (s, v) => s.CloseFeedInDoNotDisturb = v),
+
+        Stepper("social-max-friends", "Friends shown at once",
+            "How many friends the roster shows before the rest fold into a \"+N more\" line (most recent first).",
+            SettingSurface.Social, ["friends", "count", "rows", "shown", "roster", "social", "limit"],
+            PreviewTarget.FeedStrip, nameof(AppSettings.MaxFriendsShown),
+            s => s.MaxFriendsShown, (s, v) => s.MaxFriendsShown = v),
+
         // ── Advanced ─────────────────────────────────────────────────────────
         Info("theme", "Theme",
             "The app's colour theme — pick a preset or design your own on the Appearance page.",

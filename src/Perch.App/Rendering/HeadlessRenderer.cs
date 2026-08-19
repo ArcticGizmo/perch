@@ -128,6 +128,24 @@ internal static class HeadlessRenderer
         RenderControl(micProbe, Path.Combine(outDir, "overlay_mic_call_1x.png"), 96);
         RenderControl(micProbe, Path.Combine(outDir, "overlay_mic_call_1.5x.png"), 144);
 
+        // Social region: below the session rows, an expandable "Friends" roster — a row per friend with mood
+        // tile + @handle + latest status + relative time + reactions, then a "what are you working on?" compose
+        // row. Exercises the multi-row, line-height-derived height, the reaction chips and the truncation.
+        var feedProbe = new OverlayCanvas();
+        feedProbe.Update(SampleData.Sessions());
+        feedProbe.SetSocialEnabled(true);
+        feedProbe.SetSocialAccount(signedIn: true, hasHandle: true);   // region shows in the signed-in state
+        feedProbe.UpdateRoster(SampleData.Roster());
+        RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1x.png"), 96);
+        RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1.5x.png"), 144);
+
+        // Social sign-in strip: shown when Social is enabled but signed out — a click starts GitHub sign-in.
+        var socialProbe = new OverlayCanvas();
+        socialProbe.Update(SampleData.Sessions());
+        socialProbe.SetSocialEnabled(true);   // signed-out by default -> the sign-in prompt shows
+        RenderControl(socialProbe, Path.Combine(outDir, "overlay_social_signin_1x.png"), 96);
+        RenderControl(socialProbe, Path.Combine(outDir, "overlay_social_signin_1.5x.png"), 144);
+
         // Hypertree strip: the branch list under the quick links, with the row the cursor is on marked.
         // The sample puts main mid-stack (Hypertree publishes the stack already flattened, main at its
         // slot) and gives one branch a long desktop label so the trailing-label truncation is exercised.

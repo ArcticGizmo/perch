@@ -77,6 +77,9 @@ running the tray app.
 
 ## Conventions & gotchas
 
+- **Never use `TextBox.Watermark` — set placeholder text via `PlaceholderText`.** `Watermark` is obsolete
+  in Avalonia (CS0618) and banned here: a source-scan test (`UiConventionTests`) fails the build if the word
+  `Watermark` appears anywhere under `src/`.
 - **Owner-drawn text must size its rectangle from the font's line height, never a hard-coded pixel
   value.** When painting text into a bounded region, derive the height from the measured text
   (`OverlayDraw.Text(...).Height`, i.e. `FormattedText.Height`) plus padding — not a magic number. A box

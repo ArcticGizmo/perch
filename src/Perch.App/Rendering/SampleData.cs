@@ -1,5 +1,6 @@
 ﻿using Perch.Data;
 using Perch.Platform;
+using Perch.Social;
 
 namespace Perch.Avalonia.Rendering;
 
@@ -127,6 +128,33 @@ internal static class SampleData
     public static MicSnapshot Mic() =>
         new([new MicUser("91750D7E.Slack_8she8kybcnzg4", "Slack", 4242, true, DateTimeOffset.Now.AddMinutes(-7))],
             DeviceName: "Microphone (Logitech Webcam C930e)");
+
+    /// <summary>A friends roster for the overlay's social region — me + a few friends with statuses, moods and
+    /// reactions, plus one who hasn't posted, so the preview/render exercises every row shape.</summary>
+    public static RosterSnapshot Roster()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var me = new Profile(Guid.Parse("dddddddd-1111-4000-8000-00000000000d"), "jon", "Jon", "😌");
+        var ada = new Profile(Guid.Parse("aaaaaaaa-1111-4000-8000-000000000001"), "ada", "Ada L.", "🦉");
+        var grace = new Profile(Guid.Parse("bbbbbbbb-1111-4000-8000-000000000002"), "grace", "Grace H.", "🛠️");
+        var linus = new Profile(Guid.Parse("cccccccc-1111-4000-8000-000000000003"), "linus", null, "☕");
+
+        var adaPost = new FeedItem(Guid.Parse("aaaaaaaa-0000-4000-8000-000000000001"), ada,
+            "refactored the whole thing. do not ask.", "🦉", now.AddMinutes(-2));
+        var gracePost = new FeedItem(Guid.Parse("bbbbbbbb-0000-4000-8000-000000000002"), grace,
+            "tests green on the first try", "🛠️", now.AddMinutes(-14));
+        var myPost = new FeedItem(Guid.Parse("dddddddd-0000-4000-8000-00000000000d"), me,
+            "shipping something silly", "😌", now.AddMinutes(-5));
+
+        return new RosterSnapshot(me, myPost,
+        [
+            // ada: >2 distinct emojis → collapses to a combined count chip (tooltip shows the breakdown).
+            new(ada, adaPost, [new ReactionGroup("🔥", 3, true), new ReactionGroup("❤️", 2, false), new ReactionGroup("👍", 1, false)]),
+            // grace: two distinct → shown as individual chips.
+            new(grace, gracePost, [new ReactionGroup("👍", 2, false), new ReactionGroup("🎉", 1, false)]),
+            new(linus, null, []),
+        ], IncomingRequests: 1);
+    }
 
     /// <summary>A couple of daemon workers, for the daemon strip — hidden when the daemon setting is off.</summary>
     public static IReadOnlyList<DaemonWorker> DaemonWorkers()

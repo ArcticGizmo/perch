@@ -42,6 +42,8 @@ internal static class OverlaySettingsGates
         c.SetServiceStatusEnabled(s.ShowServiceStatus);
         c.SetShowMediaController(s.ShowMediaController);
         c.SetShowMicPresence(s.ShowMicPresence);
+        c.SetSocialEnabled(s.SocialEnabled);
+        c.SetMaxFriendsShown(s.MaxFriendsShown);
         c.SetHideInactiveTeamMembers(s.HideInactiveTeamMembers);
         c.SetUpsideDownQuickLinks(s.UpsideDownQuickLinks);
         c.SetExternalNotificationsAvailable(s.ExternalNotificationsEnabled);

@@ -29,11 +29,19 @@ internal static class PlatformServices
     public static ISystemMetrics SystemMetrics { get; } = new Impl.WindowsSystemMetrics();
     // Windows/Linux store the OAuth blob in ~/.claude/.credentials.json — the portable file reader.
     public static IClaudeCredentials ClaudeCredentials { get; } = new FileClaudeCredentials();
+    // The Social feature's OAuth refresh token, protected at rest by DPAPI (current user).
+    public static ISecretStore SecretStore { get; } = new Impl.WindowsSecretStore();
+    // Windows Do Not Disturb / Focus Assist quiet hours (SHQueryUserNotificationState).
+    public static IDoNotDisturb DoNotDisturb { get; } = new Impl.WindowsDoNotDisturb();
 #else
     public static IAppIconProvider AppIconProvider { get; } = new Impl.AppIconProvider();
     public static ISystemMetrics SystemMetrics { get; } = new Impl.SystemMetrics();
     // macOS keeps the OAuth blob in the login Keychain (with a file fallback for a Linux head).
     public static IClaudeCredentials ClaudeCredentials { get; } = new Impl.KeychainClaudeCredentials();
+    // The Social feature's OAuth refresh token, kept in the login Keychain.
+    public static ISecretStore SecretStore { get; } = new Impl.KeychainSecretStore();
+    // macOS Focus / Do Not Disturb (stub for now — reports not-active).
+    public static IDoNotDisturb DoNotDisturb { get; } = new Impl.MacDoNotDisturb();
 #endif
 
     public static ISessionLock CreateSessionLock() => new Impl.SessionLock();

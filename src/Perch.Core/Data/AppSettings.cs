@@ -402,6 +402,30 @@ internal sealed class AppSettings
     // keeps Auto. See <see cref="Perch.Platform.ISessionLauncher"/>.
     public TerminalApp ReopenTerminal { get; set; } = TerminalApp.Auto;
 
+    // Social. Master switch for the (opt-in) friends feed — sign in, add friends, post a status, and see
+    // friends' statuses under the overlay. Off by default and load-bearing while off: no account, no token,
+    // and not a single network call is made until it's turned on, so the feature costs nothing to everyone
+    // who never enables it. A missing key keeps it off. See docs/social-feed-plan.md.
+    public bool SocialEnabled { get; set; }
+
+    // Whether the overlay's social region is expanded (the full friends roster) or collapsed to just its header.
+    // Toggled by the region's own chevron and persisted here so it survives a restart. Expanded by default.
+    public bool SocialRegionExpanded { get; set; } = true;
+
+    // Whether a friend posting a status pops a desktop notification (gated too by the master NotificationsEnabled
+    // switch). Fired by SocialFeedMonitorHost when a poll (nudged live by Realtime, or on the next tick) surfaces
+    // a new post by someone other than you. Gated by SocialEnabled. On by default; a missing key keeps it on.
+    public bool NotifyOnFriendPost { get; set; } = true;
+
+    // When Windows Do Not Disturb is on, collapse the friends region (and hold off friend-post toasts) so the
+    // social feature goes quiet with the rest of the system. On by default; collapsing is one-shot — it won't
+    // spring back open on a new post. A missing key keeps it on.
+    public bool CloseFeedInDoNotDisturb { get; set; } = true;
+
+    // How many friends the roster shows at once (most-recently-active first); the rest fold into a "+N more"
+    // line. Default 3 to keep the region compact in the narrow overlay.
+    public int MaxFriendsShown { get; set; } = 3;
+
     // "Perch reacts": the tray and overlay bird wears the aggregate session mood — dozing (faded, a
     // trail of z's) when nothing's running, plainly alert while sessions work, a "!" badge when one
     // needs you, and visibly panicking (red bang + flying sweat) when a session looks stuck. Pure

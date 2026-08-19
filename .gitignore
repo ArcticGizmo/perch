@@ -489,3 +489,9 @@ $RECYCLE.BIN/
 
 captures
 *.perchreplay
+
+# Supabase dev keys (repo-root .env.local). Never commit - the anon key stays out of the public repo.
+.env.local
+# Supabase CLI local state (link ref, branches) - machine-specific, never committed.
+backend/supabase/.temp/
+backend/supabase/.branches/

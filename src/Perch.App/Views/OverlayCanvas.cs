@@ -602,6 +602,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         h += 2;
         if (MicStripVisible) h += MicStripHeight;
         if (MediaStripVisible) h += MediaStripHeight;
+        if (FeedStripVisible) h += FeedStripHeight;
+        if (SocialSignInStripVisible) h += SocialStripHeight;
         return h;
     }
 
@@ -1320,7 +1322,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, NoteButton }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, NoteButton, SocialStatus, ReactionSummary }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1501,6 +1503,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool showDaemon = showBody && DaemonStripVisible;     // daemon background workers, below the rows
         bool showMic = showBody && MicStripVisible;           // who has the microphone, below the rows
         bool showMedia = showBody && MediaStripVisible;       // now-playing + transport strip, below that
+        bool showFeed = showBody && FeedStripVisible;         // friends' status feed, below that
+        bool showSocialSignIn = showBody && SocialSignInStripVisible; // "sign in to Social" prompt (signed out)
 
         double height = HeaderHeight;
         if (showBody) height += PanelBodyHeight();
@@ -1578,11 +1582,23 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     DrawMicStrip(ctx, width, top);
                     top += MicStripHeight;
                 }
-                if (showMedia) DrawMediaStrip(ctx, width, top);
+                if (showMedia)
+                {
+                    DrawMediaStrip(ctx, width, top);
+                    top += MediaStripHeight;
+                }
+                if (showFeed)
+                {
+                    DrawSocialRegion(ctx, width, top);
+                    top += FeedStripHeight;
+                }
+                if (showSocialSignIn) DrawSocialSignInStrip(ctx, width, top);
             }
 
             if (!showMic) ClearMicHitRects();
             if (!showMedia) ClearMediaHitRects();
+            if (!showFeed) ClearSocialRegionHitRects();
+            if (!showSocialSignIn) ClearSocialHitRect();
 
             if (showFooter) DrawStatusFooter(ctx, width, height);
             else _footerRect = default;
@@ -3023,11 +3039,19 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool overMicLabel = HitTestMicLabel(p);
         if (overMicLabel != _hoveredMicLabel) { _hoveredMicLabel = overMicLabel; InvalidateVisual(); }
 
+        // The Social sign-in strip highlights on hover and takes the hand cursor like any other control.
+        bool overSocial = _socialSignInRect.Contains(p);
+        if (overSocial != _hoveredSocial) { _hoveredSocial = overSocial; InvalidateVisual(); }
+
+        if (UpdateSocialRegionHover(p)) InvalidateVisual();
+        bool overRegion = _hoveredSocialHeader || _hoveredSocialCompose || _hoveredSocialAdd || _hoveredReactAdd >= 0
+                          || _reactChipRects.Any(c => c.Rect.Contains(p)) || _socialMoreRect.Contains(p);
+
         // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + daemon worker lines +
         // artifacts + the update badge + outage footer + the scratch-pad note button + a row's note glyph +
-        // the media buttons + the mic strip's app name); rows show only the highlight.
+        // the media buttons + the mic strip's app name + the social region's controls); rows show only the highlight.
         Cursor = (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
-                  || overFooter || overNote || overRowNote || media >= 0 || overMicLabel)
+                  || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -3048,6 +3072,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             _noteButtonRect.Width > 0
                 && _noteButtonRect.Contains(p)        ? (TipKind.NoteButton, -1) :
+            HitTestReactionSummary(p) is var rs && rs >= 0 ? (TipKind.ReactionSummary, rs) :
+            HitTestSocialStatus(p) is var ss && ss >= 0 ? (TipKind.SocialStatus, ss) :
             InUsageStrip(p)                           ? (TipKind.Usage, -1) :
                                                         (TipKind.None, -1);
 
@@ -3079,6 +3105,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Pr:      ShowPrTooltip(_tipRow);      break;
             case TipKind.Jira:    ShowJiraTooltip(_tipRow);    break;
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
+            case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
+            case TipKind.ReactionSummary: ShowReactionSummaryTooltip(_tipRow); break;
         }
     }
 
@@ -3102,7 +3130,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        changed |= ClearSocialRegionHover();
+        _hoveredSocial = false;
         _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
@@ -3284,6 +3314,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // if the two ever overlap.
         if (HitTestMicLabel(p)) { MicJumpRequested?.Invoke(); return; }
 
+        // The Social sign-in strip: the whole band is clickable (sign in, or open Settings to finish setup).
+        if (_socialSignInRect.Contains(p)) { OnSocialStripClicked(); return; }
+
+        // The Social region (roster): header toggle, reaction chips/+, compose row, "manage friends" overflow.
+        if (RouteSocialRegionClick(p)) return;
+
         int art = HitTestArtifactIcon(p);
         if (art >= 0 && _rows[art].Session is { } artSession)
         {
@@ -3450,6 +3486,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+        // Right-click within the social region (or its sign-in strip): the Social actions live here now — a
+        // right-click on the overlay header no longer carries them.
+        if (SocialEnabled && HitTestSocialArea(p))
+        {
+            ShowSocialMenu(p);
+            return;
+        }
+
 #if DEBUG
         // Debug affordance: right-clicking the PR glyph offers to fire each PR alert (finished / approved /
         // reviewed) for this session's PR, with the state/reviews synthesised, so the notification + banner
@@ -3556,6 +3600,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 () => UsageToggleRequested?.Invoke(!_usageEnabled)));
             items.Add(new Separator());
             items.Add(MenuItem("Set initial placements…", () => SetPlacementsRequested?.Invoke()));
+
+            // Social actions are deliberately NOT here — they live on the social region's own right-click menu
+            // (see HitTestSocialArea / ShowSocialMenu), so the header stays about the overlay itself.
+
             items.Add(new Separator());
             items.Add(MenuItem("Exit Perch", () => ExitRequested?.Invoke()));
         }
