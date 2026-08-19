@@ -35,6 +35,59 @@ public sealed record Friend(Profile Profile, FriendshipState State);
 /// <param name="CreatedAt">When it was posted (server time).</param>
 public sealed record FeedItem(Guid Id, Profile Author, string Body, string? MoodEmoji, DateTimeOffset CreatedAt);
 
+/// <summary>One emoji's worth of reactions on a post — how many friends reacted with it, and whether you're
+/// one of them (so the UI can highlight your own reaction and toggle it off on a second click).</summary>
+/// <param name="Emoji">The reaction glyph (1–16 chars).</param>
+/// <param name="Count">How many people (you + friends you can see) reacted with it.</param>
+/// <param name="Mine">Whether the signed-in user is one of them.</param>
+public sealed record ReactionGroup(string Emoji, int Count, bool Mine);
+
+/// <summary>
+/// A friend as the overlay's social region shows them: their profile (handle + mood), their single most recent
+/// visible status (or null if they haven't posted), and the reactions on that status. One row per accepted
+/// friend — the region is a roster of who's around and what they're up to, not a chronological feed.
+/// </summary>
+public sealed record RosterFriend(Profile Profile, FeedItem? Latest, IReadOnlyList<ReactionGroup> Reactions)
+{
+    // Compiler-generated record equality would compare Reactions by reference, so a fresh list every poll would
+    // read as "changed" and force a needless relayout. Compare it by value (like FeedSnapshot / MicSnapshot).
+    public bool Equals(RosterFriend? other) =>
+        other is not null && Profile == other.Profile && Latest == other.Latest
+        && Reactions.SequenceEqual(other.Reactions);
+
+    public override int GetHashCode()
+    {
+        var hc = new HashCode();
+        hc.Add(Profile);
+        hc.Add(Latest);
+        foreach (var r in Reactions) hc.Add(r);
+        return hc.ToHashCode();
+    }
+}
+
+/// <summary>
+/// The whole social region as pushed to the overlay: the signed-in user's own profile (for the "post a status"
+/// row) and one <see cref="RosterFriend"/> per accepted friend, ordered most-recently-active first. A record so
+/// the overlay can skip a no-op repaint; value equality is hand-written for the same reason as <see cref="FeedSnapshot"/>.
+/// </summary>
+public sealed record RosterSnapshot(Profile? Me, IReadOnlyList<RosterFriend> Friends)
+{
+    public static readonly RosterSnapshot Empty = new(null, []);
+
+    public bool Any => Friends.Count > 0;
+
+    public bool Equals(RosterSnapshot? other) =>
+        other is not null && Me == other.Me && Friends.SequenceEqual(other.Friends);
+
+    public override int GetHashCode()
+    {
+        var hc = new HashCode();
+        hc.Add(Me);
+        foreach (var f in Friends) hc.Add(f);
+        return hc.ToHashCode();
+    }
+}
+
 /// <summary>The sign-in state: whether we hold a valid session and, if so, who we are.</summary>
 /// <param name="SignedIn">True once authenticated (a token is held and valid).</param>
 /// <param name="Me">The signed-in profile, or null if signed out or the handle isn't claimed yet.</param>

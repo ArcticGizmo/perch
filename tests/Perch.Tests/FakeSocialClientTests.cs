@@ -173,6 +173,55 @@ public sealed class FakeSocialClientTests
     }
 
     [Fact]
+    public async Task Roster_has_one_entry_per_accepted_friend_with_their_latest_status()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada", moodEmoji: "🦉");
+        var grace = c.SeedUser("grace");
+        var stranger = c.SeedUser("stranger");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        await c.SendRequestAsync(grace.Id); c.SimulateAccept(grace.Id);
+        // stranger stays a stranger — never in the roster.
+
+        c.SimulatePost(ada.Id, "older");
+        c.SimulatePost(ada.Id, "ada's latest");   // grace has no post yet
+
+        var roster = await c.GetRosterAsync();
+        Assert.Equal("myself", roster.Me!.Handle);
+        Assert.Equal(2, roster.Friends.Count);                       // ada + grace, not the stranger
+        Assert.DoesNotContain(roster.Friends, f => f.Profile.Handle == "stranger");
+
+        var adaEntry = roster.Friends.Single(f => f.Profile.Handle == "ada");
+        Assert.Equal("ada's latest", adaEntry.Latest!.Body);         // most recent only
+        var graceEntry = roster.Friends.Single(f => f.Profile.Handle == "grace");
+        Assert.Null(graceEntry.Latest);                              // no status yet
+        Assert.Equal(adaEntry, roster.Friends[0]);                   // active friend sorts first
+    }
+
+    [Fact]
+    public async Task Reactions_toggle_and_count_and_flag_mine()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        var post = c.SimulatePost(ada.Id, "shipped it");
+
+        c.SimulateReaction(post.Value, ada.Id, "🔥");   // a friend reacts
+        await c.ReactAsync(post.Value, "🔥", on: true);  // and so do I
+
+        var entry = (await c.GetRosterAsync()).Friends.Single(f => f.Profile.Handle == "ada");
+        var fire = entry.Reactions.Single(r => r.Emoji == "🔥");
+        Assert.Equal(2, fire.Count);
+        Assert.True(fire.Mine);
+
+        await c.ReactAsync(post.Value, "🔥", on: false); // I take mine back
+        var after = (await c.GetRosterAsync()).Friends.Single(f => f.Profile.Handle == "ada")
+            .Reactions.Single(r => r.Emoji == "🔥");
+        Assert.Equal(1, after.Count);
+        Assert.False(after.Mine);
+    }
+
+    [Fact]
     public async Task Requires_a_handle_before_posting()
     {
         var c = new FakeSocialClient();

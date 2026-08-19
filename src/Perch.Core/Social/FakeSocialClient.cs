@@ -19,6 +19,7 @@ public sealed partial class FakeSocialClient : ISocialClient
     private readonly List<Action<FeedItem>> _subscribers = new();
     private readonly HashSet<Guid> _blocked = new();                      // users I've blocked
     private readonly HashSet<Guid> _blockedByOthers = new();              // users who've blocked me (test seam)
+    private readonly Dictionary<Guid, Dictionary<string, HashSet<Guid>>> _reactions = new();  // postId -> emoji -> reactors
     private Profile? _me;
     private bool _signedIn;
 
@@ -145,6 +146,50 @@ public sealed partial class FakeSocialClient : ISocialClient
         return new Subscription(this, onPost);
     }
 
+    public Task<RosterSnapshot> GetRosterAsync(CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var entries = _edges
+                .Where(e => e.Value == FriendshipState.Accepted && _profiles.ContainsKey(e.Key))
+                .Select(e => _profiles[e.Key])
+                .Select(p =>
+                {
+                    var latest = CanSeeLocked(p.Id)
+                        ? _posts.Where(x => x.Author.Id == p.Id).OrderByDescending(x => x.CreatedAt).FirstOrDefault()
+                        : null;
+                    var rx = latest is not null ? GroupReactionsLocked(latest.Id) : (IReadOnlyList<ReactionGroup>)[];
+                    return new RosterFriend(p, latest, rx);
+                })
+                .OrderByDescending(e => e.Latest?.CreatedAt ?? DateTimeOffset.MinValue)
+                .ThenBy(e => e.Profile.Handle, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return Task.FromResult(new RosterSnapshot(_me, entries));
+        }
+    }
+
+    public Task ReactAsync(Guid postId, string emoji, bool on, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            RequireMe();
+            emoji = emoji?.Trim() ?? "";
+            if (emoji.Length == 0) return Task.CompletedTask;
+            if (on)
+            {
+                if (!_reactions.TryGetValue(postId, out var m)) _reactions[postId] = m = new();
+                if (!m.TryGetValue(emoji, out var set)) m[emoji] = set = new();
+                set.Add(_me!.Id);
+            }
+            else if (_reactions.TryGetValue(postId, out var m) && m.TryGetValue(emoji, out var set))
+            {
+                set.Remove(_me!.Id);
+                if (set.Count == 0) m.Remove(emoji);
+            }
+        }
+        return Task.CompletedTask;
+    }
+
     public Task BlockAsync(Guid userId, CancellationToken ct = default)
     {
         lock (_gate) { RequireMe(); _blocked.Add(userId); }
@@ -212,6 +257,17 @@ public sealed partial class FakeSocialClient : ISocialClient
         lock (_gate) _blockedByOthers.Add(userId);
     }
 
+    /// <summary>Simulates <paramref name="reactor"/> reacting to a post (for roster/reaction tests).</summary>
+    public void SimulateReaction(Guid postId, Guid reactor, string emoji)
+    {
+        lock (_gate)
+        {
+            if (!_reactions.TryGetValue(postId, out var m)) _reactions[postId] = m = new();
+            if (!m.TryGetValue(emoji, out var set)) m[emoji] = set = new();
+            set.Add(reactor);
+        }
+    }
+
     /// <summary>Simulates <paramref name="authorId"/> posting a status. Fires live subscribers if you can see it.</summary>
     public PostId SimulatePost(Guid authorId, string body, string? moodEmoji = null)
     {
@@ -236,6 +292,15 @@ public sealed partial class FakeSocialClient : ISocialClient
 
     // Mirrors the backend rule after M6: your own post is always visible; a friend's post is visible only while
     // the edge is accepted AND neither of you has blocked the other. A block kills visibility both directions.
+    private IReadOnlyList<ReactionGroup> GroupReactionsLocked(Guid postId)
+    {
+        if (!_reactions.TryGetValue(postId, out var m)) return [];
+        return m.Where(kv => kv.Value.Count > 0)
+            .Select(kv => new ReactionGroup(kv.Key, kv.Value.Count, _me is not null && kv.Value.Contains(_me.Id)))
+            .OrderByDescending(g => g.Count).ThenBy(g => g.Emoji, StringComparer.Ordinal)
+            .ToList();
+    }
+
     private bool CanSeeLocked(Guid authorId)
     {
         if (authorId == _me?.Id) return true;

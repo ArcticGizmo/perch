@@ -274,6 +274,92 @@ public sealed class SupabaseSocialClient : ISocialClient
             r.Body, r.MoodEmoji, r.CreatedAt)).ToList();
     }
 
+    // ── roster + reactions ──────────────────────────────────────────────────────────────────────────────
+
+    public async Task<RosterSnapshot> GetRosterAsync(CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+
+        // Accepted friends only — the roster is who you can actually see.
+        var friends = (await GetFriendsAsync(ct)).Where(f => f.State == FriendshipState.Accepted).ToList();
+
+        // Latest post per author (the feed is newest-first, so the first hit per author is their latest).
+        var feed = await GetFeedAsync(200, ct);
+        var latestByAuthor = new Dictionary<Guid, FeedItem>();
+        foreach (var item in feed) latestByAuthor.TryAdd(item.Author.Id, item);
+
+        // Reactions for just those latest posts, grouped by emoji.
+        var latestIds = friends
+            .Select(f => latestByAuthor.GetValueOrDefault(f.Profile.Id)?.Id)
+            .Where(id => id is not null).Select(id => id!.Value).ToList();
+        var reactions = await FetchReactionsAsync(latestIds, uid, token, ct);
+
+        var entries = friends
+            .Select(f =>
+            {
+                var latest = latestByAuthor.GetValueOrDefault(f.Profile.Id);
+                var rx = latest is not null ? reactions.GetValueOrDefault(latest.Id, []) : [];
+                return new RosterFriend(f.Profile, latest, rx);
+            })
+            // Most-recently-active first; friends who haven't posted fall to the bottom, alphabetically.
+            .OrderByDescending(e => e.Latest?.CreatedAt ?? DateTimeOffset.MinValue)
+            .ThenBy(e => e.Profile.Handle, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new RosterSnapshot(_me, entries);
+    }
+
+    public async Task ReactAsync(Guid postId, string emoji, bool on, CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        emoji = emoji?.Trim() ?? "";
+        if (emoji.Length == 0) return;
+        var token = await ValidAccessTokenAsync(ct);
+
+        if (on)
+        {
+            using var req = Rest(HttpMethod.Post, "/rest/v1/reactions", token);
+            req.Headers.Add("Prefer", "resolution=merge-duplicates");   // re-reacting is a no-op
+            req.Content = JsonContent.Create(new { post_id = postId, reactor = uid, emoji });
+            using var resp = await _http.SendAsync(req, ct);
+            await EnsureOkAsync(resp, "add your reaction", ct);
+        }
+        else
+        {
+            using var req = Rest(HttpMethod.Delete,
+                $"/rest/v1/reactions?post_id=eq.{postId}&reactor=eq.{uid}&emoji=eq.{Uri.EscapeDataString(emoji)}", token);
+            using var resp = await _http.SendAsync(req, ct);
+            await EnsureOkAsync(resp, "remove your reaction", ct);
+        }
+    }
+
+    // Batch-fetches reactions for the given post ids, grouped per post into (emoji → count, mine). RLS returns
+    // only reactions on posts you can see, plus your own.
+    private async Task<Dictionary<Guid, IReadOnlyList<ReactionGroup>>> FetchReactionsAsync(
+        IReadOnlyList<Guid> postIds, Guid uid, string token, CancellationToken ct)
+    {
+        var result = new Dictionary<Guid, IReadOnlyList<ReactionGroup>>();
+        if (postIds.Count == 0) return result;
+
+        using var req = Rest(HttpMethod.Get,
+            $"/rest/v1/reactions?post_id=in.({string.Join(",", postIds)})&select=post_id,reactor,emoji", token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "load reactions", ct);
+        var rows = await resp.Content.ReadFromJsonAsync<ReactionRow[]>(Json, ct) ?? [];
+
+        foreach (var byPost in rows.GroupBy(r => r.PostId))
+        {
+            var groups = byPost
+                .GroupBy(r => r.Emoji)
+                .Select(g => new ReactionGroup(g.Key, g.Count(), g.Any(r => r.Reactor == uid)))
+                .OrderByDescending(g => g.Count).ThenBy(g => g.Emoji, StringComparer.Ordinal)
+                .ToList();
+            result[byPost.Key] = groups;
+        }
+        return result;
+    }
+
     // ── block / report (M6) ───────────────────────────────────────────────────────────────────────────
 
     public async Task BlockAsync(Guid userId, CancellationToken ct = default)
@@ -477,4 +563,9 @@ public sealed class SupabaseSocialClient : ISocialClient
         [property: JsonPropertyName("body")] string Body,
         [property: JsonPropertyName("mood_emoji")] string? MoodEmoji,
         [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt);
+
+    private sealed record ReactionRow(
+        [property: JsonPropertyName("post_id")] Guid PostId,
+        [property: JsonPropertyName("reactor")] Guid Reactor,
+        [property: JsonPropertyName("emoji")] string Emoji);
 }

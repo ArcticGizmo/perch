@@ -66,6 +66,15 @@ public interface ISocialClient
     /// accepted friends' posts, newest first. Excludes everyone else (enforced server-side).</summary>
     Task<IReadOnlyList<FeedItem>> GetFeedAsync(int limit = 50, CancellationToken ct = default);
 
+    /// <summary>The friends roster the overlay's social region shows: your own profile plus one entry per
+    /// accepted friend (their latest visible status and its reactions), ordered most-recently-active first.
+    /// Composed from the friend graph + feed + reactions in one call.</summary>
+    Task<RosterSnapshot> GetRosterAsync(CancellationToken ct = default);
+
+    /// <summary>Adds (<paramref name="on"/> = true) or removes your <paramref name="emoji"/> reaction on a
+    /// post you can see. Idempotent in both directions. Only your own reaction is affected.</summary>
+    Task ReactAsync(Guid postId, string emoji, bool on, CancellationToken ct = default);
+
     /// <summary>Blocks <paramref name="userId"/>: their posts vanish from your feed and yours from theirs, in
     /// both directions, regardless of any friendship. Idempotent. The block is one-sided and private — the
     /// blocked user is never told and cannot undo it.</summary>
