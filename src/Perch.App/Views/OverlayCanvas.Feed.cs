@@ -282,8 +282,11 @@ public sealed partial class OverlayCanvas
             OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 1, width - 2 * (HorizPad - 4), FeedLineHeight - 2), wash, null, 6);
         }
 
+        // The avatar shows the mood from their latest status (that's the "current mood" you set when posting),
+        // falling back to a profile mood, then a stable colour dot.
         const double tile = 20;
-        DrawAvatarTile(ctx, HorizPad + tile / 2, midY, tile, f.Profile.MoodEmoji, f.Profile.Handle);
+        string? mood = f.Latest?.MoodEmoji ?? f.Profile.MoodEmoji;
+        DrawAvatarTile(ctx, HorizPad + tile / 2, midY, tile, mood, f.Profile.Handle);
         double x = HorizPad + tile + 8;
 
         // Build the right cluster from the right edge inward: time, then reaction chips, then the "+" (on hover).
@@ -295,12 +298,14 @@ public sealed partial class OverlayCanvas
             OverlayDraw.TextLeftMid(ctx, agoFt, cursor, midY);
             cursor -= 8;
 
-            // Reaction chips (drawn left-to-right within a right-aligned block).
-            double chipsW = f.Reactions.Sum(ChipWidth) + Math.Max(0, f.Reactions.Count - 1) * 5;
-            if (f.Reactions.Count > 0 && chipsW < width * 0.6)
+            // Reaction chips, drawn left-to-right within a right-aligned block. More than two distinct emojis
+            // collapse into a single count chip (with a hover tooltip of the breakdown) so the row stays tight.
+            var chips = ChipsFor(f.Reactions);
+            double chipsW = chips.Sum(ChipWidth) + Math.Max(0, chips.Count - 1) * 5;
+            if (chips.Count > 0 && chipsW < width * 0.6)
             {
                 double cx = cursor - chipsW;
-                foreach (var gr in f.Reactions) cx = DrawChip(ctx, cx, top, gr, latest.Id) + 5;
+                foreach (var c in chips) cx = DrawChip(ctx, cx, top, c, latest.Id) + 5;
                 cursor -= chipsW + 6;
             }
 
@@ -336,29 +341,49 @@ public sealed partial class OverlayCanvas
         }
     }
 
-    // Measured width of a reaction chip (emoji + optional count + padding).
-    private static double ChipWidth(ReactionGroup g)
+    // A chip ready to draw: either one reaction group, or a "combined" summary standing in for >2 distinct
+    // emojis (Emoji = the top one, Count = the total, Tooltip = the per-emoji breakdown).
+    private readonly record struct DrawableChip(string Emoji, int Count, bool Mine, bool Combined, string? Tooltip);
+
+    // Turns the reaction groups into the chips to draw: individually up to two distinct emojis, else a single
+    // combined count chip (so a post can't sprawl into a long row of chips).
+    private static List<DrawableChip> ChipsFor(IReadOnlyList<ReactionGroup> groups)
     {
-        double emojiW = OverlayDraw.Emoji(g.Emoji, FeedReactionSize, Brushes.White).Width;
-        double countW = g.Count > 1 ? OverlayDraw.MeasureWidth(g.Count.ToString(), FeedReactionSize) + 4 : 0;
+        if (groups.Count == 0) return [];
+        if (groups.Count <= 2)
+            return groups.Select(g => new DrawableChip(g.Emoji, g.Count, g.Mine, false, null)).ToList();
+        int total = groups.Sum(g => g.Count);
+        string breakdown = string.Join("   ", groups.Select(g => $"{g.Emoji} {g.Count}"));
+        return [new DrawableChip(groups[0].Emoji, total, groups.Any(g => g.Mine), true, breakdown)];
+    }
+
+    // A chip shows its count when it's >1 or it's the combined summary.
+    private static bool ShowsCount(DrawableChip c) => c.Count > 1 || c.Combined;
+
+    private static double ChipWidth(DrawableChip c)
+    {
+        double emojiW = OverlayDraw.Emoji(c.Emoji, FeedReactionSize, Brushes.White).Width;
+        double countW = ShowsCount(c) ? OverlayDraw.MeasureWidth(c.Count.ToString(), FeedReactionSize) + 4 : 0;
         return emojiW + countW + 14;
     }
 
-    // Draws one chip at x on the row starting at top; returns the x just past it. Captures its hit-rect.
-    private double DrawChip(DrawingContext ctx, double x, double top, ReactionGroup g, Guid postId)
+    // Draws one chip at x on the row starting at top; returns the x just past it. Captures its hit-rect (empty
+    // emoji marks the combined chip → clicking opens the picker) and, for the combined chip, a tooltip target.
+    private double DrawChip(DrawingContext ctx, double x, double top, DrawableChip c, Guid postId)
     {
         double midY = top + FeedLineHeight / 2;
-        double w = ChipWidth(g);
+        double w = ChipWidth(c);
         var chip = new Rect(x, top + (FeedLineHeight - (FeedReactionHeight - 4)) / 2, w, FeedReactionHeight - 4);
         var mineFill = new SolidColorBrush(Color.FromArgb(40, Palette.Accent.R, Palette.Accent.G, Palette.Accent.B));
-        OverlayDraw.Panel(ctx, chip, g.Mine ? mineFill : FeedChipBrush,
-            g.Mine ? new Pen(Palette.AccentBrush, 1) : null, 8);
-        var emojiFt = OverlayDraw.Emoji(g.Emoji, FeedReactionSize, FgBrush);
+        OverlayDraw.Panel(ctx, chip, c.Mine ? mineFill : FeedChipBrush,
+            c.Mine ? new Pen(Palette.AccentBrush, 1) : null, 8);
+        var emojiFt = OverlayDraw.Emoji(c.Emoji, FeedReactionSize, FgBrush);
         OverlayDraw.TextLeftMid(ctx, emojiFt, x + 7, midY);
-        if (g.Count > 1)
-            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(g.Count.ToString(), FeedReactionSize,
-                g.Mine ? Palette.AccentBrush : FgBrush), x + 7 + emojiFt.Width + 4, midY);
-        _reactChipRects.Add((chip, postId, g.Emoji));
+        if (ShowsCount(c))
+            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(c.Count.ToString(), FeedReactionSize,
+                c.Mine ? Palette.AccentBrush : FgBrush), x + 7 + emojiFt.Width + 4, midY);
+        _reactChipRects.Add((chip, postId, c.Combined ? "" : c.Emoji));
+        if (c.Combined && c.Tooltip is { } tip) _reactSummaryTips.Add((chip, tip));
         return chip.Right;
     }
 
@@ -372,7 +397,8 @@ public sealed partial class OverlayCanvas
                 FeedHoverBrush, null, 6);
 
         const double tile = 20;
-        DrawAvatarTile(ctx, HorizPad + tile / 2, midY, tile, _roster?.Me?.MoodEmoji, _roster?.Me?.Handle ?? "you");
+        string? myMood = _roster?.MyLatest?.MoodEmoji ?? _roster?.Me?.MoodEmoji;
+        DrawAvatarTile(ctx, HorizPad + tile / 2, midY, tile, myMood, _roster?.Me?.Handle ?? "you");
         double x = HorizPad + tile + 8;
 
         bool hasStatus = _roster?.MyLatest is not null;
@@ -456,6 +482,7 @@ public sealed partial class OverlayCanvas
     private readonly List<(Rect Rect, Guid PostId, int Index)> _reactAddRects = new();
     private readonly List<(Rect Rect, int Index)> _friendRowRects = new();
     private readonly List<(Rect Rect, string Full)> _socialStatusTips = new();
+    private readonly List<(Rect Rect, string Breakdown)> _reactSummaryTips = new();
     private int _hoveredReactAdd = -1;
     private int _hoveredFriendRow = -1;
     private bool _hoveredSocialHeader, _hoveredSocialCompose, _hoveredSocialAdd;
@@ -495,6 +522,13 @@ public sealed partial class OverlayCanvas
         return -1;
     }
 
+    // Index of the combined-reaction summary chip under p, or -1 — its dwell tooltip lists the per-emoji counts.
+    private int HitTestReactionSummary(Point p)
+    {
+        for (int i = 0; i < _reactSummaryTips.Count; i++) if (_reactSummaryTips[i].Rect.Contains(p)) return i;
+        return -1;
+    }
+
     /// <summary>Clears the region's hover state (called on pointer-exit so a row doesn't keep its highlight
     /// after the cursor leaves the overlay).</summary>
     private bool ClearSocialRegionHover()
@@ -513,6 +547,7 @@ public sealed partial class OverlayCanvas
         _reactAddRects.Clear();
         _friendRowRects.Clear();
         _socialStatusTips.Clear();
+        _reactSummaryTips.Clear();
     }
 
     // Returns the react "+" button index under p, or -1.
@@ -526,7 +561,12 @@ public sealed partial class OverlayCanvas
     private bool RouteSocialRegionClick(Point p)
     {
         foreach (var (rect, postId, emoji) in _reactChipRects)
-            if (rect.Contains(p)) { ToggleReaction(postId, emoji); return true; }
+            if (rect.Contains(p))
+            {
+                if (emoji.Length == 0) ShowReactionPicker(postId);   // the combined summary chip → pick/change
+                else ToggleReaction(postId, emoji);
+                return true;
+            }
 
         foreach (var (rect, postId, _) in _reactAddRects)
             if (rect.Contains(p)) { ShowReactionPicker(postId); return true; }
@@ -568,6 +608,16 @@ public sealed partial class OverlayCanvas
         if (index < 0 || index >= _socialStatusTips.Count) return;
         var (rect, full) = _socialStatusTips[index];
         Tooltip().ShowLines([new(full, OverlayTooltip.FgColor, false)], ToScreen(rect.Left, rect.Bottom + 4));
+    }
+
+    // Shows the per-emoji breakdown behind a combined reaction chip (wired via TipKind.ReactionSummary).
+    private void ShowReactionSummaryTooltip(int index)
+    {
+        if (index < 0 || index >= _reactSummaryTips.Count) return;
+        var (rect, breakdown) = _reactSummaryTips[index];
+        var lines = breakdown.Split("   ")
+            .Select(s => new OverlayTooltip.Line(s, OverlayTooltip.FgColor, false)).ToList();
+        Tooltip().ShowLines(lines, ToScreen(rect.Left, rect.Bottom + 4));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────────────

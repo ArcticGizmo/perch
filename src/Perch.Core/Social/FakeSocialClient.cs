@@ -177,18 +177,19 @@ public sealed partial class FakeSocialClient : ISocialClient
         {
             RequireMe();
             emoji = emoji?.Trim() ?? "";
-            if (emoji.Length == 0) return Task.CompletedTask;
-            if (on)
+            // One reaction per user: clear my existing one first, then (if turning on) add the new emoji.
+            if (_reactions.TryGetValue(postId, out var m))
+                foreach (var set in m.Values) set.Remove(_me!.Id);
+            if (on && emoji.Length > 0)
             {
-                if (!_reactions.TryGetValue(postId, out var m)) _reactions[postId] = m = new();
-                if (!m.TryGetValue(emoji, out var set)) m[emoji] = set = new();
-                set.Add(_me!.Id);
+                if (!_reactions.TryGetValue(postId, out var mm)) _reactions[postId] = mm = new();
+                if (!mm.TryGetValue(emoji, out var s)) mm[emoji] = s = new();
+                s.Add(_me!.Id);
             }
-            else if (_reactions.TryGetValue(postId, out var m) && m.TryGetValue(emoji, out var set))
-            {
-                set.Remove(_me!.Id);
-                if (set.Count == 0) m.Remove(emoji);
-            }
+            // Drop any emoji buckets that emptied out.
+            if (_reactions.TryGetValue(postId, out var clean))
+                foreach (var key in clean.Where(kv => kv.Value.Count == 0).Select(kv => kv.Key).ToList())
+                    clean.Remove(key);
         }
         return Task.CompletedTask;
     }

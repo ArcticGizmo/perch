@@ -335,27 +335,30 @@ public sealed class SupabaseSocialClient : ISocialClient
     {
         var uid = RequireUser();
         emoji = emoji?.Trim() ?? "";
-        if (emoji.Length == 0) return;
         var token = await ValidAccessTokenAsync(ct);
 
-        if (on)
-        {
-            using var req = Rest(HttpMethod.Post, "/rest/v1/reactions", token);
-            // ignore-duplicates → ON CONFLICT DO NOTHING, so re-reacting is a harmless no-op that needs only
-            // INSERT privilege. (merge-duplicates would be an upsert, which needs UPDATE priv + an UPDATE
-            // policy we deliberately don't grant — that was the "reactions don't work" permission denial.)
-            req.Headers.Add("Prefer", "resolution=ignore-duplicates");
-            req.Content = JsonContent.Create(new { post_id = postId, reactor = uid, emoji });
-            using var resp = await _http.SendAsync(req, ct);
-            await EnsureOkAsync(resp, "add your reaction", ct);
-        }
-        else
-        {
-            using var req = Rest(HttpMethod.Delete,
-                $"/rest/v1/reactions?post_id=eq.{postId}&reactor=eq.{uid}&emoji=eq.{Uri.EscapeDataString(emoji)}", token);
-            using var resp = await _http.SendAsync(req, ct);
-            await EnsureOkAsync(resp, "remove your reaction", ct);
-        }
+        // One reaction per user per post: always clear your existing reaction first, so a post can never fill
+        // up with many emojis from the same person. Turning a reaction "on" then adds the new one; "off" just
+        // leaves it cleared.
+        await RemoveMyReactionAsync(postId, uid, token, ct);
+        if (!on || emoji.Length == 0) return;
+
+        using var req = Rest(HttpMethod.Post, "/rest/v1/reactions", token);
+        // ignore-duplicates → ON CONFLICT DO NOTHING (INSERT-only). merge-duplicates would be an upsert, which
+        // needs UPDATE priv + an UPDATE policy we deliberately don't grant — that was the earlier denial.
+        req.Headers.Add("Prefer", "resolution=ignore-duplicates");
+        req.Content = JsonContent.Create(new { post_id = postId, reactor = uid, emoji });
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "add your reaction", ct);
+    }
+
+    // Deletes whatever reaction the caller has on a post (at most one, by the one-per-user rule) — no emoji
+    // filter, so switching emojis replaces cleanly.
+    private async Task RemoveMyReactionAsync(Guid postId, Guid uid, string token, CancellationToken ct)
+    {
+        using var req = Rest(HttpMethod.Delete, $"/rest/v1/reactions?post_id=eq.{postId}&reactor=eq.{uid}", token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "update your reaction", ct);
     }
 
     // Batch-fetches reactions for the given post ids, grouped per post into (emoji → count, mine). RLS returns

@@ -50,6 +50,7 @@ internal sealed class DebugSocialWindow : Window
         if (_real.Current.Me is { } me) _target.Text = me.Handle;
         _status = Field("a status to post as the puppet");
         _emoji = Field("🔥");
+        _emoji.Text = "🔥";   // a default mood/reaction so puppet posts show a mood in the roster
         _emoji.Width = 60;
 
         _log = new TextBlock

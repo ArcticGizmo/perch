@@ -148,8 +148,10 @@ internal static class SampleData
 
         return new RosterSnapshot(me, myPost,
         [
-            new(ada, adaPost, [new ReactionGroup("🔥", 2, true), new ReactionGroup("🎉", 1, false)]),
-            new(grace, gracePost, [new ReactionGroup("👍", 1, false)]),
+            // ada: >2 distinct emojis → collapses to a combined count chip (tooltip shows the breakdown).
+            new(ada, adaPost, [new ReactionGroup("🔥", 3, true), new ReactionGroup("❤️", 2, false), new ReactionGroup("👍", 1, false)]),
+            // grace: two distinct → shown as individual chips.
+            new(grace, gracePost, [new ReactionGroup("👍", 2, false), new ReactionGroup("🎉", 1, false)]),
             new(linus, null, []),
         ], IncomingRequests: 1);
     }

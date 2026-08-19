@@ -1322,7 +1322,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, NoteButton, SocialStatus }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, NoteButton, SocialStatus, ReactionSummary }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -3072,6 +3072,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             _noteButtonRect.Width > 0
                 && _noteButtonRect.Contains(p)        ? (TipKind.NoteButton, -1) :
+            HitTestReactionSummary(p) is var rs && rs >= 0 ? (TipKind.ReactionSummary, rs) :
             HitTestSocialStatus(p) is var ss && ss >= 0 ? (TipKind.SocialStatus, ss) :
             InUsageStrip(p)                           ? (TipKind.Usage, -1) :
                                                         (TipKind.None, -1);
@@ -3105,6 +3106,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Jira:    ShowJiraTooltip(_tipRow);    break;
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
             case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
+            case TipKind.ReactionSummary: ShowReactionSummaryTooltip(_tipRow); break;
         }
     }
 

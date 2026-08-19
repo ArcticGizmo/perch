@@ -222,6 +222,24 @@ public sealed class FakeSocialClientTests
     }
 
     [Fact]
+    public async Task Reacting_with_a_second_emoji_replaces_your_first_one()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        var post = c.SimulatePost(ada.Id, "shipped it");
+
+        await c.ReactAsync(post.Value, "🔥", on: true);
+        await c.ReactAsync(post.Value, "👍", on: true);   // one reaction per user → replaces 🔥
+
+        var reactions = (await c.GetRosterAsync()).Friends.Single(f => f.Profile.Handle == "ada").Reactions;
+        Assert.DoesNotContain(reactions, r => r.Emoji == "🔥");            // the first one is gone
+        var thumbs = Assert.Single(reactions);
+        Assert.Equal("👍", thumbs.Emoji);
+        Assert.True(thumbs.Mine);
+    }
+
+    [Fact]
     public async Task Requires_a_handle_before_posting()
     {
         var c = new FakeSocialClient();
