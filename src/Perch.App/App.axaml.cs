@@ -186,8 +186,9 @@ public partial class App : Application
             _social = new SupabaseSocialClient(SupabaseConfig.Resolve(),
                 PlatformServices.SecretStore, PlatformServices.UrlOpener);
             _feedHost = new SocialFeedMonitorHost(_social,
-                snap => _overlay?.Canvas.UpdateFeed(snap),
+                snap => _overlay?.Canvas.UpdateRoster(snap),
                 OnFriendPosted);
+            _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
             {
                 _overlay?.Canvas.SetSocialAccount(st.SignedIn, st.Me is not null);
@@ -258,6 +259,11 @@ public partial class App : Application
             _overlay.Canvas.SocialManageRequested += OpenSocialSettings;
             _overlay.Canvas.PostStatusRequested += OpenCompose;
             _overlay.Canvas.FriendsRequested += OpenFriends;
+            _overlay.Canvas.ReactRequested += OnReactRequested;
+            _overlay.Canvas.SocialRegionExpandChanged += expanded =>
+            {
+                if (_appSettings is { } s) { s.SocialRegionExpanded = expanded; s.Save(); }
+            };
 
             // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
             // down. History / QR / external-notify are Phase-5 concerns — their triggers are wired here so
@@ -652,6 +658,20 @@ public partial class App : Application
             () => new FriendsWindow(_social),
             () => _friendsWindow = null,
             w => w.RefreshExternal());
+    }
+
+    // A reaction chip / "+" picker in the overlay social region was used: toggle the reaction on the backend,
+    // then refresh the roster so the chip settles to the server truth. Errors are swallowed (best-effort, like
+    // the other social overlay actions) — a failed reaction just leaves the chip as it was.
+    private async void OnReactRequested(Guid postId, string emoji, bool on)
+    {
+        if (_social is null) return;
+        try
+        {
+            await _social.ReactAsync(postId, emoji, on);
+            _feedHost?.RefreshSoon();
+        }
+        catch { /* best-effort */ }
     }
 
     // A friend posted a new status (surfaced by the feed poll, whether nudged live by Realtime or found on the

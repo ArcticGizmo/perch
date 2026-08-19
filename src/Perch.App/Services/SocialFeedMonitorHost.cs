@@ -18,7 +18,7 @@ namespace Perch.Avalonia.Services;
 internal sealed class SocialFeedMonitorHost : IDisposable
 {
     private readonly ISocialClient _social;
-    private readonly Action<FeedSnapshot?> _onFeed;
+    private readonly Action<RosterSnapshot?> _onRoster;
     private readonly Action<FeedItem> _onNewFriendPost;
     private readonly DispatcherTimer _timer;
 
@@ -32,10 +32,10 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     /// <param name="onNewFriendPost">Invoked (on the UI thread) once per newly seen post authored by someone
     /// other than you — the hook for the "@x just posted" notification. Never fires for your own posts or for
     /// the backlog present when polling starts.</param>
-    public SocialFeedMonitorHost(ISocialClient social, Action<FeedSnapshot?> onFeed, Action<FeedItem> onNewFriendPost)
+    public SocialFeedMonitorHost(ISocialClient social, Action<RosterSnapshot?> onRoster, Action<FeedItem> onNewFriendPost)
     {
         _social = social;
-        _onFeed = onFeed;
+        _onRoster = onRoster;
         _onNewFriendPost = onNewFriendPost;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _timer.Tick += (_, _) => _ = Poll();
@@ -62,7 +62,7 @@ internal sealed class SocialFeedMonitorHost : IDisposable
             _realtime = null;
             _seen.Clear();
             _primed = false;
-            _onFeed(null);
+            _onRoster(null);
         }
     }
 
@@ -76,25 +76,24 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     {
         try
         {
-            var items = await _social.GetFeedAsync(50);
-            _onFeed(new FeedSnapshot(items));
-            NotifyNewFriendPosts(items);
+            var roster = await _social.GetRosterAsync();
+            _onRoster(roster);
+            NotifyNewFriendPosts(roster);
         }
-        catch { /* best-effort: a failed poll just keeps the last feed on screen */ }
+        catch { /* best-effort: a failed poll just keeps the last roster on screen */ }
     }
 
-    // Fires a notification for each newly seen post by someone other than me. The first poll after activation
-    // only primes the seen-set (the backlog isn't news); overlapping polls are naturally idempotent because a
-    // post is added to _seen the first time it's noticed.
-    private void NotifyNewFriendPosts(IReadOnlyList<FeedItem> items)
+    // Fires a notification for each friend whose latest status is one we haven't surfaced yet. The first poll
+    // after activation only primes the seen-set (the backlog isn't news); the roster is friends-only, so every
+    // entry is someone other than me. Idempotent: a post is added to _seen the first time it's noticed.
+    private void NotifyNewFriendPosts(RosterSnapshot roster)
     {
-        var meId = _social.Current.Me?.Id;
         var wasPrimed = _primed;
-        foreach (var item in items)
+        foreach (var f in roster.Friends)
         {
-            if (!_seen.Add(item.Id)) continue;          // already surfaced
-            if (wasPrimed && item.Author.Id != meId)
-                _onNewFriendPost(item);
+            if (f.Latest is not { } latest) continue;
+            if (!_seen.Add(latest.Id)) continue;        // already surfaced
+            if (wasPrimed) _onNewFriendPost(latest);
         }
         _primed = true;
     }

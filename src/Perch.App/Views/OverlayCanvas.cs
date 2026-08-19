@@ -1589,7 +1589,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 }
                 if (showFeed)
                 {
-                    DrawFeedStrip(ctx, width, top);
+                    DrawSocialRegion(ctx, width, top);
                     top += FeedStripHeight;
                 }
                 if (showSocialSignIn) DrawSocialSignInStrip(ctx, width, top);
@@ -1597,6 +1597,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
             if (!showMic) ClearMicHitRects();
             if (!showMedia) ClearMediaHitRects();
+            if (!showFeed) ClearSocialRegionHitRects();
             if (!showSocialSignIn) ClearSocialHitRect();
 
             if (showFooter) DrawStatusFooter(ctx, width, height);
@@ -3042,11 +3043,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool overSocial = _socialSignInRect.Contains(p);
         if (overSocial != _hoveredSocial) { _hoveredSocial = overSocial; InvalidateVisual(); }
 
+        if (UpdateSocialRegionHover(p)) InvalidateVisual();
+        bool overRegion = _hoveredSocialHeader || _hoveredSocialCompose || _hoveredReactAdd >= 0
+                          || _reactChipRects.Any(c => c.Rect.Contains(p)) || _socialMoreRect.Contains(p);
+
         // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + daemon worker lines +
         // artifacts + the update badge + outage footer + the scratch-pad note button + a row's note glyph +
-        // the media buttons + the mic strip's app name); rows show only the highlight.
+        // the media buttons + the mic strip's app name + the social region's controls); rows show only the highlight.
         Cursor = (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
-                  || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial)
+                  || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -3306,6 +3311,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // The Social sign-in strip: the whole band is clickable (sign in, or open Settings to finish setup).
         if (_socialSignInRect.Contains(p)) { OnSocialStripClicked(); return; }
+
+        // The Social region (roster): header toggle, reaction chips/+, compose row, "manage friends" overflow.
+        if (RouteSocialRegionClick(p)) return;
 
         int art = HitTestArtifactIcon(p);
         if (art >= 0 && _rows[art].Session is { } artSession)

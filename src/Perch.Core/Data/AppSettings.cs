@@ -413,6 +413,10 @@ internal sealed class AppSettings
     // takes no height otherwise. On by default so enabling Social shows the feed; a missing key keeps it on.
     public bool ShowFeedStrip { get; set; } = true;
 
+    // Whether the overlay's social region is expanded (the full friends roster) or collapsed to just its header.
+    // Toggled by the region's own chevron and persisted here so it survives a restart. Expanded by default.
+    public bool SocialRegionExpanded { get; set; } = true;
+
     // Whether a friend posting a status pops a desktop notification (gated too by the master NotificationsEnabled
     // switch). Fired by SocialFeedMonitorHost when a poll (nudged live by Realtime, or on the next tick) surfaces
     // a new post by someone other than you. Gated by SocialEnabled. On by default; a missing key keeps it on.

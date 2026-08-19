@@ -39,6 +39,16 @@ internal static class OverlayDraw
         FontWeight weight = FontWeight.Normal) =>
         new(s ?? "", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Face(weight), size, brush);
 
+    // The platform emoji typeface, tried before Inter so an emoji glyph resolves rather than falling to tofu.
+    private static readonly Typeface EmojiFace =
+        new(new FontFamily("Segoe UI Emoji, Apple Color Emoji, Noto Color Emoji, Twemoji Mozilla"));
+
+    /// <summary>Builds a <see cref="FormattedText"/> for an emoji glyph using the platform emoji font, so the
+    /// mood/reaction glyphs render (as colour where the toolkit supports it, else a monochrome outline) instead
+    /// of falling through Inter to a tofu box.</summary>
+    public static FormattedText Emoji(string s, double size, IBrush brush) =>
+        new(s ?? "", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, EmojiFace, size, brush);
+
     /// <summary>Draws <paramref name="ft"/> left-aligned at <paramref name="x"/>, vertically centred on
     /// <paramref name="midY"/> using its measured line height (the anti-clipping rule).</summary>
     public static void TextLeftMid(DrawingContext ctx, FormattedText ft, double x, double midY)

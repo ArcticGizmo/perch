@@ -128,14 +128,14 @@ internal static class HeadlessRenderer
         RenderControl(micProbe, Path.Combine(outDir, "overlay_mic_call_1x.png"), 96);
         RenderControl(micProbe, Path.Combine(outDir, "overlay_mic_call_1.5x.png"), 144);
 
-        // Social feed strip: below the session rows, a "Friends" caption then a few friends' recent statuses
-        // (avatar dot + @handle + status + relative time). Exercises the multi-row, line-height-derived height
-        // and the status truncation.
+        // Social region: below the session rows, an expandable "Friends" roster — a row per friend with mood
+        // tile + @handle + latest status + relative time + reactions, then a "what are you working on?" compose
+        // row. Exercises the multi-row, line-height-derived height, the reaction chips and the truncation.
         var feedProbe = new OverlayCanvas();
         feedProbe.Update(SampleData.Sessions());
         feedProbe.SetShowFeedStrip(true);
-        feedProbe.UpdateFeed(SampleData.Feed());
-        feedProbe.SetSocialAccount(signedIn: true, hasHandle: true);   // feed strip is the signed-in state
+        feedProbe.SetSocialAccount(signedIn: true, hasHandle: true);   // region shows in the signed-in state
+        feedProbe.UpdateRoster(SampleData.Roster());
         RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1x.png"), 96);
         RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1.5x.png"), 144);
 

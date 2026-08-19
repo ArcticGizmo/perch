@@ -148,6 +148,29 @@ internal static class SampleData
         ]);
     }
 
+    /// <summary>A friends roster for the overlay's social region — me + a few friends with statuses, moods and
+    /// reactions, plus one who hasn't posted, so the preview/render exercises every row shape.</summary>
+    public static RosterSnapshot Roster()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var me = new Profile(Guid.Parse("dddddddd-1111-4000-8000-00000000000d"), "jon", "Jon", "😌");
+        var ada = new Profile(Guid.Parse("aaaaaaaa-1111-4000-8000-000000000001"), "ada", "Ada L.", "🦉");
+        var grace = new Profile(Guid.Parse("bbbbbbbb-1111-4000-8000-000000000002"), "grace", "Grace H.", "🛠️");
+        var linus = new Profile(Guid.Parse("cccccccc-1111-4000-8000-000000000003"), "linus", null, "☕");
+
+        var adaPost = new FeedItem(Guid.Parse("aaaaaaaa-0000-4000-8000-000000000001"), ada,
+            "refactored the whole thing. do not ask.", "🦉", now.AddMinutes(-2));
+        var gracePost = new FeedItem(Guid.Parse("bbbbbbbb-0000-4000-8000-000000000002"), grace,
+            "tests green on the first try", "🛠️", now.AddMinutes(-14));
+
+        return new RosterSnapshot(me,
+        [
+            new(ada, adaPost, [new ReactionGroup("🔥", 2, true), new ReactionGroup("🎉", 1, false)]),
+            new(grace, gracePost, [new ReactionGroup("👍", 1, false)]),
+            new(linus, null, []),
+        ]);
+    }
+
     /// <summary>A couple of daemon workers, for the daemon strip — hidden when the daemon setting is off.</summary>
     public static IReadOnlyList<DaemonWorker> DaemonWorkers()
     {
