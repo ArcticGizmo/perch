@@ -130,7 +130,6 @@ public partial class App : Application
                 _mediaHost?.Dispose();
                 _micHost?.Dispose();
                 _feedHost?.Dispose();
-                _dndTimer?.Stop();
                 _hypertreeHost?.Dispose();
                 _daemonHost?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
@@ -188,7 +187,7 @@ public partial class App : Application
             _social = new SupabaseSocialClient(SupabaseConfig.Resolve(),
                 PlatformServices.SecretStore, PlatformServices.UrlOpener);
             _feedHost = new SocialFeedMonitorHost(_social,
-                snap => _overlay?.Canvas.UpdateRoster(snap),
+                snap => { _overlay?.Canvas.UpdateRoster(snap); CheckDnd(); },   // re-check DND on each roster tick
                 OnFriendPosted);
             _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
@@ -698,35 +697,21 @@ public partial class App : Application
     }
 
     // ── Do Not Disturb → close the friends region ────────────────────────────────────────────────────────
-    private DispatcherTimer? _dndTimer;
+    // No dedicated poll: the DND state is re-checked whenever the feed's roster stream ticks (the 60s poll, or a
+    // realtime nudge) and once when the setting changes. Lightweight for a low-stakes convenience.
     private bool _dndActive;
 
-    // Starts/stops the DND poll based on the setting. When DND is on we collapse the friends region once (it
-    // won't spring back open on a new post) and hold off friend-post toasts — see OnFriendPosted.
     private void ApplyDndMonitor(AppSettings s)
     {
-        bool want = s.SocialEnabled && s.CloseFeedInDoNotDisturb;
-        if (!want)
-        {
-            _dndTimer?.Stop();
-            _dndActive = false;
-            return;
-        }
-        _dndTimer ??= CreateDndTimer();
-        if (!_dndTimer.IsEnabled) _dndTimer.Start();
-        CheckDnd();   // apply immediately rather than waiting for the first tick
+        if (s.SocialEnabled && s.CloseFeedInDoNotDisturb) CheckDnd();   // apply immediately on enable
+        else _dndActive = false;
     }
 
-    private DispatcherTimer CreateDndTimer()
-    {
-        var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
-        t.Tick += (_, _) => CheckDnd();
-        return t;
-    }
-
-    // On the rising edge (not-DND → DND), collapse the region. IsActive is a cheap OS query, safe on the UI thread.
+    // On the rising edge (not-DND → DND), collapse the region once (it won't spring back open on a new post).
+    // Guarded on the setting so it's a no-op unless enabled. IsActive is a cheap OS query, safe on the UI thread.
     private void CheckDnd()
     {
+        if (_appSettings is not { SocialEnabled: true, CloseFeedInDoNotDisturb: true }) { _dndActive = false; return; }
         bool now;
         try { now = PlatformServices.DoNotDisturb.IsActive; } catch { now = false; }
         if (now && !_dndActive) _overlay?.Canvas.SetSocialRegionExpanded(false);
