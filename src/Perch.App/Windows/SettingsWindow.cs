@@ -16,6 +16,7 @@ using Perch.Data;
 using Perch.Data.Hypertree;
 using Perch.Data.Replay;
 using Perch.Platform;
+using Perch.Social;
 using Perch.Theming;
 
 namespace Perch.Avalonia.Windows;
@@ -119,6 +120,13 @@ internal sealed class SettingsWindow : Window
     private readonly UsageMonitorHost _usageHost;
     private readonly SettingsHooks _hooks;
     private readonly IAppIconProvider _icons;
+    private readonly ISocialClient? _social;
+
+    // The Social page rebuilds its body on every auth change (sign-in/out that may originate from the
+    // overlay strip or menu). The status line sits outside the rebuilt body so a message survives a rebuild.
+    private StackPanel? _socialBody;
+    private TextBlock? _socialStatus;
+    private Action<AuthState>? _socialAuthHandler;
 
     private Panel _contentHost = null!;
     private readonly Dictionary<string, Control> _pages = new();
@@ -134,12 +142,14 @@ internal sealed class SettingsWindow : Window
     private bool _updateAvailable;
     private string? _updateVersion;
 
-    public SettingsWindow(AppSettings settings, UsageMonitorHost usageHost, SettingsHooks hooks, IAppIconProvider icons)
+    public SettingsWindow(AppSettings settings, UsageMonitorHost usageHost, SettingsHooks hooks,
+        IAppIconProvider icons, ISocialClient? social = null)
     {
         _settings = settings;
         _usageHost = usageHost;
         _hooks = hooks;
         _icons = icons;
+        _social = social;
 
         Title = "Perch Settings";
         // Sized for the unified shell: just wide enough to show two catalogue card columns beside the docked
@@ -195,6 +205,7 @@ internal sealed class SettingsWindow : Window
         AddPage(nav, "stats",        "Session Stats",   BuildStatsPage);
         AddPage(nav, "achievements", "Achievements",    BuildAchievementsPage);
         AddPage(nav, "notify",       "Notifications",   BuildNotificationsPage);
+        AddPage(nav, "social",       "Social",          BuildSocialPage);
         AddPage(nav, "shortcuts",    "Shortcuts",       BuildHotkeysPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
         AddPage(nav, "export",       "Export",          BuildExportPage);
@@ -535,6 +546,9 @@ internal sealed class SettingsWindow : Window
         _navItems.Add((key, item));
     }
 
+    /// <summary>Navigate to a page by key from outside (e.g. the overlay's "finish Social setup" click).</summary>
+    public void NavigateTo(string key) => SelectPage(key);
+
     private void SelectPage(string key)
     {
         if (!_pages.TryGetValue(key, out var page)) return;
@@ -592,6 +606,101 @@ internal sealed class SettingsWindow : Window
     }
 
     // ── Getting started ─────────────────────────────────────────────────────────────
+    // The Social page: sign in / out, and claim a handle — the same actions the overlay strip and its
+    // right-click menu offer, gathered here with account state. Rebuilds its body on every auth change so it
+    // reflects a sign-in/out that happened from the overlay while the window is open.
+    private void BuildSocialPage(StackPanel page)
+    {
+        page.Children.Add(SettingsUi.SectionTitle("Social"));
+        page.Children.Add(SettingsUi.BodyText(
+            "Add friends by handle and see their statuses under the overlay. Enable \"Social feed\" on the Features page first."));
+
+        if (_social is null)
+        {
+            page.Children.Add(SettingsUi.BodyText("Social isn't available in this build."));
+            return;
+        }
+
+        _socialBody = new StackPanel { Spacing = 10, Margin = new Thickness(0, 6, 0, 6) };
+        page.Children.Add(_socialBody);
+
+        _socialStatus = SettingsUi.BodyText("");   // survives body rebuilds
+        page.Children.Add(_socialStatus);
+
+        // Reflect sign-in/out that originates elsewhere (the overlay strip / menu).
+        _socialAuthHandler = _ => Dispatcher.UIThread.Post(RefreshSocialPage);
+        _social.AuthChanged += _socialAuthHandler;
+        Closed += (_, _) => { if (_socialAuthHandler is not null) _social.AuthChanged -= _socialAuthHandler; };
+
+        RefreshSocialPage();
+    }
+
+    private void RefreshSocialPage()
+    {
+        if (_social is null || _socialBody is null) return;
+        _socialBody.Children.Clear();
+        var state = _social.Current;
+
+        if (!state.SignedIn)
+        {
+            _socialBody.Children.Add(SettingsUi.BodyText("You're signed out."));
+            var signIn = SettingsUi.FlatButton("Sign in with GitHub");
+            signIn.Click += async (_, _) => await RunSocial(signIn, () => _social.SignInAsync(default));
+            _socialBody.Children.Add(Left(signIn));
+            return;
+        }
+
+        if (state.Me is null)
+        {
+            // Signed in, no handle yet — claim one inline.
+            _socialBody.Children.Add(SettingsUi.BodyText(
+                "Signed in. Pick a handle your friends will recognise — 3–20 of a–z, 0–9 or _."));
+            var box = SettingsUi.ThemedTextBox("");
+            box.Watermark = "handle";
+            box.Width = 200;
+            var claim = SettingsUi.FlatButton("Claim");
+            claim.Click += async (_, _) => await RunSocial(claim, () => _social.ClaimHandleAsync(box.Text ?? "", null, null, default));
+            var row = SettingsUi.ButtonRow();
+            row.Children.Add(new TextBlock { Text = "@", Foreground = Palette.MutedBrush, VerticalAlignment = VerticalAlignment.Center });
+            row.Children.Add(box);
+            row.Children.Add(claim);
+            _socialBody.Children.Add(row);
+            AddSignOut();
+            return;
+        }
+
+        // Signed in with a handle.
+        var me = state.Me;
+        string who = me.DisplayName is { Length: > 0 } dn ? $"Signed in as @{me.Handle}  ({dn})" : $"Signed in as @{me.Handle}";
+        _socialBody.Children.Add(new TextBlock { Text = who, FontSize = 14, Foreground = Palette.FgBrush });
+        AddSignOut();
+    }
+
+    private void AddSignOut()
+    {
+        var signOut = SettingsUi.FlatButton("Sign out");
+        signOut.Click += async (_, _) => await RunSocial(signOut, () => _social!.SignOutAsync(default));
+        _socialBody!.Children.Add(Left(signOut));
+    }
+
+    // Runs a Social action with a busy state + inline error surfacing. A successful action raises AuthChanged,
+    // which rebuilds the body via RefreshSocialPage; the status line (outside the body) shows any error.
+    private async Task RunSocial(Button btn, Func<Task> action)
+    {
+        btn.IsEnabled = false;
+        if (_socialStatus is not null) _socialStatus.Text = "Working…";
+        try
+        {
+            await action();
+            if (_socialStatus is not null) _socialStatus.Text = "";
+        }
+        catch (SocialException ex) { if (_socialStatus is not null) _socialStatus.Text = ex.Message; }
+        catch { if (_socialStatus is not null) _socialStatus.Text = "Something went wrong. Please try again."; }
+        finally { btn.IsEnabled = true; }
+    }
+
+    private static Control Left(Control c) { c.HorizontalAlignment = HorizontalAlignment.Left; return c; }
+
     private void BuildGettingStartedPage(StackPanel page)
     {
         BuildBanner(page);

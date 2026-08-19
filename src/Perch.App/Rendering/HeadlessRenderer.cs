@@ -135,7 +135,7 @@ internal static class HeadlessRenderer
         feedProbe.Update(SampleData.Sessions());
         feedProbe.SetShowFeedStrip(true);
         feedProbe.UpdateFeed(SampleData.Feed());
-        feedProbe.SetSocialSignedIn(true);   // feed strip is the signed-in state
+        feedProbe.SetSocialAccount(signedIn: true, hasHandle: true);   // feed strip is the signed-in state
         RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1x.png"), 96);
         RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1.5x.png"), 144);
 

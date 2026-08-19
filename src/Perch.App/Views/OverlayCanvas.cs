@@ -3304,8 +3304,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // if the two ever overlap.
         if (HitTestMicLabel(p)) { MicJumpRequested?.Invoke(); return; }
 
-        // The Social sign-in strip: the whole band starts the GitHub sign-in flow.
-        if (_socialSignInRect.Contains(p)) { SignInRequested?.Invoke(); return; }
+        // The Social sign-in strip: the whole band is clickable (sign in, or open Settings to finish setup).
+        if (_socialSignInRect.Contains(p)) { OnSocialStripClicked(); return; }
 
         int art = HitTestArtifactIcon(p);
         if (art >= 0 && _rows[art].Session is { } artSession)
@@ -3579,6 +3579,23 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 () => UsageToggleRequested?.Invoke(!_usageEnabled)));
             items.Add(new Separator());
             items.Add(MenuItem("Set initial placements…", () => SetPlacementsRequested?.Invoke()));
+
+            // Social sign-in/out — the overlay counterpart of the Settings Social page, so the same actions
+            // are reachable without opening Settings. Only when Social is enabled.
+            if (SocialEnabled)
+            {
+                items.Add(new Separator());
+                if (SocialSignedIn)
+                {
+                    items.Add(MenuItem("Social settings…", () => SocialManageRequested?.Invoke()));
+                    items.Add(MenuItem("Sign out of Social", () => SignOutRequested?.Invoke()));
+                }
+                else
+                {
+                    items.Add(MenuItem("Sign in to Social", () => SignInRequested?.Invoke()));
+                }
+            }
+
             items.Add(new Separator());
             items.Add(MenuItem("Exit Perch", () => ExitRequested?.Invoke()));
         }

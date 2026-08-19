@@ -6,11 +6,17 @@ using Perch.Avalonia.Theming;
 namespace Perch.Avalonia.Views;
 
 /// <summary>
-/// The overlay's Social sign-in strip: a slim clickable band at the bottom of the floating panel, shown only
-/// when Social is enabled but you're <em>signed out</em> (or a session couldn't be restored), so signing in
-/// is one click from the overlay instead of a trip into Settings. When signed in it takes no height — the
-/// feed strip stands in its place. Same owner-drawn / captured-hit-rect discipline as the mic and media
-/// strips; the click raises <see cref="SignInRequested"/> for the App to drive the OAuth flow.
+/// The overlay's Social sign-in strip: a slim clickable band at the bottom of the floating panel that gives
+/// the overlay the same entry points as the Settings → Social page, so Social isn't Settings-only. It shows
+/// when Social is enabled and you either aren't signed in <em>or</em> haven't claimed a handle yet:
+/// <list type="bullet">
+///   <item>signed out → "Sign in to Social" (click raises <see cref="SignInRequested"/>);</item>
+///   <item>signed in, no handle → "Finish setup — claim a handle" (click raises <see cref="SocialManageRequested"/>,
+///     which opens the Settings Social page where the handle is entered).</item>
+/// </list>
+/// Once you're signed in with a handle it takes no height (the feed strip stands in its place). Sign-out
+/// lives on the overlay's right-click menu (see <c>ShowContextMenuAt</c>). Same owner-drawn / captured-hit-rect
+/// discipline as the mic and media strips.
 /// </summary>
 public sealed partial class OverlayCanvas
 {
@@ -21,17 +27,28 @@ public sealed partial class OverlayCanvas
 
     private bool _socialEnabled;
     private bool _socialSignedIn;
+    private bool _socialHasHandle;
     private bool _hoveredSocial;
     private Rect _socialSignInRect;
 
-    /// <summary>Raised when the sign-in strip is clicked; the App starts the GitHub sign-in flow.</summary>
+    /// <summary>Raised when the strip is clicked while signed out — the App starts GitHub sign-in.</summary>
     public event Action? SignInRequested;
 
-    // Shown only while Social is on and the user is signed out — the "please sign in" affordance.
-    private bool SocialSignInStripVisible => _socialEnabled && !_socialSignedIn;
+    /// <summary>Raised to sign out (from the overlay's right-click menu).</summary>
+    public event Action? SignOutRequested;
 
-    /// <summary>Enables/disables the whole Social feature on the overlay (drives whether the sign-in strip can
-    /// appear). Driven by <c>OverlaySettingsGates</c> from <c>AppSettings.SocialEnabled</c>.</summary>
+    /// <summary>Raised to open the Settings Social page (e.g. to claim a handle after signing in).</summary>
+    public event Action? SocialManageRequested;
+
+    // Whether Social is on at all (drives whether the menu offers sign-in/out and whether the strip can show).
+    private bool SocialEnabled => _socialEnabled;
+    private bool SocialSignedIn => _socialSignedIn;
+
+    // Shown while Social is on and setup isn't finished (signed out, or signed in without a handle yet).
+    private bool SocialSignInStripVisible => _socialEnabled && !(_socialSignedIn && _socialHasHandle);
+
+    /// <summary>Enables/disables the whole Social feature on the overlay. Driven by <c>OverlaySettingsGates</c>
+    /// from <c>AppSettings.SocialEnabled</c>.</summary>
     public void SetSocialEnabled(bool enabled)
     {
         if (_socialEnabled == enabled) return;
@@ -40,20 +57,28 @@ public sealed partial class OverlayCanvas
         if (SocialSignInStripVisible != before) RemeasurePanel();
     }
 
-    /// <summary>Pushes the live auth state (on the UI thread). Signing in hides the sign-in strip; signing out
-    /// brings it back. Changes the panel height, so relayout when the strip's visibility flips.</summary>
-    public void SetSocialSignedIn(bool signedIn)
+    /// <summary>Pushes the live auth state (on the UI thread): whether you're signed in, and whether you've
+    /// claimed a handle. Signing in with a handle hides the strip; signing out (or having no handle) shows it.</summary>
+    public void SetSocialAccount(bool signedIn, bool hasHandle)
     {
-        if (_socialSignedIn == signedIn) return;
+        if (_socialSignedIn == signedIn && _socialHasHandle == hasHandle) return;
         bool before = SocialSignInStripVisible;
         _socialSignedIn = signedIn;
+        _socialHasHandle = hasHandle;
         if (SocialSignInStripVisible != before) RemeasurePanel(); else InvalidateVisual();
+    }
+
+    // Routed from RouteClick: signed out → sign in; signed in (but unfinished) → open Settings to claim.
+    private void OnSocialStripClicked()
+    {
+        if (_socialSignedIn) SocialManageRequested?.Invoke();
+        else SignInRequested?.Invoke();
     }
 
     private void ClearSocialHitRect() => _socialSignInRect = default;
 
     // Paints the strip at y=top (height already reserved in Draw): a separator, a small accent dot and the
-    // "Sign in to Social" prompt, with the whole band captured as one hit-rect.
+    // state-appropriate prompt, with the whole band captured as one hit-rect.
     private void DrawSocialSignInStrip(DrawingContext ctx, double width, double top)
     {
         ClearSocialHitRect();
@@ -66,8 +91,8 @@ public sealed partial class OverlayCanvas
         double midY = top + SocialStripHeight / 2;
         ctx.DrawEllipse(Palette.AccentBrush, null, new Point(HorizPad + 3, midY), 3, 3);
         double x = HorizPad + 3 * 2 + 6;
-        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("Sign in to Social", SocialTextSize, Palette.AccentBrush, FontWeight.SemiBold),
-            x, midY);
+        string text = _socialSignedIn ? "Finish setup — claim a handle" : "Sign in to Social";
+        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(text, SocialTextSize, Palette.AccentBrush, FontWeight.SemiBold), x, midY);
 
         _socialSignInRect = new Rect(0, top, width, SocialStripHeight);
     }

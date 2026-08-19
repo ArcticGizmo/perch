@@ -39,7 +39,7 @@ internal sealed class PreviewPane : Border
         _canvas.UpdateMedia(SampleData.Media());
         _canvas.UpdateMic(SampleData.Mic());
         _canvas.UpdateFeed(SampleData.Feed());
-        _canvas.SetSocialSignedIn(true);    // preview the signed-in (feed) state, not the sign-in prompt
+        _canvas.SetSocialAccount(signedIn: true, hasHandle: true);   // preview the signed-in (feed) state
         _canvas.IsHitTestVisible = false;   // display-only: no clicks, no dense drag, no hovers
 
         Child = new Viewbox

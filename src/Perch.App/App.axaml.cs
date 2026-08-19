@@ -181,7 +181,8 @@ public partial class App : Application
             // background (a no-op when unconfigured or signed out).
             _social = new SupabaseSocialClient(SupabaseConfig.Resolve(),
                 PlatformServices.SecretStore, PlatformServices.UrlOpener);
-            _social.AuthChanged += st => Dispatcher.UIThread.Post(() => _overlay?.Canvas.SetSocialSignedIn(st.SignedIn));
+            _social.AuthChanged += st => Dispatcher.UIThread.Post(
+                () => _overlay?.Canvas.SetSocialAccount(st.SignedIn, st.Me is not null));
             _ = _social.TryRestoreAsync();
             // Hypertree's published status file → the overlay's branch strip (opt-in; started below).
             _hypertreeHost = new HypertreeMonitorHost(_overlay.Canvas.SetHypertree);
@@ -240,8 +241,11 @@ public partial class App : Application
             // Mic strip: its one control is the app's name, which focuses whatever holds the microphone.
             _overlay.Canvas.MicJumpRequested += JumpToMicApp;
 
-            // Social sign-in strip (shown when Social is enabled and you're signed out) → start GitHub sign-in.
+            // Social entry points from the overlay (strip + right-click menu) — the same actions as the
+            // Settings Social page, so Social isn't Settings-only.
             _overlay.Canvas.SignInRequested += OnSocialSignInRequested;
+            _overlay.Canvas.SignOutRequested += () => { _ = _social?.SignOutAsync(); };
+            _overlay.Canvas.SocialManageRequested += OpenSocialSettings;
 
             // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
             // down. History / QR / external-notify are Phase-5 concerns — their triggers are wired here so
@@ -599,6 +603,13 @@ public partial class App : Application
         {
             _notifier?.Show("Perch Social", "Sign-in didn't complete. Please try again.", ToastLevel.Info, null, null);
         }
+    }
+
+    // Open Settings on the Social page (from the overlay strip's "finish setup" click or its menu item).
+    private void OpenSocialSettings()
+    {
+        OpenSettings();
+        _settings?.NavigateTo("social");
     }
 
     // A session finished (NeedsAttention): flash the overlay and fire the notification (toast/chime/external,
@@ -1374,7 +1385,7 @@ public partial class App : Application
             OpenAchievements = OpenAchievements,
             OpenPlacements = OpenPlacementEditor,
         };
-        _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider);
+        _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider, _social);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);
         _settings.Closed += (_, _) => _settings = null;
         _settings.Show();
