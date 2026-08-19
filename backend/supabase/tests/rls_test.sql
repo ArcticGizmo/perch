@@ -8,7 +8,7 @@
 -- exactly how auth.uid() resolves a signed-in user in production.
 
 begin;
-select plan(7);
+select plan(13);
 
 -- ── fixtures (as the privileged migration role, before dropping to `authenticated`) ─────────────
 -- Three users: alice, bob (will befriend alice), carol (a stranger).
@@ -84,6 +84,64 @@ select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
 select is(
   (select count(*)::int from public.friendships),
   0, 'third party cannot see others'' friendship rows');
+reset role;
+
+-- ── M6: block hides posts both directions ───────────────────────────────────────
+-- alice (an accepted friend of bob) blocks bob.
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+insert into public.blocks (blocker, blocked)
+  values ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222');
+
+-- 8) alice can no longer see bob's post (her block).
+select is(
+  (select count(*)::int from public.posts where author = '22222222-2222-2222-2222-222222222222'),
+  0, 'block: alice cannot see the blocked bob''s post');
+reset role;
+
+-- 9) bob can no longer see alice's post either (blocking is bidirectional).
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+select is(
+  (select count(*)::int from public.posts where author = '11111111-1111-1111-1111-111111111111'),
+  0, 'block: bob cannot see alice''s post either');
+reset role;
+
+-- 10) alice unblocks bob → visibility restored (still accepted friends).
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+delete from public.blocks
+  where blocker = '11111111-1111-1111-1111-111111111111'
+    and blocked = '22222222-2222-2222-2222-222222222222';
+select is(
+  (select count(*)::int from public.posts where author = '22222222-2222-2222-2222-222222222222'),
+  1, 'unblock: alice can see bob''s post again');
+reset role;
+
+-- ── M6: per-user post rate limit ─────────────────────────────────────────────────
+-- carol has 1 post; add 9 more (total 10, all under the ceiling), then the 11th must be rejected.
+-- Inserted as the owner (RLS bypassed) but the BEFORE INSERT trigger still fires for every row.
+insert into public.posts (author, body)
+  select '33333333-3333-3333-3333-333333333333', 'flood ' || g
+  from generate_series(1, 9) g;
+
+-- 11) the 11th post within the minute is rejected by the rate-limit trigger.
+select throws_ok(
+  $$insert into public.posts (author, body)
+      values ('33333333-3333-3333-3333-333333333333', 'one too many')$$,
+  '23514',   -- check_violation raised by enforce_post_rate_limit()
+  'rate limit: the 11th post in a minute is rejected');
+
+-- ── M6: moderation kill-switch ───────────────────────────────────────────────────
+-- Suspend bob (as the owner — the moderation table has no policies, so only service_role touches it).
+insert into public.moderation (profile) values ('22222222-2222-2222-2222-222222222222');
+
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+-- 12) a suspended author's posts are hidden even from an accepted friend.
+select is(
+  (select count(*)::int from public.posts where author = '22222222-2222-2222-2222-222222222222'),
+  0, 'suspended author: posts hidden from a friend');
+-- 13) a suspended handle can no longer be found.
+select is(
+  (select count(*)::int from public.find_profile('bob')),
+  0, 'suspended author: not discoverable via find_profile');
 reset role;
 
 select * from finish();

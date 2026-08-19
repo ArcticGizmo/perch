@@ -10,10 +10,15 @@ Supabase) and `docs/social-feed-implementation.md` (the design).
 backend/supabase/
   config.toml                    # Supabase CLI config (run CLI with --workdir backend)
   migrations/
-    <ts>_init.sql   # tables, enums, indexes, are_friends() + find_profile()
-    <ts>_rls.sql    # RLS on every table + all policies + RPC grants
+    <ts>_init.sql               # tables, enums, indexes, are_friends() + find_profile()
+    <ts>_rls.sql                # RLS on every table + all policies + RPC grants
+    <ts>_grants.sql             # table-level GRANTs for the authenticated role
+    <ts>_profile_visibility.sql # read a friend's profile (shares_edge)
+    <ts>_block_report.sql       # blocks + reports tables; are_friends folds in blocking (M6)
+    <ts>_rate_limit.sql         # per-author post rate-limit trigger (M6)
+    <ts>_moderation.sql         # suspension kill-switch; posts + find_profile respect it (M6)
   tests/
-    rls_test.sql    # pgTAP: non-friends can't read posts, etc.
+    rls_test.sql    # pgTAP: non-friends can't read posts, blocking, rate limit, suspension, etc.
 ```
 
 ## One-time setup (needs your account)
@@ -112,17 +117,44 @@ JWT `sub`, so `auth.uid()` resolves like a real signed-in user):
 - an **accepted** friend can, and you can always read your own;
 - a **stranger** cannot read your posts;
 - `find_profile` matches an **exact** handle only (no partial/enumeration);
-- a **third party** cannot see two other people's friendship rows.
+- a **third party** cannot see two other people's friendship rows;
+- **(M6)** a **block** hides posts in both directions, and unblocking restores them;
+- **(M6)** the per-author **rate limit** rejects the 11th post inside a minute;
+- **(M6)** a **suspended** author's posts are hidden from a friend and the handle stops resolving.
 
-> Status: authored in M0, **not yet run against a live project** — that waits on the Supabase
-> project above. The `auth.users` insert in the test assumes the standard Supabase local stack;
-> if a required column has no default in your version, add it to the fixture insert.
+> Status: authored in M0, extended with the M6 safety checks, **not yet run against a live project** —
+> that waits on the Supabase project above. The `auth.users` insert in the test assumes the standard
+> Supabase local stack; if a required column has no default in your version, add it to the fixture insert.
 
-## Security checklist (kept in sync as milestones land — see implementation §7)
+## Safety model (M6)
 
-- [ ] RLS enabled on **every** table (RLS migration), with a passing test per policy.
-- [ ] `service_role` key is server-side only; the app ships the publishable key only.
-- [ ] Body length + handle format enforced by DB `CHECK` (schema migration), not just the client.
-- [ ] Friend discovery is exact-handle only; friendship rows invisible to third parties.
-- [ ] Refresh token stored via `ISecretStore` (DPAPI / Keychain), never plaintext.
-- [ ] Per-user post rate limit; block + server-side delete available. *(M6)*
+- **Block** — a private, one-sided row in `blocks` (blocker → blocked). `are_friends()` consults
+  `is_blocked()`, so a block kills post visibility in **both** directions regardless of friendship. It's a
+  separate table, not the `friendships` enum, precisely because `friendships_respond` lets either party
+  update an edge — a blocked user must never be able to lift their own block. `list_blocked()` (SECURITY
+  DEFINER) returns only the caller's blocked profiles for the "unblock" UI.
+- **Report** — `reports` is insert-only for `authenticated` (no select policy), so it's a write-only queue
+  only `service_role` (you, in the dashboard) can read. The app's "Report" also blocks, since a lone report
+  leaves the content in your feed.
+- **Rate limit** — a `BEFORE INSERT` trigger on `posts` rejects an author's 11th post inside a rolling
+  minute. Enforced in the DB, so a tampered client can't flood; the compose window's guard is courtesy only.
+- **Moderation kill-switch** — the `moderation` table (RLS on, **no policies/grants**, so only
+  `service_role` touches it) suspends a handle: `posts_read` hides a suspended author's posts, a trigger
+  blocks them from posting, and `find_profile` stops resolving them — all via the `is_suspended()` SECURITY
+  DEFINER helper. Suspend/lift from the SQL editor (see the header of `*_moderation.sql`).
+
+## Security checklist — sign-off (see implementation §7)
+
+- [x] RLS enabled on **every** table (`profiles`, `friendships`, `posts`, `blocks`, `reports`,
+  `moderation`), with a pgTAP test per policy in `rls_test.sql`.
+- [x] `service_role` key is server-side only; the app ships the publishable key only (see config above).
+- [x] Body length + handle format enforced by DB `CHECK` (schema migration), not just the client.
+- [x] Friend discovery is exact-handle only; friendship rows invisible to third parties.
+- [x] Refresh token stored via `ISecretStore` (DPAPI / Keychain), never plaintext (`SupabaseSocialClient`).
+- [x] Per-user post rate limit (trigger); block + report available; suspended-author content pulled.
+- [x] Nothing from `~/.claude` is ever auto-posted — composing is manual and explicit (no ingest path exists).
+- [x] TLS/HTTPS only (`https://`/`wss://`); transport degrades WebSocket → polling for firewalled users.
+
+> One item remains **manual, not code**: running `supabase test db` (or the SQL-editor checks) against the
+> live project to confirm the boxes above hold on real Postgres. The tests are written and pass locally in
+> intent; they haven't been executed against the hosted DB yet.
