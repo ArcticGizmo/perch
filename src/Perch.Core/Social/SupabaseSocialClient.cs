@@ -83,8 +83,22 @@ public sealed class SupabaseSocialClient : ISocialClient
 
         var token = await ExchangeAsync("pkce", new { auth_code = code, code_verifier = pkce.Verifier }, ct);
         ApplySession(token);
-        await LoadMeAsync(ct);
-        return Raise();
+        Raise();                          // signed in now — propagate even if the profile load hiccups
+        await LoadProfileOrExplainAsync(ct);
+        return Current;
+    }
+
+    // Loads the profile after a session is established. A missing row is fine (you just haven't claimed a
+    // handle yet); a failed *call* means the profiles table isn't reachable — almost always because the DB
+    // migrations haven't been applied — so surface that plainly rather than a raw HTTP code.
+    private async Task LoadProfileOrExplainAsync(CancellationToken ct)
+    {
+        try { await LoadMeAsync(ct); Raise(); }
+        catch (SocialException)
+        {
+            throw new SocialException(
+                "Signed in, but couldn't load your profile — check the database migrations have been applied (backend/supabase).");
+        }
     }
 
     /// <summary>Restores a session from the stored refresh token, if any. Returns the (possibly signed-out)
@@ -98,12 +112,15 @@ public sealed class SupabaseSocialClient : ISocialClient
         {
             var token = await ExchangeAsync("refresh_token", new { refresh_token = refresh }, ct);
             ApplySession(token);
-            await LoadMeAsync(ct);
-            return Raise();
+            Raise();
+            // A profile-load failure here is best-effort: the session is valid; the profile can load later.
+            // Only a rejected *refresh* (below) means the stored token is dead and should be forgotten.
+            try { await LoadMeAsync(ct); Raise(); } catch (SocialException) { }
+            return Current;
         }
-        catch
+        catch (SocialException)
         {
-            _secrets.Delete(RefreshTokenKey);   // token no longer valid — forget it
+            _secrets.Delete(RefreshTokenKey);   // the refresh token was rejected — forget it
             return Current;
         }
     }
