@@ -94,7 +94,13 @@ internal sealed class DebugSocialWindow : Window
         panel.Children.Add(SettingsUi.Separator());
         var refresh = SettingsUi.FlatButton("Refresh my overlay now");
         refresh.Click += (_, _) => { _refreshReal(); Log("Asked your overlay to re-poll."); };
-        panel.Children.Add(Left(refresh));
+        var dnd = SettingsUi.FlatButton("Check DND state");
+        dnd.Click += (_, _) => Log($"Windows Do Not Disturb detected as: {(PlatformServices.DoNotDisturb.IsActive ? "ON" : "off")}. " +
+            "Toggle it in the Action Center and click again — if this stays 'off' when DND is on, the detection needs another tweak.");
+        var actionsRow = SettingsUi.ButtonRow();
+        actionsRow.Children.Add(refresh);
+        actionsRow.Children.Add(dnd);
+        panel.Children.Add(actionsRow);
         panel.Children.Add(_log);
 
         Content = new ScrollViewer { Content = panel };

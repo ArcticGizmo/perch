@@ -629,16 +629,20 @@ internal sealed class SettingsWindow : Window
         }
 
         // All the social settings gathered here (the same ones live in Features → Social), so the whole feature
-        // is configurable in one place. These persist + apply live via DisplayToggle / DisplayChanged.
-        page.Children.Add(SettingsUi.TitleRow("Social feed",
+        // is configurable in one place. Styled like the Search rows — equal height + a divider. Persist + apply
+        // live via DisplayToggle / DisplayChanged.
+        page.Children.Add(SettingsUi.DividerRow("Social feed",
+            "The opt-in friends feed. Off makes no network calls at all.",
             DisplayToggle(_settings.SocialEnabled, v => _settings.SocialEnabled = v)));
-        page.Children.Add(SettingsUi.BodyText("The opt-in friends feed. Off makes no network calls at all."));
-        page.Children.Add(SettingsUi.TitleRow("Notify when a friend posts",
+        page.Children.Add(SettingsUi.DividerRow("Notify when a friend posts",
+            "Pop a desktop toast when a friend posts a status.",
             DisplayToggle(_settings.NotifyOnFriendPost, v => _settings.NotifyOnFriendPost = v)));
-        page.Children.Add(SettingsUi.TitleRow("Close friends in Do Not Disturb",
+        page.Children.Add(SettingsUi.DividerRow("Close friends in Do Not Disturb",
+            "When Windows Do Not Disturb is on, collapse the friends region and hold off toasts.",
             DisplayToggle(_settings.CloseFeedInDoNotDisturb, v => _settings.CloseFeedInDoNotDisturb = v)));
-        page.Children.Add(SettingsUi.TitleRow("Friends shown at once", BuildFriendsShownStepper()));
-        page.Children.Add(SettingsUi.Separator());
+        page.Children.Add(SettingsUi.DividerRow("Friends shown at once",
+            "How many friends the roster shows before the rest fold into a “+N more” line.",
+            BuildFriendsShownStepper()));
 
         _socialBody = new StackPanel { Spacing = 10, Margin = new Thickness(0, 6, 0, 6) };
         page.Children.Add(_socialBody);

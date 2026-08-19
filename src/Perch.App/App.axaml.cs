@@ -719,7 +719,7 @@ public partial class App : Application
 
     private DispatcherTimer CreateDndTimer()
     {
-        var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
         t.Tick += (_, _) => CheckDnd();
         return t;
     }
