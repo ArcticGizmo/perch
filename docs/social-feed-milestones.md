@@ -39,9 +39,9 @@ I'll flag exactly when each is needed and pause for the values.
 **Goal:** the database exists and the authorization boundary is proven, before a line of app code.
 
 **Deliverables**
-- `backend/supabase/migrations/0001_init.sql` — `profiles`, `friendships`, `posts`, enums, indexes,
+- `backend/supabase/migrations/*_init.sql` — `profiles`, `friendships`, `posts`, enums, indexes,
   the `are_friends()` + `find_profile()` functions (from `social-feed-implementation.md`).
-- `backend/supabase/migrations/0002_rls.sql` — RLS enabled on every table + all policies.
+- `backend/supabase/migrations/*_rls.sql` — RLS enabled on every table + all policies.
 - `backend/supabase/tests/rls_test.sql` — pgTAP: a non-friend **cannot** read a post; a pending
   (un-accepted) friend cannot; an accepted friend can; a third party can't see friendship rows;
   `find_profile` returns exact-handle only.

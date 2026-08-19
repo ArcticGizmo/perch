@@ -1,5 +1,5 @@
 -- Perch Social — schema (M0)
--- Tables, enums, indexes and the helper functions the RLS policies (0002) build on.
+-- Tables, enums, indexes and the helper functions the RLS policies (next migration) build on.
 -- Applies to a fresh Supabase project. See docs/social-feed-implementation.md.
 
 -- citext gives case-insensitive unique handles (@Ada == @ada) without lower() gymnastics.

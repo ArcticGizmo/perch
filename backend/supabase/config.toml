@@ -1,0 +1,9 @@
+# Supabase CLI config. `project_id` is only a local label (used to name local Docker containers); the
+# remote project is chosen at run time by `supabase link --project-ref <ref>`. Because Perch keeps its
+# Supabase files under backend/ rather than the CLI's default repo-root ./supabase, run every CLI command
+# with `--workdir backend` (so it finds backend/supabase/migrations and this file).
+#
+# Kept intentionally minimal - the CLI fills every other section with defaults. If your CLI version wants a
+# fuller config for local `supabase start`, run `supabase init --workdir backend` once to regenerate it
+# (that only adds local-dev sections; it doesn't change what `db push` does).
+project_id = "perch"

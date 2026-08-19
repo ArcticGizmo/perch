@@ -8,9 +8,10 @@ Supabase) and `docs/social-feed-implementation.md` (the design).
 
 ```
 backend/supabase/
+  config.toml                    # Supabase CLI config (run CLI with --workdir backend)
   migrations/
-    0001_init.sql   # tables, enums, indexes, are_friends() + find_profile()
-    0002_rls.sql    # RLS on every table + all policies + RPC grants
+    <ts>_init.sql   # tables, enums, indexes, are_friends() + find_profile()
+    <ts>_rls.sql    # RLS on every table + all policies + RPC grants
   tests/
     rls_test.sql    # pgTAP: non-friends can't read posts, etc.
 ```
@@ -56,14 +57,48 @@ The public repo carries neither; empty secrets are a no-op (Social just stays in
 
 ## Apply the migrations
 
-**Hosted (SQL editor):** paste `0001_init.sql` then `0002_rls.sql` and run, in order.
+All CLI commands take `--workdir backend` so the CLI finds `backend/supabase/` (Perch keeps its Supabase
+files under `backend/`, not the default repo-root `./supabase`). Migrations are idempotent
+(`create ... if not exists`, `create or replace`, `drop policy if exists`), so re-applying is always safe.
 
-**Local (Supabase CLI + Docker):**
+**Quick / one-off (SQL editor):** paste the `*_init.sql` then the `*_rls.sql` migration into the dashboard
+SQL editor and run, in order. Fine for a first bring-up; the automated paths below are better once iterating.
+
+**Automated - push to the hosted project (recommended, no Docker):**
 ```bash
-supabase start                     # spins up local Postgres + auth
-supabase db reset                  # applies everything in migrations/ in order
-supabase test db                   # runs tests/ (pgTAP)
+supabase login                                             # once, opens a browser (or set SUPABASE_ACCESS_TOKEN)
+supabase link --project-ref ecrehwttqpgdpzroazwp --workdir backend   # once, prompts for the DB password
+supabase db push --workdir backend                         # applies any not-yet-applied migrations
 ```
+To add a migration later: `supabase migration new <name> --workdir backend`, edit the generated file, then
+`db push` again. (If you already applied the migrations by hand, `db push` will re-apply them harmlessly -
+they're idempotent - or run `supabase migration repair --status applied <version> --workdir backend` for
+each, where `<version>` is the file's 14-digit timestamp prefix, to mark them applied instead.)
+
+**Automated - CI (Actions):** `.github/workflows/db-migrate.yml` runs `db push` on any change under
+`backend/supabase/migrations/**` on `main` (and on demand via *Run workflow*). Add three repo secrets under
+**Settings -> Secrets and variables -> Actions**:
+
+| Secret | Where to get it |
+|--------|-----------------|
+| `SUPABASE_ACCESS_TOKEN` | supabase.com/dashboard/account/tokens |
+| `SUPABASE_DB_PASSWORD` | Project Settings -> Database (reset it there if unknown) |
+| `SUPABASE_PROJECT_REF` | `ecrehwttqpgdpzroazwp` (not sensitive - it's in the project URL) |
+
+**Local full stack (offline, needs Docker):**
+```bash
+supabase start --workdir backend       # local Postgres + auth in Docker
+supabase db reset --workdir backend    # applies everything in migrations/ in order
+supabase test db --workdir backend     # runs tests/ (pgTAP)
+```
+
+## Branching (deferred)
+
+Supabase **Branching** gives each Git branch/PR its own ephemeral Supabase environment (own DB + auth) with
+your migrations auto-applied - ideal for PR previews. It needs the Supabase GitHub integration **and a paid
+(Pro) plan**: each preview branch is billable compute. For a solo, free-tier hobby project the `db push` CI
+above covers the same need at no cost, so branching is intentionally not set up. If you later go Pro, connect
+the repo in the dashboard (Branches) and point its "Supabase directory" at `backend/supabase`.
 
 ## Verify security
 
@@ -82,9 +117,9 @@ JWT `sub`, so `auth.uid()` resolves like a real signed-in user):
 
 ## Security checklist (kept in sync as milestones land — see implementation §7)
 
-- [ ] RLS enabled on **every** table (0002), with a passing test per policy.
+- [ ] RLS enabled on **every** table (RLS migration), with a passing test per policy.
 - [ ] `service_role` key is server-side only; the app ships the publishable key only.
-- [ ] Body length + handle format enforced by DB `CHECK` (0001), not just the client.
+- [ ] Body length + handle format enforced by DB `CHECK` (schema migration), not just the client.
 - [ ] Friend discovery is exact-handle only; friendship rows invisible to third parties.
 - [ ] Refresh token stored via `ISecretStore` (DPAPI / Keychain), never plaintext.
 - [ ] Per-user post rate limit; block + server-side delete available. *(M6)*

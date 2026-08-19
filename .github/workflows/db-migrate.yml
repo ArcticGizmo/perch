@@ -1,0 +1,32 @@
+name: Supabase migrations
+
+# Applies any not-yet-applied migrations in backend/supabase/migrations to the linked project via the
+# Supabase CLI (`db push`). Fires when a migration changes on main, or on demand. Requires three repo
+# secrets (Settings -> Secrets and variables -> Actions):
+#   SUPABASE_ACCESS_TOKEN  - a personal access token (supabase.com/dashboard/account/tokens)
+#   SUPABASE_DB_PASSWORD   - the project's database password (Project Settings -> Database)
+#   SUPABASE_PROJECT_REF   - the project ref, e.g. ecrehwttqpgdpzroazwp (not sensitive; it's in the URL)
+on:
+  push:
+    branches: [main]
+    paths: ['backend/supabase/migrations/**']
+  workflow_dispatch:
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link the project
+        run: supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}" --workdir backend
+
+      - name: Push migrations
+        run: supabase db push --workdir backend
