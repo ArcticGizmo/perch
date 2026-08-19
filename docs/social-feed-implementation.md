@@ -9,7 +9,7 @@
 
 - **Every OS/network capability behind a `Perch.Core` interface**, resolved via `PlatformServices`
   (`ISocialClient`, `ISecretStore`) — the macOS head shares them.
-- **Never trust the client.** The anon key is public *by design*; **RLS is the security boundary.**
+- **Never trust the client.** The publishable key is public *by design*; **RLS is the security boundary.**
   The `service_role` key never ships in the app — anything privileged runs in an Edge Function.
 - **Minimal PII.** Handle + optional display name only. **Never ingest anything from `~/.claude`**
   (paths, project names, transcripts) into a post. Posting is always explicit and manual.
@@ -192,7 +192,7 @@ step stays behind `ISocialClient`, so a macOS head implements the same contract.
 ## 7. Security checklist (pre-launch)
 
 - [ ] RLS enabled on **every** table; a test per policy (a non-friend cannot read posts).
-- [ ] `service_role` key exists only server-side (Edge Functions); app ships the anon key only.
+- [ ] `service_role` key exists only server-side (Edge Functions); app ships the publishable key only.
 - [ ] Body length enforced by DB `CHECK`; handle format enforced by `CHECK`.
 - [ ] Friend discovery is exact-handle only (no enumeration); friendship rows invisible to third parties.
 - [ ] Refresh token in `ISecretStore`, never plaintext.

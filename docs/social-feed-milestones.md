@@ -21,12 +21,12 @@
 
 These I can't do from here — they need your account and a couple of clicks. M0/M2 block on them:
 
-1. **Create a Supabase project** (free tier) → gives a project URL + **anon** public key. Non-secret,
+1. **Create a Supabase project** (free tier) → gives a project URL + **publishable** key. Non-secret,
    shipped in the app.
 2. **Register a GitHub OAuth app** (or enable GitHub in Supabase Auth) → client id/secret live in
    Supabase, not in Perch.
-3. Decide where the **anon key + project URL** live in the app — proposed: a compiled-in default
-   overridable by `PERCH_SUPABASE_URL` / `PERCH_SUPABASE_ANON_KEY` env for dev.
+3. Decide where the **publishable key + project URL** live in the app — proposed: a compiled-in default
+   overridable by `PERCH_SUPABASE_URL` / `PERCH_SUPABASE_PUBLISHABLE_KEY` env for dev.
 4. (Optional) **Supabase CLI + Docker** locally, so RLS policies get real pgTAP tests in M0. Without
    it, M0 ships the SQL + a documented manual test instead.
 
@@ -83,7 +83,7 @@ interfaces and a fake.
 
 ## M2 — Auth flow (GitHub OAuth) + handle claim
 
-> **Blocks on prerequisites 1–3.** First point I need the Supabase URL + anon key + GitHub enabled.
+> **Blocks on prerequisites 1–3.** First point I need the Supabase URL + publishable key + GitHub enabled.
 
 **Goal:** you can sign in and exist. End-to-end against the real project.
 
@@ -193,7 +193,7 @@ see each other's statuses.
 ```
 M0 ─ db + RLS ......... (needs Supabase project)
 M1 ─ contracts + fake . (no network; safe to land immediately)
-M2 ─ auth ............. (needs URL + anon key + GitHub)  ─┐
+M2 ─ auth ............. (needs URL + publishable key + GitHub)  ─┐
 M3 ─ friends/post/feed  ................................. ├─ working loop, polling
 M4 ─ overlay strip ....................................... │
 M5 ─ realtime + fallback ................................. ┘

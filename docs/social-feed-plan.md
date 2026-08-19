@@ -183,7 +183,7 @@ users; (d) DDoS/griefing.
   mainly at *public* scale, which is ruled out. On a small private feed they're handled with
   per-user rate limits + a block/delete switch.
 
-**The Supabase caveat to internalize:** the model rests on the **public anon key** (shipped in
+**The Supabase caveat to internalize:** the model rests on the **public publishable key** (shipped in
 the client by design) + **correct RLS**. Failure mode = one table with RLS off / a wrong policy
 is wide open to anyone holding that public key. Discipline: **RLS on every table**, the
 `service_role` key **never** in the client, a test per policy. Done right, a malicious client is

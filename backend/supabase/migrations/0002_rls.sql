@@ -1,5 +1,5 @@
 -- Perch Social — Row-Level Security (M0)
--- RLS is THE security boundary: the anon key is public by design, so every table must have RLS
+-- RLS is THE security boundary: the publishable key is public by design, so every table must have RLS
 -- on and correct policies. A table with RLS off would be wide open to anyone holding that key.
 -- See docs/social-feed-implementation.md §7.
 

@@ -14,10 +14,10 @@ public sealed class DotEnvTests
             # a comment
             PERCH_SUPABASE_URL=https://demo.supabase.co
 
-            PERCH_SUPABASE_ANON_KEY=eyJtest
+            PERCH_SUPABASE_PUBLISHABLE_KEY=eyJtest
             """);
         Assert.Equal("https://demo.supabase.co", map["PERCH_SUPABASE_URL"]);
-        Assert.Equal("eyJtest", map["PERCH_SUPABASE_ANON_KEY"]);
+        Assert.Equal("eyJtest", map["PERCH_SUPABASE_PUBLISHABLE_KEY"]);
     }
 
     [Fact]
@@ -25,10 +25,10 @@ public sealed class DotEnvTests
     {
         var map = DotEnv.Parse("""
             export PERCH_SUPABASE_URL="https://demo.supabase.co"
-            PERCH_SUPABASE_ANON_KEY='eyJtest'
+            PERCH_SUPABASE_PUBLISHABLE_KEY='eyJtest'
             """);
         Assert.Equal("https://demo.supabase.co", map["PERCH_SUPABASE_URL"]);
-        Assert.Equal("eyJtest", map["PERCH_SUPABASE_ANON_KEY"]);
+        Assert.Equal("eyJtest", map["PERCH_SUPABASE_PUBLISHABLE_KEY"]);
     }
 
     [Fact]

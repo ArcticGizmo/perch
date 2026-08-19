@@ -17,8 +17,8 @@ backend/supabase/
 
 ## One-time setup (needs your account)
 
-1. Create a **Supabase project** (free tier). Note the **project URL** and the **anon** public key
-   (Project Settings → API). The anon key is non-secret and ships in the app; the `service_role`
+1. Create a **Supabase project** (free tier). Note the **project URL** and the **publishable** key
+   (Project Settings → API Keys). The publishable key is non-secret and ships in the app; the `service_role`
    key must **never** leave the server.
 2. Enable **GitHub** as an auth provider (Authentication → Providers → GitHub) and register a GitHub
    OAuth app, putting its client id/secret into Supabase. Add the desktop loopback redirect
@@ -27,15 +27,16 @@ backend/supabase/
 
 ## Point the app at your project
 
-Get the **Project URL** and the **anon / publishable** key from the dashboard: Project Settings -> API
-Keys (older UIs: Settings -> API). Never use the `service_role` / `secret` key in the app or repo.
+Get the **Project URL** and the **publishable** key from the dashboard: Project Settings -> API Keys
+(older UIs: Settings -> API, labelled `anon` / `public` - it works in the same slot). Never use the
+`service_role` / `secret` key in the app or repo.
 
 `SupabaseConfig.Resolve()` reads them from, in order (first fully-populated wins):
 
-1. **Env vars** `PERCH_SUPABASE_URL` / `PERCH_SUPABASE_ANON_KEY` - the highest override:
+1. **Env vars** `PERCH_SUPABASE_URL` / `PERCH_SUPABASE_PUBLISHABLE_KEY` - the highest override:
    ```powershell
    $env:PERCH_SUPABASE_URL = "https://YOUR-REF.supabase.co"
-   $env:PERCH_SUPABASE_ANON_KEY = "eyJ..."
+   $env:PERCH_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_..."
    dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0
    ```
 2. **`.env.local` at the repo root** (dev builds) - the easiest spot in a checkout. Copy the root
@@ -49,7 +50,7 @@ secrets - add these under Settings -> Secrets and variables -> Actions:
 | Secret | Value |
 |--------|-------|
 | `PERCH_SUPABASE_URL` | `https://YOUR-REF.supabase.co` |
-| `PERCH_SUPABASE_ANON_KEY` | the anon / publishable key (`eyJ...` or `sb_publishable_...`) |
+| `PERCH_SUPABASE_PUBLISHABLE_KEY` | the publishable key (`sb_publishable_...`, or a legacy `eyJ...` anon key) |
 
 The public repo carries neither; empty secrets are a no-op (Social just stays inert), so a fork still builds.
 
@@ -82,7 +83,7 @@ JWT `sub`, so `auth.uid()` resolves like a real signed-in user):
 ## Security checklist (kept in sync as milestones land — see implementation §7)
 
 - [ ] RLS enabled on **every** table (0002), with a passing test per policy.
-- [ ] `service_role` key is server-side only; the app ships the anon key only.
+- [ ] `service_role` key is server-side only; the app ships the publishable key only.
 - [ ] Body length + handle format enforced by DB `CHECK` (0001), not just the client.
 - [ ] Friend discovery is exact-handle only; friendship rows invisible to third parties.
 - [ ] Refresh token stored via `ISecretStore` (DPAPI / Keychain), never plaintext.
