@@ -135,8 +135,16 @@ internal static class HeadlessRenderer
         feedProbe.Update(SampleData.Sessions());
         feedProbe.SetShowFeedStrip(true);
         feedProbe.UpdateFeed(SampleData.Feed());
+        feedProbe.SetSocialSignedIn(true);   // feed strip is the signed-in state
         RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1x.png"), 96);
         RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1.5x.png"), 144);
+
+        // Social sign-in strip: shown when Social is enabled but signed out — a click starts GitHub sign-in.
+        var socialProbe = new OverlayCanvas();
+        socialProbe.Update(SampleData.Sessions());
+        socialProbe.SetSocialEnabled(true);   // signed-out by default -> the sign-in prompt shows
+        RenderControl(socialProbe, Path.Combine(outDir, "overlay_social_signin_1x.png"), 96);
+        RenderControl(socialProbe, Path.Combine(outDir, "overlay_social_signin_1.5x.png"), 144);
 
         // Hypertree strip: the branch list under the quick links, with the row the cursor is on marked.
         // The sample puts main mid-stack (Hypertree publishes the stack already flattened, main at its

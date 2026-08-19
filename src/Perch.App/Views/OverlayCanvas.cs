@@ -603,6 +603,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (MicStripVisible) h += MicStripHeight;
         if (MediaStripVisible) h += MediaStripHeight;
         if (FeedStripVisible) h += FeedStripHeight;
+        if (SocialSignInStripVisible) h += SocialStripHeight;
         return h;
     }
 
@@ -1503,6 +1504,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool showMic = showBody && MicStripVisible;           // who has the microphone, below the rows
         bool showMedia = showBody && MediaStripVisible;       // now-playing + transport strip, below that
         bool showFeed = showBody && FeedStripVisible;         // friends' status feed, below that
+        bool showSocialSignIn = showBody && SocialSignInStripVisible; // "sign in to Social" prompt (signed out)
 
         double height = HeaderHeight;
         if (showBody) height += PanelBodyHeight();
@@ -1585,11 +1587,17 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     DrawMediaStrip(ctx, width, top);
                     top += MediaStripHeight;
                 }
-                if (showFeed) DrawFeedStrip(ctx, width, top);
+                if (showFeed)
+                {
+                    DrawFeedStrip(ctx, width, top);
+                    top += FeedStripHeight;
+                }
+                if (showSocialSignIn) DrawSocialSignInStrip(ctx, width, top);
             }
 
             if (!showMic) ClearMicHitRects();
             if (!showMedia) ClearMediaHitRects();
+            if (!showSocialSignIn) ClearSocialHitRect();
 
             if (showFooter) DrawStatusFooter(ctx, width, height);
             else _footerRect = default;
@@ -3030,11 +3038,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool overMicLabel = HitTestMicLabel(p);
         if (overMicLabel != _hoveredMicLabel) { _hoveredMicLabel = overMicLabel; InvalidateVisual(); }
 
+        // The Social sign-in strip highlights on hover and takes the hand cursor like any other control.
+        bool overSocial = _socialSignInRect.Contains(p);
+        if (overSocial != _hoveredSocial) { _hoveredSocial = overSocial; InvalidateVisual(); }
+
         // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + daemon worker lines +
         // artifacts + the update badge + outage footer + the scratch-pad note button + a row's note glyph +
         // the media buttons + the mic strip's app name); rows show only the highlight.
         Cursor = (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
-                  || overFooter || overNote || overRowNote || media >= 0 || overMicLabel)
+                  || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -3109,7 +3121,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        _hoveredSocial = false;
         _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
@@ -3290,6 +3303,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // Mute is tested first: its rect sits inside the strip but outside the label's, so order only matters
         // if the two ever overlap.
         if (HitTestMicLabel(p)) { MicJumpRequested?.Invoke(); return; }
+
+        // The Social sign-in strip: the whole band starts the GitHub sign-in flow.
+        if (_socialSignInRect.Contains(p)) { SignInRequested?.Invoke(); return; }
 
         int art = HitTestArtifactIcon(p);
         if (art >= 0 && _rows[art].Session is { } artSession)

@@ -5,6 +5,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Perch.Social;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
@@ -29,6 +30,7 @@ public partial class App : Application
     private StatusMonitorHost? _statusHost;
     private MediaMonitorHost? _mediaHost;
     private MicMonitorHost? _micHost;
+    private SupabaseSocialClient? _social;
     private HypertreeMonitorHost? _hypertreeHost;
     private DaemonMonitorHost? _daemonHost;
     // The latest daemon roster, kept so the "show +N more" window opens on current data; the single
@@ -173,6 +175,14 @@ public partial class App : Application
             // Who holds the microphone → the overlay's mic strip (opt-in; started below).
             _micHost = new MicMonitorHost(
                 PlatformServices.CreateMicrophoneMonitor(), _overlay.Canvas.UpdateMic);
+            // Social feed backend (GitHub sign-in + friends/posts). Constructed always (cheap — no network
+            // until you sign in); the overlay's sign-in strip only appears when SocialEnabled is on and you're
+            // signed out. Push auth-state changes to the overlay, and restore any saved session in the
+            // background (a no-op when unconfigured or signed out).
+            _social = new SupabaseSocialClient(SupabaseConfig.Resolve(),
+                PlatformServices.SecretStore, PlatformServices.UrlOpener);
+            _social.AuthChanged += st => Dispatcher.UIThread.Post(() => _overlay?.Canvas.SetSocialSignedIn(st.SignedIn));
+            _ = _social.TryRestoreAsync();
             // Hypertree's published status file → the overlay's branch strip (opt-in; started below).
             _hypertreeHost = new HypertreeMonitorHost(_overlay.Canvas.SetHypertree);
             // The Claude Code background daemon's worker roster → the overlay's "daemon" section. These
@@ -229,6 +239,9 @@ public partial class App : Application
 
             // Mic strip: its one control is the app's name, which focuses whatever holds the microphone.
             _overlay.Canvas.MicJumpRequested += JumpToMicApp;
+
+            // Social sign-in strip (shown when Social is enabled and you're signed out) → start GitHub sign-in.
+            _overlay.Canvas.SignInRequested += OnSocialSignInRequested;
 
             // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
             // down. History / QR / external-notify are Phase-5 concerns — their triggers are wired here so
@@ -565,6 +578,26 @@ public partial class App : Application
             _monitorHost.JiraEnabled = s.ShowJiraTicket;
             _monitorHost.JiraSubdomain = s.JiraSubdomain;
             _monitorHost.JiraProjectFilter = s.JiraProjectFilter;
+        }
+    }
+
+    // The overlay sign-in strip was clicked: run the GitHub sign-in (browser + loopback). SignInAsync is
+    // async throughout, so the UI stays responsive while the user completes it in the browser; AuthChanged
+    // then hides the strip. Errors surface as a toast rather than throwing out of the event handler.
+    private async void OnSocialSignInRequested()
+    {
+        if (_social is null) return;
+        try
+        {
+            await _social.SignInAsync();
+        }
+        catch (SocialException ex)
+        {
+            _notifier?.Show("Perch Social", ex.Message, ToastLevel.Info, null, null);
+        }
+        catch
+        {
+            _notifier?.Show("Perch Social", "Sign-in didn't complete. Please try again.", ToastLevel.Info, null, null);
         }
     }
 
