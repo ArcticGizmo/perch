@@ -49,13 +49,18 @@ public sealed partial class OverlayCanvas
 
     // Measured once and cached — FormattedText.Height is a constant in DIPs, so caching costs no correctness on
     // a DPI change and saves re-measuring every paint.
-    private static double? _feedLineH, _feedCaptionH, _feedReactionH;
+    private static double? _feedLineH, _feedCaptionH, _feedReactionH, _feedHandleH, _feedRowH;
     private static double FeedLineHeight
         => _feedLineH ??= OverlayDraw.Text("Xg", FeedBodySize, FgBrush).Height + 8;
     private static double FeedCaptionHeight
         => _feedCaptionH ??= OverlayDraw.Text("Xg", FeedCaptionSize, MutedBrush).Height + 4;
     private static double FeedReactionHeight
         => _feedReactionH ??= OverlayDraw.Text("Xg😀", FeedReactionSize, FgBrush).Height + 8;
+    private static double FeedHandleLineHeight
+        => _feedHandleH ??= OverlayDraw.Text("Xg", FeedHandleSize, FgBrush).Height;
+    // A friend/you row is two lines: handle + time on top, status + reactions below, with padding.
+    private static double FeedRowHeight
+        => _feedRowH ??= FeedHandleLineHeight + OverlayDraw.Text("Xg", FeedBodySize, FgBrush).Height + 14;
 
     private double SocialHeaderHeight => FeedCaptionHeight + 12;
 
@@ -81,11 +86,11 @@ public sealed partial class OverlayCanvas
             double h = SocialHeaderHeight;
             if (!_regionExpanded) return h;
 
-            // One line per friend — reactions and the "+" sit inline on that line, no second row, so the
-            // roster stays tight (no large gaps between friends).
-            h += FriendRowCount * FeedLineHeight;
+            // Two lines per friend/you row: handle + time on top, status + reactions below — the overlay is
+            // narrow, so the status needs its own line to breathe.
+            h += FriendRowCount * FeedRowHeight;
             if (FriendOverflow) h += FeedCaptionHeight;
-            h += FeedLineHeight + 6;   // the "you" / compose row
+            h += FeedRowHeight;   // the "you" / compose row
             return h;
         }
     }
@@ -203,7 +208,7 @@ public sealed partial class OverlayCanvas
             for (int i = 0; i < FriendRowCount; i++)
             {
                 DrawFriendRow(ctx, width, y, r.Friends[i], i);
-                y += FeedLineHeight;
+                y += FeedRowHeight;
             }
             if (FriendOverflow)
             {
@@ -265,54 +270,56 @@ public sealed partial class OverlayCanvas
         _socialHeaderRect = new Rect(0, top, width, SocialHeaderHeight);
     }
 
-    // One friend, on a single line: avatar + @handle + status, with reactions and (on hover) the "+" react
-    // button tucked against the right edge, before the time. The status truncates to make room for them, so the
-    // row never grows a second line. A truncated status becomes a dwell-tooltip target.
+    // One friend, on two lines: the mood avatar spans both; the top line is @handle (left) + time (right); the
+    // bottom line is the status (left, truncated) with reaction chips and the on-hover "+" tucked right. Giving
+    // the status its own line keeps it readable in the narrow overlay. A truncated status is a dwell target.
     private void DrawFriendRow(DrawingContext ctx, double width, double top, RosterFriend f, int index)
     {
-        _friendRowRects.Add((new Rect(0, top, width, FeedLineHeight), index));
-        double midY = top + FeedLineHeight / 2;
+        double rowH = FeedRowHeight;
+        _friendRowRects.Add((new Rect(0, top, width, rowH), index));
 
-        // The status-change glow: a soft accent wash fading out behind the row.
+        // The status-change glow: a soft accent wash fading out behind the whole row.
         double glow = GlowIntensity(f.Profile.Id);
         if (glow > 0.01)
         {
             var g = Palette.Accent;
             var wash = new SolidColorBrush(Color.FromArgb((byte)(46 * glow), g.R, g.G, g.B));
-            OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 1, width - 2 * (HorizPad - 4), FeedLineHeight - 2), wash, null, 6);
+            OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 1, width - 2 * (HorizPad - 4), rowH - 2), wash, null, 6);
         }
 
-        // The avatar shows the mood from their latest status (that's the "current mood" you set when posting),
-        // falling back to a profile mood, then a stable colour dot.
-        const double tile = 20;
+        // Avatar (mood from the latest status, then profile mood, then a colour dot), centred over both lines.
+        const double tile = 28;
         string? mood = f.Latest?.MoodEmoji ?? f.Profile.MoodEmoji;
-        DrawAvatarTile(ctx, HorizPad + tile / 2, midY, tile, mood, f.Profile.Handle);
-        double x = HorizPad + tile + 8;
+        DrawAvatarTile(ctx, HorizPad + tile / 2, top + rowH / 2, tile, mood, f.Profile.Handle);
+        double x = HorizPad + tile + 10;
 
-        // Build the right cluster from the right edge inward: time, then reaction chips, then the "+" (on hover).
+        double topMid = top + 6 + FeedHandleLineHeight / 2;
+        double botMid = top + rowH - 6 - OverlayDraw.Text("Xg", FeedBodySize, FgBrush).Height / 2;
+
+        // Top line: @handle (left), time (right).
+        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("@" + f.Profile.Handle, FeedHandleSize, Palette.AccentBrush, FontWeight.SemiBold), x, topMid);
+        if (f.Latest is { } head)
+        {
+            var agoFt = OverlayDraw.Text(FormatAgo(head.CreatedAt), FeedTimeSize, MutedBrush);
+            OverlayDraw.TextLeftMid(ctx, agoFt, width - HorizPad - agoFt.Width, topMid);
+        }
+
+        // Bottom line: build the right cluster (reactions, then the hover "+") from the right edge inward.
         double cursor = width - HorizPad;
         if (f.Latest is { } latest)
         {
-            var agoFt = OverlayDraw.Text(FormatAgo(latest.CreatedAt), FeedTimeSize, MutedBrush);
-            cursor -= agoFt.Width;
-            OverlayDraw.TextLeftMid(ctx, agoFt, cursor, midY);
-            cursor -= 8;
-
-            // Reaction chips, drawn left-to-right within a right-aligned block. More than two distinct emojis
-            // collapse into a single count chip (with a hover tooltip of the breakdown) so the row stays tight.
             var chips = ChipsFor(f.Reactions);
             double chipsW = chips.Sum(ChipWidth) + Math.Max(0, chips.Count - 1) * 5;
-            if (chips.Count > 0 && chipsW < width * 0.6)
+            if (chips.Count > 0 && chipsW < width * 0.7)
             {
                 double cx = cursor - chipsW;
-                foreach (var c in chips) cx = DrawChip(ctx, cx, top, c, latest.Id) + 5;
+                foreach (var c in chips) cx = DrawChip(ctx, cx, botMid, c, latest.Id) + 5;
                 cursor -= chipsW + 6;
             }
 
-            // The "+" react button: only when this row is hovered (discoverable, but no clutter otherwise).
             if (_hoveredFriendRow == index)
             {
-                var plus = new Rect(cursor - 22, top + (FeedLineHeight - 18) / 2, 22, 18);
+                var plus = new Rect(cursor - 22, botMid - 9, 22, 18);
                 if (_hoveredReactAdd == index) OverlayDraw.Panel(ctx, plus, FeedHoverBrush, null, 6);
                 DrawPlusGlyph(ctx, _hoveredReactAdd == index ? FgBrush : MutedBrush, plus.Center.X, plus.Center.Y);
                 _reactAddRects.Add((plus, latest.Id, index));
@@ -320,23 +327,19 @@ public sealed partial class OverlayCanvas
             }
         }
 
-        var handleFt = OverlayDraw.Text("@" + f.Profile.Handle, FeedHandleSize, Palette.AccentBrush, FontWeight.SemiBold);
-        OverlayDraw.TextLeftMid(ctx, handleFt, x, midY);
-        double bodyX = x + handleFt.Width + 8;
-
-        double bodyMax = cursor - 8 - bodyX;
+        double bodyMax = cursor - 8 - x;   // from the handle column to just before the right cluster
         if (bodyMax > 12)
         {
             if (f.Latest is { } latest2)
             {
                 string shown = OverlayDraw.Truncate(latest2.Body, FeedBodySize, bodyMax);
-                OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(shown, FeedBodySize, FgBrush), bodyX, midY);
-                if (shown != latest2.Body)   // truncated → offer the full text on dwell
-                    _socialStatusTips.Add((new Rect(bodyX, top, bodyMax, FeedLineHeight), latest2.Body));
+                OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(shown, FeedBodySize, FgBrush), x, botMid);
+                if (shown != latest2.Body)
+                    _socialStatusTips.Add((new Rect(x, botMid - FeedBodySize, bodyMax, FeedBodySize * 2), latest2.Body));
             }
             else
             {
-                OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("(no status yet)", FeedBodySize, MutedBrush), bodyX, midY);
+                OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("(no status yet)", FeedBodySize, MutedBrush), x, botMid);
             }
         }
     }
@@ -367,13 +370,13 @@ public sealed partial class OverlayCanvas
         return emojiW + countW + 14;
     }
 
-    // Draws one chip at x on the row starting at top; returns the x just past it. Captures its hit-rect (empty
-    // emoji marks the combined chip → clicking opens the picker) and, for the combined chip, a tooltip target.
-    private double DrawChip(DrawingContext ctx, double x, double top, DrawableChip c, Guid postId)
+    // Draws one chip at x, centred on midY; returns the x just past it. Captures its hit-rect (empty emoji marks
+    // the combined chip → clicking opens the picker) and, for the combined chip, a tooltip target.
+    private double DrawChip(DrawingContext ctx, double x, double midY, DrawableChip c, Guid postId)
     {
-        double midY = top + FeedLineHeight / 2;
+        double chipH = FeedReactionHeight - 4;
         double w = ChipWidth(c);
-        var chip = new Rect(x, top + (FeedLineHeight - (FeedReactionHeight - 4)) / 2, w, FeedReactionHeight - 4);
+        var chip = new Rect(x, midY - chipH / 2, w, chipH);
         var mineFill = new SolidColorBrush(Color.FromArgb(40, Palette.Accent.R, Palette.Accent.G, Palette.Accent.B));
         OverlayDraw.Panel(ctx, chip, c.Mine ? mineFill : FeedChipBrush,
             c.Mine ? new Pen(Palette.AccentBrush, 1) : null, 8);
@@ -387,52 +390,54 @@ public sealed partial class OverlayCanvas
         return chip.Right;
     }
 
-    // The "you" row: your own avatar + current status (or the "what are you working on?" prompt when you have
-    // none), with a right-hand affordance to post/update. Clicking anywhere on it opens the composer.
+    // The "you" row: same two-line shape as a friend — your avatar, "you" + time on top, your current status (or
+    // the "what are you working on?" prompt) on the bottom, with an Update/Post affordance. Clicking opens the composer.
     private void DrawComposeRow(DrawingContext ctx, double width, double top)
     {
-        double midY = top + 3 + FeedLineHeight / 2;
+        double rowH = FeedRowHeight;
         if (_hoveredSocialCompose)
-            OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 2, width - 2 * (HorizPad - 4), FeedLineHeight),
+            OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 1, width - 2 * (HorizPad - 4), rowH - 2),
                 FeedHoverBrush, null, 6);
 
-        const double tile = 20;
+        const double tile = 28;
         string? myMood = _roster?.MyLatest?.MoodEmoji ?? _roster?.Me?.MoodEmoji;
-        DrawAvatarTile(ctx, HorizPad + tile / 2, midY, tile, myMood, _roster?.Me?.Handle ?? "you");
-        double x = HorizPad + tile + 8;
+        DrawAvatarTile(ctx, HorizPad + tile / 2, top + rowH / 2, tile, myMood, _roster?.Me?.Handle ?? "you");
+        double x = HorizPad + tile + 10;
 
-        bool hasStatus = _roster?.MyLatest is not null;
-        // Right affordance: "Update" when you already have a status, "Post" otherwise.
-        var actionFt = OverlayDraw.Text(hasStatus ? "Update" : "Post", FeedReactionSize, Palette.AccentBrush, FontWeight.SemiBold);
-        double actionX = width - HorizPad - actionFt.Width;
-        OverlayDraw.TextLeftMid(ctx, actionFt, actionX, midY);
-        double rightEdge = actionX;
+        double topMid = top + 6 + FeedHandleLineHeight / 2;
+        double botMid = top + rowH - 6 - OverlayDraw.Text("Xg", FeedBodySize, FgBrush).Height / 2;
 
-        // A muted "you" label so the row reads as yours, then your status (or the prompt).
-        var youFt = OverlayDraw.Text("you", FeedHandleSize, MutedBrush, FontWeight.SemiBold);
-        OverlayDraw.TextLeftMid(ctx, youFt, x, midY);
-        double bodyX = x + youFt.Width + 8;
-
-        if (_roster?.MyLatest is { } mine)
+        // Top line: "you" (left) + time (right, when you have a status).
+        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("you", FeedHandleSize, MutedBrush, FontWeight.SemiBold), x, topMid);
+        if (_roster?.MyLatest is { } head)
         {
-            var agoFt = OverlayDraw.Text(FormatAgo(mine.CreatedAt), FeedTimeSize, MutedBrush);
-            double agoX = rightEdge - 8 - agoFt.Width;
-            OverlayDraw.TextLeftMid(ctx, agoFt, agoX, midY);
-            double bodyMax = agoX - 8 - bodyX;
-            if (bodyMax > 12)
+            var agoFt = OverlayDraw.Text(FormatAgo(head.CreatedAt), FeedTimeSize, MutedBrush);
+            OverlayDraw.TextLeftMid(ctx, agoFt, width - HorizPad - agoFt.Width, topMid);
+        }
+
+        // Bottom line: Update/Post affordance (right), your status or the prompt (left).
+        var actionFt = OverlayDraw.Text(_roster?.MyLatest is not null ? "Update" : "Post",
+            FeedReactionSize, Palette.AccentBrush, FontWeight.SemiBold);
+        double actionX = width - HorizPad - actionFt.Width;
+        OverlayDraw.TextLeftMid(ctx, actionFt, actionX, botMid);
+
+        double bodyMax = actionX - 8 - x;
+        if (bodyMax > 12)
+        {
+            if (_roster?.MyLatest is { } mine)
             {
                 string shown = OverlayDraw.Truncate(mine.Body, FeedBodySize, bodyMax);
-                OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(shown, FeedBodySize, FgBrush), bodyX, midY);
-                if (shown != mine.Body) _socialStatusTips.Add((new Rect(bodyX, top, bodyMax, FeedLineHeight), mine.Body));
+                OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(shown, FeedBodySize, FgBrush), x, botMid);
+                if (shown != mine.Body)
+                    _socialStatusTips.Add((new Rect(x, botMid - FeedBodySize, bodyMax, FeedBodySize * 2), mine.Body));
+            }
+            else
+            {
+                OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("what are you working on?", FeedBodySize, MutedBrush), x, botMid);
             }
         }
-        else
-        {
-            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("what are you working on?", FeedBodySize, MutedBrush),
-                bodyX, midY);
-        }
 
-        _socialComposeRect = new Rect(0, top, width, FeedLineHeight + 6);
+        _socialComposeRect = new Rect(0, top, width, rowH);
     }
 
     // A small rounded avatar tile: the mood emoji centred if set, else a stable colour dot from the handle.
