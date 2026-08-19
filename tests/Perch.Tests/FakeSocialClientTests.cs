@@ -140,6 +140,39 @@ public sealed class FakeSocialClientTests
     }
 
     [Fact]
+    public async Task Blocking_a_friend_hides_their_posts_and_lists_them_as_blocked()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id);
+        c.SimulateAccept(ada.Id);
+        c.SimulatePost(ada.Id, "before the block");
+        Assert.Single(await c.GetFeedAsync());               // visible while friends
+
+        await c.BlockAsync(ada.Id);
+        Assert.Empty(await c.GetFeedAsync());                 // their posts vanish
+        Assert.Contains(await c.GetBlockedAsync(), p => p.Id == ada.Id);
+
+        await c.UnblockAsync(ada.Id);
+        Assert.Single(await c.GetFeedAsync());                // visibility restored (still accepted friends)
+        Assert.Empty(await c.GetBlockedAsync());
+    }
+
+    [Fact]
+    public async Task Being_blocked_by_a_friend_hides_their_posts_too()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id);
+        c.SimulateAccept(ada.Id);
+        c.SimulateBlockedBy(ada.Id);            // they blocked me — I can't see it, but visibility dies both ways
+        c.SimulatePost(ada.Id, "you won't see this");
+
+        Assert.Empty(await c.GetFeedAsync());
+        Assert.Empty(await c.GetBlockedAsync()); // it's their block, not mine
+    }
+
+    [Fact]
     public async Task Requires_a_handle_before_posting()
     {
         var c = new FakeSocialClient();

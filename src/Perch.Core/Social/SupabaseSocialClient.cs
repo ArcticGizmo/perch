@@ -274,6 +274,52 @@ public sealed class SupabaseSocialClient : ISocialClient
             r.Body, r.MoodEmoji, r.CreatedAt)).ToList();
     }
 
+    // ── block / report (M6) ───────────────────────────────────────────────────────────────────────────
+
+    public async Task BlockAsync(Guid userId, CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        using var req = Rest(HttpMethod.Post, "/rest/v1/blocks", token);
+        req.Headers.Add("Prefer", "resolution=merge-duplicates");   // re-blocking is a no-op
+        req.Content = JsonContent.Create(new { blocker = uid, blocked = userId });
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "block this user", ct);
+    }
+
+    public async Task UnblockAsync(Guid userId, CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        using var req = Rest(HttpMethod.Delete, $"/rest/v1/blocks?blocker=eq.{uid}&blocked=eq.{userId}", token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "unblock this user", ct);
+    }
+
+    public async Task<IReadOnlyList<Profile>> GetBlockedAsync(CancellationToken ct = default)
+    {
+        var token = await ValidAccessTokenAsync(ct);
+        // A SECURITY DEFINER RPC returns just the caller's blocked profiles (id/handle/name) — a blocked
+        // stranger has no friendship edge, so the base-table profile policy wouldn't expose their handle.
+        using var req = Rest(HttpMethod.Post, "/rest/v1/rpc/list_blocked", token);
+        req.Content = JsonContent.Create(new { });
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "load your block list", ct);
+        var rows = await resp.Content.ReadFromJsonAsync<ProfileRow[]>(Json, ct) ?? [];
+        return rows.Select(r => r.ToProfile()).ToList();
+    }
+
+    public async Task ReportAsync(Guid userId, string? reason = null, CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        if (reason is { Length: > 500 }) reason = reason[..500];
+        var token = await ValidAccessTokenAsync(ct);
+        using var req = Rest(HttpMethod.Post, "/rest/v1/reports", token);
+        req.Content = JsonContent.Create(new { reporter = uid, reported = userId, reason });
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "submit the report", ct);
+    }
+
     // Realtime (M5): open a WebSocket subscription to public.posts INSERTs. RLS scopes the change stream to
     // what the signed-in user may see, exactly like the feed poll. Each insert is delivered as a FeedItem with
     // a placeholder author (liveness only needs "something new landed"; the feed poll resolves the profile),

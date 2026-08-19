@@ -66,6 +66,23 @@ public interface ISocialClient
     /// accepted friends' posts, newest first. Excludes everyone else (enforced server-side).</summary>
     Task<IReadOnlyList<FeedItem>> GetFeedAsync(int limit = 50, CancellationToken ct = default);
 
+    /// <summary>Blocks <paramref name="userId"/>: their posts vanish from your feed and yours from theirs, in
+    /// both directions, regardless of any friendship. Idempotent. The block is one-sided and private — the
+    /// blocked user is never told and cannot undo it.</summary>
+    Task BlockAsync(Guid userId, CancellationToken ct = default);
+
+    /// <summary>Removes a block you placed, restoring normal visibility (an accepted friendship, if any, works
+    /// again). Idempotent.</summary>
+    Task UnblockAsync(Guid userId, CancellationToken ct = default);
+
+    /// <summary>The profiles you have blocked (for the "unblock" affordance). Never includes people who blocked
+    /// you — blocks are private.</summary>
+    Task<IReadOnlyList<Profile>> GetBlockedAsync(CancellationToken ct = default);
+
+    /// <summary>Reports <paramref name="userId"/> to moderation with an optional reason (≤500 chars). Write-only:
+    /// the report is invisible to other users. Reporting does not block — the caller usually does both.</summary>
+    Task ReportAsync(Guid userId, string? reason = null, CancellationToken ct = default);
+
     /// <summary>
     /// Subscribes to live feed inserts, invoking <paramref name="onPost"/> (off the UI thread) for each new
     /// post from you or an accepted friend. Returns a handle whose disposal unsubscribes. Real-time is wired

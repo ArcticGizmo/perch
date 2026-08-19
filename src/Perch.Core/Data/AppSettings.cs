@@ -413,9 +413,9 @@ internal sealed class AppSettings
     // takes no height otherwise. On by default so enabling Social shows the feed; a missing key keeps it on.
     public bool ShowFeedStrip { get; set; } = true;
 
-    // Whether a friend posting a status pops a desktop notification (reusing the same quiet-hours / DND rules
-    // as the session toasts). Gated by SocialEnabled. On by default; a missing key keeps it on. (The firing
-    // path is wired when live posts arrive — see the Social milestone plan M5.)
+    // Whether a friend posting a status pops a desktop notification (gated too by the master NotificationsEnabled
+    // switch). Fired by SocialFeedMonitorHost when a poll (nudged live by Realtime, or on the next tick) surfaces
+    // a new post by someone other than you. Gated by SocialEnabled. On by default; a missing key keeps it on.
     public bool NotifyOnFriendPost { get; set; } = true;
 
     // "Perch reacts": the tray and overlay bird wears the aggregate session mood — dozing (faded, a

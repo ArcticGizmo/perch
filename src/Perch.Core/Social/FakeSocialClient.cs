@@ -17,6 +17,8 @@ public sealed partial class FakeSocialClient : ISocialClient
     private readonly Dictionary<Guid, FriendshipState> _edges = new();   // other user id -> state, from "me"'s view
     private readonly List<FeedItem> _posts = new();                       // all posts by any user; feed filters
     private readonly List<Action<FeedItem>> _subscribers = new();
+    private readonly HashSet<Guid> _blocked = new();                      // users I've blocked
+    private readonly HashSet<Guid> _blockedByOthers = new();              // users who've blocked me (test seam)
     private Profile? _me;
     private bool _signedIn;
 
@@ -143,6 +145,33 @@ public sealed partial class FakeSocialClient : ISocialClient
         return new Subscription(this, onPost);
     }
 
+    public Task BlockAsync(Guid userId, CancellationToken ct = default)
+    {
+        lock (_gate) { RequireMe(); _blocked.Add(userId); }
+        return Task.CompletedTask;
+    }
+
+    public Task UnblockAsync(Guid userId, CancellationToken ct = default)
+    {
+        lock (_gate) { RequireMe(); _blocked.Remove(userId); }
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<Profile>> GetBlockedAsync(CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            var list = _blocked.Where(_profiles.ContainsKey).Select(id => _profiles[id]).ToList();
+            return Task.FromResult<IReadOnlyList<Profile>>(list);
+        }
+    }
+
+    public Task ReportAsync(Guid userId, string? reason = null, CancellationToken ct = default)
+    {
+        lock (_gate) RequireMe();   // write-only; the fake keeps no report store to read back
+        return Task.CompletedTask;
+    }
+
     // ── Test/preview seeding (not part of ISocialClient) ────────────────────────────────────────────
 
     /// <summary>Signs in as <paramref name="handle"/> in one step (sign-in + claim), for preview/test setup.</summary>
@@ -176,6 +205,13 @@ public sealed partial class FakeSocialClient : ISocialClient
         lock (_gate) _edges[addresseeId] = FriendshipState.Accepted;
     }
 
+    /// <summary>Simulates <paramref name="userId"/> having blocked you (their block, which you can't see) — so
+    /// their posts vanish from your feed even while the friendship edge reads accepted.</summary>
+    public void SimulateBlockedBy(Guid userId)
+    {
+        lock (_gate) _blockedByOthers.Add(userId);
+    }
+
     /// <summary>Simulates <paramref name="authorId"/> posting a status. Fires live subscribers if you can see it.</summary>
     public PostId SimulatePost(Guid authorId, string body, string? moodEmoji = null)
     {
@@ -198,8 +234,14 @@ public sealed partial class FakeSocialClient : ISocialClient
     private Profile? FindByHandleLocked(string handle) =>
         _profiles.Values.FirstOrDefault(p => string.Equals(p.Handle, handle, StringComparison.OrdinalIgnoreCase));
 
-    private bool CanSeeLocked(Guid authorId) =>
-        authorId == _me?.Id || (_edges.TryGetValue(authorId, out var s) && s == FriendshipState.Accepted);
+    // Mirrors the backend rule after M6: your own post is always visible; a friend's post is visible only while
+    // the edge is accepted AND neither of you has blocked the other. A block kills visibility both directions.
+    private bool CanSeeLocked(Guid authorId)
+    {
+        if (authorId == _me?.Id) return true;
+        if (_blocked.Contains(authorId) || _blockedByOthers.Contains(authorId)) return false;
+        return _edges.TryGetValue(authorId, out var s) && s == FriendshipState.Accepted;
+    }
 
     private void RequireMe()
     {
