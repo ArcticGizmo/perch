@@ -59,9 +59,10 @@ public sealed partial class OverlayCanvas
     public void SetSocialEnabled(bool enabled)
     {
         if (_socialEnabled == enabled) return;
-        bool before = SocialSignInStripVisible;
+        bool beforeStrip = SocialSignInStripVisible;
+        bool beforeRegion = SocialRegionVisible;   // the roster region is gated on the master toggle too
         _socialEnabled = enabled;
-        if (SocialSignInStripVisible != before) RemeasurePanel();
+        if (SocialSignInStripVisible != beforeStrip || SocialRegionVisible != beforeRegion) RemeasurePanel();
     }
 
     /// <summary>Pushes the live auth state (on the UI thread): whether you're signed in, and whether you've
@@ -69,10 +70,12 @@ public sealed partial class OverlayCanvas
     public void SetSocialAccount(bool signedIn, bool hasHandle)
     {
         if (_socialSignedIn == signedIn && _socialHasHandle == hasHandle) return;
-        bool before = SocialSignInStripVisible;
+        bool beforeStrip = SocialSignInStripVisible;
+        bool beforeRegion = SocialRegionVisible;
         _socialSignedIn = signedIn;
         _socialHasHandle = hasHandle;
-        if (SocialSignInStripVisible != before) RemeasurePanel(); else InvalidateVisual();
+        if (SocialSignInStripVisible != beforeStrip || SocialRegionVisible != beforeRegion) RemeasurePanel();
+        else InvalidateVisual();
     }
 
     // Routed from RouteClick: signed out → sign in; signed in (but unfinished) → open Settings to claim.

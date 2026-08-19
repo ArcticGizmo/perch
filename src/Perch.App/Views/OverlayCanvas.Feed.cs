@@ -66,9 +66,9 @@ public sealed partial class OverlayCanvas
     /// whether it should be on (add) or off (remove). The App relays it to the social client.</summary>
     public event Action<Guid, string, bool>? ReactRequested;
 
-    // Shown once you're signed in with a handle and the feature is on. Its sibling — the sign-in prompt strip —
-    // shows in the complementary state, so the two never overlap.
-    private bool SocialRegionVisible => _feedEnabled && _socialSignedIn && _socialHasHandle;
+    // Shown once Social is on, the region toggle (ShowFeedStrip) is on, and you're signed in with a handle. Its
+    // sibling — the sign-in prompt strip — shows in the complementary state, so the two never overlap.
+    private bool SocialRegionVisible => _socialEnabled && _feedEnabled && _socialSignedIn && _socialHasHandle;
 
     private int FriendRowCount => Math.Min(FeedMaxRows, _roster?.Friends.Count ?? 0);
     private bool FriendOverflow => (_roster?.Friends.Count ?? 0) > FeedMaxRows;
