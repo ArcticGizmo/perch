@@ -100,6 +100,10 @@ internal sealed class SettingsHooks
 
     /// <summary>Open the drag-to-place initial-placement editor (also on the overlay header menu).</summary>
     public Action? OpenPlacements;
+
+    /// <summary>Open the Social compose / friends windows (also on the overlay's right-click menu).</summary>
+    public Action? OpenSocialCompose;
+    public Action? OpenSocialFriends;
 }
 
 /// <summary>
@@ -673,6 +677,17 @@ internal sealed class SettingsWindow : Window
         var me = state.Me;
         string who = me.DisplayName is { Length: > 0 } dn ? $"Signed in as @{me.Handle}  ({dn})" : $"Signed in as @{me.Handle}";
         _socialBody.Children.Add(new TextBlock { Text = who, FontSize = 14, Foreground = Palette.FgBrush });
+
+        // These open the same overlay-first windows (compose / friends) as the overlay's right-click menu.
+        var actions = SettingsUi.ButtonRow();
+        var post = SettingsUi.FlatButton("Post a status…");
+        post.Click += (_, _) => _hooks.OpenSocialCompose?.Invoke();
+        var friends = SettingsUi.FlatButton("Friends…");
+        friends.Click += (_, _) => _hooks.OpenSocialFriends?.Invoke();
+        actions.Children.Add(post);
+        actions.Children.Add(friends);
+        _socialBody.Children.Add(actions);
+
         AddSignOut();
     }
 

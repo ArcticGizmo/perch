@@ -40,9 +40,16 @@ public sealed partial class OverlayCanvas
     /// <summary>Raised to open the Settings Social page (e.g. to claim a handle after signing in).</summary>
     public event Action? SocialManageRequested;
 
+    /// <summary>Raised to open the compose window (post a status).</summary>
+    public event Action? PostStatusRequested;
+
+    /// <summary>Raised to open the friends window.</summary>
+    public event Action? FriendsRequested;
+
     // Whether Social is on at all (drives whether the menu offers sign-in/out and whether the strip can show).
     private bool SocialEnabled => _socialEnabled;
     private bool SocialSignedIn => _socialSignedIn;
+    private bool SocialHasHandle => _socialHasHandle;
 
     // Shown while Social is on and setup isn't finished (signed out, or signed in without a handle yet).
     private bool SocialSignInStripVisible => _socialEnabled && !(_socialSignedIn && _socialHasHandle);

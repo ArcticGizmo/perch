@@ -52,6 +52,8 @@ public partial class App : Application
     private GitTreeWindow? _treeWindow;
     private MarkdownWindow? _markdownWindow;
     private PlacementEditorWindow? _placementEditor;
+    private ComposeWindow? _composeWindow;
+    private FriendsWindow? _friendsWindow;
     // Open sticky notes, keyed so a second request for the same note focuses the existing one rather than
     // stacking a duplicate: "__scratch__" for the global pad, the sessionId for a session's row note. They
     // are non-modal and owned by the overlay (see StickyNoteWindow); closed together in CloseAuxWindows.
@@ -251,6 +253,8 @@ public partial class App : Application
             _overlay.Canvas.SignInRequested += OnSocialSignInRequested;
             _overlay.Canvas.SignOutRequested += () => { _ = _social?.SignOutAsync(); };
             _overlay.Canvas.SocialManageRequested += OpenSocialSettings;
+            _overlay.Canvas.PostStatusRequested += OpenCompose;
+            _overlay.Canvas.FriendsRequested += OpenFriends;
 
             // Right-click context menu. The strip toggles persist and apply live; Exit shuts the app
             // down. History / QR / external-notify are Phase-5 concerns — their triggers are wired here so
@@ -446,6 +450,8 @@ public partial class App : Application
         _treeWindow?.Close();
         _markdownWindow?.CloseWithoutPrompt();
         _placementEditor?.Close();
+        _composeWindow?.Close();
+        _friendsWindow?.Close();
         _statsWindow?.Close();
         _daemonListWindow?.Close();
         _achievementsWindow?.Close();
@@ -618,6 +624,31 @@ public partial class App : Application
     {
         OpenSettings();
         _settings?.NavigateTo("social");
+    }
+
+    // Compose a status — posts via the client, then refreshes the feed so it appears at once.
+    private void OpenCompose()
+    {
+        if (_social is null) return;
+        _composeWindow = WindowHost.ShowOrFocus(
+            _composeWindow,
+            () => new ComposeWindow(async (body, mood) =>
+            {
+                await _social.PostAsync(body, mood);
+                _feedHost?.RefreshSoon();
+            }),
+            () => _composeWindow = null);
+    }
+
+    // Manage friends (add / accept / list).
+    private void OpenFriends()
+    {
+        if (_social is null) return;
+        _friendsWindow = WindowHost.ShowOrFocus(
+            _friendsWindow,
+            () => new FriendsWindow(_social),
+            () => _friendsWindow = null,
+            w => w.RefreshExternal());
     }
 
     // A session finished (NeedsAttention): flash the overlay and fire the notification (toast/chime/external,
@@ -1392,6 +1423,8 @@ public partial class App : Application
             OpenFlightPath = OpenFlightPath,
             OpenAchievements = OpenAchievements,
             OpenPlacements = OpenPlacementEditor,
+            OpenSocialCompose = OpenCompose,
+            OpenSocialFriends = OpenFriends,
         };
         _settings = new SettingsWindow(settings, _usageHost!, hooks, PlatformServices.AppIconProvider, _social);
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);

@@ -3587,6 +3587,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 items.Add(new Separator());
                 if (SocialSignedIn)
                 {
+                    if (SocialHasHandle)
+                    {
+                        items.Add(MenuItem("Post a status…", () => PostStatusRequested?.Invoke()));
+                        items.Add(MenuItem("Friends…", () => FriendsRequested?.Invoke()));
+                    }
                     items.Add(MenuItem("Social settings…", () => SocialManageRequested?.Invoke()));
                     items.Add(MenuItem("Sign out of Social", () => SignOutRequested?.Invoke()));
                 }
