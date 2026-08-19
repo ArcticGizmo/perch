@@ -490,7 +490,5 @@ $RECYCLE.BIN/
 captures
 *.perchreplay
 
-# Supabase local config (dev keys). .env.local at the repo root is the preferred dev spot; the AppData
-# file is an alternative. Never commit either - the anon key stays out of the public repo.
+# Supabase dev keys (repo-root .env.local). Never commit - the anon key stays out of the public repo.
 .env.local
-supabase.local.json

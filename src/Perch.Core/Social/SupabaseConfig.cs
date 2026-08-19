@@ -1,7 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
-using Perch.Data;
-
 namespace Perch.Social;
 
 /// <summary>
@@ -16,8 +12,6 @@ namespace Perch.Social;
 ///   <item><b>Repo <c>.env.local</c></b> (dev builds) — <c>KEY=VALUE</c> lines in the <c>.env.local</c> beside
 ///     <c>perch.slnx</c> at the repo root, found by walking up from the running binary (see <see cref="DotEnv"/>).
 ///     Gitignored; the natural place to keep dev keys in a checkout. Not present in a shipped install.</item>
-///   <item><b>Local file</b> — <c>supabase.local.json</c> in Perch's per-profile app-data folder (i.e.
-///     <em>outside</em> the repo). Shape: <c>{ "url": "https://xxxx.supabase.co", "anonKey": "eyJ..." }</c>.</item>
 ///   <item><b>Compiled-in defaults</b> — <see cref="SupabaseDefaults"/>, empty unless a release build embeds
 ///     them. This is the only path that ships to end users, since a distributed desktop app has no server to
 ///     inject the key at runtime.</item>
@@ -28,12 +22,6 @@ namespace Perch.Social;
 public sealed record SupabaseConfig(string Url, string AnonKey)
 {
     public bool IsConfigured => !string.IsNullOrWhiteSpace(Url) && !string.IsNullOrWhiteSpace(AnonKey);
-
-    /// <summary>The per-profile local-config path — in <c>%AppData%\Perch\</c> (or the Dev profile), never
-    /// in the repository.</summary>
-    public static string LocalFilePath { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        AppProfile.DataFolderName, "supabase.local.json");
 
     public static SupabaseConfig Resolve()
     {
@@ -57,23 +45,7 @@ public sealed record SupabaseConfig(string Url, string AnonKey)
         }
         catch { /* best-effort: fall through */ }
 
-        // 3) Local file outside the repo.
-        try
-        {
-            if (File.Exists(LocalFilePath))
-            {
-                var f = JsonSerializer.Deserialize<FileShape>(File.ReadAllText(LocalFilePath));
-                if (f is { Url: { } u, AnonKey: { } k } && !string.IsNullOrWhiteSpace(u) && !string.IsNullOrWhiteSpace(k))
-                    return new(u.Trim(), k.Trim());
-            }
-        }
-        catch { /* best-effort: fall through to defaults */ }
-
-        // 4) Compiled-in defaults (empty in a plain checkout).
+        // 3) Compiled-in defaults (empty in a plain checkout; filled only for release).
         return new(SupabaseDefaults.Url, SupabaseDefaults.AnonKey);
     }
-
-    private sealed record FileShape(
-        [property: JsonPropertyName("url")] string? Url,
-        [property: JsonPropertyName("anonKey")] string? AnonKey);
 }
