@@ -26,7 +26,8 @@ public sealed partial class OverlayCanvas
     private const double FeedBodySize     = 10;   // the status text
     private const double FeedTimeSize     = 9;    // relative time on the right
     private const double FeedReactionSize = 10;   // reaction chips + the compose prompt
-    private const int    FeedMaxRows      = 6;    // friends shown before a "+N more" overflow line
+
+    private int _maxFriends = 3;   // friends shown before a "+N more" overflow line (AppSettings.MaxFriendsShown)
 
     // A short menu of reactions the "+" button offers.
     private static readonly string[] ReactionChoices = ["👍", "🔥", "🎉", "😂", "😮", "❤️", "🙌", "👀"];
@@ -75,8 +76,18 @@ public sealed partial class OverlayCanvas
     // sibling — the sign-in prompt strip — shows in the complementary state, so the two never overlap.
     private bool SocialRegionVisible => _socialEnabled && _feedEnabled && _socialSignedIn && _socialHasHandle;
 
-    private int FriendRowCount => Math.Min(FeedMaxRows, _roster?.Friends.Count ?? 0);
-    private bool FriendOverflow => (_roster?.Friends.Count ?? 0) > FeedMaxRows;
+    private int FriendRowCount => Math.Min(_maxFriends, _roster?.Friends.Count ?? 0);
+    private bool FriendOverflow => (_roster?.Friends.Count ?? 0) > _maxFriends;
+
+    /// <summary>Sets how many friends the roster shows before the "+N more" overflow (AppSettings.MaxFriendsShown,
+    /// clamped to a sane range). Changing it can change the region height, so relayout when it actually differs.</summary>
+    public void SetMaxFriendsShown(int count)
+    {
+        count = Math.Clamp(count, 1, 20);
+        if (_maxFriends == count) return;
+        _maxFriends = count;
+        if (SocialRegionVisible && _regionExpanded) RemeasurePanel();
+    }
 
     private double SocialRegionHeight
     {
@@ -582,6 +593,48 @@ public sealed partial class OverlayCanvas
         if (_socialMoreRect.Width > 0 && _socialMoreRect.Contains(p)) { FriendsRequested?.Invoke(); return true; }
         if (_socialHeaderRect.Width > 0 && _socialHeaderRect.Contains(p)) { OnSocialHeaderClicked(); return true; }
         return false;
+    }
+
+    // True when p is anywhere in the social region (or the sign-in strip) — the Social right-click menu lives
+    // here now, not on the overlay header.
+    private bool HitTestSocialArea(Point p) =>
+        (_socialSignInRect.Width > 0 && _socialSignInRect.Contains(p))
+        || (_socialHeaderRect.Width > 0 && _socialHeaderRect.Contains(p))
+        || (_socialComposeRect.Width > 0 && _socialComposeRect.Contains(p))
+        || (_socialMoreRect.Width > 0 && _socialMoreRect.Contains(p))
+        || HitTestFriendRow(p) >= 0;
+
+    // The Social context menu, shown on a right-click within the region. Adapts to the sign-in state, and adds a
+    // per-friend "React…" when a specific friend row was clicked.
+    private void ShowSocialMenu(Point p)
+    {
+        var items = new List<Control>();
+        if (!_socialSignedIn)
+        {
+            items.Add(MenuItem("Sign in to Social", () => SignInRequested?.Invoke()));
+            items.Add(MenuItem("Social settings…", () => SocialManageRequested?.Invoke()));
+            ShowFlyout(items);
+            return;
+        }
+        if (!_socialHasHandle)
+        {
+            items.Add(MenuItem("Finish setup — claim a handle", () => SocialManageRequested?.Invoke()));
+            items.Add(MenuItem("Sign out of Social", () => SignOutRequested?.Invoke()));
+            ShowFlyout(items);
+            return;
+        }
+
+        int fr = HitTestFriendRow(p);
+        if (fr >= 0 && _roster is { } r && fr < r.Friends.Count && r.Friends[fr].Latest is { } post)
+        {
+            items.Add(MenuItem($"React to @{r.Friends[fr].Profile.Handle}…", () => ShowReactionPicker(post.Id)));
+            items.Add(new Separator());
+        }
+        items.Add(MenuItem("Post a status…", () => PostStatusRequested?.Invoke()));
+        items.Add(MenuItem("Friends…", () => FriendsRequested?.Invoke()));
+        items.Add(MenuItem("Social settings…", () => SocialManageRequested?.Invoke()));
+        items.Add(MenuItem("Sign out of Social", () => SignOutRequested?.Invoke()));
+        ShowFlyout(items);
     }
 
     // Toggles the signed-in user's reaction on a post: off if it's already yours, on otherwise. The App relays

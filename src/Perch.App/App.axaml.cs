@@ -130,6 +130,7 @@ public partial class App : Application
                 _mediaHost?.Dispose();
                 _micHost?.Dispose();
                 _feedHost?.Dispose();
+                _dndTimer?.Stop();
                 _hypertreeHost?.Dispose();
                 _daemonHost?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
@@ -597,6 +598,9 @@ public partial class App : Application
         // Poll the feed only while Social is enabled and signed in (turning Social off stops the poll).
         _feedHost?.SetActive(s.SocialEnabled && (_social?.Current.SignedIn ?? false));
 
+        // Watch Windows Do Not Disturb only while Social is on and the auto-close option is enabled.
+        ApplyDndMonitor(s);
+
         // Data-layer sources for the git chip / stuck glyph (off in the monitor unless enabled here).
         if (_monitorHost is not null)
         {
@@ -693,12 +697,51 @@ public partial class App : Application
         catch { /* transient network blip — the next poll reconciles */ }
     }
 
+    // ── Do Not Disturb → close the friends region ────────────────────────────────────────────────────────
+    private DispatcherTimer? _dndTimer;
+    private bool _dndActive;
+
+    // Starts/stops the DND poll based on the setting. When DND is on we collapse the friends region once (it
+    // won't spring back open on a new post) and hold off friend-post toasts — see OnFriendPosted.
+    private void ApplyDndMonitor(AppSettings s)
+    {
+        bool want = s.SocialEnabled && s.CloseFeedInDoNotDisturb;
+        if (!want)
+        {
+            _dndTimer?.Stop();
+            _dndActive = false;
+            return;
+        }
+        _dndTimer ??= CreateDndTimer();
+        if (!_dndTimer.IsEnabled) _dndTimer.Start();
+        CheckDnd();   // apply immediately rather than waiting for the first tick
+    }
+
+    private DispatcherTimer CreateDndTimer()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        t.Tick += (_, _) => CheckDnd();
+        return t;
+    }
+
+    // On the rising edge (not-DND → DND), collapse the region. IsActive is a cheap OS query, safe on the UI thread.
+    private void CheckDnd()
+    {
+        bool now;
+        try { now = PlatformServices.DoNotDisturb.IsActive; } catch { now = false; }
+        if (now && !_dndActive) _overlay?.Canvas.SetSocialRegionExpanded(false);
+        _dndActive = now;
+    }
+
+    private bool DndSuppressing => _dndActive && (_appSettings?.CloseFeedInDoNotDisturb ?? false);
+
     // A friend posted a new status (surfaced by the feed poll, whether nudged live by Realtime or found on the
     // next tick): a quiet desktop toast, gated by the master notifications switch and NotifyOnFriendPost. Never
     // fires for your own posts or the backlog present when the feed starts (see SocialFeedMonitorHost).
     private void OnFriendPosted(FeedItem item)
     {
         if (_appSettings is not { NotificationsEnabled: true, NotifyOnFriendPost: true }) return;
+        if (DndSuppressing) return;   // Do Not Disturb: stay quiet
         var body = item.Body.Length <= 120 ? item.Body : item.Body[..117] + "…";
         _notifier?.Show($"@{item.Author.Handle} just posted", body, ToastLevel.Info, null, null);
     }

@@ -422,6 +422,15 @@ internal sealed class AppSettings
     // a new post by someone other than you. Gated by SocialEnabled. On by default; a missing key keeps it on.
     public bool NotifyOnFriendPost { get; set; } = true;
 
+    // When Windows Do Not Disturb is on, collapse the friends region (and hold off friend-post toasts) so the
+    // social feature goes quiet with the rest of the system. Off by default (opt-in); collapsing is one-shot —
+    // it won't spring back open on a new post.
+    public bool CloseFeedInDoNotDisturb { get; set; }
+
+    // How many friends the roster shows at once (most-recently-active first); the rest fold into a "+N more"
+    // line. Default 3 to keep the region compact in the narrow overlay.
+    public int MaxFriendsShown { get; set; } = 3;
+
     // "Perch reacts": the tray and overlay bird wears the aggregate session mood — dozing (faded, a
     // trail of z's) when nothing's running, plainly alert while sessions work, a "!" badge when one
     // needs you, and visibly panicking (red bang + flying sweat) when a session looks stuck. Pure

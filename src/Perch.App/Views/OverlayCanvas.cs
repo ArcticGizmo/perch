@@ -3486,6 +3486,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+        // Right-click within the social region (or its sign-in strip): the Social actions live here now — a
+        // right-click on the overlay header no longer carries them.
+        if (SocialEnabled && HitTestSocialArea(p))
+        {
+            ShowSocialMenu(p);
+            return;
+        }
+
 #if DEBUG
         // Debug affordance: right-clicking the PR glyph offers to fire each PR alert (finished / approved /
         // reviewed) for this session's PR, with the state/reviews synthesised, so the notification + banner
@@ -3593,26 +3601,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             items.Add(new Separator());
             items.Add(MenuItem("Set initial placements…", () => SetPlacementsRequested?.Invoke()));
 
-            // Social sign-in/out — the overlay counterpart of the Settings Social page, so the same actions
-            // are reachable without opening Settings. Only when Social is enabled.
-            if (SocialEnabled)
-            {
-                items.Add(new Separator());
-                if (SocialSignedIn)
-                {
-                    if (SocialHasHandle)
-                    {
-                        items.Add(MenuItem("Post a status…", () => PostStatusRequested?.Invoke()));
-                        items.Add(MenuItem("Friends…", () => FriendsRequested?.Invoke()));
-                    }
-                    items.Add(MenuItem("Social settings…", () => SocialManageRequested?.Invoke()));
-                    items.Add(MenuItem("Sign out of Social", () => SignOutRequested?.Invoke()));
-                }
-                else
-                {
-                    items.Add(MenuItem("Sign in to Social", () => SignInRequested?.Invoke()));
-                }
-            }
+            // Social actions are deliberately NOT here — they live on the social region's own right-click menu
+            // (see HitTestSocialArea / ShowSocialMenu), so the header stays about the overlay itself.
 
             items.Add(new Separator());
             items.Add(MenuItem("Exit Perch", () => ExitRequested?.Invoke()));

@@ -31,6 +31,8 @@ internal static class PlatformServices
     public static IClaudeCredentials ClaudeCredentials { get; } = new FileClaudeCredentials();
     // The Social feature's OAuth refresh token, protected at rest by DPAPI (current user).
     public static ISecretStore SecretStore { get; } = new Impl.WindowsSecretStore();
+    // Windows Do Not Disturb / Focus Assist quiet hours (SHQueryUserNotificationState).
+    public static IDoNotDisturb DoNotDisturb { get; } = new Impl.WindowsDoNotDisturb();
 #else
     public static IAppIconProvider AppIconProvider { get; } = new Impl.AppIconProvider();
     public static ISystemMetrics SystemMetrics { get; } = new Impl.SystemMetrics();
@@ -38,6 +40,8 @@ internal static class PlatformServices
     public static IClaudeCredentials ClaudeCredentials { get; } = new Impl.KeychainClaudeCredentials();
     // The Social feature's OAuth refresh token, kept in the login Keychain.
     public static ISecretStore SecretStore { get; } = new Impl.KeychainSecretStore();
+    // macOS Focus / Do Not Disturb (stub for now — reports not-active).
+    public static IDoNotDisturb DoNotDisturb { get; } = new Impl.MacDoNotDisturb();
 #endif
 
     public static ISessionLock CreateSessionLock() => new Impl.SessionLock();
