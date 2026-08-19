@@ -133,6 +133,7 @@ internal static class HeadlessRenderer
         // row. Exercises the multi-row, line-height-derived height, the reaction chips and the truncation.
         var feedProbe = new OverlayCanvas();
         feedProbe.Update(SampleData.Sessions());
+        feedProbe.SetSocialEnabled(true);
         feedProbe.SetShowFeedStrip(true);
         feedProbe.SetSocialAccount(signedIn: true, hasHandle: true);   // region shows in the signed-in state
         feedProbe.UpdateRoster(SampleData.Roster());
