@@ -182,7 +182,7 @@ internal sealed class DebugSocialWindow : Window
     private static TextBox Field(string watermark)
     {
         var t = SettingsUi.ThemedTextBox("");
-        t.Watermark = watermark;
+        t.PlaceholderText = watermark;
         t.Width = 240;
         return t;
     }

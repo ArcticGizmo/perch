@@ -37,7 +37,7 @@ internal sealed class FriendsWindow : Window
         Background = Palette.FormBgBrush;
 
         _addBox = SettingsUi.ThemedTextBox("");
-        _addBox.Watermark = "handle";
+        _addBox.PlaceholderText = "handle";
         _addBox.Width = 200;
         var addBtn = SettingsUi.FlatButton("Send request");
         addBtn.Click += async (_, _) => await AddFriend();

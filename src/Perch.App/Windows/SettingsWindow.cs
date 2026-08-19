@@ -663,7 +663,7 @@ internal sealed class SettingsWindow : Window
             _socialBody.Children.Add(SettingsUi.BodyText(
                 "Signed in. Pick a handle your friends will recognise — 3–20 of a–z, 0–9 or _."));
             var box = SettingsUi.ThemedTextBox("");
-            box.Watermark = "handle";
+            box.PlaceholderText = "handle";
             box.Width = 200;
             var claim = SettingsUi.FlatButton("Claim");
             claim.Click += async (_, _) => await RunSocial(claim, () => _social.ClaimHandleAsync(box.Text ?? "", null, null, default));

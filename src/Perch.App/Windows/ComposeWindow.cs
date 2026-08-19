@@ -42,12 +42,12 @@ internal sealed class ComposeWindow : Window
         Background = Palette.FormBgBrush;
 
         _body = SettingsUi.ThemedTextArea("");
-        _body.Watermark = "What are you working on?";
+        _body.PlaceholderText = "What are you working on?";
         _body.Height = 96;
         _body.TextChanged += (_, _) => UpdateCounter();
 
         _mood = SettingsUi.ThemedTextBox(initialMood ?? "");
-        _mood.Watermark = "🙂";
+        _mood.PlaceholderText = "🙂";
         _mood.Width = 56;
 
         _counter = SettingsUi.FieldCaption(MaxLen.ToString());
