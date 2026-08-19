@@ -15,6 +15,8 @@ namespace Perch.Tests;
 public sealed class SupabaseSocialClientTests
 {
     private const string Uid = "11111111-1111-4111-8111-111111111111";
+    private const string Other = "22222222-2222-4222-8222-222222222222";
+    private const string Other2 = "33333333-3333-4333-8333-333333333333";
 
     private static SupabaseSocialClient NewClient(StubHandler handler, ISecretStore secrets) =>
         new(new SupabaseConfig("https://demo.supabase.co", "sb_publishable_test"),
@@ -27,6 +29,11 @@ public sealed class SupabaseSocialClientTests
     private static string ProfJson(string handle) =>
         ("""[{"id":"UID","handle":"HANDLE","display_name":null,"mood_emoji":null}]""")
             .Replace("UID", Uid).Replace("HANDLE", handle);
+
+    // A posts-array JSON body authored by Uid, with the given body.
+    private static string PostsJson(string body) =>
+        ("""[{"id":"aaaaaaaa-0000-4000-8000-000000000009","author":"UID","body":"BODY","mood_emoji":null,"created_at":"2026-01-01T00:00:00Z"}]""")
+            .Replace("UID", Uid).Replace("BODY", body);
 
     [Fact]
     public async Task Restore_from_refresh_token_signs_in_and_loads_profile()
@@ -111,11 +118,57 @@ public sealed class SupabaseSocialClientTests
     }
 
     [Fact]
-    public async Task M3_methods_throw_until_wired()
+    public async Task Post_sends_the_body_and_returns_an_id()
+    {
+        var (client, _) = await SignedInClient(req =>
+            req.RequestUri!.AbsolutePath == "/rest/v1/posts" && req.Method == HttpMethod.Post
+                ? (HttpStatusCode.Created, PostsJson("hello"))
+                : null);
+        Assert.NotEqual(default, await client.PostAsync("hello"));
+    }
+
+    [Fact]
+    public async Task Post_rejects_empty_and_over_long_bodies()
     {
         var (client, _) = await SignedInClient(_ => null);
-        await Assert.ThrowsAsync<SocialException>(() => client.PostAsync("hi"));
-        await Assert.ThrowsAsync<SocialException>(() => client.GetFriendsAsync());
+        await Assert.ThrowsAsync<SocialException>(() => client.PostAsync("   "));
+        await Assert.ThrowsAsync<SocialException>(() => client.PostAsync(new string('x', 281)));
+    }
+
+    [Fact]
+    public async Task Feed_resolves_author_handles()
+    {
+        var (client, _) = await SignedInClient(req =>
+            req.RequestUri!.AbsolutePath == "/rest/v1/posts" && req.Method == HttpMethod.Get
+                ? (HttpStatusCode.OK, PostsJson("hi from ada"))
+                : null);   // profiles fetch falls through to the default (UID -> ada)
+
+        var feed = await client.GetFeedAsync();
+        Assert.Equal("ada", Assert.Single(feed).Author.Handle);
+        Assert.Equal("hi from ada", feed[0].Body);
+    }
+
+    [Fact]
+    public async Task Friends_maps_incoming_and_accepted_with_handles()
+    {
+        var (client, _) = await SignedInClient(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            if (path == "/rest/v1/friendships")
+                return (HttpStatusCode.OK,
+                    ("""[{"requester":"OTHER","addressee":"UID","status":"pending"},{"requester":"UID","addressee":"OTHER2","status":"accepted"}]""")
+                        .Replace("UID", Uid).Replace("OTHER2", Other2).Replace("OTHER", Other));
+            if (path == "/rest/v1/profiles" && req.RequestUri!.Query.Contains("in."))
+                return (HttpStatusCode.OK,
+                    ("""[{"id":"OTHER","handle":"grace","display_name":null,"mood_emoji":null},{"id":"OTHER2","handle":"linus","display_name":null,"mood_emoji":null}]""")
+                        .Replace("OTHER2", Other2).Replace("OTHER", Other));
+            return null;
+        });
+
+        var friends = await client.GetFriendsAsync();
+        Assert.Equal(2, friends.Count);
+        Assert.Contains(friends, f => f.Profile.Handle == "grace" && f.State == FriendshipState.Incoming);
+        Assert.Contains(friends, f => f.Profile.Handle == "linus" && f.State == FriendshipState.Accepted);
     }
 
     // Builds a client already signed in via a restore, layering the caller's route overrides on top of the

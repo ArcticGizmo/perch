@@ -194,13 +194,112 @@ public sealed class SupabaseSocialClient : ISocialClient
     }
 
     // ── friend graph / posting / feed (M3) ───────────────────────────────────────────────────────────
-    private static SocialException NotYet() => new("This part of Social isn't wired up yet (M3).");
-    public Task SendRequestAsync(Guid addresseeId, CancellationToken ct = default) => throw NotYet();
-    public Task RespondAsync(Guid requesterId, bool accept, CancellationToken ct = default) => throw NotYet();
-    public Task<IReadOnlyList<Friend>> GetFriendsAsync(CancellationToken ct = default) => throw NotYet();
-    public Task<PostId> PostAsync(string body, string? moodEmoji = null, CancellationToken ct = default) => throw NotYet();
-    public Task<IReadOnlyList<FeedItem>> GetFeedAsync(int limit = 50, CancellationToken ct = default) => throw NotYet();
-    public IDisposable SubscribeFeed(Action<FeedItem> onPost) => throw NotYet();
+
+    public async Task SendRequestAsync(Guid addresseeId, CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        using var req = Rest(HttpMethod.Post, "/rest/v1/friendships", token);
+        req.Headers.Add("Prefer", "resolution=merge-duplicates");   // re-sending is a no-op
+        req.Content = JsonContent.Create(new { requester = uid, addressee = addresseeId, status = "pending" });
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "send the friend request", ct);
+    }
+
+    public async Task RespondAsync(Guid requesterId, bool accept, CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        string filter = $"?requester=eq.{requesterId}&addressee=eq.{uid}";   // only the addressee (me) may respond
+        using var req = accept
+            ? Rest(HttpMethod.Patch, "/rest/v1/friendships" + filter, token)
+            : Rest(HttpMethod.Delete, "/rest/v1/friendships" + filter, token);
+        if (accept) req.Content = JsonContent.Create(new { status = "accepted" });
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, accept ? "accept the request" : "decline the request", ct);
+    }
+
+    public async Task<IReadOnlyList<Friend>> GetFriendsAsync(CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        using var req = Rest(HttpMethod.Get,
+            $"/rest/v1/friendships?or=(requester.eq.{uid},addressee.eq.{uid})&select=requester,addressee,status", token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "load friends", ct);
+        var rows = await resp.Content.ReadFromJsonAsync<FriendshipRow[]>(Json, ct) ?? [];
+
+        var profiles = await FetchProfilesAsync(rows.Select(r => r.Requester == uid ? r.Addressee : r.Requester), token, ct);
+        var list = new List<Friend>();
+        foreach (var r in rows)
+        {
+            var otherId = r.Requester == uid ? r.Addressee : r.Requester;
+            var profile = profiles.GetValueOrDefault(otherId) ?? new Profile(otherId, "unknown");
+            list.Add(new Friend(profile, MapState(r.Status, amRequester: r.Requester == uid)));
+        }
+        return list;
+    }
+
+    public async Task<PostId> PostAsync(string body, string? moodEmoji = null, CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        body = body?.Trim() ?? "";
+        if (body.Length == 0) throw new SocialException("A status can't be empty.");
+        if (body.Length > 280) throw new SocialException("A status can't be longer than 280 characters.");
+
+        var token = await ValidAccessTokenAsync(ct);
+        using var req = Rest(HttpMethod.Post, "/rest/v1/posts", token);
+        req.Headers.Add("Prefer", "return=representation");
+        req.Content = JsonContent.Create(new { author = uid, body, mood_emoji = moodEmoji });
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "post your status", ct);
+        var rows = await resp.Content.ReadFromJsonAsync<PostRow[]>(Json, ct);
+        return new PostId(rows is { Length: > 0 } ? rows[0].Id : Guid.Empty);
+    }
+
+    public async Task<IReadOnlyList<FeedItem>> GetFeedAsync(int limit = 50, CancellationToken ct = default)
+    {
+        RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        limit = Math.Clamp(limit, 1, 200);
+        using var req = Rest(HttpMethod.Get,
+            $"/rest/v1/posts?select=id,author,body,mood_emoji,created_at&order=created_at.desc&limit={limit}", token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "load the feed", ct);
+        var rows = await resp.Content.ReadFromJsonAsync<PostRow[]>(Json, ct) ?? [];
+
+        var profiles = await FetchProfilesAsync(rows.Select(r => r.Author), token, ct);
+        return rows.Select(r => new FeedItem(
+            r.Id, profiles.GetValueOrDefault(r.Author) ?? new Profile(r.Author, "unknown"),
+            r.Body, r.MoodEmoji, r.CreatedAt)).ToList();
+    }
+
+    // Realtime lands in M5; until then the feed is polled (see the App's feed host), so this is a no-op that
+    // returns a disposable the caller can hold without a null-check.
+    public IDisposable SubscribeFeed(Action<FeedItem> onPost) => new NoopDisposable();
+
+    // Batch-fetches profiles by id (RLS returns only those you may see: your own + friendship-edge shared).
+    private async Task<Dictionary<Guid, Profile>> FetchProfilesAsync(IEnumerable<Guid> ids, string token, CancellationToken ct)
+    {
+        var idList = ids.Where(i => i != Guid.Empty).Distinct().ToList();
+        if (idList.Count == 0) return new Dictionary<Guid, Profile>();
+
+        using var req = Rest(HttpMethod.Get,
+            $"/rest/v1/profiles?id=in.({string.Join(",", idList)})&select=id,handle,display_name,mood_emoji", token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "load profiles", ct);
+        var rows = await resp.Content.ReadFromJsonAsync<ProfileRow[]>(Json, ct) ?? [];
+        return rows.ToDictionary(r => r.Id, r => r.ToProfile());
+    }
+
+    private static FriendshipState MapState(string status, bool amRequester) => status switch
+    {
+        "accepted" => FriendshipState.Accepted,
+        "blocked" => FriendshipState.Blocked,
+        _ => amRequester ? FriendshipState.Pending : FriendshipState.Incoming,
+    };
+
+    private sealed class NoopDisposable : IDisposable { public void Dispose() { } }
 
     // ── internals ──────────────────────────────────────────────────────────────────────────────────
 
@@ -312,4 +411,16 @@ public sealed class SupabaseSocialClient : ISocialClient
     {
         public Profile ToProfile() => new(Id, Handle, DisplayName, MoodEmoji);
     }
+
+    private sealed record FriendshipRow(
+        [property: JsonPropertyName("requester")] Guid Requester,
+        [property: JsonPropertyName("addressee")] Guid Addressee,
+        [property: JsonPropertyName("status")] string Status);
+
+    private sealed record PostRow(
+        [property: JsonPropertyName("id")] Guid Id,
+        [property: JsonPropertyName("author")] Guid Author,
+        [property: JsonPropertyName("body")] string Body,
+        [property: JsonPropertyName("mood_emoji")] string? MoodEmoji,
+        [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt);
 }
