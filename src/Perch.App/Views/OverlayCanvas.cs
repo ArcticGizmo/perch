@@ -1322,7 +1322,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, NoteButton }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, NoteButton, SocialStatus }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -3072,6 +3072,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             _noteButtonRect.Width > 0
                 && _noteButtonRect.Contains(p)        ? (TipKind.NoteButton, -1) :
+            HitTestSocialStatus(p) is var ss && ss >= 0 ? (TipKind.SocialStatus, ss) :
             InUsageStrip(p)                           ? (TipKind.Usage, -1) :
                                                         (TipKind.None, -1);
 
@@ -3103,6 +3104,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Pr:      ShowPrTooltip(_tipRow);      break;
             case TipKind.Jira:    ShowJiraTooltip(_tipRow);    break;
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
+            case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
         }
     }
 
@@ -3127,6 +3129,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     protected override void OnPointerExited(PointerEventArgs e)
     {
         bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        changed |= ClearSocialRegionHover();
         _hoveredSocial = false;
         _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;

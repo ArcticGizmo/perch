@@ -151,7 +151,7 @@ internal static class SampleData
             new(ada, adaPost, [new ReactionGroup("🔥", 2, true), new ReactionGroup("🎉", 1, false)]),
             new(grace, gracePost, [new ReactionGroup("👍", 1, false)]),
             new(linus, null, []),
-        ]);
+        ], IncomingRequests: 1);
     }
 
     /// <summary>A couple of daemon workers, for the daemon strip — hidden when the daemon setting is off.</summary>

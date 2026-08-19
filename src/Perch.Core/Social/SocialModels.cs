@@ -74,20 +74,24 @@ public sealed record RosterFriend(Profile Profile, FeedItem? Latest, IReadOnlyLi
 /// <param name="Me">The signed-in user's own profile, or null when not yet loaded.</param>
 /// <param name="MyLatest">The signed-in user's own most recent status, or null if they haven't posted.</param>
 /// <param name="Friends">One entry per accepted friend, most-recently-active first.</param>
-public sealed record RosterSnapshot(Profile? Me, FeedItem? MyLatest, IReadOnlyList<RosterFriend> Friends)
+/// <param name="IncomingRequests">How many pending friend requests are waiting on you — the region shows a
+/// badge when this is &gt; 0.</param>
+public sealed record RosterSnapshot(Profile? Me, FeedItem? MyLatest, IReadOnlyList<RosterFriend> Friends, int IncomingRequests = 0)
 {
     public static readonly RosterSnapshot Empty = new(null, null, []);
 
     public bool Any => Friends.Count > 0;
 
     public bool Equals(RosterSnapshot? other) =>
-        other is not null && Me == other.Me && MyLatest == other.MyLatest && Friends.SequenceEqual(other.Friends);
+        other is not null && Me == other.Me && MyLatest == other.MyLatest
+        && IncomingRequests == other.IncomingRequests && Friends.SequenceEqual(other.Friends);
 
     public override int GetHashCode()
     {
         var hc = new HashCode();
         hc.Add(Me);
         hc.Add(MyLatest);
+        hc.Add(IncomingRequests);
         foreach (var f in Friends) hc.Add(f);
         return hc.ToHashCode();
     }

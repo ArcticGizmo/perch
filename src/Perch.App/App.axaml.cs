@@ -684,7 +684,13 @@ public partial class App : Application
             await _social.ReactAsync(postId, emoji, on);
             _feedHost?.RefreshSoon();
         }
-        catch { /* best-effort */ }
+        catch (SocialException ex)
+        {
+            // Surface it — a reaction that silently does nothing is impossible to diagnose (e.g. the reactions
+            // migration not applied yet, or an RLS denial).
+            _notifier?.Show("Perch Social", $"Couldn't react: {ex.Message}", ToastLevel.Info, null, null);
+        }
+        catch { /* transient network blip — the next poll reconciles */ }
     }
 
     // A friend posted a new status (surfaced by the feed poll, whether nudged live by Realtime or found on the

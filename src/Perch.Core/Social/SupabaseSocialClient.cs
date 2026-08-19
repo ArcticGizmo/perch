@@ -299,8 +299,10 @@ public sealed class SupabaseSocialClient : ISocialClient
         var uid = RequireUser();
         var token = await ValidAccessTokenAsync(ct);
 
+        var graph = await GetFriendsAsync(ct);
         // Accepted friends only — the roster is who you can actually see.
-        var friends = (await GetFriendsAsync(ct)).Where(f => f.State == FriendshipState.Accepted).ToList();
+        var friends = graph.Where(f => f.State == FriendshipState.Accepted).ToList();
+        int incoming = graph.Count(f => f.State == FriendshipState.Incoming);
 
         // Latest post per author (the feed is newest-first, so the first hit per author is their latest).
         var feed = await GetFeedAsync(200, ct);
@@ -326,7 +328,7 @@ public sealed class SupabaseSocialClient : ISocialClient
             .ToList();
 
         var myLatest = latestByAuthor.GetValueOrDefault(uid);
-        return new RosterSnapshot(_me, myLatest, entries);
+        return new RosterSnapshot(_me, myLatest, entries, incoming);
     }
 
     public async Task ReactAsync(Guid postId, string emoji, bool on, CancellationToken ct = default)
@@ -339,7 +341,10 @@ public sealed class SupabaseSocialClient : ISocialClient
         if (on)
         {
             using var req = Rest(HttpMethod.Post, "/rest/v1/reactions", token);
-            req.Headers.Add("Prefer", "resolution=merge-duplicates");   // re-reacting is a no-op
+            // ignore-duplicates → ON CONFLICT DO NOTHING, so re-reacting is a harmless no-op that needs only
+            // INSERT privilege. (merge-duplicates would be an upsert, which needs UPDATE priv + an UPDATE
+            // policy we deliberately don't grant — that was the "reactions don't work" permission denial.)
+            req.Headers.Add("Prefer", "resolution=ignore-duplicates");
             req.Content = JsonContent.Create(new { post_id = postId, reactor = uid, emoji });
             using var resp = await _http.SendAsync(req, ct);
             await EnsureOkAsync(resp, "add your reaction", ct);
@@ -386,7 +391,9 @@ public sealed class SupabaseSocialClient : ISocialClient
         var uid = RequireUser();
         var token = await ValidAccessTokenAsync(ct);
         using var req = Rest(HttpMethod.Post, "/rest/v1/blocks", token);
-        req.Headers.Add("Prefer", "resolution=merge-duplicates");   // re-blocking is a no-op
+        // ignore-duplicates (DO NOTHING) so re-blocking is a no-op needing only INSERT — blocks has no UPDATE
+        // grant/policy, so merge-duplicates (upsert) would be denied.
+        req.Headers.Add("Prefer", "resolution=ignore-duplicates");
         req.Content = JsonContent.Create(new { blocker = uid, blocked = userId });
         using var resp = await _http.SendAsync(req, ct);
         await EnsureOkAsync(resp, "block this user", ct);

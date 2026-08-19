@@ -166,7 +166,8 @@ public sealed partial class FakeSocialClient : ISocialClient
                 .ToList();
             var myLatest = _me is null ? null
                 : _posts.Where(x => x.Author.Id == _me.Id).OrderByDescending(x => x.CreatedAt).FirstOrDefault();
-            return Task.FromResult(new RosterSnapshot(_me, myLatest, entries));
+            int incoming = _edges.Count(e => e.Value == FriendshipState.Incoming);
+            return Task.FromResult(new RosterSnapshot(_me, myLatest, entries, incoming));
         }
     }
 
