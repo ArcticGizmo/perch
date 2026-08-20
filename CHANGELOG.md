@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.51] - 2026-08-20
+
+- Find & Replace in the Markdown editor (Ctrl+H)
+- Match case, regex, and preserve-case replace — VS Code's whole trick
+- Replace All undoes in a single step (Ctrl+Z, no regrets)
+
+---
+
 ## [v0.3.50] - 2026-08-20
 
 - Settings, History and the Markdown viewer now open on your current virtual desktop, instead of dragging you off to theirs

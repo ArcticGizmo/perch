@@ -113,6 +113,16 @@ internal sealed class MarkdownWindow : Window
     private readonly TextBox _findBox;
     private readonly TextBlock _findCount;
     private readonly Button _findScope, _findPrev, _findNext, _findClose;
+    // Replace row (Ctrl+H): a second row under the find row with the replacement field, a Preserve-Case toggle
+    // and Replace / Replace-all buttons. Collapsible — hidden in find-only mode. Replace is editor-only.
+    private readonly TextBox _replaceBox;
+    private readonly Button _replaceBtn, _replaceAllBtn;
+    // Option toggles (plain Buttons styled by a bool, matching the HistoryWindow toggle idiom): Match Case and
+    // Regex drive matching on both panes; Preserve Case is replace-only. State lives in the bools.
+    private readonly Button _matchCaseBtn, _regexBtn, _preserveCaseBtn;
+    private bool _matchCase, _regex, _preserveCase;
+    private StackPanel _replaceRow = null!;   // the collapsible second row
+    private bool _replaceOpen;
     private Grid _previewOverlay = null!;           // preview scroll + (when targeted) the find bar
     private Grid _editorOverlay = null!;            // source box + editor find layer + gutter + (when targeted) the bar
     private bool _findOpen;
@@ -379,7 +389,7 @@ internal sealed class MarkdownWindow : Window
         ToolTip.SetTip(_findScope, "Switch between searching the source and the preview");
         _findBox = new TextBox
         {
-            PlaceholderText = "Find…", FontSize = 12, Width = 190,
+            PlaceholderText = "Find…", FontSize = 12, Width = 172,
             BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5),
             Padding = new Thickness(8, 4), VerticalContentAlignment = VerticalAlignment.Center,
         };
@@ -392,19 +402,60 @@ internal sealed class MarkdownWindow : Window
         };
         _findPrev = SettingsUi.FlatButton("‹");
         _findPrev.Padding = new Thickness(8, 3);
-        _findPrev.Click += (_, _) => _search.Prev();
+        _findPrev.Click += (_, _) => ActiveFind.Prev();
         ToolTip.SetTip(_findPrev, "Previous match (Shift+Enter)");
         _findNext = SettingsUi.FlatButton("›");
         _findNext.Padding = new Thickness(8, 3);
-        _findNext.Click += (_, _) => _search.Next();
+        _findNext.Click += (_, _) => ActiveFind.Next();
         ToolTip.SetTip(_findNext, "Next match (Enter)");
         _findClose = SettingsUi.FlatButton("✕");
         _findClose.Padding = new Thickness(8, 3);
         _findClose.Click += (_, _) => CloseFind();
         ToolTip.SetTip(_findClose, "Close (Esc)");
+
+        // VS Code-style option toggles. Aa = Match Case, .* = Regex (both affect matching on either pane);
+        // AB = Preserve Case (replace-only). Monospace glyphs so they read as the familiar icons.
+        _matchCaseBtn = MakeOptionToggle("Aa", "Match case (Alt+C)",
+            () => { _matchCase = !_matchCase; StyleToggle(_matchCaseBtn, _matchCase); OnFindOptionChanged(); });
+        _regexBtn = MakeOptionToggle(".*", "Use regular expression (Alt+R)",
+            () => { _regex = !_regex; StyleToggle(_regexBtn, _regex); OnFindOptionChanged(); });
+        _preserveCaseBtn = MakeOptionToggle("AB", "Preserve case on replace (Alt+P)",
+            () => { _preserveCase = !_preserveCase; StyleToggle(_preserveCaseBtn, _preserveCase); });
+
+        _replaceBox = new TextBox
+        {
+            PlaceholderText = "Replace…", FontSize = 12, Width = 172,
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8, 4), VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        _replaceBox.AddHandler(KeyDownEvent, OnReplaceBoxKeyDown, RoutingStrategies.Tunnel);
+        _replaceBtn = SettingsUi.FlatButton("Replace");
+        _replaceBtn.Padding = new Thickness(10, 3);
+        _replaceBtn.Click += (_, _) => DoReplaceCurrent();
+        ToolTip.SetTip(_replaceBtn, "Replace this match (Enter)");
+        _replaceAllBtn = SettingsUi.FlatButton("Replace all");
+        _replaceAllBtn.Padding = new Thickness(10, 3);
+        _replaceAllBtn.Click += (_, _) => DoReplaceAll();
+        ToolTip.SetTip(_replaceAllBtn, "Replace all matches (Ctrl+Alt+Enter)");
+
+        var findRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
+            Children = { _findScope, _findBox, _matchCaseBtn, _regexBtn, _findCount, _findPrev, _findNext, _findClose },
+        };
+        _replaceRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
+            IsVisible = false,
+            Children = { _replaceBox, _preserveCaseBtn, _replaceBtn, _replaceAllBtn },
+        };
         _findBar = new Border
         {
-            IsVisible = false,
+            // Floats above both pane cards (it spans the editor width). A fixed width is deliberate: the two-row
+            // widget's Border under-measures when shown after the initial layout, collapsing its background to the
+            // fixed-width find box; pinning the width keeps the whole card painted. Sized for the widest row
+            // (find-only, which also shows the scope button).
+            IsVisible = false, ZIndex = 100, Width = 470,
             HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(0, 10, 16, 0), Padding = new Thickness(8, 6),
             BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
@@ -414,8 +465,8 @@ internal sealed class MarkdownWindow : Window
             }),
             Child = new StackPanel
             {
-                Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
-                Children = { _findScope, _findBox, _findCount, _findPrev, _findNext, _findClose },
+                Orientation = Orientation.Vertical, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Left,
+                Children = { findRow, _replaceRow },
             },
         };
         // Only the active engine drives the count label; the inactive one is cleared when the side switches.
@@ -502,7 +553,11 @@ internal sealed class MarkdownWindow : Window
         split.Children.Add(_innerSplitter);
         split.Children.Add(_previewPane);
 
-        return new DockPanel { LastChildFill = true, Children = { _editorToolbar, split } };
+        // The find/replace bar floats over the whole editor area (top-right), not inside either pane card — the
+        // two-row widget is wider than a single ~half-width pane, so confining it there clipped its controls. Its
+        // *scope* still selects which engine (source/preview) is searched; the bar just doesn't move.
+        var editorArea = new Grid { Children = { split, _findBar } };
+        return new DockPanel { LastChildFill = true, Children = { _editorToolbar, editorArea } };
     }
 
     // ── Theming ──────────────────────────────────────────────────────────────────────────────────
@@ -585,6 +640,18 @@ internal sealed class MarkdownWindow : Window
         StyleButton(_findPrev, t);
         StyleButton(_findNext, t);
         StyleButton(_findClose, t);
+        // Replace row: the field, the Replace / Replace-all buttons, and the three option toggles.
+        _replaceBox.Background = t.EditorBg;
+        _replaceBox.Foreground = t.Fg;
+        _replaceBox.BorderBrush = t.Border;
+        _replaceBox.SelectionBrush = t.Selection;
+        _replaceBox.SelectionForegroundBrush = t.Fg;
+        ApplyFieldBackgrounds(_replaceBox, t);
+        StyleButton(_replaceBtn, t);
+        StyleButton(_replaceAllBtn, t);
+        StyleToggle(_matchCaseBtn, _matchCase);
+        StyleToggle(_regexBtn, _regex);
+        StyleToggle(_preserveCaseBtn, _preserveCase);
         // The editor's find highlights follow the window (editor) polarity, unlike the preview's own theme.
         _editorFind.SetDark(!_windowLight);
 
@@ -1673,6 +1740,29 @@ internal sealed class MarkdownWindow : Window
         ActiveFind.SetSearch(query);
     }
 
+    /// <summary>Render/verification seam: open the find+replace bar (editor scope) with a query and replacement
+    /// and run it. Options (Match Case / Regex) can be pre-set to capture those states.</summary>
+    internal void OpenReplaceForRender(string query, string replacement,
+        bool matchCase = false, bool useRegex = false, bool preserveCase = false)
+    {
+        _matchCase = matchCase; StyleToggle(_matchCaseBtn, matchCase);
+        _regex = useRegex; StyleToggle(_regexBtn, useRegex);
+        _preserveCase = preserveCase; StyleToggle(_preserveCaseBtn, preserveCase);
+        OnFindOptionChanged();
+        _findBox.Text = query;
+        _replaceBox.Text = replacement;
+        _replaceOpen = true;
+        ShowReplaceRow(true);
+        _findOpen = true;
+        SetFindSide(FindSide.Editor);
+        _findBar.IsVisible = true;
+        ActiveFind.SetSearch(query);
+    }
+
+    /// <summary>Render/verification seam: run Replace All over the source with the current bar state and return
+    /// the count, so a headless capture can prove the edit path (regex + preserve-case) actually mutates.</summary>
+    internal int ReplaceAllForRender() => _editorFind.ReplaceAll(_replaceBox.Text ?? "", _preserveCase);
+
     /// <summary>Closes without the unsaved-changes prompt — for programmatic teardown (app exit, the update
     /// flow via <c>CloseAuxWindows</c>) where popping a modal confirm would be inappropriate.</summary>
     public void CloseWithoutPrompt()
@@ -1717,11 +1807,26 @@ internal sealed class MarkdownWindow : Window
     // The engine for the pane currently being searched.
     private FindHighlighter ActiveFind => _findSide == FindSide.Editor ? _editorFind : _search;
 
-    // Open the bar, targeting whichever pane the user last interacted with, and run any existing query.
+    // Open the bar (find only), targeting whichever pane the user last interacted with, and run any existing query.
     private void OpenFind()
     {
+        _replaceOpen = false;
+        ShowReplaceRow(false);
         _findOpen = true;
         SetFindSide(_activeSide);
+        _findBar.IsVisible = true;
+        _findBox.Focus();
+        _findBox.SelectAll();
+        ActiveFind.SetSearch(_findBox.Text ?? "");
+    }
+
+    // Open the bar with the replace row shown (Ctrl+H). Replace is editor-only, so the scope is forced to Source.
+    private void OpenReplace()
+    {
+        _replaceOpen = true;
+        ShowReplaceRow(true);
+        _findOpen = true;
+        SetFindSide(FindSide.Editor);
         _findBar.IsVisible = true;
         _findBox.Focus();
         _findBox.SelectAll();
@@ -1731,31 +1836,111 @@ internal sealed class MarkdownWindow : Window
     private void CloseFind()
     {
         _findOpen = false;
+        _replaceOpen = false;
+        ShowReplaceRow(false);
         _findBar.IsVisible = false;
         _search.Clear();
         _editorFind.Clear();
         _sourceBox.Focus();
     }
 
+    // Show/hide the replace row. Replacing is editor-only, so the pane-scope button is meaningless while it's
+    // open — hide it (and restore it for find-only mode).
+    private void ShowReplaceRow(bool show)
+    {
+        _replaceRow.IsVisible = show;
+        _findScope.IsVisible = !show;
+    }
+
     // Switch which pane the bar searches (the scope button), clearing the pane we're leaving and re-running the
-    // query on the one we're moving to.
+    // query on the one we're moving to. Replacing is editor-only, so a switch to the preview is refused then.
     private void SwitchFindSide(FindSide side)
     {
         if (!_findOpen || side == _findSide)
+            return;
+        if (_replaceOpen && side == FindSide.Preview)
             return;
         SetFindSide(side);
         ActiveFind.SetSearch(_findBox.Text ?? "");
         _findBox.Focus();
     }
 
-    // Point the bar at a pane: clear the other engine, re-parent the bar over the target pane, and relabel.
+    // A small option toggle (Aa / .* / AB) as a plain Button styled by a bool — the HistoryWindow toggle idiom.
+    private Button MakeOptionToggle(string glyph, string tip, Action onClick)
+    {
+        var b = new Button
+        {
+            Content = glyph, FontFamily = Mono, FontSize = 12,
+            Padding = new Thickness(7, 3), MinWidth = 0,
+            CornerRadius = new CornerRadius(4), VerticalAlignment = VerticalAlignment.Center,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+        };
+        ToolTip.SetTip(b, tip);
+        b.Click += (_, _) => onClick();
+        return b;
+    }
+
+    // Colour an option toggle for its on/off state (accent when active, resting chrome otherwise).
+    private void StyleToggle(Button b, bool active)
+    {
+        b.Background = active ? _theme.Accent : _theme.ButtonBg;
+        b.Foreground = active ? Brushes.White : _theme.Fg;
+        b.BorderBrush = active ? _theme.Accent : _theme.Border;
+        b.BorderThickness = new Thickness(1);
+    }
+
+    // A Match Case / Regex toggle changed: push the options to both engines (so a scope switch preserves them)
+    // and re-run the active query.
+    private void OnFindOptionChanged()
+    {
+        _search.MatchCase = _matchCase; _search.UseRegex = _regex;
+        _editorFind.MatchCase = _matchCase; _editorFind.UseRegex = _regex;
+        if (_findOpen)
+            ActiveFind.SetSearch(_findBox.Text ?? "");
+    }
+
+    // Replace the current match / all matches (editor scope only — the buttons are only reachable in replace mode).
+    private void DoReplaceCurrent()
+    {
+        if (!_findOpen || _findSide != FindSide.Editor)
+            return;
+        _editorFind.ReplaceCurrent(_replaceBox.Text ?? "", _preserveCase);
+    }
+
+    private void DoReplaceAll()
+    {
+        if (!_findOpen || _findSide != FindSide.Editor)
+            return;
+        int n = _editorFind.ReplaceAll(_replaceBox.Text ?? "", _preserveCase);
+        _findCount.Text = n > 0 ? $"Replaced {n}" : "No results";
+    }
+
+    // Enter replaces the current match; Ctrl+Alt+Enter replaces all; Escape closes. Tunnelled so the TextBox's
+    // own Enter handling (a newline) doesn't swallow it first.
+    private void OnReplaceBoxKeyDown(object? sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Enter:
+                if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+                    DoReplaceAll();
+                else
+                    DoReplaceCurrent();
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                CloseFind();
+                e.Handled = true;
+                break;
+        }
+    }
+
+    // Point the bar at a pane: clear the other engine and relabel. The bar itself floats over the whole editor
+    // area (see BuildEditorRoot), so switching scope doesn't move it — only which engine runs the query.
     private void SetFindSide(FindSide side)
     {
         (side == FindSide.Editor ? (FindHighlighter)_search : _editorFind).Clear();
         _findSide = side;
-        _previewOverlay.Children.Remove(_findBar);
-        _editorOverlay.Children.Remove(_findBar);
-        (side == FindSide.Editor ? _editorOverlay : _previewOverlay).Children.Add(_findBar);
         _findScope.Content = side == FindSide.Editor ? "Source" : "Preview";
         _findBox.PlaceholderText = side == FindSide.Editor ? "Find in source…" : "Find in preview…";
     }
@@ -1765,6 +1950,13 @@ internal sealed class MarkdownWindow : Window
     {
         if (side != _findSide)
             return;
+        if (ActiveFind.RegexError)
+        {
+            _findCount.Text = "Invalid regex";
+            _findBox.BorderBrush = _theme.Error;   // tint the field so the bad pattern reads at a glance
+            return;
+        }
+        _findBox.BorderBrush = _theme.Border;
         _findCount.Text = total > 0 ? $"{cur}/{total}"
             : string.IsNullOrEmpty(_findBox.Text) ? "" : "No results";
     }
@@ -1795,15 +1987,29 @@ internal sealed class MarkdownWindow : Window
             return;
         }
         // Ctrl+F opens find-in-page targeting the last-interacted pane. If it's already open, pressing it after
-        // interacting with the *other* pane moves the search there; otherwise it closes.
+        // interacting with the *other* pane moves the search there; from replace mode it collapses to find only;
+        // otherwise it closes.
         if (e.Key == Key.F && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             if (!_findOpen)
                 OpenFind();
+            else if (_replaceOpen)
+            {
+                _replaceOpen = false;
+                ShowReplaceRow(false);
+                _findBox.Focus();
+            }
             else if (_activeSide != _findSide)
                 SwitchFindSide(_activeSide);
             else
                 CloseFind();
+            e.Handled = true;
+            return;
+        }
+        // Ctrl+H opens find + replace over the source editor.
+        if (e.Key == Key.H && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            OpenReplace();
             e.Handled = true;
             return;
         }

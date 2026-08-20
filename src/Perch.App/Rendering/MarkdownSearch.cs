@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
@@ -29,6 +30,20 @@ internal abstract class FindHighlighter
     protected readonly List<Match> Matches = new();
     protected int Index = -1;
     private string _query = "";
+
+    // Matching options (VS Code-style), set by the bar's Aa/.* toggles. Both engines are kept in sync by the
+    // owner so switching the find scope preserves them. Literal matching is Ordinal(IgnoreCase); regex compiles
+    // the query with the same case sensitivity.
+    public bool MatchCase { get; set; }
+    public bool UseRegex { get; set; }
+
+    /// <summary>True when the last recompute failed to compile the regex — the bar shows an error, no matches.</summary>
+    public bool RegexError { get; private set; }
+
+    // The current query and (in regex mode) the compiled pattern, exposed so the editor's replace can expand
+    // group references ($1, $&) against the exact matched span.
+    protected string Query => _query;
+    protected Regex? CompiledRegex { get; private set; }
 
     // Match fill + the current-match outline. Translucent (the layer paints over the text) so glyphs stay
     // legible; the current match adds an opaque outline so it reads as "current" without a heavier wash.
@@ -115,19 +130,55 @@ internal abstract class FindHighlighter
     private void Recompute()
     {
         Matches.Clear();
+        RegexError = false;
+        CompiledRegex = null;
+
         if (_query.Length > 0)
         {
-            var segments = Segments();
-            for (int s = 0; s < segments.Count; s++)
+            if (UseRegex)
             {
-                if (!SegmentVisible(s))
-                    continue;
-                var text = segments[s];
-                int i = 0;
-                while ((i = text.IndexOf(_query, i, StringComparison.OrdinalIgnoreCase)) >= 0)
+                try
                 {
-                    Matches.Add(new Match(s, i, _query.Length));
-                    i += _query.Length;
+                    CompiledRegex = new Regex(_query,
+                        RegexOptions.CultureInvariant | (MatchCase ? RegexOptions.None : RegexOptions.IgnoreCase));
+                }
+                catch (ArgumentException)
+                {
+                    RegexError = true;   // invalid pattern — surface an error rather than matches
+                }
+            }
+
+            if (!RegexError)
+            {
+                var comparison = MatchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+                var segments = Segments();
+                for (int s = 0; s < segments.Count; s++)
+                {
+                    if (!SegmentVisible(s))
+                        continue;
+                    var text = segments[s];
+                    if (CompiledRegex is { } rx)
+                    {
+                        for (int from = 0; from <= text.Length;)
+                        {
+                            var m = rx.Match(text, from);
+                            if (!m.Success)
+                                break;
+                            if (m.Length > 0)
+                                Matches.Add(new Match(s, m.Index, m.Length));
+                            // Step one char past a zero-width match (^/$/\b) so it can't loop forever.
+                            from = m.Index + (m.Length > 0 ? m.Length : 1);
+                        }
+                    }
+                    else
+                    {
+                        int i = 0;
+                        while ((i = text.IndexOf(_query, i, comparison)) >= 0)
+                        {
+                            Matches.Add(new Match(s, i, _query.Length));
+                            i += _query.Length;
+                        }
+                    }
                 }
             }
         }
@@ -145,6 +196,16 @@ internal abstract class FindHighlighter
             var m = Matches[Index];
             Dispatcher.UIThread.Post(() => ScrollToCurrent(m), DispatcherPriority.Background);
         }
+    }
+
+    /// <summary>Set the current match to <paramref name="index"/> (clamped), repaint and scroll to it. Used by
+    /// the editor's replace to advance to the next match after an edit.</summary>
+    protected void ShowMatch(int index)
+    {
+        if (Matches.Count == 0) { Index = -1; Repaint(); Raise(); return; }
+        Index = Math.Clamp(index, 0, Matches.Count - 1);
+        Highlight(scroll: true);
+        Raise();
     }
 
     private void Raise() => ResultsChanged?.Invoke(Matches.Count == 0 ? 0 : Index + 1, Matches.Count);

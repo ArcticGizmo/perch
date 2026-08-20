@@ -1,4 +1,6 @@
 using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
@@ -38,6 +40,79 @@ internal sealed class EditorFind : FindHighlighter
 
     /// <summary>Repaint on an editor scroll / re-wrap so the highlights follow the text.</summary>
     public void OnEditorMoved() => Repaint();
+
+    /// <summary>Replace the current match with <paramref name="replacement"/> — through the TextBox selection so
+    /// the box's native undo captures it — then re-find and advance to the next match. Returns false when there's
+    /// no current match or the buffer moved underneath. Editor-only: the rendered preview isn't editable.</summary>
+    public bool ReplaceCurrent(string replacement, bool preserveCase)
+    {
+        if (Index < 0 || Index >= Matches.Count)
+            return false;
+        var m = Matches[Index];
+        var text = _box.Text ?? "";
+        if (m.Start < 0 || m.Start + m.Len > text.Length)
+            return false;   // stale match against an edited buffer
+
+        var matched = text.Substring(m.Start, m.Len);
+        var repl = BuildReplacement(text, m.Start, matched, replacement, preserveCase);
+
+        _box.SelectionStart = m.Start;
+        _box.SelectionEnd = m.Start + m.Len;
+        _box.SelectedText = repl;                 // undo-tracked replace of the selection
+        int caret = m.Start + repl.Length;
+        _box.CaretIndex = caret;
+
+        Refresh();                                // recompute over the edited text
+        // Advance to the first match at or after the caret (wraps to the first when none follow).
+        int next = 0;
+        for (int i = 0; i < Matches.Count; i++)
+            if (Matches[i].Start >= caret) { next = i; break; }
+        ShowMatch(next);
+        return true;
+    }
+
+    /// <summary>Replace every match in one undo-tracked edit — the whole buffer is rewritten through the
+    /// selection, so Ctrl+Z reverts the lot at once. Returns the number of replacements.</summary>
+    public int ReplaceAll(string replacement, bool preserveCase)
+    {
+        if (Matches.Count == 0)
+            return 0;
+        var text = _box.Text ?? "";
+        var sb = new StringBuilder(text.Length);
+        int pos = 0, count = 0;
+        foreach (var m in Matches)   // ascending within the single editor segment
+        {
+            if (m.Start < pos || m.Start + m.Len > text.Length)
+                continue;            // overlapping / stale — skip defensively
+            sb.Append(text, pos, m.Start - pos);
+            var matched = text.Substring(m.Start, m.Len);
+            sb.Append(BuildReplacement(text, m.Start, matched, replacement, preserveCase));
+            pos = m.Start + m.Len;
+            count++;
+        }
+        if (count == 0)
+            return 0;
+        sb.Append(text, pos, text.Length - pos);
+
+        _box.SelectAll();
+        _box.SelectedText = sb.ToString();   // one HandleTextInput → one undo step
+        Refresh();
+        return count;
+    }
+
+    // The replacement for one occurrence: regex group-reference expansion ($1, $&, …) against the exact matched
+    // span when in regex mode, then optional case preservation copied from the matched text.
+    private string BuildReplacement(string fullText, int start, string matched, string replacement, bool preserveCase)
+    {
+        var result = replacement;
+        if (CompiledRegex is { } rx)
+        {
+            var m = rx.Match(fullText, start);
+            if (m.Success && m.Index == start)
+                result = m.Result(replacement);
+        }
+        return preserveCase ? Perch.Data.PreserveCaseText.Apply(matched, result) : result;
+    }
 
     protected override IReadOnlyList<string> Segments()
     {

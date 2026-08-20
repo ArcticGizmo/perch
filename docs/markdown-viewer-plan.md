@@ -215,3 +215,27 @@ reloading an already-open file keeps the current buffer and lets the next poll r
 isn't advanced, so `ReloadOpenFileIfStale` re-fires until it settles). Only a genuine *initial* open failure
 shows the placeholder. `StopWatcher` moved below the null check so a transient reload failure no longer tears
 down the open-file watcher.
+
+## Find & Replace (Ctrl+F / Ctrl+H)
+
+The editor carries a VS Code-style find/replace widget. **Ctrl+F** opens find-only; **Ctrl+H** opens the
+two-row find+replace over the source editor. The bar (`_findBar` in `MarkdownWindow`) floats top-right over
+the whole editor area (both panes) rather than inside a single ~half-width pane card — the two-row widget is
+wider than one pane, so confining it clipped its controls. It carries a **fixed width** because a Border that
+becomes visible after the initial layout under-measures and collapses its background to the fixed-width find
+box; pinning the width keeps the whole card painted.
+
+- **Options** live on the shared `FindHighlighter` (`Rendering/MarkdownSearch.cs`): `MatchCase` and `UseRegex`
+  drive matching on *both* panes (kept in sync across a scope switch); `RegexError` surfaces an invalid
+  pattern (the count reads "Invalid regex" and the field tints). Literal matching is `Ordinal(IgnoreCase)`;
+  regex compiles the query with the same case sensitivity and skips zero-width matches so `^`/`$`/`\b` can't
+  loop. The **Aa** / **`.*`** toggles are plain Buttons styled by a bool (the `HistoryWindow` idiom).
+- **Replace** is editor-only (the rendered preview isn't editable), implemented on `EditorFind`
+  (`Rendering/EditorFind.cs`). `ReplaceCurrent` edits through the TextBox selection (undo-tracked) then
+  advances to the next match; `ReplaceAll` rewrites the whole buffer in one `SelectedText` set so Ctrl+Z
+  reverts the lot at once. Regex replacements expand `$1`/`$&` via `Match.Result`; the **AB** toggle applies
+  VS Code preserve-case through the pure `Perch.Core/Data/PreserveCaseText.Apply` (unit-tested,
+  `PreserveCaseTextTests`). Opening replace forces the scope to Source and hides the scope button.
+- **Keys:** in the find box, Enter / Shift+Enter step matches; in the replace box, Enter = Replace current,
+  Ctrl+Alt+Enter = Replace all; Esc closes. Render/verification seam: `OpenReplaceForRender` +
+  `ReplaceAllForRender`, captured by `HeadlessRenderer` as `markdown_replace*` / `markdown_replace_done`.

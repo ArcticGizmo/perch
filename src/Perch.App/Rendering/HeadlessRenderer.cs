@@ -804,8 +804,16 @@ internal static class HeadlessRenderer
         Capture("markdown_find_light_1x.png", windowLight: true, previewLight: false, findQuery: "code", findPreview: true);
         // …and over the source editor.
         Capture("markdown_find_editor_1x.png", windowLight: false, previewLight: true, findQuery: "code", findPreview: false);
+        // Find + Replace (Ctrl+H): the two-row widget with the replacement field and Match Case / Regex toggles.
+        Capture("markdown_replace_1x.png", windowLight: false, previewLight: true, replaceQuery: "code", replaceWith: "SNIPPET");
+        Capture("markdown_replace_light_1x.png", windowLight: true, previewLight: false, replaceQuery: "code", replaceWith: "SNIPPET");
+        // Replace All with Preserve Case actually applied, so the source shows code→snippet / Code→Snippet — proof
+        // the edit path (not just the UI) works. The "1/n" reads 0 afterwards since every match was consumed.
+        Capture("markdown_replace_done_1x.png", windowLight: false, previewLight: true,
+            replaceQuery: "code", replaceWith: "snippet", replacePreserveCase: true, runReplaceAll: true);
 
-        void Capture(string file, bool windowLight, bool previewLight, string? findQuery = null, bool findPreview = true)
+        void Capture(string file, bool windowLight, bool previewLight, string? findQuery = null, bool findPreview = true,
+            string? replaceQuery = null, string? replaceWith = null, bool replacePreserveCase = false, bool runReplaceAll = false)
         {
             var w = new MarkdownWindow(new AppSettings()) { Width = 1000, Height = 620 };
             w.SeedForRender(cwd, sets, project, @"C:\src\perch\docs\markdown-viewer-plan.md", sampleMd,
@@ -819,6 +827,18 @@ internal static class HeadlessRenderer
                 w.OpenFindForRender(findQuery, findPreview);
                 Dispatcher.UIThread.RunJobs();
                 AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            }
+            if (replaceQuery != null)
+            {
+                w.OpenReplaceForRender(replaceQuery, replaceWith ?? "", preserveCase: replacePreserveCase);
+                Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                if (runReplaceAll)
+                {
+                    w.ReplaceAllForRender();
+                    Dispatcher.UIThread.RunJobs();
+                    AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                }
             }
             var frame = w.CaptureRenderedFrame();
             if (frame != null)
