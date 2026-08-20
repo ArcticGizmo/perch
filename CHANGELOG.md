@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.49] - 2026-08-20
+
+- Markdown viewer's file list updates live as files are added or edited
+- New or edited files get a marker until you open them
+- Open Markdown files reload cleanly on save — no more "Couldn't read" mid-save flinch
+
+---
+
 ## [v0.3.48] - 2026-08-20
 
 - The Social feed now ships wired up — the release build finally hands it its keys (it had been all dressed up with nowhere to connect)

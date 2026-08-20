@@ -141,6 +141,18 @@ internal sealed class MarkdownWindow : Window
     private MarkdownFileSets? _paneSets;
     private MarkdownProjectFiles? _paneProject;
 
+    // Attention markers: files added (or edited — promoted reference→produced) in the pane *while the window
+    // stayed open*, keyed by canonical forward-slashed path (case-insensitive, matching the reader's key). Each
+    // shows a small marker in its tree row until the user opens it. Populated only by the live rescan (never the
+    // initial scan), so nothing is flagged on first load. _attentionMarkers maps each path to its marker in the
+    // *current* tree so opening a file can hide its marker without rebuilding the whole pane.
+    private readonly HashSet<string> _attention = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Ellipse> _attentionMarkers = new(StringComparer.OrdinalIgnoreCase);
+    // Last-seen on-disk mtime per listed file (canonical key), captured each scan. Lets a rescan flag a file
+    // the session *edited again* — an already-listed produced file whose set membership didn't change, so the
+    // set diff alone wouldn't catch it. The currently-open file is exempt (the user's already looking at it).
+    private Dictionary<string, DateTime> _fileMtimes = new(StringComparer.OrdinalIgnoreCase);
+
     // The pane shows the session's own Markdown (recently touched, the useful case). The whole project is a
     // bigger, .gitignore-aware scan reached through a separate quick-open palette (the "Search all project
     // files…" button → MarkdownProjectSearchWindow); its result is cached here, per target, once scanned.
@@ -153,6 +165,13 @@ internal sealed class MarkdownWindow : Window
     private bool _loading;                 // set while programmatically filling the source box (don't mark dirty)
     private bool _externalChange;          // the file changed on disk while the buffer had unsaved edits
     private FileSystemWatcher? _watcher;
+    // Live pane refresh: while the window is open we *poll* rather than rely on file-system events. A poll
+    // re-scans the session's produced/referenced sets (cheap — mtime-cached on the transcript) and re-stats
+    // the listed files, so it catches new files, the session's own edits, AND external/IDE edits — including
+    // editors (IntelliJ, VS Code) that save via atomic temp-file rename, which a FileSystemWatcher bound to
+    // one filename routinely misses. That miss is why an event-driven approach was flaky here.
+    private readonly DispatcherTimer _pollTimer;
+    private bool _refreshInFlight;         // one off-thread scan at a time — a slow poll can't pile up
     private FileNode? _currentFileNode;    // the file leaf currently open, for the discard-on-switch prompt
     private bool _suppressSelect;          // reverting a tree selection shouldn't re-trigger the handler
     private bool _closeConfirmed;          // discard already confirmed / programmatic close — skip the prompt
@@ -344,6 +363,11 @@ internal sealed class MarkdownWindow : Window
             RoutingStrategies.Bubble, handledEventsToo: true);
         _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
         _previewTimer.Tick += (_, _) => { _previewTimer.Stop(); RenderPreview(_sourceBox.Text ?? ""); };
+
+        // Live-refresh poll: re-scan sets + re-stat listed files on a cadence while the window is open. Polling
+        // (not FileSystemWatcher) is what makes external/IDE edits show up reliably — see the field comment.
+        _pollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+        _pollTimer.Tick += (_, _) => RefreshPane();
 
         // Find-in-page (Ctrl+F): one bar over two engines — the rendered preview and the source editor. The
         // bar targets whichever pane holds focus on open; a scope button switches between them. Hidden until
@@ -624,14 +648,18 @@ internal sealed class MarkdownWindow : Window
         if (string.IsNullOrEmpty(cwd))
             return;
 
-        // Drop any open file / watcher — a different project is being loaded.
+        // Drop any open file / watchers — a different project is being loaded.
         StopWatcher();
+        _pollTimer.Stop();
         _openFilePath = null;
         _currentFileNode = null;
         _dirty = false;
         _externalChange = false;
         _paneSets = null;
         _paneProject = null;   // re-scanned lazily the next time the project-search palette is opened
+        _attention.Clear();    // a different session — start with a clean slate of "new since open" badges
+        _attentionMarkers.Clear();
+        _fileMtimes = new(StringComparer.OrdinalIgnoreCase);
         _editorPlaceholder.Text = "Select a file to view it.";
         _editorHost.Child = _editorPlaceholder;
 
@@ -641,7 +669,11 @@ internal sealed class MarkdownWindow : Window
         _treeHost.Child = _filesPlaceholder;
 
         // Only the session's own file sets are scanned up front — the whole-project walk waits for the toggle.
-        Task.Run(() => new MarkdownFilesReader().GetFileSets(sid, cwd))
+        Task.Run(() =>
+            {
+                var sets = new MarkdownFilesReader().GetFileSets(sid, cwd);
+                return (Sets: sets, Mtimes: StatMtimes(sets));
+            })
             .ContinueWith(t =>
             {
                 if (!t.IsCompletedSuccessfully)
@@ -651,10 +683,168 @@ internal sealed class MarkdownWindow : Window
                     if (!IsVisible || gen != _gen)
                         return;
                     _paneCwd = cwd;
-                    _paneSets = t.Result;
+                    _paneSets = t.Result.Sets;
+                    _fileMtimes = t.Result.Mtimes;   // baseline — nothing flagged on first load
+                    RebuildPane();
+                    // Poll from here on so files the session/IDE touch while this window stays open appear live.
+                    _pollTimer.Start();
+                });
+            });
+    }
+
+    // Re-scan the session's produced/referenced .md sets off the UI thread and rebuild the pane if they
+    // changed, and reload the open file if it changed on disk. Called on the poll cadence while the window is
+    // open; guarded by IsVisible + the generation token so a result arriving after a close/retarget is dropped,
+    // and by _refreshInFlight so a slow scan can't pile up behind the timer. Cheap in the steady state: the set
+    // scan is mtime-cached on the transcript, the stats are a handful of files, and nothing rebuilds unless the
+    // set changed or a file was newly flagged.
+    private void RefreshPane()
+    {
+        var cwd = _cwd;
+        var sid = _sessionId ?? "";
+        if (_refreshInFlight || string.IsNullOrEmpty(cwd) || !IsVisible)
+            return;
+
+        _refreshInFlight = true;
+        int gen = _gen;
+        Task.Run(() =>
+            {
+                var sets = new MarkdownFilesReader().GetFileSets(sid, cwd);
+                return (Sets: sets, Mtimes: StatMtimes(sets));
+            })
+            .ContinueWith(t =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    _refreshInFlight = false;
+                    if (!t.IsCompletedSuccessfully || !IsVisible || gen != _gen
+                        || _paneCwd is not { } paneCwd || paneCwd != cwd)
+                        return;
+
+                    var sets = t.Result.Sets;
+                    var mtimes = t.Result.Mtimes;
+
+                    ReloadOpenFileIfStale(mtimes);   // the open file changed on disk (IDE/session) — refresh it
+
+                    bool setChanged = !SetsEqual(_paneSets, sets);
+                    int flaggedBefore = _attention.Count;
+
+                    if (setChanged)
+                        FlagNewOrChanged(_paneSets, sets);   // new files / read→write promotions
+                    FlagEdited(mtimes);                      // already-listed files edited since the last poll
+
+                    _fileMtimes = mtimes;                    // advance the baseline either way
+                    if (!setChanged && _attention.Count == flaggedBefore)
+                        return;   // no rows added and nothing newly flagged — leave the tree untouched
+
+                    _paneSets = sets;
+                    if (setChanged)
+                        _paneProject = null;   // the file list grew; let the project-search palette rescan next open
                     RebuildPane();
                 });
             });
+    }
+
+    // Keep the open editor honest about on-disk changes the (flaky, atomic-rename-blind) FileSystemWatcher can
+    // miss: if the open file's mtime advanced, reload it when the buffer is clean, or flag the conflict when it
+    // isn't — the same policy as OnFileChangedOnDisk, driven by the reliable poll instead of an event.
+    private void ReloadOpenFileIfStale(Dictionary<string, DateTime> newMtimes)
+    {
+        if (_openFilePath is not { } path)
+            return;
+        if (!newMtimes.TryGetValue(CanonKey(path), out var cur))
+            return;
+        if (_openFileMtimeUtc is { } loaded && cur <= loaded)
+            return;   // no newer than what we have (or our own just-saved write)
+
+        if (_dirty)
+        {
+            _externalChange = true;
+            UpdateEditorChrome();
+        }
+        else
+        {
+            LoadFile(path, isReload: true);   // clean buffer — safe to show the newest content
+        }
+    }
+
+    // Stat each listed file's on-disk mtime (canonical key → UTC last-write), off the UI thread. Unreadable /
+    // nonexistent paths (a transcript can carry paths from another host) are simply omitted.
+    private static Dictionary<string, DateTime> StatMtimes(MarkdownFileSets sets)
+    {
+        var map = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in sets.Produced.Concat(sets.Referenced))
+        {
+            var k = CanonKey(p);
+            if (map.ContainsKey(k))
+                continue;
+            try { map[k] = File.GetLastWriteTimeUtc(p); } catch { /* gone / foreign path — skip */ }
+        }
+        return map;
+    }
+
+    // Flag any already-listed file whose on-disk mtime advanced since the last scan — i.e. the session edited a
+    // file the pane already showed (a re-edit doesn't change the set, so FlagNewOrChanged wouldn't catch it).
+    // The currently-open file is exempt: the user's already looking at it (and our own Save bumps its mtime).
+    private void FlagEdited(Dictionary<string, DateTime> newMtimes)
+    {
+        var openKey = _openFilePath is { } o ? CanonKey(o) : null;
+        foreach (var (k, mtime) in newMtimes)
+        {
+            if (openKey != null && string.Equals(k, openKey, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (_fileMtimes.TryGetValue(k, out var prev) && mtime > prev)
+                _attention.Add(k);
+        }
+    }
+
+    // Sequence-equal over both file lists (ordinal). The reader preserves first-seen order and de-dupes, so a
+    // list-level compare is enough to tell "a new file appeared" from "same files as last scan".
+    private static bool SetsEqual(MarkdownFileSets? a, MarkdownFileSets? b)
+    {
+        if (ReferenceEquals(a, b))
+            return true;
+        if (a is null || b is null)
+            return false;
+        return a.Produced.SequenceEqual(b.Produced, StringComparer.Ordinal)
+            && a.Referenced.SequenceEqual(b.Referenced, StringComparer.Ordinal);
+    }
+
+    // Canonical path key, matching MarkdownFilesReader's (forward-slashed; case handled by the set's comparer).
+    private static string CanonKey(string path) => path.Replace('\\', '/');
+
+    // Compare the previous scan to the new one and flag every file that just appeared or was edited: a brand-new
+    // produced/referenced file, or one promoted from referenced to produced (a produce over a file we'd only
+    // seen read). A file already produced that's produced again doesn't change the sets, so it isn't re-flagged
+    // — the pane already lists it. Only ever called from the live rescan, so the initial load flags nothing.
+    private void FlagNewOrChanged(MarkdownFileSets? oldSets, MarkdownFileSets newSets)
+    {
+        var oldProduced = new HashSet<string>((oldSets?.Produced ?? []).Select(CanonKey), StringComparer.OrdinalIgnoreCase);
+        var oldReferenced = new HashSet<string>((oldSets?.Referenced ?? []).Select(CanonKey), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var p in newSets.Produced)
+        {
+            var k = CanonKey(p);
+            if (!oldProduced.Contains(k))   // new file, or referenced-before now produced (an edit)
+                _attention.Add(k);
+        }
+        foreach (var r in newSets.Referenced)
+        {
+            var k = CanonKey(r);
+            if (!oldReferenced.Contains(k) && !oldProduced.Contains(k))
+                _attention.Add(k);
+        }
+    }
+
+    // Drop a file's attention flag and hide its marker (if the row is realised) — called when the file is opened,
+    // so the badge clears the moment the user looks at it. Surgical: no pane rebuild.
+    private void ClearAttention(string path)
+    {
+        var k = CanonKey(path);
+        if (!_attention.Remove(k))
+            return;
+        if (_attentionMarkers.TryGetValue(k, out var marker))
+            marker.Fill = Brushes.Transparent;
     }
 
     // (Re)build the file tree from the cached session scan, applying the current search filter. Cheap — no
@@ -666,6 +856,7 @@ internal sealed class MarkdownWindow : Window
 
         var query = (_searchBox.Text ?? "").Trim();
         var roots = new List<FileNode>();
+        _attentionMarkers.Clear();   // markers are rebuilt as the fresh rows realise (via BuildNodeVisual)
 
         var produced = FilterSession(cwd, sets.Produced, query);
         var referenced = FilterSession(cwd, sets.Referenced, query);
@@ -683,6 +874,25 @@ internal sealed class MarkdownWindow : Window
 
         _tree.ItemsSource = roots;
         _treeHost.Child = _tree;
+        ReselectOpenFile(roots);
+    }
+
+    // After a rebuild the tree holds fresh FileNode instances, so any selection is lost. If a file is open
+    // and still present, re-select its new leaf (suppressed, so it doesn't re-trigger a load) and re-point
+    // _currentFileNode at it — otherwise a live refresh would drop the highlight and confuse the discard guard.
+    private void ReselectOpenFile(IReadOnlyList<FileNode> roots)
+    {
+        if (_openFilePath is not { } open)
+            return;
+        var match = roots
+            .SelectMany(r => r.Children)
+            .FirstOrDefault(c => string.Equals(c.FullPath, open, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+            return;
+        _suppressSelect = true;
+        _tree.SelectedItem = match;
+        _suppressSelect = false;
+        _currentFileNode = match;
     }
 
     // What to show when no session file matches — always pointing at the project-search button as the way out.
@@ -805,14 +1015,27 @@ internal sealed class MarkdownWindow : Window
         // File leaves carry a small bullet: rose for produced, muted for referenced.
         if (n.Kind is NodeKind.ProducedFile or NodeKind.ReferencedFile)
         {
+            // Leftmost: an attention badge for files added/edited while the window's been open. The slot is
+            // reserved (transparent when idle) so flagging/clearing never shifts the row. Amber reads as "new"
+            // and stays distinct from the rose/muted type bullet beside it.
+            bool attention = n.FullPath is { } fp && _attention.Contains(CanonKey(fp));
+            var marker = new Ellipse
+            {
+                Width = 6, Height = 6, Margin = new Thickness(0, 0, 6, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Fill = attention ? _theme.Warn : Brushes.Transparent,
+            };
+            if (n.FullPath is { } path)
+                _attentionMarkers[CanonKey(path)] = marker;
+
             var dot = new Ellipse
             {
                 Width = 6, Height = 6, Margin = new Thickness(0, 0, 7, 0),
                 VerticalAlignment = VerticalAlignment.Center,
                 Fill = n.Kind == NodeKind.ProducedFile ? ProducedDotBrush : _theme.Muted,
             };
-            var sp = new StackPanel { Orientation = Orientation.Horizontal, Children = { dot, text } };
-            ToolTip.SetTip(sp, n.FullPath);
+            var sp = new StackPanel { Orientation = Orientation.Horizontal, Children = { marker, dot, text } };
+            ToolTip.SetTip(sp, attention ? $"{n.FullPath}\n(new since you opened this window)" : n.FullPath);
             return sp;   // right-click is handled at the tree level (OnTreeContextRequested)
         }
 
@@ -889,15 +1112,13 @@ internal sealed class MarkdownWindow : Window
     }
 
     // Read the selected file off the UI thread, then open it in the editor. Guarded by the generation token
-    // so a slow read into a since-retargeted/closed window is dropped.
-    private void LoadFile(string path)
+    // so a slow read into a since-retargeted/closed window is dropped. <paramref name="isReload"/> is set when
+    // refreshing a file that's already open (poll/watcher), so a transient read failure keeps the editor
+    // rather than clobbering it — see OpenInEditor.
+    private void LoadFile(string path, bool isReload = false)
     {
         int gen = _gen;
-        Task.Run<(string? Text, DateTime? Mtime)>(() =>
-        {
-            try { return (File.ReadAllText(path), File.GetLastWriteTimeUtc(path)); }
-            catch { return (null, null); }
-        }).ContinueWith(t =>
+        Task.Run(() => TryReadFile(path)).ContinueWith(t =>
         {
             if (!t.IsCompletedSuccessfully)
                 return;
@@ -905,17 +1126,51 @@ internal sealed class MarkdownWindow : Window
             {
                 if (!IsVisible || gen != _gen)
                     return;
-                OpenInEditor(path, t.Result.Text, t.Result.Mtime);
+                OpenInEditor(path, t.Result.Text, t.Result.Mtime, isReload);
             });
         });
     }
 
-    private void OpenInEditor(string path, string? text, DateTime? mtimeUtc)
+    // Read a file resiliently through the atomic-save window. Editors like VS Code / IntelliJ save by writing
+    // a temp file and renaming it over the target, so a read can briefly hit a sharing violation or a missing
+    // file mid-swap. Open with the widest share (ReadWrite | Delete — tolerate a concurrent writer and a
+    // rename-in-progress) and retry a few times with a short pause; only a persistent failure returns null.
+    private static (string? Text, DateTime? Mtime) TryReadFile(string path)
     {
-        StopWatcher();
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(fs);
+                var text = reader.ReadToEnd();
+                DateTime? mtime = null;
+                try { mtime = File.GetLastWriteTimeUtc(path); } catch { }
+                return (text, mtime);
+            }
+            catch when (attempt < 4)
+            {
+                System.Threading.Thread.Sleep(40);   // ride out the temp-file rename, then retry
+            }
+            catch
+            {
+                return (null, null);   // genuinely unreadable (gone, permissions) — give up
+            }
+        }
+    }
 
+    private void OpenInEditor(string path, string? text, DateTime? mtimeUtc, bool isReload = false)
+    {
         if (text is null)
         {
+            // A transient read failure while *reloading* an open file (e.g. caught mid atomic-save) must not
+            // destroy the editor: keep the current buffer and let the next poll retry — we don't advance
+            // _openFileMtimeUtc, so ReloadOpenFileIfStale will try again until the file settles. Only an
+            // *initial* open failure surfaces the "Couldn't read" placeholder.
+            if (isReload)
+                return;
+            StopWatcher();
             _openFilePath = null;
             _dirty = false;
             _editorPlaceholder.Text = $"Couldn't read {Path.GetFileName(path)}.";
@@ -923,11 +1178,13 @@ internal sealed class MarkdownWindow : Window
             return;
         }
 
+        StopWatcher();
         _openFilePath = path;
         _openFileMtimeUtc = mtimeUtc;
         _loadedText = text;
         _dirty = false;
         _externalChange = false;
+        ClearAttention(path);   // the user's looking at it now — drop its "new" badge
 
         _loading = true;
         _sourceBox.Text = text;
@@ -1380,7 +1637,7 @@ internal sealed class MarkdownWindow : Window
             }
             else
             {
-                LoadFile(path);   // clean buffer — safe to show the newest content
+                LoadFile(path, isReload: true);   // clean buffer — safe to show the newest content
             }
         });
     }
@@ -1450,6 +1707,7 @@ internal sealed class MarkdownWindow : Window
     {
         _gen++;   // drop any results still in flight
         StopWatcher();
+        _pollTimer.Stop();
         _previewTimer.Stop();
         base.OnClosed(e);
     }

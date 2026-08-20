@@ -153,3 +153,65 @@ running-green/error-red/warn-amber/Jira-blue (e.g. a teal/doc tone; add to `Fixe
 Phase 0 (+ tests) → Phase 1 (glyph, independently shippable) → Phase 2 (menu + empty window shell) →
 Phase 3 (file pane) → Phase 4 (edit/save). Each phase builds and is demoable; the glyph alone is a
 complete increment. Verify owner-drawn glyph via `dotnet run … -- render <dir>` per CLAUDE.md.
+
+## Follow-up: live pane refresh (shipped)
+
+The file pane now updates while the window stays open, so Markdown a session writes or reads *after* the
+viewer opens appears without a reopen/retarget. `MarkdownWindow` watches the session's transcript
+(`TranscriptLocator.Resolve` → a `FileSystemWatcher` on the `.jsonl`), and a burst of appends is coalesced
+by a ~400ms `DispatcherTimer` into one off-thread `MarkdownFilesReader.GetFileSets` rescan (guarded by
+`IsVisible` + the generation token, the standard idiom). A `SetsEqual` check skips the rebuild when the
+append touched no new Markdown, so the tree (and its expansion/scroll) only churns when the produced/
+referenced sets actually change; a change also invalidates the cached project scan so the "Search all
+project files" palette re-scans disk next open. `RebuildPane` re-selects the open file's fresh leaf
+(suppressed) so the highlight and the discard guard survive a refresh. Watchers/timer are torn down on
+Retarget and OnClosed alongside the existing open-file watcher.
+
+### Attention badge on new/changed rows
+
+Live-refreshed arrivals now announce themselves. A file added, or promoted reference→produced (an edit),
+*while the window is open* is flagged in `_attention` (canonical forward-slashed path, case-insensitive) by
+`FlagNewOrChanged`, which diffs the previous scan against the new one in the live rescan only (the initial
+load flags nothing). Each flagged row shows a small amber dot in a reserved leftmost slot (transparent when
+idle, so flagging/clearing never shifts the row) beside the existing rose/muted type bullet; `BuildNodeVisual`
+registers the marker in `_attentionMarkers` so `ClearAttention` can hide it surgically. Opening the file
+(`OpenInEditor`) clears its flag and marker — the badge goes away the moment the user looks at it. Both maps
+reset on Retarget.
+
+#### Also badges re-edits to already-listed files
+
+The first cut only badged *set* changes (new files / read→write promotions), so re-editing a file the pane
+already listed showed nothing. Now each scan also captures every listed file's on-disk mtime (`StatMtimes`,
+off-thread; `_fileMtimes` baseline), and `FlagEdited` badges any listed file whose mtime advanced since the
+last scan — the session editing a file that's already in the list. The transcript append is still the
+trigger; the mtime just distinguishes "edited again" from "untouched". The currently-open file is exempt
+(the user's looking at it, and Save bumps its own mtime). Because a re-edit leaves the set equal, the old
+`SetsEqual` early-return was replaced by a "rebuild only if the set changed *or* a new flag was added" gate,
+so an mtime-only change still surfaces its badge without churning the tree when nothing's actually new.
+
+#### Switched the trigger from a transcript watcher to polling (reliability fix)
+
+The event-driven trigger was flaky in practice: it re-scanned only when the session *transcript* changed, so
+an edit made in an external editor (IntelliJ IDEA, VS Code) — which doesn't touch the transcript — never
+refreshed the pane; and the open-file `FileSystemWatcher` itself misses atomic "safe write" saves (temp file
++ rename) that those editors use. Replaced both the transcript watcher and the open-file event reliance with
+a `_pollTimer` (~1.2s) running while the window is open. Each tick runs `RefreshPane` (in-flight-guarded):
+re-scan the sets (mtime-cached on the transcript, so cheap), re-stat the listed files, then — new/promoted
+files via the set diff, re-edited listed files via `FlagEdited` (mtime advance), and the open file via
+`ReloadOpenFileIfStale` (reload if clean / flag conflict if dirty). Polling stats the final file, so atomic
+renames and any editor are caught. Nothing rebuilds unless the set changed or a file was newly flagged, so
+the steady state is quiet. The open file is exempt from the pane badge (the editor shows its own on-disk
+state); clearing a badge (opening the file) never disables future flagging — the mtime baseline keeps
+advancing, so a later edit re-flags. Timer starts after the first scan and stops on Retarget/OnClosed.
+
+#### Resilient reload through the atomic-save window
+
+Polling exposed a race: an editor's atomic save (write temp + rename over the target) means a reload can hit
+the file mid-swap — a sharing violation or a momentarily-missing file — and the old code turned any read
+failure into a fatal "Couldn't read" that wiped the editor and nulled `_openFilePath` (so it never retried).
+Now `TryReadFile` opens with `FileShare.ReadWrite | Delete` and retries a few times with a short pause to
+ride out the rename, and `LoadFile`/`OpenInEditor` carry an `isReload` flag: a transient failure while
+reloading an already-open file keeps the current buffer and lets the next poll retry (the mtime baseline
+isn't advanced, so `ReloadOpenFileIfStale` re-fires until it settles). Only a genuine *initial* open failure
+shows the placeholder. `StopWatcher` moved below the null check so a transient reload failure no longer tears
+down the open-file watcher.
