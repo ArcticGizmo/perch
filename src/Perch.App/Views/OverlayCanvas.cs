@@ -249,9 +249,19 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // a display change can drop even a Topmost window behind others.
     public void OnScreensChanged()
     {
-        // Docked owns the whole window geometry (full-height reserved column), so re-derive it against the
-        // new screen layout and re-assert the reservation rather than running the floating/dense re-heal.
-        if (_docked) { ApplyDockedGeometry(); BringWindowToTop(); return; }
+        // Docked owns the whole window geometry (full-height reserved column). Re-derive it only on a real
+        // monitor-layout change (a resolution/monitor add/remove) — NOT on the work-area-only change that our
+        // own reservation triggers, which would otherwise loop (reserve → work-area change → re-reserve → …)
+        // and visibly jitter the column on every collapse/expand.
+        if (_docked)
+        {
+            if (HostWindow is { Screens: { } scr } && ScreenSignature(scr) != _dockScreenSig)
+            {
+                ApplyDockedGeometry();
+                BringWindowToTop();
+            }
+            return;
+        }
         _denseCtl.OnScreensChanged(); RestoreOrEnsureFloating(); BringWindowToTop();
     }
 
@@ -1639,7 +1649,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (pen == null) return;
         var r = new Rect(1, 1, width - 2, height - 2);
         if (r.Width <= 0 || r.Height <= 0) return;
-        OverlayDraw.Panel(ctx, r, null, pen, Corner - 1);
+        OverlayDraw.Panel(ctx, r, null, pen, _docked ? 0 : Corner - 1);
     }
 
     private void DrawHeader(DrawingContext ctx, double width)
@@ -1688,21 +1698,32 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 DrawStatusPill(ctx, x, midY, idle, IdleColor, IdleColor);
         }
 
-        // Right cluster: the dense toggle glyph + (floating only) the expand chevron. The glyph points
-        // along the docked edge: floating shows the arrow collapsing toward the edge, dense shows it
-        // expanding inward. Clicking it enters dense from floating, or leaves it from the open popup.
-        DrawSideCollapseIcon(ctx, SideIconRect(width), reversed: _denseCtl.IsDense ^ (_denseCtl.Side == DenseSide.Left));
+        // Right cluster. Docked shows a single collapse chevron pointing toward the docked edge — the dense
+        // toggle glyph has no meaning here (dense is a Floating-mode affordance), and a header click collapses
+        // the column. Floating keeps the dense toggle glyph + (floating only) the expand chevron: the glyph
+        // points along the docked edge; clicking it enters dense from floating, or leaves it from the popup.
         double clusterLeft = width - HorizPad - IconBoxW;
-
-        // Shown regardless of the session count: the panel below has content (limits, quick links,
-        // Hypertree) even with an empty roster, so the expand affordance has to be reachable at zero
-        // sessions too — otherwise a collapse there could never be undone.
-        if (!_denseCtl.IsDense)
+        if (_docked)
         {
-            var chevron = OverlayDraw.Text(_expanded ? "▲" : "▼", 9, MutedBrush);
-            double chevX = clusterLeft - IconGap - chevron.Width;
-            OverlayDraw.TextLeftMid(ctx, chevron, chevX, midY);
-            clusterLeft = chevX;
+            var rect = SideIconRect(width);
+            var chev = OverlayDraw.Text(_dockSide == HAnchor.Left ? "‹" : "›", 14, MutedBrush);
+            OverlayDraw.TextLeftMid(ctx, chev, rect.Left + (rect.Width - chev.Width) / 2, midY);
+            clusterLeft = rect.Left;
+        }
+        else
+        {
+            DrawSideCollapseIcon(ctx, SideIconRect(width), reversed: _denseCtl.IsDense ^ (_denseCtl.Side == DenseSide.Left));
+
+            // Shown regardless of the session count: the panel below has content (limits, quick links,
+            // Hypertree) even with an empty roster, so the expand affordance has to be reachable at zero
+            // sessions too — otherwise a collapse there could never be undone.
+            if (!_denseCtl.IsDense)
+            {
+                var chevron = OverlayDraw.Text(_expanded ? "▲" : "▼", 9, MutedBrush);
+                double chevX = clusterLeft - IconGap - chevron.Width;
+                OverlayDraw.TextLeftMid(ctx, chevron, chevX, midY);
+                clusterLeft = chevX;
+            }
         }
 
         // Update badge — only while an update is pending. Drawn in the perch-logo colour so it stands out
@@ -2981,6 +3002,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         var p = e.GetPosition(this);
 
+        // Docked collapsed: the rows aren't shown, so only the bottom expand button is interactive — skip all
+        // the row/glyph hit-testing (which would otherwise leave stale hover/tooltip artifacts and clickable
+        // dead rows over the empty column).
+        if (_docked && _dockCollapsed)
+        {
+            bool overExpand = _dockExpandRect.Contains(p);
+            if (overExpand != _hoveredDockExpand) { _hoveredDockExpand = overExpand; InvalidateVisual(); }
+            Cursor = overExpand ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+            base.OnPointerMoved(e);
+            return;
+        }
+
         // Dense drag: manual, constrained to the docked edge (vertical), with drop lanes for re-docking.
         if (_denseArmed)
         {
@@ -3301,9 +3334,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // expand/collapse). Mirrors the WinForms MouseUp click chain.
     private void RouteClick(Point p)
     {
-        // The dense toggle glyph in the header (visible whenever the header shows, i.e. not the closed
-        // strip): enter dense from floating, or leave it from the open popup.
-        if (!_denseCtl.IsClosedStrip && p.Y < HeaderHeight && SideIconRect(Bounds.Width).Contains(p))
+        // Docked collapsed: only the bottom expand arrow (or the top icon band) re-expands the column;
+        // nothing else is clickable, since the rows aren't shown.
+        if (_docked && _dockCollapsed)
+        {
+            if (_dockExpandRect.Contains(p) || p.Y < HeaderHeight) ToggleDockedCollapsed();
+            return;
+        }
+
+        // The dense toggle glyph in the header (floating only; visible whenever the header shows, i.e. not the
+        // closed strip): enter dense from floating, or leave it from the open popup. Docked's header chevron
+        // shares the same rect but collapses the column instead — handled by the header-click block below.
+        if (!_docked && !_denseCtl.IsClosedStrip && p.Y < HeaderHeight && SideIconRect(Bounds.Width).Contains(p))
         {
             _denseCtl.Toggle();
             return;
@@ -3932,6 +3974,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
 
         if (_denseCtl.IsDense) _denseCtl.OpenPopup();
+        else if (_docked)
+        {
+            // Surface the session by expanding the docked column (mirrors expanding a collapsed float).
+            if (_dockCollapsed) { _dockCollapsed = false; UpdateTickTimer(); ApplyDockedGeometry(); }
+        }
         else if (!_expanded && _rows.Count > 0)
         {
             _expanded = true;
@@ -4295,7 +4342,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // the crisp outer edge stays the filled rounded-rect boundary. Mirrors the WinForms DrawChaseBorder.
     private void DrawChaseBorder(DrawingContext ctx, Rect rect, Color color)
     {
-        double radius = Math.Min(Corner, Math.Min(rect.Width, rect.Height) / 2);
+        double radius = _docked ? 0 : Math.Min(Corner, Math.Min(rect.Width, rect.Height) / 2);
         var pts = RoundedRectSamples(rect, radius, out var clip);
         int samples = pts.Length;
         if (samples < 2)

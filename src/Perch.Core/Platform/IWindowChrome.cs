@@ -27,6 +27,13 @@ public interface IWindowChrome
     /// instead of behind it. Best-effort; a zero handle is ignored.</summary>
     void BringToTopNoActivate(IntPtr handle);
 
+    /// <summary>Sets whether the OS window manager rounds the window's outer corners. Windows 11 rounds
+    /// borderless top-level windows by default, which no amount of owner-drawn squaring can undo — the
+    /// docked full-height column wants square corners flush to the screen edge, so it turns this off (and
+    /// back on when it floats again). On Windows this is <c>DWMWA_WINDOW_CORNER_PREFERENCE</c>; elsewhere a
+    /// no-op. Best-effort; a zero handle is ignored.</summary>
+    void SetWindowCornerPreference(IntPtr handle, bool rounded);
+
     /// <summary>Forces the window to the foreground and gives it keyboard focus, working around the OS
     /// foreground-lock that otherwise stops a background tray process from stealing focus (needed by the
     /// session switcher, which a global hotkey summons and which must accept typing immediately). Unlike

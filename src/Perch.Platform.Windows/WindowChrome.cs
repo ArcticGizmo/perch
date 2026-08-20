@@ -34,6 +34,12 @@ public sealed class WindowChrome : IWindowChrome
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
         int x, int y, int cx, int cy, uint uFlags);
 
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+    private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+    private const int DWMWCP_DEFAULT   = 0; // let the OS decide (rounds on Win11)
+    private const int DWMWCP_DONOTROUND = 1; // square corners
+
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
@@ -76,6 +82,17 @@ public sealed class WindowChrome : IWindowChrome
     {
         if (handle == IntPtr.Zero) return;
         SetWindowPos(handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+
+    /// <summary>Turns the OS window-manager's rounded corners on/off (Win11 <c>DWMWA_WINDOW_CORNER_PREFERENCE</c>)
+    /// so the docked full-height column can sit square and flush to the screen edge. Best-effort; a zero
+    /// handle (or a pre-Win11 OS, where the attribute is simply ignored) leaves the default.</summary>
+    public void SetWindowCornerPreference(IntPtr handle, bool rounded)
+    {
+        if (handle == IntPtr.Zero) return;
+        int pref = rounded ? DWMWCP_DEFAULT : DWMWCP_DONOTROUND;
+        try { DwmSetWindowAttribute(handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int)); }
+        catch { /* best-effort: pre-Win11 or DWM disabled — leave the default corners */ }
     }
 
     /// <summary>Forces the window to the foreground and hands it keyboard focus. Windows blocks a process

@@ -29,6 +29,14 @@ public sealed partial class OverlayCanvas
     private PixelRect? _dockScreenBounds;   // the monitor to dock to; null = primary
     private OverlayPlacement? _dockedPlacement;
 
+    // The collapsed strip's bottom "expand" arrow (web-app-nav style) and its hover state.
+    private Rect _dockExpandRect;
+    private bool _hoveredDockExpand;
+
+    // Signature of the screen layout last applied, so OnScreensChanged can tell a real monitor change from
+    // the work-area-only change our own reservation causes (which must not trigger a re-reserve loop).
+    private string _dockScreenSig = "";
+
     /// <summary>Whether the overlay is currently in Docked mode (reserving a screen-edge column).</summary>
     public bool IsDocked => _docked;
 
@@ -95,6 +103,7 @@ public sealed partial class OverlayCanvas
         _docked = true;
         _dockCollapsed = false;
         _hoveredRow = -1;
+        SetWindowCorners(rounded: false);   // square the outer window so it sits flush to the screen edge
         ApplyDockedGeometry();
         UpdateTickTimer();
         InvalidateMeasure();
@@ -108,12 +117,19 @@ public sealed partial class OverlayCanvas
         _docked = false;
         _dockCollapsed = false;
         PlatformServices.EdgeReservation.Release();
+        SetWindowCorners(rounded: true);    // restore the OS rounded corners for the floating panel
         SizeFloatingToContent();   // window was Manual/full-height; size back to content
         PlaceAtInitialFloating();  // restore the floating placement (or default) and re-capture it
         UpdateTickTimer();
         InvalidateMeasure();
         InvalidateVisual();
         BringWindowToTop();
+    }
+
+    private void SetWindowCorners(bool rounded)
+    {
+        if (HostWindow?.TryGetPlatformHandle() is { } h)
+            PlatformServices.WindowChrome.SetWindowCornerPreference(h.Handle, rounded);
     }
 
     // ── Geometry + reservation ───────────────────────────────────────────────────
@@ -124,6 +140,11 @@ public sealed partial class OverlayCanvas
     {
         if (HostWindow is not { Screens: { } screens } w) return;
         var screen = DockedScreen(screens);
+        // Pin the resolved monitor so a later collapse/expand or screen change stays on the same screen
+        // (rather than falling back to primary when no monitor was explicitly chosen).
+        _dockScreenBounds = screen.Bounds;
+        _dockScreenSig = ScreenSignature(screens);
+
         var wa = screen.WorkingArea;      // vertical extent (clears a top/bottom taskbar); unaffected by our own left/right reserve
         var b = screen.Bounds;            // horizontal edge (physical monitor edge, so re-reserves are stable)
         double scale = screen.Scaling <= 0 ? 1.0 : screen.Scaling;
@@ -138,6 +159,19 @@ public sealed partial class OverlayCanvas
         w.Position = new PixelPoint(x, wa.Y);
 
         ReserveDockedColumn(screen, physW);
+    }
+
+    // A stable string of every monitor's physical bounds — changes only on a real display-layout change
+    // (resolution / monitor add-remove), not on a work-area change (taskbar, our own reservation).
+    private static string ScreenSignature(Screens screens)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var s in screens.All)
+        {
+            var r = s.Bounds;
+            sb.Append(r.X).Append(',').Append(r.Y).Append(',').Append(r.Width).Append(',').Append(r.Height).Append(';');
+        }
+        return sb.ToString();
     }
 
     private void ReserveDockedColumn(Screen screen, int physWidth)
@@ -173,8 +207,25 @@ public sealed partial class OverlayCanvas
             if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, 0); DrawChaseBorder(ctx, pr, AttentionColor); }
             else OverlayDraw.Panel(ctx, pr, BgBrush, BorderPen, 0);
             _denseCtl.PaintStrip(ctx, width);
+            DrawDockExpandButton(ctx, width, h);
             DrawInstanceBorder(ctx, width, h);
         }
         return h;
+    }
+
+    // The bottom "expand" affordance on the collapsed strip — a chevron pointing away from the docked edge
+    // (into the screen), like a web-app nav's expand toggle. Click it (or press the docked hotkey / the top
+    // icon) to expand the column. Brightens on hover.
+    private void DrawDockExpandButton(DrawingContext ctx, double width, double h)
+    {
+        const double box = 24;
+        double x = (width - box) / 2;
+        double y = h - box - 12;
+        _dockExpandRect = new Rect(x, y, box, box);
+
+        // Right-docked expands leftward (‹); left-docked expands rightward (›).
+        var glyph = OverlayDraw.Text(_dockSide == HAnchor.Left ? "›" : "‹", 18,
+            _hoveredDockExpand ? FgBrush : MutedBrush, FontWeight.Bold);
+        OverlayDraw.TextLeftMid(ctx, glyph, x + (box - glyph.Width) / 2, y + box / 2);
     }
 }
