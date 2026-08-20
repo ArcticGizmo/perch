@@ -191,6 +191,7 @@ public partial class App : Application
                 snap => { _overlay?.Canvas.UpdateRoster(snap); CheckDnd(); },   // re-check DND on each roster tick
                 OnFriendPosted,
                 OnReactionToMyPost);
+            _feedHost.Diagnostic += m => _reactionDiag?.Invoke(m);   // stream to the debug tool when it's open
             _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
             {
@@ -682,11 +683,16 @@ public partial class App : Application
         if (_social is null) return;
         _debugSocialWindow = WindowHost.ShowOrFocus(
             _debugSocialWindow,
-            () => new DebugSocialWindow(_social, () => _feedHost?.RefreshSoon(), ShowReactionBubble,
-                () => $"ShowLargeReactions={_appSettings?.ShowLargeReactions}, DND active={_dndActive}, " +
-                      $"DND suppressing={DndSuppressing}, SocialEnabled={_appSettings?.SocialEnabled}, " +
-                      $"feed polling={_feedHost is not null}"),
-            () => _debugSocialWindow = null);
+            () =>
+            {
+                var w = new DebugSocialWindow(_social, () => _feedHost?.RefreshSoon(), ShowReactionBubble,
+                    () => $"ShowLargeReactions={_appSettings?.ShowLargeReactions}, DND active={_dndActive}, " +
+                          $"DND suppressing={DndSuppressing}, SocialEnabled={_appSettings?.SocialEnabled}, " +
+                          $"feed polling={_feedHost is not null}");
+                _reactionDiag = m => Dispatcher.UIThread.Post(() => w.Diag(m));   // stream host + gate diagnostics
+                return w;
+            },
+            () => { _reactionDiag = null; _debugSocialWindow = null; });
     }
 
     // A reaction chip / "+" picker in the overlay social region was used: toggle the reaction on the backend,
@@ -885,10 +891,14 @@ public partial class App : Application
     // gated on the setting (and quiet in Do Not Disturb, like the friend-post toasts). Arrives on the UI
     // thread from SocialFeedMonitorHost. Best-effort — a missing overlay/screen just skips the flourish.
     private ReactionBubbleWindow? _reactionBubbles;
+    private Action<string>? _reactionDiag;   // set by the debug tool while it's open; streams gate + poll diagnostics
     private void OnReactionToMyPost(string emoji)
     {
-        if (_appSettings is not { ShowLargeReactions: true }) return;
-        if (_dndActive && (_appSettings?.CloseFeedInDoNotDisturb ?? false)) return;
+        bool showByGate = _appSettings is { ShowLargeReactions: true };
+        bool suppressed = _dndActive && (_appSettings?.CloseFeedInDoNotDisturb ?? false);
+        _reactionDiag?.Invoke($"handler: {emoji} — ShowLargeReactions={_appSettings?.ShowLargeReactions}, " +
+            $"DND suppressing={suppressed} -> {(showByGate && !suppressed ? "SHOWING bubble" : "BLOCKED by a gate")}");
+        if (!showByGate || suppressed) return;
         ShowReactionBubble(emoji);
     }
 

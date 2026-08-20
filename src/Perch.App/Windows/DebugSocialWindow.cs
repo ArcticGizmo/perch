@@ -39,6 +39,8 @@ internal sealed class DebugSocialWindow : Window
 
     private readonly TextBox _email, _password, _handle, _target, _status, _emoji;
     private readonly SelectableTextBlock _log;
+    private readonly SelectableTextBlock _diagLog;
+    private readonly List<string> _diagLines = new();
 
     /// <param name="testReaction">Spawns a big-reaction bubble directly (bypassing the network and the
     /// ShowLargeReactions / Do Not Disturb gates), so the animation can be verified in isolation.</param>
@@ -137,6 +139,16 @@ internal sealed class DebugSocialWindow : Window
         actionsRow.Children.Add(dnd);
         panel.Children.Add(actionsRow);
         panel.Children.Add(_log);
+
+        panel.Children.Add(SettingsUi.Separator());
+        panel.Children.Add(SettingsUi.FieldCaption("Reaction diagnostics (live)"));
+        _diagLog = new SelectableTextBlock
+        {
+            Foreground = Palette.MutedBrush, FontSize = 11, TextWrapping = TextWrapping.Wrap,
+            FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
+            Text = "(each poll's reaction state on your post appears here — newest first)",
+        };
+        panel.Children.Add(_diagLog);
 
         Content = new ScrollViewer { Content = panel };
         AddHandler(KeyDownEvent, (_, e) => { if (e.Key == Key.Escape) { Close(); e.Handled = true; } }, RoutingStrategies.Tunnel);
@@ -259,6 +271,15 @@ internal sealed class DebugSocialWindow : Window
     }
 
     private void Log(string message) => _log.Text = message;
+
+    /// <summary>Appends a live diagnostic line (newest first), capped so the panel stays readable. Fed by the
+    /// feed monitor host (per-poll reaction state) and the big-reaction gate decision.</summary>
+    public void Diag(string message)
+    {
+        _diagLines.Insert(0, message);
+        if (_diagLines.Count > 40) _diagLines.RemoveRange(40, _diagLines.Count - 40);
+        _diagLog.Text = string.Join("\n", _diagLines);
+    }
 
     private static TextBox Field(string watermark)
     {

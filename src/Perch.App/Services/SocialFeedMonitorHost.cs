@@ -99,13 +99,25 @@ internal sealed class SocialFeedMonitorHost : IDisposable
         catch { /* best-effort: a failed poll just keeps the last roster on screen */ }
     }
 
+    /// <summary>Raised (UI thread) with a human-readable line each poll describing the reaction state on your
+    /// own post and any transition — a diagnostic sink for the debug tool.</summary>
+    public event Action<string>? Diagnostic;
+
     // Fires once per genuinely-new reaction on your own latest status. The baseline is re-seeded (and firing
     // suppressed) whenever the tracked post changes — so the reactions already sitting on a post when polling
     // starts, and any that carry over when you post a new status, don't replay as "new".
     private void NotifyReactionsToMe(RosterSnapshot roster)
     {
         var post = roster.MyLatest;
-        if (post is null) { _myReactionPostId = null; _myReactionCounts.Clear(); return; }
+        if (post is null)
+        {
+            if (_myReactionPostId is not null) Diagnostic?.Invoke("poll: you have no current status now — nothing to react to.");
+            _myReactionPostId = null; _myReactionCounts.Clear();
+            return;
+        }
+
+        string nowDesc = Describe(roster.MyReactions);
+        string shortId = post.Id.ToString()[..8];
 
         bool samePost = _myReactionPostId == post.Id;
         if (!samePost)
@@ -114,17 +126,34 @@ internal sealed class SocialFeedMonitorHost : IDisposable
             _myReactionPostId = post.Id;
             _myReactionCounts.Clear();
             foreach (var g in roster.MyReactions) _myReactionCounts[g.Emoji] = g.Count;
+            Diagnostic?.Invoke($"poll: now tracking post {shortId}; baseline reactions {nowDesc} (won't re-fire the baseline).");
             return;
         }
 
+        string prevDesc = Describe(_myReactionCounts);
+        int fired = 0;
         foreach (var g in roster.MyReactions)
         {
             int grew = g.Count - _myReactionCounts.GetValueOrDefault(g.Emoji, 0);
-            for (int i = 0; i < grew; i++) _onReactionToMyPost(g.Emoji);   // one bubble per net-new reaction
+            for (int i = 0; i < grew; i++) { _onReactionToMyPost(g.Emoji); fired++; }   // one bubble per net-new reaction
         }
         _myReactionCounts.Clear();
         foreach (var g in roster.MyReactions) _myReactionCounts[g.Emoji] = g.Count;
+
+        if (prevDesc != nowDesc || fired > 0)
+            Diagnostic?.Invoke($"poll: post {shortId} reactions {prevDesc} -> {nowDesc}; new reactions detected: {fired}"
+                               + (fired > 0 ? " (handler called — see gate line for whether a bubble showed)." : "."));
+        else
+            Diagnostic?.Invoke($"poll: post {shortId} reactions unchanged at {nowDesc} — no bubble (nothing new).");
     }
+
+    private static string Describe(IReadOnlyList<ReactionGroup> groups) =>
+        groups.Count == 0 ? "(none)"
+            : string.Join(", ", groups.OrderBy(g => g.Emoji, StringComparer.Ordinal).Select(g => $"{g.Emoji}x{g.Count}"));
+
+    private static string Describe(Dictionary<string, int> counts) =>
+        counts.Count == 0 ? "(none)"
+            : string.Join(", ", counts.Where(kv => kv.Value > 0).OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => $"{kv.Key}x{kv.Value}"));
 
     // Fires a notification for each friend whose latest status is one we haven't surfaced yet. The first poll
     // after activation only primes the seen-set (the backlog isn't news); the roster is friends-only, so every
