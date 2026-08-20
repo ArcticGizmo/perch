@@ -15,9 +15,12 @@ public sealed class WindowsDoNotDisturb : IDoNotDisturb
 {
     public bool IsActive => QuietHoursOn() || ShellQuietTime();
 
-    // Windows 11 stores the Focus / Do Not Disturb state in a CloudStore blob. Byte 8 of its Data value is the
-    // mode: 0 = off, non-zero = on (1 = priority only, 2 = alarms only / DND). Heuristic and version-sensitive,
-    // hence the fallback below — but this is what actually flips when you toggle DND in the Action Center.
+    // Windows 11 stores the Focus / Do Not Disturb state in a CloudStore blob whose Data value embeds the
+    // active focus profile as a UTF-16 string: "...QuietHoursProfile.Unrestricted" (off),
+    // ".PriorityOnly" or ".Alarms" (a Focus / Do Not Disturb mode is on). We read the profile name rather than
+    // a fixed byte offset — the binary layout is version-sensitive (an earlier byte-8 heuristic misfired,
+    // reading a timestamp byte as the mode), but the profile string is stable. This is what actually flips
+    // when you toggle DND in the Action Center.
     private static bool QuietHoursOn()
     {
         try
@@ -25,11 +28,16 @@ public sealed class WindowsDoNotDisturb : IDoNotDisturb
             using var key = Registry.CurrentUser.OpenSubKey(
                 @"SOFTWARE\Microsoft\Windows\CurrentVersion\CloudStore\Store\Cache\DefaultAccount\" +
                 @"$$windows.data.notifications.quiethourssettings\Current");
-            if (key?.GetValue("Data") is byte[] data && data.Length > 8)
-                return data[8] != 0;
+            if (key?.GetValue("Data") is byte[] data && data.Length > 0)
+            {
+                var s = System.Text.Encoding.Unicode.GetString(data);
+                if (s.Contains("Unrestricted", StringComparison.Ordinal)) return false;   // notifications allowed = off
+                if (s.Contains("PriorityOnly", StringComparison.Ordinal)
+                    || s.Contains("Alarms", StringComparison.Ordinal)) return true;       // a Focus/DND mode is on
+            }
         }
         catch { /* best-effort */ }
-        return false;
+        return false;   // unknown / unreadable → treat as off, so nothing is wrongly hidden
     }
 
     private static bool ShellQuietTime()
