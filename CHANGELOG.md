@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.55] - 2026-08-20
+
+- Fixed the context thermometer sizing Fable to 200k (it has a million, like Opus and Sonnet 5)
+
+---
+
 ## [v0.3.54] - 2026-08-20
 
 - Todos: your own reminders with a title, notes, and an optional due time (off by default)

@@ -60,12 +60,16 @@ public class ModelContextTests
     [InlineData("claude-sonnet-4-6", ModelContext.DefaultWindow)]
     [InlineData("Haiku 4.5", ModelContext.DefaultWindow)]
     [InlineData("claude-haiku-4-5-20251001", ModelContext.DefaultWindow)]
+    // Fable 5 ships the 1M window.
+    [InlineData("Fable 5", ModelContext.ExtendedWindow)]
+    [InlineData("claude-fable-5", ModelContext.ExtendedWindow)]
     // Unreleased generations resolve by rule, with no table to update.
     [InlineData("claude-sonnet-6", ModelContext.ExtendedWindow)]
     [InlineData("Opus 7.2", ModelContext.ExtendedWindow)]
     // Bare aliases mean "the current model of this family".
     [InlineData("sonnet", ModelContext.ExtendedWindow)]
     [InlineData("opus", ModelContext.ExtendedWindow)]
+    [InlineData("fable", ModelContext.ExtendedWindow)]
     [InlineData("haiku", ModelContext.DefaultWindow)]
     // Nothing recognisable.
     [InlineData("some-other-llm", ModelContext.DefaultWindow)]

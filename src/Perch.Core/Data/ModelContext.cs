@@ -162,16 +162,17 @@ internal static class ModelContext
         if (family is null)
             return DefaultWindow;
 
-        // No generation at all means a bare alias ("opus", "sonnet"), which Claude Code resolves to the
-        // current model of that family — the newest, so the family's present-day window.
+        // No generation at all means a bare alias ("opus", "sonnet", "fable"), which Claude Code resolves
+        // to the current model of that family — the newest, so the family's present-day window.
         if (gen is not { } g)
-            return family is "opus" or "sonnet" ? ExtendedWindow : DefaultWindow;
+            return family is "opus" or "sonnet" or "fable" ? ExtendedWindow : DefaultWindow;
 
         return family switch
         {
             "opus"   => g >= 4 ? ExtendedWindow : DefaultWindow,  // Opus 4.x onwards ships the 1M window
             "sonnet" => g >= 5 ? ExtendedWindow : DefaultWindow,  // Sonnet 5 is 1M by default; 4.x is 200k
-            _        => DefaultWindow,                            // no Haiku/Fable ships 1M unmarked
+            "fable"  => g >= 5 ? ExtendedWindow : DefaultWindow,  // Fable 5 ships the 1M window
+            _        => DefaultWindow,                            // no Haiku ships 1M unmarked
         };
     }
 
