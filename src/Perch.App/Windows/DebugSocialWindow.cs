@@ -35,16 +35,22 @@ internal sealed class DebugSocialWindow : Window
     private static readonly string[] ReactCycle = ["🔥", "🎉", "😂", "❤️", "👍", "🙌", "😮", "😢"];
     private int _reactIx;
 
+    private readonly Func<string>? _gateStatus;
+
     private readonly TextBox _email, _password, _handle, _target, _status, _emoji;
     private readonly TextBlock _log;
 
     /// <param name="testReaction">Spawns a big-reaction bubble directly (bypassing the network and the
     /// ShowLargeReactions / Do Not Disturb gates), so the animation can be verified in isolation.</param>
-    public DebugSocialWindow(SupabaseSocialClient real, Action refreshReal, Action<string>? testReaction = null)
+    /// <param name="gateStatus">Returns a human-readable line describing the big-reaction gates
+    /// (ShowLargeReactions setting, DND) so a failure to fire can be diagnosed.</param>
+    public DebugSocialWindow(SupabaseSocialClient real, Action refreshReal, Action<string>? testReaction = null,
+        Func<string>? gateStatus = null)
     {
         _real = real;
         _refreshReal = refreshReal;
         _testReaction = testReaction;
+        _gateStatus = gateStatus;
         Title = "Social testing (puppet)";
         Width = 460;
         Height = 620;
@@ -113,7 +119,12 @@ internal sealed class DebugSocialWindow : Window
             _testReaction?.Invoke(emoji);
             Log(_testReaction is null ? "Test hook not wired." : $"Spawned a local {emoji} bubble (bypasses settings/DND).");
         };
-        panel.Children.Add(Left(testBubble));
+        var diagnose = SettingsUi.FlatButton("Diagnose big reactions");
+        diagnose.Click += (_, _) => Run(Diagnose);
+        var testRow = SettingsUi.ButtonRow();
+        testRow.Children.Add(testBubble);
+        testRow.Children.Add(diagnose);
+        panel.Children.Add(testRow);
 
         panel.Children.Add(SettingsUi.Separator());
         var refresh = SettingsUi.FlatButton("Refresh my overlay now");
@@ -203,6 +214,28 @@ internal sealed class DebugSocialWindow : Window
         await p.ReactAsync(latest.Id, "", on: false);   // on:false removes the puppet's own reaction, if any
         Log($"Removed the puppet's reaction from @{target.Handle}'s latest post.");
         _refreshReal();
+    }
+
+    // Why isn't the big reaction firing? Reports the gates (ShowLargeReactions / DND) and whether the real
+    // client actually sees a reaction on your latest post. Big reactions only fire for reactions that arrive
+    // *after* the feed starts (the backlog is baseline), so a reaction already present won't re-fire — react
+    // again (a new emoji) to see it.
+    private async Task Diagnose()
+    {
+        Log(_gateStatus is null ? "Gate status hook not wired." : _gateStatus());
+        var roster = await _real.GetRosterAsync();
+        if (roster.MyLatest is null)
+        {
+            Log("Your roster has no latest status — you haven't posted, so there's nothing for a friend to react to. Post a status first.");
+            return;
+        }
+        var rx = roster.MyReactions.Count == 0
+            ? "(none)"
+            : string.Join(", ", roster.MyReactions.Select(g => $"{g.Emoji}x{g.Count}"));
+        var body = roster.MyLatest.Body;
+        Log($"Your latest status: \"{(body.Length > 40 ? body[..40] + "…" : body)}\" — reactions the real client sees on it: {rx}. " +
+            "If a reaction shows here but no bubble fired, it was already present when the feed started (baseline) or a gate above is off; " +
+            "click React (it cycles emojis) to add a fresh one.");
     }
 
     private async Task<Profile> FindTarget(SupabaseSocialClient p)

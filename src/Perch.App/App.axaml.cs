@@ -682,7 +682,10 @@ public partial class App : Application
         if (_social is null) return;
         _debugSocialWindow = WindowHost.ShowOrFocus(
             _debugSocialWindow,
-            () => new DebugSocialWindow(_social, () => _feedHost?.RefreshSoon(), ShowReactionBubble),
+            () => new DebugSocialWindow(_social, () => _feedHost?.RefreshSoon(), ShowReactionBubble,
+                () => $"ShowLargeReactions={_appSettings?.ShowLargeReactions}, DND active={_dndActive}, " +
+                      $"DND suppressing={DndSuppressing}, SocialEnabled={_appSettings?.SocialEnabled}, " +
+                      $"feed polling={_feedHost is not null}"),
             () => _debugSocialWindow = null);
     }
 
