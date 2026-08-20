@@ -446,6 +446,14 @@ internal static class SettingsRegistry
             ["theme", "colour", "color", "palette", "dark", "light", "appearance", "contrast", "accessibility", "ember", "midnight"],
             PreviewTarget.None, nameof(AppSettings.ActiveThemeId)),
 
+        // Rendered as a two-option segmented toggle (see SettingsCatalogView.DropdownEditor). Order matches
+        // the OverlayPresentationMode enum ordinals (Floating, Docked).
+        Info("overlay-mode", "Overlay mode",
+            "Float the overlay over a corner, or dock it as a reserved screen-edge column that maximized windows can't cover (Ctrl+Shift+W collapses/expands it).",
+            SettingSurface.Advanced, SettingKind.Dropdown,
+            ["overlay", "mode", "float", "floating", "dock", "docked", "column", "reserve", "sidebar", "edge", "appbar"],
+            PreviewTarget.None, nameof(AppSettings.OverlayMode)),
+
         Info("start-mode", "Start Perch",
             "When Perch launches itself - off, on session start, or at login.",
             SettingSurface.Advanced, SettingKind.Dropdown,
@@ -455,11 +463,11 @@ internal static class SettingsRegistry
         // Opens the drag-to-place editor (also reachable from the overlay header's right-click menu).
         // Backs both placement properties so the coverage test is satisfied without a NotSettings entry.
         Info("overlay-placement", "Initial overlay placement",
-            "Choose where the overlay and the dense strip first appear, by dragging a preview.",
+            "Choose where the overlay, the dense strip and the docked column first appear, by dragging a preview.",
             SettingSurface.Advanced, SettingKind.List,
-            ["placement", "position", "corner", "dock", "move", "initial", "location", "overlay", "dense", "where"],
+            ["placement", "position", "corner", "dock", "docked", "move", "initial", "location", "overlay", "dense", "side", "where"],
             PreviewTarget.None,
-            nameof(AppSettings.FloatingPlacement), nameof(AppSettings.DensePlacement)),
+            nameof(AppSettings.FloatingPlacement), nameof(AppSettings.DensePlacement), nameof(AppSettings.DockedPlacement)),
 
         // Rendered as a two-option segmented toggle (see SettingsCatalogView.DropdownEditor), not a combo.
         Info("dense-status-style", "Dense strip status changes",

@@ -37,6 +37,10 @@ public sealed class WindowChrome : IWindowChrome
     public void MakeToolWindowNoActivate(IntPtr handle) => Configure(handle, clickThrough: false);
     public void MakeClickThroughNoActivate(IntPtr handle) => Configure(handle, clickThrough: true);
 
+    /// <summary>No-op on macOS — window corner rounding isn't controlled this way here. (Docked mode is a
+    /// Windows-first feature anyway; see IEdgeReservation.)</summary>
+    public void SetWindowCornerPreference(IntPtr handle, bool rounded) { }
+
     /// <summary>Lifts the window to the front of its level without activating it, so a hint shows above
     /// the overlay. <c>orderFrontRegardless</c> raises a window without making it key/main. Best-effort.</summary>
     public void BringToTopNoActivate(IntPtr handle)

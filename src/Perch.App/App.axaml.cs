@@ -134,6 +134,7 @@ public partial class App : Application
                 _daemonHost?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
+                _overlay?.Canvas.ReleaseDocked();   // give the reserved screen edge back to the desktop
                 _overlay?.Canvas.DisposeDense();
                 Services.Replay.ReplayBootstrap.Cleanup(); // delete the disposable replay sandbox
             };
@@ -151,7 +152,7 @@ public partial class App : Application
 
             // Seed the user-defined initial placements before the window is shown (OnOpened applies the
             // floating one; the dense one is used on first dense entry). Null on either keeps the default.
-            _overlay.Canvas.SetInitialPlacements(settings.FloatingPlacement, settings.DensePlacement);
+            _overlay.Canvas.SetInitialPlacements(settings.FloatingPlacement, settings.DensePlacement, settings.DockedPlacement);
 
             // Register the curated palettes harvested from the ArcticGizmo package as built-in-like presets,
             // so a saved ActiveThemeId that names one (e.g. "nord-dark") resolves below.
@@ -271,6 +272,7 @@ public partial class App : Application
             // the menu is complete, with best-effort/stub handlers until those windows land.
             _overlay.Canvas.ExitRequested += () => desktop.Shutdown();
             _overlay.Canvas.SetPlacementsRequested += OpenPlacementEditor;
+            _overlay.Canvas.OverlayModeToggleRequested += ToggleOverlayMode;
             _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
             _overlay.Canvas.UsageToggleRequested += SetUsageEnabled;
             _overlay.Canvas.HistoryRequested += OpenHistory;
@@ -335,6 +337,11 @@ public partial class App : Application
             ApplyDisplaySettings(settings);
 
             _overlay.Show();
+
+            // If the persisted mode is Docked, reserve the edge column now the window (and its handle) exist.
+            // Floating is the default, so an older settings file just keeps floating.
+            if (settings.OverlayMode == OverlayPresentationMode.Docked)
+                _overlay.Canvas.SetOverlayMode(OverlayPresentationMode.Docked);
 
             // Once the UI is up, pop the post-update "what's new" window (if this launch detected an update).
             if (_pendingChangelog is { Count: > 0 } changelog)
@@ -1003,9 +1010,10 @@ public partial class App : Application
 
         var ctx = new PlacementEditorContext(
             screen,
-            _appSettings?.FloatingPlacement, _appSettings?.DensePlacement,
+            _appSettings?.FloatingPlacement, _appSettings?.DensePlacement, _appSettings?.DockedPlacement,
             Views.OverlayCanvas.DefaultFloatingPlacement(), o.Canvas.DefaultDensePlacement(),
-            o.Canvas.FloatingMockSizeDip(), o.Canvas.DenseMockSizeDip(),
+            Views.OverlayCanvas.DefaultDockedPlacement(),
+            o.Canvas.FloatingMockSizeDip(), o.Canvas.DenseMockSizeDip(), o.Canvas.DockedMockSizeDip(),
             ApplyPlacements);
 
         _placementEditor = WindowHost.ShowOrFocus(_placementEditor,
@@ -1014,13 +1022,14 @@ public partial class App : Application
 
     // Persists the chosen placements (null = "use the default") and applies them: the floating one lands
     // live now; the dense one takes effect on the next dense entry / launch. See OverlayCanvas.
-    private void ApplyPlacements(OverlayPlacement? floating, OverlayPlacement? dense)
+    private void ApplyPlacements(OverlayPlacement? floating, OverlayPlacement? dense, OverlayPlacement? docked)
     {
         if (_appSettings is not { } s) return;
         s.FloatingPlacement = floating;
         s.DensePlacement = dense;
+        s.DockedPlacement = docked;
         s.Save();
-        _overlay?.Canvas.ApplyPlacementsLive(floating, dense);
+        _overlay?.Canvas.ApplyPlacementsLive(floating, dense, docked);
     }
 
     // "View tree…" (overlay row) — opens/focuses the one git Tree window and points it at the clicked
@@ -1346,6 +1355,27 @@ public partial class App : Application
     // edge strip (that expands on hover) rather than hiding entirely.
     private void ToggleDense() => _overlay?.Canvas.ToggleDense();
 
+    // Ctrl+Shift+W — collapse/expand the docked column. No-op unless the overlay is in Docked mode.
+    private void ToggleDocked() => _overlay?.Canvas.ToggleDockedCollapsed();
+
+    // Switch the live overlay between Floating and Docked from the settings segmented control.
+    private void SetOverlayMode()
+    {
+        if (_appSettings is { } s) _overlay?.Canvas.SetOverlayMode(s.OverlayMode);
+    }
+
+    // Flip Floating ↔ Docked from the overlay header's right-click menu: persist the new mode and apply it
+    // live (the settings segmented control reads it back next time it opens).
+    private void ToggleOverlayMode()
+    {
+        if (_appSettings is not { } s) return;
+        s.OverlayMode = s.OverlayMode == OverlayPresentationMode.Docked
+            ? OverlayPresentationMode.Floating
+            : OverlayPresentationMode.Docked;
+        s.Save();
+        _overlay?.Canvas.SetOverlayMode(s.OverlayMode);
+    }
+
     // ── Global hotkeys ────────────────────────────────────────────────────────────
     // Disposes any current bindings and re-registers the three configured shortcuts from settings. Called
     // once at startup and again whenever the Hotkeys settings page edits a binding, so a change takes
@@ -1360,6 +1390,7 @@ public partial class App : Application
         TryRegister(s.HotkeyToggleDense,   () => Dispatcher.UIThread.Post(ToggleDense));
         TryRegister(s.HotkeyCycleSessions, () => Dispatcher.UIThread.Post(CycleSessions));
         TryRegister(s.HotkeyOpenSwitcher,  () => Dispatcher.UIThread.Post(OpenSwitcher));
+        TryRegister(s.HotkeyToggleDocked,  () => Dispatcher.UIThread.Post(ToggleDocked));
     }
 
     private void TryRegister(HotkeyBinding binding, Action onPressed)
@@ -1499,6 +1530,7 @@ public partial class App : Application
                 settings.ShowSystemMetrics, settings.ShowSessionMetrics, settings.IncludeSubprocessMetrics),
             QuickLinksChanged = () => ReloadQuickLinks(settings),
             HotkeysChanged = RegisterHotkeys,
+            OverlayModeChanged = SetOverlayMode,
             TestNotification = kind => _notifications?.ShowTest(kind),
             TestExternalNotification = () => { if (_notifications is { } n) _ = n.SendExternalTestAsync(); },
             CheckForUpdates = () => _updateService?.CheckManual(),

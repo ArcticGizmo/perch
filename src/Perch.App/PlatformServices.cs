@@ -22,6 +22,8 @@ internal static class PlatformServices
     public static ILoginItem LoginItem { get; } = new Impl.LoginItem();
     public static IAudioCue AudioCue { get; } = new Impl.AudioCue();
     public static IWindowChrome WindowChrome { get; } = new Impl.WindowChrome();
+    // Reserves a screen edge (Windows AppBar) so Docked mode's column isn't covered by maximized windows.
+    public static IEdgeReservation EdgeReservation { get; } = new Impl.EdgeReservation();
     public static IVirtualDesktopManager VirtualDesktops { get; } = new Impl.VirtualDesktopManager();
     public static IImageClipboard ImageClipboard { get; } = new Impl.ImageClipboard();
     public static IUrlOpener UrlOpener { get; } = new Impl.UrlOpener();

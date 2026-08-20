@@ -416,11 +416,11 @@ internal sealed class MarkdownWindow : Window
         // VS Code-style option toggles. Aa = Match Case, .* = Regex (both affect matching on either pane);
         // AB = Preserve Case (replace-only). Monospace glyphs so they read as the familiar icons.
         _matchCaseBtn = MakeOptionToggle("Aa", "Match case (Alt+C)",
-            () => { _matchCase = !_matchCase; StyleToggle(_matchCaseBtn, _matchCase); OnFindOptionChanged(); });
+            b => { _matchCase = !_matchCase; StyleToggle(b, _matchCase); OnFindOptionChanged(); });
         _regexBtn = MakeOptionToggle(".*", "Use regular expression (Alt+R)",
-            () => { _regex = !_regex; StyleToggle(_regexBtn, _regex); OnFindOptionChanged(); });
+            b => { _regex = !_regex; StyleToggle(b, _regex); OnFindOptionChanged(); });
         _preserveCaseBtn = MakeOptionToggle("AB", "Preserve case on replace (Alt+P)",
-            () => { _preserveCase = !_preserveCase; StyleToggle(_preserveCaseBtn, _preserveCase); });
+            b => { _preserveCase = !_preserveCase; StyleToggle(b, _preserveCase); });
 
         _replaceBox = new TextBox
         {
@@ -1866,7 +1866,9 @@ internal sealed class MarkdownWindow : Window
     }
 
     // A small option toggle (Aa / .* / AB) as a plain Button styled by a bool — the HistoryWindow toggle idiom.
-    private Button MakeOptionToggle(string glyph, string tip, Action onClick)
+    // The click callback receives the button itself, so a caller can style it without capturing the
+    // not-yet-assigned field (which would trip the nullable-flow analysis at lambda-definition time).
+    private Button MakeOptionToggle(string glyph, string tip, Action<Button> onClick)
     {
         var b = new Button
         {
@@ -1876,7 +1878,7 @@ internal sealed class MarkdownWindow : Window
             HorizontalContentAlignment = HorizontalAlignment.Center,
         };
         ToolTip.SetTip(b, tip);
-        b.Click += (_, _) => onClick();
+        b.Click += (_, _) => onClick(b);
         return b;
     }
 
