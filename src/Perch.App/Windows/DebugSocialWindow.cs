@@ -26,15 +26,33 @@ internal sealed class DebugSocialWindow : Window
 {
     private readonly SupabaseSocialClient _real;
     private readonly Action _refreshReal;
+    private readonly Action<string>? _testReaction;
     private SupabaseSocialClient? _puppet;
 
-    private readonly TextBox _email, _password, _handle, _target, _status, _emoji;
-    private readonly TextBlock _log;
+    // A ring of reactions so each "React" click uses a different emoji — reactions are one-per-user, so
+    // re-clicking the same emoji is a delete-then-insert that leaves the count unchanged and so wouldn't
+    // trigger a big-reaction bubble. Cycling guarantees a genuinely new reaction each time.
+    private static readonly string[] ReactCycle = ["🔥", "🎉", "😂", "❤️", "👍", "🙌", "😮", "😢"];
+    private int _reactIx;
 
-    public DebugSocialWindow(SupabaseSocialClient real, Action refreshReal)
+    private readonly Func<string>? _gateStatus;
+
+    private readonly TextBox _email, _password, _handle, _target, _status, _emoji;
+    private readonly SelectableTextBlock _log;
+    private readonly SelectableTextBlock _diagLog;
+    private readonly List<string> _diagLines = new();
+
+    /// <param name="testReaction">Spawns a big-reaction bubble directly (bypassing the network and the
+    /// ShowLargeReactions / Do Not Disturb gates), so the animation can be verified in isolation.</param>
+    /// <param name="gateStatus">Returns a human-readable line describing the big-reaction gates
+    /// (ShowLargeReactions setting, DND) so a failure to fire can be diagnosed.</param>
+    public DebugSocialWindow(SupabaseSocialClient real, Action refreshReal, Action<string>? testReaction = null,
+        Func<string>? gateStatus = null)
     {
         _real = real;
         _refreshReal = refreshReal;
+        _testReaction = testReaction;
+        _gateStatus = gateStatus;
         Title = "Social testing (puppet)";
         Width = 460;
         Height = 620;
@@ -53,7 +71,7 @@ internal sealed class DebugSocialWindow : Window
         _emoji.Text = "🔥";   // a default mood/reaction so puppet posts show a mood in the roster
         _emoji.Width = 60;
 
-        _log = new TextBlock
+        _log = new SelectableTextBlock
         {
             Foreground = Palette.MutedBrush, FontSize = 12, TextWrapping = TextWrapping.Wrap,
             Text = "Ready. Create a user in Supabase (Auth → Users → Add user, Auto Confirm), then sign in below.",
@@ -89,7 +107,26 @@ internal sealed class DebugSocialWindow : Window
         var reactBtn = SettingsUi.FlatButton("React to my latest post");
         reactBtn.Click += (_, _) => Run(React);
         reactRow.Children.Add(reactBtn);
+        var unreactBtn = SettingsUi.FlatButton("Remove reaction");
+        unreactBtn.Click += (_, _) => Run(Unreact);
+        reactRow.Children.Add(unreactBtn);
         panel.Children.Add(reactRow);
+
+        // Fire the big-reaction bubble directly — no network, no ShowLargeReactions / DND gate — so you can
+        // confirm the animation itself works independently of the detection path.
+        var testBubble = SettingsUi.FlatButton("Test big reaction (local)");
+        testBubble.Click += (_, _) =>
+        {
+            var emoji = ReactCycle[_reactIx++ % ReactCycle.Length];
+            _testReaction?.Invoke(emoji);
+            Log(_testReaction is null ? "Test hook not wired." : $"Spawned a local {emoji} bubble (bypasses settings/DND).");
+        };
+        var diagnose = SettingsUi.FlatButton("Diagnose big reactions");
+        diagnose.Click += (_, _) => Run(Diagnose);
+        var testRow = SettingsUi.ButtonRow();
+        testRow.Children.Add(testBubble);
+        testRow.Children.Add(diagnose);
+        panel.Children.Add(testRow);
 
         panel.Children.Add(SettingsUi.Separator());
         var refresh = SettingsUi.FlatButton("Refresh my overlay now");
@@ -102,6 +139,16 @@ internal sealed class DebugSocialWindow : Window
         actionsRow.Children.Add(dnd);
         panel.Children.Add(actionsRow);
         panel.Children.Add(_log);
+
+        panel.Children.Add(SettingsUi.Separator());
+        panel.Children.Add(SettingsUi.FieldCaption("Reaction diagnostics (live)"));
+        _diagLog = new SelectableTextBlock
+        {
+            Foreground = Palette.MutedBrush, FontSize = 11, TextWrapping = TextWrapping.Wrap,
+            FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
+            Text = "(each poll's reaction state on your post appears here — newest first)",
+        };
+        panel.Children.Add(_diagLog);
 
         Content = new ScrollViewer { Content = panel };
         AddHandler(KeyDownEvent, (_, e) => { if (e.Key == Key.Escape) { Close(); e.Handled = true; } }, RoutingStrategies.Tunnel);
@@ -158,10 +205,49 @@ internal sealed class DebugSocialWindow : Window
         var feed = await p.GetFeedAsync(50);
         var latest = feed.FirstOrDefault(x => x.Author.Id == target.Id);
         if (latest is null) { Log($"No visible post by @{target.Handle} — are you accepted friends, and have you posted?"); return; }
-        var emoji = string.IsNullOrWhiteSpace(_emoji.Text) ? "🔥" : _emoji.Text.Trim();
+        // Cycle the emoji so each click is a genuinely new reaction (see ReactCycle) — otherwise a repeat with
+        // the same emoji leaves the count unchanged and no big-reaction bubble fires.
+        var emoji = ReactCycle[_reactIx++ % ReactCycle.Length];
+        _emoji.Text = emoji;   // reflect what was actually used
         await p.ReactAsync(latest.Id, emoji, on: true);
         Log($"Reacted {emoji} to @{target.Handle}'s latest post.");
         _refreshReal();
+    }
+
+    // Clears the puppet's reaction from your latest post (reactions are one-per-user, so this removes whichever
+    // emoji it currently holds). Lets you react → remove → react again to re-trigger the big-reaction bubble.
+    private async Task Unreact()
+    {
+        var p = RequirePuppet();
+        var target = await FindTarget(p);
+        var feed = await p.GetFeedAsync(50);
+        var latest = feed.FirstOrDefault(x => x.Author.Id == target.Id);
+        if (latest is null) { Log($"No visible post by @{target.Handle} — nothing to un-react."); return; }
+        await p.ReactAsync(latest.Id, "", on: false);   // on:false removes the puppet's own reaction, if any
+        Log($"Removed the puppet's reaction from @{target.Handle}'s latest post.");
+        _refreshReal();
+    }
+
+    // Why isn't the big reaction firing? Reports the gates (ShowLargeReactions / DND) and whether the real
+    // client actually sees a reaction on your latest post. Big reactions only fire for reactions that arrive
+    // *after* the feed starts (the backlog is baseline), so a reaction already present won't re-fire — react
+    // again (a new emoji) to see it.
+    private async Task Diagnose()
+    {
+        var gate = _gateStatus is null ? "Gate status hook not wired." : _gateStatus();
+        var roster = await _real.GetRosterAsync();
+        if (roster.MyLatest is null)
+        {
+            Log(gate + "\n\nYour roster has no latest status — you haven't posted, so there's nothing for a friend to react to. Post a status first.");
+            return;
+        }
+        var rx = roster.MyReactions.Count == 0
+            ? "(none)"
+            : string.Join(", ", roster.MyReactions.Select(g => $"{g.Emoji}x{g.Count}"));
+        var body = roster.MyLatest.Body;
+        Log($"{gate}\n\nYour latest status: \"{(body.Length > 40 ? body[..40] + "…" : body)}\" — reactions the real client sees on it: {rx}.\n\n" +
+            "If a reaction shows here but no bubble fired: ShowLargeReactions must be True and DND suppressing must be False above; and the " +
+            "reaction must be NEW since the feed started (a reaction already present is baseline). Click React (it cycles emojis) to add a fresh one.");
     }
 
     private async Task<Profile> FindTarget(SupabaseSocialClient p)
@@ -185,6 +271,15 @@ internal sealed class DebugSocialWindow : Window
     }
 
     private void Log(string message) => _log.Text = message;
+
+    /// <summary>Appends a live diagnostic line (newest first), capped so the panel stays readable. Fed by the
+    /// feed monitor host (per-poll reaction state) and the big-reaction gate decision.</summary>
+    public void Diag(string message)
+    {
+        _diagLines.Insert(0, message);
+        if (_diagLines.Count > 40) _diagLines.RemoveRange(40, _diagLines.Count - 40);
+        _diagLog.Text = string.Join("\n", _diagLines);
+    }
 
     private static TextBox Field(string watermark)
     {

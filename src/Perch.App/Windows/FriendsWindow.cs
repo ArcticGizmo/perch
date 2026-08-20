@@ -18,15 +18,19 @@ namespace Perch.Avalonia.Windows;
 internal sealed class FriendsWindow : Window
 {
     private readonly ISocialClient _social;
+    private readonly Action? _onGraphChanged;
     private readonly TextBox _addBox;
     private readonly TextBlock _status;
     private readonly StackPanel _requestsPanel;
     private readonly StackPanel _friendsPanel;
     private readonly StackPanel _blockedPanel;
 
-    public FriendsWindow(ISocialClient social)
+    /// <param name="onGraphChanged">Invoked after any change to the friend graph (accept/decline, block,
+    /// unblock, remove) so the overlay roster can re-poll at once instead of waiting for its next tick.</param>
+    public FriendsWindow(ISocialClient social, Action? onGraphChanged = null)
     {
         _social = social;
+        _onGraphChanged = onGraphChanged;
         Title = "Friends";
         Width = 420;
         Height = 540;
@@ -124,19 +128,28 @@ internal sealed class FriendsWindow : Window
     private Control FriendRow(Friend f)
     {
         var label = new TextBlock { Text = $"@{f.Profile.Handle}", Foreground = Palette.FgBrush, VerticalAlignment = VerticalAlignment.Center };
-        var tag = new TextBlock
-        {
-            Text = f.State == FriendshipState.Pending ? "requested" : "friend",
-            Foreground = Palette.MutedBrush, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
-        };
+        var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right };
+
+        // A request you've sent is shown as "invited" (awaiting them); an accepted friend carries no tag —
+        // being in the list is the whole story.
+        if (f.State == FriendshipState.Pending)
+            right.Children.Add(new TextBlock
+            {
+                Text = "invited",
+                Foreground = Palette.MutedBrush, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+            });
+
         var report = SettingsUi.FlatButton("Report");
         report.Click += async (_, _) => await Report(f.Profile);
         var block = SettingsUi.FlatButton("Block");
         block.Click += async (_, _) => await Block(f.Profile);
-        var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right };
-        right.Children.Add(tag);
+        // Remove drops the edge without a trace (unlike Block): "Remove" for a friend, "Cancel" for a request
+        // you sent that hasn't been accepted.
+        var remove = SettingsUi.FlatButton(f.State == FriendshipState.Pending ? "Cancel" : "Remove");
+        remove.Click += async (_, _) => await Remove(f);
         right.Children.Add(report);
         right.Children.Add(block);
+        right.Children.Add(remove);
         return Row(label, right);
     }
 
@@ -162,23 +175,45 @@ internal sealed class FriendsWindow : Window
 
     private async Task Respond(Friend f, bool accept)
     {
-        try { await _social.RespondAsync(f.Profile.Id, accept); await Refresh(); }
+        try { await _social.RespondAsync(f.Profile.Id, accept); await Refresh(); _onGraphChanged?.Invoke(); }
         catch (SocialException ex) { _status.Text = ex.Message; }
         catch { _status.Text = "Couldn't update the request."; }
     }
 
     private async Task Block(Profile p)
     {
-        try { await _social.BlockAsync(p.Id); _status.Text = $"Blocked @{p.Handle}."; await Refresh(); }
+        try { await _social.BlockAsync(p.Id); _status.Text = $"Blocked @{p.Handle}."; await Refresh(); _onGraphChanged?.Invoke(); }
         catch (SocialException ex) { _status.Text = ex.Message; }
         catch { _status.Text = "Couldn't block that user."; }
     }
 
     private async Task Unblock(Profile p)
     {
-        try { await _social.UnblockAsync(p.Id); _status.Text = $"Unblocked @{p.Handle}."; await Refresh(); }
+        try { await _social.UnblockAsync(p.Id); _status.Text = $"Unblocked @{p.Handle}."; await Refresh(); _onGraphChanged?.Invoke(); }
         catch (SocialException ex) { _status.Text = ex.Message; }
         catch { _status.Text = "Couldn't unblock that user."; }
+    }
+
+    // Remove drops the friendship (or cancels a request you sent). An accepted friend is confirmed first, since
+    // it's easy to fat-finger and it silently stops you seeing each other; cancelling your own request is not.
+    private async Task Remove(Friend f)
+    {
+        if (f.State == FriendshipState.Accepted)
+        {
+            bool ok = await ConfirmDialog.ShowAsync(this, "Remove friend",
+                $"Remove @{f.Profile.Handle}? You'll stop seeing each other's statuses. They aren't told, and either of you can add the other again later.",
+                "Remove", "Keep");
+            if (!ok) return;
+        }
+        try
+        {
+            await _social.RemoveFriendAsync(f.Profile.Id);
+            _status.Text = f.State == FriendshipState.Pending ? $"Cancelled your request to @{f.Profile.Handle}." : $"Removed @{f.Profile.Handle}.";
+            await Refresh();
+            _onGraphChanged?.Invoke();
+        }
+        catch (SocialException ex) { _status.Text = ex.Message; }
+        catch { _status.Text = "Couldn't remove that friend."; }
     }
 
     // Report files a moderation report; it doesn't block on its own, so we do both — the common intent behind
@@ -191,6 +226,7 @@ internal sealed class FriendsWindow : Window
             await _social.BlockAsync(p.Id);
             _status.Text = $"Reported and blocked @{p.Handle}.";
             await Refresh();
+            _onGraphChanged?.Invoke();
         }
         catch (SocialException ex) { _status.Text = ex.Message; }
         catch { _status.Text = "Couldn't submit the report."; }

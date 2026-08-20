@@ -79,8 +79,13 @@ public sealed partial class FakeSocialClient : ISocialClient
         lock (_gate)
         {
             RequireMe();
-            if (!_edges.TryGetValue(addresseeId, out var s) || s == FriendshipState.Incoming)
-                _edges[addresseeId] = FriendshipState.Pending;   // idempotent; incoming+send = accept-ish, kept pending
+            if (_edges.TryGetValue(addresseeId, out var s))
+            {
+                // They already invited me → my request completes the handshake (mutual = accepted friends).
+                // Pending/Accepted/Blocked all no-op (idempotent, and never a duplicate row).
+                if (s == FriendshipState.Incoming) _edges[addresseeId] = FriendshipState.Accepted;
+            }
+            else _edges[addresseeId] = FriendshipState.Pending;
         }
         return Task.CompletedTask;
     }
@@ -95,6 +100,16 @@ public sealed partial class FakeSocialClient : ISocialClient
                 if (accept) _edges[requesterId] = FriendshipState.Accepted;
                 else _edges.Remove(requesterId);   // declined: forget the edge
             }
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task RemoveFriendAsync(Guid otherUserId, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            RequireMe();
+            _edges.Remove(otherUserId);   // drop the edge whichever state it was in; a missing edge is a no-op
         }
         return Task.CompletedTask;
     }
@@ -151,7 +166,8 @@ public sealed partial class FakeSocialClient : ISocialClient
         lock (_gate)
         {
             var entries = _edges
-                .Where(e => e.Value == FriendshipState.Accepted && _profiles.ContainsKey(e.Key))
+                // Accepted, and not blocked — a blocked person keeps an 'accepted' edge but leaves the roster.
+                .Where(e => e.Value == FriendshipState.Accepted && !_blocked.Contains(e.Key) && _profiles.ContainsKey(e.Key))
                 .Select(e => _profiles[e.Key])
                 .Select(p =>
                 {
@@ -166,8 +182,9 @@ public sealed partial class FakeSocialClient : ISocialClient
                 .ToList();
             var myLatest = _me is null ? null
                 : _posts.Where(x => x.Author.Id == _me.Id).OrderByDescending(x => x.CreatedAt).FirstOrDefault();
-            int incoming = _edges.Count(e => e.Value == FriendshipState.Incoming);
-            return Task.FromResult(new RosterSnapshot(_me, myLatest, entries, incoming));
+            var myReactions = myLatest is not null ? GroupReactionsLocked(myLatest.Id) : (IReadOnlyList<ReactionGroup>)[];
+            int incoming = _edges.Count(e => e.Value == FriendshipState.Incoming && !_blocked.Contains(e.Key));
+            return Task.FromResult(new RosterSnapshot(_me, myLatest, myReactions, entries, incoming));
         }
     }
 

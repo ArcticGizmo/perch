@@ -189,12 +189,15 @@ public partial class App : Application
                 PlatformServices.SecretStore, PlatformServices.UrlOpener);
             _feedHost = new SocialFeedMonitorHost(_social,
                 snap => { _overlay?.Canvas.UpdateRoster(snap); CheckDnd(); },   // re-check DND on each roster tick
-                OnFriendPosted);
+                OnFriendPosted,
+                OnReactionToMyPost);
+            _feedHost.Diagnostic += m => _reactionDiag?.Invoke(m);   // stream to the debug tool when it's open
             _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
             {
                 _overlay?.Canvas.SetSocialAccount(st.SignedIn, st.Me is not null);
                 _feedHost?.SetActive(settings.SocialEnabled && st.SignedIn);   // poll the feed while signed in
+                if (!st.SignedIn) { _reactionBubbles?.Close(); _reactionBubbles = null; }
             });
             _ = _social.TryRestoreAsync();
             // Hypertree's published status file → the overlay's branch strip (opt-in; started below).
@@ -474,6 +477,7 @@ public partial class App : Application
         _daemonListWindow?.Close();
         _achievementsWindow?.Close();
         _achievementCard?.Close();
+        _reactionBubbles?.Close();
         _flightWindow?.Close();
         _arcadeWindow?.Close();
         _invadersWindow?.Close();
@@ -667,7 +671,7 @@ public partial class App : Application
         if (_social is null) return;
         _friendsWindow = WindowHost.ShowOrFocus(
             _friendsWindow,
-            () => new FriendsWindow(_social),
+            () => new FriendsWindow(_social, () => _feedHost?.RefreshSoon()),
             () => _friendsWindow = null,
             w => w.RefreshExternal());
     }
@@ -679,8 +683,16 @@ public partial class App : Application
         if (_social is null) return;
         _debugSocialWindow = WindowHost.ShowOrFocus(
             _debugSocialWindow,
-            () => new DebugSocialWindow(_social, () => _feedHost?.RefreshSoon()),
-            () => _debugSocialWindow = null);
+            () =>
+            {
+                var w = new DebugSocialWindow(_social, () => _feedHost?.RefreshSoon(), ShowReactionBubble,
+                    () => $"ShowLargeReactions={_appSettings?.ShowLargeReactions}, DND active={_dndActive}, " +
+                          $"DND suppressing={DndSuppressing}, SocialEnabled={_appSettings?.SocialEnabled}, " +
+                          $"feed polling={_feedHost is not null}");
+                _reactionDiag = m => Dispatcher.UIThread.Post(() => w.Diag(m));   // stream host + gate diagnostics
+                return w;
+            },
+            () => { _reactionDiag = null; _debugSocialWindow = null; });
     }
 
     // A reaction chip / "+" picker in the overlay social region was used: toggle the reaction on the backend,
@@ -875,6 +887,45 @@ public partial class App : Application
     // screen. "Don't show again" turns off "Celebrate new unlocks" (NotifyOnAchievement) — the same
     // setting the toggle on the Achievements settings page drives — so it never fires again until
     // re-enabled there. Reuses one live window across batches.
+    // "Big reactions": a friend reacted to your own status. Float it up the screen as a large poppable bubble,
+    // gated on the setting (and quiet in Do Not Disturb, like the friend-post toasts). Arrives on the UI
+    // thread from SocialFeedMonitorHost. Best-effort — a missing overlay/screen just skips the flourish.
+    private ReactionBubbleWindow? _reactionBubbles;
+    private Action<string>? _reactionDiag;   // set by the debug tool while it's open; streams gate + poll diagnostics
+    private void OnReactionToMyPost(string emoji)
+    {
+        bool showByGate = _appSettings is { ShowLargeReactions: true };
+        bool suppressed = _dndActive && (_appSettings?.CloseFeedInDoNotDisturb ?? false);
+        _reactionDiag?.Invoke($"handler: {emoji} — ShowLargeReactions={_appSettings?.ShowLargeReactions}, " +
+            $"DND suppressing={suppressed} -> {(showByGate && !suppressed ? "SHOWING bubble" : "BLOCKED by a gate")}");
+        if (!showByGate || suppressed) return;
+        ShowReactionBubble(emoji);
+    }
+
+    // Puts a bubble on screen, creating the layer window if needed. Separate from OnReactionToMyPost's gates so
+    // the debug testing tool can force a bubble regardless of the setting / Do Not Disturb.
+    private void ShowReactionBubble(string emoji)
+    {
+        if (_overlay is null) return;
+        var screen = _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
+        if (screen is null) return;
+
+        if (_reactionBubbles is null)
+        {
+            _reactionBubbles = new ReactionBubbleWindow();
+            _reactionBubbles.TurnOff += () =>
+            {
+                if (_appSettings is not { } s) return;
+                s.ShowLargeReactions = false;
+                s.Save();
+                _settings?.SyncLargeReactions();   // keep an open settings window's toggle in step
+            };
+            _reactionBubbles.Closed += (_, _) => _reactionBubbles = null;
+            _reactionBubbles.Present(screen);
+        }
+        _reactionBubbles.Spawn(emoji);
+    }
+
     private AchievementCardWindow? _achievementCard;
     private void ShowAchievementCards(IReadOnlyList<AchievementUnlock> unlocks)
     {

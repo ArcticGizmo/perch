@@ -146,6 +146,10 @@ internal static class HeadlessRenderer
         RenderControl(socialProbe, Path.Combine(outDir, "overlay_social_signin_1x.png"), 96);
         RenderControl(socialProbe, Path.Combine(outDir, "overlay_social_signin_1.5x.png"), 144);
 
+        // "Big reactions" bubble layer: a few reactions caught mid-rise plus one popping (a static frame).
+        RenderControl(ReactionBubbleLayer.CreateForRender(), Path.Combine(outDir, "reaction_bubbles_1x.png"), 96);
+        RenderControl(ReactionBubbleLayer.CreateForRender(), Path.Combine(outDir, "reaction_bubbles_1.5x.png"), 144);
+
         // Hypertree strip: the branch list under the quick links, with the row the cursor is on marked.
         // The sample puts main mid-stack (Hypertree publishes the stack already flattened, main at its
         // slot) and gives one branch a long desktop label so the trailing-label truncation is exercised.

@@ -240,6 +240,110 @@ public sealed class FakeSocialClientTests
     }
 
     [Fact]
+    public async Task Removing_a_friend_drops_the_edge_and_the_roster_entry()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        c.SimulatePost(ada.Id, "hi");
+        Assert.Single((await c.GetRosterAsync()).Friends);
+
+        await c.RemoveFriendAsync(ada.Id);
+        Assert.DoesNotContain(await c.GetFriendsAsync(), f => f.Profile.Id == ada.Id);   // edge gone
+        Assert.Empty((await c.GetRosterAsync()).Friends);                                 // and out of the roster
+        Assert.Empty(await c.GetFeedAsync());                                             // their posts no longer visible
+    }
+
+    [Fact]
+    public async Task Cancelling_your_own_request_via_remove()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id);   // pending, sent by me
+        await c.RemoveFriendAsync(ada.Id);  // cancel it
+        Assert.DoesNotContain(await c.GetFriendsAsync(), f => f.Profile.Id == ada.Id);
+    }
+
+    [Fact]
+    public async Task Removing_someone_who_isnt_a_friend_is_a_no_op()
+    {
+        var c = SignedIn();
+        var stranger = c.SeedUser("stranger");
+        await c.RemoveFriendAsync(stranger.Id);   // no edge → no throw
+        Assert.Empty(await c.GetFriendsAsync());
+    }
+
+    [Fact]
+    public async Task A_blocked_friend_leaves_the_roster()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        c.SimulatePost(ada.Id, "hi");
+        Assert.Single((await c.GetRosterAsync()).Friends);
+
+        // Blocking keeps the 'accepted' friendship edge, but the roster must not show a blocked person.
+        await c.BlockAsync(ada.Id);
+        Assert.Empty((await c.GetRosterAsync()).Friends);
+    }
+
+    [Fact]
+    public async Task Roster_carries_reactions_on_your_own_status()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        var mine = await c.PostAsync("shipped it");
+        c.SimulateReaction(mine.Value, ada.Id, "🎉");   // a friend reacts to my post
+
+        var roster = await c.GetRosterAsync();
+        var party = Assert.Single(roster.MyReactions);
+        Assert.Equal("🎉", party.Emoji);
+        Assert.Equal(1, party.Count);
+        Assert.False(party.Mine);                        // it's ada's reaction, not mine
+    }
+
+    [Fact]
+    public async Task Mutual_requests_become_an_accepted_friendship()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        c.SimulateIncomingRequest(ada.Id);       // ada invited me first
+        await c.SendRequestAsync(ada.Id);         // I invite ada back → handshake completes
+
+        Assert.Equal(FriendshipState.Accepted, Assert.Single(await c.GetFriendsAsync()).State);
+    }
+
+    [Fact]
+    public async Task Re_requesting_an_accepted_friend_is_a_no_op()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        await c.SendRequestAsync(ada.Id);         // sending again mustn't downgrade or duplicate
+
+        Assert.Equal(FriendshipState.Accepted, Assert.Single(await c.GetFriendsAsync()).State);
+    }
+
+    [Fact]
+    public async Task Changing_your_handle_keeps_friends_display_name_and_mood()
+    {
+        var c = SignedIn("oldname");
+        await c.ClaimHandleAsync("oldname", "Ada L.", "🦉");   // set a display name + mood
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+
+        var renamed = await c.ClaimHandleAsync("newname", "Ada L.", "🦉");   // rename (id is stable)
+
+        Assert.Equal("newname", renamed.Handle);
+        Assert.Equal("Ada L.", renamed.DisplayName);
+        Assert.Equal("🦉", renamed.MoodEmoji);
+        Assert.Equal("newname", (await c.GetMeAsync())!.Handle);
+        // The friendship survives the rename — id, not handle, is what the edge references.
+        Assert.Equal(FriendshipState.Accepted, Assert.Single(await c.GetFriendsAsync()).State);
+    }
+
+    [Fact]
     public async Task Requires_a_handle_before_posting()
     {
         var c = new FakeSocialClient();

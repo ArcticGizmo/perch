@@ -19,8 +19,9 @@ backend/supabase/
     <ts>_moderation.sql         # suspension kill-switch; posts + find_profile respect it (M6)
     <ts>_reactions.sql          # emoji reactions on posts (friends-only via can_see_post)
     <ts>_reactions_one_per_user.sql # PK (post_id, reactor): one reaction per user per post
+    <ts>_friendship_dedupe.sql  # collapse duplicate unordered pairs + unique index on least/greatest
   tests/
-    rls_test.sql    # pgTAP: non-friends can't read posts, blocking, rate limit, suspension, etc.
+    rls_test.sql    # pgTAP: non-friends can't read posts, blocking, rate limit, suspension, dedupe, etc.
 ```
 
 ## One-time setup (needs your account)

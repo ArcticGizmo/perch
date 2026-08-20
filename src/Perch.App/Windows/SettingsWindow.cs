@@ -647,6 +647,10 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(SettingsUi.DividerRow("Friends shown at once",
             "How many friends the roster shows before the rest fold into a “+N more” line.",
             BuildFriendsShownStepper()));
+        _largeReactionsToggle = DisplayToggle(_settings.ShowLargeReactions, v => _settings.ShowLargeReactions = v);
+        page.Children.Add(SettingsUi.DividerRow("Show large reactions",
+            "When a friend reacts to your status, float it as a big emoji bubble that wobbles up the screen — pop it with a click.",
+            _largeReactionsToggle));
 
         _socialBody = new StackPanel { Spacing = 10, Margin = new Thickness(0, 6, 0, 6) };
         page.Children.Add(_socialBody);
@@ -739,9 +743,38 @@ internal sealed class SettingsWindow : Window
         post.Click += (_, _) => _hooks.OpenSocialCompose?.Invoke();
         var friends = SettingsUi.FlatButton("Friends…");
         friends.Click += (_, _) => _hooks.OpenSocialFriends?.Invoke();
+        // Change handle: your id (and so your friendships and statuses) is separate from your handle, so a
+        // rename keeps everything — only the name your friends see changes. Reveals an inline editor prefilled
+        // with the current handle; a successful save raises AuthChanged → RefreshSocialPage rebuilds this body.
+        var changeHandle = SettingsUi.FlatButton("Change handle…");
+        var handleEditor = new StackPanel { Spacing = 6, Margin = new Thickness(0, 6, 0, 0) };
+        changeHandle.Click += (_, _) =>
+        {
+            if (handleEditor.Children.Count > 0) { handleEditor.Children.Clear(); return; }   // toggle closed
+            var box = SettingsUi.ThemedTextBox(me.Handle);
+            box.Width = 200;
+            var save = SettingsUi.FlatButton("Save");
+            // Pass the CURRENT display name + mood through — the upsert merges by id, so omitting them would
+            // blank the columns. Only the handle changes.
+            save.Click += async (_, _) => await RunSocial(save,
+                () => _social.ClaimHandleAsync((box.Text ?? "").Trim(), me.DisplayName, me.MoodEmoji, default));
+            var cancel = SettingsUi.FlatButton("Cancel");
+            cancel.Click += (_, _) => handleEditor.Children.Clear();
+            var editRow = SettingsUi.ButtonRow();
+            editRow.Children.Add(new TextBlock { Text = "@", Foreground = Palette.MutedBrush, VerticalAlignment = VerticalAlignment.Center });
+            editRow.Children.Add(box);
+            editRow.Children.Add(save);
+            editRow.Children.Add(cancel);
+            handleEditor.Children.Add(SettingsUi.BodyText(
+                "Pick a new handle — your friends and statuses stay; only the name changes."));
+            handleEditor.Children.Add(editRow);
+            box.Focus();
+        };
         actions.Children.Add(post);
         actions.Children.Add(friends);
+        actions.Children.Add(changeHandle);
         _socialBody.Children.Add(actions);
+        _socialBody.Children.Add(handleEditor);
 
         // Developer testing tool — only when the debug flag is set (env or .env.local PERCH_SOCIAL_DEBUG).
         // Drives a second "puppet" account so the whole loop can be tested from one machine.
@@ -998,11 +1031,16 @@ internal sealed class SettingsWindow : Window
 
     // ── Achievements ─────────────────────────────────────────────────────────────────
     private PerchToggle? _celebrateToggle;
+    private PerchToggle? _largeReactionsToggle;
 
     /// <summary>Re-reads the "Celebrate new unlocks" setting into its toggle without firing the change
     /// handler — so the switch reflects it when it's turned off elsewhere (the reveal's "Don't show again"
     /// button) while this window is open.</summary>
     public void SyncAchievementCelebration() => _celebrateToggle?.SetCheckedSilent(_settings.NotifyOnAchievement);
+
+    /// <summary>Reflects a "big reactions" opt-out that came from the bubble layer's "Turn off" pill, so an
+    /// open Settings window's toggle stays in step.</summary>
+    public void SyncLargeReactions() => _largeReactionsToggle?.SetCheckedSilent(_settings.ShowLargeReactions);
 
     private void BuildAchievementsPage(StackPanel page)
     {

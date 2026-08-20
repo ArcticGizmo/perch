@@ -217,11 +217,35 @@ public sealed class SupabaseSocialClient : ISocialClient
     {
         var uid = RequireUser();
         var token = await ValidAccessTokenAsync(ct);
+
+        // An edge may already exist in EITHER direction, and the unordered unique index forbids a second row.
+        // If they already invited me (a reverse pending), my request completes the handshake → accept it.
+        // Any other existing edge (my own pending, accepted) is a no-op.
+        var existing = await GetEdgeAsync(uid, addresseeId, token, ct);
+        if (existing is not null)
+        {
+            if (existing.Status == "pending" && existing.Requester == addresseeId)
+                await RespondAsync(addresseeId, accept: true, ct);
+            return;
+        }
+
         using var req = Rest(HttpMethod.Post, "/rest/v1/friendships", token);
         req.Headers.Add("Prefer", "resolution=merge-duplicates");   // re-sending is a no-op
         req.Content = JsonContent.Create(new { requester = uid, addressee = addresseeId, status = "pending" });
         using var resp = await _http.SendAsync(req, ct);
         await EnsureOkAsync(resp, "send the friend request", ct);
+    }
+
+    // The friendship edge between two users, stored in either direction, or null if none exists.
+    private async Task<FriendshipRow?> GetEdgeAsync(Guid a, Guid b, string token, CancellationToken ct)
+    {
+        string filter =
+            $"?or=(and(requester.eq.{a},addressee.eq.{b}),and(requester.eq.{b},addressee.eq.{a}))&select=requester,addressee,status";
+        using var req = Rest(HttpMethod.Get, "/rest/v1/friendships" + filter, token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "check the friendship", ct);
+        var rows = await resp.Content.ReadFromJsonAsync<FriendshipRow[]>(Json, ct) ?? [];
+        return rows.Length > 0 ? rows[0] : null;
     }
 
     public async Task RespondAsync(Guid requesterId, bool accept, CancellationToken ct = default)
@@ -235,6 +259,19 @@ public sealed class SupabaseSocialClient : ISocialClient
         if (accept) req.Content = JsonContent.Create(new { status = "accepted" });
         using var resp = await _http.SendAsync(req, ct);
         await EnsureOkAsync(resp, accept ? "accept the request" : "decline the request", ct);
+    }
+
+    public async Task RemoveFriendAsync(Guid otherUserId, CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        // Delete the edge whichever way round it was stored — the friendships_delete RLS policy lets either
+        // party remove it. An empty match (no edge) is a successful no-op.
+        string filter =
+            $"?or=(and(requester.eq.{uid},addressee.eq.{otherUserId}),and(requester.eq.{otherUserId},addressee.eq.{uid}))";
+        using var req = Rest(HttpMethod.Delete, "/rest/v1/friendships" + filter, token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "remove this friend", ct);
     }
 
     public async Task<IReadOnlyList<Friend>> GetFriendsAsync(CancellationToken ct = default)
@@ -300,19 +337,27 @@ public sealed class SupabaseSocialClient : ISocialClient
         var token = await ValidAccessTokenAsync(ct);
 
         var graph = await GetFriendsAsync(ct);
-        // Accepted friends only — the roster is who you can actually see.
-        var friends = graph.Where(f => f.State == FriendshipState.Accepted).ToList();
-        int incoming = graph.Count(f => f.State == FriendshipState.Incoming);
+        // A block lives in its own table, so a blocked person can still carry an 'accepted' friendship row —
+        // drop them here so they leave the roster (their posts are already hidden by are_friends server-side).
+        var blocked = (await GetBlockedAsync(ct)).Select(p => p.Id).ToHashSet();
+        // Accepted friends only, minus anyone blocked — the roster is who you can actually see.
+        var friends = graph.Where(f => f.State == FriendshipState.Accepted && !blocked.Contains(f.Profile.Id)).ToList();
+        int incoming = graph.Count(f => f.State == FriendshipState.Incoming && !blocked.Contains(f.Profile.Id));
 
         // Latest post per author (the feed is newest-first, so the first hit per author is their latest).
         var feed = await GetFeedAsync(200, ct);
         var latestByAuthor = new Dictionary<Guid, FeedItem>();
         foreach (var item in feed) latestByAuthor.TryAdd(item.Author.Id, item);
 
-        // Reactions for just those latest posts, grouped by emoji.
+        var myLatest = latestByAuthor.GetValueOrDefault(uid);
+
+        // Reactions for the friends' latest posts AND your own latest — so the "you" row can show what
+        // friends thought of your status.
         var latestIds = friends
             .Select(f => latestByAuthor.GetValueOrDefault(f.Profile.Id)?.Id)
-            .Where(id => id is not null).Select(id => id!.Value).ToList();
+            .Where(id => id is not null).Select(id => id!.Value)
+            .Concat(myLatest is not null ? [myLatest.Id] : Array.Empty<Guid>())
+            .ToList();
         var reactions = await FetchReactionsAsync(latestIds, uid, token, ct);
 
         var entries = friends
@@ -327,8 +372,8 @@ public sealed class SupabaseSocialClient : ISocialClient
             .ThenBy(e => e.Profile.Handle, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var myLatest = latestByAuthor.GetValueOrDefault(uid);
-        return new RosterSnapshot(_me, myLatest, entries, incoming);
+        var myReactions = myLatest is not null ? reactions.GetValueOrDefault(myLatest.Id, []) : [];
+        return new RosterSnapshot(_me, myLatest, myReactions, entries, incoming);
     }
 
     public async Task ReactAsync(Guid postId, string emoji, bool on, CancellationToken ct = default)
