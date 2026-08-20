@@ -647,6 +647,10 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(SettingsUi.DividerRow("Friends shown at once",
             "How many friends the roster shows before the rest fold into a “+N more” line.",
             BuildFriendsShownStepper()));
+        _largeReactionsToggle = DisplayToggle(_settings.ShowLargeReactions, v => _settings.ShowLargeReactions = v);
+        page.Children.Add(SettingsUi.DividerRow("Show large reactions",
+            "When a friend reacts to your status, float it as a big emoji bubble that wobbles up the screen — pop it with a click.",
+            _largeReactionsToggle));
 
         _socialBody = new StackPanel { Spacing = 10, Margin = new Thickness(0, 6, 0, 6) };
         page.Children.Add(_socialBody);
@@ -1027,11 +1031,16 @@ internal sealed class SettingsWindow : Window
 
     // ── Achievements ─────────────────────────────────────────────────────────────────
     private PerchToggle? _celebrateToggle;
+    private PerchToggle? _largeReactionsToggle;
 
     /// <summary>Re-reads the "Celebrate new unlocks" setting into its toggle without firing the change
     /// handler — so the switch reflects it when it's turned off elsewhere (the reveal's "Don't show again"
     /// button) while this window is open.</summary>
     public void SyncAchievementCelebration() => _celebrateToggle?.SetCheckedSilent(_settings.NotifyOnAchievement);
+
+    /// <summary>Reflects a "big reactions" opt-out that came from the bubble layer's "Turn off" pill, so an
+    /// open Settings window's toggle stays in step.</summary>
+    public void SyncLargeReactions() => _largeReactionsToggle?.SetCheckedSilent(_settings.ShowLargeReactions);
 
     private void BuildAchievementsPage(StackPanel page)
     {

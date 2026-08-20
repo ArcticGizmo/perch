@@ -453,6 +453,11 @@ internal sealed class AppSettings
     // line. Default 3 to keep the region compact in the narrow overlay.
     public int MaxFriendsShown { get; set; } = 3;
 
+    // "Big reactions": when a friend reacts to your own status, float the reaction as a large emoji bubble
+    // that wobbles up the screen and pops if you click it. On by default (only ever fires once Social is on
+    // and someone reacts to you); the effect itself carries a "turn these off" control, which flips this.
+    public bool ShowLargeReactions { get; set; } = true;
+
     // "Perch reacts": the tray and overlay bird wears the aggregate session mood — dozing (faded, a
     // trail of z's) when nothing's running, plainly alert while sessions work, a "!" badge when one
     // needs you, and visibly panicking (red bang + flying sweat) when a session looks stuck. Pure

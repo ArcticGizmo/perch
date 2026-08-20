@@ -189,12 +189,14 @@ public partial class App : Application
                 PlatformServices.SecretStore, PlatformServices.UrlOpener);
             _feedHost = new SocialFeedMonitorHost(_social,
                 snap => { _overlay?.Canvas.UpdateRoster(snap); CheckDnd(); },   // re-check DND on each roster tick
-                OnFriendPosted);
+                OnFriendPosted,
+                OnReactionToMyPost);
             _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
             {
                 _overlay?.Canvas.SetSocialAccount(st.SignedIn, st.Me is not null);
                 _feedHost?.SetActive(settings.SocialEnabled && st.SignedIn);   // poll the feed while signed in
+                if (!st.SignedIn) { _reactionBubbles?.Close(); _reactionBubbles = null; }
             });
             _ = _social.TryRestoreAsync();
             // Hypertree's published status file → the overlay's branch strip (opt-in; started below).
@@ -474,6 +476,7 @@ public partial class App : Application
         _daemonListWindow?.Close();
         _achievementsWindow?.Close();
         _achievementCard?.Close();
+        _reactionBubbles?.Close();
         _flightWindow?.Close();
         _arcadeWindow?.Close();
         _invadersWindow?.Close();
@@ -875,6 +878,34 @@ public partial class App : Application
     // screen. "Don't show again" turns off "Celebrate new unlocks" (NotifyOnAchievement) — the same
     // setting the toggle on the Achievements settings page drives — so it never fires again until
     // re-enabled there. Reuses one live window across batches.
+    // "Big reactions": a friend reacted to your own status. Float it up the screen as a large poppable bubble,
+    // gated on the setting (and quiet in Do Not Disturb, like the friend-post toasts). Arrives on the UI
+    // thread from SocialFeedMonitorHost. Best-effort — a missing overlay/screen just skips the flourish.
+    private ReactionBubbleWindow? _reactionBubbles;
+    private void OnReactionToMyPost(string emoji)
+    {
+        if (_appSettings is not { ShowLargeReactions: true }) return;
+        if (_dndActive && (_appSettings?.CloseFeedInDoNotDisturb ?? false)) return;
+        if (_overlay is null) return;
+        var screen = _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
+        if (screen is null) return;
+
+        if (_reactionBubbles is null)
+        {
+            _reactionBubbles = new ReactionBubbleWindow();
+            _reactionBubbles.TurnOff += () =>
+            {
+                if (_appSettings is not { } s) return;
+                s.ShowLargeReactions = false;
+                s.Save();
+                _settings?.SyncLargeReactions();   // keep an open settings window's toggle in step
+            };
+            _reactionBubbles.Closed += (_, _) => _reactionBubbles = null;
+            _reactionBubbles.Present(screen);
+        }
+        _reactionBubbles.Spawn(emoji);
+    }
+
     private AchievementCardWindow? _achievementCard;
     private void ShowAchievementCards(IReadOnlyList<AchievementUnlock> unlocks)
     {

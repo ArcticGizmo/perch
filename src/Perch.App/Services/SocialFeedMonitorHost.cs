@@ -20,6 +20,7 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     private readonly ISocialClient _social;
     private readonly Action<RosterSnapshot?> _onRoster;
     private readonly Action<FeedItem> _onNewFriendPost;
+    private readonly Action<string> _onReactionToMyPost;
     private readonly DispatcherTimer _timer;
 
     // Post ids already surfaced, so a re-poll only notifies for genuinely new posts. Primed on the first poll
@@ -27,16 +28,28 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     private readonly HashSet<Guid> _seen = new();
     private bool _primed;
 
+    // Baseline reaction counts on your OWN latest post, keyed by the post id they belong to, so we can fire
+    // once per genuinely-new reaction (someone else reacting to you). Re-baselined when your latest post
+    // changes (a new status resets the count), which also primes the first observation so existing reactions
+    // don't replay.
+    private Guid? _myReactionPostId;
+    private readonly Dictionary<string, int> _myReactionCounts = new();
+
     private IDisposable? _realtime;
 
     /// <param name="onNewFriendPost">Invoked (on the UI thread) once per newly seen post authored by someone
     /// other than you — the hook for the "@x just posted" notification. Never fires for your own posts or for
     /// the backlog present when polling starts.</param>
-    public SocialFeedMonitorHost(ISocialClient social, Action<RosterSnapshot?> onRoster, Action<FeedItem> onNewFriendPost)
+    /// <param name="onReactionToMyPost">Invoked (on the UI thread) once per newly-seen reaction on your own
+    /// latest status, with the emoji — the hook for the "big reactions" bubbles. Never fires for reactions
+    /// already present when polling starts, nor when you post a new status.</param>
+    public SocialFeedMonitorHost(ISocialClient social, Action<RosterSnapshot?> onRoster,
+        Action<FeedItem> onNewFriendPost, Action<string> onReactionToMyPost)
     {
         _social = social;
         _onRoster = onRoster;
         _onNewFriendPost = onNewFriendPost;
+        _onReactionToMyPost = onReactionToMyPost;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _timer.Tick += (_, _) => _ = Poll();
     }
@@ -62,6 +75,8 @@ internal sealed class SocialFeedMonitorHost : IDisposable
             _realtime = null;
             _seen.Clear();
             _primed = false;
+            _myReactionPostId = null;
+            _myReactionCounts.Clear();
             _onRoster(null);
         }
     }
@@ -79,8 +94,36 @@ internal sealed class SocialFeedMonitorHost : IDisposable
             var roster = await _social.GetRosterAsync();
             _onRoster(roster);
             NotifyNewFriendPosts(roster);
+            NotifyReactionsToMe(roster);
         }
         catch { /* best-effort: a failed poll just keeps the last roster on screen */ }
+    }
+
+    // Fires once per genuinely-new reaction on your own latest status. The baseline is re-seeded (and firing
+    // suppressed) whenever the tracked post changes — so the reactions already sitting on a post when polling
+    // starts, and any that carry over when you post a new status, don't replay as "new".
+    private void NotifyReactionsToMe(RosterSnapshot roster)
+    {
+        var post = roster.MyLatest;
+        if (post is null) { _myReactionPostId = null; _myReactionCounts.Clear(); return; }
+
+        bool samePost = _myReactionPostId == post.Id;
+        if (!samePost)
+        {
+            // New (or first-seen) post: take the current reactions as the baseline, don't fire for them.
+            _myReactionPostId = post.Id;
+            _myReactionCounts.Clear();
+            foreach (var g in roster.MyReactions) _myReactionCounts[g.Emoji] = g.Count;
+            return;
+        }
+
+        foreach (var g in roster.MyReactions)
+        {
+            int grew = g.Count - _myReactionCounts.GetValueOrDefault(g.Emoji, 0);
+            for (int i = 0; i < grew; i++) _onReactionToMyPost(g.Emoji);   // one bubble per net-new reaction
+        }
+        _myReactionCounts.Clear();
+        foreach (var g in roster.MyReactions) _myReactionCounts[g.Emoji] = g.Count;
     }
 
     // Fires a notification for each friend whose latest status is one we haven't surfaced yet. The first poll

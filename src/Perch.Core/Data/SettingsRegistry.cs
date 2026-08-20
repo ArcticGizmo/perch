@@ -439,6 +439,12 @@ internal static class SettingsRegistry
             PreviewTarget.FeedStrip, nameof(AppSettings.MaxFriendsShown),
             s => s.MaxFriendsShown, (s, v) => s.MaxFriendsShown = v),
 
+        Toggle("social-large-reactions", "Show large reactions",
+            "When a friend reacts to your status, float the reaction as a big emoji bubble that wobbles up the screen — pop it with a click.",
+            SettingSurface.Social, ["reactions", "bubbles", "big", "large", "celebrate", "animation", "emoji", "social"],
+            PreviewTarget.None, nameof(AppSettings.ShowLargeReactions),
+            s => s.ShowLargeReactions, (s, v) => s.ShowLargeReactions = v),
+
         // ── Advanced ─────────────────────────────────────────────────────────
         Info("theme", "Theme",
             "The app's colour theme — pick a preset or design your own on the Appearance page.",
