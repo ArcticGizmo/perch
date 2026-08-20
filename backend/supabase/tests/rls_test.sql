@@ -8,7 +8,7 @@
 -- exactly how auth.uid() resolves a signed-in user in production.
 
 begin;
-select plan(14);
+select plan(15);
 
 -- ── fixtures (as the privileged migration role, before dropping to `authenticated`) ─────────────
 -- Three users: alice, bob (will befriend alice), carol (a stranger).
@@ -157,6 +157,17 @@ select is(
 select is(
   (select count(*)::int from public.find_profile('bob')),
   0, 'suspended author: not discoverable via find_profile');
+reset role;
+
+-- ── friendship dedupe: unordered uniqueness ──────────────────────────────────────
+-- (bob -> alice) still exists (accepted). alice adding the reverse (alice -> bob) must be rejected by the
+-- unordered unique index — a pair holds only one row, in either direction.
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+select throws_ok(
+  $$insert into public.friendships (requester, addressee, status)
+      values ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', 'pending')$$,
+  '23505',   -- unique_violation on friendships_unordered
+  'friendship: a reverse-direction duplicate is rejected by the unordered unique index');
 reset role;
 
 select * from finish();

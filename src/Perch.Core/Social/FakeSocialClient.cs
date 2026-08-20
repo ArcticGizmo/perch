@@ -79,8 +79,13 @@ public sealed partial class FakeSocialClient : ISocialClient
         lock (_gate)
         {
             RequireMe();
-            if (!_edges.TryGetValue(addresseeId, out var s) || s == FriendshipState.Incoming)
-                _edges[addresseeId] = FriendshipState.Pending;   // idempotent; incoming+send = accept-ish, kept pending
+            if (_edges.TryGetValue(addresseeId, out var s))
+            {
+                // They already invited me → my request completes the handshake (mutual = accepted friends).
+                // Pending/Accepted/Blocked all no-op (idempotent, and never a duplicate row).
+                if (s == FriendshipState.Incoming) _edges[addresseeId] = FriendshipState.Accepted;
+            }
+            else _edges[addresseeId] = FriendshipState.Pending;
         }
         return Task.CompletedTask;
     }

@@ -217,11 +217,35 @@ public sealed class SupabaseSocialClient : ISocialClient
     {
         var uid = RequireUser();
         var token = await ValidAccessTokenAsync(ct);
+
+        // An edge may already exist in EITHER direction, and the unordered unique index forbids a second row.
+        // If they already invited me (a reverse pending), my request completes the handshake → accept it.
+        // Any other existing edge (my own pending, accepted) is a no-op.
+        var existing = await GetEdgeAsync(uid, addresseeId, token, ct);
+        if (existing is not null)
+        {
+            if (existing.Status == "pending" && existing.Requester == addresseeId)
+                await RespondAsync(addresseeId, accept: true, ct);
+            return;
+        }
+
         using var req = Rest(HttpMethod.Post, "/rest/v1/friendships", token);
         req.Headers.Add("Prefer", "resolution=merge-duplicates");   // re-sending is a no-op
         req.Content = JsonContent.Create(new { requester = uid, addressee = addresseeId, status = "pending" });
         using var resp = await _http.SendAsync(req, ct);
         await EnsureOkAsync(resp, "send the friend request", ct);
+    }
+
+    // The friendship edge between two users, stored in either direction, or null if none exists.
+    private async Task<FriendshipRow?> GetEdgeAsync(Guid a, Guid b, string token, CancellationToken ct)
+    {
+        string filter =
+            $"?or=(and(requester.eq.{a},addressee.eq.{b}),and(requester.eq.{b},addressee.eq.{a}))&select=requester,addressee,status";
+        using var req = Rest(HttpMethod.Get, "/rest/v1/friendships" + filter, token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "check the friendship", ct);
+        var rows = await resp.Content.ReadFromJsonAsync<FriendshipRow[]>(Json, ct) ?? [];
+        return rows.Length > 0 ? rows[0] : null;
     }
 
     public async Task RespondAsync(Guid requesterId, bool accept, CancellationToken ct = default)

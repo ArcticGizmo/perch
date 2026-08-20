@@ -739,9 +739,38 @@ internal sealed class SettingsWindow : Window
         post.Click += (_, _) => _hooks.OpenSocialCompose?.Invoke();
         var friends = SettingsUi.FlatButton("Friends…");
         friends.Click += (_, _) => _hooks.OpenSocialFriends?.Invoke();
+        // Change handle: your id (and so your friendships and statuses) is separate from your handle, so a
+        // rename keeps everything — only the name your friends see changes. Reveals an inline editor prefilled
+        // with the current handle; a successful save raises AuthChanged → RefreshSocialPage rebuilds this body.
+        var changeHandle = SettingsUi.FlatButton("Change handle…");
+        var handleEditor = new StackPanel { Spacing = 6, Margin = new Thickness(0, 6, 0, 0) };
+        changeHandle.Click += (_, _) =>
+        {
+            if (handleEditor.Children.Count > 0) { handleEditor.Children.Clear(); return; }   // toggle closed
+            var box = SettingsUi.ThemedTextBox(me.Handle);
+            box.Width = 200;
+            var save = SettingsUi.FlatButton("Save");
+            // Pass the CURRENT display name + mood through — the upsert merges by id, so omitting them would
+            // blank the columns. Only the handle changes.
+            save.Click += async (_, _) => await RunSocial(save,
+                () => _social.ClaimHandleAsync((box.Text ?? "").Trim(), me.DisplayName, me.MoodEmoji, default));
+            var cancel = SettingsUi.FlatButton("Cancel");
+            cancel.Click += (_, _) => handleEditor.Children.Clear();
+            var editRow = SettingsUi.ButtonRow();
+            editRow.Children.Add(new TextBlock { Text = "@", Foreground = Palette.MutedBrush, VerticalAlignment = VerticalAlignment.Center });
+            editRow.Children.Add(box);
+            editRow.Children.Add(save);
+            editRow.Children.Add(cancel);
+            handleEditor.Children.Add(SettingsUi.BodyText(
+                "Pick a new handle — your friends and statuses stay; only the name changes."));
+            handleEditor.Children.Add(editRow);
+            box.Focus();
+        };
         actions.Children.Add(post);
         actions.Children.Add(friends);
+        actions.Children.Add(changeHandle);
         _socialBody.Children.Add(actions);
+        _socialBody.Children.Add(handleEditor);
 
         // Developer testing tool — only when the debug flag is set (env or .env.local PERCH_SOCIAL_DEBUG).
         // Drives a second "puppet" account so the whole loop can be tested from one machine.

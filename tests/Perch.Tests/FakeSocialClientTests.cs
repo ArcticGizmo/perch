@@ -288,6 +288,46 @@ public sealed class FakeSocialClientTests
     }
 
     [Fact]
+    public async Task Mutual_requests_become_an_accepted_friendship()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        c.SimulateIncomingRequest(ada.Id);       // ada invited me first
+        await c.SendRequestAsync(ada.Id);         // I invite ada back → handshake completes
+
+        Assert.Equal(FriendshipState.Accepted, Assert.Single(await c.GetFriendsAsync()).State);
+    }
+
+    [Fact]
+    public async Task Re_requesting_an_accepted_friend_is_a_no_op()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        await c.SendRequestAsync(ada.Id);         // sending again mustn't downgrade or duplicate
+
+        Assert.Equal(FriendshipState.Accepted, Assert.Single(await c.GetFriendsAsync()).State);
+    }
+
+    [Fact]
+    public async Task Changing_your_handle_keeps_friends_display_name_and_mood()
+    {
+        var c = SignedIn("oldname");
+        await c.ClaimHandleAsync("oldname", "Ada L.", "🦉");   // set a display name + mood
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+
+        var renamed = await c.ClaimHandleAsync("newname", "Ada L.", "🦉");   // rename (id is stable)
+
+        Assert.Equal("newname", renamed.Handle);
+        Assert.Equal("Ada L.", renamed.DisplayName);
+        Assert.Equal("🦉", renamed.MoodEmoji);
+        Assert.Equal("newname", (await c.GetMeAsync())!.Handle);
+        // The friendship survives the rename — id, not handle, is what the edge references.
+        Assert.Equal(FriendshipState.Accepted, Assert.Single(await c.GetFriendsAsync()).State);
+    }
+
+    [Fact]
     public async Task Requires_a_handle_before_posting()
     {
         var c = new FakeSocialClient();
