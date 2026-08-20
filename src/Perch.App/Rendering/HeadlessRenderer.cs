@@ -186,9 +186,11 @@ internal static class HeadlessRenderer
         // the edge) and collapsed (the narrow status-count strip). Rendered inside a fixed-height host so the
         // owner-drawn column fills it the way the live full-height window does (the reservation itself is a
         // Windows-only no-op here).
-        RenderDockedColumn(collapsed: false, Path.Combine(outDir, "overlay_docked_1x.png"), 96);
-        RenderDockedColumn(collapsed: false, Path.Combine(outDir, "overlay_docked_1.5x.png"), 144);
-        RenderDockedColumn(collapsed: true,  Path.Combine(outDir, "overlay_docked_collapsed_1x.png"), 96);
+        RenderDockedColumn(collapsed: false, HAnchor.Right, Path.Combine(outDir, "overlay_docked_1x.png"), 96);
+        RenderDockedColumn(collapsed: false, HAnchor.Right, Path.Combine(outDir, "overlay_docked_1.5x.png"), 144);
+        RenderDockedColumn(collapsed: true,  HAnchor.Right, Path.Combine(outDir, "overlay_docked_collapsed_1x.png"), 96);
+        RenderDockedColumn(collapsed: false, HAnchor.Left,  Path.Combine(outDir, "overlay_docked_left_1x.png"), 96);
+        RenderDockedColumn(collapsed: true,  HAnchor.Left,  Path.Combine(outDir, "overlay_docked_left_collapsed_1x.png"), 96);
 
         // "Jump to next session" landing highlight: the blue selection wash + left bar on the cycled row.
         // Rendered immediately after triggering it, so the fade timer hasn't run and it's at full strength.
@@ -642,18 +644,20 @@ internal static class HeadlessRenderer
     // Renders a docked column: a canvas put into Docked mode, arranged inside a fixed-height host so the
     // full-height flush column paints (the live window is sized to the work area). collapsed → the narrow
     // status-count strip; otherwise the full 280px panel.
-    private static void RenderDockedColumn(bool collapsed, string path, double dpi)
+    private static void RenderDockedColumn(bool collapsed, HAnchor side, string path, double dpi)
     {
         var canvas = new OverlayCanvas();
         canvas.Update(SampleData.Sessions());
         canvas.UpdateUsage(SampleData.Usage());
         canvas.UpdateSystemMetrics(SampleData.SystemMetrics());
+        // Seed the docked side before entering docked mode (only the horizontal anchor matters here).
+        canvas.SetInitialPlacements(null, null, new OverlayPlacement { HAnchor = side });
         canvas.SetOverlayMode(OverlayPresentationMode.Docked);
         if (collapsed) canvas.ToggleDockedCollapsed();
 
         var host = new Panel
         {
-            Width = collapsed ? 56 : 280, Height = 620,
+            Width = collapsed ? 56 : 280, Height = 900, // taller than content, so the bottom toggle tab shows
             Background = new SolidColorBrush(Color.FromRgb(18, 18, 24)), // the desktop behind the column
             Children = { canvas },
         };

@@ -1633,6 +1633,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (showFooter) DrawStatusFooter(ctx, width, height);
             else _footerRect = default;
 
+            // Docked expanded: a bottom edge pull-tab to collapse the column (mirrors the collapsed strip's
+            // expand tab, in the same spot). Drawn outside the body clip so it rides over the content edge.
+            if (_docked) DrawDockToggleHandle(ctx, width, panelH, expanded: true);
+
             DrawInstanceBorder(ctx, width, panelH);
         }
 
@@ -3007,11 +3011,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // dead rows over the empty column).
         if (_docked && _dockCollapsed)
         {
-            bool overExpand = _dockExpandRect.Contains(p);
-            if (overExpand != _hoveredDockExpand) { _hoveredDockExpand = overExpand; InvalidateVisual(); }
-            Cursor = overExpand ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+            bool overToggle = _dockToggleRect.Contains(p);
+            if (overToggle != _hoveredDockToggle) { _hoveredDockToggle = overToggle; InvalidateVisual(); }
+            Cursor = overToggle ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
             base.OnPointerMoved(e);
             return;
+        }
+
+        // Expanded docked: track the bottom collapse handle's hover (the rest of the panel stays interactive).
+        if (_docked)
+        {
+            bool overToggle = _dockToggleRect.Contains(p);
+            if (overToggle != _hoveredDockToggle) { _hoveredDockToggle = overToggle; InvalidateVisual(); }
         }
 
         // Dense drag: manual, constrained to the docked edge (vertical), with drop lanes for re-docking.
@@ -3334,13 +3345,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // expand/collapse). Mirrors the WinForms MouseUp click chain.
     private void RouteClick(Point p)
     {
-        // Docked collapsed: only the bottom expand arrow (or the top icon band) re-expands the column;
+        // Docked collapsed: only the bottom toggle handle (or the top icon band) re-expands the column;
         // nothing else is clickable, since the rows aren't shown.
         if (_docked && _dockCollapsed)
         {
-            if (_dockExpandRect.Contains(p) || p.Y < HeaderHeight) ToggleDockedCollapsed();
+            if (_dockToggleRect.Contains(p) || p.Y < HeaderHeight) ToggleDockedCollapsed();
             return;
         }
+
+        // Expanded docked: the bottom collapse handle (mirrors the header chevron).
+        if (_docked && _dockToggleRect.Contains(p)) { ToggleDockedCollapsed(); return; }
 
         // The dense toggle glyph in the header (floating only; visible whenever the header shows, i.e. not the
         // closed strip): enter dense from floating, or leave it from the open popup. Docked's header chevron

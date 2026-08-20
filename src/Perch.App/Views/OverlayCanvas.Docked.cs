@@ -29,9 +29,10 @@ public sealed partial class OverlayCanvas
     private PixelRect? _dockScreenBounds;   // the monitor to dock to; null = primary
     private OverlayPlacement? _dockedPlacement;
 
-    // The collapsed strip's bottom "expand" arrow (web-app-nav style) and its hover state.
-    private Rect _dockExpandRect;
-    private bool _hoveredDockExpand;
+    // The bottom edge "pull-tab" toggle (a half-circle hugging the inner border) and its hover state —
+    // shown in both docked states: collapse when expanded, expand when collapsed.
+    private Rect _dockToggleRect;
+    private bool _hoveredDockToggle;
 
     // Signature of the screen layout last applied, so OnScreensChanged can tell a real monitor change from
     // the work-area-only change our own reservation causes (which must not trigger a re-reserve loop).
@@ -207,25 +208,38 @@ public sealed partial class OverlayCanvas
             if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, 0); DrawChaseBorder(ctx, pr, AttentionColor); }
             else OverlayDraw.Panel(ctx, pr, BgBrush, BorderPen, 0);
             _denseCtl.PaintStrip(ctx, width);
-            DrawDockExpandButton(ctx, width, h);
+            DrawDockToggleHandle(ctx, width, h, expanded: false);
             DrawInstanceBorder(ctx, width, h);
         }
         return h;
     }
 
-    // The bottom "expand" affordance on the collapsed strip — a chevron pointing away from the docked edge
-    // (into the screen), like a web-app nav's expand toggle. Click it (or press the docked hotkey / the top
-    // icon) to expand the column. Brightens on hover.
-    private void DrawDockExpandButton(DrawingContext ctx, double width, double h)
+    // The bottom edge toggle handle — a half-circle pull-tab hugging the inner border (the edge facing the
+    // desktop, away from the docked screen edge), near the bottom above the taskbar. It reads like a web-app
+    // nav's collapse/expand toggle: the chevron points toward the docked edge to collapse (when expanded), or
+    // into the screen to expand (when collapsed). Drawn in both states so it stays in the same spot as the
+    // column toggles. Called from DrawDockedStrip (collapsed) and the main Draw path (expanded).
+    internal void DrawDockToggleHandle(DrawingContext ctx, double width, double h, bool expanded)
     {
-        const double box = 24;
-        double x = (width - box) / 2;
-        double y = h - box - 12;
-        _dockExpandRect = new Rect(x, y, box, box);
+        const double r = 13;
+        double cy = h - r - 10;
+        bool rightDock = _dockSide != HAnchor.Left;   // right-docked → inner edge is the left (x=0)
+        double cx = rightDock ? 0 : width;            // centre on the inner border so the tab straddles it
 
-        // Right-docked expands leftward (‹); left-docked expands rightward (›).
-        var glyph = OverlayDraw.Text(_dockSide == HAnchor.Left ? "›" : "‹", 18,
-            _hoveredDockExpand ? FgBrush : MutedBrush, FontWeight.Bold);
-        OverlayDraw.TextLeftMid(ctx, glyph, x + (box - glyph.Width) / 2, y + box / 2);
+        // Hit-rect = the visible (in-bounds) half of the tab.
+        _dockToggleRect = rightDock
+            ? new Rect(0, cy - r, r + 5, 2 * r)
+            : new Rect(width - r - 5, cy - r, r + 5, 2 * r);
+
+        ctx.DrawEllipse(BgFillBrush, BorderPen, new Point(cx, cy), r, r);
+        if (_hoveredDockToggle) ctx.DrawEllipse(RowHoverBrush, null, new Point(cx, cy), r, r);
+
+        // expanded → collapse (toward the docked edge); collapsed → expand (into the screen).
+        string glyph = expanded
+            ? (rightDock ? "›" : "‹")
+            : (rightDock ? "‹" : "›");
+        var chev = OverlayDraw.Text(glyph, 15, _hoveredDockToggle ? FgBrush : MutedBrush, FontWeight.Bold);
+        double halfCx = rightDock ? r / 2 : width - r / 2;
+        OverlayDraw.TextLeftMid(ctx, chev, halfCx - chev.Width / 2, cy);
     }
 }
