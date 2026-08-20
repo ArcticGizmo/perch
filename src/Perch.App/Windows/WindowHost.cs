@@ -26,6 +26,11 @@ internal static class WindowHost
         {
             if (alive.WindowState == WindowState.Minimized) alive.WindowState = WindowState.Normal;
             refresh?.Invoke(alive);
+            // The window may have been left on another virtual desktop. Pull it onto the one on screen —
+            // otherwise Activate() drags the user across to it instead of bringing it here. Best-effort, so
+            // Activate() still runs whether or not a move happened. (A freshly built window on the path below
+            // already opens on the current desktop, so only the reuse path needs this.)
+            PlatformServices.VirtualDesktops.MoveWindowToCurrentDesktop(alive.TryGetPlatformHandle()?.Handle ?? 0);
             alive.Activate();
             return alive;
         }

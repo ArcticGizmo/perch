@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.50] - 2026-08-20
+
+- Settings, History and the Markdown viewer now open on your current virtual desktop, instead of dragging you off to theirs
+
+---
+
 ## [v0.3.49] - 2026-08-20
 
 - Markdown viewer's file list updates live as files are added or edited

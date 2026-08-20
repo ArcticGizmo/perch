@@ -1468,6 +1468,10 @@ public partial class App : Application
     {
         if (_settings is { } w && w.IsVisible)
         {
+            // Pull it onto the current virtual desktop before activating, so re-opening lands on the desktop
+            // the user is looking at rather than switching them away to wherever it was left. (Settings
+            // doesn't go through WindowHost, so it needs the same nudge WindowHost.ShowOrFocus applies.)
+            PlatformServices.VirtualDesktops.MoveWindowToCurrentDesktop(w.TryGetPlatformHandle()?.Handle ?? 0);
             w.Activate();
             return;
         }

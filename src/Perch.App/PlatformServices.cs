@@ -22,6 +22,7 @@ internal static class PlatformServices
     public static ILoginItem LoginItem { get; } = new Impl.LoginItem();
     public static IAudioCue AudioCue { get; } = new Impl.AudioCue();
     public static IWindowChrome WindowChrome { get; } = new Impl.WindowChrome();
+    public static IVirtualDesktopManager VirtualDesktops { get; } = new Impl.VirtualDesktopManager();
     public static IImageClipboard ImageClipboard { get; } = new Impl.ImageClipboard();
     public static IUrlOpener UrlOpener { get; } = new Impl.UrlOpener();
 #if WINDOWS
