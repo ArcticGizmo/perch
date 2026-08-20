@@ -214,32 +214,27 @@ public sealed partial class OverlayCanvas
         return h;
     }
 
-    // The bottom edge toggle handle — a half-circle pull-tab hugging the inner border (the edge facing the
-    // desktop, away from the docked screen edge), near the bottom above the taskbar. It reads like a web-app
-    // nav's collapse/expand toggle: the chevron points toward the docked edge to collapse (when expanded), or
-    // into the screen to expand (when collapsed). Drawn in both states so it stays in the same spot as the
-    // column toggles. Called from DrawDockedStrip (collapsed) and the main Draw path (expanded).
+    // The bottom toggle handle — a round button centred at the bottom of the column, above the taskbar. It
+    // reads like a web-app nav's collapse/expand toggle: the chevron points toward the docked edge to collapse
+    // (when expanded), or into the screen to expand (when collapsed). Centred (not edge-hugging) because a
+    // window can't paint past its own border, so a clipped half-circle looked cut off; centring also gives the
+    // collapsed strip a big, obvious click target. Drawn in both states from DrawDockedStrip / the Draw path.
     internal void DrawDockToggleHandle(DrawingContext ctx, double width, double h, bool expanded)
     {
-        const double r = 13;
-        double cy = h - r - 10;
-        bool rightDock = _dockSide != HAnchor.Left;   // right-docked → inner edge is the left (x=0)
-        double cx = rightDock ? 0 : width;            // centre on the inner border so the tab straddles it
-
-        // Hit-rect = the visible (in-bounds) half of the tab.
-        _dockToggleRect = rightDock
-            ? new Rect(0, cy - r, r + 5, 2 * r)
-            : new Rect(width - r - 5, cy - r, r + 5, 2 * r);
+        const double r = 16;
+        double cx = width / 2;
+        double cy = h - r - 12;
+        _dockToggleRect = new Rect(cx - r - 4, cy - r - 4, 2 * r + 8, 2 * r + 8); // a little padding for easy clicking
 
         ctx.DrawEllipse(BgFillBrush, BorderPen, new Point(cx, cy), r, r);
         if (_hoveredDockToggle) ctx.DrawEllipse(RowHoverBrush, null, new Point(cx, cy), r, r);
 
+        bool rightDock = _dockSide != HAnchor.Left;
         // expanded → collapse (toward the docked edge); collapsed → expand (into the screen).
         string glyph = expanded
             ? (rightDock ? "›" : "‹")
             : (rightDock ? "‹" : "›");
-        var chev = OverlayDraw.Text(glyph, 15, _hoveredDockToggle ? FgBrush : MutedBrush, FontWeight.Bold);
-        double halfCx = rightDock ? r / 2 : width - r / 2;
-        OverlayDraw.TextLeftMid(ctx, chev, halfCx - chev.Width / 2, cy);
+        var chev = OverlayDraw.Text(glyph, 18, _hoveredDockToggle ? FgBrush : MutedBrush, FontWeight.Bold);
+        OverlayDraw.TextLeftMid(ctx, chev, cx - chev.Width / 2, cy);
     }
 }
