@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.48] - 2026-08-20
+
+- The Social feed now ships wired up — the release build finally hands it its keys (it had been all dressed up with nowhere to connect)
+
+---
+
 ## [v0.3.47] - 2026-08-19
 
 - New opt-in **Social feed** — a little corner for friends who run Claude Code too
