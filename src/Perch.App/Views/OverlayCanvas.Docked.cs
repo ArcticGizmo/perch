@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Platform;
 using Perch.Avalonia.Rendering;
+using Perch.Avalonia.Windows;
 using Perch.Data;
 using Perch.Platform;
 
@@ -38,6 +39,14 @@ public sealed partial class OverlayCanvas
     // the work-area-only change our own reservation causes (which must not trigger a re-reserve loop).
     private string _dockScreenSig = "";
 
+    // Drag-to-redock state (dragging the header/strip moves the column to another monitor edge). Mirrors the
+    // dense controller's drop-lane machinery, reusing DenseDropZoneWindow.
+    internal bool _dockDragArmed;
+    internal bool _dockWasDrag;
+    internal PixelPoint _dockDragStartScreen;
+    private readonly List<DenseDropZoneWindow> _dockDropZones = [];
+    private DenseDropZoneWindow? _dockActiveZone;
+
     /// <summary>Whether the overlay is currently in Docked mode (reserving a screen-edge column).</summary>
     public bool IsDocked => _docked;
 
@@ -63,8 +72,13 @@ public sealed partial class OverlayCanvas
         BringWindowToTop();
     }
 
-    /// <summary>Releases the edge reservation (app shutdown / exit). Safe to call when not docked.</summary>
-    public void ReleaseDocked() => PlatformServices.EdgeReservation.Release();
+    /// <summary>Releases the edge reservation and any drag lanes (app shutdown / exit). Safe to call when
+    /// not docked.</summary>
+    public void ReleaseDocked()
+    {
+        HideDockDropZones();
+        PlatformServices.EdgeReservation.Release();
+    }
 
     // ── Placement seeding / live adoption (parallels the dense controller's) ──────
     // Seeds the docked side + monitor from the saved placement before the window is shown. Only the
@@ -117,6 +131,9 @@ public sealed partial class OverlayCanvas
         if (!_docked) return;
         _docked = false;
         _dockCollapsed = false;
+        _dockDragArmed = false;
+        _dockWasDrag = false;
+        HideDockDropZones();
         PlatformServices.EdgeReservation.Release();
         SetWindowCorners(rounded: true);    // restore the OS rounded corners for the floating panel
         SizeFloatingToContent();   // window was Manual/full-height; size back to content
@@ -131,6 +148,56 @@ public sealed partial class OverlayCanvas
     {
         if (HostWindow?.TryGetPlatformHandle() is { } h)
             PlatformServices.WindowChrome.SetWindowCornerPreference(h.Handle, rounded);
+    }
+
+    // ── Drag to re-dock (side / monitor) ─────────────────────────────────────────
+    // While dragging the docked header/strip, put a left- and a right-edge drop lane on every monitor;
+    // releasing over one re-docks the column there. The current dock's own lane is skipped. Reuses
+    // DenseDropZoneWindow (the same translucent edge lane the dense strip uses).
+    internal void ShowDockDropZones()
+    {
+        if (_dockDropZones.Count > 0 || HostWindow?.Screens is not { } screens) return;
+        foreach (var s in screens.All)
+            foreach (var side in (ReadOnlySpan<DenseSide>)[DenseSide.Left, DenseSide.Right])
+            {
+                bool isCurrent = s.Bounds == _dockScreenBounds && (side == DenseSide.Left) == (_dockSide == HAnchor.Left);
+                if (isCurrent) continue;
+                var zone = new DenseDropZoneWindow(s, side);
+                _dockDropZones.Add(zone);
+                zone.Show();
+            }
+    }
+
+    internal void UpdateDockDropZone(PixelPoint screenPt)
+    {
+        DenseDropZoneWindow? hit = null;
+        foreach (var z in _dockDropZones)
+            if (z.ContainsScreenPoint(screenPt)) { hit = z; break; }
+
+        if (hit == _dockActiveZone) return;
+        _dockActiveZone?.SetActive(false);
+        _dockActiveZone = hit;
+        _dockActiveZone?.SetActive(true);
+    }
+
+    internal void HideDockDropZones()
+    {
+        foreach (var z in _dockDropZones) z.Close();
+        _dockDropZones.Clear();
+        _dockActiveZone = null;
+    }
+
+    // Re-docks the column to the monitor + edge whose lane the pointer was released over. Moving the same
+    // appbar (via ApplyDockedGeometry → Reserve) frees the old edge and reserves the new one. No-op if the
+    // release wasn't over a lane.
+    internal void PinToDockDropZone()
+    {
+        if (_dockActiveZone is null) return;
+        _dockScreenBounds = _dockActiveZone.TargetScreen.Bounds;
+        _dockSide = _dockActiveZone.Side == DenseSide.Left ? HAnchor.Left : HAnchor.Right;
+        ApplyDockedGeometry();
+        InvalidateVisual();
+        BringWindowToTop();
     }
 
     // ── Geometry + reservation ───────────────────────────────────────────────────

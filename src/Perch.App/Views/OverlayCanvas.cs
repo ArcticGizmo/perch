@@ -3011,6 +3011,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         var p = e.GetPosition(this);
 
+        // Docked drag-to-redock: once past the threshold, show the edge drop lanes on every monitor and
+        // highlight the one under the cursor. The column stays put (edge-locked) until release.
+        if (_dockDragArmed)
+        {
+            var cur = this.PointToScreen(p);
+            int dx = cur.X - _dockDragStartScreen.X, dy = cur.Y - _dockDragStartScreen.Y;
+            if (!_dockWasDrag && (Math.Abs(dx) > 4 || Math.Abs(dy) > 4)) { _dockWasDrag = true; ShowDockDropZones(); }
+            if (_dockWasDrag) UpdateDockDropZone(cur);
+            base.OnPointerMoved(e);
+            return;
+        }
+
         // Docked collapsed: the rows aren't shown, so only the bottom expand button is interactive — skip all
         // the row/glyph hit-testing (which would otherwise leave stale hover/tooltip artifacts and clickable
         // dead rows over the empty column).
@@ -3270,6 +3282,25 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _headerDragged = false;
         _denseArmed = false;
         _denseWasDrag = false;
+        _dockDragArmed = false;
+        _dockWasDrag = false;
+
+        // Docked: dragging the header (expanded) or the strip's top band (collapsed) re-docks the column to
+        // another monitor edge; a press that never moves falls through to RouteClick (collapse/expand) on
+        // release. The column itself is edge-locked, so we don't move the window during the drag — only the
+        // drop lanes track the cursor.
+        if (_docked)
+        {
+            if (p.Y < HeaderHeight)
+            {
+                _dockDragArmed = true;
+                _dockDragStartScreen = this.PointToScreen(p);
+            }
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            base.OnPointerPressed(e);
+            return;
+        }
 
         if (_denseCtl.IsDense)
         {
@@ -3329,6 +3360,19 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (wasDrag) _denseCtl.PinToActiveDropZone(this.PointToScreen(e.GetPosition(this)));
             _denseCtl.HideDropZones();
             if (!wasDrag) RouteClick(e.GetPosition(this));
+            base.OnPointerReleased(e);
+            return;
+        }
+
+        // Docked drag: released over another monitor's edge lane re-docks the column there; a plain click
+        // (no move) falls through to RouteClick (collapse/expand).
+        if (_dockDragArmed)
+        {
+            bool wasDrag = _dockWasDrag;
+            _dockDragArmed = false;
+            _dockWasDrag = false;
+            if (wasDrag) { PinToDockDropZone(); HideDockDropZones(); }
+            else RouteClick(e.GetPosition(this));
             base.OnPointerReleased(e);
             return;
         }
