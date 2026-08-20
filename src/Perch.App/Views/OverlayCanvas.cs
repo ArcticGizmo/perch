@@ -218,7 +218,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // Whether the full session body is currently on screen: the floating expand state, or — in dense
     // mode — whether the hover popup is open. Everything panel-related keys off this, not raw _expanded.
-    private bool ShowFullPanel => _denseCtl.IsDense ? _denseCtl.IsOpen : _expanded;
+    private bool ShowFullPanel => _docked ? !_dockCollapsed : (_denseCtl.IsDense ? _denseCtl.IsOpen : _expanded);
 
     // ── Dense mode: public surface for the app (tray / hotkey / screen changes) ──
     public bool IsDense => _denseCtl.IsDense;
@@ -228,6 +228,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // topmost, in case a display change (e.g. undocking) left it stranded or buried.
     public void ToggleDense()
     {
+        // Dense (the float-over strip) is a Floating-mode affordance; in Docked mode the dense hotkey does
+        // nothing (Ctrl+Shift+W handles collapse/expand there instead).
+        if (_docked) return;
         // In dense mode, if the list preview has popped open (e.g. a session needs attention surfaced it),
         // the hotkey dismisses that preview back to the slim strip rather than leaving dense mode. A second
         // press then exits dense as usual. (The header's side-collapse glyph still leaves dense directly.)
@@ -244,7 +247,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // geometry — this both rescues it after an undock and restores the same distance from the borders when a
     // monitor grows back (a plain clamp would leave it drifted toward the centre). Re-lift topmost too, since
     // a display change can drop even a Topmost window behind others.
-    public void OnScreensChanged() { _denseCtl.OnScreensChanged(); RestoreOrEnsureFloating(); BringWindowToTop(); }
+    public void OnScreensChanged()
+    {
+        // Docked owns the whole window geometry (full-height reserved column), so re-derive it against the
+        // new screen layout and re-assert the reservation rather than running the floating/dense re-heal.
+        if (_docked) { ApplyDockedGeometry(); BringWindowToTop(); return; }
+        _denseCtl.OnScreensChanged(); RestoreOrEnsureFloating(); BringWindowToTop();
+    }
 
     public void DisposeDense() => _denseCtl.Dispose();
 
@@ -252,20 +261,22 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// shown: the floating one is applied by <see cref="PlaceAtInitialFloating"/> at open, the dense one is
     /// handed to the controller so its first entry docks where the user asked. Null on either keeps that
     /// mode's computed default.</summary>
-    public void SetInitialPlacements(OverlayPlacement? floating, OverlayPlacement? dense)
+    public void SetInitialPlacements(OverlayPlacement? floating, OverlayPlacement? dense, OverlayPlacement? docked)
     {
         _floatingPlacement = floating;
         _denseCtl.SeedPlacement(dense);
+        SeedDockedPlacement(docked);
     }
 
     /// <summary>Adopts new placements from the editor and applies them to the running overlay: the floating
     /// one re-positions the window now (when floating), the dense one moves the strip now (when dense) and
     /// otherwise takes effect on the next dense entry. Null on either resets that mode to its default.</summary>
-    public void ApplyPlacementsLive(OverlayPlacement? floating, OverlayPlacement? dense)
+    public void ApplyPlacementsLive(OverlayPlacement? floating, OverlayPlacement? dense, OverlayPlacement? docked)
     {
         _floatingPlacement = floating;
         _denseCtl.ApplyPlacement(dense);
-        if (!_denseCtl.IsDense) PlaceAtInitialFloating();
+        ApplyDockedPlacementLive(docked);
+        if (!_denseCtl.IsDense && !_docked) PlaceAtInitialFloating();
     }
 
     // ── IDenseHost (geometry lives on the window) ──
@@ -351,7 +362,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// remembered spot stays current.</summary>
     internal void OnWindowPositionChanged()
     {
-        if (_denseCtl.IsDense) return;                          // dense owns its geometry
+        if (_denseCtl.IsDense || _docked) return;              // dense/docked own their geometry
         if (_lastPlacedFloatingPos is not { } placed) return;   // not placed yet — nothing to compare against
         if (HostWindow is not { } w) return;
         if (placed == w.Position) return;                       // our own programmatic move, not a user drag
@@ -438,7 +449,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // screen's default float. No-op in dense mode, which docks itself. Best-effort; swallows layout hiccups.
     private void EnsureFloatingOnScreen()
     {
-        if (_denseCtl.IsDense) return;
+        if (_denseCtl.IsDense || _docked) return;
         if (HostWindow is not { Screens: { } screens } w) return;
 
         try
@@ -479,7 +490,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // dense session can't clobber the floating memory.
     private void CaptureFloatingPlacement()
     {
-        if (_denseCtl.IsDense) return;
+        if (_denseCtl.IsDense || _docked) return;
         if (HostWindow is not { Screens: { } screens } w) return;
         try
         {
@@ -561,6 +572,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // eating clicks where rows used to be). Use this anywhere a toggle/update can change the panel height.
     private void RemeasurePanel()
     {
+        // Docked owns a fixed full-height window, so content changes only repaint — never resize the window.
+        if (_docked) { InvalidateMeasure(); InvalidateVisual(); return; }
         if (_denseCtl.IsDense) RelayoutWindow();
         else { InvalidateMeasure(); SizeFloatingToContent(); InvalidateVisual(); }
     }
@@ -574,7 +587,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // No-op in dense mode, whose geometry the controller owns, or before the window exists.
     private void SizeFloatingToContent()
     {
-        if (_denseCtl.IsDense || HostWindow is not { } w) return;
+        if (_denseCtl.IsDense || _docked || HostWindow is not { } w) return;
         double h = Draw(null, FormWidth); // content height in DIPs, honouring the current expand/collapse state
         if (w.SizeToContent != SizeToContent.Manual) w.SizeToContent = SizeToContent.Manual;
         if (Math.Abs(w.Width - FormWidth) > 0.5) w.Width = FormWidth;
@@ -1479,7 +1492,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         // In dense mode the window's size is set explicitly (SizeToContent off), so the content is
         // measured to the window client size the controller placed — return that. Floating auto-sizes.
-        if (_denseCtl.IsDense && double.IsFinite(availableSize.Width) && double.IsFinite(availableSize.Height)
+        if ((_denseCtl.IsDense || _docked) && double.IsFinite(availableSize.Width) && double.IsFinite(availableSize.Height)
             && availableSize is { Width: > 0, Height: > 0 })
             return availableSize;
         return new(FormWidth, Draw(null, FormWidth));
@@ -1490,6 +1503,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Measure-or-paint: returns the content height; paints only when ctx is non-null.
     private double Draw(DrawingContext? ctx, double width)
     {
+        // Docked collapsed: a narrow full-height reserved strip showing status counts (dense-strip art).
+        if (_docked && _dockCollapsed) return DrawDockedStrip(ctx, width);
         if (_denseCtl.IsClosedStrip) return DrawStrip(ctx, width);
 
         // The open panel shows its strips whether or not any sessions are running — an empty roster just
@@ -1515,17 +1530,22 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         if (ctx != null)
         {
+            // Docked mode paints a full-height, square-cornered column flush to the edge; floating paints a
+            // content-height rounded panel. The content lays out from the top identically either way.
+            double panelH = _docked ? Bounds.Height : height;
+            double corner = _docked ? 0 : Corner;
+
             // While attention is flashing, the 1px border is replaced by the animated chase (drawn under
             // the content, so the header/rows paint over its inward bloom).
-            var panelRect = new Rect(0.5, 0.5, width - 1, height - 1);
+            var panelRect = new Rect(0.5, 0.5, width - 1, panelH - 1);
             if (_attentionFlash)
             {
-                OverlayDraw.Panel(ctx, panelRect, BgBrush, null, Corner);
+                OverlayDraw.Panel(ctx, panelRect, BgBrush, null, corner);
                 DrawChaseBorder(ctx, panelRect, AttentionColor);
             }
             else
             {
-                OverlayDraw.Panel(ctx, panelRect, BgBrush, BorderPen, Corner);
+                OverlayDraw.Panel(ctx, panelRect, BgBrush, BorderPen, corner);
             }
             DrawHeader(ctx, width);
             if (_autoCloseActive) DrawAutoCloseBar(ctx, width);
@@ -1542,7 +1562,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 // Clip the body to the panel's rounded rect so the bottom-most element (a hovered last row
                 // with no strip beneath it, or a daemon/mic/media strip) follows the rounded corners instead
                 // of squaring off past them. Same trick the outage footer uses for its bottom corners.
-                using var _bodyClip = ctx.PushClip(new RoundedRect(panelRect, Corner));
+                using var _bodyClip = ctx.PushClip(new RoundedRect(panelRect, corner));
 
                 // Glyph hit-rects are rebuilt from scratch each paint; DrawSessionRow repopulates them
                 // for any row that actually shows the glyph.
@@ -1603,7 +1623,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (showFooter) DrawStatusFooter(ctx, width, height);
             else _footerRect = default;
 
-            DrawInstanceBorder(ctx, width, height);
+            DrawInstanceBorder(ctx, width, panelH);
         }
 
         return height;
@@ -3222,7 +3242,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // pointer passes the threshold). Record the cursor's screen position and the window's top-left so the
         // move tracks the cursor's total displacement. A press that never moves falls through to RouteClick on
         // release (header toggle).
-        if (p.Y < HeaderHeight && OwnerWindow is { } fw)
+        // Docked column is edge-locked (its geometry is owned by the reservation), so the header is not a
+        // drag handle — a header click toggles collapse/expand instead (routed on release).
+        if (p.Y < HeaderHeight && OwnerWindow is { } fw && !_docked)
         {
             _headerArmed = true;
             _headerDragStartScreen = this.PointToScreen(p);
@@ -3431,6 +3453,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             var branch = hs.Rows[hyper];
             MarkHypertreeRow(hyper); // move the marker now; the confirming read corrects it if the jump fails
             HypertreeRowActivated?.Invoke(branch, -1);
+            return;
+        }
+
+        // Docked: a header click collapses/expands the reserved column (the same thing Ctrl+Shift+W does).
+        if (_docked && p.Y < HeaderHeight)
+        {
+            if (_brandRect.Contains(p)) RegisterBrandClick();
+            ToggleDockedCollapsed();
             return;
         }
 

@@ -82,6 +82,10 @@ internal sealed class SettingsHooks
     /// <summary>Re-register the global keyboard shortcuts after a binding was edited or toggled.</summary>
     public Action? HotkeysChanged;
 
+    /// <summary>Switch the live overlay between Floating and Docked (the App reads the mutated
+    /// <see cref="AppSettings.OverlayMode"/> back). Raised by the Overlay-mode segmented control.</summary>
+    public Action? OverlayModeChanged;
+
     /// <summary>Preview a local desktop notification of the given kind.</summary>
     public Action<NotificationKind>? TestNotification;
 

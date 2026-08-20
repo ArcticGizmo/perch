@@ -46,6 +46,21 @@ public enum DenseStatusChangeStyle
     Bubble = 1,
 }
 
+/// <summary>
+/// How the live overlay presents itself. <see cref="Floating"/> is the classic always-on-top panel that
+/// floats over a corner (and still supports the runtime dense hover-strip). <see cref="Docked"/> reserves a
+/// screen-edge column via the OS (Windows AppBar) so maximized windows never cover it; Ctrl+Shift+W toggles
+/// that column between a narrow collapsed strip and the full panel. Persisted by <em>name</em> so the member
+/// order can change without breaking an older settings file; a missing key keeps Floating. See
+/// docs/reserve-edge-plan.md.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum OverlayPresentationMode
+{
+    Floating = 0,
+    Docked = 1,
+}
+
 internal sealed class AppSettings
 {
     // Per-profile so a dev instance doesn't read/write the installed Perch's settings (see AppProfile).
@@ -337,6 +352,16 @@ internal sealed class AppSettings
     public OverlayPlacement? FloatingPlacement { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public OverlayPlacement? DensePlacement { get; set; }
+    // The docked column's initial placement. Only its horizontal anchor (which edge) is meaningful — the
+    // column is full-height and its width is fixed for now — so the editor stores the side here and ignores
+    // the offsets. Null means the default (right edge of the primary monitor). See OverlayCanvas docked path.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OverlayPlacement? DockedPlacement { get; set; }
+
+    // Whether the overlay floats (classic panel) or docks (reserves a screen-edge column via the OS so
+    // maximized windows can't cover it). Defaults to Floating, so an older settings file keeps today's
+    // behaviour. Ctrl+Shift+W (HotkeyToggleDocked) collapses/expands the docked column. See OverlayCanvas.
+    public OverlayPresentationMode OverlayMode { get; set; } = OverlayPresentationMode.Floating;
 
     // How the dense strip surfaces a session status change: Expand pops the hover panel open (the original
     // behaviour); Bubble floats a small speech bubble off the perch-logo row that fades after a couple of
@@ -394,6 +419,8 @@ internal sealed class AppSettings
     public HotkeyBinding HotkeyToggleDense { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 'W');
     public HotkeyBinding HotkeyCycleSessions { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 'S');
     public HotkeyBinding HotkeyOpenSwitcher { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, ' ');
+    //  • Docked — collapse/expand the docked column (Ctrl+Shift+W). Only fires anything in Docked mode.
+    public HotkeyBinding HotkeyToggleDocked { get; set; } = new(HotkeyModifiers.Control | HotkeyModifiers.Shift, 'W');
 
     // Which terminal the session switcher launches when reopening a closed session (`claude --resume <id>`
     // in its working directory). Auto picks the best available (Windows Terminal, else Command Prompt); an

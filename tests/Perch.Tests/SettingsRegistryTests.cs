@@ -33,6 +33,7 @@ public class SettingsRegistryTests
         nameof(AppSettings.HotkeyToggleDense),
         nameof(AppSettings.HotkeyCycleSessions),
         nameof(AppSettings.HotkeyOpenSwitcher),
+        nameof(AppSettings.HotkeyToggleDocked),
         nameof(AppSettings.ReopenTerminal),
     };
 

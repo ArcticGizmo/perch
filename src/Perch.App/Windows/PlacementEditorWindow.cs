@@ -22,11 +22,14 @@ internal sealed record PlacementEditorContext(
     Screen TargetScreen,
     OverlayPlacement? Floating,
     OverlayPlacement? Dense,
+    OverlayPlacement? Docked,
     OverlayPlacement DefaultFloating,
     OverlayPlacement DefaultDense,
+    OverlayPlacement DefaultDocked,
     (double W, double H) FloatSizeDip,
     (double W, double H) DenseSizeDip,
-    Action<OverlayPlacement?, OverlayPlacement?> OnSave);
+    (double W, double H) DockSizeDip,
+    Action<OverlayPlacement?, OverlayPlacement?, OverlayPlacement?> OnSave);
 
 /// <summary>
 /// The "Set initial placements…" editor: a full-screen, dimmed, always-on-top overlay on one monitor where
@@ -39,13 +42,14 @@ internal sealed record PlacementEditorContext(
 /// </summary>
 internal sealed class PlacementEditorWindow : Window
 {
-    private enum EditMode { Floating, Dense }
+    private enum EditMode { Floating, Dense, Docked }
 
     private readonly PlacementEditorContext _ctx;
 
     // Per-mode working values, null meaning "use the default". Seeded from the saved placements.
     private OverlayPlacement? _floating;
     private OverlayPlacement? _dense;
+    private OverlayPlacement? _docked;
     private EditMode _mode = EditMode.Floating;
 
     private readonly Canvas _canvas = new();
@@ -58,6 +62,7 @@ internal sealed class PlacementEditorWindow : Window
     };
     private Button _floatingModeBtn = null!;
     private Button _denseModeBtn = null!;
+    private Button _dockedModeBtn = null!;
 
     // The two dashed guides from the preview's anchored corner out to the nearest screen edges, and the
     // pill that reads back the live distances.
@@ -78,6 +83,7 @@ internal sealed class PlacementEditorWindow : Window
         _ctx = ctx;
         _floating = ctx.Floating?.Clone();
         _dense = ctx.Dense?.Clone();
+        _docked = ctx.Docked?.Clone();
 
         Title = "Set initial placements";
         WindowDecorations = WindowDecorations.None;
@@ -149,6 +155,7 @@ internal sealed class PlacementEditorWindow : Window
         // selected half fills with the accent) rather than two independent buttons.
         _floatingModeBtn = MakeSegment("Overlay", EditMode.Floating);
         _denseModeBtn = MakeSegment("Dense", EditMode.Dense);
+        _dockedModeBtn = MakeSegment("Docked", EditMode.Docked);
         var segmented = new Border
         {
             BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
@@ -156,7 +163,12 @@ internal sealed class PlacementEditorWindow : Window
             Child = new StackPanel
             {
                 Orientation = Orientation.Horizontal, Spacing = 0,
-                Children = { _floatingModeBtn, new Border { Width = 1, Background = Palette.BorderBrush }, _denseModeBtn },
+                Children =
+                {
+                    _floatingModeBtn, new Border { Width = 1, Background = Palette.BorderBrush },
+                    _denseModeBtn, new Border { Width = 1, Background = Palette.BorderBrush },
+                    _dockedModeBtn,
+                },
             },
         };
 
@@ -233,17 +245,26 @@ internal sealed class PlacementEditorWindow : Window
 
     private void ResetCurrent()
     {
-        if (_mode == EditMode.Floating) _floating = null; else _dense = null;
+        if (_mode == EditMode.Floating) _floating = null;
+        else if (_mode == EditMode.Dense) _dense = null;
+        else _docked = null;
         RefreshMock();
     }
 
     // The placement currently in effect for the active mode (working value, or the default when unset).
-    private OverlayPlacement CurrentPlacement() => _mode == EditMode.Floating
-        ? _floating ?? _ctx.DefaultFloating
-        : _dense ?? _ctx.DefaultDense;
+    private OverlayPlacement CurrentPlacement() => _mode switch
+    {
+        EditMode.Floating => _floating ?? _ctx.DefaultFloating,
+        EditMode.Dense    => _dense ?? _ctx.DefaultDense,
+        _                 => _docked ?? _ctx.DefaultDocked,
+    };
 
-    private (double W, double H) CurrentSizeDip() =>
-        _mode == EditMode.Floating ? _ctx.FloatSizeDip : _ctx.DenseSizeDip;
+    private (double W, double H) CurrentSizeDip() => _mode switch
+    {
+        EditMode.Floating => _ctx.FloatSizeDip,
+        EditMode.Dense    => _ctx.DenseSizeDip,
+        _                 => _ctx.DockSizeDip,
+    };
 
     // Positions and sizes the preview for the current mode, draws the guides to the anchored edges, updates
     // the distance HUD, and reflects the mode in the toolbar. Canvas coordinates are DIP relative to the
@@ -268,7 +289,12 @@ internal sealed class PlacementEditorWindow : Window
         _mock.Height = dipH;
         Canvas.SetLeft(_mock, leftDip);
         Canvas.SetTop(_mock, topDip);
-        _mockLabel.Text = _mode == EditMode.Floating ? "Overlay\npreview" : "Dense";
+        _mockLabel.Text = _mode switch
+        {
+            EditMode.Floating => "Overlay\npreview",
+            EditMode.Dense    => "Dense",
+            _                 => "Docked\ncolumn",
+        };
 
         // Guides run from the preview's anchored point out to the two nearest work-area edges. The vertical
         // anchor is always the mock's top edge (the header) — OffsetY measures from there regardless of
@@ -284,9 +310,12 @@ internal sealed class PlacementEditorWindow : Window
 
         string hLabel = p.HAnchor == HAnchor.Left ? "Left" : "Right";
         string vLabel = p.VAnchor == VAnchor.Top ? "Top" : "Bottom";
-        _hudText.Text = _mode == EditMode.Dense
-            ? $"{hLabel} edge  ·  {vLabel} {p.OffsetY:0} px"
-            : $"{vLabel} {p.OffsetY:0} px  ·  {hLabel} {p.OffsetX:0} px";
+        _hudText.Text = _mode switch
+        {
+            EditMode.Dense    => $"{hLabel} edge  ·  {vLabel} {p.OffsetY:0} px",
+            EditMode.Docked   => $"{hLabel} edge  ·  docked column",
+            _                 => $"{vLabel} {p.OffsetY:0} px  ·  {hLabel} {p.OffsetX:0} px",
+        };
 
         // Park the HUD just below the preview, or above it if that would run off the bottom.
         _hud.Measure(Size.Infinity);
@@ -295,9 +324,10 @@ internal sealed class PlacementEditorWindow : Window
         Canvas.SetLeft(_hud, Math.Max(0, leftDip));
         Canvas.SetTop(_hud, Math.Max(0, hudY));
 
-        // Fill the selected half of the segmented control with the accent.
+        // Fill the selected segment with the accent.
         StyleSegment(_floatingModeBtn, _mode == EditMode.Floating);
         StyleSegment(_denseModeBtn, _mode == EditMode.Dense);
+        StyleSegment(_dockedModeBtn, _mode == EditMode.Docked);
     }
 
     private void OnMockPressed(object? sender, PointerPressedEventArgs e)
@@ -339,9 +369,9 @@ internal sealed class PlacementEditorWindow : Window
         int physY = bounds.Y + (int)Math.Round(topDip * scale);
         (physX, physY) = PlacementMath.Clamp(physX, physY, wa.X, wa.Y, wa.Width, wa.Height, physW, physH);
 
-        if (_mode == EditMode.Dense)
+        if (_mode is EditMode.Dense or EditMode.Docked)
         {
-            // Dense is edge-docked: snap horizontally to whichever edge is nearer.
+            // Dense/docked are edge-docked: snap horizontally to whichever edge is nearer.
             bool left = physX - wa.X <= wa.X + wa.Width - (physX + physW);
             physX = left ? wa.X : wa.X + wa.Width - physW;
         }
@@ -353,14 +383,15 @@ internal sealed class PlacementEditorWindow : Window
         placement.MonitorH = bounds.Height;
 
         if (_mode == EditMode.Floating) _floating = placement;
-        else { placement.OffsetX = 0; _dense = placement; }
+        else if (_mode == EditMode.Dense) { placement.OffsetX = 0; _dense = placement; }
+        else { placement.OffsetX = 0; placement.OffsetY = 0; _docked = placement; } // docked: only the side matters
 
         RefreshMock();
     }
 
     private void Commit()
     {
-        _ctx.OnSave(_floating, _dense);
+        _ctx.OnSave(_floating, _dense, _docked);
         Close();
     }
 

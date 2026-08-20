@@ -235,6 +235,18 @@ internal sealed class SettingsCatalogView : StackPanel
             });
         }
 
+        if (d.Id == "overlay-mode")
+        {
+            // A segmented toggle (binary choice). Order matches the OverlayPresentationMode ordinals
+            // (Floating, Docked). Switching applies live via OverlayModeChanged.
+            return SettingsUi.Segmented(["Floating", "Docked"], (int)_settings.OverlayMode, i =>
+            {
+                _settings.OverlayMode = (OverlayPresentationMode)i;
+                _settings.Save();
+                _hooks.OverlayModeChanged?.Invoke();
+            });
+        }
+
         if (d.Id == "start-mode")
         {
             // Order matches the StartMode enum ordinals (Off, OnSessionStart, OnLogin).
