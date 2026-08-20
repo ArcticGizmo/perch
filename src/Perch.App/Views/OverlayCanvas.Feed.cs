@@ -375,7 +375,8 @@ public sealed partial class OverlayCanvas
     // the combined chip → clicking opens the picker) and, for the combined chip, a tooltip target. The "mine"
     // accent outline is drawn only while <paramref name="rowHovered"/> — at rest the chips sit quietly with no
     // border, and the outline appears when you hover the row that owns them.
-    private double DrawChip(DrawingContext ctx, double x, double midY, DrawableChip c, Guid postId, bool rowHovered)
+    private double DrawChip(DrawingContext ctx, double x, double midY, DrawableChip c, Guid postId, bool rowHovered,
+        bool interactive = true)
     {
         double chipH = FeedReactionHeight - 4;
         double w = ChipWidth(c);
@@ -388,7 +389,9 @@ public sealed partial class OverlayCanvas
         if (ShowsCount(c))
             OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(c.Count.ToString(), FeedReactionSize,
                 c.Mine ? Palette.AccentBrush : FgBrush), x + 7 + emojiFt.Width + 4, midY);
-        _reactChipRects.Add((chip, postId, c.Combined ? "" : c.Emoji));
+        // Own-post chips are display-only (you can't react to yourself) — skip the click hit-rect, but keep the
+        // combined-summary tooltip so you can still see who reacted with what.
+        if (interactive) _reactChipRects.Add((chip, postId, c.Combined ? "" : c.Emoji));
         if (c.Combined && c.Tooltip is { } tip) _reactSummaryTips.Add((chip, tip));
         return chip.Right;
     }
@@ -418,13 +421,27 @@ public sealed partial class OverlayCanvas
             OverlayDraw.TextLeftMid(ctx, agoFt, width - HorizPad - agoFt.Width, topMid);
         }
 
-        // Bottom line: Update/Post affordance (right), your status or the prompt (left).
+        // Bottom line, right cluster built from the right edge inward: Update/Post affordance, then the
+        // reactions friends left on your status (display-only — you can't react to your own post).
+        double cursor = width - HorizPad;
         var actionFt = OverlayDraw.Text(_roster?.MyLatest is not null ? "Update" : "Post",
             FeedReactionSize, Palette.AccentBrush, FontWeight.SemiBold);
-        double actionX = width - HorizPad - actionFt.Width;
-        OverlayDraw.TextLeftMid(ctx, actionFt, actionX, botMid);
+        OverlayDraw.TextLeftMid(ctx, actionFt, cursor - actionFt.Width, botMid);
+        cursor -= actionFt.Width + 8;
 
-        double bodyMax = actionX - 8 - x;
+        if (_roster is { MyLatest: { } myPost, MyReactions.Count: > 0 } r2)
+        {
+            var chips = ChipsFor(r2.MyReactions);
+            double chipsW = chips.Sum(ChipWidth) + Math.Max(0, chips.Count - 1) * 5;
+            if (chipsW < width * 0.7)
+            {
+                double cx = cursor - chipsW;
+                foreach (var c in chips) cx = DrawChip(ctx, cx, botMid, c, myPost.Id, _hoveredSocialCompose, interactive: false) + 5;
+                cursor -= chipsW + 6;
+            }
+        }
+
+        double bodyMax = cursor - 8 - x;
         if (bodyMax > 12)
         {
             if (_roster?.MyLatest is { } mine)

@@ -349,10 +349,15 @@ public sealed class SupabaseSocialClient : ISocialClient
         var latestByAuthor = new Dictionary<Guid, FeedItem>();
         foreach (var item in feed) latestByAuthor.TryAdd(item.Author.Id, item);
 
-        // Reactions for just those latest posts, grouped by emoji.
+        var myLatest = latestByAuthor.GetValueOrDefault(uid);
+
+        // Reactions for the friends' latest posts AND your own latest — so the "you" row can show what
+        // friends thought of your status.
         var latestIds = friends
             .Select(f => latestByAuthor.GetValueOrDefault(f.Profile.Id)?.Id)
-            .Where(id => id is not null).Select(id => id!.Value).ToList();
+            .Where(id => id is not null).Select(id => id!.Value)
+            .Concat(myLatest is not null ? [myLatest.Id] : Array.Empty<Guid>())
+            .ToList();
         var reactions = await FetchReactionsAsync(latestIds, uid, token, ct);
 
         var entries = friends
@@ -367,8 +372,8 @@ public sealed class SupabaseSocialClient : ISocialClient
             .ThenBy(e => e.Profile.Handle, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var myLatest = latestByAuthor.GetValueOrDefault(uid);
-        return new RosterSnapshot(_me, myLatest, entries, incoming);
+        var myReactions = myLatest is not null ? reactions.GetValueOrDefault(myLatest.Id, []) : [];
+        return new RosterSnapshot(_me, myLatest, myReactions, entries, incoming);
     }
 
     public async Task ReactAsync(Guid postId, string emoji, bool on, CancellationToken ct = default)

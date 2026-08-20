@@ -288,6 +288,22 @@ public sealed class FakeSocialClientTests
     }
 
     [Fact]
+    public async Task Roster_carries_reactions_on_your_own_status()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        var mine = await c.PostAsync("shipped it");
+        c.SimulateReaction(mine.Value, ada.Id, "🎉");   // a friend reacts to my post
+
+        var roster = await c.GetRosterAsync();
+        var party = Assert.Single(roster.MyReactions);
+        Assert.Equal("🎉", party.Emoji);
+        Assert.Equal(1, party.Count);
+        Assert.False(party.Mine);                        // it's ada's reaction, not mine
+    }
+
+    [Fact]
     public async Task Mutual_requests_become_an_accepted_friendship()
     {
         var c = SignedIn();

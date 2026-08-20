@@ -146,7 +146,10 @@ internal static class SampleData
         var myPost = new FeedItem(Guid.Parse("dddddddd-0000-4000-8000-00000000000d"), me,
             "shipping something silly", "😌", now.AddMinutes(-5));
 
-        return new RosterSnapshot(me, myPost,
+        // Reactions friends left on your own status — shown on the "you" row.
+        IReadOnlyList<ReactionGroup> myReactions = [new ReactionGroup("🎉", 2, false), new ReactionGroup("😂", 1, false)];
+
+        return new RosterSnapshot(me, myPost, myReactions,
         [
             // ada: >2 distinct emojis → collapses to a combined count chip (tooltip shows the breakdown).
             new(ada, adaPost, [new ReactionGroup("🔥", 3, true), new ReactionGroup("❤️", 2, false), new ReactionGroup("👍", 1, false)]),

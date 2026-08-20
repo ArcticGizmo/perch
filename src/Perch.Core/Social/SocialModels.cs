@@ -73,18 +73,23 @@ public sealed record RosterFriend(Profile Profile, FeedItem? Latest, IReadOnlyLi
 /// </summary>
 /// <param name="Me">The signed-in user's own profile, or null when not yet loaded.</param>
 /// <param name="MyLatest">The signed-in user's own most recent status, or null if they haven't posted.</param>
+/// <param name="MyReactions">The reactions on your own latest status (so the "you" row can show what friends
+/// thought of it). Empty when you have no status or nobody's reacted.</param>
 /// <param name="Friends">One entry per accepted friend, most-recently-active first.</param>
 /// <param name="IncomingRequests">How many pending friend requests are waiting on you — the region shows a
 /// badge when this is &gt; 0.</param>
-public sealed record RosterSnapshot(Profile? Me, FeedItem? MyLatest, IReadOnlyList<RosterFriend> Friends, int IncomingRequests = 0)
+public sealed record RosterSnapshot(
+    Profile? Me, FeedItem? MyLatest, IReadOnlyList<ReactionGroup> MyReactions,
+    IReadOnlyList<RosterFriend> Friends, int IncomingRequests = 0)
 {
-    public static readonly RosterSnapshot Empty = new(null, null, []);
+    public static readonly RosterSnapshot Empty = new(null, null, [], []);
 
     public bool Any => Friends.Count > 0;
 
     public bool Equals(RosterSnapshot? other) =>
         other is not null && Me == other.Me && MyLatest == other.MyLatest
-        && IncomingRequests == other.IncomingRequests && Friends.SequenceEqual(other.Friends);
+        && IncomingRequests == other.IncomingRequests
+        && MyReactions.SequenceEqual(other.MyReactions) && Friends.SequenceEqual(other.Friends);
 
     public override int GetHashCode()
     {
@@ -92,6 +97,7 @@ public sealed record RosterSnapshot(Profile? Me, FeedItem? MyLatest, IReadOnlyLi
         hc.Add(Me);
         hc.Add(MyLatest);
         hc.Add(IncomingRequests);
+        foreach (var r in MyReactions) hc.Add(r);
         foreach (var f in Friends) hc.Add(f);
         return hc.ToHashCode();
     }

@@ -182,8 +182,9 @@ public sealed partial class FakeSocialClient : ISocialClient
                 .ToList();
             var myLatest = _me is null ? null
                 : _posts.Where(x => x.Author.Id == _me.Id).OrderByDescending(x => x.CreatedAt).FirstOrDefault();
+            var myReactions = myLatest is not null ? GroupReactionsLocked(myLatest.Id) : (IReadOnlyList<ReactionGroup>)[];
             int incoming = _edges.Count(e => e.Value == FriendshipState.Incoming && !_blocked.Contains(e.Key));
-            return Task.FromResult(new RosterSnapshot(_me, myLatest, entries, incoming));
+            return Task.FromResult(new RosterSnapshot(_me, myLatest, myReactions, entries, incoming));
         }
     }
 
