@@ -682,7 +682,7 @@ public partial class App : Application
         if (_social is null) return;
         _debugSocialWindow = WindowHost.ShowOrFocus(
             _debugSocialWindow,
-            () => new DebugSocialWindow(_social, () => _feedHost?.RefreshSoon()),
+            () => new DebugSocialWindow(_social, () => _feedHost?.RefreshSoon(), ShowReactionBubble),
             () => _debugSocialWindow = null);
     }
 
@@ -886,6 +886,13 @@ public partial class App : Application
     {
         if (_appSettings is not { ShowLargeReactions: true }) return;
         if (_dndActive && (_appSettings?.CloseFeedInDoNotDisturb ?? false)) return;
+        ShowReactionBubble(emoji);
+    }
+
+    // Puts a bubble on screen, creating the layer window if needed. Separate from OnReactionToMyPost's gates so
+    // the debug testing tool can force a bubble regardless of the setting / Do Not Disturb.
+    private void ShowReactionBubble(string emoji)
+    {
         if (_overlay is null) return;
         var screen = _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
         if (screen is null) return;

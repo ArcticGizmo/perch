@@ -26,15 +26,25 @@ internal sealed class DebugSocialWindow : Window
 {
     private readonly SupabaseSocialClient _real;
     private readonly Action _refreshReal;
+    private readonly Action<string>? _testReaction;
     private SupabaseSocialClient? _puppet;
+
+    // A ring of reactions so each "React" click uses a different emoji — reactions are one-per-user, so
+    // re-clicking the same emoji is a delete-then-insert that leaves the count unchanged and so wouldn't
+    // trigger a big-reaction bubble. Cycling guarantees a genuinely new reaction each time.
+    private static readonly string[] ReactCycle = ["🔥", "🎉", "😂", "❤️", "👍", "🙌", "😮", "😢"];
+    private int _reactIx;
 
     private readonly TextBox _email, _password, _handle, _target, _status, _emoji;
     private readonly TextBlock _log;
 
-    public DebugSocialWindow(SupabaseSocialClient real, Action refreshReal)
+    /// <param name="testReaction">Spawns a big-reaction bubble directly (bypassing the network and the
+    /// ShowLargeReactions / Do Not Disturb gates), so the animation can be verified in isolation.</param>
+    public DebugSocialWindow(SupabaseSocialClient real, Action refreshReal, Action<string>? testReaction = null)
     {
         _real = real;
         _refreshReal = refreshReal;
+        _testReaction = testReaction;
         Title = "Social testing (puppet)";
         Width = 460;
         Height = 620;
@@ -90,6 +100,17 @@ internal sealed class DebugSocialWindow : Window
         reactBtn.Click += (_, _) => Run(React);
         reactRow.Children.Add(reactBtn);
         panel.Children.Add(reactRow);
+
+        // Fire the big-reaction bubble directly — no network, no ShowLargeReactions / DND gate — so you can
+        // confirm the animation itself works independently of the detection path.
+        var testBubble = SettingsUi.FlatButton("Test big reaction (local)");
+        testBubble.Click += (_, _) =>
+        {
+            var emoji = ReactCycle[_reactIx++ % ReactCycle.Length];
+            _testReaction?.Invoke(emoji);
+            Log(_testReaction is null ? "Test hook not wired." : $"Spawned a local {emoji} bubble (bypasses settings/DND).");
+        };
+        panel.Children.Add(Left(testBubble));
 
         panel.Children.Add(SettingsUi.Separator());
         var refresh = SettingsUi.FlatButton("Refresh my overlay now");
@@ -158,7 +179,10 @@ internal sealed class DebugSocialWindow : Window
         var feed = await p.GetFeedAsync(50);
         var latest = feed.FirstOrDefault(x => x.Author.Id == target.Id);
         if (latest is null) { Log($"No visible post by @{target.Handle} — are you accepted friends, and have you posted?"); return; }
-        var emoji = string.IsNullOrWhiteSpace(_emoji.Text) ? "🔥" : _emoji.Text.Trim();
+        // Cycle the emoji so each click is a genuinely new reaction (see ReactCycle) — otherwise a repeat with
+        // the same emoji leaves the count unchanged and no big-reaction bubble fires.
+        var emoji = ReactCycle[_reactIx++ % ReactCycle.Length];
+        _emoji.Text = emoji;   // reflect what was actually used
         await p.ReactAsync(latest.Id, emoji, on: true);
         Log($"Reacted {emoji} to @{target.Handle}'s latest post.");
         _refreshReal();
