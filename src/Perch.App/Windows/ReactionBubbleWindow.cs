@@ -42,27 +42,43 @@ internal sealed class ReactionBubbleWindow : Window
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.Manual;
 
-        var pill = new Button
+        // A fully self-styled pill (not a themed Button, whose pointer-over wash made the text hard to read).
+        // Opaque background so the text is legible over any desktop; hover only nudges the shade.
+        var normalBg = new SolidColorBrush(Color.FromRgb(Palette.ButtonBg.R, Palette.ButtonBg.G, Palette.ButtonBg.B));
+        var hoverBg = new SolidColorBrush(Lighten(Palette.ButtonBg, 0.14));
+        var pill = new Border
         {
-            Content = "Turn off big reactions",
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Bottom,
-            Margin = new Thickness(0, 0, 0, 40),
-            Padding = new Thickness(14, 7),
-            Background = new SolidColorBrush(Color.FromArgb(200, Palette.ButtonBg.R, Palette.ButtonBg.G, Palette.ButtonBg.B)),
-            Foreground = new SolidColorBrush(Palette.Fg),
+            Child = new TextBlock
+            {
+                Text = "Turn off big reactions",
+                Foreground = new SolidColorBrush(Palette.Fg), FontSize = 12,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            },
+            Background = normalBg,
             BorderBrush = new SolidColorBrush(Palette.Border), BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(16), FontSize = 12,
-            Cursor = new Cursor(StandardCursorType.Hand),
+            CornerRadius = new CornerRadius(16), Padding = new Thickness(14, 7),
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 0, 40), Cursor = new Cursor(StandardCursorType.Hand),
         };
-        pill.Click += (_, _) => { TurnOff?.Invoke(); Close(); };
+        pill.PointerEntered += (_, _) => pill.Background = hoverBg;
+        pill.PointerExited += (_, _) => pill.Background = normalBg;
+        pill.PointerPressed += (_, _) => { TurnOff?.Invoke(); Close(); };
 
         _layer.Dismissed += Close;          // a click on empty space closes the whole layer
         _layer.AllGone += Close;            // nothing left to show
 
         // The layer fills the window and catches clicks (its background is a transparent, hit-testable brush);
         // the pill sits above it at the bottom.
-        Content = new Grid { Children = { _layer, pill } };
+        var root = new Grid { Children = { _layer, pill } };
+        // The window is transparent/layered, so ClearType would fringe the pill text — force grayscale AA.
+        TextOptions.SetTextRenderingMode(root, TextRenderingMode.Antialias);
+        Content = root;
+    }
+
+    private static Color Lighten(Color c, double amount)
+    {
+        byte L(byte v) => (byte)Math.Clamp(v + (255 - v) * amount, 0, 255);
+        return Color.FromRgb(L(c.R), L(c.G), L(c.B));
     }
 
     /// <summary>Sizes and shows the layer across <paramref name="screen"/> (the one holding the overlay).</summary>
@@ -73,6 +89,10 @@ internal sealed class ReactionBubbleWindow : Window
         Position = b.Position;
         Width = b.Width / scale;            // cover the screen in DIPs
         Height = b.Height / scale;
+        // Pin the layer to the same size, so its Bounds are guaranteed full-screen for bubble geometry and
+        // hit-testing (rather than relying on Grid stretch of a size-less Control).
+        _layer.Width = Width;
+        _layer.Height = Height;
         if (!IsVisible) Show();
     }
 
@@ -174,7 +194,8 @@ internal sealed class ReactionBubbleLayer : Control
     private (double cx, double cy, double size, double opacity) Geometry(Bubble b, long now)
     {
         double t = Math.Clamp((now - b.Born) / RiseMs, 0, 1);
-        double cy = Bounds.Height + b.Size - t * (Bounds.Height + b.Size * 2);   // bottom → top
+        // Start just inside the bottom edge (so the very first frame is already visible) and rise off the top.
+        double cy = (Bounds.Height - b.Size) - t * Bounds.Height;
         double cx = b.BaseX * Bounds.Width + b.Amp * Math.Sin(b.Freq * t * Math.Tau + b.Phase);
         double opacity = 1;
         if (t > 0.15) opacity = Math.Clamp(1 - (t - 0.15) / 0.85, 0.15, 1);      // fade as it climbs
@@ -229,8 +250,8 @@ internal sealed class ReactionBubbleLayer : Control
                 continue;
             }
 
-            // The bubble: a soft translucent disc behind the emoji, then the glyph.
-            var disc = new SolidColorBrush(Color.FromArgb((byte)(38 * opacity), 255, 255, 255));
+            // The bubble: a soft dark translucent disc behind the emoji (reads on any desktop), then the glyph.
+            var disc = new SolidColorBrush(Color.FromArgb((byte)(80 * opacity), 0, 0, 0));
             ctx.DrawEllipse(disc, null, new Point(cx, cy), size * 0.72, size * 0.72);
             DrawEmoji(ctx, b.Emoji, cx, cy, size, opacity);
         }
