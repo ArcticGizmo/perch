@@ -1418,8 +1418,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             ? sessions
             : sessions.Where(s => !daemonIds.Contains(s.SessionId)).ToList();
 
-        // Interactive sessions render at the top; background/SDK-driven ones group under the
-        // collapsible "Autonomous" section. Each partition sorted by display name.
+        // Interactive sessions render at the top (terminal *and* Claude Desktop sessions — both have a
+        // human driving them); only background/SDK-driven ones group under the collapsible "Autonomous"
+        // section. Each partition sorted by display name.
         var interactive = sessions.Where(s => !s.IsBackground && daemonIds?.Contains(s.SessionId) != true)
             .OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase);
         var background = sessions.Where(s => s.IsBackground && daemonIds?.Contains(s.SessionId) != true)
@@ -2366,14 +2367,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         double statusW = OverlayDraw.MeasureWidth(statusText, StatusSize);
 
-        // Left-of-name glyph cluster: warn, artifact, mail, remote-control, bot.
+        // Left-of-name glyph cluster: warn, artifact, mail, remote-control, origin (bot | desktop).
         bool stuck = _showStuckWarnings && session.IsStuck;
         double warnW = stuck ? WarnIconWidth : 0;
         bool hasArtifacts = _showArtifacts && session.HasArtifacts;
         double artW = hasArtifacts ? ArtifactIconWidth : 0;
         double mailW = session.ExternalNotify ? MailIconWidth : 0;
         double rcW   = session.RemoteControlled ? RcIconWidth : 0;
-        double botW  = session.IsBackground ? BotIconWidth : 0;
+        // Origin glyph: a bot for background/SDK runs, a monitor for Claude Desktop sessions. Mutually
+        // exclusive (a session is one host or the other), so they share one slot in the cluster.
+        double originW  = (session.IsBackground || session.IsDesktop) ? BotIconWidth : 0;
         double noteW = showNote ? NoteIconWidth : 0;
         bool showPr = _showPullRequests && session.PullRequest is not null;
         double prW  = showPr ? PrIconWidth : 0;
@@ -2413,7 +2416,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         const double GitGap = 4;
         double gitW = showGit ? gitAddW + GitGap + gitDelW + 8 : 0;
 
-        double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - botW - mailW
+        double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - originW - mailW
                          - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW - jiraW - mdW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
@@ -2431,35 +2434,40 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
         if (mailW > 0)    DrawMailIcon(ctx, HorizPad + 14 + warnW + artW, nameMidY);
         if (rcW > 0)   DrawRemoteIcon(ctx, HorizPad + 16 + warnW + artW + mailW, nameMidY);
-        if (botW > 0)  DrawBotIcon(ctx, HorizPad + 14 + warnW + artW + mailW + rcW, nameMidY);
+        if (originW > 0)
+        {
+            double originX = HorizPad + 14 + warnW + artW + mailW + rcW;
+            if (session.IsDesktop) DrawDesktopIcon(ctx, originX, nameMidY);
+            else DrawBotIcon(ctx, originX, nameMidY);
+        }
         if (noteW > 0)
         {
-            double noteGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + botW;
+            double noteGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + originW;
             // Full amber for a session note; dimmed for a project-only note so it stays ambient.
             DrawNoteIcon(ctx, noteGlyphX, nameMidY, session.HasNote ? NoteBrush : NoteDimBrush);
             _noteRects[rowIndex] = new Rect(noteGlyphX - 2, nameMidY - 9, NoteIconWidth + 2, 18);
         }
         if (showPr)
         {
-            double prGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW;
+            double prGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + originW + noteW;
             DrawPrIcon(ctx, prGlyphX, nameMidY, session.PullRequest!.Value.State,
                 session.PullRequest!.Value.ChecksRollup, hovered: _hoveredPrRow == rowIndex);
             _prRects[rowIndex] = new Rect(prGlyphX - 2, nameMidY - 9, PrIconWidth + 2, 18);
         }
         if (showJira)
         {
-            double jiraGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW;
+            double jiraGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + originW + noteW + prW;
             DrawJiraIcon(ctx, jiraGlyphX, nameMidY);
             _jiraRects[rowIndex] = new Rect(jiraGlyphX - 2, nameMidY - 9, JiraIconWidth + 2, 18);
         }
         if (showMd)
         {
-            double mdGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW + jiraW;
+            double mdGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + originW + noteW + prW + jiraW;
             DrawMdIcon(ctx, mdGlyphX, nameMidY, hovered: _hoveredMarkdownRow == rowIndex);
             _mdRects[rowIndex] = new Rect(mdGlyphX - 2, nameMidY - 9, MdIconWidth + 2, 18);
         }
 
-        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + botW + noteW + prW + jiraW + mdW;
+        double nameX = HorizPad + 14 + warnW + artW + mailW + rcW + originW + noteW + prW + jiraW + mdW;
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
         // Git churn immediately right of the name: "+added" green, "-deleted" red.
@@ -2715,6 +2723,21 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(left, top, w, h), 2)); // face
         ctx.DrawEllipse(BotBrush, null, new Point(left + 3.5, top + 4), 1, 1);  // eyes
         ctx.DrawEllipse(BotBrush, null, new Point(left + w - 3.5, top + 4), 1, 1);
+    }
+
+    // The Claude Desktop glyph: a little monitor (screen + stand). Marks an interactive session hosted by
+    // the Claude Desktop app rather than a terminal; shares the neutral origin-glyph gray with the bot, so
+    // the *shape* carries the distinction (a monitor, not a robot). Sits in the same cluster slot.
+    private static void DrawDesktopIcon(DrawingContext ctx, double x, double midY)
+    {
+        var pen = new Pen(BotBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        const double w = 11, h = 7.5;
+        double left = x, top = midY - h / 2 - 1;
+        double cx = left + w / 2, bottom = top + h;
+
+        ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(left, top, w, h), 1.5)); // screen
+        ctx.DrawLine(pen, new Point(cx, bottom), new Point(cx, bottom + 2.5));          // stand
+        ctx.DrawLine(pen, new Point(cx - 3, bottom + 2.5), new Point(cx + 3, bottom + 2.5)); // base
     }
 
     // The remote-control "broadcast" glyph: a source dot with two quarter-arc waves rising up-right.

@@ -45,6 +45,19 @@ public sealed class SessionLauncher : ISessionLauncher
             new ProcessStartInfo("wt.exe", $"-d \"{cwd}\" cmd /k {inner}") { UseShellExecute = true },
     };
 
+    // Claude Desktop ships as an MSIX-packaged (Store) app, so its exe lives under the ACL-protected,
+    // version-stamped C:\Program Files\WindowsApps\... — you can't launch it by path. The supported way is
+    // to activate it by AppUserModelID, which is stable across version bumps (the family name's publisher
+    // hash and the "Claude" app id don't change on update). "explorer.exe shell:AppsFolder\<AUMID>" is the
+    // canonical shell activation; if the app is already running it just brings the window forward, which is
+    // exactly what we want for one that's been closed to the tray. Re-derive the AUMID if it ever changes
+    // with:  Get-StartApps | ? Name -like 'Claude*'   (AppID column).
+    private const string ClaudeDesktopAumid = "Claude_pzs8sxrjxfjjc!Claude";
+
+    public bool OpenClaudeDesktop() =>
+        TryStart(new ProcessStartInfo("explorer.exe", $"shell:AppsFolder\\{ClaudeDesktopAumid}")
+            { UseShellExecute = true });
+
     private static bool TryStart(ProcessStartInfo psi)
     {
         try { return Process.Start(psi) is not null; }

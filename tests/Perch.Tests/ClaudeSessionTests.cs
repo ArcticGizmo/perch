@@ -69,6 +69,27 @@ public class ClaudeSessionTests
     }
 
     [Theory]
+    [InlineData("claude-desktop")]
+    [InlineData("CLAUDE-DESKTOP")]   // case-insensitive
+    public void Desktop_IsInteractiveNotBackground(string entrypoint)
+    {
+        // A Claude Desktop session is interactive (a human at the keyboard, hosted by the desktop app),
+        // so it is IsDesktop but deliberately NOT IsBackground.
+        var session = WithEntrypoint(entrypoint);
+        Assert.True(session.IsDesktop);
+        Assert.False(session.IsBackground);
+    }
+
+    [Theory]
+    [InlineData("cli")]
+    [InlineData("sdk-py")]
+    [InlineData(null)]
+    public void IsDesktop_FalseForEverythingElse(string? entrypoint)
+    {
+        Assert.False(WithEntrypoint(entrypoint).IsDesktop);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]

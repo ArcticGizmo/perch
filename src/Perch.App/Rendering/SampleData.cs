@@ -79,6 +79,10 @@ internal static class SampleData
             // A session whose last request to the API failed (529 Overloaded) — the red ApiError alert.
             new ClaudeSession("6543", "s6", SessionStatus.ApiError, @"C:\src\web", "web", now,
                 ApiFailure: new ApiFailure(529, "API Error: 529 Overloaded.")),
+            // A Claude Desktop session (Entrypoint == "claude-desktop") -> interactive, listed with the
+            // rest but marked with the monitor glyph.
+            new ClaudeSession("5566", "s7", SessionStatus.Running, @"C:\src\thoughts", "claude-thoughts", now,
+                Entrypoint: "claude-desktop"),
             // A background/SDK session (Entrypoint != "cli") -> grouped under the Autonomous section.
             new ClaudeSession("7788", "s5", SessionStatus.Running, @"C:\src\bot", "nightly-bot", now,
                 Entrypoint: "sdk-py"),

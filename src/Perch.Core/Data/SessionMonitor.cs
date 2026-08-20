@@ -425,9 +425,10 @@ internal sealed class SessionMonitor : IDisposable
             var cwd = node["cwd"]?.GetValue<string>() ?? "";
             var updatedAtMs = node["updatedAt"]?.GetValue<long>() ?? 0;
 
-            // How the session was launched: "cli" for an interactive terminal, "sdk-ts"/"sdk-py" for a
-            // background / SDK-driven run. The only on-disk tell that a session has no human at the
-            // keyboard, so the overlay can mark it distinctly. See ClaudeSession.IsBackground.
+            // How the session was launched: "cli" for an interactive terminal, "claude-desktop" for the
+            // Claude Desktop app (also interactive), "sdk-ts"/"sdk-py" for a background / SDK-driven run.
+            // The on-disk tell of a session's host, so the overlay can group and mark it distinctly. See
+            // ClaudeSession.IsDesktop / IsBackground.
             var entrypoint = node["entrypoint"]?.GetValue<string>();
 
             // Remote Control marker: Claude Code adds a "bridgeSessionId" to the session file only

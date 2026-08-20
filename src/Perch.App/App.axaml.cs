@@ -529,20 +529,46 @@ public partial class App : Application
     // isn't done, and rescans so the overlay refreshes.
     private void FocusSession(ClaudeSession session)
     {
-        if (int.TryParse(session.Pid, out int pid)
-            && !PlatformServices.WindowActivator.FocusTerminalForProcess(pid, session.ProjectName))
+        if (int.TryParse(session.Pid, out int pid))
         {
-            // The session is alive but has no host window to bring forward — its terminal was hidden or
-            // torn down while the process kept running. Say so: an unexplained no-op click reads as Perch
-            // being broken, and the row itself gives no hint that there's nothing behind it. A plain info
-            // toast (null pid), so clicking it just dismisses rather than retrying the focus that failed.
-            _notifier?.Show(
-                "No window to focus",
-                $"{session.DisplayName} is still running (PID {pid}) but has no terminal window on screen. "
-                    + "Right-click the row to terminate it.",
-                ToastLevel.Warning, null, null);
+            if (session.IsDesktop)
+                FocusDesktopSession(session, pid);
+            else if (!PlatformServices.WindowActivator.FocusTerminalForProcess(pid, session.ProjectName))
+            {
+                // The session is alive but has no terminal to bring forward — its window was hidden or torn
+                // down while the process kept running. Say so: an unexplained no-op click reads as Perch
+                // being broken, and the row itself gives no hint that there's nothing behind it. A plain
+                // info toast (null pid), so clicking it just dismisses rather than retrying the failed focus.
+                _notifier?.Show(
+                    "No window to focus",
+                    $"{session.DisplayName} is still running (PID {pid}) but has no terminal window on "
+                        + "screen. Right-click the row to terminate it.",
+                    ToastLevel.Warning, null, null);
+            }
         }
         _monitorHost?.Acknowledge(session.Pid);
+    }
+
+    // Focuses a Claude Desktop session. The claude process runs under the Claude Desktop app, whose window
+    // is a process *ancestor*, so FocusAppWindowForProcess walks up to it and raises it (it can't pick out
+    // the specific in-app session — one app window hosts them all, the best Win32 allows). When no window
+    // is found the app has been quit or closed to the tray, so we launch/re-activate it and say so rather
+    // than leaving the click dead.
+    private void FocusDesktopSession(ClaudeSession session, int pid)
+    {
+        if (PlatformServices.WindowActivator.FocusAppWindowForProcess(pid)) return;
+
+        if (PlatformServices.SessionLauncher.OpenClaudeDesktop())
+            _notifier?.Show(
+                "Opening Claude Desktop",
+                $"Claude Desktop wasn't showing a window, so Perch is bringing it up for {session.DisplayName}.",
+                ToastLevel.Info, null, null);
+        else
+            _notifier?.Show(
+                "Couldn't open Claude Desktop",
+                $"{session.DisplayName} is hosted by Claude Desktop, which has no window on screen and "
+                    + "couldn't be launched. Open it manually to get back to this session.",
+                ToastLevel.Warning, null, null);
     }
 
     // Terminates a session from the row's right-click menu, after an explicit confirmation — this kills
@@ -1509,10 +1535,11 @@ public partial class App : Application
         else hk.Dispose(); // OS refused the combo — leave the slot empty rather than hold a dead binding
     }
 
-    // "Jump to next session": focus the terminal of the session after the last one we jumped to, wrapping
-    // around — so repeatedly pressing the hotkey walks every interactive session in turn. Background/SDK
-    // sessions have no terminal to focus, so they're skipped. Focusing also acknowledges the session,
-    // clearing a "done" badge just like a click.
+    // "Jump to next session": focus the host of the session after the last one we jumped to, wrapping
+    // around — so repeatedly pressing the hotkey walks every interactive session in turn (terminal
+    // sessions raise their terminal, Claude Desktop sessions raise the desktop app). Only background/SDK
+    // sessions are skipped — no human is at the keyboard. Focusing also acknowledges the session, clearing
+    // a "done" badge just like a click.
     private void CycleSessions()
     {
         var targets = _lastSessions.Where(s => !s.IsBackground).ToList();

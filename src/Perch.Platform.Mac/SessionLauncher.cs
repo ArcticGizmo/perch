@@ -12,4 +12,8 @@ namespace Perch.Platform.Mac;
 public sealed class SessionLauncher : ISessionLauncher
 {
     public bool Reopen(string cwd, string sessionId, TerminalApp terminal) => false;
+
+    // Not yet implemented (see docs/macos-port-plan.md): should activate Claude Desktop via its bundle id
+    // (`open -b <bundleId>`). Returns false for now, so the app tells the user it couldn't open it.
+    public bool OpenClaudeDesktop() => false;
 }

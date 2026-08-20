@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.56] - 2026-08-20
+
+- Claude Desktop sessions now list with your live ones, marked with a monitor glyph (they'd been filed under autonomous bots)
+- Jump-to and the session switcher now reach Claude Desktop sessions
+- Focusing one raises Claude Desktop, opening it first if it's closed to the tray
+
+---
+
 ## [v0.3.55] - 2026-08-20
 
 - Fixed the context thermometer sizing Fable to 200k (it has a million, like Opus and Sonnet 5)

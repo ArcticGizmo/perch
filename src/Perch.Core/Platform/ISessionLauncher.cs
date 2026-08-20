@@ -19,4 +19,13 @@ public interface ISessionLauncher
     /// Best-effort; never throws.
     /// </summary>
     bool Reopen(string cwd, string sessionId, TerminalApp terminal);
+
+    /// <summary>
+    /// Launches (or re-activates) the Claude Desktop app — the host of a <c>claude-desktop</c> session that
+    /// isn't showing a window. Activating an already-running instance simply brings its window forward, so
+    /// this doubles as "un-hide the app closed to the tray". Returns true when the launch was issued, false
+    /// when Claude Desktop couldn't be found (not installed) or the platform doesn't implement this yet, so
+    /// the caller can tell the user rather than leave a click that does nothing. Best-effort; never throws.
+    /// </summary>
+    bool OpenClaudeDesktop();
 }

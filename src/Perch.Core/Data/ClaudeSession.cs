@@ -261,21 +261,35 @@ public record ClaudeSession(
 
     /// <summary>
     /// How the session was launched, from the session file's <c>entrypoint</c> field: <c>"cli"</c> for
-    /// an ordinary interactive terminal session, or <c>"sdk-ts"</c>/<c>"sdk-py"</c> for one driven by
-    /// the Claude Agent SDK (a background / programmatic run). Null when the field is absent.
+    /// an ordinary interactive terminal session, <c>"claude-desktop"</c> for one hosted by the Claude
+    /// Desktop app (also interactive — a human is at the keyboard, just not in a terminal), or
+    /// <c>"sdk-ts"</c>/<c>"sdk-py"</c> for one driven by the Claude Agent SDK (a background / programmatic
+    /// run). Null when the field is absent. See <see cref="IsDesktop"/> and <see cref="IsBackground"/>.
     /// </summary>
     public string? Entrypoint { get; init; } = string.IsNullOrWhiteSpace(Entrypoint) ? null : Entrypoint.Trim();
 
     /// <summary>
-    /// True when this session is a background / SDK-driven run rather than an interactive terminal
-    /// session — i.e. its <see cref="Entrypoint"/> is anything other than <c>"cli"</c> (typically
-    /// <c>"sdk-ts"</c> or <c>"sdk-py"</c>). Such sessions have no human at the keyboard, so the overlay
-    /// marks them with a distinct glyph. A missing entrypoint is treated as interactive (the safe
-    /// default), so only an explicit non-cli value flips this on.
+    /// True when this session is hosted by the Claude Desktop app — i.e. its <see cref="Entrypoint"/> is
+    /// <c>"claude-desktop"</c>. Still an <em>interactive</em> session (a human is driving it from the
+    /// desktop app), so it is deliberately <b>not</b> <see cref="IsBackground"/>; it simply has no terminal
+    /// window to focus, so activation raises the Claude Desktop app window instead. The overlay marks it
+    /// with a distinct monitor glyph.
+    /// </summary>
+    public bool IsDesktop =>
+        string.Equals(Entrypoint, "claude-desktop", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when this session is a background / SDK-driven run rather than an interactive session — i.e.
+    /// its <see cref="Entrypoint"/> is some non-<c>"cli"</c> value that isn't the interactive Claude
+    /// Desktop app either (typically <c>"sdk-ts"</c> or <c>"sdk-py"</c>). Such sessions have no human at
+    /// the keyboard, so the overlay groups them under "Autonomous" and marks them with a bot glyph. A
+    /// missing entrypoint is treated as interactive (the safe default), and <see cref="IsDesktop"/>
+    /// sessions are interactive too, so only an explicit non-cli / non-desktop value flips this on.
     /// </summary>
     public bool IsBackground =>
         !string.IsNullOrEmpty(Entrypoint)
-        && !string.Equals(Entrypoint, "cli", StringComparison.OrdinalIgnoreCase);
+        && !string.Equals(Entrypoint, "cli", StringComparison.OrdinalIgnoreCase)
+        && !IsDesktop;
 
     /// <summary>
     /// True when this session has opted in to external (ntfy) notifications — i.e. its session file
