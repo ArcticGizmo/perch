@@ -228,9 +228,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // topmost, in case a display change (e.g. undocking) left it stranded or buried.
     public void ToggleDense()
     {
-        // Dense (the float-over strip) is a Floating-mode affordance; in Docked mode the dense hotkey does
-        // nothing (Ctrl+Shift+W handles collapse/expand there instead).
-        if (_docked) return;
+        // In Docked mode this expand/collapse gesture applies to the reserved column, not the float-over
+        // strip: the dense hotkey (and the header/tray affordances that call this) collapse/expand the docked
+        // column, same as the dedicated docked hotkey. Dense proper is a Floating-mode affordance.
+        if (_docked) { ToggleDockedCollapsed(); return; }
         // In dense mode, if the list preview has popped open (e.g. a session needs attention surfaced it),
         // the hotkey dismisses that preview back to the slim strip rather than leaving dense mode. A second
         // press then exits dense as usual. (The header's side-collapse glyph still leaves dense directly.)
