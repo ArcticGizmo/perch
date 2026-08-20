@@ -222,20 +222,20 @@ internal sealed class DebugSocialWindow : Window
     // again (a new emoji) to see it.
     private async Task Diagnose()
     {
-        Log(_gateStatus is null ? "Gate status hook not wired." : _gateStatus());
+        var gate = _gateStatus is null ? "Gate status hook not wired." : _gateStatus();
         var roster = await _real.GetRosterAsync();
         if (roster.MyLatest is null)
         {
-            Log("Your roster has no latest status — you haven't posted, so there's nothing for a friend to react to. Post a status first.");
+            Log(gate + "\n\nYour roster has no latest status — you haven't posted, so there's nothing for a friend to react to. Post a status first.");
             return;
         }
         var rx = roster.MyReactions.Count == 0
             ? "(none)"
             : string.Join(", ", roster.MyReactions.Select(g => $"{g.Emoji}x{g.Count}"));
         var body = roster.MyLatest.Body;
-        Log($"Your latest status: \"{(body.Length > 40 ? body[..40] + "…" : body)}\" — reactions the real client sees on it: {rx}. " +
-            "If a reaction shows here but no bubble fired, it was already present when the feed started (baseline) or a gate above is off; " +
-            "click React (it cycles emojis) to add a fresh one.");
+        Log($"{gate}\n\nYour latest status: \"{(body.Length > 40 ? body[..40] + "…" : body)}\" — reactions the real client sees on it: {rx}.\n\n" +
+            "If a reaction shows here but no bubble fired: ShowLargeReactions must be True and DND suppressing must be False above; and the " +
+            "reaction must be NEW since the feed started (a reaction already present is baseline). Click React (it cycles emojis) to add a fresh one.");
     }
 
     private async Task<Profile> FindTarget(SupabaseSocialClient p)
