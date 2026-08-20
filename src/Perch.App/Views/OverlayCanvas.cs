@@ -66,7 +66,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double ActivitySize   = 10;
     private const double SubNameSize    = 11;
     private const double SubStatusSize  = 9.5;
-    private const double SectionLabel   = 10;
     private const double SectionChev    = 9;
     private const double HyperLabelSize = 9;    // the "Hypertree" caption above the branch lines
     private const double HyperRowSize   = 10.5; // a branch line's name
@@ -116,7 +115,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private static readonly IBrush SubAgentBrush  = Palette.SubAgentBrush;
     private static readonly IPen   TreeLinePen    = new Pen(Palette.TreeLineBrush, 1);
     private static readonly IBrush BotBrush       = Palette.TeamGrayBrush;
-    private static readonly IBrush BadgeBrush     = Palette.TrackBrush;
     private static Color MailColor      => Palette.Active.Teal.ToColor();
     private static readonly IBrush MailBrush      = Palette.TealBrush;
     private static Color RemoteColor    => Palette.Active.Accent.ToColor();
@@ -1626,6 +1624,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 if (showTodos) DrawTodosStrip(ctx, width, TodosTop);
 
                 double top = RowsTop;
+                _autonomousHeaderRect = default; // re-armed below only when the section is actually drawn
                 for (int i = 0; i < _rows.Count; i++)
                 {
                     var r = _rows[i];
@@ -2547,32 +2546,31 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // ── "Autonomous" section header ───────────────────────────────────────────
+    // The shared collapsible-section style, matching the Todo and Friends headers: a chevron + caption on
+    // the left, a right-hand count, a hover wash over the whole band, and a click on the band toggles
+    // collapse (see RouteClick). The bot glyph rides next to the count (mirroring Friends' "N active" dot),
+    // keeping the caption left-aligned with the other section captions.
+    private Rect _autonomousHeaderRect;
+    private bool _hoveredAutonomousHeader;
+
     private void DrawSectionHeaderRow(DrawingContext ctx, DisplayRow row, double top, double width)
     {
         double midY = top + SectionRowHeight / 2;
+        _autonomousHeaderRect = new Rect(0, top, width, SectionRowHeight);
 
-        var chevron = OverlayDraw.Text(_autonomousExpanded ? "▾" : "▸", SectionChev, MutedBrush);
-        double x = HorizPad;
-        OverlayDraw.TextLeftMid(ctx, chevron, x, midY);
-        x += chevron.Width + 4;
+        if (_hoveredAutonomousHeader)
+            OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 3, width - 2 * (HorizPad - 4), SectionRowHeight - 6),
+                FeedHoverBrush, null, 6);
 
-        DrawBotIcon(ctx, x, midY);
-        x += BotIconWidth;
+        DrawChevron(ctx, HorizPad + 4, midY, _autonomousExpanded);
+        var capFt = OverlayDraw.Text("Autonomous", FeedCaptionSize, MutedBrush, FontWeight.SemiBold);
+        OverlayDraw.TextLeftMid(ctx, capFt, HorizPad + 14, midY);
 
-        var label = OverlayDraw.Text("Autonomous", SectionLabel, MutedBrush);
-        OverlayDraw.TextLeftMid(ctx, label, x, midY);
-        x += label.Width + 6;
-
-        // Count badge (dim pill).
-        var countFt = OverlayDraw.Text(row.SectionCount.ToString(), SectionLabel, MutedBrush);
-        double badgeW = countFt.Width + 10;
-        double badgeH = label.Height + 2;
-        OverlayDraw.Panel(ctx, new Rect(x, midY - badgeH / 2, badgeW, badgeH), BadgeBrush, null, badgeH / 2);
-        OverlayDraw.TextLeftMid(ctx, countFt, x + 5, midY);
-        x += badgeW + 8;
-
-        if (x < width - HorizPad)
-            ctx.DrawLine(SepPen, new Point(x, midY), new Point(width - HorizPad, midY));
+        // Far right: the bot glyph + session count, so a collapsed section still says how many are running.
+        var nFt = OverlayDraw.Text(row.SectionCount.ToString(), FeedCaptionSize, MutedBrush);
+        double nx = width - HorizPad - nFt.Width;
+        OverlayDraw.TextLeftMid(ctx, nFt, nx, midY);
+        DrawBotIcon(ctx, nx - BotIconWidth - 2, midY);
     }
 
     // ── Sub-agent / teammate rows ─────────────────────────────────────────────
@@ -3167,6 +3165,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             InvalidateVisual();
         }
 
+        bool autoHeader = _autonomousHeaderRect.Width > 0 && _autonomousHeaderRect.Contains(p);
+        if (autoHeader != _hoveredAutonomousHeader) { _hoveredAutonomousHeader = autoHeader; InvalidateVisual(); }
+
         int art = HitTestArtifactIcon(p);
         if (art != _hoveredArtifactRow) { _hoveredArtifactRow = art; InvalidateVisual(); }
 
@@ -3291,10 +3292,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredHyperHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredHyperHeader || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
         _hoveredSocial = false;
-        _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHyperHeader = false;
+        _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHyperHeader = _hoveredAutonomousHeader = false;
         _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredTodoRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;

@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.57] - 2026-08-20
+
+- Autonomous section header restyled to match Todo and Friends (consistency, at last)
+- Clicking an autonomous session no longer un-hides a stray window (it says there's nothing to open, and means it)
+
+---
+
 ## [v0.3.56] - 2026-08-20
 
 - Claude Desktop sessions now list with your live ones, marked with a monitor glyph (they'd been filed under autonomous bots)

@@ -533,6 +533,15 @@ public partial class App : Application
         {
             if (session.IsDesktop)
                 FocusDesktopSession(session, pid);
+            else if (session.IsBackground)
+                // An autonomous / SDK-driven run has no window of its own to bring forward — the same
+                // reason the jump hotkey and switcher skip these. Say so and acknowledge; walking the
+                // process ancestry (as FocusTerminalForProcess does) would only risk un-hiding some
+                // unrelated host window — the shell that launched the agent, say — which isn't the session.
+                _notifier?.Show(
+                    "Autonomous session",
+                    $"{session.DisplayName} is an autonomous (SDK) session — there's no window to open.",
+                    ToastLevel.Info, null, null);
             else if (!PlatformServices.WindowActivator.FocusTerminalForProcess(pid, session.ProjectName))
             {
                 // The session is alive but has no terminal to bring forward — its window was hidden or torn
