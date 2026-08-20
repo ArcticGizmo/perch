@@ -59,6 +59,7 @@ internal enum PreviewTarget
     MediaController,
     MicPresence,
     DaemonProcesses,
+    Todos,
     QuickLinks,
     PerchReacts,
     FeedStrip,

@@ -139,6 +139,18 @@ internal static class SettingsRegistry
             PreviewTarget.DaemonProcesses, nameof(AppSettings.ShowDaemonProcesses),
             s => s.ShowDaemonProcesses, (s, v) => s.ShowDaemonProcesses = v),
 
+        Toggle("todos", "Todos",
+            "Show your outstanding todos and their due times as a section on the overlay.",
+            SettingSurface.SessionRow, ["todo", "to-do", "task", "reminder", "due", "checklist"],
+            PreviewTarget.Todos, nameof(AppSettings.ShowTodos),
+            s => s.ShowTodos, (s, v) => s.ShowTodos = v),
+
+        Toggle("todo-reminders", "Todo reminders",
+            "Fire a desktop notification when a todo's due time arrives.",
+            SettingSurface.Notifications, ["todo", "reminder", "due", "notify", "alert", "toast"],
+            PreviewTarget.Todos, nameof(AppSettings.TodoRemindersEnabled),
+            s => s.TodoRemindersEnabled, (s, v) => s.TodoRemindersEnabled = v),
+
         Toggle("stuck-detection", "Stuck detection",
             "Amber warning glyph when a session is spinning - error streaks or failing loops.",
             SettingSurface.SessionRow, ["stuck", "runaway", "loop", "error", "streak", "frozen", "spinning"],

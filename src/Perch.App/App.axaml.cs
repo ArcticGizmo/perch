@@ -63,6 +63,12 @@ public partial class App : Application
     // The searchable project-note picker (right-click the note button). A single reused instance, owned by
     // the overlay like the sticky notes; torn down in CloseAuxWindows.
     private ProjectNotePickerWindow? _projectPicker;
+    // The user's to-do list: a single shared store, the reused editor window, and the poller that feeds the
+    // overlay strip + fires due reminders. All three share the one TodoStore instance so an edit in the
+    // window is seen by the poller (and vice versa) without reloading from disk.
+    private TodoStore? _todoStore;
+    private TodoWindow? _todoWindow;
+    private Services.TodoMonitorHost? _todoHost;
     private AppSettings? _appSettings;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
 
@@ -132,6 +138,7 @@ public partial class App : Application
                 _feedHost?.Dispose();
                 _hypertreeHost?.Dispose();
                 _daemonHost?.Dispose();
+                _todoHost?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
                 _overlay?.Canvas.ReleaseDocked();   // give the reserved screen edge back to the desktop
@@ -202,6 +209,11 @@ public partial class App : Application
             _ = _social.TryRestoreAsync();
             // Hypertree's published status file → the overlay's branch strip (opt-in; started below).
             _hypertreeHost = new HypertreeMonitorHost(_overlay.Canvas.SetHypertree);
+            _overlay.Canvas.SetHypertreeExpanded(settings.HypertreeExpanded);
+            _overlay.Canvas.HypertreeExpandChanged += expanded =>
+            {
+                if (_appSettings is { } s) { s.HypertreeExpanded = expanded; s.Save(); }
+            };
             // The Claude Code background daemon's worker roster → the overlay's "daemon" section. These
             // headless sessions have no window to focus, so they get their own rows with an options menu.
             // The full-list window (opened from the strip's overflow line) follows the roster live too.
@@ -324,6 +336,26 @@ public partial class App : Application
             _notifier.SessionActivated += OnToastActivated;
             _notifications = new NotificationService(_notifier, settings, _sessionLock, PlatformServices.AudioCue);
             _achievements = new AchievementService(AchievementStore.Load());
+
+            // The user's to-do list: the shared store, the poller that keeps the overlay "To do" strip current
+            // and fires due reminders. Started/stopped from ApplyDisplaySettings per the ShowTodos / reminders
+            // settings. A Complete from the overlay writes through the same store and re-runs the poller.
+            _todoStore = TodoStore.Load();
+            _todoHost = new Services.TodoMonitorHost(
+                _todoStore, (lines, total) => _overlay!.Canvas.SetTopTodos(lines, total), _notifications, settings);
+            _overlay.Canvas.SetTodosExpanded(settings.TodosExpanded);
+            _overlay.Canvas.TodosExpandChanged += expanded =>
+            {
+                if (_appSettings is { } s) { s.TodosExpanded = expanded; s.Save(); }
+            };
+            _overlay.Canvas.TodosRequested += OpenTodos;
+            _overlay.Canvas.TodoCompleteRequested += id =>
+            {
+                _todoStore!.Complete(id);
+                _todoStore.Save();
+                _todoHost?.RefreshNow();
+                _todoWindow?.Retarget();
+            };
 
             // In-app updater: reflect availability on the tray item, the overlay badge and any open
             // Settings window. The overlay's badge click and the tray/Settings actions all route here.
@@ -486,6 +518,7 @@ public partial class App : Application
         _changelogWindow?.Close();
         _switcher?.Close();
         _projectPicker?.Close();
+        _todoWindow?.Close();
         foreach (var note in _noteWindows.Values.ToList())
             note.CloseWithoutPrompt();
     }
@@ -607,6 +640,15 @@ public partial class App : Application
 
         // Poll the feed only while Social is enabled and signed in (turning Social off stops the poll).
         _feedHost?.SetActive(s.SocialEnabled && (_social?.Current.SignedIn ?? false));
+
+        // Run the to-do poller while either the overlay strip or the due reminders are enabled; stop it (and
+        // clear the strip) when both are off. The canvas gate (SetShowTodos, applied above) hides the strip
+        // independently, so the poller can keep firing reminders with the strip turned off.
+        if (_todoHost is { } todoHost)
+        {
+            if (s.ShowTodos || s.TodoRemindersEnabled) todoHost.Start();
+            else todoHost.Stop();
+        }
 
         // Watch Windows Do Not Disturb only while Social is on and the auto-close option is enabled.
         ApplyDndMonitor(s);
@@ -1109,6 +1151,17 @@ public partial class App : Application
             w => w.Retarget(session.Cwd, session.SessionId, session.DisplayName, isActive));
     }
 
+    // Opens (or focuses) the to-do list window. Edits flow through the shared TodoStore; an edit there
+    // saves and re-runs the poller so the overlay strip and reminders track it — see the onChanged callback.
+    private void OpenTodos()
+    {
+        _todoStore ??= TodoStore.Load();
+        _todoWindow = WindowHost.ShowOrFocus(_todoWindow,
+            () => new TodoWindow(_todoStore, () => _todoHost?.RefreshNow()),
+            () => _todoWindow = null,
+            w => w.Retarget());
+    }
+
     private void OpenAchievements() =>
         _achievementsWindow = WindowHost.ShowOrFocus(_achievementsWindow,
             () =>
@@ -1365,6 +1418,9 @@ public partial class App : Application
         var achievementsItem = new NativeMenuItem("Achievements…");
         achievementsItem.Click += (_, _) => OpenAchievements();
 
+        var todosItem = new NativeMenuItem("Todos…");
+        todosItem.Click += (_, _) => OpenTodos();
+
         // Reads "Check for Updates…" normally; flips to "Update available" once a pending update is
         // detected (see OnUpdateAvailabilityChanged). Clicking it applies the pending update, else checks.
         _updateItem = new NativeMenuItem("Check for Updates…");
@@ -1390,6 +1446,7 @@ public partial class App : Application
                 statsItem,
                 flightItem,
                 achievementsItem,
+                todosItem,
                 _updateItem,
                 new NativeMenuItemSeparator(),
                 exitItem,

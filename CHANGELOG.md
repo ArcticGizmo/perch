@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.54] - 2026-08-20
+
+- Todos: your own reminders with a title, notes, and an optional due time (off by default)
+- An opt-in "Todo" overlay section, above the sessions - what's next, and how overdue you are (off by default)
+- A two-pane Todos window: triage on the left, read the notes on the right
+- Desktop nudge when a todo falls due (once per item, not a nag)
+- Right-click a todo to complete it; open the list from the tray or a session menu
+
+---
+
 ## [v0.3.53] - 2026-08-20
 
 - Big reactions: a friend's reaction to your status wobbles up the screen as a poppable bubble

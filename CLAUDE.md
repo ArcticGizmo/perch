@@ -90,6 +90,16 @@ running the tray app.
 - **Dashboards are owner-drawn through a single measure-or-paint routine.** e.g. `StatsDashboard.Draw(DrawingContext?, width)`
   returns the content height when the context is null (measure pass) and paints when it isn't. Keep the
   two in one method so the measured height and the painted layout can never drift apart.
+- **Collapsible overlay sections follow one standard pattern.** A section that can collapse (the Social/
+  Friends region, the Todo section, the Hypertree strip) draws a **header row** = `chevron ▸/▾` (via the
+  shared `OverlayCanvas.DrawChevron`) + a caption + an optional right-hand **"+"** (via `DrawPlusGlyph`,
+  inside an ~18px box with its own hover), with a hover wash (`FeedHoverBrush`) over the band. A **click on
+  the header toggles** expand/collapse; the **"+"** does the section's add action. Collapsed → only the
+  header contributes to `PanelBodyHeight`/`Draw` and the section's row hit-tests early-return; expanded → the
+  header plus the body lines. The expand state is **persisted per section** as a bool on `AppSettings` (in
+  `SettingsRegistryTests.NotSettings`, not a Settings-window control), seeded once with `Set*Expanded(...)`
+  and written back through a `*ExpandChanged` event the App handles. Reuse this shape for any new collapsible
+  section rather than inventing another; see `OverlayCanvas.Todos.cs` + `OverlayCanvas.Feed.cs`.
 - **IO / heavy work runs off the UI thread**, then marshals back: `Task.Run(...)` →
   `Dispatcher.UIThread.Post(...)` (or `ContinueWith(..., TaskScheduler.FromCurrentSynchronizationContext())`).
   Guard the callback against a window that closed mid-flight (`IsVisible` / disposed checks) and swallow

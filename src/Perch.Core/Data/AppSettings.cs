@@ -132,6 +132,24 @@ internal sealed class AppSettings
     // only; the workers themselves keep running. Defaults to true; a missing key keeps it on.
     public bool ShowDaemonProcesses { get; set; } = true;
 
+    // Whether to show the user's own todo list as a "Todo" section on the overlay — the top few
+    // outstanding items with their relative due times. Off hides the section (todos are still tracked and
+    // editable from the Todos window and tray menu). Off by default (opt-in); a missing key keeps it off.
+    public bool ShowTodos { get; set; } = false;
+
+    // Whether a desktop reminder fires when a todo's due time arrives (once per item). Off keeps the
+    // todo list purely visual - overdue items still surface in the overlay/window, just without a toast.
+    // Defaults to true; a missing key keeps it on.
+    public bool TodoRemindersEnabled { get; set; } = true;
+
+    // Whether the overlay's Todo section is expanded (showing the top items) or collapsed to just its
+    // header. Toggled by the section's own chevron, not a Settings control. Defaults to expanded.
+    public bool TodosExpanded { get; set; } = true;
+
+    // Whether the overlay's Hypertree section is expanded (showing the branch lines) or collapsed to just
+    // its header. Toggled by the section's own chevron. Defaults to expanded.
+    public bool HypertreeExpanded { get; set; } = true;
+
     // The global scratch pad — free-form multi-line text opened from the note button leading the overlay's
     // quick-links row. Not tied to any session; persisted here so it survives a restart. Null/empty means
     // the pad is empty (nothing written to the file when empty). See StickyNoteWindow.

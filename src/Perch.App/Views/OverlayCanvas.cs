@@ -621,6 +621,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (UsageStripVisible) h += UsageStripHeight;
         if (HasQuickLinksRow) h += QuickLinksRowHeight;
         if (HypertreeStripVisible) h += HypertreeStripHeight;
+        h += TodosStripHeight;
         foreach (var r in _rows) h += HeightOf(r);
         h += DaemonStripHeight;
         h += 2;
@@ -804,12 +805,38 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private static double HypertreeCaptionHeight
         => _hyperCaptionH ??= OverlayDraw.Text("Xg", HyperLabelSize, MutedBrush).Height + 4;
 
+    // Collapsed → only the header (caption + chevron) shows. Seeded from AppSettings.HypertreeExpanded and
+    // toggled by the header chevron (the standard collapsible-section pattern — see CLAUDE.md).
+    private bool _hypertreeExpanded = true;
+    private bool _hoveredHyperHeader;
+    private Rect _hyperHeaderRect;
+
     private double HypertreeStripHeight
         => !HypertreeStripVisible
             ? 0
-            : HypertreeCaptionHeight + (_hypertree!.Rows.Count * HypertreeLineHeight) + 6;
+            : HypertreeCaptionHeight + (_hypertreeExpanded ? _hypertree!.Rows.Count * HypertreeLineHeight + 6 : 0);
+
+    /// <summary>Raised when the Hypertree header's chevron is clicked to expand or collapse — the app persists it.</summary>
+    public event Action<bool>? HypertreeExpandChanged;
 
     private double HypertreeTop => QuickLinksTop + (HasQuickLinksRow ? QuickLinksRowHeight : 0);
+
+    /// <summary>Sets the section's initial expand/collapse state (from AppSettings) without raising the change
+    /// event. Call once at wire-up.</summary>
+    public void SetHypertreeExpanded(bool expanded)
+    {
+        if (_hypertreeExpanded == expanded) return;
+        _hypertreeExpanded = expanded;
+        if (HypertreeStripVisible) RemeasurePanel();
+    }
+
+    // Routed from RouteClick: the header toggles expand/collapse.
+    private void OnHypertreeHeaderClicked()
+    {
+        _hypertreeExpanded = !_hypertreeExpanded;
+        HypertreeExpandChanged?.Invoke(_hypertreeExpanded);
+        RemeasurePanel();
+    }
 
     /// <summary>Replaces the Hypertree strip's contents; null clears it. Called on the UI thread by
     /// <c>HypertreeMonitorHost</c>. Changes the panel height, so relayout.</summary>
@@ -853,9 +880,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
-    // Top of the first session row: below the header and whichever strips are showing. Mirrors the
-    // painted layout so hit-testing lines up (guarded by the expanded/rows check in HitTestRow).
-    private double RowsTop => HypertreeTop + HypertreeStripHeight;
+    // Top of the first session row: below the header and whichever strips are showing (the Todo section sits
+    // between Hypertree and the rows). Mirrors the painted layout so hit-testing lines up (guarded by the
+    // expanded/rows check in HitTestRow).
+    private double RowsTop => TodosTop + TodosStripHeight;
 
     // The top of a given display row.
     private double RowTop(int index)
@@ -1531,6 +1559,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool showQuickLinks = showBody && HasQuickLinksRow;   // app icon strip, below the usage bars
         bool showHypertree = showBody && HypertreeStripVisible; // Hypertree branches, below the quick links
         bool showDaemon = showBody && DaemonStripVisible;     // daemon background workers, below the rows
+        bool showTodos = showBody && TodosStripVisible;       // user's own to-dos, below the daemon strip
         bool showMic = showBody && MicStripVisible;           // who has the microphone, below the rows
         bool showMedia = showBody && MediaStripVisible;       // now-playing + transport strip, below that
         bool showFeed = showBody && FeedStripVisible;         // friends' status feed, below that
@@ -1591,6 +1620,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _prRects.Clear();
                 _jiraRects.Clear();
                 _subChevronRects.Clear();
+
+                // The Todo section sits under the Hypertree strip, above the session rows.
+                if (showTodos) DrawTodosStrip(ctx, width, TodosTop);
 
                 double top = RowsTop;
                 for (int i = 0; i < _rows.Count; i++)
@@ -1999,9 +2031,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double y = HypertreeTop;
         double captionH = HypertreeCaptionHeight;
 
+        // Collapsible header: a chevron, then the "Hypertree" caption. Clicking it collapses the branch lines.
+        double capMid = y + captionH / 2;
+        if (_hoveredHyperHeader)
+            OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, y + 1, width - 2 * (HorizPad - 4), captionH - 2),
+                FeedHoverBrush, null, 5);
+        DrawChevron(ctx, HorizPad + 4, capMid, _hypertreeExpanded);
         var caption = OverlayDraw.Text("Hypertree", HyperLabelSize, MutedBrush, FontWeight.SemiBold);
-        OverlayDraw.TextLeftMid(ctx, caption, HorizPad, y + captionH / 2);
+        OverlayDraw.TextLeftMid(ctx, caption, HorizPad + 14, capMid);
+        _hyperHeaderRect = new Rect(0, y, width, captionH);
         y += captionH;
+
+        if (!_hypertreeExpanded) return;
 
         double lineH = HypertreeLineHeight;
         const double MarkerW = 2, MarkerGap = 6, MetaMaxW = 96;
@@ -2077,7 +2118,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Returns the index into the Hypertree rows under p, or -1 if none (or the strip isn't shown).
     private int HitTestHypertreeRow(Point p)
     {
-        if (!(ShowFullPanel && HypertreeStripVisible)) return -1;
+        if (!(ShowFullPanel && HypertreeStripVisible && _hypertreeExpanded)) return -1;
 
         double top = HypertreeTop + HypertreeCaptionHeight;
         double lineH = HypertreeLineHeight;
@@ -2091,7 +2132,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Returns the Hypertree row whose trailing desktop chip is under p, or -1. Only rows with more than
     // one desktop have a chip, so a hit here always means there is a choice to offer.
     private int HitTestHypertreeDesktop(Point p)
-        => ShowFullPanel && HypertreeStripVisible ? HitRect(_hyperDesktopRects, p) : -1;
+        => ShowFullPanel && HypertreeStripVisible && _hypertreeExpanded ? HitRect(_hyperDesktopRects, p) : -1;
 
     /// <summary>
     /// Paints the daemon section: a "daemon" caption, then one narrow line per dispatched background
@@ -3084,8 +3125,24 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int hyperDesk = HitTestHypertreeDesktop(p);
         if (hyperDesk != _hoveredHyperDesktop) { _hoveredHyperDesktop = hyperDesk; InvalidateVisual(); }
 
+        bool hyperHeader = ShowFullPanel && HypertreeStripVisible && _hyperHeaderRect.Width > 0 && _hyperHeaderRect.Contains(p);
+        if (hyperHeader != _hoveredHyperHeader) { _hoveredHyperHeader = hyperHeader; InvalidateVisual(); }
+
         int daemon = HitTestDaemonRow(p);
         if (daemon != _hoveredDaemonRow) { _hoveredDaemonRow = daemon; InvalidateVisual(); }
+
+        int todo = HitTestTodoRow(p);
+        if (todo != _hoveredTodoRow) { _hoveredTodoRow = todo; InvalidateVisual(); }
+
+        bool todoAdd = _todoAddRect.Width > 0 && _todoAddRect.Contains(p);
+        // The "+" sits inside the header band, so don't also light the header when hovering it.
+        bool todoHeader = !todoAdd && _todoHeaderRect.Width > 0 && _todoHeaderRect.Contains(p);
+        if (todoAdd != _hoveredTodoAdd || todoHeader != _hoveredTodoHeader)
+        {
+            _hoveredTodoAdd = todoAdd;
+            _hoveredTodoHeader = todoHeader;
+            InvalidateVisual();
+        }
 
         int art = HitTestArtifactIcon(p);
         if (art != _hoveredArtifactRow) { _hoveredArtifactRow = art; InvalidateVisual(); }
@@ -3211,10 +3268,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredHyperHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
         _hoveredSocial = false;
-        _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
+        _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHyperHeader = false;
+        _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredTodoRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;
         _hoveredFooter = false;
         _hoveredNoteButton = false;
@@ -3529,6 +3587,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+        // The Todo section: the header "+" opens the window to add, the header toggles collapse, and a body
+        // line opens the window (right-click a line offers "Complete" — see ShowContextMenuAt).
+        if (_todoAddRect.Width > 0 && _todoAddRect.Contains(p)) { TodosRequested?.Invoke(); return; }
+        if (_todoHeaderRect.Width > 0 && _todoHeaderRect.Contains(p)) { OnTodoHeaderClicked(); return; }
+        if (HitTestTodoRow(p) >= 0)
+        {
+            TodosRequested?.Invoke();
+            return;
+        }
+
         // The note button leading the quick-links row opens the global scratch pad.
         if (_noteButtonRect.Width > 0 && _noteButtonRect.Contains(p))
         {
@@ -3542,6 +3610,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             QuickLinkActivated?.Invoke(_quickLinks[ql]);
             return;
         }
+
+        // The Hypertree header toggles the branch section collapsed/expanded.
+        if (_hyperHeaderRect.Width > 0 && _hyperHeaderRect.Contains(p)) { OnHypertreeHeaderClicked(); return; }
 
         // The trailing desktop chip opens a picker for that row's desktops; the rest of the line is the
         // plain "go to this branch" jump. Tested first — the chip sits inside the line's own hit-band.
@@ -3609,6 +3680,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             if (DaemonOverflow && daemonRow == VisibleDaemonCount) DaemonListRequested?.Invoke();
             else ShowDaemonMenu(daemonRow);
+            return;
+        }
+
+        // A to-do line: right-click opens its options menu (Complete / open the full list).
+        int todoRow = HitTestTodoRow(p);
+        if (todoRow >= 0)
+        {
+            ShowTodoMenu(todoRow);
             return;
         }
 
@@ -3699,6 +3778,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // .md browser), independent of the glyph toggle — not just rows that produced Markdown.
             if (!subRow)
                 actions.Add(MenuItem("Markdown files…", () => MarkdownRequested?.Invoke(s)));
+
+            // The todo list is global (not tied to this session), but the row menu is a handy place to
+            // reach it — the same window the tray's "Todos…" and the overlay strip open.
+            actions.Add(MenuItem("Todos…", () => TodosRequested?.Invoke()));
 
             // 3. Terminate — the one destructive item, isolated in its own group. Sub-agent rows have no
             //    process of their own, so nothing to kill.

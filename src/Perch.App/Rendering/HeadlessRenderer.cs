@@ -174,6 +174,27 @@ internal static class HeadlessRenderer
         RenderControl(daemonProbe, Path.Combine(outDir, "overlay_daemon_1x.png"), 96);
         RenderControl(daemonProbe, Path.Combine(outDir, "overlay_daemon_1.5x.png"), 144);
 
+        // The user's "To do" strip: a captioned section under the daemon strip, one line per outstanding
+        // item with its relative due time — an overdue item (attention hue), one due soon, and one undated.
+        var todoProbe = new OverlayCanvas();
+        todoProbe.Update(SampleData.Sessions());
+        todoProbe.SetTopTodos(SampleTodoLines(), 3);
+        RenderControl(todoProbe, Path.Combine(outDir, "overlay_todos_1x.png"), 96);
+        RenderControl(todoProbe, Path.Combine(outDir, "overlay_todos_1.5x.png"), 144);
+
+        // Collapsed Todo section: just the header, with its open-count and the "+".
+        var todoCollapsedProbe = new OverlayCanvas();
+        todoCollapsedProbe.Update(SampleData.Sessions());
+        todoCollapsedProbe.SetTodosExpanded(false);
+        todoCollapsedProbe.SetTopTodos(SampleTodoLines(), 3);
+        RenderControl(todoCollapsedProbe, Path.Combine(outDir, "overlay_todos_collapsed_1x.png"), 96);
+
+        // Empty todo list: the section still shows, as a header over a single faint "add one…" prompt.
+        var todoEmptyProbe = new OverlayCanvas();
+        todoEmptyProbe.Update(SampleData.Sessions());
+        todoEmptyProbe.SetTopTodos([], 0);
+        RenderControl(todoEmptyProbe, Path.Combine(outDir, "overlay_todos_empty_1x.png"), 96);
+
         // Empty roster: no sessions at all, so the header reads "no sessions" and the rows are simply
         // absent — but the strips the session list has nothing to do with (machine metrics, plan limits,
         // quick links, Hypertree branches) all stay, which is the whole point of this surface.
@@ -1105,5 +1126,14 @@ internal static class HeadlessRenderer
                 @"C:\src\api", "api", "slash", $"Sweep flaky test batch {i + 1}", now.AddMinutes(-10 + i)));
         return workers;
     }
+
+    // Three sample to-do lines for the overlay "To do" strip: an overdue item, one due soon, and an
+    // undated one (no trailing label) — the three shapes the strip has to render.
+    private static IReadOnlyList<OverlayCanvas.TodoLine> SampleTodoLines() =>
+    [
+        new("t1", "Cut the v1.0 release", "overdue 20m", Overdue: true),
+        new("t2", "Reply to the design review", "in 2h", Overdue: false),
+        new("t3", "Water the office ficus", null, Overdue: false),
+    ];
 
 }
