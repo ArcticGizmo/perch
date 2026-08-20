@@ -99,6 +99,9 @@ internal sealed class DebugSocialWindow : Window
         var reactBtn = SettingsUi.FlatButton("React to my latest post");
         reactBtn.Click += (_, _) => Run(React);
         reactRow.Children.Add(reactBtn);
+        var unreactBtn = SettingsUi.FlatButton("Remove reaction");
+        unreactBtn.Click += (_, _) => Run(Unreact);
+        reactRow.Children.Add(unreactBtn);
         panel.Children.Add(reactRow);
 
         // Fire the big-reaction bubble directly — no network, no ShowLargeReactions / DND gate — so you can
@@ -185,6 +188,20 @@ internal sealed class DebugSocialWindow : Window
         _emoji.Text = emoji;   // reflect what was actually used
         await p.ReactAsync(latest.Id, emoji, on: true);
         Log($"Reacted {emoji} to @{target.Handle}'s latest post.");
+        _refreshReal();
+    }
+
+    // Clears the puppet's reaction from your latest post (reactions are one-per-user, so this removes whichever
+    // emoji it currently holds). Lets you react → remove → react again to re-trigger the big-reaction bubble.
+    private async Task Unreact()
+    {
+        var p = RequirePuppet();
+        var target = await FindTarget(p);
+        var feed = await p.GetFeedAsync(50);
+        var latest = feed.FirstOrDefault(x => x.Author.Id == target.Id);
+        if (latest is null) { Log($"No visible post by @{target.Handle} — nothing to un-react."); return; }
+        await p.ReactAsync(latest.Id, "", on: false);   // on:false removes the puppet's own reaction, if any
+        Log($"Removed the puppet's reaction from @{target.Handle}'s latest post.");
         _refreshReal();
     }
 
