@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.53] - 2026-08-20
+
+- Big reactions: a friend's reaction to your status wobbles up the screen as a poppable bubble
+- See the reactions friends leave on your own status
+- Remove a friend outright, not just block them
+- Change your handle without losing your friends
+- Duplicate friend requests are no longer possible (existing duplicates deduped)
+- Fixed Do Not Disturb reading as "on" when it wasn't (it had been quietly eating your notifications)
+
+---
+
 ## [v0.3.52] - 2026-08-20
 
 - New **Docked** mode: the overlay reserves a screen-edge column maximized windows can't cover (your top-right corner is yours again)
