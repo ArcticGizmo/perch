@@ -38,7 +38,7 @@ internal sealed class DebugSocialWindow : Window
     private readonly Func<string>? _gateStatus;
 
     private readonly TextBox _email, _password, _handle, _target, _status, _emoji;
-    private readonly TextBlock _log;
+    private readonly SelectableTextBlock _log;
 
     /// <param name="testReaction">Spawns a big-reaction bubble directly (bypassing the network and the
     /// ShowLargeReactions / Do Not Disturb gates), so the animation can be verified in isolation.</param>
@@ -69,7 +69,7 @@ internal sealed class DebugSocialWindow : Window
         _emoji.Text = "🔥";   // a default mood/reaction so puppet posts show a mood in the roster
         _emoji.Width = 60;
 
-        _log = new TextBlock
+        _log = new SelectableTextBlock
         {
             Foreground = Palette.MutedBrush, FontSize = 12, TextWrapping = TextWrapping.Wrap,
             Text = "Ready. Create a user in Supabase (Auth → Users → Add user, Auto Confirm), then sign in below.",
