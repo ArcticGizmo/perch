@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.52] - 2026-08-20
+
+- New **Docked** mode: the overlay reserves a screen-edge column maximized windows can't cover (your top-right corner is yours again)
+- Switch floating/docked from Settings or the header right-click menu
+- Collapse/expand the docked column via hotkey, the header, or the bottom toggle
+- Drag the docked header to re-dock it to another edge or monitor
+- Docked side is set in the initial-placement editor
+
+---
+
 ## [v0.3.51] - 2026-08-20
 
 - Find & Replace in the Markdown editor (Ctrl+H)
