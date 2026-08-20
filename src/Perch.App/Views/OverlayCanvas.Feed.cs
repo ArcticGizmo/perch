@@ -30,7 +30,7 @@ public sealed partial class OverlayCanvas
     private int _maxFriends = 3;   // friends shown before a "+N more" overflow line (AppSettings.MaxFriendsShown)
 
     // A short menu of reactions the "+" button offers.
-    private static readonly string[] ReactionChoices = ["👍", "🔥", "🎉", "😂", "😮", "❤️", "🙌", "👀"];
+    private static readonly string[] ReactionChoices = ["👍", "🔥", "🎉", "😂", "😮", "❤️", "🙌", "👀", "😢", "😔"];
 
     private static readonly IBrush FeedTileBrush  = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));  // avatar tile
     private static readonly IBrush FeedChipBrush   = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)); // reaction chip
@@ -314,7 +314,7 @@ public sealed partial class OverlayCanvas
             if (chips.Count > 0 && chipsW < width * 0.7)
             {
                 double cx = cursor - chipsW;
-                foreach (var c in chips) cx = DrawChip(ctx, cx, botMid, c, latest.Id) + 5;
+                foreach (var c in chips) cx = DrawChip(ctx, cx, botMid, c, latest.Id, _hoveredFriendRow == index) + 5;
                 cursor -= chipsW + 6;
             }
 
@@ -372,15 +372,17 @@ public sealed partial class OverlayCanvas
     }
 
     // Draws one chip at x, centred on midY; returns the x just past it. Captures its hit-rect (empty emoji marks
-    // the combined chip → clicking opens the picker) and, for the combined chip, a tooltip target.
-    private double DrawChip(DrawingContext ctx, double x, double midY, DrawableChip c, Guid postId)
+    // the combined chip → clicking opens the picker) and, for the combined chip, a tooltip target. The "mine"
+    // accent outline is drawn only while <paramref name="rowHovered"/> — at rest the chips sit quietly with no
+    // border, and the outline appears when you hover the row that owns them.
+    private double DrawChip(DrawingContext ctx, double x, double midY, DrawableChip c, Guid postId, bool rowHovered)
     {
         double chipH = FeedReactionHeight - 4;
         double w = ChipWidth(c);
         var chip = new Rect(x, midY - chipH / 2, w, chipH);
         var mineFill = new SolidColorBrush(Color.FromArgb(40, Palette.Accent.R, Palette.Accent.G, Palette.Accent.B));
         OverlayDraw.Panel(ctx, chip, c.Mine ? mineFill : FeedChipBrush,
-            c.Mine ? new Pen(Palette.AccentBrush, 1) : null, 8);
+            c.Mine && rowHovered ? new Pen(Palette.AccentBrush, 1) : null, 8);
         var emojiFt = OverlayDraw.Emoji(c.Emoji, FeedReactionSize, FgBrush);
         OverlayDraw.TextLeftMid(ctx, emojiFt, x + 7, midY);
         if (ShowsCount(c))

@@ -237,6 +237,19 @@ public sealed class SupabaseSocialClient : ISocialClient
         await EnsureOkAsync(resp, accept ? "accept the request" : "decline the request", ct);
     }
 
+    public async Task RemoveFriendAsync(Guid otherUserId, CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        // Delete the edge whichever way round it was stored — the friendships_delete RLS policy lets either
+        // party remove it. An empty match (no edge) is a successful no-op.
+        string filter =
+            $"?or=(and(requester.eq.{uid},addressee.eq.{otherUserId}),and(requester.eq.{otherUserId},addressee.eq.{uid}))";
+        using var req = Rest(HttpMethod.Delete, "/rest/v1/friendships" + filter, token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "remove this friend", ct);
+    }
+
     public async Task<IReadOnlyList<Friend>> GetFriendsAsync(CancellationToken ct = default)
     {
         var uid = RequireUser();
@@ -300,9 +313,12 @@ public sealed class SupabaseSocialClient : ISocialClient
         var token = await ValidAccessTokenAsync(ct);
 
         var graph = await GetFriendsAsync(ct);
-        // Accepted friends only — the roster is who you can actually see.
-        var friends = graph.Where(f => f.State == FriendshipState.Accepted).ToList();
-        int incoming = graph.Count(f => f.State == FriendshipState.Incoming);
+        // A block lives in its own table, so a blocked person can still carry an 'accepted' friendship row —
+        // drop them here so they leave the roster (their posts are already hidden by are_friends server-side).
+        var blocked = (await GetBlockedAsync(ct)).Select(p => p.Id).ToHashSet();
+        // Accepted friends only, minus anyone blocked — the roster is who you can actually see.
+        var friends = graph.Where(f => f.State == FriendshipState.Accepted && !blocked.Contains(f.Profile.Id)).ToList();
+        int incoming = graph.Count(f => f.State == FriendshipState.Incoming && !blocked.Contains(f.Profile.Id));
 
         // Latest post per author (the feed is newest-first, so the first hit per author is their latest).
         var feed = await GetFeedAsync(200, ct);

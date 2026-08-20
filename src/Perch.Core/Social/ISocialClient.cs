@@ -54,6 +54,12 @@ public interface ISocialClient
     /// <paramref name="requesterId"/>. Only the addressee of a pending request may call this.</summary>
     Task RespondAsync(Guid requesterId, bool accept, CancellationToken ct = default);
 
+    /// <summary>Removes the friendship edge between you and <paramref name="otherUserId"/> outright — whether
+    /// it's an accepted friend or a request you sent that you want to cancel. Deletes the edge in whichever
+    /// direction it was stored; either party may do it. Idempotent (no edge → no-op). Unlike <see
+    /// cref="BlockAsync"/> it leaves no trace: the other person can send a fresh request afterwards.</summary>
+    Task RemoveFriendAsync(Guid otherUserId, CancellationToken ct = default);
+
     /// <summary>The signed-in user's friend graph — accepted friends plus pending/incoming requests, each
     /// tagged with its <see cref="FriendshipState"/>.</summary>
     Task<IReadOnlyList<Friend>> GetFriendsAsync(CancellationToken ct = default);

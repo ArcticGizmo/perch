@@ -667,7 +667,7 @@ public partial class App : Application
         if (_social is null) return;
         _friendsWindow = WindowHost.ShowOrFocus(
             _friendsWindow,
-            () => new FriendsWindow(_social),
+            () => new FriendsWindow(_social, () => _feedHost?.RefreshSoon()),
             () => _friendsWindow = null,
             w => w.RefreshExternal());
     }
