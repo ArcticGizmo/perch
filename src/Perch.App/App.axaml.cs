@@ -272,6 +272,7 @@ public partial class App : Application
             // the menu is complete, with best-effort/stub handlers until those windows land.
             _overlay.Canvas.ExitRequested += () => desktop.Shutdown();
             _overlay.Canvas.SetPlacementsRequested += OpenPlacementEditor;
+            _overlay.Canvas.OverlayModeToggleRequested += ToggleOverlayMode;
             _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
             _overlay.Canvas.UsageToggleRequested += SetUsageEnabled;
             _overlay.Canvas.HistoryRequested += OpenHistory;
@@ -1361,6 +1362,18 @@ public partial class App : Application
     private void SetOverlayMode()
     {
         if (_appSettings is { } s) _overlay?.Canvas.SetOverlayMode(s.OverlayMode);
+    }
+
+    // Flip Floating ↔ Docked from the overlay header's right-click menu: persist the new mode and apply it
+    // live (the settings segmented control reads it back next time it opens).
+    private void ToggleOverlayMode()
+    {
+        if (_appSettings is not { } s) return;
+        s.OverlayMode = s.OverlayMode == OverlayPresentationMode.Docked
+            ? OverlayPresentationMode.Floating
+            : OverlayPresentationMode.Docked;
+        s.Save();
+        _overlay?.Canvas.SetOverlayMode(s.OverlayMode);
     }
 
     // ── Global hotkeys ────────────────────────────────────────────────────────────

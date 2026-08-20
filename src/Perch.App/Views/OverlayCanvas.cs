@@ -1248,6 +1248,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// the app opens the placement editor.</summary>
     public event Action? SetPlacementsRequested;
 
+    /// <summary>Raised when the user picks the floating/docked toggle from the header's right-click menu; the
+    /// app flips <see cref="Perch.Data.OverlayPresentationMode"/>, persists it, and applies it live.</summary>
+    public event Action? OverlayModeToggleRequested;
+
     /// <summary>Raised when the user picks "View history" for a session; carries the session id so the
     /// app can open the history viewer on it.</summary>
     public event Action<string>? HistoryRequested;
@@ -3686,6 +3690,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             items.Add(MenuItem(_usageEnabled ? "Hide usage" : "Show usage",
                 () => UsageToggleRequested?.Invoke(!_usageEnabled)));
             items.Add(new Separator());
+            items.Add(MenuItem(_docked ? "Switch to floating overlay" : "Dock to screen edge",
+                () => OverlayModeToggleRequested?.Invoke()));
             items.Add(MenuItem("Set initial placements…", () => SetPlacementsRequested?.Invoke()));
 
             // Social actions are deliberately NOT here — they live on the social region's own right-click menu
