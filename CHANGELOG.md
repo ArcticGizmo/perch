@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.63] - 2026-08-21
+
+- React to a friend's status with any emoji, not just the preset ten
+- Reaction presets show as a grid now, instead of a scrolling list
+- Set your status mood to any emoji you type or paste (Win + . still obliges)
+
+---
+
 ## [v0.3.62] - 2026-08-21
 
 - Docked column re-fits its height when the resolution changes (it used to hang under the taskbar)

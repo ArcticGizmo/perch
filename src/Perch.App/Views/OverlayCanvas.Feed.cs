@@ -4,6 +4,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
+using Perch.Avalonia.Windows;
 using Perch.Social;
 
 namespace Perch.Avalonia.Views;
@@ -29,8 +30,19 @@ public sealed partial class OverlayCanvas
 
     private int _maxFriends = 3;   // friends shown before a "+N more" overflow line (AppSettings.MaxFriendsShown)
 
-    // A short menu of reactions the "+" button offers.
-    private static readonly string[] ReactionChoices = ["👍", "🔥", "🎉", "😂", "😮", "❤️", "🙌", "👀", "😢", "😔"];
+    // The reaction presets the picker offers as a grid, with search keywords. The picker also accepts any
+    // system emoji you type or paste, so these are a fast path, not a limit.
+    private static readonly (string Emoji, string Keywords)[] ReactionPresets =
+    [
+        ("👍", "up like yes good approve thumbs"), ("🔥", "fire lit hot streak on a roll"),
+        ("🎉", "party celebrate tada ship"),       ("😂", "laugh lol funny haha"),
+        ("😮", "wow surprised whoa"),               ("❤️", "love heart red"),
+        ("🙌", "praise hooray raised hands"),        ("👀", "eyes looking watching reviewing"),
+        ("😢", "sad cry tear"),                      ("😔", "down disappointed sad"),
+        ("🚀", "rocket ship launch fast"),          ("💯", "hundred perfect score nailed it"),
+        ("🤯", "mind blown wow"),                    ("🫡", "salute respect o7"),
+        ("😅", "phew nervous close sweat"),          ("💀", "dead dying rip lol"),
+    ];
 
     private static readonly IBrush FeedTileBrush  = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));  // avatar tile
     private static readonly IBrush FeedChipBrush   = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)); // reaction chip
@@ -588,13 +600,13 @@ public sealed partial class OverlayCanvas
         foreach (var (rect, postId, emoji) in _reactChipRects)
             if (rect.Contains(p))
             {
-                if (emoji.Length == 0) ShowReactionPicker(postId);   // the combined summary chip → pick/change
+                if (emoji.Length == 0) ShowReactionPicker(postId, ToScreen(rect.Left, rect.Bottom + 2));   // combined summary chip → pick/change
                 else ToggleReaction(postId, emoji);
                 return true;
             }
 
         foreach (var (rect, postId, _) in _reactAddRects)
-            if (rect.Contains(p)) { ShowReactionPicker(postId); return true; }
+            if (rect.Contains(p)) { ShowReactionPicker(postId, ToScreen(rect.Left, rect.Bottom + 2)); return true; }
 
         if (_socialInviteRect.Width > 0 && _socialInviteRect.Contains(p)) { FriendsRequested?.Invoke(); return true; }
         if (_socialAddRect.Width > 0 && _socialAddRect.Contains(p)) { FriendsRequested?.Invoke(); return true; }
@@ -636,7 +648,7 @@ public sealed partial class OverlayCanvas
         int fr = HitTestFriendRow(p);
         if (fr >= 0 && _roster is { } r && fr < r.Friends.Count && r.Friends[fr].Latest is { } post)
         {
-            items.Add(MenuItem($"React to @{r.Friends[fr].Profile.Handle}…", () => ShowReactionPicker(post.Id)));
+            items.Add(MenuItem($"React to @{r.Friends[fr].Profile.Handle}…", () => ShowReactionPicker(post.Id, ToScreen(p.X, p.Y))));
             items.Add(new Separator());
         }
         items.Add(MenuItem("Post a status…", () => PostStatusRequested?.Invoke()));
@@ -656,17 +668,15 @@ public sealed partial class OverlayCanvas
         ReactRequested?.Invoke(postId, emoji, !mine);
     }
 
-    // Pops a small emoji menu for the "+" button; picking one adds that reaction.
-    private void ShowReactionPicker(Guid postId)
+    // Pops the reaction picker at the given screen anchor: a grid of preset emojis plus an entry that accepts
+    // any system emoji you type or paste. Picking one adds that reaction to the post.
+    private void ShowReactionPicker(Guid postId, PixelPoint anchor)
     {
-        var items = new List<Control>();
-        foreach (var emoji in ReactionChoices)
-        {
-            var mi = new MenuItem { Header = emoji };
-            mi.Click += (_, _) => ReactRequested?.Invoke(postId, emoji, true);
-            items.Add(mi);
-        }
-        ShowFlyout(items);
+        var picker = new EmojiPickerWindow("React", ReactionPresets,
+            emoji => { if (!string.IsNullOrWhiteSpace(emoji)) ReactRequested?.Invoke(postId, emoji, true); },
+            anchor);
+        picker.Show();
+        picker.Activate();
     }
 
     // Shows the full text of a truncated status as a dwell tooltip (wired via TipKind.SocialStatus).

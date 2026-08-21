@@ -132,32 +132,58 @@ internal sealed class ComposeWindow : Window
     // a "None" option, and a hint that the OS emoji picker is a keystroke away.
     private void ShowMoodPicker()
     {
-        var search = new TextBox { PlaceholderText = "search moods…", Width = 240 };
+        var search = new TextBox { PlaceholderText = "search or type an emoji…", Width = 240 };
         var wrap = new WrapPanel { MaxWidth = 240 };
+
+        void Choose(string? mood) { SetMood(mood); _moodFlyout?.Hide(); }
 
         void Rebuild(string q)
         {
             wrap.Children.Clear();
-            var none = MoodChip("🚫", clear: true);
-            none.Click += (_, _) => { SetMood(null); _moodFlyout?.Hide(); };
-            wrap.Children.Add(none);
+
+            // Typed/pasted a system emoji? Offer it as a highlighted "use this" chip so any mood is settable,
+            // not just the curated set. Otherwise the "None" clear chip leads.
+            if (EmojiText.ContainsEmoji(q))
+            {
+                var custom = EmojiText.FirstGrapheme(q);
+                var chip = MoodChip(custom, clear: false);
+                chip.BorderBrush = Palette.AccentBrush;
+                chip.BorderThickness = new Thickness(1.5);
+                chip.Click += (_, _) => Choose(custom);
+                wrap.Children.Add(chip);
+            }
+            else
+            {
+                var none = MoodChip("🚫", clear: true);
+                none.Click += (_, _) => Choose(null);
+                wrap.Children.Add(none);
+            }
+
             foreach (var (emoji, kw) in MoodData)
             {
-                if (q.Length > 0 && !kw.Contains(q, StringComparison.OrdinalIgnoreCase) && emoji != q) continue;
+                if (q.Length > 0 && !EmojiText.ContainsEmoji(q)
+                    && !kw.Contains(q, StringComparison.OrdinalIgnoreCase) && emoji != q) continue;
                 var b = MoodChip(emoji, clear: false);
-                b.Click += (_, _) => { SetMood(emoji); _moodFlyout?.Hide(); };
+                b.Click += (_, _) => Choose(emoji);
                 wrap.Children.Add(b);
             }
         }
         Rebuild("");
         search.TextChanged += (_, _) => Rebuild(search.Text?.Trim() ?? "");
+        // Enter commits a typed emoji directly (handy after Win + . drops one into the box).
+        search.KeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Enter) return;
+            var q = search.Text?.Trim() ?? "";
+            if (EmojiText.ContainsEmoji(q)) { Choose(EmojiText.FirstGrapheme(q)); e.Handled = true; }
+        };
 
         var content = new StackPanel { Width = 260, Spacing = 8 };
         content.Children.Add(search);
         content.Children.Add(new ScrollViewer { MaxHeight = 200, Content = wrap });
         content.Children.Add(new TextBlock
         {
-            Text = "Tip: click the box, then Win + . for the system emoji picker.",
+            Text = "Tip: type or paste any emoji above (Win + . opens the system picker), then Enter.",
             Foreground = Palette.MutedBrush, FontSize = 11, TextWrapping = TextWrapping.Wrap,
         });
 
