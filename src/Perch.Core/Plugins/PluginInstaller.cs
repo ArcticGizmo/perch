@@ -61,6 +61,20 @@ internal sealed class PluginInstaller
         return InstallVerifiedZip(source.Slug, release.TagName, zipBytes, want, zip.Name);
     }
 
+    /// <summary>Removes an installed plugin's directory (<c>&lt;pluginsDir&gt;/&lt;id&gt;</c>), best-effort.
+    /// Returns true if a directory was there and is now gone. The caller also drops the persisted record.</summary>
+    public bool Uninstall(string id)
+    {
+        var dir = Path.Combine(_pluginsDir, id);
+        try
+        {
+            if (!Directory.Exists(dir)) return false;
+            Directory.Delete(dir, recursive: true);
+            return true;
+        }
+        catch { return false; }
+    }
+
     /// <summary>Verifies the hash, extracts safely, validates the manifest, and places the plugin. Public
     /// for tests (no network). <paramref name="expectedHash"/> is lower-case hex.</summary>
     public PluginInstallResult InstallVerifiedZip(string slug, string tag, byte[] zipBytes, string expectedHash, string zipName)
