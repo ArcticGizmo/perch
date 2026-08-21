@@ -14,6 +14,17 @@ internal sealed class ProcessPluginSandbox : IPluginSandbox
 {
     public IPluginProcess Launch(PluginLaunchSpec spec)
     {
+        var proc = Process.Start(BuildStartInfo(spec))
+            ?? throw new InvalidOperationException($"failed to start plugin process '{spec.Command}'.");
+        return new ProcessHandle(proc);
+    }
+
+    /// <summary>The shared <see cref="ProcessStartInfo"/> every sandbox uses: stdio redirected, no window,
+    /// working dir pinned to the plugin folder, and UTF-8 fixed in both directions so a plugin's unicode
+    /// glyphs survive the pipe regardless of the child's console codepage. Exposed so the hardened Windows
+    /// sandbox reuses the exact same launch shape (and just adds a Job Object / AppContainer around it).</summary>
+    internal static ProcessStartInfo BuildStartInfo(PluginLaunchSpec spec)
+    {
         var psi = new ProcessStartInfo
         {
             FileName = ResolveCommand(spec),
@@ -23,17 +34,11 @@ internal sealed class ProcessPluginSandbox : IPluginSandbox
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            // Fix the protocol encoding to UTF-8 in both directions so a plugin's unicode glyphs (emoji,
-            // symbols) survive the pipe regardless of the child's console codepage — the alternative is the
-            // Windows OEM codepage mangling anything outside ASCII. Plugins are documented to emit UTF-8.
             StandardOutputEncoding = new UTF8Encoding(false),
             StandardInputEncoding = new UTF8Encoding(false),
         };
         foreach (var arg in spec.Args) psi.ArgumentList.Add(arg);
-
-        var proc = Process.Start(psi)
-            ?? throw new InvalidOperationException($"failed to start plugin process '{spec.Command}'.");
-        return new ProcessHandle(proc);
+        return psi;
     }
 
     // A command that is a bare launcher name (powershell, node, python) is left for PATH resolution; a

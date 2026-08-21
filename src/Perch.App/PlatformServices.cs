@@ -65,4 +65,15 @@ internal static class PlatformServices
 #else
         new Media.NullMediaController();
 #endif
+
+    // The plugin launcher: the hardened Job-Object sandbox on Windows, the plain process sandbox elsewhere
+    // (and on a Windows binary running off-Windows). Dual-guarded like the media controller.
+    public static Perch.Plugins.IPluginSandbox CreatePluginSandbox() =>
+#if WINDOWS
+        OperatingSystem.IsWindows()
+            ? new Impl.WindowsPluginSandbox()
+            : new Perch.Plugins.ProcessPluginSandbox();
+#else
+        new Perch.Plugins.ProcessPluginSandbox();
+#endif
 }

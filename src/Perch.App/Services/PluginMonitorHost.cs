@@ -26,7 +26,7 @@ internal sealed class PluginMonitorHost : IDisposable
     private readonly NotificationService _notifications;
     private readonly AppSettings _settings;
     private readonly Func<PluginPollContext> _context;
-    private readonly PluginService _service = new(new ProcessPluginSandbox(), AppInfo.Version);
+    private readonly PluginService _service = new(PlatformServices.CreatePluginSandbox(), AppInfo.Version);
     private readonly DispatcherTimer _timer;
 
     private bool _disposed;
