@@ -373,7 +373,14 @@ public partial class App : Application
             // Third-party plugins: runs the installed/enabled/consented plugins and feeds the overlay's
             // Plugins section. Started/stopped from ApplyDisplaySettings per the master PluginsEnabled switch.
             _pluginHost = new Services.PluginMonitorHost(
-                badges => _overlay!.Canvas.SetPluginBadges(badges), _notifications, settings);
+                badges => _overlay!.Canvas.SetPluginBadges(badges), _notifications, settings,
+                // Best-effort session context: the first tracked session's project dir / id, offered to
+                // plugins whose grants permit it (read.cwd / read.sessions).
+                () =>
+                {
+                    var s = _lastSessions?.FirstOrDefault();
+                    return new Perch.Plugins.PluginPollContext(s?.Cwd, s?.SessionId);
+                });
             _overlay.Canvas.SetPluginsExpanded(settings.PluginsExpanded);
             _overlay.Canvas.PluginsExpandChanged += expanded =>
             {
