@@ -5,16 +5,19 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 
 /// <summary>
-/// Migrates users off the retired <c>perch</c> Claude Code marketplace plugin. Perch now self-manages
-/// its hooks directly in <c>~/.claude/settings.json</c> (see <see cref="ClaudeUserSettings"/>), so the
-/// old plugin must be removed or its hooks would fire in addition to ours — every event delivered
+/// Migrates users off the retired <c>perch</c> <b>Claude Code marketplace plugin</b>. Perch now
+/// self-manages its hooks directly in <c>~/.claude/settings.json</c> (see <see cref="ClaudeUserSettings"/>),
+/// so the old plugin must be removed or its hooks would fire in addition to ours — every event delivered
 /// twice.
+///
+/// Note: this type has nothing to do with Perch's own extensibility/plugin system — it only manages the
+/// <em>Claude Code</em> plugin that Perch used to ship. Named explicitly to avoid that confusion.
 ///
 /// "Is the old plugin still registered?" is answered by reading <c>~/.claude/settings.json</c> directly
 /// (fast, no subprocess); removal strips those keys (authoritative — it stops event delivery at once)
 /// and then best-effort asks the CLI to drop the installed plugin and its marketplace clone.
 /// </summary>
-internal sealed class PluginManager
+internal sealed class ClaudeCodePluginManager
 {
     // The repo doubles as the marketplace (see .claude-plugin/marketplace.json). The marketplace
     // *name* comes from that file's "name" field; the plugin id is "<plugin>@<marketplace>".

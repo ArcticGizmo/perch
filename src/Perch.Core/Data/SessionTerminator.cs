@@ -22,7 +22,7 @@ public enum TerminateResult
 /// <summary>
 /// Terminates a Claude Code session by killing its process tree. Deliberately plain <see cref="Process"/>
 /// work rather than a platform seam: <see cref="Process.Kill(bool)"/> is cross-platform, and Core already
-/// kills child processes this way (see <c>PluginManager</c>, <c>GitStatsService</c>), so there is no
+/// kills child processes this way (see <c>ClaudeCodePluginManager</c>, <c>GitStatsService</c>), so there is no
 /// OS-specific behaviour to hide behind an interface.
 /// </summary>
 public static class SessionTerminator

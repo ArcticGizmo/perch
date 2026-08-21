@@ -6,7 +6,7 @@ namespace Perch.Tests;
 
 /// <summary>
 /// Covers the self-managed-hook reconcile/removal in <see cref="ClaudeUserSettings"/> and the
-/// migration-off-plugin strip in <see cref="PluginManager"/> — the settings.json read/merge/write logic
+/// migration-off-plugin strip in <see cref="ClaudeCodePluginManager"/> — the settings.json read/merge/write logic
 /// that must stay idempotent and never clobber a user's own keys. Each test works against a throwaway
 /// settings file (the path-taking overloads) so nothing touches the shared fixture config dir.
 /// </summary>
@@ -314,8 +314,8 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
         }
         """);
 
-        Assert.True(PluginManager.RemoveRegistration(_settings));
-        var (marketplace, plugin) = PluginManager.ReadInstalledState(_settings);
+        Assert.True(ClaudeCodePluginManager.RemoveRegistration(_settings));
+        var (marketplace, plugin) = ClaudeCodePluginManager.ReadInstalledState(_settings);
         Assert.False(marketplace);
         Assert.False(plugin);
 
@@ -330,6 +330,6 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
     public void RemoveRegistration_IsNoOpWhenNothingRegistered()
     {
         File.WriteAllText(_settings, """{ "model": "claude-opus" }""");
-        Assert.False(PluginManager.RemoveRegistration(_settings));
+        Assert.False(ClaudeCodePluginManager.RemoveRegistration(_settings));
     }
 }

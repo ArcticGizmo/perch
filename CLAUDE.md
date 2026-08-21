@@ -10,7 +10,7 @@ macOS/Linux heads can follow — a macOS port is in progress (see `docs/macos-po
 Multi-project solution (`perch.slnx`); the projects live under `src/`:
 
 - `src/Perch.Core/` — the UI-free core (plain `net10.0`). The `~/.claude` data layer (`Data/`: file readers,
-  parsers, models, `AppSettings`, stats/flight/history services, `NotificationService`, `PluginManager`,
+  parsers, models, `AppSettings`, stats/flight/history services, `NotificationService`, `ClaudeCodePluginManager`,
   `AppInfo`) plus the platform-service **interfaces** the UI resolves (`Platform/`: `INotifier`,
   `IWindowActivator`, `IPathInstaller`, `IAudioCue`, `IAppIconProvider`, `ISystemMetrics`, `ISessionLock`,
   `IGlobalHotkey`, `IMicrophoneMonitor`, …). No UI, no `System.Drawing`.

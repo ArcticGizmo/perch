@@ -494,9 +494,9 @@ public partial class App : Application
     {
         try
         {
-            var (marketplace, plugin) = PluginManager.ReadInstalledState();
+            var (marketplace, plugin) = ClaudeCodePluginManager.ReadInstalledState();
             if (!marketplace && !plugin) return;
-            await new PluginManager().RemoveAsync();
+            await new ClaudeCodePluginManager().RemoveAsync();
         }
         catch { /* best-effort */ }
     }
