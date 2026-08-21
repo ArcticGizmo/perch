@@ -85,6 +85,10 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<Plugins.InstalledPluginRecord>? InstalledPlugins { get; set; }
 
+    // Master kill switch for the whole plugin subsystem: when false, no plugin runs regardless of its own
+    // enabled flag (PluginHost.Resolve honours this). Defaults true; managed from the Plugins page.
+    public bool PluginsEnabled { get; set; } = true;
+
     // Whether to show (and fetch, via the OAuth /usage endpoint) the session/weekly usage bars.
     // Defaults to true; a missing key in an older settings file keeps this default.
     public bool ShowUsage { get; set; } = true;

@@ -117,4 +117,37 @@ public class PluginServiceTests
         Assert.Equal(@"C:\plugins\weather", sandbox.LastSpec!.WorkingDirectory);
         Assert.Equal("x", sandbox.LastSpec.Command);
     }
+
+    [Fact]
+    public async Task Consented_grants_override_the_declared_capabilities()
+    {
+        // Manifest declares notify, but the user's consent (grants) withholds it: the notify is dropped.
+        var capturing = new FakePluginProcess(["""{"type":"notify","title":"t","body":"b"}"""]);
+        var sandbox = new FakePluginSandbox(capturing);
+        var svc = new PluginService(sandbox, "0.9.0", TimeSpan.FromSeconds(5));
+
+        var plugin = Plugin([PluginExtensionPoints.Event], new PluginCapabilities { Notify = true });
+        var result = await svc.PollAsync(plugin, PluginPollContext.Empty, grants: PluginGrants.None);
+
+        Assert.Empty(result.Notifications);
+        Assert.Contains(result.DeniedActions, d => d.Contains("notify"));
+    }
+
+    [Fact]
+    public async Task RaiseEvent_sends_the_event_name_and_surfaces_a_permitted_notify()
+    {
+        var capturing = new FakePluginProcess(["""{"type":"notify","title":"Attn","body":"look"}"""]);
+        var sandbox = new FakePluginSandbox(capturing);
+        var svc = new PluginService(sandbox, "0.9.0", TimeSpan.FromSeconds(5));
+
+        var plugin = Plugin([PluginExtensionPoints.Event], new PluginCapabilities { Notify = true });
+        var grants = new PluginGrants(Notify: true, ReadCwd: false, ReadSessions: false, Network: []);
+
+        var result = await svc.RaiseEventAsync(plugin, SessionEvents.Attention, PluginPollContext.Empty, grants);
+
+        Assert.Contains("\"type\":\"event\"", capturing.CapturedStdin);
+        Assert.Contains(SessionEvents.Attention, capturing.CapturedStdin);
+        Assert.Single(result.Notifications);
+        Assert.Equal("Attn", result.Notifications[0].Title);
+    }
 }

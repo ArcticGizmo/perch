@@ -22,19 +22,33 @@ internal sealed class PluginService
 
     /// <summary>Runs one poll of a plugin and returns what it contributed. Requires a valid manifest;
     /// callers filter to <see cref="DiscoveredPlugin.Ok"/> plugins first. Never throws for plugin
-    /// misbehaviour.</summary>
-    public async Task<PluginPollResult> PollAsync(
-        DiscoveredPlugin plugin, PluginPollContext context, CancellationToken ct = default)
+    /// misbehaviour. <paramref name="grants"/> is the user-consented grant to enforce; when null (a local
+    /// sideload / test) it falls back to what the manifest declares.</summary>
+    public Task<PluginPollResult> PollAsync(
+        DiscoveredPlugin plugin, PluginPollContext context, PluginGrants? grants = null, CancellationToken ct = default) =>
+        RunAsync(plugin, PluginRequest.PollType, eventName: null, context, grants, ct);
+
+    /// <summary>Delivers a session lifecycle event to a plugin (its <c>event</c> extension point) and
+    /// returns anything it contributed in response. Same enforcement and safety as <see cref="PollAsync"/>.</summary>
+    public Task<PluginPollResult> RaiseEventAsync(
+        DiscoveredPlugin plugin, string eventName, PluginPollContext context,
+        PluginGrants? grants = null, CancellationToken ct = default) =>
+        RunAsync(plugin, PluginRequest.EventType, eventName, context, grants, ct);
+
+    private async Task<PluginPollResult> RunAsync(
+        DiscoveredPlugin plugin, string requestType, string? eventName,
+        PluginPollContext context, PluginGrants? grants, CancellationToken ct)
     {
         var manifest = plugin.Manifest
             ?? throw new ArgumentException("plugin has no valid manifest", nameof(plugin));
 
-        var grants = PluginGrants.FromDeclared(manifest.Capabilities);
+        var effective = grants ?? PluginGrants.FromDeclared(manifest.Capabilities);
         var request = new PluginRequest(
-            PluginRequest.PollType,
+            requestType,
             _perchVersion,
-            grants.ToWire(),
-            BuildContext(context, grants));
+            effective.ToWire(),
+            BuildContext(context, effective),
+            Event: eventName);
 
         PluginRunResult run;
         try
@@ -49,7 +63,7 @@ internal sealed class PluginService
             return PluginPollResult.Fault($"failed to launch: {ex.Message}");
         }
 
-        return Interpret(manifest, grants, run);
+        return Interpret(manifest, effective, run);
     }
 
     // Only hand the plugin the context its grants permit. This is the outbound half of least privilege.
