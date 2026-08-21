@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "id": "dev.perch.git-dirty",
+  "name": "Git Dirty Count",
+  "version": "1.0.0",
+  "description": "Badges the number of uncommitted changes in the active session's repository.",
+  "author": "Perch samples",
+  "homepage": "https://github.com/quartexsoftware/perch",
+  "entry": {
+    "type": "process",
+    "command": "powershell",
+    "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "git-dirty.ps1"],
+    "mode": "oneshot"
+  },
+  "extensionPoints": ["poll", "overlay.glyph"],
+  "capabilities": {
+    "read.cwd": true,
+    "poll.intervalSec": 30
+  }
+}

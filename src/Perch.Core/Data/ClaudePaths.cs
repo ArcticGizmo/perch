@@ -33,8 +33,19 @@ internal static class ClaudePaths
     /// session <c>{sessionId}.jsonl</c> files. See <see cref="TranscriptLocator"/>.</summary>
     public static string ProjectsDir { get; } = Path.Combine(ClaudeDir, "projects");
 
-    /// <summary><c>~/.claude/plugins</c> — installed-plugin state and marketplace clones.</summary>
+    /// <summary><c>~/.claude/plugins</c> — installed-plugin state and marketplace clones. This is
+    /// <b>Claude Code's</b> plugin directory, not Perch's; see <see cref="PerchPluginsDir"/> for the
+    /// Perch extension installs.</summary>
     public static string PluginsDir { get; } = Path.Combine(ClaudeDir, "plugins");
+
+    /// <summary><c>~/.claude/perch</c> — Perch's own data area (kept beside the Claude data it watches
+    /// so a relocated <c>CLAUDE_CONFIG_DIR</c> carries it along).</summary>
+    public static string PerchDir { get; } = Path.Combine(ClaudeDir, "perch");
+
+    /// <summary><c>~/.claude/perch/plugins</c> — installed Perch extensions, one directory per plugin
+    /// (named by the manifest <c>id</c>), each holding its <c>perch-plugin.json</c> and payload. See
+    /// docs/pluggability-plan.md.</summary>
+    public static string PerchPluginsDir { get; } = Path.Combine(PerchDir, "plugins");
 
     /// <summary><c>~/.claude/daemon</c> — the Claude Code background daemon's state directory
     /// (its worker roster plus named-pipe keys). See <see cref="DaemonRosterReader"/>.</summary>
