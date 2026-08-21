@@ -14,13 +14,18 @@ internal interface IPluginSandbox
     IPluginProcess Launch(PluginLaunchSpec spec);
 }
 
-/// <summary>What to launch and where. <see cref="WorkingDirectory"/> is pinned to the plugin's own
-/// install folder so a relative <see cref="Command"/> resolves there and the process starts confined to
-/// its directory.</summary>
+/// <summary>What to launch, where, and — for a sandbox that can enforce it — what the plugin is allowed to
+/// touch. <see cref="WorkingDirectory"/> is pinned to the plugin's own install folder so a relative
+/// <see cref="Command"/> resolves there. <see cref="AllowNetwork"/> and <see cref="ReadablePaths"/> are the
+/// resolved grants: a hardening sandbox (Windows AppContainer) uses them to block network for a plugin that
+/// wasn't granted it and to confine filesystem reads; the plain cross-platform sandbox ignores them (it has
+/// no OS mechanism), which is why the grants are <em>also</em> enforced at the message layer.</summary>
 internal sealed record PluginLaunchSpec(
     string WorkingDirectory,
     string Command,
-    IReadOnlyList<string> Args);
+    IReadOnlyList<string> Args,
+    bool AllowNetwork,
+    IReadOnlyList<string> ReadablePaths);
 
 /// <summary>A launched plugin process, abstracted over <see cref="System.Diagnostics.Process"/> so the
 /// protocol driver (<see cref="PluginSession"/>) is unit-testable against in-memory streams.</summary>

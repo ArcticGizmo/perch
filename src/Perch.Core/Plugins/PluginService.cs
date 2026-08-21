@@ -53,7 +53,10 @@ internal sealed class PluginService
         PluginRunResult run;
         try
         {
-            var spec = new PluginLaunchSpec(plugin.Directory, manifest.Entry.Command, manifest.Entry.Args);
+            var spec = new PluginLaunchSpec(
+                plugin.Directory, manifest.Entry.Command, manifest.Entry.Args,
+                AllowNetwork: effective.Network.Count > 0,
+                ReadablePaths: ReadablePaths(plugin.Directory, effective, context));
             using var proc = _sandbox.Launch(spec);
             run = await PluginSession.RunOnceAsync(proc, request, _timeout, ct);
         }
@@ -64,6 +67,16 @@ internal sealed class PluginService
         }
 
         return Interpret(manifest, effective, run);
+    }
+
+    // The filesystem roots a hardening sandbox should let the plugin read: always its own folder (it must
+    // read its own entry script), plus the project dir / Claude data only when the matching grant is held.
+    private static IReadOnlyList<string> ReadablePaths(string pluginDir, PluginGrants grants, PluginPollContext ctx)
+    {
+        var paths = new List<string> { pluginDir };
+        if (grants.ReadCwd && !string.IsNullOrEmpty(ctx.Cwd)) paths.Add(ctx.Cwd!);
+        if (grants.ReadSessions) paths.Add(Perch.Data.ClaudePaths.ClaudeDir);
+        return paths;
     }
 
     // Only hand the plugin the context its grants permit. This is the outbound half of least privilege.

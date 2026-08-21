@@ -119,6 +119,23 @@ public class PluginServiceTests
     }
 
     [Fact]
+    public async Task The_launch_spec_carries_the_resolved_grants_for_the_sandbox()
+    {
+        // No network grant, no read.cwd → the spec forbids network and exposes only the plugin's own dir.
+        var (_, s1) = await Run(Plugin([PluginExtensionPoints.Poll], dir: @"C:\plugins\p"), []);
+        Assert.False(s1.LastSpec!.AllowNetwork);
+        Assert.Equal([@"C:\plugins\p"], s1.LastSpec.ReadablePaths);
+
+        // Network granted → the spec allows it.
+        var capturing = new FakePluginSandbox(new FakePluginProcess([]));
+        var svc = new PluginService(capturing, "0.9.0", TimeSpan.FromSeconds(5));
+        await svc.PollAsync(
+            Plugin([PluginExtensionPoints.Poll], new PluginCapabilities { Network = ["example.com"] }, @"C:\plugins\p"),
+            PluginPollContext.Empty);
+        Assert.True(capturing.LastSpec!.AllowNetwork);
+    }
+
+    [Fact]
     public async Task Consented_grants_override_the_declared_capabilities()
     {
         // Manifest declares notify, but the user's consent (grants) withholds it: the notify is dropped.
