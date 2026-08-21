@@ -15,7 +15,7 @@
           <RootNamespace>Perch.Avalonia</RootNamespace>
           <AssemblyName>perch</AssemblyName>
           <Product>Perch</Product>
-          <Version>0.3.58</Version>
+          <Version>0.3.59</Version>
           <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
      </PropertyGroup>
 

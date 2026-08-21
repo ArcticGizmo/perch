@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.59] - 2026-08-21
+
+- Select text across the Markdown preview and copy it, VS Code-style (it was decorative before)
+- Right-click a preview selection for "Copy as Markdown" (the underlying source)
+
+---
+
 ## [v0.3.58] - 2026-08-21
 
 - Quiet mode: mute the fun/social/silly features for a while (right-click the header)

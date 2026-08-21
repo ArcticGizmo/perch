@@ -12,6 +12,7 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -201,6 +202,29 @@ internal sealed class MarkdownWindow : Window
     private ScrollViewer? _srcScroll;       // the editor's inner scroll (resolved from the template)
     private bool _gutterPending;            // coalesces gutter recomputes posted after a layout pass
 
+    // ── Preview text selection (VS Code-style character selection across rendered blocks) ──
+    // Our own selection, modelled on DiffView's char selection: a global (block, char) anchor→focus that can
+    // span blocks — something a per-block SelectableTextBlock can't do — painted by an owner-drawn layer via
+    // the blocks' own TextLayout (HitTestTextRange), exactly like the find highlights. Pressing captures the
+    // pointer to the preview scroll so the whole gesture routes here (even over opaque code/table blocks) and
+    // the per-block native selection stays out of the way. Ctrl+C copies the rendered text of the selection
+    // (VS Code preview behaviour); right-click → "Copy as Markdown" copies the underlying source instead.
+    // A press that never moves is a click → the existing jump-to-editor gesture.
+    private readonly List<PreviewBlock> _pvBlocks = new();   // the preview's selectable text blocks, in order
+    private SelectionLayer? _selLayer;      // owner-drawn layer painting the char selection
+    private bool _pvDragging;               // a selection drag is in progress
+    private int _selAnchorPos = -1, _selAnchorCh = -1;       // selection anchor: (block index, char in block)
+    private int _selFocusPos = -1, _selFocusCh = -1;         // selection focus:  (block index, char in block)
+    private Point _pvDragViewport;          // last drag point in preview-scroll (viewport) space, for auto-scroll
+    private DispatcherTimer? _pvAutoScroll; // edge auto-scroll while dragging a selection
+    // The click-to-edit jump is precomputed at press (verbatim code hit-testing needs the press-time point)
+    // and only fired on release if the gesture turned out to be a bare click, not a selection drag.
+    private int _pendingCaret;
+    private double _pendingAlignY;
+    private bool _hasPendingJump;
+
+    private sealed record PreviewBlock(SelectableTextBlock Tb, string Content);
+
     public MarkdownWindow(AppSettings settings)
     {
         _settings = settings;
@@ -355,8 +379,9 @@ internal sealed class MarkdownWindow : Window
         // The gutter bar and the editor find highlights track the editor's own scrolling and re-wrapping.
         _sourceBox.LayoutUpdated += (_, _) => { UpdateGutter(); _editorFind.OnEditorMoved(); };
         // A press in the source box marks it the active pane for Ctrl+F (tunnelled + handledEventsToo so the
-        // TextBox's own pointer handling doesn't hide it from us).
-        _sourceBox.AddHandler(PointerPressedEvent, (_, _) => _activeSide = FindSide.Editor,
+        // TextBox's own pointer handling doesn't hide it from us) and drops any lingering preview block
+        // selection — only one pane holds a selection at a time.
+        _sourceBox.AddHandler(PointerPressedEvent, (_, _) => { _activeSide = FindSide.Editor; ClearPreviewSelection(); },
             RoutingStrategies.Tunnel, handledEventsToo: true);
 
         _previewScroll = new ScrollViewer
@@ -371,6 +396,17 @@ internal sealed class MarkdownWindow : Window
         // selectable text already handled still reaches us.
         _previewScroll.AddHandler(PointerPressedEvent, OnPreviewPointerPressed,
             RoutingStrategies.Bubble, handledEventsToo: true);
+        _previewScroll.AddHandler(PointerMovedEvent, OnPreviewPointerMoved,
+            RoutingStrategies.Bubble, handledEventsToo: true);
+        _previewScroll.AddHandler(PointerReleasedEvent, OnPreviewPointerReleased,
+            RoutingStrategies.Bubble, handledEventsToo: true);
+        // Right-click on a selection offers "Copy as Markdown" (Ctrl+C copies the rendered text instead).
+        _previewScroll.AddHandler(ContextRequestedEvent, OnPreviewContextRequested, RoutingStrategies.Bubble);
+        // Focusable so that after a drag-selection the preview (not a stray TextBox) receives Ctrl+C.
+        _previewScroll.Focusable = true;
+        // Edge auto-scroll while dragging a selection past the top/bottom of the viewport (the VS Code feel).
+        _pvAutoScroll = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        _pvAutoScroll.Tick += (_, _) => PreviewAutoScrollTick();
         _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
         _previewTimer.Tick += (_, _) => { _previewTimer.Stop(); RenderPreview(_sourceBox.Text ?? ""); };
 
@@ -1293,9 +1329,20 @@ internal sealed class MarkdownWindow : Window
         var root = MarkdownView.Build(md, style, out var anchors);
         _previewAnchors = anchors;
         _activeAnchorBorder = null;   // the old wrappers are gone; re-attach the highlight below
+        // A rebuilt tree drops the old blocks, so any selection is stale — start clean and re-collect the
+        // selectable text blocks (in document order) that the selection spans.
+        ResetPreviewSelection();
+        CollectPreviewBlocks(root);
         // Route the fresh tree through the search engine — it wraps it with the highlight layer, re-collects
         // the searchable blocks, and re-runs any active find (repaint only, no scroll jump).
-        _previewScroll.Content = _search.SetContent(root, previewDark: !_previewLight);
+        var content = _search.SetContent(root, previewDark: !_previewLight);
+        // Slot our selection overlay between the content and the find layer (a fresh one each render, since
+        // SetContent builds a new host grid). Translucent, above the content so the char wash also shows over
+        // code/table blocks whose own backgrounds are opaque; non-hit-testable so it never eats clicks.
+        _selLayer = new SelectionLayer(this, _previewTheme.Selection);
+        if (content is Grid hostGrid)
+            hostGrid.Children.Insert(1, _selLayer);
+        _previewScroll.Content = content;
 
         // Re-mark the block under the caret on the fresh tree (no scroll — don't yank the view while typing).
         SyncPreviewToCaret(scroll: false, force: true);
@@ -1320,14 +1367,45 @@ internal sealed class MarkdownWindow : Window
             AlignPreviewToCaret(a);
     }
 
-    // Preview→source: clicking maps to a precise source position and focuses the editor (ready to edit).
-    // It resolves the nearest stamped element (a list item, table row, heading, paragraph or code block) —
-    // finer than the enclosing block — and inside a verbatim code block hit-tests to the exact line/column.
+    // A left press in the preview starts a character selection at the caret under the pointer (VS Code-style —
+    // it can then drag across blocks). Capturing the pointer to the scroll routes the whole gesture here (even
+    // over opaque code/table blocks) and keeps the per-block native selection out of the way. A press that
+    // never moves is a bare click → the "edit from the preview" jump (caret to the source line + focus editor).
     private void OnPreviewPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         _activeSide = FindSide.Preview;   // interacting with the preview makes it the active pane for Ctrl+F
         if (!e.GetCurrentPoint(_previewScroll).Properties.IsLeftButtonPressed)
             return;
+
+        ClearPreviewSelection();   // a new gesture starts fresh
+
+        // Don't hijack a scrollbar-thumb drag — let the scroll viewer handle its own.
+        if ((e.Source as Visual)?.FindAncestorOfType<ScrollBar>(includeSelf: true) is not null)
+            return;
+
+        // Precompute the click→editor jump now: verbatim code hit-testing needs the press-time point, and by
+        // release the pointer is captured to the scroll (so e.Source no longer points at the block).
+        ComputePendingJump(e);
+
+        var pView = e.GetPosition(_previewScroll);
+        if (NearestBlock(pView) is not { } hit)
+            return;   // no selectable text under the pointer
+
+        _selAnchorPos = _selFocusPos = hit.Pos;
+        _selAnchorCh = _selFocusCh = hit.Ch;
+        _pvDragging = true;
+        _pvDragViewport = pView;
+        _pvAutoScroll?.Start();
+        e.Pointer.Capture(_previewScroll);
+        _selLayer?.InvalidateVisual();
+    }
+
+    // Resolve the nearest stamped element under the press (a list item, table row, heading, paragraph or code
+    // block — finer than the enclosing block) and stash the caret + viewport-Y for a possible click-jump on
+    // release; inside a verbatim code block, hit-test to the exact line/column.
+    private void ComputePendingJump(PointerPressedEventArgs e)
+    {
+        _hasPendingJump = false;
         for (var v = e.Source as Visual; v is not null; v = v.GetVisualParent())
         {
             if (v is not Control c)
@@ -1337,13 +1415,303 @@ internal sealed class MarkdownWindow : Window
                 continue;
 
             var text = _sourceBox.Text ?? "";
-            int caret = MarkdownView.GetVerbatim(c) && c is TextBlock tb
+            _pendingCaret = MarkdownView.GetVerbatim(c) && c is TextBlock tb
                 ? VerbatimClickOffset(tb, e.GetPosition(tb), text, line)
                 : LineStartOffset(text, line);
-            // Align the editor so the clicked line lands at the same height the click did in the preview.
-            JumpEditorToCaret(caret, e.GetPosition(_previewScroll).Y);
+            _pendingAlignY = e.GetPosition(_previewScroll).Y;
+            _hasPendingJump = true;
             return;
         }
+    }
+
+    // Extend the selection's focus to the caret under the dragging pointer (resolved globally, across blocks).
+    private void OnPreviewPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_pvDragging)
+            return;
+        // If the button is no longer down (a release we somehow missed / capture lost mid-gesture), end it.
+        if (!e.GetCurrentPoint(_previewScroll).Properties.IsLeftButtonPressed)
+        {
+            EndPreviewDrag(e.Pointer);
+            return;
+        }
+        _pvDragViewport = e.GetPosition(_previewScroll);
+        ExtendSelectionTo(_pvDragViewport);
+    }
+
+    // End the gesture: a real (non-empty) selection keeps focus so Ctrl+C targets the preview; a bare click
+    // (empty selection) clears it and performs the deferred caret jump into the editor.
+    private void OnPreviewPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_pvDragging)
+            return;
+        EndPreviewDrag(e.Pointer);
+
+        if (HasPreviewSelection())
+        {
+            _previewScroll.Focus();
+        }
+        else
+        {
+            ClearPreviewSelection();
+            if (_hasPendingJump)
+                JumpEditorToCaret(_pendingCaret, _pendingAlignY);
+        }
+    }
+
+    private void EndPreviewDrag(IPointer pointer)
+    {
+        _pvDragging = false;
+        _pvAutoScroll?.Stop();
+        if (ReferenceEquals(pointer.Captured, _previewScroll))
+            pointer.Capture(null);
+    }
+
+    // While selection-dragging, scroll the viewport when the pointer nears its top/bottom edge, then re-resolve
+    // the focus against the (fixed-on-screen) pointer so the selection keeps growing as content scrolls.
+    private void PreviewAutoScrollTick()
+    {
+        if (!_pvDragging) { _pvAutoScroll?.Stop(); return; }
+        const double edge = 24, step = 14;
+        double max = Math.Max(0, _previewScroll.Extent.Height - _previewScroll.Viewport.Height);
+        double y = _pvDragViewport.Y;
+        if (y < edge && _previewScroll.Offset.Y > 0)
+            _previewScroll.Offset = _previewScroll.Offset.WithY(Math.Max(0, _previewScroll.Offset.Y - step));
+        else if (y > _previewScroll.Viewport.Height - edge && _previewScroll.Offset.Y < max)
+            _previewScroll.Offset = _previewScroll.Offset.WithY(Math.Min(max, _previewScroll.Offset.Y + step));
+        else
+            return;
+        ExtendSelectionTo(_pvDragViewport);
+    }
+
+    private void ExtendSelectionTo(Point pView)
+    {
+        if (NearestBlock(pView) is not { } hit)
+            return;
+        if (_selFocusPos != hit.Pos || _selFocusCh != hit.Ch)
+        {
+            _selFocusPos = hit.Pos;
+            _selFocusCh = hit.Ch;
+            _selLayer?.InvalidateVisual();
+        }
+    }
+
+    // The nearest selectable block to a point in preview-scroll (viewport) space — the block whose vertical
+    // band contains the point, else the last one above it (so a point in the trailing whitespace of a line, or
+    // between blocks, still resolves to a real caret) — plus the caret char within it. Null when there are no
+    // blocks. Shared by both starting (press) and extending (drag) a selection.
+    private (int Pos, int Ch)? NearestBlock(Point pView)
+    {
+        if (_pvBlocks.Count == 0)
+            return null;
+        int chosen = -1;
+        for (int i = 0; i < _pvBlocks.Count; i++)
+        {
+            var tb = _pvBlocks[i].Tb;
+            if (!tb.IsEffectivelyVisible || tb.TranslatePoint(new Point(0, 0), _previewScroll) is not { } top)
+                continue;
+            double bottom = top.Y + tb.Bounds.Height;
+            if (pView.Y >= top.Y && pView.Y <= bottom) { chosen = i; break; }
+            if (top.Y <= pView.Y) chosen = i;
+        }
+        if (chosen < 0)
+        {
+            for (int i = 0; i < _pvBlocks.Count; i++)
+                if (_pvBlocks[i].Tb.IsEffectivelyVisible) { chosen = i; break; }
+            if (chosen < 0) chosen = 0;
+        }
+        var ctb = _pvBlocks[chosen].Tb;
+        int ch = _previewScroll.TranslatePoint(pView, ctb) is { } pInText
+            ? CharIndexAt(ctb, pInText, _pvBlocks[chosen].Content.Length)
+            : 0;
+        return (chosen, ch);
+    }
+
+    // The caret char index within a block for a point in the block's own coordinate space. The TextLayout is
+    // laid out without the control's padding, so subtract it (mirrors the origin offset used when painting).
+    private static int CharIndexAt(SelectableTextBlock tb, Point p, int maxLen)
+    {
+        if (tb.TextLayout is not { } layout)
+            return 0;
+        var hit = layout.HitTestPoint(new Point(p.X - tb.Padding.Left, p.Y - tb.Padding.Top));
+        int idx = hit.TextPosition + (hit.IsTrailing ? 1 : 0);
+        return Math.Clamp(idx, 0, maxLen);
+    }
+
+    // The selection in document order: (startBlock, startChar, endBlock, endChar). startBlock < 0 when empty.
+    private (int SP, int SC, int EP, int EC) NormalizedCharRange()
+    {
+        if (_selAnchorPos < 0 || _selFocusPos < 0)
+            return (-1, -1, -1, -1);
+        bool anchorFirst = _selAnchorPos < _selFocusPos ||
+                           (_selAnchorPos == _selFocusPos && _selAnchorCh <= _selFocusCh);
+        return anchorFirst
+            ? (_selAnchorPos, _selAnchorCh, _selFocusPos, _selFocusCh)
+            : (_selFocusPos, _selFocusCh, _selAnchorPos, _selAnchorCh);
+    }
+
+    private bool HasPreviewSelection()
+    {
+        var (sp, sc, ep, ec) = NormalizedCharRange();
+        return sp >= 0 && !(sp == ep && sc == ec);
+    }
+
+    private void ClearPreviewSelection()
+    {
+        _selAnchorPos = _selAnchorCh = _selFocusPos = _selFocusCh = -1;
+        _selLayer?.InvalidateVisual();
+    }
+
+    private void ResetPreviewSelection()
+    {
+        _pvDragging = false;
+        _pvAutoScroll?.Stop();
+        _selAnchorPos = _selAnchorCh = _selFocusPos = _selFocusCh = -1;
+    }
+
+    // Paint the character selection across every block in its range — the first block from the start char, the
+    // last up to the end char, the ones between in full — via the same HitTestTextRange the find layer uses, so
+    // a wrapped block yields one rect per visual row. Called by the selection layer at render time.
+    private void RenderPreviewSelection(DrawingContext ctx, Control layer, IBrush fill)
+    {
+        var (sp, sc, ep, ec) = NormalizedCharRange();
+        if (sp < 0)
+            return;
+        for (int i = sp; i <= ep && i < _pvBlocks.Count; i++)
+        {
+            var (tb, content) = (_pvBlocks[i].Tb, _pvBlocks[i].Content);
+            if (!tb.IsEffectivelyVisible || tb.TextLayout is not { } layout)
+                continue;
+            int len = content.Length;
+            int start = i == sp ? Math.Clamp(sc, 0, len) : 0;
+            int end = i == ep ? Math.Clamp(ec, 0, len) : len;
+            if (end <= start)
+                continue;
+            if (tb.TranslatePoint(new Point(tb.Padding.Left, tb.Padding.Top), layer) is not { } origin)
+                continue;
+            foreach (var r in layout.HitTestTextRange(start, end - start))
+                ctx.FillRectangle(fill, new Rect(origin.X + r.X, origin.Y + r.Y, r.Width, r.Height));
+        }
+    }
+
+    // Collect the preview's selectable text blocks in document order (depth-first; recursion stops at a block,
+    // whose inline runs are its own children), each with its flattened text — the string the selection indexes
+    // and copies, matching how the block's TextLayout is built (so char offsets line up with hit-testing).
+    private void CollectPreviewBlocks(Control root)
+    {
+        _pvBlocks.Clear();
+        CollectPreviewBlocks((ILogical)root);
+    }
+
+    private void CollectPreviewBlocks(ILogical node)
+    {
+        foreach (var child in node.LogicalChildren)
+        {
+            if (child is SelectableTextBlock t)
+                _pvBlocks.Add(new PreviewBlock(t, FlattenBlock(t)));
+            else
+                CollectPreviewBlocks(child);
+        }
+    }
+
+    private static string FlattenBlock(SelectableTextBlock t)
+    {
+        if (t.Inlines is not { Count: > 0 } inlines)
+            return t.Text ?? "";
+        var sb = new System.Text.StringBuilder();
+        FlattenInlines(inlines, sb);
+        return sb.ToString();
+    }
+
+    private static void FlattenInlines(InlineCollection inlines, System.Text.StringBuilder sb)
+    {
+        foreach (var inline in inlines)
+            switch (inline)
+            {
+                case Run r: sb.Append(r.Text); break;
+                case LineBreak: sb.Append('\n'); break;
+                case InlineUIContainer: sb.Append('￼'); break;   // one layout position (object replacement)
+                case Span s: FlattenInlines(s.Inlines, sb); break;
+            }
+    }
+
+    // Copy the rendered text of the selection (VS Code preview behaviour) — the selected characters of each
+    // block, one '\n' between blocks; the object-replacement chars that stand in for inline widgets (task-list
+    // checkboxes) are dropped. Returns false when nothing's selected, so Ctrl+C can fall through.
+    private bool CopyRenderedSelection()
+    {
+        var (sp, sc, ep, ec) = NormalizedCharRange();
+        if (sp < 0 || (sp == ep && sc == ec))
+            return false;
+        var sb = new System.Text.StringBuilder();
+        for (int i = sp; i <= ep && i < _pvBlocks.Count; i++)
+        {
+            string c = _pvBlocks[i].Content;
+            int start = i == sp ? Math.Clamp(sc, 0, c.Length) : 0;
+            int end = i == ep ? Math.Clamp(ec, 0, c.Length) : c.Length;
+            if (i > sp) sb.Append('\n');
+            if (end > start) sb.Append(c, start, end - start);
+        }
+        Clipboard?.SetTextAsync(sb.ToString().Replace("￼", ""));
+        return true;
+    }
+
+    // The underlying Markdown for the selection: the source lines spanned by the top-level blocks the selection
+    // touches (mapped from the first/last selected block by geometry). Line-granular — you can't faithfully
+    // reconstruct partial-block Markdown — but it's the "underlying equivalent" of what was highlighted. Null
+    // when there's no selection.
+    private string? SelectedMarkdown()
+    {
+        var (sp, _, ep, _) = NormalizedCharRange();
+        if (sp < 0 || _previewAnchors.Count == 0)
+            return null;
+        int a0 = AnchorIndexForBlock(sp), a1 = AnchorIndexForBlock(ep);
+        if (a0 < 0 || a1 < 0)
+            return null;
+        int lo = Math.Min(a0, a1), hi = Math.Max(a0, a1);
+        var lines = (_sourceBox.Text ?? "").Replace("\r", "").Split('\n');
+        if (lines.Length == 0)
+            return null;
+        int startLine = Math.Clamp(_previewAnchors[lo].StartLine, 0, lines.Length - 1);
+        int endLine = _previewAnchors[hi].EndLine;   // int.MaxValue for the last block — clamp to the end
+        endLine = Math.Clamp(endLine == int.MaxValue ? lines.Length - 1 : endLine, startLine, lines.Length - 1);
+        return string.Join("\n", lines[startLine..(endLine + 1)]).TrimEnd('\n');
+    }
+
+    // The top-level anchor a selectable block sits under, resolved by the block's mid-Y against the anchor
+    // wrappers' vertical bands (nearest when it falls in a gap). -1 when it can't be placed.
+    private int AnchorIndexForBlock(int pos)
+    {
+        if (pos < 0 || pos >= _pvBlocks.Count)
+            return -1;
+        var tb = _pvBlocks[pos].Tb;
+        if (tb.TranslatePoint(new Point(0, tb.Bounds.Height / 2), _previewScroll) is not { } p)
+            return -1;
+        int best = -1;
+        double bestDist = double.MaxValue;
+        for (int i = 0; i < _previewAnchors.Count; i++)
+        {
+            if (_previewAnchors[i].Control.TranslatePoint(new Point(0, 0), _previewScroll) is not { } top)
+                continue;
+            double y0 = top.Y, y1 = top.Y + _previewAnchors[i].Control.Bounds.Height;
+            if (p.Y >= y0 && p.Y < y1)
+                return i;
+            double dist = p.Y < y0 ? y0 - p.Y : p.Y - y1;
+            if (dist < bestDist) { bestDist = dist; best = i; }
+        }
+        return best;
+    }
+
+    // Right-click over a selection: copy the rendered text, or the underlying Markdown.
+    private void OnPreviewContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (!HasPreviewSelection())
+            return;
+        var items = new List<Control> { MenuItem("Copy", () => CopyRenderedSelection()) };
+        if (SelectedMarkdown() is { } md)
+            items.Add(MenuItem("Copy as Markdown", () => Clipboard?.SetTextAsync(md)));
+        new MenuFlyout { ItemsSource = items }.ShowAt(_previewScroll, showAtPointer: true);
+        e.Handled = true;
     }
 
     // Map a click inside a verbatim (code) block to an exact source offset via text hit-testing: the visual
@@ -1799,6 +2167,7 @@ internal sealed class MarkdownWindow : Window
         StopWatcher();
         _pollTimer.Stop();
         _previewTimer.Stop();
+        _pvAutoScroll?.Stop();
         base.OnClosed(e);
     }
 
@@ -1988,6 +2357,15 @@ internal sealed class MarkdownWindow : Window
             e.Handled = true;
             return;
         }
+        // Ctrl+C over a preview selection copies its rendered text (VS Code preview behaviour; "Copy as
+        // Markdown" on the right-click menu gets the source instead). Only when the preview is the active pane
+        // and a selection exists; otherwise it falls through to the focused control's own copy (the editor's).
+        if (e.Key == Key.C && e.KeyModifiers.HasFlag(KeyModifiers.Control)
+            && _activeSide == FindSide.Preview && CopyRenderedSelection())
+        {
+            e.Handled = true;
+            return;
+        }
         // Ctrl+F opens find-in-page targeting the last-interacted pane. If it's already open, pressing it after
         // interacting with the *other* pane moves the search there; from replace mode it collapses to find only;
         // otherwise it closes.
@@ -2035,6 +2413,26 @@ internal sealed class MarkdownWindow : Window
             e.Handled = true;
         }
         base.OnKeyDown(e);
+    }
+
+    // A translucent, non-interactive overlay that paints the character selection through each block's own text
+    // layout (like the find layer and DiffView's highlight layer). It sits above the content so the wash also
+    // shows over blocks with opaque backgrounds (code, tables); non-hit-testable so clicks fall through to the
+    // preview text. Repaints on layout changes (wrap reflow, scroll) and whenever the owner invalidates it.
+    private sealed class SelectionLayer : Control
+    {
+        private readonly MarkdownWindow _owner;
+        private readonly IBrush _fill;
+
+        public SelectionLayer(MarkdownWindow owner, IBrush fill)
+        {
+            _owner = owner;
+            _fill = fill;
+            IsHitTestVisible = false;
+            LayoutUpdated += (_, _) => InvalidateVisual();
+        }
+
+        public override void Render(DrawingContext context) => _owner.RenderPreviewSelection(context, this, _fill);
     }
 
     private enum NodeKind { Group, ProducedFile, ReferencedFile }
