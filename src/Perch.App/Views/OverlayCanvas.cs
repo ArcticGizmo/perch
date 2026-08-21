@@ -31,7 +31,8 @@ namespace Perch.Avalonia.Views;
 public sealed partial class OverlayCanvas : Control, IDenseHost
 {
     // ── Layout (mirrors OverlayForm's constants) ──────────────────────────────
-    private const double FormWidth        = 280;
+    private const double FormWidth        = 280;   // the default and minimum floating panel width (DIPs)
+    private const double ResizeGripWidth  = 6;      // left-edge hit zone for the drag-to-widen grip (floating)
     private const double HeaderHeight     = 44;
     private const double Corner           = 10;
     private const double HorizPad         = 12;
@@ -206,6 +207,19 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // so a stray pre-placement move can't be mistaken for a drag. See OnWindowPositionChanged.
     private PixelPoint? _lastPlacedFloatingPos;
 
+    // Overlay widths in DIPs. Two layers per presentation, mirroring how position works (_floatingPlacement vs
+    // _effectiveFloating): the *configured* width is the persisted, editor-owned value (the placement editor is
+    // the on-disk source of truth); the *runtime* width is what the panel is currently at, which a live resize
+    // grip drags ephemerally (never written to disk). Reset restores the runtime to the configured (or factory)
+    // width. Never below FormWidth — the classic layout is the floor. Every window-sizing site reads the Current*
+    // property, so widening reflows the whole panel (the draw/hit-test pipeline is already width-parameterised).
+    private double _floatingWidthDip = FormWidth;          // runtime floating width
+    private double _configuredFloatingWidth = FormWidth;   // persisted floating width (editor value, or FormWidth)
+    private double _dockedWidthDip = FormWidth;            // runtime docked (expanded) width
+    private double _configuredDockedWidth = FormWidth;     // persisted docked width (editor value, or FormWidth)
+    private double CurrentFloatingWidth => Math.Max(FormWidth, _floatingWidthDip);
+    private double DockExpandedWidth => Math.Max(FormWidth, _dockedWidthDip);
+
     public OverlayCanvas()
     {
         // The brand mark and quick-link icons are 256px sources drawn at ~16–18px; the default sampler
@@ -277,6 +291,80 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         SeedDockedPlacement(docked);
     }
 
+    /// <summary>Seeds the floating panel's configured (persisted) width from AppSettings.FloatingWidthDip and
+    /// resets the runtime width to match. Null — or any value at/below the default — keeps the built-in
+    /// <see cref="FormWidth"/>. Called at startup and whenever the placement editor commits a new width. Safe
+    /// before the window is shown (just records it) or after (re-fits the floating window live).</summary>
+    public void SetFloatingWidth(double? dip)
+    {
+        double w = NormalizeWidth(dip);
+        _configuredFloatingWidth = w;
+        _floatingWidthDip = w;
+        if (HostWindow is not null && !_denseCtl.IsDense && !_docked) SizeFloatingToContent();
+        InvalidateMeasure();
+        InvalidateVisual();
+    }
+
+    /// <summary>Seeds the docked column's configured (persisted) expanded width from AppSettings.DockedWidthDip
+    /// and resets the runtime width to match. Null / at-or-below the default keeps <see cref="FormWidth"/>.
+    /// Re-reserves the column live when currently docked.</summary>
+    public void SetDockedWidth(double? dip)
+    {
+        double w = NormalizeWidth(dip);
+        _configuredDockedWidth = w;
+        _dockedWidthDip = w;
+        if (_docked) { ApplyDockedGeometry(); InvalidateMeasure(); InvalidateVisual(); }
+    }
+
+    private static double NormalizeWidth(double? dip) => dip is { } d && d > FormWidth ? d : FormWidth;
+
+    // Whether the active presentation has a resettable width (the runtime differs from factory, or a custom
+    // width is configured) — gates the header menu's "Reset size" entry.
+    private bool CanResetWidth =>
+        _docked
+            ? Math.Abs(DockExpandedWidth - FormWidth) > 0.5 || Math.Abs(_configuredDockedWidth - FormWidth) > 0.5
+            : Math.Abs(CurrentFloatingWidth - FormWidth) > 0.5 || Math.Abs(_configuredFloatingWidth - FormWidth) > 0.5;
+
+    // The active presentation's configured width, and whether it differs from the factory default (i.e. whether
+    // a "reset to initial vs default" choice is meaningful — if they're equal the menu offers one plain reset).
+    private double ActiveConfiguredWidth => _docked ? _configuredDockedWidth : _configuredFloatingWidth;
+    private bool ConfiguredDiffersFromDefault => Math.Abs(ActiveConfiguredWidth - FormWidth) > 0.5;
+
+    /// <summary>Resets the active presentation's runtime width to the configured width (<paramref name="toFactory"/>
+    /// false) or the built-in default (true), discarding any live-drag resize. Persists nothing — the configured
+    /// width on disk is untouched.</summary>
+    public void ResetOverlayWidth(bool toFactory)
+    {
+        if (_docked)
+        {
+            _dockedWidthDip = toFactory ? FormWidth : _configuredDockedWidth;
+            ApplyDockedGeometry();
+        }
+        else
+        {
+            _floatingWidthDip = toFactory ? FormWidth : _configuredFloatingWidth;
+            if (HostWindow is not null && !_denseCtl.IsDense) SizeFloatingToContent();
+        }
+        InvalidateMeasure();
+        InvalidateVisual();
+    }
+
+    // The widest a panel may grow on its current monitor: the work-area width less the default side margins, so
+    // a maximised grow can't push it off-screen. Falls back to a generous constant when the screen can't resolve.
+    private double MaxFloatingWidthDip(Window w)
+    {
+        try
+        {
+            if (w.Screens?.ScreenFromWindow(w) is { } s)
+            {
+                double scale = s.Scaling <= 0 ? 1.0 : s.Scaling;
+                return Math.Max(FormWidth, s.WorkingArea.Width / scale - 2 * FloatRightMargin);
+            }
+        }
+        catch { /* best-effort — fall through to the constant cap */ }
+        return 2000;
+    }
+
     /// <summary>Adopts new placements from the editor and applies them to the running overlay: the floating
     /// one re-positions the window now (when floating), the dense one moves the strip now (when dense) and
     /// otherwise takes effect on the next dense entry. Null on either resets that mode to its default.</summary>
@@ -321,7 +409,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         RestoreOrEnsureFloating(); // prefer the remembered corner-relative spot; the raw position may be on a since-removed monitor
     }
 
-    double IDenseHost.FullPanelWidthDip => FormWidth;
+    double IDenseHost.FullPanelWidthDip => CurrentFloatingWidth;
     double IDenseHost.FullPanelHeightDip => FullPanelHeight();
     // The dense strip's status dots must agree with the header pills, so it gets the same non-daemon view.
     IReadOnlyList<ClaudeSession> IDenseHost.Sessions => _countedSessions;
@@ -355,7 +443,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // jumps — the "toggle to dense and back reverts the position" bug on small screens. FormWidth is fixed;
     // the height is the measure pass's content height (honours the current collapsed/expanded state).
     private (int W, int H) FloatingPhysicalSize(double scale) =>
-        (Math.Max(1, (int)(FormWidth * scale)), Math.Max(1, (int)(Draw(null, FormWidth) * scale)));
+        (Math.Max(1, (int)(CurrentFloatingWidth * scale)), Math.Max(1, (int)(Draw(null, CurrentFloatingWidth) * scale)));
 
     // Every programmatic floating move routes through here so OnWindowPositionChanged can tell our own moves
     // from a user drag. (Dense geometry is exempt — dense moves are ignored wholesale while IsDense.)
@@ -394,6 +482,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     public void PlaceAtInitialFloating()
     {
         if (_floatingPlacement is not { } p || !TryPlaceFloating(p)) PlaceAtDefaultFloating();
+        // Lock the window to the (possibly widened) content width now — the XAML opens it at the default width
+        // with only height auto-fitting, so a seeded FloatingWidthDip wouldn't otherwise apply until the first
+        // content relayout. Positioning above already used CurrentFloatingWidth, so this keeps the right edge put.
+        SizeFloatingToContent();
         CaptureFloatingPlacement(); // seed the runtime memory (even the default) so screen changes can restore it
     }
 
@@ -431,7 +523,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // ── Placement-editor support ────────────────────────────────────────────────
     // The real DIP size of each presentation's mock, so the editor's test window matches what will
     // actually appear (and thus its corner offsets mean the same thing when applied).
-    public (double W, double H) FloatingMockSizeDip() => (FormWidth, FullPanelHeight());
+    // The built-in default / minimum overlay width (DIPs) — the floor the placement editor and resize grips
+    // clamp to. Exposed so the editor (which lives in a different assembly namespace) can normalise widths.
+    public static double MinOverlayWidthDip => FormWidth;
+
+    public (double W, double H) FloatingMockSizeDip() => (Math.Max(FormWidth, _configuredFloatingWidth), FullPanelHeight());
     public (double W, double H) DenseMockSizeDip() => _denseCtl.StripSizeDip();
 
     // The built-in default placements, expressed as OverlayPlacements so "Reset to defaults" in the editor
@@ -597,9 +693,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private void SizeFloatingToContent()
     {
         if (_denseCtl.IsDense || _docked || HostWindow is not { } w) return;
-        double h = Draw(null, FormWidth); // content height in DIPs, honouring the current expand/collapse state
+        double targetW = CurrentFloatingWidth;
+        double h = Draw(null, targetW); // content height in DIPs, honouring the current expand/collapse state
         if (w.SizeToContent != SizeToContent.Manual) w.SizeToContent = SizeToContent.Manual;
-        if (Math.Abs(w.Width - FormWidth) > 0.5) w.Width = FormWidth;
+        if (Math.Abs(w.Width - targetW) > 0.5) w.Width = targetW;
         if (double.IsNaN(w.Height) || Math.Abs(w.Height - h) > 0.5) w.Height = h;
     }
 
@@ -1581,7 +1678,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if ((_denseCtl.IsDense || _docked) && double.IsFinite(availableSize.Width) && double.IsFinite(availableSize.Height)
             && availableSize is { Width: > 0, Height: > 0 })
             return availableSize;
-        return new(FormWidth, Draw(null, FormWidth));
+        return new(CurrentFloatingWidth, Draw(null, CurrentFloatingWidth));
     }
 
     public override void Render(DrawingContext ctx) => Draw(ctx, Bounds.Width);
@@ -1718,10 +1815,26 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // expand tab, in the same spot). Drawn outside the body clip so it rides over the content edge.
             if (_docked) DrawDockToggleHandle(ctx, width, panelH, expanded: true);
 
+            // A faint grip hint on whichever edge the pointer is over, so the drag-to-resize affordance is
+            // discoverable. Painted last so body content can't cover it.
+            if (_hoverResizeEdge != ResizeEdge.None) DrawResizeGripHint(ctx, width, panelH);
+
             DrawInstanceBorder(ctx, width, panelH);
         }
 
         return height;
+    }
+
+    // Three small dots stacked at the hovered edge — the standard "grab to resize" motif — shown only while the
+    // pointer is over a grip zone. Uses the muted glyph fill so it reads as chrome, not content.
+    private void DrawResizeGripHint(DrawingContext ctx, double width, double panelH)
+    {
+        bool rightEdge = _hoverResizeEdge == ResizeEdge.FloatingRight
+                         || (_hoverResizeEdge == ResizeEdge.Docked && _dockSide == HAnchor.Left);
+        double cx = rightEdge ? width - ResizeGripWidth / 2.0 : ResizeGripWidth / 2.0;
+        double cy = panelH / 2.0;
+        for (int i = -1; i <= 1; i++)
+            ctx.DrawEllipse(MutedBrush, null, new Point(cx, cy + i * 5), 1.1, 1.1);
     }
 
     // A 2px marker border hugging the panel so an isolated instance can't be confused with a running
@@ -3099,6 +3212,54 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // the WinForms form). Click routing runs on release (when it wasn't a drag): artifact-open, row-focus,
     // quick-link launch, section toggle, header expand. Right-click opens the context menu.
     private static readonly Cursor HandCursor = new(StandardCursorType.Hand);
+    private static readonly Cursor ResizeCursor = new(StandardCursorType.SizeWestEast);
+
+    // Which edge (if any) a point is over for a resize drag. Floating is resizable from *either* side; the
+    // docked column only from its open (inner) side — the outer edge is locked flush to the screen. Grips live
+    // in the body only (below the header) so they can't collide with header icons / the drag-to-move gesture,
+    // and never in dense mode or the collapsed docked strip (those own their own geometry).
+    private enum ResizeEdge { None, FloatingLeft, FloatingRight, Docked }
+    private ResizeEdge HitResizeEdge(Point p)
+    {
+        if (_denseCtl.IsDense || OwnerWindow is null) return ResizeEdge.None;
+        if (p.Y < HeaderHeight || p.Y > Bounds.Height) return ResizeEdge.None;
+        double w = Bounds.Width;
+        if (_docked)
+        {
+            if (_dockCollapsed) return ResizeEdge.None;
+            bool innerLeft = _dockSide != HAnchor.Left;   // right-docked → the open edge is on the left
+            bool hit = innerLeft ? p.X <= ResizeGripWidth : p.X >= w - ResizeGripWidth;
+            return hit ? ResizeEdge.Docked : ResizeEdge.None;
+        }
+        if (p.X <= ResizeGripWidth) return ResizeEdge.FloatingLeft;
+        if (p.X >= w - ResizeGripWidth) return ResizeEdge.FloatingRight;
+        return ResizeEdge.None;
+    }
+
+    // Arms an edge-resize drag: records the grabbed edge, the cursor's start screen X, and the start width.
+    // Floating also captures the physical X of the *held* (opposite) edge and locks the window to manual sizing
+    // so the per-move Width/Position writes hold (the first frames may still be on the XAML SizeToContent auto-fit).
+    private void ArmResize(ResizeEdge edge, Point p, Window w)
+    {
+        double scale = w.RenderScaling <= 0 ? 1.0 : w.RenderScaling;
+        _resizeEdge = edge;
+        _resized = false;
+        _resizeStartCursorX = this.PointToScreen(p).X;
+        if (edge == ResizeEdge.Docked)
+        {
+            _resizeStartWidth = DockExpandedWidth;
+            return;
+        }
+        if (w.SizeToContent != SizeToContent.Manual)
+        {
+            w.SizeToContent = SizeToContent.Manual;
+            w.Height = Draw(null, CurrentFloatingWidth);
+            w.Width = CurrentFloatingWidth;
+        }
+        _resizeStartWidth = CurrentFloatingWidth;
+        int physW = Math.Max(1, (int)(CurrentFloatingWidth * scale));
+        _resizeFixedEdgeX = edge == ResizeEdge.FloatingLeft ? w.Position.X + physW : w.Position.X;
+    }
 
     // Drag state. A left press in the header arms a potential drag; once the pointer moves past a small
     // threshold we move the window ourselves (manual drag, see OnPointerMoved). A press that never moves is a
@@ -3113,6 +3274,17 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // arrived mid-drag (it clipped). Owning the move keeps pointer capture, so a real mouse-up ends it.
     private PixelPoint _headerDragStartScreen; // cursor screen pos at press (physical px)
     private PixelPoint _headerStartWindowPos;  // window top-left at press (physical px)
+
+    // Edge resize drag. Floating grows from whichever edge is grabbed, holding the *opposite* edge fixed; the
+    // docked column grows from its open edge, holding the screen-flush edge fixed (ApplyDockedGeometry owns the
+    // reposition + re-reservation). We record the cursor's screen X, the fixed edge's physical X (floating), and
+    // the start width, so the move tracks the cursor's horizontal displacement. Runtime-only — never persisted.
+    private ResizeEdge _resizeEdge;    // None = no drag armed
+    private bool _resized;
+    private int _resizeStartCursorX;   // cursor screen X at press (physical px)
+    private int _resizeFixedEdgeX;     // floating: the opposite (held) edge in physical px
+    private double _resizeStartWidth;  // panel width at press (DIP)
+    private ResizeEdge _hoverResizeEdge; // which edge the grip hint highlights (None = no hint)
 
     // Dense-mode drag is manual (constrained to the docked edge, vertical, with drop lanes) — the OS move
     // loop can't do that, so it can't use BeginMoveDrag. The closed strip drags from anywhere; the open
@@ -3174,6 +3346,45 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _denseCtl.ShowDropZones();
             }
             if (_denseWasDrag) _denseCtl.DragVertical(_denseStartY + dy, cur);
+            base.OnPointerMoved(e);
+            return;
+        }
+
+        // Edge resize drag: widen/narrow the panel. Floating holds the opposite edge fixed (grows into the
+        // screen from whichever edge was grabbed); the docked column grows from its open edge with the
+        // screen-flush edge held by ApplyDockedGeometry. Clamped to [FormWidth, work-area width]. Runtime-only.
+        if (_resizeEdge != ResizeEdge.None && OwnerWindow is { } rzw)
+        {
+            var cur = this.PointToScreen(p);
+            int dx = cur.X - _resizeStartCursorX;
+            if (!_resized && Math.Abs(dx) > 4) _resized = true;
+            if (_resized)
+            {
+                double scale = rzw.RenderScaling <= 0 ? 1.0 : rzw.RenderScaling;
+                double max = MaxFloatingWidthDip(rzw);
+                if (_resizeEdge == ResizeEdge.Docked)
+                {
+                    // Right-docked → open edge is the left, so dragging left (dx<0) widens; left-docked is mirrored.
+                    double deltaDip = (_dockSide == HAnchor.Left ? dx : -dx) / scale;
+                    _dockedWidthDip = Math.Clamp(_resizeStartWidth + deltaDip, FormWidth, max);
+                    ApplyDockedGeometry(reserve: false);   // live resize; the OS re-reserve lands on release
+                }
+                else
+                {
+                    // Floating: left edge held right fixed (dx<0 widens); right edge held left fixed (dx>0 widens).
+                    double deltaDip = (_resizeEdge == ResizeEdge.FloatingLeft ? -dx : dx) / scale;
+                    double newWidth = Math.Clamp(_resizeStartWidth + deltaDip, FormWidth, max);
+                    _floatingWidthDip = newWidth;
+                    int newPhysW = Math.Max(1, (int)(newWidth * scale));
+                    rzw.Width = newWidth;
+                    // Left-edge drag moves the window (right edge is the fixed one); right-edge drag leaves the
+                    // top-left where it is. Route through SetFloatingPosition so PositionChanged reads it as ours.
+                    int newX = _resizeEdge == ResizeEdge.FloatingLeft ? _resizeFixedEdgeX - newPhysW : _resizeFixedEdgeX;
+                    SetFloatingPosition(rzw, new PixelPoint(newX, rzw.Position.Y));
+                }
+                InvalidateMeasure();
+                InvalidateVisual();
+            }
             base.OnPointerMoved(e);
             return;
         }
@@ -3268,11 +3479,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool overRegion = _hoveredSocialHeader || _hoveredSocialCompose || _hoveredSocialAdd || _hoveredReactAdd >= 0
                           || _reactChipRects.Any(c => c.Rect.Contains(p)) || _socialMoreRect.Contains(p);
 
+        // The resize grips: a faint handle hint on the hovered edge (painted in Draw) + the horizontal-resize
+        // cursor, which takes priority over the hand/default below.
+        ResizeEdge overResizeEdge = HitResizeEdge(p);
+        if (overResizeEdge != _hoverResizeEdge) { _hoverResizeEdge = overResizeEdge; InvalidateVisual(); }
+        bool overResize = overResizeEdge != ResizeEdge.None;
+
         // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + daemon worker lines +
         // artifacts + the update badge + outage footer + the scratch-pad note button + a row's note glyph +
         // the media buttons + the mic strip's app name + the social region's controls); rows show only the highlight.
-        Cursor = (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
-                  || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion)
+        Cursor = overResize ? ResizeCursor
+            : (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
+               || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -3361,6 +3579,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _hoveredNoteButton = false;
         _hoveredMediaButton = -1;
         _hoveredMicLabel = false;
+        if (_hoverResizeEdge != ResizeEdge.None) { _hoverResizeEdge = ResizeEdge.None; changed = true; }
         Cursor = Cursor.Default;
         _tipKind = TipKind.None;
         _tipRow = -1;
@@ -3426,6 +3645,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _denseWasDrag = false;
         _dockDragArmed = false;
         _dockWasDrag = false;
+        _resizeEdge = ResizeEdge.None;
+        _resized = false;
 
         // Docked: dragging the header (expanded) or the strip's top band (collapsed) re-docks the column to
         // another monitor edge; a press that never moves falls through to RouteClick (collapse/expand) on
@@ -3433,6 +3654,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // drop lanes track the cursor.
         if (_docked)
         {
+            // A press on the column's open (inner) edge resizes it (re-reserving the AppBar); tested before the
+            // header redock-drag so the inner edge widens rather than starting a monitor drag.
+            if (HitResizeEdge(p) == ResizeEdge.Docked && OwnerWindow is { } dcw)
+            {
+                ArmResize(ResizeEdge.Docked, p, dcw);
+                e.Pointer.Capture(this);
+                e.Handled = true;
+                base.OnPointerPressed(e);
+                return;
+            }
             if (p.Y < HeaderHeight)
             {
                 _dockDragArmed = true;
@@ -3455,6 +3686,17 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _denseDragStartScreen = this.PointToScreen(p);
                 _denseStartY = dw.Position.Y;
             }
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            base.OnPointerPressed(e);
+            return;
+        }
+
+        // Floating: a press on either side's resize grip (body only) starts a manual widen/narrow, holding the
+        // opposite edge fixed. Tested before the header-drag arm.
+        if (HitResizeEdge(p) is var fe && fe != ResizeEdge.None && OwnerWindow is { } rw)
+        {
+            ArmResize(fe, p, rw);
             e.Pointer.Capture(this);
             e.Handled = true;
             base.OnPointerPressed(e);
@@ -3530,6 +3772,26 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _dockDragArmed = false;
             _dockWasDrag = false;
             if (wasDrag) { PinToDockDropZone(); HideDockDropZones(); }
+            else RouteClick(e.GetPosition(this));
+            base.OnPointerReleased(e);
+            return;
+        }
+
+        // Edge resize drag: on mouse-up settle the size. Floating re-fits its height and re-captures the
+        // corner-relative spot (so a later screen change preserves the new width + pinned edge); docked is
+        // already settled by ApplyDockedGeometry each move. The width is runtime-only — nothing is persisted.
+        // A grip press that never moved falls through to a normal click.
+        if (_resizeEdge != ResizeEdge.None)
+        {
+            bool didResize = _resized;
+            bool wasDocked = _resizeEdge == ResizeEdge.Docked;
+            _resizeEdge = ResizeEdge.None;
+            _resized = false;
+            if (didResize)
+            {
+                if (wasDocked) ApplyDockedGeometry();   // settle: re-reserve the AppBar at the final width
+                else { SizeFloatingToContent(); CaptureFloatingPlacement(); }
+            }
             else RouteClick(e.GetPosition(this));
             base.OnPointerReleased(e);
             return;
@@ -3916,6 +4178,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             items.Add(MenuItem(_docked ? "Switch to floating overlay" : "Dock to screen edge",
                 () => OverlayModeToggleRequested?.Invoke()));
             items.Add(MenuItem("Set initial placements…", () => SetPlacementsRequested?.Invoke()));
+            if (CanResetWidth) items.Add(ResetSizeMenuItem());
 
             // Quiet mode: silence the fun/social/silly features for a while (or turn it back off).
             items.Add(new Separator());
@@ -3947,6 +4210,26 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         item.Click += (_, _) => onClick();
         if (onMiddleClick is not null) WireMiddleClick(item, onMiddleClick);
         return item;
+    }
+
+    // The header menu's "Reset size" entry: discards a live resize-grip drag on the active presentation. When a
+    // custom width is configured in the placement editor (different from the factory default), it offers a
+    // choice — reset to that initial width or all the way to the default; otherwise a single plain reset. The
+    // width is runtime-only, so this changes nothing on disk. Gated by CanResetWidth (there's something to undo).
+    private Control ResetSizeMenuItem()
+    {
+        if (!ConfiguredDiffersFromDefault)
+            return MenuItem("Reset size", () => ResetOverlayWidth(toFactory: true));
+
+        return new MenuItem
+        {
+            Header = "Reset size",
+            ItemsSource = new List<Control>
+            {
+                MenuItem($"To initial ({ActiveConfiguredWidth:0} px)", () => ResetOverlayWidth(toFactory: false)),
+                MenuItem($"To default ({FormWidth:0} px)", () => ResetOverlayWidth(toFactory: true)),
+            },
+        };
     }
 
     /// <summary>Whether a Quiet-mode window is currently active (used to word the menu and hide the arcade).</summary>

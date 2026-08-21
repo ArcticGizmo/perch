@@ -166,6 +166,10 @@ public partial class App : Application
             // Seed the user-defined initial placements before the window is shown (OnOpened applies the
             // floating one; the dense one is used on first dense entry). Null on either keeps the default.
             _overlay.Canvas.SetInitialPlacements(settings.FloatingPlacement, settings.DensePlacement, settings.DockedPlacement);
+            // Seed the user's chosen overlay widths (set in the placement editor; drag a live grip to adjust for
+            // the session). Null keeps the default width for that presentation.
+            _overlay.Canvas.SetFloatingWidth(settings.FloatingWidthDip);
+            _overlay.Canvas.SetDockedWidth(settings.DockedWidthDip);
 
             // Register the curated palettes harvested from the ArcticGizmo package as built-in-like presets,
             // so a saved ActiveThemeId that names one (e.g. "nord-dark") resolves below.
@@ -1210,6 +1214,7 @@ public partial class App : Application
             Views.OverlayCanvas.DefaultFloatingPlacement(), o.Canvas.DefaultDensePlacement(),
             Views.OverlayCanvas.DefaultDockedPlacement(),
             o.Canvas.FloatingMockSizeDip(), o.Canvas.DenseMockSizeDip(), o.Canvas.DockedMockSizeDip(),
+            Views.OverlayCanvas.MinOverlayWidthDip,
             ApplyPlacements);
 
         _placementEditor = WindowHost.ShowOrFocus(_placementEditor,
@@ -1218,14 +1223,20 @@ public partial class App : Application
 
     // Persists the chosen placements (null = "use the default") and applies them: the floating one lands
     // live now; the dense one takes effect on the next dense entry / launch. See OverlayCanvas.
-    private void ApplyPlacements(OverlayPlacement? floating, OverlayPlacement? dense, OverlayPlacement? docked)
+    private void ApplyPlacements(OverlayPlacement? floating, OverlayPlacement? dense, OverlayPlacement? docked,
+        double? floatingWidth, double? dockedWidth)
     {
         if (_appSettings is not { } s) return;
         s.FloatingPlacement = floating;
         s.DensePlacement = dense;
         s.DockedPlacement = docked;
+        s.FloatingWidthDip = floatingWidth;
+        s.DockedWidthDip = dockedWidth;
         s.Save();
         _overlay?.Canvas.ApplyPlacementsLive(floating, dense, docked);
+        // SetFloatingWidth/SetDockedWidth reseed the configured width and reset the runtime width to it.
+        _overlay?.Canvas.SetFloatingWidth(floatingWidth);
+        _overlay?.Canvas.SetDockedWidth(dockedWidth);
     }
 
     // "View tree…" (overlay row) — opens/focuses the one git Tree window and points it at the clicked

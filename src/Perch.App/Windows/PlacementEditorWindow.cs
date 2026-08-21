@@ -29,7 +29,8 @@ internal sealed record PlacementEditorContext(
     (double W, double H) FloatSizeDip,
     (double W, double H) DenseSizeDip,
     (double W, double H) DockSizeDip,
-    Action<OverlayPlacement?, OverlayPlacement?, OverlayPlacement?> OnSave);
+    double MinWidthDip,
+    Action<OverlayPlacement?, OverlayPlacement?, OverlayPlacement?, double?, double?> OnSave);
 
 /// <summary>
 /// The "Set initial placements…" editor: a full-screen, dimmed, always-on-top overlay on one monitor where
@@ -74,9 +75,21 @@ internal sealed class PlacementEditorWindow : Window
         Foreground = Palette.FgBrush, FontSize = 12, FontWeight = FontWeight.Bold,
     };
 
-    // Drag state: whether a drag is in progress and the pointer's grab offset within the preview (DIP).
+    // Drag state: whether a move-drag is in progress and the pointer's grab offset within the preview (DIP).
     private bool _dragging;
     private Point _grab;
+
+    // Editable widths (DIP) for the floating panel and docked column — the height stays the illustrative value
+    // from the context. Seeded from the current configured widths; the user drags the preview's edge to change
+    // them. Dense has no editable width. A ResizeEdge (below) tracks an in-progress edge drag.
+    private double _floatWidthDip;
+    private double _dockWidthDip;
+    private enum ResizeEdge { None, Left, Right }
+    private ResizeEdge _resizeEdge;
+    private double _resizeFixedEdgeDip;   // the held (opposite) edge's canvas-DIP X while resizing
+    private static readonly Cursor ResizeCursor = new(StandardCursorType.SizeWestEast);
+    private static readonly Cursor MoveCursor = new(StandardCursorType.SizeAll);
+    private const double EdgeGrabDip = 10;   // how close to an edge counts as a resize grab
 
     public PlacementEditorWindow(PlacementEditorContext ctx)
     {
@@ -84,6 +97,8 @@ internal sealed class PlacementEditorWindow : Window
         _floating = ctx.Floating?.Clone();
         _dense = ctx.Dense?.Clone();
         _docked = ctx.Docked?.Clone();
+        _floatWidthDip = Math.Max(ctx.MinWidthDip, ctx.FloatSizeDip.W);
+        _dockWidthDip = Math.Max(ctx.MinWidthDip, ctx.DockSizeDip.W);
 
         Title = "Set initial placements";
         WindowDecorations = WindowDecorations.None;
@@ -144,7 +159,7 @@ internal sealed class PlacementEditorWindow : Window
 
         var instructions = new TextBlock
         {
-            Text = "Drag the preview to where the overlay should first appear, then choose Done.\n" +
+            Text = "Drag the preview to place it; drag its side edge to set the width, then choose Done.\n" +
                    "Placement is measured from the nearest corner, so it sticks if your resolution changes.",
             Foreground = Palette.FgBrush, FontSize = 14, TextAlignment = TextAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top,
@@ -245,9 +260,9 @@ internal sealed class PlacementEditorWindow : Window
 
     private void ResetCurrent()
     {
-        if (_mode == EditMode.Floating) _floating = null;
+        if (_mode == EditMode.Floating) { _floating = null; _floatWidthDip = _ctx.MinWidthDip; }
         else if (_mode == EditMode.Dense) _dense = null;
-        else _docked = null;
+        else { _docked = null; _dockWidthDip = _ctx.MinWidthDip; }
         RefreshMock();
     }
 
@@ -261,10 +276,22 @@ internal sealed class PlacementEditorWindow : Window
 
     private (double W, double H) CurrentSizeDip() => _mode switch
     {
-        EditMode.Floating => _ctx.FloatSizeDip,
+        EditMode.Floating => (_floatWidthDip, _ctx.FloatSizeDip.H),
         EditMode.Dense    => _ctx.DenseSizeDip,
-        _                 => _ctx.DockSizeDip,
+        _                 => (_dockWidthDip, _ctx.DockSizeDip.H),
     };
+
+    // The widest a preview may grow on the target monitor: the work-area width less small margins, so a preview
+    // can't exceed the screen. Docked can fill more of the screen than floating, but the same cap is fine.
+    private double MaxWidthDip()
+    {
+        var screen = _ctx.TargetScreen;
+        double scale = screen.Scaling <= 0 ? 1.0 : screen.Scaling;
+        return Math.Max(_ctx.MinWidthDip, screen.WorkingArea.Width / scale - 32);
+    }
+
+    // Whether the active mode's width is editable (floating from either edge; docked from its open edge only).
+    private bool WidthEditable => _mode is EditMode.Floating or EditMode.Docked;
 
     // Positions and sizes the preview for the current mode, draws the guides to the anchored edges, updates
     // the distance HUD, and reflects the mode in the toolbar. Canvas coordinates are DIP relative to the
@@ -313,8 +340,8 @@ internal sealed class PlacementEditorWindow : Window
         _hudText.Text = _mode switch
         {
             EditMode.Dense    => $"{hLabel} edge  ·  {vLabel} {p.OffsetY:0} px",
-            EditMode.Docked   => $"{hLabel} edge  ·  docked column",
-            _                 => $"{vLabel} {p.OffsetY:0} px  ·  {hLabel} {p.OffsetX:0} px",
+            EditMode.Docked   => $"{hLabel} edge  ·  {dipW:0} px wide",
+            _                 => $"{vLabel} {p.OffsetY:0} px  ·  {hLabel} {p.OffsetX:0} px  ·  {dipW:0} px wide",
         };
 
         // Park the HUD just below the preview, or above it if that would run off the bottom.
@@ -330,8 +357,35 @@ internal sealed class PlacementEditorWindow : Window
         StyleSegment(_dockedModeBtn, _mode == EditMode.Docked);
     }
 
+    // Which editable edge (if any) a mock-local X is over: floating from either edge, docked only from its open
+    // (inner) edge — the outer edge is locked flush to the screen.
+    private ResizeEdge EditableEdgeAt(double localX, double mockWidth)
+    {
+        if (_mode == EditMode.Floating)
+        {
+            if (localX <= EdgeGrabDip) return ResizeEdge.Left;
+            if (localX >= mockWidth - EdgeGrabDip) return ResizeEdge.Right;
+        }
+        else if (_mode == EditMode.Docked)
+        {
+            bool openLeft = CurrentPlacement().HAnchor != HAnchor.Left;   // right-docked → open edge on the left
+            if (openLeft && localX <= EdgeGrabDip) return ResizeEdge.Left;
+            if (!openLeft && localX >= mockWidth - EdgeGrabDip) return ResizeEdge.Right;
+        }
+        return ResizeEdge.None;
+    }
+
     private void OnMockPressed(object? sender, PointerPressedEventArgs e)
     {
+        var edge = WidthEditable ? EditableEdgeAt(e.GetPosition(_mock).X, _mock.Width) : ResizeEdge.None;
+        if (edge != ResizeEdge.None)
+        {
+            _resizeEdge = edge;
+            double leftDip = Canvas.GetLeft(_mock);
+            _resizeFixedEdgeDip = edge == ResizeEdge.Left ? leftDip + _mock.Width : leftDip; // hold the opposite edge
+            e.Pointer.Capture(_mock);
+            return;
+        }
         var pos = e.GetPosition(_canvas);
         _grab = new Point(pos.X - Canvas.GetLeft(_mock), pos.Y - Canvas.GetTop(_mock));
         _dragging = true;
@@ -340,15 +394,54 @@ internal sealed class PlacementEditorWindow : Window
 
     private void OnMockMoved(object? sender, PointerEventArgs e)
     {
-        if (!_dragging) return;
-        var pos = e.GetPosition(_canvas);
-        UpdateFromDipTopLeft(pos.X - _grab.X, pos.Y - _grab.Y);
+        if (_resizeEdge != ResizeEdge.None) { DoResize(e.GetPosition(_canvas).X); return; }
+        if (_dragging)
+        {
+            var pos = e.GetPosition(_canvas);
+            UpdateFromDipTopLeft(pos.X - _grab.X, pos.Y - _grab.Y);
+            return;
+        }
+        // Idle hover: show a resize cursor over an editable edge, the move cursor elsewhere.
+        _mock.Cursor = WidthEditable && EditableEdgeAt(e.GetPosition(_mock).X, _mock.Width) != ResizeEdge.None
+            ? ResizeCursor : MoveCursor;
     }
 
     private void OnMockReleased(object? sender, PointerReleasedEventArgs e)
     {
         _dragging = false;
+        _resizeEdge = ResizeEdge.None;
         e.Pointer.Capture(null);
+    }
+
+    // Applies an edge-resize to the active mode: grow from the grabbed edge, holding the opposite edge fixed.
+    // Floating re-derives its placement from the new geometry (so position + width both reflect the drag);
+    // docked keeps its side and RefreshMock re-snaps the column flush to the edge at the new width.
+    private void DoResize(double canvasX)
+    {
+        double min = _ctx.MinWidthDip, max = MaxWidthDip();
+        double newWidth, leftDip;
+        if (_resizeEdge == ResizeEdge.Right)
+        {
+            leftDip = _resizeFixedEdgeDip;                       // left edge held
+            newWidth = Math.Clamp(canvasX - leftDip, min, max);
+        }
+        else
+        {
+            double rightDip = _resizeFixedEdgeDip;               // right edge held
+            newWidth = Math.Clamp(rightDip - canvasX, min, max);
+            leftDip = rightDip - newWidth;
+        }
+
+        if (_mode == EditMode.Floating)
+        {
+            _floatWidthDip = newWidth;
+            UpdateFromDipTopLeft(leftDip, Canvas.GetTop(_mock));  // re-derive placement at the new width
+        }
+        else
+        {
+            _dockWidthDip = newWidth;
+            RefreshMock();                                        // re-snaps flush to the docked edge
+        }
     }
 
     // Turns a dragged DIP top-left into a stored, corner-anchored placement for the current mode: clamp
@@ -391,7 +484,11 @@ internal sealed class PlacementEditorWindow : Window
 
     private void Commit()
     {
-        _ctx.OnSave(_floating, _dense, _docked);
+        // Widths persist only when they differ from the default (null = "use the default"), mirroring how a
+        // null placement means "use the computed default".
+        double? fw = _floatWidthDip > _ctx.MinWidthDip + 0.5 ? _floatWidthDip : null;
+        double? dw = _dockWidthDip > _ctx.MinWidthDip + 0.5 ? _dockWidthDip : null;
+        _ctx.OnSave(_floating, _dense, _docked, fw, dw);
         Close();
     }
 

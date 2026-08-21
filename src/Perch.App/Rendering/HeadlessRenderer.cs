@@ -64,6 +64,13 @@ internal static class HeadlessRenderer
         RenderControl(canvas, Path.Combine(outDir, "overlay_1x.png"), 96);
         RenderControl(canvas, Path.Combine(outDir, "overlay_1.5x.png"), 144);
 
+        // Widened panel: the floating overlay is horizontally resizable (drag the left-edge grip), with the
+        // default width as the floor. Render one at a generous width so the reflow — longer session names, the
+        // right-aligned status/glyphs riding the new right edge, the strips stretching — stays under review.
+        canvas.SetFloatingWidth(460);
+        RenderControl(canvas, Path.Combine(outDir, "overlay_wide_1x.png"), 96);
+        canvas.SetFloatingWidth(null);
+
         // Attention flash: the sample already carries a NeedsAttention session, so trigger the chase
         // border and render one frame of it (the animation timer doesn't tick in headless, so this
         // captures the comet at phase 0 over its faint inward-glow base outline).
@@ -216,6 +223,7 @@ internal static class HeadlessRenderer
         RenderDockedColumn(collapsed: true,  HAnchor.Right, Path.Combine(outDir, "overlay_docked_collapsed_1x.png"), 96);
         RenderDockedColumn(collapsed: false, HAnchor.Left,  Path.Combine(outDir, "overlay_docked_left_1x.png"), 96);
         RenderDockedColumn(collapsed: true,  HAnchor.Left,  Path.Combine(outDir, "overlay_docked_left_collapsed_1x.png"), 96);
+        RenderDockedColumn(collapsed: false, HAnchor.Right, Path.Combine(outDir, "overlay_docked_wide_1x.png"), 96, widthDip: 460);
 
         // "Jump to next session" landing highlight: the blue selection wash + left bar on the cycled row.
         // Rendered immediately after triggering it, so the fade timer hasn't run and it's at full strength.
@@ -675,7 +683,7 @@ internal static class HeadlessRenderer
     // Renders a docked column: a canvas put into Docked mode, arranged inside a fixed-height host so the
     // full-height flush column paints (the live window is sized to the work area). collapsed → the narrow
     // status-count strip; otherwise the full 280px panel.
-    private static void RenderDockedColumn(bool collapsed, HAnchor side, string path, double dpi)
+    private static void RenderDockedColumn(bool collapsed, HAnchor side, string path, double dpi, double? widthDip = null)
     {
         var canvas = new OverlayCanvas();
         canvas.Update(SampleData.Sessions());
@@ -683,12 +691,14 @@ internal static class HeadlessRenderer
         canvas.UpdateSystemMetrics(SampleData.SystemMetrics());
         // Seed the docked side before entering docked mode (only the horizontal anchor matters here).
         canvas.SetInitialPlacements(null, null, new OverlayPlacement { HAnchor = side });
+        // The docked column is resizable (drag its open edge); a width override exercises the widened reflow.
+        if (widthDip is { } wd) canvas.SetDockedWidth(wd);
         canvas.SetOverlayMode(OverlayPresentationMode.Docked);
         if (collapsed) canvas.ToggleDockedCollapsed();
 
         var host = new Panel
         {
-            Width = collapsed ? 56 : 280, Height = 900, // taller than content, so the bottom toggle tab shows
+            Width = collapsed ? 56 : (widthDip ?? 280), Height = 900, // taller than content, so the bottom toggle tab shows
             Background = new SolidColorBrush(Color.FromRgb(18, 18, 24)), // the desktop behind the column
             Children = { canvas },
         };

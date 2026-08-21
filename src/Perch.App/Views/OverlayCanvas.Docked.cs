@@ -107,9 +107,9 @@ public sealed partial class OverlayCanvas
     public static OverlayPlacement DefaultDockedPlacement() =>
         new() { HAnchor = HAnchor.Right, VAnchor = VAnchor.Top };
 
-    // The DIP size of the docked mock the placement editor drags (a representative full-width column). Only
-    // the side is captured, so the height is illustrative.
-    public (double W, double H) DockedMockSizeDip() => (FormWidth, 320);
+    // The DIP size of the docked mock the placement editor drags (a representative full-height column). The
+    // width is the configured docked width (editable in the editor); the height is illustrative.
+    public (double W, double H) DockedMockSizeDip() => (Math.Max(FormWidth, _configuredDockedWidth), 320);
 
     // ── Transitions ──────────────────────────────────────────────────────────────
     private void EnterDocked()
@@ -204,7 +204,9 @@ public sealed partial class OverlayCanvas
     // Sizes/positions the window as a full-work-area-height column flush to the docked edge (collapsed or
     // expanded width) and (re)reserves that column via the OS. Called on entry, on collapse/expand, on a
     // live placement change, and on a screen change.
-    private void ApplyDockedGeometry()
+    // reserve:false resizes/repositions the column window without re-reserving the OS AppBar — used during a
+    // live resize drag so the desktop doesn't reflow on every mouse-move; the final reserve lands on release.
+    private void ApplyDockedGeometry(bool reserve = true)
     {
         if (HostWindow is not { Screens: { } screens } w) return;
         var screen = DockedScreen(screens);
@@ -217,7 +219,7 @@ public sealed partial class OverlayCanvas
         var b = screen.Bounds;            // horizontal edge (physical monitor edge, so re-reserves are stable)
         double scale = screen.Scaling <= 0 ? 1.0 : screen.Scaling;
 
-        double dipW = _dockCollapsed ? DockCollapsedWidth : FormWidth;
+        double dipW = _dockCollapsed ? DockCollapsedWidth : DockExpandedWidth;
         int physW = Math.Max(1, (int)(dipW * scale));
         int x = _dockSide == HAnchor.Left ? b.X : b.X + b.Width - physW;
 
@@ -226,7 +228,7 @@ public sealed partial class OverlayCanvas
         w.Height = Math.Max(1, wa.Height / scale);
         w.Position = new PixelPoint(x, wa.Y);
 
-        ReserveDockedColumn(screen, physW);
+        if (reserve) ReserveDockedColumn(screen, physW);
     }
 
     // A stable string of every monitor's physical bounds — changes only on a real display-layout change

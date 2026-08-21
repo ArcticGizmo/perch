@@ -396,6 +396,17 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public OverlayPlacement? DockedPlacement { get; set; }
 
+    // The floating overlay's and docked column's user-chosen widths in DIPs, set from the "Set initial
+    // placements…" editor (drag the preview's edge). Null (or any value at/below the built-in default width)
+    // means "use the default", so a settings file predating the feature keeps today's fixed-width layout. The
+    // panel can only grow wider than the classic width, never narrower. Like position, the editor is the sole
+    // on-disk source of truth — a live drag of the overlay's resize grip is runtime-only and not persisted here
+    // (reset it from the header's right-click menu). See OverlayCanvas resize grips + PlacementEditorWindow.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? FloatingWidthDip { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? DockedWidthDip { get; set; }
+
     // Whether the overlay floats (classic panel) or docks (reserves a screen-edge column via the OS so
     // maximized windows can't cover it). Defaults to Floating, so an older settings file keeps today's
     // behaviour. Ctrl+Shift+W (HotkeyToggleDocked) collapses/expands the docked column. See OverlayCanvas.

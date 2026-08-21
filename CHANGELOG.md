@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.60] - 2026-08-21
+
+- Drag either edge to widen the floating overlay (280 px is no longer the whole world)
+- The docked column resizes too, from its open inner edge
+- Set the resting width in "Set initial placements…" by dragging the preview's edge
+- Live resizes are temporary; "Reset size" in the header menu restores the set width
+
+---
+
 ## [v0.3.59] - 2026-08-21
 
 - Select text across the Markdown preview and copy it, VS Code-style (it was decorative before)

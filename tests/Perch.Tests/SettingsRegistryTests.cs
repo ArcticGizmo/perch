@@ -32,6 +32,10 @@ public class SettingsRegistryTests
         // Quiet mode's deadline is hidden mode state, toggled from the overlay header's right-click menu
         // (not a Settings-window control). See Perch.Data.QuietMode.
         nameof(AppSettings.QuietUntil),
+        // The overlay widths are set from the "Set initial placements…" editor (drag the preview's edge), not
+        // a Settings-window control — like the placements themselves.
+        nameof(AppSettings.FloatingWidthDip),
+        nameof(AppSettings.DockedWidthDip),
         // Custom themes are managed by the Appearance page's designer, not a catalogue control.
         nameof(AppSettings.CustomThemes),
         nameof(AppSettings.PendingUpdateVersion),
