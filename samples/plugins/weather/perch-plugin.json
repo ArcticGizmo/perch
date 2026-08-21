@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "id": "dev.perch.weather",
+  "name": "Weather Badge",
+  "version": "1.0.0",
+  "description": "Shows the current temperature for a fixed location in the overlay.",
+  "author": "Perch samples",
+  "homepage": "https://github.com/ArcticGizmo/perch",
+  "entry": {
+    "type": "process",
+    "command": "powershell",
+    "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "weather.ps1"],
+    "mode": "oneshot"
+  },
+  "extensionPoints": ["poll", "overlay.glyph"],
+  "capabilities": {
+    "network": ["api.open-meteo.com"],
+    "poll.intervalSec": 300
+  }
+}

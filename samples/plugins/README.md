@@ -38,9 +38,16 @@ before enabling.
 
 ## Samples
 
-| Folder | Extension points | Capabilities | Milestone |
+| Folder | Extension points | Capabilities | What it shows |
 |---|---|---|---|
-| [`git-dirty`](git-dirty/) | `poll`, `overlay.glyph` | `read.cwd` | M1 — polls the active session's repo, badges the uncommitted-change count |
+| [`git-dirty`](git-dirty/) | `poll`, `overlay.glyph` | `read.cwd` | Uncommitted-change count for the active session's repo. Exercises the scoped filesystem-consent path. |
+| [`weather`](weather/) | `poll`, `overlay.glyph` | `network:[api.open-meteo.com]` | Current temperature for a fixed location. Exercises the **network consent** dialog + a real HTTP call, and unicode glyph output over the UTF-8 pipe. |
+| [`sysinfo`](sysinfo/) | `poll`, `overlay.glyph` | *(none)* | CPU load + free memory. The "requests no special access" consent path — the safe baseline. |
 
-More arrive with later milestones (a Pomodoro `command` badge, an event-driven webhook notifier —
-see the trial-plugin table in the plan) as the extension points they need land.
+Install any of these with **Settings → Plugins → Install from folder…**, then Allow at the consent prompt.
+
+Plugins emitting non-ASCII glyphs should write their JSON as **UTF-8** (Perch reads plugin stdout as UTF-8);
+see `weather.ps1` for the raw-bytes idiom that dodges the Windows console codepage.
+
+Still to come, once the extension points they need land: a Pomodoro `command` badge and an event-driven
+webhook notifier (they need the `command` point and session-event delivery — see the plan's milestone list).

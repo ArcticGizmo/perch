@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "dev.perch.sysinfo",
+  "name": "System Info",
+  "version": "1.0.0",
+  "description": "Shows current CPU load and free memory in the overlay.",
+  "author": "Perch samples",
+  "homepage": "https://github.com/ArcticGizmo/perch",
+  "entry": {
+    "type": "process",
+    "command": "powershell",
+    "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "sysinfo.ps1"],
+    "mode": "oneshot"
+  },
+  "extensionPoints": ["poll", "overlay.glyph"],
+  "capabilities": {
+    "poll.intervalSec": 15
+  }
+}

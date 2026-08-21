@@ -1,6 +1,7 @@
 namespace Perch.Plugins;
 
 using System.Diagnostics;
+using System.Text;
 
 /// <summary>
 /// The default plugin launcher: a plain child process with stdio redirected, no inherited handles, and its
@@ -22,6 +23,11 @@ internal sealed class ProcessPluginSandbox : IPluginSandbox
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
+            // Fix the protocol encoding to UTF-8 in both directions so a plugin's unicode glyphs (emoji,
+            // symbols) survive the pipe regardless of the child's console codepage — the alternative is the
+            // Windows OEM codepage mangling anything outside ASCII. Plugins are documented to emit UTF-8.
+            StandardOutputEncoding = new UTF8Encoding(false),
+            StandardInputEncoding = new UTF8Encoding(false),
         };
         foreach (var arg in spec.Args) psi.ArgumentList.Add(arg);
 

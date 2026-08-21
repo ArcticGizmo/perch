@@ -110,6 +110,32 @@ public sealed class PluginProcessIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task A_unicode_glyph_survives_the_utf8_pipe()
+    {
+        if (!_ready) return;
+
+        // Emit a sun glyph (U+2600) and a degree sign (U+00B0) as raw UTF-8 bytes, the way the weather
+        // sample does — proving ProcessPluginSandbox's UTF-8 stdio survives non-ASCII output.
+        const string script = """
+            $obj = @{ type = 'render'; glyph = @{ glyph = [char]0x2600; text = ('7' + [char]0x00B0) } }
+            $json = ($obj | ConvertTo-Json -Compress)
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($json + "`n")
+            $out = [Console]::OpenStandardOutput()
+            $out.Write($bytes, 0, $bytes.Length); $out.Flush()
+            """;
+
+        var plugin = WritePlugin(script, [PluginExtensionPoints.OverlayGlyph, PluginExtensionPoints.Poll],
+            new PluginCapabilities());
+        var svc = new PluginService(new ProcessPluginSandbox(), "0.9.0", TimeSpan.FromSeconds(20));
+
+        var result = await svc.PollAsync(plugin, PluginPollContext.Empty);
+
+        Assert.NotNull(result.Glyph);
+        Assert.Equal("☀", result.Glyph!.Glyph);
+        Assert.Equal("7°", result.Glyph.Text);
+    }
+
+    [Fact]
     public async Task A_plugin_that_never_exits_is_killed_at_the_timeout()
     {
         if (!_ready) return;
