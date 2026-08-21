@@ -101,7 +101,11 @@ internal sealed record SettingDescriptor(
     // For a toggle not backed by an AppSettings property (e.g. a Claude Code env var). Leave Backing empty
     // when these are set; the UI reads/writes through them instead of GetBool/SetBool.
     Func<bool>? GetBoolRaw = null,
-    Action<bool>? SetBoolRaw = null)
+    Action<bool>? SetBoolRaw = null,
+    // Whether this is a "fun / social / silly" feature that Quiet mode silences. QuietMode.Resolve masks
+    // every playful toggle off while a quiet window is active, so a feature opts in here (at its definition)
+    // rather than every use-site checking the quiet state. See Perch.Data.QuietMode.
+    bool Playful = false)
 {
     /// <summary>
     /// Whether every whitespace-separated token in <paramref name="query"/> is a substring of the setting's

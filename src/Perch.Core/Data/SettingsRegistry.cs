@@ -363,25 +363,25 @@ internal static class SettingsRegistry
             "The bird reflects the aggregate session mood.",
             SettingSurface.Whimsy, ["bird", "mood", "reacts", "whimsy", "perch", "emotion"],
             PreviewTarget.PerchReacts, nameof(AppSettings.PerchReacts),
-            s => s.PerchReacts, (s, v) => s.PerchReacts = v),
+            s => s.PerchReacts, (s, v) => s.PerchReacts = v, playful: true),
 
         Toggle("notify-achievement", "Achievement reveal card",
             "Full-screen card reveal when new achievement badges unlock.",
             SettingSurface.Whimsy, ["achievement", "unlock", "badge", "reveal", "card", "trophy"],
             PreviewTarget.None, nameof(AppSettings.NotifyOnAchievement),
-            s => s.NotifyOnAchievement, (s, v) => s.NotifyOnAchievement = v),
+            s => s.NotifyOnAchievement, (s, v) => s.NotifyOnAchievement = v, playful: true),
 
         Toggle("achievement-toasts", "Achievement toasts",
             "Also pop a desktop toast for each unlock.",
             SettingSurface.Whimsy, ["achievement", "toast", "unlock", "badge", "popup"],
             PreviewTarget.None, nameof(AppSettings.AchievementToasts),
-            s => s.AchievementToasts, (s, v) => s.AchievementToasts = v),
+            s => s.AchievementToasts, (s, v) => s.AchievementToasts = v, playful: true),
 
         Toggle("upside-down-quick-links", "Upside-down quick links",
             "Rotate the quick-link icons 180 degrees. For fun.",
             SettingSurface.Whimsy, ["upside", "down", "rotate", "quick", "links", "flip", "fun"],
             PreviewTarget.QuickLinks, nameof(AppSettings.UpsideDownQuickLinks),
-            s => s.UpsideDownQuickLinks, (s, v) => s.UpsideDownQuickLinks = v),
+            s => s.UpsideDownQuickLinks, (s, v) => s.UpsideDownQuickLinks = v, playful: true),
 
         // ── Integrations ─────────────────────────────────────────────────────
         Info("quick-links", "Quick links",
@@ -431,13 +431,13 @@ internal static class SettingsRegistry
             "The opt-in friends feed: sign in, add friends by handle, post a status, and see friends' statuses under the overlay. Off makes no network calls at all.",
             SettingSurface.Social, ["social", "friends", "feed", "status", "post", "update", "myspace", "connect"],
             PreviewTarget.None, nameof(AppSettings.SocialEnabled),
-            s => s.SocialEnabled, (s, v) => s.SocialEnabled = v),
+            s => s.SocialEnabled, (s, v) => s.SocialEnabled = v, playful: true),
 
         Toggle("notify-friend-post", "Notify when a friend posts",
             "Pop a desktop toast when a friend posts a status.",
             SettingSurface.Social, ["notify", "friend", "post", "status", "social", "toast", "notification"],
             PreviewTarget.None, nameof(AppSettings.NotifyOnFriendPost),
-            s => s.NotifyOnFriendPost, (s, v) => s.NotifyOnFriendPost = v),
+            s => s.NotifyOnFriendPost, (s, v) => s.NotifyOnFriendPost = v, playful: true),
 
         Toggle("social-dnd-close", "Close friends in Do Not Disturb",
             "When Windows Do Not Disturb is on, collapse the friends region and hold off friend-post toasts. It won't reopen on a new post.",
@@ -455,7 +455,7 @@ internal static class SettingsRegistry
             "When a friend reacts to your status, float the reaction as a big emoji bubble that wobbles up the screen — pop it with a click.",
             SettingSurface.Social, ["reactions", "bubbles", "big", "large", "celebrate", "animation", "emoji", "social"],
             PreviewTarget.None, nameof(AppSettings.ShowLargeReactions),
-            s => s.ShowLargeReactions, (s, v) => s.ShowLargeReactions = v),
+            s => s.ShowLargeReactions, (s, v) => s.ShowLargeReactions = v, playful: true),
 
         // ── Advanced ─────────────────────────────────────────────────────────
         Info("theme", "Theme",
@@ -538,9 +538,9 @@ internal static class SettingsRegistry
 
     private static SettingDescriptor Toggle(string id, string name, string desc, SettingSurface surface,
         string[] keywords, PreviewTarget preview, string backing,
-        Func<AppSettings, bool> get, Action<AppSettings, bool> set)
+        Func<AppSettings, bool> get, Action<AppSettings, bool> set, bool playful = false)
         => new(id, name, desc, surface, SettingKind.Toggle, keywords, preview, [backing],
-            GetBool: get, SetBool: set);
+            GetBool: get, SetBool: set, Playful: playful);
 
     private static SettingDescriptor Stepper(string id, string name, string desc, SettingSurface surface,
         string[] keywords, PreviewTarget preview, string backing,

@@ -1178,29 +1178,54 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// apply the pending update.</summary>
     public event Action? UpdateRequested;
 
-    // A completely-secret easter egg: click the brand mark ten times in quick succession to summon a
-    // Space Invaders clone (see SpaceInvadersWindow). The brand icon's hit-rect is captured in DrawHeader;
-    // the counter resets if a click lands more than a short window after the last.
+    // A completely-secret easter egg: press and hold the brand mark for ~700ms to summon the little "Perch
+    // Arcade" chooser (see ArcadeMenuWindow). The brand icon's hit-rect is captured in DrawHeader; the hold
+    // is armed on press over that rect and cancelled the moment the pointer moves (it's becoming a drag) or
+    // lifts early (an ordinary header click). Firing sets ArcadeUnlocked so the header's right-click menu can
+    // offer a quick shortcut thereafter.
+    private const int BrandHoldMs = 700;
     private Rect _brandRect;
-    private int _brandClicks;
-    private DateTime _lastBrandClick;
+    private DispatcherTimer? _brandHoldTimer;
+    private Point _brandHoldOrigin;
+    private bool _brandHoldFired;   // set when the hold completes, so the release doesn't also toggle the header
 
-    /// <summary>Raised after the brand mark is clicked ten times in quick succession. Shh.</summary>
+    /// <summary>Raised when the brand mark is long-pressed (or the header menu's shortcut is picked) to open
+    /// the secret arcade. Shh.</summary>
     public event Action? EasterEggTriggered;
 
-    // Counts a click on the brand mark toward the easter egg, resetting the streak on too long a gap and
-    // firing (then resetting) on the tenth. Deliberately non-committal — the click still toggles the header.
-    private void RegisterBrandClick()
+    /// <summary>Whether the secret arcade has been discovered. Once true, the header's right-click menu offers
+    /// a "Perch Arcade" shortcut. Seeded from settings at startup; the setter only repaints (no event) so it's
+    /// safe to call while loading.</summary>
+    public bool ArcadeUnlocked { get; set; }
+
+    /// <summary>Raised the first time the arcade is unlocked via the long-press, so the app can persist it.</summary>
+    public event Action? ArcadeUnlockChanged;
+
+    // Arms the long-press when a left press lands on the brand mark. Cancelled by BrandHoldCancel() on any
+    // real movement or an early release.
+    private void BrandHoldArm(Point origin)
     {
-        var now = DateTime.UtcNow;
-        if ((now - _lastBrandClick).TotalMilliseconds > 1200) _brandClicks = 0;
-        _lastBrandClick = now;
-        if (++_brandClicks >= 10)
-        {
-            _brandClicks = 0;
-            EasterEggTriggered?.Invoke();
-        }
+        _brandHoldFired = false;
+        _brandHoldOrigin = origin;
+        _brandHoldTimer ??= CreateBrandHoldTimer();
+        _brandHoldTimer.Stop();
+        _brandHoldTimer.Start();
     }
+
+    private DispatcherTimer CreateBrandHoldTimer()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(BrandHoldMs) };
+        t.Tick += (_, _) =>
+        {
+            t.Stop();
+            _brandHoldFired = true;
+            if (!ArcadeUnlocked) { ArcadeUnlocked = true; ArcadeUnlockChanged?.Invoke(); }
+            EasterEggTriggered?.Invoke();
+        };
+        return t;
+    }
+
+    private void BrandHoldCancel() => _brandHoldTimer?.Stop();
 
     /// <summary>Shows or hides the header's update badge (repaint only — the badge lives in the header
     /// glyph cluster and is drawn each frame from this flag).</summary>
@@ -1266,6 +1291,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _externalNotifyAvailable;
     private bool _viewTreeAvailable;
     private bool _gitKrakenAvailable;
+    // The local wall-clock end of the current Quiet-mode window, or null when it's off. Drives the header
+    // menu wording (and the arcade shortcut's visibility); set from AppSettings.QuietUntil via the gates.
+    private DateTime? _quietUntil;
 
     /// <summary>Raised when the user picks "Exit Perch" from the header's right-click menu.</summary>
     public event Action? ExitRequested;
@@ -1277,6 +1305,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// <summary>Raised when the user picks the floating/docked toggle from the header's right-click menu; the
     /// app flips <see cref="Perch.Data.OverlayPresentationMode"/>, persists it, and applies it live.</summary>
     public event Action? OverlayModeToggleRequested;
+
+    /// <summary>Raised when the user picks a Quiet-mode duration (or "off") from the header's right-click menu.
+    /// The app maps it to a deadline (<see cref="Perch.Data.QuietMode.DeadlineFor"/>), persists it on
+    /// <c>AppSettings.QuietUntil</c>, and re-applies the effective settings so the playful features go
+    /// quiet / return. Internal — <see cref="Perch.Data.QuietDuration"/> is a Core-internal type.</summary>
+    internal event Action<Perch.Data.QuietDuration>? QuietModeRequested;
 
     /// <summary>Raised when the user picks "View history" for a session; carries the session id so the
     /// app can open the history viewer on it.</summary>
@@ -1360,6 +1394,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (_viewTreeAvailable == available) return;
         _viewTreeAvailable = available;
+        InvalidateVisual();
+    }
+
+    /// <summary>The current Quiet-mode deadline (or null when off), so the header menu can show the remaining
+    /// time and toggle it off, and the arcade shortcut can hide while quiet. Set from <c>AppSettings.QuietUntil</c>
+    /// through <see cref="Perch.Avalonia.Services.OverlaySettingsGates"/>.</summary>
+    public void SetQuietUntil(DateTime? until)
+    {
+        if (_quietUntil == until) return;
+        _quietUntil = until;
         InvalidateVisual();
     }
 
@@ -1698,9 +1742,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double midY = HeaderHeight / 2;
 
         double brandRight = HorizPad;
-        if (Brand is { })
+        const double iconSize = 18;
+        if (QuietActive)
         {
-            const double iconSize = 18;
+            // Quiet mode: the bird's asleep — swap the logo for a 💤 glyph, centred in the same box (the brand
+            // hit-rect stays put so the long-press-to-arcade gesture still lands where the logo was).
+            _brandRect = new Rect(HorizPad, midY - iconSize / 2, iconSize, iconSize);
+            var zzz = OverlayDraw.Emoji("\U0001F4A4", 14, MutedBrush);
+            ctx.DrawText(zzz, new Point(_brandRect.Center.X - zzz.Width / 2, _brandRect.Center.Y - zzz.Height / 2));
+            brandRight = HorizPad + iconSize + 5;
+        }
+        else if (Brand is { })
+        {
             _brandRect = new Rect(HorizPad, midY - iconSize / 2, iconSize, iconSize);
             ctx.DrawImage(Brand, _brandRect);
             brandRight = HorizPad + iconSize + 5;
@@ -3073,6 +3126,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         var p = e.GetPosition(this);
 
+        // A brand long-press only counts while the pointer stays put — the first real movement means it's
+        // becoming a header drag, so cancel the pending arcade summon.
+        if (_brandHoldTimer is { IsEnabled: true } &&
+            (Math.Abs(p.X - _brandHoldOrigin.X) > 4 || Math.Abs(p.Y - _brandHoldOrigin.Y) > 4))
+            BrandHoldCancel();
+
         // Docked drag-to-redock: once past the threshold, show the edge drop lanes on every monitor and
         // highlight the one under the cursor. The column stays put (edge-locked) until release.
         if (_dockDragArmed)
@@ -3362,6 +3421,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _leftPressed = true;
         _headerArmed = false;
         _headerDragged = false;
+        _brandHoldFired = false;   // clear any stale long-press result before this fresh press
         _denseArmed = false;
         _denseWasDrag = false;
         _dockDragArmed = false;
@@ -3377,6 +3437,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             {
                 _dockDragArmed = true;
                 _dockDragStartScreen = this.PointToScreen(p);
+                if (_brandRect.Contains(p)) BrandHoldArm(p);   // shh — long-press the brand to open the arcade
             }
             e.Pointer.Capture(this);
             e.Handled = true;
@@ -3411,6 +3472,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _headerArmed = true;
             _headerDragStartScreen = this.PointToScreen(p);
             _headerStartWindowPos = fw.Position;
+            if (_brandRect.Contains(p)) BrandHoldArm(p);   // shh — long-press the brand to open the arcade
         }
 
         e.Pointer.Capture(this);
@@ -3431,6 +3493,20 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (!_leftPressed) { base.OnPointerReleased(e); return; }
         _leftPressed = false;
         e.Pointer.Capture(null);
+
+        // A brand long-press that completed already summoned the arcade — swallow this release so it doesn't
+        // also toggle the header. A release before the hold fires just cancels the pending timer (an ordinary
+        // click, routed normally below). The hold is only ever armed on a motionless press, so no drag was
+        // in flight here.
+        BrandHoldCancel();
+        if (_brandHoldFired)
+        {
+            _brandHoldFired = false;
+            _headerArmed = _headerDragged = false;
+            _dockDragArmed = _dockWasDrag = false;
+            base.OnPointerReleased(e);
+            return;
+        }
 
         // Dense drag: released over another monitor's drop lane re-pins the strip there; a plain click
         // (no move) falls through to RouteClick (the dense toggle glyph, or rows in the open popup).
@@ -3657,19 +3733,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
 
         // Docked: a header click collapses/expands the reserved column (the same thing Ctrl+Shift+W does).
+        // (The brand mark's own secret — long-press to open the arcade — is handled on press/release, not here.)
         if (_docked && p.Y < HeaderHeight)
         {
-            if (_brandRect.Contains(p)) RegisterBrandClick();
             ToggleDockedCollapsed();
             return;
         }
 
         if (!_denseCtl.IsDense && p.Y < HeaderHeight)
         {
-            // Secret: repeatedly clicking the brand mark itself feeds the easter egg. It still falls through
-            // to the toggle below, so the behaviour is indistinguishable from any other header click.
-            if (_brandRect.Contains(p)) RegisterBrandClick();
-
             // Header click toggles expand/collapse (floating only); size the window to match by hand.
             _expanded = !_expanded;
             UpdateTickTimer();
@@ -3845,8 +3917,21 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 () => OverlayModeToggleRequested?.Invoke()));
             items.Add(MenuItem("Set initial placements…", () => SetPlacementsRequested?.Invoke()));
 
+            // Quiet mode: silence the fun/social/silly features for a while (or turn it back off).
+            items.Add(new Separator());
+            items.Add(QuietModeMenuItem());
+
             // Social actions are deliberately NOT here — they live on the social region's own right-click menu
             // (see HitTestSocialArea / ShowSocialMenu), so the header stays about the overlay itself.
+
+            // Once the arcade has been discovered (by long-pressing the brand), offer it a quick way back in
+            // so it needn't be rediscovered by feel. Stays hidden until then — and hidden while quiet, since
+            // the arcade is one of the "silly" things Quiet mode is meant to put away.
+            if (ArcadeUnlocked && !QuietActive)
+            {
+                items.Add(new Separator());
+                items.Add(MenuItem("Perch Arcade", () => EasterEggTriggered?.Invoke()));
+            }
 
             items.Add(new Separator());
             items.Add(MenuItem("Exit Perch", () => ExitRequested?.Invoke()));
@@ -3862,6 +3947,39 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         item.Click += (_, _) => onClick();
         if (onMiddleClick is not null) WireMiddleClick(item, onMiddleClick);
         return item;
+    }
+
+    /// <summary>Whether a Quiet-mode window is currently active (used to word the menu and hide the arcade).</summary>
+    private bool QuietActive => Perch.Data.QuietMode.IsActive(_quietUntil, DateTime.Now);
+
+    // The header menu's Quiet-mode entry: while active, a single "turn off" item showing the remaining time;
+    // otherwise a submenu of durations. Each choice raises QuietModeRequested for the app to apply + persist.
+    private MenuItem QuietModeMenuItem()
+    {
+        if (QuietActive)
+            return MenuItem($"Quiet mode: on — turn off ({QuietRemainingText()} left)",
+                () => QuietModeRequested?.Invoke(Perch.Data.QuietDuration.Off));
+
+        var durations = new List<Control>();
+#if DEBUG
+        // A quick 1-minute window (debug builds only) so the "playful features come back online" path can be
+        // exercised without waiting out a real preset.
+        durations.Add(MenuItem("For 1 minute (dev)", () => QuietModeRequested?.Invoke(Perch.Data.QuietDuration.Minute1)));
+#endif
+        durations.Add(MenuItem("For 30 minutes",         () => QuietModeRequested?.Invoke(Perch.Data.QuietDuration.Minutes30)));
+        durations.Add(MenuItem("For 1 hour",             () => QuietModeRequested?.Invoke(Perch.Data.QuietDuration.Hour1)));
+        durations.Add(MenuItem("For 2 hours",            () => QuietModeRequested?.Invoke(Perch.Data.QuietDuration.Hours2)));
+        durations.Add(MenuItem("Until tomorrow morning", () => QuietModeRequested?.Invoke(Perch.Data.QuietDuration.UntilMorning)));
+        return new MenuItem { Header = "Quiet mode", ItemsSource = durations };
+    }
+
+    // "1h 5m" / "42m" / "<1m" — the time left in the current quiet window, for the menu label.
+    private string QuietRemainingText()
+    {
+        var left = (_quietUntil ?? DateTime.Now) - DateTime.Now;
+        if (left <= TimeSpan.Zero) return "<1m";
+        int mins = (int)Math.Ceiling(left.TotalMinutes);
+        return mins >= 60 ? $"{mins / 60}h {mins % 60}m" : $"{mins}m";
     }
 
     // Appends each non-empty group to the menu, inserting a separator before a group only when something is

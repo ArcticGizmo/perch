@@ -50,5 +50,8 @@ internal static class OverlaySettingsGates
         c.SetExternalNotificationsAvailable(s.ExternalNotificationsEnabled);
         c.SetViewTreeAvailable(s.ShowGitReview);
         c.SetDenseStatusChangeStyle(s.DenseStatusChangeStyle);
+        // Quiet mode is meta, not a display toggle: QuietMode.Resolve leaves QuietUntil intact on the masked
+        // copy, so this reflects the live window whether s is the raw or the effective settings.
+        c.SetQuietUntil(s.QuietUntil);
     }
 }

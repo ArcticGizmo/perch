@@ -150,6 +150,26 @@ internal sealed class AppSettings
     // its header. Toggled by the section's own chevron. Defaults to expanded.
     public bool HypertreeExpanded { get; set; } = true;
 
+    // Secret "Perch Arcade" state. Once the brand mark has been long-pressed to reveal the arcade, this
+    // flips true and stays true — the overlay header's right-click menu then carries a quick "Perch Arcade"
+    // shortcut so it needn't be rediscovered by feel. Not a Settings-window control. Defaults to locked.
+    public bool ArcadeUnlocked { get; set; }
+
+    // The secret daily Wordle's progress, persisted as one compact string ("yyyy-MM-dd|guess1,guess2,...")
+    // so today's guesses survive a restart. Scoped to a calendar day by WordleGame's codec; a past day reads
+    // back as a fresh puzzle. Not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WordleState { get; set; }
+
+    // Quiet mode: the local wall-clock time the current quiet window ends, or null when quiet mode is off.
+    // While a window is active (now < QuietUntil) the "playful" features — the social feed, friend/achievement
+    // celebrations and the whimsy toggles — are masked off through QuietMode.Resolve, without any feature
+    // needing to know quiet mode exists. Toggled from the overlay header's right-click menu; persisted so a
+    // window survives a restart (a past value simply reads as off). Not a Settings-window control. See
+    // [[QuietMode]].
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? QuietUntil { get; set; }
+
     // The global scratch pad — free-form multi-line text opened from the note button leading the overlay's
     // quick-links row. Not tied to any session; persisted here so it survives a restart. Null/empty means
     // the pad is empty (nothing written to the file when empty). See StickyNoteWindow.

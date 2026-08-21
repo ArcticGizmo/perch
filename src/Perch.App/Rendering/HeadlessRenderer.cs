@@ -395,6 +395,12 @@ internal static class HeadlessRenderer
         crossingPlay.SnapshotPlaying();
         RenderControl(crossingPlay, Path.Combine(outDir, "crossing_play_1x.png"), 96);
 
+        // The third toy: the daily Perch Wordle — a posed mid-play board (two scored guesses + a half-typed
+        // row) so the grid, keyboard colouring and message line all appear. Fed a throwaway settings object.
+        var wordle = new Windows.WordleBoard(new Perch.Data.AppSettings());
+        wordle.SnapshotPlaying();
+        RenderControl(wordle, Path.Combine(outDir, "wordle_play_1x.png"), 96);
+
         // Perch Wrapped poster: a shareable Spotify-Wrapped-style card built from the sample report.
         // Rendered with the bundled bird icon so the header/footer icon paths are exercised too.
         IImage? brandIcon = null;

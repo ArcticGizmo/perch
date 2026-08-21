@@ -9,16 +9,16 @@ using Perch.Avalonia.Theming;
 namespace Perch.Avalonia.Windows;
 
 /// <summary>
-/// The little "Perch Arcade" chooser that now stands between the ten-clicks easter egg and the two secret
-/// toys (<see cref="SpaceInvadersWindow"/> and <see cref="FroggerWindow"/>). Pick a game with the arrow keys
-/// (or the mouse) and Enter/Space launches it; the chooser closes as it hands off. Owner-drawn over the same
-/// <see cref="OverlayDraw"/> / <see cref="Palette"/> vocabulary as the games themselves.
+/// The little "Perch Arcade" chooser that now stands between the long-press easter egg and the three secret
+/// toys (<see cref="SpaceInvadersWindow"/>, <see cref="FroggerWindow"/> and <see cref="WordleWindow"/>). Pick
+/// a game with the arrow keys (or the mouse) and Enter/Space launches it; the chooser closes as it hands off.
+/// Owner-drawn over the same <see cref="OverlayDraw"/> / <see cref="Palette"/> vocabulary as the games.
 /// </summary>
 public sealed class ArcadeMenuWindow : Window
 {
     private readonly ArcadeMenu _menu = new();
 
-    public ArcadeMenuWindow(Action launchInvaders, Action launchFrogger)
+    public ArcadeMenuWindow(Action launchInvaders, Action launchFrogger, Action launchWordle)
     {
         Title = "Perch Arcade";
         CanResize = false;
@@ -30,7 +30,7 @@ public sealed class ArcadeMenuWindow : Window
         _menu.Chosen += index =>
         {
             Close();
-            (index == 0 ? launchInvaders : launchFrogger)();
+            (index switch { 0 => launchInvaders, 1 => launchFrogger, _ => launchWordle })();
         };
     }
 
@@ -55,12 +55,12 @@ public sealed class ArcadeMenuWindow : Window
     }
 }
 
-/// <summary>The chooser's owner-drawn control: a title, two selectable game cards each with a tiny live
+/// <summary>The chooser's owner-drawn control: a title, three selectable game cards each with a tiny live
 /// sprite, and a shimmering prompt. Raises <see cref="Chosen"/> with the selected index (0 = Invaders,
-/// 1 = Crossing).</summary>
+/// 1 = Crossing, 2 = Wordle).</summary>
 internal sealed class ArcadeMenu : Control
 {
-    private const double MenuW = 460, MenuH = 400;
+    private const double MenuW = 460, MenuH = 528;
     private const double CardX = 40, CardW = MenuW - 2 * CardX, CardH = 92, CardGap = 20;
     private const double FirstCardY = 130;
     private const int TickMs = 16;
@@ -71,6 +71,7 @@ internal sealed class ArcadeMenu : Control
     {
         ("PERCH INVADERS", "Blast the descending swarm"),
         ("PERCH CROSSING", "Hop the bird home, Frogger-style"),
+        ("PERCH WORDLE", "Crack today's five-letter word"),
     };
 
     private int _selected;
@@ -209,16 +210,38 @@ internal sealed class ArcadeMenu : Control
         // Icon tile on the left, with a small bob when selected.
         double bob = sel ? 2.0 * Math.Sin(_anim * 2) : 0;
         var icon = new Rect(CardX + 22, y + (CardH - 44) / 2 + bob, 44, 44);
-        if (i == 0)
-            DrawBitSprite(ctx, Invader, icon, Palette.RunningBrush);
-        else
-            DrawBitSprite(ctx, Bird, icon, Palette.AccentBrush);
+        switch (i)
+        {
+            case 0: DrawBitSprite(ctx, Invader, icon, Palette.RunningBrush); break;
+            case 1: DrawBitSprite(ctx, Bird, icon, Palette.AccentBrush); break;
+            default: DrawWordleGlyph(ctx, icon); break;
+        }
 
         double tx = CardX + 88;
         var name = OverlayDraw.Text(Games[i].Title, 18, Palette.FgBrush, FontWeight.Bold);
         ctx.DrawText(name, new Point(tx, y + 24));
         var blurb = OverlayDraw.Text(Games[i].Blurb, 12, Palette.MutedBrush);
         ctx.DrawText(blurb, new Point(tx, y + 52));
+    }
+
+    // Wordle's card icon: a tiny posed board — a couple of greens, a yellow, the rest sunken — so it reads
+    // as a five-letter grid at a glance, using the same semantic hues the game's tiles do.
+    private static void DrawWordleGlyph(DrawingContext ctx, Rect box)
+    {
+        const int cols = 3, rows = 2;
+        const double gap = 4;
+        double tw = (box.Width - (cols - 1) * gap) / cols;
+        double th = (box.Height - (rows - 1) * gap) / rows;
+        IBrush[,] fills =
+        {
+            { Palette.RunningBrush, Palette.SurfaceSunkenBrush, Palette.WarnBrush },
+            { Palette.WarnBrush, Palette.RunningBrush, Palette.SurfaceSunkenBrush },
+        };
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++)
+                OverlayDraw.Panel(ctx,
+                    new Rect(box.X + c * (tw + gap), box.Y + r * (th + gap), tw, th),
+                    fills[r, c], null, 4);
     }
 
     private static void DrawBitSprite(DrawingContext ctx, string[] rows, Rect box, IBrush brush)

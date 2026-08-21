@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.58] - 2026-08-21
+
+- Quiet mode: mute the fun/social/silly features for a while (right-click the header)
+- The perch dozes off while it's on (💤)
+
+---
+
 ## [v0.3.57] - 2026-08-20
 
 - Autonomous section header restyled to match Todo and Friends (consistency, at last)

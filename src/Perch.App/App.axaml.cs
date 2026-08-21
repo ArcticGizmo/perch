@@ -48,6 +48,7 @@ public partial class App : Application
     private ArcadeMenuWindow? _arcadeWindow;        // shhh
     private SpaceInvadersWindow? _invadersWindow;   // shhh
     private FroggerWindow? _froggerWindow;          // shhh
+    private WordleWindow? _wordleWindow;            // shhh
     private HistoryWindow? _historyWindow;
     private GitTreeWindow? _treeWindow;
     private MarkdownWindow? _markdownWindow;
@@ -70,6 +71,11 @@ public partial class App : Application
     private TodoWindow? _todoWindow;
     private Services.TodoMonitorHost? _todoHost;
     private AppSettings? _appSettings;
+    // The effective settings: _appSettings with the "playful" features masked off while Quiet mode is active
+    // (see Perch.Data.QuietMode). Behavioral reads use Effective; editing/persistence uses _appSettings.
+    // Recomputed by ApplyEffectiveSettings on a settings change, a Quiet-mode toggle, and at window expiry.
+    private AppSettings? _effectiveSettings;
+    private DispatcherTimer? _quietTimer;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
 
     // Debug-only replay transport, present only under `perch replay <recording>`. It advances the scrub
@@ -203,7 +209,7 @@ public partial class App : Application
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
             {
                 _overlay?.Canvas.SetSocialAccount(st.SignedIn, st.Me is not null);
-                _feedHost?.SetActive(settings.SocialEnabled && st.SignedIn);   // poll the feed while signed in
+                _feedHost?.SetActive(Effective.SocialEnabled && st.SignedIn);   // poll the feed while signed in (paused in Quiet mode)
                 if (!st.SignedIn) { _reactionBubbles?.Close(); _reactionBubbles = null; }
             });
             _ = _social.TryRestoreAsync();
@@ -288,6 +294,7 @@ public partial class App : Application
             _overlay.Canvas.ExitRequested += () => desktop.Shutdown();
             _overlay.Canvas.SetPlacementsRequested += OpenPlacementEditor;
             _overlay.Canvas.OverlayModeToggleRequested += ToggleOverlayMode;
+            _overlay.Canvas.QuietModeRequested += OnQuietModeRequested;
             _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
             _overlay.Canvas.UsageToggleRequested += SetUsageEnabled;
             _overlay.Canvas.HistoryRequested += OpenHistory;
@@ -362,14 +369,22 @@ public partial class App : Application
             _updateService = new UpdateService(settings, _notifications);
             _updateService.AvailabilityChanged += OnUpdateAvailabilityChanged;
             _overlay.Canvas.UpdateRequested += () => _updateService!.PerformUpdate(CloseAuxWindows);
-            // Secret: ten quick clicks on the brand mark open the little arcade chooser (Invaders / Crossing).
+            // Secret: press and hold the brand mark (~700ms) to open the little arcade chooser (Invaders /
+            // Crossing / Wordle). Once discovered, ArcadeUnlocked flips on and is persisted so the header's
+            // right-click menu can offer a quick shortcut thereafter.
+            _overlay.Canvas.ArcadeUnlocked = settings.ArcadeUnlocked;
             _overlay.Canvas.EasterEggTriggered += OpenArcade;
+            _overlay.Canvas.ArcadeUnlockChanged += () =>
+            {
+                if (_appSettings is { } s && !s.ArcadeUnlocked) { s.ArcadeUnlocked = true; s.Save(); }
+            };
             // Clicking the "update available" toast starts the update, same as the update button.
             _notifier.UpdateActivated += () => _updateService!.PerformUpdate(CloseAuxWindows);
 
             // Drive every overlay display gate + the monitor's data-layer toggles from persisted settings
             // (the Phase-3 Settings UI will edit these; this reads whatever's on disk, defaults included).
-            ApplyDisplaySettings(settings);
+            // Goes through the Quiet-mode resolver so a quiet window restored from disk applies at startup.
+            ApplyEffectiveSettings();
 
             _overlay.Show();
 
@@ -514,6 +529,7 @@ public partial class App : Application
         _arcadeWindow?.Close();
         _invadersWindow?.Close();
         _froggerWindow?.Close();
+        _wordleWindow?.Close();
         _qrWindow?.Close();
         _changelogWindow?.Close();
         _switcher?.Close();
@@ -665,6 +681,55 @@ public partial class App : Application
     // Applies every persisted overlay display gate to the canvas and the monitor's data-layer toggles,
     // so the overlay honours the user's settings from the first frame. Mirrors the block the WinForms
     // OverlayApplicationContext runs at startup; the Phase-3 Settings UI drives the same setters live.
+    // ── Quiet mode ───────────────────────────────────────────────────────────────────────────────────────
+    // The effective settings (playful features masked while quiet); falls back to the raw settings before the
+    // first resolve. Non-null once _appSettings is set (which is before any behavioral read can fire).
+    private AppSettings Effective => _effectiveSettings ?? _appSettings!;
+
+    private bool QuietActive => _appSettings is { } s && QuietMode.IsActive(s.QuietUntil, DateTime.Now);
+
+    // Recompute the effective settings from the raw settings + the live quiet state, push them onto every gate
+    // and host (ApplyDisplaySettings), and (re)arm the one-shot expiry timer. The single place quiet state and
+    // a settings change both funnel through, so the two can never drift.
+    private void ApplyEffectiveSettings()
+    {
+        if (_appSettings is not { } raw) return;
+        _effectiveSettings = QuietMode.Resolve(raw, QuietActive);
+        ApplyDisplaySettings(_effectiveSettings);
+        ScheduleQuietExpiry();
+    }
+
+    // Arms a one-shot timer to un-quiet exactly when the window ends; a null/past deadline just clears it.
+    private void ScheduleQuietExpiry()
+    {
+        _quietTimer?.Stop();
+        _quietTimer = null;
+        if (_appSettings?.QuietUntil is not { } until) return;
+        var delay = until - DateTime.Now;
+        if (delay <= TimeSpan.Zero) return;   // already elapsed; the next resolve reads it as off
+        _quietTimer = new DispatcherTimer { Interval = delay };
+        _quietTimer.Tick += (_, _) => OnQuietExpired();
+        _quietTimer.Start();
+    }
+
+    private void OnQuietExpired()
+    {
+        _quietTimer?.Stop();
+        _quietTimer = null;
+        if (_appSettings is { } s) { s.QuietUntil = null; s.Save(); }
+        ApplyEffectiveSettings();   // bring the playful features back
+    }
+
+    // The header menu picked a Quiet-mode duration (or "off"): set the deadline, persist, and re-resolve so the
+    // playful features go quiet / return at once.
+    private void OnQuietModeRequested(QuietDuration duration)
+    {
+        if (_appSettings is not { } s) return;
+        s.QuietUntil = QuietMode.DeadlineFor(duration, DateTime.Now);
+        s.Save();
+        ApplyEffectiveSettings();
+    }
+
     private void ApplyDisplaySettings(AppSettings s)
     {
         if (_overlay is null) return;
@@ -821,7 +886,7 @@ public partial class App : Application
     // fires for your own posts or the backlog present when the feed starts (see SocialFeedMonitorHost).
     private void OnFriendPosted(FeedItem item)
     {
-        if (_appSettings is not { NotificationsEnabled: true, NotifyOnFriendPost: true }) return;
+        if (Effective is not { NotificationsEnabled: true, NotifyOnFriendPost: true }) return;   // NotifyOnFriendPost is masked off in Quiet mode
         if (DndSuppressing) return;   // Do Not Disturb: stay quiet
         var body = item.Body.Length <= 120 ? item.Body : item.Body[..117] + "…";
         _notifier?.Show($"@{item.Author.Handle} just posted", body, ToastLevel.Info, null, null);
@@ -878,7 +943,10 @@ public partial class App : Application
     // levels are still recorded and show in the Achievements window.
     private void PresentAchievementUnlocks(IReadOnlyList<AchievementUnlock> unlocks)
     {
-        if (unlocks.Count == 0 || _appSettings is not { } settings) return;
+        // The unlocks are already recorded by the achievement store; this only presents them, so the celebration
+        // gates read the effective settings — NotifyOnAchievement / AchievementToasts are masked off in Quiet mode.
+        if (unlocks.Count == 0 || _appSettings is null) return;
+        var settings = Effective;
 
         if (settings.AchievementToasts && _notifications is { } n)
         {
@@ -971,7 +1039,7 @@ public partial class App : Application
     private Action<string>? _reactionDiag;   // set by the debug tool while it's open; streams gate + poll diagnostics
     private void OnReactionToMyPost(string emoji)
     {
-        bool showByGate = _appSettings is { ShowLargeReactions: true };
+        bool showByGate = Effective is { ShowLargeReactions: true };   // masked off in Quiet mode
         bool suppressed = _dndActive && (_appSettings?.CloseFeedInDoNotDisturb ?? false);
         _reactionDiag?.Invoke($"handler: {emoji} — ShowLargeReactions={_appSettings?.ShowLargeReactions}, " +
             $"DND suppressing={suppressed} -> {(showByGate && !suppressed ? "SHOWING bubble" : "BLOCKED by a gate")}");
@@ -1211,17 +1279,22 @@ public partial class App : Application
     private void OpenFlightPath() =>
         _flightWindow = WindowHost.ShowOrFocus(_flightWindow, () => new FlightPathWindow(), () => _flightWindow = null);
 
-    // The reward for clicking the brand mark ten times: the arcade chooser. It hands off to one of the two
-    // toys below and closes as it does. All three are reused like every other aux window.
+    // The reward for long-pressing the brand mark: the arcade chooser. It hands off to one of the three toys
+    // below and closes as it does. All are reused like every other aux window.
     private void OpenArcade() =>
         _arcadeWindow = WindowHost.ShowOrFocus(_arcadeWindow,
-            () => new ArcadeMenuWindow(OpenInvaders, OpenFrogger), () => _arcadeWindow = null);
+            () => new ArcadeMenuWindow(OpenInvaders, OpenFrogger, OpenWordle), () => _arcadeWindow = null);
 
     private void OpenInvaders() =>
         _invadersWindow = WindowHost.ShowOrFocus(_invadersWindow, () => new SpaceInvadersWindow(), () => _invadersWindow = null);
 
     private void OpenFrogger() =>
         _froggerWindow = WindowHost.ShowOrFocus(_froggerWindow, () => new FroggerWindow(), () => _froggerWindow = null);
+
+    // The daily Wordle keeps today's progress in AppSettings so it survives a restart; the window reads and
+    // writes AppSettings.WordleState directly and saves after each guess.
+    private void OpenWordle() =>
+        _wordleWindow = WindowHost.ShowOrFocus(_wordleWindow, () => new WordleWindow(_appSettings!), () => _wordleWindow = null);
 
     // "Show QR code" — a centred card with the session's remote-control deep-link QR. Only one is shown
     // at a time; opening another (or clicking away) closes the previous.

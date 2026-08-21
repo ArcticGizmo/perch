@@ -25,6 +25,13 @@ public class SettingsRegistryTests
         // chevron on the overlay, not Settings-window controls.
         nameof(AppSettings.TodosExpanded),
         nameof(AppSettings.HypertreeExpanded),
+        // The secret arcade's unlock flag and the daily Wordle's saved progress are hidden toy state, not
+        // user-facing settings controls.
+        nameof(AppSettings.ArcadeUnlocked),
+        nameof(AppSettings.WordleState),
+        // Quiet mode's deadline is hidden mode state, toggled from the overlay header's right-click menu
+        // (not a Settings-window control). See Perch.Data.QuietMode.
+        nameof(AppSettings.QuietUntil),
         // Custom themes are managed by the Appearance page's designer, not a catalogue control.
         nameof(AppSettings.CustomThemes),
         nameof(AppSettings.PendingUpdateVersion),
