@@ -70,6 +70,7 @@ public partial class App : Application
     private TodoStore? _todoStore;
     private TodoWindow? _todoWindow;
     private Services.TodoMonitorHost? _todoHost;
+    private Services.PluginMonitorHost? _pluginHost;
     private AppSettings? _appSettings;
     // The effective settings: _appSettings with the "playful" features masked off while Quiet mode is active
     // (see Perch.Data.QuietMode). Behavioral reads use Effective; editing/persistence uses _appSettings.
@@ -145,6 +146,7 @@ public partial class App : Application
                 _hypertreeHost?.Dispose();
                 _daemonHost?.Dispose();
                 _todoHost?.Dispose();
+                _pluginHost?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
                 _overlay?.Canvas.ReleaseDocked();   // give the reserved screen edge back to the desktop
@@ -367,6 +369,17 @@ public partial class App : Application
                 _todoHost?.RefreshNow();
                 _todoWindow?.Retarget();
             };
+
+            // Third-party plugins: runs the installed/enabled/consented plugins and feeds the overlay's
+            // Plugins section. Started/stopped from ApplyDisplaySettings per the master PluginsEnabled switch.
+            _pluginHost = new Services.PluginMonitorHost(
+                badges => _overlay!.Canvas.SetPluginBadges(badges), _notifications, settings);
+            _overlay.Canvas.SetPluginsExpanded(settings.PluginsExpanded);
+            _overlay.Canvas.PluginsExpandChanged += expanded =>
+            {
+                if (_appSettings is { } s) { s.PluginsExpanded = expanded; s.Save(); }
+            };
+            _overlay.Canvas.PluginsRequested += () => { OpenSettings(); _settings?.NavigateTo("plugins"); };
 
             // In-app updater: reflect availability on the tray item, the overlay badge and any open
             // Settings window. The overlay's badge click and the tray/Settings actions all route here.
@@ -752,6 +765,13 @@ public partial class App : Application
         {
             if (s.ShowTodos || s.TodoRemindersEnabled) todoHost.Start();
             else todoHost.Stop();
+        }
+
+        // Run the plugin poller only while the master switch is on; stopping it clears the overlay section.
+        if (_pluginHost is { } pluginHost)
+        {
+            if (s.PluginsEnabled) pluginHost.Start();
+            else pluginHost.Stop();
         }
 
         // Watch Windows Do Not Disturb only while Social is on and the auto-close option is enabled.
@@ -1754,6 +1774,14 @@ public partial class App : Application
             MetricsChanged = () => _metricsHost?.Configure(
                 settings.ShowSystemMetrics, settings.ShowSessionMetrics, settings.IncludeSubprocessMetrics),
             QuickLinksChanged = () => ReloadQuickLinks(settings),
+            PluginsChanged = () =>
+            {
+                if (_pluginHost is { } h)
+                {
+                    if (Effective.PluginsEnabled) h.Start(); else h.Stop();
+                    h.Refresh();
+                }
+            },
             HotkeysChanged = RegisterHotkeys,
             OverlayModeChanged = SetOverlayMode,
             TestNotification = kind => _notifications?.ShowTest(kind),

@@ -123,6 +123,41 @@ public class PluginInstallerTests : IDisposable
     }
 
     [Fact]
+    public void Installs_from_a_local_directory_leaving_the_source_intact()
+    {
+        var src = Path.Combine(Path.GetTempPath(), "perch-sideload-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(src);
+        File.WriteAllText(Path.Combine(src, "perch-plugin.json"), ValidManifest);
+        File.WriteAllText(Path.Combine(src, "w.ps1"), "echo hi");
+        try
+        {
+            var r = NewInstaller().InstallFromDirectory(src);
+
+            Assert.True(r.Ok, r.Error);
+            Assert.Equal("(local)", r.Record!.Source);
+            Assert.Equal("dev.test.weather", r.Record.Id);
+            Assert.False(r.Record.Enabled);
+            Assert.True(File.Exists(Path.Combine(_pluginsDir, "dev.test.weather", "w.ps1")));
+            Assert.True(File.Exists(Path.Combine(src, "perch-plugin.json"))); // source untouched
+        }
+        finally { try { Directory.Delete(src, recursive: true); } catch { } }
+    }
+
+    [Fact]
+    public void Local_install_rejects_a_folder_without_a_manifest()
+    {
+        var src = Path.Combine(Path.GetTempPath(), "perch-sideload-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(src);
+        try
+        {
+            var r = NewInstaller().InstallFromDirectory(src);
+            Assert.False(r.Ok);
+            Assert.Contains("no perch-plugin.json", r.Error);
+        }
+        finally { try { Directory.Delete(src, recursive: true); } catch { } }
+    }
+
+    [Fact]
     public async Task Full_network_path_resolves_verifies_and_installs()
     {
         var zip = Zip(("perch-plugin.json", ValidManifest), ("w.ps1", "x"));

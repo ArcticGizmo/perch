@@ -42,6 +42,8 @@ public class SettingsRegistryTests
         nameof(AppSettings.InstalledPlugins),
         // The plugin master kill switch lives on the Plugins page alongside the install/consent actions.
         nameof(AppSettings.PluginsEnabled),
+        // The Plugins section's expand/collapse is UI state toggled by the section's own overlay chevron.
+        nameof(AppSettings.PluginsExpanded),
         nameof(AppSettings.PendingUpdateVersion),
         nameof(AppSettings.LastSeenVersion),
         nameof(AppSettings.AutoStartOnFirstSession),

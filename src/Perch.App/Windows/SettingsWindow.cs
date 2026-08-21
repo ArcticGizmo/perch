@@ -16,6 +16,7 @@ using Perch.Data;
 using Perch.Data.Hypertree;
 using Perch.Data.Replay;
 using Perch.Platform;
+using Perch.Plugins;
 using Perch.Social;
 using Perch.Theming;
 
@@ -78,6 +79,10 @@ internal sealed class SettingsHooks
 
     /// <summary>Rebuild the overlay's quick-links strip (re-resolving icons off-thread).</summary>
     public Action? QuickLinksChanged;
+
+    /// <summary>Re-scan and re-poll installed plugins (after an install / enable / disable / master-switch
+    /// change), so the overlay's Plugins section reflects the change without a restart.</summary>
+    public Action? PluginsChanged;
 
     /// <summary>Re-register the global keyboard shortcuts after a binding was edited or toggled.</summary>
     public Action? HotkeysChanged;
@@ -219,6 +224,7 @@ internal sealed class SettingsWindow : Window
         AddPage(nav, "social",       "Social",          BuildSocialPage);
         AddPage(nav, "shortcuts",    "Shortcuts",       BuildHotkeysPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
+        AddPage(nav, "plugins",      "Plugins",         BuildPluginsPage);
         AddPage(nav, "export",       "Export",          BuildExportPage);
         AddPage(nav, "about",        "About",           BuildAboutPage);
         AddPage(nav, "changelog",    "Changelog",       BuildChangelogPage);
@@ -1505,6 +1511,216 @@ internal sealed class SettingsWindow : Window
         _topicQrWindow.Closed += (_, _) => _topicQrWindow = null;
         _topicQrWindow.Show();
         _topicQrWindow.Activate();
+    }
+
+    // ── Plugins ───────────────────────────────────────────────────────────────────
+    private StackPanel _pluginList = null!;
+    private TextBox _pluginSourceBox = null!;
+    private Button _pluginInstallBtn = null!;
+    private TextBlock _pluginStatus = null!;
+
+    // The persisted install list, created on first use. Records are mutated in place (this IS the source
+    // of truth the plugin host reads), then persisted with Save() and re-driven via the PluginsChanged hook.
+    private List<InstalledPluginRecord> PluginRecords => _settings.InstalledPlugins ??= new();
+
+    private void BuildPluginsPage(StackPanel page)
+    {
+        page.Children.Add(SettingsUi.SectionTitle("Plugins"));
+        page.Children.Add(SettingsUi.BodyText(
+            "Extend Perch with third-party plugins. Each runs as a separate program and can only do what " +
+            "you allow when you install it. Install from a GitHub repository (owner/repo): the release is " +
+            "downloaded, checksum-verified, and shown to you for consent before it ever runs."));
+
+        var master = Toggle(_settings.PluginsEnabled);
+        master.CheckedChanged += (_, _) =>
+        {
+            _settings.PluginsEnabled = master.IsChecked;
+            _settings.Save();
+            _hooks.PluginsChanged?.Invoke();
+        };
+        page.Children.Add(SettingsUi.TitleRow("Enable plugins", master));
+        page.Children.Add(SettingsUi.Separator());
+
+        page.Children.Add(SettingsUi.FieldCaption("Add from GitHub"));
+        var addGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            Margin = new Thickness(0, 0, 0, 6),
+        };
+        _pluginSourceBox = SettingsUi.ThemedTextBox("");
+        _pluginSourceBox.PlaceholderText = "owner/repo  or  owner/repo@1.2.3";
+        Grid.SetColumn(_pluginSourceBox, 0);
+        _pluginInstallBtn = SettingsUi.FlatButton("Install");
+        _pluginInstallBtn.Margin = new Thickness(8, 0, 0, 0);
+        _pluginInstallBtn.Click += async (_, _) => await InstallPluginFromBox();
+        Grid.SetColumn(_pluginInstallBtn, 1);
+        addGrid.Children.Add(_pluginSourceBox);
+        addGrid.Children.Add(_pluginInstallBtn);
+        page.Children.Add(addGrid);
+
+        var folderRow = SettingsUi.ButtonRow();
+        var folderBtn = SettingsUi.FlatButton("Install from folder…");
+        folderBtn.Click += async (_, _) => await InstallPluginFromFolder();
+        folderRow.Children.Add(folderBtn);
+        page.Children.Add(folderRow);
+
+        _pluginStatus = new TextBlock
+        {
+            Foreground = Palette.MutedBrush,
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 8),
+        };
+        page.Children.Add(_pluginStatus);
+
+        page.Children.Add(SettingsUi.Separator());
+        page.Children.Add(SettingsUi.FieldCaption("Installed"));
+        _pluginList = new StackPanel();
+        page.Children.Add(_pluginList);
+        RebuildPluginList();
+    }
+
+    private async Task InstallPluginFromBox()
+    {
+        var source = PluginInstallSource.TryParse(_pluginSourceBox.Text ?? "");
+        if (source is null)
+        {
+            SetPluginStatus("Enter a GitHub reference like owner/repo or owner/repo@1.2.3.");
+            return;
+        }
+
+        _pluginInstallBtn.IsEnabled = false;
+        SetPluginStatus($"Installing {source.Slug}…");
+        try
+        {
+            var installer = new PluginInstaller(new HttpPluginDownloader(), ClaudePaths.PerchPluginsDir, AppInfo.Version);
+            var result = await installer.InstallAsync(source);
+            if (await ConsentAndPersist(installer, result)) _pluginSourceBox.Text = "";
+        }
+        catch (Exception ex) { SetPluginStatus($"Install failed: {ex.Message}"); }
+        finally { _pluginInstallBtn.IsEnabled = true; }
+    }
+
+    private async Task InstallPluginFromFolder()
+    {
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Choose a plugin folder (containing perch-plugin.json)",
+            AllowMultiple = false,
+        });
+        var path = folders.Count > 0 ? folders[0].TryGetLocalPath() : null;
+        if (string.IsNullOrEmpty(path)) return;
+
+        SetPluginStatus("Installing from folder…");
+        try
+        {
+            var installer = new PluginInstaller(new HttpPluginDownloader(), ClaudePaths.PerchPluginsDir, AppInfo.Version);
+            await ConsentAndPersist(installer, installer.InstallFromDirectory(path));
+        }
+        catch (Exception ex) { SetPluginStatus($"Install failed: {ex.Message}"); }
+    }
+
+    // Shared tail of both install paths: surface an error, else show the consent dialog and — on Allow —
+    // grant, persist, and re-drive the overlay. Returns true when a plugin was actually installed.
+    private async Task<bool> ConsentAndPersist(PluginInstaller installer, PluginInstallResult result)
+    {
+        if (!result.Ok || result.Manifest is null || result.Record is null)
+        {
+            SetPluginStatus(result.Error ?? "Install failed.");
+            return false;
+        }
+
+        var allowed = await PluginConsentDialog.ShowAsync(this, result.Manifest, result.Record.Source);
+        if (!allowed)
+        {
+            installer.Uninstall(result.Record.Id);
+            SetPluginStatus("Cancelled — nothing was installed.");
+            return false;
+        }
+
+        PluginConsent.GrantAll(result.Record, result.Manifest.Capabilities);
+        PluginStore.Upsert(PluginRecords, result.Record);
+        _settings.Save();
+        _hooks.PluginsChanged?.Invoke();
+        SetPluginStatus($"Installed {result.Manifest.Name} {result.Manifest.Version}.");
+        RebuildPluginList();
+        return true;
+    }
+
+    private void SetPluginStatus(string text)
+    {
+        if (_pluginStatus is not null) _pluginStatus.Text = text;
+    }
+
+    private void RebuildPluginList()
+    {
+        _pluginList.Children.Clear();
+        var records = PluginRecords;
+        if (records.Count == 0)
+        {
+            _pluginList.Children.Add(new TextBlock
+            {
+                Text = "No plugins installed yet — add one above.",
+                Foreground = Palette.MutedBrush,
+                Margin = new Thickness(0, 4, 0, 4),
+            });
+            return;
+        }
+        foreach (var rec in records)
+            _pluginList.Children.Add(BuildPluginRow(rec));
+    }
+
+    private Control BuildPluginRow(InstalledPluginRecord rec)
+    {
+        var grid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+
+        var toggle = Toggle(rec.Enabled);
+        toggle.VerticalAlignment = VerticalAlignment.Center;
+        toggle.CheckedChanged += (_, _) =>
+        {
+            PluginStore.SetEnabled(PluginRecords, rec.Id, toggle.IsChecked);
+            _settings.Save();
+            _hooks.PluginsChanged?.Invoke();
+        };
+        Grid.SetColumn(toggle, 0);
+
+        var textStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 8, 0) };
+        textStack.Children.Add(new TextBlock
+        {
+            Text = string.IsNullOrEmpty(rec.Name) ? rec.Id : rec.Name,
+            FontSize = 14, FontWeight = FontWeight.Bold, Foreground = Palette.TitleBrush,
+        });
+        var subtitle = rec.Id
+            + (string.IsNullOrEmpty(rec.Version) ? "" : $"  ·  {rec.Version}")
+            + (string.IsNullOrEmpty(rec.Source) ? "" : $"  ·  {rec.Source}");
+        textStack.Children.Add(new TextBlock
+        {
+            Text = subtitle, FontSize = 12, Foreground = Palette.MutedBrush,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        });
+        Grid.SetColumn(textStack, 1);
+
+        var remove = SettingsUi.FlatButton("Remove");
+        remove.Foreground = new SolidColorBrush(Palette.Danger);
+        remove.VerticalAlignment = VerticalAlignment.Center;
+        remove.Click += (_, _) =>
+        {
+            new PluginInstaller(new HttpPluginDownloader(), ClaudePaths.PerchPluginsDir, AppInfo.Version).Uninstall(rec.Id);
+            PluginStore.Remove(PluginRecords, rec.Id);
+            _settings.Save();
+            _hooks.PluginsChanged?.Invoke();
+            RebuildPluginList();
+        };
+        Grid.SetColumn(remove, 2);
+
+        grid.Children.Add(toggle);
+        grid.Children.Add(textStack);
+        grid.Children.Add(remove);
+        return grid;
     }
 
     // ── Quick links ───────────────────────────────────────────────────────────────

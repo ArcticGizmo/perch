@@ -10,6 +10,9 @@ internal sealed class InstalledPluginRecord
 {
     public string Id { get; set; } = "";
 
+    /// <summary>The manifest's display name, kept for the settings list without re-reading the manifest.</summary>
+    public string Name { get; set; } = "";
+
     /// <summary><c>owner/repo</c> the plugin was installed from (empty for a local sideload).</summary>
     public string Source { get; set; } = "";
 

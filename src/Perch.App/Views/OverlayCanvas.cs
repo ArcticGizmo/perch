@@ -717,6 +717,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         h += TodosStripHeight;
         foreach (var r in _rows) h += HeightOf(r);
         h += DaemonStripHeight;
+        if (PluginsStripVisible) h += PluginsStripHeight;
         h += 2;
         if (MicStripVisible) h += MicStripHeight;
         if (MediaStripVisible) h += MediaStripHeight;
@@ -1697,6 +1698,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool showQuickLinks = showBody && HasQuickLinksRow;   // app icon strip, below the usage bars
         bool showHypertree = showBody && HypertreeStripVisible; // Hypertree branches, below the quick links
         bool showDaemon = showBody && DaemonStripVisible;     // daemon background workers, below the rows
+        bool showPlugins = showBody && PluginsStripVisible;   // installed plugins' glyphs, below the daemon strip
         bool showTodos = showBody && TodosStripVisible;       // user's own to-dos, below the daemon strip
         bool showMic = showBody && MicStripVisible;           // who has the microphone, below the rows
         bool showMedia = showBody && MediaStripVisible;       // now-playing + transport strip, below that
@@ -1780,6 +1782,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     DrawDaemonStrip(ctx, width, top);
                     top += DaemonStripHeight;
                 }
+                if (showPlugins)
+                {
+                    DrawPluginsStrip(ctx, width, top);
+                    top += PluginsStripHeight;
+                }
 
                 // The mic and now-playing strips sit below the rows (and above any outage footer), in that
                 // order; each captures its own button hit-rects, which are otherwise cleared just below.
@@ -1801,6 +1808,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 if (showSocialSignIn) DrawSocialSignInStrip(ctx, width, top);
             }
 
+            if (!showPlugins) ClearPluginsHitRects();
             if (!showMic) ClearMicHitRects();
             if (!showMedia) ClearMediaHitRects();
             if (!showFeed) ClearSocialRegionHitRects();
@@ -3422,6 +3430,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int todo = HitTestTodoRow(p);
         if (todo != _hoveredTodoRow) { _hoveredTodoRow = todo; InvalidateVisual(); }
 
+        int plugin = HitTestPluginRow(p);
+        if (plugin != _hoveredPluginRow) { _hoveredPluginRow = plugin; InvalidateVisual(); }
+
         bool todoAdd = _todoAddRect.Width > 0 && _todoAddRect.Contains(p);
         // The "+" sits inside the header band, so don't also light the header when hovering it.
         bool todoHeader = !todoAdd && _todoHeaderRect.Width > 0 && _todoHeaderRect.Contains(p);
@@ -3429,6 +3440,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             _hoveredTodoAdd = todoAdd;
             _hoveredTodoHeader = todoHeader;
+            InvalidateVisual();
+        }
+
+        bool pluginAdd = _pluginAddRect.Width > 0 && _pluginAddRect.Contains(p);
+        bool pluginHeader = !pluginAdd && _pluginHeaderRect.Width > 0 && _pluginHeaderRect.Contains(p);
+        if (pluginAdd != _hoveredPluginAdd || pluginHeader != _hoveredPluginHeader)
+        {
+            _hoveredPluginAdd = pluginAdd;
+            _hoveredPluginHeader = pluginHeader;
             InvalidateVisual();
         }
 
@@ -3953,6 +3973,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (HitTestTodoRow(p) >= 0)
         {
             TodosRequested?.Invoke();
+            return;
+        }
+
+        // The Plugins section: the header "+" (and a body line) open the Plugins settings page; the header
+        // toggles collapse.
+        if (_pluginAddRect.Width > 0 && _pluginAddRect.Contains(p)) { PluginsRequested?.Invoke(); return; }
+        if (_pluginHeaderRect.Width > 0 && _pluginHeaderRect.Contains(p)) { OnPluginHeaderClicked(); return; }
+        if (HitTestPluginRow(p) >= 0)
+        {
+            PluginsRequested?.Invoke();
             return;
         }
 

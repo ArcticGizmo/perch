@@ -202,6 +202,20 @@ internal static class HeadlessRenderer
         todoEmptyProbe.SetTopTodos([], 0);
         RenderControl(todoEmptyProbe, Path.Combine(outDir, "overlay_todos_empty_1x.png"), 96);
 
+        // Plugins section: a glyph per installed/enabled plugin (glyph + short text + name), plus a faulted
+        // one rendered dimmed. Expanded and collapsed variants.
+        var pluginProbe = new OverlayCanvas();
+        pluginProbe.Update(SampleData.Sessions());
+        pluginProbe.SetPluginBadges(SamplePluginBadges());
+        RenderControl(pluginProbe, Path.Combine(outDir, "overlay_plugins_1x.png"), 96);
+        RenderControl(pluginProbe, Path.Combine(outDir, "overlay_plugins_1.5x.png"), 144);
+
+        var pluginCollapsedProbe = new OverlayCanvas();
+        pluginCollapsedProbe.Update(SampleData.Sessions());
+        pluginCollapsedProbe.SetPluginsExpanded(false);
+        pluginCollapsedProbe.SetPluginBadges(SamplePluginBadges());
+        RenderControl(pluginCollapsedProbe, Path.Combine(outDir, "overlay_plugins_collapsed_1x.png"), 96);
+
         // Empty roster: no sessions at all, so the header reads "no sessions" and the rows are simply
         // absent — but the strips the session list has nothing to do with (machine metrics, plan limits,
         // quick links, Hypertree branches) all stay, which is the whole point of this surface.
@@ -1149,6 +1163,13 @@ internal static class HeadlessRenderer
         new("t1", "Cut the v1.0 release", "overdue 20m", Overdue: true),
         new("t2", "Reply to the design review", "in 2h", Overdue: false),
         new("t3", "Water the office ficus", null, Overdue: false),
+    ];
+
+    private static IReadOnlyList<OverlayCanvas.PluginBadge> SamplePluginBadges() =>
+    [
+        new("dev.perch.git-dirty", "Git Dirty Count", "", "11", "11 uncommitted changes", Ok: true),
+        new("dev.jon.weather", "Weather Badge", "☀", "24°", "Melbourne, sunny", Ok: true),
+        new("dev.jon.pomodoro", "Pomodoro", "▶", "12m", "focus timer running", Ok: false),
     ];
 
 }

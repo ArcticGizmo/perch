@@ -160,6 +160,10 @@ internal sealed class AppSettings
     // its header. Toggled by the section's own chevron. Defaults to expanded.
     public bool HypertreeExpanded { get; set; } = true;
 
+    // Whether the overlay's Plugins section is expanded (showing each plugin's glyph) or collapsed to just
+    // its header. Toggled by the section's own chevron, not a Settings control. Defaults to expanded.
+    public bool PluginsExpanded { get; set; } = true;
+
     // Secret "Perch Arcade" state. Once the brand mark has been long-pressed to reveal the arcade, this
     // flips true and stays true — the overlay header's right-click menu then carries a quick "Perch Arcade"
     // shortcut so it needn't be rediscovered by feel. Not a Settings-window control. Defaults to locked.

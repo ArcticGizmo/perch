@@ -61,6 +61,63 @@ internal sealed class PluginInstaller
         return InstallVerifiedZip(source.Slug, release.TagName, zipBytes, want, zip.Name);
     }
 
+    /// <summary>Installs a plugin from a local directory (a sideload — the folder is copied, not moved, so
+    /// the source is left intact). Validates the manifest and places it by id, exactly like the GitHub
+    /// path but with no download/verify step (there's nothing to verify — the user chose the folder). Comes
+    /// back <see cref="InstalledPluginRecord.Enabled"/> false with the requested capabilities for consent.</summary>
+    public PluginInstallResult InstallFromDirectory(string sourceDir)
+    {
+        if (!Directory.Exists(sourceDir))
+            return PluginInstallResult.Fail($"folder not found: {sourceDir}");
+
+        var root = LocateManifestRoot(sourceDir);
+        if (root is null)
+            return PluginInstallResult.Fail($"that folder has no {PluginRegistry.ManifestFileName}.");
+
+        var parse = PluginManifestParser.Parse(
+            File.ReadAllText(Path.Combine(root, PluginRegistry.ManifestFileName)), _hostVersion);
+        if (!parse.Ok)
+            return PluginInstallResult.Fail("invalid manifest:\n  - " + string.Join("\n  - ", parse.Errors));
+
+        var manifest = parse.Manifest!;
+        var installDir = Path.Combine(_pluginsDir, manifest.Id);
+        var fullRoot = Path.GetFullPath(root);
+        var fullInstall = Path.GetFullPath(installDir);
+        if (string.Equals(fullRoot, fullInstall, StringComparison.OrdinalIgnoreCase))
+            return PluginInstallResult.Fail("that folder is already the installed copy.");
+
+        try
+        {
+            Directory.CreateDirectory(_pluginsDir);
+            if (Directory.Exists(installDir)) Directory.Delete(installDir, recursive: true);
+            CopyDir(fullRoot, installDir);
+        }
+        catch (Exception ex) { return PluginInstallResult.Fail($"could not copy the plugin: {ex.Message}"); }
+
+        var record = new InstalledPluginRecord
+        {
+            Id = manifest.Id,
+            Name = manifest.Name,
+            Source = "(local)",
+            Tag = "local",
+            Version = manifest.Version,
+            AssetSha256 = "",
+            Enabled = false,
+            GrantedCapabilities = [],
+            GrantedNetwork = [],
+        };
+        return PluginInstallResult.Success(record, manifest, installDir);
+    }
+
+    private static void CopyDir(string source, string dest)
+    {
+        Directory.CreateDirectory(dest);
+        foreach (var dir in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
+            Directory.CreateDirectory(dir.Replace(source, dest));
+        foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+            File.Copy(file, file.Replace(source, dest), overwrite: true);
+    }
+
     /// <summary>Removes an installed plugin's directory (<c>&lt;pluginsDir&gt;/&lt;id&gt;</c>), best-effort.
     /// Returns true if a directory was there and is now gone. The caller also drops the persisted record.</summary>
     public bool Uninstall(string id)
@@ -112,6 +169,7 @@ internal sealed class PluginInstaller
             var record = new InstalledPluginRecord
             {
                 Id = manifest.Id,
+                Name = manifest.Name,
                 Source = slug,
                 Tag = tag,
                 Version = manifest.Version,
