@@ -232,8 +232,21 @@ test of publish + verified install.
   master kill switch, `PluginStore`, **plus** the Settings **"Plugins" page** (master toggle, install from
   GitHub / local folder, per-plugin enable/disable/remove). *Remaining:* the `command` extension point
   (menu-coupled; manifest `commands` + invoke path) and an audit/fault log surface.
-- **M4 — Sandbox (`IPluginSandbox`) + resource limits.** Restricted-token launch on Windows;
-  timeouts/interval floors/fault-disable hardened. Security review. *Not started.*
+- **M4 — Sandbox (`IPluginSandbox`) + resource limits. ⏳ Partly done.**
+  - ✅ **Windows Job Object sandbox** (`WindowsPluginSandbox`, commit c50f322): 1 GiB job memory cap,
+    active-process cap (fork-bomb guard), `KILL_ON_JOB_CLOSE` (no orphaned plugin processes survive the
+    tray). Best-effort with graceful fallback. Interop verified (struct = 144 B; a 400 MB cap stops a
+    700 MB alloc). Wired via `PlatformServices.CreatePluginSandbox()`.
+  - ✅ **Enforcement intent plumbed** (commit ca37133): `PluginLaunchSpec.AllowNetwork` / `ReadablePaths`
+    resolved from the consented grants, ready for whatever egress/FS mechanism lands.
+  - ⛔ **Egress allowlist enforcement — deferred with a finding.** The only per-process network controls
+    on Windows are **AppContainer** (all-or-nothing `internetClient`) or **WFP**. AppContainer is the wrong
+    tool here: it also blocks WMI and executing external tools, which **breaks realistic plugins** — e.g.
+    the `sysinfo` sample (WMI/CIM) and `git-dirty` (spawns `git.exe`). Correct **per-host** egress *without*
+    breaking plugins needs a **WFP filter or a bundled local proxy** — a substantial, admin-adjacent
+    subproject. Recommend doing it as its own effort; until then `network` stays consent-disclosed (the
+    dialog reddens it) and the per-grant `AllowNetwork` flag is ready for the chosen mechanism.
+  - ☐ Restricted-token / reduced-privilege launch (needs hand-rolled `CreateProcess`) — follow-up.
 - **M5 (later) — WASM tier** if out-of-process proves too limiting for compute-heavy plugins.
 
 ### What's committed vs. what needs the user
