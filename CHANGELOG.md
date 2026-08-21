@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.62] - 2026-08-21
+
+- Docked column re-fits its height when the resolution changes (it used to hang under the taskbar)
+- A taskbar resize or move nudges it back into place too
+- Detection is event-driven now, so nothing polls while the display sits still
+
+---
+
 ## [v0.3.61] - 2026-08-21
 
 - Notes are per-project now, shared by every session in a directory

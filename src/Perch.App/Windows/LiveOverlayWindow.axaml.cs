@@ -14,6 +14,18 @@ public partial class LiveOverlayWindow : Window
 {
     public OverlayCanvas Canvas { get; }
 
+    // Docked mode re-derives its column geometry from these two raw messages, which the OS delivers to every
+    // real top-level window (ours is one). Hooking them is fully event-driven — no polling — and covers
+    // everything that moves the column: WM_DISPLAYCHANGE for resolution / monitor add-remove / DPI, and
+    // WM_SETTINGCHANGE with wParam == SPI_SETWORKAREA for a taskbar resize or move. We hook the raw messages
+    // because Avalonia's Screens.Changed proved unreliable here — a resolution change didn't raise it, leaving
+    // the column sized to the old work area (drooping under the taskbar). The field holds the delegate so it
+    // isn't GC'd while registered.
+    private const uint WM_DISPLAYCHANGE = 0x007E;
+    private const uint WM_SETTINGCHANGE = 0x001A;
+    private const uint SPI_SETWORKAREA  = 0x002F;
+    private global::Avalonia.Controls.Win32Properties.CustomWndProcHookCallback? _wndProcHook;
+
     // Design-time / XAML-loader ctor. The app uses the canvas-taking overload below.
     public LiveOverlayWindow() : this(new OverlayCanvas()) { }
 
@@ -49,6 +61,20 @@ public partial class LiveOverlayWindow : Window
         // No Alt+Tab entry and never take activation (showing must not steal focus from the terminal).
         if (TryGetPlatformHandle() is { } handle)
             PlatformServices.WindowChrome.MakeToolWindowNoActivate(handle.Handle);
+
+        // Low-latency display-change signal for docked mode. Win32Properties lives in Avalonia.Controls (both
+        // heads compile it); it only does anything on the Win32 backend, so gate on the OS. The hook returns
+        // zero and leaves `handled` false so Avalonia's own WndProc still runs.
+        if (OperatingSystem.IsWindows())
+        {
+            _wndProcHook = (IntPtr _, uint msg, IntPtr wParam, IntPtr _, ref bool _) =>
+            {
+                if (msg == WM_DISPLAYCHANGE || (msg == WM_SETTINGCHANGE && (uint)wParam == SPI_SETWORKAREA))
+                    Canvas.OnDisplayChanged();
+                return IntPtr.Zero;
+            };
+            global::Avalonia.Controls.Win32Properties.AddWndProcHookCallback(this, _wndProcHook);
+        }
     }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);

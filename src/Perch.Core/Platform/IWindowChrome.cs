@@ -34,6 +34,13 @@ public interface IWindowChrome
     /// no-op. Best-effort; a zero handle is ignored.</summary>
     void SetWindowCornerPreference(IntPtr handle, bool rounded);
 
+    /// <summary>Reads, live from the OS, the geometry of the monitor containing the point <paramref name="x"/>,
+    /// <paramref name="y"/> (physical pixels) — nearest monitor if the point is off every screen: its full
+    /// bounds and work area (taskbar excluded) in physical pixels, and the display scale. Bypasses the UI
+    /// framework's cached screen list, which can serve a stale work area after a resolution change (leaving
+    /// the docked column too tall, drooping under the taskbar). Null when unavailable (off-platform stub).</summary>
+    MonitorGeometry? GetMonitorGeometryAt(int x, int y);
+
     /// <summary>Forces the window to the foreground and gives it keyboard focus, working around the OS
     /// foreground-lock that otherwise stops a background tray process from stealing focus (needed by the
     /// session switcher, which a global hotkey summons and which must accept typing immediately). Unlike

@@ -259,13 +259,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // a display change can drop even a Topmost window behind others.
     public void OnScreensChanged()
     {
-        // Docked owns the whole window geometry (full-height reserved column). Re-derive it only on a real
-        // monitor-layout change (a resolution/monitor add/remove) — NOT on the work-area-only change that our
-        // own reservation triggers, which would otherwise loop (reserve → work-area change → re-reserve → …)
-        // and visibly jitter the column on every collapse/expand.
+        // Docked owns the whole window geometry (full-height reserved column). This event is only a fast path:
+        // when it does fire, re-derive immediately if the live OS geometry differs from what we applied. The
+        // reliable backbone is the ~1s geometry watchdog (StartDockWatch), because Avalonia's Screens.Changed
+        // proved unreliable — a resolution change didn't raise it at all. Both compare a signature that
+        // excludes the horizontal work area, so our own reservation never triggers a re-derive (no loop).
         if (_docked)
         {
-            if (HostWindow is { Screens: { } scr } && ScreenSignature(scr) != _dockScreenSig)
+            if (CurrentDockGeomSig() is { } sig && sig != _dockGeomSig)
             {
                 ApplyDockedGeometry();
                 BringWindowToTop();

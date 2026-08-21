@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Platform;
+using Avalonia.Threading;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Windows;
 using Perch.Data;
@@ -35,9 +36,10 @@ public sealed partial class OverlayCanvas
     private Rect _dockToggleRect;
     private bool _hoveredDockToggle;
 
-    // Signature of the screen layout last applied, so OnScreensChanged can tell a real monitor change from
-    // the work-area-only change our own reservation causes (which must not trigger a re-reserve loop).
-    private string _dockScreenSig = "";
+    // The docked geometry we last sized to, as a loop-safe signature (bounds + vertical work area + scale; see
+    // GeomSig). Detection re-derives only when a live OS read differs from this — so our own edge reservation
+    // (which moves only the horizontal work area, excluded from the signature) never triggers a re-derive.
+    private string _dockGeomSig = "";
 
     // Drag-to-redock state (dragging the header/strip moves the column to another monitor edge). Mirrors the
     // dense controller's drop-lane machinery, reusing DenseDropZoneWindow.
@@ -65,11 +67,18 @@ public sealed partial class OverlayCanvas
         if (!_docked) return;
         _dockCollapsed = !_dockCollapsed;
         _hoveredRow = -1;
+        // ApplyDockedGeometry re-queries the live work area and re-pins the height, so this doubles as a
+        // fallback: if a display change ever slipped past OnScreensChanged and left the column the wrong
+        // height (e.g. drooping under the taskbar), the next collapse/expand re-derives it correctly.
         ApplyDockedGeometry();
         UpdateTickTimer();
         InvalidateMeasure();
         InvalidateVisual();
         BringWindowToTop();
+        // Re-assert once more after this layout pass settles: InvalidateMeasure above queues a measure, and on
+        // Windows a size write can be swallowed while a layout/auto-fit is mid-flight. The posted re-apply lands
+        // after the queue drains, guaranteeing the pinned height sticks. Guarded against a mode change in between.
+        Dispatcher.UIThread.Post(() => { if (_docked) ApplyDockedGeometry(); }, DispatcherPriority.Loaded);
     }
 
     /// <summary>Releases the edge reservation and any drag lanes (app shutdown / exit). Safe to call when
@@ -119,7 +128,7 @@ public sealed partial class OverlayCanvas
         _dockCollapsed = false;
         _hoveredRow = -1;
         SetWindowCorners(rounded: false);   // square the outer window so it sits flush to the screen edge
-        ApplyDockedGeometry();
+        ApplyDockedGeometry();              // display changes re-derive via the WM_DISPLAYCHANGE/WM_SETTINGCHANGE hook
         UpdateTickTimer();
         InvalidateMeasure();
         InvalidateVisual();
@@ -133,9 +142,11 @@ public sealed partial class OverlayCanvas
         _dockCollapsed = false;
         _dockDragArmed = false;
         _dockWasDrag = false;
+        _dockDisplayDebounce?.Stop();
         HideDockDropZones();
         PlatformServices.EdgeReservation.Release();
         SetWindowCorners(rounded: true);    // restore the OS rounded corners for the floating panel
+        if (HostWindow is { } w) { w.MinHeight = 0; w.MaxHeight = double.PositiveInfinity; } // release the docked height pin
         SizeFloatingToContent();   // window was Manual/full-height; size back to content
         PlaceAtInitialFloating();  // restore the floating placement (or default) and re-capture it
         UpdateTickTimer();
@@ -209,45 +220,131 @@ public sealed partial class OverlayCanvas
     private void ApplyDockedGeometry(bool reserve = true)
     {
         if (HostWindow is not { Screens: { } screens } w) return;
-        var screen = DockedScreen(screens);
-        // Pin the resolved monitor so a later collapse/expand or screen change stays on the same screen
-        // (rather than falling back to primary when no monitor was explicitly chosen).
-        _dockScreenBounds = screen.Bounds;
-        _dockScreenSig = ScreenSignature(screens);
+        var screen = DockedScreen(screens);   // identifies WHICH monitor (self-heals to primary if it vanished)
 
-        var wa = screen.WorkingArea;      // vertical extent (clears a top/bottom taskbar); unaffected by our own left/right reserve
-        var b = screen.Bounds;            // horizontal edge (physical monitor edge, so re-reserves are stable)
-        double scale = screen.Scaling <= 0 ? 1.0 : screen.Scaling;
+        // Resolve the target monitor's extents LIVE from the OS, keyed on a point at the centre of the resolved
+        // monitor. Avalonia's cached Screens.WorkingArea can stay stale after a resolution change — which is the
+        // whole bug: re-applying then reads the old, larger work area and the column keeps drooping under the
+        // taskbar. The OS read is authoritative; fall back to Avalonia's screen only when it's unavailable
+        // (the macOS stub returns null). A centre point also survives a re-dock (PinToDockDropZone sets
+        // _dockScreenBounds → DockedScreen → the target monitor), so we read the target, not wherever the
+        // window currently sits.
+        var ab = screen.Bounds;
+        var os = HostWindow.TryGetPlatformHandle() is { } h
+            ? PlatformServices.WindowChrome.GetMonitorGeometryAt(ab.X + ab.Width / 2, ab.Y + ab.Height / 2)
+            : null;
+
+        int bx, bw, waY, waH; double scale;
+        if (os is { } g)
+        {
+            bx = g.BoundsX; bw = g.BoundsWidth;
+            waY = g.WorkY; waH = g.WorkHeight;
+            scale = g.Scale <= 0 ? 1.0 : g.Scale;
+            _dockScreenBounds = new PixelRect(g.BoundsX, g.BoundsY, g.BoundsWidth, g.BoundsHeight);
+        }
+        else
+        {
+            var wa = screen.WorkingArea;   // vertical extent (clears a top/bottom taskbar)
+            bx = ab.X; bw = ab.Width;
+            waY = wa.Y; waH = wa.Height;
+            scale = screen.Scaling <= 0 ? 1.0 : screen.Scaling;
+            _dockScreenBounds = ab;        // pin the resolved monitor for later collapse/expand + screen changes
+        }
+        // Record the geometry we're sizing to, so the watchdog re-applies only when the live read differs.
+        _dockGeomSig = GeomSig(_dockScreenBounds.Value, waY, waH, scale);
 
         double dipW = _dockCollapsed ? DockCollapsedWidth : DockExpandedWidth;
+        double dipH = Math.Max(1, waH / scale);
         int physW = Math.Max(1, (int)(dipW * scale));
-        int x = _dockSide == HAnchor.Left ? b.X : b.X + b.Width - physW;
+        int x = _dockSide == HAnchor.Left ? bx : bx + bw - physW;
 
+        // Pin the height HARD via Min==Max, not just Height: the window is SizeToContent="Height" / CanResize
+        // false, and a stray auto-fit or a stale write could otherwise leave it at its old (too-tall) size,
+        // drooping under the taskbar after a resolution drop. Relax the clamp before shrinking so the move to a
+        // smaller value isn't blocked by the previous, larger floor.
         w.SizeToContent = SizeToContent.Manual;
+        w.MinHeight = 0;
+        w.MaxHeight = double.PositiveInfinity;
         w.Width = dipW;
-        w.Height = Math.Max(1, wa.Height / scale);
-        w.Position = new PixelPoint(x, wa.Y);
+        w.Height = dipH;
+        w.MinHeight = dipH;
+        w.MaxHeight = dipH;
+        w.Position = new PixelPoint(x, waY);
 
-        if (reserve) ReserveDockedColumn(screen, physW);
+        if (reserve) ReserveDockedColumn(_dockScreenBounds.Value, physW);
     }
 
-    // A stable string of every monitor's physical bounds — changes only on a real display-layout change
-    // (resolution / monitor add-remove), not on a work-area change (taskbar, our own reservation).
-    private static string ScreenSignature(Screens screens)
+    // ── Display-change detection: fully event-driven, zero idle cost ─────────────────────────────────
+    // The Windows head hooks the raw window messages the OS delivers to every top-level window (ours is one):
+    // WM_DISPLAYCHANGE (resolution / monitor add-remove / DPI) and WM_SETTINGCHANGE/SPI_SETWORKAREA (taskbar
+    // resize or move). Between them they cover everything that changes the column's geometry — so there is NO
+    // polling timer; nothing runs while the display is static. (Avalonia's own Screens.Changed proved
+    // unreliable — a resolution change didn't raise it — which is why we hook the raw messages instead.)
+    //
+    // Learned from ../hypertree's monitor-layout spike: these messages fire MID-reshuffle and several times per
+    // change, so we never act on the raw event — we debounce, then re-derive only if the live OS geometry
+    // actually moved. The one-shot debounce timer exists only in the ~500ms window after an event and then
+    // stops, so a docked-but-static overlay costs nothing.
+    private DispatcherTimer? _dockDisplayDebounce;
+
+    /// <summary>A display/work-area message arrived (wired by the Windows head). Debounce — the messages repeat
+    /// mid-reshuffle — then re-derive the column if the live OS geometry actually moved. No-op unless docked.
+    /// The debounce also naturally chains a late work-area settle: WM_SETTINGCHANGE re-arms it after the taskbar
+    /// finishes reflowing, so the final geometry always lands.</summary>
+    public void OnDisplayChanged()
     {
-        var sb = new System.Text.StringBuilder();
-        foreach (var s in screens.All)
-        {
-            var r = s.Bounds;
-            sb.Append(r.X).Append(',').Append(r.Y).Append(',').Append(r.Width).Append(',').Append(r.Height).Append(';');
-        }
-        return sb.ToString();
+        if (!_docked) return;
+        _dockDisplayDebounce ??= CreateDisplayDebounce();
+        _dockDisplayDebounce.Stop();
+        _dockDisplayDebounce.Start();
     }
 
-    private void ReserveDockedColumn(Screen screen, int physWidth)
+    // A one-shot timer: ~500ms after the last display/work-area message it re-derives the docked geometry iff
+    // the live OS signature changed, then stops. Re-applying only on a real change keeps it loop-safe — the
+    // signature excludes the horizontal work area our own reservation moves.
+    private DispatcherTimer CreateDisplayDebounce()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        t.Tick += (_, _) =>
+        {
+            t.Stop();
+            if (_docked && CurrentDockGeomSig() is { } sig && sig != _dockGeomSig)
+            {
+                ApplyDockedGeometry();
+                BringWindowToTop();
+            }
+        };
+        return t;
+    }
+
+    // The docked monitor's geometry as a compact signature, read LIVE from the OS (bypassing Avalonia's cached
+    // Screens). Keyed on a point at the centre of the currently-docked monitor. Null only when no monitor point
+    // is resolvable yet; on the macOS stub (no OS read) it falls back to Avalonia's screen signature.
+    private string? CurrentDockGeomSig()
+    {
+        if (HostWindow is not { Screens: { } screens }) return null;
+        var anchor = _dockScreenBounds ?? DockedScreen(screens).Bounds;
+        var os = HostWindow.TryGetPlatformHandle() is { } h
+            ? PlatformServices.WindowChrome.GetMonitorGeometryAt(anchor.X + anchor.Width / 2, anchor.Y + anchor.Height / 2)
+            : null;
+        if (os is { } g)
+            return GeomSig(new PixelRect(g.BoundsX, g.BoundsY, g.BoundsWidth, g.BoundsHeight), g.WorkY, g.WorkHeight, g.Scale);
+        // No OS read (macOS stub): fall back to Avalonia's screen, in the SAME GeomSig format ApplyDockedGeometry
+        // records — otherwise the watchdog would see a permanent mismatch and re-apply every tick.
+        var s = DockedScreen(screens);
+        return GeomSig(s.Bounds, s.WorkingArea.Y, s.WorkingArea.Height, s.Scaling <= 0 ? 1.0 : s.Scaling);
+    }
+
+    // Bounds + the *vertical* work-area extent (Y/Height) + scale, as a string. Excludes the work area's
+    // X/Width on purpose: a left/right reservation (ours, or a side taskbar) moves only those, and folding them
+    // in would make the watchdog re-reserve on its own change — a loop. The vertical extent and scale are never
+    // touched by a left/right reserve, so keying on them catches every real display change and nothing else.
+    private static string GeomSig(PixelRect b, int workY, int workHeight, double scale)
+        => $"{b.X},{b.Y},{b.Width},{b.Height}/{workY},{workHeight}@{scale}";
+
+    private void ReserveDockedColumn(PixelRect b, int physWidth)
     {
         if (HostWindow?.TryGetPlatformHandle() is not { } h) return;
-        var b = screen.Bounds;
         var edge = _dockSide == HAnchor.Left ? ReservedEdge.Left : ReservedEdge.Right;
         PlatformServices.EdgeReservation.Reserve(h.Handle, edge, physWidth, b.X, b.Y, b.Width, b.Height);
     }

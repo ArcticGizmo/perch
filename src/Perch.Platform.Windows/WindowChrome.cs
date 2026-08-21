@@ -40,6 +40,21 @@ public sealed class WindowChrome : IWindowChrome
     private const int DWMWCP_DEFAULT   = 0; // let the OS decide (rounds on Win11)
     private const int DWMWCP_DONOTROUND = 1; // square corners
 
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+    [DllImport("user32.dll")] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+    [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+    private const uint MONITOR_DEFAULTTONEAREST = 2;
+    private const int  MDT_EFFECTIVE_DPI = 0;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X, Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int left, top, right, bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
+
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
@@ -93,6 +108,31 @@ public sealed class WindowChrome : IWindowChrome
         int pref = rounded ? DWMWCP_DEFAULT : DWMWCP_DONOTROUND;
         try { DwmSetWindowAttribute(handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int)); }
         catch { /* best-effort: pre-Win11 or DWM disabled — leave the default corners */ }
+    }
+
+    /// <summary>Reads the monitor at a screen point live from the OS (<c>MonitorFromPoint</c> +
+    /// <c>GetMonitorInfo</c>), so callers get a fresh work area even when Avalonia's cached screen list is
+    /// stale after a resolution change. Best-effort; returns null on a failed read.</summary>
+    public MonitorGeometry? GetMonitorGeometryAt(int x, int y)
+    {
+        try
+        {
+            IntPtr mon = MonitorFromPoint(new POINT { X = x, Y = y }, MONITOR_DEFAULTTONEAREST);
+            if (mon == IntPtr.Zero) return null;
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            if (!GetMonitorInfo(mon, ref mi)) return null;
+
+            double scale = 1.0;
+            try { if (GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, out uint dpiX, out _) == 0 && dpiX >= 48) scale = dpiX / 96.0; }
+            catch { /* pre-8.1 or shcore missing — 1.0 is a safe default */ }
+
+            var b = mi.rcMonitor; var wa = mi.rcWork;
+            return new MonitorGeometry(
+                b.left, b.top, b.right - b.left, b.bottom - b.top,
+                wa.left, wa.top, wa.right - wa.left, wa.bottom - wa.top,
+                scale);
+        }
+        catch { return null; }
     }
 
     /// <summary>Forces the window to the foreground and hands it keyboard focus. Windows blocks a process

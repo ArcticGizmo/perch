@@ -41,6 +41,10 @@ public sealed class WindowChrome : IWindowChrome
     /// Windows-first feature anyway; see IEdgeReservation.)</summary>
     public void SetWindowCornerPreference(IntPtr handle, bool rounded) { }
 
+    /// <summary>Not implemented on macOS yet — returns null so callers fall back to the UI framework's
+    /// screen list. (Docked mode is a Windows-first feature; see IEdgeReservation.)</summary>
+    public MonitorGeometry? GetMonitorGeometryAt(int x, int y) => null;
+
     /// <summary>Lifts the window to the front of its level without activating it, so a hint shows above
     /// the overlay. <c>orderFrontRegardless</c> raises a window without making it key/main. Best-effort.</summary>
     public void BringToTopNoActivate(IntPtr handle)
