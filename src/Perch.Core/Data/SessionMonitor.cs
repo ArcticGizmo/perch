@@ -306,27 +306,13 @@ internal sealed class SessionMonitor : IDisposable
     }
 
     /// <summary>
-    /// Sets or clears a session's pinned note by writing or deleting its <c>{sessionId}.note</c> sidecar.
-    /// A null/blank <paramref name="text"/> removes the note; otherwise it's stored as a small JSON payload
-    /// (<c>{ "text": …, "updatedAt": … }</c>) so pin/colour can be layered on later without a format change.
-    /// Best-effort — never throws. Call <see cref="Scan"/> afterwards to refresh the session list and glyphs.
-    /// The sidecar is deliberately left on disk when the session ends (unlike <c>.mode</c>/<c>.notify</c>),
-    /// so a note rides along into the history viewer.
-    /// </summary>
-    public void SetNote(string sessionId, string? text)
-    {
-        if (string.IsNullOrEmpty(sessionId))
-            return;
-        WriteNote(Path.Combine(_sessionsDir, $"{sessionId}.note"), text);
-    }
-
-    /// <summary>
     /// Sets or clears a <em>project</em> note — a note shared by every session with the same working
     /// directory <paramref name="cwd"/>, stored as a <c>project.note</c> sidecar in the project's
     /// transcript directory (<c>~/.claude/projects/{enc-cwd}/</c>) so it's naturally scoped to the project
-    /// and rides along with its transcripts. Same JSON payload and best-effort semantics as
-    /// <see cref="SetNote"/>; a null/blank <paramref name="text"/> removes it. Call <see cref="Scan"/>
-    /// afterwards to refresh.
+    /// and rides along with its transcripts. A null/blank <paramref name="text"/> removes it; otherwise it's
+    /// stored as a small JSON payload (<c>{ "text": …, "updatedAt": … }</c>) so pin/colour can be layered on
+    /// later without a format change. Best-effort — never throws. Call <see cref="Scan"/> afterwards to
+    /// refresh the session list and glyphs.
     /// </summary>
     public void SetProjectNote(string cwd, string? text)
     {
@@ -347,7 +333,7 @@ internal sealed class SessionMonitor : IDisposable
 
     // Writes or clears a note sidecar at `path`: a null/blank text deletes it, otherwise the canonical
     // JSON payload ({ text, updatedAt }) is written (creating the parent directory). Best-effort; never
-    // throws. Shared by the per-session (SetNote) and per-project (SetProjectNote) writers.
+    // throws. Backs the per-project (SetProjectNote) writer.
     private static void WriteNote(string path, string? text)
     {
         try
@@ -681,14 +667,9 @@ internal sealed class SessionMonitor : IDisposable
             var externalNotify = !string.IsNullOrEmpty(sessionId)
                 && File.Exists(Path.Combine(_sessionsDir, $"{sessionId}.notify"));
 
-            // Pinned note: a short human annotation stored in a sibling {sessionId}.note sidecar,
-            // written/removed by the overlay's right-click menu + note editor. Null when unset.
-            var note = string.IsNullOrEmpty(sessionId)
-                ? null
-                : ReadNote(Path.Combine(_sessionsDir, $"{sessionId}.note"));
-
-            // Project note: a note shared by every session in this cwd, from a project.note sidecar in the
-            // project's transcript dir. Surfaced so the row can show the note glyph even with no session note.
+            // Project note: a short human annotation shared by every session in this cwd, from a
+            // project.note sidecar in the project's transcript dir. Written/removed by the overlay's
+            // right-click menu + note editor; surfaced so the row can show the note glyph. Null when unset.
             var projectNote = ReadProjectNote(cwd);
 
             // The explicit name set by Claude Code's built-in /rename command (a custom-title record
@@ -806,7 +787,6 @@ internal sealed class SessionMonitor : IDisposable
                 awaitingSince,
                 gitStats,
                 entrypoint,
-                note,
                 projectNote,
                 context.Model,
                 context.Source,
@@ -942,8 +922,8 @@ internal sealed class SessionMonitor : IDisposable
         return null;
     }
 
-    // Reads a session's pinned note from its {sessionId}.note sidecar. The canonical format is a small
-    // JSON object with a "text" field (see SetNote); a hand-edited plain-text file is tolerated as a
+    // Reads a note from a note sidecar (the project.note file). The canonical format is a small JSON
+    // object with a "text" field (see SetProjectNote); a hand-edited plain-text file is tolerated as a
     // fallback so a note dropped in by hand still shows. Missing/blank/unparseable → null. Never throws.
     // Internal (not private) so the note round-trip can be unit-tested without a full scan.
     internal static string? ReadNote(string path)

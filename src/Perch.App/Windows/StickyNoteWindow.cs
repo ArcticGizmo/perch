@@ -19,10 +19,9 @@ namespace Perch.Avalonia.Windows;
 /// <list type="bullet">
 ///   <item>the <b>global</b> scratch pad (<see cref="Global"/>), opened from the note button leading the
 ///   quick-links row — a single free-text pad; and</item>
-///   <item>a <b>row note</b> (<see cref="ForSessionRow"/>), opened from a session's right-click menu — two
-///   stacked sections, one for a <em>project</em> note shared by every session in the same working
-///   directory and one for a note pinned to just <em>this session</em>. Twice the single-note height so
-///   both fit comfortably.</item>
+///   <item>a <b>project note</b> (<see cref="ForProject"/>), opened from a session's right-click menu or the
+///   project-note picker — a single section for the note shared by every session in the same working
+///   directory.</item>
 /// </list>
 /// Unlike the old modal editor it is <b>non-modal and owned by the overlay</b>: it stays open like a real
 /// sticky note while you keep clicking around Perch, and because it's owned it can never fall <em>behind</em>
@@ -33,7 +32,8 @@ namespace Perch.Avalonia.Windows;
 internal sealed class StickyNoteWindow : Window
 {
     private const double NoteWidth = 442;      // ~30% larger than the original 340
-    private const double SingleHeight = 390;   // one section (~30% up from 300); a row note doubles this
+    private const double SingleHeight = 390;   // the height a fresh, near-empty note opens at
+    private const double MaxNoteHeight = 780;  // it auto-grows to fit its content, but never taller than this
     private const int ShadowRoom = 16;         // transparent margin around the paper so its shadow shows
     private const int SideGap = 16;            // gap between the overlay and the note when placed beside it
     private const int CascadeStep = 26;        // per-open offset so stacked notes don't hide each other
@@ -46,6 +46,7 @@ internal sealed class StickyNoteWindow : Window
     private Action _persist = () => { };       // reads the boxes and writes them through the caller's sink
     private bool _saving;                      // Save pressed — skip the discard confirmation
     private bool _closeConfirmed;              // discard already confirmed — let the re-issued Close through
+    private bool _userResized;                 // the user dragged the grip — stop auto-growing to content
 
     /// <summary>How many notes are already open, so this one can cascade instead of stacking exactly on
     /// top of the last. Set by the caller before <see cref="Window.Show()"/>.</summary>
@@ -59,8 +60,8 @@ internal sealed class StickyNoteWindow : Window
     private static readonly Color PaperEdge  = Color.FromRgb(0xEC, 0xD5, 0x6B);
     private static readonly Color Ink        = Color.FromRgb(0x3A, 0x32, 0x14);
     private static readonly Color InkMuted   = Color.FromRgb(0x7A, 0x6C, 0x38);
-    private static readonly Color ProjectAccent = Color.FromRgb(0x2E, 0x9E, 0x5B); // green tab = project
-    private static readonly Color SessionAccent = Color.FromRgb(0x3D, 0x7E, 0xC4); // blue tab  = session
+    private static readonly Color ProjectAccent = Color.FromRgb(0x2E, 0x9E, 0x5B); // green tab = project note
+    private static readonly Color ScratchAccent = Color.FromRgb(0x3D, 0x7E, 0xC4); // blue = the global scratch pad
 
     /// <summary>The global scratch pad: one free-text section. <paramref name="onSave"/> receives the
     /// (trimmed) pad text on Save (empty = clear).</summary>
@@ -70,7 +71,7 @@ internal sealed class StickyNoteWindow : Window
             "Scratch pad", SingleHeight,
             [new Section(
                 "", // the window title already says "Scratch pad" — no in-body heading needed
-                existingText, "Jot anything here…", SessionAccent)]);
+                existingText, "Jot anything here…", ScratchAccent)]);
         w.SetPersist(() => onSave(w.SectionText(0)));
         return w;
     }
@@ -89,44 +90,26 @@ internal sealed class StickyNoteWindow : Window
         return w;
     }
 
-    /// <summary>A session row's note: a project section over a session section, at double height.
-    /// <paramref name="onSave"/> receives (projectText, sessionText), each trimmed (empty = clear).</summary>
-    public static StickyNoteWindow ForSessionRow(
-        string sessionDisplayName, string projectName, string? projectText, string? sessionText,
-        Action<string, string> onSave)
-    {
-        var w = new StickyNoteWindow(
-            $"Notes — {sessionDisplayName}", SingleHeight * 2,
-            [
-                new Section(
-                    $"Project · {projectName}",
-                    projectText, "Shared by every session in this project…", ProjectAccent),
-                new Section(
-                    "This session",
-                    sessionText, "Pinned to this session alone…", SessionAccent),
-            ]);
-        w.SetPersist(() => onSave(w.SectionText(0), w.SectionText(1)));
-        return w;
-    }
-
     /// <summary>
     /// Builds a detached, fixed-size copy of the note surface for the headless render harness — no owner,
-    /// no live positioning, no persistence. Not used at runtime. <paramref name="sessionRow"/> picks the
-    /// two-section row note; otherwise the single-section global pad.
+    /// no live positioning, no persistence. Not used at runtime. <paramref name="projectNote"/> picks the
+    /// project note; otherwise the global scratch pad.
     /// </summary>
-    internal static Control BuildPreviewSurface(bool sessionRow)
+    internal static Control BuildPreviewSurface(bool projectNote)
     {
-        var w = sessionRow
-            ? ForSessionRow(
-                "api", "perch",
+        var w = projectNote
+            ? ForProject(
+                "perch",
                 "Freeze main before the release — ping #eng when the tag is cut.",
-                "Risky refactor — mid-bisect on a flaky test. Don't rebase.",
-                (_, _) => { })
+                _ => { })
             : Global("Ship v0.9:\n- cut the tag\n- update the changelog\n- poke the CI flake", _ => { });
         var content = (Control)w.Content!;
+        // Mirror the runtime auto-grow so the preview shows the note at the height its content earns.
+        content.Measure(new Size(NoteWidth, double.PositiveInfinity));
+        var h = Math.Clamp(content.DesiredSize.Height, SingleHeight, MaxNoteHeight);
         w.Content = null;                 // detach so the panel can adopt it
         content.Width = NoteWidth;
-        content.Height = w.Height;
+        content.Height = h;
         return content;
     }
 
@@ -189,6 +172,7 @@ internal sealed class StickyNoteWindow : Window
             var card = BuildSectionCard(sections[i], out var box);
             boxes.Add(box);
             _initial[i] = box.Text ?? "";
+            box.TextChanged += (_, _) => GrowToFitContent(); // a note grows as you fill it, up to the cap
             card.Margin = new Thickness(0, i == 0 ? 0 : 8, 0, 0);
             Grid.SetRow(card, i);
             body.Children.Add(card);
@@ -301,6 +285,7 @@ internal sealed class StickyNoteWindow : Window
         grip.PointerPressed += (_, e) =>
         {
             if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+            _userResized = true; // once you size it by hand, we stop auto-growing over the top of that
             BeginResizeDrag(WindowEdge.SouthEast, e);
             e.Handled = true; // don't let the press bubble into a move-drag
         };
@@ -401,12 +386,31 @@ internal sealed class StickyNoteWindow : Window
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
+        GrowToFitContent();  // a note reopened with content already in it comes up tall enough to show it
         PlaceBesideOwner();
         if (_boxes.Count > 0)
         {
             _boxes[0].Focus();
             _boxes[0].CaretIndex = _boxes[0].Text?.Length ?? 0;
         }
+    }
+
+    // Grows the window just enough to show its content without scrolling — a fresh, empty note opens at
+    // SingleHeight and only gets taller as it fills, never past MaxNoteHeight (beyond which the editor
+    // scrolls). Grow-only within a session, so deleting text doesn't make the note jump smaller under you;
+    // a fresh open re-measures from scratch. Bows out entirely once the user has sized the note by hand.
+    private void GrowToFitContent()
+    {
+        if (_userResized || Content is not Layoutable root) return;
+
+        // Measure the whole surface at its real width but unbounded height: the editor's ScrollViewer
+        // doesn't clamp an infinite constraint, so wrapped multi-line text reports its full extent.
+        root.Measure(new Size(NoteWidth, double.PositiveInfinity));
+        var target = Math.Clamp(root.DesiredSize.Height, SingleHeight, MaxNoteHeight);
+        if (target <= Height + 0.5) return; // never auto-shrink; ignore sub-pixel churn
+
+        Height = target;
+        if (IsVisible) PlaceBesideOwner(); // re-clamp so a grown note stays beside the overlay and on-screen
     }
 
     // Tunnels from the window down to the focused control, so it fires before the multi-line editor

@@ -120,18 +120,9 @@ internal sealed class SessionMonitorHost : IDisposable
         _monitor.Scan();
     }
 
-    /// <summary>Sets or clears a session's pinned note (writes/deletes its <c>.note</c> sidecar) and
-    /// rescans so the overlay's note glyph + second line refresh. A null/blank text clears it. Call on
-    /// the UI thread.</summary>
-    public void SetNote(string sessionId, string? text)
-    {
-        _monitor.SetNote(sessionId, text);
-        _monitor.Scan();
-    }
-
     /// <summary>Sets or clears the project note shared by every session under <paramref name="cwd"/>
-    /// (writes/deletes the project's <c>project.note</c> sidecar) and rescans. A null/blank text clears
-    /// it. Call on the UI thread.</summary>
+    /// (writes/deletes the project's <c>project.note</c> sidecar) and rescans so the overlay's note glyph
+    /// refreshes. A null/blank text clears it. Call on the UI thread.</summary>
     public void SetProjectNote(string cwd, string? text)
     {
         _monitor.SetProjectNote(cwd, text);

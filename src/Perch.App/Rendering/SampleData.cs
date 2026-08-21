@@ -40,7 +40,7 @@ internal static class SampleData
         [
             new ClaudeSession("1234", "s1", SessionStatus.Running, @"C:\src\perch", "perch", now,
                 Activity: "Editing OverlayForm.cs", SubAgents: subs, Mode: PermissionMode.AcceptEdits,
-                Note: "risky refactor — waiting on review",
+                ProjectNote: "risky refactor — waiting on review",
                 ContextFill: 0.82f, BurnRate: 12300, GitStats: new GitLineStats(142, 37),
                 Tasks: new List<TaskItem>
                 {
@@ -50,7 +50,7 @@ internal static class SampleData
                 }),
             new ClaudeSession("5678", "s2", SessionStatus.AwaitingInput, @"C:\src\api", "api", now,
                 ExternalNotify: true,
-                // No session note, but a project note — so the row still shows the note glyph.
+                // A project note — the row shows the amber note glyph.
                 ProjectNote: "API freeze — ship v0.9 before merging anything",
                 PullRequest: new PullRequestInfo(1135, "https://github.com/o/r/pull/1135", "Surface PRs on the overlay", PrState.Open)
                 {
@@ -71,7 +71,7 @@ internal static class SampleData
                     Checks = [new("build", PrCheckState.Pending), new("deploy-preview", PrCheckState.Pending)],
                 }),
             new ClaudeSession("3456", "s4", SessionStatus.Idle, @"C:\src\scratch", "scratch", now,
-                Note: "don't touch — bisecting a flaky test",
+                ProjectNote: "don't touch — bisecting a flaky test",
                 PullRequest: new PullRequestInfo(74, "https://github.com/o/r/pull/74", "Ship v0.9", PrState.Merged)
                 {
                     Checks = [new("build", PrCheckState.Success), new("e2e", PrCheckState.Success)],

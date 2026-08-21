@@ -67,8 +67,10 @@ internal static class TranscriptRedactor
         return (Redact(node, MetaPreserveKeys, placeholderCwd) ?? node).ToJsonString();
     }
 
-    /// <summary>Redacts a <c>.note</c> sidecar's free text while keeping its JSON shape (see
-    /// <see cref="SessionMonitor.SetNote"/>): the <c>text</c> is scrubbed, the <c>updatedAt</c> stamp kept.</summary>
+    /// <summary>Redacts a note sidecar's free text while keeping its JSON shape (see
+    /// <see cref="SessionMonitor.SetProjectNote"/>): the <c>text</c> is scrubbed, the <c>updatedAt</c> stamp
+    /// kept. Applies to the <c>project.note</c> sidecar and legacy <c>{sessionId}.note</c> files in old
+    /// recordings.</summary>
     public static string RedactNote(string json)
     {
         try

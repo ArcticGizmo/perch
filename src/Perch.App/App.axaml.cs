@@ -318,7 +318,7 @@ public partial class App : Application
             // merge/review. The overlay banner is forced (bypassing its setting) so both surfaces always show.
             _overlay.Canvas.DebugTestPrEventRequested += (s, kind) => FirePrEvent(s, kind, forceBanner: true);
 #endif
-            _overlay.Canvas.NoteClearRequested += sessionId => _monitorHost?.SetNote(sessionId, null);
+            _overlay.Canvas.NoteClearRequested += cwd => _monitorHost?.SetProjectNote(cwd, null);
             _overlay.Canvas.TerminateRequested += OnTerminateSession;
             _overlay.Canvas.ScratchPadRequested += OnOpenScratchPad;
             _overlay.Canvas.ProjectNotesRequested += OnOpenProjectNotePicker;
@@ -1379,22 +1379,19 @@ public partial class App : Application
     // is just this file, so the toggle is wired now.
     private void OnToggleExternalNotify(string sessionId) => _monitorHost?.ToggleExternalNotify(sessionId);
 
-    // "Add note…/Edit note…" — opens the multi-line scratch pad prefilled from the session's current note,
-    // then writes the result to its .note sidecar (empty clears it). The note shows inline on the session's
-    // overlay row. Modal on the overlay so it can take focus, which the no-activate overlay window can't.
-    // Best-effort: a closed overlay mid-flow just no-ops.
+    // "Add note…/Edit note…" from a session row — opens the sticky-note editor on the row's project note
+    // (shared by every session in the same working directory), prefilled from the current note and re-read
+    // for freshness, writing the result to the project's project.note sidecar (empty clears it). The note
+    // shows as a glyph on every session row in that directory. Keyed by cwd so opening the note from a row
+    // OR the project picker focuses the same window rather than stacking a duplicate. Best-effort: a closed
+    // overlay mid-flow just no-ops.
     private void OnEditNote(ClaudeSession session)
     {
         if (_monitorHost is not { } host) return;
-        OpenStickyNote(session.SessionId, () =>
-            StickyNoteWindow.ForSessionRow(
-                session.DisplayName, session.ProjectName,
-                host.ReadProjectNote(session.Cwd), session.Note,
-                (projectText, sessionText) =>
-                {
-                    host.SetProjectNote(session.Cwd, projectText);
-                    host.SetNote(session.SessionId, sessionText);
-                }));
+        OpenStickyNote("projnote:" + session.Cwd, () =>
+            StickyNoteWindow.ForProject(
+                session.ProjectName, host.ReadProjectNote(session.Cwd),
+                text => host.SetProjectNote(session.Cwd, text)));
     }
 
     // The global scratch pad — opened from the note button leading the overlay's quick-links row. Multi-line

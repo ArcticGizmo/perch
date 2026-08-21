@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.61] - 2026-08-21
+
+- Notes are per-project now, shared by every session in a directory
+- Per-session notes are gone (no more losing a note when the session ends)
+- Sticky notes open small and grow to fit as you write (corner-drag still wins)
+
+---
+
 ## [v0.3.60] - 2026-08-21
 
 - Drag either edge to widen the floating overlay (280 px is no longer the whole world)

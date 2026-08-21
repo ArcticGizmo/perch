@@ -159,9 +159,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Pinned-note glyph: a sticky-note amber, so a note reads as a deliberate human annotation. The note's
     // text isn't previewed on the row (hover the glyph); this is just the glyph colour.
     private static readonly IBrush NoteBrush      = new SolidColorBrush(Color.FromRgb(244, 193, 79));
-    // A note that's only inherited from the project (no per-session note) draws in a dimmed amber so it
-    // recedes — a project note is ambient context, not something demanding attention like a session note.
-    private static readonly IBrush NoteDimBrush   = new SolidColorBrush(Color.FromArgb(105, 244, 193, 79));
     // The Markdown glyph: a rose document mark, marking a session that produced a .md file. The hue is
     // deliberately clear of every other glyph — amber (artifact/note/warn), teal (mail), green (running),
     // red (error), blue (Jira/PR) and purple (sub-agent) — so it never reads as one of them on a shared
@@ -1418,8 +1415,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     public event Action<string>? ExternalNotifyToggleRequested;
 
     /// <summary>Raised when the user picks "Add note…"/"Edit note…" for a session. The app opens the note
-    /// editor (prefilled from <see cref="ClaudeSession.Note"/>) and writes the result via the monitor.
-    /// Internal — <see cref="ClaudeSession"/> is a Core-internal type.</summary>
+    /// editor on the row's project note (prefilled from <see cref="ClaudeSession.ProjectNote"/>) and writes
+    /// the result via the monitor. Internal — <see cref="ClaudeSession"/> is a Core-internal type.</summary>
     internal event Action<ClaudeSession>? NoteEditRequested;
 
     /// <summary>Raised when the user picks "Markdown files…" for a session; the app opens the Markdown
@@ -1427,8 +1424,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// Internal — <see cref="ClaudeSession"/> is a Core-internal type.</summary>
     internal event Action<ClaudeSession>? MarkdownRequested;
 
-    /// <summary>Raised when the user picks "Clear note" for a session; carries the session id for the app
-    /// to delete its <c>.note</c> sidecar.</summary>
+    /// <summary>Raised when the user picks "Clear note" for a session; carries the working directory
+    /// (<see cref="ClaudeSession.Cwd"/>) for the app to delete its <c>project.note</c> sidecar.</summary>
     public event Action<string>? NoteClearRequested;
 
     /// <summary>Raised when the user picks "Terminate session…". The app confirms first (this is
@@ -2492,7 +2489,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // The "Session notes" indicator toggle (off by default) gates the note glyph on the row. The note's
         // full text isn't previewed inline (it's multi-line — hover the glyph, or open the editor); off ⇒
         // the note is still stored and editable from the right-click menu, just no glyph.
-        bool showNote = session.HasAnyNote && _showNoteLine;
+        bool showNote = session.HasProjectNote && _showNoteLine;
 
         // The activity/elapsed line sits under the name; the name centres in a single-line row and rides
         // high once an activity line sits beneath it.
@@ -2608,8 +2605,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (noteW > 0)
         {
             double noteGlyphX = HorizPad + 14 + warnW + artW + mailW + rcW + originW;
-            // Full amber for a session note; dimmed for a project-only note so it stays ambient.
-            DrawNoteIcon(ctx, noteGlyphX, nameMidY, session.HasNote ? NoteBrush : NoteDimBrush);
+            DrawNoteIcon(ctx, noteGlyphX, nameMidY, NoteBrush);
             _noteRects[rowIndex] = new Rect(noteGlyphX - 2, nameMidY - 9, NoteIconWidth + 2, 18);
         }
         if (showPr)
@@ -4123,9 +4119,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 actions.Add(MenuItem("Open in GitKraken", () => OpenInGitKrakenRequested?.Invoke(s)));
             if (!subRow && _showNoteLine)
             {
-                actions.Add(MenuItem(s.HasAnyNote ? "Edit note…" : "Add note…", () => NoteEditRequested?.Invoke(s)));
-                if (s.HasNote)
-                    actions.Add(MenuItem("Clear note", () => NoteClearRequested?.Invoke(s.SessionId)));
+                actions.Add(MenuItem(s.HasProjectNote ? "Edit note…" : "Add note…", () => NoteEditRequested?.Invoke(s)));
+                if (s.HasProjectNote)
+                    actions.Add(MenuItem("Clear note", () => NoteClearRequested?.Invoke(s.Cwd)));
             }
             if (!subRow && _externalNotifyAvailable)
             {

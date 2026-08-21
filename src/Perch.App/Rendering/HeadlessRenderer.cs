@@ -479,19 +479,18 @@ internal static class HeadlessRenderer
         mdPanel.Children.Add(md);
         RenderControl(mdPanel, Path.Combine(outDir, "markdown_1x.png"), 96);
 
-        // Row note glyph with the notes indicator on: s1 has a session note (full amber) and s2 ("api")
-        // has only a project note (dimmed amber, so it recedes) — both surface the glyph, but the
-        // project-only note is deliberately quieter.
+        // Row note glyph with the notes indicator on: s1 and s2 ("api") both carry a project note, so
+        // both surface the amber note glyph.
         var noteProbe = new OverlayCanvas();
         noteProbe.SetShowNoteLine(true);
         noteProbe.Update(SampleData.Sessions());
         RenderControl(noteProbe, Path.Combine(outDir, "overlay_notes_1x.png"), 96);
 
-        // Sticky notes: the global scratch pad (single section) and a session row note (project + session
-        // sections at double height), over a dark backdrop so the paper, tape strip and shadow read.
-        RenderOnBackdrop(Windows.StickyNoteWindow.BuildPreviewSurface(sessionRow: false),
+        // Sticky notes: the global scratch pad and a project note, each a single section, over a dark
+        // backdrop so the paper, tape strip and shadow read.
+        RenderOnBackdrop(Windows.StickyNoteWindow.BuildPreviewSurface(projectNote: false),
             Path.Combine(outDir, "note_scratch_1x.png"), Color.FromRgb(30, 30, 38));
-        RenderOnBackdrop(Windows.StickyNoteWindow.BuildPreviewSurface(sessionRow: true),
+        RenderOnBackdrop(Windows.StickyNoteWindow.BuildPreviewSurface(projectNote: true),
             Path.Combine(outDir, "note_row_1x.png"), Color.FromRgb(30, 30, 38));
 
         // Settings surface (Phase 3 remainder): a factory-built sample page exercising the new custom
