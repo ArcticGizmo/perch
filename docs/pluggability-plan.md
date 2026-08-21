@@ -1,11 +1,11 @@
 # Making Perch pluggable (third-party extensions)
 
-**Status:** In progress, 2026-08-21. Branch `pluggability-plan`. The **UI-free core of M1–M3 is
-built, tested (110+ tests) and committed**; the remaining work is the owner-drawn UI (overlay
-glyph section, consent dialog, Plugins settings page), the `command` extension point (menu-coupled),
-and the M4 sandbox — batched for a session with the user's review. This doc records the model, the
-security posture, the GitHub publish/install story, the Windows trial plugins, and (below) the
-milestone status.
+**Status:** In progress, 2026-08-21. Branch `pluggability-plan`. **M1–M3 are usable end-to-end
+through the UI** — install a plugin (from GitHub or a local folder), consent to its capabilities,
+and see it run in a collapsible "Plugins" overlay section — all built on the tested Core (120+
+tests). Remaining: the `command` extension point (menu-coupled), the M4 OS sandbox, and a security
+review. This doc records the model, the security posture, the GitHub publish/install story, the
+Windows trial plugins, and (below) the milestone status.
 
 **Housekeeping done on this branch:** the old `PluginManager` is renamed to
 `ClaudeCodePluginManager` (`src/Perch.Core/Data/ClaudeCodePluginManager.cs`). It was never a
@@ -218,22 +218,20 @@ test of publish + verified install.
 ## Milestones
 
 - **M0 — Rename. ✅ Done** (commit ee7ab02). `PluginManager` → `ClaudeCodePluginManager`.
-- **M1 — Contract + host core. ✅ Core done** (commit 2bba88d). `PluginManifest`/validator,
-  `PluginProtocol` (NDJSON), `PluginCapabilityGate`/`PluginGrants`, `IPluginSandbox`/`IPluginProcess`
-  + `ProcessPluginSandbox`, `PluginSession` (one-shot + timeout/kill), `PluginRegistry`,
-  `PluginService`. 51 tests incl. real-PowerShell integration; runnable `samples/plugins/git-dirty`.
-  *Remaining:* wire `overlay.glyph` into the overlay as a **collapsible "Plugins" section** (UI).
-- **M2 — GitHub install + verify + consent. ✅ Core done** (commit b247941). `PluginInstallSource`,
-  `GitHubReleaseParser`, `Sha256Sums`, `IPluginDownloader`/`HttpPluginDownloader`, `PluginInstaller`
-  (SHA-256 verify + zip-slip-guarded extract + manifest validate + place), `InstalledPluginRecord` +
-  `PluginConsent` (re-consent on capability/host growth) in `AppSettings`. 34 tests.
-  *Remaining:* the **consent dialog** + **Add from GitHub…** UI.
-- **M3 — Full extension points + Plugins page. ⏳ Core mostly done.** `event` extension point +
-  `SessionEvents`, `PluginService` enforces the **consented** grants (not just declared), `PluginHealth`
-  (fault → auto-disable), `PluginHost.Resolve` (master switch × on-disk × consent), master kill switch
-  (`AppSettings.PluginsEnabled`). *Remaining:* the **Plugins settings page** (enable/disable, kill
-  switch, audit/fault log, update flow — UI) and the `command` extension point (menu-coupled; manifest
-  `commands` + invoke path — deferred with the UI so the menu/settings shape drives it).
+- **M1 — Contract + host core + overlay. ✅ Done** (2bba88d, 755805a). The Core (manifest/validator,
+  NDJSON protocol, capability gate, sandbox seam + `ProcessPluginSandbox`, one-shot session, registry,
+  service) **plus** the collapsible **"Plugins" overlay section** (`OverlayCanvas.Plugins.cs`) fed by
+  `PluginMonitorHost`. Runnable `samples/plugins/git-dirty`; section verified via render mode.
+- **M2 — GitHub install + verify + consent. ✅ Done** (b247941, 755805a). Core install pipeline
+  (`PluginInstallSource`, `GitHubReleaseParser`, `Sha256Sums`, `HttpPluginDownloader`, `PluginInstaller`
+  with SHA-256 verify + zip-slip-guarded extract + `InstallFromDirectory` sideload) **plus** the
+  `PluginConsentDialog` (Allow/Deny over the requested capabilities) and the settings-page install flow.
+  `PluginConsent` re-consents on capability/host growth.
+- **M3 — Extension points + Plugins page. ✅ Mostly done** (cbc1c4d, c526f3b, 755805a). `event` point +
+  `SessionEvents`, consented-grant enforcement, `PluginHealth` (fault → auto-disable), `PluginHost.Resolve`,
+  master kill switch, `PluginStore`, **plus** the Settings **"Plugins" page** (master toggle, install from
+  GitHub / local folder, per-plugin enable/disable/remove). *Remaining:* the `command` extension point
+  (menu-coupled; manifest `commands` + invoke path) and an audit/fault log surface.
 - **M4 — Sandbox (`IPluginSandbox`) + resource limits.** Restricted-token launch on Windows;
   timeouts/interval floors/fault-disable hardened. Security review. *Not started.*
 - **M5 (later) — WASM tier** if out-of-process proves too limiting for compute-heavy plugins.
