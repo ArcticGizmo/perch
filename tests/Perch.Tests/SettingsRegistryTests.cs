@@ -38,6 +38,8 @@ public class SettingsRegistryTests
         nameof(AppSettings.DockedWidthDip),
         // Custom themes are managed by the Appearance page's designer, not a catalogue control.
         nameof(AppSettings.CustomThemes),
+        // Installed plugins are managed by the Plugins page (install/consent/enable), not a toggle control.
+        nameof(AppSettings.InstalledPlugins),
         nameof(AppSettings.PendingUpdateVersion),
         nameof(AppSettings.LastSeenVersion),
         nameof(AppSettings.AutoStartOnFirstSession),

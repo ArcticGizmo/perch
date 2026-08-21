@@ -79,6 +79,12 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<Theming.Theme>? CustomThemes { get; set; }
 
+    // Installed third-party plugins: provenance (source/tag/hash) plus the capabilities the user consented
+    // to and whether each is enabled. The granted set here is the source of truth the plugin host enforces
+    // (see Perch.Plugins.PluginConsent). Null/empty means none installed. See docs/pluggability-plan.md.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<Plugins.InstalledPluginRecord>? InstalledPlugins { get; set; }
+
     // Whether to show (and fetch, via the OAuth /usage endpoint) the session/weekly usage bars.
     // Defaults to true; a missing key in an older settings file keeps this default.
     public bool ShowUsage { get; set; } = true;

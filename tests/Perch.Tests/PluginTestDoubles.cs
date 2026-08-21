@@ -59,3 +59,17 @@ internal sealed class FakePluginSandbox(FakePluginProcess process) : IPluginSand
         return process;
     }
 }
+
+/// <summary>An <see cref="IPluginDownloader"/> serving canned responses by URL, so the installer's
+/// resolve/verify/extract orchestration is exercised with no network.</summary>
+internal sealed class FakePluginDownloader : IPluginDownloader
+{
+    public Dictionary<string, string> Texts { get; } = new();
+    public Dictionary<string, byte[]> Bytes { get; } = new();
+
+    public Task<string> GetTextAsync(string url, CancellationToken ct) =>
+        Texts.TryGetValue(url, out var t) ? Task.FromResult(t) : throw new InvalidOperationException($"no canned text for {url}");
+
+    public Task<byte[]> GetBytesAsync(string url, CancellationToken ct) =>
+        Bytes.TryGetValue(url, out var b) ? Task.FromResult(b) : throw new InvalidOperationException($"no canned bytes for {url}");
+}
