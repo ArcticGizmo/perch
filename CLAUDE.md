@@ -142,6 +142,14 @@ running the tray app.
 - **Single reused window instances.** Settings / history / stats / flight windows are created lazily and
   reused via `WindowHost.ShowOrFocus`; they're closed together in `App` (Exit / update flow via
   `CloseAuxWindows`). Wire any new top-level window into that idiom.
+- **Filling a window's content *after* `Show()` needs an explicit `InvalidateArrange()`.** Adding children
+  re-measures up the tree, but a `Center`/`Bottom`-aligned ancestor whose own arrange rect is unchanged (it
+  already fills the window) short-circuits `Arrange` and keeps the offset+size it was aligned at when the
+  container was still empty — the new content then spills out of that stale slot. Windows hid this: the
+  post-`Show` platform resize forced a full re-arrange; on macOS the resize lands *before* the content does,
+  so nothing re-arranges. Build the content before the first `Show` where you can, and call
+  `InvalidateArrange()` on the aligned ancestor when you swap it while visible (see
+  `AchievementCardWindow.ShowNextBatch`).
 - **Settings are registry-driven — add a `SettingDescriptor`, not another page.** Every user-facing setting
   is described once in `Perch.Core/Data/SettingsRegistry` (id, name, keywords, surface, kind, the
   `AppSettings` property it backs, and a `PreviewTarget`). That one entry powers the **Search** page, the
