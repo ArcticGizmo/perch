@@ -104,6 +104,42 @@ public interface ISocialClient
     /// in M5; until then a client may implement this as a no-op and rely on <see cref="GetFeedAsync"/> polling.
     /// </summary>
     IDisposable SubscribeFeed(Action<FeedItem> onPost);
+
+    // ── Networked Connect 4 ("play a friend") ────────────────────────────────────────────────────────
+    // A game is between two people who are already accepted friends; the creator plays red and moves first.
+    // The server is authoritative — every move is validated in the database, so the client only proposes
+    // moves and renders the state it gets back.
+
+    /// <summary>Creates a new Connect 4 game inviting <paramref name="opponentUserId"/> (must be an accepted
+    /// friend). You are red and move first. Throws <see cref="SocialException"/> if they aren't a friend.</summary>
+    Task<GameSummary> CreateGameAsync(Guid opponentUserId, CancellationToken ct = default);
+
+    /// <summary>Your Connect 4 games (both players are you-or-a-friend, so RLS returns only your own),
+    /// most-recently-active first — the "your turn / their turn / finished" list.</summary>
+    Task<IReadOnlyList<GameSummary>> GetGamesAsync(CancellationToken ct = default);
+
+    /// <summary>The full state of one game — its summary plus the ordered move list to rebuild the board.
+    /// Throws <see cref="SocialException"/> if the game doesn't exist or isn't yours.</summary>
+    Task<GameState> GetGameAsync(Guid gameId, CancellationToken ct = default);
+
+    /// <summary>Drops your disc into <paramref name="column"/> (0–6) in <paramref name="gameId"/>. The move is
+    /// validated server-side; returns the updated state. Throws <see cref="SocialException"/> if it isn't your
+    /// turn, the column is full, or the game is over.</summary>
+    Task<GameState> DropAsync(Guid gameId, int column, CancellationToken ct = default);
+
+    /// <summary>Resigns <paramref name="gameId"/>, conceding the win to your opponent. Idempotent on an
+    /// already-finished game. Returns the updated state.</summary>
+    Task<GameState> ResignGameAsync(Guid gameId, CancellationToken ct = default);
+
+    /// <summary>Permanently removes <paramref name="gameId"/> and its moves. Either player may remove a shared
+    /// game; idempotent (a game that's already gone is a no-op). Old finished games are also pruned server-side
+    /// on a retention schedule, so this is for tidying up now rather than a requirement.</summary>
+    Task DeleteGameAsync(Guid gameId, CancellationToken ct = default);
+
+    /// <summary>Subscribes to live changes for one game, invoking <paramref name="onChanged"/> (off the UI
+    /// thread) whenever a move lands so the caller re-fetches. Returns a handle whose disposal unsubscribes.
+    /// A client may implement this as a no-op and rely on polling.</summary>
+    IDisposable SubscribeGame(Guid gameId, Action onChanged);
 }
 
 /// <summary>A Social operation failed in a way the UI should surface (handle taken, body too long, not

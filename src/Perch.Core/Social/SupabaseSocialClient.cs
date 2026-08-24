@@ -18,7 +18,7 @@ namespace Perch.Social;
 /// the publishable key as <c>apikey</c> and the user's access token as the bearer, so row-level security
 /// scopes every read/write to the signed-in user.</para>
 /// </summary>
-public sealed class SupabaseSocialClient : ISocialClient
+public sealed partial class SupabaseSocialClient : ISocialClient
 {
     // Where the refresh token lives (via ISecretStore → DPAPI / Keychain).
     private const string RefreshTokenKey = "supabase.refresh_token";
@@ -488,8 +488,12 @@ public sealed class SupabaseSocialClient : ISocialClient
     public IDisposable SubscribeFeed(Action<FeedItem> onPost)
     {
         if (!_config.IsConfigured) return new NoopDisposable();
-        return new SupabaseRealtimeConnection(BaseUrl, _config.PublishableKey, ValidAccessTokenAsync,
-            post => onPost(new FeedItem(post.Id, new Profile(post.Author, "…"), post.Body, post.Mood, post.CreatedAt)));
+        return new SupabaseRealtimeConnection(BaseUrl, _config.PublishableKey, RealtimeChannel.Posts, ValidAccessTokenAsync,
+            frame =>
+            {
+                if (RealtimeProtocol.TryParseInsert(frame, out var post))
+                    onPost(new FeedItem(post.Id, new Profile(post.Author, "…"), post.Body, post.Mood, post.CreatedAt));
+            });
     }
 
     // Batch-fetches profiles by id (RLS returns only those you may see: your own + friendship-edge shared).
