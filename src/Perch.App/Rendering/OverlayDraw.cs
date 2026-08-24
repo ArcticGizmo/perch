@@ -49,18 +49,28 @@ internal static class OverlayDraw
     public static FormattedText Emoji(string s, double size, IBrush brush) =>
         new(s ?? "", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, EmojiFace, size, brush);
 
-    /// <summary>Draws an emoji built via <see cref="Emoji"/> vertically centred on <paramref name="midY"/> by
-    /// its <em>em box</em>, with its left edge at <paramref name="x"/>. Colour-emoji glyphs sit high in the
-    /// FormattedText line box (the box carries a tall ascent), so centring by <c>Height</c> renders them too
-    /// high with empty space beneath; anchoring off the baseline and the em size centres the glyph itself.
-    /// <paramref name="emSize"/> is the size passed to <see cref="Emoji"/>.</summary>
+    /// <summary>Draws an emoji built via <see cref="Emoji"/> vertically centred on <paramref name="midY"/>, with
+    /// its left edge at <paramref name="x"/>. Colour-emoji metrics don't give a clean centre: the FormattedText
+    /// line box carries a tall ascent, so centring by <c>Height</c> renders the glyph too high, while centring
+    /// its em box off the baseline renders it too low — so we split the difference. <paramref name="emSize"/> is
+    /// the size passed to <see cref="Emoji"/>.</summary>
     public static void EmojiLeftMid(DrawingContext ctx, FormattedText ft, double x, double midY, double emSize)
-        => ctx.DrawText(ft, new Point(x, midY + emSize / 2 - ft.Baseline));
+        => ctx.DrawText(ft, new Point(x, EmojiTop(ft, midY, emSize)));
 
-    /// <summary>Draws an emoji centred on (<paramref name="cx"/>, <paramref name="cy"/>) by its em box — the
-    /// two-axis counterpart of <see cref="EmojiLeftMid"/> (see it for why <c>Height</c> can't be used).</summary>
+    /// <summary>Draws an emoji centred on (<paramref name="cx"/>, <paramref name="cy"/>) — the two-axis
+    /// counterpart of <see cref="EmojiLeftMid"/>.</summary>
     public static void EmojiCentered(DrawingContext ctx, FormattedText ft, double cx, double cy, double emSize)
-        => ctx.DrawText(ft, new Point(cx - ft.Width / 2, cy + emSize / 2 - ft.Baseline));
+        => ctx.DrawText(ft, new Point(cx - ft.Width / 2, EmojiTop(ft, cy, emSize)));
+
+    // Blend between box-centring (bias 0 → glyph too high) and em-box baseline-centring (bias 1 → too low).
+    // Tuned against the live app (headless emoji metrics differ): nudge toward 0 if emoji sit too low, toward 1
+    // if too high.
+    private const double EmojiCenterBias = 0.4;
+
+    // The top-of-box Y that vertically centres an emoji glyph on midY (see EmojiCenterBias).
+    private static double EmojiTop(FormattedText ft, double midY, double emSize)
+        => (1 - EmojiCenterBias) * (midY - ft.Height / 2)
+           + EmojiCenterBias * (midY + emSize / 2 - ft.Baseline);
 
     /// <summary>Draws <paramref name="ft"/> left-aligned at <paramref name="x"/>, vertically centred on
     /// <paramref name="midY"/> using its measured line height (the anti-clipping rule).</summary>
