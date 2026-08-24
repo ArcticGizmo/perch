@@ -472,11 +472,15 @@ internal static class SettingsRegistry
 
         // Rendered as a two-option segmented toggle (see SettingsCatalogView.DropdownEditor). Order matches
         // the OverlayPresentationMode enum ordinals (Floating, Docked).
+        // Windows-only: docking means *reserving* the edge via the shell's AppBar API, and macOS has no
+        // equivalent, so the whole setting is hidden there rather than offering a mode that can't hold its
+        // space. See docs/macos-docked-mode-investigation.md.
         Info("overlay-mode", "Overlay mode",
             "Float the overlay over a corner, or dock it as a reserved screen-edge column that maximized windows can't cover (Ctrl+Shift+W collapses/expands it).",
             SettingSurface.Advanced, SettingKind.Dropdown,
             ["overlay", "mode", "float", "floating", "dock", "docked", "column", "reserve", "sidebar", "edge", "appbar"],
-            PreviewTarget.None, nameof(AppSettings.OverlayMode)),
+            PreviewTarget.None, nameof(AppSettings.OverlayMode))
+            with { Requires = PlatformFeature.EdgeReservation },
 
         Info("start-mode", "Start Perch",
             "When Perch launches itself - off, on session start, or at login.",
@@ -487,7 +491,7 @@ internal static class SettingsRegistry
         // Opens the drag-to-place editor (also reachable from the overlay header's right-click menu).
         // Backs both placement properties so the coverage test is satisfied without a NotSettings entry.
         Info("overlay-placement", "Initial overlay placement",
-            "Choose where the overlay, the dense strip and the docked column first appear, by dragging a preview.",
+            "Choose where each overlay layout first appears, by dragging a preview.",
             SettingSurface.Advanced, SettingKind.List,
             ["placement", "position", "corner", "dock", "docked", "move", "initial", "location", "overlay", "dense", "side", "where"],
             PreviewTarget.None,
@@ -535,12 +539,19 @@ internal static class SettingsRegistry
     }
 
     /// <summary>Descriptors whose name/keywords/surface match <paramref name="query"/> (all match when blank).</summary>
-    public static IEnumerable<SettingDescriptor> Search(string query)
+    public static IEnumerable<SettingDescriptor> Search(string query, Func<PlatformFeature, bool> supports)
     {
         foreach (var d in All)
-            if (d.MatchesQuery(query))
+            if (supports(d.Requires) && d.MatchesQuery(query))
                 yield return d;
     }
+
+    /// <summary>Every setting this platform can actually offer — <see cref="All"/> minus the ones whose
+    /// <see cref="SettingDescriptor.Requires"/> capability is missing here (Docked mode off Windows). The
+    /// caller supplies the capability probe; the app head owns that mapping
+    /// (<c>PlatformServices.Supports</c>).</summary>
+    public static IEnumerable<SettingDescriptor> Available(Func<PlatformFeature, bool> supports)
+        => All.Where(d => supports(d.Requires));
 
     private static SettingDescriptor Toggle(string id, string name, string desc, SettingSurface surface,
         string[] keywords, PreviewTarget preview, string backing,

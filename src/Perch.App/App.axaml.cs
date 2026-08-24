@@ -402,8 +402,10 @@ public partial class App : Application
             _overlay.Show();
 
             // If the persisted mode is Docked, reserve the edge column now the window (and its handle) exist.
-            // Floating is the default, so an older settings file just keeps floating.
-            if (settings.OverlayMode == OverlayPresentationMode.Docked)
+            // Floating is the default, so an older settings file just keeps floating. A settings file carrying
+            // Docked from a Windows machine stays floating here when the platform can't reserve an edge — the
+            // value is left on disk untouched so it still applies when the same profile is read on Windows.
+            if (settings.OverlayMode == OverlayPresentationMode.Docked && DockedModeAvailable)
                 _overlay.Canvas.SetOverlayMode(OverlayPresentationMode.Docked);
 
             // Once the UI is up, pop the post-update "what's new" window (if this launch detected an update).
@@ -1737,9 +1739,15 @@ public partial class App : Application
     // Ctrl+Shift+W — collapse/expand the docked column. No-op unless the overlay is in Docked mode.
     private void ToggleDocked() => _overlay?.Canvas.ToggleDockedCollapsed();
 
+    // Docked mode reserves a screen-edge column through the OS, which only Windows can do — everywhere else
+    // the whole feature is withheld (setting, hotkey, overlay menu item, placement-editor segment) rather
+    // than shipped as a column maximized windows quietly cover. See docs/macos-docked-mode-investigation.md.
+    public static bool DockedModeAvailable => PlatformServices.EdgeReservation.IsSupported;
+
     // Switch the live overlay between Floating and Docked from the settings segmented control.
     private void SetOverlayMode()
     {
+        if (!DockedModeAvailable) return;
         if (_appSettings is { } s) _overlay?.Canvas.SetOverlayMode(s.OverlayMode);
     }
 
@@ -1747,6 +1755,7 @@ public partial class App : Application
     // live (the settings segmented control reads it back next time it opens).
     private void ToggleOverlayMode()
     {
+        if (!DockedModeAvailable) return;
         if (_appSettings is not { } s) return;
         s.OverlayMode = s.OverlayMode == OverlayPresentationMode.Docked
             ? OverlayPresentationMode.Floating
@@ -1769,7 +1778,7 @@ public partial class App : Application
         TryRegister(s.HotkeyToggleDense,   () => Dispatcher.UIThread.Post(ToggleDense));
         TryRegister(s.HotkeyCycleSessions, () => Dispatcher.UIThread.Post(CycleSessions));
         TryRegister(s.HotkeyOpenSwitcher,  () => Dispatcher.UIThread.Post(OpenSwitcher));
-        TryRegister(s.HotkeyToggleDocked,  () => Dispatcher.UIThread.Post(ToggleDocked));
+        if (DockedModeAvailable) TryRegister(s.HotkeyToggleDocked, () => Dispatcher.UIThread.Post(ToggleDocked));
     }
 
     private void TryRegister(HotkeyBinding binding, Action onPressed)

@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using Perch.Platform;
 
 namespace Perch.Platform.Windows;
@@ -50,6 +50,9 @@ public sealed class EdgeReservation : IEdgeReservation
 
     // The handle the appbar is currently registered against; Zero when nothing is reserved.
     private IntPtr _registered;
+
+    /// <summary>Windows has the AppBar API, so Docked mode is offered here.</summary>
+    public bool IsSupported => true;
 
     public void Reserve(IntPtr handle, ReservedEdge edge, int thicknessPx,
                         int monitorX, int monitorY, int monitorW, int monitorH)

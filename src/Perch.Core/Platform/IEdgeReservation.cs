@@ -1,4 +1,4 @@
-namespace Perch.Platform;
+﻿namespace Perch.Platform;
 
 /// <summary>Which screen edge an <see cref="IEdgeReservation"/> reserves space along.</summary>
 public enum ReservedEdge { Left, Top, Right, Bottom }
@@ -8,8 +8,9 @@ public enum ReservedEdge { Left, Top, Right, Bottom }
 /// boundary instead of covering it — the mechanism behind Perch's "Docked" overlay mode. On Windows this
 /// is an application desktop toolbar (<c>SHAppBarMessage</c>), the same shell facility the taskbar uses:
 /// committing a reservation shrinks the desktop work area, and the OS then keeps maximized windows clear
-/// of the strip. macOS/Linux heads have no direct equivalent yet, so they get a no-op implementation and
-/// Docked mode simply floats without reserving there.
+/// of the strip. macOS has no equivalent - public or private - so its implementation reports
+/// <see cref="IsSupported"/> false and the app doesn't offer Docked mode at all there (see
+/// <c>docs/macos-docked-mode-investigation.md</c>).
 ///
 /// <para>Every method is best-effort and never throws; a zero handle is ignored. A single instance tracks
 /// one reservation for one window — call <see cref="Reserve"/> again to move/resize it (edge, thickness or
@@ -18,6 +19,12 @@ public enum ReservedEdge { Left, Top, Right, Bottom }
 /// </summary>
 public interface IEdgeReservation
 {
+    /// <summary>Whether this platform can reserve screen edge space at all. False where the OS provides no
+    /// mechanism (macOS/Linux) - Docked mode is then withheld entirely rather than shipped as a column that
+    /// silently fails to hold its space, so this gates the setting, the hotkey and the placement editor's
+    /// docked segment as well as the reservation itself.</summary>
+    bool IsSupported { get; }
+
     /// <summary>Reserves (or updates) a strip <paramref name="thicknessPx"/> physical pixels deep along
     /// <paramref name="edge"/> of the monitor whose physical bounds are given. Ties the reservation to
     /// <paramref name="handle"/> (the overlay's native window handle); registering on the first call.

@@ -4174,8 +4174,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             items.Add(MenuItem(_usageEnabled ? "Hide usage" : "Show usage",
                 () => UsageToggleRequested?.Invoke(!_usageEnabled)));
             items.Add(new Separator());
-            items.Add(MenuItem(_docked ? "Switch to floating overlay" : "Dock to screen edge",
-                () => OverlayModeToggleRequested?.Invoke()));
+            // Only where the OS can actually reserve the edge (Windows) — see App.DockedModeAvailable.
+            if (App.DockedModeAvailable)
+                items.Add(MenuItem(_docked ? "Switch to floating overlay" : "Dock to screen edge",
+                    () => OverlayModeToggleRequested?.Invoke()));
             items.Add(MenuItem("Set initial placements…", () => SetPlacementsRequested?.Invoke()));
             if (CanResetWidth) items.Add(ResetSizeMenuItem());
 

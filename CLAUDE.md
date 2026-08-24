@@ -157,7 +157,12 @@ running the tray app.
   `OverlayCanvas` (`Views/PreviewPane`) seeded from `Rendering/SampleData` and re-gated through the shared
   `Services/OverlaySettingsGates.Apply(canvas, settings)`, the same helper the live overlay uses. When you
   add a setting: add the `AppSettings` property **and** a registry descriptor (a coverage test,
-  `SettingsRegistryTests`, fails the build otherwise); if it drives an overlay glyph, add a canvas `Set*`
+  `SettingsRegistryTests`, fails the build otherwise); if it depends on an OS capability some head lacks,
+  mark it `Requires = PlatformFeature.X` and teach `PlatformServices.Supports` about it — the descriptor
+  stays in `All` (so coverage passes and a settings file written on another OS still round-trips) while
+  `SettingsRegistry.Available`/`Search` hide it from the catalogue and search (Docked mode does this: it
+  needs `IEdgeReservation.IsSupported`, which is Windows-only — see
+  `docs/macos-docked-mode-investigation.md`); if it drives an overlay glyph, add a canvas `Set*`
   gate + a line in `OverlaySettingsGates` and a `PreviewTarget`; if it needs live activation beyond the
   idempotent `DisplayChanged` (a poll/sampler), extend `SettingsLiveApply`. The pre-registry per-topic
   pages (Indicators, Monitoring, Usage, …) are retired; a handful of pages with unique actions/editors

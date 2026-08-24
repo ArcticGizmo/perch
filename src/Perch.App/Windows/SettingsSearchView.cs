@@ -109,7 +109,7 @@ internal sealed class SettingsSearchView : StackPanel
         var query = _box.Text?.Trim() ?? "";
         _results.Children.Clear();
 
-        var matches = SettingsRegistry.Search(query).ToList();
+        var matches = SettingsRegistry.Search(query, PlatformServices.Supports).ToList();
         _count.Text = matches.Count == 1 ? "1 setting" : $"{matches.Count} settings";
 
         if (matches.Count == 0)

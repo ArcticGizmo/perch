@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Collections;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
@@ -167,24 +167,26 @@ internal sealed class PlacementEditorWindow : Window
         };
 
         // Overlay / Dense is a one-or-the-other choice, so present it as a joined segmented control (the
-        // selected half fills with the accent) rather than two independent buttons.
+        // selected half fills with the accent) rather than two independent buttons. The Docked segment only
+        // appears where the OS can reserve a screen edge (see App.DockedModeAvailable); the button is still
+        // built so the styling pass below needn't branch, it just never joins the tree.
         _floatingModeBtn = MakeSegment("Overlay", EditMode.Floating);
         _denseModeBtn = MakeSegment("Dense", EditMode.Dense);
         _dockedModeBtn = MakeSegment("Docked", EditMode.Docked);
+        var segments = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0 };
+        segments.Children.Add(_floatingModeBtn);
+        segments.Children.Add(SegmentDivider());
+        segments.Children.Add(_denseModeBtn);
+        if (App.DockedModeAvailable)
+        {
+            segments.Children.Add(SegmentDivider());
+            segments.Children.Add(_dockedModeBtn);
+        }
         var segmented = new Border
         {
             BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8), ClipToBounds = true, Background = Palette.ButtonBgBrush,
-            Child = new StackPanel
-            {
-                Orientation = Orientation.Horizontal, Spacing = 0,
-                Children =
-                {
-                    _floatingModeBtn, new Border { Width = 1, Background = Palette.BorderBrush },
-                    _denseModeBtn, new Border { Width = 1, Background = Palette.BorderBrush },
-                    _dockedModeBtn,
-                },
-            },
+            Child = segments,
         };
 
         var resetBtn = MakeButton("Reset to defaults", ResetCurrent);
@@ -228,6 +230,9 @@ internal sealed class PlacementEditorWindow : Window
         btn.Click += (_, _) => SetMode(mode);
         return btn;
     }
+
+    // The hairline between two joined segments.
+    private static Border SegmentDivider() => new() { Width = 1, Background = Palette.BorderBrush };
 
     private static void StyleSegment(Button btn, bool selected)
     {
