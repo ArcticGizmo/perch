@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- The macOS installer DMG now actually looks like an installer: a styled Finder window with a "drag Perch
+  onto Applications" backdrop, an arrow, and the icons parked either side of it — instead of a naked folder.
+
 ---
 
 ## [v0.3.63] - 2026-08-21
