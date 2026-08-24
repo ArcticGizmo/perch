@@ -158,7 +158,9 @@ internal sealed class DebugSocialWindow : Window
             "Opens two boards — yours and the puppet's — for one game, so you can play both sides here and watch " +
             "moves sync through the real backend. Befriends the puppet first if needed. (Needs the connect4 " +
             "migration applied to the database.)"));
-        panel.Children.Add(ButtonRow(("Start Connect 4 vs puppet (both boards)", StartConnect4)));
+        panel.Children.Add(ButtonRow(
+            ("Start Connect 4 vs puppet (both boards)", StartConnect4),
+            ("Invite me (from puppet)", InviteFromPuppet)));
 
         panel.Children.Add(SettingsUi.Separator());
         panel.Children.Add(SettingsUi.FieldCaption("Reaction diagnostics (live)"));
@@ -340,6 +342,29 @@ internal sealed class DebugSocialWindow : Window
 
         _c4Windows.Add(mine);
         _c4Windows.Add(theirs);
+    }
+
+    // Has the puppet send you a Connect 4 invite, so the accept/decline flow can be exercised from the overlay's
+    // GAMES strip (or the lobby). Befriends first if needed.
+    private async Task InviteFromPuppet()
+    {
+        var p = RequirePuppet();
+        if (_real.Current.Me is not { } me) throw new SocialException("Your real account needs a claimed handle first.");
+        if (p.Current.Me is not { } pup) throw new SocialException("Claim a puppet handle first.");
+
+        try
+        {
+            await p.RequestGameAsync(me.Id);
+        }
+        catch (SocialException)
+        {
+            Log("Not friends yet — befriending the puppet, then inviting…");
+            try { await p.SendRequestAsync(me.Id); } catch { }
+            try { await _real.RespondAsync(pup.Id, accept: true); } catch { }
+            await p.RequestGameAsync(me.Id);
+        }
+        _refreshReal();
+        Log($"@{pup.Handle} invited you to Connect 4 — accept it from the overlay's GAMES strip or the lobby.");
     }
 
     private async Task<Profile> FindTarget(SupabaseSocialClient p)

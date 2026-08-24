@@ -116,6 +116,64 @@ public class FakeSocialGameTests
     }
 
     [Fact]
+    public async Task RequestGame_creates_a_pending_invite_not_a_game()
+    {
+        var (fake, _, friend) = SignedInWithFriend();
+        var req = await fake.RequestGameAsync(friend.Id);
+
+        Assert.Empty(await fake.GetGamesAsync());                       // no game exists yet
+        var invites = await fake.GetGameRequestsAsync();
+        Assert.Contains(invites, r => r.Id == req.Id);
+        Assert.Equal(friend.Id, req.Addressee.Id);
+    }
+
+    [Fact]
+    public async Task RequestGame_rejects_a_non_friend()
+    {
+        var fake = new FakeSocialClient();
+        fake.SignInAs("alice");
+        var stranger = fake.SeedUser("carol");
+        await Assert.ThrowsAsync<SocialException>(() => fake.RequestGameAsync(stranger.Id));
+    }
+
+    [Fact]
+    public async Task AcceptingAnInvite_creates_the_game_and_clears_the_request()
+    {
+        var (fake, me, friend) = SignedInWithFriend();
+        // The friend invites me (I'm the addressee, so I can accept).
+        var req = fake.SimulateIncomingGameRequest(friend.Id);
+
+        var state = await fake.AcceptGameRequestAsync(req.Id);
+        Assert.Equal(GameStatus.InProgress, state.Summary.Status);
+        Assert.Equal(friend.Id, state.Summary.Red.Id);   // the inviter plays red
+        Assert.Equal(me.Id, state.Summary.Yellow.Id);
+
+        Assert.Contains(await fake.GetGamesAsync(), g => g.Id == state.Summary.Id);
+        Assert.Empty(await fake.GetGameRequestsAsync());  // the invite is gone
+    }
+
+    [Fact]
+    public async Task OnlyTheInvitee_canAccept()
+    {
+        var (fake, _, friend) = SignedInWithFriend();
+        // I invite the friend — I'm the requester, so I can't accept my own invite.
+        var req = await fake.RequestGameAsync(friend.Id);
+        await Assert.ThrowsAsync<SocialException>(() => fake.AcceptGameRequestAsync(req.Id));
+    }
+
+    [Fact]
+    public async Task DecliningAnInvite_removes_it_without_a_game()
+    {
+        var (fake, _, friend) = SignedInWithFriend();
+        var req = fake.SimulateIncomingGameRequest(friend.Id);
+
+        await fake.DeclineGameRequestAsync(req.Id);
+        Assert.Empty(await fake.GetGameRequestsAsync());
+        Assert.Empty(await fake.GetGamesAsync());
+        await fake.DeclineGameRequestAsync(req.Id);   // idempotent
+    }
+
+    [Fact]
     public async Task DeleteGame_removes_it_and_is_idempotent()
     {
         var (fake, _, friend) = SignedInWithFriend();

@@ -13,6 +13,71 @@ public sealed partial class FakeSocialClient
 {
     private readonly Dictionary<Guid, FakeGame> _games = new();
     private readonly Dictionary<Guid, List<Action>> _gameSubs = new();
+    private readonly Dictionary<Guid, FakeRequest> _gameRequests = new();
+
+    public Task<GameRequest> RequestGameAsync(Guid opponentUserId, CancellationToken ct = default)
+    {
+        GameRequest request;
+        lock (_gate)
+        {
+            RequireMe();
+            if (opponentUserId == _me!.Id) throw new SocialException("You can't play yourself.");
+            bool friends = _edges.TryGetValue(opponentUserId, out var s)
+                           && s == FriendshipState.Accepted && !_blocked.Contains(opponentUserId);
+            if (!friends) throw new SocialException("You can only invite an accepted friend.");
+            if (_gameRequests.Values.Any(r => r.Requester == _me.Id && r.Addressee == opponentUserId))
+                throw new SocialException("You've already invited them.");
+
+            var fr = new FakeRequest { Requester = _me.Id, Addressee = opponentUserId };
+            _gameRequests[fr.Id] = fr;
+            request = RequestModelLocked(fr);
+        }
+        return Task.FromResult(request);
+    }
+
+    public Task<IReadOnlyList<GameRequest>> GetGameRequestsAsync(CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            RequireMe();
+            var list = _gameRequests.Values
+                .Where(r => r.Requester == _me!.Id || r.Addressee == _me.Id)
+                .OrderByDescending(r => r.Created)
+                .Select(RequestModelLocked)
+                .ToList();
+            return Task.FromResult<IReadOnlyList<GameRequest>>(list);
+        }
+    }
+
+    public Task<GameState> AcceptGameRequestAsync(Guid requestId, CancellationToken ct = default)
+    {
+        GameState state;
+        lock (_gate)
+        {
+            RequireMe();
+            if (!_gameRequests.TryGetValue(requestId, out var fr))
+                throw new SocialException("That invite is no longer available.");
+            if (fr.Addressee != _me!.Id) throw new SocialException("Only the invitee can accept.");
+
+            var fg = new FakeGame { Red = fr.Requester, Yellow = fr.Addressee };
+            _games[fg.Id] = fg;
+            _gameRequests.Remove(requestId);
+            state = StateLocked(fg);
+        }
+        return Task.FromResult(state);
+    }
+
+    public Task DeclineGameRequestAsync(Guid requestId, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            RequireMe();
+            // Only remove a request you're part of; a missing one is a no-op (idempotent).
+            if (_gameRequests.TryGetValue(requestId, out var fr) && (fr.Requester == _me!.Id || fr.Addressee == _me.Id))
+                _gameRequests.Remove(requestId);
+        }
+        return Task.CompletedTask;
+    }
 
     public Task<GameSummary> CreateGameAsync(Guid opponentUserId, CancellationToken ct = default)
     {
@@ -123,6 +188,18 @@ public sealed partial class FakeSocialClient
 
     // ── Test/preview seams (not part of ISocialClient) ──────────────────────────────────────────────
 
+    /// <summary>Simulates <paramref name="fromUserId"/> inviting you to a game (shows as an incoming request).</summary>
+    public GameRequest SimulateIncomingGameRequest(Guid fromUserId)
+    {
+        lock (_gate)
+        {
+            RequireMe();
+            var fr = new FakeRequest { Requester = fromUserId, Addressee = _me!.Id };
+            _gameRequests[fr.Id] = fr;
+            return RequestModelLocked(fr);
+        }
+    }
+
     /// <summary>Simulates the opponent dropping into <paramref name="column"/> — applies a move for whoever's
     /// turn it currently is (so call it after your own move) and fires the game's subscribers.</summary>
     public void SimulateOpponentDrop(Guid gameId, int column)
@@ -160,6 +237,13 @@ public sealed partial class FakeSocialClient
 
     private GameState StateLocked(FakeGame fg) => new(SummaryLocked(fg), fg.Moves.ToList());
 
+    private GameRequest RequestModelLocked(FakeRequest fr)
+    {
+        var requester = _profiles.GetValueOrDefault(fr.Requester) ?? new Profile(fr.Requester, "unknown");
+        var addressee = _profiles.GetValueOrDefault(fr.Addressee) ?? new Profile(fr.Addressee, "unknown");
+        return new GameRequest(fr.Id, requester, addressee, fr.Created);
+    }
+
     private static GameStatus MapStatus(Connect4Status s) => s switch
     {
         Connect4Status.RedWon => GameStatus.RedWon,
@@ -187,6 +271,14 @@ public sealed partial class FakeSocialClient
         public List<int> Moves { get; } = new();
         public GameStatus? Forced { get; set; }        // set by resign; otherwise status is derived from Moves
         public DateTimeOffset Updated { get; set; } = DateTimeOffset.UtcNow;
+    }
+
+    private sealed class FakeRequest
+    {
+        public Guid Id { get; } = Guid.NewGuid();
+        public Guid Requester { get; init; }
+        public Guid Addressee { get; init; }
+        public DateTimeOffset Created { get; } = DateTimeOffset.UtcNow;
     }
 
     private sealed class GameSubscription : IDisposable

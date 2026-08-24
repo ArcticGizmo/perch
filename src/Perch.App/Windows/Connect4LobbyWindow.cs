@@ -22,6 +22,7 @@ internal sealed class Connect4LobbyWindow : Window
     private readonly Action<GameSummary> _onPlay;
     private readonly TextBlock _status;
     private readonly StackPanel _gamesPanel;
+    private readonly StackPanel _requestsPanel;
     private readonly StackPanel _friendsPanel;
 
     public Connect4LobbyWindow(ISocialClient social, Action<GameSummary> onPlay)
@@ -39,14 +40,18 @@ internal sealed class Connect4LobbyWindow : Window
 
         _status = SettingsUi.BodyText("");
         _gamesPanel = new StackPanel { Spacing = 6 };
+        _requestsPanel = new StackPanel { Spacing = 6 };
         _friendsPanel = new StackPanel { Spacing = 6 };
 
         var panel = new StackPanel { Margin = new Thickness(16), Spacing = 10 };
         panel.Children.Add(SettingsUi.SectionTitle("Your games"));
         panel.Children.Add(_gamesPanel);
         panel.Children.Add(SettingsUi.Separator());
+        panel.Children.Add(SettingsUi.SectionTitle("Invites"));
+        panel.Children.Add(_requestsPanel);
+        panel.Children.Add(SettingsUi.Separator());
         panel.Children.Add(SettingsUi.SectionTitle("Start a game"));
-        panel.Children.Add(SettingsUi.BodyText("Challenge any of your friends — you'll play red and move first."));
+        panel.Children.Add(SettingsUi.BodyText("Invite a friend — they accept, then you play red and move first."));
         panel.Children.Add(_friendsPanel);
         panel.Children.Add(_status);
 
@@ -65,14 +70,20 @@ internal sealed class Connect4LobbyWindow : Window
         try
         {
             var games = await _social.GetGamesAsync();
+            var requests = await _social.GetGameRequestsAsync();
             var friends = await _social.GetFriendsAsync();
             var accepted = friends.Where(f => f.State == FriendshipState.Accepted).ToList();
+            var meId = _social.Current.Me?.Id ?? Guid.Empty;
 
             _gamesPanel.Children.Clear();
+            _requestsPanel.Children.Clear();
             _friendsPanel.Children.Clear();
 
-            if (games.Count == 0) _gamesPanel.Children.Add(SettingsUi.BodyText("No games yet — start one below."));
+            if (games.Count == 0) _gamesPanel.Children.Add(SettingsUi.BodyText("No games yet — invite a friend below."));
             else foreach (var g in games) _gamesPanel.Children.Add(GameRow(g));
+
+            if (requests.Count == 0) _requestsPanel.Children.Add(SettingsUi.BodyText("No pending invites."));
+            else foreach (var r in requests) _requestsPanel.Children.Add(RequestRow(r, meId));
 
             if (accepted.Count == 0) _friendsPanel.Children.Add(SettingsUi.BodyText("No friends yet — add some in the Friends window."));
             else foreach (var f in accepted.OrderBy(f => f.Profile.Handle)) _friendsPanel.Children.Add(FriendRow(f));
@@ -103,10 +114,38 @@ internal sealed class Connect4LobbyWindow : Window
     private Control FriendRow(Friend f)
     {
         var label = new TextBlock { Text = $"@{f.Profile.Handle}", Foreground = Palette.FgBrush, VerticalAlignment = VerticalAlignment.Center };
-        var play = SettingsUi.FlatButton("Play");
-        play.Click += async (_, _) => await StartGame(f.Profile);
+        var invite = SettingsUi.FlatButton("Invite");
+        invite.Click += async (_, _) => await SendInvite(f.Profile);
         var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right };
-        right.Children.Add(play);
+        right.Children.Add(invite);
+        return Row(label, right);
+    }
+
+    // A pending invite: one you received (Accept / Decline) or one you sent (awaiting, with Cancel).
+    private Control RequestRow(GameRequest r, Guid meId)
+    {
+        bool incoming = r.IsIncoming(meId);
+        var label = new TextBlock
+        {
+            Text = incoming ? $"@{r.Requester.Handle} invited you" : $"you invited @{r.Addressee.Handle}",
+            Foreground = Palette.FgBrush, VerticalAlignment = VerticalAlignment.Center,
+        };
+        var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right };
+        if (incoming)
+        {
+            var accept = SettingsUi.FlatButton("Accept");
+            accept.Click += async (_, _) => await AcceptInvite(r);
+            var decline = SettingsUi.FlatButton("Decline");
+            decline.Click += async (_, _) => await DeclineInvite(r, "Declined the invite.");
+            right.Children.Add(accept);
+            right.Children.Add(decline);
+        }
+        else
+        {
+            var cancel = SettingsUi.FlatButton("Cancel");
+            cancel.Click += async (_, _) => await DeclineInvite(r, "Cancelled the invite.");
+            right.Children.Add(cancel);
+        }
         return Row(label, right);
     }
 
@@ -121,17 +160,41 @@ internal sealed class Connect4LobbyWindow : Window
         catch { _status.Text = "Couldn't remove that game. Please try again."; }
     }
 
-    private async Task StartGame(Profile opponent)
+    private async Task SendInvite(Profile opponent)
     {
-        _status.Text = $"Starting a game with @{opponent.Handle}…";
+        _status.Text = $"Inviting @{opponent.Handle}…";
         try
         {
-            var game = await _social.CreateGameAsync(opponent.Id);
-            _onPlay(game);
+            await _social.RequestGameAsync(opponent.Id);
+            _status.Text = $"Invited @{opponent.Handle} — they'll get a request to accept.";
+            await Refresh();
+        }
+        catch (SocialException ex) { _status.Text = ex.Message; }
+        catch { _status.Text = "Couldn't send the invite. Please try again."; }
+    }
+
+    private async Task AcceptInvite(GameRequest r)
+    {
+        try
+        {
+            var state = await _social.AcceptGameRequestAsync(r.Id);
+            _onPlay(state.Summary);   // jump straight into the new game
             Close();
         }
         catch (SocialException ex) { _status.Text = ex.Message; }
-        catch { _status.Text = "Couldn't start the game. Please try again."; }
+        catch { _status.Text = "Couldn't accept the invite. Please try again."; }
+    }
+
+    private async Task DeclineInvite(GameRequest r, string done)
+    {
+        try
+        {
+            await _social.DeclineGameRequestAsync(r.Id);
+            _status.Text = done;
+            await Refresh();
+        }
+        catch (SocialException ex) { _status.Text = ex.Message; }
+        catch { _status.Text = "Couldn't update the invite. Please try again."; }
     }
 
     // How a game reads from the signed-in player's point of view.

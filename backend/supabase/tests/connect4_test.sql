@@ -9,7 +9,7 @@
 -- auth.uid() resolves a signed-in user in production.
 
 begin;
-select plan(14);
+select plan(19);
 
 -- ── fixtures ────────────────────────────────────────────────────────────────────
 -- alice & bob are accepted friends; carol is a stranger.
@@ -150,6 +150,50 @@ select is(
   (select count(*)::int from public.games where id = 'a0000000-0000-0000-0000-000000000001')
     + (select count(*)::int from public.moves where game_id = 'a0000000-0000-0000-0000-000000000001'),
   0, 'games_delete: a player deletes their own game and its moves cascade');
+
+-- ── game invites (request / accept) ──────────────────────────────
+-- 15) An accepted friend can send an invite.
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');   -- alice invites bob
+insert into public.game_requests (id, requester, addressee)
+  values ('c0000000-0000-0000-0000-000000000001',
+          '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222');
+select is(
+  (select count(*)::int from public.game_requests where id = 'c0000000-0000-0000-0000-000000000001'),
+  1, 'game invite: an accepted friend can invite');
+reset role;
+
+-- 16) A stranger cannot invite (RLS WITH CHECK).
+select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
+select throws_ok(
+  $$insert into public.game_requests (requester, addressee)
+      values ('33333333-3333-3333-3333-333333333333', '11111111-1111-1111-1111-111111111111')$$,
+  '42501', 'game invite: a stranger cannot invite');
+
+-- 17) A third party cannot see the invite.
+select is(
+  (select count(*)::int from public.game_requests where id = 'c0000000-0000-0000-0000-000000000001'),
+  0, 'game invite: a third party cannot see it');
+reset role;
+
+-- 18) Only the invitee can accept (alice is the requester here, not the addressee).
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+select throws_ok(
+  $$select public.accept_game_request('c0000000-0000-0000-0000-000000000001')$$,
+  '42501', 'accept: only the invitee can accept');
+reset role;
+
+-- 19) The invitee accepts → a game is created and the request is gone.
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');   -- bob accepts
+select public.accept_game_request('c0000000-0000-0000-0000-000000000001');
+reset role;
+select is(
+  (select count(*)::int from public.game_requests where id = 'c0000000-0000-0000-0000-000000000001')
+    + (select case when exists (
+        select 1 from public.games
+        where player_red = '11111111-1111-1111-1111-111111111111'
+          and player_yellow = '22222222-2222-2222-2222-222222222222'
+          and status = 'in_progress') then 0 else 1 end),
+  0, 'accept: the request is gone and an in-progress game now exists');
 
 select * from finish();
 rollback;

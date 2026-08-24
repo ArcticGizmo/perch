@@ -109,8 +109,8 @@ public sealed partial class OverlayCanvas
             double h = SocialHeaderHeight;
             if (!_regionExpanded) return h;
 
-            // The games strip sits between the header and the friend rows, when there are active games.
-            if (_games.Count > 0) h += GamesRowHeight;
+            // The games strip sits between the header and the friend rows, when there are invites or games.
+            if (HasGameStripItems) h += GamesRowHeight;
 
             // Two lines per friend/you row: handle + time on top, status + reactions below — the overlay is
             // narrow, so the status needs its own line to breathe.
@@ -220,7 +220,7 @@ public sealed partial class OverlayCanvas
         if (!_regionExpanded) return;
 
         // The Connect 4 strip, between the header and the friends.
-        if (_games.Count > 0) { DrawGamesStrip(ctx, width, y); y += GamesRowHeight; }
+        if (HasGameStripItems) { DrawGamesStrip(ctx, width, y); y += GamesRowHeight; }
 
         if (_roster is { Friends.Count: > 0 } r)
         {
@@ -606,9 +606,8 @@ public sealed partial class OverlayCanvas
     // Routes a click inside the region. Returns true if it consumed the click.
     private bool RouteSocialRegionClick(Point p)
     {
-        // A game icon opens/continues that game.
-        foreach (var (rect, game) in _gameIconRects)
-            if (rect.Contains(p)) { GameOpenRequested?.Invoke(game); return true; }
+        // A game icon opens/continues a game, or opens an invite's accept/decline menu.
+        if (TryRouteGameIconClick(p)) return true;
 
         foreach (var (rect, postId, emoji) in _reactChipRects)
             if (rect.Contains(p))

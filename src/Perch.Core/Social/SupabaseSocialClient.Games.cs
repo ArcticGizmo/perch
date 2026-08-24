@@ -33,6 +33,64 @@ public sealed partial class SupabaseSocialClient
         return ToSummary(rows[0], profiles);
     }
 
+    public async Task<GameRequest> RequestGameAsync(Guid opponentUserId, CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        if (opponentUserId == uid) throw new SocialException("You can't play yourself.");
+        var token = await ValidAccessTokenAsync(ct);
+
+        using var req = Rest(HttpMethod.Post, "/rest/v1/game_requests", token);
+        req.Headers.Add("Prefer", "return=representation");
+        req.Content = JsonContent.Create(new { requester = uid, addressee = opponentUserId });
+        using var resp = await _http.SendAsync(req, ct);
+        // The unique (requester, addressee) index rejects a duplicate invite; the RLS check requires friendship.
+        await EnsureOkAsync(resp, "send the invite", ct);
+        var rows = await resp.Content.ReadFromJsonAsync<GameRequestRow[]>(Json, ct) ?? [];
+        if (rows.Length == 0) throw new SocialException("The invite wasn't sent.");
+
+        var profiles = await FetchProfilesAsync([uid, opponentUserId], token, ct);
+        return ToRequest(rows[0], profiles);
+    }
+
+    public async Task<IReadOnlyList<GameRequest>> GetGameRequestsAsync(CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        using var req = Rest(HttpMethod.Get,
+            $"/rest/v1/game_requests?or=(requester.eq.{uid},addressee.eq.{uid})" +
+            "&select=id,requester,addressee,created_at&order=created_at.desc", token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "load your invites", ct);
+        var rows = await resp.Content.ReadFromJsonAsync<GameRequestRow[]>(Json, ct) ?? [];
+
+        var profiles = await FetchProfilesAsync(rows.SelectMany(r => new[] { r.Requester, r.Addressee }), token, ct);
+        return rows.Select(r => ToRequest(r, profiles)).ToList();
+    }
+
+    public async Task<GameState> AcceptGameRequestAsync(Guid requestId, CancellationToken ct = default)
+    {
+        RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        using var req = Rest(HttpMethod.Post, "/rest/v1/rpc/accept_game_request", token);
+        req.Content = JsonContent.Create(new { p_request = requestId });
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "accept the invite", ct);
+        // The RPC returns the freshly created games row (a single composite); re-read the full state.
+        var row = await resp.Content.ReadFromJsonAsync<GameRow>(Json, ct)
+                  ?? throw new SocialException("The game wasn't created.");
+        return await GetGameAsync(row.Id, ct);
+    }
+
+    public async Task DeclineGameRequestAsync(Guid requestId, CancellationToken ct = default)
+    {
+        RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        // The RLS delete policy scopes this to a request you're part of (decline if invitee, cancel if requester).
+        using var req = Rest(HttpMethod.Delete, $"/rest/v1/game_requests?id=eq.{requestId}", token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, "remove the invite", ct);
+    }
+
     public async Task<IReadOnlyList<GameSummary>> GetGamesAsync(CancellationToken ct = default)
     {
         var uid = RequireUser();
@@ -134,6 +192,12 @@ public sealed partial class SupabaseSocialClient
 
     private static Connect4Disc ParseTurn(string s) => s == "yellow" ? Connect4Disc.Yellow : Connect4Disc.Red;
 
+    private GameRequest ToRequest(GameRequestRow r, IReadOnlyDictionary<Guid, Profile> profiles) => new(
+        r.Id,
+        profiles.GetValueOrDefault(r.Requester) ?? new Profile(r.Requester, "unknown"),
+        profiles.GetValueOrDefault(r.Addressee) ?? new Profile(r.Addressee, "unknown"),
+        r.CreatedAt);
+
     // ── wire DTOs ────────────────────────────────────────────────────────────────────────────────────
 
     private sealed record GameRow(
@@ -148,4 +212,10 @@ public sealed partial class SupabaseSocialClient
     private sealed record MoveRow(
         [property: JsonPropertyName("ply")] int Ply,
         [property: JsonPropertyName("col")] int Col);
+
+    private sealed record GameRequestRow(
+        [property: JsonPropertyName("id")] Guid Id,
+        [property: JsonPropertyName("requester")] Guid Requester,
+        [property: JsonPropertyName("addressee")] Guid Addressee,
+        [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt);
 }

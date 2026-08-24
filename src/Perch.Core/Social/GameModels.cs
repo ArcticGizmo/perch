@@ -47,6 +47,23 @@ public sealed record GameSummary(
 }
 
 /// <summary>
+/// A pending Connect 4 invite — a request to play that exists only until it's accepted (which creates the game)
+/// or declined/cancelled (which deletes it). The <see cref="Requester"/> would play red and move first.
+/// </summary>
+/// <param name="Id">Server id of the request.</param>
+/// <param name="Requester">Who sent the invite (would play red).</param>
+/// <param name="Addressee">Who must accept it (would play yellow).</param>
+/// <param name="CreatedAt">When the invite was sent (server time).</param>
+public sealed record GameRequest(Guid Id, Profile Requester, Profile Addressee, DateTimeOffset CreatedAt)
+{
+    /// <summary>True when <paramref name="userId"/> is the invitee — i.e. this invite is waiting on them.</summary>
+    public bool IsIncoming(Guid userId) => Addressee.Id == userId;
+
+    /// <summary>The other party from <paramref name="userId"/>'s point of view.</summary>
+    public Profile Other(Guid userId) => Requester.Id == userId ? Addressee : Requester;
+}
+
+/// <summary>
 /// The full state of a networked game: its <see cref="Summary"/> plus the ordered list of dropped columns
 /// (move 0 = red). The board is reconstructed on demand from the moves via the pure engine, so the client
 /// never re-implements the rules — it renders and validates from the authoritative move list the server

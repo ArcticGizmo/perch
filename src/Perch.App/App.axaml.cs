@@ -210,7 +210,7 @@ public partial class App : Application
                 snap => { _overlay?.Canvas.UpdateRoster(snap); CheckDnd(); },   // re-check DND on each roster tick
                 OnFriendPosted,
                 OnReactionToMyPost,
-                games => _overlay?.Canvas.SetGames(games, _social?.Current.Me?.Id ?? Guid.Empty));
+                (games, requests) => _overlay?.Canvas.SetGames(games, requests, _social?.Current.Me?.Id ?? Guid.Empty));
             _feedHost.Diagnostic += m => _reactionDiag?.Invoke(m);   // stream to the debug tool when it's open
             _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
@@ -291,6 +291,7 @@ public partial class App : Application
             _overlay.Canvas.FriendsRequested += OpenFriends;
             _overlay.Canvas.ReactRequested += OnReactRequested;
             _overlay.Canvas.GameOpenRequested += OpenOnlineGameFromOverlay;   // a game icon in the friends region
+            _overlay.Canvas.GameRequestResponded += OnGameRequestResponded;   // accept / decline / cancel an invite
             _overlay.Canvas.SocialRegionExpandChanged += expanded =>
             {
                 if (_appSettings is { } s) { s.SocialRegionExpanded = expanded; s.Save(); }
@@ -1329,6 +1330,27 @@ public partial class App : Application
         _onlineGameWindows[game.Id] = w;
         w.Closed += (_, _) => _onlineGameWindows.Remove(game.Id);
         w.Show();
+    }
+
+    // A game invite in the overlay was accepted (opens the new game) or declined/cancelled (just removed).
+    private async void OnGameRequestResponded(Perch.Social.GameRequest request, bool accept)
+    {
+        if (_social is null) return;
+        try
+        {
+            if (accept)
+            {
+                var state = await _social.AcceptGameRequestAsync(request.Id);
+                _feedHost?.RefreshSoon();
+                OpenOnlineGameFromOverlay(state.Summary);   // jump straight into the accepted game
+            }
+            else
+            {
+                await _social.DeclineGameRequestAsync(request.Id);
+                _feedHost?.RefreshSoon();
+            }
+        }
+        catch { /* best-effort — a failed accept/decline just leaves the invite where it was */ }
     }
 
     // "Show QR code" — a centred card with the session's remote-control deep-link QR. Only one is shown

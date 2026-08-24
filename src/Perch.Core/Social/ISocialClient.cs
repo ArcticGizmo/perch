@@ -110,8 +110,26 @@ public interface ISocialClient
     // The server is authoritative — every move is validated in the database, so the client only proposes
     // moves and renders the state it gets back.
 
-    /// <summary>Creates a new Connect 4 game inviting <paramref name="opponentUserId"/> (must be an accepted
-    /// friend). You are red and move first. Throws <see cref="SocialException"/> if they aren't a friend.</summary>
+    /// <summary>Invites <paramref name="opponentUserId"/> (an accepted friend) to a game — the normal way to
+    /// start one. No game exists yet: a request is created and the game is only born when they accept (see
+    /// <see cref="AcceptGameRequestAsync"/>). You would play red and move first. Throws
+    /// <see cref="SocialException"/> if they aren't a friend or an invite to them is already outstanding.</summary>
+    Task<GameRequest> RequestGameAsync(Guid opponentUserId, CancellationToken ct = default);
+
+    /// <summary>Your outstanding game invites — both the ones you've sent and the ones waiting on you.</summary>
+    Task<IReadOnlyList<GameRequest>> GetGameRequestsAsync(CancellationToken ct = default);
+
+    /// <summary>Accepts an invite you received, which creates the game and removes the request. Returns the new
+    /// game's state. Throws <see cref="SocialException"/> if you're not the invitee or it's gone.</summary>
+    Task<GameState> AcceptGameRequestAsync(Guid requestId, CancellationToken ct = default);
+
+    /// <summary>Declines an invite you received, or cancels one you sent — either way the request is removed.
+    /// Idempotent (a request that's already gone is a no-op).</summary>
+    Task DeclineGameRequestAsync(Guid requestId, CancellationToken ct = default);
+
+    /// <summary>Creates a live game with <paramref name="opponentUserId"/> directly, bypassing the invite
+    /// handshake — for a rematch between two players already in a game, and the developer testing tool. You are
+    /// red and move first. Throws <see cref="SocialException"/> if they aren't an accepted friend.</summary>
     Task<GameSummary> CreateGameAsync(Guid opponentUserId, CancellationToken ct = default);
 
     /// <summary>Your Connect 4 games (both players are you-or-a-friend, so RLS returns only your own),

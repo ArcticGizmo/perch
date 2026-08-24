@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Media;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
@@ -8,45 +9,59 @@ using Perch.Social;
 namespace Perch.Avalonia.Views;
 
 /// <summary>
-/// The Connect 4 strip inside the social region: a compact row between the FRIENDS header and the first friend
-/// row that shows one little disc icon per in-progress game, so you can see — and jump straight back into — a
-/// game at a glance. The icon encodes two things: its <b>shape</b> tells a freshly-started ("requested") game
-/// (a hollow ring) from one that's under way (a filled disc), and its <b>colour</b> tells whose move it is —
-/// accent (with a small badge) when it's <em>your</em> turn, muted while you're waiting on your opponent.
-/// Clicking an icon opens/continues that game. Games are fed by the same poll that drives the roster.
+/// The Connect 4 strip inside the social region: a compact "GAMES" row between the FRIENDS header and the first
+/// friend row, with one little disc icon per pending invite or in-progress game, so you can see — and act on —
+/// a game at a glance. The icon encodes two things:
+/// <list type="bullet">
+///   <item><b>shape</b>: a hollow ring for a <em>requested</em> game (an invite not yet accepted), a filled disc
+///     for one that's under way;</item>
+///   <item><b>colour</b>: accent (with a small attention badge) when it needs <em>you</em> — an invite waiting
+///     on you to accept, or a game where it's your move — and muted while you're waiting on your opponent.</item>
+/// </list>
+/// Clicking an in-progress game opens/continues it; clicking a request pops an Accept/Decline (or Cancel) menu.
+/// Games and requests ride the existing feed poll.
 /// </summary>
 public sealed partial class OverlayCanvas
 {
     private IReadOnlyList<GameSummary> _games = [];
+    private IReadOnlyList<GameRequest> _requests = [];
     private Guid _gamesMeId;
     private const int MaxGameIcons = 8;
 
-    private readonly List<(Rect Rect, GameSummary Game)> _gameIconRects = new();
+    // One icon in the strip: exactly one of Game / Request is set.
+    private readonly record struct GameStripItem(Rect Rect, GameSummary? Game, GameRequest? Request);
+    private readonly List<GameStripItem> _gameIconRects = new();
     private int _hoveredGameIcon = -1;
 
-    /// <summary>Raised when a game icon is clicked — the App opens/continues that game.</summary>
+    /// <summary>Raised when an in-progress game icon is clicked — the App opens/continues that game.</summary>
     public event Action<GameSummary>? GameOpenRequested;
 
-    /// <summary>Feeds the signed-in user's Connect 4 games (only in-progress ones are shown) plus their own id
-    /// (to work out whose turn it is). Relayouts when the strip appears/disappears or its height changes.</summary>
-    public void SetGames(IReadOnlyList<GameSummary> games, Guid meId)
+    /// <summary>Raised when a game invite is acted on: accept (true) or decline/cancel (false).</summary>
+    public event Action<GameRequest, bool>? GameRequestResponded;
+
+    /// <summary>Feeds the signed-in user's in-progress games and pending invites, plus their own id (to work
+    /// out whose turn it is / which invites are incoming). Relayouts when the strip appears or disappears.</summary>
+    public void SetGames(IReadOnlyList<GameSummary> games, IReadOnlyList<GameRequest> requests, Guid meId)
     {
         var active = games?.Where(g => g.Status == GameStatus.InProgress).ToList() ?? [];
         bool beforeVisible = GamesStripVisible;
         _games = active;
+        _requests = requests ?? [];
         _gamesMeId = meId;
         if (GamesStripVisible != beforeVisible) RemeasurePanel();
         else if (SocialRegionVisible) InvalidateVisual();
     }
 
-    // Shown only in the expanded social region, and only when there's at least one active game.
-    private bool GamesStripVisible => SocialRegionVisible && _regionExpanded && _games.Count > 0;
+    private bool HasGameStripItems => _games.Count + _requests.Count > 0;
+
+    // Shown only in the expanded social region, and only when there's at least one invite or game.
+    private bool GamesStripVisible => SocialRegionVisible && _regionExpanded && HasGameStripItems;
 
     // Icon row height, derived from the caption line height (not a magic pixel) so it scales with the font.
     private double GamesRowHeight => FeedCaptionHeight + 16;
 
-    // Paints the strip at y=top (its height is reserved by SocialRegionHeight): a small "GAMES" caption then a
-    // disc per game, capped with a "+N" overflow.
+    // Paints the strip at y=top (its height is reserved by SocialRegionHeight): a small "GAMES" caption, then a
+    // disc per invite (first) and game, capped with a "+N" overflow.
     private void DrawGamesStrip(DrawingContext ctx, double width, double top)
     {
         double rowH = GamesRowHeight;
@@ -57,39 +72,52 @@ public sealed partial class OverlayCanvas
         double x = HorizPad + 2 + cap.Width + 12;
 
         double d = FeedCaptionHeight + 4;   // disc diameter
-        double gap = 9;
-        int shown = Math.Min(_games.Count, MaxGameIcons);
-        for (int i = 0; i < shown; i++)
+        int total = _requests.Count + _games.Count;
+        int budget = MaxGameIcons;
+        int i = 0;
+
+        // Invites first — they're the "requested" state and often need your action.
+        foreach (var req in _requests)
         {
-            var g = _games[i];
-            var iconRect = new Rect(x, midY - d / 2, d, d);
-            var hitRect = iconRect.Inflate(3);
-            if (_hoveredGameIcon == i) OverlayDraw.Panel(ctx, hitRect, FeedHoverBrush, null, 6);
-            DrawGameIcon(ctx, iconRect.Center, d, g);
-            _gameIconRects.Add((hitRect, g));
-            x += d + gap;
+            if (budget <= 0) break;
+            x = DrawStripIcon(ctx, x, midY, d, i++, requested: true, needsYou: req.IsIncoming(_gamesMeId),
+                new GameStripItem(default, null, req));
+            budget--;
         }
-        if (_games.Count > shown)
+        foreach (var g in _games)
         {
-            var moreFt = OverlayDraw.Text($"+{_games.Count - shown}", FeedCaptionSize, MutedBrush);
+            if (budget <= 0) break;
+            x = DrawStripIcon(ctx, x, midY, d, i++, requested: false, needsYou: g.IsTurnOf(_gamesMeId),
+                new GameStripItem(default, g, null));
+            budget--;
+        }
+
+        if (total > MaxGameIcons)
+        {
+            var moreFt = OverlayDraw.Text($"+{total - MaxGameIcons}", FeedCaptionSize, MutedBrush);
             OverlayDraw.TextLeftMid(ctx, moreFt, x, midY);
         }
     }
 
-    // One game's disc: hollow ring = a freshly-started ("requested") game, filled = in play; accent when it's
-    // your move (plus a small attention badge so it reads as "needs you"), muted while waiting on the opponent.
-    private void DrawGameIcon(DrawingContext ctx, Point c, double d, GameSummary g)
+    // Draws one disc at x (centred on midY), records its hit-rect, and returns the next x. Shape: ring for a
+    // requested game, filled for one under way. Colour: accent + badge when it needs you, muted while waiting.
+    private double DrawStripIcon(DrawingContext ctx, double x, double midY, double d, int index,
+        bool requested, bool needsYou, GameStripItem item)
     {
-        bool myTurn = g.IsTurnOf(_gamesMeId);
-        bool requested = g.MoveCount == 0;   // no moves yet reads as a new / just-requested game
-        var brush = myTurn ? Palette.AccentBrush : MutedBrush;
+        var center = new Point(x + d / 2, midY);
+        var hit = new Rect(x, midY - d / 2, d, d).Inflate(3);
+        if (_hoveredGameIcon == index) OverlayDraw.Panel(ctx, hit, FeedHoverBrush, null, 6);
+
+        var brush = needsYou ? Palette.AccentBrush : MutedBrush;
         double r = d / 2 - 1;
+        if (requested) ctx.DrawEllipse(null, new Pen(brush, 2), center, r, r);   // ring = invite / requested
+        else ctx.DrawEllipse(brush, null, center, r, r);                         // filled = under way
+        if (needsYou)
+            ctx.DrawEllipse(new SolidColorBrush(AttentionColor), null,
+                new Point(center.X + r * 0.72, center.Y - r * 0.72), 2.6, 2.6);
 
-        if (requested) ctx.DrawEllipse(null, new Pen(brush, 2), c, r, r);   // ring = new / requested
-        else ctx.DrawEllipse(brush, null, c, r, r);                         // filled = under way
-
-        if (myTurn)
-            ctx.DrawEllipse(new SolidColorBrush(AttentionColor), null, new Point(c.X + r * 0.72, c.Y - r * 0.72), 2.6, 2.6);
+        _gameIconRects.Add(item with { Rect = hit });
+        return x + d + 9;
     }
 
     private int HitTestGameIcon(Point p)
@@ -98,16 +126,56 @@ public sealed partial class OverlayCanvas
         return -1;
     }
 
-    // Dwell tooltip for a game icon: opponent, state (new / in play), and whose turn — wired via TipKind.Game.
+    // Routes a click on a strip icon: open an in-progress game, or pop the invite's Accept/Decline (Cancel) menu.
+    private bool TryRouteGameIconClick(Point p)
+    {
+        foreach (var it in _gameIconRects)
+        {
+            if (!it.Rect.Contains(p)) continue;
+            if (it.Game is { } g) GameOpenRequested?.Invoke(g);
+            else if (it.Request is { } r) ShowGameRequestMenu(r);
+            return true;
+        }
+        return false;
+    }
+
+    // Accept/Decline for an invite waiting on you; Cancel for one you sent.
+    private void ShowGameRequestMenu(GameRequest r)
+    {
+        var items = new List<Control>();
+        if (r.IsIncoming(_gamesMeId))
+        {
+            items.Add(MenuItem($"Accept game from @{r.Requester.Handle}", () => GameRequestResponded?.Invoke(r, true)));
+            items.Add(MenuItem("Decline", () => GameRequestResponded?.Invoke(r, false)));
+        }
+        else
+        {
+            items.Add(MenuItem($"Waiting for @{r.Addressee.Handle} to accept", () => { }));
+            items.Add(MenuItem("Cancel invite", () => GameRequestResponded?.Invoke(r, false)));
+        }
+        ShowFlyout(items);
+    }
+
+    // Dwell tooltip for a strip icon (wired via TipKind.Game): opponent, state, and whose move / whose accept.
     private void ShowGameTooltip(int index)
     {
         if (index < 0 || index >= _gameIconRects.Count) return;
-        var (rect, g) = _gameIconRects[index];
-        var opp = g.Opponent(_gamesMeId);
-        string state = g.MoveCount == 0 ? "new game" : "in play";
-        string turn = g.IsTurnOf(_gamesMeId) ? "your turn" : $"waiting for @{opp?.Handle}";
-        Tooltip().ShowLines(
-            [new($"Connect 4 vs @{opp?.Handle ?? "?"}  ·  {state}  ·  {turn}", OverlayTooltip.FgColor, false)],
-            ToScreen(rect.Left, rect.Bottom + 4));
+        var it = _gameIconRects[index];
+        string line;
+        if (it.Request is { } r)
+        {
+            line = r.IsIncoming(_gamesMeId)
+                ? $"Connect 4 invite from @{r.Requester.Handle}  ·  accept to play"
+                : $"Connect 4 invite to @{r.Addressee.Handle}  ·  waiting to be accepted";
+        }
+        else if (it.Game is { } g)
+        {
+            var opp = g.Opponent(_gamesMeId);
+            string state = g.MoveCount == 0 ? "new game" : "in play";
+            string turn = g.IsTurnOf(_gamesMeId) ? "your turn" : $"waiting for @{opp?.Handle}";
+            line = $"Connect 4 vs @{opp?.Handle ?? "?"}  ·  {state}  ·  {turn}";
+        }
+        else return;
+        Tooltip().ShowLines([new(line, OverlayTooltip.FgColor, false)], ToScreen(it.Rect.Left, it.Rect.Bottom + 4));
     }
 }

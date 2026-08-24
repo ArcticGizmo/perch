@@ -21,7 +21,7 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     private readonly Action<RosterSnapshot?> _onRoster;
     private readonly Action<FeedItem> _onNewFriendPost;
     private readonly Action<string> _onReactionToMyPost;
-    private readonly Action<IReadOnlyList<GameSummary>>? _onGames;
+    private readonly Action<IReadOnlyList<GameSummary>, IReadOnlyList<GameRequest>>? _onGames;
     private readonly DispatcherTimer _timer;
 
     // Post ids already surfaced, so a re-poll only notifies for genuinely new posts. Primed on the first poll
@@ -44,12 +44,12 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     /// <param name="onReactionToMyPost">Invoked (on the UI thread) once per newly-seen reaction on your own
     /// latest status, with the emoji — the hook for the "big reactions" bubbles. Never fires for reactions
     /// already present when polling starts, nor when you post a new status.</param>
-    /// <param name="onGames">Invoked (on the UI thread) each poll with the signed-in user's Connect 4 games, so
-    /// the overlay's games strip stays current. Best-effort: if the backend doesn't have the games tables yet
-    /// (migration not applied) the fetch is skipped without disturbing the roster.</param>
+    /// <param name="onGames">Invoked (on the UI thread) each poll with the signed-in user's Connect 4 games and
+    /// pending invites, so the overlay's games strip stays current. Best-effort: if the backend doesn't have the
+    /// games tables yet (migration not applied) the fetch is skipped without disturbing the roster.</param>
     public SocialFeedMonitorHost(ISocialClient social, Action<RosterSnapshot?> onRoster,
         Action<FeedItem> onNewFriendPost, Action<string> onReactionToMyPost,
-        Action<IReadOnlyList<GameSummary>>? onGames = null)
+        Action<IReadOnlyList<GameSummary>, IReadOnlyList<GameRequest>>? onGames = null)
     {
         _social = social;
         _onRoster = onRoster;
@@ -84,7 +84,7 @@ internal sealed class SocialFeedMonitorHost : IDisposable
             _myReactionPostId = null;
             _myReactionCounts.Clear();
             _onRoster(null);
-            _onGames?.Invoke([]);
+            _onGames?.Invoke([], []);
         }
     }
 
@@ -109,7 +109,12 @@ internal sealed class SocialFeedMonitorHost : IDisposable
         // the roster; a failure just leaves the last games on screen.
         if (_onGames is not null)
         {
-            try { _onGames(await _social.GetGamesAsync()); }
+            try
+            {
+                var games = await _social.GetGamesAsync();
+                var requests = await _social.GetGameRequestsAsync();
+                _onGames(games, requests);
+            }
             catch { /* games unavailable this tick — leave the strip as-is */ }
         }
     }
