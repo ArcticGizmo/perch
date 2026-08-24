@@ -91,7 +91,9 @@ internal sealed class EmojiPickerWindow : Window
         _entry.PlaceholderText = "search or type an emoji…";
         _entry.TextChanged += (_, _) => Rebuild();
 
-        _grid = new WrapPanel { MaxWidth = 276 };
+        // A little top inset so the first row's emoji glyphs (which sit high in their line box) aren't clipped
+        // by the ScrollViewer's top edge.
+        _grid = new WrapPanel { MaxWidth = 276, Margin = new Thickness(0, 4, 0, 0) };
 
         var tip = new TextBlock
         {
@@ -189,7 +191,9 @@ internal sealed class EmojiPickerWindow : Window
             BorderBrush = highlight ? Palette.AccentBrush : Brushes.Transparent,
             BorderThickness = new Thickness(highlight ? 1.5 : 0),
             CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(6, 3), Margin = new Thickness(0, 0, 3, 3),
+            // Extra vertical padding gives the tall emoji ascent room so the glyph isn't clipped (with the
+            // grid's top inset handling the first row against the ScrollViewer's edge).
+            Padding = new Thickness(6, 6), Margin = new Thickness(0, 0, 3, 3),
             Cursor = new Cursor(StandardCursorType.Hand),
             Opacity = dim ? 0.6 : 1.0,
             HorizontalContentAlignment = HorizontalAlignment.Center,

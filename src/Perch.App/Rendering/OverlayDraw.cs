@@ -49,6 +49,19 @@ internal static class OverlayDraw
     public static FormattedText Emoji(string s, double size, IBrush brush) =>
         new(s ?? "", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, EmojiFace, size, brush);
 
+    /// <summary>Draws an emoji built via <see cref="Emoji"/> vertically centred on <paramref name="midY"/> by
+    /// its <em>em box</em>, with its left edge at <paramref name="x"/>. Colour-emoji glyphs sit high in the
+    /// FormattedText line box (the box carries a tall ascent), so centring by <c>Height</c> renders them too
+    /// high with empty space beneath; anchoring off the baseline and the em size centres the glyph itself.
+    /// <paramref name="emSize"/> is the size passed to <see cref="Emoji"/>.</summary>
+    public static void EmojiLeftMid(DrawingContext ctx, FormattedText ft, double x, double midY, double emSize)
+        => ctx.DrawText(ft, new Point(x, midY + emSize / 2 - ft.Baseline));
+
+    /// <summary>Draws an emoji centred on (<paramref name="cx"/>, <paramref name="cy"/>) by its em box — the
+    /// two-axis counterpart of <see cref="EmojiLeftMid"/> (see it for why <c>Height</c> can't be used).</summary>
+    public static void EmojiCentered(DrawingContext ctx, FormattedText ft, double cx, double cy, double emSize)
+        => ctx.DrawText(ft, new Point(cx - ft.Width / 2, cy + emSize / 2 - ft.Baseline));
+
     /// <summary>Draws <paramref name="ft"/> left-aligned at <paramref name="x"/>, vertically centred on
     /// <paramref name="midY"/> using its measured line height (the anti-clipping rule).</summary>
     public static void TextLeftMid(DrawingContext ctx, FormattedText ft, double x, double midY)

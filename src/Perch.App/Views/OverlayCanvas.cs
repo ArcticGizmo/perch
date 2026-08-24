@@ -1860,7 +1860,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // hit-rect stays put so the long-press-to-arcade gesture still lands where the logo was).
             _brandRect = new Rect(HorizPad, midY - iconSize / 2, iconSize, iconSize);
             var zzz = OverlayDraw.Emoji("\U0001F4A4", 14, MutedBrush);
-            ctx.DrawText(zzz, new Point(_brandRect.Center.X - zzz.Width / 2, _brandRect.Center.Y - zzz.Height / 2));
+            OverlayDraw.EmojiCentered(ctx, zzz, _brandRect.Center.X, _brandRect.Center.Y, 14);
             brandRight = HorizPad + iconSize + 5;
         }
         else if (Brand is { })

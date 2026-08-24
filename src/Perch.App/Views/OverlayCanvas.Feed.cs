@@ -403,7 +403,7 @@ public sealed partial class OverlayCanvas
         OverlayDraw.Panel(ctx, chip, c.Mine ? mineFill : FeedChipBrush,
             c.Mine && rowHovered ? new Pen(Palette.AccentBrush, 1) : null, 8);
         var emojiFt = OverlayDraw.Emoji(c.Emoji, FeedReactionSize, FgBrush);
-        OverlayDraw.TextLeftMid(ctx, emojiFt, x + 7, midY);
+        OverlayDraw.EmojiLeftMid(ctx, emojiFt, x + 7, midY, FeedReactionSize);
         if (ShowsCount(c))
             OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(c.Count.ToString(), FeedReactionSize,
                 c.Mine ? Palette.AccentBrush : FgBrush), x + 7 + emojiFt.Width + 4, midY);
@@ -486,7 +486,7 @@ public sealed partial class OverlayCanvas
         if (!string.IsNullOrWhiteSpace(emoji))
         {
             var ft = OverlayDraw.Emoji(emoji, size * 0.62, FgBrush);
-            ctx.DrawText(ft, new Point(cx - ft.Width / 2, cy - ft.Height / 2));
+            OverlayDraw.EmojiCentered(ctx, ft, cx, cy, size * 0.62);
         }
         else
         {
