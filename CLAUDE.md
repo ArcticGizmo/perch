@@ -142,6 +142,14 @@ running the tray app.
 - **Single reused window instances.** Settings / history / stats / flight windows are created lazily and
   reused via `WindowHost.ShowOrFocus`; they're closed together in `App` (Exit / update flow via
   `CloseAuxWindows`). Wire any new top-level window into that idiom.
+- **Filling a window's content *after* `Show()` needs an explicit `InvalidateArrange()`.** Adding children
+  re-measures up the tree, but a `Center`/`Bottom`-aligned ancestor whose own arrange rect is unchanged (it
+  already fills the window) short-circuits `Arrange` and keeps the offset+size it was aligned at when the
+  container was still empty — the new content then spills out of that stale slot. Windows hid this: the
+  post-`Show` platform resize forced a full re-arrange; on macOS the resize lands *before* the content does,
+  so nothing re-arranges. Build the content before the first `Show` where you can, and call
+  `InvalidateArrange()` on the aligned ancestor when you swap it while visible (see
+  `AchievementCardWindow.ShowNextBatch`).
 - **Settings are registry-driven — add a `SettingDescriptor`, not another page.** Every user-facing setting
   is described once in `Perch.Core/Data/SettingsRegistry` (id, name, keywords, surface, kind, the
   `AppSettings` property it backs, and a `PreviewTarget`). That one entry powers the **Search** page, the
@@ -149,7 +157,12 @@ running the tray app.
   `OverlayCanvas` (`Views/PreviewPane`) seeded from `Rendering/SampleData` and re-gated through the shared
   `Services/OverlaySettingsGates.Apply(canvas, settings)`, the same helper the live overlay uses. When you
   add a setting: add the `AppSettings` property **and** a registry descriptor (a coverage test,
-  `SettingsRegistryTests`, fails the build otherwise); if it drives an overlay glyph, add a canvas `Set*`
+  `SettingsRegistryTests`, fails the build otherwise); if it depends on an OS capability some head lacks,
+  mark it `Requires = PlatformFeature.X` and teach `PlatformServices.Supports` about it — the descriptor
+  stays in `All` (so coverage passes and a settings file written on another OS still round-trips) while
+  `SettingsRegistry.Available`/`Search` hide it from the catalogue and search (Docked mode does this: it
+  needs `IEdgeReservation.IsSupported`, which is Windows-only — see
+  `docs/macos-docked-mode-investigation.md`); if it drives an overlay glyph, add a canvas `Set*`
   gate + a line in `OverlaySettingsGates` and a `PreviewTarget`; if it needs live activation beyond the
   idempotent `DisplayChanged` (a poll/sampler), extend `SettingsLiveApply`. The pre-registry per-topic
   pages (Indicators, Monitoring, Usage, …) are retired; a handful of pages with unique actions/editors

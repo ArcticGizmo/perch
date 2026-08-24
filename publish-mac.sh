@@ -20,6 +20,7 @@ PUBLISH_DIR="publish"
 OUT_DIR="releases"
 PLIST_SRC="src/Perch.App/Info.plist"
 ICNS="src/Perch.App/Assets/icon.icns"
+DMG_BG="tools/dmg-background.png"   # styled drag-install backdrop; regen via tools/gen-dmg-background.sh
 # The bundle id (com.arcticgizmo.perch) lives in Info.plist; vpk rejects --bundleId alongside --plist.
 
 # --- version -------------------------------------------------------------------------------------
@@ -42,6 +43,10 @@ fi
 if [[ ! -f "$ICNS" ]]; then
     echo "$ICNS missing - generating it..." >&2
     ./tools/gen-icns.sh
+fi
+if [[ ! -f "$DMG_BG" ]]; then
+    echo "$DMG_BG missing — generating it..." >&2
+    ./tools/gen-dmg-background.sh
 fi
 
 echo "Building Perch v$VERSION ($RID)..."
@@ -105,14 +110,69 @@ app="$OUT_DIR/Perch.app"
 rm -rf "$app"
 unzip -q "$OUT_DIR/Perch-osx-Portable.zip" -d "$OUT_DIR"   # yields releases/Perch.app
 
-# hdiutil needs a folder holding the .app + the Applications symlink; stage that under WORK (a transient
-# copy, cleaned on exit) so the kept releases/Perch.app stays a plain bundle, not a DMG source tree.
+VOL="Perch"
+
+# Stage the DMG's contents under WORK (a transient copy, cleaned on exit) so the kept releases/Perch.app
+# stays a plain bundle, not a DMG source tree. The layout Finder styling expects:
+#   Perch.app                     <- the app the user drags
+#   Applications -> /Applications  <- the drop target
+#   .background/background.png     <- the drag-to-install backdrop (hidden)
+#   .VolumeIcon.icns               <- shows the Perch icon on the mounted volume
 stage="$WORK/dmg"
-mkdir -p "$stage"
+mkdir -p "$stage/.background"
 cp -R "$app" "$stage/Perch.app"
 ln -s /Applications "$stage/Applications"
-rm -f "$dmg"
-hdiutil create -volname "Perch" -srcfolder "$stage" -ov -format UDZO "$dmg" >/dev/null
+cp "$DMG_BG" "$stage/.background/background.png"
+cp "$ICNS" "$stage/.VolumeIcon.icns"
+
+# Build a read-write image first, mount it, style the Finder window (icon view + background + icon
+# positions), then convert to the compressed read-only DMG we ship. A bare `hdiutil create -format UDZO`
+# can't be styled after the fact, which is why the old drag-install window was just a naked folder.
+rw="$WORK/perch-rw.dmg"
+rm -f "$rw" "$dmg"
+hdiutil detach "/Volumes/$VOL" >/dev/null 2>&1 || true   # clear a stale mount from an aborted run
+hdiutil create -volname "$VOL" -srcfolder "$stage" -fs HFS+ -format UDRW -ov "$rw" >/dev/null
+
+echo "Styling DMG window ..."
+dev="$(hdiutil attach -readwrite -noverify -noautoopen "$rw" | grep -Eo '/dev/disk[0-9]+' | head -1)"
+vol="/Volumes/$VOL"
+
+# Best-effort Finder styling: on a headless/locked session the AppleScript can fail — the DMG is still a
+# functional drag-install image (app + Applications alias + background folder), so warn and carry on rather
+# than sinking the whole release.
+if osascript <<APPLESCRIPT
+tell application "Finder"
+    tell disk "$VOL"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {200, 120, 840, 520}
+        set opts to the icon view options of container window
+        set arrangement of opts to not arranged
+        set icon size of opts to 128
+        set text size of opts to 12
+        set background picture of opts to file ".background:background.png"
+        set position of item "Perch.app" of container window to {172, 170}
+        set position of item "Applications" of container window to {468, 170}
+        set position of item ".background" of container window to {900, 900}
+        set position of item ".VolumeIcon.icns" of container window to {900, 700}
+        update without registering applications
+        delay 1
+        close
+    end tell
+end tell
+APPLESCRIPT
+then
+    # Flag the volume so Finder honours .VolumeIcon.icns (needs the custom-icon attribute set).
+    if command -v SetFile >/dev/null 2>&1; then SetFile -a C "$vol" || true; fi
+else
+    echo "Warning: Finder styling failed (headless session?); shipping an unstyled but working DMG." >&2
+fi
+
+sync
+hdiutil detach "$dev" >/dev/null 2>&1 || hdiutil detach "$vol" >/dev/null 2>&1 || true
+hdiutil convert "$rw" -format UDZO -imagekey zlib-level=9 -ov -o "$dmg" >/dev/null
 
 echo
 echo "Release artifacts ready in: $OUT_DIR/"

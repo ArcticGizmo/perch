@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.64] - 2026-08-24
+
+- Emoji sit properly centred in mood tiles, chips, and the reaction picker
+- The reaction picker no longer clips at its edges
+- Floating overlay stops sliding sideways when it collapses or expands (macOS)
+- Achievement cards no longer spill off the screen (macOS)
+- Docked mode is hidden on macOS (the OS won't let an app reserve a screen edge)
+- The macOS installer DMG looks like an installer now — a drag-to-Applications backdrop, not a bare folder
+
+---
+
 ## [v0.3.63] - 2026-08-21
 
 - React to a friend's status with any emoji, not just the preset ten

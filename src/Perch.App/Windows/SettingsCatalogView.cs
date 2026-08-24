@@ -111,7 +111,7 @@ internal sealed class SettingsCatalogView : StackPanel
         {
             if (_active is { } a && a != surface) continue;
 
-            var items = SettingsRegistry.All
+            var items = SettingsRegistry.Available(PlatformServices.Supports)
                 .Where(d => d.Surface == surface && d.Id != "context-green-segment" && d.MatchesQuery(query))
                 .ToList();
             if (items.Count == 0) continue;

@@ -21,7 +21,14 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     private readonly Action<RosterSnapshot?> _onRoster;
     private readonly Action<FeedItem> _onNewFriendPost;
     private readonly Action<string> _onReactionToMyPost;
+    private readonly Action<IReadOnlyList<GameSummary>, IReadOnlyList<GameRequest>>? _onGames;
+    private readonly Action<GameRequest>? _onNewGameInvite;
     private readonly DispatcherTimer _timer;
+
+    // Incoming game invites already surfaced, so a re-poll only notifies for genuinely-new ones. Primed on the
+    // first poll after activation (the backlog isn't news), then diffed thereafter — mirrors the post-seen set.
+    private readonly HashSet<Guid> _seenInvites = new();
+    private bool _invitesPrimed;
 
     // Post ids already surfaced, so a re-poll only notifies for genuinely new posts. Primed on the first poll
     // after activation (the backlog is baseline, not news), then diffed on every poll thereafter.
@@ -43,13 +50,23 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     /// <param name="onReactionToMyPost">Invoked (on the UI thread) once per newly-seen reaction on your own
     /// latest status, with the emoji — the hook for the "big reactions" bubbles. Never fires for reactions
     /// already present when polling starts, nor when you post a new status.</param>
+    /// <param name="onGames">Invoked (on the UI thread) each poll with the signed-in user's Connect 4 games and
+    /// pending invites, so the overlay's games strip stays current. Best-effort: if the backend doesn't have the
+    /// games tables yet (migration not applied) the fetch is skipped without disturbing the roster.</param>
+    /// <param name="onNewGameInvite">Invoked (on the UI thread) once per newly-seen invite waiting on you — the
+    /// hook for the "@x challenged you" notification. Never fires for invites you sent, nor for the backlog
+    /// present when polling starts.</param>
     public SocialFeedMonitorHost(ISocialClient social, Action<RosterSnapshot?> onRoster,
-        Action<FeedItem> onNewFriendPost, Action<string> onReactionToMyPost)
+        Action<FeedItem> onNewFriendPost, Action<string> onReactionToMyPost,
+        Action<IReadOnlyList<GameSummary>, IReadOnlyList<GameRequest>>? onGames = null,
+        Action<GameRequest>? onNewGameInvite = null)
     {
         _social = social;
         _onRoster = onRoster;
         _onNewFriendPost = onNewFriendPost;
         _onReactionToMyPost = onReactionToMyPost;
+        _onGames = onGames;
+        _onNewGameInvite = onNewGameInvite;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _timer.Tick += (_, _) => _ = Poll();
     }
@@ -75,9 +92,12 @@ internal sealed class SocialFeedMonitorHost : IDisposable
             _realtime = null;
             _seen.Clear();
             _primed = false;
+            _seenInvites.Clear();
+            _invitesPrimed = false;
             _myReactionPostId = null;
             _myReactionCounts.Clear();
             _onRoster(null);
+            _onGames?.Invoke([], []);
         }
     }
 
@@ -97,6 +117,36 @@ internal sealed class SocialFeedMonitorHost : IDisposable
             NotifyReactionsToMe(roster);
         }
         catch { /* best-effort: a failed poll just keeps the last roster on screen */ }
+
+        // Games are fetched separately so their absence (e.g. the connect4 migration not applied) can't blank
+        // the roster; a failure just leaves the last games on screen.
+        if (_onGames is not null || _onNewGameInvite is not null)
+        {
+            try
+            {
+                var games = await _social.GetGamesAsync();
+                var requests = await _social.GetGameRequestsAsync();
+                _onGames?.Invoke(games, requests);
+                NotifyNewGameInvites(requests);
+            }
+            catch { /* games unavailable this tick — leave the strip as-is */ }
+        }
+    }
+
+    // Fires once per genuinely-new invite waiting on you. The first poll after activation primes the seen-set
+    // (the backlog isn't news); invites you sent are ignored (you're the requester, not the addressee).
+    private void NotifyNewGameInvites(IReadOnlyList<GameRequest> requests)
+    {
+        if (_onNewGameInvite is null) return;
+        var meId = _social.Current.Me?.Id ?? Guid.Empty;
+        var wasPrimed = _invitesPrimed;
+        foreach (var r in requests)
+        {
+            if (!r.IsIncoming(meId)) continue;          // only invites waiting on me
+            if (!_seenInvites.Add(r.Id)) continue;      // already surfaced
+            if (wasPrimed) _onNewGameInvite(r);
+        }
+        _invitesPrimed = true;
     }
 
     /// <summary>Raised (UI thread) with a human-readable line each poll describing the reaction state on your

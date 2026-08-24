@@ -30,29 +30,94 @@ internal static class RealtimeProtocol
         return b.Uri;
     }
 
-    /// <summary>The <c>phx_join</c> frame that subscribes to INSERTs on <c>public.posts</c>. The server applies
-    /// the caller's RLS to the change stream, so no author filter is needed here.</summary>
-    public static string JoinPosts(int refId, string accessToken) => Frame(PostsTopic, "phx_join", refId, new JsonObject
+    /// <summary>The <c>phx_join</c> frame for a channel. A <see cref="RealtimeKind.PostgresChanges"/> channel
+    /// subscribes to an event on a schema.table (with an optional row filter); a <see cref="RealtimeKind.Broadcast"/>
+    /// channel subscribes to transient broadcast messages (invites, nudges, rematches) that never touch the DB.
+    /// For postgres-changes the server applies the caller's RLS to the stream, so visibility is enforced
+    /// regardless of the filter.</summary>
+    public static string Join(int refId, string accessToken, RealtimeChannel ch)
     {
-        ["config"] = new JsonObject
+        var config = new JsonObject();
+        if (ch.Kind == RealtimeKind.Broadcast)
+            // self:false — we never want to receive our own broadcasts echoed back.
+            config["broadcast"] = new JsonObject { ["self"] = false };
+        else
+            config["postgres_changes"] = new JsonArray(ChangeSpec(ch));
+        return Frame(ch.Topic, "phx_join", refId, new JsonObject
         {
-            ["postgres_changes"] = new JsonArray(new JsonObject
-            {
-                ["event"] = "INSERT",
-                ["schema"] = "public",
-                ["table"] = "posts",
-            }),
-        },
-        ["access_token"] = accessToken,
-    });
+            ["config"] = config,
+            ["access_token"] = accessToken,
+        });
+    }
+
+    /// <summary>The <c>phx_join</c> frame for the feed's <c>public.posts</c> INSERT channel (kept for the
+    /// existing feed subscription and its tests).</summary>
+    public static string JoinPosts(int refId, string accessToken) => Join(refId, accessToken, RealtimeChannel.Posts);
+
+    private static JsonObject ChangeSpec(RealtimeChannel ch)
+    {
+        var o = new JsonObject { ["event"] = ch.Event, ["schema"] = ch.Schema, ["table"] = ch.Table };
+        if (!string.IsNullOrEmpty(ch.Filter)) o["filter"] = ch.Filter;
+        return o;
+    }
 
     /// <summary>The keep-alive frame (Phoenix drops an idle socket after ~60s).</summary>
     public static string Heartbeat(int refId) => Frame("phoenix", "heartbeat", refId, new JsonObject());
 
-    /// <summary>Pushes a refreshed JWT to the channel so a long-lived socket keeps its authorization as the
+    /// <summary>Pushes a refreshed JWT to a channel so a long-lived socket keeps its authorization as the
     /// access token rotates.</summary>
-    public static string AccessToken(int refId, string accessToken) =>
-        Frame(PostsTopic, "access_token", refId, new JsonObject { ["access_token"] = accessToken });
+    public static string AccessToken(string topic, int refId, string accessToken) =>
+        Frame(topic, "access_token", refId, new JsonObject { ["access_token"] = accessToken });
+
+    /// <summary>Access-token frame on the posts channel (kept for the feed subscription and its tests).</summary>
+    public static string AccessToken(int refId, string accessToken) => AccessToken(PostsTopic, refId, accessToken);
+
+    /// <summary>Whether an inbound frame is a postgres-changes event for the given <paramref name="schema"/>.
+    /// <paramref name="table"/> — the light guard the generic connection uses to decide whether a frame is
+    /// worth handing to its callback. Never throws.</summary>
+    public static bool IsChange(string json, string schema, string table)
+    {
+        try
+        {
+            var root = JsonNode.Parse(json)?.AsObject();
+            if (root is null || (string?)root["event"] != "postgres_changes") return false;
+            var data = root["payload"]?["data"]?.AsObject();
+            return data is not null && (string?)data["schema"] == schema && (string?)data["table"] == table;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    /// <summary>Whether an inbound frame is a Realtime <c>broadcast</c> message (the transient channel Perch uses
+    /// for invites/nudges/rematches). The light guard the generic connection uses on a broadcast channel; never
+    /// throws.</summary>
+    public static bool IsBroadcast(string json)
+    {
+        try
+        {
+            var root = JsonNode.Parse(json)?.AsObject();
+            return root is not null && (string?)root["event"] == "broadcast";
+        }
+        catch (JsonException) { return false; }
+    }
+
+    /// <summary>Best-effort parse of an inbound broadcast frame into its application event name and payload
+    /// object. A relayed broadcast looks like <c>{event:"broadcast", payload:{event:&lt;name&gt;, payload:{…}}}</c>.
+    /// Never throws — an unreadable frame is simply ignored (the poll remains the source of truth).</summary>
+    public static bool TryParseBroadcast(string json, out string name, out JsonObject payload)
+    {
+        name = "";
+        payload = new JsonObject();
+        try
+        {
+            var root = JsonNode.Parse(json)?.AsObject();
+            var p = root?["payload"]?.AsObject();
+            if (root is null || (string?)root["event"] != "broadcast" || p is null) return false;
+            name = (string?)p["event"] ?? "";
+            payload = p["payload"]?.AsObject() ?? new JsonObject();
+            return name.Length > 0;
+        }
+        catch (JsonException) { return false; }
+    }
 
     private static string Frame(string topic, string @event, int refId, JsonObject payload) => new JsonObject
     {
@@ -97,19 +162,50 @@ internal static class RealtimeProtocol
     }
 }
 
+/// <summary>What kind of Realtime subscription a channel is: a database change stream, or a transient broadcast
+/// channel (no DB writes) Perch uses for snappy invites/nudges/rematches.</summary>
+internal enum RealtimeKind { PostgresChanges, Broadcast }
+
+/// <summary>Describes one Realtime channel: its Phoenix topic, its <see cref="RealtimeKind"/>, and — for a
+/// postgres-changes channel — the change it wants (an event on a schema.table, with an optional row filter like
+/// <c>game_id=eq.…</c>). RLS still governs what the server actually pushes; the filter only narrows it further.</summary>
+internal sealed record RealtimeChannel(
+    string Topic, RealtimeKind Kind = RealtimeKind.PostgresChanges,
+    string Schema = "", string Table = "", string Event = "INSERT", string? Filter = null)
+{
+    /// <summary>The feed's <c>public.posts</c> INSERT channel.</summary>
+    public static readonly RealtimeChannel Posts =
+        new(RealtimeProtocol.PostsTopic, RealtimeKind.PostgresChanges, "public", "posts");
+
+    /// <summary>A single game's <c>public.moves</c> INSERT channel, filtered to that game.</summary>
+    public static RealtimeChannel Moves(Guid gameId) =>
+        new($"realtime:public:moves:{gameId}", RealtimeKind.PostgresChanges, "public", "moves", "INSERT", $"game_id=eq.{gameId}");
+
+    /// <summary>A user's transient broadcast inbox — where invites, invite responses, nudges and rematches are
+    /// delivered instantly (the persistent DB rows are still the source of truth; this only beats the poll).</summary>
+    public static RealtimeChannel Inbox(Guid userId) =>
+        new($"realtime:perch:inbox:{userId}", RealtimeKind.Broadcast);
+
+    /// <summary>The channel name the Realtime broadcast REST endpoint expects — the topic without the
+    /// <c>realtime:</c> Phoenix prefix.</summary>
+    public string BroadcastName =>
+        Topic.StartsWith("realtime:", StringComparison.Ordinal) ? Topic["realtime:".Length..] : Topic;
+}
+
 /// <summary>A newly inserted post as announced over Realtime — the raw row, before author-profile resolution
 /// (the feed poll fills that in). Deliberately minimal; liveness only needs to know "something new landed".</summary>
 internal readonly record struct RealtimePost(Guid Id, Guid Author, string Body, string? Mood, DateTimeOffset CreatedAt);
 
 /// <summary>
-/// A single Supabase Realtime subscription to <c>public.posts</c> INSERTs. Owns a <see cref="ClientWebSocket"/>,
-/// joins the channel, heartbeats, and reconnects with exponential backoff when the socket drops — all on a
-/// background loop, so construction never blocks. Each visible insert invokes the callback (off the UI thread);
-/// disposal tears the socket down and stops reconnecting.
+/// A single Supabase Realtime subscription to one <see cref="RealtimeChannel"/> (a table's changes). Owns a
+/// <see cref="ClientWebSocket"/>, joins the channel, heartbeats, and reconnects with exponential backoff when
+/// the socket drops — all on a background loop, so construction never blocks. Each matching change frame is
+/// handed to the callback (off the UI thread) as raw JSON, which the caller parses however it needs; disposal
+/// tears the socket down and stops reconnecting.
 ///
 /// <para><b>Fallback is the whole point.</b> If the socket can never establish — a strict proxy, no network,
 /// realtime disabled on the project — this just keeps retrying quietly; nothing surfaces to the user, and the
-/// feed still updates on its polling cadence. Realtime only makes the poll fire <em>sooner</em>.</para>
+/// caller's polling cadence still updates. Realtime only makes the next poll fire <em>sooner</em>.</para>
 /// </summary>
 internal sealed class SupabaseRealtimeConnection : IDisposable
 {
@@ -117,17 +213,19 @@ internal sealed class SupabaseRealtimeConnection : IDisposable
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(2);
 
     private readonly Uri _socketUri;
+    private readonly RealtimeChannel _channel;
     private readonly Func<CancellationToken, Task<string>> _tokenProvider;
-    private readonly Action<RealtimePost> _onInsert;
+    private readonly Action<string> _onFrame;
     private readonly CancellationTokenSource _cts = new();
     private int _ref;
 
-    public SupabaseRealtimeConnection(
-        string baseUrl, string apiKey, Func<CancellationToken, Task<string>> tokenProvider, Action<RealtimePost> onInsert)
+    public SupabaseRealtimeConnection(string baseUrl, string apiKey, RealtimeChannel channel,
+        Func<CancellationToken, Task<string>> tokenProvider, Action<string> onFrame)
     {
         _socketUri = RealtimeProtocol.SocketUri(baseUrl, apiKey);
+        _channel = channel;
         _tokenProvider = tokenProvider;
-        _onInsert = onInsert;
+        _onFrame = onFrame;
         _ = RunAsync(_cts.Token);
     }
 
@@ -163,7 +261,7 @@ internal sealed class SupabaseRealtimeConnection : IDisposable
         var token = await _tokenProvider(ct);   // requires a signed-in session; throws → caught → backoff
         using var ws = new ClientWebSocket();
         await ws.ConnectAsync(_socketUri, ct);
-        await SendAsync(ws, RealtimeProtocol.JoinPosts(NextRef(), token), ct);
+        await SendAsync(ws, RealtimeProtocol.Join(NextRef(), token, _channel), ct);
 
         using var heartbeat = new CancellationTokenSource();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, heartbeat.Token);
@@ -190,7 +288,7 @@ internal sealed class SupabaseRealtimeConnection : IDisposable
             try
             {
                 var token = await _tokenProvider(ct);
-                await SendAsync(ws, RealtimeProtocol.AccessToken(NextRef(), token), ct);
+                await SendAsync(ws, RealtimeProtocol.AccessToken(_channel.Topic, NextRef(), token), ct);
             }
             catch (OperationCanceledException) { return; }
             catch { /* token blip: the heartbeat still kept the socket alive */ }
@@ -213,9 +311,12 @@ internal sealed class SupabaseRealtimeConnection : IDisposable
 
             var frame = sb.ToString();
             sb.Clear();
-            if (RealtimeProtocol.TryParseInsert(frame, out var post))
+            bool relevant = _channel.Kind == RealtimeKind.Broadcast
+                ? RealtimeProtocol.IsBroadcast(frame)
+                : RealtimeProtocol.IsChange(frame, _channel.Schema, _channel.Table);
+            if (relevant)
             {
-                try { _onInsert(post); } catch { /* never let a callback kill the socket loop */ }
+                try { _onFrame(frame); } catch { /* never let a callback kill the socket loop */ }
             }
         }
     }

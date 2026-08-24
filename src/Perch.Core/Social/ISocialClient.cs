@@ -104,6 +104,77 @@ public interface ISocialClient
     /// in M5; until then a client may implement this as a no-op and rely on <see cref="GetFeedAsync"/> polling.
     /// </summary>
     IDisposable SubscribeFeed(Action<FeedItem> onPost);
+
+    // ── Networked Connect 4 ("play a friend") ────────────────────────────────────────────────────────
+    // A game is between two people who are already accepted friends; the creator plays red and moves first.
+    // The server is authoritative — every move is validated in the database, so the client only proposes
+    // moves and renders the state it gets back.
+
+    /// <summary>Invites <paramref name="opponentUserId"/> (an accepted friend) to a game — the normal way to
+    /// start one. You make your first move <em>before</em> sending, so <paramref name="firstColumn"/> (0–6) is
+    /// carried on the invite and applied the instant they accept — the invitee is never left staring at an empty
+    /// board waiting for you to move. No game exists yet: a request is created (and broadcast for instant
+    /// delivery) and the game is only born when they accept (see <see cref="AcceptGameRequestAsync"/>). You play
+    /// red and moved first. Throws <see cref="SocialException"/> if they aren't a friend or an invite to them is
+    /// already outstanding.</summary>
+    Task<GameRequest> RequestGameAsync(Guid opponentUserId, int firstColumn, CancellationToken ct = default);
+
+    /// <summary>Your outstanding game invites — both the ones you've sent and the ones waiting on you.</summary>
+    Task<IReadOnlyList<GameRequest>> GetGameRequestsAsync(CancellationToken ct = default);
+
+    /// <summary>Accepts an invite you received, which creates the game (seeded with the inviter's first move so
+    /// it is immediately your turn) and removes the request. The inviter is notified instantly over their inbox.
+    /// Returns the new game's state. Throws <see cref="SocialException"/> if you're not the invitee or it's gone.</summary>
+    Task<GameState> AcceptGameRequestAsync(Guid requestId, CancellationToken ct = default);
+
+    /// <summary>Declines an invite you received, or cancels one you sent — either way the request is removed.
+    /// Idempotent (a request that's already gone is a no-op).</summary>
+    Task DeclineGameRequestAsync(Guid requestId, CancellationToken ct = default);
+
+    /// <summary>Creates a live game with <paramref name="opponentUserId"/> directly, bypassing the invite
+    /// handshake — used by the developer testing tool (which opens both boards at once). Real invites and
+    /// rematches go through the compose → <see cref="RequestGameAsync"/> flow instead, so the opener plays their
+    /// first move before it's sent. You are red and move first. Throws <see cref="SocialException"/> if they
+    /// aren't an accepted friend.</summary>
+    Task<GameSummary> CreateGameAsync(Guid opponentUserId, CancellationToken ct = default);
+
+    /// <summary>Your Connect 4 games (both players are you-or-a-friend, so RLS returns only your own),
+    /// most-recently-active first — the "your turn / their turn / finished" list.</summary>
+    Task<IReadOnlyList<GameSummary>> GetGamesAsync(CancellationToken ct = default);
+
+    /// <summary>The full state of one game — its summary plus the ordered move list to rebuild the board.
+    /// Throws <see cref="SocialException"/> if the game doesn't exist or isn't yours.</summary>
+    Task<GameState> GetGameAsync(Guid gameId, CancellationToken ct = default);
+
+    /// <summary>Drops your disc into <paramref name="column"/> (0–6) in <paramref name="gameId"/>. The move is
+    /// validated server-side; returns the updated state. Throws <see cref="SocialException"/> if it isn't your
+    /// turn, the column is full, or the game is over.</summary>
+    Task<GameState> DropAsync(Guid gameId, int column, CancellationToken ct = default);
+
+    /// <summary>Resigns <paramref name="gameId"/>, conceding the win to your opponent. Idempotent on an
+    /// already-finished game. Returns the updated state.</summary>
+    Task<GameState> ResignGameAsync(Guid gameId, CancellationToken ct = default);
+
+    /// <summary>Permanently removes <paramref name="gameId"/> and its moves. Either player may remove a shared
+    /// game; idempotent (a game that's already gone is a no-op). Old finished games are also pruned server-side
+    /// on a retention schedule, so this is for tidying up now rather than a requirement.</summary>
+    Task DeleteGameAsync(Guid gameId, CancellationToken ct = default);
+
+    /// <summary>Subscribes to live changes for one game, invoking <paramref name="onChanged"/> (off the UI
+    /// thread) whenever a move lands so the caller re-fetches. Returns a handle whose disposal unsubscribes.
+    /// A client may implement this as a no-op and rely on polling.</summary>
+    IDisposable SubscribeGame(Guid gameId, Action onChanged);
+
+    /// <summary>Subscribes to the signed-in user's transient broadcast inbox, invoking <paramref name="onMessage"/>
+    /// (off the UI thread) for each incoming invite / invite-response / nudge, so the app reacts instantly rather
+    /// than waiting for the next poll. Returns a handle whose disposal unsubscribes. Best-effort: a client may
+    /// implement this as a no-op, in which case the games/requests poll still surfaces everything (just slower).</summary>
+    IDisposable SubscribeInbox(Action<InboxMessage> onMessage);
+
+    /// <summary>Nudges <paramref name="opponentUserId"/> that it is their turn in <paramref name="gameId"/> —
+    /// delivered to their inbox as a transient "your turn" broadcast (no DB write). Best-effort and idempotent to
+    /// spam from the caller's point of view; a failure is swallowed. Only meaningful while it's their turn.</summary>
+    Task SendNudgeAsync(Guid gameId, Guid opponentUserId, CancellationToken ct = default);
 }
 
 /// <summary>A Social operation failed in a way the UI should surface (handle taken, body too long, not

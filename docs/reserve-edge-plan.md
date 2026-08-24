@@ -53,9 +53,15 @@ reservation) → move window into `rc` → `ABM_REMOVE` on teardown.
    `ABN_POSCHANGED` (another appbar moved → re-`QUERYPOS`/`SETPOS`), `ABN_FULLSCREENAPP`,
    `ABN_STATECHANGE`. Needs a Win32 message hook on the reservation window (Avalonia:
    `Win32Properties.AddWndProcHookCallback`, or hook the platform HWND).
-6. **macOS has no direct equivalent.** There's no clean public AppBar analog; reserving
-   `NSScreen.visibleFrame` needs private/awkward APIs. This is a **Windows-first** feature;
-   the Mac head gets a no-op stub, consistent with `docs/macos-port-plan.md`.
+6. **macOS has no equivalent at all - Docked mode is Windows-only.** Investigated properly on
+   2026-08-24 and settled: `NSScreen.visibleFrame` is computed from the menu bar and the Dock
+   alone, no public *or* private API lets a third party contribute to it, and the apps that look
+   like they manage it (uBar) are really resizing other apps' windows through the Accessibility
+   API. So this is not a stub awaiting a port - the Mac head reports
+   `IEdgeReservation.IsSupported = false` and the app **withholds Docked mode entirely** there
+   (setting, hotkey, overlay menu item, placement-editor segment), rather than offering a column
+   that windows quietly slide under. Full write-up, including what an Accessibility-based
+   approximation would cost: `docs/macos-docked-mode-investigation.md`.
 
 ## How it folds into Perch
 
@@ -115,7 +121,8 @@ Implemented per the user's decisions (2026-08-20). Both heads build; all 720 .NE
 `render` mode. The live in-app reservation is a faithful port of the proven spike — flip
 **Settings → Advanced → Overlay mode → Docked** to try it.
 
-Key files: `IEdgeReservation` (Core) + `EdgeReservation` (Windows AppBar / Mac no-op) via
+Key files: `IEdgeReservation` (Core, incl. the `IsSupported` capability flag the whole feature is
+gated on) + `EdgeReservation` (Windows AppBar / Mac unsupported) via
 `PlatformServices`; `AppSettings.OverlayMode`/`DockedPlacement`/`HotkeyToggleDocked`; the
 `overlay-mode` registry descriptor + segmented editor; `OverlayCanvas.Docked.cs` (geometry,
 reservation, collapsed-strip paint) + docked hooks in `OverlayCanvas.Draw`; the placement editor's

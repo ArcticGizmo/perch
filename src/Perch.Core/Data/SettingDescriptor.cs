@@ -66,6 +66,23 @@ internal enum PreviewTarget
 }
 
 /// <summary>
+/// An OS capability a setting depends on. A setting whose capability the running platform lacks is hidden
+/// from every settings surface — it stays in <c>SettingsRegistry.All</c> (so the coverage test still sees it,
+/// and its <see cref="AppSettings"/> property still round-trips a settings file written on another OS), but
+/// the catalogue and search filter it out. The app head owns the mapping from feature to "is it available
+/// here", since that's where the platform seams are resolved (<c>PlatformServices.Supports</c>).
+/// </summary>
+internal enum PlatformFeature
+{
+    /// <summary>Available everywhere.</summary>
+    None,
+
+    /// <summary>Needs <c>IEdgeReservation</c> to actually reserve screen edge space — Windows only, which is
+    /// why Docked mode isn't offered on macOS. See <c>docs/macos-docked-mode-investigation.md</c>.</summary>
+    EdgeReservation,
+}
+
+/// <summary>
 /// One row in the <c>SettingsRegistry</c> — the single description of a setting that search, the surface
 /// catalogue, and the live-preview linkage all read from. Bindings are typed by <see cref="Kind"/>: a
 /// <see cref="SettingKind.Toggle"/> sets <see cref="GetBool"/>/<see cref="SetBool"/>, a stepper/slider sets
@@ -105,7 +122,10 @@ internal sealed record SettingDescriptor(
     // Whether this is a "fun / social / silly" feature that Quiet mode silences. QuietMode.Resolve masks
     // every playful toggle off while a quiet window is active, so a feature opts in here (at its definition)
     // rather than every use-site checking the quiet state. See Perch.Data.QuietMode.
-    bool Playful = false)
+    bool Playful = false,
+    // The OS capability this setting needs; settings the running platform can't support are hidden from the
+    // catalogue and search. See PlatformFeature.
+    PlatformFeature Requires = PlatformFeature.None)
 {
     /// <summary>
     /// Whether every whitespace-separated token in <paramref name="query"/> is a substring of the setting's

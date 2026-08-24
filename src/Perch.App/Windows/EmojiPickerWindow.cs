@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
 
 namespace Perch.Avalonia.Windows;
@@ -91,7 +92,9 @@ internal sealed class EmojiPickerWindow : Window
         _entry.PlaceholderText = "search or type an emoji…";
         _entry.TextChanged += (_, _) => Rebuild();
 
-        _grid = new WrapPanel { MaxWidth = 276 };
+        // A little top inset so the first row's emoji glyphs (which sit high in their line box) aren't clipped
+        // by the ScrollViewer's top edge.
+        _grid = new WrapPanel { MaxWidth = 276, Margin = new Thickness(0, 4, 0, 0) };
 
         var tip = new TextBlock
         {
@@ -184,12 +187,16 @@ internal sealed class EmojiPickerWindow : Window
     {
         var b = new Button
         {
-            Content = new TextBlock { Text = emoji, FontFamily = EmojiText.Font, FontSize = 20 },
+            // Owner-drawn glyph rather than a TextBlock: Avalonia clips a colour-emoji glyph to the text line's
+            // own bounds (the tall ascent overflows and gets cut at the top), so we draw it ourselves through
+            // the same baseline-centred path the overlay uses — no clipping, and consistent with the rows.
+            Content = new EmojiGlyph(emoji, 20),
             Background = highlight ? Palette.OverlayRowHoverBrush : Brushes.Transparent,
             BorderBrush = highlight ? Palette.AccentBrush : Brushes.Transparent,
             BorderThickness = new Thickness(highlight ? 1.5 : 0),
             CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(6, 3), Margin = new Thickness(0, 0, 3, 3),
+            // A fixed square chip: the emoji is centred in it with room to spare, so the tall glyph never clips.
+            Width = 40, Height = 40, Padding = new Thickness(0), Margin = new Thickness(0, 0, 3, 3),
             Cursor = new Cursor(StandardCursorType.Hand),
             Opacity = dim ? 0.6 : 1.0,
             HorizontalContentAlignment = HorizontalAlignment.Center,
@@ -214,5 +221,28 @@ internal sealed class EmojiPickerWindow : Window
         int x = Math.Clamp(Position.X, wa.X, Math.Max(wa.X, wa.X + wa.Width - w));
         int y = Math.Clamp(Position.Y, wa.Y, Math.Max(wa.Y, wa.Y + wa.Height - h));
         Position = new PixelPoint(x, y);
+    }
+
+    // A single emoji drawn owner-style (via OverlayDraw) rather than through a TextBlock, so the tall colour-
+    // glyph ascent isn't clipped at the top the way a TextBlock clips it to its text line. Sized to a small
+    // square with the glyph centred through the same baseline-aware path the overlay rows use.
+    private sealed class EmojiGlyph : Control
+    {
+        private readonly string _emoji;
+        private readonly double _size;
+
+        public EmojiGlyph(string emoji, double size)
+        {
+            _emoji = emoji;
+            _size = size;
+            Width = size + 6;
+            Height = size + 6;
+        }
+
+        public override void Render(DrawingContext ctx)
+        {
+            var ft = OverlayDraw.Emoji(_emoji, _size, Brushes.White);
+            OverlayDraw.EmojiCentered(ctx, ft, Bounds.Width / 2, Bounds.Height / 2, _size);
+        }
     }
 }

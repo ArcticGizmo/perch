@@ -356,7 +356,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (w.Screens?.ScreenFromWindow(w) is { } s)
             {
                 double scale = s.Scaling <= 0 ? 1.0 : s.Scaling;
-                return Math.Max(FormWidth, s.WorkingArea.Width / scale - 2 * FloatRightMargin);
+                // WorkingArea is screen space (physical px on Windows, points on macOS); back to DIP via the factor.
+                return Math.Max(FormWidth, s.WorkingArea.Width / ScreenSpacePerDip(scale) - 2 * FloatRightMargin);
             }
         }
         catch { /* best-effort — fall through to the constant cap */ }
@@ -440,8 +441,20 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // needs the real floating size or a bottom/right-anchored spot recomputes against the wrong height and
     // jumps — the "toggle to dense and back reverts the position" bug on small screens. FormWidth is fixed;
     // the height is the measure pass's content height (honours the current collapsed/expanded state).
-    private (int W, int H) FloatingPhysicalSize(double scale) =>
-        (Math.Max(1, (int)(CurrentFloatingWidth * scale)), Math.Max(1, (int)(Draw(null, CurrentFloatingWidth) * scale)));
+    private (int W, int H) FloatingPhysicalSize(double scale)
+    {
+        double f = ScreenSpacePerDip(scale);
+        return (Math.Max(1, (int)(CurrentFloatingWidth * f)), Math.Max(1, (int)(Draw(null, CurrentFloatingWidth) * f)));
+    }
+
+    // DIP → screen-coordinate-space factor. Avalonia reports Window.Position and Screen.Bounds/WorkingArea in
+    // *physical pixels* on Windows but in *logical points* (== DIPs) on macOS, while a Window's Width/Height are
+    // always DIPs. All our placement/clamp math positions a DIP-sized window inside a screen-space rectangle, so
+    // it must convert the window size into whatever unit that rectangle uses: multiply by the DPI scale on
+    // Windows, but by 1.0 on macOS (points already are DIPs). Getting this wrong mixed points and pixels and
+    // yanked the floating panel sideways on the first header toggle once RenderScaling settled to 2 — the
+    // clamp bound came out as (workAreaWidthInPoints - windowWidthInPixels). See docs / the geom trace.
+    private static double ScreenSpacePerDip(double scale) => OperatingSystem.IsMacOS() ? 1.0 : scale;
 
     // Every programmatic floating move routes through here so OnWindowPositionChanged can tell our own moves
     // from a user drag. (Dense geometry is exempt — dense moves are ignored wholesale while IsDense.)
@@ -464,14 +477,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         CaptureFloatingPlacement();                             // a real drag — remember it corner-relative
     }
 
-    // Physical top-left that puts the floating window at the top-right of the given screen's work area.
+    // Screen-space top-left that puts the floating window at the top-right of the given screen's work area.
+    // physWidth is already in screen space; the margins are DIP so convert them the same way (see ScreenSpacePerDip).
     private static PixelPoint DefaultFloatingPosition(Screen screen, int physWidth)
     {
         var wa = screen.WorkingArea;
-        double scale = screen.Scaling;
+        double f = ScreenSpacePerDip(screen.Scaling);
         return new PixelPoint(
-            wa.X + wa.Width - physWidth - (int)(FloatRightMargin * scale),
-            wa.Y + (int)(FloatTopGap * scale));
+            wa.X + wa.Width - physWidth - (int)(FloatRightMargin * f),
+            wa.Y + (int)(FloatTopGap * f));
     }
 
     /// <summary>Places the owning floating window at the user-defined initial placement if one is set
@@ -500,7 +514,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         var wa = screen.WorkingArea;
         double scale = screen.Scaling;
         var (physW, physH) = FloatingPhysicalSize(scale);
-        var (x, y) = PlacementMath.ToPosition(p, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
+        var (x, y) = PlacementMath.ToPosition(p, wa.X, wa.Y, wa.Width, wa.Height, ScreenSpacePerDip(scale), physW, physH);
         SetFloatingPosition(w, new PixelPoint(x, y));
         return true;
     }
@@ -542,7 +556,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (HostWindow is not { Screens: { } screens } w) return;
         var home = screens.Primary ?? (screens.All.Count > 0 ? screens.All[0] : null);
         if (home is null) return;
-        SetFloatingPosition(w, DefaultFloatingPosition(home, (int)(w.Width * home.Scaling)));
+        SetFloatingPosition(w, DefaultFloatingPosition(home, (int)(w.Width * ScreenSpacePerDip(home.Scaling))));
     }
 
     // Guarantees the floating window sits on a currently-connected screen. Its position is otherwise only
@@ -606,7 +620,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             double scale = screen.Scaling;
             (physW, physH) = FloatingPhysicalSize(scale);
             var p = PlacementMath.FromPosition(
-                w.Position.X, w.Position.Y, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
+                w.Position.X, w.Position.Y, wa.X, wa.Y, wa.Width, wa.Height, ScreenSpacePerDip(scale), physW, physH);
             p.MonitorX = screen.Bounds.X; p.MonitorY = screen.Bounds.Y;
             p.MonitorW = screen.Bounds.Width; p.MonitorH = screen.Bounds.Height;
             _effectiveFloating = p;
@@ -635,7 +649,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         var wa = screen.WorkingArea;
         double scale = screen.Scaling;
         var (physW, physH) = FloatingPhysicalSize(scale);
-        var (x, y) = PlacementMath.ToPosition(p, wa.X, wa.Y, wa.Width, wa.Height, scale, physW, physH);
+        var (x, y) = PlacementMath.ToPosition(p, wa.X, wa.Y, wa.Width, wa.Height, ScreenSpacePerDip(scale), physW, physH);
         SetFloatingPosition(w, new PixelPoint(x, y));
         return true;
     }
@@ -1515,7 +1529,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, NoteButton, SocialStatus, ReactionSummary }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, NoteButton, SocialStatus, ReactionSummary, Game }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1860,7 +1874,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // hit-rect stays put so the long-press-to-arcade gesture still lands where the logo was).
             _brandRect = new Rect(HorizPad, midY - iconSize / 2, iconSize, iconSize);
             var zzz = OverlayDraw.Emoji("\U0001F4A4", 14, MutedBrush);
-            ctx.DrawText(zzz, new Point(_brandRect.Center.X - zzz.Width / 2, _brandRect.Center.Y - zzz.Height / 2));
+            OverlayDraw.EmojiCentered(ctx, zzz, _brandRect.Center.X, _brandRect.Center.Y, 14);
             brandRight = HorizPad + iconSize + 5;
         }
         else if (Brand is { })
@@ -3508,6 +3522,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             _noteButtonRect.Width > 0
                 && _noteButtonRect.Contains(p)        ? (TipKind.NoteButton, -1) :
+            HitTestGameIcon(p) is var gi && gi >= 0 ? (TipKind.Game, gi) :
             HitTestReactionSummary(p) is var rs && rs >= 0 ? (TipKind.ReactionSummary, rs) :
             HitTestSocialStatus(p) is var ss && ss >= 0 ? (TipKind.SocialStatus, ss) :
             InUsageStrip(p)                           ? (TipKind.Usage, -1) :
@@ -3543,6 +3558,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
             case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
             case TipKind.ReactionSummary: ShowReactionSummaryTooltip(_tipRow); break;
+            case TipKind.Game: ShowGameTooltip(_tipRow); break;
         }
     }
 
@@ -4172,8 +4188,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             items.Add(MenuItem(_usageEnabled ? "Hide usage" : "Show usage",
                 () => UsageToggleRequested?.Invoke(!_usageEnabled)));
             items.Add(new Separator());
-            items.Add(MenuItem(_docked ? "Switch to floating overlay" : "Dock to screen edge",
-                () => OverlayModeToggleRequested?.Invoke()));
+            // Only where the OS can actually reserve the edge (Windows) — see App.DockedModeAvailable.
+            if (App.DockedModeAvailable)
+                items.Add(MenuItem(_docked ? "Switch to floating overlay" : "Dock to screen edge",
+                    () => OverlayModeToggleRequested?.Invoke()));
             items.Add(MenuItem("Set initial placements…", () => SetPlacementsRequested?.Invoke()));
             if (CanResetWidth) items.Add(ResetSizeMenuItem());
 

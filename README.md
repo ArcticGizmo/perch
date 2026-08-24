@@ -260,8 +260,11 @@ hashes everything currently in `releases\`, which accumulates older versions' `.
 from a clean artifact set.
 
 The mac build is arm64-only and unsigned (see the [macOS install note](#macos-apple-silicon-unsigned) for
-the Gatekeeper workaround). `publish-mac.sh` regenerates `Assets/icon.icns` on demand via
-[`tools/gen-icns.sh`](tools/gen-icns.sh) if it's missing.
+the Gatekeeper workaround). `publish-mac.sh` builds a styled drag-install DMG (icon-view window with a
+"drag Perch → Applications" backdrop and positioned icons) and regenerates its assets on demand if
+missing: `Assets/icon.icns` via [`tools/gen-icns.sh`](tools/gen-icns.sh) and the DMG backdrop
+`tools/dmg-background.png` via [`tools/gen-dmg-background.sh`](tools/gen-dmg-background.sh) (both use only
+stock `swift`/`sips` from the Xcode Command Line Tools).
 
 ## Development
 

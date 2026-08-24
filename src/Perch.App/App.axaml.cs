@@ -49,6 +49,10 @@ public partial class App : Application
     private SpaceInvadersWindow? _invadersWindow;   // shhh
     private FroggerWindow? _froggerWindow;          // shhh
     private WordleWindow? _wordleWindow;            // shhh
+    private Connect4Window? _connect4Window;        // shhh
+    private readonly Dictionary<Guid, Connect4Window> _onlineGameWindows = new();   // overlay-opened games, by id
+    private IDisposable? _inboxSub;                  // transient inbox (Connect 4 invites / nudges / rematches)
+    private NudgeBubbleWindow? _nudgeBubble;         // at most one on screen at a time
     private HistoryWindow? _historyWindow;
     private GitTreeWindow? _treeWindow;
     private MarkdownWindow? _markdownWindow;
@@ -207,13 +211,16 @@ public partial class App : Application
             _feedHost = new SocialFeedMonitorHost(_social,
                 snap => { _overlay?.Canvas.UpdateRoster(snap); CheckDnd(); },   // re-check DND on each roster tick
                 OnFriendPosted,
-                OnReactionToMyPost);
+                OnReactionToMyPost,
+                (games, requests) => _overlay?.Canvas.SetGames(games, requests, _social?.Current.Me?.Id ?? Guid.Empty),
+                OnGameInvited);
             _feedHost.Diagnostic += m => _reactionDiag?.Invoke(m);   // stream to the debug tool when it's open
             _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
             {
                 _overlay?.Canvas.SetSocialAccount(st.SignedIn, st.Me is not null);
                 _feedHost?.SetActive(Effective.SocialEnabled && st.SignedIn);   // poll the feed while signed in (paused in Quiet mode)
+                SetInboxActive(Effective.SocialEnabled && st is { SignedIn: true, Me: not null });
                 if (!st.SignedIn) { _reactionBubbles?.Close(); _reactionBubbles = null; }
             });
             _ = _social.TryRestoreAsync();
@@ -287,6 +294,8 @@ public partial class App : Application
             _overlay.Canvas.PostStatusRequested += OpenCompose;
             _overlay.Canvas.FriendsRequested += OpenFriends;
             _overlay.Canvas.ReactRequested += OnReactRequested;
+            _overlay.Canvas.GameOpenRequested += OpenOnlineGameFromOverlay;   // a game icon in the friends region
+            _overlay.Canvas.GameRequestResponded += OnGameRequestResponded;   // accept / decline / cancel an invite
             _overlay.Canvas.SocialRegionExpandChanged += expanded =>
             {
                 if (_appSettings is { } s) { s.SocialRegionExpanded = expanded; s.Save(); }
@@ -393,8 +402,10 @@ public partial class App : Application
             _overlay.Show();
 
             // If the persisted mode is Docked, reserve the edge column now the window (and its handle) exist.
-            // Floating is the default, so an older settings file just keeps floating.
-            if (settings.OverlayMode == OverlayPresentationMode.Docked)
+            // Floating is the default, so an older settings file just keeps floating. A settings file carrying
+            // Docked from a Windows machine stays floating here when the platform can't reserve an edge — the
+            // value is left on disk untouched so it still applies when the same profile is read on Windows.
+            if (settings.OverlayMode == OverlayPresentationMode.Docked && DockedModeAvailable)
                 _overlay.Canvas.SetOverlayMode(OverlayPresentationMode.Docked);
 
             // Once the UI is up, pop the post-update "what's new" window (if this launch detected an update).
@@ -534,6 +545,9 @@ public partial class App : Application
         _invadersWindow?.Close();
         _froggerWindow?.Close();
         _wordleWindow?.Close();
+        _connect4Window?.Close();
+        foreach (var w in _onlineGameWindows.Values.ToList()) w.Close();
+        _nudgeBubble?.Close();
         _qrWindow?.Close();
         _changelogWindow?.Close();
         _switcher?.Close();
@@ -744,6 +758,8 @@ public partial class App : Application
 
         // Poll the feed only while Social is enabled and signed in (turning Social off stops the poll).
         _feedHost?.SetActive(s.SocialEnabled && (_social?.Current.SignedIn ?? false));
+        // The transient Connect 4 inbox (invites / nudges) follows the same gate.
+        SetInboxActive(s.SocialEnabled && _social is { Current: { SignedIn: true, Me: not null } });
 
         // Run the to-do poller while either the overlay strip or the due reminders are enabled; stop it (and
         // clear the strip) when both are off. The canvas gate (SetShowTodos, applied above) hides the strip
@@ -894,6 +910,17 @@ public partial class App : Application
         if (DndSuppressing) return;   // Do Not Disturb: stay quiet
         var body = item.Body.Length <= 120 ? item.Body : item.Body[..117] + "…";
         _notifier?.Show($"@{item.Author.Handle} just posted", body, ToastLevel.Info, null, null);
+    }
+
+    // A friend challenged you to a Connect 4 game (surfaced by the feed poll — nudged live by the inbox broadcast,
+    // or found on the next tick): a quiet desktop toast, gated by the master notifications switch and
+    // NotifyOnGameInvite. Never fires for invites you sent or the backlog present when the feed starts.
+    private void OnGameInvited(Perch.Social.GameRequest request)
+    {
+        if (Effective is not { NotificationsEnabled: true, NotifyOnGameInvite: true }) return;   // masked off in Quiet mode
+        if (DndSuppressing) return;   // Do Not Disturb: stay quiet
+        _notifier?.Show($"@{request.Requester.Handle} challenged you to Connect 4",
+            "Open Perch to accept or decline.", ToastLevel.Info, null, null);
     }
 
     // A session finished (NeedsAttention): flash the overlay and fire the notification (toast/chime/external,
@@ -1294,7 +1321,7 @@ public partial class App : Application
     // below and closes as it does. All are reused like every other aux window.
     private void OpenArcade() =>
         _arcadeWindow = WindowHost.ShowOrFocus(_arcadeWindow,
-            () => new ArcadeMenuWindow(OpenInvaders, OpenFrogger, OpenWordle), () => _arcadeWindow = null);
+            () => new ArcadeMenuWindow(OpenInvaders, OpenFrogger, OpenWordle, OpenConnect4), () => _arcadeWindow = null);
 
     private void OpenInvaders() =>
         _invadersWindow = WindowHost.ShowOrFocus(_invadersWindow, () => new SpaceInvadersWindow(), () => _invadersWindow = null);
@@ -1306,6 +1333,136 @@ public partial class App : Application
     // writes AppSettings.WordleState directly and saves after each guess.
     private void OpenWordle() =>
         _wordleWindow = WindowHost.ShowOrFocus(_wordleWindow, () => new WordleWindow(_appSettings!), () => _wordleWindow = null);
+
+    // Connect 4: local hot-seat / vs-computer, plus — when Social is signed in — an online "Play a friend" mode
+    // the window reaches via the lobby (see docs/connect4-plan.md). Passing the social client is what lights up
+    // the "Play a friend" pill; local play works with or without it.
+    private void OpenConnect4() =>
+        _connect4Window = WindowHost.ShowOrFocus(_connect4Window, () => new Connect4Window(_social), () => _connect4Window = null);
+
+    // A game icon in the overlay's friends region was clicked — open (or focus, if already open) that game's
+    // online board. Reused per game id so clicking twice doesn't stack duplicate windows.
+    private void OpenOnlineGameFromOverlay(Perch.Social.GameSummary game)
+    {
+        if (_social?.Current.Me is not { } me) return;
+        // Reuse an already-open board for this game (tracked here, or a lobby/compose one found by id) — and pull
+        // it onto the virtual desktop you're on now, so it isn't left stranded on another desktop.
+        var existing = _onlineGameWindows.GetValueOrDefault(game.Id) ?? FindGameWindow(game.Id, currentDesktopOnly: false);
+        if (existing is not null) { BringToCurrentDesktop(existing); existing.Activate(); return; }
+        var w = new Connect4Window(_social, me.Id, game);
+        _onlineGameWindows[game.Id] = w;
+        w.Closed += (_, _) => _onlineGameWindows.Remove(game.Id);
+        w.Show();
+    }
+
+    // Moves a window onto the current virtual desktop (best-effort; no-op where virtual desktops don't apply).
+    private static void BringToCurrentDesktop(Window w)
+    {
+        if (w.TryGetPlatformHandle() is { } h) PlatformServices.WindowChrome.MoveWindowToCurrentDesktop(h.Handle);
+    }
+
+    // A game invite in the overlay was accepted (opens the new game) or declined/cancelled (just removed).
+    private async void OnGameRequestResponded(Perch.Social.GameRequest request, bool accept)
+    {
+        if (_social is null) return;
+        try
+        {
+            if (accept)
+            {
+                var state = await _social.AcceptGameRequestAsync(request.Id);
+                _feedHost?.RefreshSoon();
+                OpenOnlineGameFromOverlay(state.Summary);   // jump straight into the accepted game
+            }
+            else
+            {
+                await _social.DeclineGameRequestAsync(request.Id);
+                _feedHost?.RefreshSoon();
+            }
+        }
+        catch { /* best-effort — a failed accept/decline just leaves the invite where it was */ }
+    }
+
+    // ── Transient inbox: Connect 4 invites / invite-responses / nudges ──────────────────────────────
+    // These broadcasts only accelerate what the poll already surfaces (invites/games) or drive a fleeting toast
+    // (nudge); the persisted rows remain authoritative, so a missed broadcast just means "a little slower".
+    private void SetInboxActive(bool active)
+    {
+        if (active)
+        {
+            if (_inboxSub is null && _social is not null)
+                _inboxSub = _social.SubscribeInbox(m => Dispatcher.UIThread.Post(() => OnInboxMessage(m)));
+        }
+        else { _inboxSub?.Dispose(); _inboxSub = null; }
+    }
+
+    private void OnInboxMessage(Perch.Social.InboxMessage m)
+    {
+        switch (m.Kind)
+        {
+            case Perch.Social.InboxKind.Nudge:
+                ShowNudge(m);
+                break;
+            default:
+                // Invite / accepted / declined: pull the authoritative games + requests now so the overlay's
+                // GAMES strip reflects it immediately instead of waiting for the next 60s feed tick.
+                _feedHost?.RefreshSoon();
+                break;
+        }
+    }
+
+    // Floats a "your turn" bubble off the side of the nudged game's board (if it's open) or the overlay.
+    private void ShowNudge(Perch.Social.InboxMessage m)
+    {
+        string handle = m.FromHandle is { Length: > 0 } h ? "@" + h : "Your opponent";
+        string label = $"{handle} nudged you — your turn!";
+        // Only anchor to a board that's on the virtual desktop you're actually looking at — otherwise the bubble
+        // would float over empty space beside a board that lives on another desktop. Fall back to the overlay.
+        Window? anchor = (Window?)FindGameWindow(m.GameId, currentDesktopOnly: true) ?? _overlay;
+        if (anchor is null || !anchor.IsVisible) return;
+
+        _nudgeBubble?.Close();
+        var bubble = new NudgeBubbleWindow(() => _nudgeBubble = null);
+        _nudgeBubble = bubble;
+
+        double scale = anchor.RenderScaling <= 0 ? 1 : anchor.RenderScaling;
+        bubble.Configure(tailRight: false, label);           // provisional (right side); size is side-independent
+        double bw = bubble.Width * scale, bh = bubble.Height * scale;
+
+        var pos = anchor.Position;
+        double aw = anchor.Bounds.Width * scale, ah = anchor.Bounds.Height * scale;
+        var screen = anchor.Screens.ScreenFromWindow(anchor) ?? anchor.Screens.Primary;
+        double gap = 10 * scale;
+
+        bool right = screen is null || pos.X + aw + gap + bw <= screen.Bounds.Right;
+        if (!right) bubble.Configure(tailRight: true, label);  // bubble sits to the anchor's left instead
+
+        int x = right ? (int)(pos.X + aw + gap) : (int)(pos.X - bw - gap);
+        int y = (int)(pos.Y + (ah - bh) / 2);
+        if (screen is not null)
+        {
+            x = Math.Clamp(x, screen.Bounds.X, Math.Max(screen.Bounds.X, screen.Bounds.Right - (int)bw));
+            y = Math.Clamp(y, screen.Bounds.Y, Math.Max(screen.Bounds.Y, screen.Bounds.Bottom - (int)bh));
+        }
+        bubble.Position = new PixelPoint(x, y);
+        bubble.Present();
+    }
+
+    // Any open Connect 4 board currently showing the given online game. With currentDesktopOnly, skips boards on
+    // another virtual desktop (for anchoring a nudge bubble to a board the user can actually see right now);
+    // without it, matches any board (for reusing/relocating a window when re-opening a game).
+    private Connect4Window? FindGameWindow(Guid? gameId, bool currentDesktopOnly)
+    {
+        if (gameId is not { } id || id == Guid.Empty) return null;
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            foreach (var w in desktop.Windows)
+            {
+                if (w is not Connect4Window c || !c.IsVisible || c.CurrentGameId != id) continue;
+                if (currentDesktopOnly && c.TryGetPlatformHandle() is { } h
+                    && !PlatformServices.WindowChrome.IsWindowOnCurrentDesktop(h.Handle)) continue;
+                return c;
+            }
+        return null;
+    }
 
     // "Show QR code" — a centred card with the session's remote-control deep-link QR. Only one is shown
     // at a time; opening another (or clicking away) closes the previous.
@@ -1582,9 +1739,15 @@ public partial class App : Application
     // Ctrl+Shift+W — collapse/expand the docked column. No-op unless the overlay is in Docked mode.
     private void ToggleDocked() => _overlay?.Canvas.ToggleDockedCollapsed();
 
+    // Docked mode reserves a screen-edge column through the OS, which only Windows can do — everywhere else
+    // the whole feature is withheld (setting, hotkey, overlay menu item, placement-editor segment) rather
+    // than shipped as a column maximized windows quietly cover. See docs/macos-docked-mode-investigation.md.
+    public static bool DockedModeAvailable => PlatformServices.EdgeReservation.IsSupported;
+
     // Switch the live overlay between Floating and Docked from the settings segmented control.
     private void SetOverlayMode()
     {
+        if (!DockedModeAvailable) return;
         if (_appSettings is { } s) _overlay?.Canvas.SetOverlayMode(s.OverlayMode);
     }
 
@@ -1592,6 +1755,7 @@ public partial class App : Application
     // live (the settings segmented control reads it back next time it opens).
     private void ToggleOverlayMode()
     {
+        if (!DockedModeAvailable) return;
         if (_appSettings is not { } s) return;
         s.OverlayMode = s.OverlayMode == OverlayPresentationMode.Docked
             ? OverlayPresentationMode.Floating
@@ -1614,7 +1778,7 @@ public partial class App : Application
         TryRegister(s.HotkeyToggleDense,   () => Dispatcher.UIThread.Post(ToggleDense));
         TryRegister(s.HotkeyCycleSessions, () => Dispatcher.UIThread.Post(CycleSessions));
         TryRegister(s.HotkeyOpenSwitcher,  () => Dispatcher.UIThread.Post(OpenSwitcher));
-        TryRegister(s.HotkeyToggleDocked,  () => Dispatcher.UIThread.Post(ToggleDocked));
+        if (DockedModeAvailable) TryRegister(s.HotkeyToggleDocked, () => Dispatcher.UIThread.Post(ToggleDocked));
     }
 
     private void TryRegister(HotkeyBinding binding, Action onPressed)

@@ -47,6 +47,15 @@ internal static class PlatformServices
     public static IDoNotDisturb DoNotDisturb { get; } = new Impl.MacDoNotDisturb();
 #endif
 
+    /// <summary>Whether the OS capability a <see cref="Perch.Data.SettingDescriptor"/> depends on exists on
+    /// this platform. Settings that fail this are hidden from the catalogue and search — the composition root
+    /// is the right place for the mapping, since it's what resolved the seam in the first place.</summary>
+    public static bool Supports(Perch.Data.PlatformFeature feature) => feature switch
+    {
+        Perch.Data.PlatformFeature.EdgeReservation => EdgeReservation.IsSupported,
+        _ => true,
+    };
+
     public static ISessionLock CreateSessionLock() => new Impl.SessionLock();
     public static IGlobalHotkey CreateGlobalHotkey() => new Impl.GlobalHotkey();
 

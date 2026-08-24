@@ -64,4 +64,49 @@ public sealed class RealtimeProtocolTests
     {
         Assert.False(RealtimeProtocol.TryParseInsert(json, out _));
     }
+
+    [Fact]
+    public void Join_broadcast_channel_subscribes_to_broadcast_not_postgres_changes()
+    {
+        var ch = RealtimeChannel.Inbox(Guid.NewGuid());
+        var frame = JsonNode.Parse(RealtimeProtocol.Join(1, "jwt-xyz", ch))!.AsObject();
+        Assert.Equal(ch.Topic, (string?)frame["topic"]);
+        Assert.Equal("phx_join", (string?)frame["event"]);
+        Assert.Equal("jwt-xyz", (string?)frame["payload"]!["access_token"]);
+        var config = frame["payload"]!["config"]!.AsObject();
+        Assert.True(config.ContainsKey("broadcast"));
+        Assert.False(config.ContainsKey("postgres_changes"));
+        Assert.False((bool)config["broadcast"]!["self"]!);
+    }
+
+    [Fact]
+    public void Inbox_channel_strips_the_realtime_prefix_for_the_broadcast_endpoint()
+    {
+        var id = Guid.NewGuid();
+        var ch = RealtimeChannel.Inbox(id);
+        Assert.StartsWith("realtime:", ch.Topic);
+        Assert.Equal($"perch:inbox:{id}", ch.BroadcastName);
+    }
+
+    [Fact]
+    public void TryParseBroadcast_reads_a_relayed_broadcast()
+    {
+        var json =
+            """{"event":"broadcast","topic":"realtime:perch:inbox:x","payload":{"event":"inbox","payload":{"kind":3,"from":"abc"}}}""";
+        Assert.True(RealtimeProtocol.TryParseBroadcast(json, out var name, out var payload));
+        Assert.Equal("inbox", name);
+        Assert.Equal(3, (int?)payload["kind"]);
+        Assert.Equal("abc", (string?)payload["from"]);
+    }
+
+    [Theory]
+    [InlineData("""{"event":"postgres_changes","payload":{"data":{"table":"posts","type":"INSERT"}}}""")] // not a broadcast
+    [InlineData("""{"event":"phx_reply","payload":{"status":"ok"}}""")]                                    // a join ack
+    [InlineData("""{"event":"broadcast","payload":{"event":""}}""")]                                       // no application event name
+    [InlineData("not json")]
+    [InlineData("")]
+    public void TryParseBroadcast_ignores_everything_else(string json)
+    {
+        Assert.False(RealtimeProtocol.TryParseBroadcast(json, out _, out _));
+    }
 }

@@ -18,7 +18,7 @@ public sealed class ArcadeMenuWindow : Window
 {
     private readonly ArcadeMenu _menu = new();
 
-    public ArcadeMenuWindow(Action launchInvaders, Action launchFrogger, Action launchWordle)
+    public ArcadeMenuWindow(Action launchInvaders, Action launchFrogger, Action launchWordle, Action launchConnect4)
     {
         Title = "Perch Arcade";
         CanResize = false;
@@ -30,7 +30,7 @@ public sealed class ArcadeMenuWindow : Window
         _menu.Chosen += index =>
         {
             Close();
-            (index switch { 0 => launchInvaders, 1 => launchFrogger, _ => launchWordle })();
+            (index switch { 0 => launchInvaders, 1 => launchFrogger, 2 => launchWordle, _ => launchConnect4 })();
         };
     }
 
@@ -55,12 +55,12 @@ public sealed class ArcadeMenuWindow : Window
     }
 }
 
-/// <summary>The chooser's owner-drawn control: a title, three selectable game cards each with a tiny live
+/// <summary>The chooser's owner-drawn control: a title, four selectable game cards each with a tiny live
 /// sprite, and a shimmering prompt. Raises <see cref="Chosen"/> with the selected index (0 = Invaders,
-/// 1 = Crossing, 2 = Wordle).</summary>
+/// 1 = Crossing, 2 = Wordle, 3 = Connect 4).</summary>
 internal sealed class ArcadeMenu : Control
 {
-    private const double MenuW = 460, MenuH = 528;
+    private const double MenuW = 460, MenuH = 640;
     private const double CardX = 40, CardW = MenuW - 2 * CardX, CardH = 92, CardGap = 20;
     private const double FirstCardY = 130;
     private const int TickMs = 16;
@@ -72,6 +72,7 @@ internal sealed class ArcadeMenu : Control
         ("PERCH INVADERS", "Blast the descending swarm"),
         ("PERCH CROSSING", "Hop the bird home, Frogger-style"),
         ("PERCH WORDLE", "Crack today's five-letter word"),
+        ("PERCH CONNECT 4", "Line up four — solo or a friend"),
     };
 
     private int _selected;
@@ -214,7 +215,8 @@ internal sealed class ArcadeMenu : Control
         {
             case 0: DrawBitSprite(ctx, Invader, icon, Palette.RunningBrush); break;
             case 1: DrawBitSprite(ctx, Bird, icon, Palette.AccentBrush); break;
-            default: DrawWordleGlyph(ctx, icon); break;
+            case 2: DrawWordleGlyph(ctx, icon); break;
+            default: DrawConnect4Glyph(ctx, icon); break;
         }
 
         double tx = CardX + 88;
@@ -242,6 +244,31 @@ internal sealed class ArcadeMenu : Control
                 OverlayDraw.Panel(ctx,
                     new Rect(box.X + c * (tw + gap), box.Y + r * (th + gap), tw, th),
                     fills[r, c], null, 4);
+    }
+
+    // Connect 4's card icon: a tiny board of holes with a couple of red and yellow discs dropped in, so it
+    // reads as the game at a glance using the same red/yellow disc hues the board itself does.
+    private static void DrawConnect4Glyph(DrawingContext ctx, Rect box)
+    {
+        OverlayDraw.Panel(ctx, box, Palette.ButtonBgBrush, new Pen(Palette.BorderBrush, 1), 6);
+        const int cols = 3, rows = 3;
+        double m = 5;
+        double cw = (box.Width - 2 * m) / cols, ch = (box.Height - 2 * m) / rows;
+        double rad = Math.Min(cw, ch) / 2 - 2;
+        // A small posed position: two reds, two yellows, the rest empty holes.
+        IBrush?[,] fills =
+        {
+            { null, null, Palette.AwaitingBrush },
+            { null, Palette.ErrorBrush, Palette.AwaitingBrush },
+            { Palette.ErrorBrush, Palette.AwaitingBrush, Palette.ErrorBrush },
+        };
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++)
+            {
+                var center = new Point(box.X + m + c * cw + cw / 2, box.Y + m + r * ch + ch / 2);
+                ctx.DrawEllipse(Palette.OverlaySurfaceBrush, null, center, rad, rad);   // the hole
+                if (fills[r, c] is { } f) ctx.DrawEllipse(f, null, center, rad - 1, rad - 1);
+            }
     }
 
     private static void DrawBitSprite(DrawingContext ctx, string[] rows, Rect box, IBrush brush)

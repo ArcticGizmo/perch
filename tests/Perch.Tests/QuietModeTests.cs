@@ -15,6 +15,7 @@ public class QuietModeTests
     {
         nameof(AppSettings.SocialEnabled),
         nameof(AppSettings.NotifyOnFriendPost),
+        nameof(AppSettings.NotifyOnGameInvite),
         nameof(AppSettings.ShowLargeReactions),
         nameof(AppSettings.PerchReacts),
         nameof(AppSettings.NotifyOnAchievement),
@@ -72,6 +73,7 @@ public class QuietModeTests
             // Playful — should all end up false.
             SocialEnabled = true,
             NotifyOnFriendPost = true,
+            NotifyOnGameInvite = true,
             ShowLargeReactions = true,
             PerchReacts = true,
             NotifyOnAchievement = true,
@@ -93,6 +95,7 @@ public class QuietModeTests
         // Every playful toggle is off on the effective copy.
         Assert.False(eff.SocialEnabled);
         Assert.False(eff.NotifyOnFriendPost);
+        Assert.False(eff.NotifyOnGameInvite);
         Assert.False(eff.ShowLargeReactions);
         Assert.False(eff.PerchReacts);
         Assert.False(eff.NotifyOnAchievement);

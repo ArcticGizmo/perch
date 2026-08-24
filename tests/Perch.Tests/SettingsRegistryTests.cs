@@ -99,6 +99,34 @@ public class SettingsRegistryTests
         Assert.True(dupes.Count == 0, $"Duplicate descriptor ids: {string.Join(", ", dupes)}");
     }
 
+    // Docked mode reserves a screen edge through the OS, which only Windows can do, so its setting is
+    // withheld everywhere else (see docs/macos-docked-mode-investigation.md). The descriptor still lives in
+    // All — the coverage test above needs it, and a settings file written on Windows must still round-trip —
+    // so the withholding happens in the Available/Search filters the settings surfaces go through.
+    [Fact]
+    public void OverlayModeRequiresEdgeReservation()
+    {
+        var overlayMode = SettingsRegistry.All.Single(d => d.Id == "overlay-mode");
+        Assert.Equal(PlatformFeature.EdgeReservation, overlayMode.Requires);
+    }
+
+    [Fact]
+    public void AvailableHidesSettingsThisPlatformCannotSupport()
+    {
+        bool NoEdgeReservation(PlatformFeature f) => f != PlatformFeature.EdgeReservation;
+
+        Assert.Equal(SettingsRegistry.All, SettingsRegistry.Available(_ => true));
+
+        var available = SettingsRegistry.Available(NoEdgeReservation).ToList();
+        Assert.DoesNotContain(available, d => d.Id == "overlay-mode");
+        // Nothing else is collateral damage: only the EdgeReservation-gated entries drop out.
+        Assert.Equal(SettingsRegistry.All.Count(d => d.Requires == PlatformFeature.None), available.Count);
+
+        // Search runs through the same gate, so a hidden setting can't be found by typing its name either.
+        Assert.DoesNotContain(SettingsRegistry.Search("overlay mode", NoEdgeReservation), d => d.Id == "overlay-mode");
+        Assert.Contains(SettingsRegistry.Search("overlay mode", _ => true), d => d.Id == "overlay-mode");
+    }
+
     [Fact]
     public void ToggleBindingsReadAndWriteTheirBackingProperty()
     {

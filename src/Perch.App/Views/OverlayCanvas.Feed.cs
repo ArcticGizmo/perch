@@ -109,6 +109,9 @@ public sealed partial class OverlayCanvas
             double h = SocialHeaderHeight;
             if (!_regionExpanded) return h;
 
+            // The games strip sits between the header and the friend rows, when there are invites or games.
+            if (HasGameStripItems) h += GamesRowHeight;
+
             // Two lines per friend/you row: handle + time on top, status + reactions below — the overlay is
             // narrow, so the status needs its own line to breathe.
             h += FriendRowCount * FeedRowHeight;
@@ -215,6 +218,9 @@ public sealed partial class OverlayCanvas
         DrawRegionHeader(ctx, width, top);
         double y = top + SocialHeaderHeight;
         if (!_regionExpanded) return;
+
+        // The Connect 4 strip, between the header and the friends.
+        if (HasGameStripItems) { DrawGamesStrip(ctx, width, y); y += GamesRowHeight; }
 
         if (_roster is { Friends.Count: > 0 } r)
         {
@@ -397,7 +403,7 @@ public sealed partial class OverlayCanvas
         OverlayDraw.Panel(ctx, chip, c.Mine ? mineFill : FeedChipBrush,
             c.Mine && rowHovered ? new Pen(Palette.AccentBrush, 1) : null, 8);
         var emojiFt = OverlayDraw.Emoji(c.Emoji, FeedReactionSize, FgBrush);
-        OverlayDraw.TextLeftMid(ctx, emojiFt, x + 7, midY);
+        OverlayDraw.EmojiLeftMid(ctx, emojiFt, x + 7, midY, FeedReactionSize);
         if (ShowsCount(c))
             OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(c.Count.ToString(), FeedReactionSize,
                 c.Mine ? Palette.AccentBrush : FgBrush), x + 7 + emojiFt.Width + 4, midY);
@@ -480,7 +486,7 @@ public sealed partial class OverlayCanvas
         if (!string.IsNullOrWhiteSpace(emoji))
         {
             var ft = OverlayDraw.Emoji(emoji, size * 0.62, FgBrush);
-            ctx.DrawText(ft, new Point(cx - ft.Width / 2, cy - ft.Height / 2));
+            OverlayDraw.EmojiCentered(ctx, ft, cx, cy, size * 0.62);
         }
         else
         {
@@ -535,14 +541,16 @@ public sealed partial class OverlayCanvas
         bool compose = _socialComposeRect.Width > 0 && _socialComposeRect.Contains(p);
         int friendRow = HitTestFriendRow(p);
         int reactAdd = HitTestReactAdd(p);
+        int gameIcon = HitTestGameIcon(p);
         bool changed = add != _hoveredSocialAdd || header != _hoveredSocialHeader
                        || compose != _hoveredSocialCompose || reactAdd != _hoveredReactAdd
-                       || friendRow != _hoveredFriendRow;
+                       || friendRow != _hoveredFriendRow || gameIcon != _hoveredGameIcon;
         _hoveredSocialAdd = add;
         _hoveredSocialHeader = header;
         _hoveredSocialCompose = compose;
         _hoveredFriendRow = friendRow;
         _hoveredReactAdd = reactAdd;
+        _hoveredGameIcon = gameIcon;
         return changed;
     }
 
@@ -571,9 +579,9 @@ public sealed partial class OverlayCanvas
     private bool ClearSocialRegionHover()
     {
         bool any = _hoveredSocialAdd || _hoveredSocialHeader || _hoveredSocialCompose
-                   || _hoveredReactAdd >= 0 || _hoveredFriendRow >= 0;
+                   || _hoveredReactAdd >= 0 || _hoveredFriendRow >= 0 || _hoveredGameIcon >= 0;
         _hoveredSocialAdd = _hoveredSocialHeader = _hoveredSocialCompose = false;
-        _hoveredReactAdd = _hoveredFriendRow = -1;
+        _hoveredReactAdd = _hoveredFriendRow = _hoveredGameIcon = -1;
         return any;
     }
 
@@ -583,6 +591,7 @@ public sealed partial class OverlayCanvas
         _reactChipRects.Clear();
         _reactAddRects.Clear();
         _friendRowRects.Clear();
+        _gameIconRects.Clear();
         _socialStatusTips.Clear();
         _reactSummaryTips.Clear();
     }
@@ -597,6 +606,9 @@ public sealed partial class OverlayCanvas
     // Routes a click inside the region. Returns true if it consumed the click.
     private bool RouteSocialRegionClick(Point p)
     {
+        // A game icon opens/continues a game, or opens an invite's accept/decline menu.
+        if (TryRouteGameIconClick(p)) return true;
+
         foreach (var (rect, postId, emoji) in _reactChipRects)
             if (rect.Contains(p))
             {

@@ -143,6 +143,22 @@ internal static class HeadlessRenderer
         feedProbe.SetSocialEnabled(true);
         feedProbe.SetSocialAccount(signedIn: true, hasHandle: true);   // region shows in the signed-in state
         feedProbe.UpdateRoster(SampleData.Roster());
+        // Connect 4 games strip: an incoming invite (accent ring + badge), an outgoing invite (muted ring), a
+        // your-turn game in play (accent disc + badge) and one waiting on the opponent (muted disc) — so every
+        // ring/fill + accent/muted + your-turn-badge variant renders.
+        var youProf = new Perch.Social.Profile(Guid.NewGuid(), "you");
+        var adaProf = new Perch.Social.Profile(Guid.NewGuid(), "ada");
+        var graceProf = new Perch.Social.Profile(Guid.NewGuid(), "grace");
+        List<Perch.Social.GameRequest> gameRequests =
+        [
+            new(Guid.NewGuid(), adaProf, youProf, DateTimeOffset.Now),     // incoming: ada invited you
+            new(Guid.NewGuid(), youProf, graceProf, DateTimeOffset.Now),   // outgoing: you invited grace
+        ];
+        feedProbe.SetGames(
+        [
+            new(Guid.NewGuid(), youProf, adaProf, Perch.Social.GameStatus.InProgress, Perch.Games.Connect4Disc.Red, 5, DateTimeOffset.Now),     // your turn, in play
+            new(Guid.NewGuid(), graceProf, youProf, Perch.Social.GameStatus.InProgress, Perch.Games.Connect4Disc.Red, 4, DateTimeOffset.Now),   // their turn, in play
+        ], gameRequests, youProf.Id);
         RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1x.png"), 96);
         RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1.5x.png"), 144);
 
@@ -408,6 +424,62 @@ internal static class HeadlessRenderer
         var wordle = new Windows.WordleBoard(new Perch.Data.AppSettings());
         wordle.SnapshotPlaying();
         RenderControl(wordle, Path.Combine(outDir, "wordle_play_1x.png"), 96);
+
+        // The fourth toy: Perch Connect 4 — a posed mid-game board (a few discs down, a column hovered so the
+        // drop-preview ghost + column wash show) in its default vs-Computer mode. Timers don't tick headless,
+        // so this is a static pose with no disc in flight.
+        var connect4 = new Windows.Connect4Board();
+        connect4.SnapshotPlaying();
+        RenderControl(connect4, Path.Combine(outDir, "connect4_play_1x.png"), 96);
+
+        // Connect 4 online mode: the "play a friend" board — a posed mid-game between two accounts (seeded via
+        // the in-memory FakeSocialClient), from the local player's point of view, so the "vs @handle" header,
+        // the Resign pill, the turn line and the drop preview all render. It's the caller's turn here.
+        var fakeSocial = new Perch.Social.FakeSocialClient();
+        var meP = fakeSocial.SignInAs("you");
+        var oppP = fakeSocial.SeedUser("rival");
+        fakeSocial.SimulateAccept(oppP.Id);
+        var gsummary = fakeSocial.CreateGameAsync(oppP.Id).GetAwaiter().GetResult();
+        fakeSocial.DropAsync(gsummary.Id, 3).GetAwaiter().GetResult();   // you (red)
+        fakeSocial.SimulateOpponentDrop(gsummary.Id, 3);                 // rival (yellow)
+        fakeSocial.DropAsync(gsummary.Id, 4).GetAwaiter().GetResult();   // you
+        fakeSocial.SimulateOpponentDrop(gsummary.Id, 2);                 // rival → back to your turn
+        var gstate = fakeSocial.GetGameAsync(gsummary.Id).GetAwaiter().GetResult();
+        var connect4Online = new Windows.Connect4Board();
+        connect4Online.SnapshotOnline(gstate, meP.Id);
+        RenderControl(connect4Online, Path.Combine(outDir, "connect4_online_1x.png"), 96);
+
+        // Connect 4 compose: challenging a friend — you've dropped the opening disc and the invite is out, so the
+        // "Challenge @rival", the settled first disc, the "waiting to accept" line and the Cancel pill all render.
+        var connect4Compose = new Windows.Connect4Board();
+        connect4Compose.SnapshotCompose(oppP, meP.Id);
+        RenderControl(connect4Compose, Path.Combine(outDir, "connect4_compose_1x.png"), 96);
+
+        // Connect 4 online, waiting on the opponent: one more of your moves so it's the rival's turn — this is
+        // when the "Nudge" pill (top-left) appears alongside the "Waiting for @rival" line.
+        fakeSocial.DropAsync(gsummary.Id, 5).GetAwaiter().GetResult();   // you → now it's the rival's turn
+        var waitState = fakeSocial.GetGameAsync(gsummary.Id).GetAwaiter().GetResult();
+        var connect4Waiting = new Windows.Connect4Board();
+        connect4Waiting.SnapshotOnline(waitState, meP.Id);
+        RenderControl(connect4Waiting, Path.Combine(outDir, "connect4_online_waiting_1x.png"), 96);
+
+        // The "your turn" nudge bubble (what your opponent's nudge floats beside your board / the overlay).
+        RenderControl(Windows.NudgeBubbleWindow.CreateForRender(tailRight: false, "@rival nudged you — your turn!"),
+            Path.Combine(outDir, "connect4_nudge_1x.png"), 96);
+
+        // Connect 4 online, finished: you win a fresh game (vertical four in column 0), so the end verdict and
+        // the "Rematch" pill (which replaces "Resign" once the game is over) render.
+        var wonSummary = fakeSocial.CreateGameAsync(oppP.Id).GetAwaiter().GetResult();
+        for (int i = 0; i < 3; i++)
+        {
+            fakeSocial.DropAsync(wonSummary.Id, 0).GetAwaiter().GetResult();   // you (red)
+            fakeSocial.SimulateOpponentDrop(wonSummary.Id, 1);                 // rival parks in column 1
+        }
+        fakeSocial.DropAsync(wonSummary.Id, 0).GetAwaiter().GetResult();       // fourth red → you win
+        var wonState = fakeSocial.GetGameAsync(wonSummary.Id).GetAwaiter().GetResult();
+        var connect4Over = new Windows.Connect4Board();
+        connect4Over.SnapshotOnline(wonState, meP.Id);
+        RenderControl(connect4Over, Path.Combine(outDir, "connect4_online_over_1x.png"), 96);
 
         // Perch Wrapped poster: a shareable Spotify-Wrapped-style card built from the sample report.
         // Rendered with the bundled bird icon so the header/footer icon paths are exercised too.

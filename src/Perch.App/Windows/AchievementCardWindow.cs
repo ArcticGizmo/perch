@@ -30,6 +30,7 @@ internal sealed class AchievementCardWindow : Window
     private const int StaggerMs = 110;       // each card flips in a beat after the previous
 
     private readonly StackPanel _cardsHost = NewCardsHost();
+    private StackPanel? _stack;   // the centred title/cards/buttons column - see ShowNextBatch
     private readonly Queue<IReadOnlyList<AchievementUnlock>> _batches = new();
     private bool _showing;
 
@@ -59,9 +60,11 @@ internal sealed class AchievementCardWindow : Window
         Width = b.Width / scale;            // cover the screen in DIPs
         Height = b.Height / scale;
 
+        // Fill the cards in before the first Show, so the opening layout pass already sees the real content
+        // (rather than an empty host it would have to be re-arranged out of - see ShowNextBatch).
+        AddBatch(unlocks);
         if (!IsVisible) Show();
         Activate();
-        AddBatch(unlocks);
     }
 
     /// <summary>Add another batch to a reveal that's already on screen (a later batch caught it still up);
@@ -97,7 +100,7 @@ internal sealed class AchievementCardWindow : Window
             Children = { ok, never },
         };
 
-        var stack = new StackPanel
+        _stack = new StackPanel
         {
             Spacing = 18,
             HorizontalAlignment = HorizontalAlignment.Center,
@@ -109,7 +112,7 @@ internal sealed class AchievementCardWindow : Window
         // read with plenty of contrast. The window itself is transparent, so this blends over the desktop.
         // Dismissal is deliberately only via the buttons (or the keyboard) — a stray backdrop click won't
         // close it, so you always make an explicit OK / Don't-show-again choice.
-        var root = new Grid { Background = Vignette(), Children = { stack } };
+        var root = new Grid { Background = Vignette(), Children = { _stack } };
         // The window is transparent/layered, so ClearType would fringe the text (title, buttons, cards) with
         // black — force grayscale AA. Inherits down to the owner-drawn cards' DrawText too.
         TextOptions.SetTextRenderingMode(root, TextRenderingMode.Antialias);
@@ -183,6 +186,13 @@ internal sealed class AchievementCardWindow : Window
             card.RevealMore(more, delayMs: shown.Count * StaggerMs);
             _cardsHost.Children.Add(card);
         }
+
+        // The cards land in an already-visible window, so the column has to be re-arranged by hand. Adding
+        // children re-measures up the tree, but the column's own arrange rect (the whole window) doesn't
+        // change, so Arrange short-circuits and the column keeps the offset/size it was centred at when the
+        // host was still empty - the cards then spill out of that stale slot, off the right of the screen and
+        // under the buttons. (Windows hid this: the post-Show platform resize forced a full re-arrange.)
+        _stack?.InvalidateArrange();
     }
 
     // OK / Esc / Enter: play the next queued batch, or close when there are none left.
