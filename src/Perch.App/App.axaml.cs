@@ -50,6 +50,7 @@ public partial class App : Application
     private FroggerWindow? _froggerWindow;          // shhh
     private WordleWindow? _wordleWindow;            // shhh
     private Connect4Window? _connect4Window;        // shhh
+    private readonly Dictionary<Guid, Connect4Window> _onlineGameWindows = new();   // overlay-opened games, by id
     private HistoryWindow? _historyWindow;
     private GitTreeWindow? _treeWindow;
     private MarkdownWindow? _markdownWindow;
@@ -208,7 +209,8 @@ public partial class App : Application
             _feedHost = new SocialFeedMonitorHost(_social,
                 snap => { _overlay?.Canvas.UpdateRoster(snap); CheckDnd(); },   // re-check DND on each roster tick
                 OnFriendPosted,
-                OnReactionToMyPost);
+                OnReactionToMyPost,
+                games => _overlay?.Canvas.SetGames(games, _social?.Current.Me?.Id ?? Guid.Empty));
             _feedHost.Diagnostic += m => _reactionDiag?.Invoke(m);   // stream to the debug tool when it's open
             _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
@@ -288,6 +290,7 @@ public partial class App : Application
             _overlay.Canvas.PostStatusRequested += OpenCompose;
             _overlay.Canvas.FriendsRequested += OpenFriends;
             _overlay.Canvas.ReactRequested += OnReactRequested;
+            _overlay.Canvas.GameOpenRequested += OpenOnlineGameFromOverlay;   // a game icon in the friends region
             _overlay.Canvas.SocialRegionExpandChanged += expanded =>
             {
                 if (_appSettings is { } s) { s.SocialRegionExpanded = expanded; s.Save(); }
@@ -536,6 +539,7 @@ public partial class App : Application
         _froggerWindow?.Close();
         _wordleWindow?.Close();
         _connect4Window?.Close();
+        foreach (var w in _onlineGameWindows.Values.ToList()) w.Close();
         _qrWindow?.Close();
         _changelogWindow?.Close();
         _switcher?.Close();
@@ -1314,6 +1318,18 @@ public partial class App : Application
     // the "Play a friend" pill; local play works with or without it.
     private void OpenConnect4() =>
         _connect4Window = WindowHost.ShowOrFocus(_connect4Window, () => new Connect4Window(_social), () => _connect4Window = null);
+
+    // A game icon in the overlay's friends region was clicked — open (or focus, if already open) that game's
+    // online board. Reused per game id so clicking twice doesn't stack duplicate windows.
+    private void OpenOnlineGameFromOverlay(Perch.Social.GameSummary game)
+    {
+        if (_social?.Current.Me is not { } me) return;
+        if (_onlineGameWindows.TryGetValue(game.Id, out var existing)) { existing.Activate(); return; }
+        var w = new Connect4Window(_social, me.Id, game);
+        _onlineGameWindows[game.Id] = w;
+        w.Closed += (_, _) => _onlineGameWindows.Remove(game.Id);
+        w.Show();
+    }
 
     // "Show QR code" — a centred card with the session's remote-control deep-link QR. Only one is shown
     // at a time; opening another (or clicking away) closes the previous.

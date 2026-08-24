@@ -21,6 +21,7 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     private readonly Action<RosterSnapshot?> _onRoster;
     private readonly Action<FeedItem> _onNewFriendPost;
     private readonly Action<string> _onReactionToMyPost;
+    private readonly Action<IReadOnlyList<GameSummary>>? _onGames;
     private readonly DispatcherTimer _timer;
 
     // Post ids already surfaced, so a re-poll only notifies for genuinely new posts. Primed on the first poll
@@ -43,13 +44,18 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     /// <param name="onReactionToMyPost">Invoked (on the UI thread) once per newly-seen reaction on your own
     /// latest status, with the emoji — the hook for the "big reactions" bubbles. Never fires for reactions
     /// already present when polling starts, nor when you post a new status.</param>
+    /// <param name="onGames">Invoked (on the UI thread) each poll with the signed-in user's Connect 4 games, so
+    /// the overlay's games strip stays current. Best-effort: if the backend doesn't have the games tables yet
+    /// (migration not applied) the fetch is skipped without disturbing the roster.</param>
     public SocialFeedMonitorHost(ISocialClient social, Action<RosterSnapshot?> onRoster,
-        Action<FeedItem> onNewFriendPost, Action<string> onReactionToMyPost)
+        Action<FeedItem> onNewFriendPost, Action<string> onReactionToMyPost,
+        Action<IReadOnlyList<GameSummary>>? onGames = null)
     {
         _social = social;
         _onRoster = onRoster;
         _onNewFriendPost = onNewFriendPost;
         _onReactionToMyPost = onReactionToMyPost;
+        _onGames = onGames;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _timer.Tick += (_, _) => _ = Poll();
     }
@@ -78,6 +84,7 @@ internal sealed class SocialFeedMonitorHost : IDisposable
             _myReactionPostId = null;
             _myReactionCounts.Clear();
             _onRoster(null);
+            _onGames?.Invoke([]);
         }
     }
 
@@ -97,6 +104,14 @@ internal sealed class SocialFeedMonitorHost : IDisposable
             NotifyReactionsToMe(roster);
         }
         catch { /* best-effort: a failed poll just keeps the last roster on screen */ }
+
+        // Games are fetched separately so their absence (e.g. the connect4 migration not applied) can't blank
+        // the roster; a failure just leaves the last games on screen.
+        if (_onGames is not null)
+        {
+            try { _onGames(await _social.GetGamesAsync()); }
+            catch { /* games unavailable this tick — leave the strip as-is */ }
+        }
     }
 
     /// <summary>Raised (UI thread) with a human-readable line each poll describing the reaction state on your

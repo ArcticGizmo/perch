@@ -109,6 +109,9 @@ public sealed partial class OverlayCanvas
             double h = SocialHeaderHeight;
             if (!_regionExpanded) return h;
 
+            // The games strip sits between the header and the friend rows, when there are active games.
+            if (_games.Count > 0) h += GamesRowHeight;
+
             // Two lines per friend/you row: handle + time on top, status + reactions below — the overlay is
             // narrow, so the status needs its own line to breathe.
             h += FriendRowCount * FeedRowHeight;
@@ -215,6 +218,9 @@ public sealed partial class OverlayCanvas
         DrawRegionHeader(ctx, width, top);
         double y = top + SocialHeaderHeight;
         if (!_regionExpanded) return;
+
+        // The Connect 4 strip, between the header and the friends.
+        if (_games.Count > 0) { DrawGamesStrip(ctx, width, y); y += GamesRowHeight; }
 
         if (_roster is { Friends.Count: > 0 } r)
         {
@@ -535,14 +541,16 @@ public sealed partial class OverlayCanvas
         bool compose = _socialComposeRect.Width > 0 && _socialComposeRect.Contains(p);
         int friendRow = HitTestFriendRow(p);
         int reactAdd = HitTestReactAdd(p);
+        int gameIcon = HitTestGameIcon(p);
         bool changed = add != _hoveredSocialAdd || header != _hoveredSocialHeader
                        || compose != _hoveredSocialCompose || reactAdd != _hoveredReactAdd
-                       || friendRow != _hoveredFriendRow;
+                       || friendRow != _hoveredFriendRow || gameIcon != _hoveredGameIcon;
         _hoveredSocialAdd = add;
         _hoveredSocialHeader = header;
         _hoveredSocialCompose = compose;
         _hoveredFriendRow = friendRow;
         _hoveredReactAdd = reactAdd;
+        _hoveredGameIcon = gameIcon;
         return changed;
     }
 
@@ -571,9 +579,9 @@ public sealed partial class OverlayCanvas
     private bool ClearSocialRegionHover()
     {
         bool any = _hoveredSocialAdd || _hoveredSocialHeader || _hoveredSocialCompose
-                   || _hoveredReactAdd >= 0 || _hoveredFriendRow >= 0;
+                   || _hoveredReactAdd >= 0 || _hoveredFriendRow >= 0 || _hoveredGameIcon >= 0;
         _hoveredSocialAdd = _hoveredSocialHeader = _hoveredSocialCompose = false;
-        _hoveredReactAdd = _hoveredFriendRow = -1;
+        _hoveredReactAdd = _hoveredFriendRow = _hoveredGameIcon = -1;
         return any;
     }
 
@@ -583,6 +591,7 @@ public sealed partial class OverlayCanvas
         _reactChipRects.Clear();
         _reactAddRects.Clear();
         _friendRowRects.Clear();
+        _gameIconRects.Clear();
         _socialStatusTips.Clear();
         _reactSummaryTips.Clear();
     }
@@ -597,6 +606,10 @@ public sealed partial class OverlayCanvas
     // Routes a click inside the region. Returns true if it consumed the click.
     private bool RouteSocialRegionClick(Point p)
     {
+        // A game icon opens/continues that game.
+        foreach (var (rect, game) in _gameIconRects)
+            if (rect.Contains(p)) { GameOpenRequested?.Invoke(game); return true; }
+
         foreach (var (rect, postId, emoji) in _reactChipRects)
             if (rect.Contains(p))
             {

@@ -143,6 +143,17 @@ internal static class HeadlessRenderer
         feedProbe.SetSocialEnabled(true);
         feedProbe.SetSocialAccount(signedIn: true, hasHandle: true);   // region shows in the signed-in state
         feedProbe.UpdateRoster(SampleData.Roster());
+        // Connect 4 games strip: one your-turn game in play, one waiting on the opponent, and one freshly
+        // requested (0 moves) — so the ring/fill + accent/muted + your-turn badge variants all render.
+        var youProf = new Perch.Social.Profile(Guid.NewGuid(), "you");
+        var adaProf = new Perch.Social.Profile(Guid.NewGuid(), "ada");
+        var graceProf = new Perch.Social.Profile(Guid.NewGuid(), "grace");
+        feedProbe.SetGames(
+        [
+            new(Guid.NewGuid(), youProf, adaProf, Perch.Social.GameStatus.InProgress, Perch.Games.Connect4Disc.Red, 5, DateTimeOffset.Now),     // your turn, in play
+            new(Guid.NewGuid(), graceProf, youProf, Perch.Social.GameStatus.InProgress, Perch.Games.Connect4Disc.Red, 4, DateTimeOffset.Now),   // their turn, in play
+            new(Guid.NewGuid(), youProf, graceProf, Perch.Social.GameStatus.InProgress, Perch.Games.Connect4Disc.Red, 0, DateTimeOffset.Now),   // new/requested, your turn
+        ], youProf.Id);
         RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1x.png"), 96);
         RenderControl(feedProbe, Path.Combine(outDir, "overlay_feed_1.5x.png"), 144);
 
