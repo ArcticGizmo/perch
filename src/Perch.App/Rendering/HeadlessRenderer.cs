@@ -409,6 +409,44 @@ internal static class HeadlessRenderer
         wordle.SnapshotPlaying();
         RenderControl(wordle, Path.Combine(outDir, "wordle_play_1x.png"), 96);
 
+        // The fourth toy: Perch Connect 4 — a posed mid-game board (a few discs down, a column hovered so the
+        // drop-preview ghost + column wash show) in its default vs-Computer mode. Timers don't tick headless,
+        // so this is a static pose with no disc in flight.
+        var connect4 = new Windows.Connect4Board();
+        connect4.SnapshotPlaying();
+        RenderControl(connect4, Path.Combine(outDir, "connect4_play_1x.png"), 96);
+
+        // Connect 4 online mode: the "play a friend" board — a posed mid-game between two accounts (seeded via
+        // the in-memory FakeSocialClient), from the local player's point of view, so the "vs @handle" header,
+        // the Resign pill, the turn line and the drop preview all render. It's the caller's turn here.
+        var fakeSocial = new Perch.Social.FakeSocialClient();
+        var meP = fakeSocial.SignInAs("you");
+        var oppP = fakeSocial.SeedUser("rival");
+        fakeSocial.SimulateAccept(oppP.Id);
+        var gsummary = fakeSocial.CreateGameAsync(oppP.Id).GetAwaiter().GetResult();
+        fakeSocial.DropAsync(gsummary.Id, 3).GetAwaiter().GetResult();   // you (red)
+        fakeSocial.SimulateOpponentDrop(gsummary.Id, 3);                 // rival (yellow)
+        fakeSocial.DropAsync(gsummary.Id, 4).GetAwaiter().GetResult();   // you
+        fakeSocial.SimulateOpponentDrop(gsummary.Id, 2);                 // rival → back to your turn
+        var gstate = fakeSocial.GetGameAsync(gsummary.Id).GetAwaiter().GetResult();
+        var connect4Online = new Windows.Connect4Board();
+        connect4Online.SnapshotOnline(gstate, meP.Id);
+        RenderControl(connect4Online, Path.Combine(outDir, "connect4_online_1x.png"), 96);
+
+        // Connect 4 online, finished: you win a fresh game (vertical four in column 0), so the end verdict and
+        // the "Rematch" pill (which replaces "Resign" once the game is over) render.
+        var wonSummary = fakeSocial.CreateGameAsync(oppP.Id).GetAwaiter().GetResult();
+        for (int i = 0; i < 3; i++)
+        {
+            fakeSocial.DropAsync(wonSummary.Id, 0).GetAwaiter().GetResult();   // you (red)
+            fakeSocial.SimulateOpponentDrop(wonSummary.Id, 1);                 // rival parks in column 1
+        }
+        fakeSocial.DropAsync(wonSummary.Id, 0).GetAwaiter().GetResult();       // fourth red → you win
+        var wonState = fakeSocial.GetGameAsync(wonSummary.Id).GetAwaiter().GetResult();
+        var connect4Over = new Windows.Connect4Board();
+        connect4Over.SnapshotOnline(wonState, meP.Id);
+        RenderControl(connect4Over, Path.Combine(outDir, "connect4_online_over_1x.png"), 96);
+
         // Perch Wrapped poster: a shareable Spotify-Wrapped-style card built from the sample report.
         // Rendered with the bundled bird icon so the header/footer icon paths are exercised too.
         IImage? brandIcon = null;

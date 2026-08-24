@@ -1,0 +1,156 @@
+using System.Linq;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Perch.Games;
+using Perch.Avalonia.Theming;
+using Perch.Social;
+
+namespace Perch.Avalonia.Windows;
+
+/// <summary>
+/// The "Play a friend" lobby for online Connect 4: start a new game against any accepted friend, or resume one
+/// of your in-progress / recent games. Reads the friend graph and game list via <see cref="ISocialClient"/> and
+/// hands the chosen <see cref="GameSummary"/> back through the <c>onPlay</c> callback (the caller opens the board
+/// window). Templated controls + async refresh, mirroring <see cref="FriendsWindow"/>.
+/// </summary>
+internal sealed class Connect4LobbyWindow : Window
+{
+    private readonly ISocialClient _social;
+    private readonly Action<GameSummary> _onPlay;
+    private readonly TextBlock _status;
+    private readonly StackPanel _gamesPanel;
+    private readonly StackPanel _friendsPanel;
+
+    public Connect4LobbyWindow(ISocialClient social, Action<GameSummary> onPlay)
+    {
+        _social = social;
+        _onPlay = onPlay;
+        Title = "Play a friend";
+        Width = 420;
+        Height = 520;
+        MinWidth = 320;
+        MinHeight = 360;
+        ShowInTaskbar = false;
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        Background = Palette.FormBgBrush;
+
+        _status = SettingsUi.BodyText("");
+        _gamesPanel = new StackPanel { Spacing = 6 };
+        _friendsPanel = new StackPanel { Spacing = 6 };
+
+        var panel = new StackPanel { Margin = new Thickness(16), Spacing = 10 };
+        panel.Children.Add(SettingsUi.SectionTitle("Your games"));
+        panel.Children.Add(_gamesPanel);
+        panel.Children.Add(SettingsUi.Separator());
+        panel.Children.Add(SettingsUi.SectionTitle("Start a game"));
+        panel.Children.Add(SettingsUi.BodyText("Challenge any of your friends — you'll play red and move first."));
+        panel.Children.Add(_friendsPanel);
+        panel.Children.Add(_status);
+
+        Content = new ScrollViewer { Content = panel };
+        AddHandler(KeyDownEvent, (_, e) => { if (e.Key == Key.Escape) { Close(); e.Handled = true; } }, RoutingStrategies.Tunnel);
+    }
+
+    protected override void OnOpened(EventArgs e)
+    {
+        base.OnOpened(e);
+        _ = Refresh();
+    }
+
+    private async Task Refresh()
+    {
+        try
+        {
+            var games = await _social.GetGamesAsync();
+            var friends = await _social.GetFriendsAsync();
+            var accepted = friends.Where(f => f.State == FriendshipState.Accepted).ToList();
+
+            _gamesPanel.Children.Clear();
+            _friendsPanel.Children.Clear();
+
+            if (games.Count == 0) _gamesPanel.Children.Add(SettingsUi.BodyText("No games yet — start one below."));
+            else foreach (var g in games) _gamesPanel.Children.Add(GameRow(g));
+
+            if (accepted.Count == 0) _friendsPanel.Children.Add(SettingsUi.BodyText("No friends yet — add some in the Friends window."));
+            else foreach (var f in accepted.OrderBy(f => f.Profile.Handle)) _friendsPanel.Children.Add(FriendRow(f));
+        }
+        catch (SocialException ex) { _status.Text = ex.Message; }
+        catch { _status.Text = "Couldn't load your games. Please try again."; }
+    }
+
+    private Control GameRow(GameSummary g)
+    {
+        var meId = _social.Current.Me?.Id ?? Guid.Empty;
+        var opp = g.Opponent(meId);
+        var label = new TextBlock
+        {
+            Text = $"@{opp?.Handle ?? "?"}  ·  {Describe(g, meId)}",
+            Foreground = Palette.FgBrush, VerticalAlignment = VerticalAlignment.Center,
+        };
+        var open = SettingsUi.FlatButton(g.Status == GameStatus.InProgress ? "Open" : "View");
+        open.Click += (_, _) => { _onPlay(g); Close(); };
+        var remove = SettingsUi.FlatButton("Remove");
+        remove.Click += async (_, _) => await RemoveGame(g);
+        var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right };
+        right.Children.Add(open);
+        right.Children.Add(remove);
+        return Row(label, right);
+    }
+
+    private Control FriendRow(Friend f)
+    {
+        var label = new TextBlock { Text = $"@{f.Profile.Handle}", Foreground = Palette.FgBrush, VerticalAlignment = VerticalAlignment.Center };
+        var play = SettingsUi.FlatButton("Play");
+        play.Click += async (_, _) => await StartGame(f.Profile);
+        var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right };
+        right.Children.Add(play);
+        return Row(label, right);
+    }
+
+    private async Task RemoveGame(GameSummary g)
+    {
+        try
+        {
+            await _social.DeleteGameAsync(g.Id);
+            await Refresh();
+        }
+        catch (SocialException ex) { _status.Text = ex.Message; }
+        catch { _status.Text = "Couldn't remove that game. Please try again."; }
+    }
+
+    private async Task StartGame(Profile opponent)
+    {
+        _status.Text = $"Starting a game with @{opponent.Handle}…";
+        try
+        {
+            var game = await _social.CreateGameAsync(opponent.Id);
+            _onPlay(game);
+            Close();
+        }
+        catch (SocialException ex) { _status.Text = ex.Message; }
+        catch { _status.Text = "Couldn't start the game. Please try again."; }
+    }
+
+    // How a game reads from the signed-in player's point of view.
+    private static string Describe(GameSummary g, Guid meId) => g.Status switch
+    {
+        GameStatus.InProgress => g.IsTurnOf(meId) ? "your turn" : "their turn",
+        GameStatus.Draw => "draw",
+        GameStatus.RedWon => g.Seat(meId) == Connect4Disc.Red ? "you won" : "you lost",
+        GameStatus.YellowWon => g.Seat(meId) == Connect4Disc.Yellow ? "you won" : "you lost",
+        _ => "ended",
+    };
+
+    private static Control Row(Control left, Control right)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        Grid.SetColumn(left, 0);
+        Grid.SetColumn(right, 1);
+        grid.Children.Add(left);
+        grid.Children.Add(right);
+        return grid;
+    }
+}

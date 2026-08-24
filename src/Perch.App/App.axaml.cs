@@ -49,6 +49,7 @@ public partial class App : Application
     private SpaceInvadersWindow? _invadersWindow;   // shhh
     private FroggerWindow? _froggerWindow;          // shhh
     private WordleWindow? _wordleWindow;            // shhh
+    private Connect4Window? _connect4Window;        // shhh
     private HistoryWindow? _historyWindow;
     private GitTreeWindow? _treeWindow;
     private MarkdownWindow? _markdownWindow;
@@ -534,6 +535,7 @@ public partial class App : Application
         _invadersWindow?.Close();
         _froggerWindow?.Close();
         _wordleWindow?.Close();
+        _connect4Window?.Close();
         _qrWindow?.Close();
         _changelogWindow?.Close();
         _switcher?.Close();
@@ -1294,7 +1296,7 @@ public partial class App : Application
     // below and closes as it does. All are reused like every other aux window.
     private void OpenArcade() =>
         _arcadeWindow = WindowHost.ShowOrFocus(_arcadeWindow,
-            () => new ArcadeMenuWindow(OpenInvaders, OpenFrogger, OpenWordle), () => _arcadeWindow = null);
+            () => new ArcadeMenuWindow(OpenInvaders, OpenFrogger, OpenWordle, OpenConnect4), () => _arcadeWindow = null);
 
     private void OpenInvaders() =>
         _invadersWindow = WindowHost.ShowOrFocus(_invadersWindow, () => new SpaceInvadersWindow(), () => _invadersWindow = null);
@@ -1306,6 +1308,12 @@ public partial class App : Application
     // writes AppSettings.WordleState directly and saves after each guess.
     private void OpenWordle() =>
         _wordleWindow = WindowHost.ShowOrFocus(_wordleWindow, () => new WordleWindow(_appSettings!), () => _wordleWindow = null);
+
+    // Connect 4: local hot-seat / vs-computer, plus — when Social is signed in — an online "Play a friend" mode
+    // the window reaches via the lobby (see docs/connect4-plan.md). Passing the social client is what lights up
+    // the "Play a friend" pill; local play works with or without it.
+    private void OpenConnect4() =>
+        _connect4Window = WindowHost.ShowOrFocus(_connect4Window, () => new Connect4Window(_social), () => _connect4Window = null);
 
     // "Show QR code" — a centred card with the session's remote-control deep-link QR. Only one is shown
     // at a time; opening another (or clicking away) closes the previous.

@@ -36,6 +36,8 @@ internal sealed class DebugSocialWindow : Window
     private int _reactIx;
 
     private readonly Func<string>? _gateStatus;
+    private readonly SocialDebugConfig _dbg;
+    private readonly List<Window> _c4Windows = new();   // the current pair of Connect 4 boards (yours + puppet's)
 
     private readonly TextBox _email, _password, _handle, _target, _status, _emoji;
     private readonly SelectableTextBlock _log;
@@ -70,6 +72,14 @@ internal sealed class DebugSocialWindow : Window
         _emoji = Field("🔥");
         _emoji.Text = "🔥";   // a default mood/reaction so puppet posts show a mood in the roster
         _emoji.Width = 60;
+
+        // Prefill the puppet credentials from the environment / .env.local so they don't have to be retyped each
+        // run (PERCH_SOCIAL_DEBUG_EMAIL / _PASSWORD / _HANDLE). If both email and password are present the puppet
+        // is also signed in automatically on open (see OnOpened).
+        _dbg = SocialDebugConfig.Resolve();
+        if (_dbg.Email is { } de) _email.Text = de;
+        if (_dbg.Password is { } dp) _password.Text = dp;
+        if (_dbg.Handle is { } dh) _handle.Text = dh;
 
         _log = new SelectableTextBlock
         {
@@ -140,6 +150,16 @@ internal sealed class DebugSocialWindow : Window
         panel.Children.Add(actionsRow);
         panel.Children.Add(_log);
 
+        // Connect 4: open both sides of one online game (yours + the puppet's) so the whole networked loop can
+        // be played from this machine, through the real backend.
+        panel.Children.Add(SettingsUi.Separator());
+        panel.Children.Add(SettingsUi.FieldCaption("Connect 4"));
+        panel.Children.Add(SettingsUi.BodyText(
+            "Opens two boards — yours and the puppet's — for one game, so you can play both sides here and watch " +
+            "moves sync through the real backend. Befriends the puppet first if needed. (Needs the connect4 " +
+            "migration applied to the database.)"));
+        panel.Children.Add(ButtonRow(("Start Connect 4 vs puppet (both boards)", StartConnect4)));
+
         panel.Children.Add(SettingsUi.Separator());
         panel.Children.Add(SettingsUi.FieldCaption("Reaction diagnostics (live)"));
         _diagLog = new SelectableTextBlock
@@ -154,7 +174,27 @@ internal sealed class DebugSocialWindow : Window
         AddHandler(KeyDownEvent, (_, e) => { if (e.Key == Key.Escape) { Close(); e.Handled = true; } }, RoutingStrategies.Tunnel);
     }
 
+    protected override void OnOpened(EventArgs e)
+    {
+        base.OnOpened(e);
+        // With credentials configured, get the puppet signed in (and handle claimed) on open, so the tester can
+        // jump straight to posting / "Start Connect 4 vs puppet".
+        if (_dbg.HasCredentials && _puppet is null) Run(AutoSetup);
+    }
+
     // ── actions ─────────────────────────────────────────────────────────────────
+
+    // Signs the puppet in from the configured credentials and, if a handle is configured and not yet claimed,
+    // claims it — so opening this window leaves a ready-to-play puppet.
+    private async Task AutoSetup()
+    {
+        await SignIn();
+        if (_dbg.Handle is { } handle && _puppet?.Current.Me is null)
+        {
+            _handle.Text = handle;
+            await ClaimHandle();
+        }
+    }
 
     private async Task SignIn()
     {
@@ -248,6 +288,58 @@ internal sealed class DebugSocialWindow : Window
         Log($"{gate}\n\nYour latest status: \"{(body.Length > 40 ? body[..40] + "…" : body)}\" — reactions the real client sees on it: {rx}.\n\n" +
             "If a reaction shows here but no bubble fired: ShowLargeReactions must be True and DND suppressing must be False above; and the " +
             "reaction must be NEW since the feed started (a reaction already present is baseline). Click React (it cycles emojis) to add a fresh one.");
+    }
+
+    // Creates a real-vs-puppet game (befriending first if the two aren't already accepted friends) and opens
+    // two online boards side by side — one signed in as you, one as the puppet. Since both clients run in this
+    // process against the real backend, you can play both sides and watch each move propagate via the other
+    // board's realtime nudge / poll.
+    private async Task StartConnect4()
+    {
+        var p = RequirePuppet();
+        if (_real.Current.Me is not { } me) throw new SocialException("Your real account needs a claimed handle first.");
+        if (p.Current.Me is not { } pup) throw new SocialException("Claim a puppet handle first.");
+
+        GameSummary game;
+        try
+        {
+            game = await _real.CreateGameAsync(pup.Id);
+        }
+        catch (SocialException)
+        {
+            // Most likely not accepted friends yet — do the handshake (puppet requests, you accept) and retry.
+            Log("Not friends yet — befriending the puppet, then starting the game…");
+            try { await p.SendRequestAsync(me.Id); } catch { }
+            try { await _real.RespondAsync(pup.Id, accept: true); } catch { }
+            game = await _real.CreateGameAsync(pup.Id);   // a second failure surfaces to the caller's Run()
+        }
+        _refreshReal();
+        OpenBoards(game);
+        Log($"Opened both boards. You (@{me.Handle}) are red and move first; the puppet (@{pup.Handle}) plays in the other window.");
+    }
+
+    // Opens both sides of one game (yours + the puppet's), side by side. Closes any previous pair first so a
+    // rematch swaps the pair cleanly rather than leaving stale windows. Passed as each board's onRematch hook,
+    // so "Rematch" reopens both boards for the new game (not just one side — that was the glitch).
+    private void OpenBoards(GameSummary game)
+    {
+        if (_real.Current.Me is not { } me || _puppet?.Current.Me is not { } pup) return;
+
+        foreach (var w in _c4Windows) { try { w.Close(); } catch { } }
+        _c4Windows.Clear();
+
+        var mine = new Connect4Window(_real, me.Id, game, OpenBoards) { WindowStartupLocation = WindowStartupLocation.Manual };
+        mine.Position = new PixelPoint(60, 90);
+        mine.Title = $"Connect 4 — YOU (@{me.Handle})";
+        mine.Show();
+
+        var theirs = new Connect4Window(_puppet, pup.Id, game, OpenBoards) { WindowStartupLocation = WindowStartupLocation.Manual };
+        theirs.Position = new PixelPoint(620, 90);
+        theirs.Title = $"Connect 4 — PUPPET (@{pup.Handle})";
+        theirs.Show();
+
+        _c4Windows.Add(mine);
+        _c4Windows.Add(theirs);
     }
 
     private async Task<Profile> FindTarget(SupabaseSocialClient p)
