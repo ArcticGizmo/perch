@@ -439,6 +439,12 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.NotifyOnFriendPost),
             s => s.NotifyOnFriendPost, (s, v) => s.NotifyOnFriendPost = v, playful: true),
 
+        Toggle("notify-game-invite", "Notify when challenged to a game",
+            "Pop a desktop toast when a friend challenges you to a Connect 4 game.",
+            SettingSurface.Social, ["notify", "game", "invite", "challenge", "connect 4", "connect4", "social", "toast", "notification"],
+            PreviewTarget.None, nameof(AppSettings.NotifyOnGameInvite),
+            s => s.NotifyOnGameInvite, (s, v) => s.NotifyOnGameInvite = v, playful: true),
+
         Toggle("social-dnd-close", "Close friends in Do Not Disturb",
             "When Windows Do Not Disturb is on, collapse the friends region and hold off friend-post toasts. It won't reopen on a new post.",
             SettingSurface.Social, ["dnd", "do not disturb", "focus", "quiet", "close", "friends", "social"],

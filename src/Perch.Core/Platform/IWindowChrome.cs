@@ -47,4 +47,17 @@ public interface IWindowChrome
     /// the no-activate helpers above, this one deliberately activates. Best-effort; a zero handle is
     /// ignored.</summary>
     void ForceForeground(IntPtr handle);
+
+    /// <summary>Whether the window is on the currently-active virtual desktop (Windows) / Space (macOS). Used to
+    /// decide whether a window is actually visible to the user right now — e.g. so a nudge bubble only anchors to
+    /// a game board on the desktop being looked at. Returns <c>true</c> when it can't be determined (no virtual
+    /// desktops, off-platform, or a failed query), so callers degrade to "assume visible" rather than hide.
+    /// A zero handle returns <c>true</c>.</summary>
+    bool IsWindowOnCurrentDesktop(IntPtr handle);
+
+    /// <summary>Moves the window onto the currently-active virtual desktop (Windows), so re-opening an
+    /// already-open window brings it to the desktop you're on rather than leaving it stranded on another. No-op
+    /// if it's already here, if virtual desktops are unavailable, or off-platform. Best-effort; a zero handle is
+    /// ignored.</summary>
+    void MoveWindowToCurrentDesktop(IntPtr handle);
 }

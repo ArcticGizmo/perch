@@ -55,6 +55,33 @@ public sealed class WindowChrome : IWindowChrome
     [StructLayout(LayoutKind.Sequential)]
     private struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
 
+    // Virtual-desktop management (shell IVirtualDesktopManager — a documented, stable public COM interface).
+    [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("a5cd92ff-29be-454c-8d04-d82879fb3f1b")]
+    private interface IVirtualDesktopManager
+    {
+        [PreserveSig] int IsWindowOnCurrentVirtualDesktop(IntPtr topLevelWindow, out int onCurrentDesktop);
+        [PreserveSig] int GetWindowDesktopId(IntPtr topLevelWindow, out Guid desktopId);
+        [PreserveSig] int MoveWindowToDesktop(IntPtr topLevelWindow, ref Guid desktopId);
+    }
+
+    private static readonly Guid CLSID_VirtualDesktopManager = new("aa509086-5ca9-4c25-8f95-589d3c07b48a");
+    private IVirtualDesktopManager? _vdm;
+    private bool _vdmTried;
+
+    // Lazily create (and cache) the COM manager; null on any host without it (older Windows, disabled shell).
+    private IVirtualDesktopManager? Vdm()
+    {
+        if (_vdmTried) return _vdm;
+        _vdmTried = true;
+        try
+        {
+            var t = Type.GetTypeFromCLSID(CLSID_VirtualDesktopManager);
+            if (t is not null) _vdm = (IVirtualDesktopManager?)Activator.CreateInstance(t);
+        }
+        catch { _vdm = null; }
+        return _vdm;
+    }
+
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
@@ -160,5 +187,36 @@ public sealed class WindowChrome : IWindowChrome
         {
             if (attached) AttachThreadInput(thisThread, fgThread, false);
         }
+    }
+
+    /// <summary>True if the window sits on the active virtual desktop. Assumes true (visible) when the shell
+    /// manager is unavailable or the query fails, so callers never wrongly hide UI. A zero handle → true.</summary>
+    public bool IsWindowOnCurrentDesktop(IntPtr handle)
+    {
+        if (handle == IntPtr.Zero) return true;
+        var vdm = Vdm();
+        if (vdm is null) return true;
+        try { if (vdm.IsWindowOnCurrentVirtualDesktop(handle, out int onCur) == 0) return onCur != 0; }
+        catch { /* fall through to "assume visible" */ }
+        return true;
+    }
+
+    /// <summary>Moves the window to the active virtual desktop. There is no public "current desktop id", so we
+    /// read it from the foreground window — which is, by definition, on the desktop the user is looking at — and
+    /// move the target there. No-op if it's already here or the manager/foreground can't be resolved.</summary>
+    public void MoveWindowToCurrentDesktop(IntPtr handle)
+    {
+        if (handle == IntPtr.Zero) return;
+        var vdm = Vdm();
+        if (vdm is null) return;
+        try
+        {
+            if (vdm.IsWindowOnCurrentVirtualDesktop(handle, out int onCur) == 0 && onCur != 0) return;   // already here
+            IntPtr fg = GetForegroundWindow();
+            if (fg != IntPtr.Zero && fg != handle &&
+                vdm.GetWindowDesktopId(fg, out Guid current) == 0 && current != Guid.Empty)
+                vdm.MoveWindowToDesktop(handle, ref current);
+        }
+        catch { /* best-effort: leave the window where it is */ }
     }
 }

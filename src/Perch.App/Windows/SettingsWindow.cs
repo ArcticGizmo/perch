@@ -641,6 +641,9 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(SettingsUi.DividerRow("Notify when a friend posts",
             "Pop a desktop toast when a friend posts a status.",
             DisplayToggle(_settings.NotifyOnFriendPost, v => _settings.NotifyOnFriendPost = v)));
+        page.Children.Add(SettingsUi.DividerRow("Notify when challenged to a game",
+            "Pop a desktop toast when a friend challenges you to a Connect 4 game.",
+            DisplayToggle(_settings.NotifyOnGameInvite, v => _settings.NotifyOnGameInvite = v)));
         page.Children.Add(SettingsUi.DividerRow("Close friends in Do Not Disturb",
             "When Windows Do Not Disturb is on, collapse the friends region and hold off toasts.",
             DisplayToggle(_settings.CloseFeedInDoNotDisturb, v => _settings.CloseFeedInDoNotDisturb = v)));

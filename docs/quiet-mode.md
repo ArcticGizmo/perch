@@ -35,7 +35,7 @@ the intent is reviewed.
 
 ## What it silences
 
-Social & friends (`SocialEnabled`, `NotifyOnFriendPost`, `ShowLargeReactions`), Whimsy
+Social & friends (`SocialEnabled`, `NotifyOnFriendPost`, `NotifyOnGameInvite`, `ShowLargeReactions`), Whimsy
 (`PerchReacts`, `NotifyOnAchievement`, `AchievementToasts`, `UpsideDownQuickLinks`), and the Arcade
 header shortcut (hidden while quiet). Deliberately **not** the media/mic strips or any functional
 alert (done / waiting / API error / PR) — those stay on the raw settings.

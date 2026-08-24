@@ -493,6 +493,12 @@ internal sealed class AppSettings
     // a new post by someone other than you. Gated by SocialEnabled. On by default; a missing key keeps it on.
     public bool NotifyOnFriendPost { get; set; } = true;
 
+    // Whether being challenged to a Connect 4 game pops a desktop notification (gated too by the master
+    // NotificationsEnabled switch). Fired by SocialFeedMonitorHost when a poll (nudged live by the inbox
+    // broadcast, or on the next tick) surfaces a new invite waiting on you. Gated by SocialEnabled. On by
+    // default; a missing key keeps it on.
+    public bool NotifyOnGameInvite { get; set; } = true;
+
     // When Windows Do Not Disturb is on, collapse the friends region (and hold off friend-post toasts) so the
     // social feature goes quiet with the rest of the system. On by default; collapsing is one-shot — it won't
     // spring back open on a new post. A missing key keeps it on.

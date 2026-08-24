@@ -74,6 +74,14 @@ public sealed class WindowChrome : IWindowChrome
         catch { /* best-effort */ }
     }
 
+    /// <summary>macOS overlay windows join all Spaces (see <c>collectionBehavior</c>), and per-Space tracking of
+    /// ordinary windows isn't wired yet — so report "visible" and let callers anchor normally. (Virtual-desktop
+    /// awareness is a Windows-first refinement.)</summary>
+    public bool IsWindowOnCurrentDesktop(IntPtr handle) => true;
+
+    /// <summary>No-op on macOS — moving a window between Spaces isn't controlled this way here.</summary>
+    public void MoveWindowToCurrentDesktop(IntPtr handle) { }
+
     private static void Configure(IntPtr handle, bool clickThrough)
     {
         try

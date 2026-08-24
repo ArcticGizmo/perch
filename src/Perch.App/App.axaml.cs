@@ -212,7 +212,8 @@ public partial class App : Application
                 snap => { _overlay?.Canvas.UpdateRoster(snap); CheckDnd(); },   // re-check DND on each roster tick
                 OnFriendPosted,
                 OnReactionToMyPost,
-                (games, requests) => _overlay?.Canvas.SetGames(games, requests, _social?.Current.Me?.Id ?? Guid.Empty));
+                (games, requests) => _overlay?.Canvas.SetGames(games, requests, _social?.Current.Me?.Id ?? Guid.Empty),
+                OnGameInvited);
             _feedHost.Diagnostic += m => _reactionDiag?.Invoke(m);   // stream to the debug tool when it's open
             _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
@@ -909,6 +910,17 @@ public partial class App : Application
         _notifier?.Show($"@{item.Author.Handle} just posted", body, ToastLevel.Info, null, null);
     }
 
+    // A friend challenged you to a Connect 4 game (surfaced by the feed poll — nudged live by the inbox broadcast,
+    // or found on the next tick): a quiet desktop toast, gated by the master notifications switch and
+    // NotifyOnGameInvite. Never fires for invites you sent or the backlog present when the feed starts.
+    private void OnGameInvited(Perch.Social.GameRequest request)
+    {
+        if (Effective is not { NotificationsEnabled: true, NotifyOnGameInvite: true }) return;   // masked off in Quiet mode
+        if (DndSuppressing) return;   // Do Not Disturb: stay quiet
+        _notifier?.Show($"@{request.Requester.Handle} challenged you to Connect 4",
+            "Open Perch to accept or decline.", ToastLevel.Info, null, null);
+    }
+
     // A session finished (NeedsAttention): flash the overlay and fire the notification (toast/chime/external,
     // gated per settings).
     // True when the session is one of the daemon's headless background workers. Those are deliberately
@@ -1331,11 +1343,20 @@ public partial class App : Application
     private void OpenOnlineGameFromOverlay(Perch.Social.GameSummary game)
     {
         if (_social?.Current.Me is not { } me) return;
-        if (_onlineGameWindows.TryGetValue(game.Id, out var existing)) { existing.Activate(); return; }
+        // Reuse an already-open board for this game (tracked here, or a lobby/compose one found by id) — and pull
+        // it onto the virtual desktop you're on now, so it isn't left stranded on another desktop.
+        var existing = _onlineGameWindows.GetValueOrDefault(game.Id) ?? FindGameWindow(game.Id, currentDesktopOnly: false);
+        if (existing is not null) { BringToCurrentDesktop(existing); existing.Activate(); return; }
         var w = new Connect4Window(_social, me.Id, game);
         _onlineGameWindows[game.Id] = w;
         w.Closed += (_, _) => _onlineGameWindows.Remove(game.Id);
         w.Show();
+    }
+
+    // Moves a window onto the current virtual desktop (best-effort; no-op where virtual desktops don't apply).
+    private static void BringToCurrentDesktop(Window w)
+    {
+        if (w.TryGetPlatformHandle() is { } h) PlatformServices.WindowChrome.MoveWindowToCurrentDesktop(h.Handle);
     }
 
     // A game invite in the overlay was accepted (opens the new game) or declined/cancelled (just removed).
@@ -1392,7 +1413,9 @@ public partial class App : Application
     {
         string handle = m.FromHandle is { Length: > 0 } h ? "@" + h : "Your opponent";
         string label = $"{handle} nudged you — your turn!";
-        Window? anchor = (Window?)FindGameWindow(m.GameId) ?? _overlay;
+        // Only anchor to a board that's on the virtual desktop you're actually looking at — otherwise the bubble
+        // would float over empty space beside a board that lives on another desktop. Fall back to the overlay.
+        Window? anchor = (Window?)FindGameWindow(m.GameId, currentDesktopOnly: true) ?? _overlay;
         if (anchor is null || !anchor.IsVisible) return;
 
         _nudgeBubble?.Close();
@@ -1422,13 +1445,20 @@ public partial class App : Application
         bubble.Present();
     }
 
-    // Any open Connect 4 board currently showing the given online game (for anchoring a nudge bubble).
-    private Connect4Window? FindGameWindow(Guid? gameId)
+    // Any open Connect 4 board currently showing the given online game. With currentDesktopOnly, skips boards on
+    // another virtual desktop (for anchoring a nudge bubble to a board the user can actually see right now);
+    // without it, matches any board (for reusing/relocating a window when re-opening a game).
+    private Connect4Window? FindGameWindow(Guid? gameId, bool currentDesktopOnly)
     {
         if (gameId is not { } id || id == Guid.Empty) return null;
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             foreach (var w in desktop.Windows)
-                if (w is Connect4Window c && c.IsVisible && c.CurrentGameId == id) return c;
+            {
+                if (w is not Connect4Window c || !c.IsVisible || c.CurrentGameId != id) continue;
+                if (currentDesktopOnly && c.TryGetPlatformHandle() is { } h
+                    && !PlatformServices.WindowChrome.IsWindowOnCurrentDesktop(h.Handle)) continue;
+                return c;
+            }
         return null;
     }
 

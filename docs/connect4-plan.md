@@ -208,6 +208,11 @@ missed broadcast just means "a little slower" — the same philosophy as the fee
    `GameInvite`/`GameInviteAccepted`/`GameInviteDeclined` (`InboxMessage`/`InboxKind`, `InboxModels.cs`). The App
    holds one inbox subscription (gated like the feed) → `RefreshSoon` so the overlay GAMES strip updates instantly;
    the inviter's compose window self-manages (inbox `GameInviteAccepted` → GoLive, plus a 3s fallback poll).
+   A **desktop notification** fires when a friend challenges you (`AppSettings.NotifyOnGameInvite`, **default on**,
+   `playful:true` so Quiet mode masks it; registry id `notify-game-invite`, and on the Social settings page).
+   `SocialFeedMonitorHost` diffs genuinely-new incoming invites (prime-then-diff, like the friend-post toast) and
+   raises `OnGameInvited` → `_notifier.Show("@h challenged you to Connect 4", …)`, gated by the master
+   notifications switch + DnD. The broadcast just makes the poll (and thus the toast) fire immediately.
 3. **Nudge.** `ISocialClient.SendNudgeAsync(gameId, opponent)` broadcasts a `Nudge`; the board shows a "Nudge"
    pill (and `N` key) while it's the opponent's turn (10s cooldown). On receipt the App floats a
    `NudgeBubbleWindow` ("@h nudged you — your turn!", modelled on `DenseBubbleWindow`) off the side of that game's
@@ -215,6 +220,14 @@ missed broadcast just means "a little slower" — the same philosophy as the fee
 4. **Rematch is realtime.** A finished game's "Rematch" now opens the same compose flow (you make the first move,
    the invite broadcasts) instead of a direct `CreateGameAsync` — so the opponent gets it instantly. (The debug
    tester keeps its direct both-boards rematch via the `onRematch` hook + `CreateGameAsync`.)
+
+**Virtual-desktop awareness (Windows).** Two follow-ups behind `IWindowChrome` (shell `IVirtualDesktopManager`
+COM; Mac stub returns "on current" / no-op): (a) opening a game that's already open elsewhere pulls that window
+onto your current virtual desktop (`MoveWindowToCurrentDesktop` — reads the current desktop id from the
+foreground window; `OpenOnlineGameFromOverlay` now reuses any open board by id, not just its own dict, then
+moves + activates); (b) the nudge bubble only anchors to a board on the *current* desktop
+(`IsWindowOnCurrentDesktop`; `FindGameWindow(…, currentDesktopOnly)`), falling back to the overlay — fixes a
+bubble floating mid-screen beside a board that lived on another desktop.
 
 Tests: `RealtimeProtocolTests` (broadcast join/parse/topic), `FakeSocialGameTests` (first-move seeding, inbox
 subscribe/deliver; `FakeInboxBus` + `SimulateInbox` seam). pgTAP `connect4_test.sql` (21 checks — accept now
