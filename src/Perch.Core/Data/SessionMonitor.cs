@@ -463,6 +463,16 @@ internal sealed class SessionMonitor : IDisposable
             bool IsParentMidTurn() =>
                 (parentMidTurn ??= _transcripts.LastTurnAwaitingAssistant(sessionId, cwd)) == true;
 
+            // Same lazy, cached-by-mtime read, consulted only at the two "done" edges below. True while the
+            // session has a background (async) agent it launched but whose <task-notification> result hasn't
+            // come back yet. In that gap the session goes idle because the *agent* finished, not because the
+            // session did — a task-notification is coming that re-wakes the parent — so no "done" must fire.
+            // Once the notification lands this flips false and the parent's own completion can alert. See
+            // HasOutstandingAsyncAgent.
+            bool? outstandingAsync = null;
+            bool HasOutstandingAsyncAgent() =>
+                (outstandingAsync ??= _transcripts.HasOutstandingAsyncAgent(sessionId, cwd)) == true;
+
             SessionStatus status;
             // Set when a deferred busy->idle completion settle elapses this scan (below), so the "done"
             // notification is raised even though this is no longer a busy->idle edge.
@@ -531,12 +541,26 @@ internal sealed class SessionMonitor : IDisposable
                     }
                     else if ((now - settleAt).TotalMilliseconds >= CompletionSettleMs)
                     {
-                        // Window elapsed with no marker: it really was a completion. Raise it now, and
-                        // flag it so the notification below fires even though this isn't a busy->idle edge.
-                        _completionSettleAt.Remove(pid);
-                        _idleSince[pid] = now;
-                        status = SessionStatus.NeedsAttention;
-                        fireCompletionSettled = true;
+                        if (HasOutstandingAsyncAgent())
+                        {
+                            // Not a real completion: a background (async) agent finished, which flipped the
+                            // session busy->idle, but its <task-notification> hasn't come back yet — the
+                            // parent will be re-woken to process the result. Firing here is the premature
+                            // "done" the user sees just before the session resumes. Drop the watch and stay
+                            // idle; the parent's own later busy->idle (once the result is answered) raises
+                            // the single alert.
+                            _completionSettleAt.Remove(pid);
+                            status = SessionStatus.Idle;
+                        }
+                        else
+                        {
+                            // Window elapsed with no marker: it really was a completion. Raise it now, and
+                            // flag it so the notification below fires even though this isn't a busy->idle edge.
+                            _completionSettleAt.Remove(pid);
+                            _idleSince[pid] = now;
+                            status = SessionStatus.NeedsAttention;
+                            fireCompletionSettled = true;
+                        }
                     }
                     else
                         // Still within the window — keep waiting silently.
@@ -591,6 +615,18 @@ internal sealed class SessionMonitor : IDisposable
             {
                 _hadRunningSubs.Remove(pid);
 
+                // A background sub-agent just finished and its <task-notification> result hasn't come back
+                // yet — so this return is not the session's own completion: Claude Code will inject that
+                // notification and re-wake the parent a beat later. Raising a synthetic "done" here races
+                // that notification and double-alerts (the reported bug — "done" shows, then the parent
+                // immediately starts a turn). Stay silent and let the parent's own subsequent busy->idle
+                // raise the single completion. Read from the parent transcript, so — unlike the parent's
+                // live status — it doesn't depend on a scan landing while the agent was mid-run.
+                if (subsJustFinished && HasOutstandingAsyncAgent())
+                {
+                    // Intentionally nothing: no grace window, no synthetic "done".
+                }
+
                 // Sub-agents finished and the parent reads as idle. Do NOT fire "done" here yet: a
                 // sub-agent returning control is not the session completing — the parent almost always
                 // resumes to analyse the result (flipping to busy) and then raises its own busy->idle
@@ -599,7 +635,7 @@ internal sealed class SessionMonitor : IDisposable
                 // which case there's no completion to report.
                 // Guard against a pending busy->idle completion settle owning the same edge: let that one
                 // path raise the single "done" rather than arming a second (overlapping) window here.
-                if (subsJustFinished && !subsWentStale && status == SessionStatus.Idle
+                else if (subsJustFinished && !subsWentStale && status == SessionStatus.Idle
                     && !_subsFinishedIdleAt.ContainsKey(pid) && !_completionSettleAt.ContainsKey(pid))
                     _subsFinishedIdleAt[pid] = now;
 

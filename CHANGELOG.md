@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.66] - 2026-08-24
+
+- No more premature "done" when a background agent finishes — Perch waits for the session to actually stop
+
+---
+
 ## [v0.3.65] - 2026-08-24
 
 - Reorder the overlay's sections by dragging them around the Settings preview

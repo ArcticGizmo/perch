@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Perch.Data;
 
 namespace Perch.Data;
@@ -28,6 +29,13 @@ internal sealed class TranscriptReader
     private readonly MtimeCache<bool> _bareCommand = new();
     private readonly MtimeCache<bool> _interrupted = new();
     private readonly MtimeCache<bool> _awaitingAssistant = new();
+    private readonly MtimeCache<bool> _outstandingAsync = new();
+
+    // The tool-use-id a delivered <task-notification> is answering, pulled from the raw transcript line
+    // (angle brackets aren't JSON-escaped, so this matches without a full parse of what can be a very
+    // large notification record). Links a finished async agent back to its launch. See ParseOutstandingAsyncAgent.
+    private static readonly Regex TaskNotificationToolUseId =
+        new(@"<tool-use-id>([^<]+)</tool-use-id>", RegexOptions.Compiled);
     private readonly MtimeCache<IReadOnlyList<Artifact>> _artifacts = new();
     private readonly MtimeCache<IReadOnlyList<TaskItem>> _tasks = new();
     private readonly MtimeCache<StuckMetrics> _stuck = new();
@@ -120,6 +128,83 @@ internal sealed class TranscriptReader
             return false;
         var path = TranscriptLocator.Resolve(sessionId, cwd);
         return path != null && _awaitingAssistant.GetOrCompute(path, ParseAwaitingAssistant, false);
+    }
+
+    /// <summary>
+    /// True when the session has an <em>outstanding async sub-agent</em>: a background (async) agent it
+    /// launched whose result has not yet been handed back. An async launch is the parent tool_result
+    /// carrying <c>toolUseResult.isAsync == true</c> ("Async agent launched successfully"); the result
+    /// comes back later as an injected <c>&lt;task-notification&gt;</c> naming the same
+    /// <c>&lt;tool-use-id&gt;</c>. An id that has been launched but not yet notified back is outstanding.
+    ///
+    /// This is the timing-independent discriminator the monitor uses to hold the "done" for a background
+    /// agent. When such an agent runs, the session goes idle two ways that look identical on disk — once
+    /// when the <em>agent</em> finishes (the background work ended, but a task-notification is coming that
+    /// re-wakes the parent) and again when the <em>parent</em> genuinely completes after processing that
+    /// result. Only the second is a real completion. The gap between the agent finishing and its
+    /// task-notification landing is exactly where the premature "done" fired; while that gap is open this
+    /// returns true (the id is launched-but-not-notified), and once the notification lands — so the parent
+    /// is about to/has resumed — it returns false and the real completion is free to alert.
+    ///
+    /// Unlike the parent's live session status (which the sessions-dir watcher can miss, since it never
+    /// sees the agent transcript change), these are durable facts in the parent transcript. Whole-file but
+    /// cheap: task-notifications are matched by regex on the raw line (their embedded result can be huge)
+    /// and only the small <c>isAsync</c> launch records are JSON-parsed; cached by (length, last-write)
+    /// like the other readers. Best-effort; false on any failure.
+    /// </summary>
+    public bool HasOutstandingAsyncAgent(string sessionId, string cwd)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return false;
+        var path = TranscriptLocator.Resolve(sessionId, cwd);
+        return path != null && _outstandingAsync.GetOrCompute(path, ParseOutstandingAsyncAgent, false);
+    }
+
+    private static bool ParseOutstandingAsyncAgent(string path)
+    {
+        HashSet<string>? launched = null; // async-launch Agent/Task tool_use ids
+        HashSet<string>? notified = null; // tool-use-ids a <task-notification> has reported back
+        foreach (var line in TranscriptScan.ReadLines(path))
+        {
+            if (line.Length == 0)
+                continue;
+
+            // A delivered task-notification (as a user record and/or a queue-operation) names the
+            // tool-use-id it answers. Regex it off the raw line — the embedded agent result can be large,
+            // and a task-notification never carries an isAsync launch, so handle it first and skip the parse.
+            if (line.Contains("<task-notification>"))
+            {
+                var m = TaskNotificationToolUseId.Match(line);
+                if (m.Success)
+                    (notified ??= new()).Add(m.Groups[1].Value);
+                continue;
+            }
+
+            // An async launch: the small "Async agent launched" tool_result with toolUseResult.isAsync.
+            if (!line.Contains("isAsync"))
+                continue;
+            JsonNode? node;
+            try { node = JsonNode.Parse(line); }
+            catch { continue; }
+            try
+            {
+                if (node?["toolUseResult"]?["isAsync"]?.GetValue<bool>() != true)
+                    continue;
+            }
+            catch { continue; } // isAsync present but not a bool
+            if (TranscriptJson.ContentArray(node) is { } content)
+                foreach (var block in content)
+                    if (TranscriptJson.BlockType(block) == "tool_result"
+                        && block!["tool_use_id"]?.GetValue<string>() is { } id)
+                        (launched ??= new()).Add(id);
+        }
+
+        if (launched == null)
+            return false;
+        foreach (var id in launched)
+            if (notified == null || !notified.Contains(id))
+                return true;
+        return false;
     }
 
     /// <summary>
