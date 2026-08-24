@@ -9,7 +9,7 @@
 -- auth.uid() resolves a signed-in user in production.
 
 begin;
-select plan(19);
+select plan(21);
 
 -- ── fixtures ────────────────────────────────────────────────────────────────────
 -- alice & bob are accepted friends; carol is a stranger.
@@ -154,9 +154,9 @@ select is(
 -- ── game invites (request / accept) ──────────────────────────────
 -- 15) An accepted friend can send an invite.
 select pg_temp.act_as('11111111-1111-1111-1111-111111111111');   -- alice invites bob
-insert into public.game_requests (id, requester, addressee)
+insert into public.game_requests (id, requester, addressee, first_col)
   values ('c0000000-0000-0000-0000-000000000001',
-          '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222');
+          '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', 4);
 select is(
   (select count(*)::int from public.game_requests where id = 'c0000000-0000-0000-0000-000000000001'),
   1, 'game invite: an accepted friend can invite');
@@ -194,6 +194,27 @@ select is(
           and player_yellow = '22222222-2222-2222-2222-222222222222'
           and status = 'in_progress') then 0 else 1 end),
   0, 'accept: the request is gone and an in-progress game now exists');
+
+-- 20) The accepted game is seeded with the inviter's opening move (red, col 4) and it's the invitee's turn.
+select is(
+  (select move_count::int || ':' || turn::text
+     from public.games
+    where player_red = '11111111-1111-1111-1111-111111111111'
+      and player_yellow = '22222222-2222-2222-2222-222222222222'
+      and status = 'in_progress'
+    order by created_at desc limit 1),
+  '1:yellow', 'accept: the invite''s opening move is seeded and it is the invitee''s turn');
+
+-- 21) That opening move is red's disc in column 4 at ply 0.
+select is(
+  (select mover::text || ':' || col::int
+     from public.moves
+    where game_id = (select id from public.games
+                       where player_red = '11111111-1111-1111-1111-111111111111'
+                         and player_yellow = '22222222-2222-2222-2222-222222222222'
+                       order by created_at desc limit 1)
+      and ply = 0),
+  '11111111-1111-1111-1111-111111111111:4', 'accept: move 0 is the inviter''s disc in the chosen column');
 
 select * from finish();
 rollback;

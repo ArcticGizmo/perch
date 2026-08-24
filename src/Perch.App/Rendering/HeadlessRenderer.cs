@@ -449,6 +449,24 @@ internal static class HeadlessRenderer
         connect4Online.SnapshotOnline(gstate, meP.Id);
         RenderControl(connect4Online, Path.Combine(outDir, "connect4_online_1x.png"), 96);
 
+        // Connect 4 compose: challenging a friend — you've dropped the opening disc and the invite is out, so the
+        // "Challenge @rival", the settled first disc, the "waiting to accept" line and the Cancel pill all render.
+        var connect4Compose = new Windows.Connect4Board();
+        connect4Compose.SnapshotCompose(oppP, meP.Id);
+        RenderControl(connect4Compose, Path.Combine(outDir, "connect4_compose_1x.png"), 96);
+
+        // Connect 4 online, waiting on the opponent: one more of your moves so it's the rival's turn — this is
+        // when the "Nudge" pill (top-left) appears alongside the "Waiting for @rival" line.
+        fakeSocial.DropAsync(gsummary.Id, 5).GetAwaiter().GetResult();   // you → now it's the rival's turn
+        var waitState = fakeSocial.GetGameAsync(gsummary.Id).GetAwaiter().GetResult();
+        var connect4Waiting = new Windows.Connect4Board();
+        connect4Waiting.SnapshotOnline(waitState, meP.Id);
+        RenderControl(connect4Waiting, Path.Combine(outDir, "connect4_online_waiting_1x.png"), 96);
+
+        // The "your turn" nudge bubble (what your opponent's nudge floats beside your board / the overlay).
+        RenderControl(Windows.NudgeBubbleWindow.CreateForRender(tailRight: false, "@rival nudged you — your turn!"),
+            Path.Combine(outDir, "connect4_nudge_1x.png"), 96);
+
         // Connect 4 online, finished: you win a fresh game (vertical four in column 0), so the end verdict and
         // the "Rematch" pill (which replaces "Resign" once the game is over) render.
         var wonSummary = fakeSocial.CreateGameAsync(oppP.Id).GetAwaiter().GetResult();

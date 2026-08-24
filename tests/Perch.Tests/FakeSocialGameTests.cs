@@ -119,7 +119,7 @@ public class FakeSocialGameTests
     public async Task RequestGame_creates_a_pending_invite_not_a_game()
     {
         var (fake, _, friend) = SignedInWithFriend();
-        var req = await fake.RequestGameAsync(friend.Id);
+        var req = await fake.RequestGameAsync(friend.Id, 3);
 
         Assert.Empty(await fake.GetGamesAsync());                       // no game exists yet
         var invites = await fake.GetGameRequestsAsync();
@@ -133,7 +133,38 @@ public class FakeSocialGameTests
         var fake = new FakeSocialClient();
         fake.SignInAs("alice");
         var stranger = fake.SeedUser("carol");
-        await Assert.ThrowsAsync<SocialException>(() => fake.RequestGameAsync(stranger.Id));
+        await Assert.ThrowsAsync<SocialException>(() => fake.RequestGameAsync(stranger.Id, 3));
+    }
+
+    [Fact]
+    public async Task Accepting_seeds_the_inviters_first_move_so_its_the_accepters_turn()
+    {
+        var (fake, me, friend) = SignedInWithFriend();
+        // The friend invites me, dropping column 5 as their opening move.
+        var req = fake.SimulateIncomingGameRequest(friend.Id, firstCol: 5);
+
+        var state = await fake.AcceptGameRequestAsync(req.Id);
+        Assert.Equal(new[] { 5 }, state.Moves);                       // the opening move is already on the board
+        Assert.Equal(1, state.Summary.MoveCount);
+        Assert.Equal(Connect4Disc.Yellow, state.Summary.Turn);       // …and it's immediately my (the accepter's) turn
+        Assert.True(state.Summary.IsTurnOf(me.Id));
+    }
+
+    [Fact]
+    public void SubscribeInbox_delivers_to_the_signed_in_user_and_stops_after_dispose()
+    {
+        var (fake, _, friend) = SignedInWithFriend();
+        var received = new List<InboxMessage>();
+        var sub = fake.SubscribeInbox(received.Add);
+
+        fake.SimulateInbox(new InboxMessage(InboxKind.Nudge, friend.Id, "bob", GameId: Guid.NewGuid()));
+        Assert.Single(received);
+        Assert.Equal(InboxKind.Nudge, received[0].Kind);
+        Assert.Equal(friend.Id, received[0].FromUserId);
+
+        sub.Dispose();
+        fake.SimulateInbox(new InboxMessage(InboxKind.GameInvite, friend.Id));
+        Assert.Single(received);   // no more after unsubscribe
     }
 
     [Fact]
@@ -157,7 +188,7 @@ public class FakeSocialGameTests
     {
         var (fake, _, friend) = SignedInWithFriend();
         // I invite the friend — I'm the requester, so I can't accept my own invite.
-        var req = await fake.RequestGameAsync(friend.Id);
+        var req = await fake.RequestGameAsync(friend.Id, 3);
         await Assert.ThrowsAsync<SocialException>(() => fake.AcceptGameRequestAsync(req.Id));
     }
 

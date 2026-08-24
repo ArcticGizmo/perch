@@ -25,11 +25,26 @@ internal sealed class Connect4Window : Window
 {
     private readonly Connect4Board _board = new();
     private readonly ISocialClient? _social;
-    private readonly Connect4OnlineController? _online;
+    private Connect4OnlineController? _online;
     private readonly Action<GameSummary>? _onRematch;
     private Guid _meId;
+    private Guid _gameId;
     private Profile? _opponent;
     private bool _rematchInFlight;
+
+    // Compose (challenge) lifecycle: while waiting for the invite to be accepted, an inbox subscription (instant)
+    // and a fallback poll (robust) both watch for the game to appear, then GoLive turns this into the live board.
+    private readonly bool _composing;
+    private Guid _composeRequestId;
+
+    /// <summary>The online game this window is showing (empty for local play or a challenge not yet accepted) —
+    /// lets the App find the right board to float a nudge bubble beside.</summary>
+    public Guid CurrentGameId => _wentLive || !_composing ? _gameId : Guid.Empty;
+
+    private HashSet<Guid> _preSendGameIds = new();
+    private IDisposable? _inboxSub;
+    private DispatcherTimer? _composePoll;
+    private bool _wentLive;
 
     /// <summary>Local play (vs computer / hot-seat). If <paramref name="social"/> is signed in, the board also
     /// offers a "Play a friend" pill that opens the online lobby.</summary>
@@ -46,40 +61,138 @@ internal sealed class Connect4Window : Window
     /// <summary>Online play: an existing game against a friend. The board starts in Online mode and reconciles
     /// against the authoritative server state via the controller. <paramref name="onRematch"/>, when supplied,
     /// takes over what "Rematch" does with the freshly created game (the debug tester uses it to reopen both
-    /// boards); when null, a rematch just opens your own board for the new game.</summary>
+    /// boards); when null, a rematch opens a fresh challenge (you make the first move again).</summary>
     public Connect4Window(ISocialClient social, Guid meId, GameSummary game, Action<GameSummary>? onRematch = null)
     {
         _social = social;
         _meId = meId;
+        _gameId = game.Id;
         _opponent = game.Opponent(meId);
         _onRematch = onRematch;
         Chrome(_opponent is null ? "Connect 4 — online" : $"Connect 4 — @{_opponent.Handle}");
 
         _board.EnterOnlineMode(meId);
         _online = new Connect4OnlineController(social, game.Id);
-        _online.Updated += _board.ApplyOnlineState;
-        _online.Failed += _board.SetOnlineError;
-        _board.OnlineDropRequested += col => _ = _online.DropAsync(col);
-        _board.ResignRequested += () => _ = _online.ResignAsync();
-        _board.RematchRequested += Rematch;
+        WireLiveBoard();
     }
 
-    // A finished online game's "Rematch" starts a fresh game with the same opponent. The in-flight guard stops
-    // a double-click from creating two games. If an onRematch hook was supplied (the debug tester), it decides
-    // what to open with the new game (both boards); otherwise this opens your own board. Either way the current
-    // window closes.
+    /// <summary>Compose a challenge: drop your first disc, then the invite is sent carrying that move. Once the
+    /// friend accepts, this same window seamlessly becomes the live game (they're immediately on their turn, so
+    /// they're never left waiting). Self-managed — no game exists until acceptance.</summary>
+    public Connect4Window(ISocialClient social, Guid meId, Profile opponent)
+    {
+        _social = social;
+        _meId = meId;
+        _opponent = opponent;
+        _composing = true;
+        Chrome($"Connect 4 — challenge @{opponent.Handle}");
+
+        _board.EnterComposeMode(meId, opponent);
+        _board.ComposeMoveMade += SendChallenge;
+        _board.CancelComposeRequested += CancelCompose;
+    }
+
+    // Wires the board's online interactions to the live controller (used by the online ctor and after GoLive).
+    private void WireLiveBoard()
+    {
+        if (_online is null) return;
+        _online.Updated += _board.ApplyOnlineState;
+        _online.Failed += _board.SetOnlineError;
+        _board.OnlineDropRequested += col => _ = _online!.DropAsync(col);
+        _board.ResignRequested += () => _ = _online!.ResignAsync();
+        _board.RematchRequested += Rematch;
+        _board.NudgeRequested += Nudge;
+    }
+
+    // The first disc was dropped: persist + broadcast the invite carrying that move, then wait for acceptance.
+    private async void SendChallenge(int firstCol)
+    {
+        if (_social is null || _opponent is null) return;
+        try
+        {
+            // Snapshot the games already shared with this opponent, so the fallback poll can spot the NEW one.
+            var existing = await _social.GetGamesAsync();
+            _preSendGameIds = existing.Where(g => g.Opponent(_meId)?.Id == _opponent.Id).Select(g => g.Id).ToHashSet();
+
+            var req = await _social.RequestGameAsync(_opponent.Id, firstCol);
+            _composeRequestId = req.Id;
+            _board.MarkChallengeSent();
+
+            _inboxSub = _social.SubscribeInbox(OnInbox);      // instant path (off the UI thread)
+            _composePoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            _composePoll.Tick += (_, _) => _ = PollForAcceptedGame();   // robust fallback
+            _composePoll.Start();
+        }
+        catch (SocialException ex) { _board.MarkChallengeDeclined(ex.Message); }
+        catch { _board.MarkChallengeDeclined("Couldn't send the challenge — try again."); }
+    }
+
+    // Instant acceptance/decline notice over the inbox (marshalled to the UI thread).
+    private void OnInbox(InboxMessage m) => Dispatcher.UIThread.Post(() =>
+    {
+        if (_wentLive) return;
+        if (m.Kind == InboxKind.GameInviteAccepted && m.GameId is { } g) GoLive(g);
+        else if (m.Kind == InboxKind.GameInviteDeclined && m.RequestId == _composeRequestId)
+            _board.MarkChallengeDeclined($"@{_opponent?.Handle} declined the challenge.");
+    });
+
+    // Fallback: poll for a fresh in-progress game with this opponent (covers a missed broadcast).
+    private async Task PollForAcceptedGame()
+    {
+        if (_wentLive || _social is null || _opponent is null) return;
+        try
+        {
+            var games = await _social.GetGamesAsync();
+            var fresh = games.FirstOrDefault(g =>
+                g.Status == GameStatus.InProgress && g.Opponent(_meId)?.Id == _opponent.Id && !_preSendGameIds.Contains(g.Id));
+            if (fresh is not null) GoLive(fresh.Id);
+        }
+        catch { /* transient — the next tick / the inbox will catch it */ }
+    }
+
+    // The challenge was accepted: stop the compose watchers and turn this window into the live game.
+    private void GoLive(Guid gameId)
+    {
+        if (_wentLive) return;
+        _wentLive = true;
+        _gameId = gameId;
+        _composePoll?.Stop();
+        _inboxSub?.Dispose();
+        _inboxSub = null;
+
+        _online = new Connect4OnlineController(_social!, gameId);
+        WireLiveBoard();
+        _online.Start();
+    }
+
+    private void CancelCompose()
+    {
+        // If we already sent it, best-effort cancel the pending request so the friend's invite disappears.
+        if (_composeRequestId != Guid.Empty && _social is not null)
+            _ = _social.DeclineGameRequestAsync(_composeRequestId);
+        Close();
+    }
+
+    private void Nudge()
+    {
+        if (_social is null || _opponent is null || _gameId == Guid.Empty) return;
+        _ = _social.SendNudgeAsync(_gameId, _opponent.Id);
+    }
+
+    // A finished online game's "Rematch". The debug tester's onRematch hook keeps the direct both-boards path;
+    // real play opens a fresh challenge so you make the opening move again (same snappy invite/accept flow).
     private async void Rematch()
     {
         if (_social is null || _opponent is null || _rematchInFlight) return;
         _rematchInFlight = true;
-        try
+        if (_onRematch is not null)
         {
-            var next = await _social.CreateGameAsync(_opponent.Id);
-            if (_onRematch is not null) _onRematch(next);           // e.g. the tester reopens both boards
-            else new Connect4Window(_social, _meId, next).Show();   // real play: your board; opponent opens theirs
-            Close();
+            try { var next = await _social.CreateGameAsync(_opponent.Id); _onRematch(next); Close(); }
+            catch { _rematchInFlight = false; }
+            return;
         }
-        catch { _rematchInFlight = false; /* leave the finished game open if the rematch can't be created */ }
+        new Connect4Window(_social, _meId, _opponent).Show();   // compose a fresh challenge
+        Close();
     }
 
     private void Chrome(string title)
@@ -95,13 +208,19 @@ internal sealed class Connect4Window : Window
     private void OpenLobby()
     {
         if (_social is null) return;
-        new Connect4LobbyWindow(_social, OpenOnlineGame).Show(this);
+        new Connect4LobbyWindow(_social, OpenOnlineGame, StartChallenge).Show(this);
     }
 
     private void OpenOnlineGame(GameSummary game)
     {
         if (_social?.Current.Me is not { } me) return;
         new Connect4Window(_social, me.Id, game).Show(this);
+    }
+
+    private void StartChallenge(Profile opponent)
+    {
+        if (_social?.Current.Me is not { } me) return;
+        new Connect4Window(_social, me.Id, opponent).Show(this);
     }
 
     protected override void OnOpened(EventArgs e)
@@ -116,6 +235,8 @@ internal sealed class Connect4Window : Window
     {
         _board.Stop();
         _online?.Dispose();
+        _composePoll?.Stop();
+        _inboxSub?.Dispose();
         base.OnClosed(e);
     }
 
@@ -159,6 +280,9 @@ internal sealed class Connect4Board : Control
     public event Action<int>? OnlineDropRequested;
     public event Action? ResignRequested;
     public event Action? RematchRequested;       // online mode: the "Rematch" pill on a finished game
+    public event Action<int>? ComposeMoveMade;   // compose mode: the first disc was dropped (the challenge move)
+    public event Action? CancelComposeRequested; // compose mode: the "Cancel" pill
+    public event Action? NudgeRequested;         // online mode: "Nudge" while waiting on the opponent
 
     // ── State ──
     private Connect4Game _game = new();
@@ -186,10 +310,20 @@ internal sealed class Connect4Board : Control
     private string? _toast;                               // transient message (e.g. a rejected move)
     private int _toastTicks;
 
+    // Compose state: challenging a friend by dropping the first disc locally before the invite is sent. There's
+    // no game (or GameState) yet — the board is local red-only until the challenge is accepted and GoLive lands.
+    private bool _composeMode;
+    private Profile? _composeOpponent;
+    private bool _composeMoved;                           // the first disc has been dropped
+    private bool _composeSent;                            // the invite has been sent (waiting to be accepted)
+
+    // Nudge cooldown (online, waiting on opponent): ticks down after a nudge so the pill can't be spammed.
+    private int _nudgeCooldownTicks;
+
     private DispatcherTimer? _timer;
 
     // Header hit-rects, laid out from the fixed geometry per mode.
-    private Rect _vsCpuPill, _twoPlayerPill, _playFriendPill, _resignPill;
+    private Rect _vsCpuPill, _twoPlayerPill, _playFriendPill, _resignPill, _nudgePill;
 
     public Connect4Board()
     {
@@ -214,14 +348,55 @@ internal sealed class Connect4Board : Control
         InvalidateVisual();
     }
 
+    /// <summary>Starts a challenge: an online board with no game yet, where you (red) drop the first disc, which
+    /// becomes the invite's opening move (raised via <see cref="ComposeMoveMade"/>). Once accepted, the window
+    /// calls <see cref="ApplyOnlineState"/> and this seamlessly becomes the live game.</summary>
+    public void EnterComposeMode(Guid meId, Profile opponent)
+    {
+        _mode = GameMode.Online;
+        _onlineMeId = meId;
+        _composeMode = true;
+        _composeOpponent = opponent;
+        _composeMoved = false;
+        _composeSent = false;
+        _onlineApplied = false;
+        _onlineSummary = null;
+        _lastMoveCount = 0;
+        _game.Reset();
+        _cursor = Cols / 2;
+        LayoutHeader();
+        InvalidateVisual();
+    }
+
+    /// <summary>Marks the challenge as sent (waiting for the invitee to accept).</summary>
+    public void MarkChallengeSent()
+    {
+        _composeSent = true;
+        _toast = null;
+        InvalidateVisual();
+    }
+
+    /// <summary>The invitee declined (or the send failed) — surface it and let the window offer to close.</summary>
+    public void MarkChallengeDeclined(string message)
+    {
+        _toast = message;
+        _toastTicks = 400;
+        InvalidateVisual();
+    }
+
     /// <summary>Applies an authoritative game state from the server: rebuilds the board from the move list and,
     /// if exactly one move was appended since the last state, animates that disc dropping (so both your own and
     /// the opponent's moves land with the falling animation).</summary>
     public void ApplyOnlineState(GameState state)
     {
+        // The challenge was accepted (or this is a resumed game): leave compose and become the live game. Red's
+        // opening move is already move 0 in the state, so the disc the challenger dropped simply stays put.
+        bool wasComposing = _composeMode;
+        _composeMode = false;
+        _composeSent = false;
         _onlineSummary = state.Summary;
         var g = state.ToGame();
-        bool animate = _onlineApplied && g.MoveCount == _lastMoveCount + 1 && state.Moves.Count > 0;
+        bool animate = _onlineApplied && !wasComposing && g.MoveCount == _lastMoveCount + 1 && state.Moves.Count > 0;
         _game = g;
         _lastMoveCount = g.MoveCount;
         _onlineApplied = true;
@@ -283,6 +458,7 @@ internal sealed class Connect4Board : Control
     {
         _pulse += 0.12;
         if (_toastTicks > 0 && --_toastTicks == 0) _toast = null;
+        if (_nudgeCooldownTicks > 0) _nudgeCooldownTicks--;
 
         if (_falling)
         {
@@ -344,6 +520,8 @@ internal sealed class Connect4Board : Control
             RematchRequested?.Invoke();
             return true;
         }
+        // 'N' nudges the opponent while waiting on them.
+        if (key == Key.N && CanNudgeNow()) { TryNudge(); return true; }
         switch (key)
         {
             case Key.Left or Key.A:
@@ -361,16 +539,29 @@ internal sealed class Connect4Board : Control
     private bool HumanCanMoveNow()
     {
         if (_falling) return false;
+        if (_composeMode) return !_composeMoved;   // one move only: dropping it sends the challenge
         if (_mode == GameMode.Online)
             return !_onlineBusy && _onlineSummary is { Status: GameStatus.InProgress } s && s.IsTurnOf(_onlineMeId);
         if (_game.IsOver || _aiThinkTicks != 0) return false;
         return _mode == GameMode.TwoPlayer || _game.Turn != AiDisc;
     }
 
+    // True when we're online, mid-game, and it's the opponent's move — the only time a nudge makes sense.
+    private bool CanNudgeNow() =>
+        _mode == GameMode.Online && !_composeMode &&
+        _onlineSummary is { Status: GameStatus.InProgress } s && !s.IsTurnOf(_onlineMeId);
+
     private void TryHumanDrop(int col)
     {
         if (!HumanCanMoveNow()) return;
         if (!_game.CanDrop(col)) return;   // full/invalid column: nothing to do
+        if (_composeMode)
+        {
+            _composeMoved = true;          // lock further input; the window sends the challenge
+            DoDrop(col);                   // drop red's disc locally (it becomes move 0 of the game)
+            ComposeMoveMade?.Invoke(col);
+            return;
+        }
         if (_mode == GameMode.Online)
         {
             _onlineBusy = true;            // lock input until the server confirms/rejects
@@ -380,6 +571,15 @@ internal sealed class Connect4Board : Control
             return;
         }
         DoDrop(col);
+    }
+
+    // Fire a nudge if allowed and not on cooldown, then start the cooldown so it can't be spammed.
+    private void TryNudge()
+    {
+        if (!CanNudgeNow() || _nudgeCooldownTicks > 0) return;
+        _nudgeCooldownTicks = 625;         // ~10s at 16ms
+        NudgeRequested?.Invoke();
+        InvalidateVisual();
     }
 
     // The local funnel: validate, apply to the engine, and start the fall animation from above the board.
@@ -433,6 +633,15 @@ internal sealed class Connect4Board : Control
 
         if (_mode == GameMode.Online)
         {
+            if (_composeMode)
+            {
+                // Top-right pill cancels the challenge; otherwise a click drops the opening disc.
+                if (_resignPill.Contains(p)) { CancelComposeRequested?.Invoke(); e.Handled = true; return; }
+                int cc = ColumnAt(p);
+                if (cc >= 0) { TryHumanDrop(cc); e.Handled = true; return; }
+                base.OnPointerPressed(e);
+                return;
+            }
             // Top-right pill: Resign while the game is live, Rematch once it's over.
             if (_onlineSummary is { } s && _resignPill.Contains(p))
             {
@@ -440,6 +649,8 @@ internal sealed class Connect4Board : Control
                 else RematchRequested?.Invoke();
                 e.Handled = true; return;
             }
+            // Top-left "Nudge" pill while it's the opponent's turn.
+            if (CanNudgeNow() && _nudgePill.Contains(p)) { TryNudge(); e.Handled = true; return; }
             int oc = ColumnAt(p);
             if (oc >= 0) { TryHumanDrop(oc); e.Handled = true; return; }
             base.OnPointerPressed(e);
@@ -472,11 +683,12 @@ internal sealed class Connect4Board : Control
     private void LayoutHeader()
     {
         const double ph = 30, y = 58, gap = 12;
-        _vsCpuPill = _twoPlayerPill = _playFriendPill = _resignPill = default;
+        _vsCpuPill = _twoPlayerPill = _playFriendPill = _resignPill = _nudgePill = default;
 
         if (_mode == GameMode.Online)
         {
-            _resignPill = new Rect(BoardW - 96, 20, 80, 28);
+            _resignPill = new Rect(BoardW - 96, 20, 80, 28);   // Resign / Rematch / (Cancel while composing)
+            _nudgePill = new Rect(16, 20, 88, 28);             // Nudge (shown only while waiting on the opponent)
             return;
         }
 
@@ -511,11 +723,24 @@ internal sealed class Connect4Board : Control
 
         if (_mode == GameMode.Online)
         {
-            var opp = _onlineSummary?.Opponent(_onlineMeId);
-            var vs = OverlayDraw.Text(opp is null ? "Online game" : $"vs @{opp.Handle}", 14, Palette.FgBrush, FontWeight.SemiBold);
+            var opp = _composeMode ? _composeOpponent : _onlineSummary?.Opponent(_onlineMeId);
+            string vsText = _composeMode
+                ? (opp is null ? "New challenge" : $"Challenge @{opp.Handle}")
+                : (opp is null ? "Online game" : $"vs @{opp.Handle}");
+            var vs = OverlayDraw.Text(vsText, 14, Palette.FgBrush, FontWeight.SemiBold);
             ctx.DrawText(vs, new Point((BoardW - vs.Width) / 2, 60));
-            if (_onlineSummary is { } s)
+
+            if (_composeMode)
+                DrawPill(ctx, _resignPill, "Cancel", active: false);
+            else if (_onlineSummary is { } s)
+            {
                 DrawPill(ctx, _resignPill, s.Status == GameStatus.InProgress ? "Resign" : "Rematch", active: false);
+                if (CanNudgeNow())
+                {
+                    bool ready = _nudgeCooldownTicks == 0;
+                    DrawPill(ctx, _nudgePill, ready ? "Nudge" : "Nudged", active: ready);
+                }
+            }
         }
         else
         {
@@ -589,6 +814,13 @@ internal sealed class Connect4Board : Control
     // (text, colour, disc swatch) for the online turn/verdict line.
     private (string, IBrush, Connect4Disc) OnlineStatusLine()
     {
+        if (_composeMode)
+        {
+            string handle = _composeOpponent is { } o ? $"@{o.Handle}" : "your friend";
+            if (!_composeMoved) return ($"Drop a disc to challenge {handle}", Palette.FgBrush, Connect4Disc.Red);
+            if (!_composeSent) return ("Sending your challenge…", Palette.MutedBrush, Connect4Disc.None);
+            return ($"Waiting for {handle} to accept…", Palette.MutedBrush, Connect4Disc.None);
+        }
         if (_onlineSummary is not { } s) return ("Connecting…", Palette.MutedBrush, Connect4Disc.None);
         var mySeat = s.Seat(_onlineMeId);
         var opp = s.Opponent(_onlineMeId);
@@ -721,12 +953,17 @@ internal sealed class Connect4Board : Control
 
         string text;
         bool prompt;
-        if (_mode == GameMode.Online)
+        if (_composeMode)
+        {
+            if (!_composeMoved) { text = "◀ ▶ pick column  ·  ↓ drop to send your challenge"; prompt = false; }
+            else { text = "They'll join the moment they accept"; prompt = false; }
+        }
+        else if (_mode == GameMode.Online)
         {
             if (_onlineSummary is not { Status: GameStatus.InProgress }) { text = "Game over — Rematch to play again"; prompt = true; }
             else if (_onlineBusy) { text = "Sending…"; prompt = false; }
             else if (_onlineSummary.IsTurnOf(_onlineMeId)) { text = "◀ ▶ pick column  ·  ↓ drop  ·  Resign to concede"; prompt = false; }
-            else { text = "Waiting for your opponent to move…"; prompt = false; }
+            else { text = "Waiting for your opponent  ·  N to nudge them"; prompt = false; }
         }
         else if (_game.IsOver) { text = "Enter / click to play again"; prompt = true; }
         else { text = "◀ ▶ pick column  ·  ↓ drop  ·  M mode  ·  R restart"; prompt = false; }
@@ -763,5 +1000,18 @@ internal sealed class Connect4Board : Control
         ApplyOnlineState(state);
         _hoverCol = -1;
         _cursor = 3;
+    }
+
+    /// <summary>Poses the "compose a challenge" board for headless snapshots: your opening disc dropped and the
+    /// invite sent, so the "Challenge @handle", waiting line and Cancel pill render.</summary>
+    internal void SnapshotCompose(Profile opponent, Guid meId)
+    {
+        EnterComposeMode(meId, opponent);
+        _game.Drop(3);              // your opening disc, settled (timers don't tick under the harness)
+        _composeMoved = true;
+        _composeSent = true;
+        _falling = false;
+        _hoverCol = -1;
+        InvalidateVisual();
     }
 }

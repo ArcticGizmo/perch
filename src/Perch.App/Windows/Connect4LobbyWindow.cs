@@ -20,15 +20,17 @@ internal sealed class Connect4LobbyWindow : Window
 {
     private readonly ISocialClient _social;
     private readonly Action<GameSummary> _onPlay;
+    private readonly Action<Profile> _onChallenge;
     private readonly TextBlock _status;
     private readonly StackPanel _gamesPanel;
     private readonly StackPanel _requestsPanel;
     private readonly StackPanel _friendsPanel;
 
-    public Connect4LobbyWindow(ISocialClient social, Action<GameSummary> onPlay)
+    public Connect4LobbyWindow(ISocialClient social, Action<GameSummary> onPlay, Action<Profile> onChallenge)
     {
         _social = social;
         _onPlay = onPlay;
+        _onChallenge = onChallenge;
         Title = "Play a friend";
         Width = 420;
         Height = 520;
@@ -51,7 +53,7 @@ internal sealed class Connect4LobbyWindow : Window
         panel.Children.Add(_requestsPanel);
         panel.Children.Add(SettingsUi.Separator());
         panel.Children.Add(SettingsUi.SectionTitle("Start a game"));
-        panel.Children.Add(SettingsUi.BodyText("Invite a friend — they accept, then you play red and move first."));
+        panel.Children.Add(SettingsUi.BodyText("Invite a friend — you drop the first disc, then they accept and it's their move."));
         panel.Children.Add(_friendsPanel);
         panel.Children.Add(_status);
 
@@ -115,7 +117,7 @@ internal sealed class Connect4LobbyWindow : Window
     {
         var label = new TextBlock { Text = $"@{f.Profile.Handle}", Foreground = Palette.FgBrush, VerticalAlignment = VerticalAlignment.Center };
         var invite = SettingsUi.FlatButton("Invite");
-        invite.Click += async (_, _) => await SendInvite(f.Profile);
+        invite.Click += (_, _) => { _onChallenge(f.Profile); Close(); };   // opens the compose board (drop first, then send)
         var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Right };
         right.Children.Add(invite);
         return Row(label, right);
@@ -158,19 +160,6 @@ internal sealed class Connect4LobbyWindow : Window
         }
         catch (SocialException ex) { _status.Text = ex.Message; }
         catch { _status.Text = "Couldn't remove that game. Please try again."; }
-    }
-
-    private async Task SendInvite(Profile opponent)
-    {
-        _status.Text = $"Inviting @{opponent.Handle}…";
-        try
-        {
-            await _social.RequestGameAsync(opponent.Id);
-            _status.Text = $"Invited @{opponent.Handle} — they'll get a request to accept.";
-            await Refresh();
-        }
-        catch (SocialException ex) { _status.Text = ex.Message; }
-        catch { _status.Text = "Couldn't send the invite. Please try again."; }
     }
 
     private async Task AcceptInvite(GameRequest r)

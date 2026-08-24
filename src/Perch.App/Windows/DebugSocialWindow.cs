@@ -352,19 +352,22 @@ internal sealed class DebugSocialWindow : Window
         if (_real.Current.Me is not { } me) throw new SocialException("Your real account needs a claimed handle first.");
         if (p.Current.Me is not { } pup) throw new SocialException("Claim a puppet handle first.");
 
+        // The puppet drops its opening disc in the centre column as part of the invite (so when you accept, it's
+        // already your move) — mirrors the real compose flow.
+        const int puppetFirstCol = 3;
         try
         {
-            await p.RequestGameAsync(me.Id);
+            await p.RequestGameAsync(me.Id, puppetFirstCol);
         }
         catch (SocialException)
         {
             Log("Not friends yet — befriending the puppet, then inviting…");
             try { await p.SendRequestAsync(me.Id); } catch { }
             try { await _real.RespondAsync(pup.Id, accept: true); } catch { }
-            await p.RequestGameAsync(me.Id);
+            await p.RequestGameAsync(me.Id, puppetFirstCol);
         }
         _refreshReal();
-        Log($"@{pup.Handle} invited you to Connect 4 — accept it from the overlay's GAMES strip or the lobby.");
+        Log($"@{pup.Handle} invited you to Connect 4 (opening move played) — accept it from the overlay's GAMES strip or the lobby.");
     }
 
     private async Task<Profile> FindTarget(SupabaseSocialClient p)

@@ -187,6 +187,41 @@ SQL migration hasn't been applied (`supabase db push --workdir backend`), so the
 calls + the `drop_disc`/`resign_game` RPCs + Postgres-Changes delivery are compile-checked only. Next step is a
 two-account live playtest and pgTAP tests for the new RLS/RPC.
 
+### Feedback round 2 — snappy transient flows (SHIPPED as code)
+
+Four pieces of playtest feedback, all resolved with **Supabase Realtime *broadcast*** layered on top of the
+existing persistent tables (broadcast is a best-effort accelerator; the DB rows + poll stay authoritative, so a
+missed broadcast just means "a little slower" — the same philosophy as the feed). User chose **keep persistence**
+(not fully-transient) and **nudge beside the board, else the overlay**.
+
+1. **Invite = make your first move, then send.** `game_requests` gains `first_col`
+   (`20260823120000_connect4_challenge_first_move.sql`); `accept_game_request` seeds it as move 0 (red) and hands
+   the turn to the invitee — so the friend is never left staring at an empty board after accepting.
+   `ISocialClient.RequestGameAsync` now takes `firstColumn`. The lobby "Invite" opens a **compose board**
+   (`Connect4Board` compose phase: drop one disc → `ComposeMoveMade` → `RequestGameAsync` → "Waiting for @h to
+   accept…"), which becomes the live game in-place once accepted.
+2. **Invite/accept is snappy.** Broadcast added to the realtime layer: `RealtimeKind.Broadcast`,
+   `RealtimeChannel.Inbox(uid)` (topic `realtime:perch:inbox:<uid>`), `RealtimeProtocol.Join` emits
+   `config.broadcast`, `IsBroadcast`/`TryParseBroadcast`, and `SupabaseRealtimeConnection` recognises broadcast
+   frames. `ISocialClient.SubscribeInbox` (per-user inbox) + a REST send via `/realtime/v1/api/broadcast`
+   (`BroadcastInboxAsync`). `RequestGameAsync`/`AcceptGameRequestAsync`/`DeclineGameRequestAsync` fire
+   `GameInvite`/`GameInviteAccepted`/`GameInviteDeclined` (`InboxMessage`/`InboxKind`, `InboxModels.cs`). The App
+   holds one inbox subscription (gated like the feed) → `RefreshSoon` so the overlay GAMES strip updates instantly;
+   the inviter's compose window self-manages (inbox `GameInviteAccepted` → GoLive, plus a 3s fallback poll).
+3. **Nudge.** `ISocialClient.SendNudgeAsync(gameId, opponent)` broadcasts a `Nudge`; the board shows a "Nudge"
+   pill (and `N` key) while it's the opponent's turn (10s cooldown). On receipt the App floats a
+   `NudgeBubbleWindow` ("@h nudged you — your turn!", modelled on `DenseBubbleWindow`) off the side of that game's
+   board window if open, else the overlay.
+4. **Rematch is realtime.** A finished game's "Rematch" now opens the same compose flow (you make the first move,
+   the invite broadcasts) instead of a direct `CreateGameAsync` — so the opponent gets it instantly. (The debug
+   tester keeps its direct both-boards rematch via the `onRematch` hook + `CreateGameAsync`.)
+
+Tests: `RealtimeProtocolTests` (broadcast join/parse/topic), `FakeSocialGameTests` (first-move seeding, inbox
+subscribe/deliver; `FakeInboxBus` + `SimulateInbox` seam). pgTAP `connect4_test.sql` (21 checks — accept now
+asserts the seeded move + turn). Renders: `connect4_compose_1x.png`, `connect4_online_waiting_1x.png` (Nudge
+pill), `connect4_nudge_1x.png`. **Broadcast delivery is still unverified live** (migrations not applied); if the
+project enables Realtime Authorization / private channels, add a `realtime.messages` policy for the inbox topics.
+
 ### Watch-outs (carried from the social-layer review)
 
 - Realtime publication is not enabled by any migration today — do it explicitly and verify.

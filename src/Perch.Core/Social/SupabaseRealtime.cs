@@ -30,14 +30,25 @@ internal static class RealtimeProtocol
         return b.Uri;
     }
 
-    /// <summary>The <c>phx_join</c> frame that subscribes to a channel's postgres-changes (an event on a
-    /// schema.table, with an optional row filter). The server applies the caller's RLS to the change stream, so
-    /// visibility is enforced regardless of the filter.</summary>
-    public static string Join(int refId, string accessToken, RealtimeChannel ch) => Frame(ch.Topic, "phx_join", refId, new JsonObject
+    /// <summary>The <c>phx_join</c> frame for a channel. A <see cref="RealtimeKind.PostgresChanges"/> channel
+    /// subscribes to an event on a schema.table (with an optional row filter); a <see cref="RealtimeKind.Broadcast"/>
+    /// channel subscribes to transient broadcast messages (invites, nudges, rematches) that never touch the DB.
+    /// For postgres-changes the server applies the caller's RLS to the stream, so visibility is enforced
+    /// regardless of the filter.</summary>
+    public static string Join(int refId, string accessToken, RealtimeChannel ch)
     {
-        ["config"] = new JsonObject { ["postgres_changes"] = new JsonArray(ChangeSpec(ch)) },
-        ["access_token"] = accessToken,
-    });
+        var config = new JsonObject();
+        if (ch.Kind == RealtimeKind.Broadcast)
+            // self:false — we never want to receive our own broadcasts echoed back.
+            config["broadcast"] = new JsonObject { ["self"] = false };
+        else
+            config["postgres_changes"] = new JsonArray(ChangeSpec(ch));
+        return Frame(ch.Topic, "phx_join", refId, new JsonObject
+        {
+            ["config"] = config,
+            ["access_token"] = accessToken,
+        });
+    }
 
     /// <summary>The <c>phx_join</c> frame for the feed's <c>public.posts</c> INSERT channel (kept for the
     /// existing feed subscription and its tests).</summary>
@@ -72,6 +83,38 @@ internal static class RealtimeProtocol
             if (root is null || (string?)root["event"] != "postgres_changes") return false;
             var data = root["payload"]?["data"]?.AsObject();
             return data is not null && (string?)data["schema"] == schema && (string?)data["table"] == table;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    /// <summary>Whether an inbound frame is a Realtime <c>broadcast</c> message (the transient channel Perch uses
+    /// for invites/nudges/rematches). The light guard the generic connection uses on a broadcast channel; never
+    /// throws.</summary>
+    public static bool IsBroadcast(string json)
+    {
+        try
+        {
+            var root = JsonNode.Parse(json)?.AsObject();
+            return root is not null && (string?)root["event"] == "broadcast";
+        }
+        catch (JsonException) { return false; }
+    }
+
+    /// <summary>Best-effort parse of an inbound broadcast frame into its application event name and payload
+    /// object. A relayed broadcast looks like <c>{event:"broadcast", payload:{event:&lt;name&gt;, payload:{…}}}</c>.
+    /// Never throws — an unreadable frame is simply ignored (the poll remains the source of truth).</summary>
+    public static bool TryParseBroadcast(string json, out string name, out JsonObject payload)
+    {
+        name = "";
+        payload = new JsonObject();
+        try
+        {
+            var root = JsonNode.Parse(json)?.AsObject();
+            var p = root?["payload"]?.AsObject();
+            if (root is null || (string?)root["event"] != "broadcast" || p is null) return false;
+            name = (string?)p["event"] ?? "";
+            payload = p["payload"]?.AsObject() ?? new JsonObject();
+            return name.Length > 0;
         }
         catch (JsonException) { return false; }
     }
@@ -119,17 +162,34 @@ internal static class RealtimeProtocol
     }
 }
 
-/// <summary>Describes one Realtime channel: its Phoenix topic and the postgres-changes it wants (an event on a
-/// schema.table, with an optional row filter like <c>game_id=eq.…</c>). RLS still governs what the server
-/// actually pushes; the filter only narrows it further.</summary>
-internal sealed record RealtimeChannel(string Topic, string Schema, string Table, string Event = "INSERT", string? Filter = null)
+/// <summary>What kind of Realtime subscription a channel is: a database change stream, or a transient broadcast
+/// channel (no DB writes) Perch uses for snappy invites/nudges/rematches.</summary>
+internal enum RealtimeKind { PostgresChanges, Broadcast }
+
+/// <summary>Describes one Realtime channel: its Phoenix topic, its <see cref="RealtimeKind"/>, and — for a
+/// postgres-changes channel — the change it wants (an event on a schema.table, with an optional row filter like
+/// <c>game_id=eq.…</c>). RLS still governs what the server actually pushes; the filter only narrows it further.</summary>
+internal sealed record RealtimeChannel(
+    string Topic, RealtimeKind Kind = RealtimeKind.PostgresChanges,
+    string Schema = "", string Table = "", string Event = "INSERT", string? Filter = null)
 {
     /// <summary>The feed's <c>public.posts</c> INSERT channel.</summary>
-    public static readonly RealtimeChannel Posts = new(RealtimeProtocol.PostsTopic, "public", "posts");
+    public static readonly RealtimeChannel Posts =
+        new(RealtimeProtocol.PostsTopic, RealtimeKind.PostgresChanges, "public", "posts");
 
     /// <summary>A single game's <c>public.moves</c> INSERT channel, filtered to that game.</summary>
     public static RealtimeChannel Moves(Guid gameId) =>
-        new($"realtime:public:moves:{gameId}", "public", "moves", "INSERT", $"game_id=eq.{gameId}");
+        new($"realtime:public:moves:{gameId}", RealtimeKind.PostgresChanges, "public", "moves", "INSERT", $"game_id=eq.{gameId}");
+
+    /// <summary>A user's transient broadcast inbox — where invites, invite responses, nudges and rematches are
+    /// delivered instantly (the persistent DB rows are still the source of truth; this only beats the poll).</summary>
+    public static RealtimeChannel Inbox(Guid userId) =>
+        new($"realtime:perch:inbox:{userId}", RealtimeKind.Broadcast);
+
+    /// <summary>The channel name the Realtime broadcast REST endpoint expects — the topic without the
+    /// <c>realtime:</c> Phoenix prefix.</summary>
+    public string BroadcastName =>
+        Topic.StartsWith("realtime:", StringComparison.Ordinal) ? Topic["realtime:".Length..] : Topic;
 }
 
 /// <summary>A newly inserted post as announced over Realtime — the raw row, before author-profile resolution
@@ -251,7 +311,10 @@ internal sealed class SupabaseRealtimeConnection : IDisposable
 
             var frame = sb.ToString();
             sb.Clear();
-            if (RealtimeProtocol.IsChange(frame, _channel.Schema, _channel.Table))
+            bool relevant = _channel.Kind == RealtimeKind.Broadcast
+                ? RealtimeProtocol.IsBroadcast(frame)
+                : RealtimeProtocol.IsChange(frame, _channel.Schema, _channel.Table);
+            if (relevant)
             {
                 try { _onFrame(frame); } catch { /* never let a callback kill the socket loop */ }
             }

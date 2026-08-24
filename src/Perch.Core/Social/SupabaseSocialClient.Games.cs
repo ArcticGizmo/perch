@@ -33,15 +33,16 @@ public sealed partial class SupabaseSocialClient
         return ToSummary(rows[0], profiles);
     }
 
-    public async Task<GameRequest> RequestGameAsync(Guid opponentUserId, CancellationToken ct = default)
+    public async Task<GameRequest> RequestGameAsync(Guid opponentUserId, int firstColumn, CancellationToken ct = default)
     {
         var uid = RequireUser();
         if (opponentUserId == uid) throw new SocialException("You can't play yourself.");
+        if (firstColumn is < 0 or > 6) throw new SocialException("That column is off the board.");
         var token = await ValidAccessTokenAsync(ct);
 
         using var req = Rest(HttpMethod.Post, "/rest/v1/game_requests", token);
         req.Headers.Add("Prefer", "return=representation");
-        req.Content = JsonContent.Create(new { requester = uid, addressee = opponentUserId });
+        req.Content = JsonContent.Create(new { requester = uid, addressee = opponentUserId, first_col = firstColumn });
         using var resp = await _http.SendAsync(req, ct);
         // The unique (requester, addressee) index rejects a duplicate invite; the RLS check requires friendship.
         await EnsureOkAsync(resp, "send the invite", ct);
@@ -49,7 +50,11 @@ public sealed partial class SupabaseSocialClient
         if (rows.Length == 0) throw new SocialException("The invite wasn't sent.");
 
         var profiles = await FetchProfilesAsync([uid, opponentUserId], token, ct);
-        return ToRequest(rows[0], profiles);
+        var request = ToRequest(rows[0], profiles);
+        // Best-effort instant delivery: the persisted row is authoritative; this just beats the invitee's poll.
+        await BroadcastInboxAsync(opponentUserId,
+            new InboxMessage(InboxKind.GameInvite, uid, MyHandle(), RequestId: request.Id), token, ct);
+        return request;
     }
 
     public async Task<IReadOnlyList<GameRequest>> GetGameRequestsAsync(CancellationToken ct = default)
@@ -78,17 +83,39 @@ public sealed partial class SupabaseSocialClient
         // The RPC returns the freshly created games row (a single composite); re-read the full state.
         var row = await resp.Content.ReadFromJsonAsync<GameRow>(Json, ct)
                   ?? throw new SocialException("The game wasn't created.");
-        return await GetGameAsync(row.Id, ct);
+        var state = await GetGameAsync(row.Id, ct);
+        // Tell the inviter instantly that their game is live (and it already carries their first move).
+        var me = RequireUser();
+        var inviter = state.Summary.Opponent(me)?.Id ?? state.Summary.Red.Id;
+        await BroadcastInboxAsync(inviter,
+            new InboxMessage(InboxKind.GameInviteAccepted, me, MyHandle(), GameId: row.Id), token, ct);
+        return state;
     }
 
     public async Task DeclineGameRequestAsync(Guid requestId, CancellationToken ct = default)
     {
-        RequireUser();
+        var uid = RequireUser();
         var token = await ValidAccessTokenAsync(ct);
+        // Read the request first (RLS-scoped) so we know who to notify once it's gone; a missing row is a no-op.
+        Guid? other = null;
+        using (var greq = Rest(HttpMethod.Get, $"/rest/v1/game_requests?id=eq.{requestId}&select=requester,addressee", token))
+        using (var gresp = await _http.SendAsync(greq, ct))
+        {
+            if (gresp.IsSuccessStatusCode)
+            {
+                var rows = await gresp.Content.ReadFromJsonAsync<GameRequestRow[]>(Json, ct) ?? [];
+                if (rows.Length > 0) other = rows[0].Requester == uid ? rows[0].Addressee : rows[0].Requester;
+            }
+        }
+
         // The RLS delete policy scopes this to a request you're part of (decline if invitee, cancel if requester).
         using var req = Rest(HttpMethod.Delete, $"/rest/v1/game_requests?id=eq.{requestId}", token);
         using var resp = await _http.SendAsync(req, ct);
         await EnsureOkAsync(resp, "remove the invite", ct);
+
+        if (other is { } them)
+            await BroadcastInboxAsync(them,
+                new InboxMessage(InboxKind.GameInviteDeclined, uid, MyHandle(), RequestId: requestId), token, ct);
     }
 
     public async Task<IReadOnlyList<GameSummary>> GetGamesAsync(CancellationToken ct = default)
@@ -171,6 +198,83 @@ public sealed partial class SupabaseSocialClient
         if (!_config.IsConfigured) return new NoopDisposable();
         return new SupabaseRealtimeConnection(BaseUrl, _config.PublishableKey, RealtimeChannel.Moves(gameId),
             ValidAccessTokenAsync, _ => onChanged());
+    }
+
+    public IDisposable SubscribeInbox(Action<InboxMessage> onMessage)
+    {
+        if (!_config.IsConfigured) return new NoopDisposable();
+        Guid me;
+        try { me = RequireUser(); } catch (SocialException) { return new NoopDisposable(); }
+        return new SupabaseRealtimeConnection(BaseUrl, _config.PublishableKey, RealtimeChannel.Inbox(me),
+            ValidAccessTokenAsync, frame =>
+            {
+                if (RealtimeProtocol.TryParseBroadcast(frame, out var name, out var payload) &&
+                    name == InboxEvent && TryReadInbox(payload, out var msg))
+                    onMessage(msg);
+            });
+    }
+
+    public async Task SendNudgeAsync(Guid gameId, Guid opponentUserId, CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        await BroadcastInboxAsync(opponentUserId,
+            new InboxMessage(InboxKind.Nudge, uid, MyHandle(), GameId: gameId), token, ct);
+    }
+
+    // ── inbox broadcast (transient) ────────────────────────────────────────────────────────────────
+    // The application event name carried inside every Perch inbox broadcast.
+    private const string InboxEvent = "inbox";
+
+    private string? MyHandle() { lock (_gate) return _me?.Handle; }
+
+    // Posts one transient broadcast to another user's inbox channel via the Realtime broadcast REST endpoint —
+    // no DB write. Best-effort: a failure is swallowed (the persistent row + the recipient's poll still cover it).
+    private async Task BroadcastInboxAsync(Guid toUserId, InboxMessage msg, string token, CancellationToken ct)
+    {
+        try
+        {
+            var channel = RealtimeChannel.Inbox(toUserId);
+            var payload = new System.Text.Json.Nodes.JsonObject
+            {
+                ["kind"] = (int)msg.Kind,
+                ["from"] = msg.FromUserId.ToString(),
+                ["from_handle"] = msg.FromHandle,
+                ["game_id"] = msg.GameId?.ToString(),
+                ["request_id"] = msg.RequestId?.ToString(),
+            };
+            var body = new System.Text.Json.Nodes.JsonObject
+            {
+                ["messages"] = new System.Text.Json.Nodes.JsonArray(new System.Text.Json.Nodes.JsonObject
+                {
+                    ["topic"] = channel.BroadcastName,
+                    ["event"] = InboxEvent,
+                    ["payload"] = payload,
+                    ["private"] = false,
+                }),
+            };
+            using var req = Rest(HttpMethod.Post, "/realtime/v1/api/broadcast", token);
+            req.Content = new StringContent(body.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req, ct);
+            // Ignore the result — this is only an accelerator.
+        }
+        catch { /* transient: the poll (and persisted state) still deliver */ }
+    }
+
+    private static bool TryReadInbox(System.Text.Json.Nodes.JsonObject p, out InboxMessage msg)
+    {
+        msg = default!;
+        try
+        {
+            if (!Enum.IsDefined(typeof(InboxKind), (int?)p["kind"] ?? -1)) return false;
+            var kind = (InboxKind)(int)p["kind"]!;
+            Guid.TryParse((string?)p["from"], out var from);
+            Guid? game = Guid.TryParse((string?)p["game_id"], out var g) ? g : null;
+            Guid? request = Guid.TryParse((string?)p["request_id"], out var r) ? r : null;
+            msg = new InboxMessage(kind, from, (string?)p["from_handle"], game, request);
+            return true;
+        }
+        catch { return false; }
     }
 
     // ── mapping ──────────────────────────────────────────────────────────────────────────────────────

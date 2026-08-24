@@ -51,6 +51,8 @@ public partial class App : Application
     private WordleWindow? _wordleWindow;            // shhh
     private Connect4Window? _connect4Window;        // shhh
     private readonly Dictionary<Guid, Connect4Window> _onlineGameWindows = new();   // overlay-opened games, by id
+    private IDisposable? _inboxSub;                  // transient inbox (Connect 4 invites / nudges / rematches)
+    private NudgeBubbleWindow? _nudgeBubble;         // at most one on screen at a time
     private HistoryWindow? _historyWindow;
     private GitTreeWindow? _treeWindow;
     private MarkdownWindow? _markdownWindow;
@@ -217,6 +219,7 @@ public partial class App : Application
             {
                 _overlay?.Canvas.SetSocialAccount(st.SignedIn, st.Me is not null);
                 _feedHost?.SetActive(Effective.SocialEnabled && st.SignedIn);   // poll the feed while signed in (paused in Quiet mode)
+                SetInboxActive(Effective.SocialEnabled && st is { SignedIn: true, Me: not null });
                 if (!st.SignedIn) { _reactionBubbles?.Close(); _reactionBubbles = null; }
             });
             _ = _social.TryRestoreAsync();
@@ -541,6 +544,7 @@ public partial class App : Application
         _wordleWindow?.Close();
         _connect4Window?.Close();
         foreach (var w in _onlineGameWindows.Values.ToList()) w.Close();
+        _nudgeBubble?.Close();
         _qrWindow?.Close();
         _changelogWindow?.Close();
         _switcher?.Close();
@@ -751,6 +755,8 @@ public partial class App : Application
 
         // Poll the feed only while Social is enabled and signed in (turning Social off stops the poll).
         _feedHost?.SetActive(s.SocialEnabled && (_social?.Current.SignedIn ?? false));
+        // The transient Connect 4 inbox (invites / nudges) follows the same gate.
+        SetInboxActive(s.SocialEnabled && _social is { Current: { SignedIn: true, Me: not null } });
 
         // Run the to-do poller while either the overlay strip or the due reminders are enabled; stop it (and
         // clear the strip) when both are off. The canvas gate (SetShowTodos, applied above) hides the strip
@@ -1351,6 +1357,79 @@ public partial class App : Application
             }
         }
         catch { /* best-effort — a failed accept/decline just leaves the invite where it was */ }
+    }
+
+    // ── Transient inbox: Connect 4 invites / invite-responses / nudges ──────────────────────────────
+    // These broadcasts only accelerate what the poll already surfaces (invites/games) or drive a fleeting toast
+    // (nudge); the persisted rows remain authoritative, so a missed broadcast just means "a little slower".
+    private void SetInboxActive(bool active)
+    {
+        if (active)
+        {
+            if (_inboxSub is null && _social is not null)
+                _inboxSub = _social.SubscribeInbox(m => Dispatcher.UIThread.Post(() => OnInboxMessage(m)));
+        }
+        else { _inboxSub?.Dispose(); _inboxSub = null; }
+    }
+
+    private void OnInboxMessage(Perch.Social.InboxMessage m)
+    {
+        switch (m.Kind)
+        {
+            case Perch.Social.InboxKind.Nudge:
+                ShowNudge(m);
+                break;
+            default:
+                // Invite / accepted / declined: pull the authoritative games + requests now so the overlay's
+                // GAMES strip reflects it immediately instead of waiting for the next 60s feed tick.
+                _feedHost?.RefreshSoon();
+                break;
+        }
+    }
+
+    // Floats a "your turn" bubble off the side of the nudged game's board (if it's open) or the overlay.
+    private void ShowNudge(Perch.Social.InboxMessage m)
+    {
+        string handle = m.FromHandle is { Length: > 0 } h ? "@" + h : "Your opponent";
+        string label = $"{handle} nudged you — your turn!";
+        Window? anchor = (Window?)FindGameWindow(m.GameId) ?? _overlay;
+        if (anchor is null || !anchor.IsVisible) return;
+
+        _nudgeBubble?.Close();
+        var bubble = new NudgeBubbleWindow(() => _nudgeBubble = null);
+        _nudgeBubble = bubble;
+
+        double scale = anchor.RenderScaling <= 0 ? 1 : anchor.RenderScaling;
+        bubble.Configure(tailRight: false, label);           // provisional (right side); size is side-independent
+        double bw = bubble.Width * scale, bh = bubble.Height * scale;
+
+        var pos = anchor.Position;
+        double aw = anchor.Bounds.Width * scale, ah = anchor.Bounds.Height * scale;
+        var screen = anchor.Screens.ScreenFromWindow(anchor) ?? anchor.Screens.Primary;
+        double gap = 10 * scale;
+
+        bool right = screen is null || pos.X + aw + gap + bw <= screen.Bounds.Right;
+        if (!right) bubble.Configure(tailRight: true, label);  // bubble sits to the anchor's left instead
+
+        int x = right ? (int)(pos.X + aw + gap) : (int)(pos.X - bw - gap);
+        int y = (int)(pos.Y + (ah - bh) / 2);
+        if (screen is not null)
+        {
+            x = Math.Clamp(x, screen.Bounds.X, Math.Max(screen.Bounds.X, screen.Bounds.Right - (int)bw));
+            y = Math.Clamp(y, screen.Bounds.Y, Math.Max(screen.Bounds.Y, screen.Bounds.Bottom - (int)bh));
+        }
+        bubble.Position = new PixelPoint(x, y);
+        bubble.Present();
+    }
+
+    // Any open Connect 4 board currently showing the given online game (for anchoring a nudge bubble).
+    private Connect4Window? FindGameWindow(Guid? gameId)
+    {
+        if (gameId is not { } id || id == Guid.Empty) return null;
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            foreach (var w in desktop.Windows)
+                if (w is Connect4Window c && c.IsVisible && c.CurrentGameId == id) return c;
+        return null;
     }
 
     // "Show QR code" — a centred card with the session's remote-control deep-link QR. Only one is shown
