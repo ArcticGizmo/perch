@@ -1,4 +1,6 @@
-﻿using Perch.Data;
+﻿using Perch.Avalonia.Views;
+using Perch.Data;
+using Perch.Data.Hypertree;
 using Perch.Platform;
 using Perch.Social;
 
@@ -162,6 +164,39 @@ internal static class SampleData
             new(linus, null, []),
         ], IncomingRequests: 1);
     }
+
+    /// <summary>A Hypertree stack with more than one branch, so the strip shows in the preview/render (a lone
+    /// "main" line is suppressed). Cursor sits on the first branch.</summary>
+    public static HypertreeStatus Hypertree()
+    {
+        HypertreeRow Row(string kind, string name, string desktop) => new()
+        {
+            Kind = kind, Name = name, Cursor = 0,
+            Id = kind == "main" ? null : Guid.NewGuid(),
+            Desktops = [new HypertreeDesktop { Label = desktop }],
+        };
+
+        return new HypertreeStatus
+        {
+            Schema = 1, Version = "1.0", Pid = 4242,
+            Rows =
+            [
+                Row("main", "main", "Desktop 1"),
+                Row("branch", "overlay-port", "Desktop 2"),
+                Row("branch", "social-feed", "Desktop 3"),
+            ],
+            Current = new HypertreePosition { Row = 1, Desktop = 0 },
+        };
+    }
+
+    /// <summary>A few outstanding to-dos for the Todo section — one overdue, so the preview exercises both the
+    /// normal and attention hues. Returned already sorted + capped, the way the monitor host feeds them.</summary>
+    public static IReadOnlyList<OverlayCanvas.TodoLine> Todos() =>
+    [
+        new("t-1", "Review the overlay layout PR", "in 2h", Overdue: false),
+        new("t-2", "Reply to the design thread", "yesterday", Overdue: true),
+        new("t-3", "Cut the next release", "Fri", Overdue: false),
+    ];
 
     /// <summary>A couple of daemon workers, for the daemon strip — hidden when the daemon setting is off.</summary>
     public static IReadOnlyList<DaemonWorker> DaemonWorkers()

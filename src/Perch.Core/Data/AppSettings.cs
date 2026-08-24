@@ -407,6 +407,14 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? DockedWidthDip { get; set; }
 
+    // The top-to-bottom order of the overlay's movable sections, set by dragging them in the Settings live
+    // preview's "Rearrange" mode. Null means "use the default order" (see OverlaySectionOrder.Default), so a
+    // settings file predating the feature keeps today's layout. Persisted by section name; a stale/partial list
+    // is reconciled by OverlaySectionOrder.Normalize on the way onto the canvas. The header and outage bar are
+    // fixed chrome and never appear here. See OverlayCanvas section layout + PreviewPane.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<OverlaySection>? SectionOrder { get; set; }
+
     // Whether the overlay floats (classic panel) or docks (reserves a screen-edge column via the OS so
     // maximized windows can't cover it). Defaults to Floating, so an older settings file keeps today's
     // behaviour. Ctrl+Shift+W (HotkeyToggleDocked) collapses/expands the docked column. See OverlayCanvas.

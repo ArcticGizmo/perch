@@ -218,6 +218,62 @@ internal static class HeadlessRenderer
         todoEmptyProbe.SetTopTodos([], 0);
         RenderControl(todoEmptyProbe, Path.Combine(outDir, "overlay_todos_empty_1x.png"), 96);
 
+        // Section ordering: every movable section seeded at once, rendered in the default order and again in a
+        // custom order, so the single ordered layout pass (measure + paint) can be eyeballed for clipping or
+        // overlap. If these two differ only by section sequence, the reorder plumbing is sound.
+        OverlayCanvas AllSectionsProbe()
+        {
+            var c = new OverlayCanvas();
+            c.Update(SampleData.Sessions());
+            c.UpdateUsage(SampleData.Usage());
+            c.UpdateSystemMetrics(SampleData.SystemMetrics());
+            c.UpdateSessionMetrics(SampleData.SessionMetrics());
+            c.SetQuickLinks(links, icons);
+            c.SetHypertree(SampleData.Hypertree());
+            c.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
+            c.SetDaemonWorkers(SampleData.DaemonWorkers());
+            c.SetShowMediaController(true);   // off by default; enabled so the strip shows in this probe
+            c.SetShowMicPresence(true);
+            c.UpdateMedia(SampleData.Media());
+            c.UpdateMic(SampleData.Mic());
+            c.SetSocialEnabled(true);
+            c.SetSocialAccount(signedIn: true, hasHandle: true);
+            c.UpdateRoster(SampleData.Roster());
+            return c;
+        }
+
+        var sectionsDefault = AllSectionsProbe();
+        RenderControl(sectionsDefault, Path.Combine(outDir, "overlay_sections_default_1x.png"), 96);
+
+        var sectionsReordered = AllSectionsProbe();
+        sectionsReordered.SetSectionOrder(
+        [
+            OverlaySection.Sessions, OverlaySection.Friends, OverlaySection.ClaudeMetrics,
+            OverlaySection.Call, OverlaySection.Media, OverlaySection.Todo,
+            OverlaySection.Hypertree, OverlaySection.QuickLinks, OverlaySection.SystemInfo,
+        ]);
+        RenderControl(sectionsReordered, Path.Combine(outDir, "overlay_sections_reordered_1x.png"), 96);
+
+        // Rearrange mode (Settings preview): the per-section drag grips and, with Media/Call left off in
+        // settings, the dimmed-but-still-positionable disabled sections. (The mid-drag insertion line needs a
+        // live pointer, so it isn't in the static render.)
+        var rearrangeProbe = new OverlayCanvas();
+        rearrangeProbe.Update(SampleData.Sessions());
+        rearrangeProbe.UpdateUsage(SampleData.Usage());
+        rearrangeProbe.UpdateSystemMetrics(SampleData.SystemMetrics());
+        rearrangeProbe.UpdateSessionMetrics(SampleData.SessionMetrics());
+        rearrangeProbe.SetQuickLinks(links, icons);
+        rearrangeProbe.SetHypertree(SampleData.Hypertree());
+        rearrangeProbe.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
+        rearrangeProbe.SetDaemonWorkers(SampleData.DaemonWorkers());
+        rearrangeProbe.UpdateMedia(SampleData.Media());   // media/mic left disabled → dimmed in rearrange
+        rearrangeProbe.UpdateMic(SampleData.Mic());
+        rearrangeProbe.SetSocialEnabled(true);
+        rearrangeProbe.SetSocialAccount(signedIn: true, hasHandle: true);
+        rearrangeProbe.UpdateRoster(SampleData.Roster());
+        rearrangeProbe.RearrangeMode = true;
+        RenderControl(rearrangeProbe, Path.Combine(outDir, "overlay_sections_rearrange_1x.png"), 96);
+
         // Empty roster: no sessions at all, so the header reads "no sessions" and the rows are simply
         // absent — but the strips the session list has nothing to do with (machine metrics, plan limits,
         // quick links, Hypertree branches) all stay, which is the whole point of this surface.

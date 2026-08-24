@@ -396,6 +396,14 @@ internal static class SettingsRegistry
             PreviewTarget.None, nameof(AppSettings.HypertreeEnabled),
             s => s.HypertreeEnabled, (s, v) => s.HypertreeEnabled = v),
 
+        // Not a catalogue control — edited by dragging the sections in the live preview's "Rearrange" mode —
+        // but listed so search surfaces it and it points the user at the preview.
+        Info("section-order", "Section arrangement",
+            "Drag the overlay's sections into the order you want (in the live preview's Rearrange mode).",
+            SettingSurface.Advanced, SettingKind.List,
+            ["section", "sections", "order", "arrange", "arrangement", "rearrange", "reorder", "layout", "move"],
+            PreviewTarget.None, nameof(AppSettings.SectionOrder)),
+
         Toggle("pull-requests", "Pull requests",
             "A GitHub PR merge glyph on a session whose branch has a PR.",
             SettingSurface.Integrations, ["github", "pr", "pull", "request", "merge", "branch"],

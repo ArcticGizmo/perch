@@ -723,20 +723,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // never drift.
     private double PanelBodyHeight()
     {
-        double h = 0;
-        if (_showSystemMetrics) h += SysMetricsStripHeight;
-        if (UsageStripVisible) h += UsageStripHeight;
-        if (HasQuickLinksRow) h += QuickLinksRowHeight;
-        if (HypertreeStripVisible) h += HypertreeStripHeight;
-        h += TodosStripHeight;
-        foreach (var r in _rows) h += HeightOf(r);
-        h += DaemonStripHeight;
-        h += 2;
-        if (MicStripVisible) h += MicStripHeight;
-        if (MediaStripVisible) h += MediaStripHeight;
-        if (FeedStripVisible) h += FeedStripHeight;
-        if (SocialSignInStripVisible) h += SocialStripHeight;
-        return h;
+        // Walk the movable sections in the user's chosen order, recording each visible section's absolute top
+        // so the paint pass and every hit-test read the same geometry. Returns the total body height (below
+        // the header, above any outage footer). See OverlayCanvas.Sections.cs.
+        _sectionTop.Clear();
+        double top = HeaderHeight;
+        foreach (var s in _sectionOrder)
+        {
+            if (!SectionVisible(s)) continue;
+            _sectionTop[s] = top;
+            top += SectionHeight(s);
+        }
+        return top - HeaderHeight;
     }
 
     // "Waiting on you" ramp length (minutes to fully red); user-tunable later (SetWaitingTimerRedMinutes).
@@ -866,7 +864,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // The quick-links row is always shown with the panel now — it hosts the note button even when the user
     // has no quick links of their own.
     private bool HasQuickLinksRow => true;
-    private double QuickLinksTop => UsageStripTop + (UsageStripVisible ? UsageStripHeight : 0);
+    private double QuickLinksTop => _sectionTop.GetValueOrDefault(OverlaySection.QuickLinks);
 
     // ── Hypertree strip ───────────────────────────────────────────────────────
     // The optional integration with Hypertree (the virtual-desktop branch manager): one narrow line per
@@ -926,7 +924,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// <summary>Raised when the Hypertree header's chevron is clicked to expand or collapse — the app persists it.</summary>
     public event Action<bool>? HypertreeExpandChanged;
 
-    private double HypertreeTop => QuickLinksTop + (HasQuickLinksRow ? QuickLinksRowHeight : 0);
+    private double HypertreeTop => _sectionTop.GetValueOrDefault(OverlaySection.Hypertree);
 
     /// <summary>Sets the section's initial expand/collapse state (from AppSettings) without raising the change
     /// event. Call once at wire-up.</summary>
@@ -990,7 +988,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Top of the first session row: below the header and whichever strips are showing (the Todo section sits
     // between Hypertree and the rows). Mirrors the painted layout so hit-testing lines up (guarded by the
     // expanded/rows check in HitTestRow).
-    private double RowsTop => TodosTop + TodosStripHeight;
+    private double RowsTop => _sectionTop.GetValueOrDefault(OverlaySection.Sessions);
 
     // The top of a given display row.
     private double RowTop(int index)
@@ -1706,16 +1704,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // contributes no session rows, so the panel reads as "here are your limits, links and branches;
         // no Claude is working right now".
         bool showBody = ShowFullPanel;
-        bool showSys = showBody && _showSystemMetrics;        // machine CPU/RAM strip, just under the header
-        bool showUsage = showBody && UsageStripVisible;       // rate-limit + spend bars, below the metrics strip
-        bool showQuickLinks = showBody && HasQuickLinksRow;   // app icon strip, below the usage bars
-        bool showHypertree = showBody && HypertreeStripVisible; // Hypertree branches, below the quick links
-        bool showDaemon = showBody && DaemonStripVisible;     // daemon background workers, below the rows
-        bool showTodos = showBody && TodosStripVisible;       // user's own to-dos, below the daemon strip
-        bool showMic = showBody && MicStripVisible;           // who has the microphone, below the rows
-        bool showMedia = showBody && MediaStripVisible;       // now-playing + transport strip, below that
-        bool showFeed = showBody && FeedStripVisible;         // friends' status feed, below that
-        bool showSocialSignIn = showBody && SocialSignInStripVisible; // "sign in to Social" prompt (signed out)
 
         double height = HeaderHeight;
         if (showBody) height += PanelBodyHeight();
@@ -1746,13 +1734,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             DrawHeader(ctx, width);
             if (_autoCloseActive) DrawAutoCloseBar(ctx, width);
 
-            if (showSys) DrawSystemMetricsStrip(ctx, width);
-            if (showUsage) DrawUsageBars(ctx, width);
-            if (showQuickLinks) DrawQuickLinksRow(ctx, width);
-            else _noteButtonRect = default; // no row painted → drop the stale note-button hit-rect
-            if (showHypertree) DrawHypertreeStrip(ctx, width);
-            else _hyperDesktopRects.Clear(); // no strip painted → drop the stale desktop-chip hit-rects
-
             if (showBody)
             {
                 // Clip the body to the panel's rounded rect so the bottom-most element (a hovered last row
@@ -1773,52 +1754,24 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _jiraRects.Clear();
                 _subChevronRects.Clear();
 
-                // The Todo section sits under the Hypertree strip, above the session rows.
-                if (showTodos) DrawTodosStrip(ctx, width, TodosTop);
+                // Paint every visible section at the top recorded by the preceding measure pass, in the user's
+                // chosen order. _sectionTop was populated by PanelBodyHeight() above. See OverlayCanvas.Sections.cs.
+                foreach (var s in _sectionOrder)
+                    if (_sectionTop.TryGetValue(s, out var sectionTop))
+                        PaintSection(ctx, width, s, sectionTop);
 
-                double top = RowsTop;
-                _autonomousHeaderRect = default; // re-armed below only when the section is actually drawn
-                for (int i = 0; i < _rows.Count; i++)
-                {
-                    var r = _rows[i];
-                    if (r.IsSectionHeader) DrawSectionHeaderRow(ctx, r, top, width);
-                    else if (r.IsSubAgent) DrawSubAgentRow(ctx, i, r, top, width);
-                    else DrawSessionRow(ctx, i, r.Session!, top, width);
-                    top += HeightOf(r);
-                }
-
-                // The daemon workers' section sits directly under the rows — the "separate section under
-                // the normal rows" for sessions that have no terminal to jump to.
-                if (showDaemon)
-                {
-                    DrawDaemonStrip(ctx, width, top);
-                    top += DaemonStripHeight;
-                }
-
-                // The mic and now-playing strips sit below the rows (and above any outage footer), in that
-                // order; each captures its own button hit-rects, which are otherwise cleared just below.
-                if (showMic)
-                {
-                    DrawMicStrip(ctx, width, top);
-                    top += MicStripHeight;
-                }
-                if (showMedia)
-                {
-                    DrawMediaStrip(ctx, width, top);
-                    top += MediaStripHeight;
-                }
-                if (showFeed)
-                {
-                    DrawSocialRegion(ctx, width, top);
-                    top += FeedStripHeight;
-                }
-                if (showSocialSignIn) DrawSocialSignInStrip(ctx, width, top);
+                // Rearrange mode (Settings preview only): draw the grips and the drop-insertion indicator.
+                if (RearrangeMode) DrawRearrangeAffordances(ctx, width);
             }
 
-            if (!showMic) ClearMicHitRects();
-            if (!showMedia) ClearMediaHitRects();
-            if (!showFeed) ClearSocialRegionHitRects();
-            if (!showSocialSignIn) ClearSocialHitRect();
+            // Drop stale hit-rects for any section that wasn't painted this pass (its glyphs are gone, so a
+            // click must not still land on where it used to be).
+            if (!showBody || !SectionVisible(OverlaySection.QuickLinks)) _noteButtonRect = default;
+            if (!showBody || !SectionVisible(OverlaySection.Hypertree)) _hyperDesktopRects.Clear();
+            if (!showBody || !MicStripVisible) ClearMicHitRects();
+            if (!showBody || !MediaStripVisible) ClearMediaHitRects();
+            if (!showBody || !FeedStripVisible) ClearSocialRegionHitRects();
+            if (!showBody || !SocialSignInStripVisible) ClearSocialHitRect();
 
             if (showFooter) DrawStatusFooter(ctx, width, height);
             else _footerRect = default;
@@ -2025,15 +1978,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private void DrawSystemMetricsStrip(DrawingContext ctx, double width)
     {
         bool has = _sysMetrics.HasData;
-        double top = HeaderHeight + 2;
+        double top = SystemInfoTop + 2;
         DrawSysBar(ctx, width, top,                "CPU", has ? _sysMetrics.CpuPercent : null);
         DrawSysBar(ctx, width, top + BarRowHeight, "RAM", has ? _sysMetrics.RamPercent : null);
 
-        // A thin grey rule separating the system strip from the usage strip below — only when the usage
-        // strip is there to divide from. Floated a few px above the boundary so the clearance reads even.
-        if (UsageStripVisible)
+        // A thin grey rule separating the system strip from the usage strip below — only when the usage strip
+        // sits directly beneath it (they may no longer be neighbours once sections are reordered). Floated a
+        // few px above the boundary so the clearance reads even.
+        if (NextVisibleSection(OverlaySection.SystemInfo) == OverlaySection.ClaudeMetrics)
         {
-            double sepY = UsageStripTop - 4;
+            double sepY = SystemInfoTop + SysMetricsStripHeight - 4;
             ctx.DrawLine(new Pen(new SolidColorBrush(SepColor), 1),
                 new Point(HorizPad, sepY), new Point(width - HorizPad, sepY));
         }
@@ -2049,7 +2003,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Bars below the header (or the metrics strip, when shown) when expanded: the 5-hour ("Session") and
     // 7-day ("Weekly") rate-limit windows, plus one per model-scoped weekly window the endpoint reports
     // (e.g. Fable). Dimmed when the reading is stale/unavailable.
-    private double UsageStripTop => HeaderHeight + (_showSystemMetrics ? SysMetricsStripHeight : 0);
+    // Section tops now come from the ordered layout (PanelBodyHeight populates _sectionTop), not a fixed chain,
+    // so a reordered section paints and hit-tests where it actually sits. 0 when the section isn't laid out
+    // (not visible) — callers all guard on the matching *Visible check before trusting the value.
+    private double SystemInfoTop => _sectionTop.GetValueOrDefault(OverlaySection.SystemInfo);
+    private double UsageStripTop => _sectionTop.GetValueOrDefault(OverlaySection.ClaudeMetrics);
 
     // When the rate bars are on: Session + Weekly are always drawn and scoped windows only when the endpoint
     // returns them. The monthly spend bar adds one more when enabled. Either can be off, so the strip's
@@ -3307,6 +3265,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
+        if (RearrangeMode) { HandleRearrangeMoved(e); return; }
+
         var p = e.GetPosition(this);
 
         // A brand long-press only counts while the pointer stays put — the first real movement means it's
@@ -3610,6 +3570,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
+        if (RearrangeMode) { HandleRearrangePressed(e); return; }
+
         var props = e.GetCurrentPoint(this).Properties;
 
         // Any press that reaches the canvas while a menu is open is a click *outside* that menu — presses
@@ -3745,6 +3707,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
+        if (RearrangeMode) { HandleRearrangeReleased(e); return; }
+
         if (!_leftPressed) { base.OnPointerReleased(e); return; }
         _leftPressed = false;
         e.Pointer.Capture(null);
@@ -4173,7 +4137,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // Right-clicking a strip toggles just that strip off (only when it's actually showing); the
         // header menu below can turn either back on.
         bool overSystemStrip = ShowFullPanel && _showSystemMetrics
-                               && p.Y >= HeaderHeight && p.Y < UsageStripTop;
+                               && p.Y >= SystemInfoTop && p.Y < SystemInfoTop + SysMetricsStripHeight;
         if (overSystemStrip)
             items.Add(MenuItem("Hide system metrics", () => SystemMetricsToggleRequested?.Invoke(false)));
         if (InUsageStrip(p))

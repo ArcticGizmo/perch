@@ -275,7 +275,7 @@ internal sealed class SettingsWindow : Window
         };
         Grid.SetColumn(cards, 0);
 
-        var dock = BuildPreviewDock(preview);
+        var dock = BuildPreviewDock(preview, BuildArrangeControls(preview));
         Grid.SetColumn(dock, 1);
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), IsVisible = false };
@@ -517,25 +517,135 @@ internal sealed class SettingsWindow : Window
         return pill;
     }
 
-    private static Control BuildPreviewDock(PreviewPane preview)
+    // The "Rearrange" toggle + "Reset arrangement" button that sit under the Features preview. Rearrange puts
+    // the preview into drag-to-reorder mode (all sections shown, disabled ones dimmed); a drop persists the new
+    // order and pushes it onto the live overlay. Reset appears only when the saved order differs from default.
+    private Control BuildArrangeControls(PreviewPane preview)
     {
-        var stack = new StackPanel { Margin = new Thickness(14, 16, 16, 16) };
-        stack.Children.Add(new TextBlock
+        var reset = new Button
+        {
+            Content = "Reset arrangement",
+            FontSize = 12,
+            Padding = new Thickness(10, 4),
+            IsVisible = !OverlaySectionOrder.IsDefault(_settings.SectionOrder),
+        };
+
+        var rearrange = new ToggleButton
+        {
+            Content = "Rearrange",
+            FontSize = 12,
+            Padding = new Thickness(10, 4),
+        };
+
+        void RefreshReset() => reset.IsVisible = !OverlaySectionOrder.IsDefault(_settings.SectionOrder);
+
+        rearrange.IsCheckedChanged += (_, _) =>
+        {
+            bool on = rearrange.IsChecked == true;
+            preview.SetRearrange(on);
+            if (!on) preview.Apply(_settings);   // leaving rearrange: restore the real per-section gates
+            RefreshReset();
+        };
+
+        preview.SectionOrderChanged += order =>
+        {
+            _settings.SectionOrder = order.ToList();
+            _settings.Save();
+            _hooks.DisplayChanged?.Invoke();     // re-lay-out the live overlay in the new order
+            RefreshReset();
+        };
+
+        reset.Click += (_, _) =>
+        {
+            _settings.SectionOrder = null;
+            _settings.Save();
+            _hooks.DisplayChanged?.Invoke();
+            preview.SetSectionOrder(OverlaySectionOrder.Default);   // reflect default in the preview (keeps rearrange gates)
+            reset.IsVisible = false;
+        };
+
+        return new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(2, 12, 0, 0),
+            Children = { rearrange, reset },
+        };
+    }
+
+    private static Control BuildPreviewDock(PreviewPane preview, Control? footer = null)
+    {
+        var label = new TextBlock
         {
             Text = "LIVE PREVIEW", FontSize = 11, FontWeight = FontWeight.SemiBold,
             Foreground = Palette.MutedBrush, Margin = new Thickness(2, 0, 0, 8),
-        });
-        stack.Children.Add(preview);
+        };
+
+        // Only the preview scrolls (the label above and the arrange buttons below stay put), and top/bottom
+        // fade gradients + a down-chevron appear only when there's more to see in that direction — so a preview
+        // taller than the dock reads as scrollable rather than simply cut off.
+        var scroll = new ScrollViewer
+        {
+            Content = preview,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+
+        var fade = Palette.FormBg;
+        var clear = Color.FromArgb(0, fade.R, fade.G, fade.B);
+        Border Fade(bool top) => new()
+        {
+            Height = 30, IsHitTestVisible = false, IsVisible = false,
+            VerticalAlignment = top ? VerticalAlignment.Top : VerticalAlignment.Bottom,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Background = new LinearGradientBrush
+            {
+                StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
+                EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
+                GradientStops = top
+                    ? new GradientStops { new(fade, 0), new(clear, 1) }
+                    : new GradientStops { new(clear, 0), new(fade, 1) },
+            },
+        };
+
+        var topFade = Fade(top: true);
+        var bottomFade = Fade(top: false);
+        var chevron = new TextBlock
+        {
+            Text = "⌄", FontSize = 15, Foreground = Palette.MutedBrush, IsHitTestVisible = false, IsVisible = false,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 0, 1),
+        };
+
+        void UpdateFades()
+        {
+            double max = scroll.Extent.Height - scroll.Viewport.Height;
+            double y = scroll.Offset.Y;
+            topFade.IsVisible = y > 1;
+            bool more = y < max - 1;
+            bottomFade.IsVisible = chevron.IsVisible = more;
+        }
+        scroll.ScrollChanged += (_, _) => UpdateFades();
+        scroll.LayoutUpdated += (_, _) => UpdateFades();
+
+        var previewArea = new Grid();
+        previewArea.Children.Add(scroll);
+        previewArea.Children.Add(topFade);
+        previewArea.Children.Add(bottomFade);
+        previewArea.Children.Add(chevron);
+        Grid.SetRow(previewArea, 1);
+
+        var outer = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new Thickness(14, 16, 16, 16) };
+        outer.Children.Add(label);
+        outer.Children.Add(previewArea);
+        if (footer is not null)
+        {
+            Grid.SetRow(footer, 2);
+            outer.Children.Add(footer);
+        }
 
         return new Border
         {
             Width = 300, BorderThickness = new Thickness(1, 0, 0, 0), BorderBrush = Palette.BorderBrush,
-            Child = new ScrollViewer
-            {
-                Content = stack,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            },
+            Child = outer,
         };
     }
 

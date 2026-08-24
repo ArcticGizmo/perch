@@ -36,12 +36,17 @@ internal sealed class PreviewPane : Border
         _canvas.UpdateSystemMetrics(SampleData.SystemMetrics());
         _canvas.UpdateSessionMetrics(SampleData.SessionMetrics());
         _canvas.SetDaemonWorkers(SampleData.DaemonWorkers());
+        _canvas.SetHypertree(SampleData.Hypertree());
+        _canvas.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
         _canvas.UpdateMedia(SampleData.Media());
         _canvas.UpdateMic(SampleData.Mic());
         _canvas.SetSocialEnabled(true);
         _canvas.UpdateRoster(SampleData.Roster());
         _canvas.SetSocialAccount(signedIn: true, hasHandle: true);   // preview the signed-in (roster) state
         _canvas.IsHitTestVisible = false;   // display-only: no clicks, no dense drag, no hovers
+
+        // Bubble the preview canvas's reorder event up to whoever hosts the pane (the Settings window).
+        _canvas.SectionOrderChanged += order => SectionOrderChanged?.Invoke(order);
 
         Child = new Viewbox
         {
@@ -59,4 +64,21 @@ internal sealed class PreviewPane : Border
 
     /// <summary>Re-gates the preview overlay to reflect <paramref name="settings"/> (typically a working clone).</summary>
     public void Apply(AppSettings settings) => OverlaySettingsGates.Apply(_canvas, settings);
+
+    /// <summary>Raised when the user drags the sections into a new order; carries the new full order for the
+    /// Settings window to persist and push live.</summary>
+    public event Action<IReadOnlyList<OverlaySection>>? SectionOrderChanged;
+
+    /// <summary>Puts the preview into (or out of) drag-to-reorder mode. On: every section shows (disabled ones
+    /// dimmed) and can be dragged. Off: back to a display-only picture — the caller should re-<see cref="Apply"/>
+    /// the settings so the forced-on gates return to the user's real choices.</summary>
+    public void SetRearrange(bool on)
+    {
+        _canvas.RearrangeMode = on;
+        _canvas.IsHitTestVisible = on;
+    }
+
+    /// <summary>Pushes a section order straight onto the preview canvas (used by "Reset arrangement", which must
+    /// update the preview without re-gating — so it works while rearrange mode has the gates forced on).</summary>
+    public void SetSectionOrder(IReadOnlyList<OverlaySection> order) => _canvas.SetSectionOrder(order);
 }

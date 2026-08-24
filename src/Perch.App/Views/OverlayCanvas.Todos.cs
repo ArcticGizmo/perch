@@ -66,7 +66,7 @@ public sealed partial class OverlayCanvas
 
     // Sits directly under the Hypertree strip, above the session rows — your agenda reads with the branches,
     // not buried beneath the session list.
-    private double TodosTop => HypertreeTop + HypertreeStripHeight;
+    private double TodosTop => _sectionTop.GetValueOrDefault(Perch.Data.OverlaySection.Todo);
 
     /// <summary>Show/hide the whole Todo section. Toggling it changes the panel height, so relayout.</summary>
     public void SetShowTodos(bool enabled)

@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.65] - 2026-08-24
+
+- Reorder the overlay's sections by dragging them around the Settings preview
+- Reset the arrangement to default (for when the reordering got away from you)
+- The live preview scrolls on its own, and admits when there's more below
+
+---
+
 ## [v0.3.64] - 2026-08-24
 
 - Emoji sit properly centred in mood tiles, chips, and the reaction picker
