@@ -707,6 +707,25 @@ internal static class HeadlessRenderer
             wq.Close();
         }
 
+        // macOS variant (no edge reservation): the placement step is dropped, so the rail shows four steps.
+        {
+            var wm = new Windows.OnboardingWindow(new AppSettings(), dockedSupported: false, static () => { })
+            {
+                Width = 940, Height = 660,
+            };
+            wm.ShowStepForRender(0);
+            wm.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = wm.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "onboarding_mac_1x.png"));
+                frame.Save(fs);
+            }
+            wm.Close();
+        }
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }

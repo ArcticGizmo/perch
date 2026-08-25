@@ -5,6 +5,8 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Perch.Avalonia.Theming;
 using Perch.Data;
 
@@ -21,16 +23,16 @@ namespace Perch.Avalonia.Windows;
 /// </summary>
 internal sealed class OnboardingWindow : Window
 {
-    private const int StepMax = 4;
+    private enum StepKind { Welcome, Tour, Placement, Tiers, Done }
 
-    private static readonly (string Title, string Sub)[] StepMeta =
-    [
-        ("Welcome", "What Perch does"),
-        ("The lay of the land", "Read the overlay"),
-        ("Where it lives", "Floating or docked"),
-        ("Choose your setup", "How much to switch on"),
-        ("You're all set", "Where things live"),
-    ];
+    private static (string Title, string Sub) StepInfo(StepKind k) => k switch
+    {
+        StepKind.Welcome   => ("Welcome", "What Perch does"),
+        StepKind.Tour      => ("The lay of the land", "Read the overlay"),
+        StepKind.Placement => ("Where it lives", "Floating or docked"),
+        StepKind.Tiers     => ("Choose your setup", "How much to switch on"),
+        _                  => ("You're all set", "Where things live"),
+    };
 
     private readonly AppSettings _settings;
     private readonly bool _dockedSupported;
@@ -39,9 +41,13 @@ internal sealed class OnboardingWindow : Window
 
     // Working state, kept across step navigation (the stage is rebuilt each GoTo).
     private readonly HashSet<string> _enabled;
+    private readonly List<StepKind> _steps;   // the ordered sequence (placement dropped where docking is unsupported)
     private OnboardingTier _preset;
     private OverlayPresentationMode _placement;
     private int _step;
+
+    private int LastStep => _steps.Count - 1;
+    private StepKind Current => _steps[_step];
 
     // Chrome refs updated as steps/state change.
     private readonly ContentControl _stage = new();
@@ -84,6 +90,12 @@ internal sealed class OnboardingWindow : Window
         _enabled = OnboardingTiers.Preset(_preset).ToHashSet();
         _placement = dockedSupported ? settings.OverlayMode : OverlayPresentationMode.Floating;
 
+        // The placement step only makes sense where the overlay can actually dock (Windows). On macOS the
+        // overlay always floats, so drop that step entirely rather than offering a one-option choice.
+        _steps = dockedSupported
+            ? [StepKind.Welcome, StepKind.Tour, StepKind.Placement, StepKind.Tiers, StepKind.Done]
+            : [StepKind.Welcome, StepKind.Tour, StepKind.Tiers, StepKind.Done];
+
         Title = "Welcome to Perch";
         Width = 940;
         Height = 660;
@@ -97,6 +109,22 @@ internal sealed class OnboardingWindow : Window
     }
 
     private static Color Soft(Color c, byte a) => Color.FromArgb(a, c.R, c.G, c.B);
+
+    // The Perch brand mark (the app icon), loaded once. Falls back to the bird emoji if the asset is missing.
+    private static Bitmap? _logo;
+    private static bool _logoTried;
+    private static Control LogoMark(double size)
+    {
+        if (!_logoTried)
+        {
+            _logoTried = true;
+            try { _logo = new Bitmap(AssetLoader.Open(new Uri("avares://perch/Assets/icon.png"))); }
+            catch { _logo = null; }
+        }
+        return _logo is { } b
+            ? new Image { Source = b, Width = size, Height = size, VerticalAlignment = VerticalAlignment.Center }
+            : new TextBlock { Text = "🐦", FontSize = size * 0.85, VerticalAlignment = VerticalAlignment.Center };
+    }
 
     /// <summary>Navigates to a given step for the headless renderer (HeadlessRenderer shows the window and
     /// captures a frame; templated controls only get their styles inside a shown window).</summary>
@@ -123,7 +151,7 @@ internal sealed class OnboardingWindow : Window
                         VerticalAlignment = VerticalAlignment.Center,
                         Children =
                         {
-                            new TextBlock { Text = "🐦", FontSize = 18, VerticalAlignment = VerticalAlignment.Center },
+                            LogoMark(20),
                             new TextBlock
                             {
                                 Text = "Perch  ·  Quick start", FontSize = 14, FontWeight = FontWeight.SemiBold,
@@ -175,10 +203,10 @@ internal sealed class OnboardingWindow : Window
             Foreground = _muted, Margin = new Thickness(6, 0, 0, 12),
         });
 
-        for (var i = 0; i < StepMeta.Length; i++)
+        for (var i = 0; i < _steps.Count; i++)
         {
             var idx = i;
-            var (title, sub) = StepMeta[i];
+            var (title, sub) = StepInfo(_steps[i]);
             var btn = new Button
             {
                 HorizontalAlignment = HorizontalAlignment.Stretch,
@@ -234,6 +262,8 @@ internal sealed class OnboardingWindow : Window
         _backBtn.MinWidth = 92;
         _backBtn.Padding = new Thickness(16, 9);
         _backBtn.CornerRadius = new CornerRadius(9);
+        _backBtn.HorizontalContentAlignment = HorizontalAlignment.Center;
+        _backBtn.VerticalContentAlignment = VerticalAlignment.Center;
         _backBtn.Click += (_, _) => GoTo(_step - 1);
 
         StylePrimary(_nextBtn);
@@ -261,17 +291,17 @@ internal sealed class OnboardingWindow : Window
 
     private void GoTo(int n)
     {
-        _step = Math.Clamp(n, 0, StepMax);
-        _stage.Content = _step switch
+        _step = Math.Clamp(n, 0, LastStep);
+        _stage.Content = Current switch
         {
-            0 => BuildWelcome(),
-            1 => BuildLayoutTour(),
-            2 => BuildPlacement(),
-            3 => BuildTierChooser(),
-            _ => BuildDone(),
+            StepKind.Welcome   => BuildWelcome(),
+            StepKind.Tour      => BuildLayoutTour(),
+            StepKind.Placement => BuildPlacement(),
+            StepKind.Tiers     => BuildTierChooser(),
+            _                  => BuildDone(),
         };
 
-        _stepCount.Text = $"Step {_step + 1} of {StepMax + 1}";
+        _stepCount.Text = $"Step {_step + 1} of {_steps.Count}";
         _backBtn.IsEnabled = _step > 0;
         _nextBtn.Content = NextLabel();
 
@@ -279,16 +309,17 @@ internal sealed class OnboardingWindow : Window
             _railButtons[i].Background = i == _step ? _button : Brushes.Transparent;
     }
 
-    private string NextLabel() => _step switch
+    private string NextLabel()
     {
-        StepMax => "Finish setup",
-        3 => OnboardingTiers.MatchedTier(_enabled) is { } t ? $"Use {TierName(t)}" : "Use custom setup",
-        _ => "Next",
-    };
+        if (_step == LastStep) return "Finish setup";
+        if (Current == StepKind.Tiers)
+            return OnboardingTiers.MatchedTier(_enabled) is { } t ? $"Use {TierName(t)}" : "Use custom setup";
+        return "Next";
+    }
 
     private void OnNext()
     {
-        if (_step == StepMax) { Commit(applyTier: true); return; }
+        if (_step == LastStep) { Commit(applyTier: true); return; }
         GoTo(_step + 1);
     }
 
@@ -405,9 +436,10 @@ internal sealed class OnboardingWindow : Window
         var selected = _placement == mode;
         var body = new StackPanel
         {
-            Spacing = 5,
+            Spacing = 8,
             Children =
             {
+                PlacementArt(mode == OverlayPresentationMode.Docked),
                 new TextBlock { Text = title, FontSize = 18, FontWeight = FontWeight.SemiBold, Foreground = _text },
                 new TextBlock { Text = blurb, FontSize = 12.5, Foreground = _muted, TextWrapping = TextWrapping.Wrap },
             },
@@ -438,6 +470,59 @@ internal sealed class OnboardingWindow : Window
             card.Cursor = new Cursor(StandardCursorType.Hand);
         }
         return card;
+    }
+
+    // A small stand-in diagram of the overlay's placement: a "desktop" with either the panel floating over a
+    // window's corner, or a reserved full-height column the windows sit beside. Deliberately minimal — it
+    // shows the shape, not the overlay's contents.
+    private Control PlacementArt(bool docked)
+    {
+        const double W = 250, H = 116;
+        var canvas = new Canvas { Width = W, Height = H };
+
+        if (docked)
+        {
+            canvas.Children.Add(MiniWindow(12, 14, W - 66, H - 28));   // windows stop before the column
+            var col = new Border
+            {
+                Width = 34, Height = H - 12, CornerRadius = new CornerRadius(4),
+                Background = _accentSoft, BorderBrush = _accent, BorderThickness = new Thickness(1.5),
+            };
+            Canvas.SetLeft(col, W - 42);
+            Canvas.SetTop(col, 6);
+            canvas.Children.Add(col);
+        }
+        else
+        {
+            canvas.Children.Add(MiniWindow(12, 14, W - 24, H - 28));   // a full window…
+            var pnl = new Border                                       // …with the panel floating over its corner
+            {
+                Width = 52, Height = 70, CornerRadius = new CornerRadius(5),
+                Background = _accentSoft, BorderBrush = _accent, BorderThickness = new Thickness(1.5),
+            };
+            Canvas.SetLeft(pnl, W - 70);
+            Canvas.SetTop(pnl, 14);
+            canvas.Children.Add(pnl);
+        }
+
+        return new Border
+        {
+            Width = W, Height = H, CornerRadius = new CornerRadius(9), Margin = new Thickness(0, 0, 0, 4),
+            Background = _button, BorderBrush = _border, BorderThickness = new Thickness(1),
+            ClipToBounds = true, Child = canvas,
+        };
+    }
+
+    private Border MiniWindow(double x, double y, double w, double h)
+    {
+        var win = new Border
+        {
+            Width = w, Height = h, CornerRadius = new CornerRadius(4),
+            Background = _surface, BorderBrush = _border, BorderThickness = new Thickness(1),
+        };
+        Canvas.SetLeft(win, x);
+        Canvas.SetTop(win, y);
+        return win;
     }
 
     // ── Step 3: Tier chooser + fine-tune ─────────────────────────────────────
@@ -622,7 +707,7 @@ internal sealed class OnboardingWindow : Window
             _resetBtn.IsVisible = matched is null;
         if (_quietNote != null)
             _quietNote.IsVisible = _quietActive && _enabled.Any(id => SettingsRegistry.ById(id)?.Playful == true);
-        if (_step == 3)
+        if (Current == StepKind.Tiers)
             _nextBtn.Content = NextLabel();
     }
 
@@ -633,7 +718,11 @@ internal sealed class OnboardingWindow : Window
         var matched = OnboardingTiers.MatchedTier(_enabled);
         var panel = new StackPanel { Spacing = 14, MaxWidth = 600, HorizontalAlignment = HorizontalAlignment.Left };
         panel.Children.Add(Eyebrow("YOU'RE ALL SET"));
-        panel.Children.Add(H1("Perch is on its perch. 🐦"));
+        panel.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 12, VerticalAlignment = VerticalAlignment.Center,
+            Children = { H1("Perch is on its perch."), LogoMark(30) },
+        });
         panel.Children.Add(Lede(
             "Your overlay will appear the next time a Claude Code session starts. Here's the setup you picked — nothing is locked in."));
 
