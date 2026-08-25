@@ -406,7 +406,8 @@ internal sealed class OnboardingWindow : Window
         points.Children.Add(TourRow("3", "Quick links",
             "One-tap launchers — GitHub, Jira, a scratch note, whatever you pin."));
         points.Children.Add(TourRow("4", "Session rows",
-            "One row per live session: a status dot, the project, and badges like permission mode or a waiting timer."));
+            "One row per live session — status dot, project, and badges like permission mode or a waiting " +
+            "timer — with its sub-agents and teammates nested beneath."));
         points.Children.Add(TourRow("5", "Movable sections",
             "Todos, media and more stack in an order you choose — rearrange them in Settings."));
         left.Children.Add(points);
@@ -437,11 +438,19 @@ internal sealed class OnboardingWindow : Window
     private Control TourPreview()
     {
         var now = DateTime.Now;
+        // A small team tree under the lead session, so the preview shows sub-agent / teammate visibility.
+        var subs = new List<SubAgent>
+        {
+            new("t1", "teammate", "general-purpose", IsTeammate: true, Name: "arch-explorer",
+                Color: "blue", Activity: "Reading Program.cs"),
+            new("a1", "Explore the auth flow", "general-purpose",
+                Children: [new("a1a", "Map the OAuth callback", "general-purpose")]),
+        };
         var canvas = new OverlayCanvas();
         canvas.Update(
         [
             new ClaudeSession("1234", "s1", SessionStatus.Running, @"C:\src\perch", "perch", now,
-                Activity: "Editing OverlayForm.cs", Mode: PermissionMode.AcceptEdits),
+                Activity: "Editing OverlayForm.cs", Mode: PermissionMode.AcceptEdits, SubAgents: subs),
             new ClaudeSession("5678", "s2", SessionStatus.AwaitingInput, @"C:\src\api", "api", now),
             new ClaudeSession("5566", "s7", SessionStatus.Running, @"C:\src\thoughts", "claude-thoughts", now),
         ]);
