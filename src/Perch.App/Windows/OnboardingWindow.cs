@@ -7,7 +7,10 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Perch.Avalonia.Rendering;
+using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
+using Perch.Avalonia.Views;
 using Perch.Data;
 
 namespace Perch.Avalonia.Windows;
@@ -386,24 +389,80 @@ internal sealed class OnboardingWindow : Window
 
     private Control BuildLayoutTour()
     {
-        var left = new StackPanel { Spacing = 14, MaxWidth = 560, HorizontalAlignment = HorizontalAlignment.Left };
-        left.Children.Add(Eyebrow("THE LAY OF THE LAND"));
-        left.Children.Add(H1("This little panel is your overlay."));
-        left.Children.Add(Lede(
+        var root = new StackPanel { Spacing = 14, MaxWidth = 680, HorizontalAlignment = HorizontalAlignment.Left };
+        root.Children.Add(Eyebrow("THE LAY OF THE LAND"));
+        root.Children.Add(H1("This little panel is your overlay."));
+        root.Children.Add(Lede(
             "It floats at the edge of your screen (or docks to a column) whenever a session is running. " +
-            "Here's what you'll find on it, top to bottom:"));
+            "Here's what you'll find on it — shown live on the right:"));
 
-        left.Children.Add(TourRow("1", "Header & the bird",
+        var points = new StackPanel { Spacing = 12, VerticalAlignment = VerticalAlignment.Top };
+        points.Children.Add(TourRow("1", "Header & the bird",
             "Drag to move it; right-click for Quiet mode and placement. The bird mirrors the overall mood."));
-        left.Children.Add(TourRow("2", "System & usage",
+        points.Children.Add(TourRow("2", "System & usage",
             "Machine CPU/RAM, then your 5-hour and weekly rate-limit bars — headroom at a glance."));
-        left.Children.Add(TourRow("3", "Quick links",
+        points.Children.Add(TourRow("3", "Quick links",
             "One-tap launchers — GitHub, Jira, a scratch note, whatever you pin."));
-        left.Children.Add(TourRow("4", "Session rows",
+        points.Children.Add(TourRow("4", "Session rows",
             "One row per live session: a status dot, the project, and badges like permission mode or a waiting timer."));
-        left.Children.Add(TourRow("5", "Movable sections",
-            "Todos, friends, media and more stack in an order you choose — rearrange them in Settings."));
-        return left;
+        points.Children.Add(TourRow("5", "Movable sections",
+            "Todos, media and more stack in an order you choose — rearrange them in Settings."));
+
+        var previewCol = new StackPanel
+        {
+            Spacing = 8, Width = 272, VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(20, 2, 0, 0),
+            [DockPanel.DockProperty] = Dock.Right,
+        };
+        previewCol.Children.Add(new TextBlock
+        {
+            Text = "LIVE PREVIEW", FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = _muted,
+            Margin = new Thickness(2, 0, 0, 0),
+        });
+        previewCol.Children.Add(TourPreview());
+
+        var row = new DockPanel { LastChildFill = true, Children = { previewCol, points } };
+        root.Children.Add(row);
+        return root;
+    }
+
+    // A miniature, display-only overlay showing the features the tour points call out — the same
+    // OverlayCanvas + SampleData + OverlaySettingsGates path the Settings live preview uses (PreviewPane),
+    // seeded here so quick links and the movable sections the tour mentions are present.
+    private Control TourPreview()
+    {
+        var canvas = new OverlayCanvas();
+        canvas.Update(SampleData.Sessions());
+        canvas.UpdateUsage(SampleData.Usage());
+        canvas.UpdateSystemMetrics(SampleData.SystemMetrics());
+        canvas.UpdateSessionMetrics(SampleData.SessionMetrics());
+        canvas.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
+        canvas.UpdateMedia(SampleData.Media());
+        canvas.SetQuickLinks(
+            [new QuickLink { Name = "GitHub" }, new QuickLink { Name = "Jira" }, new QuickLink { Name = "Slack" }],
+            [null, null, null]);
+
+        // Turn on exactly the tour's features (session-row badges are on by default).
+        OverlaySettingsGates.Apply(canvas, new AppSettings
+        {
+            ShowSystemMetrics = true,
+            ShowUsage = true,
+            ShowExpectedUsageRate = true,
+            ShowTodos = true,
+            ShowMediaController = true,
+        });
+        canvas.IsHitTestVisible = false;   // a picture, not a control
+
+        return new Border
+        {
+            Background = _button, CornerRadius = new CornerRadius(12),
+            BorderBrush = _border, BorderThickness = new Thickness(1), Padding = new Thickness(10),
+            Child = new Viewbox
+            {
+                Child = canvas, Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly,
+                Width = 250, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top,
+            },
+        };
     }
 
     // ── Step 2: Placement ────────────────────────────────────────────────────
@@ -818,29 +877,28 @@ internal sealed class OnboardingWindow : Window
 
     private Control TourRow(string n, string title, string blurb)
     {
+        // DockPanel (not a horizontal StackPanel) so the text fills the real column width and wraps — a
+        // StackPanel would measure the text at infinite width and let it spill under the preview column.
+        var number = new Border
+        {
+            Width = 24, Height = 24, CornerRadius = new CornerRadius(7), Background = _accent,
+            VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 0, 13, 0),
+            [DockPanel.DockProperty] = Dock.Left,
+            Child = new TextBlock
+            {
+                Text = n, FontSize = 12, FontWeight = FontWeight.Bold, Foreground = _onAccent,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
         var text = new StackPanel
         {
-            MaxWidth = 460,
             Children =
             {
-                new TextBlock { Text = title, FontSize = 14.5, FontWeight = FontWeight.SemiBold, Foreground = _text },
+                new TextBlock { Text = title, FontSize = 14.5, FontWeight = FontWeight.SemiBold, Foreground = _text, TextWrapping = TextWrapping.Wrap },
                 new TextBlock { Text = blurb, FontSize = 13, Foreground = _muted, TextWrapping = TextWrapping.Wrap },
             },
         };
-        return new StackPanel
-        {
-            Orientation = Orientation.Horizontal, Spacing = 13,
-            Children =
-            {
-                new Border
-                {
-                    Width = 24, Height = 24, CornerRadius = new CornerRadius(7), Background = _accent,
-                    VerticalAlignment = VerticalAlignment.Top,
-                    Child = new TextBlock { Text = n, FontSize = 12, FontWeight = FontWeight.Bold, Foreground = _onAccent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center },
-                },
-                text,
-            },
-        };
+        return new DockPanel { LastChildFill = true, Children = { number, text } };
     }
 
     private Control SummaryLine(string k, string v)
