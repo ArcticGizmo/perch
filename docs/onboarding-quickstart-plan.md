@@ -67,7 +67,7 @@ untouched. Nothing is destroyed — a feature left off just stays one search awa
 | Startup + trigger site | `src/Perch.App/App.axaml.cs` — `OnFrameworkInitializationCompleted()` (post-`_overlay.Show()`, mirror the `ShowChangelog` deferred block); replay guard |
 | Live-apply funnel | `App.ApplyEffectiveSettings()` → `ApplyDisplaySettings()` → `OverlaySettingsGates.Apply`; host syncs in `OpenSettings` `SettingsHooks` |
 | Window infra | `src/Perch.App/Windows/WindowHost.cs` `ShowOrFocus<T>`; `StatsWindow.cs` as the code-built template |
-| Tray menu | `App.SetUpTray(...)` — add a `NativeMenuItem("Run quick start…")` beside `settingsItem` |
+| Settings catalogue (re-run) | `SettingsCatalogView` / `SettingSurface` — a "Getting Started" section hosting the "Run quick start…" action |
 | Preview stack | `Views/PreviewPane`, `Rendering/SampleData`, `Services/OverlaySettingsGates` |
 | Theming | `src/Perch.App/Theming/Palette.cs` (`*Brush` singletons, colour accessors) |
 
@@ -87,8 +87,9 @@ The whole feature-set logic with zero UI. Highest test leverage; unblocks M1.
 - `Perch.Core/Data/OnboardingTiers.cs` — the catalog:
   - The **managed toggle universe**: the explicit list of boolean `SettingDescriptor` ids the wizard
     governs (the six logical groups from the mockup — *At a glance / Usage & machine / Alerts /
-    Dashboards & tools / Integrations / Fun & social*). Non-boolean config (Jira subdomain,
-    thresholds, quick-links list) is **not** managed.
+    Dashboards & tools / Integrations / Fun & social*). **Excluded:** non-boolean config (Jira
+    subdomain, thresholds, quick-links list); the always-openable dashboards (Stats/History/Flight —
+    decision 2, described only); and `overlay-mode` (decision 4, set by its own step).
   - Per-tier membership (which managed ids are on), enforced as supersets.
   - `IReadOnlyList<OnboardingGroup> Groups` for UI: group label + icon + ordered items (id, display
     name, the lowest tier each turns on in) — so M1 renders straight from Core, no duplicated lists.
@@ -133,11 +134,17 @@ The window itself, driven entirely off M0. Not yet triggered on startup.
 - `src/Perch.App/Windows/OnboardingWindow.cs` — `internal sealed class OnboardingWindow : Window`,
   code-built, `Background = Palette.SurfaceSunkenBrush`, centred, fixed comfortable size. Ctor takes
   `(AppSettings settings, ...preview deps)`.
-- Wizard chrome: left step rail (Welcome / The lay of the land / Choose your setup / You're all set),
-  footer Back / Next / Finish, progress dots — mirroring the mockup, styled from `Palette.*`.
+- Wizard chrome: left step rail (Welcome / The lay of the land / Where it lives / Choose your setup /
+  You're all set), footer Back / Next / Finish, progress dots — mirroring the mockup, styled from
+  `Palette.*`.
 - **Step 1 (layout tour):** a detached `OverlayCanvas` seeded from `SampleData`, with numbered
   callouts/legend describing header+bird, system+usage, quick links, session rows, movable sections.
-- **Step 2 (tier chooser + fine-tune):** three tier cards + a live grouped breakdown rendered from
+- **Step 2 (placement):** a two-card select — **Floating** (pre-selected) vs **Docked** — writing
+  `AppSettings.OverlayMode`. Gate Docked on `IEdgeReservation.IsSupported` via `PlatformServices`:
+  where unsupported, disable the card ("Windows only") or omit the step and keep Floating. Applied
+  through the same live funnel as the tier (Docked needs the edge-reservation host started — the
+  Settings `OverlayModeChanged` hook is the reference).
+- **Step 3 (tier chooser + fine-tune):** three tier cards + a live grouped breakdown rendered from
   `OnboardingTiers.Groups`. Each feature chip is a **toggle button** (`aria-pressed`) — clicking it
   adds/removes that id from the working set. Selecting a tier card reseeds the working set to that
   preset. On-items highlighted, off-items ghosted, per-group `n/total`, a running total. When the
@@ -170,24 +177,27 @@ Make it appear at the right time and apply completely.
   `if (!settings.FirstRunComplete) Dispatcher.UIThread.Post(ShowOnboarding, DispatcherPriority.Background);`
 - `App.ShowOnboarding()` via `WindowHost.ShowOrFocus(ref _onboardingWindow, ...)`; add
   `_onboardingWindow` field; close it in `CloseAuxWindows`.
-- **Tray item:** `NativeMenuItem("Run quick start…")` beside `settingsItem`, `Click → ShowOnboarding()`.
-- **Settings re-run entry:** a `SettingDescriptor`/action (Advanced surface) or a button on an
-  existing unique page that calls `ShowOnboarding()` — labelled "Run quick start…", keyword-searchable.
+- **Re-run entry (decision 3):** a single "Run quick start…" action in a **Getting Started** section
+  of Settings that calls `ShowOnboarding()`. If a new `SettingSurface.GettingStarted` /
+  catalogue section is the cleanest home, add it; otherwise a button on the nearest existing intro
+  page. Keyword-searchable ("setup", "onboarding", "quick start"). No tray item.
 - **Complete live-apply** on the window's `Applied` event: call `ApplyEffectiveSettings()` **and**
-  fire the host syncs a tier can flip — the same set the Settings `SettingsHooks` cover:
+  fire the host syncs a tier/placement can flip — the same set the Settings `SettingsHooks` cover:
   `MediaEnabledChanged`, `HypertreeEnabledChanged`, `HotkeysChanged`, `MetricsChanged`,
-  `_feedHost.SetActive`, `_todoHost.Start/Stop`, and the `_monitorHost` PR/Jira/GitStats/Stuck flags.
-  Factor a single `ApplyAllSettingsLive()` if it reduces duplication with `OpenSettings`.
+  `OverlayModeChanged` (placement step), `_feedHost.SetActive`, `_todoHost.Start/Stop`, and the
+  `_monitorHost` PR/Jira/GitStats/Stuck flags. Factor a single `ApplyAllSettingsLive()` if it reduces
+  duplication with `OpenSettings`.
 
 **Tests / verification**
 - Manual first-run: delete the profile `settings.json`, `dotnet run` → wizard appears once; finish →
   overlay reflects the tier live (no restart); relaunch → wizard does **not** reappear.
-- Tray "Run quick start…" and the Settings entry both reopen it; re-running a **lower** tier turns
-  the extras off live; re-running does not clobber unmanaged config (Jira subdomain, thresholds).
+- The Settings "Run quick start…" entry reopens it; re-running a **lower** tier turns the extras off
+  live; re-running does not clobber unmanaged config (Jira subdomain, thresholds); changing placement
+  re-docks/undocks live.
 - Replay (`perch replay`) does not trigger the wizard.
 
-**Acceptance:** clean first-run once, re-runnable from tray + Settings, tier changes apply live and
-completely, upgraders are not ambushed.
+**Acceptance:** clean first-run once, re-runnable from the Settings Getting Started section, tier and
+placement changes apply live and completely, upgraders are not ambushed.
 
 ### M3 — Polish, Quiet-mode interaction, a11y, docs
 
@@ -222,13 +232,22 @@ completely, upgraders are not ambushed.
 - **Mockup vs catalog drift.** The mockup's 11/33/51 are illustrative; the catalog is authoritative.
   Reconcile the displayed numbers in M1 and keep them derived from `OnboardingTiers.Count`.
 
-## Open questions (worth a decision before M0)
+## Decisions (settled — 2026-08-25)
 
-1. **Should Basic include sound chimes?** Mockup keeps Basic visual-only (calm); chimes start at
-   Intermediate. Confirm.
-2. **Are dashboards "managed"?** Stats/History/Flight windows are always openable; the mockup frames
-   them as "surfaced per tier." Decide whether the wizard actually toggles anything for them or just
-   describes them (leaning: describe only — they have no on/off setting).
-3. **Re-run entry placement** — dedicated Advanced descriptor vs a button on an existing page.
-4. **Docked overlay mode** in Kitchen sink is Windows-only (`Requires = EdgeReservation`); the tier
-   apply must respect `PlatformServices.Supports` so macOS doesn't try to enable it.
+1. **Basic is silent.** No sound chimes in Basic — desktop notification only for done/waiting. Chimes
+   start at Intermediate. A user who wants a chime can flip it on the fine-tune chips.
+2. **Dashboards are described, not managed.** Stats / History / Flight have no on/off setting and are
+   always openable; the wizard *mentions* them (layout tour + summary copy) but they are **not** in
+   the managed toggle universe and render as read-only notes, not clickable chips.
+3. **Re-run lives in a "Getting Started" section.** A single entry point — "Run quick start…" — in a
+   Getting Started area of Settings (see M2). No separate tray item / Advanced descriptor.
+4. **Placement is its own wizard step, before the tier chooser.** A dedicated select step —
+   **Floating vs Docked**, defaulting to **Floating** — sets `AppSettings.OverlayMode`. This removes
+   overlay-mode from the tier bundles entirely. Docked requires `PlatformFeature.EdgeReservation`
+   (Windows-only), so on heads without it the Docked option is disabled/omitted and Floating is the
+   silent default — no platform filtering needed inside the tier `Apply`.
+
+## Wizard steps (final)
+
+`0` Welcome · `1` The lay of the land · `2` **Where it lives** (Floating / Docked) · `3` Choose your
+setup (tiers + per-feature fine-tune) · `4` You're all set.
