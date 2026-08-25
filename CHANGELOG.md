@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- A guided Quick Start on first launch: a quick tour of the overlay, then pick how much to switch on — Basic, Intermediate, or the full kitchen sink
+- Fine-tune the starter set feature by feature before you commit, so you're not stuck with a preset
+- Choose up front whether the overlay floats or docks to a screen edge
+- Re-run the Quick Start any time from Settings → Getting started (it won't undo changes you've made since)
+
 ---
 
 ## [v0.3.66] - 2026-08-24

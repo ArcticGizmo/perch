@@ -1,7 +1,8 @@
 # Onboarding Quick Start — implementation plan
 
 **Branch:** `onboarding-quickstart`
-**Status:** planned (no code yet)
+**Status:** M0–M3 shipped as code (M0 fully tested; the wizard eyeballed via `render`; the first-run
+popup + live-apply are runtime-unverified — they need the interactive tray app).
 **Design mockup:** [`docs/onboarding-quickstart-mockup.html`](./onboarding-quickstart-mockup.html) — the interactive concept this plan implements.
 
 ## Problem

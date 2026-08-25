@@ -1899,7 +1899,7 @@ public partial class App : Application
     {
         var settings = _appSettings ??= AppSettings.Load();
         _onboardingWindow = WindowHost.ShowOrFocus(_onboardingWindow,
-            () => new OnboardingWindow(settings, DockedModeAvailable, ApplyAllSettingsLive),
+            () => new OnboardingWindow(settings, DockedModeAvailable, ApplyAllSettingsLive, QuietActive),
             () => _onboardingWindow = null);
     }
 

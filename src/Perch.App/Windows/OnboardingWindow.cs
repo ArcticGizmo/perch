@@ -34,6 +34,7 @@ internal sealed class OnboardingWindow : Window
 
     private readonly AppSettings _settings;
     private readonly bool _dockedSupported;
+    private readonly bool _quietActive;
     private readonly Action _onApplied;
 
     // Working state, kept across step navigation (the stage is rebuilt each GoTo).
@@ -54,6 +55,7 @@ internal sealed class OnboardingWindow : Window
     private TextBlock? _tallyText;
     private TextBlock? _breakdownLead;
     private Button? _resetBtn;
+    private TextBlock? _quietNote;
     private readonly List<(OnboardingTier Tier, Border Card)> _tierCards = new();
 
     // ── Palette-derived fills (a transient window; snapshotted at construction) ──
@@ -68,10 +70,11 @@ internal sealed class OnboardingWindow : Window
     private readonly IBrush _accentSoft;
     private readonly IBrush _onSoft;
 
-    public OnboardingWindow(AppSettings settings, bool dockedSupported, Action onApplied)
+    public OnboardingWindow(AppSettings settings, bool dockedSupported, Action onApplied, bool quietActive = false)
     {
         _settings = settings;
         _dockedSupported = dockedSupported;
+        _quietActive = quietActive;
         _onApplied = onApplied;
 
         _accentSoft = new SolidColorBrush(Soft(Palette.Accent, 40));
@@ -234,6 +237,7 @@ internal sealed class OnboardingWindow : Window
         _backBtn.Click += (_, _) => GoTo(_step - 1);
 
         StylePrimary(_nextBtn);
+        _nextBtn.IsDefault = true;   // Enter advances / finishes
         _nextBtn.Click += (_, _) => OnNext();
 
         var right = new StackPanel
@@ -307,7 +311,17 @@ internal sealed class OnboardingWindow : Window
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
-        if (e.Key == Key.Escape) { Close(); e.Handled = true; }
+        // Left/Right page through the wizard; Escape closes. Enter is handled by the default Next button.
+        // Guarded on !Handled so a focused control (a button, a future focusable chip) wins first.
+        if (!e.Handled)
+        {
+            switch (e.Key)
+            {
+                case Key.Escape: Close(); e.Handled = true; break;
+                case Key.Right:  GoTo(_step + 1); e.Handled = true; break;
+                case Key.Left:   GoTo(_step - 1); e.Handled = true; break;
+            }
+        }
         base.OnKeyDown(e);
     }
 
@@ -442,6 +456,14 @@ internal sealed class OnboardingWindow : Window
         foreach (var tier in OnboardingTiers.AllTiers)
             cards.Children.Add(TierCard(tier));
         panel.Children.Add(cards);
+
+        _quietNote = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap, FontSize = 12.5, Margin = new Thickness(0, 2, 0, 0),
+            Foreground = new SolidColorBrush(Palette.Yellow), IsVisible = false,
+            Text = "🌙  Quiet mode is on right now, so the playful features you pick here will switch on when it ends.",
+        };
+        panel.Children.Add(_quietNote);
 
         // Breakdown header (lead + tally + reset).
         _breakdownLead = new TextBlock { FontSize = 15, FontWeight = FontWeight.SemiBold, Foreground = _text, VerticalAlignment = VerticalAlignment.Center };
@@ -598,6 +620,8 @@ internal sealed class OnboardingWindow : Window
             _tallyText.Text = $"{_enabled.Count} of {OnboardingTiers.Managed.Count} features";
         if (_resetBtn != null)
             _resetBtn.IsVisible = matched is null;
+        if (_quietNote != null)
+            _quietNote.IsVisible = _quietActive && _enabled.Any(id => SettingsRegistry.ById(id)?.Playful == true);
         if (_step == 3)
             _nextBtn.Content = NextLabel();
     }

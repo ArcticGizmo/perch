@@ -688,6 +688,25 @@ internal static class HeadlessRenderer
             w.Close();
         }
 
+        // Quiet-mode variant of the tier chooser: Kitchen sink pre-selected (so playful features are on) with
+        // Quiet active, so the "playful features switch on when it ends" note renders.
+        {
+            var wq = new Windows.OnboardingWindow(
+                new AppSettings { OnboardingTierChosen = OnboardingTier.KitchenSink },
+                dockedSupported: true, static () => { }, quietActive: true) { Width = 940, Height = 660 };
+            wq.ShowStepForRender(3);
+            wq.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = wq.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "onboarding_quiet_1x.png"));
+                frame.Save(fs);
+            }
+            wq.Close();
+        }
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }
