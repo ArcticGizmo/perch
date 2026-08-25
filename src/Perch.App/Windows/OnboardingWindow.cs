@@ -389,12 +389,14 @@ internal sealed class OnboardingWindow : Window
 
     private Control BuildLayoutTour()
     {
-        var root = new StackPanel { Spacing = 14, MaxWidth = 680, HorizontalAlignment = HorizontalAlignment.Left };
-        root.Children.Add(Eyebrow("THE LAY OF THE LAND"));
-        root.Children.Add(H1("This little panel is your overlay."));
-        root.Children.Add(Lede(
+        // Left column: the title, intro and the numbered points. Right column: the live preview, top-aligned
+        // so it uses the full height beside the title rather than being pushed below it.
+        var left = new StackPanel { Spacing = 14 };
+        left.Children.Add(Eyebrow("THE LAY OF THE LAND"));
+        left.Children.Add(H1("This little panel is your overlay."));
+        left.Children.Add(Lede(
             "It floats at the edge of your screen (or docks to a column) whenever a session is running. " +
-            "Here's what you'll find on it — shown live on the right:"));
+            "Here's what you'll find on it — shown live to the right:"));
 
         var points = new StackPanel { Spacing = 12, VerticalAlignment = VerticalAlignment.Top };
         points.Children.Add(TourRow("1", "Header & the bird",
@@ -407,48 +409,53 @@ internal sealed class OnboardingWindow : Window
             "One row per live session: a status dot, the project, and badges like permission mode or a waiting timer."));
         points.Children.Add(TourRow("5", "Movable sections",
             "Todos, media and more stack in an order you choose — rearrange them in Settings."));
+        left.Children.Add(points);
 
-        var previewCol = new StackPanel
+        var right = new StackPanel
         {
             Spacing = 8, Width = 272, VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(20, 2, 0, 0),
-            [DockPanel.DockProperty] = Dock.Right,
+            Margin = new Thickness(24, 2, 0, 0), [DockPanel.DockProperty] = Dock.Right,
         };
-        previewCol.Children.Add(new TextBlock
+        right.Children.Add(new TextBlock
         {
             Text = "LIVE PREVIEW", FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = _muted,
             Margin = new Thickness(2, 0, 0, 0),
         });
-        previewCol.Children.Add(TourPreview());
+        right.Children.Add(TourPreview());
 
-        var row = new DockPanel { LastChildFill = true, Children = { previewCol, points } };
-        root.Children.Add(row);
-        return root;
+        return new DockPanel
+        {
+            LastChildFill = true, MaxWidth = 680, HorizontalAlignment = HorizontalAlignment.Left,
+            Children = { right, left },
+        };
     }
 
     // A miniature, display-only overlay showing the features the tour points call out — the same
-    // OverlayCanvas + SampleData + OverlaySettingsGates path the Settings live preview uses (PreviewPane),
-    // seeded here so quick links and the movable sections the tour mentions are present.
+    // OverlayCanvas + OverlaySettingsGates path the Settings live preview uses. Seeded with a small, clean set
+    // of sessions (no stuck/error/API-error/autonomous rows) and without CPU/RAM or the todo strip, so it
+    // reads as an at-a-glance example rather than a stress test.
     private Control TourPreview()
     {
+        var now = DateTime.Now;
         var canvas = new OverlayCanvas();
-        canvas.Update(SampleData.Sessions());
+        canvas.Update(
+        [
+            new ClaudeSession("1234", "s1", SessionStatus.Running, @"C:\src\perch", "perch", now,
+                Activity: "Editing OverlayForm.cs", Mode: PermissionMode.AcceptEdits),
+            new ClaudeSession("5678", "s2", SessionStatus.AwaitingInput, @"C:\src\api", "api", now),
+            new ClaudeSession("5566", "s7", SessionStatus.Running, @"C:\src\thoughts", "claude-thoughts", now),
+        ]);
         canvas.UpdateUsage(SampleData.Usage());
-        canvas.UpdateSystemMetrics(SampleData.SystemMetrics());
-        canvas.UpdateSessionMetrics(SampleData.SessionMetrics());
-        canvas.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
-        canvas.UpdateMedia(SampleData.Media());
+        canvas.UpdateMedia(SampleData.Media());   // one movable-section example (the now-playing strip)
         canvas.SetQuickLinks(
             [new QuickLink { Name = "GitHub" }, new QuickLink { Name = "Jira" }, new QuickLink { Name = "Slack" }],
             [null, null, null]);
 
-        // Turn on exactly the tour's features (session-row badges are on by default).
+        // Turn on just the tour's features — no system metrics, no todo strip. Session-row badges are on by default.
         OverlaySettingsGates.Apply(canvas, new AppSettings
         {
-            ShowSystemMetrics = true,
             ShowUsage = true,
             ShowExpectedUsageRate = true,
-            ShowTodos = true,
             ShowMediaController = true,
         });
         canvas.IsHitTestVisible = false;   // a picture, not a control
