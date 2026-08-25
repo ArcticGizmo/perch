@@ -557,6 +557,20 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? LastSeenVersion { get; set; }
 
+    // First-run onboarding (the guided Quick Start). FirstRunComplete flips true once the wizard has been
+    // finished (or dismissed) — the tray only auto-shows it while this is false, so it appears on a genuinely
+    // fresh install and never again. An install that predates onboarding (a settings.json with no
+    // FirstRunComplete key) is seeded true by MigrateFirstRun so an update doesn't ambush a returning user
+    // with it. Not a Settings-window control (re-run it from the Getting Started section instead). See
+    // docs/onboarding-quickstart-plan.md.
+    public bool FirstRunComplete { get; set; }
+
+    // The starter tier last chosen in the Quick Start, or null when the user hand-customised the set (or has
+    // never run it). Used only to pre-select a tier when the wizard is re-run. Persisted by name (see the enum
+    // converter). Not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OnboardingTier? OnboardingTierChosen { get; set; }
+
     // Legacy quick-link switches (pre-configurable links). Kept only so an older settings file can be
     // migrated into QuickLinks on load; nullable to tell "absent" from "false", and cleared once
     // folded in so they're not re-written. See MigrateQuickLinks.
@@ -571,17 +585,40 @@ internal sealed class AppSettings
         {
             if (File.Exists(FilePath))
             {
-                var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new();
+                var json = File.ReadAllText(FilePath);
+                var s = JsonSerializer.Deserialize<AppSettings>(json) ?? new();
                 s.MigrateQuickLinks();
                 s.MigrateStartMode();
+                s.MigrateFirstRun(json);
                 return s;
             }
         }
         catch { }
+        // No settings file — a genuinely fresh install. FirstRunComplete stays false so the Quick Start runs.
         var fresh = new AppSettings();
         fresh.MigrateQuickLinks();
         fresh.MigrateStartMode();
         return fresh;
+    }
+
+    // Seeds FirstRunComplete for a settings file written before the onboarding Quick Start existed: such a
+    // file has no "FirstRunComplete" key, and its owner has clearly used Perch before, so mark onboarding done
+    // rather than ambushing them with the first-run wizard after an update. A file already written by this
+    // version carries the key (even when false — a fresh install that quit mid-onboarding) and is left as-is,
+    // so the wizard still reappears for someone who hasn't finished it. Keyed off raw key presence, not the
+    // deserialized value, precisely so those two "false" cases can be told apart. Best-effort: unparseable
+    // JSON leaves the default.
+    internal void MigrateFirstRun(string? rawJson)
+    {
+        if (rawJson == null) return;
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                !doc.RootElement.TryGetProperty(nameof(FirstRunComplete), out _))
+                FirstRunComplete = true;
+        }
+        catch { }
     }
 
     // Folds the legacy AutoStartOnFirstSession switch into StartMode: it was on -> "on session start",

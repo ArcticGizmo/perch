@@ -40,6 +40,11 @@ public class SettingsRegistryTests
         nameof(AppSettings.CustomThemes),
         nameof(AppSettings.PendingUpdateVersion),
         nameof(AppSettings.LastSeenVersion),
+        // First-run onboarding bookkeeping: whether the Quick Start has been completed, and the last starter
+        // tier picked. Not user-facing catalogue controls (the wizard is re-run from the Getting Started
+        // section). See docs/onboarding-quickstart-plan.md.
+        nameof(AppSettings.FirstRunComplete),
+        nameof(AppSettings.OnboardingTierChosen),
         nameof(AppSettings.AutoStartOnFirstSession),
         nameof(AppSettings.ShowGitKraken),
         nameof(AppSettings.ShowSlack),

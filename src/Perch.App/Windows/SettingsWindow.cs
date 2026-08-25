@@ -101,6 +101,8 @@ internal sealed class SettingsHooks
     public Action? OpenStats;
     public Action? OpenFlightPath;
     public Action? OpenAchievements;
+    // Re-run the first-run guided Quick Start (from the Getting Started page). See docs/onboarding-quickstart-plan.md.
+    public Action? OpenQuickStart;
 
     /// <summary>Open the drag-to-place initial-placement editor (also on the overlay header menu).</summary>
     public Action? OpenPlacements;
@@ -931,6 +933,19 @@ internal sealed class SettingsWindow : Window
     private void BuildGettingStartedPage(StackPanel page)
     {
         BuildBanner(page);
+
+        page.Children.Add(SettingsUi.SectionTitle("Quick start"));
+        page.Children.Add(SettingsUi.BodyText(
+            "New here, or want to start fresh? The guided Quick Start walks you through the overlay and lets " +
+            "you pick a starting set of features — Basic, Intermediate, or the full kitchen sink — then " +
+            "fine-tune it. Re-running it won't undo changes you've made since."));
+        var qsRow = SettingsUi.ButtonRow();
+        var qsBtn = SettingsUi.FlatButton("Run quick start…");
+        qsBtn.Click += (_, _) => _hooks.OpenQuickStart?.Invoke();
+        qsRow.Children.Add(qsBtn);
+        page.Children.Add(qsRow);
+
+        page.Children.Add(SettingsUi.Separator());
 
         page.Children.Add(SettingsUi.SectionTitle("What it does"));
         page.Children.Add(SettingsUi.BodyText(

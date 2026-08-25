@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.67] - 2026-08-25
+
+- Guided Quick Start on first launch — a tour of the overlay, then pick a starting feature set
+- Basic, Intermediate, or the full kitchen sink (fine-tune any switch before committing)
+- The tour shows a live overlay preview, so the dot-points aren't just words
+- Choose up front whether the overlay floats or docks to a screen edge (Windows)
+- Re-run it any time from Settings → Getting started; your later tweaks survive
+
+---
+
 ## [v0.3.66] - 2026-08-24
 
 - No more premature "done" when a background agent finishes — Perch waits for the session to actually stop

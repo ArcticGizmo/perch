@@ -666,6 +666,66 @@ internal static class HeadlessRenderer
         // overlay preview docked on the right, at a representative window size.
         RenderControl(SampleShellPage(), Path.Combine(outDir, "settings_shell_1x.png"), 96);
 
+        // First-run onboarding Quick Start (M1): the five wizard steps (Welcome, layout tour, placement,
+        // tier chooser, summary). Templated controls (Button/ContentControl) only get their styles inside a
+        // shown window, so these are captured via CaptureRenderedFrame rather than a detached bitmap.
+        for (int s = 0; s <= 4; s++)
+        {
+            var w = new Windows.OnboardingWindow(new AppSettings(), dockedSupported: true, static () => { })
+            {
+                Width = 940, Height = 660,
+            };
+            w.ShowStepForRender(s);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, $"onboarding_{s}_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
+        // Quiet-mode variant of the tier chooser: Kitchen sink pre-selected (so playful features are on) with
+        // Quiet active, so the "playful features switch on when it ends" note renders.
+        {
+            var wq = new Windows.OnboardingWindow(
+                new AppSettings { OnboardingTierChosen = OnboardingTier.KitchenSink },
+                dockedSupported: true, static () => { }, quietActive: true) { Width = 940, Height = 660 };
+            wq.ShowStepForRender(3);
+            wq.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = wq.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "onboarding_quiet_1x.png"));
+                frame.Save(fs);
+            }
+            wq.Close();
+        }
+
+        // macOS variant (no edge reservation): the placement step is dropped, so the rail shows four steps.
+        {
+            var wm = new Windows.OnboardingWindow(new AppSettings(), dockedSupported: false, static () => { })
+            {
+                Width = 940, Height = 660,
+            };
+            wm.ShowStepForRender(0);
+            wm.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = wm.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "onboarding_mac_1x.png"));
+                frame.Save(fs);
+            }
+            wm.Close();
+        }
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }

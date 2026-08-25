@@ -42,6 +42,7 @@ public partial class App : Application
     private GitKrakenLauncher? _gitKrakenLauncher;
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
+    private OnboardingWindow? _onboardingWindow;
     private StatsWindow? _statsWindow;
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
@@ -412,6 +413,12 @@ public partial class App : Application
             if (_pendingChangelog is { Count: > 0 } changelog)
                 Dispatcher.UIThread.Post(() => ShowChangelog(changelog), DispatcherPriority.Background);
 
+            // First launch on a fresh install: pop the guided Quick Start once. Seeded true for upgraders by
+            // MigrateFirstRun, so it never ambushes a returning user; skipped under replay (which must not
+            // mutate settings). See docs/onboarding-quickstart-plan.md (M2).
+            if (!Services.Replay.ReplaySession.IsActive && !settings.FirstRunComplete)
+                Dispatcher.UIThread.Post(ShowOnboarding, DispatcherPriority.Background);
+
             _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: settings.IncludeSubprocessMetrics);
             _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
 
@@ -426,7 +433,10 @@ public partial class App : Application
                     _replayController, Perch.Data.Replay.MarkerExtractor.Extract(replay.Recording));
                 _replayWindow.Show();
             }
-            CheckAchievements(force: true); // background all-time scan → celebrate anything unlocked while away
+            // Background all-time scan → celebrate anything unlocked while away. On a genuinely fresh install
+            // (the Quick Start is about to show) record silently instead, so pre-existing history doesn't bury
+            // the wizard in cards.
+            CheckAchievements(force: true, present: settings.FirstRunComplete);
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
             if (settings.ShowServiceStatus) _statusHost.Start(); // initial fetch (polls every 2 min thereafter)
             if (settings.ShowMediaController) _mediaHost.Start(); // begin listening to the system media session
@@ -528,6 +538,7 @@ public partial class App : Application
     private void CloseAuxWindows()
     {
         _settings?.Close();
+        _onboardingWindow?.Close();
         _historyWindow?.Close();
         _treeWindow?.Close();
         _markdownWindow?.CloseWithoutPrompt();
@@ -943,7 +954,11 @@ public partial class App : Application
     // Evaluates lifetime achievement badges off the UI thread and toasts any newly-unlocked ones (once,
     // via the store). The all-time scan is the slowest stats path, so this is throttled (force bypasses it
     // for the startup check) and single-flighted so overlapping finishes can't stack scans.
-    private void CheckAchievements(bool force)
+    // present:false runs the all-time Sync (so newly-crossed levels are still *recorded*) but skips the
+    // celebration — used on the very first launch so a fresh install with prior Claude Code history doesn't
+    // throw a stack of achievement cards over the Quick Start. Because the levels are recorded, they won't
+    // re-celebrate on a later check; only genuinely new unlocks pop from then on.
+    private void CheckAchievements(bool force, bool present = true)
     {
         if (_achievements is not { } svc || _appSettings is not { } settings || _achievementCheckInFlight)
             return;
@@ -964,7 +979,7 @@ public partial class App : Application
             _achievementCheckInFlight = false;
             if (!t.IsCompletedSuccessfully || t.Result.Count == 0)
                 return;
-            PresentAchievementUnlocks(t.Result);
+            if (present) PresentAchievementUnlocks(t.Result);   // else: recorded silently (first-run load)
         }));
     }
 
@@ -1884,6 +1899,38 @@ public partial class App : Application
     // Lazily create-or-focus the single Settings window instance. The window edits the shared
     // AppSettings and applies changes live through the hooks below — the Avalonia counterpart of the
     // WinForms OverlayApplicationContext's SettingsForm wiring.
+    // Show the first-run guided Quick Start (also re-runnable from Settings → Getting Started). Reused via
+    // WindowHost like the other top-level windows; on Finish it persists the chosen set and calls
+    // ApplyAllSettingsLive to bring it up without a relaunch. See docs/onboarding-quickstart-plan.md.
+    private void ShowOnboarding()
+    {
+        var settings = _appSettings ??= AppSettings.Load();
+        _onboardingWindow = WindowHost.ShowOrFocus(_onboardingWindow,
+            () => new OnboardingWindow(settings, DockedModeAvailable, ApplyAllSettingsLive, QuietActive),
+            () => _onboardingWindow = null);
+    }
+
+    // Reconcile every host a tier / placement change can flip, then push the display gates live — the same
+    // set the Settings window's SettingsHooks cover, so applying an onboarding tier brings features alive
+    // without a relaunch (persistence already happened in the wizard). See docs/onboarding-quickstart-plan.md.
+    private void ApplyAllSettingsLive()
+    {
+        if (_appSettings is not { } s) return;
+
+        if (s.ShowUsage) _usageHost?.Start(); else _usageHost?.Stop();
+        if (s.ShowServiceStatus) _statusHost?.Start(); else _statusHost?.Stop();
+        if (s.ShowMediaController) _mediaHost?.Start(); else _mediaHost?.Stop();
+        if (s.HypertreeEnabled) _hypertreeHost?.Start(); else _hypertreeHost?.Stop();
+        if (s.ShowDaemonProcesses) _daemonHost?.Start(); else _daemonHost?.Stop();
+        _metricsHost?.Configure(s.ShowSystemMetrics, s.ShowSessionMetrics, s.IncludeSubprocessMetrics);
+        SyncMicMonitor();
+        ReloadQuickLinks(s);
+        SetOverlayMode();   // no-op where docked isn't available; placement is Floating there anyway
+
+        // Display gates + data-layer toggles (feed/todo/PR/Jira/stuck/git churn), through the Quiet resolver.
+        ApplyEffectiveSettings();
+    }
+
     private void OpenSettings()
     {
         if (_settings is { } w && w.IsVisible)
@@ -1927,6 +1974,7 @@ public partial class App : Application
             OpenStats = OpenStats,
             OpenFlightPath = OpenFlightPath,
             OpenAchievements = OpenAchievements,
+            OpenQuickStart = ShowOnboarding,
             OpenPlacements = OpenPlacementEditor,
             OpenSocialCompose = OpenCompose,
             OpenSocialFriends = OpenFriends,

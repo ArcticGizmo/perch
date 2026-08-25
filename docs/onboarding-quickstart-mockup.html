@@ -1,0 +1,923 @@
+<title>Perch Quick Start</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,600&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<style>
+  /* ---------- Tokens: light (bare :root) ---------- */
+  :root{
+    --bg:#e4e9e7;
+    --stage-glow:#d3ddda;
+    --frame:#f6f8f6;
+    --surface:#ffffff;
+    --surface-2:#eef2f0;
+    --surface-3:#e7ecea;
+    --line:#d4ddd9;
+    --line-strong:#c2ccc8;
+    --ink:#152220;
+    --muted:#4f605c;
+    --faint:#7e8d89;
+
+    --accent:#f2a950;        /* feather amber — fills / selected */
+    --accent-strong:#9d5f10; /* amber as readable text on light */
+    --accent-ink:#241606;    /* text on amber fill */
+    --accent-soft:rgba(242,169,80,.16);
+    --accent-line:rgba(157,95,16,.32);
+
+    --on:#1f7a6c;            /* sage-teal — "enabled" text on light */
+    --on-fill:#58b6a8;
+    --on-soft:rgba(88,182,168,.16);
+    --on-line:rgba(31,122,108,.30);
+
+    --good:#2f8f68;
+    --warn:#c98a1e;
+    --crit:#c85149;
+
+    --shadow:0 24px 60px -28px rgba(20,40,38,.45), 0 2px 6px -2px rgba(20,40,38,.18);
+    --radius:16px;
+    --maxw:1000px;
+  }
+  /* ---------- Tokens: dark via system default ---------- */
+  :root:not([data-theme="light"]){
+    @media (prefers-color-scheme: dark){
+      --bg:#0b1114;
+      --stage-glow:#131e22;
+      --frame:#111a1e;
+      --surface:#152025;
+      --surface-2:#1a262b;
+      --surface-3:#213036;
+      --line:#26353b;
+      --line-strong:#33454c;
+      --ink:#e9f0ee;
+      --muted:#95a6a6;
+      --faint:#63767a;
+
+      --accent:#f2a950;
+      --accent-strong:#f4b667;
+      --accent-ink:#1c1305;
+      --accent-soft:rgba(242,169,80,.14);
+      --accent-line:rgba(242,169,80,.34);
+
+      --on:#77cbbd;
+      --on-fill:#58b6a8;
+      --on-soft:rgba(88,182,168,.13);
+      --on-line:rgba(119,203,189,.28);
+
+      --good:#5fb98a;
+      --warn:#e0a24a;
+      --crit:#e0685f;
+
+      --shadow:0 30px 70px -30px rgba(0,0,0,.7), 0 2px 8px -2px rgba(0,0,0,.5);
+    }
+  }
+  /* ---------- Tokens: dark via explicit toggle ---------- */
+  :root[data-theme="dark"]{
+    --bg:#0b1114;
+    --stage-glow:#131e22;
+    --frame:#111a1e;
+    --surface:#152025;
+    --surface-2:#1a262b;
+    --surface-3:#213036;
+    --line:#26353b;
+    --line-strong:#33454c;
+    --ink:#e9f0ee;
+    --muted:#95a6a6;
+    --faint:#63767a;
+    --accent:#f2a950;
+    --accent-strong:#f4b667;
+    --accent-ink:#1c1305;
+    --accent-soft:rgba(242,169,80,.14);
+    --accent-line:rgba(242,169,80,.34);
+    --on:#77cbbd;
+    --on-fill:#58b6a8;
+    --on-soft:rgba(88,182,168,.13);
+    --on-line:rgba(119,203,189,.28);
+    --good:#5fb98a;
+    --warn:#e0a24a;
+    --crit:#e0685f;
+    --shadow:0 30px 70px -30px rgba(0,0,0,.7), 0 2px 8px -2px rgba(0,0,0,.5);
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:
+      radial-gradient(1100px 620px at 78% -8%, var(--stage-glow), transparent 60%),
+      radial-gradient(900px 520px at 8% 108%, var(--stage-glow), transparent 55%),
+      var(--bg);
+    color:var(--ink);
+    font-family:"Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+  }
+
+  .stage{max-width:var(--maxw);margin:0 auto;padding:34px 22px 60px}
+
+  /* ---------- Toolbar above the frame ---------- */
+  .stagebar{display:flex;align-items:center;gap:12px;margin:0 4px 18px}
+  .wordmark{display:flex;align-items:center;gap:10px;font-weight:600}
+  .wordmark .bird{width:26px;height:26px;flex:none}
+  .wordmark b{font-family:"Fraunces",serif;font-weight:600;font-size:19px;letter-spacing:.2px}
+  .stagebar .spacer{flex:1}
+  .pill-btn{
+    font:inherit;font-size:12.5px;font-weight:600;color:var(--muted);
+    background:var(--surface);border:1px solid var(--line);border-radius:999px;
+    padding:7px 13px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
+    transition:border-color .15s, color .15s, background .15s;
+  }
+  .pill-btn:hover{color:var(--ink);border-color:var(--line-strong)}
+  .pill-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .mock-note{font-size:12px;color:var(--faint);font-family:"JetBrains Mono",monospace}
+
+  /* ---------- The app-window frame ---------- */
+  .frame{
+    background:var(--frame);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    box-shadow:var(--shadow);
+    overflow:hidden;
+  }
+  .titlebar{
+    display:flex;align-items:center;gap:10px;
+    padding:12px 16px;
+    background:var(--surface-2);
+    border-bottom:1px solid var(--line);
+  }
+  .lights{display:flex;gap:7px}
+  .lights i{width:11px;height:11px;border-radius:50%;display:block;opacity:.85}
+  .lights i:nth-child(1){background:#e0685f}
+  .lights i:nth-child(2){background:#e0a24a}
+  .lights i:nth-child(3){background:#5fb98a}
+  .titlebar .tt{font-size:13px;color:var(--muted);font-weight:600;margin-left:6px}
+  .titlebar .step-count{margin-left:auto;font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--faint)}
+
+  .body{display:grid;grid-template-columns:246px 1fr;min-height:560px}
+
+  /* ---------- Left rail (stepper) ---------- */
+  .rail{
+    border-right:1px solid var(--line);
+    background:linear-gradient(180deg, var(--surface-2), var(--frame) 70%);
+    padding:26px 18px;
+  }
+  .rail .kicker{
+    font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--faint);margin:0 6px 16px;
+  }
+  .steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+  .steps li{margin:0}
+  .steps button{
+    width:100%;text-align:left;font:inherit;cursor:pointer;
+    display:flex;align-items:flex-start;gap:12px;
+    padding:11px 12px;border-radius:11px;border:1px solid transparent;background:none;color:var(--muted);
+    transition:background .15s,color .15s,border-color .15s;
+  }
+  .steps button:hover{background:var(--surface);color:var(--ink)}
+  .steps button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .steps .dot{
+    flex:none;width:24px;height:24px;border-radius:50%;
+    display:grid;place-items:center;font-size:12px;font-weight:700;
+    font-family:"JetBrains Mono",monospace;
+    background:var(--surface);border:1px solid var(--line-strong);color:var(--faint);
+    transition:all .18s;
+  }
+  .steps .txt b{display:block;font-size:14px;font-weight:600;color:inherit;line-height:1.25}
+  .steps .txt span{display:block;font-size:11.5px;color:var(--faint);margin-top:2px}
+  .steps li.active button{background:var(--surface);color:var(--ink);border-color:var(--line)}
+  .steps li.active .dot{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+  .steps li.done .dot{background:var(--on-soft);border-color:var(--on-line);color:var(--on)}
+  .rail .roost{margin-top:26px;padding:14px;border:1px dashed var(--line-strong);border-radius:12px;color:var(--muted);font-size:12px}
+  .rail .roost b{color:var(--ink);font-weight:600}
+
+  /* ---------- Main panel ---------- */
+  .stepwrap{position:relative;padding:34px 38px 30px;min-width:0}
+  .panel{display:none;animation:rise .32s ease both}
+  .panel.show{display:block}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+  .eyebrow{
+    font-family:"JetBrains Mono",monospace;font-size:11.5px;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--accent-strong);margin:0 0 10px;font-weight:500;
+  }
+  h1{
+    font-family:"Fraunces",serif;font-weight:600;
+    font-size:clamp(28px,4vw,40px);line-height:1.04;margin:0 0 12px;letter-spacing:-.01em;
+    text-wrap:balance;
+  }
+  h1 .soft{color:var(--accent-strong)}
+  .lede{font-size:16px;color:var(--muted);max-width:56ch;margin:0 0 22px}
+  .lede.tight{margin-bottom:14px}
+
+  /* ---------- Welcome step ---------- */
+  .welcome-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:28px;align-items:center}
+  .facts{list-style:none;margin:18px 0 0;padding:0;display:flex;flex-direction:column;gap:12px}
+  .facts li{display:flex;gap:12px;align-items:flex-start;font-size:14.5px}
+  .facts .g{flex:none;width:30px;height:30px;border-radius:9px;background:var(--accent-soft);display:grid;place-items:center}
+  .facts b{font-weight:600}
+  .facts span{color:var(--muted)}
+  .roost-card{
+    background:radial-gradient(120% 120% at 70% 10%, var(--surface-3), var(--surface));
+    border:1px solid var(--line);border-radius:18px;padding:26px;text-align:center;
+  }
+  .roost-card .big-bird{width:120px;height:120px;margin:0 auto 6px;display:block}
+  .roost-card p{margin:6px 0 0;color:var(--muted);font-size:13.5px}
+  .roost-card .time{font-family:"JetBrains Mono",monospace;color:var(--faint);font-size:12px;margin-top:14px}
+
+  /* ---------- Layout tour ---------- */
+  .tour{display:grid;grid-template-columns:340px 1fr;gap:30px;align-items:start}
+  .overlay-mock{
+    background:var(--surface);border:1px solid var(--line-strong);border-radius:14px;
+    padding:12px;box-shadow:var(--shadow);font-size:12px;
+  }
+  .om-row{border-radius:9px;padding:9px 10px;transition:box-shadow .2s, background .2s;position:relative}
+  .om-row + .om-row{margin-top:7px}
+  .om-row.hl{background:var(--accent-soft);box-shadow:0 0 0 1.5px var(--accent-line)}
+  .om-head{display:flex;align-items:center;gap:8px;background:var(--surface-2)}
+  .om-head .b{width:20px;height:20px;flex:none}
+  .om-head b{font-family:"Fraunces",serif;font-size:14px}
+  .om-head .menu{margin-left:auto;color:var(--faint);letter-spacing:2px}
+  .om-metrics{display:flex;gap:10px;color:var(--muted)}
+  .om-metrics .m{flex:1;background:var(--surface-2);border-radius:6px;padding:5px 8px}
+  .om-metrics .m b{display:block;color:var(--ink);font-family:"JetBrains Mono",monospace;font-size:12px}
+  .om-metrics .m span{font-size:10px}
+  .bar{height:9px;border-radius:5px;background:var(--surface-3);overflow:hidden;margin-top:6px}
+  .bar i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,var(--on-fill),var(--accent))}
+  .om-usage .lbl{display:flex;justify-content:space-between;color:var(--muted);font-size:10.5px}
+  .om-links{display:flex;gap:8px}
+  .om-links .lnk{width:30px;height:30px;border-radius:8px;background:var(--surface-2);display:grid;place-items:center;font-size:14px}
+  .om-sessions{background:var(--surface-2)}
+  .sess{display:flex;align-items:center;gap:8px;padding:5px 2px}
+  .sess + .sess{border-top:1px solid var(--line)}
+  .sdot{width:8px;height:8px;border-radius:50%;flex:none}
+  .sess .nm{font-weight:600;color:var(--ink)}
+  .sess .badge{margin-left:auto;font-family:"JetBrains Mono",monospace;font-size:10px;padding:2px 6px;border-radius:5px;background:var(--accent-soft);color:var(--accent-strong)}
+  .sess .badge.on{background:var(--on-soft);color:var(--on)}
+
+  .tour-legend{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+  .tour-legend li{margin:0}
+  .tour-legend button{
+    width:100%;text-align:left;font:inherit;cursor:pointer;background:none;border:1px solid transparent;
+    border-radius:11px;padding:13px 14px;color:var(--ink);display:flex;gap:13px;align-items:flex-start;
+    transition:background .15s,border-color .15s;
+  }
+  .tour-legend button:hover,.tour-legend button:focus-visible{background:var(--surface);border-color:var(--line);outline:none}
+  .tour-legend .n{
+    flex:none;width:24px;height:24px;border-radius:7px;background:var(--accent);color:var(--accent-ink);
+    font-family:"JetBrains Mono",monospace;font-weight:700;font-size:12px;display:grid;place-items:center;margin-top:1px;
+  }
+  .tour-legend b{font-weight:600;font-size:14.5px;display:block}
+  .tour-legend span{color:var(--muted);font-size:13px}
+
+  /* ---------- Tier chooser ---------- */
+  .tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:6px 0 22px}
+  .tier{
+    position:relative;text-align:left;cursor:pointer;font:inherit;color:var(--ink);
+    background:var(--surface);border:1.5px solid var(--line);border-radius:15px;padding:18px 17px 16px;
+    transition:border-color .18s, background .18s, transform .18s, box-shadow .18s;
+  }
+  .tier:hover{transform:translateY(-2px);border-color:var(--line-strong)}
+  .tier:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .tier.sel{border-color:var(--accent);background:var(--accent-soft);box-shadow:0 12px 30px -18px rgba(242,169,80,.6)}
+  .tier .glyph{font-size:22px;line-height:1}
+  .tier h3{font-family:"Fraunces",serif;font-weight:600;font-size:20px;margin:10px 0 3px}
+  .tier .who{color:var(--muted);font-size:12.5px;min-height:34px}
+  .tier .count{
+    margin-top:12px;font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--muted);
+    display:flex;align-items:baseline;gap:6px;
+  }
+  .tier .count b{font-size:22px;color:var(--accent-strong);font-weight:500;font-family:"JetBrains Mono",monospace}
+  .tier.sel .count b{color:var(--accent-strong)}
+  .tier .check{
+    position:absolute;top:14px;right:14px;width:20px;height:20px;border-radius:50%;
+    background:var(--accent);color:var(--accent-ink);display:none;place-items:center;font-size:12px;font-weight:800;
+  }
+  .tier.sel .check{display:grid}
+
+  /* ---------- Placement select ---------- */
+  .places{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px;max-width:640px}
+  .place{
+    position:relative;text-align:left;cursor:pointer;font:inherit;color:var(--ink);
+    background:var(--surface);border:1.5px solid var(--line);border-radius:15px;padding:16px;
+    transition:border-color .18s, background .18s, transform .18s, box-shadow .18s;
+  }
+  .place:hover{transform:translateY(-2px);border-color:var(--line-strong)}
+  .place:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .place.sel{border-color:var(--accent);background:var(--accent-soft);box-shadow:0 12px 30px -18px rgba(242,169,80,.6)}
+  .place h3{font-family:"Fraunces",serif;font-weight:600;font-size:19px;margin:2px 0 4px}
+  .place .who{color:var(--muted);font-size:12.5px;min-height:52px}
+  .place .check{position:absolute;top:12px;right:12px;width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--accent-ink);display:none;place-items:center;font-size:12px;font-weight:800}
+  .place.sel .check{display:grid}
+  .place .tag{display:inline-block;margin-top:10px;font-family:"JetBrains Mono",monospace;font-size:10.5px;padding:2px 8px;border-radius:6px;background:var(--surface-2);color:var(--faint);border:1px solid var(--line)}
+  .place .tag.rec{background:var(--on-soft);color:var(--on);border-color:var(--on-line)}
+  .place-art{height:92px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line);position:relative;overflow:hidden;margin-bottom:12px}
+  .place-art .pa-panel{position:absolute;background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:4px}
+  .place-art.floating .pa-panel{top:12px;right:12px;width:34px;height:44px}
+  .place-art.docked .pa-panel{top:8px;right:8px;bottom:8px;width:20px}
+  @media (max-width:860px){ .places{grid-template-columns:1fr} .place .who{min-height:0} }
+
+  .breakdown-head{
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    padding:0 0 14px;border-bottom:1px solid var(--line);margin-bottom:16px;
+  }
+  .breakdown-head .lead{font-family:"Fraunces",serif;font-size:18px;font-weight:600}
+  .breakdown-head .lead b{color:var(--accent-strong);font-family:"JetBrains Mono",monospace;font-weight:500}
+  .reset-btn{
+    font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+    background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
+    color:var(--muted);padding:4px 10px;transition:color .15s,border-color .15s;
+  }
+  .reset-btn:hover{color:var(--ink);border-color:var(--line-strong)}
+  .reset-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .reset-btn[hidden]{display:none}
+  .tally{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .tally .track{width:160px;height:8px;border-radius:5px;background:var(--surface-3);overflow:hidden}
+  .tally .track i{display:block;height:100%;background:linear-gradient(90deg,var(--on-fill),var(--accent));transition:width .4s ease}
+  .tally .num{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--muted);white-space:nowrap}
+
+  .groups{display:grid;grid-template-columns:repeat(2,1fr);gap:14px 22px}
+  .group{padding:2px 0}
+  .group h4{
+    display:flex;align-items:center;gap:9px;margin:0 0 9px;font-size:13.5px;font-weight:700;
+  }
+  .group h4 .gi{font-size:15px}
+  .group h4 .gc{
+    margin-left:auto;font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:500;
+    color:var(--muted);background:var(--surface-2);border-radius:6px;padding:2px 7px;
+  }
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{
+    font-family:inherit;font-size:12px;font-weight:500;border-radius:8px;padding:4px 9px;
+    display:inline-flex;align-items:center;gap:6px;border:1px solid;line-height:1.3;
+    cursor:pointer;-webkit-appearance:none;appearance:none;
+    transition:opacity .2s, background .2s, border-color .2s, color .2s, transform .1s;
+  }
+  .chip:hover{transform:translateY(-1px)}
+  .chip.off:hover{opacity:1;color:var(--muted);border-color:var(--line-strong)}
+  .chip.on:hover{filter:brightness(1.05)}
+  .chip:active{transform:translateY(0)}
+  .chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .chip .d{width:6px;height:6px;border-radius:50%;flex:none}
+  .chip.on{background:var(--on-soft);border-color:var(--on-line);color:var(--on)}
+  .chip.on .d{background:var(--on-fill)}
+  .chip.off{background:transparent;border-color:var(--line);color:var(--faint);opacity:.72}
+  .chip.off .d{background:var(--line-strong)}
+  .chip.new{animation:pop .34s ease both}
+  @keyframes pop{0%{transform:scale(.9);opacity:.3}60%{transform:scale(1.04)}100%{transform:scale(1);opacity:1}}
+  .laterline{margin-top:8px;font-size:11.5px;color:var(--faint)}
+
+  .stash{
+    margin-top:20px;padding:14px 16px;border-radius:12px;
+    background:var(--surface-2);border:1px solid var(--line);
+    display:flex;gap:12px;align-items:flex-start;font-size:13px;color:var(--muted);
+  }
+  .stash .i{font-size:17px;line-height:1}
+  .stash b{color:var(--ink);font-weight:600}
+
+  /* ---------- Done step ---------- */
+  .done-hero{display:flex;gap:12px;align-items:center;margin-bottom:6px}
+  .summary-card{
+    margin-top:20px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--surface);
+  }
+  .summary-card .sc-head{
+    display:flex;align-items:center;gap:12px;padding:15px 18px;background:var(--accent-soft);border-bottom:1px solid var(--line);
+  }
+  .summary-card .sc-head .glyph{font-size:22px}
+  .summary-card .sc-head b{font-family:"Fraunces",serif;font-size:19px;font-weight:600}
+  .summary-card .sc-head .cnt{margin-left:auto;font-family:"JetBrains Mono",monospace;font-size:13px;color:var(--accent-strong)}
+  .summary-card .sc-body{padding:16px 18px;display:grid;grid-template-columns:repeat(2,1fr);gap:10px 22px}
+  .sc-line{display:flex;gap:9px;font-size:13px;align-items:baseline}
+  .sc-line .k{color:var(--muted);min-width:0}
+  .sc-line .v{margin-left:auto;font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--ink);white-space:nowrap}
+  .next-steps{list-style:none;margin:18px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
+  .next-steps li{display:flex;gap:11px;align-items:flex-start;font-size:14px;color:var(--muted)}
+  .next-steps b{color:var(--ink);font-weight:600}
+  .next-steps .k{flex:none;font-size:16px}
+
+  /* ---------- Footer actions ---------- */
+  .actions{
+    display:flex;align-items:center;gap:14px;
+    padding:15px 20px;border-top:1px solid var(--line);background:var(--surface-2);
+  }
+  .rerun{font-size:12px;color:var(--faint);display:flex;align-items:center;gap:7px}
+  .rerun code{font-family:"JetBrains Mono",monospace;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+  .progress-dots{display:flex;gap:7px;margin:0 auto}
+  .progress-dots i{width:8px;height:8px;border-radius:50%;background:var(--line-strong);transition:background .2s, width .2s}
+  .progress-dots i.on{background:var(--accent);width:22px;border-radius:5px}
+  .btn{
+    font:inherit;font-weight:600;font-size:14px;cursor:pointer;border-radius:10px;padding:10px 20px;
+    border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);
+    transition:background .15s,border-color .15s,transform .1s,opacity .15s;
+  }
+  .btn:hover{border-color:var(--faint)}
+  .btn:active{transform:translateY(1px)}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+  .btn.primary:hover{filter:brightness(1.04)}
+  .btn.ghost{background:none;border-color:transparent;color:var(--muted)}
+  .btn[disabled]{opacity:.4;cursor:not-allowed}
+
+  .footnote{max-width:var(--maxw);margin:16px auto 0;padding:0 4px;font-size:12px;color:var(--faint)}
+  .footnote b{color:var(--muted);font-weight:600}
+
+  @media (prefers-reduced-motion: reduce){
+    *{animation-duration:.001ms !important;transition:none !important}
+  }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width:860px){
+    .body{grid-template-columns:1fr}
+    .rail{border-right:none;border-bottom:1px solid var(--line);padding:16px}
+    .rail .kicker{margin-bottom:10px}
+    .steps{flex-direction:row;overflow-x:auto;gap:8px}
+    .steps button{white-space:nowrap}
+    .steps .txt span{display:none}
+    .rail .roost{display:none}
+    .welcome-grid,.tour{grid-template-columns:1fr}
+    .roost-card{order:-1}
+    .tiers{grid-template-columns:1fr}
+    .groups{grid-template-columns:1fr}
+    .summary-card .sc-body{grid-template-columns:1fr}
+    .stepwrap{padding:24px 20px}
+  }
+</style>
+
+<div class="stage">
+  <div class="stagebar">
+    <span class="wordmark">
+      <svg class="bird" viewBox="0 0 48 48" aria-hidden="true"><path fill="var(--accent)" d="M33 9c0 3-2.2 4.4-4 5 2.7 1.3 6 4.6 6 10.2 0 8-6.4 13.8-15 13.8-6.3 0-10.4-2.6-12.6-5.2-.7-.8.1-2 1.1-1.7 1.9.6 3.9.7 5.3.5-3.9-1.6-6.1-5-6.1-9.1 0-.9 1-1.4 1.7-.8 1 .8 2.2 1.4 3.3 1.6C13 21.5 15 16.6 20 13.7c3.5-2 5-3.6 6.2-5.6.5-.9 1.8-.8 2.2.1.3.8.5 1.5.6 2.3C30.4 9.6 31.7 9 33 9Z"/><circle cx="30" cy="16.2" r="1.5" fill="var(--accent-ink)"/></svg>
+      <b>Perch</b>
+    </span>
+    <span class="mock-note">first-run quick start · concept</span>
+    <span class="spacer"></span>
+    <button class="pill-btn" id="themeBtn" type="button" aria-label="Toggle light and dark preview">
+      <span id="themeIcon">◐</span><span id="themeLbl">Theme</span>
+    </button>
+  </div>
+
+  <div class="frame">
+    <div class="titlebar">
+      <span class="lights"><i></i><i></i><i></i></span>
+      <span class="tt">Welcome to Perch</span>
+      <span class="step-count" id="stepCount">Step 1 of 5</span>
+    </div>
+
+    <div class="body">
+      <!-- Rail -->
+      <nav class="rail" aria-label="Setup steps">
+        <p class="kicker">Getting started</p>
+        <ul class="steps" id="steps">
+          <li data-go="0"><button type="button"><span class="dot">1</span><span class="txt"><b>Welcome</b><span>What Perch does</span></span></button></li>
+          <li data-go="1"><button type="button"><span class="dot">2</span><span class="txt"><b>The lay of the land</b><span>Read the overlay</span></span></button></li>
+          <li data-go="2"><button type="button"><span class="dot">3</span><span class="txt"><b>Where it lives</b><span>Floating or docked</span></span></button></li>
+          <li data-go="3"><button type="button"><span class="dot">4</span><span class="txt"><b>Choose your setup</b><span>How much to switch on</span></span></button></li>
+          <li data-go="4"><button type="button"><span class="dot">5</span><span class="txt"><b>You're all set</b><span>Where things live</span></span></button></li>
+        </ul>
+        <div class="roost">Takes about a minute. <b>Nothing here is permanent</b> — every switch has a home in Settings afterwards.</div>
+      </nav>
+
+      <!-- Main -->
+      <main class="stepwrap">
+        <!-- STEP 0 : WELCOME -->
+        <section class="panel show" data-step="0">
+          <p class="eyebrow">Nice to meet you</p>
+          <div class="welcome-grid">
+            <div>
+              <h1>A quiet <span class="soft">roost</span> for your Claude&nbsp;Code sessions.</h1>
+              <p class="lede">Perch sits in your system tray and keeps an eye on every running session — surfacing status, usage and nudges as a small desktop overlay, so you don't have to keep flipping back to check.</p>
+              <ul class="facts">
+                <li><span class="g">👁️</span><span><b>It watches, you work.</b> A glance tells you which sessions are running, waiting on you, or stuck.</span></li>
+                <li><span class="g">🔔</span><span><b>It taps you on the shoulder.</b> Optional toasts and chimes when a run finishes or needs input.</span></li>
+                <li><span class="g">🎚️</span><span><b>It grows with you.</b> Perch has a lot under the hood. We'll start light and you can add more whenever.</span></li>
+              </ul>
+            </div>
+            <div class="roost-card">
+              <svg class="big-bird" viewBox="0 0 48 48" aria-hidden="true"><path fill="var(--accent)" d="M33 9c0 3-2.2 4.4-4 5 2.7 1.3 6 4.6 6 10.2 0 8-6.4 13.8-15 13.8-6.3 0-10.4-2.6-12.6-5.2-.7-.8.1-2 1.1-1.7 1.9.6 3.9.7 5.3.5-3.9-1.6-6.1-5-6.1-9.1 0-.9 1-1.4 1.7-.8 1 .8 2.2 1.4 3.3 1.6C13 21.5 15 16.6 20 13.7c3.5-2 5-3.6 6.2-5.6.5-.9 1.8-.8 2.2.1.3.8.5 1.5.6 2.3C30.4 9.6 31.7 9 33 9Z"/><circle cx="30" cy="16.2" r="1.6" fill="var(--accent-ink)"/></svg>
+              <p>Perch reacts to how your sessions are going.<br>Right now: all calm.</p>
+              <p class="time">tray · always within reach</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- STEP 1 : LAYOUT TOUR -->
+        <section class="panel" data-step="1">
+          <p class="eyebrow">The lay of the land</p>
+          <h1>This little panel is your&nbsp;overlay.</h1>
+          <p class="lede tight">It floats at the edge of your screen (or docks to a column). Hover a label to see where it lives — this is roughly what you'll see once a session is running.</p>
+          <div class="tour">
+            <div class="overlay-mock" id="overlayMock" aria-hidden="true">
+              <div class="om-row om-head" data-region="head">
+                <svg class="b" viewBox="0 0 48 48"><path fill="var(--accent)" d="M33 9c0 3-2.2 4.4-4 5 2.7 1.3 6 4.6 6 10.2 0 8-6.4 13.8-15 13.8-6.3 0-10.4-2.6-12.6-5.2-.7-.8.1-2 1.1-1.7 1.9.6 3.9.7 5.3.5-3.9-1.6-6.1-5-6.1-9.1 0-.9 1-1.4 1.7-.8 1 .8 2.2 1.4 3.3 1.6C13 21.5 15 16.6 20 13.7c3.5-2 5-3.6 6.2-5.6.5-.9 1.8-.8 2.2.1.3.8.5 1.5.6 2.3C30.4 9.6 31.7 9 33 9Z"/></svg>
+                <b>Perch</b><span class="menu">•••</span>
+              </div>
+              <div class="om-row om-metrics" data-region="metrics">
+                <div class="m"><b>18%</b><span>CPU</span></div>
+                <div class="m"><b>6.4G</b><span>RAM</span></div>
+              </div>
+              <div class="om-row om-usage" data-region="usage">
+                <div class="lbl"><span>5-hour limit</span><span>62%</span></div>
+                <div class="bar"><i style="width:62%"></i></div>
+                <div class="lbl" style="margin-top:6px"><span>Weekly</span><span>41%</span></div>
+                <div class="bar"><i style="width:41%"></i></div>
+              </div>
+              <div class="om-row om-links" data-region="links">
+                <span class="lnk">🐙</span><span class="lnk">🎫</span><span class="lnk">📋</span><span class="lnk">🗒️</span>
+              </div>
+              <div class="om-row om-sessions" data-region="sessions">
+                <div class="sess"><span class="sdot" style="background:var(--good)"></span><span class="nm">perch</span><span class="badge on">plan</span></div>
+                <div class="sess"><span class="sdot" style="background:var(--warn)"></span><span class="nm">nexus-api</span><span class="badge">waiting 2m</span></div>
+                <div class="sess"><span class="sdot" style="background:var(--accent)"></span><span class="nm">web-ui</span><span class="badge on">3/5</span></div>
+              </div>
+            </div>
+            <ul class="tour-legend" id="legend">
+              <li><button type="button" data-region="head"><span class="n">1</span><span><b>Header &amp; the bird</b><span>Drag to move it, right-click for Quiet mode and placement. The bird mirrors the overall mood.</span></span></button></li>
+              <li><button type="button" data-region="metrics"><span class="n">2</span><span><b>System &amp; usage</b><span>Machine CPU/RAM, then your 5-hour and weekly rate-limit bars — so you see headroom at a glance.</span></span></button></li>
+              <li><button type="button" data-region="links"><span class="n">3</span><span><b>Quick links</b><span>One-tap launchers — GitHub, Jira, a scratch note, anything you pin here.</span></span></button></li>
+              <li><button type="button" data-region="sessions"><span class="n">4</span><span><b>Session rows</b><span>One row per live session: a status dot, the project, and badges like permission mode, task progress or a waiting timer.</span></span></button></li>
+              <li><button type="button" data-region="usage"><span class="n">5</span><span><b>Everything's movable</b><span>These sections stack in an order you choose — todos, friends, media and more can join them later.</span></span></button></li>
+            </ul>
+          </div>
+        </section>
+
+        <!-- STEP 2 : PLACEMENT -->
+        <section class="panel" data-step="2">
+          <p class="eyebrow">Where it lives</p>
+          <h1>A floating window, or docked to an&nbsp;edge?</h1>
+          <p class="lede tight">This is how the overlay sits on your screen. Floating is the easy default — you can switch any time from Settings.</p>
+          <div class="places" id="places" role="radiogroup" aria-label="Overlay placement">
+            <button class="place sel" data-place="floating" role="radio" aria-checked="true" type="button">
+              <span class="check">✓</span>
+              <div class="place-art floating"><span class="pa-panel"></span></div>
+              <h3>Floating</h3>
+              <div class="who">A small panel that hovers over your desktop near a corner. Drag it wherever suits — it stays on top when you need it.</div>
+              <span class="tag rec">Recommended</span>
+            </button>
+            <button class="place" data-place="docked" role="radio" aria-checked="false" type="button">
+              <span class="check">✓</span>
+              <div class="place-art docked"><span class="pa-panel"></span></div>
+              <h3>Docked</h3>
+              <div class="who">Reserves a slim column at a screen edge, so your other windows never overlap it. Best on a wide monitor.</div>
+              <span class="tag">Windows only</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- STEP 3 : TIER CHOOSER -->
+        <section class="panel" data-step="3">
+          <p class="eyebrow">Choose your setup</p>
+          <h1>How much Perch do you want, to&nbsp;start?</h1>
+          <p class="lede tight">Perch ships with 60-odd features. Pick a starting point below — then <b style="color:var(--ink);font-weight:600">click any feature to fine-tune it</b>. Nothing's locked in; you can change all of this later in Settings too.</p>
+
+          <div class="tiers" id="tiers" role="radiogroup" aria-label="Feature set">
+            <button class="tier" role="radio" data-tier="1" aria-checked="false" type="button">
+              <span class="check">✓</span>
+              <div class="glyph">🌱</div>
+              <h3>Basic</h3>
+              <div class="who">The calm essentials. Status at a glance, and a nudge when a run's done.</div>
+              <div class="count"><b data-count="1">11</b> features on</div>
+            </button>
+            <button class="tier sel" role="radio" data-tier="2" aria-checked="true" type="button">
+              <span class="check">✓</span>
+              <div class="glyph">⚙️</div>
+              <h3>Intermediate</h3>
+              <div class="who">Basic, plus the productivity kit — PRs, tickets, dashboards, todos, a little delight.</div>
+              <div class="count"><b data-count="2">33</b> features on</div>
+            </button>
+            <button class="tier" role="radio" data-tier="3" aria-checked="false" type="button">
+              <span class="check">✓</span>
+              <div class="glyph">🎡</div>
+              <h3>Kitchen sink</h3>
+              <div class="who">The lot. Social, games, the secret arcade, phone push — every switch flipped on.</div>
+              <div class="count"><b data-count="3">50</b> features on</div>
+            </button>
+          </div>
+
+          <div class="breakdown-head">
+            <span class="lead">Here's what <b id="tierName">Intermediate</b> switches on</span>
+            <button id="resetTier" class="reset-btn" type="button" hidden>↺ Reset to tier</button>
+            <span class="tally">
+              <span class="track"><i id="tallyBar" style="width:65%"></i></span>
+              <span class="num" id="tallyNum">33 of 50 features</span>
+            </span>
+          </div>
+
+          <div class="groups" id="groups"><!-- generated --></div>
+
+          <div class="stash">
+            <span class="i">🗄️</span>
+            <div>Whatever you leave off isn't gone — it's just tucked away. <b>Every feature stays one search away in Settings</b>, and Quiet mode can hush the playful bits on demand. This screen only sets your starting point.</div>
+          </div>
+        </section>
+
+        <!-- STEP 4 : DONE -->
+        <section class="panel" data-step="4">
+          <p class="eyebrow">You're all set</p>
+          <div class="done-hero">
+            <h1>Perch is on its perch. 🐦</h1>
+          </div>
+          <p class="lede tight">Your overlay will appear the next time a Claude Code session starts. Here's the setup you picked — nothing is locked in.</p>
+
+          <div class="summary-card">
+            <div class="sc-head">
+              <span class="glyph" id="doneGlyph">⚙️</span>
+              <b id="doneTier">Intermediate</b>
+              <span class="cnt" id="doneCount">33 features on</span>
+            </div>
+            <div class="sc-body" id="doneGroups"><!-- generated --></div>
+          </div>
+
+          <ul class="next-steps">
+            <li><span class="k">🔎</span><span><b>Everything's searchable.</b> Settings has a search box — type "chime", "Jira", "arcade" and jump straight to any switch.</span></li>
+            <li><span class="k">🎚️</span><span><b>Reorder your overlay.</b> Drag the sections in Settings → live preview to put what you care about on top.</span></li>
+            <li><span class="k">↻</span><span><b>Start over whenever.</b> Re-run this quick start any time — it won't undo anything you've since changed.</span></li>
+          </ul>
+        </section>
+      </main>
+    </div>
+
+    <!-- Footer -->
+    <div class="actions">
+      <span class="rerun">↻ Re-runnable from <code>Settings › Quick start</code></span>
+      <span class="progress-dots" id="dots"><i class="on"></i><i></i><i></i><i></i><i></i></span>
+      <button class="btn ghost" id="backBtn" type="button" disabled>Back</button>
+      <button class="btn primary" id="nextBtn" type="button">Next</button>
+    </div>
+  </div>
+
+  <p class="footnote"><b>Concept mockup.</b> An interactive proposal for Perch's first-run onboarding — tier counts and groupings are drawn from the real settings registry. Click the tiers and the step rail to explore.</p>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---------------- Feature model ----------------
+     Each item's `t` = lowest tier it turns on in: 1 Basic, 2 Intermediate, 3 Kitchen sink.
+     A chosen tier T shows an item as ON when item.t <= T. */
+  var GROUPS = [
+    { key:"glance", name:"At a glance", icon:"👁️", items:[
+      {l:"Permission badges", t:1},{l:"Task progress", t:1},{l:"Context pressure", t:1},{l:"Waiting timer", t:1},
+      {l:"Burn rate", t:2},{l:"Stuck detection", t:2},{l:"Artifacts", t:2},{l:"Markdown glyph", t:2},{l:"Pinned notes", t:2},
+      {l:"Now-playing media", t:3},{l:"Mic presence", t:3},{l:"Daemon workers", t:3}
+    ]},
+    { key:"usage", name:"Usage & machine", icon:"📊", items:[
+      {l:"Rate-limit bars", t:1},{l:"System metrics", t:1},
+      {l:"Expected-rate mark", t:2},{l:"Monthly spend", t:2},{l:"Per-session metrics", t:2},
+      {l:"Service status", t:3}
+    ]},
+    { key:"alerts", name:"Alerts", icon:"🔔", items:[
+      {l:"Notify: done", t:1},{l:"Notify: waiting", t:1},
+      {l:"Sound chimes", t:2},{l:"Notify: API error", t:2},{l:"PR notifications", t:2},{l:"Todo reminders", t:2},
+      {l:"Push to phone", t:3},{l:"Push while locked", t:3},{l:"Friend & game alerts", t:3}
+    ]},
+    { key:"tools", name:"Dashboards & tools", icon:"🪟", items:[
+      {l:"Session history", t:1},{l:"Stats dashboard", t:1},
+      {l:"Flight path", t:2},{l:"Git tree & diff", t:2},{l:"Markdown viewer", t:2},{l:"Theme designer", t:2},{l:"Todo list", t:2},
+      {l:"Perch Wrapped", t:3},{l:"Sticky notes", t:3},{l:"Session switcher", t:3},{l:"Secret arcade", t:3}
+    ]},
+    { key:"integrations", name:"Integrations", icon:"🔗", items:[
+      {l:"Quick links", t:1},
+      {l:"Pull requests", t:2},{l:"Jira tickets", t:2},{l:"Hypertree", t:2},
+      {l:"Agent Teams", t:3}
+    ]},
+    { key:"fun", name:"Fun & social", icon:"🎈", items:[
+      {l:"Perch reacts", t:2},{l:"Achievements", t:2},
+      {l:"Achievement toasts", t:3},{l:"Social feed", t:3},{l:"Connect 4", t:3},{l:"Big reactions", t:3},{l:"Upside-down links", t:3}
+    ]}
+  ];
+
+  var TIERS = {
+    1:{name:"Basic", glyph:"🌱"},
+    2:{name:"Intermediate", glyph:"⚙️"},
+    3:{name:"Kitchen sink", glyph:"🎡"}
+  };
+
+  var TOTAL = GROUPS.reduce(function(n,g){return n+g.items.length;},0); // 51
+  /* ---------------- Tier chooser + per-feature fine-tune ----------------
+     A tier is a *preset* that seeds the working set `enabled`. Individual
+     chips are then clickable, so the final choice can be any custom mix. */
+
+  // stable key per item
+  GROUPS.forEach(function(g){ g.items.forEach(function(i){ i.key = g.key + "/" + i.l; }); });
+
+  function tierSet(tier){
+    var s = {};
+    GROUPS.forEach(function(g){ g.items.forEach(function(i){ if(i.t<=tier) s[i.key]=true; }); });
+    return s;
+  }
+  function setSize(o){ return Object.keys(o).length; }
+
+  var groupsEl = document.getElementById("groups");
+  var tierBtns = Array.prototype.slice.call(document.querySelectorAll(".tier"));
+  var selectedPreset = 2;        // last tier button chosen (reset target)
+  var enabled = tierSet(2);      // the live working set (may be customised)
+  var animateKeys = {};          // keys to pop on the next render
+
+  /* Fill the per-tier preset counts on the cards */
+  document.querySelectorAll("[data-count]").forEach(function(el){
+    el.textContent = setSize(tierSet(parseInt(el.getAttribute("data-count"),10)));
+  });
+
+  function matchedTier(){       // which preset (if any) the working set equals; 0 = custom
+    for(var t=1;t<=3;t++){
+      var s = tierSet(t);
+      if(setSize(s)===setSize(enabled) && Object.keys(s).every(function(k){return enabled[k];})) return t;
+    }
+    return 0;
+  }
+
+  function renderBreakdown(){
+    var frag = document.createDocumentFragment();
+    GROUPS.forEach(function(g){
+      var on = g.items.filter(function(i){return enabled[i.key];}).length;
+      var group = document.createElement("div");
+      group.className = "group";
+      var h = document.createElement("h4");
+      h.innerHTML = '<span class="gi">'+g.icon+'</span>'+g.name+'<span class="gc">'+on+'/'+g.items.length+'</span>';
+      group.appendChild(h);
+      var chips = document.createElement("div");
+      chips.className = "chips";
+      g.items.forEach(function(i){
+        var isOn = !!enabled[i.key];
+        var c = document.createElement("button");
+        c.type = "button";
+        c.className = "chip " + (isOn?"on":"off") + (animateKeys[i.key]?" new":"");
+        c.setAttribute("aria-pressed", isOn?"true":"false");
+        c.setAttribute("data-key", i.key);
+        c.title = (isOn?"Turn off ":"Turn on ")+i.l;
+        c.innerHTML = '<span class="d"></span>'+i.l;
+        chips.appendChild(c);
+      });
+      group.appendChild(chips);
+      frag.appendChild(group);
+    });
+    groupsEl.innerHTML = "";
+    groupsEl.appendChild(frag);
+    animateKeys = {};
+
+    var count = setSize(enabled);
+    var mt = matchedTier();
+    document.getElementById("tierName").textContent = mt ? TIERS[mt].name : "your custom mix";
+    document.getElementById("tallyNum").textContent = count+" of "+TOTAL+" features";
+    document.getElementById("tallyBar").style.width = Math.round(count/TOTAL*100)+"%";
+    document.getElementById("resetTier").hidden = (mt!==0);
+  }
+
+  function refreshStep2(){
+    renderBreakdown();
+    var mt = matchedTier();
+    tierBtns.forEach(function(b){
+      var isSel = parseInt(b.getAttribute("data-tier"),10)===mt;
+      b.classList.toggle("sel", isSel);
+      b.setAttribute("aria-checked", isSel?"true":"false");
+    });
+    updateDone();
+    if(typeof step!=="undefined" && step===3) updateNextLabel();
+  }
+
+  function selectPreset(t){
+    selectedPreset = t;
+    enabled = tierSet(t);
+    animateKeys = {};
+    Object.keys(enabled).forEach(function(k){ animateKeys[k]=true; });
+    refreshStep2();
+  }
+
+  function toggleItem(key){
+    if(enabled[key]) delete enabled[key];
+    else { enabled[key]=true; animateKeys[key]=true; }
+    refreshStep2();
+  }
+
+  tierBtns.forEach(function(b){
+    b.addEventListener("click", function(){ selectPreset(parseInt(b.getAttribute("data-tier"),10)); });
+  });
+  groupsEl.addEventListener("click", function(e){
+    var chip = e.target.closest ? e.target.closest(".chip") : null;
+    if(chip && chip.getAttribute("data-key")) toggleItem(chip.getAttribute("data-key"));
+  });
+  document.getElementById("resetTier").addEventListener("click", function(){ selectPreset(selectedPreset); });
+
+  /* ---------------- Placement select ---------------- */
+  var placement = "floating";
+  var placeBtns = Array.prototype.slice.call(document.querySelectorAll(".place"));
+  function selectPlace(p){
+    placement = p;
+    placeBtns.forEach(function(b){
+      var isSel = b.getAttribute("data-place")===p;
+      b.classList.toggle("sel", isSel);
+      b.setAttribute("aria-checked", isSel?"true":"false");
+    });
+    updateDone();
+  }
+  placeBtns.forEach(function(b){
+    b.addEventListener("click", function(){ selectPlace(b.getAttribute("data-place")); });
+  });
+
+  /* ---------------- Done summary ---------------- */
+  function updateDone(){
+    var mt = matchedTier();
+    document.getElementById("doneTier").textContent = mt ? TIERS[mt].name : "Custom setup";
+    document.getElementById("doneGlyph").textContent = mt ? TIERS[mt].glyph : "🎚️";
+    document.getElementById("doneCount").textContent = setSize(enabled)+" features on";
+    var body = document.getElementById("doneGroups");
+    body.innerHTML = "";
+    var pline = document.createElement("div");
+    pline.className = "sc-line";
+    pline.innerHTML = '<span class="k">🪟 Overlay placement</span><span class="v">'+(placement==="floating"?"Floating":"Docked")+'</span>';
+    body.appendChild(pline);
+    GROUPS.forEach(function(g){
+      var on = g.items.filter(function(i){return enabled[i.key];}).length;
+      var line = document.createElement("div");
+      line.className = "sc-line";
+      line.innerHTML = '<span class="k">'+g.icon+' '+g.name+'</span><span class="v">'+on+'/'+g.items.length+'</span>';
+      body.appendChild(line);
+    });
+  }
+
+  function updateNextLabel(){
+    var mt = matchedTier();
+    nextBtn.textContent = mt ? ("Use "+TIERS[mt].name) : "Use custom setup";
+  }
+
+  /* ---------------- Layout tour highlight ---------------- */
+  var mock = document.getElementById("overlayMock");
+  function highlight(region, on){
+    var el = mock.querySelector('[data-region="'+region+'"]');
+    if(el) el.classList.toggle("hl", on);
+  }
+  document.querySelectorAll("#legend button").forEach(function(btn){
+    var r = btn.getAttribute("data-region");
+    btn.addEventListener("mouseenter", function(){highlight(r,true);});
+    btn.addEventListener("mouseleave", function(){highlight(r,false);});
+    btn.addEventListener("focus", function(){highlight(r,true);});
+    btn.addEventListener("blur", function(){highlight(r,false);});
+  });
+
+  /* ---------------- Step navigation ---------------- */
+  var STEP_MAX = 4;
+  var step = 0;
+  var panels = Array.prototype.slice.call(document.querySelectorAll(".panel"));
+  var stepLis = Array.prototype.slice.call(document.querySelectorAll("#steps li"));
+  var dots = Array.prototype.slice.call(document.querySelectorAll("#dots i"));
+  var backBtn = document.getElementById("backBtn");
+  var nextBtn = document.getElementById("nextBtn");
+
+  function goto(n){
+    step = Math.max(0, Math.min(STEP_MAX, n));
+    panels.forEach(function(p){ p.classList.toggle("show", parseInt(p.getAttribute("data-step"),10)===step); });
+    stepLis.forEach(function(li,idx){
+      li.classList.toggle("active", idx===step);
+      li.classList.toggle("done", idx<step);
+    });
+    dots.forEach(function(d,idx){ d.classList.toggle("on", idx===step); });
+    document.getElementById("stepCount").textContent = "Step "+(step+1)+" of 5";
+    backBtn.disabled = step===0;
+    if(step===STEP_MAX) nextBtn.textContent = "Finish setup";
+    else if(step===3) updateNextLabel();
+    else nextBtn.textContent = "Next";
+    if(step===STEP_MAX) updateDone();
+    // scroll the frame body into view on small screens
+    if(window.innerWidth<=860){ document.querySelector(".stepwrap").scrollIntoView({behavior:"smooth",block:"start"}); }
+  }
+
+  backBtn.addEventListener("click", function(){ goto(step-1); });
+  nextBtn.addEventListener("click", function(){
+    if(step===STEP_MAX){ // "finish" — bounce for feedback in the mock
+      nextBtn.textContent = "All done ✓";
+      return;
+    }
+    goto(step+1);
+  });
+  stepLis.forEach(function(li){
+    li.querySelector("button").addEventListener("click", function(){ goto(parseInt(li.getAttribute("data-go"),10)); });
+  });
+
+  /* keyboard: left/right arrows move steps when not typing */
+  document.addEventListener("keydown", function(e){
+    if(e.key==="ArrowRight"){ goto(step+1); }
+    else if(e.key==="ArrowLeft"){ goto(step-1); }
+  });
+
+  /* ---------------- Theme preview toggle ---------------- */
+  var root = document.documentElement;
+  var themeBtn = document.getElementById("themeBtn");
+  var themeLbl = document.getElementById("themeLbl");
+  var themeIcon = document.getElementById("themeIcon");
+  function currentIsDark(){
+    var attr = root.getAttribute("data-theme");
+    if(attr==="dark") return true;
+    if(attr==="light") return false;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+  themeBtn.addEventListener("click", function(){
+    var dark = currentIsDark();
+    root.setAttribute("data-theme", dark?"light":"dark");
+    themeLbl.textContent = dark?"Light":"Dark";
+    themeIcon.textContent = dark?"☀":"☾";
+  });
+
+  /* ---------------- init ---------------- */
+  refreshStep2();
+  goto(0);
+})();
+</script>
