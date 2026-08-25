@@ -19,18 +19,24 @@ A four-step wizard in its own window: **Welcome** (what Perch is) → **The lay 
 annotated overlay so the layout is learned) → **Choose your setup** (three tiers with a live,
 grouped breakdown + running counts) → **You're all set** (summary + "everything's still in
 Settings, re-run any time"). Tiers are strict supersets: `Basic ⊆ Intermediate ⊆ Kitchen sink`.
-Choosing a tier flips a **managed set** of feature toggles; every non-managed setting (fields,
-thresholds, quick-links list) is left untouched. Nothing is destroyed — a lower tier just leaves
-features off, and they stay one search away in Settings.
+
+A tier is a **preset**, not a locked bundle: picking one seeds a working set, and **each feature in
+the grouped breakdown is individually clickable** so the user can fine-tune before applying. Deviate
+from a preset and the chooser shows "custom" with a one-tap reset back to the tier. The wizard
+applies whatever the final working set is — a tier, or any custom mix. Applying flips a **managed
+set** of feature toggles; every non-managed setting (fields, thresholds, quick-links list) is left
+untouched. Nothing is destroyed — a feature left off just stays one search away in Settings.
 
 ## Key architecture decisions
 
-1. **Tier model lives in `Perch.Core`, data-driven off the settings registry.** A tier is a set of
-   `SettingDescriptor` ids. Applying a tier walks the *managed* toggle universe and sets each to
-   `id ∈ tier`, using each descriptor's existing `SetBool`/`SetInt`. This keeps tiers testable
-   headless, cross-platform, and automatically consistent with the registry (a coverage test fails
-   if a tier names an id that doesn't exist). The HTML mockup's counts (11 / 33 / 51) are
-   *illustrative* — the catalog is the source of truth; reconcile the mockup to it in M1.
+1. **Tier model lives in `Perch.Core`, data-driven off the settings registry.** A tier resolves to a
+   set of `SettingDescriptor` ids (its preset). The **apply step takes an explicit enabled-set of
+   ids**, not a tier — the tier just produces the initial set, and per-feature toggles mutate it.
+   Applying walks the *managed* toggle universe and sets each to `id ∈ enabledSet`, using each
+   descriptor's existing `SetBool`/`SetInt`. This keeps tiers testable headless, cross-platform, and
+   automatically consistent with the registry (a coverage test fails if a tier names an id that
+   doesn't exist). The HTML mockup's counts (11 / 33 / 51) are *illustrative* — the catalog is the
+   source of truth; reconcile the mockup to it in M1.
 2. **First-run signal is a new persisted bool, not `Program.IsFirstRun`.** `Program.IsFirstRun` is a
    Velopack per-install hook that never fires on `dotnet run`; we need something that survives and
    is dev-testable. Add `AppSettings.FirstRunComplete` (default `false`) + a migration that seeds
@@ -86,14 +92,18 @@ The whole feature-set logic with zero UI. Highest test leverage; unblocks M1.
   - Per-tier membership (which managed ids are on), enforced as supersets.
   - `IReadOnlyList<OnboardingGroup> Groups` for UI: group label + icon + ordered items (id, display
     name, the lowest tier each turns on in) — so M1 renders straight from Core, no duplicated lists.
-  - `void Apply(AppSettings s, OnboardingTier tier)` — for each managed id, resolve its
-    `SettingDescriptor` and `SetBool(s, id ∈ tier)`. Plus any tier-implied int/enum seeds
-    (e.g. ensure `NotificationsEnabled` master on for tiers that notify).
+  - `IReadOnlySet<string> Preset(OnboardingTier tier)` — the managed ids a tier turns on (used to
+    seed the chooser and to detect "does the current working set still equal a tier?").
+  - `void Apply(AppSettings s, IReadOnlySet<string> enabledIds)` — the real apply: for each managed
+    id, resolve its `SettingDescriptor` and `SetBool(s, id ∈ enabledIds)`. Plus any implied int/enum
+    seeds (e.g. ensure `NotificationsEnabled` master on when any notify toggle is in the set). A thin
+    `Apply(s, OnboardingTier tier) => Apply(s, Preset(tier))` overload covers the un-customised path.
   - `int Count(OnboardingTier tier)` helper for the card counts.
 - `AppSettings`: add `bool FirstRunComplete { get; set; }` (default `false`) and
   `OnboardingTier? OnboardingTierChosen { get; set; }` (`[JsonIgnore(WhenWritingNull)]`, remembers
-  the last pick to pre-select on re-run). Add both to `SettingsRegistryTests.NotSettings` (they're
-  flags, not user-facing descriptors — like `ArcadeUnlocked`).
+  the last preset picked to pre-select on re-run; a custom mix leaves it null / marked custom). Add
+  both to `SettingsRegistryTests.NotSettings` (they're flags, not user-facing descriptors — like
+  `ArcadeUnlocked`).
 - `MigrateFirstRun()` called from `AppSettings.Load()` (beside `MigrateStartMode`): if
   `LastSeenVersion != null` (an existing install) and the key was absent, set
   `FirstRunComplete = true` so upgraders don't get the wizard.
@@ -102,11 +112,13 @@ The whole feature-set logic with zero UI. Highest test leverage; unblocks M1.
 - Every id in every tier / group resolves to a real `SettingsRegistry.All` descriptor with a
   non-null `SetBool`.
 - Superset invariant: `Basic ⊆ Intermediate ⊆ KitchenSink`.
-- `Apply` sets exactly the managed set (on for members, off for non-members) and mutates **no**
-  unmanaged property (round-trip a settings object with sentinel field values and assert they
-  survive).
-- `Apply` is idempotent and order-independent; re-applying Basic after KitchenSink turns the extras
-  back off.
+- `Apply(s, enabledIds)` sets exactly the given set (on for members, off for every other managed id)
+  and mutates **no** unmanaged property (round-trip a settings object with sentinel field values and
+  assert they survive).
+- **Custom sets round-trip:** a hand-built set (e.g. Basic + one Kitchen-sink id) applies exactly —
+  the one extra on, nothing else from Kitchen sink leaking in.
+- `Apply` is idempotent and order-independent; applying Basic's preset after KitchenSink's turns the
+  extras back off.
 - Migration: fresh install (`LastSeenVersion == null`) → `FirstRunComplete == false`; existing
   install → `true`.
 - `Count` matches the group membership (and reconcile the mockup's displayed numbers to it).
@@ -125,14 +137,18 @@ The window itself, driven entirely off M0. Not yet triggered on startup.
   footer Back / Next / Finish, progress dots — mirroring the mockup, styled from `Palette.*`.
 - **Step 1 (layout tour):** a detached `OverlayCanvas` seeded from `SampleData`, with numbered
   callouts/legend describing header+bird, system+usage, quick links, session rows, movable sections.
-- **Step 2 (tier chooser):** three tier cards + a live grouped breakdown rendered from
-  `OnboardingTiers.Groups` — on-items highlighted, off-items ghosted, per-group `n/total`, a running
-  total, and "+N more in Settings". Selecting a tier updates counts (and, if cheap, re-gates a live
-  `OverlayCanvas` preview via `OverlaySettingsGates.Apply` on a cloned settings). Pre-select
-  `OnboardingTierChosen ?? Intermediate`.
-- **Finish:** `OnboardingTiers.Apply(settings, chosen)` → set `OnboardingTierChosen` +
-  `FirstRunComplete = true` → `settings.Save()` → raise an `Applied` event the App handles to run the
-  live funnel (M2) → close. (Window only persists + signals; App owns live-apply.)
+- **Step 2 (tier chooser + fine-tune):** three tier cards + a live grouped breakdown rendered from
+  `OnboardingTiers.Groups`. Each feature chip is a **toggle button** (`aria-pressed`) — clicking it
+  adds/removes that id from the working set. Selecting a tier card reseeds the working set to that
+  preset. On-items highlighted, off-items ghosted, per-group `n/total`, a running total. When the
+  working set no longer equals any preset, no card is selected, the header reads "your custom mix",
+  and a **Reset to tier** control reseeds `selectedPreset`. Pre-select
+  `OnboardingTierChosen ?? Intermediate`. Optionally re-gate a live `OverlayCanvas` preview via
+  `OverlaySettingsGates.Apply` on a cloned settings as the set changes.
+- **Finish:** `OnboardingTiers.Apply(settings, workingSet)` → record `OnboardingTierChosen` (the
+  matched tier, or null when custom) + `FirstRunComplete = true` → `settings.Save()` → raise an
+  `Applied` event the App handles to run the live funnel (M2) → close. (Window only persists +
+  signals; App owns live-apply.)
 - Headless render: register the window's surfaces in `HeadlessRenderer` so
   `dotnet run … -- render <dir>` dumps them at 1× / 1.5× for eyeballing.
 

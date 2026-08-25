@@ -299,6 +299,14 @@
   }
   .breakdown-head .lead{font-family:"Fraunces",serif;font-size:18px;font-weight:600}
   .breakdown-head .lead b{color:var(--accent-strong);font-family:"JetBrains Mono",monospace;font-weight:500}
+  .reset-btn{
+    font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+    background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
+    color:var(--muted);padding:4px 10px;transition:color .15s,border-color .15s;
+  }
+  .reset-btn:hover{color:var(--ink);border-color:var(--line-strong)}
+  .reset-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .reset-btn[hidden]{display:none}
   .tally{margin-left:auto;display:flex;align-items:center;gap:8px}
   .tally .track{width:160px;height:8px;border-radius:5px;background:var(--surface-3);overflow:hidden}
   .tally .track i{display:block;height:100%;background:linear-gradient(90deg,var(--on-fill),var(--accent));transition:width .4s ease}
@@ -316,10 +324,16 @@
   }
   .chips{display:flex;flex-wrap:wrap;gap:6px}
   .chip{
-    font-size:12px;font-weight:500;border-radius:8px;padding:4px 9px;
+    font-family:inherit;font-size:12px;font-weight:500;border-radius:8px;padding:4px 9px;
     display:inline-flex;align-items:center;gap:6px;border:1px solid;line-height:1.3;
-    transition:opacity .25s, background .25s, border-color .25s, color .25s;
+    cursor:pointer;-webkit-appearance:none;appearance:none;
+    transition:opacity .2s, background .2s, border-color .2s, color .2s, transform .1s;
   }
+  .chip:hover{transform:translateY(-1px)}
+  .chip.off:hover{opacity:1;color:var(--muted);border-color:var(--line-strong)}
+  .chip.on:hover{filter:brightness(1.05)}
+  .chip:active{transform:translateY(0)}
+  .chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .chip .d{width:6px;height:6px;border-radius:50%;flex:none}
   .chip.on{background:var(--on-soft);border-color:var(--on-line);color:var(--on)}
   .chip.on .d{background:var(--on-fill)}
@@ -505,7 +519,7 @@
         <section class="panel" data-step="2">
           <p class="eyebrow">Choose your setup</p>
           <h1>How much Perch do you want, to&nbsp;start?</h1>
-          <p class="lede tight">Perch ships with 60-odd features. Rather than face them all at once, pick a starting point below. You'll see exactly what each one switches on — and you can dial it up or down any time.</p>
+          <p class="lede tight">Perch ships with 60-odd features. Pick a starting point below — then <b style="color:var(--ink);font-weight:600">click any feature to fine-tune it</b>. Nothing's locked in; you can change all of this later in Settings too.</p>
 
           <div class="tiers" id="tiers" role="radiogroup" aria-label="Feature set">
             <button class="tier" role="radio" data-tier="1" aria-checked="false" type="button">
@@ -533,6 +547,7 @@
 
           <div class="breakdown-head">
             <span class="lead">Here's what <b id="tierName">Intermediate</b> switches on</span>
+            <button id="resetTier" class="reset-btn" type="button" hidden>↺ Reset to tier</button>
             <span class="tally">
               <span class="track"><i id="tallyBar" style="width:65%"></i></span>
               <span class="num" id="tallyNum">33 of 51 features</span>
@@ -631,96 +646,131 @@
   };
 
   var TOTAL = GROUPS.reduce(function(n,g){return n+g.items.length;},0); // 51
-  function onCount(tier){
-    return GROUPS.reduce(function(n,g){
-      return n + g.items.filter(function(i){return i.t<=tier;}).length;
-    },0);
-  }
+  /* ---------------- Tier chooser + per-feature fine-tune ----------------
+     A tier is a *preset* that seeds the working set `enabled`. Individual
+     chips are then clickable, so the final choice can be any custom mix. */
 
-  /* Fill the per-tier counts on the cards */
+  // stable key per item
+  GROUPS.forEach(function(g){ g.items.forEach(function(i){ i.key = g.key + "/" + i.l; }); });
+
+  function tierSet(tier){
+    var s = {};
+    GROUPS.forEach(function(g){ g.items.forEach(function(i){ if(i.t<=tier) s[i.key]=true; }); });
+    return s;
+  }
+  function setSize(o){ return Object.keys(o).length; }
+
+  var groupsEl = document.getElementById("groups");
+  var tierBtns = Array.prototype.slice.call(document.querySelectorAll(".tier"));
+  var selectedPreset = 2;        // last tier button chosen (reset target)
+  var enabled = tierSet(2);      // the live working set (may be customised)
+  var animateKeys = {};          // keys to pop on the next render
+
+  /* Fill the per-tier preset counts on the cards */
   document.querySelectorAll("[data-count]").forEach(function(el){
-    el.textContent = onCount(parseInt(el.getAttribute("data-count"),10));
+    el.textContent = setSize(tierSet(parseInt(el.getAttribute("data-count"),10)));
   });
 
-  /* ---------------- Tier chooser ---------------- */
-  var selectedTier = 2;
-  var groupsEl = document.getElementById("groups");
-  var firstRender = true;
+  function matchedTier(){       // which preset (if any) the working set equals; 0 = custom
+    for(var t=1;t<=3;t++){
+      var s = tierSet(t);
+      if(setSize(s)===setSize(enabled) && Object.keys(s).every(function(k){return enabled[k];})) return t;
+    }
+    return 0;
+  }
 
   function renderBreakdown(){
-    var t = selectedTier;
     var frag = document.createDocumentFragment();
     GROUPS.forEach(function(g){
-      var on = g.items.filter(function(i){return i.t<=t;}).length;
-      var later = g.items.length - on;
+      var on = g.items.filter(function(i){return enabled[i.key];}).length;
       var group = document.createElement("div");
       group.className = "group";
-
       var h = document.createElement("h4");
       h.innerHTML = '<span class="gi">'+g.icon+'</span>'+g.name+'<span class="gc">'+on+'/'+g.items.length+'</span>';
       group.appendChild(h);
-
       var chips = document.createElement("div");
       chips.className = "chips";
       g.items.forEach(function(i){
-        var isOn = i.t<=t;
-        var c = document.createElement("span");
-        c.className = "chip " + (isOn?"on":"off");
-        // animate chips that are newly on relative to a lower tier
-        if(!firstRender && isOn && i.t===t) c.className += " new";
+        var isOn = !!enabled[i.key];
+        var c = document.createElement("button");
+        c.type = "button";
+        c.className = "chip " + (isOn?"on":"off") + (animateKeys[i.key]?" new":"");
+        c.setAttribute("aria-pressed", isOn?"true":"false");
+        c.setAttribute("data-key", i.key);
+        c.title = (isOn?"Turn off ":"Turn on ")+i.l;
         c.innerHTML = '<span class="d"></span>'+i.l;
         chips.appendChild(c);
       });
       group.appendChild(chips);
-
-      if(later>0){
-        var lt = document.createElement("div");
-        lt.className = "laterline";
-        lt.textContent = "+ "+later+" more available in Settings";
-        group.appendChild(lt);
-      }
       frag.appendChild(group);
     });
     groupsEl.innerHTML = "";
     groupsEl.appendChild(frag);
+    animateKeys = {};
 
-    var on = onCount(t);
-    document.getElementById("tierName").textContent = TIERS[t].name;
-    document.getElementById("tallyNum").textContent = on+" of "+TOTAL+" features";
-    document.getElementById("tallyBar").style.width = Math.round(on/TOTAL*100)+"%";
-    firstRender = false;
+    var count = setSize(enabled);
+    var mt = matchedTier();
+    document.getElementById("tierName").textContent = mt ? TIERS[mt].name : "your custom mix";
+    document.getElementById("tallyNum").textContent = count+" of "+TOTAL+" features";
+    document.getElementById("tallyBar").style.width = Math.round(count/TOTAL*100)+"%";
+    document.getElementById("resetTier").hidden = (mt!==0);
   }
 
-  var tierBtns = Array.prototype.slice.call(document.querySelectorAll(".tier"));
-  function selectTier(t){
-    selectedTier = t;
+  function refreshStep2(){
+    renderBreakdown();
+    var mt = matchedTier();
     tierBtns.forEach(function(b){
-      var isSel = parseInt(b.getAttribute("data-tier"),10)===t;
+      var isSel = parseInt(b.getAttribute("data-tier"),10)===mt;
       b.classList.toggle("sel", isSel);
       b.setAttribute("aria-checked", isSel?"true":"false");
     });
-    renderBreakdown();
     updateDone();
+    if(typeof step!=="undefined" && step===2) updateNextLabel();
   }
+
+  function selectPreset(t){
+    selectedPreset = t;
+    enabled = tierSet(t);
+    animateKeys = {};
+    Object.keys(enabled).forEach(function(k){ animateKeys[k]=true; });
+    refreshStep2();
+  }
+
+  function toggleItem(key){
+    if(enabled[key]) delete enabled[key];
+    else { enabled[key]=true; animateKeys[key]=true; }
+    refreshStep2();
+  }
+
   tierBtns.forEach(function(b){
-    b.addEventListener("click", function(){ selectTier(parseInt(b.getAttribute("data-tier"),10)); });
+    b.addEventListener("click", function(){ selectPreset(parseInt(b.getAttribute("data-tier"),10)); });
   });
+  groupsEl.addEventListener("click", function(e){
+    var chip = e.target.closest ? e.target.closest(".chip") : null;
+    if(chip && chip.getAttribute("data-key")) toggleItem(chip.getAttribute("data-key"));
+  });
+  document.getElementById("resetTier").addEventListener("click", function(){ selectPreset(selectedPreset); });
 
   /* ---------------- Done summary ---------------- */
   function updateDone(){
-    var t = selectedTier;
-    document.getElementById("doneTier").textContent = TIERS[t].name;
-    document.getElementById("doneGlyph").textContent = TIERS[t].glyph;
-    document.getElementById("doneCount").textContent = onCount(t)+" features on";
+    var mt = matchedTier();
+    document.getElementById("doneTier").textContent = mt ? TIERS[mt].name : "Custom setup";
+    document.getElementById("doneGlyph").textContent = mt ? TIERS[mt].glyph : "🎚️";
+    document.getElementById("doneCount").textContent = setSize(enabled)+" features on";
     var body = document.getElementById("doneGroups");
     body.innerHTML = "";
     GROUPS.forEach(function(g){
-      var on = g.items.filter(function(i){return i.t<=t;}).length;
+      var on = g.items.filter(function(i){return enabled[i.key];}).length;
       var line = document.createElement("div");
       line.className = "sc-line";
       line.innerHTML = '<span class="k">'+g.icon+' '+g.name+'</span><span class="v">'+on+'/'+g.items.length+'</span>';
       body.appendChild(line);
     });
+  }
+
+  function updateNextLabel(){
+    var mt = matchedTier();
+    nextBtn.textContent = mt ? ("Use "+TIERS[mt].name) : "Use custom setup";
   }
 
   /* ---------------- Layout tour highlight ---------------- */
@@ -756,7 +806,9 @@
     dots.forEach(function(d,idx){ d.classList.toggle("on", idx===step); });
     document.getElementById("stepCount").textContent = "Step "+(step+1)+" of 4";
     backBtn.disabled = step===0;
-    nextBtn.textContent = step===STEP_MAX ? "Finish setup" : (step===2 ? "Use "+TIERS[selectedTier].name : "Next");
+    if(step===STEP_MAX) nextBtn.textContent = "Finish setup";
+    else if(step===2) updateNextLabel();
+    else nextBtn.textContent = "Next";
     if(step===3) updateDone();
     // scroll the frame body into view on small screens
     if(window.innerWidth<=860){ document.querySelector(".stepwrap").scrollIntoView({behavior:"smooth",block:"start"}); }
@@ -799,8 +851,7 @@
   });
 
   /* ---------------- init ---------------- */
-  renderBreakdown();
-  updateDone();
+  refreshStep2();
   goto(0);
 })();
 </script>
