@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.72] - 2026-08-26
+
+- Docked column keeps the right height when the display scale changes, including over Parsec and RDP
+- Docked mode no longer borrows dense mode's hover-to-expand (it was never invited)
+
+---
+
 ## [v0.3.71] - 2026-08-26
 
 - A dot on the Friends header flags a status you haven't seen yet
