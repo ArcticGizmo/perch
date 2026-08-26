@@ -14,14 +14,17 @@ public partial class LiveOverlayWindow : Window
 {
     public OverlayCanvas Canvas { get; }
 
-    // Docked mode re-derives its column geometry from these two raw messages, which the OS delivers to every
+    // Docked mode re-derives its column geometry from these raw messages, which the OS delivers to every
     // real top-level window (ours is one). Hooking them is fully event-driven — no polling — and covers
-    // everything that moves the column: WM_DISPLAYCHANGE for resolution / monitor add-remove / DPI, and
-    // WM_SETTINGCHANGE with wParam == SPI_SETWORKAREA for a taskbar resize or move. We hook the raw messages
-    // because Avalonia's Screens.Changed proved unreliable here — a resolution change didn't raise it, leaving
-    // the column sized to the old work area (drooping under the taskbar). The field holds the delegate so it
-    // isn't GC'd while registered.
+    // everything that moves the column: WM_DISPLAYCHANGE for resolution / monitor add-remove, WM_DPICHANGED
+    // for a scale/DPI change (which can arrive *without* a resolution change — e.g. changing the display
+    // scale, or a remote-desktop / Parsec virtual display flipping DPI on connect — so WM_DISPLAYCHANGE alone
+    // misses it), and WM_SETTINGCHANGE with wParam == SPI_SETWORKAREA for a taskbar resize or move. We hook
+    // the raw messages because Avalonia's Screens.Changed proved unreliable here — a resolution change didn't
+    // raise it, leaving the column sized to the old work area (drooping under the taskbar). The field holds
+    // the delegate so it isn't GC'd while registered.
     private const uint WM_DISPLAYCHANGE = 0x007E;
+    private const uint WM_DPICHANGED    = 0x02E0;
     private const uint WM_SETTINGCHANGE = 0x001A;
     private const uint SPI_SETWORKAREA  = 0x002F;
     private global::Avalonia.Controls.Win32Properties.CustomWndProcHookCallback? _wndProcHook;
@@ -69,7 +72,8 @@ public partial class LiveOverlayWindow : Window
         {
             _wndProcHook = (IntPtr _, uint msg, IntPtr wParam, IntPtr _, ref bool _) =>
             {
-                if (msg == WM_DISPLAYCHANGE || (msg == WM_SETTINGCHANGE && (uint)wParam == SPI_SETWORKAREA))
+                if (msg == WM_DISPLAYCHANGE || msg == WM_DPICHANGED
+                    || (msg == WM_SETTINGCHANGE && (uint)wParam == SPI_SETWORKAREA))
                     Canvas.OnDisplayChanged();
                 return IntPtr.Zero;
             };

@@ -124,6 +124,11 @@ public sealed partial class OverlayCanvas
     private void EnterDocked()
     {
         if (_docked) return;
+        // Dense is a hover sub-state of Floating; Docked is the other top-level mode. If we're switching in
+        // from dense (Floating + dense strip), tear that down first — otherwise _denseCtl stays live and the
+        // pointer/relayout paths keep forwarding to it, so hovering the docked column snaps it to the dense
+        // popup's geometry. Suspend clears dense without restoring the floating window (we own geometry next).
+        _denseCtl.Suspend();
         _docked = true;
         _dockCollapsed = false;
         _hoveredRow = -1;
@@ -234,12 +239,12 @@ public sealed partial class OverlayCanvas
             ? PlatformServices.WindowChrome.GetMonitorGeometryAt(ab.X + ab.Width / 2, ab.Y + ab.Height / 2)
             : null;
 
-        int bx, bw, waY, waH; double scale;
+        int bx, bw, waY, waH; double osScale;
         if (os is { } g)
         {
             bx = g.BoundsX; bw = g.BoundsWidth;
             waY = g.WorkY; waH = g.WorkHeight;
-            scale = g.Scale <= 0 ? 1.0 : g.Scale;
+            osScale = g.Scale <= 0 ? 1.0 : g.Scale;
             _dockScreenBounds = new PixelRect(g.BoundsX, g.BoundsY, g.BoundsWidth, g.BoundsHeight);
         }
         else
@@ -247,15 +252,30 @@ public sealed partial class OverlayCanvas
             var wa = screen.WorkingArea;   // vertical extent (clears a top/bottom taskbar)
             bx = ab.X; bw = ab.Width;
             waY = wa.Y; waH = wa.Height;
-            scale = screen.Scaling <= 0 ? 1.0 : screen.Scaling;
+            osScale = screen.Scaling <= 0 ? 1.0 : screen.Scaling;
             _dockScreenBounds = ab;        // pin the resolved monitor for later collapse/expand + screen changes
         }
+
+        // Convert DIP<->physical for THIS window off the scale Avalonia will actually render it at
+        // (RenderScaling), NOT the OS's GetDpiForMonitor value. The two normally agree, but they diverge
+        // across a DPI change: Avalonia updates RenderScaling on its own WM_DPICHANGED schedule, not in
+        // lockstep with the OS read (and a remote-desktop / Parsec virtual display can flip DPI repeatedly on
+        // connect). Sizing off anything but RenderScaling makes the rendered column the wrong height — it
+        // droops under the taskbar, or falls short. The OS read stays the authority on WHERE and HOW MUCH
+        // space (work-area extent + bounds, which Avalonia's cache goes stale on); RenderScaling is the
+        // authority on this window's DIP<->px. physW (window X + reservation thickness) uses it too, so the
+        // reserved strip matches the column's real rendered width. The deferred re-apply in the debounce
+        // catches the transient window where RenderScaling still lags the OS read.
+        double renderScale = w.RenderScaling <= 0 ? osScale : w.RenderScaling;
+
         // Record the geometry we're sizing to, so the watchdog re-applies only when the live read differs.
-        _dockGeomSig = GeomSig(_dockScreenBounds.Value, waY, waH, scale);
+        // Keyed on BOTH scales: a render-scale-only settle produces no OS-side change, so without renderScale
+        // in the signature the watchdog would miss it and leave the column mis-sized.
+        _dockGeomSig = GeomSig(_dockScreenBounds.Value, waY, waH, osScale, renderScale);
 
         double dipW = _dockCollapsed ? DockCollapsedWidth : DockExpandedWidth;
-        double dipH = Math.Max(1, waH / scale);
-        int physW = Math.Max(1, (int)(dipW * scale));
+        double dipH = Math.Max(1, waH / renderScale);
+        int physW = Math.Max(1, (int)(dipW * renderScale));
         int x = _dockSide == HAnchor.Left ? bx : bx + bw - physW;
 
         // Pin the height HARD via Min==Max, not just Height: the window is SizeToContent="Height" / CanResize
@@ -312,6 +332,11 @@ public sealed partial class OverlayCanvas
             {
                 ApplyDockedGeometry();
                 BringWindowToTop();
+                // Re-apply after this layout pass settles — the same guard ToggleDockedCollapsed uses. On a
+                // DPI change Avalonia updates the window's RenderScaling on its own schedule, which may still
+                // be lagging when this fires; the posted re-derive runs after the queue drains (RenderScaling
+                // settled), so the final height lands correctly instead of needing a manual collapse/expand.
+                Dispatcher.UIThread.Post(() => { if (_docked) ApplyDockedGeometry(); }, DispatcherPriority.Loaded);
             }
         };
         return t;
@@ -322,25 +347,28 @@ public sealed partial class OverlayCanvas
     // is resolvable yet; on the macOS stub (no OS read) it falls back to Avalonia's screen signature.
     private string? CurrentDockGeomSig()
     {
-        if (HostWindow is not { Screens: { } screens }) return null;
+        if (HostWindow is not { Screens: { } screens } w) return null;
+        double renderScale = w.RenderScaling <= 0 ? 1.0 : w.RenderScaling;
         var anchor = _dockScreenBounds ?? DockedScreen(screens).Bounds;
         var os = HostWindow.TryGetPlatformHandle() is { } h
             ? PlatformServices.WindowChrome.GetMonitorGeometryAt(anchor.X + anchor.Width / 2, anchor.Y + anchor.Height / 2)
             : null;
         if (os is { } g)
-            return GeomSig(new PixelRect(g.BoundsX, g.BoundsY, g.BoundsWidth, g.BoundsHeight), g.WorkY, g.WorkHeight, g.Scale);
+            return GeomSig(new PixelRect(g.BoundsX, g.BoundsY, g.BoundsWidth, g.BoundsHeight),
+                g.WorkY, g.WorkHeight, g.Scale <= 0 ? 1.0 : g.Scale, renderScale);
         // No OS read (macOS stub): fall back to Avalonia's screen, in the SAME GeomSig format ApplyDockedGeometry
         // records — otherwise the watchdog would see a permanent mismatch and re-apply every tick.
         var s = DockedScreen(screens);
-        return GeomSig(s.Bounds, s.WorkingArea.Y, s.WorkingArea.Height, s.Scaling <= 0 ? 1.0 : s.Scaling);
+        return GeomSig(s.Bounds, s.WorkingArea.Y, s.WorkingArea.Height, s.Scaling <= 0 ? 1.0 : s.Scaling, renderScale);
     }
 
-    // Bounds + the *vertical* work-area extent (Y/Height) + scale, as a string. Excludes the work area's
-    // X/Width on purpose: a left/right reservation (ours, or a side taskbar) moves only those, and folding them
-    // in would make the watchdog re-reserve on its own change — a loop. The vertical extent and scale are never
-    // touched by a left/right reserve, so keying on them catches every real display change and nothing else.
-    private static string GeomSig(PixelRect b, int workY, int workHeight, double scale)
-        => $"{b.X},{b.Y},{b.Width},{b.Height}/{workY},{workHeight}@{scale}";
+    // Bounds + the *vertical* work-area extent (Y/Height) + both scales (the OS's GetDpiForMonitor value and
+    // the window's RenderScaling), as a string. Excludes the work area's X/Width on purpose: a left/right
+    // reservation (ours, or a side taskbar) moves only those, and folding them in would make the watchdog
+    // re-reserve on its own change — a loop. The vertical extent and the two scales are never touched by a
+    // left/right reserve, so keying on them catches every real display/DPI change and nothing else.
+    private static string GeomSig(PixelRect b, int workY, int workHeight, double osScale, double renderScale)
+        => $"{b.X},{b.Y},{b.Width},{b.Height}/{workY},{workHeight}@{osScale}~{renderScale}";
 
     private void ReserveDockedColumn(PixelRect b, int physWidth)
     {

@@ -287,6 +287,29 @@ internal sealed class DenseController : IDisposable
         _host.Invalidate();
     }
 
+    /// <summary>
+    /// Tears down dense state <em>without</em> restoring the floating window — for switching straight into
+    /// Docked mode, where the caller (<see cref="OverlayCanvas.EnterDocked"/>) owns the window geometry and a
+    /// floating restore would only fight it. Dense is a hover sub-state of Floating; Docked is the other
+    /// top-level mode, so the two must never be live at once. Without this, <c>_dense</c> stays true after the
+    /// swap and the pointer/relayout paths still forward to the controller — hovering the docked column yanks
+    /// it to the dense popup's size (the reported bug). Clears the popup, timers, bubble, drop lanes and
+    /// hover, but leaves the remembered dense placement (_denseY / side / monitor) so a later return to
+    /// Floating + dense lands where it did before. No-op when not dense.
+    /// </summary>
+    public void Suspend()
+    {
+        if (!_dense) return;
+        _dense = false;
+        _denseOpen = false;
+        _closeTimer.Stop();
+        HideDropZones();            // in case a re-dock drag was mid-flight when the mode switched
+        DismissBubble();
+        _host.ClearRowHover();
+        _host.HideTooltips();
+        // Deliberately no RestoreFloating / RelayoutWindow: EnterDocked sets the column geometry next.
+    }
+
     public void OpenPopup()
     {
         if (!_dense || _denseOpen) return;
