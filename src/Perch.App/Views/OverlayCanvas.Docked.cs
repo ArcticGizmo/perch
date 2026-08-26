@@ -124,6 +124,11 @@ public sealed partial class OverlayCanvas
     private void EnterDocked()
     {
         if (_docked) return;
+        // Dense is a hover sub-state of Floating; Docked is the other top-level mode. If we're switching in
+        // from dense (Floating + dense strip), tear that down first — otherwise _denseCtl stays live and the
+        // pointer/relayout paths keep forwarding to it, so hovering the docked column snaps it to the dense
+        // popup's geometry. Suspend clears dense without restoring the floating window (we own geometry next).
+        _denseCtl.Suspend();
         _docked = true;
         _dockCollapsed = false;
         _hoveredRow = -1;
