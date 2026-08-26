@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Desktop basketball: a hoop hangs off the overlay and a ball bounces around your screen (Whimsy toggle)
+- Drag the resting ball away from the hoop to shoot; a dotted arc previews the flight
+- Swishes count — the lifetime tally lives under the net, and Quiet mode packs the whole court away
+- The headless render harness and the test host can no longer overwrite your real settings file (a render
+  used to save throwaway defaults over it, wiping settings and re-running the Quick Start on dev builds)
+- A settings file that won't fully parse is now salvaged value-by-value instead of reset to defaults
+- Settings saves are atomic, and a briefly locked settings file no longer reads as a fresh install
+
 ---
 
 ## [v0.3.72] - 2026-08-26

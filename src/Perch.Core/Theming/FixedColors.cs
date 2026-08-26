@@ -25,6 +25,8 @@ public sealed record FixedColors
     public required Rgb Danger { get; init; }
     /// <summary>The Jira ticket deep-link glyph (Jira brand blue).</summary>
     public required Rgb Jira { get; init; }
+    /// <summary>The desktop-basketball ball. A basketball is basketball-orange under every theme.</summary>
+    public required Rgb Basketball { get; init; }
 
     /// <summary>The one true fixed palette.</summary>
     public static readonly FixedColors Default = new()
@@ -33,6 +35,7 @@ public sealed record FixedColors
         BrandHover = new(255, 104, 84),
         Danger     = new(248, 113, 113),
         Jira       = new(38, 132, 255),   // Jira brand blue (#2684FF)
+        Basketball = new(232, 118, 42),   // leather orange; reads on light and dark
     };
 
     /// <summary>These colours as seen under a colour-vision deficiency, for the designer's live preview
@@ -46,6 +49,7 @@ public sealed record FixedColors
             BrandHover = CvdSim.Simulate(BrandHover, type),
             Danger     = CvdSim.Simulate(Danger, type),
             Jira       = CvdSim.Simulate(Jira, type),
+            Basketball = CvdSim.Simulate(Basketball, type),
         };
     }
 

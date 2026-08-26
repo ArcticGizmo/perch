@@ -176,6 +176,11 @@ public partial class App : Application
             _overlay.Canvas.SetFloatingWidth(settings.FloatingWidthDip);
             _overlay.Canvas.SetDockedWidth(settings.DockedWidthDip);
 
+            // Desktop basketball: keep the hoop tied to the panel edge through drags, dock/mode changes and
+            // the constant SizeToContent height changes. No-ops while the toy is off.
+            _overlay.PositionChanged += (_, _) => UpdateBasketballAnchor();
+            _overlay.Resized += (_, _) => UpdateBasketballAnchor();
+
             // Register the curated palettes harvested from the ArcticGizmo package as built-in-like presets,
             // so a saved ActiveThemeId that names one (e.g. "nord-dark") resolves below.
             Perch.Theming.ThemeCatalog.RegisterImported(Theming.PaletteImport.All());
@@ -560,6 +565,7 @@ public partial class App : Application
         _achievementsWindow?.Close();
         _achievementCard?.Close();
         _reactionBubbles?.Close();
+        _basketball?.Close();
         _flightWindow?.Close();
         _arcadeWindow?.Close();
         _invadersWindow?.Close();
@@ -792,6 +798,10 @@ public partial class App : Application
 
         // Watch Windows Do Not Disturb only while Social is on and the auto-close option is enabled.
         ApplyDndMonitor(s);
+
+        // Desktop basketball follows the effective toggle, so Quiet mode packs the hoop away and brings
+        // it back at expiry like the other playful features.
+        ApplyBasketball(s);
 
         // Data-layer sources for the git chip / stuck glyph (off in the monitor unless enabled here).
         if (_monitorHost is not null)
@@ -1142,6 +1152,47 @@ public partial class App : Application
             _reactionBubbles.Present(screen);
         }
         _reactionBubbles.Spawn(emoji);
+    }
+
+    // Desktop basketball: the click-through hoop/ball layer + its tiny hit window (see BasketballWindow).
+    // Created/closed by ApplyBasketball off the effective BasketballEnabled toggle; the hoop re-anchors from
+    // the overlay window's PositionChanged/Resized (wired at startup, no-op while this is null).
+    private BasketballWindow? _basketball;
+
+    private void ApplyBasketball(AppSettings s)
+    {
+        if (!s.BasketballEnabled)
+        {
+            _basketball?.Close();
+            _basketball = null;
+            return;
+        }
+        if (_basketball is null)
+        {
+            if (_overlay is null) return;
+            _basketball = new BasketballWindow();
+            _basketball.SetTally(_appSettings?.BasketballHoops ?? 0);
+            _basketball.Scored += () =>
+            {
+                if (_appSettings is not { } a) return;
+                a.BasketballHoops++;
+                a.Save();
+            };
+            _basketball.Closed += (_, _) => _basketball = null;
+        }
+        UpdateBasketballAnchor();
+    }
+
+    // Re-covers the overlay's screen and hangs the hoop off the panel's roomier side. Called on every
+    // overlay move/resize (cheap: Present short-circuits an unchanged work area).
+    private void UpdateBasketballAnchor()
+    {
+        if (_basketball is null || _overlay is null) return;
+        var screen = _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
+        if (screen is null) return;
+        _basketball.Present(screen);
+        var overlayRect = new PixelRect(_overlay.Position, PixelSize.FromSize(_overlay.Bounds.Size, screen.Scaling));
+        _basketball.SetAnchor(overlayRect, screen.WorkingArea);
     }
 
     private AchievementCardWindow? _achievementCard;

@@ -305,6 +305,11 @@ internal sealed class SettingsCatalogView : StackPanel
         box.PlaceholderText = placeholder;
         box.TextChanged += (_, _) =>
         {
+            // Avalonia raises TextChanged asynchronously, so the *initial* programmatic assignment above
+            // still reaches this handler after it's attached. Only persist a real edit — the echo of the
+            // current value must not Save() (rendering the catalogue against a throwaway AppSettings used
+            // to write those defaults over the real settings file this way).
+            if ((box.Text ?? "") == (get() ?? "")) return;
             set(box.Text);
             _settings.Save();
             if (live) _hooks.DisplayChanged?.Invoke();

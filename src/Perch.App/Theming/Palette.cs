@@ -71,6 +71,7 @@ public static class Palette
         BrandBrush.Color       = Fixed.Brand.ToColor();
         BrandHoverBrush.Color  = Fixed.BrandHover.ToColor();
         JiraBrush.Color        = Fixed.Jira.ToColor();
+        BasketballBrush.Color  = Fixed.Basketball.ToColor();
     }
 
     // The overlay panel is painted as a translucent scrim over the desktop; this is its fixed alpha.
@@ -97,6 +98,9 @@ public static class Palette
 
     // Jira brand blue for the ticket deep-link glyph; a fixed brand hue, the same under every theme.
     public static Color Jira        => Fixed.Jira.ToColor();
+
+    // The desktop-basketball ball; a fixed identity hue, the same under every theme.
+    public static Color Basketball  => Fixed.Basketball.ToColor();
 
     // Usage bar / status palette (same thresholds the overlay uses) — now themeable, from the active theme.
     public static Color Green        => Active.StatusRunning.ToColor();
@@ -183,4 +187,5 @@ public static class Palette
     public static readonly SolidColorBrush BrandBrush     = new(FixedColors.Default.Brand.ToColor());
     public static readonly SolidColorBrush BrandHoverBrush = new(FixedColors.Default.BrandHover.ToColor());
     public static readonly SolidColorBrush JiraBrush      = new(FixedColors.Default.Jira.ToColor());
+    public static readonly SolidColorBrush BasketballBrush = new(FixedColors.Default.Basketball.ToColor());
 }
