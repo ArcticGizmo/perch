@@ -1172,11 +1172,28 @@ public partial class App : Application
             if (_overlay is null) return;
             _basketball = new BasketballWindow();
             _basketball.SetTally(_appSettings?.BasketballHoops ?? 0);
+            _basketball.SetRimOffset(_appSettings?.BasketballRimOffsetDip);
             _basketball.Scored += () =>
             {
                 if (_appSettings is not { } a) return;
                 a.BasketballHoops++;
                 a.Save();
+            };
+            // The ring was dragged to a new height (or its menu reset it) — remember it panel-relative.
+            _basketball.RimOffsetChanged += offset =>
+            {
+                if (_appSettings is not { } a) return;
+                a.BasketballRimOffsetDip = offset;
+                a.Save();
+            };
+            // "Hide desktop basketball" on the ring menu = the Whimsy toggle, off. ApplyEffectiveSettings
+            // re-runs ApplyBasketball, which closes the windows.
+            _basketball.HideRequested += () =>
+            {
+                if (_appSettings is not { } a) return;
+                a.BasketballEnabled = false;
+                a.Save();
+                ApplyEffectiveSettings();
             };
             _basketball.Closed += (_, _) => _basketball = null;
         }

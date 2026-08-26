@@ -27,11 +27,11 @@ public class BasketballPhysicsTests
     }
 
     [Fact]
-    public void LaunchVelocityIsOppositeTheDragAndCapped()
+    public void LaunchVelocityFollowsTheDragAndIsCapped()
     {
-        // Drag right+down → launch left+up.
+        // Flick to the right → launch right; vertical always means up.
         var (vx, vy) = BasketballPhysics.LaunchVelocity(100, 100);
-        Assert.True(vx < 0);
+        Assert.True(vx > 0);
         Assert.True(vy < 0);
 
         // A drag past the cap launches no faster than the cap itself.
@@ -42,15 +42,27 @@ public class BasketballPhysicsTests
     }
 
     [Fact]
-    public void VerticalPullIsMirroredSoUpwardDragsStillArcTheShotUp()
+    public void VerticalDragAlwaysMeansUp()
     {
-        // The ball rests on the bottom of the work area, so a literal down-drag has no screen to move in;
-        // pulling up must mean the same thing as pulling down.
+        // The ball rests on the bottom of the work area, so a downward flick has nowhere useful to go;
+        // both vertical directions arc the shot up.
         var (ux, uy) = BasketballPhysics.LaunchVelocity(100, -100);
         var (dx, dy) = BasketballPhysics.LaunchVelocity(100, 100);
         Assert.Equal(dx, ux, 6);
         Assert.Equal(dy, uy, 6);
-        Assert.True(uy < 0, "an upward pull should still launch the ball upward");
+        Assert.True(uy < 0, "a vertical drag should always launch the ball upward");
+    }
+
+    [Fact]
+    public void ResetToRetossesTheBallFromThePointGivenAndWakesIt()
+    {
+        var p = Court();
+        StepUntilResting(p);
+        p.ResetTo(400, 300, 80, -120);
+        Assert.False(p.Resting);
+        Assert.Equal(400, p.X, 1);
+        Assert.Equal(300, p.Y, 1);
+        StepUntilResting(p);   // and it still settles like any other flight
     }
 
     [Fact]
@@ -129,7 +141,7 @@ public class BasketballPhysicsTests
         p.Drop(322);
         StepUntilResting(p);
         // The swish on the way down already happened during the drop; now shoot straight up from under it.
-        Assert.True(p.Launch(0, 200));   // drag straight down → launch straight up
+        Assert.True(p.Launch(0, 200));   // vertical flick (either direction) → straight up
         for (int i = 0; i < 4000 && !p.Resting; i++)
         {
             var r = p.Step(Dt);
@@ -157,7 +169,7 @@ public class BasketballPhysicsTests
         p.Drop(500);
         StepUntilResting(p);
         p.SetHoop(400, 600 - BasketballPhysics.BoardBelowRim, -1);   // sink the board to floor level
-        Assert.True(p.Launch(60, 0));   // drag right → launch left, into the board
+        Assert.True(p.Launch(-60, 0));   // flick left, into the board
         bool cameBack = false;
         for (int i = 0; i < 600; i++)
         {
@@ -169,14 +181,14 @@ public class BasketballPhysicsTests
     }
 
     [Fact]
-    public void TrajectoryPreviewArcsAwayFromTheDragAndBendsDown()
+    public void TrajectoryPreviewFollowsTheDragAndBendsDown()
     {
         var p = Court();
         StepUntilResting(p);
-        var pts = p.TrajectoryPreview(120, 120, count: 12);   // drag down-right → shot up-left
+        var pts = p.TrajectoryPreview(120, 120, count: 12);   // flick right → shot up-right
         Assert.Equal(12, pts.Count);
-        Assert.True(pts[0].X < p.X, "first point should move opposite the drag (left)");
-        Assert.True(pts[0].Y < p.Y, "first point should move opposite the drag (up)");
+        Assert.True(pts[0].X > p.X, "first point should follow the drag (right)");
+        Assert.True(pts[0].Y < p.Y, "first point should arc upward");
         // Gravity bends the arc: consecutive vertical deltas grow (less negative → positive).
         double d1 = pts[1].Y - pts[0].Y;
         double dLast = pts[^1].Y - pts[^2].Y;

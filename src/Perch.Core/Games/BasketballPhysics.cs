@@ -10,7 +10,7 @@ public readonly record struct BasketballStepResult(bool Scored, bool RimHit, boo
 /// head): one ball bouncing around a rectangular court (the screen's work area, in DIPs, origin top-left,
 /// +y down) with gravity, air drag and restitution; a hoop made of a vertical backboard segment and two
 /// rim-lip point colliders; swish detection when the ball's centre crosses the rim line downward between
-/// the lips; and the slingshot launch (drag away from the target, capped, launched opposite). Kept in
+/// the lips; and the flick launch (drag toward the target, capped, vertical always up). Kept in
 /// <c>Perch.Core</c> so it's deterministic and testable like <see cref="Connect4Game"/> — nothing here
 /// touches Avalonia or the OS. <see cref="Step"/> sub-steps internally so a fast ball can't tunnel
 /// through a rim lip between frames.
@@ -96,18 +96,34 @@ public sealed class BasketballPhysics
         _wasAboveRim = false;
     }
 
-    /// <summary>The slingshot launch velocity for a drag of (<paramref name="dragDx"/>,
-    /// <paramref name="dragDy"/>): opposite the drag, speed proportional to its length, capped.
-    /// The vertical pull is mirrored to always mean <em>down</em> (any vertical drag arcs the shot up):
-    /// the ball rests on the very bottom of the work area, so a literal down-drag runs out of screen
-    /// within pixels — and a launch into the floor is never what anyone meant anyway.</summary>
+    /// <summary>The flick launch velocity for a drag of (<paramref name="dragDx"/>,
+    /// <paramref name="dragDy"/>): <em>toward</em> the drag (flick where you want the ball to go), speed
+    /// proportional to the drag's length, capped. The vertical component always means <em>up</em>
+    /// (mirrored): the ball rests on the very bottom of the work area, and a launch into the floor is
+    /// never what anyone meant anyway.</summary>
     public static (double Vx, double Vy) LaunchVelocity(double dragDx, double dragDy)
     {
         double dy = Math.Abs(dragDy);
         double len = Math.Sqrt(dragDx * dragDx + dy * dy);
         if (len < MinDrag) return (0, 0);
         double speed = Math.Min(len, MaxDrag) / MaxDrag * MaxSpeed;
-        return (-dragDx / len * speed, -dy / len * speed);
+        return (dragDx / len * speed, -dy / len * speed);
+    }
+
+    /// <summary>Wake a resting ball so gravity applies again — for when the surface it settled on moved
+    /// (the user dragged the rim it was balanced on). A no-op mid-flight.</summary>
+    public void Wake() => Resting = false;
+
+    /// <summary>Re-toss the ball from an arbitrary point with an arbitrary velocity (the hoop's
+    /// double-click reset; the view adds the variance so the engine stays deterministic).</summary>
+    public void ResetTo(double x, double y, double vx, double vy)
+    {
+        X = Math.Clamp(x, BallRadius, Width - BallRadius);
+        Y = Math.Clamp(y, BallRadius, Height - BallRadius);
+        Vx = vx;
+        Vy = vy;
+        Resting = false;
+        _wasAboveRim = false;
     }
 
     /// <summary>Fire the ball opposite the drag vector. A drag shorter than <see cref="MinDrag"/> is a

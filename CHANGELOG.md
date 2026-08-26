@@ -8,8 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Desktop basketball: a hoop hangs off the overlay and a ball bounces around your screen (Whimsy toggle)
-- Drag the resting ball away from the hoop to shoot; a dotted arc previews the flight
+- Flick the resting ball toward the hoop to shoot; a dotted arc previews the flight
 - Swishes count — the lifetime tally lives under the net, and Quiet mode packs the whole court away
+- The ball has a generous grab halo, the ring drags up and down (the height sticks), and right-clicking
+  the ring offers "Reset hoop height" and "Hide desktop basketball"
+- Double-click the ring to re-toss the ball from the middle of the screen (with a little spice)
 - The headless render harness and the test host can no longer overwrite your real settings file (a render
   used to save throwaway defaults over it, wiping settings and re-running the Quick Start on dev builds)
 - A settings file that won't fully parse is now salvaged value-by-value instead of reset to defaults

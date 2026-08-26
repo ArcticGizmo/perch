@@ -354,7 +354,7 @@ internal static class SettingsRegistry
             s => s.UpsideDownQuickLinks, (s, v) => s.UpsideDownQuickLinks = v, playful: true),
 
         Toggle("basketball", "Desktop basketball",
-            "A hoop beside the overlay and a ball that bounces around the screen. Drag the ball back to shoot.",
+            "A hoop beside the overlay and a ball that bounces around the screen. Flick the ball to shoot.",
             SettingSurface.Whimsy, ["basketball", "hoop", "ball", "physics", "shoot", "sport", "game", "fun"],
             PreviewTarget.None, nameof(AppSettings.BasketballEnabled),
             s => s.BasketballEnabled, (s, v) => s.BasketballEnabled = v, playful: true),

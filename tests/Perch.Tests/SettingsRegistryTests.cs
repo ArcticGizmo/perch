@@ -29,9 +29,11 @@ public class SettingsRegistryTests
         // user-facing settings controls.
         nameof(AppSettings.ArcadeUnlocked),
         nameof(AppSettings.WordleState),
-        // The desktop-basketball lifetime swish tally, painted on the backboard. Hidden toy state (the
-        // feature itself is the "basketball" Whimsy toggle).
+        // The desktop-basketball lifetime swish tally, painted on the backboard, and the hoop height set
+        // by dragging the ring itself. Hidden toy / direct-manipulation state (the feature itself is the
+        // "basketball" Whimsy toggle).
         nameof(AppSettings.BasketballHoops),
+        nameof(AppSettings.BasketballRimOffsetDip),
         // Quiet mode's deadline is hidden mode state, toggled from the overlay header's right-click menu
         // (not a Settings-window control). See Perch.Data.QuietMode.
         nameof(AppSettings.QuietUntil),

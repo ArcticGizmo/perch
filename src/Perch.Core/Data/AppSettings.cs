@@ -164,6 +164,12 @@ internal sealed class AppSettings
     // WordleState, not a Settings-window control.
     public int BasketballHoops { get; set; }
 
+    // The hoop's vertical position, as an offset (DIPs) below the overlay panel's top edge — set by
+    // dragging the ring itself, so it keeps riding the panel. Null = the default height. Like the overlay
+    // widths, direct-manipulation state rather than a Settings-window control. See BasketballWindow.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? BasketballRimOffsetDip { get; set; }
+
     // The secret daily Wordle's progress, persisted as one compact string ("yyyy-MM-dd|guess1,guess2,...")
     // so today's guesses survive a restart. Scoped to a calendar day by WordleGame's codec; a past day reads
     // back as a fresh puzzle. Not a Settings-window control.

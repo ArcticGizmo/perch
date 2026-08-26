@@ -14,15 +14,17 @@ namespace Perch.Avalonia.Windows;
 /// <summary>
 /// Desktop basketball (the <c>AppSettings.BasketballEnabled</c> Whimsy toggle): a hoop hung off whichever
 /// side of the overlay panel has the most room, and a ball that bounces around the screen under
-/// <see cref="BasketballPhysics"/>, eventually coming to rest. Drag the resting ball <em>away</em> from the
-/// hoop to slingshot it (a partial trajectory previews the arc); swishes bump the tally painted under the
-/// net. See docs/basketball-plan.md.
+/// <see cref="BasketballPhysics"/>, eventually coming to rest. Flick the resting ball <em>toward</em> the
+/// hoop to shoot (a partial trajectory previews the arc); swishes bump the tally painted under the net;
+/// double-clicking the hoop re-tosses the ball from screen centre. See docs/basketball-plan.md.
 ///
 /// <para>Unlike <see cref="ReactionBubbleWindow"/> (transient, deliberately hit-testable) this layer is
 /// persistent, so it is fully click-through (<see cref="IWindowChrome.MakeClickThroughNoActivate"/>) and
-/// never eats a desktop click. Input arrives instead through <see cref="BallHitWindow"/> — a tiny
-/// transparent no-activate window parked exactly over the <em>resting</em> ball, the only pixels the
-/// feature ever claims. It captures the slingshot drag and hides while the ball flies.</para>
+/// never eats a desktop click. Input arrives instead through two small transparent no-activate windows —
+/// <see cref="BallHitWindow"/>, a forgiving halo parked over the <em>resting</em> ball (captures the
+/// aim flick, hides in flight), and <see cref="RingHitWindow"/> over the hoop (drag to set the hoop
+/// height, persisted panel-relative; right-click for reset/hide; double-click to re-toss the ball) — the
+/// only pixels the feature claims.</para>
 /// </summary>
 internal sealed class BasketballWindow : Window
 {
@@ -31,11 +33,25 @@ internal sealed class BasketballWindow : Window
 
     private readonly BasketballLayer _layer = new();
     private BallHitWindow? _hit;
+    private RingHitWindow? _ringHit;
     private double _scale = 1.0;
     private PixelRect _presented;              // the work area last covered, to skip redundant re-covers
+    private PixelRect _lastOverlayRect;        // the anchor inputs, kept so a rim drag/reset can re-derive
+    private PixelRect _lastWorkArea;
+    private bool _anchored;
+    private double? _rimOffsetDip;             // user-set hoop height below the panel top; null = default
+    private double _dragStartRimY;             // rim height when a ring drag began
 
     /// <summary>Raised on each swish, so the App can bump and persist the lifetime tally.</summary>
     public event Action? Scored;
+
+    /// <summary>The user dragged the ring to a new height (an offset below the panel top, in DIPs) or
+    /// reset it (null) — the App persists it (<c>AppSettings.BasketballRimOffsetDip</c>).</summary>
+    public event Action<double?>? RimOffsetChanged;
+
+    /// <summary>The user picked "Hide desktop basketball" on the ring's right-click menu — the App turns
+    /// the Whimsy toggle off and persists.</summary>
+    public event Action? HideRequested;
 
     public BasketballWindow()
     {
@@ -58,6 +74,10 @@ internal sealed class BasketballWindow : Window
 
     /// <summary>Seed the lifetime swish tally painted under the net.</summary>
     public void SetTally(int tally) => _layer.SetTally(tally);
+
+    /// <summary>Seed the persisted hoop height (offset below the panel top, DIPs; null = default) before
+    /// the first anchor.</summary>
+    public void SetRimOffset(double? offsetDip) => _rimOffsetDip = offsetDip;
 
     /// <summary>Cover <paramref name="screen"/>'s work area (the ball's court) in DIPs. Idempotent, so the
     /// per-drag anchor updates can call it freely; a real change re-clamps the ball via the physics.</summary>
@@ -87,6 +107,10 @@ internal sealed class BasketballWindow : Window
     /// edge, visually tied to it in floating, docked and dense modes alike.</summary>
     public void SetAnchor(PixelRect overlayRect, PixelRect workArea)
     {
+        _lastOverlayRect = overlayRect;
+        _lastWorkArea = workArea;
+        _anchored = true;
+
         double left = (overlayRect.X - Position.X) / _scale;
         double right = (overlayRect.Right - Position.X) / _scale;
         double top = (overlayRect.Y - Position.Y) / _scale;
@@ -96,11 +120,73 @@ internal sealed class BasketballWindow : Window
 
         int facing = spaceRight >= spaceLeft ? 1 : -1;
         double boardX = facing > 0 ? right + HoopGapDip : left - HoopGapDip;
-        // Below the panel top, but never higher than a full-power arc can actually reach from the floor
-        // (~640 DIP with the engine's launch cap), and never absurdly low.
+        _layer.SetHoop(boardX, ClampRim(top + (_rimOffsetDip ?? RimBelowPanelTop)), facing);
+        PositionRingHitWindow();
+    }
+
+    // Below the panel top, but never higher than a full-power arc can actually reach from the floor
+    // (~640 DIP with the engine's launch cap), and never absurdly low.
+    private double ClampRim(double rimY)
+    {
         double lo = Math.Max(BasketballPhysics.BoardAboveRim + 24, Height - 640);
         double hi = Math.Max(lo, Height * 0.7);
-        _layer.SetHoop(boardX, Math.Clamp(top + RimBelowPanelTop, lo, hi), facing);
+        return Math.Clamp(rimY, lo, hi);
+    }
+
+    // Parks the ring's input window over the drawn hoop (backboard + rim + net + tally). Unlike the ball's
+    // halo it's always up: the ring is grabbable (drag = hoop height) and right-clickable at any time.
+    private void PositionRingHitWindow()
+    {
+        _ringHit ??= CreateRingHitWindow();
+        double xMin = Math.Min(_layer.HoopBoardX, _layer.HoopRimFarX) - 8;
+        double xMax = Math.Max(_layer.HoopBoardX, _layer.HoopRimFarX) + 8;
+        double yMin = _layer.HoopRimY - BasketballPhysics.BoardAboveRim - 6;
+        double yMax = _layer.HoopRimY + 50;   // net depth + the tally pill
+        _ringHit.Resize(xMax - xMin, yMax - yMin);
+        _ringHit.Position = new PixelPoint(
+            Position.X + (int)Math.Round(xMin * _scale),
+            Position.Y + (int)Math.Round(yMin * _scale));
+        if (!_ringHit.IsVisible) _ringHit.Show();
+        PlatformServices.WindowChrome.BringToTopNoActivate(_ringHit.TryGetPlatformHandle()?.Handle ?? 0);
+    }
+
+    private RingHitWindow CreateRingHitWindow() => new(
+        dragStarted: () => _dragStartRimY = _layer.HoopRimY,
+        dragDelta: deltaPx =>
+        {
+            _layer.MoveHoopTo(ClampRim(_dragStartRimY + deltaPx.Y / _scale));
+            PositionRingHitWindow();
+        },
+        dragEnded: () =>
+        {
+            // Store the height panel-relative so it keeps riding the panel, and let the App persist it.
+            // A press-and-release that didn't actually move (a plain click, the first half of a
+            // double-click) changes nothing and saves nothing.
+            double top = (_lastOverlayRect.Y - Position.Y) / _scale;
+            double offset = _layer.HoopRimY - top;
+            if (Math.Abs(offset - (_rimOffsetDip ?? RimBelowPanelTop)) < 0.5) return;
+            _rimOffsetDip = offset;
+            RimOffsetChanged?.Invoke(_rimOffsetDip);
+        },
+        rightClicked: ShowRingMenu,
+        doubleClicked: () => _layer.ResetBall());
+
+    private void ShowRingMenu()
+    {
+        if (_ringHit is null) return;
+        var reset = new MenuItem { Header = "Reset hoop height" };
+        reset.Click += (_, _) =>
+        {
+            _rimOffsetDip = null;
+            RimOffsetChanged?.Invoke(null);
+            if (_anchored) SetAnchor(_lastOverlayRect, _lastWorkArea);
+        };
+        var hide = new MenuItem { Header = "Hide desktop basketball" };
+        hide.Click += (_, _) => HideRequested?.Invoke();
+        var flyout = new MenuFlyout();
+        flyout.Items.Add(reset);
+        flyout.Items.Add(hide);
+        flyout.ShowAt(_ringHit.Surface, showAtPointer: true);
     }
 
     private void ShowHitWindowOverBall(double xDip, double yDip)
@@ -128,6 +214,8 @@ internal sealed class BasketballWindow : Window
     {
         _hit?.Close();
         _hit = null;
+        _ringHit?.Close();
+        _ringHit = null;
         base.OnClosed(e);
     }
 }
@@ -145,6 +233,7 @@ internal sealed class BasketballLayer : Control
     private const double NetDepth = 26;
 
     private readonly BasketballPhysics _physics = new();
+    private readonly Random _rng = new();   // only for the double-click re-toss variance
     private DispatcherTimer? _timer;
     private long _lastTick;
     private (double Dx, double Dy)? _aim;   // the live drag vector (DIPs), while aiming
@@ -157,7 +246,7 @@ internal sealed class BasketballLayer : Control
     /// <summary>The ball settled (floor or balanced on the rim) — park the hit window over it.</summary>
     public event Action<double, double>? BallCameToRest;
 
-    /// <summary>A slingshot fired — hide the hit window until the ball settles again.</summary>
+    /// <summary>The ball took flight (a shot or a re-toss) — hide the hit window until it settles.</summary>
     public event Action? BallLaunched;
 
     /// <summary>A swish landed (the tally here is already bumped; the App persists its copy).</summary>
@@ -166,6 +255,9 @@ internal sealed class BasketballLayer : Control
     public bool IsBallResting => _physics.Resting;
     public double BallX => _physics.X;
     public double BallY => _physics.Y;
+    public double HoopBoardX => _physics.BoardX;
+    public double HoopRimY => _physics.RimY;
+    public double HoopRimFarX => _physics.RimFarX;
 
     public void SetTally(int tally)
     {
@@ -181,6 +273,9 @@ internal sealed class BasketballLayer : Control
 
     public void SetHoop(double boardX, double rimY, int facing)
     {
+        bool moved = _hoopPlaced &&
+            (Math.Abs(boardX - _physics.BoardX) > 0.5 || Math.Abs(rimY - _physics.RimY) > 0.5
+             || facing != _physics.Facing);
         _physics.SetHoop(boardX, rimY, facing);
         if (!_hoopPlaced)
         {
@@ -189,6 +284,31 @@ internal sealed class BasketballLayer : Control
             _physics.Drop(boardX + facing * (BasketballPhysics.RimSpan + 70));
             EnsureTimer();
         }
+        else if (moved && _physics.Resting && _physics.Y < _physics.Height - BasketballPhysics.BallRadius - 1)
+        {
+            // The ball was asleep balanced on the rim and the rim just moved out from under it: let it
+            // fall, and pull the hit window away like any launch until it settles again.
+            _physics.Wake();
+            _wasResting = false;
+            BallLaunched?.Invoke();
+            EnsureTimer();
+        }
+        InvalidateVisual();
+    }
+
+    /// <summary>Move just the rim height (a live ring drag); board side and facing stay put.</summary>
+    public void MoveHoopTo(double rimY) => SetHoop(_physics.BoardX, rimY, _physics.Facing);
+
+    /// <summary>Re-toss the ball from the centre of the screen with a gentle random lob (the hoop's
+    /// double-click reset — for when the ball ends up somewhere annoying).</summary>
+    public void ResetBall()
+    {
+        double vx = (_rng.NextDouble() - 0.5) * 260;        // a little sideways drift either way
+        double vy = -(60 + _rng.NextDouble() * 160);        // a gentle upward toss
+        _physics.ResetTo(_physics.Width / 2, _physics.Height / 2, vx, vy);
+        _wasResting = false;
+        BallLaunched?.Invoke();   // pull the hit window away until it settles again
+        EnsureTimer();
         InvalidateVisual();
     }
 
@@ -200,7 +320,7 @@ internal sealed class BasketballLayer : Control
         InvalidateVisual();
     }
 
-    /// <summary>The drag ended: launch (opposite the drag) or, for a tiny drag, cancel the shot.</summary>
+    /// <summary>The drag ended: launch (toward the flick) or, for a tiny drag, cancel the shot.</summary>
     public void EndAim(double dx, double dy)
     {
         _aim = null;
@@ -326,7 +446,7 @@ internal sealed class BasketballLayer : Control
     {
         double x = _physics.X, y = _physics.Y;
 
-        // The rubber-band: ball → your drag point (behind the shot), with a grip dot at the hand.
+        // The aim line: ball → your drag point (the direction of the shot), with a grip dot at the hand.
         var band = new Pen(new SolidColorBrush(Color.FromArgb(150, Palette.Fg.R, Palette.Fg.G, Palette.Fg.B)),
             1.5, DashStyle.Dash);
         ctx.DrawLine(band, new Point(x, y), new Point(x + dx, y + dy));
@@ -377,7 +497,7 @@ internal sealed class BasketballLayer : Control
         // Settle the ball deterministically (no timer headless), then pose a drag.
         layer._physics.Drop(140);
         while (!layer._physics.Resting) layer._physics.Step(0.016);
-        layer._aim = (-70, -60);                // pull up-left (vertical mirrors down) → a shot arcing to the hoop
+        layer._aim = (70, -60);                 // flick up-right → a shot arcing toward the hoop
         return new Grid
         {
             Width = 420, Height = 360,
@@ -394,14 +514,17 @@ internal sealed class BasketballLayer : Control
 }
 
 /// <summary>
-/// The one interactive surface of desktop basketball: a tiny transparent no-activate tool window parked
-/// exactly over the resting ball. Press captures the pointer; the drag is reported in physical pixels
-/// (screen space, so it keeps working outside the window's own 40 DIPs); release fires the slingshot.
-/// Hidden while the ball is in flight — the click-through layer owns every other pixel's honesty.
+/// The ball's interactive surface: a small transparent no-activate tool window parked exactly over the
+/// resting ball. Press captures the pointer; the drag is reported in physical pixels (screen space, so it
+/// keeps working outside the window's own square); release fires the shot toward the flick. Hidden while
+/// the ball is in flight — the click-through layer owns every other pixel's honesty.
 /// </summary>
 internal sealed class BallHitWindow : Window
 {
-    public const double SizeDip = 40;
+    // Generously larger than the 24-DIP ball: the ball is a small target and the window is invisible, so
+    // a forgiving halo makes it grabbable without hunting for exact pixels. Kept modest all the same —
+    // desktop clicks inside this square go to the ball, not the desktop, while the ball rests.
+    public const double SizeDip = 72;
 
     private readonly Action<PixelPoint> _aimChanged;
     private readonly Action<PixelPoint> _released;
@@ -473,6 +596,118 @@ internal sealed class BallHitWindow : Window
             e.Pointer.Capture(null);
             var p = this.PointToScreen(e.GetPosition(this));
             _owner._released(new PixelPoint(p.X - _owner._dragStart.X, p.Y - _owner._dragStart.Y));
+            e.Handled = true;
+        }
+    }
+}
+
+/// <summary>
+/// The ring's input window: a transparent no-activate tool window parked over the drawn hoop, up the
+/// whole time the game is (unlike the ball's halo, which hides in flight). Left-drag adjusts the hoop
+/// height — reported as cumulative screen-pixel deltas so the drag keeps working outside the window —
+/// right-click opens the ring menu (reset height / hide the game), and double-click re-tosses the ball
+/// from screen centre (for when it settles somewhere annoying).
+/// </summary>
+internal sealed class RingHitWindow : Window
+{
+    private readonly Action _dragStarted;
+    private readonly Action<PixelPoint> _dragDelta;
+    private readonly Action _dragEnded;
+    private readonly Action _rightClicked;
+    private readonly Action _doubleClicked;
+    private PixelPoint _dragStart;
+    private bool _dragging;
+
+    /// <summary>The hit-test surface — also the anchor the ring menu flyout shows at.</summary>
+    internal Control Surface { get; }
+
+    public RingHitWindow(Action dragStarted, Action<PixelPoint> dragDelta, Action dragEnded,
+        Action rightClicked, Action doubleClicked)
+    {
+        _dragStarted = dragStarted;
+        _dragDelta = dragDelta;
+        _dragEnded = dragEnded;
+        _rightClicked = rightClicked;
+        _doubleClicked = doubleClicked;
+
+        WindowDecorations = WindowDecorations.None;
+        Background = Brushes.Transparent;
+        TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
+        Topmost = true;
+        ShowInTaskbar = false;
+        CanResize = false;
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Cursor = new Cursor(StandardCursorType.SizeNorthSouth);
+
+        Surface = new HitSurface(this);
+        Content = Surface;
+    }
+
+    /// <summary>Match the window (and its pinned hit surface) to the hoop's drawn extent, in DIPs.</summary>
+    public void Resize(double widthDip, double heightDip)
+    {
+        Width = widthDip;
+        Height = heightDip;
+        Surface.Width = widthDip;
+        Surface.Height = heightDip;
+    }
+
+    protected override void OnOpened(EventArgs e)
+    {
+        base.OnOpened(e);
+        if (TryGetPlatformHandle() is { } h)
+            PlatformServices.WindowChrome.MakeToolWindowNoActivate(h.Handle);
+    }
+
+    private sealed class HitSurface : Control
+    {
+        private readonly RingHitWindow _owner;
+        public HitSurface(RingHitWindow owner) => _owner = owner;
+
+        public override void Render(DrawingContext ctx) =>
+            ctx.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
+
+        protected override void OnPointerPressed(PointerPressedEventArgs e)
+        {
+            base.OnPointerPressed(e);
+            var props = e.GetCurrentPoint(this).Properties;
+            if (props.IsRightButtonPressed)
+            {
+                _owner._rightClicked();
+                e.Handled = true;
+                return;
+            }
+            if (!props.IsLeftButtonPressed) return;
+            if (e.ClickCount >= 2)
+            {
+                // Double-click resets the ball; don't also start a height drag from the second press.
+                _owner._doubleClicked();
+                e.Handled = true;
+                return;
+            }
+            _owner._dragging = true;
+            _owner._dragStart = this.PointToScreen(e.GetPosition(this));
+            _owner._dragStarted();
+            e.Pointer.Capture(this);
+            e.Handled = true;
+        }
+
+        protected override void OnPointerMoved(PointerEventArgs e)
+        {
+            base.OnPointerMoved(e);
+            if (!_owner._dragging) return;
+            var p = this.PointToScreen(e.GetPosition(this));
+            _owner._dragDelta(new PixelPoint(p.X - _owner._dragStart.X, p.Y - _owner._dragStart.Y));
+            e.Handled = true;
+        }
+
+        protected override void OnPointerReleased(PointerReleasedEventArgs e)
+        {
+            base.OnPointerReleased(e);
+            if (!_owner._dragging) return;
+            _owner._dragging = false;
+            e.Pointer.Capture(null);
+            _owner._dragEnded();
             e.Handled = true;
         }
     }
