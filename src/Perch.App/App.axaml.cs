@@ -296,6 +296,14 @@ public partial class App : Application
             _overlay.Canvas.PostStatusRequested += OpenCompose;
             _overlay.Canvas.FriendsRequested += OpenFriends;
             _overlay.Canvas.ReactRequested += OnReactRequested;
+            // Emoji picker recents: read from and write back to the persisted AppSettings.RecentEmojis, so the
+            // picker's default grid tracks what the user actually reacts with across sessions.
+            _overlay.Canvas.RecentEmojisProvider = () =>
+                (IReadOnlyList<string>?)_appSettings?.RecentEmojis ?? [];
+            _overlay.Canvas.EmojiUsed = emoji =>
+            {
+                if (_appSettings is { } s) { s.RecordRecentEmoji(emoji); s.Save(); }
+            };
             _overlay.Canvas.GameOpenRequested += OpenOnlineGameFromOverlay;   // a game icon in the friends region
             _overlay.Canvas.GameRequestResponded += OnGameRequestResponded;   // accept / decline / cancel an invite
             _overlay.Canvas.SocialRegionExpandChanged += expanded =>

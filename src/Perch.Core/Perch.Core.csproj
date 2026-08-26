@@ -24,4 +24,9 @@
     <InternalsVisibleTo Include="Perch.Platform.Windows" />
     <InternalsVisibleTo Include="Perch.Platform.Mac" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- The searchable emoji dataset the picker uses (see EmojiCatalog). Regenerate with tools/gen-emoji.py. -->
+    <EmbeddedResource Include="Data\emoji-data.tsv" LogicalName="Perch.emoji-data.tsv" />
+  </ItemGroup>
 </Project>

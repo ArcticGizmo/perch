@@ -8,6 +8,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
+using Perch.Data;
 
 namespace Perch.Avalonia.Windows;
 
@@ -47,34 +48,52 @@ internal static class EmojiText
 }
 
 /// <summary>
-/// A reusable, activating emoji chooser shown near the cursor: a grid (not a long vertical list) of preset
-/// emoji chips plus an entry box that accepts <em>any</em> system emoji you type or paste — so a reaction (or a
-/// status mood) is never limited to the curated set. Typing text filters the presets by keyword; typing/pasting
-/// an emoji offers it as a highlighted "use this" chip, and Enter picks it. Closes on pick, Esc, or deactivation.
+/// Perch's own emoji chooser, shown near the cursor — a replacement for leaning on the OS emoji dialog. With the
+/// box empty it shows your <em>recently used</em> emoji (falling back to a popular set on first run); typing filters
+/// the whole cross-platform emoji set (<see cref="EmojiCatalog"/>) by name, shortcode or keyword; and typing or
+/// pasting an actual emoji offers it directly as a highlighted "use this" chip. Enter picks the best match; picking
+/// records it as recently used. Closes on pick, Esc, or deactivation.
 ///
 /// <para>It's a real (activating) window rather than a flyout on purpose: the overlay is a no-activate tool
-/// window, so a flyout hung off it can't reliably take keyboard focus for the entry box / the OS emoji picker.</para>
+/// window, so a flyout hung off it can't reliably take keyboard focus for the entry box.</para>
 /// </summary>
 internal sealed class EmojiPickerWindow : Window
 {
+    // Shown in the empty state when the user has no history yet, so the grid is never blank on first run.
+    private static readonly string[] PopularFallback =
+    [
+        "👍", "🔥", "🎉", "😂", "😮", "❤️", "🙌", "👀",
+        "😢", "🚀", "💯", "🤯", "🫡", "😅", "💀", "✅",
+    ];
+
+    private const int MaxSearchResults = 60;
+
     private readonly Action<string?> _onPick;
-    private readonly (string Emoji, string Keywords)[] _presets;
+    private readonly Action<string>? _onEmojiUsed;
+    private readonly IReadOnlyList<string> _recents;
     private readonly bool _showClear;
     private readonly TextBox _entry;
+    private readonly TextBlock _sectionLabel;
     private readonly WrapPanel _grid;
+    private readonly TextBlock _empty;
     private bool _picked;
 
     /// <param name="onPick">Invoked with the chosen emoji, or <c>null</c> when the "clear" chip is used
     /// (only offered when <paramref name="showClear"/> is set).</param>
+    /// <param name="recents">Most-recently-used emoji, most-recent first, shown by default. May be empty/null.</param>
+    /// <param name="onEmojiUsed">Invoked with the chosen emoji (never null) so the caller can record it as
+    /// recently used. Not called for the "clear" chip.</param>
     public EmojiPickerWindow(
         string title,
-        (string Emoji, string Keywords)[] presets,
         Action<string?> onPick,
         PixelPoint anchor,
+        IReadOnlyList<string>? recents = null,
+        Action<string>? onEmojiUsed = null,
         bool showClear = false)
     {
         _onPick = onPick;
-        _presets = presets;
+        _onEmojiUsed = onEmojiUsed;
+        _recents = recents ?? [];
         _showClear = showClear;
 
         Title = title;
@@ -89,17 +108,23 @@ internal sealed class EmojiPickerWindow : Window
         Background = Palette.OverlaySurfaceBrush;
 
         _entry = SettingsUi.ThemedTextBox("");
-        _entry.PlaceholderText = "search or type an emoji…";
+        _entry.PlaceholderText = "search emoji…";
         _entry.TextChanged += (_, _) => Rebuild();
+
+        _sectionLabel = new TextBlock
+        {
+            FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = Palette.MutedBrush,
+            Margin = new Thickness(2, 0, 0, 0),
+        };
 
         // A little top inset so the first row's emoji glyphs (which sit high in their line box) aren't clipped
         // by the ScrollViewer's top edge.
         _grid = new WrapPanel { MaxWidth = 276, Margin = new Thickness(0, 4, 0, 0) };
 
-        var tip = new TextBlock
+        _empty = new TextBlock
         {
-            Text = "Tip: press Win + . for the system emoji picker.",
-            Foreground = Palette.MutedBrush, FontSize = 11, TextWrapping = TextWrapping.Wrap,
+            Text = "No emoji found.", Foreground = Palette.MutedBrush, FontSize = 12,
+            Margin = new Thickness(2, 6, 0, 2), IsVisible = false,
         };
 
         var panel = new StackPanel { Spacing = 8 };
@@ -108,8 +133,9 @@ internal sealed class EmojiPickerWindow : Window
             Text = title, FontSize = 13, FontWeight = FontWeight.SemiBold, Foreground = Palette.TitleBrush,
         });
         panel.Children.Add(_entry);
-        panel.Children.Add(new ScrollViewer { MaxHeight = 184, Content = _grid });
-        panel.Children.Add(tip);
+        panel.Children.Add(_sectionLabel);
+        panel.Children.Add(new ScrollViewer { MaxHeight = 220, Content = _grid });
+        panel.Children.Add(_empty);
 
         Content = new Border
         {
@@ -138,47 +164,71 @@ internal sealed class EmojiPickerWindow : Window
         {
             var q = _entry.Text?.Trim() ?? "";
             if (EmojiText.ContainsEmoji(q)) { Pick(EmojiText.FirstGrapheme(q)); e.Handled = true; return; }
-            // Otherwise, if the keyword search narrowed to a single preset, pick it.
-            var matches = FilteredPresets(q);
-            if (matches.Count == 1) { Pick(matches[0].Emoji); e.Handled = true; return; }
+            // Otherwise pick the top search result, so "type a couple letters, hit Enter" works.
+            if (q.Length > 0)
+            {
+                var matches = EmojiCatalog.Search(q, 1);
+                if (matches.Count > 0) { Pick(matches[0].Emoji); e.Handled = true; return; }
+            }
         }
         base.OnKeyDown(e);
     }
 
-    // Rebuilds the chip grid from the current entry text: a highlighted custom chip when an emoji was typed,
-    // an optional "clear" chip, then the presets that match the keyword search (all of them when it's empty).
+    // Rebuilds the chip grid from the current entry text. Empty box → recently-used (or popular) grid; a typed
+    // emoji → a highlighted custom chip above the recents; a keyword → the full-catalogue search results.
     private void Rebuild()
     {
         _grid.Children.Clear();
+        _empty.IsVisible = false;
         var q = _entry.Text?.Trim() ?? "";
 
         if (EmojiText.ContainsEmoji(q))
         {
             var custom = EmojiText.FirstGrapheme(q);
+            _sectionLabel.Text = "Use this";
             _grid.Children.Add(Chip(custom, () => Pick(custom), highlight: true));
-        }
-        else if (_showClear && q.Length == 0)
-        {
-            _grid.Children.Add(Chip("🚫", () => Pick(null), dim: true));
+            return;
         }
 
-        foreach (var (emoji, _) in FilteredPresets(q))
-            _grid.Children.Add(Chip(emoji, () => Pick(emoji)));
+        if (q.Length == 0)
+        {
+            if (_showClear) _grid.Children.Add(Chip("🚫", () => Pick(null), dim: true));
+
+            var recents = DistinctRecents();
+            if (recents.Count > 0)
+            {
+                _sectionLabel.Text = "Recently used";
+                foreach (var emoji in recents) _grid.Children.Add(Chip(emoji, () => Pick(emoji)));
+            }
+            else
+            {
+                _sectionLabel.Text = "Popular";
+                foreach (var emoji in PopularFallback) _grid.Children.Add(Chip(emoji, () => Pick(emoji)));
+            }
+            return;
+        }
+
+        var results = EmojiCatalog.Search(q, MaxSearchResults);
+        _sectionLabel.Text = results.Count > 0 ? "Results" : "";
+        _empty.IsVisible = results.Count == 0;
+        foreach (var r in results) _grid.Children.Add(Chip(r.Emoji, () => Pick(r.Emoji)));
     }
 
-    // The presets to show for a query: all of them when it's empty or an emoji was typed (so a preset stays
-    // one click away), otherwise those whose keywords contain the query.
-    private List<(string Emoji, string Keywords)> FilteredPresets(string q)
+    // Recents as unique glyphs, most-recent first (the caller's list should already be deduped, but be defensive).
+    private List<string> DistinctRecents()
     {
-        if (q.Length == 0 || EmojiText.ContainsEmoji(q)) return _presets.ToList();
-        return _presets.Where(p =>
-            p.Keywords.Contains(q, StringComparison.OrdinalIgnoreCase) || p.Emoji == q).ToList();
+        var seen = new HashSet<string>();
+        var list = new List<string>();
+        foreach (var e in _recents)
+            if (!string.IsNullOrWhiteSpace(e) && seen.Add(e)) list.Add(e);
+        return list;
     }
 
     private void Pick(string? emoji)
     {
         if (_picked) return;
         _picked = true;
+        if (!string.IsNullOrWhiteSpace(emoji)) _onEmojiUsed?.Invoke(emoji);
         _onPick(emoji);
         Close();
     }

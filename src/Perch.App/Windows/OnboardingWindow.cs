@@ -130,8 +130,17 @@ internal sealed class OnboardingWindow : Window
     }
 
     /// <summary>Navigates to a given step for the headless renderer (HeadlessRenderer shows the window and
-    /// captures a frame; templated controls only get their styles inside a shown window).</summary>
-    public void ShowStepForRender(int step) => GoTo(step);
+    /// captures a frame; templated controls only get their styles inside a shown window). Also marks this as a
+    /// render-only instance so its OnClosed dismissal never writes settings (the renderer builds it from a
+    /// throwaway AppSettings, but Save() targets the real on-disk file).</summary>
+    public void ShowStepForRender(int step)
+    {
+        _renderOnly = true;
+        GoTo(step);
+    }
+
+    // True only for a HeadlessRenderer instance (see ShowStepForRender): suppresses the OnClosed persist.
+    private bool _renderOnly;
 
     // ── Chrome (header / rail / stage / footer) ──────────────────────────────
 
@@ -326,6 +335,10 @@ internal sealed class OnboardingWindow : Window
         GoTo(_step + 1);
     }
 
+    // Set once the wizard has recorded onboarding as seen, so the OnClosed "dismissed" fallback below doesn't
+    // redundantly re-save (or fight a Commit that's about to close the window).
+    private bool _committed;
+
     // Persists the choices and signals the app to apply them live, then closes. applyTier=false is the
     // "Skip setup" path: it only records that onboarding was seen (so it won't reappear) and applies nothing.
     private void Commit(bool applyTier)
@@ -337,10 +350,25 @@ internal sealed class OnboardingWindow : Window
             _settings.OnboardingTierChosen = OnboardingTiers.MatchedTier(_enabled);
         }
 
+        _committed = true;
         _settings.FirstRunComplete = true;
         _settings.Save();
         _onApplied();
         Close();
+    }
+
+    // Dismissing the wizard by any other means — the title-bar [X] or Esc — should also count as "seen", so it
+    // doesn't nag on every launch. Records onboarding complete (applying nothing, like "Skip setup") unless a
+    // Commit already did. See docs/onboarding-quickstart-plan.md.
+    protected override void OnClosed(EventArgs e)
+    {
+        if (!_committed && !_renderOnly)
+        {
+            _committed = true;
+            _settings.FirstRunComplete = true;
+            _settings.Save();
+        }
+        base.OnClosed(e);
     }
 
     protected override void OnKeyDown(KeyEventArgs e)

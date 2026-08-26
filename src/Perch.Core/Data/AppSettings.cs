@@ -415,6 +415,28 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<OverlaySection>? SectionOrder { get; set; }
 
+    // Most-recently-used emoji from Perch's own emoji picker, most-recent first, de-duplicated and capped at
+    // RecentEmojiCap. Powers the picker's default "Recently used" grid so the reactions you actually reach for
+    // are one click away. Runtime state rather than a user-facing setting (excluded from the registry via
+    // SettingsRegistryTests.NotSettings); null/empty until the first pick. See EmojiPickerWindow + RecordRecentEmoji.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? RecentEmojis { get; set; }
+
+    /// <summary>How many recently-used emoji the picker remembers (see <see cref="RecentEmojis"/>).</summary>
+    public const int RecentEmojiCap = 24;
+
+    /// <summary>Promote <paramref name="emoji"/> to the front of <see cref="RecentEmojis"/> (de-duplicating and
+    /// capping the list), so the picker's "Recently used" grid tracks what you actually pick. No-ops on blank
+    /// input. The caller <see cref="Save"/>s.</summary>
+    public void RecordRecentEmoji(string? emoji)
+    {
+        if (string.IsNullOrWhiteSpace(emoji)) return;
+        var list = RecentEmojis ??= new();
+        list.RemoveAll(e => e == emoji);
+        list.Insert(0, emoji);
+        if (list.Count > RecentEmojiCap) list.RemoveRange(RecentEmojiCap, list.Count - RecentEmojiCap);
+    }
+
     // Whether the overlay floats (classic panel) or docks (reserves a screen-edge column via the OS so
     // maximized windows can't cover it). Defaults to Floating, so an older settings file keeps today's
     // behaviour. Ctrl+Shift+W (HotkeyToggleDocked) collapses/expands the docked column. See OverlayCanvas.

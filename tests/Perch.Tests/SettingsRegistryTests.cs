@@ -32,6 +32,9 @@ public class SettingsRegistryTests
         // Quiet mode's deadline is hidden mode state, toggled from the overlay header's right-click menu
         // (not a Settings-window control). See Perch.Data.QuietMode.
         nameof(AppSettings.QuietUntil),
+        // The emoji picker's most-recently-used list is runtime history it maintains itself, not a
+        // Settings-window control. See EmojiPickerWindow + AppSettings.RecordRecentEmoji.
+        nameof(AppSettings.RecentEmojis),
         // The overlay widths are set from the "Set initial placements…" editor (drag the preview's edge), not
         // a Settings-window control — like the placements themselves.
         nameof(AppSettings.FloatingWidthDip),

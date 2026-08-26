@@ -30,19 +30,11 @@ public sealed partial class OverlayCanvas
 
     private int _maxFriends = 3;   // friends shown before a "+N more" overflow line (AppSettings.MaxFriendsShown)
 
-    // The reaction presets the picker offers as a grid, with search keywords. The picker also accepts any
-    // system emoji you type or paste, so these are a fast path, not a limit.
-    private static readonly (string Emoji, string Keywords)[] ReactionPresets =
-    [
-        ("👍", "up like yes good approve thumbs"), ("🔥", "fire lit hot streak on a roll"),
-        ("🎉", "party celebrate tada ship"),       ("😂", "laugh lol funny haha"),
-        ("😮", "wow surprised whoa"),               ("❤️", "love heart red"),
-        ("🙌", "praise hooray raised hands"),        ("👀", "eyes looking watching reviewing"),
-        ("😢", "sad cry tear"),                      ("😔", "down disappointed sad"),
-        ("🚀", "rocket ship launch fast"),          ("💯", "hundred perfect score nailed it"),
-        ("🤯", "mind blown wow"),                    ("🫡", "salute respect o7"),
-        ("😅", "phew nervous close sweat"),          ("💀", "dead dying rip lol"),
-    ];
+    // Feeds the emoji picker's default "Recently used" grid and records each pick, wired by App to
+    // AppSettings.RecentEmojis. Null-safe: an unwired canvas (e.g. the Settings preview) simply shows the
+    // popular fallback and remembers nothing.
+    internal Func<IReadOnlyList<string>>? RecentEmojisProvider;
+    internal Action<string>? EmojiUsed;
 
     private static readonly IBrush FeedTileBrush  = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));  // avatar tile
     private static readonly IBrush FeedChipBrush   = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)); // reaction chip
@@ -697,13 +689,15 @@ public sealed partial class OverlayCanvas
         ReactRequested?.Invoke(postId, emoji, !mine);
     }
 
-    // Pops the reaction picker at the given screen anchor: a grid of preset emojis plus an entry that accepts
-    // any system emoji you type or paste. Picking one adds that reaction to the post.
+    // Pops the reaction picker at the given screen anchor: your recently-used emoji by default, full-catalogue
+    // search as you type, plus any system emoji you type or paste. Picking one adds that reaction to the post.
     private void ShowReactionPicker(Guid postId, PixelPoint anchor)
     {
-        var picker = new EmojiPickerWindow("React", ReactionPresets,
+        var picker = new EmojiPickerWindow("React",
             emoji => { if (!string.IsNullOrWhiteSpace(emoji)) ReactRequested?.Invoke(postId, emoji, true); },
-            anchor);
+            anchor,
+            recents: RecentEmojisProvider?.Invoke(),
+            onEmojiUsed: EmojiUsed);
         picker.Show();
         picker.Activate();
     }

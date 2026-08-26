@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.69] - 2026-08-26
+
+- Perch's own emoji picker for reactions — no more detour through the Windows dialog
+- Opens on your recently-used emoji (popular picks until you build a history)
+- Search the whole cross-platform emoji set by name, keyword or shortcode (`fire`, `tada`, `+1`)
+- Type or paste any emoji directly; Enter picks the top match
+- Closing the first-run Quick Start now counts as done, instead of nagging every launch
+
+---
+
 ## [v0.3.68] - 2026-08-26
 
 - Hover a status reaction to see who reacted — up to 10 handles, then a "+N more"
