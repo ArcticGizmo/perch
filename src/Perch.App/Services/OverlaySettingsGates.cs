@@ -48,7 +48,6 @@ internal static class OverlaySettingsGates
         c.SetHideInactiveTeamMembers(s.HideInactiveTeamMembers);
         c.SetUpsideDownQuickLinks(s.UpsideDownQuickLinks);
         c.SetExternalNotificationsAvailable(s.ExternalNotificationsEnabled);
-        c.SetViewTreeAvailable(s.ShowGitReview);
         c.SetDenseStatusChangeStyle(s.DenseStatusChangeStyle);
         c.SetSectionOrder(OverlaySectionOrder.Normalize(s.SectionOrder));
         // Quiet mode is meta, not a display toggle: QuietMode.Resolve leaves QuietUntil intact on the masked

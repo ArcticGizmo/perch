@@ -1392,11 +1392,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     internal event Action<Artifact, bool>? ArtifactChosen; // bool: open in a new browser window (middle-click)
 
     // ── Right-click context menu (4.13) ───────────────────────────────────────
-    // External (ntfy) notifications and the git-history ("View tree") item are gated by global settings that
-    // decide whether their per-session items appear at all. The QR / history windows themselves are Phase 5;
-    // the menu wires only their triggers.
+    // External (ntfy) notifications are gated by a global setting that decides whether their per-session items
+    // appear at all. The QR / history windows themselves are Phase 5; the menu wires only their triggers. (The
+    // git-history "View git history…" item has no global toggle — it always shows on a repo row.)
     private bool _externalNotifyAvailable;
-    private bool _viewTreeAvailable;
     private bool _gitKrakenAvailable;
     // The local wall-clock end of the current Quiet-mode window, or null when it's off. Drives the header
     // menu wording (and the arcade shortcut's visibility); set from AppSettings.QuietUntil via the gates.
@@ -1467,8 +1466,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// is Phase 5; this wires only the trigger. Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
     internal event Action<ClaudeSession>? QrRequested;
 
-    /// <summary>Raised when the user picks "View tree…" for a session. The app opens the git Tree window on
-    /// the session's working directory. Gated by <see cref="_viewTreeAvailable"/> and a cheap repo check.
+    /// <summary>Raised when the user picks "View git history…" for a session. The app opens the git Tree window
+    /// on the session's working directory. Shown on any repo row (a cheap repo check) — no global toggle.
     /// Internal — <see cref="ClaudeSession"/> is Core-internal.</summary>
     internal event Action<ClaudeSession>? ViewTreeRequested;
 
@@ -1492,15 +1491,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (_externalNotifyAvailable == available) return;
         _externalNotifyAvailable = available;
-        InvalidateVisual();
-    }
-
-    /// <summary>Whether the git Tree feature is switched on globally — gates the right-click "View tree…"
-    /// item (which also requires the session's cwd to be a git repo).</summary>
-    public void SetViewTreeAvailable(bool available)
-    {
-        if (_viewTreeAvailable == available) return;
-        _viewTreeAvailable = available;
         InvalidateVisual();
     }
 
@@ -4094,7 +4084,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             //    external notifications. Each gated by its global switch / a cheap repo check.
             var actions = new List<Control>();
             bool isRepo = !subRow && GitRepoService.IsRepo(s.Cwd);
-            if (isRepo && _viewTreeAvailable)
+            if (isRepo)
                 actions.Add(MenuItem("View git history…", () => ViewTreeRequested?.Invoke(s)));
             if (isRepo && _gitKrakenAvailable)
                 actions.Add(MenuItem("Open in GitKraken", () => OpenInGitKrakenRequested?.Invoke(s)));

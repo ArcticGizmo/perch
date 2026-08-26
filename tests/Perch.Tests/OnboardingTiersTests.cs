@@ -54,7 +54,6 @@ public class OnboardingTiersTests
     [InlineData("quick-links")]       // a list, not a toggle
     [InlineData("theme")]             // a dropdown
     [InlineData("detect-error-streaks")] // stuck-detection sub-heuristic, left at default
-    [InlineData("git-review-split")]  // git-tree display sub-preference
     public void ExcludedIdsAreNotManaged(string id)
         => Assert.DoesNotContain(id, OnboardingTiers.Managed);
 

@@ -91,36 +91,6 @@ internal static class SettingsRegistry
             PreviewTarget.GitStats, nameof(AppSettings.ShowGitStats),
             s => s.ShowGitStats, (s, v) => s.ShowGitStats = v),
 
-        Toggle("git-review", "Git tree",
-            "Adds a \"View tree…\" item to a session's right-click menu that opens a branch-scoped git tree, files and diff window for its directory.",
-            SettingSurface.Advanced, ["git", "tree", "diff", "review", "changes", "commit", "history", "branch"],
-            PreviewTarget.None, nameof(AppSettings.ShowGitReview),
-            s => s.ShowGitReview, (s, v) => s.ShowGitReview = v),
-
-        Toggle("git-review-split", "Git tree: split diff",
-            "Show the git tree diff side-by-side (old vs new) instead of unified. Also toggled from the window's own toolbar.",
-            SettingSurface.Advanced, ["git", "diff", "split", "side", "unified", "tree"],
-            PreviewTarget.None, nameof(AppSettings.GitReviewSplitView),
-            s => s.GitReviewSplitView, (s, v) => s.GitReviewSplitView = v),
-
-        Toggle("git-review-wrap", "Git tree: wrap lines",
-            "Wrap long lines in the git tree diff. Also toggled from the window's own toolbar.",
-            SettingSurface.Advanced, ["git", "diff", "wrap", "lines", "tree"],
-            PreviewTarget.None, nameof(AppSettings.GitReviewWrap),
-            s => s.GitReviewWrap, (s, v) => s.GitReviewWrap = v),
-
-        Toggle("git-tree-light", "Git tree: light mode",
-            "Render the git tree window in light mode (just that window). Also toggled from the window's own toolbar.",
-            SettingSurface.Advanced, ["git", "tree", "light", "dark", "theme", "mode"],
-            PreviewTarget.None, nameof(AppSettings.GitTreeLight),
-            s => s.GitTreeLight, (s, v) => s.GitTreeLight = v),
-
-        Toggle("git-tree-hunk-staging", "Git tree: hunk staging",
-            "Show per-hunk and per-line stage / unstage / discard controls in the git tree diff. Off stages whole files. Also toggled from the window's own toolbar.",
-            SettingSurface.Advanced, ["git", "tree", "hunk", "line", "stage", "discard", "partial"],
-            PreviewTarget.None, nameof(AppSettings.GitTreeHunkStaging),
-            s => s.GitTreeHunkStaging, (s, v) => s.GitTreeHunkStaging = v),
-
         Toggle("media-controller", "Now-playing media",
             "The media controller strip - track plus previous / play-pause / next.",
             SettingSurface.SessionRow, ["media", "music", "now", "playing", "spotify", "track", "controller", "sound"],

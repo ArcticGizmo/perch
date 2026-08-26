@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.70] - 2026-08-26
+
+- "View git history…" always sits on a repo's right-click menu now — no toggle to hunt for
+- Git tree's diff options (split, light mode, hunk staging) live in the window's own toolbar, not global settings
+- Retired the git tree "wrap lines" setting (it always wrapped anyway)
+
+---
+
 ## [v0.3.69] - 2026-08-26
 
 - Perch's own emoji picker for reactions — no more detour through the Windows dialog

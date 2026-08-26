@@ -344,29 +344,20 @@ internal sealed class AppSettings
     // feature costs nothing when disabled. A missing key keeps it off.
     public bool ShowGitStats { get; set; }
 
-    // Whether the per-session right-click menu offers "Review changes…", which opens the read-only git
-    // Change Review window for that session's working directory. On by default. Purely gates the menu
-    // action — nothing runs in the background either way (and even when used, git is only invoked on demand
-    // while the window is open), so it's cheap. A missing key defaults it on.
-    public bool ShowGitReview { get; set; } = true;
-
     // The git Tree diff layout: false = unified (one column), true = side-by-side split. Persisted so the
-    // choice sticks between openings; set from the window's floating mode selector. A missing key defaults to
-    // split (with GitTreeHunkStaging, this pair encodes the three-way Unified/Split/Hunk mode).
+    // choice sticks between openings; set from the window's own toolbar mode selector — not a Settings
+    // control (see SettingsRegistryTests.NotSettings). A missing key defaults to split (with
+    // GitTreeHunkStaging, this pair encodes the three-way Unified/Split/Hunk mode).
     public bool GitReviewSplitView { get; set; } = true;
 
-    // Whether the Change Review diff wraps long lines. On by default; toggled from the window's "Wrap"
-    // checkbox and persisted. A missing key keeps wrapping on.
-    public bool GitReviewWrap { get; set; } = true;
-
     // Whether the git Tree window renders in light mode (just that window — the rest of the app keeps its
-    // theme). Off by default; toggled from the window's own light/dark button and persisted. A missing key
-    // keeps it dark.
+    // theme). Off by default; toggled from the window's own light/dark button and persisted — not a Settings
+    // control (see SettingsRegistryTests.NotSettings). A missing key keeps it dark.
     public bool GitTreeLight { get; set; }
 
     // Whether the git Tree diff shows per-hunk (and line) staging controls. Off by default — staging a whole
-    // file is the common case; hunk/line staging is opt-in. Toggled from the window's "Hunk staging"
-    // checkbox and persisted. A missing key keeps it off.
+    // file is the common case; hunk/line staging is opt-in. Toggled from the window's own toolbar and
+    // persisted — not a Settings control (see SettingsRegistryTests.NotSettings). A missing key keeps it off.
     public bool GitTreeHunkStaging { get; set; }
 
     // Quick links. Icons displayed below the usage bars; each opens the app or focuses it. The list

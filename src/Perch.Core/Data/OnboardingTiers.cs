@@ -98,7 +98,6 @@ internal static class OnboardingTiers
         [
             new OnboardingItem("today-stats-tray", OnboardingTier.Basic),
             new OnboardingItem("estimated-cost",   OnboardingTier.Intermediate),
-            new OnboardingItem("git-review",       OnboardingTier.Intermediate),
             new OnboardingItem("todos",            OnboardingTier.Intermediate),
         ]),
 

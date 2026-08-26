@@ -39,6 +39,11 @@ public class SettingsRegistryTests
         // a Settings-window control — like the placements themselves.
         nameof(AppSettings.FloatingWidthDip),
         nameof(AppSettings.DockedWidthDip),
+        // The git Tree window's diff-view preferences (split vs unified, light mode, hunk staging) are set
+        // from that window's own toolbar controls and persisted, not from a Settings-window control.
+        nameof(AppSettings.GitReviewSplitView),
+        nameof(AppSettings.GitTreeLight),
+        nameof(AppSettings.GitTreeHunkStaging),
         // Custom themes are managed by the Appearance page's designer, not a catalogue control.
         nameof(AppSettings.CustomThemes),
         nameof(AppSettings.PendingUpdateVersion),
