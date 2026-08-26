@@ -40,7 +40,31 @@ public sealed record FeedItem(Guid Id, Profile Author, string Body, string? Mood
 /// <param name="Emoji">The reaction glyph (1–16 chars).</param>
 /// <param name="Count">How many people (you + friends you can see) reacted with it.</param>
 /// <param name="Mine">Whether the signed-in user is one of them.</param>
-public sealed record ReactionGroup(string Emoji, int Count, bool Mine);
+/// <param name="Handles">Display handles of the reactors we can name — yourself shown as <c>"you"</c> — for
+/// the hover tooltip, capped at 10. May be shorter than <see cref="Count"/> when more than 10 people reacted
+/// or some reacted from outside your friend graph (their profile isn't readable); the UI fills the gap with a
+/// "+N more". Never <c>@</c>-prefixed — the UI adds that.</param>
+public sealed record ReactionGroup(string Emoji, int Count, bool Mine, IReadOnlyList<string> Handles)
+{
+    /// <summary>Back-compat / test convenience: a group with no named reactors (empty tooltip list).</summary>
+    public ReactionGroup(string Emoji, int Count, bool Mine) : this(Emoji, Count, Mine, []) { }
+
+    // Record equality would compare Handles by reference, so a fresh list every poll would read as "changed"
+    // and force a needless relayout up in RosterFriend/RosterSnapshot. Compare it by value.
+    public bool Equals(ReactionGroup? other) =>
+        other is not null && Emoji == other.Emoji && Count == other.Count && Mine == other.Mine
+        && Handles.SequenceEqual(other.Handles);
+
+    public override int GetHashCode()
+    {
+        var hc = new HashCode();
+        hc.Add(Emoji);
+        hc.Add(Count);
+        hc.Add(Mine);
+        foreach (var h in Handles) hc.Add(h);
+        return hc.ToHashCode();
+    }
+}
 
 /// <summary>
 /// A friend as the overlay's social region shows them: their profile (handle + mood), their single most recent
@@ -103,10 +127,24 @@ public sealed record RosterSnapshot(
     }
 }
 
+/// <summary>A feature-wide fault that should be surfaced to the user, distinct from a transient failed call.</summary>
+public enum SocialFault
+{
+    /// <summary>No fault — Social is operating normally.</summary>
+    None = 0,
+
+    /// <summary>The backend keeps rejecting our (valid) tokens as "issued at future": the clock on the node
+    /// minting the JWT is ahead of the node validating it (a GoTrue/PostgREST skew), so nothing works until
+    /// the clocks are resynced. Surfaced as "Timestamp drift" so the user knows it's a backend clock problem,
+    /// not their sign-in.</summary>
+    TimestampDrift = 1,
+}
+
 /// <summary>The sign-in state: whether we hold a valid session and, if so, who we are.</summary>
 /// <param name="SignedIn">True once authenticated (a token is held and valid).</param>
 /// <param name="Me">The signed-in profile, or null if signed out or the handle isn't claimed yet.</param>
-public sealed record AuthState(bool SignedIn, Profile? Me)
+/// <param name="Fault">A feature-wide fault to surface (e.g. timestamp drift), or <see cref="SocialFault.None"/>.</param>
+public sealed record AuthState(bool SignedIn, Profile? Me, SocialFault Fault = SocialFault.None)
 {
     public static readonly AuthState SignedOut = new(false, null);
 }

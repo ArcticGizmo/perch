@@ -14,7 +14,9 @@ namespace Perch.Avalonia.Views;
 /// </summary>
 internal sealed class OverlayTooltip : Window
 {
-    public readonly record struct Line(string Text, Color Color, bool Bold);
+    /// <param name="Emoji">Optional colour-emoji glyph drawn before <paramref name="Text"/> using the platform
+    /// emoji face (so it renders in colour, not a monochrome outline). Null for a plain text line.</param>
+    public readonly record struct Line(string Text, Color Color, bool Bold, string? Emoji = null);
 
     private static readonly Color BgColor     = Color.FromRgb(20, 20, 28);
     private static readonly Color BorderColor = Color.FromRgb(60, 60, 80);
@@ -99,6 +101,9 @@ internal sealed class OverlayTooltip : Window
     // Internal (not private) so the headless render harness can eyeball it without opening a window.
     internal sealed class Body : Control
     {
+        private const double EmojiSize = 12;   // colour-emoji prefix, ~ the text size
+        private const double EmojiGap  = 4;    // between the emoji and the handles that follow it
+
         private IReadOnlyList<Line> _lines = [];
         public IReadOnlyList<Line> Lines { set => _lines = value; }
 
@@ -106,13 +111,17 @@ internal sealed class OverlayTooltip : Window
             OverlayDraw.Text(l.Text, l.Bold ? 12 : 11.5, new SolidColorBrush(l.Color),
                 l.Bold ? FontWeight.Bold : FontWeight.Normal);
 
+        // The width a line's optional colour-emoji prefix adds (glyph + gap), or 0 for a plain line.
+        private static double EmojiLead(Line l) =>
+            l.Emoji is { } e ? OverlayDraw.Emoji(e, EmojiSize, Brushes.White).Width + EmojiGap : 0;
+
         protected override Size MeasureOverride(Size availableSize)
         {
             double w = 0, h = VertPad * 2;
             foreach (var l in _lines)
             {
                 var ft = Ft(l);
-                w = Math.Max(w, ft.Width);
+                w = Math.Max(w, EmojiLead(l) + ft.Width);
                 h += ft.Height + LineGap;
             }
             if (_lines.Count > 0) h -= LineGap;
@@ -137,9 +146,19 @@ internal sealed class OverlayTooltip : Window
             }
 
             double y = Math.Max(VertPad, (Bounds.Height - contentH) / 2);
-            foreach (var ft in fts)
+            for (int i = 0; i < _lines.Count; i++)
             {
-                ctx.DrawText(ft, new Point(HorizPad, y));
+                var ft = fts[i];
+                double tx = HorizPad;
+                // A colour-emoji prefix, drawn through OverlayDraw.Emoji so it lands in colour (not a
+                // monochrome outline), vertically centred on the text line.
+                if (_lines[i].Emoji is { } e)
+                {
+                    var eft = OverlayDraw.Emoji(e, EmojiSize, new SolidColorBrush(_lines[i].Color));
+                    OverlayDraw.EmojiLeftMid(ctx, eft, tx, y + ft.Height / 2, EmojiSize);
+                    tx += eft.Width + EmojiGap;
+                }
+                ctx.DrawText(ft, new Point(tx, y));
                 y += ft.Height + LineGap;
             }
         }

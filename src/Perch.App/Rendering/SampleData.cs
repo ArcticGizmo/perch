@@ -152,15 +152,21 @@ internal static class SampleData
         var myPost = new FeedItem(Guid.Parse("dddddddd-0000-4000-8000-00000000000d"), me,
             "shipping something silly", "😌", now.AddMinutes(-5));
 
-        // Reactions friends left on your own status — shown on the "you" row.
-        IReadOnlyList<ReactionGroup> myReactions = [new ReactionGroup("🎉", 2, false), new ReactionGroup("😂", 1, false)];
+        // Reactions friends left on your own status — shown on the "you" row. Handles feed the hover tooltip.
+        IReadOnlyList<ReactionGroup> myReactions =
+            [new ReactionGroup("🎉", 2, false, ["ada", "grace"]), new ReactionGroup("😂", 1, false, ["linus"])];
 
         return new RosterSnapshot(me, myPost, myReactions,
         [
-            // ada: >2 distinct emojis → collapses to a combined count chip (tooltip shows the breakdown).
-            new(ada, adaPost, [new ReactionGroup("🔥", 3, true), new ReactionGroup("❤️", 2, false), new ReactionGroup("👍", 1, false)]),
+            // ada: >2 distinct emojis → collapses to a combined count chip (tooltip shows who reacted, per emoji).
+            new(ada, adaPost, [
+                new ReactionGroup("🔥", 3, true, ["you", "grace", "linus"]),
+                new ReactionGroup("❤️", 2, false, ["grace", "linus"]),
+                new ReactionGroup("👍", 1, false, ["grace"])]),
             // grace: two distinct → shown as individual chips.
-            new(grace, gracePost, [new ReactionGroup("👍", 2, false), new ReactionGroup("🎉", 1, false)]),
+            new(grace, gracePost, [
+                new ReactionGroup("👍", 2, false, ["ada", "linus"]),
+                new ReactionGroup("🎉", 1, false, ["ada"])]),
             new(linus, null, []),
         ], IncomingRequests: 1);
     }

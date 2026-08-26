@@ -301,6 +301,49 @@ public sealed class FakeSocialClientTests
         Assert.Equal("🎉", party.Emoji);
         Assert.Equal(1, party.Count);
         Assert.False(party.Mine);                        // it's ada's reaction, not mine
+        Assert.Equal(["ada"], party.Handles);            // and the tooltip can name her
+    }
+
+    [Fact]
+    public async Task Reaction_handles_name_reactors_you_first_and_alphabetically()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        var bea = c.SeedUser("bea");
+        foreach (var f in new[] { ada, bea }) { await c.SendRequestAsync(f.Id); c.SimulateAccept(f.Id); }
+        var post = c.SimulatePost(ada.Id, "shipped it");
+
+        c.SimulateReaction(post.Value, bea.Id, "🔥");
+        c.SimulateReaction(post.Value, ada.Id, "🔥");
+        await c.ReactAsync(post.Value, "🔥", on: true);   // me too
+
+        var fire = (await c.GetRosterAsync()).Friends.Single(f => f.Profile.Handle == "ada")
+            .Reactions.Single(r => r.Emoji == "🔥");
+        Assert.Equal(3, fire.Count);
+        // "you" leads, then the named friends alphabetically.
+        Assert.Equal(["you", "ada", "bea"], fire.Handles);
+    }
+
+    [Fact]
+    public async Task Reaction_handles_cap_at_ten_reactors()
+    {
+        var c = SignedIn();
+        var author = c.SeedUser("author");
+        await c.SendRequestAsync(author.Id); c.SimulateAccept(author.Id);
+        var post = c.SimulatePost(author.Id, "popular");
+
+        // Twelve distinct friends all react with the same emoji.
+        for (int i = 0; i < 12; i++)
+        {
+            var f = c.SeedUser($"fan{i:00}");
+            await c.SendRequestAsync(f.Id); c.SimulateAccept(f.Id);
+            c.SimulateReaction(post.Value, f.Id, "👍");
+        }
+
+        var thumbs = (await c.GetRosterAsync()).Friends.Single(f => f.Profile.Handle == "author")
+            .Reactions.Single(r => r.Emoji == "👍");
+        Assert.Equal(12, thumbs.Count);          // the count is the true total
+        Assert.Equal(10, thumbs.Handles.Count);  // but only ten handles ride along (UI shows "+2 more")
     }
 
     [Fact]

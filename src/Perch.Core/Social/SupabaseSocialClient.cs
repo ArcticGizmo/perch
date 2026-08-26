@@ -23,6 +23,21 @@ public sealed partial class SupabaseSocialClient : ISocialClient
     // Where the refresh token lives (via ISecretStore → DPAPI / Keychain).
     private const string RefreshTokenKey = "supabase.refresh_token";
 
+    // A freshly minted GoTrue token can carry an iat/nbf a beat ahead of the node that will validate it
+    // (small clock differences between Supabase's own services), so the very next PostgREST call is rejected
+    // with "issued in the future" until the wall clock catches up. Since iat is a fixed instant, we wait it
+    // out once after minting — a small buffer past the claim — and cap the wait so a genuinely wrong clock
+    // can't hang sign-in. When the token can't be decoded we fall back to FallbackSettleDelay.
+    private static readonly TimeSpan TokenSettleBuffer = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan MaxTokenSettleWait = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan FallbackSettleDelay = TimeSpan.FromSeconds(2);
+
+    // Reactive backstop for when the proactive settle wasn't enough because the *validator's* clock (not
+    // ours) is behind the token's iat — e.g. a GoTrue/PostgREST skew. We retry a few times over a few
+    // seconds until real time carries the validator past iat. Bounded so a genuinely bad clock fails loudly.
+    private const int TokenNotYetValidMaxAttempts = 4;
+    private static readonly TimeSpan TokenNotYetValidRetryDelay = TimeSpan.FromSeconds(1.5);
+
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     private readonly SupabaseConfig _config;
@@ -36,6 +51,12 @@ public sealed partial class SupabaseSocialClient : ISocialClient
     private Guid _userId;
     private Profile? _me;
     private bool _signedIn;
+    private SocialFault _fault;
+    private DateTimeOffset? _driftSince;   // when the current unbroken run of drift rejections began (null = none)
+
+    // How long the drift error must persist — across the settle + retry window — before the whole feature is
+    // flipped into the fault state, so a transient startup skew the retry rides out doesn't raise a false alarm.
+    private static readonly TimeSpan DriftGrace = TimeSpan.FromSeconds(6);
 
     public SupabaseSocialClient(SupabaseConfig config, ISecretStore secrets, IUrlOpener urls, HttpClient? http = null)
     {
@@ -47,14 +68,52 @@ public sealed partial class SupabaseSocialClient : ISocialClient
 
     public AuthState Current
     {
-        get { lock (_gate) return new AuthState(_signedIn, _me); }
+        get { lock (_gate) return new AuthState(_signedIn, _me, _fault); }
     }
 
     public event Action<AuthState>? AuthChanged;
 
+    // Any successful REST call clears the drift streak (and the fault if it was raised) — the clocks are back
+    // in agreement. Called from EnsureOkAsync's success path so recovery is automatic, from any call.
+    private void OnCallSucceeded()
+    {
+        bool changed;
+        lock (_gate)
+        {
+            _driftSince = null;
+            changed = _fault == SocialFault.TimestampDrift;
+            _fault = SocialFault.None;
+        }
+        if (changed) Raise();
+    }
+
+    // A drift rejection was observed. Time-grace backstop: if drift has been unbroken for longer than the
+    // grace window, flip into the fault. This catches drift that develops mid-session and only shows up
+    // through the background pollers (which don't go through the retry loop below). The sign-in path trips
+    // the fault sooner and deterministically, via MarkDriftPersistent when its retries are exhausted.
+    private void OnDriftObserved()
+    {
+        lock (_gate) { _driftSince ??= DateTimeOffset.UtcNow; }
+        if (DateTimeOffset.UtcNow - (_driftSince ?? DateTimeOffset.UtcNow) >= DriftGrace) MarkDriftPersistent();
+    }
+
+    // Flip the whole feature into the timestamp-drift fault (once). Called when retries are exhausted or the
+    // grace window elapses; cleared by the next successful call in OnCallSucceeded.
+    private void MarkDriftPersistent()
+    {
+        bool changed;
+        lock (_gate)
+        {
+            _driftSince ??= DateTimeOffset.UtcNow;
+            changed = _fault != SocialFault.TimestampDrift;
+            _fault = SocialFault.TimestampDrift;
+        }
+        if (changed) Raise();
+    }
+
     // ── sign-in / restore / sign-out ───────────────────────────────────────────────────────────────
 
-    public async Task<AuthState> SignInAsync(CancellationToken ct = default)
+    public async Task<AuthState> SignInAsync(bool privateWindow = false, CancellationToken ct = default)
     {
         if (!_config.IsConfigured)
             throw new SocialException("Social isn't configured yet (no Supabase URL / key).");
@@ -66,7 +125,10 @@ public sealed partial class SupabaseSocialClient : ISocialClient
             $"{BaseUrl}/auth/v1/authorize?provider=github" +
             $"&redirect_to={Uri.EscapeDataString(loopback.RedirectUri)}" +
             $"&code_challenge={pkce.Challenge}&code_challenge_method=S256";
-        _urls.Open(authorizeUrl);
+        // A private/incognito window carries no github.com cookie, so GitHub asks which account to use
+        // instead of silently reusing the one the default browser is already signed into.
+        if (privateWindow) _urls.OpenPrivate(authorizeUrl);
+        else _urls.Open(authorizeUrl);
 
         // Give the user a couple of minutes to complete the browser dance.
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -94,6 +156,7 @@ public sealed partial class SupabaseSocialClient : ISocialClient
     private async Task LoadProfileOrExplainAsync(CancellationToken ct)
     {
         try { await LoadMeAsync(ct); Raise(); }
+        catch (TokenNotYetValidException) { throw; }   // a clock-skew timing error — report it as-is, not as a migration hint
         catch (SocialException)
         {
             throw new SocialException(
@@ -151,6 +214,8 @@ public sealed partial class SupabaseSocialClient : ISocialClient
             _userId = default;
             _me = null;
             _signedIn = false;
+            _fault = SocialFault.None;
+            _driftSince = null;
         }
         _secrets.Delete(RefreshTokenKey);
         AuthChanged?.Invoke(AuthState.SignedOut);
@@ -358,7 +423,13 @@ public sealed partial class SupabaseSocialClient : ISocialClient
             .Where(id => id is not null).Select(id => id!.Value)
             .Concat(myLatest is not null ? [myLatest.Id] : Array.Empty<Guid>())
             .ToList();
-        var reactions = await FetchReactionsAsync(latestIds, uid, token, ct);
+        // A uid → display-handle map so a reaction's tooltip can name who reacted. Only people you share a
+        // friendship edge with (plus yourself) are resolvable — reactors from outside your graph stay unnamed
+        // and fall into the tooltip's "+N more". Yourself shows as "you".
+        var handleByUid = new Dictionary<Guid, string> { [uid] = "you" };
+        foreach (var f in graph) handleByUid[f.Profile.Id] = f.Profile.Handle;
+
+        var reactions = await FetchReactionsAsync(latestIds, uid, handleByUid, token, ct);
 
         var entries = friends
             .Select(f =>
@@ -409,7 +480,8 @@ public sealed partial class SupabaseSocialClient : ISocialClient
     // Batch-fetches reactions for the given post ids, grouped per post into (emoji → count, mine). RLS returns
     // only reactions on posts you can see, plus your own.
     private async Task<Dictionary<Guid, IReadOnlyList<ReactionGroup>>> FetchReactionsAsync(
-        IReadOnlyList<Guid> postIds, Guid uid, string token, CancellationToken ct)
+        IReadOnlyList<Guid> postIds, Guid uid, IReadOnlyDictionary<Guid, string> handleByUid,
+        string token, CancellationToken ct)
     {
         var result = new Dictionary<Guid, IReadOnlyList<ReactionGroup>>();
         if (postIds.Count == 0) return result;
@@ -424,13 +496,27 @@ public sealed partial class SupabaseSocialClient : ISocialClient
         {
             var groups = byPost
                 .GroupBy(r => r.Emoji)
-                .Select(g => new ReactionGroup(g.Key, g.Count(), g.Any(r => r.Reactor == uid)))
+                .Select(g => new ReactionGroup(g.Key, g.Count(), g.Any(r => r.Reactor == uid),
+                    NameReactors(g, handleByUid)))
                 .OrderByDescending(g => g.Count).ThenBy(g => g.Emoji, StringComparer.Ordinal)
                 .ToList();
             result[byPost.Key] = groups;
         }
         return result;
     }
+
+    // The display handles of the reactors we can name — "you" first, then friends alphabetically, capped at 10.
+    // Reactors outside your friend graph aren't in the map (their profile isn't readable) and are dropped, so
+    // the returned list can be shorter than the group's count; the UI shows a "+N more" for the difference.
+    private static IReadOnlyList<string> NameReactors(
+        IEnumerable<ReactionRow> reactors, IReadOnlyDictionary<Guid, string> handleByUid) =>
+        reactors
+            .Select(r => handleByUid.GetValueOrDefault(r.Reactor))
+            .Where(h => h is not null).Select(h => h!)
+            .OrderByDescending(h => h == "you")
+            .ThenBy(h => h, StringComparer.OrdinalIgnoreCase)
+            .Take(10)
+            .ToList();
 
     // ── block / report (M6) ───────────────────────────────────────────────────────────────────────────
 
@@ -532,8 +618,67 @@ public sealed partial class SupabaseSocialClient : ISocialClient
 
         using var resp = await _http.SendAsync(req, ct);
         await EnsureOkAsync(resp, "sign in", ct);
-        return await resp.Content.ReadFromJsonAsync<TokenResponse>(Json, ct)
+        var token = await resp.Content.ReadFromJsonAsync<TokenResponse>(Json, ct)
                ?? throw new SocialException("The sign-in response was empty.");
+
+        // Don't hand back a token whose validity window hasn't opened yet — otherwise every REST call made
+        // with it fails "issued in the future" until the clock passes iat. Waiting here fixes all of them.
+        await AwaitTokenValidityAsync(token.AccessToken, ct);
+        return token;
+    }
+
+    // Reads the freshly minted access token's iat/nbf and, if its validity window is still in the (near)
+    // future relative to the local clock, waits until it opens plus a small buffer. Capped so a badly wrong
+    // clock can't hang us; a token we can't decode gets the small fixed fallback delay instead of nothing.
+    private static async Task AwaitTokenValidityAsync(string? accessToken, CancellationToken ct)
+    {
+        TimeSpan wait;
+        if (TryReadTokenNotBefore(accessToken, out var notBefore))
+        {
+            wait = notBefore + TokenSettleBuffer - DateTimeOffset.UtcNow;
+            if (wait <= TimeSpan.Zero) return;            // already valid — the common, no-skew case
+            if (wait > MaxTokenSettleWait) wait = MaxTokenSettleWait;
+        }
+        else
+        {
+            wait = FallbackSettleDelay;                   // couldn't decode — hedge with a short fixed delay
+        }
+
+        try { await Task.Delay(wait, ct); }
+        catch (OperationCanceledException) { /* cancellation is the caller's concern, not a settle failure */ throw; }
+    }
+
+    // Best-effort decode of a JWT's "not valid before" instant = max(iat, nbf), read straight from the
+    // payload segment without validating the signature (we're only reading timing claims we already trust
+    // GoTrue to have set). Returns false if the token isn't a well-formed JWT or carries no timing claim.
+    private static bool TryReadTokenNotBefore(string? jwt, out DateTimeOffset notBefore)
+    {
+        notBefore = default;
+        if (string.IsNullOrEmpty(jwt)) return false;
+        var parts = jwt.Split('.');
+        if (parts.Length < 2) return false;
+
+        try
+        {
+            var c = JsonSerializer.Deserialize<JwtTimingClaims>(Base64UrlDecode(parts[1]), Json);
+            if (c is null) return false;
+
+            long? epoch = null;
+            if (c.Iat is { } iat) epoch = iat;
+            if (c.Nbf is { } nbf) epoch = epoch is { } e ? Math.Max(e, nbf) : nbf;
+            if (epoch is not { } seconds) return false;
+
+            notBefore = DateTimeOffset.FromUnixTimeSeconds(seconds);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    // Base64url (JWT flavour: '-'/'_', no padding) → bytes.
+    private static byte[] Base64UrlDecode(string s)
+    {
+        s = s.Replace('-', '+').Replace('_', '/');
+        return Convert.FromBase64String(s.PadRight(s.Length + (4 - s.Length % 4) % 4, '='));
     }
 
     private void ApplySession(TokenResponse token)
@@ -569,11 +714,16 @@ public sealed partial class SupabaseSocialClient : ISocialClient
     private async Task LoadMeAsync(CancellationToken ct)
     {
         var uid = RequireUser();
-        var token = await ValidAccessTokenAsync(ct);
-        using var req = Rest(HttpMethod.Get, $"/rest/v1/profiles?id=eq.{uid}&select=id,handle,display_name,mood_emoji", token);
-        using var resp = await _http.SendAsync(req, ct);
-        await EnsureOkAsync(resp, "load profile", ct);
-        var rows = await resp.Content.ReadFromJsonAsync<ProfileRow[]>(Json, ct);
+        // This is the first REST call after a mint, so it's where a residual token-timing skew shows up —
+        // retry once past the skew if the proactive settle in ExchangeAsync wasn't quite enough.
+        var rows = await RetryOnTokenNotYetValidAsync(async () =>
+        {
+            var token = await ValidAccessTokenAsync(ct);
+            using var req = Rest(HttpMethod.Get, $"/rest/v1/profiles?id=eq.{uid}&select=id,handle,display_name,mood_emoji", token);
+            using var resp = await _http.SendAsync(req, ct);
+            await EnsureOkAsync(resp, "load profile", ct);
+            return await resp.Content.ReadFromJsonAsync<ProfileRow[]>(Json, ct);
+        }, ct);
         lock (_gate) _me = rows is { Length: > 0 } ? rows[0].ToProfile() : null;   // null = handle not claimed yet
     }
 
@@ -601,12 +751,58 @@ public sealed partial class SupabaseSocialClient : ISocialClient
         return state;
     }
 
-    private static async Task EnsureOkAsync(HttpResponseMessage resp, string what, CancellationToken ct)
+    private async Task EnsureOkAsync(HttpResponseMessage resp, string what, CancellationToken ct)
     {
-        if (resp.IsSuccessStatusCode) return;
+        if (resp.IsSuccessStatusCode) { OnCallSucceeded(); return; }
         string detail = "";
         try { detail = await resp.Content.ReadAsStringAsync(ct); } catch { }
+
+        // A token whose iat/nbf is still ahead of the validating node is rejected with one of these phrases.
+        // Surface it as a distinct type so callers can wait-and-retry rather than treating it as a hard fail;
+        // if it keeps happening past the grace window the whole feature flips to the drift fault (below).
+        if (LooksLikeTokenNotYetValid(detail))
+        {
+            OnDriftObserved();
+            throw new TokenNotYetValidException(
+                $"Couldn't {what}: the sign-in token isn't valid yet (clock skew). {Trim(detail)}".Trim());
+        }
+
         throw new SocialException($"Couldn't {what} ({(int)resp.StatusCode}). {Trim(detail)}".Trim());
+    }
+
+    // The validator (PostgREST) rejects a not-yet-valid token with wording that varies by component and
+    // version — GoTrue says "issued in the future", PostgREST "JWT issued at future" with code PGRST303 —
+    // so match on the PostgREST code and on "issued"+"future" as well as the other known phrasings. The
+    // common thread is a token whose iat/nbf sits ahead of the clock checking it.
+    private static bool LooksLikeTokenNotYetValid(string body)
+    {
+        if (body.Contains("PGRST303", StringComparison.OrdinalIgnoreCase)) return true;   // PostgREST "JWT issued at future"
+        if (body.Contains("issued", StringComparison.OrdinalIgnoreCase)
+            && body.Contains("future", StringComparison.OrdinalIgnoreCase)) return true;  // "issued at/in the future"
+        return body.Contains("used before issued", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("not yet valid", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Runs an operation and, if it fails because the token's validity window hasn't opened yet, waits and
+    // retries with a short backoff. The skew we're papering over is between GoTrue (which stamps iat) and the
+    // node validating the token — so waiting on our own clock only helps because real wall-time advances the
+    // validator's clock past iat too. A few attempts over a few seconds rides out a ~1-2s backend skew; the
+    // token then stays valid for its whole life, so later calls (and the pollers) succeed without retrying.
+    private async Task<T> RetryOnTokenNotYetValidAsync<T>(Func<Task<T>> op, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try { return await op(); }
+            catch (TokenNotYetValidException)
+            {
+                if (attempt >= TokenNotYetValidMaxAttempts)
+                {
+                    MarkDriftPersistent();   // retried briefly and it still fails — surface the drift fault
+                    throw;
+                }
+                await Task.Delay(TokenNotYetValidRetryDelay, ct);
+            }
+        }
     }
 
     private static string Trim(string s) => s.Length <= 200 ? s : s[..200];
@@ -620,6 +816,11 @@ public sealed partial class SupabaseSocialClient : ISocialClient
         [property: JsonPropertyName("user")] GotrueUser? User);
 
     private sealed record GotrueUser([property: JsonPropertyName("id")] Guid Id);
+
+    // Just the timing claims we read out of a minted access token to know when it becomes valid.
+    private sealed record JwtTimingClaims(
+        [property: JsonPropertyName("iat")] long? Iat,
+        [property: JsonPropertyName("nbf")] long? Nbf);
 
     private sealed record ProfileRow(
         [property: JsonPropertyName("id")] Guid Id,

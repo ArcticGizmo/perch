@@ -19,6 +19,12 @@ public sealed class UrlOpener : IUrlOpener
 
     public void OpenInNewWindow(string url) => Run(url, newInstance: true);
 
+    // NOTE (Phase 3): /usr/bin/open has no generic "private window" flag — that needs the default browser's
+    // bundle id plus its own --incognito/--inprivate/-private-window arg via `open -na <app> --args …`,
+    // which is browser-specific and unverified here. Until that's resolved, fall back to a fresh window so
+    // sign-in still works; it just won't force a private session on macOS yet.
+    public void OpenPrivate(string url) => OpenInNewWindow(url);
+
     private static void Run(string url, bool newInstance)
     {
         if (string.IsNullOrWhiteSpace(url)) return;

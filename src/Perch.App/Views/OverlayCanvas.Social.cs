@@ -28,6 +28,7 @@ public sealed partial class OverlayCanvas
     private bool _socialEnabled;
     private bool _socialSignedIn;
     private bool _socialHasHandle;
+    private bool _socialDrift;          // backend timestamp-drift fault — the whole feature is in an error state
     private bool _hoveredSocial;
     private Rect _socialSignInRect;
 
@@ -51,8 +52,9 @@ public sealed partial class OverlayCanvas
     private bool SocialSignedIn => _socialSignedIn;
     private bool SocialHasHandle => _socialHasHandle;
 
-    // Shown while Social is on and setup isn't finished (signed out, or signed in without a handle yet).
-    private bool SocialSignInStripVisible => _socialEnabled && !(_socialSignedIn && _socialHasHandle);
+    // Shown while Social is on and setup isn't finished (signed out, or signed in without a handle yet) — or
+    // while a backend fault (timestamp drift) has the whole feature in an error state, which takes precedence.
+    private bool SocialSignInStripVisible => _socialEnabled && (_socialDrift || !(_socialSignedIn && _socialHasHandle));
 
     /// <summary>Enables/disables the whole Social feature on the overlay. Driven by <c>OverlaySettingsGates</c>
     /// from <c>AppSettings.SocialEnabled</c>.</summary>
@@ -78,10 +80,24 @@ public sealed partial class OverlayCanvas
         else InvalidateVisual();
     }
 
-    // Routed from RouteClick: signed out → sign in; signed in (but unfinished) → open Settings to claim.
+    /// <summary>Pushes the feature-wide fault state (on the UI thread). While a timestamp-drift fault is set,
+    /// the strip shows a "Timestamp drift" error and the roster region is suppressed, so it's clear the whole
+    /// feature is broken rather than just empty. Cleared automatically once the backend accepts a token again.</summary>
+    public void SetSocialFault(bool drift)
+    {
+        if (_socialDrift == drift) return;
+        bool beforeStrip = SocialSignInStripVisible;
+        bool beforeRegion = SocialRegionVisible;
+        _socialDrift = drift;
+        if (SocialSignInStripVisible != beforeStrip || SocialRegionVisible != beforeRegion) RemeasurePanel();
+        else InvalidateVisual();
+    }
+
+    // Routed from RouteClick: drift → open Settings (which explains it); signed out → sign in; signed in
+    // (but unfinished) → open Settings to claim.
     private void OnSocialStripClicked()
     {
-        if (_socialSignedIn) SocialManageRequested?.Invoke();
+        if (_socialDrift || _socialSignedIn) SocialManageRequested?.Invoke();
         else SignInRequested?.Invoke();
     }
 
@@ -99,10 +115,14 @@ public sealed partial class OverlayCanvas
                 SocialHoverBrush, null, 6);
 
         double midY = top + SocialStripHeight / 2;
-        ctx.DrawEllipse(Palette.AccentBrush, null, new Point(HorizPad + 3, midY), 3, 3);
+        // Drift takes precedence: an error-hued dot + "Timestamp drift" so it reads as broken, not unfinished.
+        var accent = _socialDrift ? Palette.ErrorBrush : Palette.AccentBrush;
+        ctx.DrawEllipse(accent, null, new Point(HorizPad + 3, midY), 3, 3);
         double x = HorizPad + 3 * 2 + 6;
-        string text = _socialSignedIn ? "Finish setup — claim a handle" : "Sign in to Social";
-        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(text, SocialTextSize, Palette.AccentBrush, FontWeight.SemiBold), x, midY);
+        string text = _socialDrift ? "Social unavailable — Timestamp drift"
+            : _socialSignedIn ? "Finish setup — claim a handle"
+            : "Sign in to Social";
+        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(text, SocialTextSize, accent, FontWeight.SemiBold), x, midY);
 
         _socialSignInRect = new Rect(0, top, width, SocialStripHeight);
     }

@@ -588,6 +588,19 @@ internal static class HeadlessRenderer
         };
         RenderOnBackdrop(tipPr, Path.Combine(outDir, "tooltip_pr_1x.png"), Color.FromRgb(40, 40, 52));
 
+        // Reaction hover tooltip: who reacted, one line per emoji, the glyph drawn through the colour-emoji
+        // face (not a monochrome outline) — mirrors OverlayCanvas.ShowReactionSummaryTooltip.
+        var tipReact = new Views.OverlayTooltip.Body
+        {
+            Lines =
+            [
+                new Views.OverlayTooltip.Line("you, @grace, @linus", Views.OverlayTooltip.FgColor, false, "🔥"),
+                new Views.OverlayTooltip.Line("@ada, @grace, +8 more", Views.OverlayTooltip.FgColor, false, "❤️"),
+                new Views.OverlayTooltip.Line("@ada", Views.OverlayTooltip.FgColor, false, "👍"),
+            ],
+        };
+        RenderOnBackdrop(tipReact, Path.Combine(outDir, "tooltip_react_1x.png"), Color.FromRgb(40, 40, 52));
+
         // Flight path (5.6): synthetic day with active / waiting / stuck segments across a few lanes.
         var flight = new Views.FlightPathTimeline();
         flight.SetReport(SampleFlightReport());

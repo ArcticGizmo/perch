@@ -86,7 +86,7 @@ public sealed partial class OverlayCanvas
     // Shown once Social is on and you're signed in with a handle (there's just the one "Social feed" switch now
     // — the region and the feature are the same thing). Its sibling — the sign-in prompt strip — shows in the
     // complementary state, so the two never overlap.
-    private bool SocialRegionVisible => _socialEnabled && _socialSignedIn && _socialHasHandle;
+    private bool SocialRegionVisible => _socialEnabled && _socialSignedIn && _socialHasHandle && !_socialDrift;
 
     private int FriendRowCount => Math.Min(_maxFriends, _roster?.Friends.Count ?? 0);
     private bool FriendOverflow => (_roster?.Friends.Count ?? 0) > _maxFriends;
@@ -364,19 +364,36 @@ public sealed partial class OverlayCanvas
     }
 
     // A chip ready to draw: either one reaction group, or a "combined" summary standing in for >2 distinct
-    // emojis (Emoji = the top one, Count = the total, Tooltip = the per-emoji breakdown).
-    private readonly record struct DrawableChip(string Emoji, int Count, bool Mine, bool Combined, string? Tooltip);
+    // emojis (Emoji = the top one, Count = the total). TipLines is the hover tooltip: for a single-emoji chip
+    // one line naming who reacted, for the combined chip one such line per emoji. Each line keeps its emoji
+    // apart from the handle text so the tooltip can draw the glyph through the colour-emoji face.
+    private readonly record struct DrawableChip(
+        string Emoji, int Count, bool Mine, bool Combined, IReadOnlyList<(string Emoji, string Text)> TipLines);
 
     // Turns the reaction groups into the chips to draw: individually up to two distinct emojis, else a single
-    // combined count chip (so a post can't sprawl into a long row of chips).
+    // combined count chip (so a post can't sprawl into a long row of chips). Every chip carries a tooltip that
+    // names who reacted (up to 10, then "+N more").
     private static List<DrawableChip> ChipsFor(IReadOnlyList<ReactionGroup> groups)
     {
         if (groups.Count == 0) return [];
         if (groups.Count <= 2)
-            return groups.Select(g => new DrawableChip(g.Emoji, g.Count, g.Mine, false, null)).ToList();
+            return groups.Select(g =>
+                new DrawableChip(g.Emoji, g.Count, g.Mine, false, [ReactorLine(g)])).ToList();
         int total = groups.Sum(g => g.Count);
-        string breakdown = string.Join("   ", groups.Select(g => $"{g.Emoji} {g.Count}"));
-        return [new DrawableChip(groups[0].Emoji, total, groups.Any(g => g.Mine), true, breakdown)];
+        var lines = groups.Select(ReactorLine).ToList();
+        return [new DrawableChip(groups[0].Emoji, total, groups.Any(g => g.Mine), true, lines)];
+    }
+
+    // One tooltip line for a reaction: (emoji, "@ada, @grace, you") — the reactors we could name, then a
+    // "+N more" for any beyond the 10 we carry or who reacted from outside your friend graph. Handles are shown
+    // @-prefixed (but not "you"). The emoji rides separately so the tooltip renders it in colour.
+    private static (string Emoji, string Text) ReactorLine(ReactionGroup g)
+    {
+        var names = string.Join(", ", g.Handles.Select(h => h == "you" ? h : "@" + h));
+        int more = g.Count - g.Handles.Count;
+        if (more > 0) names = names.Length > 0 ? $"{names}, +{more} more" : $"+{more} more";
+        if (names.Length == 0) names = g.Count == 1 ? "1 reaction" : $"{g.Count} reactions";
+        return (g.Emoji, names);
     }
 
     // A chip shows its count when it's >1 or it's the combined summary.
@@ -390,7 +407,7 @@ public sealed partial class OverlayCanvas
     }
 
     // Draws one chip at x, centred on midY; returns the x just past it. Captures its hit-rect (empty emoji marks
-    // the combined chip → clicking opens the picker) and, for the combined chip, a tooltip target. The "mine"
+    // the combined chip → clicking opens the picker) and a hover-tooltip target naming who reacted. The "mine"
     // accent outline is drawn only while <paramref name="rowHovered"/> — at rest the chips sit quietly with no
     // border, and the outline appears when you hover the row that owns them.
     private double DrawChip(DrawingContext ctx, double x, double midY, DrawableChip c, Guid postId, bool rowHovered,
@@ -408,9 +425,9 @@ public sealed partial class OverlayCanvas
             OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(c.Count.ToString(), FeedReactionSize,
                 c.Mine ? Palette.AccentBrush : FgBrush), x + 7 + emojiFt.Width + 4, midY);
         // Own-post chips are display-only (you can't react to yourself) — skip the click hit-rect, but keep the
-        // combined-summary tooltip so you can still see who reacted with what.
+        // tooltip so you can still see who reacted with what.
         if (interactive) _reactChipRects.Add((chip, postId, c.Combined ? "" : c.Emoji));
-        if (c.Combined && c.Tooltip is { } tip) _reactSummaryTips.Add((chip, tip));
+        if (c.TipLines.Count > 0) _reactSummaryTips.Add((chip, c.TipLines));
         return chip.Right;
     }
 
@@ -525,7 +542,7 @@ public sealed partial class OverlayCanvas
     private readonly List<(Rect Rect, Guid PostId, int Index)> _reactAddRects = new();
     private readonly List<(Rect Rect, int Index)> _friendRowRects = new();
     private readonly List<(Rect Rect, string Full)> _socialStatusTips = new();
-    private readonly List<(Rect Rect, string Breakdown)> _reactSummaryTips = new();
+    private readonly List<(Rect Rect, IReadOnlyList<(string Emoji, string Text)> Lines)> _reactSummaryTips = new();
     private int _hoveredReactAdd = -1;
     private int _hoveredFriendRow = -1;
     private bool _hoveredSocialHeader, _hoveredSocialCompose, _hoveredSocialAdd;
@@ -567,7 +584,7 @@ public sealed partial class OverlayCanvas
         return -1;
     }
 
-    // Index of the combined-reaction summary chip under p, or -1 — its dwell tooltip lists the per-emoji counts.
+    // Index of the reaction chip under p, or -1 — its dwell tooltip names who reacted (per emoji for a combined chip).
     private int HitTestReactionSummary(Point p)
     {
         for (int i = 0; i < _reactSummaryTips.Count; i++) if (_reactSummaryTips[i].Rect.Contains(p)) return i;
@@ -699,14 +716,14 @@ public sealed partial class OverlayCanvas
         Tooltip().ShowLines([new(full, OverlayTooltip.FgColor, false)], ToScreen(rect.Left, rect.Bottom + 4));
     }
 
-    // Shows the per-emoji breakdown behind a combined reaction chip (wired via TipKind.ReactionSummary).
+    // Shows who reacted to a status, one line per emoji (wired via TipKind.ReactionSummary).
     private void ShowReactionSummaryTooltip(int index)
     {
         if (index < 0 || index >= _reactSummaryTips.Count) return;
-        var (rect, breakdown) = _reactSummaryTips[index];
-        var lines = breakdown.Split("   ")
-            .Select(s => new OverlayTooltip.Line(s, OverlayTooltip.FgColor, false)).ToList();
-        Tooltip().ShowLines(lines, ToScreen(rect.Left, rect.Bottom + 4));
+        var (rect, lines) = _reactSummaryTips[index];
+        var tipLines = lines
+            .Select(l => new OverlayTooltip.Line(l.Text, OverlayTooltip.FgColor, false, l.Emoji)).ToList();
+        Tooltip().ShowLines(tipLines, ToScreen(rect.Left, rect.Bottom + 4));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────────────

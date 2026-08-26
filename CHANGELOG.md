@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.68] - 2026-08-26
+
+- Hover a status reaction to see who reacted — up to 10 handles, then a "+N more"
+- "Sign in with a different account" opens a private window, so GitHub actually asks which one
+- Sign-in shrugs off a brief backend clock skew instead of failing every request
+- A stubborn "JWT issued at future" now shows a clear "Timestamp drift" state (it's the server's clock, not you)
+
+---
+
 ## [v0.3.67] - 2026-08-25
 
 - Guided Quick Start on first launch — a tour of the overlay, then pick a starting feature set

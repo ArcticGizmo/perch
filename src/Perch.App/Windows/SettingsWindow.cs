@@ -819,12 +819,34 @@ internal sealed class SettingsWindow : Window
         _socialBody.Children.Clear();
         var state = _social.Current;
 
+        // Feature-wide fault banner (shown above whatever sign-in/handle state follows). Timestamp drift is a
+        // backend clock problem, not something the user can fix by re-signing-in, so say so plainly.
+        if (state.Fault == SocialFault.TimestampDrift)
+        {
+            var banner = SettingsUi.BodyText(
+                "Timestamp drift — Social is paused. The server that issues your sign-in token and the one that "
+                + "checks it have clocks that disagree, so every request is rejected as \"issued at future\". "
+                + "This clears itself once the backend clocks are back in sync (if you run Supabase locally, "
+                + "restart it; a hosted project needs its clocks resynced). Nothing is wrong with your account.");
+            banner.Foreground = Palette.ErrorBrush;
+            _socialBody.Children.Add(banner);
+            _socialBody.Children.Add(SettingsUi.Separator());
+        }
+
         if (!state.SignedIn)
         {
             _socialBody.Children.Add(SettingsUi.BodyText("You're signed out."));
             var signIn = SettingsUi.FlatButton("Sign in with GitHub");
-            signIn.Click += async (_, _) => await RunSocial(signIn, () => _social.SignInAsync(default));
+            signIn.Click += async (_, _) => await RunSocial(signIn, () => _social.SignInAsync(false, default));
             _socialBody.Children.Add(Left(signIn));
+
+            // GitHub has no account picker — a normal sign-in reuses whichever account the default browser is
+            // logged into. This opens the flow in a private/incognito window so the user can pick an account.
+            var otherAccount = SettingsUi.FlatButton("Sign in with a different account");
+            otherAccount.Click += async (_, _) => await RunSocial(otherAccount, () => _social.SignInAsync(true, default));
+            _socialBody.Children.Add(Left(otherAccount));
+            _socialBody.Children.Add(SettingsUi.FieldCaption(
+                "Opens a private browser window so GitHub asks which account to use."));
             return;
         }
 

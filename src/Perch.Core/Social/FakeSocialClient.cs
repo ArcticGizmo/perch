@@ -30,7 +30,7 @@ public sealed partial class FakeSocialClient : ISocialClient
 
     public event Action<AuthState>? AuthChanged;
 
-    public Task<AuthState> SignInAsync(CancellationToken ct = default)
+    public Task<AuthState> SignInAsync(bool privateWindow = false, CancellationToken ct = default)
     {
         AuthState state;
         lock (_gate) { _signedIn = true; state = new AuthState(true, _me); }
@@ -317,10 +317,22 @@ public sealed partial class FakeSocialClient : ISocialClient
     {
         if (!_reactions.TryGetValue(postId, out var m)) return [];
         return m.Where(kv => kv.Value.Count > 0)
-            .Select(kv => new ReactionGroup(kv.Key, kv.Value.Count, _me is not null && kv.Value.Contains(_me.Id)))
+            .Select(kv => new ReactionGroup(kv.Key, kv.Value.Count, _me is not null && kv.Value.Contains(_me.Id),
+                NameReactorsLocked(kv.Value)))
             .OrderByDescending(g => g.Count).ThenBy(g => g.Emoji, StringComparer.Ordinal)
             .ToList();
     }
+
+    // Display handles for a reaction's tooltip — "you" first, then friends alphabetically, capped at 10.
+    // Unknown reactors (no profile) are dropped, mirroring the real client's RLS-limited resolution.
+    private IReadOnlyList<string> NameReactorsLocked(IEnumerable<Guid> reactors) =>
+        reactors
+            .Select(id => id == _me?.Id ? "you" : _profiles.GetValueOrDefault(id)?.Handle)
+            .Where(h => h is not null).Select(h => h!)
+            .OrderByDescending(h => h == "you")
+            .ThenBy(h => h, StringComparer.OrdinalIgnoreCase)
+            .Take(10)
+            .ToList();
 
     private bool CanSeeLocked(Guid authorId)
     {

@@ -28,8 +28,11 @@ public interface ISocialClient
     /// Launches the OAuth sign-in (system browser + loopback redirect) and persists the resulting refresh
     /// token via <see cref="Perch.Platform.ISecretStore"/>. Returns the new state — signed-in, but with a
     /// null <see cref="AuthState.Me"/> if the user hasn't claimed a handle yet (the caller then prompts).
+    /// When <paramref name="privateWindow"/> is true the authorize page opens in a private/incognito browser
+    /// window, so the provider (GitHub) doesn't silently reuse the browser's logged-in account and the user
+    /// can choose which account to sign in with.
     /// </summary>
-    Task<AuthState> SignInAsync(CancellationToken ct = default);
+    Task<AuthState> SignInAsync(bool privateWindow = false, CancellationToken ct = default);
 
     /// <summary>Clears the stored token and local session, returning to <see cref="AuthState.SignedOut"/>.</summary>
     Task SignOutAsync(CancellationToken ct = default);
@@ -180,7 +183,15 @@ public interface ISocialClient
 /// <summary>A Social operation failed in a way the UI should surface (handle taken, body too long, not
 /// signed in, backend rejected the request). Distinct from transient network errors, which surface as empty
 /// results the caller retries.</summary>
-public sealed class SocialException : Exception
+public class SocialException : Exception
 {
     public SocialException(string message) : base(message) { }
+}
+
+/// <summary>The backend rejected a token because its validity window (iat/nbf) is still in the future — a
+/// clock-skew race just after minting. A subtype of <see cref="SocialException"/> so existing handlers still
+/// catch it, but distinct enough for a wait-and-retry before giving up.</summary>
+public sealed class TokenNotYetValidException : SocialException
+{
+    public TokenNotYetValidException(string message) : base(message) { }
 }

@@ -33,7 +33,7 @@ public sealed class UrlOpener : IUrlOpener
                 // friends) takes -new-window. Launch the exe directly so a new top-level window is created
                 // on the current desktop instead of the shell handing the URL to the existing process.
                 var psi = new ProcessStartInfo(b.ExePath) { UseShellExecute = false };
-                psi.ArgumentList.Add(b.IsGecko ? "-new-window" : "--new-window");
+                psi.ArgumentList.Add(b.Family == BrowserFamily.Gecko ? "-new-window" : "--new-window");
                 psi.ArgumentList.Add(url);
                 Process.Start(psi);
                 return;
@@ -44,7 +44,41 @@ public sealed class UrlOpener : IUrlOpener
         Open(url);
     }
 
-    private readonly record struct Browser(string ExePath, bool IsGecko);
+    public void OpenPrivate(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return;
+
+        var browser = ResolveDefaultBrowser();
+        if (browser is { } b)
+        {
+            try
+            {
+                // The private-window switch differs per browser: Chromium uses --incognito, Edge --inprivate,
+                // Opera --private, and Gecko -private-window. Each opens a fresh private window, so no extra
+                // new-window flag is needed. Launch the exe directly (a shell open would hand off to the
+                // running profile and ignore the flag).
+                var psi = new ProcessStartInfo(b.ExePath) { UseShellExecute = false };
+                psi.ArgumentList.Add(b.Family switch
+                {
+                    BrowserFamily.Gecko => "-private-window",
+                    BrowserFamily.Edge => "--inprivate",
+                    BrowserFamily.Opera => "--private",
+                    _ => "--incognito",
+                });
+                psi.ArgumentList.Add(url);
+                Process.Start(psi);
+                return;
+            }
+            catch { /* fall through — best-effort, at least open a fresh normal window below */ }
+        }
+
+        // Couldn't resolve the browser or launch privately: a normal new window is the honest fallback.
+        OpenInNewWindow(url);
+    }
+
+    private enum BrowserFamily { Chromium, Edge, Opera, Gecko }
+
+    private readonly record struct Browser(string ExePath, BrowserFamily Family);
 
     /// <summary>
     /// Reads the default https handler's executable from the registry: the user's UrlAssociations choice
@@ -71,13 +105,24 @@ public sealed class UrlOpener : IUrlOpener
             string exe = ExtractExePath(command);
             if (exe.Length == 0 || !File.Exists(exe)) return null;
 
-            bool isGecko = progId.Contains("Firefox", StringComparison.OrdinalIgnoreCase)
-                || progId.Contains("Mozilla", StringComparison.OrdinalIgnoreCase)
-                || Path.GetFileName(exe).Contains("firefox", StringComparison.OrdinalIgnoreCase);
-
-            return new Browser(exe, isGecko);
+            return new Browser(exe, ClassifyBrowser(progId, Path.GetFileName(exe)));
         }
         catch { return null; }
+    }
+
+    /// <summary>Classifies the browser from its ProgId and exe filename so the family-specific new-window
+    /// and private switches can be chosen. Anything unrecognised is treated as generic Chromium — the most
+    /// common case, and its <c>--incognito</c>/<c>--new-window</c> flags are the widest-supported.</summary>
+    private static BrowserFamily ClassifyBrowser(string progId, string exeName)
+    {
+        bool Match(string needle) =>
+            progId.Contains(needle, StringComparison.OrdinalIgnoreCase)
+            || exeName.Contains(needle, StringComparison.OrdinalIgnoreCase);
+
+        if (Match("firefox") || Match("mozilla")) return BrowserFamily.Gecko;
+        if (Match("edge") || Match("msedge")) return BrowserFamily.Edge;
+        if (Match("opera")) return BrowserFamily.Opera;
+        return BrowserFamily.Chromium;
     }
 
     /// <summary>Pulls the executable path out of a shell open command (a leading quoted path, else the

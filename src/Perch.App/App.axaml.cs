@@ -220,6 +220,7 @@ public partial class App : Application
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
             {
                 _overlay?.Canvas.SetSocialAccount(st.SignedIn, st.Me is not null);
+                OnSocialFaultChanged(st.Fault);
                 _feedHost?.SetActive(Effective.SocialEnabled && st.SignedIn);   // poll the feed while signed in (paused in Quiet mode)
                 SetInboxActive(Effective.SocialEnabled && st is { SignedIn: true, Me: not null });
                 if (!st.SignedIn) { _reactionBubbles?.Close(); _reactionBubbles = null; }
@@ -815,6 +816,21 @@ public partial class App : Application
         {
             _notifier?.Show("Perch Social", "Sign-in didn't complete. Please try again.", ToastLevel.Info, null, null);
         }
+    }
+
+    // Reflects the Social feature-wide fault onto the overlay and warns once per onset. Timestamp drift means
+    // the backend's token-minting and token-validating clocks disagree, so nothing works until they're synced;
+    // we surface it plainly instead of leaving the feature mysteriously empty.
+    private bool _socialFaulted;
+    private void OnSocialFaultChanged(SocialFault fault)
+    {
+        bool drift = fault == SocialFault.TimestampDrift;
+        _overlay?.Canvas.SetSocialFault(drift);
+        if (drift && !_socialFaulted)
+            _notifier?.Show("Perch Social",
+                "Timestamp drift — the server's clock is out of sync, so Social is paused until it's fixed.",
+                ToastLevel.Warning, null, null);
+        _socialFaulted = drift;
     }
 
     // Open Settings on the Social page (from the overlay strip's "finish setup" click or its menu item).

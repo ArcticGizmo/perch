@@ -23,7 +23,17 @@ public sealed class SupabaseSocialClientTests
             secrets, new NoopUrlOpener(), new HttpClient(handler));
 
     private static string TokenJson() =>
-        """{"access_token":"jwt.access","refresh_token":"rt2","expires_in":3600,"user":{"id":"UID"}}""".Replace("UID", Uid);
+        ("""{"access_token":"JWT","refresh_token":"rt2","expires_in":3600,"user":{"id":"UID"}}""")
+            .Replace("JWT", Jwt(iatUnix: 1_600_000_000)).Replace("UID", Uid);   // iat well in the past → no settle wait
+
+    // Builds a minimally well-formed JWT (header.payload.signature) carrying just an iat, so the client's
+    // token-settle decode has something real to read. base64url, no padding — the JWT flavour.
+    private static string Jwt(long iatUnix)
+    {
+        static string B64Url(string s) =>
+            Convert.ToBase64String(Encoding.UTF8.GetBytes(s)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        return $"{B64Url("""{"alg":"HS256","typ":"JWT"}""")}.{B64Url($"{{\"iat\":{iatUnix}}}")}.sig";
+    }
 
     // A profiles-array JSON body with the given handle (display/mood left null), Uid substituted.
     private static string ProfJson(string handle) =>
@@ -56,6 +66,59 @@ public sealed class SupabaseSocialClientTests
         Assert.True(state.SignedIn);
         Assert.Equal("ada", state.Me?.Handle);
         Assert.Equal("rt2", secrets.Get("supabase.refresh_token"));   // rotated refresh token persisted
+    }
+
+    [Fact]
+    public async Task Profile_load_retries_past_a_token_issued_in_the_future()
+    {
+        var secrets = new InMemorySecretStore();
+        secrets.Set("supabase.refresh_token", "rt1");
+
+        // First profile read is rejected as not-yet-valid (clock-skew race); the client should wait and
+        // retry, and the second read succeeds — so sign-in still lands with the profile loaded.
+        var profileCalls = 0;
+        var handler = new StubHandler(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            if (path == "/auth/v1/token") return (HttpStatusCode.OK, TokenJson());
+            if (path == "/rest/v1/profiles")
+                // The exact body PostgREST returns when its clock is behind the token's iat (see the field
+                // diagnostic log) - "at future", not "in the future", and carried in code PGRST303.
+                return ++profileCalls == 1
+                    ? (HttpStatusCode.Unauthorized, """{"code":"PGRST303","details":null,"hint":null,"message":"JWT issued at future"}""")
+                    : (HttpStatusCode.OK, ProfJson("ada"));
+            return (HttpStatusCode.NotFound, "[]");
+        });
+
+        var state = await NewClient(handler, secrets).TryRestoreAsync();
+
+        Assert.True(state.SignedIn);
+        Assert.Equal("ada", state.Me?.Handle);
+        Assert.Equal(2, profileCalls);        // proved it retried rather than gave up
+    }
+
+    [Fact]
+    public async Task Persistent_timestamp_drift_puts_social_into_the_fault_state()
+    {
+        var secrets = new InMemorySecretStore();
+        secrets.Set("supabase.refresh_token", "rt1");
+
+        // Every profile read keeps failing with the drift error — the retries can't ride it out, so the
+        // whole feature should end up in the TimestampDrift fault (not a silent empty state).
+        var handler = new StubHandler(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            if (path == "/auth/v1/token") return (HttpStatusCode.OK, TokenJson());
+            if (path == "/rest/v1/profiles")
+                return (HttpStatusCode.Unauthorized, """{"code":"PGRST303","message":"JWT issued at future"}""");
+            return (HttpStatusCode.NotFound, "[]");
+        });
+
+        var client = NewClient(handler, secrets);
+        var state = await client.TryRestoreAsync();
+
+        Assert.Equal(SocialFault.TimestampDrift, state.Fault);
+        Assert.Equal(SocialFault.TimestampDrift, client.Current.Fault);
     }
 
     [Fact]
@@ -218,5 +281,6 @@ public sealed class SupabaseSocialClientTests
     {
         public void Open(string url) { }
         public void OpenInNewWindow(string url) { }
+        public void OpenPrivate(string url) { }
     }
 }
