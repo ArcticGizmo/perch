@@ -10,7 +10,7 @@ using System.Text.Json.Serialization;
 /// ordinal doubles as "how much is on". Persisted by <em>name</em> (via the converter) as
 /// <see cref="AppSettings.OnboardingTierChosen"/>, so the member order can change without breaking a file.
 /// </summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+[JsonConverter(typeof(TolerantStringEnumConverter<OnboardingTier>))]
 internal enum OnboardingTier
 {
     Basic = 0,

@@ -21,7 +21,7 @@ public enum TerminalApp
 /// When Perch launches itself. Persisted by <em>name</em> (see the converter) rather than ordinal, because
 /// perch-hook reads the raw settings.json with a string-only mini-parser — so keep the member names stable.
 /// </summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+[JsonConverter(typeof(TolerantStringEnumConverter<StartMode>))]
 public enum StartMode
 {
     /// <summary>Never launch on its own — Perch only runs when you start it.</summary>
@@ -36,7 +36,7 @@ public enum StartMode
 /// How the dense strip announces a session status change (finished / awaiting input / API error).
 /// Persisted by <em>name</em> so the member order can change without breaking an older settings file.
 /// </summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+[JsonConverter(typeof(TolerantStringEnumConverter<DenseStatusChangeStyle>))]
 public enum DenseStatusChangeStyle
 {
     /// <summary>Pop the hover panel open (the original behaviour) so the changed session is visible.</summary>
@@ -54,7 +54,7 @@ public enum DenseStatusChangeStyle
 /// order can change without breaking an older settings file; a missing key keeps Floating. See
 /// docs/reserve-edge-plan.md.
 /// </summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+[JsonConverter(typeof(TolerantStringEnumConverter<OverlayPresentationMode>))]
 public enum OverlayPresentationMode
 {
     Floating = 0,
@@ -594,24 +594,54 @@ internal sealed class AppSettings
 
     public static AppSettings Load()
     {
-        try
+        string? json = null;
+        try { if (File.Exists(FilePath)) json = File.ReadAllText(FilePath); }
+        catch { json = null; }
+
+        if (json is not null)
         {
-            if (File.Exists(FilePath))
+            try
             {
-                var json = File.ReadAllText(FilePath);
                 var s = JsonSerializer.Deserialize<AppSettings>(json) ?? new();
                 s.MigrateQuickLinks();
                 s.MigrateStartMode();
                 s.MigrateFirstRun(json);
                 return s;
             }
+            catch
+            {
+                // The file exists but wouldn't parse even with the tolerant enum converters (a truncated write,
+                // a bad hand-edit, a property whose shape changed). NEVER silently discard it and reset to
+                // defaults — that both loses the user's settings and, because a fresh AppSettings has
+                // FirstRunComplete=false, re-runs the first-run Quick Start on someone who's clearly used Perch
+                // before. Instead: keep a copy of the unreadable file for recovery, and seed FirstRunComplete
+                // true (a file existing is proof this isn't a first run — the same reasoning as MigrateFirstRun).
+                BackupUnreadable(json);
+                var recovered = new AppSettings { FirstRunComplete = true };
+                recovered.MigrateQuickLinks();
+                recovered.MigrateStartMode();
+                return recovered;
+            }
         }
-        catch { }
+
         // No settings file — a genuinely fresh install. FirstRunComplete stays false so the Quick Start runs.
         var fresh = new AppSettings();
         fresh.MigrateQuickLinks();
         fresh.MigrateStartMode();
         return fresh;
+    }
+
+    // Best-effort side copy of a settings file we couldn't parse, so a user (or a bug report) can recover it
+    // instead of it being overwritten by the next Save. Kept at a fixed name — the latest unreadable file wins.
+    private static void BackupUnreadable(string json)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(FilePath)!;
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "settings.unreadable.json"), json);
+        }
+        catch { }
     }
 
     // Seeds FirstRunComplete for a settings file written before the onboarding Quick Start existed: such a

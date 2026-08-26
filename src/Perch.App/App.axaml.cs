@@ -858,7 +858,10 @@ public partial class App : Application
             {
                 await _social.PostAsync(body, mood);
                 _feedHost?.RefreshSoon();
-            }, _social.Current.Me?.MoodEmoji),   // seed the composer with your current mood
+            }, _social.Current.Me?.MoodEmoji,   // seed the composer with your current mood
+                // Share the reaction picker's recents + extended search, so mood picks and reactions draw on one history.
+                recents: () => (IReadOnlyList<string>?)_appSettings?.RecentEmojis ?? [],
+                onEmojiUsed: emoji => { if (_appSettings is { } s) { s.RecordRecentEmoji(emoji); s.Save(); } }),
             () => _composeWindow = null);
     }
 

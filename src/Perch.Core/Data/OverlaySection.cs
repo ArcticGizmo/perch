@@ -14,7 +14,7 @@ using System.Text.Json.Serialization;
 /// <para>Persisted by <em>name</em> (see the converter) so the member order can change without breaking an
 /// older settings file, and an unknown/missing name is dropped by <see cref="OverlaySectionOrder.Normalize"/>.</para>
 /// </summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+[JsonConverter(typeof(TolerantStringEnumConverter<OverlaySection>))]
 public enum OverlaySection
 {
     /// <summary>The whole-machine CPU + RAM strip, just under the header.</summary>

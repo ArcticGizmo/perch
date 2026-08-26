@@ -19,33 +19,9 @@ internal sealed class ComposeWindow : Window
 {
     private const int MaxLen = 280;
 
-    // A curated set of coding-ish moods with search keywords — enough that "search on click" is useful without
-    // shipping a full emoji database. The OS emoji picker (Win + .) covers everything else while the box is focused.
-    private static readonly (string Emoji, string Keywords)[] MoodData =
-    [
-        ("😌", "relieved calm chill relaxed content"), ("🔥", "fire lit hot streak on a roll"),
-        ("🎉", "party celebrate ship done shipped"), ("🚀", "rocket launch ship fast"),
-        ("🧠", "brain thinking focus deep smart"), ("🐛", "bug debug broken"),
-        ("☕", "coffee tired break caffeine"), ("😴", "sleep tired sleepy zzz"),
-        ("🤔", "thinking hmm pondering"), ("😅", "sweat nervous phew close"),
-        ("💥", "boom crash blew up"), ("✅", "done check complete finished"),
-        ("😎", "cool sunglasses confident"), ("😤", "determined grind pushing"),
-        ("🥳", "party celebrate hooray"), ("😭", "crying sad rough"),
-        ("🤯", "mind blown wow"), ("💀", "dead dying rip done for"),
-        ("👀", "eyes looking watching reviewing"), ("🙃", "upside down irony chaos"),
-        ("🏃", "running busy sprint"), ("🧹", "cleanup refactor tidy"),
-        ("📦", "shipping release package deploy"), ("⚡", "fast energy quick"),
-        ("🌙", "night late owl"), ("🎯", "focus goal target"),
-        ("🤖", "ai bot automation agent"), ("🫠", "melting overwhelmed done"),
-        ("😐", "meh neutral whatever"), ("🤬", "angry frustrated rage"),
-        ("🥲", "smiling tear bittersweet"), ("🫡", "salute done sir yes"),
-        ("🧪", "test experiment try"), ("🔧", "fix tools wrench"),
-        ("📝", "writing notes docs planning"), ("🍕", "food lunch hungry"),
-        ("💤", "sleep zzz afk away"), ("🎨", "design ui polish"),
-        ("🧯", "firefighting incident oncall"), ("🌱", "new fresh start learning"),
-    ];
-
     private readonly Func<string, string?, Task> _post;
+    private readonly Func<IReadOnlyList<string>>? _recents;
+    private readonly Action<string>? _onEmojiUsed;
     private readonly TextBox _body;
     private readonly Button _moodBtn;
     private readonly TextBlock _counter;
@@ -53,11 +29,16 @@ internal sealed class ComposeWindow : Window
     private readonly Button _postBtn;
 
     private string? _mood;
-    private Flyout? _moodFlyout;
 
-    public ComposeWindow(Func<string, string?, Task> post, string? initialMood = null)
+    /// <param name="recents">Supplies the most-recently-used emoji for the mood picker's default grid, and
+    /// <paramref name="onEmojiUsed"/> records a pick — the same wiring the overlay's reaction picker uses, so
+    /// moods and reactions share one recents history and the same extended emoji search.</param>
+    public ComposeWindow(Func<string, string?, Task> post, string? initialMood = null,
+        Func<IReadOnlyList<string>>? recents = null, Action<string>? onEmojiUsed = null)
     {
         _post = post;
+        _recents = recents;
+        _onEmojiUsed = onEmojiUsed;
         _mood = string.IsNullOrWhiteSpace(initialMood) ? null : initialMood;
         Title = "Post a status";
         Width = 420;
@@ -80,7 +61,7 @@ internal sealed class ComposeWindow : Window
             Background = Palette.ButtonBgBrush, BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
             VerticalAlignment = VerticalAlignment.Top, Cursor = new Cursor(StandardCursorType.Hand),
         };
-        ToolTip.SetTip(_moodBtn, "Pick a mood (or press Win + . in the box for the system emoji picker)");
+        ToolTip.SetTip(_moodBtn, "Pick a mood");
         _moodBtn.Click += (_, _) => ShowMoodPicker();
         RefreshMoodButton();
 
@@ -128,78 +109,22 @@ internal sealed class ComposeWindow : Window
         RefreshMoodButton();
     }
 
-    // A searchable emoji picker anchored to the mood button: a search box filtering the curated list by keyword,
-    // a "None" option, and a hint that the OS emoji picker is a keystroke away.
+    // The shared emoji picker (recents by default + the full cross-platform EmojiCatalog search), anchored just
+    // below the mood button. showClear offers the "None" chip that clears the mood. Same picker the overlay's
+    // reaction chooser uses, so every emoji selector in Perch behaves the same and shares one recents history.
     private void ShowMoodPicker()
     {
-        var search = new TextBox { PlaceholderText = "search or type an emoji…", Width = 240 };
-        var wrap = new WrapPanel { MaxWidth = 240 };
-
-        void Choose(string? mood) { SetMood(mood); _moodFlyout?.Hide(); }
-
-        void Rebuild(string q)
-        {
-            wrap.Children.Clear();
-
-            // Typed/pasted a system emoji? Offer it as a highlighted "use this" chip so any mood is settable,
-            // not just the curated set. Otherwise the "None" clear chip leads.
-            if (EmojiText.ContainsEmoji(q))
-            {
-                var custom = EmojiText.FirstGrapheme(q);
-                var chip = MoodChip(custom, clear: false);
-                chip.BorderBrush = Palette.AccentBrush;
-                chip.BorderThickness = new Thickness(1.5);
-                chip.Click += (_, _) => Choose(custom);
-                wrap.Children.Add(chip);
-            }
-            else
-            {
-                var none = MoodChip("🚫", clear: true);
-                none.Click += (_, _) => Choose(null);
-                wrap.Children.Add(none);
-            }
-
-            foreach (var (emoji, kw) in MoodData)
-            {
-                if (q.Length > 0 && !EmojiText.ContainsEmoji(q)
-                    && !kw.Contains(q, StringComparison.OrdinalIgnoreCase) && emoji != q) continue;
-                var b = MoodChip(emoji, clear: false);
-                b.Click += (_, _) => Choose(emoji);
-                wrap.Children.Add(b);
-            }
-        }
-        Rebuild("");
-        search.TextChanged += (_, _) => Rebuild(search.Text?.Trim() ?? "");
-        // Enter commits a typed emoji directly (handy after Win + . drops one into the box).
-        search.KeyDown += (_, e) =>
-        {
-            if (e.Key != Key.Enter) return;
-            var q = search.Text?.Trim() ?? "";
-            if (EmojiText.ContainsEmoji(q)) { Choose(EmojiText.FirstGrapheme(q)); e.Handled = true; }
-        };
-
-        var content = new StackPanel { Width = 260, Spacing = 8 };
-        content.Children.Add(search);
-        content.Children.Add(new ScrollViewer { MaxHeight = 200, Content = wrap });
-        content.Children.Add(new TextBlock
-        {
-            Text = "Tip: type or paste any emoji above (Win + . opens the system picker), then Enter.",
-            Foreground = Palette.MutedBrush, FontSize = 11, TextWrapping = TextWrapping.Wrap,
-        });
-
-        _moodFlyout = new Flyout { Content = content };
-        _moodFlyout.ShowAt(_moodBtn);
-        search.Focus();
+        var anchor = _moodBtn.PointToScreen(new Point(0, _moodBtn.Bounds.Height + 4));
+        var picker = new EmojiPickerWindow(
+            "Pick a mood",
+            mood => SetMood(mood),          // null when the "clear" chip is used
+            anchor,
+            recents: _recents?.Invoke(),
+            onEmojiUsed: _onEmojiUsed,
+            showClear: true);
+        picker.Show();
+        picker.Activate();
     }
-
-    private static Button MoodChip(string emoji, bool clear) => new()
-    {
-        Content = new TextBlock { Text = emoji, FontFamily = new FontFamily("Segoe UI Emoji"), FontSize = 16 },
-        Background = Brushes.Transparent, BorderThickness = new Thickness(0),
-        Padding = new Thickness(6, 3), Margin = new Thickness(0, 0, 2, 2),
-        Cursor = new Cursor(StandardCursorType.Hand),
-        Opacity = clear ? 0.6 : 1.0,
-    };
 
     private void UpdateCounter()
     {

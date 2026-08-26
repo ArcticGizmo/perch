@@ -43,6 +43,39 @@ public sealed partial class OverlayCanvas
     private bool _regionExpanded = true;
     private RosterSnapshot? _roster;
 
+    // "New status you haven't seen" tracking, keyed by friend → the latest post id acknowledged as seen. A visible
+    // friend's status is unseen when its id differs from the acked id here; the header shows a dot while any visible
+    // friend is unseen. Acked by launch priming, by opening the pane, or by dismissing the status. Runtime-only
+    // (never persisted) — a fresh launch treats everything as seen, riding the first-roster priming below. A friend
+    // posting a new status (new id) makes them unseen again.
+    private readonly Dictionary<Guid, Guid> _seenStatus = new();
+
+    // "Dismiss status" dismissals, keyed by friend → the dismissed post id. A friend with a dismissed latest
+    // status is dropped from the roster entirely until they post again (a new id clears it). Distinct from the
+    // unseen dot above: opening the pane clears the dot but never un-hides a dismissed row. Runtime-only.
+    private readonly Dictionary<Guid, Guid> _dismissedStatus = new();
+
+    // Statuses older than this are filtered out of the roster to keep it fresh.
+    private static readonly TimeSpan StatusFreshness = TimeSpan.FromHours(12);
+
+    // The friends actually shown: those with a current status — one that exists, was posted within StatusFreshness,
+    // and hasn't been dismissed since. Ordered as the roster delivered them (most-recently-active first). Cheap to
+    // recompute over a handful of friends, so measure/paint/hit-test each call it and stay in step.
+    private List<RosterFriend> VisibleFriends()
+    {
+        if (_roster is not { } r) return [];
+        var now = DateTimeOffset.UtcNow;
+        var list = new List<RosterFriend>(r.Friends.Count);
+        foreach (var f in r.Friends)
+        {
+            if (f.Latest is not { } latest) continue;
+            if (now - latest.CreatedAt > StatusFreshness) continue;
+            if (_dismissedStatus.GetValueOrDefault(f.Profile.Id) == latest.Id) continue;
+            list.Add(f);
+        }
+        return list;
+    }
+
     // Per-friend status-change glow: tick (Environment.TickCount64) when a friend's latest status last changed.
     // Primed on the first roster so an initial population doesn't glow the whole list.
     private readonly Dictionary<Guid, long> _glowStart = new();
@@ -80,8 +113,8 @@ public sealed partial class OverlayCanvas
     // complementary state, so the two never overlap.
     private bool SocialRegionVisible => _socialEnabled && _socialSignedIn && _socialHasHandle && !_socialDrift;
 
-    private int FriendRowCount => Math.Min(_maxFriends, _roster?.Friends.Count ?? 0);
-    private bool FriendOverflow => (_roster?.Friends.Count ?? 0) > _maxFriends;
+    private int FriendRowCount => Math.Min(_maxFriends, VisibleFriends().Count);
+    private bool FriendOverflow => VisibleFriends().Count > _maxFriends;
 
     /// <summary>Sets how many friends the roster shows before the "+N more" overflow (AppSettings.MaxFriendsShown,
     /// clamped to a sane range). Changing it can change the region height, so relayout when it actually differs.</summary>
@@ -123,6 +156,7 @@ public sealed partial class OverlayCanvas
     {
         if (_regionExpanded == expanded) return;
         _regionExpanded = expanded;
+        if (expanded) MarkAllStatusesSeen();   // opening the pane marks the new statuses seen
         if (SocialRegionVisible) RemeasurePanel();
     }
 
@@ -151,13 +185,57 @@ public sealed partial class OverlayCanvas
             if (f.Latest is not { } latest) continue;
             bool changed = !_rosterSeenLatest.TryGetValue(f.Profile.Id, out var prev) || prev != latest.Id;
             _rosterSeenLatest[f.Profile.Id] = latest.Id;
-            if (changed && wasPrimed)
+
+            if (!wasPrimed)
+            {
+                // Launch priming: everything already present counts as seen.
+                _seenStatus[f.Profile.Id] = latest.Id;
+                continue;
+            }
+
+            if (changed)
             {
                 _glowStart[f.Profile.Id] = Environment.TickCount64;
                 EnsureGlowTimer();
+                // Expanded → the change is already on screen (and glowing), so ack it as seen at once. Collapsed →
+                // leave it unseen until the pane is opened or the row is explicitly marked seen.
+                if (_regionExpanded) _seenStatus[f.Profile.Id] = latest.Id;
             }
         }
         _rosterPrimed = true;
+    }
+
+    // True while any visible friend's status hasn't been acknowledged as seen — drives the header's "new status"
+    // dot. Only visible statuses count, so a stale or dismissed one (which you can't open the pane to see) never
+    // lights it.
+    private bool HasUnseenStatus
+    {
+        get
+        {
+            foreach (var f in VisibleFriends())
+                if (f.Latest is { } latest && _seenStatus.GetValueOrDefault(f.Profile.Id) != latest.Id)
+                    return true;
+            return false;
+        }
+    }
+
+    // Acks every friend's current status (opening the pane, or launch) — everything currently shown is now seen.
+    private void MarkAllStatusesSeen()
+    {
+        if (_roster is null) return;
+        foreach (var f in _roster.Friends)
+            if (f.Latest is { } latest) _seenStatus[f.Profile.Id] = latest.Id;
+    }
+
+    // The per-row "Dismiss status": hides this friend's status row until they post again (a new id), and acks
+    // it for the header dot (a dismissed status is, by definition, seen). Removing a row changes the panel
+    // height, so relayout rather than just repaint.
+    private void DismissStatus(Guid friendId, Guid postId)
+    {
+        _dismissedStatus[friendId] = postId;
+        _seenStatus[friendId] = postId;
+        _glowStart.Remove(friendId);
+        RemeasurePanel();
     }
 
     // 1→0 ease-out over GlowMs; 0 once elapsed (the timer prunes it).
@@ -194,6 +272,7 @@ public sealed partial class OverlayCanvas
     private void OnSocialHeaderClicked()
     {
         _regionExpanded = !_regionExpanded;
+        if (_regionExpanded) MarkAllStatusesSeen();   // opening the pane marks the new statuses seen
         SocialRegionExpandChanged?.Invoke(_regionExpanded);
         RemeasurePanel();
     }
@@ -214,16 +293,18 @@ public sealed partial class OverlayCanvas
         // The Connect 4 strip, between the header and the friends.
         if (HasGameStripItems) { DrawGamesStrip(ctx, width, y); y += GamesRowHeight; }
 
-        if (_roster is { Friends.Count: > 0 } r)
+        var vis = VisibleFriends();
+        if (vis.Count > 0)
         {
-            for (int i = 0; i < FriendRowCount; i++)
+            int shown = Math.Min(_maxFriends, vis.Count);
+            for (int i = 0; i < shown; i++)
             {
-                DrawFriendRow(ctx, width, y, r.Friends[i], i);
+                DrawFriendRow(ctx, width, y, vis[i], i);
                 y += FeedRowHeight;
             }
-            if (FriendOverflow)
+            if (vis.Count > _maxFriends)
             {
-                int more = r.Friends.Count - FriendRowCount;
+                int more = vis.Count - shown;
                 var ft = OverlayDraw.Text($"+{more} more · manage friends", FeedCaptionSize, MutedBrush);
                 OverlayDraw.TextLeftMid(ctx, ft, HorizPad + 2, y + FeedCaptionHeight / 2);
                 _socialMoreRect = new Rect(0, y, width, FeedCaptionHeight);
@@ -248,6 +329,13 @@ public sealed partial class OverlayCanvas
         OverlayDraw.TextLeftMid(ctx, capFt, x, midY);
         x += capFt.Width + 8;
 
+        // "New status" dot: a friend posted while the region was collapsed and it hasn't been seen since.
+        if (HasUnseenStatus)
+        {
+            ctx.DrawEllipse(Palette.AccentBrush, null, new Point(x + 3, midY), 3, 3);
+            x += 3 * 2 + 6;
+        }
+
         // Invite badge: a small attention pill with the pending-request count. Clicking it opens Friends.
         int invites = _roster?.IncomingRequests ?? 0;
         if (invites > 0)
@@ -268,8 +356,8 @@ public sealed partial class OverlayCanvas
         DrawPlusGlyph(ctx, _hoveredSocialAdd ? FgBrush : MutedBrush, addCx, midY);
         _socialAddRect = addRect;
 
-        // Left of the "+": a live dot + count of friends with a current status.
-        int online = _roster?.Friends.Count(f => f.Latest is not null) ?? 0;
+        // Left of the "+": a live dot + count of friends with a current (fresh, non-dismissed) status.
+        int online = VisibleFriends().Count;
         if (online > 0)
         {
             var ft = OverlayDraw.Text($"{online} active", FeedCaptionSize, MutedBrush);
@@ -667,9 +755,14 @@ public sealed partial class OverlayCanvas
         }
 
         int fr = HitTestFriendRow(p);
-        if (fr >= 0 && _roster is { } r && fr < r.Friends.Count && r.Friends[fr].Latest is { } post)
+        var vis = VisibleFriends();
+        if (fr >= 0 && fr < vis.Count && vis[fr].Latest is { } post)
         {
-            items.Add(MenuItem($"React to @{r.Friends[fr].Profile.Handle}…", () => ShowReactionPicker(post.Id, ToScreen(p.X, p.Y))));
+            var friend = vis[fr];
+            items.Add(MenuItem($"React to @{friend.Profile.Handle}…", () => ShowReactionPicker(post.Id, ToScreen(p.X, p.Y))));
+            // Hide this friend's status row until they next post (a new id brings it back), and ack it for the
+            // header dot. Distinct from the "new status" dot — this dismisses the row itself.
+            items.Add(MenuItem("Dismiss status", () => DismissStatus(friend.Profile.Id, post.Id)));
             items.Add(new Separator());
         }
         items.Add(MenuItem("Post a status…", () => PostStatusRequested?.Invoke()));

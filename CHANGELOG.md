@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.71] - 2026-08-26
+
+- A dot on the Friends header flags a status you haven't seen yet
+- Dismiss a friend's status to hide it until they post again
+- Statuses older than 12 hours drop off the roster (there is a freshness window)
+- The status mood picker now uses the same emoji search and recents as reactions
+- A setting value the app can't read no longer resets all the others, or re-runs onboarding (it was a trap)
+
+---
+
 ## [v0.3.70] - 2026-08-26
 
 - "View git history…" always sits on a repo's right-click menu now — no toggle to hunt for
