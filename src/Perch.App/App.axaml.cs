@@ -51,6 +51,12 @@ public partial class App : Application
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
     private SessionConsoleWindow? _sessionConsole;   // PoC: Perch-controlled session (docs/session-control-poc.md)
+    // PoC: the permission valet (session-control M2). The pipe server runs whenever the tray does (it
+    // answers "pass" in microseconds when disarmed, so hooked sessions never notice it); the tray menu
+    // toggle arms the prompt UI. Not persisted — a setting comes at the M6 gate.
+    private Perch.Data.Control.ValetServer? _valetServer;
+    private ValetPromptWindow? _valetPrompt;
+    private bool _valetArmed;
     private ArcadeMenuWindow? _arcadeWindow;        // shhh
     private SpaceInvadersWindow? _invadersWindow;   // shhh
     private FroggerWindow? _froggerWindow;          // shhh
@@ -155,6 +161,7 @@ public partial class App : Application
                 _hypertreeHost?.Dispose();
                 _daemonHost?.Dispose();
                 _todoHost?.Dispose();
+                _valetServer?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
                 _overlay?.Canvas.ReleaseDocked();   // give the reserved screen edge back to the desktop
@@ -289,6 +296,10 @@ public partial class App : Application
             _monitorHost.PrReviewed += OnPrReviewed;
             _monitorHost.PrApproved += OnPrApproved;
             _monitorHost.OpenHistoryRequested += OpenHistory; // the plugin's jump-to-session
+
+            // Permission valet (PoC): accept perch-hook's PreToolUse relays for the whole tray lifetime.
+            _valetServer = new Perch.Data.Control.ValetServer { Decide = DecideValet };
+            _valetServer.Start();
 
             // Row click focuses the session's terminal; the artifact glyph always pops a picker list, and
             // the chosen artifact is opened here.
@@ -1454,6 +1465,41 @@ public partial class App : Application
     private void OpenSessionConsole() =>
         _sessionConsole = WindowHost.ShowOrFocus(_sessionConsole, () => new SessionConsoleWindow(), () => _sessionConsole = null);
 
+    // The permission valet's verdict (session-control M2), called on the pipe server's worker thread
+    // with the session's tool call blocked until the returned task resolves — so everything but the
+    // "actually show a prompt" path answers pass immediately: valet disarmed, a session this Perch owns
+    // over stream-json (its console already answers can_use_tool), or a read-only tool the interactive
+    // session would overwhelmingly auto-allow (the PoC heuristic — the hook can't see whether Claude
+    // Code would have prompted).
+    private Task<Perch.Data.Control.ValetDecision> DecideValet(Perch.Data.Control.ValetRequest request)
+    {
+        if (!_valetArmed
+            || Perch.Data.Control.ControlledSessions.Owns(request.SessionId)
+            || Perch.Data.Control.ValetProtocol.IsReadOnlyTool(request.ToolName))
+            return Task.FromResult(Perch.Data.Control.ValetDecision.Pass);
+
+        var tcs = new TaskCompletionSource<Perch.Data.Control.ValetDecision>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                if (_valetPrompt is null || !_valetPrompt.IsVisible)
+                {
+                    _valetPrompt = new ValetPromptWindow();
+                    _valetPrompt.Closed += (_, _) => _valetPrompt = null;
+                    _valetPrompt.Show();
+                }
+                _valetPrompt.Enqueue(request, d => tcs.TrySetResult(d));
+            }
+            catch
+            {
+                tcs.TrySetResult(Perch.Data.Control.ValetDecision.Pass);   // UI failed → fail open
+            }
+        });
+        return tcs.Task;
+    }
+
     // The reward for long-pressing the brand mark: the arcade chooser. It hands off to one of the three toys
     // below and closes as it does. All are reused like every other aux window.
     private void OpenArcade() =>
@@ -1886,6 +1932,16 @@ public partial class App : Application
         var sessionConsoleItem = new NativeMenuItem("Session console (PoC)…");
         sessionConsoleItem.Click += (_, _) => OpenSessionConsole();
 
+        // Arms the permission valet: while on, prompting-class tool calls from hooked sessions surface
+        // as Perch prompt cards (unanswered ones fall back to the terminal prompt). State shows in the
+        // label since this Avalonia's NativeMenuItem has no checkbox toggle.
+        var valetItem = new NativeMenuItem("Permission valet (PoC): off");
+        valetItem.Click += (_, _) =>
+        {
+            _valetArmed = !_valetArmed;
+            valetItem.Header = $"Permission valet (PoC): {(_valetArmed ? "on" : "off")}";
+        };
+
         // Reads "Check for Updates…" normally; flips to "Update available" once a pending update is
         // detected (see OnUpdateAvailabilityChanged). Clicking it applies the pending update, else checks.
         _updateItem = new NativeMenuItem("Check for Updates…");
@@ -1913,6 +1969,7 @@ public partial class App : Application
                 achievementsItem,
                 todosItem,
                 sessionConsoleItem,
+                valetItem,
                 _updateItem,
                 new NativeMenuItemSeparator(),
                 exitItem,

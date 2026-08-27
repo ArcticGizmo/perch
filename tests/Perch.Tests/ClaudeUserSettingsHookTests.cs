@@ -15,13 +15,18 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
     private readonly string _dir;
     private readonly string _settings;
 
-    // The seven (event, arg) pairs Perch manages — mirror of ClaudeUserSettings.ManagedHooks.
+    // The (event, first-arg) pairs Perch manages — mirror of ClaudeUserSettings.ManagedHooks. (The
+    // valet entry carries a second arg, its pipe name, which these tests don't pin — it varies by the
+    // profile the suite runs under.)
     private static readonly (string Event, string Arg)[] Expected =
     {
-        ("PreToolUse", "mode"), ("PostToolUse", "mode"), ("Stop", "mode"),
+        ("PreToolUse", "mode"), ("PreToolUse", "valet"), ("PostToolUse", "mode"), ("Stop", "mode"),
         ("SubagentStop", "agentstop"), ("TeammateIdle", "teammateidle"),
         ("SessionStart", "start"), ("SessionEnd", "cleanup"),
     };
+
+    // How many managed entries a given event carries (PreToolUse has two: mode + valet).
+    private static int ExpectedCount(string evt) => Expected.Count(e => e.Event == evt);
 
     public ClaudeUserSettingsHookTests()
     {
@@ -147,8 +152,8 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
         // The marker-less duplicates are recognised by command and collapsed to the single managed set.
         Assert.Equal(Expected.Length, ManagedHooks(Read()).Count);
         var hooks = (JsonObject)Read()["hooks"]!;
-        foreach (var (evt, _) in Expected)
-            Assert.Single((JsonArray)hooks[evt]!);
+        foreach (var evt in Expected.Select(e => e.Event).Distinct())
+            Assert.Equal(ExpectedCount(evt), ((JsonArray)hooks[evt]!).Count);
     }
 
     [Fact]
@@ -170,7 +175,7 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
         ClaudeUserSettings.ReconcileHooks(_settings, "/opt/perch/bin/perch-hook", "0.2.0");
 
         Assert.Equal(Expected.Length, ManagedHooks(Read()).Count);
-        Assert.Single((JsonArray)((JsonObject)Read()["hooks"]!)["PreToolUse"]!);
+        Assert.Equal(ExpectedCount("PreToolUse"), ((JsonArray)((JsonObject)Read()["hooks"]!)["PreToolUse"]!).Count);
     }
 
     // ── dev / release profile scope ─────────────────────────────────────────────────────

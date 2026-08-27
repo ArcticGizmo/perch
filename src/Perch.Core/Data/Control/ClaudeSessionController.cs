@@ -84,7 +84,11 @@ internal sealed class ClaudeSessionController : IDisposable
             {
                 foreach (var ev in StreamJsonParser.Parse(line))
                 {
-                    if (ev is SessionInitEvent init) SessionId = init.SessionId;
+                    if (ev is SessionInitEvent init)
+                    {
+                        SessionId = init.SessionId;
+                        ControlledSessions.Register(init.SessionId);   // the valet + focus routing skip owned sessions
+                    }
                     EventReceived?.Invoke(ev);
                 }
             }
@@ -104,6 +108,7 @@ internal sealed class ClaudeSessionController : IDisposable
             errTail = ToolSummary.Clip(err.Length > 400 ? err[^400..] : err);
         }
         catch { /* best effort */ }
+        ControlledSessions.Unregister(SessionId);
         Exited?.Invoke(exitCode, errTail);
     }
 

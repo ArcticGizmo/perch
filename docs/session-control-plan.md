@@ -79,7 +79,22 @@ renders into. No control, no protocol risk — mostly assembly of existing parts
 - **Deferred polish:** diff-aware rendering of Edit/Write inputs, images, search, virtualisation
   beyond "cap rendered history to the last N events".
 
-### M2 — Permission valet: answer any session's permission prompts from Perch
+### M2 — Permission valet: answer any session's permission prompts from Perch ✅ (code + e2e)
+
+> **Landed 2026-08-27.** `perch-hook valet` (PreToolUse) forwards the raw payload over a named pipe to
+> the tray's `ValetServer` (Perch.Core/Data/Control) and relays an explicit allow/deny back as
+> `hookSpecificOutput`; everything else is silent (never `"ask"` — that *forces* a prompt, so "no
+> opinion" must be no output). The pipe name is baked into the hook registration per profile
+> (`ClaudeUserSettings`), so dev/release trays never cross. Tray side: `DecideValet` passes instantly
+> when disarmed / the session is Perch-owned (`ControlledSessions`) / the tool is read-only
+> (`ValetProtocol.IsReadOnlyTool` — the PoC heuristic), else `ValetPromptWindow` cards with
+> Allow/Deny/Ignore and an 18 s auto-pass; armed via the tray menu ("Permission valet (PoC)").
+> **e2e verified against real claude 2.1.247** with a project-local registration + stand-in server:
+> allow → Write ran with no denial; no server → instant fail-open, normal denial, no added latency.
+> Unit-tested: pipe round-trip, pass-on-unparseable, fail-open-on-throw. Still needs a human pass:
+> the armed prompt UI in a live interactive terminal (ignore → TUI prompt appears at ~18 s), and the
+> known heuristic gap — an armed valet also prompts for allowlisted mutating tools (e.g. an allowlisted
+> `git status` under Bash) because the hook can't see Claude Code's own permission evaluation.
 
 The highest-value control feature and the riskiest UX loop — prove it before anything else builds on it.
 
