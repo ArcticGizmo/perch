@@ -54,6 +54,11 @@
                we harvest data rather than drive the engine. Since v0.3.0 the namespace is
                `ArcticGizmo.Avalonia.Palette` (was a bare `Palette`), so no extern alias is needed. -->
           <PackageReference Include="ArcticGizmo.Avalonia.Palette.Core" Version="0.3.0" />
+          <!-- Embedded ConPTY terminal for Perch-controlled sessions (session-control): a maintained,
+               Avalonia-12/net10 terminal control (XTerm.NET emulator over Porta.Pty's ConPTY) so a real
+               interactive `claude` TUI runs inside a Perch window, promptable from the terminal or from
+               Perch. See docs/session-control-plan.md. -->
+          <PackageReference Include="Iciclecreek.Avalonia.Terminal" Version="3.1.0" />
           <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
           <PackageReference Include="Velopack" Version="1.2.0" />
           <PackageReference Include="QRCoder" Version="1.8.0" />

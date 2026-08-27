@@ -51,12 +51,16 @@ public partial class App : Application
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
     private SessionConsoleWindow? _sessionConsole;   // PoC: Perch-controlled session (docs/session-control-poc.md)
-    // PoC: the permission valet (session-control M2). The pipe server runs whenever the tray does (it
-    // answers "pass" in microseconds when disarmed, so hooked sessions never notice it); the tray menu
-    // toggle arms the prompt UI. Not persisted — a setting comes at the M6 gate.
+    private SessionTerminalWindow? _sessionTerminal; // PoC: embedded ConPTY terminal (the elevation destination)
+    // PoC: the permission valet (session-control M2), now PARKED in favour of the embedded terminal
+    // (docs/session-control-plan.md). The pipe server still runs (answers "pass" instantly), but there's
+    // no tray toggle to arm it, so _valetArmed stays false and DecideValet always passes. Kept wired so
+    // un-parking is a one-line change rather than a rebuild.
     private Perch.Data.Control.ValetServer? _valetServer;
     private ValetPromptWindow? _valetPrompt;
+#pragma warning disable CS0649 // parked: never armed (no tray toggle); DecideValet short-circuits to pass
     private bool _valetArmed;
+#pragma warning restore CS0649
     private ArcadeMenuWindow? _arcadeWindow;        // shhh
     private SpaceInvadersWindow? _invadersWindow;   // shhh
     private FroggerWindow? _froggerWindow;          // shhh
@@ -591,6 +595,7 @@ public partial class App : Application
         _basketball?.Close();
         _flightWindow?.Close();
         _sessionConsole?.Close();
+        _sessionTerminal?.Close();
         _arcadeWindow?.Close();
         _invadersWindow?.Close();
         _froggerWindow?.Close();
@@ -712,10 +717,10 @@ public partial class App : Application
         _notifier?.Show(title, body, level, null, null);
     }
 
-    // Elevate a running terminal session into a Perch-controlled one (PoC, session-control M4): confirm,
-    // kill the terminal-side process, then resume the same session id in the console over stream-json —
-    // the conversation continues under Perch's full control. Same-id resume keeps one transcript, so the
-    // hand-off is seamless; "Hand back to terminal" in the console is the reverse.
+    // Elevate a running terminal session into Perch (session-control — ConPTY pivot): confirm, stop the
+    // external terminal's process, then resume the same session id in Perch's own embedded ConPTY
+    // terminal. The conversation continues under the same id/transcript in a real terminal that lives
+    // inside Perch — no orphaned external window, and promptable from the terminal or from Perch.
     private async void OnElevateToPerch(ClaudeSession session)
     {
         if (_overlay is not { } owner) return;
@@ -723,21 +728,23 @@ public partial class App : Application
         bool confirmed = await ConfirmDialog.ShowAsync(
             owner,
             "Elevate to Perch?",
-            $"Take over {session.DisplayName} (PID {session.Pid}) in Perch's session console? "
-                + "Its terminal process is stopped and the same conversation resumes inside Perch. "
-                + "You can hand it back to a terminal afterwards.",
+            $"Take over {session.DisplayName} (PID {session.Pid}) in Perch's embedded terminal? "
+                + "Its current terminal process is stopped and the same conversation resumes inside Perch. "
+                + "(The old terminal window may show teardown output — you can close it.)",
             "Elevate", "Cancel");
         if (!confirmed) return;
 
-        // Stop the terminal-side process so its --resume can be picked up cleanly, then rescan to drop
-        // the now-dead row.
+        // Stop the external process so its --resume can be picked up, then rescan to drop the dead row.
         SessionTerminator.Terminate(session.Pid);
         _monitorHost?.Rescan();
 
-        // No model override: --resume restores the session's own model, and the full model id wouldn't
-        // match the console's short-name picker anyway.
-        OpenSessionConsole();
-        _sessionConsole?.ResumeSession(session.SessionId, session.Cwd);
+        // Fresh window each elevation so a previous terminal isn't reused mid-session; resume by id.
+        _sessionTerminal?.Close();
+        _sessionTerminal = new SessionTerminalWindow();
+        _sessionTerminal.Closed += (_, _) => _sessionTerminal = null;
+        _sessionTerminal.ResumeSession(session.SessionId, session.Cwd);
+        _sessionTerminal.Show();
+        _sessionTerminal.Activate();
     }
 
     // Opens the artifact the user picked from the overlay's artifact-glyph list. Middle-click asks for a
@@ -1504,6 +1511,9 @@ public partial class App : Application
     private void OpenSessionConsole() =>
         _sessionConsole = WindowHost.ShowOrFocus(_sessionConsole, () => new SessionConsoleWindow(), () => _sessionConsole = null);
 
+    private void OpenSessionTerminal() =>
+        _sessionTerminal = WindowHost.ShowOrFocus(_sessionTerminal, () => new SessionTerminalWindow(), () => _sessionTerminal = null);
+
     // The permission valet's verdict (session-control M2), called on the pipe server's worker thread
     // with the session's tool call blocked until the returned task resolves — so everything but the
     // "actually show a prompt" path answers pass immediately: valet disarmed, a session this Perch owns
@@ -1968,18 +1978,15 @@ public partial class App : Application
         var todosItem = new NativeMenuItem("Todos…");
         todosItem.Click += (_, _) => OpenTodos();
 
+        var sessionTerminalItem = new NativeMenuItem("Session terminal (PoC)…");
+        sessionTerminalItem.Click += (_, _) => OpenSessionTerminal();
+
         var sessionConsoleItem = new NativeMenuItem("Session console (PoC)…");
         sessionConsoleItem.Click += (_, _) => OpenSessionConsole();
 
-        // Arms the permission valet: while on, prompting-class tool calls from hooked sessions surface
-        // as Perch prompt cards (unanswered ones fall back to the terminal prompt). State shows in the
-        // label since this Avalonia's NativeMenuItem has no checkbox toggle.
-        var valetItem = new NativeMenuItem("Permission valet (PoC): off");
-        valetItem.Click += (_, _) =>
-        {
-            _valetArmed = !_valetArmed;
-            valetItem.Header = $"Permission valet (PoC): {(_valetArmed ? "on" : "off")}";
-        };
+        // Note: the permission valet (session-control M2) is parked in favour of the embedded terminal —
+        // its server/hook stay wired but there's no tray toggle to arm it, so it stays dormant (always
+        // "pass"). See docs/session-control-plan.md.
 
         // Reads "Check for Updates…" normally; flips to "Update available" once a pending update is
         // detected (see OnUpdateAvailabilityChanged). Clicking it applies the pending update, else checks.
@@ -2007,8 +2014,8 @@ public partial class App : Application
                 flightItem,
                 achievementsItem,
                 todosItem,
+                sessionTerminalItem,
                 sessionConsoleItem,
-                valetItem,
                 _updateItem,
                 new NativeMenuItemSeparator(),
                 exitItem,

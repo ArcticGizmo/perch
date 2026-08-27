@@ -5,6 +5,18 @@
 > already on this branch). Every milestone here ends in a **runnable end-to-end demonstration** of one
 > risky mechanism; polish (theming depth, settings registry entries, markdown fidelity, macOS parity,
 > overlay glyphs) is deliberately deferred to a single backlog behind a decision gate at M6.
+>
+> **POST-GATE PIVOT (2026-08-27, user feedback):** the stream-json chat *console* and the *permission
+> valet* both proved awkward to dogfood — elevation killed the terminal but left the external window
+> spewing teardown escapes, and the valet only makes sense for external terminals (can't be dogfooded
+> purely inside Perch). Decision: build the **embedded ConPTY terminal** (previously the deferred M6
+> option) as the primary surface — a real interactive `claude` TUI inside a Perch window, promptable
+> from the terminal *or* a Perch input box. Chosen tech: `Iciclecreek.Avalonia.Terminal` +
+> `Porta.Pty` (MIT, net10/Avalonia-12, XTerm.NET emulator over ConPTY). The **valet is parked** (code
+> wired but no tray toggle, so dormant). `SessionTerminalWindow` is the new elevation destination and
+> gets its own tray entry. Spike verified: package restores against Avalonia 12.0.5 and the integration
+> compiles against the real `TerminalControl` API; the live TUI render is the user's dogfood pass. See
+> the "Embedded terminal" note under M6.
 
 The goal, restated from the investigation: users keep their own terminals if they want; Perch attaches
 rich surfaces to *any* session (reading, permission responses, prompt nudges); Perch-owned sessions get
@@ -237,8 +249,28 @@ Make the M0 console honest enough for daily dogfooding — still function over f
 > 3. Build the `AskUserQuestion`/plan-approval protocol spike now, or defer until the console is actually
 >    dogfooded and the need is proven?
 > 4. Pursue the ConPTY embedded-terminal tab at all, now that valet + elevation cover the ask without it?
+>
+> **User answers (2026-08-27):** (Q1) valet parked, embedded terminal is the surface; (Q4) **yes, build
+> ConPTY** — done below. Q2 (macOS) and Q3 (`AskUserQuestion` spike) still open.
 
-Once those are answered, the polish backlog is:
+### Embedded ConPTY terminal ✅ (code) — the post-gate pivot
+
+> **Landed 2026-08-27.** `SessionTerminalWindow` hosts a real interactive `claude` TUI inside Perch via
+> `Iciclecreek.Terminal.TerminalControl` (XTerm.NET over Porta.Pty/ConPTY). On Windows it launches
+> `cmd.exe /c claude [--resume <id>]` in the chosen cwd; a Perch input box below the terminal writes
+> prompts into the same PTY via `SendInputAsync(text + "\r")`, so a prompt can come from the terminal or
+> from Perch. Wired as a tray entry ("Session terminal (PoC)…") and as the **new elevation destination**
+> (overlay "Elevate to Perch" now resumes into this terminal, not the chat console). The valet's tray
+> toggle was removed (parked; server/hook stay wired but dormant). Spike verification: the package
+> restores against Avalonia 12.0.5 with no downgrade, and the integration compiles against the real
+> `TerminalControl` API (`LaunchProcess`/`SendInputAsync`/`ProcessExited`/`IsLive`/`BufferSize`); all
+> tests green. **Owed (user dogfood pass — needs a live desktop):** confirm the TUI renders and is
+> interactive, prompt-from-Perch types correctly, and elevation resumes cleanly. Known residue:
+> elevating an *external* session still kills its process, so that external terminal window shows
+> teardown output (unavoidable when killing a TUI out from under another host) — launching sessions in
+> Perch's terminal from the start avoids it entirely.
+
+Once the remaining decisions are answered, the polish backlog is:
 
 - Settings + registry descriptors (valet on/off + timeout, mirror preferences, elevation confirmations)
   — each with the required `SettingsRegistryTests` coverage and `PlatformFeature` gating where an OS

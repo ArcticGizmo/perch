@@ -1,22 +1,35 @@
 # Session control — interactive test guide
 
-Hands-on passes for the session-control PoC (branch `session-control-poc`). These cover the items the
-milestones couldn't prove headlessly: live behaviour, the valet loop, elevate/hand-back, and the
-still-unproven interrupt. Use a throwaway folder as the working directory for anything that writes files.
+Hands-on passes for the session-control PoC (branch `session-control-poc`). **The primary dogfood
+surface is now the embedded ConPTY terminal** (tray → "Session terminal (PoC)…") — a real `claude` TUI
+inside Perch you can drive from the terminal or from a Perch input box. The stream-json chat console and
+the permission valet are secondary/parked; the terminal is what to exercise first.
 
 ## Setup
 
-1. Build + run the dev tray (isolated `(Dev)` profile, won't touch an installed Perch):
-   ```
-   dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0
-   ```
-   Leave it running — launching Perch reconciles its hooks (including the new `valet` hook) into
-   `~/.claude/settings.json`.
-2. **Verify the valet hook registered** (dev pipe name): `~/.claude/settings.json` → `hooks.PreToolUse`
-   should contain an entry whose `args` are `["valet","perch-valet-dev"]`. Start your test terminal
-   session *after* this exists.
-3. Use a scratch project folder, e.g. `mkdir C:\tmp\sc-test`, and run `claude` there in a normal
-   terminal for the "terminal session" steps.
+Build + run the dev tray (isolated `(Dev)` profile, won't touch an installed Perch):
+```
+dotnet run --project src/Perch.App -f net10.0-windows10.0.19041.0
+```
+Use a scratch project folder for anything that writes files, e.g. `mkdir C:\tmp\sc-test`.
+
+---
+
+## THE headline test — embedded terminal (dogfood this first)
+
+Tray → **Session terminal (PoC)…**. Set the folder (or accept the default) — a real `claude` starts in
+an embedded terminal.
+
+- **It's a real terminal:** type in it directly, exactly as you would in Windows Terminal — `hi, what can you do?`,
+  arrow keys, Ctrl+C, `/help`, the lot. The full TUI should render (colour, the input box, spinners).
+- **Prompt from Perch:** type into the **bottom input box** (not the terminal) and press Enter, e.g.
+  `Write a haiku about pseudo-consoles.` → it appears in the terminal as if you typed it, and claude answers.
+- **Both at once:** alternate — a prompt typed in the terminal, then one from the Perch box — same session.
+- **Exit handling:** type `exit` (or finish claude) → the status shows "claude exited (N)" and the
+  button flips to **Restart claude**.
+
+**Looking for:** the TUI renders and is fully interactive; the Perch input box injects prompts into the
+same session; no separate console window pops up.
 
 ---
 
@@ -36,47 +49,29 @@ panel flickering; tool results attach to the right call.
 
 ---
 
-## M2 — Permission valet (answer a terminal session's prompts from Perch)
+## Elevate an existing terminal session into Perch
 
-In the tray, click **Permission valet (PoC): off** so it reads **on**. Then, in a terminal `claude`
-session running in **default** permission mode (so mutating tools would normally prompt), try:
+The escape-character problem you hit is addressed by resuming into the embedded terminal instead of the
+chat console.
 
-- Allow: `Create a file valet-allow.txt containing the word hello.`
-  → a Perch card appears (project · "Writing valet-allow.txt"). Click **Allow** → the file is written,
-  the terminal never prompted.
-- Deny: `Run the shell command: echo should-be-denied`
-  → card for Bash → **Deny** → the session is told it was denied.
-- Ignore / fall-through: `Create a file valet-ignore.txt containing hi.`
-  → click **Ignore** (or just wait ~18s) → the card releases and the **terminal's own** prompt appears.
-- Fail-open: **Quit Perch entirely**, then in the terminal `Create a file no-tray.txt.` → no delay, the
-  normal terminal prompt appears immediately. (Re-launch Perch afterwards.)
-- Read-only pass-through: `Read the README in this folder.` → **no** card (read-only tools are skipped).
-
-**Known gap to observe (decision input):** with the valet **on**, ask for something that uses a tool
-you've allowlisted in settings (e.g. an allowlisted `Bash(git status)`): the card **still appears**,
-because the hook can't see Claude Code's own allowlist. Note how annoying/acceptable this feels — it
-drives the "default-on?" decision.
-
----
-
-## M4 — Elevate a terminal session into Perch, then hand it back
-
-1. In a terminal session, teach it something: `Remember this codeword: PELICAN. Reply with just: stored.`
+1. In a normal external terminal, run `claude` and teach it something:
+   `Remember this codeword: PELICAN. Reply with just: stored.`
 2. In the Perch **overlay**, right-click that session's row → **Elevate to Perch (PoC)…** → confirm.
-   The terminal process is killed and the **Session console** opens, resuming the same conversation.
-3. In the console, verify memory carried over: `What was the codeword I gave you? Reply with just the word.`
-   → should answer **PELICAN** (same session id, one transcript).
-4. Click **Hand back to terminal** in the console. A new terminal opens on the same session.
-5. In that terminal: `What was the codeword again?` → still **PELICAN**.
+   The external process is stopped and an **embedded Session terminal** opens, resuming the session.
+3. In the embedded terminal (or the Perch box): `What was the codeword I gave you?` → **PELICAN**
+   (same session, one transcript).
 
-**Looking for:** no duplicated/forked session; memory intact across both hand-offs; the overlay row for
-the owned session, if clicked, brings the **console** forward (not a "No window to focus" toast).
+**Looking for:** the resumed session works in the embedded terminal; the overlay row for an owned
+session brings its Perch window forward. **Known residue:** the *external* terminal window is still
+killed and may show teardown escapes — that's unavoidable when killing a TUI in someone else's terminal;
+starting sessions in Perch's terminal from the outset avoids it entirely.
 
 ---
 
-## M5 — Session console directly
+## Secondary — the stream-json chat console (M5)
 
-Tray → **Session console (PoC)…**. Set the folder, pick a model, click **Start session**.
+Tray → **Session console (PoC)…** is the alternative rich-chat surface (not a terminal). Set the folder,
+pick a model, click **Start session**.
 
 - **Markdown rendering:** `Explain how to reverse a singly linked list, with a C# code block and a table of the time and space complexity.`
 - **Inline permission bar:** with mode **default**, `Create a file console-write.txt containing hi.`
@@ -97,9 +92,10 @@ Tray → **Session console (PoC)…**. Set the folder, pick a model, click **Sta
 
 | Pass | Proves | Status before this test |
 |------|--------|-------------------------|
-| M1 live follow | rich reading tracks a real session | headless capture only |
-| M2 allow/deny/ignore/quit | the valet loop + fail-open | e2e-verified via script, not in-app |
-| M2 allowlisted-tool card | the heuristic gap (default-on decision) | known gap, unmeasured |
-| M4 elevate → codeword → hand back | seamless ownership hand-off | resume verified, full round-trip not |
-| M5 interrupt on sonnet/opus | turn cancellation actually works | **unproven** |
-| M5 focus routing | owned-session click → console | code only |
+| **Embedded terminal (headline)** | real claude TUI in Perch + prompt-from-Perch | dep+compile verified; render owed |
+| Elevate → codeword | resume into the embedded terminal | resume verified headlessly, full flow owed |
+| M1 live follow (history) | rich reading tracks a real session | headless capture only |
+| Console markdown/queue | rich chat surface | headless capture only |
+| Console interrupt on sonnet/opus | turn cancellation actually works | **unproven** |
+
+The permission valet is **parked** — no tray toggle, dormant. Ignore it for now.
