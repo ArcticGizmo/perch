@@ -50,6 +50,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double MetricsBarWidth  = 28; // width reserved for a session row's CPU/RAM mini-bars
     private const double QuickLinksRowHeight = 24; // height of the quick-links icon strip below the usage bars
     private const double BotIconWidth     = 16;
+    // The host app icon that stands in for the status dot is drawn at this size, centred on the dot's centre
+    // (the plain dot is an 8px circle) — dot-scale so it aligns with the dots and doesn't crowd the row.
+    private const double OriginIconSize   = 11;
     private const double RcIconWidth      = 14;
     private const double MailIconWidth    = 16;
     private const double ModeBadgeWidth   = 16;
@@ -754,6 +757,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
     private bool _showMarkdown;   // off by default; the "Markdown files…" menu item is always available
+    private bool _showIdeStatusIcons = true;  // host app icon in place of the status dot (IDE / Claude Desktop)
     private bool _showWaitingTimer = true;
     private float _ctxYellow = 0.60f, _ctxOrange = 0.75f, _ctxRed = 0.90f;
 
@@ -855,6 +859,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private List<Bitmap?> _quickLinkIcons = [];
     private bool _upsideDownQuickLinks;
     private int _hoveredQuickLink = -1;
+
+    // Real host-app icons for the origin glyph — an IDE (keyed by the host's executable path) or Claude
+    // Desktop (keyed by DesktopOriginKey) — rendered off the exe by the app (like quick links), converted to
+    // greyscale so they sit quietly rather than pulling the eye. A null value means "resolved, no icon" —
+    // draw the vector mark instead. Populated via SetOriginIcon as the app resolves them in the background.
+    private readonly Dictionary<string, Bitmap?> _originIcons = new(StringComparer.OrdinalIgnoreCase);
+    // Status-tinted variants of the source icons, keyed by "<hostKey>|<argb>" — a session's status colour
+    // changes over time, so tints are produced on demand and memoised (a handful of hosts × few statuses).
+    private readonly Dictionary<string, Bitmap?> _tintedIcons = new();
+
+    /// <summary>Cache key for the Claude Desktop app icon (desktop sessions share one host, so one key).</summary>
+    internal const string DesktopOriginKey = "claude-desktop";
 
     // The global scratch-pad note button that leads the quick-links row: its hit-rect (captured at paint
     // time) and hover state. Clicking it opens the scratch pad (see RouteClick / ScratchPadRequested).
@@ -1093,6 +1109,62 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         catch { return null; }
     }
 
+    /// <summary>Supplies the resolved host-app icon for the origin/status-dot slot, keyed by the IDE host's
+    /// executable path or <see cref="DesktopOriginKey"/> (<paramref name="pngFile"/> null → no icon, fall
+    /// back to the vector mark). The app resolves these off-thread and posts them here; repaints when a new
+    /// icon lands. Drawn in full colour — it stands in for the status dot, so the colour is the point.</summary>
+    internal void SetOriginIcon(string key, string? pngFile)
+    {
+        if (string.IsNullOrEmpty(key)) return;
+        // Already have a usable icon for this key — nothing to do (avoids re-decoding the same PNG).
+        if (_originIcons.TryGetValue(key, out var existing) && existing is not null) return;
+        var bmp = DecodeIcon(pngFile);
+        _originIcons[key] = bmp;
+        if (bmp is not null) InvalidateVisual();
+    }
+
+    // A status-colour-tinted copy of the host icon at `key`: the icon's alpha silhouette filled flat with
+    // `color` (grey/green/orange/…), so it reads like the status dot in the shape of the app. Memoised per
+    // (key, colour). Null when no source icon has resolved yet — the caller then draws the vector fallback.
+    private Bitmap? TintedIcon(string key, Color color)
+    {
+        if (!_originIcons.TryGetValue(key, out var src) || src is null) return null;
+
+        uint argb = ((uint)color.A << 24) | ((uint)color.R << 16) | ((uint)color.G << 8) | color.B;
+        string ck = key + "|" + argb;
+        if (_tintedIcons.TryGetValue(ck, out var cached)) return cached;
+
+        Bitmap? tint = null;
+        try
+        {
+            var size = src.PixelSize;
+            var wb = new WriteableBitmap(size, src.Dpi, PixelFormat.Bgra8888, AlphaFormat.Premul);
+            using (var fb = wb.Lock())
+            {
+                int len = fb.RowBytes * size.Height;
+                src.CopyPixels(new PixelRect(0, 0, size.Width, size.Height), fb.Address, len, fb.RowBytes);
+
+                var bytes = new byte[len];
+                System.Runtime.InteropServices.Marshal.Copy(fb.Address, bytes, 0, len);
+                for (int i = 0; i + 3 < len; i += 4)
+                {
+                    // Keep only the source coverage (alpha at byte 3 — last in both BGRA and RGBA), and fill
+                    // premultiplied with the status colour: a crisp, anti-aliased status-hued silhouette.
+                    int a = bytes[i + 3];
+                    bytes[i]     = (byte)(color.B * a / 255);
+                    bytes[i + 1] = (byte)(color.G * a / 255);
+                    bytes[i + 2] = (byte)(color.R * a / 255);
+                }
+                System.Runtime.InteropServices.Marshal.Copy(bytes, 0, fb.Address, len);
+            }
+            tint = wb;
+        }
+        catch { tint = null; }
+
+        _tintedIcons[ck] = tint;
+        return tint;
+    }
+
     /// <summary>Show/hide the clickable artifact glyph (the session still tracks its artifacts).</summary>
     public void SetShowArtifacts(bool show)
     {
@@ -1107,6 +1179,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (_showMarkdown == show) return;
         _showMarkdown = show;
+        InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the host app icon (IDE / Claude Desktop) in place of the leftmost status dot. Off
+    /// draws the plain coloured dot for those sessions instead; the host is still detected.</summary>
+    public void SetShowIdeStatusIcons(bool show)
+    {
+        if (_showIdeStatusIcons == show) return;
+        _showIdeStatusIcons = show;
         InvalidateVisual();
     }
 
@@ -1269,6 +1350,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private readonly Dictionary<int, Rect> _taskRects = new();
     private readonly Dictionary<int, Rect> _metricsRects = new();
     private readonly Dictionary<int, Rect> _noteRects = new();
+    // The origin (IDE-host) glyph's hit-rect + the host's display name, captured at paint time so a dwell
+    // tooltip can name the editor ("Visual Studio Code", "PyCharm", …). Only IDE-hosted rows get an entry.
+    private readonly Dictionary<int, Rect> _originRects = new();
+    private readonly Dictionary<int, string> _originLabels = new();
     private readonly Dictionary<int, Rect> _prRects = new();
     private readonly Dictionary<int, Rect> _jiraRects = new();
     // The expand/collapse chevron on a sub-agent row that has children — captured at paint time so a
@@ -1517,7 +1602,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, NoteButton, SocialStatus, ReactionSummary, Game }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, Origin, NoteButton, SocialStatus, ReactionSummary, Game }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1740,6 +1825,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _taskRects.Clear();
                 _metricsRects.Clear();
                 _noteRects.Clear();
+                _originRects.Clear();
+                _originLabels.Clear();
                 _prRects.Clear();
                 _jiraRects.Clear();
                 _subChevronRects.Clear();
@@ -2378,6 +2465,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private int HitTestTaskCount(Point p)    => HitRect(_taskRects, p);
     private int HitTestMetrics(Point p)      => HitRect(_metricsRects, p);
     private int HitTestNoteIcon(Point p)     => HitRect(_noteRects, p);
+    private int HitTestOriginIcon(Point p)   => HitRect(_originRects, p);
 
     private static int HitRect(Dictionary<int, Rect> rects, Point p)
     {
@@ -2471,7 +2559,46 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             SessionStatus.ApiError       => ApiErrorColor,
             _                            => IdleColor,
         };
-        ctx.DrawEllipse(new SolidColorBrush(dotColor), null, new Point(HorizPad + 4, nameMidY), 4, 4);
+        // Leftmost indicator. For a session hosted by an app — an IDE (VS Code, Cursor, …) or Claude Desktop
+        // — the status dot is replaced by that app's own icon, recoloured to the row's status colour (grey/
+        // green/orange/…). So it carries the same status-at-a-glance the dot did, plus the host, in the same
+        // space, and is a bit of fun. The real icon's silhouette is tinted once resolved; until then (or when
+        // it can't be resolved) a brand vector mark / monitor glyph stands in, in the same status colour.
+        // Plain terminal and background/SDK sessions keep the plain coloured dot.
+        string? hostKey = session.IsDesktop ? DesktopOriginKey
+                        : session.IsIde     ? session.IdeHost!.Executable
+                        : null;
+        double dotCx = HorizPad + 4;   // the status-dot centre — host icons line up on it
+        if (_showIdeStatusIcons && (session.IsDesktop || session.IsIde))
+        {
+            var hostBrush = new SolidColorBrush(dotColor);
+            var tinted = hostKey is not null ? TintedIcon(hostKey, dotColor) : null;
+            if (tinted is not null)
+            {
+                DrawOriginBitmap(ctx, dotCx, nameMidY, tinted);
+            }
+            else
+            {
+                // Vector fallback — authored at ~12px with a left origin; scale to dot-scale and centre it on
+                // the dot so it matches the real-icon path and the plain dots.
+                const double native = 12;
+                double s = OriginIconSize / native;
+                var m = Matrix.CreateTranslation(-dotCx, -nameMidY)
+                      * Matrix.CreateScale(s, s)
+                      * Matrix.CreateTranslation(dotCx, nameMidY);
+                using (ctx.PushTransform(m))
+                {
+                    if (session.IsDesktop) DrawDesktopIcon(ctx, dotCx - native / 2, nameMidY, hostBrush);
+                    else                   DrawIdeIcon(ctx, dotCx - native / 2, nameMidY, session.IdeHost!.Kind, hostBrush);
+                }
+            }
+            _originRects[rowIndex]  = new Rect(dotCx - 8, nameMidY - 8, 16, 16);
+            _originLabels[rowIndex] = session.IsDesktop ? "Claude Desktop" : session.IdeHost!.DisplayName;
+        }
+        else
+        {
+            ctx.DrawEllipse(new SolidColorBrush(dotColor), null, new Point(dotCx, nameMidY), 4, 4);
+        }
 
         string statusText = session.Status switch
         {
@@ -2499,9 +2626,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double artW = hasArtifacts ? ArtifactIconWidth : 0;
         double mailW = session.ExternalNotify ? MailIconWidth : 0;
         double rcW   = session.RemoteControlled ? RcIconWidth : 0;
-        // Origin glyph: a bot for background/SDK runs, a monitor for Claude Desktop sessions. Mutually
-        // exclusive (a session is one host or the other), so they share one slot in the cluster.
-        double originW  = (session.IsBackground || session.IsDesktop) ? BotIconWidth : 0;
+        // Origin glyph: only background / SDK runs still get a cluster glyph (the bot). IDE- and
+        // Claude-Desktop-hosted sessions now show their host's icon in the status-dot slot instead (see the
+        // leftmost-indicator block above), so they no longer reserve a cluster slot — the name reclaims it.
+        double originW  = session.IsBackground ? BotIconWidth : 0;
         double noteW = showNote ? NoteIconWidth : 0;
         bool showPr = _showPullRequests && session.PullRequest is not null;
         double prW  = showPr ? PrIconWidth : 0;
@@ -2562,8 +2690,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (originW > 0)
         {
             double originX = HorizPad + 14 + warnW + artW + mailW + rcW;
-            if (session.IsDesktop) DrawDesktopIcon(ctx, originX, nameMidY);
-            else DrawBotIcon(ctx, originX, nameMidY);
+            DrawBotIcon(ctx, originX, nameMidY);
         }
         if (noteW > 0)
         {
@@ -2848,12 +2975,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         ctx.DrawEllipse(BotBrush, null, new Point(left + w - 3.5, top + 4), 1, 1);
     }
 
-    // The Claude Desktop glyph: a little monitor (screen + stand). Marks an interactive session hosted by
-    // the Claude Desktop app rather than a terminal; shares the neutral origin-glyph gray with the bot, so
-    // the *shape* carries the distinction (a monitor, not a robot). Sits in the same cluster slot.
-    private static void DrawDesktopIcon(DrawingContext ctx, double x, double midY)
+    // The Claude Desktop glyph: a little monitor (screen + stand). The fallback for a Claude Desktop session
+    // (in the status-dot slot) until its real app icon resolves; drawn in the row's status colour.
+    private static void DrawDesktopIcon(DrawingContext ctx, double x, double midY, IBrush brush)
     {
-        var pen = new Pen(BotBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = new Pen(brush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
         const double w = 11, h = 7.5;
         double left = x, top = midY - h / 2 - 1;
         double cx = left + w / 2, bottom = top + h;
@@ -2861,6 +2987,140 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(left, top, w, h), 1.5)); // screen
         ctx.DrawLine(pen, new Point(cx, bottom), new Point(cx, bottom + 2.5));          // stand
         ctx.DrawLine(pen, new Point(cx - 3, bottom + 2.5), new Point(cx + 3, bottom + 2.5)); // base
+    }
+
+    // The IDE-host vector mark: a simplified brand silhouette, the fallback in the status-dot slot until the
+    // editor's real app icon resolves. Drawn in the given brush (the row's status colour), so it reads as a
+    // status indicator in the shape of the editor. Kept small and simplified — brand *marks* at glyph size,
+    // not pixel-faithful logos.
+    private static void DrawIdeIcon(DrawingContext ctx, double x, double midY, IdeHostKind kind, IBrush brush)
+    {
+        switch (kind)
+        {
+            case IdeHostKind.VsCode:    DrawVsCodeIcon(ctx, x, midY, brush);    break;
+            case IdeHostKind.Cursor:    DrawCursorIcon(ctx, x, midY, brush);    break;
+            case IdeHostKind.Windsurf:  DrawWindsurfIcon(ctx, x, midY, brush);  break;
+            case IdeHostKind.JetBrains: DrawJetBrainsIcon(ctx, x, midY, brush); break;
+            default:                    DrawGenericIdeIcon(ctx, x, midY, brush); break;
+        }
+    }
+
+    // Draws the host-app icon (rendered from its executable) fit into a dot-scale box centred on (cx, cy) —
+    // the status-dot centre — so it lines up with the plain dots on other rows. Shell-extracted icons come
+    // out vertically flipped (see the quick-links strip), so mirror about the horizontal axis to right them.
+    private static void DrawOriginBitmap(DrawingContext ctx, double cx, double cy, Bitmap icon)
+    {
+        var src = icon.Size;
+        double scale = Math.Min(OriginIconSize / src.Width, OriginIconSize / src.Height);
+        double w = src.Width * scale, h = src.Height * scale;
+        var dst = new Rect(cx - w / 2, cy - h / 2, w, h);
+        var flip = Matrix.CreateTranslation(0, -cy)
+                 * Matrix.CreateScale(1, -1)
+                 * Matrix.CreateTranslation(0, cy);
+        using (ctx.PushTransform(flip))
+            ctx.DrawImage(icon, new Rect(src), dst);
+    }
+
+    // VS Code: the blue folded-ribbon silhouette — a vertical spine on the left, with the two ribbon tips
+    // and the central fold-notch opening to the right.
+    private static void DrawVsCodeIcon(DrawingContext ctx, double x, double midY, IBrush brush)
+    {
+        const double w = 12, h = 13;
+        double left = x, top = midY - h / 2;
+        var ribbon = new StreamGeometry();
+        using (var gc = ribbon.Open())
+        {
+            gc.BeginFigure(new Point(left, top), isFilled: true);        // spine top
+            gc.LineTo(new Point(left, top + h));                          // spine (full-height left edge)
+            gc.LineTo(new Point(left + w, top + 0.72 * h));               // lower-right tip
+            gc.LineTo(new Point(left + 0.58 * w, top + 0.50 * h));        // fold crease
+            gc.LineTo(new Point(left + w, top + 0.28 * h));               // upper-right tip
+            gc.EndFigure(true);
+        }
+        ctx.DrawGeometry(brush, null, ribbon);
+    }
+
+    // Cursor: an isometric cube (three rhombic faces).
+    private static void DrawCursorIcon(DrawingContext ctx, double x, double midY, IBrush brush)
+    {
+        const double w = 12, h = 13;
+        double left = x, top = midY - h / 2, cx = left + w / 2, cy = midY;
+        var pen = new Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
+        var apex   = new Point(cx, top);
+        var uR     = new Point(left + w, top + 0.25 * h);
+        var lR     = new Point(left + w, top + 0.75 * h);
+        var basePt = new Point(cx, top + h);
+        var lL     = new Point(left, top + 0.75 * h);
+        var uL     = new Point(left, top + 0.25 * h);
+        var centre = new Point(cx, cy);
+
+        var hex = new StreamGeometry();
+        using (var gc = hex.Open())
+        {
+            gc.BeginFigure(apex, isFilled: false);
+            gc.LineTo(uR); gc.LineTo(lR); gc.LineTo(basePt); gc.LineTo(lL); gc.LineTo(uL);
+            gc.EndFigure(true);
+        }
+        ctx.DrawGeometry(null, pen, hex);
+        ctx.DrawLine(pen, centre, apex);   // three spokes → the cube's visible edges
+        ctx.DrawLine(pen, centre, lL);
+        ctx.DrawLine(pen, centre, lR);
+    }
+
+    // Windsurf: a sail (filled triangle) on a mast, over a short board.
+    private static void DrawWindsurfIcon(DrawingContext ctx, double x, double midY, IBrush brush)
+    {
+        const double w = 12, h = 13;
+        double left = x, top = midY - h / 2;
+        double mastX = left + 3;
+        var pen = new Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
+
+        var sail = new StreamGeometry();
+        using (var gc = sail.Open())
+        {
+            gc.BeginFigure(new Point(mastX, top + 1), isFilled: true);
+            gc.LineTo(new Point(left + w - 1, top + 0.42 * h));
+            gc.LineTo(new Point(mastX, top + 0.64 * h));
+            gc.EndFigure(true);
+        }
+        ctx.DrawGeometry(brush, null, sail);
+        ctx.DrawLine(pen, new Point(mastX, top + 1), new Point(mastX, top + h - 2));           // mast
+        ctx.DrawLine(pen, new Point(left + 1, top + h - 2), new Point(left + w - 1, top + h - 2)); // board
+    }
+
+    // JetBrains: the brand's rounded square, with a small square punched out of a corner (a nod to the
+    // segmented product marks). One glyph covers every JetBrains IDE; the tooltip names the product.
+    private static void DrawJetBrainsIcon(DrawingContext ctx, double x, double midY, IBrush brush)
+    {
+        const double s = 12;
+        double left = x, top = midY - s / 2;
+        ctx.DrawRectangle(brush, null, new RoundedRect(new Rect(left, top, s, s), 2.5));
+        // Punch a small square in the surface tone at the lower-left, echoing the logo's inner element.
+        double n = s * 0.3;
+        ctx.DrawRectangle(BgFillBrush, null, new Rect(left + s * 0.18, top + s * 0.52, n, n));
+    }
+
+    // Generic editor fallback (Zed, Visual Studio, an unmatched host): the "</>" code mark.
+    private static void DrawGenericIdeIcon(DrawingContext ctx, double x, double midY, IBrush brush)
+    {
+        const double w = 12, h = 12;
+        double left = x, top = midY - h / 2;
+        var pen = new Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
+
+        var chevrons = new StreamGeometry();
+        using (var gc = chevrons.Open())
+        {
+            gc.BeginFigure(new Point(left + 3.5, top + 2), isFilled: false);   // "<"
+            gc.LineTo(new Point(left + 0.5, midY));
+            gc.LineTo(new Point(left + 3.5, top + h - 2));
+            gc.EndFigure(false);
+            gc.BeginFigure(new Point(left + w - 3.5, top + 2), isFilled: false); // ">"
+            gc.LineTo(new Point(left + w - 0.5, midY));
+            gc.LineTo(new Point(left + w - 3.5, top + h - 2));
+            gc.EndFigure(false);
+        }
+        ctx.DrawGeometry(null, pen, chevrons);
+        ctx.DrawLine(pen, new Point(left + w * 0.62, top + 1.5), new Point(left + w * 0.38, top + h - 1.5)); // "/"
     }
 
     // The remote-control "broadcast" glyph: a source dot with two quarter-arc waves rising up-right.
@@ -3468,6 +3728,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitTestMetrics(p)    is var me && me >= 0 ? (TipKind.Metrics, me) :
             HitRect(_prRects, p) is var pr && pr >= 0 ? (TipKind.Pr, pr) :
             HitRect(_jiraRects, p) is var jr && jr >= 0 ? (TipKind.Jira, jr) :
+            HitTestOriginIcon(p) is var oi && oi >= 0 ? (TipKind.Origin, oi) :
             _mediaTitleRect.Contains(p)               ? (TipKind.Media, -1) :
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             _noteButtonRect.Width > 0
@@ -3505,6 +3766,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Mic:     ShowMicTooltip();            break;
             case TipKind.Pr:      ShowPrTooltip(_tipRow);      break;
             case TipKind.Jira:    ShowJiraTooltip(_tipRow);    break;
+            case TipKind.Origin:  ShowOriginTooltip(_tipRow);  break;
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
             case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
             case TipKind.ReactionSummary: ShowReactionSummaryTooltip(_tipRow); break;
@@ -5029,6 +5291,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (row < 0 || row >= _rows.Count || _rows[row].Session?.Stuck is not { } stuck) return;
         if (!_warnRects.TryGetValue(row, out var r)) return;
         Tooltip().ShowText(stuck.Reason, ToScreen(r.Left, r.Bottom + 4));
+    }
+
+    // Names the host editor/IDE behind the origin glyph ("Visual Studio Code", "PyCharm", …).
+    private void ShowOriginTooltip(int row)
+    {
+        if (!_originRects.TryGetValue(row, out var r)) return;
+        if (!_originLabels.TryGetValue(row, out var label)) return;
+        Tooltip().ShowText(label, ToScreen(r.Left, r.Bottom + 4));
     }
 
     private void ShowTaskTooltip(int row)

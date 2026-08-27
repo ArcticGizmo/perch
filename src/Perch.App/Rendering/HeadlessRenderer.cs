@@ -55,6 +55,7 @@ internal static class HeadlessRenderer
         canvas.SetShowJiraTickets(true);
         canvas.SetShowMarkdown(true);   // off by default; enabled here so the sample row shows the glyph
         canvas.Update(SampleData.Sessions());
+        ResolveIdeIcons(canvas);   // real host-editor icons for IDE-hosted sample rows (fake paths → vector mark)
         canvas.UpdateUsage(SampleData.Usage());
         canvas.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));
         canvas.UpdateSessionMetrics(new Dictionary<string, SessionMetrics>
@@ -915,6 +916,23 @@ internal static class HeadlessRenderer
             Children = { canvas },
         };
         RenderControl(host, path, dpi);
+    }
+
+    // Resolves the real host-app icons for the sample sessions (synchronously — the render is one-shot and
+    // can't wait on the app's background resolve) and hands them to the canvas. IDE rows with a fake/relative
+    // Executable resolve to nothing and fall back to the vector mark; the Claude Desktop icon resolves by
+    // Start-Menu name when the app is installed.
+    private static void ResolveIdeIcons(OverlayCanvas c)
+    {
+        var provider = PlatformServices.AppIconProvider;
+        foreach (var s in SampleData.Sessions())
+        {
+            var exe = s.IdeHost?.Executable;
+            if (!string.IsNullOrEmpty(exe))
+                c.SetOriginIcon(exe, provider.GetIconFile("", null, exe, 32));
+        }
+        if (SampleData.Sessions().Any(s => s.IsDesktop))
+            c.SetOriginIcon(OverlayCanvas.DesktopOriginKey, provider.GetIconFile("Claude", null, null, 32));
     }
 
     private static void RenderControl(Control control, string path, double dpi)

@@ -85,6 +85,12 @@ internal static class SettingsRegistry
             PreviewTarget.Markdown, nameof(AppSettings.ShowMarkdown),
             s => s.ShowMarkdown, (s, v) => s.ShowMarkdown = v),
 
+        Toggle("ide-status-icons", "IDE status icons",
+            "For a session hosted by an app - an IDE (VS Code, Cursor, a JetBrains IDE) or Claude Desktop - show that app's icon in place of the status dot, recoloured to the status colour. Off shows the plain coloured dot.",
+            SettingSurface.SessionRow, ["ide", "editor", "vscode", "cursor", "windsurf", "jetbrains", "desktop", "icon", "host", "dot", "status"],
+            PreviewTarget.None, nameof(AppSettings.ShowIdeStatusIcons),
+            s => s.ShowIdeStatusIcons, (s, v) => s.ShowIdeStatusIcons = v),
+
         Toggle("git-stats", "Git line churn",
             "The +added / -removed chip from git diff in a session's directory.",
             SettingSurface.SessionRow, ["git", "diff", "lines", "added", "removed", "churn", "numstat"],

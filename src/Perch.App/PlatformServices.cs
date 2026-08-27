@@ -27,6 +27,8 @@ internal static class PlatformServices
     public static IVirtualDesktopManager VirtualDesktops { get; } = new Impl.VirtualDesktopManager();
     public static IImageClipboard ImageClipboard { get; } = new Impl.ImageClipboard();
     public static IUrlOpener UrlOpener { get; } = new Impl.UrlOpener();
+    // Resolves a session's host editor/IDE from its process ancestry (drives the overlay's IDE glyph).
+    public static IIdeHostDetector IdeHostDetector { get; } = new Impl.IdeHostDetector();
 #if WINDOWS
     public static IAppIconProvider AppIconProvider { get; } = new Impl.WindowsAppIconProvider();
     public static ISystemMetrics SystemMetrics { get; } = new Impl.WindowsSystemMetrics();

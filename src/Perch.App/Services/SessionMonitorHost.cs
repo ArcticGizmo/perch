@@ -52,9 +52,11 @@ internal sealed class SessionMonitorHost : IDisposable
     /// <param name="processProbe">How pid liveness is tested. Defaults to the real OS probe; a replay
     /// passes one backed by the projector so recorded (dead) pids read as alive within their window.</param>
     public SessionMonitorHost(
-        Action<IReadOnlyList<ClaudeSession>> onSessions, Perch.Platform.IProcessProbe? processProbe = null)
+        Action<IReadOnlyList<ClaudeSession>> onSessions,
+        Perch.Platform.IProcessProbe? processProbe = null,
+        Perch.Platform.IIdeHostDetector? ideDetector = null)
     {
-        _monitor = new SessionMonitor(processProbe);
+        _monitor = new SessionMonitor(processProbe, ideDetector);
         _onSessions = onSessions;
         _monitor.SessionsChanged += OnSessionsChanged;
         // These fire from within Scan, which only runs on the UI thread (see ChangeDetected below and

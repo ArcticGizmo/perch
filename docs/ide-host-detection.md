@@ -1,0 +1,87 @@
+# IDE-host detection & origin glyph
+
+Marks each session with the editor/IDE hosting it — VS Code, Cursor, Windsurf, a JetBrains IDE, … —
+alongside the existing Claude Desktop (monitor) and background/SDK (bot) origin marks.
+
+## Why it needs process ancestry
+
+Nothing in a session's on-disk state distinguishes an IDE-hosted session. Claude Code records
+`entrypoint: "cli"` for a bare terminal **and** for an IDE's integrated terminal, and the session JSON
+carries no IDE field. (The IDE integration *does* write `~/.claude/ide/{port}.lock` files with an `ideName`
+and `workspaceFolders`, but those can only be correlated to a session by matching the workspace folder to
+the session `cwd` — which false-positives when a plain terminal shares a repo with an open IDE window, and
+is empty for folderless windows.)
+
+The reliable, per-session signal is **process ancestry**: the session's `claude` process is a descendant of
+the IDE process. Observed chains:
+
+```
+VS Code:  claude.exe <- powershell.exe <- Code.exe <- Code.exe <- explorer.exe
+Terminal: claude.exe <- cmd.exe <- WindowsTerminal.exe <- explorer.exe
+```
+
+An ancestor named `Code.exe` / `Cursor.exe` / `Windsurf.exe` / `idea64.exe` / … identifies the host (and,
+for JetBrains, the specific product) directly.
+
+## Design
+
+Mirrors the existing `IProcessProbe` seam.
+
+- **`Perch.Core/Data/IdeHost.cs`** — `IdeHostKind` enum + `IdeHost` record. `IdeHost.FromExecutable(name)` is
+  the pure, shared executable→host table (VS Code family, Cursor, Windsurf, Zed, Visual Studio, the JetBrains
+  launchers by prefix). Unit-tested in `IdeHostTests`.
+- **`Perch.Core/Platform/IIdeHostDetector.cs`** — `Detect(int pid) -> IdeHost?`. `NullIdeHostDetector` is the
+  default (no glyph) for the mac head, replay and tests.
+- **`Perch.Platform.Windows/IdeHostDetector.cs`** — walks the pid's ancestry over a Toolhelp process snapshot
+  (cached ~1.5 s so a whole scan is one enumeration), returns the first ancestor `FromExecutable` recognises.
+  Best-effort, never throws, cycle-guarded.
+- **`Perch.Platform.Mac/IdeHostDetector.cs`** — stub returning null (a real one would use
+  `proc_listpids`/`sysctl`; see macos-port-plan).
+- Wired `PlatformServices.IdeHostDetector` → `SessionMonitorHost` → `SessionMonitor`, which stamps
+  `ClaudeSession.IdeHost` (+ `IsIde`) at build time.
+
+## Rendering — the host icon *is* the status dot, recoloured
+
+Rather than an extra glyph, a hosted session's **leftmost status dot is replaced by the host app's own icon,
+recoloured to the row's status colour** (grey idle / green running / orange done / yellow awaiting / red
+error). So the leftmost indicator still carries status at a glance — exactly what the dot did — *and* names
+the host by its shape, in the same space, with a bit of fun. Plain-terminal and background/SDK sessions keep
+the plain coloured dot (background also keeps its bot glyph in the name cluster).
+
+**Shape source: the real host-app icon, extracted from its executable.** For an **IDE** the detector resolves
+the ancestor's full image path (`QueryFullProcessImageName`) into `IdeHost.Executable`, and the app renders
+that exe's icon through the **same `IAppIconProvider` the quick-links strip uses**
+(`GetIconFile("", null, exePath, 32)` — the empty name skips the slow Start-Menu enumeration and renders
+straight off the binary). For a **Claude Desktop** session (known from the `entrypoint`, not ancestry — its
+process is the CLI `claude.exe`, indistinguishable by name from any other) the app resolves the Claude Desktop
+logo by Start-Menu name (`GetIconFile("Claude", null, null, 32)` — it's a Store/MSIX app whose real logo only
+comes back via the AppsFolder). Resolution runs off the UI thread, deduped by cache key — exe path for IDEs,
+`OverlayCanvas.DesktopOriginKey` for Claude Desktop (`App.RefreshOriginIcons` + `_requestedIdeIcons`); the PNG
+is decoded (`DecodeIcon`) and cached (`SetOriginIcon` / `_originIcons`).
+
+**Status tint.** `OverlayCanvas.TintedIcon(key, statusColour)` fills the icon's alpha silhouette flat with the
+row's status colour (Marshal pixel-walk, no `unsafe`; only the source coverage/alpha is kept — at ~13px the
+silhouette *is* the read), memoised per (host, colour). `DrawOriginBitmap` aspect-fits it into a 13px box in
+the dot slot and mirrors it about the horizontal axis (shell-extracted icons come back vertically flipped —
+the same correction the quick-links strip applies).
+
+**Fallback: owner-drawn marks in the dot slot**, drawn in the *same* status colour — the monitor glyph for
+Claude Desktop, and for IDEs a simplified brand silhouette (VS Code ribbon, Cursor cube, Windsurf sail,
+JetBrains square, or a generic `</>`). Shown until the real icon lands and whenever it can't be resolved (mac,
+a bare base name, an inaccessible process, or a Start-Menu name that doesn't match). A dwell tooltip on the
+dot names the host ("Visual Studio Code", "PyCharm", …). `HeadlessRenderer.ResolveIdeIcons` wires the same
+resolution into `render` mode so it's a faithful preview.
+
+Gated by the **"IDE status icons"** setting (`AppSettings.ShowIdeStatusIcons`, `SettingSurface.SessionRow`,
+default **on**): off falls back to the plain coloured status dot for host rows (the host is still detected)
+and skips the icon resolution. Registry entry `ide-status-icons`; canvas gate `SetShowIdeStatusIcons` wired
+through `OverlaySettingsGates.Apply` (live overlay + Settings preview). Detection cost is one cached process
+snapshot per scan on Windows (plus, while on, a one-off icon render per distinct host and a small tint per
+host×status); nothing on other heads.
+
+## Not done / possible follow-ups
+
+- **macOS** detector (currently a stub).
+- **Focus/activation**: an IDE-hosted session's terminal is a child of the IDE; check `WindowActivator`
+  raises the right window (the console-attach path may already cover it).
+- Could enrich the label from the `~/.claude/ide/*.lock` `ideName` if a host's exe isn't in the table.
