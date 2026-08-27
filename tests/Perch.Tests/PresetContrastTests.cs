@@ -59,11 +59,6 @@ public class PresetContrastTests
         AssertNonText(t.StatusError, t.OverlaySurface, themeId, "StatusError");
         AssertNonText(t.Accent, t.OverlaySurface, themeId, "Accent");
         AssertNonText(FixedColors.Default.Jira, t.OverlaySurface, themeId, "Jira");
-        // IDE-host origin glyphs are non-text marks too (the monochrome ones ride the theme's own gray and
-        // are covered elsewhere; these are the fixed brand hues).
-        AssertNonText(FixedColors.Default.VsCode, t.OverlaySurface, themeId, "VsCode");
-        AssertNonText(FixedColors.Default.Windsurf, t.OverlaySurface, themeId, "Windsurf");
-        AssertNonText(FixedColors.Default.JetBrains, t.OverlaySurface, themeId, "JetBrains");
     }
 
     private static void AssertAA(Rgb fg, Rgb bg, string themeId, string pair) =>
