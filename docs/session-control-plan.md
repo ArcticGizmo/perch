@@ -211,10 +211,34 @@ Make the M0 console honest enough for daily dogfooding — still function over f
   a small Perch task) without needing a terminal escape hatch for anything except slash commands.
 - **Deferred polish:** slash-command palette, image paste, transcript search, session picker.
 
-### M6 — Decision gate, then the polish backlog
+### M6 — Decision gate ⏳ (reached — awaiting the human decisions below before polish begins)
 
-Half-day review against the dogfooding: what shipped where, what got cut (M3 especially), which
-surfaces become default-on. Only then:
+> **Reached 2026-08-27.** M1–M5 landed as code on `session-control-poc` (M3 spiked and deliberately not
+> built). Everything is behind `(PoC)`-suffixed, opt-in surfaces; no persisted settings, no changelog,
+> nothing default-on — exactly the pre-gate state the plan called for. Per the plan, the gate is a
+> **human checkpoint**: the questions below decide what (if anything) graduates out of PoC, and the
+> polish backlog stays parked until then.
+>
+> **What shipped (all verified at least at the protocol/e2e level; interactive app passes still owed):**
+> - M1 rich reading — history viewer renders live transcripts through `MarkdownView`, incremental tail.
+> - M2 permission valet — answer any session's prompts from Perch; e2e-verified allow + fail-open.
+> - M4 elevate/hand-back — `--resume` takeover both directions; resume e2e-verified (interrupt not).
+> - M5 console parity — Markdown answers, owned-session focus routing, queued-prompt indicator.
+>
+> **Open items carried in:** interactive/dogfooding passes for every surface; the valet's read-only-tool
+> heuristic (armed valet still prompts for allowlisted mutating tools); a conclusive interrupt test;
+> `AskUserQuestion`/plan-mode over stream-json (needs a protocol spike).
+>
+> **Decisions needed from the user before polish** (see the chat summary):
+> 1. Which surfaces graduate to default-on vs stay opt-in `(PoC)`? (Especially: should the valet ever be
+>    on by default, given the heuristic gap and that it inserts a hook into *every* session?)
+> 2. Invest in the macOS head now (named pipe → Unix socket behind a Core interface) or keep Windows-only
+>    for the PoC?
+> 3. Build the `AskUserQuestion`/plan-approval protocol spike now, or defer until the console is actually
+>    dogfooded and the need is proven?
+> 4. Pursue the ConPTY embedded-terminal tab at all, now that valet + elevation cover the ask without it?
+
+Once those are answered, the polish backlog is:
 
 - Settings + registry descriptors (valet on/off + timeout, mirror preferences, elevation confirmations)
   — each with the required `SettingsRegistryTests` coverage and `PlatformFeature` gating where an OS
