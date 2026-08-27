@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.74] - 2026-08-27
+
+- Clicking a session now focuses terminals Windows Terminal adopted from outside itself
+- Sessions with no window on screen say so, instead of quietly focusing the desktop
+
+---
+
 ## [v0.3.73] - 2026-08-27
 
 - Check the arcade

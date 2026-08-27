@@ -13,8 +13,11 @@ public sealed class WindowActivator : IWindowActivator
 {
     // Focuses the host window of a Claude Code session. The session's claude.exe runs inside some
     // host's terminal — a standalone emulator (Windows Terminal), or an IDE's integrated terminal
-    // (VSCode, Rider). In every case the host's window is a process *ancestor* of claude.exe, so we
-    // walk the parent chain and bring the closest ancestor's real window forward.
+    // (VSCode, Rider). Usually the host's window is a process *ancestor* of claude.exe, so we walk the
+    // parent chain and bring the closest ancestor's real window forward. When it isn't — chiefly the
+    // Windows Terminal DefTerm handoff, where a COM-activated OpenConsole.exe outside the ancestry owns
+    // the console — we fall back to ResolveTerminalViaConsole, which reads the session→terminal link from
+    // the kernel console object. See docs/terminal-focus-correlation.md.
     //
     // The key to *which* window is GA_ROOTOWNER. Under ConPTY (Win11 26100+) each shell owns a 0×0
     // "PseudoConsoleWindow"; that window is window-*owned* by the exact terminal window hosting this
@@ -29,32 +32,58 @@ public sealed class WindowActivator : IWindowActivator
     // leaving a click that appears to do nothing.
     public bool FocusTerminalForProcess(int pid, string? projectHint = null)
     {
-        // Build ancestor list closest-first: claude → cmd → WindowsTerminal → explorer …
-        var ancestors = new List<int>();
-        int current = pid;
-        for (int depth = 0; depth < 10; depth++)
-        {
-            if (current <= 0) break;
-            ancestors.Add(current);
-            current = GetParentPid(current);
-        }
+        // Build the ancestor chain closest-first (claude → cmd → WindowsTerminal → explorer …) from a
+        // single process snapshot, assigning each a depth score (0 = the Claude process itself).
+        var processes = SnapshotProcesses();
+        var depthByPid = new Dictionary<int, int>();
 
-        // Assign a depth score to each PID (0 = the Claude process itself)
-        var depthByPid = ancestors
-            .Select((p, i) => (p, i))
-            .ToDictionary(x => x.p, x => x.i);
+        // explorer.exe is an ancestor of virtually every interactive session yet never *hosts* a
+        // terminal window, so it must never be chosen as the host. The closest-depth rule below usually
+        // keeps it from winning — but only while the real terminal is somewhere in the chain. It isn't
+        // always: a Windows Terminal DefTerm console can be handed off to a COM-activated
+        // OpenConsole.exe (parented to svchost, not the shell), whose PseudoConsoleWindow — the only
+        // route to the WT window — lives outside this ancestry. With no terminal in the chain, explorer
+        // becomes the closest match and we'd silently focus the desktop / Program Manager (a dead click
+        // that even suppresses the "no window" toast). Excluding it makes that case fail honestly.
+        var excludedPids = new HashSet<int>();
+
+        int current = pid;
+        for (int depth = 0; depth < 10 && current > 0; depth++)
+        {
+            if (!depthByPid.TryAdd(current, depth)) break; // a cycle in a torn snapshot
+            if (processes.TryGetValue(current, out var info))
+            {
+                if (string.Equals(info.ExeFile, "explorer.exe", StringComparison.OrdinalIgnoreCase))
+                    excludedPids.Add(current);
+                current = info.ParentPid;
+            }
+            else current = 0;
+        }
 
         // Visible windows only on the first pass — that's the healthy case and the narrowest net. If it
         // comes up empty the host window is itself hidden (see below), so we retry accepting those too.
-        var byDepth = CollectHostWindows(depthByPid, includeHidden: false);
+        var byDepth = CollectHostWindows(depthByPid, excludedPids, includeHidden: false);
         if (byDepth.Count == 0)
         {
             // A live session whose whole host window has been hidden (WS_VISIBLE cleared — not
             // minimized, not cloaked onto another virtual desktop). It is still perfectly focusable
             // once shown, so don't give up on it; FocusWindow below un-hides whatever we pick. The
             // hidden pass runs *second* so the common path keeps the tighter visible-only net.
-            byDepth = CollectHostWindows(depthByPid, includeHidden: true);
-            if (byDepth.Count == 0) return false;
+            byDepth = CollectHostWindows(depthByPid, excludedPids, includeHidden: true);
+            if (byDepth.Count == 0)
+            {
+                // Process ancestry can't reach the terminal at all. The case this rescues is the Windows
+                // Terminal default-terminal (DefTerm) handoff, where a COM-activated OpenConsole.exe —
+                // parented to svchost, not the shell — owns the session's PseudoConsoleWindow, so nothing
+                // in claude's ancestry leads to the terminal window. Ask the kernel's console object
+                // instead (ResolveTerminalViaConsole); it links the session to its terminal directly,
+                // whichever way the console was allocated. If that too comes up empty the session has no
+                // reachable window, so return false and let the caller show its "no window" notification.
+                IntPtr viaConsole = ResolveTerminalViaConsole(pid);
+                if (viaConsole == IntPtr.Zero) return false;
+                FocusWindow(viaConsole);
+                return true;
+            }
         }
 
         // Prefer the *closest* ancestor — explorer is a distant ancestor of every process and owns
@@ -89,7 +118,7 @@ public sealed class WindowActivator : IWindowActivator
     // that case is handled by FocusWindow un-hiding what it's given. includeHidden is for the narrower
     // case where the ancestor has no visible window of its own to enumerate.
     private static SortedDictionary<int, List<(IntPtr hWnd, string title)>> CollectHostWindows(
-        Dictionary<int, int> depthByPid, bool includeHidden)
+        Dictionary<int, int> depthByPid, HashSet<int> excludedPids, bool includeHidden)
     {
         var byDepth = new SortedDictionary<int, List<(IntPtr hWnd, string title)>>();
 
@@ -97,6 +126,7 @@ public sealed class WindowActivator : IWindowActivator
         {
             if (!includeHidden && !IsWindowVisible(hWnd)) return true;
             GetWindowThreadProcessId(hWnd, out uint windowPid);
+            if (excludedPids.Contains((int)windowPid)) return true; // never host on explorer's windows
             if (!depthByPid.TryGetValue((int)windowPid, out int d)) return true;
 
             IntPtr owner = GetAncestor(hWnd, GA_ROOTOWNER);
@@ -109,6 +139,48 @@ public sealed class WindowActivator : IWindowActivator
         }, IntPtr.Zero);
 
         return byDepth;
+    }
+
+    // Resolves a session's terminal window through the kernel's console object rather than the process
+    // tree. This is the fallback for when FocusTerminalForProcess's ancestry walk finds nothing — most
+    // importantly the Windows Terminal DefTerm handoff, where a COM-activated OpenConsole.exe (parented to
+    // svchost, not the shell) owns the session's 0×0 PseudoConsoleWindow, leaving it outside claude's
+    // ancestry. AttachConsole binds *this* process to the target's console; GetConsoleWindow then returns
+    // that session's pseudo-console window whichever way it was allocated, and its GA_ROOTOWNER is the
+    // hosting terminal window — the authoritative session→terminal link the ancestry can't provide. It is
+    // read live at click time from the console object; nothing is persisted and no hook is involved.
+    //
+    // Console attachment is process-*global* state, so this serialises on a lock, does only three Win32
+    // calls while attached, and always FreeConsole()s in a finally. Perch's Windows head is a WinExe (GUI,
+    // no console of its own), so FreeConsole/AttachConsole neither allocate nor destroy a visible console
+    // window; the leading FreeConsole only matters for a dev run that inherited the launching terminal's
+    // console (AttachConsole fails with ERROR_ACCESS_DENIED while we already hold one).
+    //
+    // Returns IntPtr.Zero when there is nothing to focus: the process is gone, it has no Win32 console
+    // (Git Bash/mintty — already covered by the ancestry walk), or its console is a higher integrity level
+    // than Perch (access denied). The caller treats zero as "no window" and notifies the user.
+    private static readonly object _consoleLock = new();
+
+    private static IntPtr ResolveTerminalViaConsole(int pid)
+    {
+        lock (_consoleLock)
+        {
+            FreeConsole();
+            if (!AttachConsole((uint)pid))
+                return IntPtr.Zero;
+            try
+            {
+                IntPtr consoleWnd = GetConsoleWindow();
+                if (consoleWnd == IntPtr.Zero)
+                    return IntPtr.Zero;
+                IntPtr owner = GetAncestor(consoleWnd, GA_ROOTOWNER);
+                return owner == IntPtr.Zero ? consoleWnd : owner;
+            }
+            finally
+            {
+                FreeConsole();
+            }
+        }
     }
 
     // Focuses the app that owns pid, where pid may well be a windowless helper process — the case this
@@ -286,28 +358,6 @@ public sealed class WindowActivator : IWindowActivator
         return sb.ToString();
     }
 
-    private static int GetParentPid(int pid)
-    {
-        var snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (snapshot == IntPtr.Zero) return -1;
-        try
-        {
-            var entry = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
-            if (!Process32First(snapshot, ref entry)) return -1;
-            do
-            {
-                if ((int)entry.th32ProcessID == pid)
-                    return (int)entry.th32ParentProcessID;
-            }
-            while (Process32Next(snapshot, ref entry));
-            return -1;
-        }
-        finally
-        {
-            CloseHandle(snapshot);
-        }
-    }
-
     // ── Interop ──────────────────────────────────────────────────────────────
     private const int SW_SHOW = 5;
     private const int SW_RESTORE = 9;
@@ -348,6 +398,19 @@ public sealed class WindowActivator : IWindowActivator
     [DllImport("kernel32.dll")]
     private static extern uint GetCurrentThreadId();
 
+    // Console attach/detach for ResolveTerminalViaConsole. AttachConsole binds this process to a target's
+    // console; GetConsoleWindow then returns that console's window (the ConPTY PseudoConsoleWindow).
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachConsole(uint dwProcessId);
+
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool FreeConsole();
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetConsoleWindow();
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
@@ -361,10 +424,14 @@ public sealed class WindowActivator : IWindowActivator
     [DllImport("kernel32.dll")]
     private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
 
-    [DllImport("kernel32.dll")]
+    // CharSet.Auto MUST match the PROCESSENTRY32 struct's CharSet.Auto below: it selects the Unicode
+    // (…W) entry points, so szExeFile is marshalled as Unicode. Without it these default to CharSet.Ansi
+    // (…A), which fills szExeFile with ANSI bytes that the Auto/Unicode struct then reads back as garbage —
+    // silently breaking any comparison against the exe name (e.g. the "explorer.exe" host exclusion).
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
     private static extern bool Process32First(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
 
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
     private static extern bool Process32Next(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
 
     [DllImport("kernel32.dll")]
