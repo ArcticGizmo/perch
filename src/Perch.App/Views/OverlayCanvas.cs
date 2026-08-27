@@ -50,6 +50,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double MetricsBarWidth  = 28; // width reserved for a session row's CPU/RAM mini-bars
     private const double QuickLinksRowHeight = 24; // height of the quick-links icon strip below the usage bars
     private const double BotIconWidth     = 16;
+    // The host app icon that stands in for the status dot is drawn at this size, centred on the dot's centre
+    // (the plain dot is an 8px circle) — dot-scale so it aligns with the dots and doesn't crowd the row.
+    private const double OriginIconSize   = 11;
     private const double RcIconWidth      = 14;
     private const double MailIconWidth    = 16;
     private const double ModeBadgeWidth   = 16;
@@ -2555,19 +2558,36 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         string? hostKey = session.IsDesktop ? DesktopOriginKey
                         : session.IsIde     ? session.IdeHost!.Executable
                         : null;
+        double dotCx = HorizPad + 4;   // the status-dot centre — host icons line up on it
         if (session.IsDesktop || session.IsIde)
         {
             var hostBrush = new SolidColorBrush(dotColor);
             var tinted = hostKey is not null ? TintedIcon(hostKey, dotColor) : null;
-            if (tinted is not null)      DrawOriginBitmap(ctx, HorizPad, nameMidY, tinted);
-            else if (session.IsDesktop)  DrawDesktopIcon(ctx, HorizPad, nameMidY, hostBrush);
-            else                         DrawIdeIcon(ctx, HorizPad, nameMidY, session.IdeHost!.Kind, hostBrush);
-            _originRects[rowIndex]  = new Rect(HorizPad - 1, nameMidY - 8, 16, 16);
+            if (tinted is not null)
+            {
+                DrawOriginBitmap(ctx, dotCx, nameMidY, tinted);
+            }
+            else
+            {
+                // Vector fallback — authored at ~12px with a left origin; scale to dot-scale and centre it on
+                // the dot so it matches the real-icon path and the plain dots.
+                const double native = 12;
+                double s = OriginIconSize / native;
+                var m = Matrix.CreateTranslation(-dotCx, -nameMidY)
+                      * Matrix.CreateScale(s, s)
+                      * Matrix.CreateTranslation(dotCx, nameMidY);
+                using (ctx.PushTransform(m))
+                {
+                    if (session.IsDesktop) DrawDesktopIcon(ctx, dotCx - native / 2, nameMidY, hostBrush);
+                    else                   DrawIdeIcon(ctx, dotCx - native / 2, nameMidY, session.IdeHost!.Kind, hostBrush);
+                }
+            }
+            _originRects[rowIndex]  = new Rect(dotCx - 8, nameMidY - 8, 16, 16);
             _originLabels[rowIndex] = session.IsDesktop ? "Claude Desktop" : session.IdeHost!.DisplayName;
         }
         else
         {
-            ctx.DrawEllipse(new SolidColorBrush(dotColor), null, new Point(HorizPad + 4, nameMidY), 4, 4);
+            ctx.DrawEllipse(new SolidColorBrush(dotColor), null, new Point(dotCx, nameMidY), 4, 4);
         }
 
         string statusText = session.Status switch
@@ -2975,19 +2995,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
     }
 
-    // Draws the real host-app icon (rendered from its executable) fit into the status-dot slot, centred on
-    // the row's name baseline. Shell-extracted icons come out vertically flipped (see the quick-links strip),
-    // so mirror about the horizontal axis to right them.
-    private static void DrawOriginBitmap(DrawingContext ctx, double x, double midY, Bitmap icon)
+    // Draws the host-app icon (rendered from its executable) fit into a dot-scale box centred on (cx, cy) —
+    // the status-dot centre — so it lines up with the plain dots on other rows. Shell-extracted icons come
+    // out vertically flipped (see the quick-links strip), so mirror about the horizontal axis to right them.
+    private static void DrawOriginBitmap(DrawingContext ctx, double cx, double cy, Bitmap icon)
     {
-        const double box = 13;
         var src = icon.Size;
-        double scale = Math.Min(box / src.Width, box / src.Height);
+        double scale = Math.Min(OriginIconSize / src.Width, OriginIconSize / src.Height);
         double w = src.Width * scale, h = src.Height * scale;
-        var dst = new Rect(x + (box - w) / 2, midY - h / 2, w, h);
-        var flip = Matrix.CreateTranslation(0, -midY)
+        var dst = new Rect(cx - w / 2, cy - h / 2, w, h);
+        var flip = Matrix.CreateTranslation(0, -cy)
                  * Matrix.CreateScale(1, -1)
-                 * Matrix.CreateTranslation(0, midY);
+                 * Matrix.CreateTranslation(0, cy);
         using (ctx.PushTransform(flip))
             ctx.DrawImage(icon, new Rect(src), dst);
     }
