@@ -18,10 +18,12 @@ namespace Perch.Avalonia.Windows;
 /// The session-history viewer (the Avalonia port of <c>HistoryViewerForm</c>). A toolbar with a session
 /// dropdown (every transcript across all projects, active first then newest-first), a Readable/Raw
 /// toggle, and a Follow button sits over a scrolled transcript body. Readable view renders each event as
-/// its own block — Markdown-formatted prose (<see cref="MarkdownRender"/>) and collapsible
-/// <see cref="Expander"/>s for tool calls; Raw view is the verbatim monospace timeline. Active sessions
-/// are tailed live (<see cref="FileSystemWatcher"/>); Follow keeps the view pinned to the newest event.
-/// Large transcripts are gated behind an explicit confirmation.
+/// its own block — prose through the block-level <see cref="MarkdownView"/> (headings, code panels,
+/// tables) and collapsible <see cref="Expander"/>s for tool calls; Raw view is the verbatim monospace
+/// timeline. Active sessions are tailed live (<see cref="FileSystemWatcher"/>) and rendered
+/// <em>incrementally</em> — new events append and a landed tool result patches its existing block in
+/// place, so following a busy session never rebuilds the whole panel. Follow keeps the view pinned to
+/// the newest event. Large transcripts are gated behind an explicit confirmation.
 /// </summary>
 internal sealed class HistoryWindow : Window
 {
@@ -52,6 +54,12 @@ internal sealed class HistoryWindow : Window
     private bool _raw;
     private bool _follow;
     private readonly HashSet<string> _expanded = new();
+
+    // Incremental-render state for the readable view: the live panel plus one entry per parser event
+    // (null for kinds the readable view skips), index-aligned with _parser.Events so a mutated tool call
+    // can be patched in place and new events appended without rebuilding everything.
+    private StackPanel? _readablePanel;
+    private readonly List<Control?> _eventControls = new();
 
     private readonly FileSystemWatcher _watcher = new();
     private DispatcherTimer? _tailDebounce;
@@ -111,6 +119,7 @@ internal sealed class HistoryWindow : Window
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
+        if (_renderSample) return;   // headless capture: keep the synthetic sample, skip the disk scan
         LoadList();
     }
 
@@ -175,6 +184,8 @@ internal sealed class HistoryWindow : Window
         StopWatching();
         _parser = null;
         _expanded.Clear();
+        _readablePanel = null;
+        _eventControls.Clear();
 
         if (entry.IsPlaceholder)
         {
@@ -267,11 +278,11 @@ internal sealed class HistoryWindow : Window
         {
             t.Stop();
             if (_parser is null) return;
-            if (_parser.Ingest().HasNew)
-            {
-                Render();
-                if (_follow) _scroll.ScrollToEnd();
-            }
+            var r = _parser.Ingest();
+            // Mutations matter too: a tool result landing on an earlier call arrives with no new events.
+            if (!r.HasNew && r.MutatedIndices.Count == 0) return;
+            ApplyIncremental(r);
+            if (_follow) _scroll.ScrollToEnd();
         };
         return t;
     }
@@ -301,6 +312,36 @@ internal sealed class HistoryWindow : Window
         _scroll.Content = _raw ? RenderRaw(events) : RenderReadable(events);
     }
 
+    // Folds one Ingest pass into the on-screen readable panel: new events append, a mutated tool call
+    // (its result landed) is rebuilt in place — keeping a long-followed session O(new), not O(all).
+    // Anything but the steady state (raw view, placeholder showing, first events) falls back to Render().
+    private void ApplyIncremental(IngestResult r)
+    {
+        if (_raw || _readablePanel is null || !ReferenceEquals(_scroll.Content, _readablePanel))
+        {
+            Render();
+            return;
+        }
+
+        var events = _parser!.Events;
+
+        // Append first: a mutation can target an event added in this same pass (call + result in one
+        // batch), so its control must exist before the patch loop looks it up.
+        if (r.HasNew)
+            for (int i = r.FirstNewIndex; i < events.Count; i++)
+                AppendEvent(_readablePanel, events[i]);
+
+        foreach (int idx in r.MutatedIndices)
+        {
+            if (idx < 0 || idx >= _eventControls.Count || _eventControls[idx] is not { } old) continue;
+            int at = _readablePanel.Children.IndexOf(old);
+            if (at < 0) continue;
+            var fresh = ToolBlock(events[idx]);   // only tool calls mutate (their result stitches on)
+            _readablePanel.Children[at] = fresh;
+            _eventControls[idx] = fresh;
+        }
+    }
+
     private Control RenderRaw(IReadOnlyList<HistoryEvent> events)
     {
         var body = new SelectableTextBlock { Margin = new Thickness(16), FontFamily = Mono, FontSize = 12.5, Foreground = FgBrush };
@@ -321,17 +362,26 @@ internal sealed class HistoryWindow : Window
     private Control RenderReadable(IReadOnlyList<HistoryEvent> events)
     {
         var panel = new StackPanel { Margin = new Thickness(16), Spacing = 8 };
+        _eventControls.Clear();
         foreach (var ev in events)
-        {
-            if (ev.Kind == HistoryEventKind.Meta) continue;
-            panel.Children.Add(ev.Kind switch
-            {
-                HistoryEventKind.ToolCall => ToolBlock(ev),
-                HistoryEventKind.Image    => ImageBlock(ev),
-                _                         => ProseBlock(ev),
-            });
-        }
+            AppendEvent(panel, ev);
+        _readablePanel = panel;
         return panel;
+    }
+
+    // Renders one event into the readable panel, recording its control (or null for skipped kinds) so
+    // ApplyIncremental can find it again by event index.
+    private void AppendEvent(StackPanel panel, HistoryEvent ev)
+    {
+        Control? c = ev.Kind switch
+        {
+            HistoryEventKind.Meta     => null,
+            HistoryEventKind.ToolCall => ToolBlock(ev),
+            HistoryEventKind.Image    => ImageBlock(ev),
+            _                         => ProseBlock(ev),
+        };
+        _eventControls.Add(c);
+        if (c is not null) panel.Children.Add(c);
     }
 
     private Control ProseBlock(HistoryEvent ev)
@@ -347,23 +397,50 @@ internal sealed class HistoryWindow : Window
         var header = new SelectableTextBlock { FontWeight = FontWeight.Bold, Foreground = brush, FontSize = 13 };
         header.Inlines = new InlineCollection { new Run(label) };
 
-        var body = new SelectableTextBlock { TextWrapping = TextWrapping.Wrap, Foreground = FgBrush, FontSize = 13, Margin = new Thickness(0, 2, 0, 0) };
-        var inlines = new InlineCollection();
+        Control body;
         if (ev.Kind == HistoryEventKind.Thinking)
         {
-            body.FontStyle = FontStyle.Italic;
-            body.Foreground = MutedBrush;
-            inlines.Add(new Run(ev.Detail));
+            body = new SelectableTextBlock
+            {
+                TextWrapping = TextWrapping.Wrap, Foreground = MutedBrush, FontSize = 13,
+                FontStyle = FontStyle.Italic, Margin = new Thickness(0, 2, 0, 0),
+                Inlines = new InlineCollection { new Run(ev.Detail) },
+            };
         }
         else
         {
-            MarkdownRender.Append(inlines, ev.Detail.Length > 0 ? ev.Detail : ev.Summary,
-                FgBrush, MutedBrush, ToolBrush, AsstBrush, TitleBrush);
+            // Prose goes through the block-level MarkdownView (headings, code panels, tables) — the
+            // "stop squinting at raw markdown in a terminal" upgrade. Best-effort inside: a parse
+            // failure falls back to the raw text.
+            body = new Border
+            {
+                Margin = new Thickness(0, 2, 0, 0),
+                Child = MarkdownView.Build(ev.Detail.Length > 0 ? ev.Detail : ev.Summary, ProseStyle()),
+            };
         }
-        body.Inlines = inlines;
 
         return new StackPanel { Margin = new Thickness(ev.IsSidechain ? 24 : 0, 0, 0, 0), Children = { header, body } };
     }
+
+    // The window-palette MarkdownStyle for transcript prose (unlike the markdown viewer's independent
+    // "paper" preview theme, history renders in the window's own chrome).
+    private static MarkdownStyle ProseStyle() => new(
+        Fg: Palette.FgBrush, Muted: Palette.MutedBrush, Title: Palette.TitleBrush, Link: Palette.AccentBrush,
+        CodeFg: Palette.FgBrush, CodeBg: Palette.ButtonBgBrush, QuoteBar: Palette.SeparatorBrush,
+        Rule: Palette.SeparatorBrush, TableBorder: Palette.BorderBrush, TableHeaderBg: Palette.ButtonBgBrush,
+        Syntax: Palette.Active.IsDark ? CodeSyntax.Dark() : CodeSyntax.Light());
+
+    /// <summary>HeadlessRenderer hook: shows the readable view over synthetic events (no transcript on
+    /// disk, no session list scan). <paramref name="expandedKeys"/> pre-expands those tool blocks so the
+    /// capture shows both expander states. Call before <c>Show()</c>.</summary>
+    internal void ShowSampleForRender(IReadOnlyList<HistoryEvent> events, params string[] expandedKeys)
+    {
+        _renderSample = true;
+        foreach (var k in expandedKeys) _expanded.Add(k);
+        _scroll.Content = RenderReadable(events);
+    }
+
+    private bool _renderSample;
 
     private Control ToolBlock(HistoryEvent ev)
     {

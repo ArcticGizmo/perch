@@ -52,7 +52,17 @@ Proved: spawn/drive a session bidirectionally on Windows redirected stdio; per-b
 `can_use_tool` round-trip; `set_permission_mode`; normal transcripts + hooks fire. Remaining known
 gaps: interrupt unexercised (picked up in M4), resume not wired (M4).
 
-### M1 — Rich mirror pane: read any live session, including ones Perch didn't launch
+### M1 — Rich mirror pane: read any live session, including ones Perch didn't launch ✅ (code)
+
+> **Landed 2026-08-27.** Discovery: `HistoryWindow` already *was* most of the mirror (live
+> `FileSystemWatcher` tail + debounce, Follow, per-session open from the overlay row via
+> `HistoryRequested`). What M1 added: prose now renders through the block-level `MarkdownView`
+> (headings, syntax-highlighted code panels, tables, quotes) instead of flat inlines, and live tailing
+> is **incremental** — new events append and a landed tool result patches its block in place
+> (`ApplyIncremental`), which also fixed a real bug where a result arriving with no new events never
+> re-rendered. Verified via a new `CaptureRenderedFrame` headless capture (`history_readable_1x.png`);
+> live-watching a real session is still to be eyeballed interactively. No separate `SessionMirrorWindow`
+> was built — reuse won.
 
 The "stop reading giant markdown/diffs in a terminal" win, and the foundation every later surface
 renders into. No control, no protocol risk — mostly assembly of existing parts.

@@ -441,6 +441,10 @@ internal static class HeadlessRenderer
         // captured via CaptureRenderedFrame rather than a detached one-shot bitmap.
         RenderMarkdownWindow(outDir);
 
+        // History viewer's readable transcript view (session-control M1): markdown-rendered prose,
+        // dimmed thinking, and tool expanders (one collapsed, one expanded with a stitched result).
+        RenderHistoryReadable(outDir);
+
         // The project-wide Markdown quick-open palette (VS Code-style fuzzy search), populated with a query so
         // the ranked results and their highlighted matches show.
         RenderMarkdownProjectSearch(outDir);
@@ -1068,6 +1072,64 @@ internal static class HeadlessRenderer
 
     // Shows a real MarkdownWindow seeded with sample data (session file groups + a project folder tree on
     // the left, a rendered preview on the right) and captures its rendered frame.
+    // The history viewer's readable transcript body over synthetic events — the "rich mirror" reading
+    // surface for live sessions (session-control M1). Markdown-heavy assistant prose so the block-level
+    // MarkdownView styling (heading, fenced code, table) can be eyeballed alongside thinking + tools.
+    private static void RenderHistoryReadable(string outDir)
+    {
+        var ts = new DateTime(2026, 8, 27, 10, 15, 0);
+        var events = new List<HistoryEvent>
+        {
+            new()
+            {
+                Kind = HistoryEventKind.UserText, Timestamp = ts, Key = "e0",
+                Summary = "Why is the placement test flaky?",
+                Detail = "Why is the `PlacementMath` test flaky? Show me the fix as a diff and summarise the causes in a table.",
+            },
+            new()
+            {
+                Kind = HistoryEventKind.Thinking, Timestamp = ts, Key = "e1",
+                Summary = "The failure only reproduces at 1.5× DPI…",
+                Detail = "The failure only reproduces at 1.5× DPI — the offset rounds twice, once in Snap and once in ToDip. Reading the test first.",
+            },
+            new()
+            {
+                Kind = HistoryEventKind.ToolCall, Timestamp = ts, Key = "t1",
+                Summary = "Reading PlacementMath.cs",
+                Detail = "{\n  \"file_path\": \"src/Perch.Core/Data/PlacementMath.cs\"\n}",
+                Result = "public static PixelPoint Snap(PixelPoint p, double scale)\n{\n    …\n}",
+            },
+            new()
+            {
+                Kind = HistoryEventKind.ToolCall, Timestamp = ts, Key = "t2",
+                Summary = "Running: dotnet test --filter PlacementMathTests",
+                Detail = "{\n  \"command\": \"dotnet test --filter PlacementMathTests\"\n}",
+                Result = "Passed!  - Failed: 0, Passed: 41",
+            },
+            new()
+            {
+                Kind = HistoryEventKind.AssistantText, Timestamp = ts, Key = "e2",
+                Summary = "Found it — a double-rounding bug.",
+                Detail = "Found it — a **double-rounding** bug.\n\n### The fix\n\n```csharp\n// round once, at the edge\nvar dip = Math.Round(px / scale, MidpointRounding.AwayFromZero);\nreturn new PixelPoint((int)(dip * scale), p.Y);\n```\n\n### Causes\n\n| Cause | Effect |\n|-------|--------|\n| `Snap` rounds pixels | off-by-one at 1.5× |\n| `ToDip` rounds again | drift accumulates |\n\n> Only one of the two conversions may round; the other must stay exact.",
+            },
+        };
+
+        // Templated controls (Expander, SelectableTextBlock) only realise inside a shown window, so this
+        // is captured via CaptureRenderedFrame like the markdown viewer, not a detached one-shot bitmap.
+        var w = new Windows.HistoryWindow { Width = 780, Height = 900 };
+        w.ShowSampleForRender(events, "t2");
+        w.Show();
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        var frame = w.CaptureRenderedFrame();
+        if (frame != null)
+        {
+            using var fs = File.Create(Path.Combine(outDir, "history_readable_1x.png"));
+            frame.Save(fs);
+        }
+        w.Close();
+    }
+
     private static void RenderMarkdownWindow(string outDir)
     {
         const string cwd = @"C:\src\perch";
