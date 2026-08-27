@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.75] - 2026-08-27
+
+- IDE and Claude Desktop sessions show the host app's icon as their status dot, tinted to the status colour
+- The host is sniffed from the process tree (the session file wasn't telling)
+- New "IDE status icons" setting toggles it, on by default
+
+---
+
 ## [v0.3.74] - 2026-08-27
 
 - Clicking a session now focuses terminals Windows Terminal adopted from outside itself
