@@ -158,7 +158,19 @@ that may be cut at the gate.
 
 </details>
 
-### M4 — Elevate & hand back: move a session between terminal and Perch ownership
+### M4 — Elevate & hand back: move a session between terminal and Perch ownership ✅ (code + resume e2e)
+
+> **Landed 2026-08-27.** `ClaudeSessionController.Start` gained `resumeSessionId` (`--resume <id>`);
+> `SessionConsoleWindow.ResumeSession` + a "Hand back to terminal" button; the overlay session-row menu
+> gained "Elevate to Perch (PoC)…" (CLI sessions only, not ones Perch already owns) →
+> `App.OnElevateToPerch` confirms, `SessionTerminator.Terminate`s the terminal process, and resumes the
+> same id in the console. **Resume e2e verified against real claude 2.1.247**: seed a session by id →
+> resume by id → it recalled the codeword, same session id, one transcript. **Interrupt: inconclusive,
+> honestly** — the control request was sent cleanly, but a fast `haiku` turn finished before it landed,
+> so cancellation itself isn't yet proven (needs a genuinely long turn / slower model, or the race is
+> real and interrupt needs the queued-message path). Kill-then-resume worked with no lost/forked id in
+> the spike. Still needs a human pass: the full overlay→elevate→console→hand-back round-trip in the
+> live app, and a conclusive interrupt test.
 
 - **Build:** `ClaudeSessionController.Start` gains `resumeSessionId` (`--resume <id>`);
   `SessionConsoleWindow` gains a "resume existing" path. Overlay session-row action "Elevate to

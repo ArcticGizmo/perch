@@ -1521,6 +1521,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// Internal — <see cref="ClaudeSession"/> is a Core-internal type.</summary>
     internal event Action<ClaudeSession>? MarkdownRequested;
 
+    /// <summary>Raised when the user picks "Elevate to Perch (PoC)" on a session row (session-control M4):
+    /// the app terminates the terminal-side process and resumes the same session id in the console window,
+    /// so the conversation continues under Perch's full control. PoC affordance — see
+    /// <c>docs/session-control-plan.md</c>.</summary>
+    internal event Action<ClaudeSession>? ElevateToPerchRequested;
+
     /// <summary>Raised when the user picks "Clear note" for a session; carries the working directory
     /// (<see cref="ClaudeSession.Cwd"/>) for the app to delete its <c>project.note</c> sidecar.</summary>
     public event Action<string>? NoteClearRequested;
@@ -4369,6 +4375,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // The todo list is global (not tied to this session), but the row menu is a handy place to
             // reach it — the same window the tray's "Todos…" and the overlay strip open.
             actions.Add(MenuItem("Todos…", () => TodosRequested?.Invoke()));
+
+            // Elevate to Perch (PoC, session-control M4): take over this terminal session over
+            // stream-json. Only a real interactive CLI session can be elevated (not sub-agents, desktop,
+            // or one Perch already owns).
+            if (!subRow && s.Entrypoint == "cli" && !Perch.Data.Control.ControlledSessions.Owns(s.SessionId))
+                actions.Add(MenuItem("Elevate to Perch (PoC)…", () => ElevateToPerchRequested?.Invoke(s)));
 
             // 3. Terminate — the one destructive item, isolated in its own group. Sub-agent rows have no
             //    process of their own, so nothing to kill.

@@ -366,6 +366,7 @@ public partial class App : Application
 #endif
             _overlay.Canvas.NoteClearRequested += cwd => _monitorHost?.SetProjectNote(cwd, null);
             _overlay.Canvas.TerminateRequested += OnTerminateSession;
+            _overlay.Canvas.ElevateToPerchRequested += OnElevateToPerch;   // PoC: take over a session (M4)
             _overlay.Canvas.ScratchPadRequested += OnOpenScratchPad;
             _overlay.Canvas.ProjectNotesRequested += OnOpenProjectNotePicker;
 
@@ -699,6 +700,34 @@ public partial class App : Application
                 ToastLevel.Error),
         };
         _notifier?.Show(title, body, level, null, null);
+    }
+
+    // Elevate a running terminal session into a Perch-controlled one (PoC, session-control M4): confirm,
+    // kill the terminal-side process, then resume the same session id in the console over stream-json —
+    // the conversation continues under Perch's full control. Same-id resume keeps one transcript, so the
+    // hand-off is seamless; "Hand back to terminal" in the console is the reverse.
+    private async void OnElevateToPerch(ClaudeSession session)
+    {
+        if (_overlay is not { } owner) return;
+
+        bool confirmed = await ConfirmDialog.ShowAsync(
+            owner,
+            "Elevate to Perch?",
+            $"Take over {session.DisplayName} (PID {session.Pid}) in Perch's session console? "
+                + "Its terminal process is stopped and the same conversation resumes inside Perch. "
+                + "You can hand it back to a terminal afterwards.",
+            "Elevate", "Cancel");
+        if (!confirmed) return;
+
+        // Stop the terminal-side process so its --resume can be picked up cleanly, then rescan to drop
+        // the now-dead row.
+        SessionTerminator.Terminate(session.Pid);
+        _monitorHost?.Rescan();
+
+        // No model override: --resume restores the session's own model, and the full model id wouldn't
+        // match the console's short-name picker anyway.
+        OpenSessionConsole();
+        _sessionConsole?.ResumeSession(session.SessionId, session.Cwd);
     }
 
     // Opens the artifact the user picked from the overlay's artifact-glyph list. Middle-click asks for a

@@ -33,13 +33,17 @@ internal sealed class ClaudeSessionController : IDisposable
     public bool IsRunning => _process is { HasExited: false };
 
     /// <summary>Launches the session in <paramref name="cwd"/>. Model/mode may be null for the user's
-    /// defaults; both are validated against known tokens since they end up on a shell command line.</summary>
-    public void Start(string cwd, string? model = null, string? permissionMode = null)
+    /// defaults; both are validated against known tokens since they end up on a shell command line.
+    /// <paramref name="resumeSessionId"/> resumes an existing session by id (<c>--resume</c>) — the
+    /// conversation continues under the <em>same</em> id and transcript, the mechanism behind "elevate a
+    /// terminal session into Perch" (session-control M4).</summary>
+    public void Start(string cwd, string? model = null, string? permissionMode = null, string? resumeSessionId = null)
     {
         if (IsRunning) throw new InvalidOperationException("Session already running.");
 
         var args = "-p --input-format stream-json --output-format stream-json --verbose" +
                    " --include-partial-messages --permission-prompt-tool stdio";
+        if (IsSafeToken(resumeSessionId)) args += $" --resume {resumeSessionId}";
         if (IsSafeToken(model)) args += $" --model {model}";
         if (IsSafeToken(permissionMode) && permissionMode != "default") args += $" --permission-mode {permissionMode}";
 

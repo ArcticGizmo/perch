@@ -6,7 +6,9 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Perch.Avalonia.Theming;
+using Perch.Data;
 using Perch.Data.Control;
+using Perch.Platform;
 
 namespace Perch.Avalonia.Windows;
 
@@ -34,6 +36,8 @@ internal sealed class SessionConsoleWindow : Window
     private readonly Button _sendButton;
 
     private ClaudeSessionController? _controller;
+    private string? _resumeId;                     // set when elevating/hand-off resumes an existing session
+    private readonly Button _handBackButton;
     private PermissionRequestEvent? _pendingPermission;
     private SelectableTextBlock? _streamBlock;                    // live delta accumulator, finalised per text block
     private readonly Dictionary<string, TextBlock> _toolChips = new();
@@ -80,6 +84,13 @@ internal sealed class SessionConsoleWindow : Window
             VerticalAlignment = VerticalAlignment.Center, IsEnabled = false,
         };
         _interruptButton.Click += (_, _) => _controller?.Interrupt();
+        _handBackButton = new Button
+        {
+            Content = "Hand back to terminal", FontSize = 12, CornerRadius = new CornerRadius(6),
+            VerticalAlignment = VerticalAlignment.Center, IsEnabled = false,
+            IsVisible = false,   // only meaningful once a session is running
+        };
+        _handBackButton.Click += (_, _) => HandBackToTerminal();
         _statusLabel = new TextBlock
         {
             Text = "not started", Foreground = Palette.MutedBrush, FontSize = 11,
@@ -89,7 +100,7 @@ internal sealed class SessionConsoleWindow : Window
         var toolbar = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 9),
-            Children = { _cwdBox, _modelCombo, _modeCombo, _startButton, _interruptButton, _statusLabel },
+            Children = { _cwdBox, _modelCombo, _modeCombo, _startButton, _interruptButton, _handBackButton, _statusLabel },
         };
         var toolbarPanel = new Border { Background = Palette.FormBgBrush, Child = toolbar, [DockPanel.DockProperty] = Dock.Top };
 
@@ -159,7 +170,7 @@ internal sealed class SessionConsoleWindow : Window
         controller.Exited += (code, err) => Dispatcher.UIThread.Post(() => { if (!_closed) OnSessionExited(code, err); });
         try
         {
-            controller.Start(cwd, model, mode);
+            controller.Start(cwd, model, mode, _resumeId);
         }
         catch (Exception ex)
         {
@@ -168,15 +179,51 @@ internal sealed class SessionConsoleWindow : Window
             return;
         }
 
+        if (_resumeId is not null) AddSystemLine($"resuming session {Shorten(_resumeId)} …");
         _controller = controller;
         _statusLabel.Text = "starting…";
         _startButton.IsEnabled = false;
         _cwdBox.IsEnabled = false;
         _modelCombo.IsEnabled = false;
         _interruptButton.IsEnabled = true;
+        _handBackButton.IsVisible = true;
+        _handBackButton.IsEnabled = true;
         _input.IsEnabled = true;
         _sendButton.IsEnabled = true;
         _input.Focus();
+    }
+
+    /// <summary>Opens (or focuses) the console already resuming an existing session by id — the target of
+    /// the overlay's "Elevate to Perch" action (session-control M4). The caller has already stopped the
+    /// terminal-side process; here we take over its transcript via <c>--resume</c>.</summary>
+    public void ResumeSession(string sessionId, string cwd, string? model = null)
+    {
+        _resumeId = sessionId;
+        if (Directory.Exists(cwd)) _cwdBox.Text = cwd;
+        if (!string.IsNullOrEmpty(model))
+        {
+            var idx = Array.FindIndex((string[])_modelCombo.ItemsSource!, m => m == model);
+            if (idx >= 0) _modelCombo.SelectedIndex = idx;
+        }
+        if (_controller is null) StartSession();
+    }
+
+    // Stops the Perch-owned session and reopens it in a real terminal via `claude --resume <id>`, the
+    // reverse of "Elevate to Perch" — the conversation continues under the same id (session-control M4).
+    private void HandBackToTerminal()
+    {
+        var id = _controller?.SessionId;
+        if (string.IsNullOrEmpty(id))
+        {
+            AddSystemLine("no live session id yet — can't hand back");
+            return;
+        }
+        var cwd = _cwdBox.Text?.Trim() ?? "";
+        _handBackButton.IsEnabled = false;
+        AddSystemLine($"handing session {Shorten(id)} back to a terminal…");
+        _controller?.Stop();   // OnSessionExited resets the toolbar when the process ends
+        try { PlatformServices.SessionLauncher.Reopen(cwd, id, TerminalApp.Auto); }
+        catch (Exception ex) { AddSystemLine($"couldn't open terminal: {ex.Message}"); }
     }
 
     private void OnSessionExited(int exitCode, string stderrTail)
@@ -189,11 +236,13 @@ internal sealed class SessionConsoleWindow : Window
         _permBar.IsVisible = false;
         _streamBlock = null;
         _toolChips.Clear();
+        _resumeId = null;                    // a fresh "Start" is a new session, not a re-resume
         _startButton.IsEnabled = true;       // the window can host a fresh session
         _startButton.Content = "New session";
         _cwdBox.IsEnabled = true;
         _modelCombo.IsEnabled = true;
         _interruptButton.IsEnabled = false;
+        _handBackButton.IsEnabled = false;
         _input.IsEnabled = false;
         _sendButton.IsEnabled = false;
     }
