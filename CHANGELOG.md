@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.73] - 2026-08-27
+
+- Check the arcade
+- A settings file that won't fully parse is salvaged value-by-value instead of reset
+- Dev tooling can no longer overwrite the real settings file (it kept re-running the Quick Start; it
+  knows what it did)
+- Settings saves are atomic, and a briefly locked settings file no longer reads as a fresh install
+
+---
+
 ## [v0.3.72] - 2026-08-26
 
 - Docked column keeps the right height when the display scale changes, including over Parsec and RDP

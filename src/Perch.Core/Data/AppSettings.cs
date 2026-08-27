@@ -155,6 +155,21 @@ internal sealed class AppSettings
     // shortcut so it needn't be rediscovered by feel. Not a Settings-window control. Defaults to locked.
     public bool ArcadeUnlocked { get; set; }
 
+    // Desktop basketball: a hoop hung off the roomier side of the overlay panel and a ball that bounces
+    // around the screen (drag the resting ball back to shoot). A playful toggle, masked off in Quiet mode.
+    // See BasketballWindow + Perch.Games.BasketballPhysics; plan in docs/basketball-plan.md.
+    public bool BasketballEnabled { get; set; }
+
+    // The lifetime desktop-basketball swish tally, painted on the backboard. Hidden toy state like
+    // WordleState, not a Settings-window control.
+    public int BasketballHoops { get; set; }
+
+    // The hoop's vertical position, as an offset (DIPs) below the overlay panel's top edge — set by
+    // dragging the ring itself, so it keeps riding the panel. Null = the default height. Like the overlay
+    // widths, direct-manipulation state rather than a Settings-window control. See BasketballWindow.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? BasketballRimOffsetDip { get; set; }
+
     // The secret daily Wordle's progress, persisted as one compact string ("yyyy-MM-dd|guess1,guess2,...")
     // so today's guesses survive a restart. Scoped to a calendar day by WordleGame's codec; a past day reads
     // back as a fresh puzzle. Not a Settings-window control.
@@ -592,11 +607,27 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? ShowSlack     { get; set; }
 
+    // Process-wide persistence kill-switch, for hosts that build real windows/controls around throwaway
+    // AppSettings instances — the headless render harness and the test host. Their Debug builds share the
+    // real "Perch (Dev)" profile (AppProfile), so a stray Save() from a posed control overwrites the
+    // developer's actual settings with defaults; FirstRunComplete=false in that file then re-runs the
+    // first-run Quick Start on the next dev launch. That exact wipe shipped once: SettingsCatalogView's
+    // field editor saves on TextChanged, and Avalonia raises the *initial* programmatic text assignment
+    // asynchronously, so merely rendering the catalogue saved its throwaway defaults over the real file.
+    // The per-call-site fixes stop the known offenders; this switch makes the whole class of bug impossible
+    // in processes that should never persist.
+    private static bool _persistenceDisabled;
+    public static void DisablePersistence() => _persistenceDisabled = true;
+
+    // Set on the stand-in returned when a settings file exists but couldn't be read (locked by another
+    // process mid-write, a permissions hiccup). This instance is defaults, not the user's data — persisting
+    // it would overwrite their intact file — so Save() declines for the rest of the session and the next
+    // clean launch reads the real file again. Internal (non-public accessors), so it never serializes.
+    internal bool SaveSuppressed { get; private set; }
+
     public static AppSettings Load()
     {
-        string? json = null;
-        try { if (File.Exists(FilePath)) json = File.ReadAllText(FilePath); }
-        catch { json = null; }
+        var (json, existed) = ReadSettingsFile();
 
         if (json is not null)
         {
@@ -610,18 +641,30 @@ internal sealed class AppSettings
             }
             catch
             {
-                // The file exists but wouldn't parse even with the tolerant enum converters (a truncated write,
-                // a bad hand-edit, a property whose shape changed). NEVER silently discard it and reset to
-                // defaults — that both loses the user's settings and, because a fresh AppSettings has
-                // FirstRunComplete=false, re-runs the first-run Quick Start on someone who's clearly used Perch
-                // before. Instead: keep a copy of the unreadable file for recovery, and seed FirstRunComplete
-                // true (a file existing is proof this isn't a first run — the same reasoning as MigrateFirstRun).
+                // The file exists but wouldn't parse as a whole even with the tolerant enum converters (a
+                // truncated write, a bad hand-edit, a property whose shape changed). NEVER silently discard
+                // it and reset to defaults — that both loses the user's settings and, because a fresh
+                // AppSettings has FirstRunComplete=false, re-runs the first-run Quick Start on someone who's
+                // clearly used Perch before. Instead: keep a copy of the unreadable file for recovery, then
+                // salvage optimistically — merge in every property that still reads individually, because a
+                // broken settings file is usually only off by one value and still full of good ones.
                 BackupUnreadable(json);
-                var recovered = new AppSettings { FirstRunComplete = true };
+                var recovered = SalvageMerge(json);
                 recovered.MigrateQuickLinks();
                 recovered.MigrateStartMode();
                 return recovered;
             }
+        }
+
+        if (existed)
+        {
+            // A file is (or may be) there, but reading it failed even after retries. Not a first run, and
+            // these defaults are not the user's settings: skip the Quick Start and refuse to save over the
+            // intact file for this session (see SaveSuppressed).
+            var standIn = new AppSettings { FirstRunComplete = true, SaveSuppressed = true };
+            standIn.MigrateQuickLinks();
+            standIn.MigrateStartMode();
+            return standIn;
         }
 
         // No settings file — a genuinely fresh install. FirstRunComplete stays false so the Quick Start runs.
@@ -629,6 +672,49 @@ internal sealed class AppSettings
         fresh.MigrateQuickLinks();
         fresh.MigrateStartMode();
         return fresh;
+    }
+
+    // Reads the settings file with shared access (the hook, an exiting instance and this one can touch it
+    // concurrently) and a couple of brief retries, so a moment of contention never masquerades as a fresh
+    // install. (null, false) = provably no file; (null, true) = a file may be there but wasn't readable.
+    private static (string? Json, bool Existed) ReadSettingsFile()
+    {
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                using var fs = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(fs);
+                return (reader.ReadToEnd(), true);
+            }
+            catch (FileNotFoundException) { return (null, false); }
+            catch (DirectoryNotFoundException) { return (null, false); }
+            catch { Thread.Sleep(40); }
+        }
+        return (null, true);
+    }
+
+    // The optimistic per-property merge behind Load()'s recovery path: when the file no longer deserializes
+    // as a whole, every property that still reads individually is kept — only the broken value(s) fall back
+    // to defaults. FirstRunComplete is seeded true up front (a file existing is proof this isn't a first
+    // run) and then, like everything else, takes the file's own value when that value is readable.
+    internal static AppSettings SalvageMerge(string json)
+    {
+        var salvaged = new AppSettings { FirstRunComplete = true };
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return salvaged;
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                var pi = typeof(AppSettings).GetProperty(prop.Name);
+                if (pi is not { CanWrite: true }) continue;
+                try { pi.SetValue(salvaged, JsonSerializer.Deserialize(prop.Value, pi.PropertyType)); }
+                catch { /* this property is the broken bit — skip it, keep the rest */ }
+            }
+        }
+        catch { /* not even JSON (torn write) — defaults, with FirstRunComplete kept */ }
+        return salvaged;
     }
 
     // Best-effort side copy of a settings file we couldn't parse, so a user (or a bug report) can recover it
@@ -703,11 +789,18 @@ internal sealed class AppSettings
 
     public void Save()
     {
+        // No-persist guards: the render/test hosts (process-wide) and the unreadable-file stand-in
+        // (per-instance) must never overwrite the user's real file. See DisablePersistence / SaveSuppressed.
+        if (_persistenceDisabled || SaveSuppressed) return;
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath,
+            // Write-then-move so a process killed mid-save can never leave a truncated file for the next
+            // launch to misread as corrupt.
+            string tmp = FilePath + ".tmp";
+            File.WriteAllText(tmp,
                 JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(tmp, FilePath, overwrite: true);
         }
         catch { }
     }

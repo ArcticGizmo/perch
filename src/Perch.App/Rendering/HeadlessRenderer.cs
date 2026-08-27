@@ -30,6 +30,13 @@ internal static class HeadlessRenderer
 {
     public static int RenderAll(string outDir, string? themeId = null)
     {
+        // This process poses real windows/controls around throwaway AppSettings instances, and a Debug
+        // build shares the developer's live "Perch (Dev)" profile — so make every Save() in the process a
+        // no-op before anything is built. A posed control's change events (e.g. a TextBox's deferred
+        // initial TextChanged) once saved throwaway defaults over the real settings file, which wiped the
+        // developer's settings and re-ran the first-run Quick Start.
+        AppSettings.DisablePersistence();
+
         Directory.CreateDirectory(outDir);
 
         AppBuilder.Configure<App>()
@@ -172,6 +179,11 @@ internal static class HeadlessRenderer
         // "Big reactions" bubble layer: a few reactions caught mid-rise plus one popping (a static frame).
         RenderControl(ReactionBubbleLayer.CreateForRender(), Path.Combine(outDir, "reaction_bubbles_1x.png"), 96);
         RenderControl(ReactionBubbleLayer.CreateForRender(), Path.Combine(outDir, "reaction_bubbles_1.5x.png"), 144);
+
+        // Desktop basketball: the hoop hung off a pretend panel edge, the resting ball mid-aim with its
+        // rubber-band + partial trajectory, and the tally pill under the net (a static frame).
+        RenderControl(BasketballLayer.CreateForRender(), Path.Combine(outDir, "basketball_1x.png"), 96);
+        RenderControl(BasketballLayer.CreateForRender(), Path.Combine(outDir, "basketball_1.5x.png"), 144);
 
         // Hypertree strip: the branch list under the quick links, with the row the cursor is on marked.
         // The sample puts main mid-stack (Hypertree publishes the stack already flattened, main at its

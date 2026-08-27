@@ -18,7 +18,8 @@ public sealed class ArcadeMenuWindow : Window
 {
     private readonly ArcadeMenu _menu = new();
 
-    public ArcadeMenuWindow(Action launchInvaders, Action launchFrogger, Action launchWordle, Action launchConnect4)
+    public ArcadeMenuWindow(Action launchInvaders, Action launchFrogger, Action launchWordle, Action launchConnect4,
+        Func<bool> basketballOn, Action toggleBasketball)
     {
         Title = "Perch Arcade";
         CanResize = false;
@@ -27,8 +28,17 @@ public sealed class ArcadeMenuWindow : Window
         Background = Palette.OverlaySurfaceBrush;
         Content = _menu;
 
+        _menu.SetBasketballOn(basketballOn());
         _menu.Chosen += index =>
         {
+            if (index == ArcadeMenu.BasketballIndex)
+            {
+                // The basketball card toggles the desktop toy in place — it lives on the desktop, not in
+                // a window, so the chooser stays up and just refreshes its badge.
+                toggleBasketball();
+                _menu.SetBasketballOn(basketballOn());
+                return;
+            }
             Close();
             (index switch { 0 => launchInvaders, 1 => launchFrogger, 2 => launchWordle, _ => launchConnect4 })();
         };
@@ -55,15 +65,19 @@ public sealed class ArcadeMenuWindow : Window
     }
 }
 
-/// <summary>The chooser's owner-drawn control: a title, four selectable game cards each with a tiny live
+/// <summary>The chooser's owner-drawn control: a title, five selectable cards each with a tiny live
 /// sprite, and a shimmering prompt. Raises <see cref="Chosen"/> with the selected index (0 = Invaders,
-/// 1 = Crossing, 2 = Wordle, 3 = Connect 4).</summary>
+/// 1 = Crossing, 2 = Wordle, 3 = Connect 4, 4 = the desktop-basketball toggle).</summary>
 internal sealed class ArcadeMenu : Control
 {
-    private const double MenuW = 460, MenuH = 640;
+    private const double MenuW = 460, MenuH = 752;
     private const double CardX = 40, CardW = MenuW - 2 * CardX, CardH = 92, CardGap = 20;
     private const double FirstCardY = 130;
     private const int TickMs = 16;
+
+    /// <summary>The basketball card's slot — the one entry that toggles the desktop toy in place
+    /// (see <see cref="ArcadeMenuWindow"/>) instead of launching a game window.</summary>
+    public const int BasketballIndex = 4;
 
     public event Action<int>? Chosen;
 
@@ -73,8 +87,10 @@ internal sealed class ArcadeMenu : Control
         ("PERCH CROSSING", "Hop the bird home, Frogger-style"),
         ("PERCH WORDLE", "Crack today's five-letter word"),
         ("PERCH CONNECT 4", "Line up four — solo or a friend"),
+        ("PERCH BASKETBALL", "A hoop on your desktop, all day long"),
     };
 
+    private bool _basketballOn;
     private int _selected;
     private double _pulse;
     private double _anim;                 // drives the little demo sprites
@@ -112,6 +128,13 @@ internal sealed class ArcadeMenu : Control
         Width = MenuW;
         Height = MenuH;
         Focusable = true;
+    }
+
+    /// <summary>Reflect the desktop-basketball toggle's live state on its card's ON/OFF badge.</summary>
+    public void SetBasketballOn(bool on)
+    {
+        _basketballOn = on;
+        InvalidateVisual();
     }
 
     protected override Size MeasureOverride(Size availableSize) => new(MenuW, MenuH);
@@ -191,7 +214,8 @@ internal sealed class ArcadeMenu : Control
         double a = 0.45 + 0.55 * Math.Abs(Math.Sin(_pulse));
         using (ctx.PushOpacity(a))
         {
-            var hint = OverlayDraw.Text("Arrow keys select  ·  Enter to play", 13, Palette.FgBrush, FontWeight.Bold);
+            string action = _selected == BasketballIndex ? "Enter to toggle" : "Enter to play";
+            var hint = OverlayDraw.Text($"Arrow keys select  ·  {action}", 13, Palette.FgBrush, FontWeight.Bold);
             ctx.DrawText(hint, new Point((w - hint.Width) / 2, h - 56));
         }
         var esc = OverlayDraw.Text("Esc to close", 11, Palette.MutedBrush);
@@ -216,7 +240,8 @@ internal sealed class ArcadeMenu : Control
             case 0: DrawBitSprite(ctx, Invader, icon, Palette.RunningBrush); break;
             case 1: DrawBitSprite(ctx, Bird, icon, Palette.AccentBrush); break;
             case 2: DrawWordleGlyph(ctx, icon); break;
-            default: DrawConnect4Glyph(ctx, icon); break;
+            case 3: DrawConnect4Glyph(ctx, icon); break;
+            default: DrawBasketballGlyph(ctx, icon); break;
         }
 
         double tx = CardX + 88;
@@ -224,6 +249,42 @@ internal sealed class ArcadeMenu : Control
         ctx.DrawText(name, new Point(tx, y + 24));
         var blurb = OverlayDraw.Text(Games[i].Blurb, 12, Palette.MutedBrush);
         ctx.DrawText(blurb, new Point(tx, y + 52));
+
+        // The basketball card carries a live ON/OFF badge — it toggles the desktop toy, not a window.
+        if (i == BasketballIndex)
+        {
+            var label = OverlayDraw.Text(_basketballOn ? "ON" : "OFF", 11,
+                _basketballOn ? Palette.RunningBrush : Palette.MutedBrush, FontWeight.Bold);
+            var badge = new Rect(rect.Right - label.Width - 40, y + (CardH - 24) / 2, label.Width + 20, 24);
+            OverlayDraw.Panel(ctx, badge, Palette.OverlaySurfaceBrush, new Pen(Palette.BorderBrush, 1), 12);
+            ctx.DrawText(label, new Point(badge.X + 10, badge.Center.Y - label.Height / 2));
+        }
+    }
+
+    // Basketball's card icon: the hoop in miniature — backboard on the right, brand-red rim, a hint of
+    // net, and the ball mid-flight toward it, in the same hues the desktop toy uses.
+    private static void DrawBasketballGlyph(DrawingContext ctx, Rect box)
+    {
+        double boardX = box.Right - 5;
+        OverlayDraw.Panel(ctx, new Rect(boardX, box.Y + 2, 4, box.Height * 0.55),
+            Palette.ButtonBgBrush, new Pen(Palette.BorderBrush, 1), 1);
+
+        double rimY = box.Y + box.Height * 0.42;
+        double rimL = boardX - box.Width * 0.5;
+        ctx.DrawLine(new Pen(Palette.BrandBrush, 2.5), new Point(rimL, rimY), new Point(boardX, rimY));
+
+        var netPen = new Pen(new SolidColorBrush(Color.FromArgb(120, Palette.Fg.R, Palette.Fg.G, Palette.Fg.B)), 1);
+        double netB = rimY + box.Height * 0.3;
+        double mid = (rimL + boardX) / 2;
+        ctx.DrawLine(netPen, new Point(rimL, rimY), new Point(mid - 3, netB));
+        ctx.DrawLine(netPen, new Point(boardX, rimY), new Point(mid + 3, netB));
+        ctx.DrawLine(netPen, new Point(mid, rimY), new Point(mid, netB));
+
+        var seam = new Pen(new SolidColorBrush(Color.FromArgb(90, 0, 0, 0)), 1);
+        var c = new Point(box.X + 9, box.Bottom - 11);
+        ctx.DrawEllipse(Palette.BasketballBrush, seam, c, 8, 8);
+        ctx.DrawLine(seam, new Point(c.X - 7.5, c.Y), new Point(c.X + 7.5, c.Y));
+        ctx.DrawLine(seam, new Point(c.X, c.Y - 7.5), new Point(c.X, c.Y + 7.5));
     }
 
     // Wordle's card icon: a tiny posed board — a couple of greens, a yellow, the rest sunken — so it reads

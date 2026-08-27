@@ -53,6 +53,14 @@ public sealed partial class OverlayCanvas
     public bool IsDocked => _docked;
 
     // ── App-facing surface ───────────────────────────────────────────────────────
+    /// <summary>Raised after the docked column's geometry has been (re)applied — enter, collapse/expand,
+    /// re-dock, display changes — so a companion anchored to the panel's edge (desktop basketball's hoop)
+    /// can re-derive its spot. Floating moves are already observable through the window's
+    /// PositionChanged/Resized, but the docked writes can be swallowed mid-layout and re-applied from a
+    /// posted callback (see ToggleDockedCollapsed), so an explicit post-apply signal is the reliable
+    /// one.</summary>
+    public event Action? DockedGeometryChanged;
+
     /// <summary>Switches the live overlay between Floating and Docked. Idempotent.</summary>
     public void SetOverlayMode(OverlayPresentationMode mode)
     {
@@ -292,6 +300,7 @@ public sealed partial class OverlayCanvas
         w.Position = new PixelPoint(x, waY);
 
         if (reserve) ReserveDockedColumn(_dockScreenBounds.Value, physW);
+        DockedGeometryChanged?.Invoke();
     }
 
     // ── Display-change detection: fully event-driven, zero idle cost ─────────────────────────────────

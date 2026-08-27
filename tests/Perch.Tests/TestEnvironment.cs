@@ -31,5 +31,10 @@ internal static class TestEnvironment
     public static void Init()
     {
         Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", FixtureConfigDir);
+
+        // AppSettings.FilePath is NOT isolated by CLAUDE_CONFIG_DIR — a Debug test host shares the real
+        // %APPDATA%\Perch (Dev) profile. No test should ever persist settings there, so make every Save()
+        // in this process a no-op (the same guard the headless render harness uses).
+        AppSettings.DisablePersistence();
     }
 }
