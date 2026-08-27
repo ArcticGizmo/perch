@@ -176,12 +176,87 @@ casing; the spawned session appears in the overlay as an ordinary CLI session, s
 tries to focus a terminal that doesn't exist ("No window to focus") — production would route focus to
 the console window and tag Perch-owned sessions.
 
-## 5. Suggested next steps
+## 5. Follow-up: terminal AND rich UI at the same time (dual-surface)
 
-1. Exercise interrupt + `--resume` hand-off (both directions) and pin them with captures.
-2. Markdown-render assistant text (the markdown-viewer feature already has the pieces).
-3. Route overlay clicks for Perch-owned sessions to the console window; add a "Continue in Perch"
-   action on observed idle sessions (resume).
-4. Surface `AskUserQuestion`/plan approval as first-class UI (they arrive as tool_use blocks).
-5. Decide on the embedded-terminal tab: spike `Iciclecreek.Avalonia.Terminal` + Porta.Pty against the
+The follow-up question after the PoC: can a user keep their own terminal session *and* get a rich
+Perch surface on it simultaneously — including "lifting" an existing terminal session into Perch
+control? **Yes — and mostly without ownership at all.** The unlock is decomposing "rich UI" into its
+three parts, each of which has its own attachment mechanism:
+
+| Need | Mechanism | Ownership required? | Status |
+|---|---|---|---|
+| Rich **reading** (big markdown/diffs, tool activity) | live transcript tail — `TranscriptParser` already does this | ❌ none | works today for every session |
+| Answering **permission prompts** from Perch | **PreToolUse hook returning the decision** (below) | ❌ none | documented hook contract; needs perch-hook extension |
+| **Sending prompts** into a terminal session from Perch | **session inbox socket** (below) | ❌ none | documented cross-session messaging; caveats apply |
+| Full control: editing tool inputs, mode switch, interrupt, streaming deltas | stream-json ownership (this PoC) | ✅ Perch spawns | shipped as PoC |
+| Awareness (waiting-for-input, idle) | Notification hook | ❌ none | perch-hook already uses it |
+
+### The permission valet (PreToolUse hook)
+
+A PreToolUse hook can *return the permission decision itself* — in interactive TUI sessions, in every
+permission mode ([hooks docs](https://code.claude.com/docs/en/hooks.md)):
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PreToolUse",
+  "permissionDecision":"allow|deny|ask","permissionDecisionReason":"…"}}
+```
+
+Default hook timeout is 600s (per-hook configurable). So `perch-hook pretool` can forward the request
+to the tray over a local pipe, Perch shows its rich Allow/Deny UI (with the full tool input, nicely
+rendered), and the hook returns the user's decision. Returning `"ask"` (or timing out quickly when
+Perch is closed / the user ignores it) falls back to the normal terminal prompt — the terminal
+experience degrades to exactly what it is today, never worse. This answers "respond to input requests
+without jumping around" for **every** session, including ones Perch didn't launch. Note the two
+surfaces are sequential, not simultaneous: while the hook waits, the TUI shows a hook spinner, not the
+prompt — so the valet should use a short wait (a few seconds, or "only when the Perch prompt window is
+focused/visible") before deferring with `"ask"`.
+
+### Sending prompts into a live terminal session (inbox socket)
+
+Every session binds a local inbox socket (named pipe on Windows), exported to hooks/Bash children as
+`CLAUDE_CODE_MESSAGING_SOCKET` + `CLAUDE_CODE_MESSAGING_TOKEN`
+([cross-session messaging docs](https://code.claude.com/docs/en/cross-session-messaging.md)) — the
+`system/init` record in this PoC's captures carries the same `messaging_socket_path`. Since perch-hook
+runs *inside* every session's hooks, it can harvest the socket path + token at SessionStart and hand
+them to the tray; Perch can then post text into the running session. Caveats: plain text only,
+messages arrive as inter-session messages (not literally "the user typed this"), and cross-process
+senders are subject to the session's `crossSessionInbound` accept/hold/refuse controls — so treat this
+as "nudge/queue a request", with the terminal remaining the primary prompt box.
+
+### Lifting a session into full Perch control
+
+`claude --resume <sessionId>` (no `--fork-session`) keeps the **same session id and appends to the
+same transcript** ([sessions docs](https://code.claude.com/docs/en/sessions.md)). So elevation is a
+clean sequential hand-off: end the terminal process, respawn under `ClaudeSessionController` with
+`--resume <id>` — same conversation, now with full stream-json control; the reverse hand-off (back to
+a terminal) is the same move. A skill or overlay action can orchestrate it, but with the valet +
+socket + transcript-tail combination attached to the terminal session, full lifting becomes the
+exception rather than the requirement. A "make all sessions Perch-controlled" SessionStart *hook* is
+not possible in the ownership sense (a hook can't re-parent a running TUI process — a PATH
+shim/launcher wrapper could, via a ConPTY proxy, but that's the heavyweight option); in the
+attachment sense, perch-hook at SessionStart already achieves it for free.
+
+### Revised recommendation
+
+Ship **attachment** (valet + socket harvest + rich mirror pane on the existing transcript tail) as the
+default experience — every terminal session gets the rich surface, no behaviour change to the
+terminal. Keep **ownership** (this PoC's stream-json console) for Perch-native sessions and for
+"elevate" via resume. ConPTY remains an optional embedded-terminal tab later; the tmux-style ConPTY
+proxy shim is only worth building if keystroke-level injection into the real TUI ever becomes a hard
+requirement.
+
+## 6. Suggested next steps
+
+1. PoC the permission valet: `perch-hook pretool` ↔ tray pipe ↔ a rich permission prompt window;
+   verify the `"ask"` fallback and tune the defer timeout.
+2. Rich mirror pane for *any* live session (transcript tail + the markdown-viewer rendering pieces) —
+   this is the "stop reading massive markdown/diffs in a terminal" win and needs no control at all.
+3. Harvest `CLAUDE_CODE_MESSAGING_SOCKET`/`_TOKEN` in perch-hook at SessionStart; PoC posting a prompt
+   into a live terminal session and see how it lands.
+4. Exercise interrupt + `--resume` hand-off (both directions: terminal → console, console → terminal)
+   and pin them with captures; surface as an "Elevate to Perch" action on observed sessions.
+5. Markdown-render assistant text in the session console; surface `AskUserQuestion`/plan approval as
+   first-class UI (they arrive as tool_use blocks).
+6. Route overlay clicks for Perch-owned sessions to the console window.
+7. Decide on the embedded-terminal tab: spike `Iciclecreek.Avalonia.Terminal` + Porta.Pty against the
    real `claude` TUI (mouse, alt-screen, resize) before committing.
