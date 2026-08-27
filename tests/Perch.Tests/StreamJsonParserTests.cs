@@ -1,0 +1,105 @@
+using Perch.Data.Control;
+using Xunit;
+
+namespace Perch.Tests;
+
+/// <summary>
+/// The stream-json decoder behind the controlled-session PoC (docs/session-control-poc.md). The sample
+/// lines are trimmed captures from a real <c>claude -p --output-format stream-json</c> run (2.1.247).
+/// </summary>
+public class StreamJsonParserTests
+{
+    [Fact]
+    public void Init_YieldsSessionInit()
+    {
+        var line = """{"type":"system","subtype":"init","cwd":"C:\\proj","session_id":"5b4d131d-dfd4-4103-860c-f5c96094b598","tools":["Bash","Read","Write"],"model":"claude-haiku-4-5-20251001","permissionMode":"default","uuid":"u1"}""";
+        var ev = Assert.IsType<SessionInitEvent>(Assert.Single(StreamJsonParser.Parse(line)));
+        Assert.Equal("5b4d131d-dfd4-4103-860c-f5c96094b598", ev.SessionId);
+        Assert.Equal("claude-haiku-4-5-20251001", ev.Model);
+        Assert.Equal("default", ev.PermissionMode);
+        Assert.Equal(3, ev.ToolCount);
+    }
+
+    [Fact]
+    public void AssistantMessage_YieldsOneEventPerBlock()
+    {
+        var line = """{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"pondering"},{"type":"text","text":"hello"},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"echo hi"}}]},"session_id":"s"}""";
+        var events = StreamJsonParser.Parse(line);
+        Assert.Equal(3, events.Count);
+        Assert.Equal("pondering", Assert.IsType<AssistantThinkingEvent>(events[0]).Text);
+        Assert.Equal("hello", Assert.IsType<AssistantTextEvent>(events[1]).Text);
+        var tool = Assert.IsType<ToolUseEvent>(events[2]);
+        Assert.Equal("toolu_1", tool.ToolUseId);
+        Assert.Equal("Bash", tool.ToolName);
+        Assert.Equal("Running: echo hi", tool.Summary);
+    }
+
+    [Fact]
+    public void ToolResult_HandlesStringAndBlockContent()
+    {
+        var stringResult = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}}""";
+        var ev = Assert.IsType<ToolResultEvent>(Assert.Single(StreamJsonParser.Parse(stringResult)));
+        Assert.Equal("toolu_1", ev.ToolUseId);
+        Assert.Equal("ok", ev.Preview);
+        Assert.False(ev.IsError);
+
+        var blockResult = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":[{"type":"text","text":"boom"}],"is_error":true}]}}""";
+        var err = Assert.IsType<ToolResultEvent>(Assert.Single(StreamJsonParser.Parse(blockResult)));
+        Assert.Equal("boom", err.Preview);
+        Assert.True(err.IsError);
+    }
+
+    [Fact]
+    public void StreamEvent_TextDeltaOnly()
+    {
+        var delta = """{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"chunk"}}}""";
+        Assert.Equal("chunk", Assert.IsType<TextDeltaEvent>(Assert.Single(StreamJsonParser.Parse(delta))).Text);
+
+        var toolDelta = """{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"comm"}}}""";
+        Assert.Empty(StreamJsonParser.Parse(toolDelta));
+    }
+
+    [Fact]
+    public void CanUseTool_YieldsPermissionRequest()
+    {
+        var line = """{"type":"control_request","request_id":"be11bc84-3253-405d-aef7-1eaba4143976","request":{"subtype":"can_use_tool","tool_name":"Write","display_name":"Write","input":{"file_path":"C:\\t\\perm-test.txt","content":"hello"},"description":"perm-test.txt","permission_suggestions":[{"type":"setMode","mode":"acceptEdits","destination":"session"}],"tool_use_id":"toolu_x"}}""";
+        var ev = Assert.IsType<PermissionRequestEvent>(Assert.Single(StreamJsonParser.Parse(line)));
+        Assert.Equal("be11bc84-3253-405d-aef7-1eaba4143976", ev.RequestId);
+        Assert.Equal("Write", ev.ToolName);
+        Assert.Equal("perm-test.txt", ev.Description);
+        Assert.Contains("perm-test.txt", ev.InputJson);
+        Assert.Equal("acceptEdits", ev.SuggestedMode);
+    }
+
+    [Fact]
+    public void ControlResponse_ModeAckYieldsModeChanged_OtherAcksIgnored()
+    {
+        var modeAck = """{"type":"control_response","response":{"subtype":"success","request_id":"req_mode_1","response":{"mode":"acceptEdits"}}}""";
+        Assert.Equal("acceptEdits", Assert.IsType<ModeChangedEvent>(Assert.Single(StreamJsonParser.Parse(modeAck))).Mode);
+
+        var initAck = """{"type":"control_response","response":{"subtype":"success","request_id":"req_init_1","response":{"commands":[]}}}""";
+        Assert.Empty(StreamJsonParser.Parse(initAck));
+    }
+
+    [Fact]
+    public void Result_YieldsTurnResult()
+    {
+        var line = """{"type":"result","subtype":"success","is_error":false,"duration_ms":2318,"num_turns":1,"session_id":"s","total_cost_usd":0.062387,"usage":{"input_tokens":10,"output_tokens":47},"result":"hello"}""";
+        var ev = Assert.IsType<TurnResultEvent>(Assert.Single(StreamJsonParser.Parse(line)));
+        Assert.False(ev.IsError);
+        Assert.Equal("success", ev.Subtype);
+        Assert.Equal(0.062387, ev.CostUsd, precision: 6);
+        Assert.Equal(10, ev.InputTokens);
+        Assert.Equal(47, ev.OutputTokens);
+        Assert.Equal(2318, ev.DurationMs);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not json at all")]
+    [InlineData("{\"type\":\"rate_limit_event\",\"rate_limit_info\":{}}")]
+    [InlineData("{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_name\":\"SessionStart\"}")]
+    [InlineData("{\"truncated\":")]
+    public void UnknownOrMalformedLines_YieldNothing(string line) =>
+        Assert.Empty(StreamJsonParser.Parse(line));
+}

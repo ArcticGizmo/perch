@@ -50,6 +50,7 @@ public partial class App : Application
     private StatsWindow? _statsWindow;
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
+    private SessionConsoleWindow? _sessionConsole;   // PoC: Perch-controlled session (docs/session-control-poc.md)
     private ArcadeMenuWindow? _arcadeWindow;        // shhh
     private SpaceInvadersWindow? _invadersWindow;   // shhh
     private FroggerWindow? _froggerWindow;          // shhh
@@ -577,6 +578,7 @@ public partial class App : Application
         _reactionBubbles?.Close();
         _basketball?.Close();
         _flightWindow?.Close();
+        _sessionConsole?.Close();
         _arcadeWindow?.Close();
         _invadersWindow?.Close();
         _froggerWindow?.Close();
@@ -1449,6 +1451,9 @@ public partial class App : Application
     private void OpenFlightPath() =>
         _flightWindow = WindowHost.ShowOrFocus(_flightWindow, () => new FlightPathWindow(), () => _flightWindow = null);
 
+    private void OpenSessionConsole() =>
+        _sessionConsole = WindowHost.ShowOrFocus(_sessionConsole, () => new SessionConsoleWindow(), () => _sessionConsole = null);
+
     // The reward for long-pressing the brand mark: the arcade chooser. It hands off to one of the three toys
     // below and closes as it does. All are reused like every other aux window.
     private void OpenArcade() =>
@@ -1878,6 +1883,9 @@ public partial class App : Application
         var todosItem = new NativeMenuItem("Todos…");
         todosItem.Click += (_, _) => OpenTodos();
 
+        var sessionConsoleItem = new NativeMenuItem("Session console (PoC)…");
+        sessionConsoleItem.Click += (_, _) => OpenSessionConsole();
+
         // Reads "Check for Updates…" normally; flips to "Update available" once a pending update is
         // detected (see OnUpdateAvailabilityChanged). Clicking it applies the pending update, else checks.
         _updateItem = new NativeMenuItem("Check for Updates…");
@@ -1904,6 +1912,7 @@ public partial class App : Application
                 flightItem,
                 achievementsItem,
                 todosItem,
+                sessionConsoleItem,
                 _updateItem,
                 new NativeMenuItemSeparator(),
                 exitItem,

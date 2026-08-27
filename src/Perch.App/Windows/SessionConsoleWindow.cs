@@ -1,0 +1,348 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Threading;
+using Perch.Avalonia.Theming;
+using Perch.Data.Control;
+
+namespace Perch.Avalonia.Windows;
+
+/// <summary>
+/// PoC: a Perch-<em>controlled</em> Claude Code session — Perch spawns the CLI over the bidirectional
+/// stream-json interface (<see cref="ClaudeSessionController"/>) and renders the conversation as rich
+/// blocks instead of a terminal: streamed assistant text, dimmed thinking, tool chips with results, an
+/// inline permission bar (Allow / Deny / the CLI's suggested mode switch), a live permission-mode
+/// switcher, and interrupt. See <c>docs/session-control-poc.md</c> for scope and findings.
+/// </summary>
+internal sealed class SessionConsoleWindow : Window
+{
+    private readonly TextBox _cwdBox;
+    private readonly ComboBox _modelCombo;
+    private readonly ComboBox _modeCombo;
+    private readonly Button _startButton;
+    private readonly Button _interruptButton;
+    private readonly TextBlock _statusLabel;
+    private readonly StackPanel _transcript;
+    private readonly ScrollViewer _scroll;
+    private readonly Border _permBar;
+    private readonly TextBlock _permLabel;
+    private readonly Button _permAllowMode;
+    private readonly TextBox _input;
+    private readonly Button _sendButton;
+
+    private ClaudeSessionController? _controller;
+    private PermissionRequestEvent? _pendingPermission;
+    private SelectableTextBlock? _streamBlock;                    // live delta accumulator, finalised per text block
+    private readonly Dictionary<string, TextBlock> _toolChips = new();
+    private bool _suppressModeSend;                               // guards combo updates that echo a CLI ack
+    private bool _closed;
+
+    private static readonly string[] Modes = ["default", "plan", "acceptEdits", "bypassPermissions"];
+
+    public SessionConsoleWindow()
+    {
+        Title = "Session console (PoC)";
+        Width = 760;
+        Height = 640;
+        MinWidth = 520;
+        MinHeight = 400;
+        Background = Palette.SurfaceSunkenBrush;
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+
+        _cwdBox = new TextBox
+        {
+            Text = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            PlaceholderText = "Project folder", FontSize = 12, MinWidth = 260,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _modelCombo = new ComboBox
+        {
+            ItemsSource = new[] { "(default model)", "haiku", "sonnet", "opus" }, SelectedIndex = 0,
+            FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+        };
+        _modeCombo = new ComboBox
+        {
+            ItemsSource = Modes, SelectedIndex = 0, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+        };
+        _modeCombo.SelectionChanged += (_, _) => OnModeSelected();
+        _startButton = new Button
+        {
+            Content = "Start session", FontSize = 12, CornerRadius = new CornerRadius(6),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _startButton.Click += (_, _) => StartSession();
+        _interruptButton = new Button
+        {
+            Content = "Interrupt", FontSize = 12, CornerRadius = new CornerRadius(6),
+            VerticalAlignment = VerticalAlignment.Center, IsEnabled = false,
+        };
+        _interruptButton.Click += (_, _) => _controller?.Interrupt();
+        _statusLabel = new TextBlock
+        {
+            Text = "not started", Foreground = Palette.MutedBrush, FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+
+        var toolbar = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 9),
+            Children = { _cwdBox, _modelCombo, _modeCombo, _startButton, _interruptButton, _statusLabel },
+        };
+        var toolbarPanel = new Border { Background = Palette.FormBgBrush, Child = toolbar, [DockPanel.DockProperty] = Dock.Top };
+
+        _transcript = new StackPanel { Spacing = 8, Margin = new Thickness(14, 12) };
+        _scroll = new ScrollViewer { Content = _transcript, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+
+        // Permission bar: hidden until the CLI raises a can_use_tool control request; blocks the turn
+        // until answered, so it sits right above the input where a reply would go.
+        _permLabel = new TextBlock
+        {
+            Foreground = Palette.TitleBrush, FontSize = 12, TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var allow = new Button { Content = "Allow", FontSize = 12, CornerRadius = new CornerRadius(6) };
+        allow.Click += (_, _) => AnswerPermission(true, switchMode: false);
+        _permAllowMode = new Button { Content = "Allow + accept edits", FontSize = 12, CornerRadius = new CornerRadius(6) };
+        _permAllowMode.Click += (_, _) => AnswerPermission(true, switchMode: true);
+        var deny = new Button { Content = "Deny", FontSize = 12, CornerRadius = new CornerRadius(6) };
+        deny.Click += (_, _) => AnswerPermission(false, switchMode: false);
+        var permButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { allow, _permAllowMode, deny } };
+        permButtons.HorizontalAlignment = HorizontalAlignment.Right;
+        var permGrid = new DockPanel { Children = { permButtons, _permLabel } };
+        permButtons[DockPanel.DockProperty] = Dock.Right;
+        _permBar = new Border
+        {
+            Background = Palette.FormBgBrush, BorderBrush = Palette.AwaitingBrush, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 8), Margin = new Thickness(12, 0, 12, 8),
+            Child = permGrid, IsVisible = false, [DockPanel.DockProperty] = Dock.Bottom,
+        };
+
+        _input = new TextBox
+        {
+            PlaceholderText = "Message Claude… (Enter to send, Shift+Enter for a new line)",
+            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontSize = 13,
+            MaxHeight = 120, IsEnabled = false,
+        };
+        _input.KeyDown += OnInputKeyDown;
+        _sendButton = new Button
+        {
+            Content = "Send", FontSize = 12, CornerRadius = new CornerRadius(6), IsEnabled = false,
+            VerticalAlignment = VerticalAlignment.Stretch, Margin = new Thickness(8, 0, 0, 0),
+        };
+        _sendButton.Click += (_, _) => SendPrompt();
+        var inputRow = new DockPanel { Margin = new Thickness(12, 0, 12, 12), Children = { _sendButton, _input } };
+        _sendButton[DockPanel.DockProperty] = Dock.Right;
+        inputRow[DockPanel.DockProperty] = Dock.Bottom;
+
+        Content = new DockPanel { Children = { toolbarPanel, inputRow, _permBar, _scroll } };
+    }
+
+    // ── Session lifecycle ───────────────────────────────────────────────────────
+
+    private void StartSession()
+    {
+        var cwd = _cwdBox.Text?.Trim() ?? "";
+        if (!Directory.Exists(cwd))
+        {
+            AddSystemLine($"Folder not found: {cwd}");
+            return;
+        }
+
+        var model = _modelCombo.SelectedIndex > 0 ? _modelCombo.SelectedItem as string : null;
+        var mode = _modeCombo.SelectedItem as string;
+
+        var controller = new ClaudeSessionController();
+        controller.EventReceived += ev => Dispatcher.UIThread.Post(() => { if (!_closed) HandleEvent(ev); });
+        controller.Exited += (code, err) => Dispatcher.UIThread.Post(() => { if (!_closed) OnSessionExited(code, err); });
+        try
+        {
+            controller.Start(cwd, model, mode);
+        }
+        catch (Exception ex)
+        {
+            AddSystemLine($"Failed to start claude: {ex.Message}");
+            controller.Dispose();
+            return;
+        }
+
+        _controller = controller;
+        _statusLabel.Text = "starting…";
+        _startButton.IsEnabled = false;
+        _cwdBox.IsEnabled = false;
+        _modelCombo.IsEnabled = false;
+        _interruptButton.IsEnabled = true;
+        _input.IsEnabled = true;
+        _sendButton.IsEnabled = true;
+        _input.Focus();
+    }
+
+    private void OnSessionExited(int exitCode, string stderrTail)
+    {
+        AddSystemLine(exitCode == 0 ? "session ended" : $"claude exited ({exitCode}) {stderrTail}".TrimEnd());
+        _statusLabel.Text = "ended";
+        _controller?.Dispose();
+        _controller = null;
+        _pendingPermission = null;
+        _permBar.IsVisible = false;
+        _streamBlock = null;
+        _toolChips.Clear();
+        _startButton.IsEnabled = true;       // the window can host a fresh session
+        _startButton.Content = "New session";
+        _cwdBox.IsEnabled = true;
+        _modelCombo.IsEnabled = true;
+        _interruptButton.IsEnabled = false;
+        _input.IsEnabled = false;
+        _sendButton.IsEnabled = false;
+    }
+
+    // ── Event rendering ─────────────────────────────────────────────────────────
+
+    private void HandleEvent(SessionEvent ev)
+    {
+        switch (ev)
+        {
+            case SessionInitEvent init:
+                _statusLabel.Text = $"{Shorten(init.SessionId)} · {init.Model} · {init.ToolCount} tools";
+                SyncModeCombo(init.PermissionMode);
+                break;
+            case TextDeltaEvent delta:
+                if (_streamBlock is null)
+                {
+                    _streamBlock = MakeText("", Palette.FgBrush);
+                    _transcript.Children.Add(_streamBlock);
+                }
+                _streamBlock.Text += delta.Text;
+                _scroll.ScrollToEnd();
+                break;
+            case AssistantTextEvent text:
+                // The completed block supersedes the delta accumulator (they carry the same content).
+                if (_streamBlock is not null) { _streamBlock.Text = text.Text; _streamBlock = null; }
+                else _transcript.Children.Add(MakeText(text.Text, Palette.FgBrush));
+                _scroll.ScrollToEnd();
+                break;
+            case AssistantThinkingEvent thinking:
+                var clipped = thinking.Text.Length > 400 ? thinking.Text[..400] + "…" : thinking.Text;
+                var block = MakeText(clipped, Palette.MutedBrush);
+                block.FontStyle = FontStyle.Italic;
+                block.FontSize = 12;
+                _transcript.Children.Add(block);
+                _scroll.ScrollToEnd();
+                break;
+            case ToolUseEvent tool:
+                var chip = MakeText($"▸ {tool.Summary}", Palette.MutedBrush);
+                chip.FontSize = 12;
+                if (tool.ToolUseId.Length > 0) _toolChips[tool.ToolUseId] = chip;
+                _transcript.Children.Add(chip);
+                _scroll.ScrollToEnd();
+                break;
+            case ToolResultEvent result:
+                if (_toolChips.Remove(result.ToolUseId, out var owner))
+                {
+                    if (result.IsError)
+                    {
+                        owner.Text += $" — {result.Preview}";
+                        owner.Foreground = Palette.ErrorBrush;
+                    }
+                    else owner.Text += " ✓";
+                }
+                break;
+            case PermissionRequestEvent permission:
+                _pendingPermission = permission;
+                var what = permission.Description.Length > 0 ? permission.Description : permission.InputJson;
+                _permLabel.Text = $"Allow {permission.ToolName}? {what}";
+                _permAllowMode.IsVisible = permission.SuggestedMode == "acceptEdits";
+                _permBar.IsVisible = true;
+                break;
+            case ModeChangedEvent mode:
+                SyncModeCombo(mode.Mode);
+                AddSystemLine($"permission mode → {mode.Mode}");
+                break;
+            case TurnResultEvent result:
+                _streamBlock = null;
+                AddSystemLine(result.IsError
+                    ? $"turn failed ({result.Subtype})"
+                    : $"turn done · ${result.CostUsd:0.00} · {result.OutputTokens} out tokens");
+                break;
+        }
+    }
+
+    private void AnswerPermission(bool allow, bool switchMode)
+    {
+        if (_pendingPermission is not { } request || _controller is not { } controller) return;
+        controller.RespondToPermission(request, allow);
+        if (allow && switchMode && request.SuggestedMode is { } mode) controller.SetPermissionMode(mode);
+        AddSystemLine($"{(allow ? "allowed" : "denied")} {request.ToolName}");
+        _pendingPermission = null;
+        _permBar.IsVisible = false;
+    }
+
+    // ── Input ───────────────────────────────────────────────────────────────────
+
+    private void OnInputKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            SendPrompt();
+            e.Handled = true;
+        }
+    }
+
+    private void SendPrompt()
+    {
+        var text = _input.Text?.Trim();
+        if (string.IsNullOrEmpty(text) || _controller is not { IsRunning: true } controller) return;
+        controller.SendPrompt(text);
+        _input.Text = "";
+
+        var bubble = new Border
+        {
+            Background = Palette.OverlayRowHoverBrush, CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10, 6), Child = MakeText(text, Palette.TitleBrush),
+        };
+        _transcript.Children.Add(bubble);
+        _scroll.ScrollToEnd();
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────────────
+
+    private void OnModeSelected()
+    {
+        if (_suppressModeSend || _controller is not { IsRunning: true } controller) return;
+        if (_modeCombo.SelectedItem is string mode) controller.SetPermissionMode(mode);
+    }
+
+    private void SyncModeCombo(string mode)
+    {
+        var index = Array.IndexOf(Modes, mode);
+        if (index < 0 || index == _modeCombo.SelectedIndex) return;
+        _suppressModeSend = true;
+        _modeCombo.SelectedIndex = index;
+        _suppressModeSend = false;
+    }
+
+    private void AddSystemLine(string text)
+    {
+        var line = MakeText(text, Palette.MutedBrush);
+        line.FontSize = 11;
+        _transcript.Children.Add(line);
+        _scroll.ScrollToEnd();
+    }
+
+    private static SelectableTextBlock MakeText(string text, IBrush brush) => new()
+    {
+        Text = text, Foreground = brush, FontSize = 13, TextWrapping = TextWrapping.Wrap,
+    };
+
+    private static string Shorten(string sessionId) => sessionId.Length > 8 ? sessionId[..8] : sessionId;
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _closed = true;
+        _controller?.Dispose();   // Stop(): stdin close + tree kill; the session stays resumable on disk
+        _controller = null;
+        base.OnClosed(e);
+    }
+}
