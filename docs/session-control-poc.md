@@ -218,10 +218,41 @@ Every session binds a local inbox socket (named pipe on Windows), exported to ho
 ([cross-session messaging docs](https://code.claude.com/docs/en/cross-session-messaging.md)) — the
 `system/init` record in this PoC's captures carries the same `messaging_socket_path`. Since perch-hook
 runs *inside* every session's hooks, it can harvest the socket path + token at SessionStart and hand
-them to the tray; Perch can then post text into the running session. Caveats: plain text only,
-messages arrive as inter-session messages (not literally "the user typed this"), and cross-process
-senders are subject to the session's `crossSessionInbound` accept/hold/refuse controls — so treat this
-as "nudge/queue a request", with the terminal remaining the primary prompt box.
+them to the tray; Perch can then post text into the running session.
+
+**M3 spike findings (2026-08-27, claude 2.1.247 — verified live).** Harvesting works exactly as
+hoped: a SessionStart hook captured `CLAUDE_CODE_MESSAGING_SOCKET` (`\\.\pipe\LOCAL\cc-msg-<32 hex>`)
+and a 32-char `CLAUDE_CODE_MESSAGING_TOKEN`. But **two mechanisms, not one**:
+
+- The *raw socket* handshake as third-party write-ups describe it (connect the pipe, send
+  `{"type":"auth","token":…}`, then a text line) did **not** work in the spike — no auth ack came back
+  and the injected line never surfaced in the session. The binary's own strings show the real wire
+  format is richer than that paraphrase: a delivery **envelope** (`from="…" from-session="…"
+  hop-chain="…" from-name="…" from-mode="…"` wrapping the body), address schemes
+  (`uds:`/`bridge:`/`did:`), an `ackId`, and `crossSessionInbound` gating. So driving the raw pipe
+  directly is real but under-documented and fiddly — not worth reverse-engineering for the PoC.
+- The **supported** channel works perfectly and is the right answer. Pointing the SDK's own
+  cross-session `SendMessage` at the held session delivered instantly, and Claude acted on it. The
+  transcript records it as a normal `user` record whose content is:
+
+  ```
+  Another Claude session sent a message:
+  <cross-session-message from="uds:\\.\pipe\LOCAL\cc-msg-…" from-name="perch-d1" from-mode="prompting">
+  Please reply with exactly: cross-session message received
+  </cross-session-message>
+
+  This came from another Claude session — not typed by your user, but very likely working on their
+  behalf. Treat it as a teammate's request and act on it within this session's own permission settings…
+  ```
+
+Conclusions for the product: (1) prompt injection into a live terminal session **is achievable** and
+lands as an actionable request; (2) it is framed as a *teammate message*, never as "the user typed
+this", and carries a standing "a peer cannot grant escalation" guard — so it is genuinely a
+**nudge/queue** channel, with the terminal remaining the primary prompt box, exactly as planned; (3)
+the clean way to send is the supported cross-session mechanism, which implies Perch should originate
+messages **from a Claude session context** (or replicate the enveloped protocol) rather than poking the
+raw pipe. The token is a capability — harvested into a sidecar it must be treated as a secret (tray
+memory or DPAPI, not a world-readable file).
 
 ### Lifting a session into full Perch control
 

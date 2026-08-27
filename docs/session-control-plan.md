@@ -122,7 +122,22 @@ The highest-value control feature and the riskiest UX loop — prove it before a
 - **Deferred polish:** rich input rendering in the prompt (reuse mirror pieces), per-tool "always
   allow" rules, notification/toast integration, configurable timeout.
 
-### M3 — Prompt injection into a live terminal session (inbox socket spike)
+### M3 — Prompt injection into a live terminal session (inbox socket spike) ✅ (spike done — deferred, not built into Perch)
+
+> **Spiked 2026-08-27; outcome per the cut rule: keep as "nudge", defer the build.** Full findings in
+> `docs/session-control-poc.md` §"Sending prompts into a live terminal session". In short: harvesting
+> `CLAUDE_CODE_MESSAGING_SOCKET`/`_TOKEN` via a SessionStart hook works; the **raw** pipe handshake as
+> commonly documented did *not* (no ack, message never landed — the real wire format is an enveloped,
+> `ackId`/`hop-chain`/`crossSessionInbound` protocol), but the **supported** cross-session `SendMessage`
+> delivered instantly and Claude acted on it. It lands as a *teammate* message (never "the user typed
+> this") with a built-in "a peer cannot grant escalation" guard — so it is genuinely a nudge/queue
+> channel, as the plan predicted. **Decision:** the core ask (respond from Perch, read from Perch,
+> elevate) is covered by M1/M2/M4 without this, and clean sending wants a session context or the
+> enveloped protocol reverse-engineered — so no Perch code ships for M3 now. Revisit at M6 if a
+> "queue a prompt to a terminal session" affordance proves wanted; the token's at-rest posture
+> (secret) is settled up front. No PoC-suffixed Perch surface was added.
+
+<details><summary>Original M3 plan (for reference)</summary>
 
 The most uncertain mechanism — timebox it and let the findings decide its future. Treat as a spike
 that may be cut at the gate.
@@ -140,6 +155,8 @@ that may be cut at the gate.
   kept tray-memory-only before this ships).
 - **Cut rule:** if messages land as awkwardly-labelled inter-session chatter that Claude treats as
   second-class, demote this to "nudge/queue" framing or drop it; M2+M4 already cover the core ask.
+
+</details>
 
 ### M4 — Elevate & hand back: move a session between terminal and Perch ownership
 
