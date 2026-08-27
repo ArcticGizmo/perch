@@ -1107,51 +1107,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         catch { return null; }
     }
 
-    /// <summary>Supplies the resolved host-app icon for the origin glyph, keyed by the IDE host's executable
-    /// path or <see cref="DesktopOriginKey"/> (<paramref name="pngFile"/> null → no icon, fall back to the
-    /// vector mark). The app resolves these off-thread and posts them here; repaints when a new icon lands.
-    /// Icons are converted to greyscale so the origin mark stays quiet.</summary>
+    /// <summary>Supplies the resolved host-app icon for the origin/status-dot slot, keyed by the IDE host's
+    /// executable path or <see cref="DesktopOriginKey"/> (<paramref name="pngFile"/> null → no icon, fall
+    /// back to the vector mark). The app resolves these off-thread and posts them here; repaints when a new
+    /// icon lands. Drawn in full colour — it stands in for the status dot, so the colour is the point.</summary>
     internal void SetOriginIcon(string key, string? pngFile)
     {
         if (string.IsNullOrEmpty(key)) return;
         // Already have a usable icon for this key — nothing to do (avoids re-decoding the same PNG).
         if (_originIcons.TryGetValue(key, out var existing) && existing is not null) return;
-        var bmp = DecodeGrayIcon(pngFile);
+        var bmp = DecodeIcon(pngFile);
         _originIcons[key] = bmp;
         if (bmp is not null) InvalidateVisual();
-    }
-
-    // Decodes an icon PNG and desaturates it to greyscale (keeping alpha), so the origin marks read as quiet
-    // monochrome host tags rather than pulling attention with full brand colour. Pixel-walked via Marshal
-    // (no unsafe); grey = R·0.299 + G·0.587 + B·0.114. Channel order doesn't matter — the result sets R=G=B —
-    // and premultiplied alpha stays consistent (grey is a linear combination of the same channels).
-    private static Bitmap? DecodeGrayIcon(string? file)
-    {
-        if (string.IsNullOrEmpty(file)) return null;
-        try
-        {
-            using var src = new Bitmap(file);
-            var size = src.PixelSize;
-            if (size.Width <= 0 || size.Height <= 0) return null;
-
-            var wb = new WriteableBitmap(size, src.Dpi, PixelFormat.Bgra8888, AlphaFormat.Premul);
-            using (var fb = wb.Lock())
-            {
-                int len = fb.RowBytes * size.Height;
-                src.CopyPixels(new PixelRect(0, 0, size.Width, size.Height), fb.Address, len, fb.RowBytes);
-
-                var bytes = new byte[len];
-                System.Runtime.InteropServices.Marshal.Copy(fb.Address, bytes, 0, len);
-                for (int i = 0; i + 3 < len; i += 4)
-                {
-                    byte gray = (byte)((bytes[i] * 29 + bytes[i + 1] * 150 + bytes[i + 2] * 77) >> 8);
-                    bytes[i] = bytes[i + 1] = bytes[i + 2] = gray;   // keep bytes[i+3] = alpha
-                }
-                System.Runtime.InteropServices.Marshal.Copy(bytes, 0, fb.Address, len);
-            }
-            return wb;
-        }
-        catch { return null; }
     }
 
     /// <summary>Show/hide the clickable artifact glyph (the session still tracks its artifacts).</summary>
@@ -2539,7 +2506,27 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             SessionStatus.ApiError       => ApiErrorColor,
             _                            => IdleColor,
         };
-        ctx.DrawEllipse(new SolidColorBrush(dotColor), null, new Point(HorizPad + 4, nameMidY), 4, 4);
+        // Leftmost indicator. For a session hosted by an app — an IDE (VS Code, Cursor, …) or Claude Desktop
+        // — the status dot is replaced by that app's own icon: recognisable at a glance, no extra width, and
+        // a little fun. The real icon (in colour) is used once resolved; until then, or when it can't be
+        // resolved, a brand vector mark / monitor glyph stands in. Plain terminal and background/SDK sessions
+        // keep the coloured status dot. (Status stays legible in the row's status text on the right.)
+        string? hostKey = session.IsDesktop ? DesktopOriginKey
+                        : session.IsIde     ? session.IdeHost!.Executable
+                        : null;
+        if (session.IsDesktop || session.IsIde)
+        {
+            var hostIcon = hostKey is not null && _originIcons.TryGetValue(hostKey, out var hb) ? hb : null;
+            if (hostIcon is not null)      DrawOriginBitmap(ctx, HorizPad, nameMidY, hostIcon);
+            else if (session.IsDesktop)    DrawDesktopIcon(ctx, HorizPad, nameMidY);
+            else                           DrawIdeIcon(ctx, HorizPad, nameMidY, session.IdeHost!.Kind);
+            _originRects[rowIndex]  = new Rect(HorizPad - 1, nameMidY - 8, 16, 16);
+            _originLabels[rowIndex] = session.IsDesktop ? "Claude Desktop" : session.IdeHost!.DisplayName;
+        }
+        else
+        {
+            ctx.DrawEllipse(new SolidColorBrush(dotColor), null, new Point(HorizPad + 4, nameMidY), 4, 4);
+        }
 
         string statusText = session.Status switch
         {
@@ -2567,11 +2554,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double artW = hasArtifacts ? ArtifactIconWidth : 0;
         double mailW = session.ExternalNotify ? MailIconWidth : 0;
         double rcW   = session.RemoteControlled ? RcIconWidth : 0;
-        // Origin glyph: a bot for background/SDK runs, a monitor for Claude Desktop sessions, or the host
-        // editor's mark for an IDE-hosted terminal (VS Code, Cursor, …). Mutually exclusive — a session has
-        // one origin — so they share one slot in the cluster. Bot/desktop (from the entrypoint field) win
-        // over the IDE mark for the rare background/desktop run that happens to sit under an IDE.
-        double originW  = (session.IsBackground || session.IsDesktop || session.IsIde) ? BotIconWidth : 0;
+        // Origin glyph: only background / SDK runs still get a cluster glyph (the bot). IDE- and
+        // Claude-Desktop-hosted sessions now show their host's icon in the status-dot slot instead (see the
+        // leftmost-indicator block above), so they no longer reserve a cluster slot — the name reclaims it.
+        double originW  = session.IsBackground ? BotIconWidth : 0;
         double noteW = showNote ? NoteIconWidth : 0;
         bool showPr = _showPullRequests && session.PullRequest is not null;
         double prW  = showPr ? PrIconWidth : 0;
@@ -2632,29 +2618,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (originW > 0)
         {
             double originX = HorizPad + 14 + warnW + artW + mailW + rcW;
-            if (session.IsDesktop)
-            {
-                // The real Claude Desktop app icon (greyscale) when resolved; otherwise the monitor glyph.
-                if (_originIcons.TryGetValue(DesktopOriginKey, out var dicon) && dicon is not null)
-                {
-                    DrawOriginBitmap(ctx, originX, nameMidY, dicon);
-                    _originRects[rowIndex] = new Rect(originX - 2, nameMidY - 9, BotIconWidth, 18);
-                    _originLabels[rowIndex] = "Claude Desktop";
-                }
-                else DrawDesktopIcon(ctx, originX, nameMidY);
-            }
-            else if (session.IsBackground) DrawBotIcon(ctx, originX, nameMidY);
-            else if (session.IdeHost is { } ide)
-            {
-                // The real host-editor icon extracted from its executable when we have it; otherwise the
-                // brand vector mark.
-                if (ide.Executable is { } key && _originIcons.TryGetValue(key, out var icon) && icon is not null)
-                    DrawOriginBitmap(ctx, originX, nameMidY, icon);
-                else
-                    DrawIdeIcon(ctx, originX, nameMidY, ide.Kind);
-                _originRects[rowIndex] = new Rect(originX - 2, nameMidY - 9, BotIconWidth, 18);
-                _originLabels[rowIndex] = ide.DisplayName;
-            }
+            DrawBotIcon(ctx, originX, nameMidY);
         }
         if (noteW > 0)
         {
@@ -2970,12 +2934,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
     }
 
-    // Draws the real host-app icon (rendered from its executable) fit into the origin slot, centred on the
-    // row's name baseline. Shell-extracted icons come out vertically flipped (see the quick-links strip),
+    // Draws the real host-app icon (rendered from its executable) fit into the status-dot slot, centred on
+    // the row's name baseline. Shell-extracted icons come out vertically flipped (see the quick-links strip),
     // so mirror about the horizontal axis to right them.
     private static void DrawOriginBitmap(DrawingContext ctx, double x, double midY, Bitmap icon)
     {
-        const double box = 14;
+        const double box = 13;
         var src = icon.Size;
         double scale = Math.Min(box / src.Width, box / src.Height);
         double w = src.Width * scale, h = src.Height * scale;
