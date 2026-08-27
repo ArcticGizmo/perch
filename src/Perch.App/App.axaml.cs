@@ -1822,6 +1822,7 @@ public partial class App : Application
     private void RefreshOriginIcons(IReadOnlyList<ClaudeSession> sessions)
     {
         if (_overlay is null) return;
+        if (_appSettings?.ShowIdeStatusIcons == false) return;   // setting off — don't render icons we won't draw
 
         // (cacheKey, iconName, resolvedPath) tuples to resolve. IDEs render straight off the exe path (empty
         // name skips the slow Start-Menu lookup); Claude Desktop is a Store app whose real logo only resolves

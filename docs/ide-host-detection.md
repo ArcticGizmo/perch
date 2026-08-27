@@ -72,8 +72,12 @@ a bare base name, an inaccessible process, or a Start-Menu name that doesn't mat
 dot names the host ("Visual Studio Code", "PyCharm", …). `HeadlessRenderer.ResolveIdeIcons` wires the same
 resolution into `render` mode so it's a faithful preview.
 
-No user setting — always on. Detection cost is one cached process snapshot per scan on Windows (plus a one-off
-icon render per distinct host, and a small tint per host×status); nothing on other heads.
+Gated by the **"IDE status icons"** setting (`AppSettings.ShowIdeStatusIcons`, `SettingSurface.SessionRow`,
+default **on**): off falls back to the plain coloured status dot for host rows (the host is still detected)
+and skips the icon resolution. Registry entry `ide-status-icons`; canvas gate `SetShowIdeStatusIcons` wired
+through `OverlaySettingsGates.Apply` (live overlay + Settings preview). Detection cost is one cached process
+snapshot per scan on Windows (plus, while on, a one-off icon render per distinct host and a small tint per
+host×status); nothing on other heads.
 
 ## Not done / possible follow-ups
 

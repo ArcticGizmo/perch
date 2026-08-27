@@ -757,6 +757,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showStuckWarnings = true;
     private bool _showArtifacts = true;
     private bool _showMarkdown;   // off by default; the "Markdown files…" menu item is always available
+    private bool _showIdeStatusIcons = true;  // host app icon in place of the status dot (IDE / Claude Desktop)
     private bool _showWaitingTimer = true;
     private float _ctxYellow = 0.60f, _ctxOrange = 0.75f, _ctxRed = 0.90f;
 
@@ -1178,6 +1179,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (_showMarkdown == show) return;
         _showMarkdown = show;
+        InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the host app icon (IDE / Claude Desktop) in place of the leftmost status dot. Off
+    /// draws the plain coloured dot for those sessions instead; the host is still detected.</summary>
+    public void SetShowIdeStatusIcons(bool show)
+    {
+        if (_showIdeStatusIcons == show) return;
+        _showIdeStatusIcons = show;
         InvalidateVisual();
     }
 
@@ -2559,7 +2569,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                         : session.IsIde     ? session.IdeHost!.Executable
                         : null;
         double dotCx = HorizPad + 4;   // the status-dot centre — host icons line up on it
-        if (session.IsDesktop || session.IsIde)
+        if (_showIdeStatusIcons && (session.IsDesktop || session.IsIde))
         {
             var hostBrush = new SolidColorBrush(dotColor);
             var tinted = hostKey is not null ? TintedIcon(hostKey, dotColor) : null;

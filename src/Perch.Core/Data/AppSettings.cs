@@ -216,6 +216,12 @@ internal sealed class AppSettings
     // Defaults to false (off); a missing key keeps it off.
     public bool ShowMarkdown { get; set; }
 
+    // Whether a session hosted by an app (an IDE — VS Code, Cursor, a JetBrains IDE — or Claude Desktop)
+    // replaces its leftmost status dot with that app's icon, recoloured to the status colour. Off falls back
+    // to the plain coloured status dot for those sessions (the host is still detected, just not shown).
+    // Defaults to true; a missing key keeps it on.
+    public bool ShowIdeStatusIcons { get; set; } = true;
+
     // Whether to show the now-playing media controller strip on the overlay — what's currently playing
     // (from the Windows media session: Spotify, a browser media tab, etc.) plus previous / play-pause /
     // next controls. Off by default (opt-in); the strip is only visible while something is actually
