@@ -40,6 +40,10 @@ public partial class App : Application
     private DaemonListWindow? _daemonListWindow;
     private QuickLinkLauncher? _quickLinkLauncher;
     private GitKrakenLauncher? _gitKrakenLauncher;
+    // Executable paths whose host-editor icon we've already kicked off resolving, so a session scan doesn't
+    // re-request the same icon every tick. IDE executables are few and stable, so this only ever holds a
+    // handful of entries.
+    private readonly HashSet<string> _requestedIdeIcons = new(StringComparer.OrdinalIgnoreCase);
     private LiveOverlayWindow? _overlay;
     private SettingsWindow? _settings;
     private OnboardingWindow? _onboardingWindow;
@@ -261,8 +265,9 @@ public partial class App : Application
                 _overlay!.Canvas.Update(sessions);
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
+                RefreshOriginIcons(sessions);
                 MaybeHandleAutoClose(sessions.Count);
-            }, Services.Replay.ReplaySession.Current?.Projector);
+            }, Services.Replay.ReplaySession.Current?.Projector, PlatformServices.IdeHostDetector);
 
             // One-shot grace timer: fires AutoCloseGraceMs after the last session ends; if still none by
             // then, an auto-started tray exits. Armed/cancelled from the scan callback above.
@@ -1805,6 +1810,44 @@ public partial class App : Application
         {
             var icons = links.Select(l => launcher.IconFile(l, 32)).ToList();
             Dispatcher.UIThread.Post(() => _overlay?.Canvas.SetQuickLinks(links, icons));
+        });
+    }
+
+    // Renders the real host-app icon for the origin glyph — an IDE-hosted session (from the editor's
+    // executable) or a Claude Desktop session (from the Claude Desktop app) — via the same IAppIconProvider
+    // the quick-links strip uses, and hands it to the overlay, which greyscales it and draws it in place of
+    // the vector/monitor mark. Each distinct host is resolved once, off the UI thread; until an icon lands
+    // the canvas shows its fallback. An IDE with only a bare base name (the detector couldn't resolve the
+    // full path) is skipped, since there's nothing for the shell to render.
+    private void RefreshOriginIcons(IReadOnlyList<ClaudeSession> sessions)
+    {
+        if (_overlay is null) return;
+
+        // (cacheKey, iconName, resolvedPath) tuples to resolve. IDEs render straight off the exe path (empty
+        // name skips the slow Start-Menu lookup); Claude Desktop is a Store app whose real logo only resolves
+        // by its Start-Menu display name, so it goes by name with no path.
+        var pending = new List<(string Key, string Name, string? Path)>();
+
+        foreach (var exe in sessions
+                     .Select(s => s.IdeHost?.Executable)
+                     .Where(exe => !string.IsNullOrEmpty(exe) && (exe!.Contains('\\') || exe.Contains('/')))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+            if (_requestedIdeIcons.Add(exe!))
+                pending.Add((exe!, "", exe));
+
+        if (sessions.Any(s => s.IsDesktop) && _requestedIdeIcons.Add(OverlayCanvas.DesktopOriginKey))
+            pending.Add((OverlayCanvas.DesktopOriginKey, "Claude", null));
+
+        if (pending.Count == 0) return;
+
+        var provider = PlatformServices.AppIconProvider;
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            foreach (var (key, name, path) in pending)
+            {
+                var png = provider.GetIconFile(name, null, path, 32);
+                Dispatcher.UIThread.Post(() => _overlay?.Canvas.SetOriginIcon(key, png));
+            }
         });
     }
 

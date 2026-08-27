@@ -88,6 +88,15 @@ internal static class SampleData
             // A background/SDK session (Entrypoint != "cli") -> grouped under the Autonomous section.
             new ClaudeSession("7788", "s5", SessionStatus.Running, @"C:\src\bot", "nightly-bot", now,
                 Entrypoint: "sdk-py"),
+            // IDE-hosted sessions — each marked with its host editor's origin glyph. A coloured brand
+            // (VS Code), a monochrome one (Cursor), and a JetBrains IDE; the Windsurf sail and the generic
+            // "</>" fallback are exercised by the unit tests / render captures.
+            new ClaudeSession("8801", "s8", SessionStatus.Running, @"C:\src\ext", "extension", now,
+                IdeHost: new IdeHost(IdeHostKind.VsCode, "Visual Studio Code", "code")),
+            new ClaudeSession("8802", "s9", SessionStatus.Idle, @"C:\src\agent", "agent", now,
+                IdeHost: new IdeHost(IdeHostKind.Cursor, "Cursor", "cursor")),
+            new ClaudeSession("8803", "s10", SessionStatus.AwaitingInput, @"C:\src\svc", "service", now,
+                IdeHost: new IdeHost(IdeHostKind.JetBrains, "PyCharm", "pycharm64")),
         ];
     }
 

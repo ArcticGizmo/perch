@@ -147,7 +147,8 @@ public record ClaudeSession(
     ApiFailure? ApiFailure = null,                                     // set iff Status == ApiError
     PullRequestInfo? PullRequest = null,                              // the PR for Cwd's branch, if any
     JiraTicketInfo? JiraTicket = null,                               // the Jira ticket for Cwd's branch, if any
-    bool HasProducedMarkdown = false                                 // session wrote/edited at least one .md file
+    bool HasProducedMarkdown = false,                                // session wrote/edited at least one .md file
+    IdeHost? IdeHost = null                                          // the editor/IDE hosting the session, if any
 )
 {
     /// <summary>
@@ -289,6 +290,19 @@ public record ClaudeSession(
         !string.IsNullOrEmpty(Entrypoint)
         && !string.Equals(Entrypoint, "cli", StringComparison.OrdinalIgnoreCase)
         && !IsDesktop;
+
+    /// <summary>
+    /// The editor/IDE hosting this session — VS Code, Cursor, Windsurf, a JetBrains IDE, … — when it runs
+    /// inside one (or inside that IDE's integrated / an embedded terminal), or null for a plain terminal.
+    /// Unlike <see cref="IsDesktop"/>/<see cref="IsBackground"/> this can't be read from the session file
+    /// (Claude Code records <c>entrypoint: "cli"</c> either way); it's resolved from process ancestry by
+    /// <see cref="Perch.Platform.IIdeHostDetector"/>. The overlay marks it with the IDE's own glyph in the
+    /// origin slot.
+    /// </summary>
+    public IdeHost? IdeHost { get; init; } = IdeHost;
+
+    /// <summary>True when this session was launched from / lives inside a recognised editor or IDE.</summary>
+    public bool IsIde => IdeHost != null;
 
     /// <summary>
     /// True when this session has opted in to external (ntfy) notifications — i.e. its session file

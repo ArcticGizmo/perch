@@ -72,6 +72,9 @@ public static class Palette
         BrandHoverBrush.Color  = Fixed.BrandHover.ToColor();
         JiraBrush.Color        = Fixed.Jira.ToColor();
         BasketballBrush.Color  = Fixed.Basketball.ToColor();
+        VsCodeBrush.Color      = Fixed.VsCode.ToColor();
+        WindsurfBrush.Color    = Fixed.Windsurf.ToColor();
+        JetBrainsBrush.Color   = Fixed.JetBrains.ToColor();
     }
 
     // The overlay panel is painted as a translucent scrim over the desktop; this is its fixed alpha.
@@ -101,6 +104,11 @@ public static class Palette
 
     // The desktop-basketball ball; a fixed identity hue, the same under every theme.
     public static Color Basketball  => Fixed.Basketball.ToColor();
+
+    // IDE-host brand hues for the origin glyph; fixed brand identities, the same under every theme.
+    public static Color VsCode      => Fixed.VsCode.ToColor();
+    public static Color Windsurf    => Fixed.Windsurf.ToColor();
+    public static Color JetBrains   => Fixed.JetBrains.ToColor();
 
     // Usage bar / status palette (same thresholds the overlay uses) — now themeable, from the active theme.
     public static Color Green        => Active.StatusRunning.ToColor();
@@ -188,4 +196,7 @@ public static class Palette
     public static readonly SolidColorBrush BrandHoverBrush = new(FixedColors.Default.BrandHover.ToColor());
     public static readonly SolidColorBrush JiraBrush      = new(FixedColors.Default.Jira.ToColor());
     public static readonly SolidColorBrush BasketballBrush = new(FixedColors.Default.Basketball.ToColor());
+    public static readonly SolidColorBrush VsCodeBrush    = new(FixedColors.Default.VsCode.ToColor());
+    public static readonly SolidColorBrush WindsurfBrush  = new(FixedColors.Default.Windsurf.ToColor());
+    public static readonly SolidColorBrush JetBrainsBrush = new(FixedColors.Default.JetBrains.ToColor());
 }

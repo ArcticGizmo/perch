@@ -27,6 +27,12 @@ public sealed record FixedColors
     public required Rgb Jira { get; init; }
     /// <summary>The desktop-basketball ball. A basketball is basketball-orange under every theme.</summary>
     public required Rgb Basketball { get; init; }
+    /// <summary>VS Code brand blue — the IDE-host glyph for a VS Code (family) session.</summary>
+    public required Rgb VsCode { get; init; }
+    /// <summary>Windsurf brand teal — the IDE-host glyph for a Windsurf session.</summary>
+    public required Rgb Windsurf { get; init; }
+    /// <summary>JetBrains brand magenta — the IDE-host glyph for a JetBrains IDE session.</summary>
+    public required Rgb JetBrains { get; init; }
 
     /// <summary>The one true fixed palette.</summary>
     public static readonly FixedColors Default = new()
@@ -36,6 +42,9 @@ public sealed record FixedColors
         Danger     = new(248, 113, 113),
         Jira       = new(38, 132, 255),   // Jira brand blue (#2684FF)
         Basketball = new(232, 118, 42),   // leather orange; reads on light and dark
+        VsCode     = new(41, 143, 226),   // VS Code azure; a mid blue that clears the 3:1 floor on both
+        Windsurf   = new(13, 148, 136),   // Windsurf teal (teal-600); clears the 3:1 floor on light + dark
+        JetBrains  = new(214, 63, 140),   // JetBrains magenta
     };
 
     /// <summary>These colours as seen under a colour-vision deficiency, for the designer's live preview
@@ -50,6 +59,9 @@ public sealed record FixedColors
             Danger     = CvdSim.Simulate(Danger, type),
             Jira       = CvdSim.Simulate(Jira, type),
             Basketball = CvdSim.Simulate(Basketball, type),
+            VsCode     = CvdSim.Simulate(VsCode, type),
+            Windsurf   = CvdSim.Simulate(Windsurf, type),
+            JetBrains  = CvdSim.Simulate(JetBrains, type),
         };
     }
 

@@ -153,6 +153,7 @@ internal sealed class SessionMonitor : IDisposable
     // How we decide a session's pid is still alive. Defaults to the real OS probe; replay swaps in one
     // backed by the projector so recorded (dead) pids read as alive within their active window.
     private readonly IProcessProbe _processProbe;
+    private readonly IIdeHostDetector _ideDetector;
 
     // PIDs we have an exit subscription for, keyed by the same string PID used everywhere else.
     private readonly Dictionary<string, Process> _trackedProcesses = new();
@@ -210,9 +211,12 @@ internal sealed class SessionMonitor : IDisposable
 
     /// <param name="processProbe">How pid liveness is tested. Defaults to the real OS probe; replay
     /// injects one backed by the recording so dead recorded pids report alive within their window.</param>
-    public SessionMonitor(IProcessProbe? processProbe = null)
+    /// <param name="ideDetector">How a session's host IDE is resolved from its process ancestry. Defaults to
+    /// the no-op detector (no IDE glyph); the app injects the platform implementation.</param>
+    public SessionMonitor(IProcessProbe? processProbe = null, IIdeHostDetector? ideDetector = null)
     {
         _processProbe = processProbe ?? SystemProcessProbe.Instance;
+        _ideDetector = ideDetector ?? NullIdeHostDetector.Instance;
         _debounceTimer = new System.Threading.Timer(_ => ChangeDetected?.Invoke());
         // A background git refresh landing with new numbers should repaint the overlay — treat it like
         // any other change trigger. The rescan re-reads the (now-fresh) cache, so it settles at once.
@@ -800,6 +804,12 @@ internal sealed class SessionMonitor : IDisposable
                 jiraTicket = JiraLink.Resolve(
                     JiraLink.BranchFromHeadRef(PrStatusService.ReadHeadRef(cwd)), JiraSubdomain, JiraProjectFilter);
 
+            // Which editor/IDE hosts this session (VS Code, Cursor, a JetBrains IDE, …), resolved from the
+            // session process's ancestry. Nothing in the session file distinguishes it — Claude Code records
+            // entrypoint "cli" whether it's a bare terminal or an IDE's integrated one — so this is the only
+            // signal. The detector is a cheap, snapshot-cached, never-throwing OS walk (no-op off Windows).
+            var ideHost = int.TryParse(pid, out var pidNum) ? _ideDetector.Detect(pidNum) : null;
+
             var session = new ClaudeSession(
                 pid,
                 sessionId,
@@ -829,7 +839,8 @@ internal sealed class SessionMonitor : IDisposable
                 apiFailure,
                 pullRequest,
                 jiraTicket,
-                producedMarkdown
+                producedMarkdown,
+                ideHost
             );
 
             if (status == SessionStatus.NeedsAttention
