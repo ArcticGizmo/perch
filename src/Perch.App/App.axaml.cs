@@ -613,6 +613,16 @@ public partial class App : Application
     // isn't done, and rescans so the overlay refreshes.
     private void FocusSession(ClaudeSession session)
     {
+        // A session Perch owns over stream-json lives in the console window, not a terminal — bring that
+        // forward instead of hunting for a terminal that doesn't exist (session-control M5).
+        if (Perch.Data.Control.ControlledSessions.Owns(session.SessionId))
+        {
+            OpenSessionConsole();
+            _monitorHost?.Acknowledge(session.Pid);
+            _monitorHost?.Rescan();
+            return;
+        }
+
         if (int.TryParse(session.Pid, out int pid))
         {
             if (session.IsDesktop)

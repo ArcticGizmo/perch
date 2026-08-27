@@ -187,7 +187,18 @@ that may be cut at the gate.
   proves lossy, elevation needs a cooperative exit (e.g. inbox-socket nudge from M3, or user exits
   manually and Perch offers "continue here" on the now-dead session).
 
-### M5 — Ownership console: interactive-parity essentials
+### M5 — Ownership console: interactive-parity essentials ✅ (partial — core done, two items deferred)
+
+> **Landed 2026-08-27.** Done: assistant answers render through the block-level `MarkdownView`
+> (code panels, tables, headings — verified via a new `session_console_1x.png` capture); overlay clicks
+> on a Perch-owned session id route to the console instead of hunting for a terminal (`FocusSession`
+> early-returns via `ControlledSessions.Owns`, killing the "No window to focus" toast); a queued-prompt
+> indicator in the status line (stream-json queues prompts sent mid-turn). Already covered earlier:
+> Perch-owned sessions skip the valet (`ControlledSessions`, M2). **Deferred within M5** (need a
+> protocol spike, not just UI): `AskUserQuestion` as a first-class choice UI and plan-mode approval —
+> how these arrive over stream-json (a tool_use that auto-runs? a control request?) isn't established
+> yet, so building buttons would be guessing. Tracked into the M6 gate. Still needs a human pass:
+> dogfooding a long real session end-to-end from the console.
 
 Make the M0 console honest enough for daily dogfooding — still function over form.
 

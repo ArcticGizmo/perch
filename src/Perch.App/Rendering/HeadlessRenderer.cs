@@ -445,6 +445,10 @@ internal static class HeadlessRenderer
         // dimmed thinking, and tool expanders (one collapsed, one expanded with a stitched result).
         RenderHistoryReadable(outDir);
 
+        // Perch-controlled session console (session-control M0/M5): the rich chat surface with
+        // Markdown-rendered assistant answers, dimmed thinking, and tool chips with results.
+        RenderSessionConsole(outDir);
+
         // The project-wide Markdown quick-open palette (VS Code-style fuzzy search), populated with a query so
         // the ranked results and their highlighted matches show.
         RenderMarkdownProjectSearch(outDir);
@@ -1125,6 +1129,37 @@ internal static class HeadlessRenderer
         if (frame != null)
         {
             using var fs = File.Create(Path.Combine(outDir, "history_readable_1x.png"));
+            frame.Save(fs);
+        }
+        w.Close();
+    }
+
+    // The Perch-controlled session console over synthetic events (session-control M5): assistant text
+    // rendered as Markdown (code panel + table), dimmed thinking, tool chips with a ✓ result.
+    private static void RenderSessionConsole(string outDir)
+    {
+        var events = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-...", "claude-haiku-4-5", "default", 16),
+            new Perch.Data.Control.AssistantThinkingEvent("Checking how PlacementMath rounds before I answer."),
+            new Perch.Data.Control.ToolUseEvent("t1", "Read", "Reading PlacementMath.cs"),
+            new Perch.Data.Control.ToolResultEvent("t1", "public static PixelPoint Snap(...)", false),
+            new Perch.Data.Control.AssistantTextEvent(
+                "Here's the **fix** — round once, at the edge:\n\n" +
+                "```csharp\nvar dip = Math.Round(px / scale, MidpointRounding.AwayFromZero);\nreturn new PixelPoint((int)(dip * scale), p.Y);\n```\n\n" +
+                "| Cause | Effect |\n|-------|--------|\n| `Snap` rounds | off-by-one at 1.5x |\n| `ToDip` rounds again | drift |\n"),
+            new Perch.Data.Control.TurnResultEvent(false, "success", 0.01, 0, 214, 1800),
+        };
+
+        var w = new Windows.SessionConsoleWindow { Width = 760, Height = 720 };
+        w.FeedSampleForRender(events);
+        w.Show();
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        var frame = w.CaptureRenderedFrame();
+        if (frame != null)
+        {
+            using var fs = File.Create(Path.Combine(outDir, "session_console_1x.png"));
             frame.Save(fs);
         }
         w.Close();

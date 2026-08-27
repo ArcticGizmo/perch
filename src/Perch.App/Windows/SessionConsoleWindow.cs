@@ -42,6 +42,9 @@ internal sealed class SessionConsoleWindow : Window
     private SelectableTextBlock? _streamBlock;                    // live delta accumulator, finalised per text block
     private readonly Dictionary<string, TextBlock> _toolChips = new();
     private bool _suppressModeSend;                               // guards combo updates that echo a CLI ack
+    private bool _turnActive;                                     // a turn is running; further sends queue
+    private int _queued;                                          // prompts queued behind the running turn
+    private string _sessionInfo = "";                            // the init line; the status shows it + queue
     private bool _closed;
 
     private static readonly string[] Modes = ["default", "plan", "acceptEdits", "bypassPermissions"];
@@ -236,6 +239,8 @@ internal sealed class SessionConsoleWindow : Window
         _permBar.IsVisible = false;
         _streamBlock = null;
         _toolChips.Clear();
+        _turnActive = false;
+        _queued = 0;
         _resumeId = null;                    // a fresh "Start" is a new session, not a re-resume
         _startButton.IsEnabled = true;       // the window can host a fresh session
         _startButton.Content = "New session";
@@ -254,7 +259,8 @@ internal sealed class SessionConsoleWindow : Window
         switch (ev)
         {
             case SessionInitEvent init:
-                _statusLabel.Text = $"{Shorten(init.SessionId)} · {init.Model} · {init.ToolCount} tools";
+                _sessionInfo = $"{Shorten(init.SessionId)} · {init.Model} · {init.ToolCount} tools";
+                UpdateStatus();
                 SyncModeCombo(init.PermissionMode);
                 break;
             case TextDeltaEvent delta:
@@ -267,9 +273,17 @@ internal sealed class SessionConsoleWindow : Window
                 _scroll.ScrollToEnd();
                 break;
             case AssistantTextEvent text:
-                // The completed block supersedes the delta accumulator (they carry the same content).
-                if (_streamBlock is not null) { _streamBlock.Text = text.Text; _streamBlock = null; }
-                else _transcript.Children.Add(MakeText(text.Text, Palette.FgBrush));
+                // The completed block supersedes the plain delta accumulator: swap in a rich Markdown
+                // render (headings, code panels, tables) so a long answer reads like Claude Desktop, not
+                // a wall of terminal text. During streaming _streamBlock shows raw deltas for immediacy.
+                var rendered = MarkdownBlock(text.Text);
+                if (_streamBlock is not null)
+                {
+                    int at = _transcript.Children.IndexOf(_streamBlock);
+                    if (at >= 0) _transcript.Children[at] = rendered; else _transcript.Children.Add(rendered);
+                    _streamBlock = null;
+                }
+                else _transcript.Children.Add(rendered);
                 _scroll.ScrollToEnd();
                 break;
             case AssistantThinkingEvent thinking:
@@ -311,6 +325,8 @@ internal sealed class SessionConsoleWindow : Window
                 break;
             case TurnResultEvent result:
                 _streamBlock = null;
+                if (_queued > 0) _queued--; else _turnActive = false;   // a queued turn now runs
+                UpdateStatus();
                 AddSystemLine(result.IsError
                     ? $"turn failed ({result.Subtype})"
                     : $"turn done · ${result.CostUsd:0.00} · {result.OutputTokens} out tokens");
@@ -346,6 +362,11 @@ internal sealed class SessionConsoleWindow : Window
         controller.SendPrompt(text);
         _input.Text = "";
 
+        // The CLI runs one turn at a time; a prompt sent mid-turn queues. Track it so the status shows
+        // how many are waiting (stream-json accepts them all, drained in order).
+        if (_turnActive) _queued++; else _turnActive = true;
+        UpdateStatus();
+
         var bubble = new Border
         {
             Background = Palette.OverlayRowHoverBrush, CornerRadius = new CornerRadius(6),
@@ -354,6 +375,9 @@ internal sealed class SessionConsoleWindow : Window
         _transcript.Children.Add(bubble);
         _scroll.ScrollToEnd();
     }
+
+    private void UpdateStatus() =>
+        _statusLabel.Text = _queued > 0 ? $"{_sessionInfo} · {_queued} queued" : _sessionInfo;
 
     // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -385,7 +409,28 @@ internal sealed class SessionConsoleWindow : Window
         Text = text, Foreground = brush, FontSize = 13, TextWrapping = TextWrapping.Wrap,
     };
 
+    // A completed assistant message rendered through the block-level MarkdownView (same styling as the
+    // history mirror), so code, tables and headings read richly. Best-effort: parse failure → raw text.
+    private static Control MarkdownBlock(string md) => Perch.Avalonia.Rendering.MarkdownView.Build(md, ProseStyle());
+
+    private static Perch.Avalonia.Rendering.MarkdownStyle ProseStyle() => new(
+        Fg: Palette.FgBrush, Muted: Palette.MutedBrush, Title: Palette.TitleBrush, Link: Palette.AccentBrush,
+        CodeFg: Palette.FgBrush, CodeBg: Palette.ButtonBgBrush, QuoteBar: Palette.SeparatorBrush,
+        Rule: Palette.SeparatorBrush, TableBorder: Palette.BorderBrush, TableHeaderBg: Palette.ButtonBgBrush,
+        Syntax: Palette.Active.IsDark
+            ? Perch.Avalonia.Rendering.CodeSyntax.Dark()
+            : Perch.Avalonia.Rendering.CodeSyntax.Light());
+
     private static string Shorten(string sessionId) => sessionId.Length > 8 ? sessionId[..8] : sessionId;
+
+    /// <summary>HeadlessRenderer hook: feed synthetic events into the transcript (no process), so the
+    /// rich rendering — user bubble, thinking, tool chips, Markdown answer — can be captured.</summary>
+    internal void FeedSampleForRender(IEnumerable<SessionEvent> events)
+    {
+        _sessionInfo = "a1b2c3d4 · claude-haiku-4-5 · 16 tools";
+        UpdateStatus();
+        foreach (var ev in events) HandleEvent(ev);
+    }
 
     protected override void OnClosed(EventArgs e)
     {
