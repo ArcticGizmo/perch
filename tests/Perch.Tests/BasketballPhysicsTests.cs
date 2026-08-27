@@ -54,6 +54,26 @@ public class BasketballPhysicsTests
     }
 
     [Fact]
+    public void CatchFreezesTheBallMidFlightUntilWokenOrLaunched()
+    {
+        var p = Court();
+        StepUntilResting(p);
+        Assert.True(p.Launch(100, 100));
+        for (int i = 0; i < 10; i++) p.Step(Dt);   // some way into the flight
+        double x = p.X, y = p.Y;
+
+        p.Catch();
+        Assert.True(p.Resting);
+        p.Step(Dt);                                 // frozen: hangs mid-air, gravity suspended
+        Assert.Equal(x, p.X);
+        Assert.Equal(y, p.Y);
+
+        p.Wake();                                   // and falls again once woken
+        p.Step(Dt);
+        Assert.True(p.Y > y);
+    }
+
+    [Fact]
     public void ResetToRetossesTheBallFromThePointGivenAndWakesIt()
     {
         var p = Court();
@@ -115,8 +135,8 @@ public class BasketballPhysicsTests
     public void BallDroppedThroughTheRimScoresExactlyOnce()
     {
         var p = Court(hoopX: 300, rimY: 300, facing: 1);
-        // Lips at 302 and 342 → the rim's centre line is x = 322. Drop straight through it.
-        p.Drop(322);
+        // Lips at 303 and 355 → the rim's centre line is x = 329. Drop straight through it.
+        p.Drop(329);
         int scores = 0;
         for (int i = 0; i < 4000 && !p.Resting; i++)
             if (p.Step(Dt).Scored) scores++;
@@ -138,7 +158,7 @@ public class BasketballPhysicsTests
         // Fire the ball straight up through the rim from below: the upward pass must not score;
         // the fall back down through the rim is a legitimate basket.
         var p = Court(hoopX: 300, rimY: 300, facing: 1);
-        p.Drop(322);
+        p.Drop(329);
         StepUntilResting(p);
         // The swish on the way down already happened during the drop; now shoot straight up from under it.
         Assert.True(p.Launch(0, 200));   // vertical flick (either direction) → straight up
@@ -153,7 +173,7 @@ public class BasketballPhysicsTests
     public void FallingOntoARimLipReportsTheClangAndTheBallStillSettles()
     {
         var p = Court(hoopX: 300, rimY: 300, facing: 1);
-        p.Drop(342);   // dead centre of the far lip
+        p.Drop(355);   // dead centre of the far lip
         bool clanged = false;
         for (int i = 0; i < 4000 && !p.Resting; i++)
             if (p.Step(Dt).RimHit) clanged = true;
@@ -164,12 +184,10 @@ public class BasketballPhysicsTests
     [Fact]
     public void BackboardReflectsTheBall()
     {
-        // Rim facing away (left) so the incoming ball meets the board's bare right face, not a rim lip.
+        // Fly straight at the board's right face, above the rim line where no lip can intercept (the rim
+        // faces left anyway). The board spans y 240..313 for a rim at 300.
         var p = Court(hoopX: 400, rimY: 300, facing: -1);
-        p.Drop(500);
-        StepUntilResting(p);
-        p.SetHoop(400, 600 - BasketballPhysics.BoardBelowRim, -1);   // sink the board to floor level
-        Assert.True(p.Launch(-60, 0));   // flick left, into the board
+        p.ResetTo(500, 260, -1200, 0);
         bool cameBack = false;
         for (int i = 0; i < 600; i++)
         {

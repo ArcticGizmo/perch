@@ -177,9 +177,14 @@ public partial class App : Application
             _overlay.Canvas.SetDockedWidth(settings.DockedWidthDip);
 
             // Desktop basketball: keep the hoop tied to the panel edge through drags, dock/mode changes and
-            // the constant SizeToContent height changes. No-ops while the toy is off.
+            // the constant SizeToContent height changes. No-ops while the toy is off. Docked geometry gets
+            // its own explicit signal (collapse/expand writes can be swallowed mid-layout and re-applied
+            // from a posted callback, so the plain window events see stale bounds); it's re-posted so the
+            // handler reads the settled Bounds, not the mid-flight ones.
             _overlay.PositionChanged += (_, _) => UpdateBasketballAnchor();
             _overlay.Resized += (_, _) => UpdateBasketballAnchor();
+            _overlay.Canvas.DockedGeometryChanged += () =>
+                Dispatcher.UIThread.Post(UpdateBasketballAnchor, DispatcherPriority.Background);
 
             // Register the curated palettes harvested from the ArcticGizmo package as built-in-like presets,
             // so a saved ActiveThemeId that names one (e.g. "nord-dark") resolves below.
@@ -1201,15 +1206,27 @@ public partial class App : Application
     }
 
     // Re-covers the overlay's screen and hangs the hoop off the panel's roomier side. Called on every
-    // overlay move/resize (cheap: Present short-circuits an unchanged work area).
+    // overlay move/resize (cheap: Present short-circuits an unchanged work area). The court's extent comes
+    // from a LIVE OS work-area read, not Avalonia's cached Screens.WorkingArea — the cache goes stale
+    // across the docked column's own edge reservation and display changes (the docked code documents the
+    // same), and a stale court let the ball roll in behind the docked column.
     private void UpdateBasketballAnchor()
     {
         if (_basketball is null || _overlay is null) return;
         var screen = _overlay.Screens.ScreenFromWindow(_overlay) ?? _overlay.Screens.Primary;
         if (screen is null) return;
-        _basketball.Present(screen);
-        var overlayRect = new PixelRect(_overlay.Position, PixelSize.FromSize(_overlay.Bounds.Size, screen.Scaling));
-        _basketball.SetAnchor(overlayRect, screen.WorkingArea);
+
+        // The window's RenderScaling is the DIP<->px authority for windows on this screen (the docked
+        // column's rule); the OS read is the authority on where and how much space.
+        double scale = _overlay.RenderScaling > 0 ? _overlay.RenderScaling : screen.Scaling;
+        var overlayRect = new PixelRect(_overlay.Position, PixelSize.FromSize(_overlay.Bounds.Size, scale));
+        var wa = screen.WorkingArea;
+        if (PlatformServices.WindowChrome.GetMonitorGeometryAt(
+                overlayRect.X + overlayRect.Width / 2, overlayRect.Y + overlayRect.Height / 2) is { } live)
+            wa = new PixelRect(live.WorkX, live.WorkY, live.WorkWidth, live.WorkHeight);
+
+        _basketball.Present(wa, scale);
+        _basketball.SetAnchor(overlayRect, wa);
     }
 
     private AchievementCardWindow? _achievementCard;
@@ -1431,7 +1448,20 @@ public partial class App : Application
     // below and closes as it does. All are reused like every other aux window.
     private void OpenArcade() =>
         _arcadeWindow = WindowHost.ShowOrFocus(_arcadeWindow,
-            () => new ArcadeMenuWindow(OpenInvaders, OpenFrogger, OpenWordle, OpenConnect4), () => _arcadeWindow = null);
+            () => new ArcadeMenuWindow(OpenInvaders, OpenFrogger, OpenWordle, OpenConnect4,
+                basketballOn: () => _appSettings?.BasketballEnabled ?? false,
+                toggleBasketball: ToggleBasketball),
+            () => _arcadeWindow = null);
+
+    // The arcade chooser's basketball card flips the same Whimsy toggle Settings does; the effective
+    // re-apply hangs the hoop / packs the court away live.
+    private void ToggleBasketball()
+    {
+        if (_appSettings is not { } s) return;
+        s.BasketballEnabled = !s.BasketballEnabled;
+        s.Save();
+        ApplyEffectiveSettings();
+    }
 
     private void OpenInvaders() =>
         _invadersWindow = WindowHost.ShowOrFocus(_invadersWindow, () => new SpaceInvadersWindow(), () => _invadersWindow = null);

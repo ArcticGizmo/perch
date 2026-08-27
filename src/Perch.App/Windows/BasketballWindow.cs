@@ -21,10 +21,10 @@ namespace Perch.Avalonia.Windows;
 /// <para>Unlike <see cref="ReactionBubbleWindow"/> (transient, deliberately hit-testable) this layer is
 /// persistent, so it is fully click-through (<see cref="IWindowChrome.MakeClickThroughNoActivate"/>) and
 /// never eats a desktop click. Input arrives instead through two small transparent no-activate windows —
-/// <see cref="BallHitWindow"/>, a forgiving halo parked over the <em>resting</em> ball (captures the
-/// aim flick, hides in flight), and <see cref="RingHitWindow"/> over the hoop (drag to set the hoop
-/// height, persisted panel-relative; right-click for reset/hide; double-click to re-toss the ball) — the
-/// only pixels the feature claims.</para>
+/// <see cref="BallHitWindow"/>, a forgiving halo glued to the ball (parked on it at rest, chasing it in
+/// flight — pressing a flying ball catches it dead), and <see cref="RingHitWindow"/> over the hoop (drag
+/// to set the hoop height, persisted panel-relative; right-click for reset/hide; double-click to re-toss
+/// the ball) — the only pixels the feature claims.</para>
 /// </summary>
 internal sealed class BasketballWindow : Window
 {
@@ -41,6 +41,7 @@ internal sealed class BasketballWindow : Window
     private bool _anchored;
     private double? _rimOffsetDip;             // user-set hoop height below the panel top; null = default
     private double _dragStartRimY;             // rim height when a ring drag began
+    private Rect _overlayRectDip;              // the panel in court coordinates, for the stranded-ball catch
 
     /// <summary>Raised on each swish, so the App can bump and persist the lifetime tally.</summary>
     public event Action? Scored;
@@ -67,8 +68,8 @@ internal sealed class BasketballWindow : Window
         TextOptions.SetTextRenderingMode(_layer, TextRenderingMode.Antialias);
         Content = _layer;
 
-        _layer.BallCameToRest += ShowHitWindowOverBall;
-        _layer.BallLaunched += () => _hit?.Hide();
+        _layer.BallCameToRest += OnBallCameToRest;
+        _layer.BallMoved += MoveHitWindowWithBall;
         _layer.Scored += () => Scored?.Invoke();
     }
 
@@ -79,27 +80,28 @@ internal sealed class BasketballWindow : Window
     /// the first anchor.</summary>
     public void SetRimOffset(double? offsetDip) => _rimOffsetDip = offsetDip;
 
-    /// <summary>Cover <paramref name="screen"/>'s work area (the ball's court) in DIPs. Idempotent, so the
-    /// per-drag anchor updates can call it freely; a real change re-clamps the ball via the physics.</summary>
-    public void Present(Screen screen)
+    /// <summary>Cover the work area (the ball's court, physical pixels — read live from the OS by the App,
+    /// since the framework's cached value goes stale across the docked column's edge reservation) in DIPs.
+    /// Idempotent, so the per-drag anchor updates can call it freely; a real change re-clamps the ball via
+    /// the physics.</summary>
+    public void Present(PixelRect workArea, double scale)
     {
-        var wa = screen.WorkingArea;            // physical pixels
-        if (wa == _presented && Math.Abs(screen.Scaling - _scale) < 0.001)
+        if (workArea == _presented && Math.Abs(scale - _scale) < 0.001)
         {
             if (!IsVisible) Show();
             return;
         }
-        _presented = wa;
-        _scale = screen.Scaling;
-        Position = wa.Position;
-        Width = wa.Width / _scale;
-        Height = wa.Height / _scale;
+        _presented = workArea;
+        _scale = scale;
+        Position = workArea.Position;
+        Width = workArea.Width / _scale;
+        Height = workArea.Height / _scale;
         // Pin the layer to the same size so its Bounds are the court, not a stretch guess.
         _layer.Width = Width;
         _layer.Height = Height;
         _layer.SetCourt(Width, Height);
         if (!IsVisible) Show();
-        if (_layer.IsBallResting) ShowHitWindowOverBall(_layer.BallX, _layer.BallY);
+        if (_layer.IsBallResting) OnBallCameToRest(_layer.BallX, _layer.BallY);
     }
 
     /// <summary>Hang the hoop off the roomier side of the overlay window (both rects in physical pixels,
@@ -114,6 +116,7 @@ internal sealed class BasketballWindow : Window
         double left = (overlayRect.X - Position.X) / _scale;
         double right = (overlayRect.Right - Position.X) / _scale;
         double top = (overlayRect.Y - Position.Y) / _scale;
+        _overlayRectDip = new Rect(left, top, right - left, overlayRect.Height / _scale);
 
         int spaceLeft = overlayRect.X - workArea.X;
         int spaceRight = (workArea.X + workArea.Width) - overlayRect.Right;
@@ -122,13 +125,30 @@ internal sealed class BasketballWindow : Window
         double boardX = facing > 0 ? right + HoopGapDip : left - HoopGapDip;
         _layer.SetHoop(boardX, ClampRim(top + (_rimOffsetDip ?? RimBelowPanelTop)), facing);
         PositionRingHitWindow();
+
+        // The panel may have just moved (or expanded) onto a sleeping ball — don't leave it stranded.
+        if (_layer.IsBallResting && BallStranded(_layer.BallX, _layer.BallY))
+            _layer.ResetBall();
+    }
+
+    // A ball whose centre sits inside the panel/column is unreachable: the panel is topmost, so the ball is
+    // invisible there and its grab halo would float over the panel's own UI. Leaning against the panel's
+    // edge from outside is fine — only a centre genuinely inside counts.
+    private bool BallStranded(double x, double y) =>
+        _anchored && _overlayRectDip.Deflate(2).Contains(new Point(x, y));
+
+    // The ball settled: re-toss it if it's somewhere unreachable, otherwise park the grab halo over it.
+    private void OnBallCameToRest(double x, double y)
+    {
+        if (BallStranded(x, y)) _layer.ResetBall();
+        else ShowHitWindowOverBall(x, y);
     }
 
     // Below the panel top, but never higher than a full-power arc can actually reach from the floor
-    // (~640 DIP with the engine's launch cap), and never absurdly low.
+    // (~1800 DIP with the full-court launch cap — beyond any realistic monitor), and never absurdly low.
     private double ClampRim(double rimY)
     {
-        double lo = Math.Max(BasketballPhysics.BoardAboveRim + 24, Height - 640);
+        double lo = Math.Max(BasketballPhysics.BoardAboveRim + 24, Height - 1800);
         double hi = Math.Max(lo, Height * 0.7);
         return Math.Clamp(rimY, lo, hi);
     }
@@ -141,7 +161,7 @@ internal sealed class BasketballWindow : Window
         double xMin = Math.Min(_layer.HoopBoardX, _layer.HoopRimFarX) - 8;
         double xMax = Math.Max(_layer.HoopBoardX, _layer.HoopRimFarX) + 8;
         double yMin = _layer.HoopRimY - BasketballPhysics.BoardAboveRim - 6;
-        double yMax = _layer.HoopRimY + 50;   // net depth + the tally pill
+        double yMax = _layer.HoopRimY + BasketballLayer.NetDepth + 28;   // net depth + the tally pill
         _ringHit.Resize(xMax - xMin, yMax - yMin);
         _ringHit.Position = new PixelPoint(
             Position.X + (int)Math.Round(xMin * _scale),
@@ -192,14 +212,28 @@ internal sealed class BasketballWindow : Window
     private void ShowHitWindowOverBall(double xDip, double yDip)
     {
         _hit ??= new BallHitWindow(
-            aimPx => _layer.SetAim(aimPx.X / _scale, aimPx.Y / _scale),
-            dragPx => _layer.EndAim(dragPx.X / _scale, dragPx.Y / _scale));
-        double half = BallHitWindow.SizeDip / 2;
-        _hit.Position = new PixelPoint(
-            Position.X + (int)Math.Round((xDip - half) * _scale),
-            Position.Y + (int)Math.Round((yDip - half) * _scale));
+            caught: () => _layer.CatchBall(),
+            aimChanged: aimPx => _layer.SetAim(aimPx.X / _scale, aimPx.Y / _scale),
+            released: dragPx => _layer.EndAim(dragPx.X / _scale, dragPx.Y / _scale));
+        MoveHitWindow(xDip, yDip);
         if (!_hit.IsVisible) _hit.Show();
         PlatformServices.WindowChrome.BringToTopNoActivate(_hit.TryGetPlatformHandle()?.Handle ?? 0);
+    }
+
+    // The per-tick chase while the ball flies: just the position write — the show/z-order work happens
+    // once in ShowHitWindowOverBall, not sixty times a second.
+    private void MoveHitWindowWithBall(double xDip, double yDip)
+    {
+        if (_hit is not { IsVisible: true }) { ShowHitWindowOverBall(xDip, yDip); return; }
+        MoveHitWindow(xDip, yDip);
+    }
+
+    private void MoveHitWindow(double xDip, double yDip)
+    {
+        double half = BallHitWindow.SizeDip / 2;
+        _hit!.Position = new PixelPoint(
+            Position.X + (int)Math.Round((xDip - half) * _scale),
+            Position.Y + (int)Math.Round((yDip - half) * _scale));
     }
 
     protected override void OnOpened(EventArgs e)
@@ -230,7 +264,7 @@ internal sealed class BasketballLayer : Control
 {
     private const int TickMs = 16;
     private const double FlashMs = 900;
-    private const double NetDepth = 26;
+    internal const double NetDepth = 34;   // the ring hit window's extent reads this too
 
     private readonly BasketballPhysics _physics = new();
     private readonly Random _rng = new();   // only for the double-click re-toss variance
@@ -243,11 +277,12 @@ internal sealed class BasketballLayer : Control
     private bool _hoopPlaced;
     private bool _wasResting;
 
-    /// <summary>The ball settled (floor or balanced on the rim) — park the hit window over it.</summary>
+    /// <summary>The ball settled (floor, rim, or a mid-air catch) — park the hit window over it.</summary>
     public event Action<double, double>? BallCameToRest;
 
-    /// <summary>The ball took flight (a shot or a re-toss) — hide the hit window until it settles.</summary>
-    public event Action? BallLaunched;
+    /// <summary>Raised each tick the ball is in flight, so the grab halo can chase it — a moving ball is
+    /// catchable (press = freeze it on the spot).</summary>
+    public event Action<double, double>? BallMoved;
 
     /// <summary>A swish landed (the tally here is already bumped; the App persists its copy).</summary>
     public event Action? Scored;
@@ -280,17 +315,17 @@ internal sealed class BasketballLayer : Control
         if (!_hoopPlaced)
         {
             _hoopPlaced = true;
-            // First appearance: drop the ball in from the top, just in front of the hoop.
-            _physics.Drop(boardX + facing * (BasketballPhysics.RimSpan + 70));
+            // First appearance: drop the ball in from the top, centre-screen (matching the double-click
+            // re-toss's spot, and clear of wherever the panel happens to sit).
+            _physics.Drop(_physics.Width / 2);
             EnsureTimer();
         }
         else if (moved && _physics.Resting && _physics.Y < _physics.Height - BasketballPhysics.BallRadius - 1)
         {
-            // The ball was asleep balanced on the rim and the rim just moved out from under it: let it
-            // fall, and pull the hit window away like any launch until it settles again.
+            // The ball was asleep balanced on the rim (or caught mid-air) and its support just moved:
+            // let it fall — the grab halo chases it via BallMoved until it settles again.
             _physics.Wake();
             _wasResting = false;
-            BallLaunched?.Invoke();
             EnsureTimer();
         }
         InvalidateVisual();
@@ -307,7 +342,6 @@ internal sealed class BasketballLayer : Control
         double vy = -(60 + _rng.NextDouble() * 160);        // a gentle upward toss
         _physics.ResetTo(_physics.Width / 2, _physics.Height / 2, vx, vy);
         _wasResting = false;
-        BallLaunched?.Invoke();   // pull the hit window away until it settles again
         EnsureTimer();
         InvalidateVisual();
     }
@@ -327,10 +361,20 @@ internal sealed class BasketballLayer : Control
         if (_physics.Launch(dx, dy))
         {
             _wasResting = false;
-            BallLaunched?.Invoke();
             EnsureTimer();
         }
         InvalidateVisual();
+    }
+
+    /// <summary>Catch a flying ball: freeze it on the spot (it becomes the normal aimable resting ball,
+    /// mid-air included). A no-op when it's already at rest.</summary>
+    public void CatchBall()
+    {
+        if (_physics.Resting) return;
+        _physics.Catch();
+        _wasResting = true;
+        InvalidateVisual();
+        BallCameToRest?.Invoke(_physics.X, _physics.Y);
     }
 
     private void EnsureTimer()
@@ -365,6 +409,9 @@ internal sealed class BasketballLayer : Control
             Scored?.Invoke();
         }
         InvalidateVisual();
+
+        if (!_physics.Resting)
+            BallMoved?.Invoke(_physics.X, _physics.Y);   // the grab halo chases the flying ball
 
         if (_physics.Resting && !_wasResting)
         {
@@ -405,27 +452,36 @@ internal sealed class BasketballLayer : Control
         ctx.DrawLine(rimPen, new Point(bx, rimY), new Point(farX, rimY));
         ctx.DrawEllipse(Palette.BrandBrush, null, new Point(farX, rimY), 2.5, 2.5);
 
-        // Net: tapering strands with one weave line, in faint foreground.
+        // Net: a diamond mesh between the lips — two tiers of crossing strands tapering toward the
+        // bottom — that sways for a moment after a swish, so the catch reads (the engine bleeds the
+        // ball's speed at the same instant; together they make the swish feel like cloth, not a hole).
         var netPen = new Pen(new SolidColorBrush(Color.FromArgb(110, Palette.Fg.R, Palette.Fg.G, Palette.Fg.B)), 1);
         double near = _physics.RimNearX;
-        double baseY = rimY + NetDepth;
-        const int strands = 5;
-        for (int i = 0; i < strands; i++)
+        double sway = 0;
+        if (_flashStart is { } fs)
         {
-            double t = i / (double)(strands - 1);
-            double topX = near + (farX - near) * t;
-            double botX = near + (farX - near) * (0.18 + 0.64 * t);   // taper ~30%
-            ctx.DrawLine(netPen, new Point(topX, rimY + 1), new Point(botX, baseY));
+            double ph = Math.Clamp((Environment.TickCount64 - fs) / FlashMs, 0, 1);
+            if (ph < 1) sway = Math.Sin(ph * Math.Tau * 2.2) * 5 * (1 - ph);   // a damped wobble
         }
-        double midY = rimY + NetDepth * 0.5;
-        ctx.DrawLine(netPen, new Point(near + (farX - near) * 0.09, midY), new Point(near + (farX - near) * 0.91, midY));
+        double midY = rimY + NetDepth * 0.55, botY = rimY + NetDepth;
+        double XAt(double t, double taper, double shift) => near + (farX - near) * (taper / 2 + (1 - taper) * t) + shift;
+        const int cols = 5;
+        for (int j = 0; j < cols - 1; j++)
+        {
+            double tl = j / (double)(cols - 1), tr = (j + 1) / (double)(cols - 1);
+            var mid = new Point(XAt((j + 0.5) / (cols - 1), 0.16, sway * 0.55), midY);
+            ctx.DrawLine(netPen, new Point(XAt(tl, 0, 0), rimY + 1), mid);
+            ctx.DrawLine(netPen, new Point(XAt(tr, 0, 0), rimY + 1), mid);
+            ctx.DrawLine(netPen, mid, new Point(XAt(tl, 0.34, sway), botY));
+            ctx.DrawLine(netPen, mid, new Point(XAt(tr, 0.34, sway), botY));
+        }
 
         // The lifetime tally, on a small scrim pill under the net so it reads over any desktop.
         var ft = OverlayDraw.Text(_tally.ToString(), 10, Palette.MutedBrush);
         double cx = (near + farX) / 2;
-        var pill = new Rect(cx - ft.Width / 2 - 5, baseY + 4, ft.Width + 10, ft.Height + 4);
+        var pill = new Rect(cx - ft.Width / 2 - 5, botY + 4, ft.Width + 10, ft.Height + 4);
         OverlayDraw.Panel(ctx, pill, Palette.OverlayScrimBrush, null, pill.Height / 2);
-        ctx.DrawText(ft, new Point(cx - ft.Width / 2, baseY + 6));
+        ctx.DrawText(ft, new Point(cx - ft.Width / 2, botY + 6));
     }
 
     private static void DrawBall(DrawingContext ctx, double x, double y, double spin)
@@ -514,26 +570,29 @@ internal sealed class BasketballLayer : Control
 }
 
 /// <summary>
-/// The ball's interactive surface: a small transparent no-activate tool window parked exactly over the
-/// resting ball. Press captures the pointer; the drag is reported in physical pixels (screen space, so it
-/// keeps working outside the window's own square); release fires the shot toward the flick. Hidden while
-/// the ball is in flight — the click-through layer owns every other pixel's honesty.
+/// The ball's interactive surface: a small transparent no-activate tool window glued to the
+/// ball — parked on it at rest, chasing it in flight. Press catches the ball (a flying ball freezes on
+/// the spot) and captures the pointer; the drag is reported in physical pixels (screen space, so it
+/// keeps working outside the window's own square); release fires the shot toward the flick. The
+/// click-through layer owns every other pixel's honesty.
 /// </summary>
 internal sealed class BallHitWindow : Window
 {
-    // Generously larger than the 24-DIP ball: the ball is a small target and the window is invisible, so
+    // Generously larger than the 32-DIP ball: the ball is a small target and the window is invisible, so
     // a forgiving halo makes it grabbable without hunting for exact pixels. Kept modest all the same —
-    // desktop clicks inside this square go to the ball, not the desktop, while the ball rests.
-    public const double SizeDip = 72;
+    // desktop clicks inside this square go to the ball, not the desktop, wherever the ball is.
+    public const double SizeDip = 88;
 
+    private readonly Action _caught;
     private readonly Action<PixelPoint> _aimChanged;
     private readonly Action<PixelPoint> _released;
     private readonly Control _surface;
     private PixelPoint _dragStart;
     private bool _dragging;
 
-    public BallHitWindow(Action<PixelPoint> aimChanged, Action<PixelPoint> released)
+    public BallHitWindow(Action caught, Action<PixelPoint> aimChanged, Action<PixelPoint> released)
     {
+        _caught = caught;
         _aimChanged = aimChanged;
         _released = released;
 
@@ -573,6 +632,7 @@ internal sealed class BallHitWindow : Window
         {
             base.OnPointerPressed(e);
             if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+            _owner._caught();   // a flying ball freezes on the spot; a resting one is untouched
             _owner._dragging = true;
             _owner._dragStart = this.PointToScreen(e.GetPosition(this));
             e.Pointer.Capture(this);

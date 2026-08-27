@@ -18,20 +18,22 @@ public readonly record struct BasketballStepResult(bool Scored, bool RimHit, boo
 public sealed class BasketballPhysics
 {
     // ── Court / ball geometry (DIPs) ─────────────────────────────────────────
-    public const double BallRadius = 12;
+    public const double BallRadius = 16;
     /// <summary>Rim opening, backboard face to front lip. Comfortably wider than the ball (real hoops are
-    /// ~1.9× the ball; this is ~1.7× so shots are makeable but not automatic).</summary>
-    public const double RimSpan = 40;
+    /// ~1.9× the ball; this is ~1.6× so shots are makeable but not automatic).</summary>
+    public const double RimSpan = 52;
     /// <summary>How far the rim's near lip sits off the backboard face.</summary>
-    public const double RimInset = 2;
+    public const double RimInset = 3;
     /// <summary>Backboard extent above / below the rim line.</summary>
-    public const double BoardAboveRim = 46;
-    public const double BoardBelowRim = 10;
+    public const double BoardAboveRim = 60;
+    public const double BoardBelowRim = 13;
 
     // ── Feel constants ───────────────────────────────────────────────────────
     private const double Gravity = 1800;          // DIP/s²
     private const double MaxDrag = 240;           // drag length (DIP) that maps to full power
-    private const double MaxSpeed = 1900;         // DIP/s at full power
+    // Full power covers a full-court shot: ideal 45° range is v²/g ≈ 5000 DIP (less air drag), so even a
+    // hoop on the far side of a wide monitor is theoretically makeable.
+    private const double MaxSpeed = 3000;         // DIP/s at full power
     public const double MinDrag = 6;              // shorter drags are a cancelled shot
     private const double WallRestitution = 0.72;
     private const double FloorRestitution = 0.62;
@@ -40,7 +42,7 @@ public sealed class BasketballPhysics
     private const double AirDrag = 0.10;          // fraction of velocity shed per second
     private const double RollFriction = 2.2;      // fraction of ground speed shed per second
     private const double SleepSpeed = 26;         // slower than this on the floor → asleep
-    private const double SubStep = 0.004;         // internal integration step (s); 1900·0.004 ≈ 7.6 < BallRadius
+    private const double SubStep = 0.004;         // internal integration step (s); 3000·0.004 = 12 < BallRadius
     private const double MaxStep = 0.05;          // clamp a hitched frame so the ball doesn't teleport
 
     // ── Court bounds (the layer window's size in DIPs) ───────────────────────
@@ -113,6 +115,17 @@ public sealed class BasketballPhysics
     /// <summary>Wake a resting ball so gravity applies again — for when the surface it settled on moved
     /// (the user dragged the rim it was balanced on). A no-op mid-flight.</summary>
     public void Wake() => Resting = false;
+
+    /// <summary>Catch the ball mid-flight: kill its motion and let it hang right where it is, becoming
+    /// the normal aimable resting ball (mid-air included). <see cref="Wake"/> or a launch puts gravity
+    /// back in charge.</summary>
+    public void Catch()
+    {
+        Vx = 0;
+        Vy = 0;
+        Resting = true;
+        _wasAboveRim = false;
+    }
 
     /// <summary>Re-toss the ball from an arbitrary point with an arbitrary velocity (the hoop's
     /// double-click reset; the view adds the variance so the engine stays deterministic).</summary>
@@ -238,6 +251,10 @@ public sealed class BasketballPhysics
         {
             scored = true;
             _wasAboveRim = false;
+            // The net catches the ball: bleed most of its speed so a swish visibly snags and drops out of
+            // the bottom rather than firing straight through at full pace.
+            Vx *= 0.45;
+            Vy *= 0.55;
         }
 
         // Floor: bounce, then roll, then sleep.

@@ -30,8 +30,9 @@ Three pieces:
      backboard (with the running swish tally), rim + net, ball, aim rubber-band, and the partial
      trajectory dots.
    - **The hit windows**: small transparent no-activate tool windows over the interactive spots — a
-     forgiving 72-DIP halo parked over the *resting* ball (press → pointer capture; drag → aim; release →
-     launch and hide until the ball next rests), and one over the ring (left-drag sets the hoop height,
+     forgiving 72-DIP halo glued to the ball (parked on it at rest, chasing it each tick in flight;
+     press catches a flying ball dead on the spot — mid-air included — then drag → aim; release →
+     launch), and one over the ring (left-drag sets the hoop height,
      persisted as `AppSettings.BasketballRimOffsetDip`, an offset below the panel top so it keeps riding
      the panel; right-click opens a menu with "Reset hoop height" and "Hide desktop basketball"). This
      sidesteps per-pixel hit-testing on a persistent full-screen window entirely: the click-through layer
@@ -39,8 +40,14 @@ Three pieces:
 
 3. **App wiring** (`App.axaml.cs`) — gate on `Effective.BasketballEnabled` inside `ApplyDisplaySettings`
    (so Quiet mode masks it off and back on for free), re-anchor the hoop from the overlay window's
-   `PositionChanged`/`Resized` (the panel resizes constantly — `SizeToContent`), persist the swish tally,
-   and close the windows in `CloseAuxWindows`.
+   `PositionChanged`/`Resized` (the panel resizes constantly — `SizeToContent`) plus the canvas's
+   `DockedGeometryChanged` (the docked writes can be swallowed mid-layout and re-applied from a posted
+   callback, so the plain window events see stale bounds on collapse/expand), persist the swish tally,
+   and close the windows in `CloseAuxWindows`. The court's extent comes from a **live OS work-area read**
+   (`IWindowChrome.GetMonitorGeometryAt`), never Avalonia's cached `Screens.WorkingArea` — the cache goes
+   stale across the docked column's own edge reservation, and a stale court let the ball roll in behind
+   the column. Belt-and-braces: a ball that comes to rest with its centre inside the panel/column rect
+   (or gets the panel moved onto it) is auto re-tossed from screen centre rather than stranded.
 
 ## Ring placement
 
