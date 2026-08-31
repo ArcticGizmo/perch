@@ -262,6 +262,20 @@ Make the M0 console honest enough for daily dogfooding — still function over f
 > `OpenSessionTerminal`. `RowsTop`/`SessionsSectionHeight` account for the row so row hit-testing stays
 > aligned. Verified via `render` captures (populated + empty overlay).
 
+### Embedded ConPTY terminal — refinements (2026-08-31, user feedback)
+
+> Three fixes after the first dogfood: (1) **starts empty** — the cwd box is blank and "Start claude" is
+> disabled until a real folder is chosen, so a session can't launch at the home dir / a filesystem root;
+> (2) a **folder-picker button** (📁) opens the native OS folder dialog (`StorageProvider.OpenFolderPickerAsync`);
+> (3) the **renderer artifact is fixed** — root cause was `TerminalControl` auto-launching its default
+> `cmd.exe` on load (its `Process` defaults to `cmd.exe`, and `TerminalView.OnLoaded` launches it), so our
+> explicit `LaunchProcess` was a *second* process → duplicated/reflowed frames. Setting `Process = ""`
+> disables the auto-launch; we own every launch. A resumed session now launches from the terminal's
+> `Loaded` (after layout, correct size), fresh sessions from the Start click. **Verified live** (UI-driven
+> screenshots in captures/): empty state shows no phantom shell; picking a folder + Start launches a
+> single clean claude TUI in the chosen dir; a prompt typed in the Perch box injected into the PTY and
+> claude replied. 936 tests green.
+
 ### Embedded ConPTY terminal ✅ (code) — the post-gate pivot
 
 > **Landed 2026-08-27.** `SessionTerminalWindow` hosts a real interactive `claude` TUI inside Perch via

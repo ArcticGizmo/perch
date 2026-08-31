@@ -1,8 +1,10 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Iciclecreek.Terminal;
 using Perch.Avalonia.Theming;
@@ -25,6 +27,7 @@ internal sealed class SessionTerminalWindow : Window
     private static readonly FontFamily Mono = new("Cascadia Mono, Cascadia Code, Consolas, Menlo, monospace");
 
     private readonly TextBox _cwdBox;
+    private readonly Button _browseButton;
     private readonly Button _startButton;
     private readonly TextBlock _statusLabel;
     private readonly TerminalControl _terminal;
@@ -33,6 +36,7 @@ internal sealed class SessionTerminalWindow : Window
 
     private string? _resumeId;
     private bool _launched;
+    private bool _autoLaunchOnLoad;   // resume/elevation: launch once the terminal is laid out (sized)
 
     public SessionTerminalWindow()
     {
@@ -44,27 +48,37 @@ internal sealed class SessionTerminalWindow : Window
         Background = Palette.SurfaceSunkenBrush;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
+        // Deliberately empty: a session must be pointed at a project explicitly — launching at the home
+        // dir (or a filesystem root) is a footgun, so Start stays disabled until a real folder is chosen.
         _cwdBox = new TextBox
         {
-            Text = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            PlaceholderText = "Project folder", FontSize = 12, MinWidth = 320,
+            Text = "",
+            PlaceholderText = "Select a project folder…", FontSize = 12, MinWidth = 300,
             VerticalAlignment = VerticalAlignment.Center,
         };
+        _cwdBox.TextChanged += (_, _) => UpdateStartEnabled();
+        _browseButton = new Button
+        {
+            Content = "📁", FontSize = 13, CornerRadius = new CornerRadius(6),
+            VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(8, 4),
+            [ToolTip.TipProperty] = "Choose a project folder…",
+        };
+        _browseButton.Click += async (_, _) => await BrowseAsync();
         _startButton = new Button
         {
             Content = "Start claude", FontSize = 12, CornerRadius = new CornerRadius(6),
-            VerticalAlignment = VerticalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center, IsEnabled = false,
         };
         _startButton.Click += (_, _) => Launch();
         _statusLabel = new TextBlock
         {
-            Text = "not started", Foreground = Palette.MutedBrush, FontSize = 11,
+            Text = "select a folder to begin", Foreground = Palette.MutedBrush, FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
         };
         var toolbar = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 9),
-            Children = { _cwdBox, _startButton, _statusLabel },
+            Children = { _cwdBox, _browseButton, _startButton, _statusLabel },
         };
         var toolbarPanel = new Border { Background = Palette.FormBgBrush, Child = toolbar, [DockPanel.DockProperty] = Dock.Top };
 
@@ -73,8 +87,13 @@ internal sealed class SessionTerminalWindow : Window
             FontFamily = Mono,
             FontSize = 13,
             BufferSize = 5000,
+            // Empty so the control does NOT auto-launch its default shell (cmd.exe) on load — otherwise it
+            // spawns a phantom shell AND our explicit LaunchProcess runs a second process, which is what
+            // produced the duplicated/reflowed frames. We own every launch via LaunchProcess(cwd, …).
+            Process = "",
         };
         _terminal.ProcessExited += OnProcessExited;
+        _terminal.Loaded += OnTerminalLoaded;   // defers a resumed session's launch until the control is sized
 
         // "Prompt from Perch": writes the text into the same PTY (as if typed), so the interactive TUI
         // receives it and Enter submits it. The terminal above stays fully usable for direct typing.
@@ -104,17 +123,27 @@ internal sealed class SessionTerminalWindow : Window
     }
 
     /// <summary>Opens the terminal already targeting a session to resume by id (the elevation
-    /// destination): the working directory is set and <c>claude --resume &lt;id&gt;</c> launches on open.</summary>
+    /// destination): the working directory is set and <c>claude --resume &lt;id&gt;</c> auto-launches once the
+    /// terminal has been laid out (see <see cref="OnTerminalLoaded"/>). A fresh session never auto-launches
+    /// — the user must pick a folder and press Start.</summary>
     public void ResumeSession(string sessionId, string cwd)
     {
         _resumeId = sessionId;
         if (Directory.Exists(cwd)) _cwdBox.Text = cwd;
+        _autoLaunchOnLoad = !string.IsNullOrEmpty(_resumeId) && Directory.Exists(cwd);
     }
 
-    protected override void OnOpened(EventArgs e)
+    // Auto-launch a resumed session only after the terminal control is laid out and has a real size —
+    // launching before that starts the PTY at a default/tiny size, and claude repaints after the resize,
+    // leaving a duplicated frame in scrollback (the reflow artifact). Fresh sessions launch on the Start
+    // click, which is always after layout, so they're unaffected.
+    private void OnTerminalLoaded(object? sender, RoutedEventArgs e)
     {
-        base.OnOpened(e);
-        if (!_launched) Launch();   // auto-start (fresh or resume) so the window is useful immediately
+        if (_autoLaunchOnLoad && !_launched)
+        {
+            _autoLaunchOnLoad = false;
+            Launch();
+        }
     }
 
     private void Launch()
@@ -161,6 +190,8 @@ internal sealed class SessionTerminalWindow : Window
         _launched = true;
         _statusLabel.Text = _resumeId is null ? "running" : $"resumed {Shorten(_resumeId)}";
         _startButton.IsEnabled = false;
+        _cwdBox.IsEnabled = false;       // the cwd is fixed once claude is running
+        _browseButton.IsEnabled = false;
         _promptBox.IsEnabled = true;
         _sendButton.IsEnabled = true;
         _terminal.Focus();
@@ -170,11 +201,47 @@ internal sealed class SessionTerminalWindow : Window
     {
         _statusLabel.Text = $"claude exited ({e.ExitCode})";
         _launched = false;
-        _startButton.IsEnabled = true;
         _startButton.Content = "Restart claude";
+        _cwdBox.IsEnabled = true;
+        _browseButton.IsEnabled = true;
         _promptBox.IsEnabled = false;
         _sendButton.IsEnabled = false;
+        UpdateStartEnabled();
     });
+
+    // Choose a project folder with the native OS folder picker (feedback: pick graphically, don't type).
+    private async System.Threading.Tasks.Task BrowseAsync()
+    {
+        try
+        {
+            var start = Directory.Exists(_cwdBox.Text?.Trim())
+                ? await StorageProvider.TryGetFolderFromPathAsync(_cwdBox.Text!.Trim())
+                : null;
+            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Choose a project folder",
+                AllowMultiple = false,
+                SuggestedStartLocation = start,
+            });
+            if (folders.Count == 0) return;
+            var path = folders[0].TryGetLocalPath();
+            if (!string.IsNullOrEmpty(path)) _cwdBox.Text = path;   // TextChanged re-enables Start
+        }
+        catch (Exception ex)
+        {
+            _statusLabel.Text = $"couldn't open folder picker: {ex.Message}";
+        }
+    }
+
+    // Start is enabled only when idle and the box holds a real folder — the guard against launching at
+    // the home dir or a filesystem root.
+    private void UpdateStartEnabled()
+    {
+        bool ok = !_launched && Directory.Exists(_cwdBox.Text?.Trim() ?? "");
+        _startButton.IsEnabled = ok;
+        if (!_launched)
+            _statusLabel.Text = ok ? "ready — press Start" : "select a folder to begin";
+    }
 
     private void OnPromptKeyDown(object? sender, KeyEventArgs e)
     {
