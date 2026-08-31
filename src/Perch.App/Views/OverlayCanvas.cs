@@ -42,6 +42,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double RowHeight        = 46;
     private const double SubRowHeight     = 24;
     private const double SectionRowHeight = 26;
+    private const double NewSessionRowHeight = 26; // the "+ New session" launcher row atop the session rows
     private const double SubIndent        = 22;
     private const double BarRowHeight     = 18;
     private const double UsageStripPad    = 14; // padding around the usage bars; the strip's own height is
@@ -1001,10 +1002,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
-    // Top of the first session row: below the header and whichever strips are showing (the Todo section sits
-    // between Hypertree and the rows). Mirrors the painted layout so hit-testing lines up (guarded by the
-    // expanded/rows check in HitTestRow).
-    private double RowsTop => _sectionTop.GetValueOrDefault(OverlaySection.Sessions);
+    // Top of the first session row: below the header, whichever strips are showing (the Todo section sits
+    // between Hypertree and the rows), and the "+ New session" launcher row that heads the Sessions section.
+    // Mirrors the painted layout so hit-testing lines up (guarded by the expanded/rows check in HitTestRow).
+    private double RowsTop => _sectionTop.GetValueOrDefault(OverlaySection.Sessions) + NewSessionRowHeight;
 
     // The top of a given display row.
     private double RowTop(int index)
@@ -1343,6 +1344,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private int _hoveredArtifactRow = -1;
     private int _hoveredMarkdownRow = -1;
     private int _hoveredPrRow = -1;
+    private bool _hoveredNewSession;      // the "+ New session" launcher row (session-control)
+    private Rect _newSessionRect;         // captured at paint for hit-testing
     private readonly Dictionary<int, Rect> _artifactRects = new();
     private readonly Dictionary<int, Rect> _mdRects = new();
     private readonly Dictionary<int, Rect> _thermoRects = new();
@@ -1471,6 +1474,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// focuses the session's terminal via the platform seam. Internal — <see cref="ClaudeSession"/> is
     /// a Core-internal type.</summary>
     internal event Action<ClaudeSession>? SessionActivated;
+
+    /// <summary>Raised when the user clicks the "+ New session" launcher row atop the session list — the
+    /// app opens a Perch-controlled session (the embedded terminal), so a session can be started from the
+    /// overlay rather than a tray menu (session-control).</summary>
+    internal event Action? NewSessionRequested;
 
     /// <summary>Raised when the user picks an artifact from the artifact glyph's popover list; the app
     /// opens it. The list is always shown (even for a single artifact), so this is the only artifact path.</summary>
@@ -3634,6 +3642,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int row = HitTestRow(p);
         if (row != _hoveredRow) { _hoveredRow = row; InvalidateVisual(); }
 
+        // The "+ New session" launcher band (guard on ShowFullPanel — its rect is stale in dense mode).
+        bool overNewSession = ShowFullPanel && _newSessionRect.Width > 0 && _newSessionRect.Contains(p);
+        if (overNewSession != _hoveredNewSession) { _hoveredNewSession = overNewSession; InvalidateVisual(); }
+
         int ql = HitTestQuickLink(p);
         if (ql != _hoveredQuickLink) { _hoveredQuickLink = ql; InvalidateVisual(); }
 
@@ -3717,7 +3729,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // the media buttons + the mic strip's app name + the social region's controls); rows show only the highlight.
         Cursor = overResize ? ResizeCursor
             : (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
-               || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion)
+               || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -3800,9 +3812,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredHyperHeader || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredHyperHeader || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
         _hoveredSocial = false;
+        _hoveredNewSession = false;
         _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHyperHeader = _hoveredAutonomousHeader = false;
         _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredTodoRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;
@@ -4155,6 +4168,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (!_collapsedAgents.Remove(chevSub.AgentId))
                 _collapsedAgents.Add(chevSub.AgentId);
             Update(_sessions); // rebuild the render list under the new collapse state
+            return;
+        }
+
+        // The "+ New session" launcher band atop the rows (not in Rearrange preview, where it's inert chrome).
+        if (!RearrangeMode && ShowFullPanel && _newSessionRect.Width > 0 && _newSessionRect.Contains(p))
+        {
+            NewSessionRequested?.Invoke();
             return;
         }
 

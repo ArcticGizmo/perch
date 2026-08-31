@@ -17,8 +17,12 @@ Use a scratch project folder for anything that writes files, e.g. `mkdir C:\tmp\
 
 ## THE headline test — embedded terminal (dogfood this first)
 
-Tray → **Session terminal (PoC)…**. Set the folder (or accept the default) — a real `claude` starts in
-an embedded terminal.
+Open it either way:
+- **Overlay:** click the **"+ New session"** row at the top of the session list (works even with no
+  sessions running), or
+- **Tray:** **Session terminal (PoC)…**.
+
+Set the folder (or accept the default) — a real `claude` starts in an embedded terminal.
 
 - **It's a real terminal:** type in it directly, exactly as you would in Windows Terminal — `hi, what can you do?`,
   arrow keys, Ctrl+C, `/help`, the lot. The full TUI should render (colour, the input box, spinners).

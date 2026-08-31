@@ -308,6 +308,7 @@ public partial class App : Application
             // Row click focuses the session's terminal; the artifact glyph always pops a picker list, and
             // the chosen artifact is opened here.
             _overlay.Canvas.SessionActivated += FocusSession;
+            _overlay.Canvas.NewSessionRequested += OpenSessionTerminal;   // "+ New session" row → embedded terminal
             _overlay.Canvas.ArtifactChosen += OpenArtifact;
             _overlay.Canvas.DaemonListRequested += OpenDaemonList;
 

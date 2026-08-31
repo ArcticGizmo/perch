@@ -253,6 +253,15 @@ Make the M0 console honest enough for daily dogfooding — still function over f
 > **User answers (2026-08-27):** (Q1) valet parked, embedded terminal is the surface; (Q4) **yes, build
 > ConPTY** — done below. Q2 (macOS) and Q3 (`AskUserQuestion` spike) still open.
 
+### Overlay "+ New session" launcher ✅ (code)
+
+> **Landed 2026-08-27.** A "+ New session" row heads the overlay's Sessions section (above the session
+> rows, present even with an empty roster), so a Perch-controlled session launches from the overlay
+> rather than the tray menu. Owner-drawn in `OverlayCanvas.Sections.cs` (`DrawNewSessionRow`, hover
+> wash + "+" glyph + accent caption), hit-tested via `_newSessionRect`, raises `NewSessionRequested` →
+> `OpenSessionTerminal`. `RowsTop`/`SessionsSectionHeight` account for the row so row hit-testing stays
+> aligned. Verified via `render` captures (populated + empty overlay).
+
 ### Embedded ConPTY terminal ✅ (code) — the post-gate pivot
 
 > **Landed 2026-08-27.** `SessionTerminalWindow` hosts a real interactive `claude` TUI inside Perch via
