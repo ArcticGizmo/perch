@@ -21,7 +21,23 @@ namespace Perch.Avalonia.Rendering;
 internal sealed record MarkdownStyle(
     IBrush Fg, IBrush Muted, IBrush Title, IBrush Link,
     IBrush CodeFg, IBrush CodeBg, IBrush QuoteBar, IBrush Rule, IBrush TableBorder, IBrush TableHeaderBg,
-    CodeSyntax Syntax);
+    CodeSyntax Syntax)
+{
+    // Type scale / spacing / face — defaults are the viewer's VS Code-preview look; the rich session UI
+    // overrides them (larger prose, its own body face) without forking the renderer.
+
+    /// <summary>Body text size in DIPs (paragraphs, lists, table cells).</summary>
+    public double BodySize { get; init; } = 13.5;
+
+    /// <summary>Vertical space below each block.</summary>
+    public double BlockGap { get; init; } = 12;
+
+    /// <summary>The prose face; null inherits the window's. Code keeps its monospace face regardless.</summary>
+    public FontFamily? BodyFont { get; init; }
+
+    /// <summary>Padding around the whole document.</summary>
+    public Thickness RootMargin { get; init; } = new(22, 16);
+}
 
 /// <summary>The per-token-kind colours for fenced-code syntax highlighting (<see cref="CodeHighlight"/>),
 /// keyed to the preview's own light/dark palette. Modelled on VS Code's default light/dark themes; plain
@@ -65,10 +81,10 @@ internal sealed class MarkdownView
         .UsePipeTables().UseEmphasisExtras().UseTaskLists().UseAutoLinks().UsePreciseSourceLocation().Build();
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
 
-    private const double BodySize = 13.5;
-    private const double BlockGap = 12;   // vertical space below a block
-
     private readonly MarkdownStyle _s;
+
+    private double BodySize => _s.BodySize;
+    private double BlockGap => _s.BlockGap;   // vertical space below a block
 
     private MarkdownView(MarkdownStyle s) => _s = s;
 
@@ -112,7 +128,10 @@ internal sealed class MarkdownView
         var view = new MarkdownView(style);
         var list = new List<PreviewAnchor>();
         anchors = list;
-        var root = new StackPanel { Margin = new Thickness(22, 16) };
+        var root = new StackPanel { Margin = style.RootMargin };
+        // FontFamily is an inherited text property, so setting it on the root reaches every prose block
+        // beneath; code panels set their monospace face explicitly and are unaffected.
+        if (style.BodyFont is { } bodyFont) TextElement.SetFontFamily(root, bodyFont);
         if (string.IsNullOrWhiteSpace(md))
             return root;
 

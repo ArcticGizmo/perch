@@ -252,6 +252,29 @@ internal static class ClaudeUserSettings
         CommentHandling     = JsonCommentHandling.Skip,
     };
 
+    /// <summary>
+    /// What a new Claude Code session starts with, per <c>~/.claude/settings.json</c>: the <c>model</c>,
+    /// <c>permissions.defaultMode</c> and <c>effortLevel</c> keys. Each is null when unset (the CLI then
+    /// applies its own built-in default). Read best-effort; a missing or malformed file yields all-null.
+    /// </summary>
+    public static SessionDefaults ReadSessionDefaults()
+    {
+        try
+        {
+            var path = ClaudePaths.UserSettingsFile;
+            if (!File.Exists(path)) return SessionDefaults.None;
+            var root = JsonNode.Parse(File.ReadAllText(path), documentOptions: ReadOptions) as JsonObject;
+            return new SessionDefaults(
+                TranscriptJson.AsString(root?["model"]),
+                TranscriptJson.AsString((root?["permissions"] as JsonObject)?["defaultMode"]),
+                TranscriptJson.AsString(root?["effortLevel"]));
+        }
+        catch
+        {
+            return SessionDefaults.None;
+        }
+    }
+
     /// <summary>True when <c>env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</c> is set to "1".</summary>
     public static bool IsAgentTeamsEnabled()
     {
@@ -311,4 +334,11 @@ internal static class ClaudeUserSettings
             return false;
         }
     }
+}
+
+/// <summary>The user's configured session defaults from <c>settings.json</c> (see
+/// <see cref="ClaudeUserSettings.ReadSessionDefaults"/>); null = not set there.</summary>
+internal sealed record SessionDefaults(string? Model, string? PermissionMode, string? Effort)
+{
+    public static readonly SessionDefaults None = new(null, null, null);
 }

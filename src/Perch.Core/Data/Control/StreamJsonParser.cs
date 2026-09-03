@@ -42,13 +42,19 @@ internal static class StreamJsonParser
     private static IReadOnlyList<SessionEvent> ParseSystem(JsonNode root)
     {
         if (TranscriptJson.AsString(root["subtype"]) != "init") return [];
+        var commands = (root["slash_commands"] as JsonArray)?
+            .Select(c => TranscriptJson.AsString(c))
+            .Where(c => !string.IsNullOrEmpty(c))
+            .Select(c => c!)
+            .ToList();
         return
         [
             new SessionInitEvent(
                 TranscriptJson.AsString(root["session_id"]) ?? "",
                 TranscriptJson.AsString(root["model"]) ?? "",
                 TranscriptJson.AsString(root["permissionMode"]) ?? "",
-                (root["tools"] as JsonArray)?.Count ?? 0),
+                (root["tools"] as JsonArray)?.Count ?? 0,
+                commands ?? []),
         ];
     }
 
@@ -72,7 +78,8 @@ internal static class StreamJsonParser
                     events.Add(new ToolUseEvent(
                         TranscriptJson.AsString(block?["id"]) ?? "",
                         name,
-                        ToolSummary.Describe(name, block?["input"])));
+                        ToolSummary.Describe(name, block?["input"]),
+                        block?["input"]?.ToJsonString() ?? "{}"));
                     break;
             }
         }
@@ -156,7 +163,9 @@ internal static class StreamJsonParser
                 AsDouble(root["total_cost_usd"]),
                 TranscriptJson.AsLong(usage?["input_tokens"]),
                 TranscriptJson.AsLong(usage?["output_tokens"]),
-                TranscriptJson.AsLong(root["duration_ms"])),
+                TranscriptJson.AsLong(root["duration_ms"]),
+                TranscriptJson.AsLong(usage?["cache_read_input_tokens"]),
+                TranscriptJson.AsLong(usage?["cache_creation_input_tokens"])),
         ];
     }
 

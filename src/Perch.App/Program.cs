@@ -16,6 +16,12 @@ internal static class Program
     /// to auto-install the Claude Code plugin once, without the user having to think about it.</summary>
     public static bool IsFirstRun { get; private set; }
 
+    /// <summary>A claude-shaped session request on this launch's command line (<c>perch --resume &lt;id&gt;</c>,
+    /// <c>perch -c</c>, <c>perch [dir]</c>) when this process became the tray — the app opens the rich session
+    /// window for it once the overlay is up. When a tray was already running the request was forwarded to it
+    /// over the control pipe instead and this process exited (docs/session-ui-plan.md, Phase 3).</summary>
+    public static Perch.Data.Control.SessionOpenIntent? PendingSessionIntent { get; private set; }
+
     // Per-user-session name: only one tray runs per desktop login. The Windows "Local\" session
     // namespace prefix isn't valid off Windows, so use a plain name there. A dev instance gets its own
     // name (see AppProfile) so it can run alongside an installed Perch instead of no-op'ing against its
@@ -56,6 +62,11 @@ internal static class Program
 
         AutoStarted = args.Any(a => string.Equals(a, "--autostarted", StringComparison.OrdinalIgnoreCase));
 
+        // `perch` as a claude-shaped CLI: `perch --resume [id]`, `perch -c`, `perch [dir]` open a Perch
+        // session window. Parsed here (unknown flags are ignored, so a plain tray launch is untouched) and
+        // acted on at the single-instance gate below: forwarded to the running tray, or kept for this one.
+        var sessionIntent = isReplay ? null : Perch.Data.Control.SessionOpenIntent.FromArgs(args, Environment.CurrentDirectory);
+
         // Velopack install/update/uninstall lifecycle. The fast callbacks keep the per-user PATH entry
         // in sync so the plugin (and the user) can invoke `perch` from any terminal; the first-run hook
         // flags the launch so the running app installs the Claude Code plugin with a visible tray.
@@ -86,7 +97,12 @@ internal static class Program
         var mutexName = SingleInstanceMutexName + (isReplay ? "_Replay" : "");
         _instanceMutex = new Mutex(initiallyOwned: true, mutexName, out bool createdNew);
         if (!createdNew)
-            return 0; // another Avalonia tray instance already owns the mutex
+        {
+            // Another tray instance already owns the mutex: a session request is handed to it over the
+            // control pipe (this process is just the CLI); anything else is the classic silent no-op.
+            return sessionIntent is null ? 0 : ForwardSessionIntent(sessionIntent);
+        }
+        PendingSessionIntent = sessionIntent;
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
 
@@ -106,6 +122,40 @@ internal static class Program
         try { Services.HookInstaller.Uninstall(); } catch { }
         Console.WriteLine("Perch: removed the PATH entry, login registration and Claude Code hooks.");
         return 0;
+    }
+
+    // The CLI half of the control pipe: send the intent to the running tray as one JSON line, print its
+    // one-line answer to the launching terminal, and exit with 0 on success. Bounded waits so a wedged tray
+    // can't hang the shell; every failure is reported rather than swallowed, since the user is watching.
+    private static int ForwardSessionIntent(Perch.Data.Control.SessionOpenIntent intent)
+    {
+        AttachParentConsole();
+        try
+        {
+            using var pipe = new System.IO.Pipes.NamedPipeClientStream(
+                ".", Perch.Data.Control.ControlProtocol.PipeName, System.IO.Pipes.PipeDirection.InOut,
+                System.IO.Pipes.PipeOptions.Asynchronous);
+            pipe.Connect(3000);
+            var payload = System.Text.Encoding.UTF8.GetBytes(intent.ToJson() + "\n");
+            pipe.Write(payload, 0, payload.Length);
+            pipe.Flush();
+
+            using var reader = new StreamReader(pipe, System.Text.Encoding.UTF8);
+            var read = reader.ReadLineAsync();
+            if (!read.Wait(10_000) || read.Result is not { } line)
+            {
+                Console.Error.WriteLine("Perch is running but didn't answer.");
+                return 1;
+            }
+            var reply = Perch.Data.Control.ControlReply.Parse(line);
+            Console.WriteLine(reply?.Message ?? line);
+            return reply is { Ok: true } ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Perch is running but couldn't be reached: {ex.Message}");
+            return 1;
+        }
     }
 
     // Attaches this WinExe to the launching terminal's console (Windows only) and reopens the standard

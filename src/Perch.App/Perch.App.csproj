@@ -58,7 +58,7 @@
                Avalonia-12/net10 terminal control (XTerm.NET emulator over Porta.Pty's ConPTY) so a real
                interactive `claude` TUI runs inside a Perch window, promptable from the terminal or from
                Perch. See docs/session-control-plan.md. -->
-          <PackageReference Include="Iciclecreek.Avalonia.Terminal" Version="3.1.0" />
+          <PackageReference Include="Iciclecreek.Avalonia.Terminal" Version="4.0.0-rc005" />
           <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
           <PackageReference Include="Velopack" Version="1.2.0" />
           <PackageReference Include="QRCoder" Version="1.8.0" />

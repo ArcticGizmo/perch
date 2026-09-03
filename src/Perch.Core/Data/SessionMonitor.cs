@@ -840,7 +840,10 @@ internal sealed class SessionMonitor : IDisposable
                 pullRequest,
                 jiraTicket,
                 producedMarkdown,
-                ideHost
+                ideHost,
+                // Driven by a Perch session window? The lock sidecar is the cross-process truth (a second
+                // Perch instance's sessions count too); a stale lock (dead owner) reads as not controlled.
+                Control.SessionLock.Read(sessionId) is { IsLive: true }
             );
 
             if (status == SessionStatus.NeedsAttention

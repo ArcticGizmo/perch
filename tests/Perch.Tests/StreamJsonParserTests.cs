@@ -18,6 +18,15 @@ public class StreamJsonParserTests
         Assert.Equal("claude-haiku-4-5-20251001", ev.Model);
         Assert.Equal("default", ev.PermissionMode);
         Assert.Equal(3, ev.ToolCount);
+        Assert.Empty(ev.SlashCommands!);
+    }
+
+    [Fact]
+    public void Init_CapturesAdvertisedSlashCommands()
+    {
+        var line = """{"type":"system","subtype":"init","session_id":"s","tools":[],"model":"m","permissionMode":"default","slash_commands":["compact","model","review"]}""";
+        var ev = Assert.IsType<SessionInitEvent>(Assert.Single(StreamJsonParser.Parse(line)));
+        Assert.Equal(new[] { "compact", "model", "review" }, ev.SlashCommands);
     }
 
     [Fact]
@@ -32,6 +41,7 @@ public class StreamJsonParserTests
         Assert.Equal("toolu_1", tool.ToolUseId);
         Assert.Equal("Bash", tool.ToolName);
         Assert.Equal("Running: echo hi", tool.Summary);
+        Assert.Equal("""{"command":"echo hi"}""", tool.InputJson);
     }
 
     [Fact]
@@ -92,6 +102,18 @@ public class StreamJsonParserTests
         Assert.Equal(10, ev.InputTokens);
         Assert.Equal(47, ev.OutputTokens);
         Assert.Equal(2318, ev.DurationMs);
+    }
+
+    [Fact]
+    public void Result_CapturesCacheTokens_AndDerivesContext()
+    {
+        var line = """{"type":"result","subtype":"success","is_error":false,"duration_ms":900,"session_id":"s","total_cost_usd":0.01,"usage":{"input_tokens":1200,"output_tokens":800,"cache_read_input_tokens":45000,"cache_creation_input_tokens":3000}}""";
+        var ev = Assert.IsType<TurnResultEvent>(Assert.Single(StreamJsonParser.Parse(line)));
+        Assert.Equal(45000, ev.CacheReadTokens);
+        Assert.Equal(3000, ev.CacheCreationTokens);
+        // Context occupancy = every input bucket summed; fresh (billed) input excludes the cache re-read.
+        Assert.Equal(49200, ev.ContextTokens);
+        Assert.Equal(4200, ev.FreshInputTokens);
     }
 
     [Theory]

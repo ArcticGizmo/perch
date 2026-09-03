@@ -23,9 +23,10 @@ using System.Text.Json.Nodes;
 //   cleanup      SessionEnd                       → remove this session's sidecars + sweep agent markers
 //
 // Two invariants keep a stale hook from ever wedging a Claude Code session: it always exits 0, and it
-// never volunteers a decision on stdout — the only output it ever writes is `valet` relaying a choice a
-// user explicitly made in the Perch UI; every failure path is silent, which Claude Code treats as "no
-// opinion" (normal permission flow). Honours CLAUDE_CONFIG_DIR (data view) and PERCH_DEV
+// never volunteers a decision on stdout — the only outputs it ever writes are `valet` relaying a choice a
+// user explicitly made in the Perch UI, and `start`'s advisory systemMessage when a normal claude opens a
+// session Perch is already controlling ({sid}.perch-lock); every failure path is silent, which Claude Code
+// treats as "no opinion" (normal permission flow). Honours CLAUDE_CONFIG_DIR (data view) and PERCH_DEV
 // (which profile's settings to read) exactly like the app, so dev/hermetic testing works end to end.
 
 string action = args.Length > 0 ? args[0] : "";
@@ -66,9 +67,11 @@ try
             HandleValet(payload, args.Length > 1 ? args[1] : null);
             break;
 
-        // SessionStart also seeds the initial mode (if present), then may launch the tray.
+        // SessionStart also seeds the initial mode (if present), warns if the id is Perch-controlled, then
+        // may launch the tray.
         case "start":
             WriteMode(sessionsDir, f);
+            WarnIfPerchControlled(sessionsDir, f);
             HandleStart(f);
             break;
 
@@ -146,13 +149,82 @@ static void HandleStart(Dictionary<string, string?> f)
     LaunchPerch();
 }
 
+// SessionStart guard (docs/session-ui-plan.md, collision defence (c)): Perch writes {sid}.perch-lock for
+// every session it drives over stream-json. If a *normal* `claude --resume <sid>` opens that id while
+// the owning Perch is alive, two processes would append to one transcript — so tell the user, via the
+// hook's systemMessage (shown in the terminal, not fed to the model). Perch's own controlled session
+// fires this hook too; it carries PERCH_SESSION_OWNER=<tray pid> in its environment, which is how it's
+// recognised as the legitimate owner and left silent. A lock whose owner has exited is stale: deleted,
+// no warning. Fail-open everywhere — never blocks the session, and the message is advisory only.
+static void WarnIfPerchControlled(string sessionsDir, Dictionary<string, string?> f)
+{
+    try
+    {
+        string? sid = f["session_id"];
+        string? source = f["source"];
+        if (string.IsNullOrEmpty(sid)) return;
+        if (!string.IsNullOrEmpty(source) && source != "startup" && source != "resume") return;
+
+        string lockPath = Path.Combine(sessionsDir, sid + ".perch-lock");
+        if (!File.Exists(lockPath)) return;
+
+        var l = ReadFields(File.ReadAllBytes(lockPath), "pid", "profile");
+        string? pid = l["pid"];
+        if (string.Equals(pid, Environment.GetEnvironmentVariable("PERCH_SESSION_OWNER"), StringComparison.Ordinal))
+            return;   // this IS the Perch-controlled session starting
+        if (!IsProcessAlive(pid))
+        {
+            TryDelete(lockPath);   // stale lock from a tray that exited without cleaning up
+            return;
+        }
+
+        string who = string.IsNullOrEmpty(l["profile"]) ? "Perch" : l["profile"]!;
+        var output = new JsonObject
+        {
+            ["systemMessage"] =
+                $"⚠ Perch: session {sid[..Math.Min(8, sid.Length)]} is currently controlled by {who} (pid {pid}). " +
+                "Two writers on one transcript will corrupt it — continue it from the Perch window instead, " +
+                "or close it there first.",
+        };
+        Console.Out.Write(output.ToJsonString());
+    }
+    catch { /* fail open */ }
+}
+
+// True when the recorded owner pid is a live process. Unparseable → treat as dead (stale).
+static bool IsProcessAlive(string? pidText)
+{
+    if (!int.TryParse(pidText, out int pid) || pid <= 0) return false;
+    try
+    {
+        using var p = Process.GetProcessById(pid);
+        return !p.HasExited;
+    }
+    catch { return false; }
+}
+
 // SessionEnd: remove this session's sidecars, and sweep any agent stop/idle markers it left behind.
 static void HandleCleanup(string sessionsDir, Dictionary<string, string?> f)
 {
     string? sid = f["session_id"];
     if (!string.IsNullOrEmpty(sid))
+    {
         foreach (string ext in new[] { ".mode", ".notify", ".history", ".afk" /* legacy */ })
             TryDelete(Path.Combine(sessionsDir, sid + ext));
+        // The ownership lock goes only when it's ours (the controlled session itself ending) or stale — a
+        // normal claude that briefly opened a Perch-controlled id must not strip Perch's live ownership.
+        try
+        {
+            string lockPath = Path.Combine(sessionsDir, sid + ".perch-lock");
+            if (File.Exists(lockPath))
+            {
+                string? pid = ReadFields(File.ReadAllBytes(lockPath), "pid")["pid"];
+                bool ours = string.Equals(pid, Environment.GetEnvironmentVariable("PERCH_SESSION_OWNER"), StringComparison.Ordinal);
+                if (ours || !IsProcessAlive(pid)) TryDelete(lockPath);
+            }
+        }
+        catch { }
+    }
 
     string? sub = SubagentsDir(f["transcript_path"]);
     if (sub is not null && Directory.Exists(sub))

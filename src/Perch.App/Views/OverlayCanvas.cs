@@ -873,6 +873,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// <summary>Cache key for the Claude Desktop app icon (desktop sessions share one host, so one key).</summary>
     internal const string DesktopOriginKey = "claude-desktop";
 
+    /// <summary>Cache key for the Perch mark on sessions a Perch session window drives (the brand bitmap).</summary>
+    internal const string PerchOriginKey = "perch-session";
+
     // The global scratch-pad note button that leads the quick-links row: its hit-rect (captured at paint
     // time) and hover state. Clicking it opens the scratch pad (see RouteClick / ScratchPadRequested).
     private Rect _noteButtonRect;
@@ -2579,17 +2582,21 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // space, and is a bit of fun. The real icon's silhouette is tinted once resolved; until then (or when
         // it can't be resolved) a brand vector mark / monitor glyph stands in, in the same status colour.
         // Plain terminal and background/SDK sessions keep the plain coloured dot.
-        string? hostKey = session.IsDesktop ? DesktopOriginKey
+        string? hostKey = session.IsPerchControlled ? PerchOriginKey
+                        : session.IsDesktop ? DesktopOriginKey
                         : session.IsIde     ? session.IdeHost!.Executable
                         : null;
         double dotCx = HorizPad + 4;   // the status-dot centre — host icons line up on it
-        if (_showIdeStatusIcons && (session.IsDesktop || session.IsIde))
+        // A Perch-driven session always wears the Perch mark (it's how you tell it apart from a terminal
+        // session, and where a click will land), independent of the IDE-icon preference.
+        if (session.IsPerchControlled && !_originIcons.ContainsKey(PerchOriginKey)) _originIcons[PerchOriginKey] = Brand;
+        if (session.IsPerchControlled || (_showIdeStatusIcons && (session.IsDesktop || session.IsIde)))
         {
             var hostBrush = new SolidColorBrush(dotColor);
             var tinted = hostKey is not null ? TintedIcon(hostKey, dotColor) : null;
             if (tinted is not null)
             {
-                DrawOriginBitmap(ctx, dotCx, nameMidY, tinted);
+                DrawOriginBitmap(ctx, dotCx, nameMidY, tinted, flip: !session.IsPerchControlled);
             }
             else
             {
@@ -2602,12 +2609,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                       * Matrix.CreateTranslation(dotCx, nameMidY);
                 using (ctx.PushTransform(m))
                 {
-                    if (session.IsDesktop) DrawDesktopIcon(ctx, dotCx - native / 2, nameMidY, hostBrush);
-                    else                   DrawIdeIcon(ctx, dotCx - native / 2, nameMidY, session.IdeHost!.Kind, hostBrush);
+                    if (session.IsPerchControlled)  ctx.DrawEllipse(hostBrush, null, new Point(dotCx, nameMidY), 4, 4);
+                    else if (session.IsDesktop)     DrawDesktopIcon(ctx, dotCx - native / 2, nameMidY, hostBrush);
+                    else                            DrawIdeIcon(ctx, dotCx - native / 2, nameMidY, session.IdeHost!.Kind, hostBrush);
                 }
             }
             _originRects[rowIndex]  = new Rect(dotCx - 8, nameMidY - 8, 16, 16);
-            _originLabels[rowIndex] = session.IsDesktop ? "Claude Desktop" : session.IdeHost!.DisplayName;
+            _originLabels[rowIndex] = session.IsPerchControlled ? "Perch session" : session.IsDesktop ? "Claude Desktop" : session.IdeHost!.DisplayName;
         }
         else
         {
@@ -3021,17 +3029,23 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // Draws the host-app icon (rendered from its executable) fit into a dot-scale box centred on (cx, cy) —
     // the status-dot centre — so it lines up with the plain dots on other rows. Shell-extracted icons come
-    // out vertically flipped (see the quick-links strip), so mirror about the horizontal axis to right them.
-    private static void DrawOriginBitmap(DrawingContext ctx, double cx, double cy, Bitmap icon)
+    // out vertically flipped (see the quick-links strip), so by default mirror about the horizontal axis to
+    // right them; a bitmap decoded straight from a PNG asset (the Perch mark) is already upright, so it opts out.
+    private static void DrawOriginBitmap(DrawingContext ctx, double cx, double cy, Bitmap icon, bool flip = true)
     {
         var src = icon.Size;
         double scale = Math.Min(OriginIconSize / src.Width, OriginIconSize / src.Height);
         double w = src.Width * scale, h = src.Height * scale;
         var dst = new Rect(cx - w / 2, cy - h / 2, w, h);
-        var flip = Matrix.CreateTranslation(0, -cy)
-                 * Matrix.CreateScale(1, -1)
-                 * Matrix.CreateTranslation(0, cy);
-        using (ctx.PushTransform(flip))
+        if (!flip)
+        {
+            ctx.DrawImage(icon, new Rect(src), dst);
+            return;
+        }
+        var mirror = Matrix.CreateTranslation(0, -cy)
+                   * Matrix.CreateScale(1, -1)
+                   * Matrix.CreateTranslation(0, cy);
+        using (ctx.PushTransform(mirror))
             ctx.DrawImage(icon, new Rect(src), dst);
     }
 
@@ -3391,7 +3405,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         Color c = Palette.ModeColor(mode);
         if (alpha < 255) c = Color.FromArgb((byte)alpha, c.R, c.G, c.B);
-        var brush = new SolidColorBrush(c);
+        DrawModeChevrons(ctx, new SolidColorBrush(c), x, midY);
+    }
+
+    /// <summary>The mode badge's glyph — two fast-forward chevrons (~11×8 DIPs, left edge at <paramref name="x"/>,
+    /// centred on <paramref name="midY"/>) — shared with the session window so its mode pill and menu wear
+    /// exactly the badge the overlay rows do.</summary>
+    internal static void DrawModeChevrons(DrawingContext ctx, IBrush brush, double x, double midY)
+    {
         const double hh = 4, w = 5;
         Chevron(ctx, brush, x, midY, hh, w);
         Chevron(ctx, brush, x + w + 1, midY, hh, w);

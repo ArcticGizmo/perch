@@ -613,7 +613,27 @@ internal sealed class TranscriptReader
         return raw != null && raw.StartsWith("<local-command-stdout>", StringComparison.Ordinal) ? raw : null;
     }
 
+    /// <summary>
+    /// The context occupancy of a session on disk: the size of its most recent prompt (all input buckets
+    /// summed) and the window that measures against. Used to estimate what resuming the session will cost
+    /// before it is resumed. <c>Used</c> is 0 when no usage record is present. Best-effort; never throws.
+    /// Not memoised — callers that need it repeatedly should cache the derived estimate.
+    /// </summary>
+    public static (long Used, ContextWindowInfo Window) ReadContextUsage(string path, string cwd)
+    {
+        try { return ScanContext(path, cwd); }
+        catch { return (0, UnknownWindow); }
+    }
+
     private static (float? fill, ContextWindowInfo window) ParseContextFill(string path, string cwd)
+    {
+        var (used, window) = ScanContext(path, cwd);
+        return used == 0 ? (null, window) : (Math.Clamp((float)used / window.Tokens, 0f, 1f), window);
+    }
+
+    // The shared scan behind both the fill gauge and the resume estimate: reads the whole transcript,
+    // tracking the newest /model line, the running model id, and the largest + latest prompt sizes.
+    private static (long used, ContextWindowInfo window) ScanContext(string path, string cwd)
     {
         // A /model switch can land anywhere in the transcript, and the most recent one wins — so unlike
         // the activity/title tail-scans we must read the whole file. It's cheap: a substring pre-filter
@@ -703,10 +723,7 @@ internal sealed class TranscriptReader
             ConfiguredModelId: ReadConfiguredModel(cwd),
             MaxObservedPrompt: maxUsed));
 
-        if (latestUsed == 0)
-            return (null, window);
-
-        return (Math.Clamp((float)latestUsed / window.Tokens, 0f, 1f), window);
+        return (latestUsed, window);
     }
 
     // How far apart two assistant turns can be and still count as one continuous burst of work.

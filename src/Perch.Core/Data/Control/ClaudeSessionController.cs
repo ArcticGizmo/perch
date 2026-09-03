@@ -29,23 +29,34 @@ internal sealed class ClaudeSessionController : IDisposable
     private readonly Lock _writeLock = new();
     private int _requestCounter;
 
+    /// <summary>The session id. Known from launch (pinned via <c>--session-id</c> for a new session, or the
+    /// <c>--resume</c> id), then confirmed by <c>system/init</c>.</summary>
     public string? SessionId { get; private set; }
+    public string Cwd { get; private set; } = "";
     public bool IsRunning => _process is { HasExited: false };
 
     /// <summary>Launches the session in <paramref name="cwd"/>. Model/mode may be null for the user's
     /// defaults; both are validated against known tokens since they end up on a shell command line.
     /// <paramref name="resumeSessionId"/> resumes an existing session by id (<c>--resume</c>) — the
     /// conversation continues under the <em>same</em> id and transcript, the mechanism behind "elevate a
-    /// terminal session into Perch" (session-control M4).</summary>
-    public void Start(string cwd, string? model = null, string? permissionMode = null, string? resumeSessionId = null)
+    /// terminal session into Perch" (session-control M4). Otherwise a fresh GUID is pinned via
+    /// <c>--session-id</c> (or <paramref name="newSessionId"/> when the caller chose one), so the id — and
+    /// with it the <see cref="ControlledSessions"/> registration and the <see cref="SessionLock"/> sidecar —
+    /// exist <em>before</em> the CLI's <c>init</c>, closing the pre-init window of the collision defences.</summary>
+    public void Start(string cwd, string? model = null, string? permissionMode = null, string? resumeSessionId = null,
+        string? newSessionId = null, string? effort = null)
     {
         if (IsRunning) throw new InvalidOperationException("Session already running.");
 
+        bool resume = IsSafeToken(resumeSessionId);
+        var id = resume ? resumeSessionId! : (IsSafeToken(newSessionId) ? newSessionId! : Guid.NewGuid().ToString());
+
         var args = "-p --input-format stream-json --output-format stream-json --verbose" +
                    " --include-partial-messages --permission-prompt-tool stdio";
-        if (IsSafeToken(resumeSessionId)) args += $" --resume {resumeSessionId}";
+        args += resume ? $" --resume {id}" : $" --session-id {id}";
         if (IsSafeToken(model)) args += $" --model {model}";
         if (IsSafeToken(permissionMode) && permissionMode != "default") args += $" --permission-mode {permissionMode}";
+        if (IsEffortLevel(effort)) args += $" --effort {effort}";
 
         // `claude` is a .cmd shim on Windows PATH, so it needs a shell host (same reason
         // SessionLauncher.Reopen never execs it directly). Elsewhere it's a plain executable.
@@ -61,8 +72,29 @@ internal sealed class ClaudeSessionController : IDisposable
         psi.StandardOutputEncoding = System.Text.Encoding.UTF8;
         psi.StandardErrorEncoding = System.Text.Encoding.UTF8;
         psi.StandardInputEncoding = new System.Text.UTF8Encoding(false);
+        // Lets perch-hook (a child of this claude) tell "Perch's own controlled session starting" from "a
+        // normal claude opened a Perch-controlled id" — see SessionLock / collision defence (c).
+        psi.Environment[SessionLock.OwnerEnvVar] = Environment.ProcessId.ToString();
 
-        var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start claude.");
+        // Ownership is claimed before the process exists so nothing can race the pre-init window; a
+        // failed launch releases it again below.
+        SessionId = id;
+        Cwd = cwd;
+        ControlledSessions.Register(id);
+        SessionLock.Acquire(id, cwd);
+
+        Process process;
+        try
+        {
+            process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start claude.");
+        }
+        catch
+        {
+            ControlledSessions.Unregister(id);
+            SessionLock.Release(id);
+            SessionId = null;
+            throw;
+        }
         _process = process;
         _stdin = process.StandardInput;
 
@@ -88,10 +120,15 @@ internal sealed class ClaudeSessionController : IDisposable
             {
                 foreach (var ev in StreamJsonParser.Parse(line))
                 {
-                    if (ev is SessionInitEvent init)
+                    // Normally confirms the pinned/resumed id; if the CLI reports a different one (it shouldn't),
+                    // follow it so ownership tracks the transcript that is actually being written.
+                    if (ev is SessionInitEvent init && init.SessionId.Length > 0 && init.SessionId != SessionId)
                     {
+                        ControlledSessions.Unregister(SessionId);
+                        SessionLock.Release(SessionId);
                         SessionId = init.SessionId;
                         ControlledSessions.Register(init.SessionId);   // the valet + focus routing skip owned sessions
+                        SessionLock.Acquire(init.SessionId, Cwd);
                     }
                     EventReceived?.Invoke(ev);
                 }
@@ -113,6 +150,7 @@ internal sealed class ClaudeSessionController : IDisposable
         }
         catch { /* best effort */ }
         ControlledSessions.Unregister(SessionId);
+        SessionLock.Release(SessionId);
         Exited?.Invoke(exitCode, errTail);
     }
 
@@ -128,14 +166,17 @@ internal sealed class ClaudeSessionController : IDisposable
     });
 
     /// <summary>Answers a <see cref="PermissionRequestEvent"/>. On allow the tool's input is echoed back
-    /// as <c>updatedInput</c> (the protocol allows editing it; the PoC passes it through unchanged).</summary>
-    public void RespondToPermission(PermissionRequestEvent request, bool allow, string? denyMessage = null)
+    /// as <c>updatedInput</c> — unchanged, or <paramref name="updatedInput"/> when the caller edited it (how
+    /// <c>AskUserQuestion</c> is answered: the input plus an <c>answers</c> object, see
+    /// <see cref="AskUserQuestionInput"/>).</summary>
+    public void RespondToPermission(PermissionRequestEvent request, bool allow, string? denyMessage = null, JsonNode? updatedInput = null)
     {
         JsonObject verdict;
         if (allow)
         {
-            JsonNode? input = null;
-            try { input = JsonNode.Parse(request.InputJson); } catch { /* omit on parse failure */ }
+            JsonNode? input = updatedInput;
+            if (input is null)
+                try { input = JsonNode.Parse(request.InputJson); } catch { /* omit on parse failure */ }
             verdict = new JsonObject { ["behavior"] = "allow", ["updatedInput"] = input ?? new JsonObject() };
         }
         else
@@ -165,6 +206,31 @@ internal sealed class ClaudeSessionController : IDisposable
             ["request"] = new JsonObject { ["subtype"] = "set_permission_mode", ["mode"] = mode },
         });
     }
+
+    /// <summary>Switches the model mid-session — the Agent SDK's <c>setModel</c> control request.</summary>
+    public void SetModel(string model)
+    {
+        if (!IsSafeToken(model)) return;
+        WriteLine(new JsonObject
+        {
+            ["type"] = "control_request",
+            ["request_id"] = NextRequestId(),
+            ["request"] = new JsonObject { ["subtype"] = "set_model", ["model"] = model },
+        });
+    }
+
+    /// <summary>Changes the effort level mid-session by sending the documented <c>/effort &lt;level&gt;</c> command
+    /// as a user message (slash commands are accepted over stream-json input in print mode).</summary>
+    public void SetEffort(string level)
+    {
+        if (!IsEffortLevel(level) && level != "auto") return;   // "auto" clears the saved level
+        SendPrompt($"/effort {level}");
+    }
+
+    /// <summary>The CLI's accepted effort levels (<c>--effort</c> / <c>/effort</c>).</summary>
+    public static readonly string[] EffortLevels = ["low", "medium", "high", "xhigh", "max"];
+
+    public static bool IsEffortLevel(string? s) => s is not null && Array.IndexOf(EffortLevels, s) >= 0;
 
     /// <summary>Interrupts the in-flight turn (the stream-json equivalent of Esc).</summary>
     public void Interrupt() => WriteLine(new JsonObject
