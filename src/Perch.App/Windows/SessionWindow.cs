@@ -40,7 +40,14 @@ namespace Perch.Avalonia.Windows;
 /// </summary>
 internal sealed class SessionWindow : Window
 {
-    private static readonly string[] Modes = ["default", "plan", "acceptEdits", "bypassPermissions"];
+    private static readonly string[] Modes = ["default", "auto", "plan", "acceptEdits", "bypassPermissions"];
+
+    // What a Perch-driven session starts in when nothing is explicitly chosen — the launcher pick, then
+    // settings.json's permissions.defaultMode, then this. A plain terminal `claude` would fall back to
+    // "default" (ask on every action), but a Perch session answers permissions in-UI, so "auto" is the
+    // friendlier default. (This is the recent change from the old "manual"/default fallback.)
+    private const string FallbackMode = "auto";
+    private string StartingMode => _mode ?? _defaults.PermissionMode ?? FallbackMode;
     private static readonly string[] ModelChoices = ["haiku", "sonnet", "opus", "fable"];
 
     // What a session launches with when nothing is chosen here: the user's settings.json values, else the
@@ -71,6 +78,12 @@ internal sealed class SessionWindow : Window
     // Live usage readout beside the settings chips: cumulative tokens in/out, and context-window pressure.
     private readonly TextBlock _tokensPillText, _contextPillText;
     private readonly Border _tokensPill, _contextPill;
+    // The context pill's thermometer — the overlay's own glyph/variants (OverlayCanvas.DrawThermo), at the
+    // thresholds the floating UI is configured with. Show/threshold/green-segment mirror settings, pushed
+    // by the app via SetContextPressureConfig; default to AppSettings' own defaults so it reads sanely if
+    // that call never comes.
+    private readonly ThermoGlyph _thermoGlyph;
+    private bool _showContextPressure = true, _showContextGreenSegment;
     private readonly ModeGlyph _modeGlyph;
     private readonly SessionButton _interruptButton, _resumeButton, _endButton, _moreButton;
 
@@ -208,7 +221,9 @@ internal sealed class SessionWindow : Window
         _tokensPill = Pill(_tokensPillText, _p.Raised2, _p.BorderSoft);
         _tokensPill.IsVisible = false;
         _contextPillText = new TextBlock { FontSize = 12, FontFamily = _p.Mono, Foreground = _p.Muted, VerticalAlignment = VerticalAlignment.Center };
-        _contextPill = Pill(_contextPillText, _p.Raised2, _p.BorderSoft);
+        _thermoGlyph = new ThermoGlyph { VerticalAlignment = VerticalAlignment.Center, IsVisible = false };
+        _contextPill = Pill(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { _thermoGlyph, _contextPillText } },
+            _p.Raised2, _p.BorderSoft);
         _contextPill.IsVisible = false;
 
         _statusText = new TextBlock { FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center };
@@ -846,7 +861,7 @@ internal sealed class SessionWindow : Window
         PerchSession session;
         try
         {
-            session = start(new SessionLaunchOptions(_cwd, _model, _mode, _effort, _resumeId));
+            session = start(new SessionLaunchOptions(_cwd, _model, StartingMode, _effort, _resumeId));
         }
         catch (Exception ex)
         {
@@ -939,7 +954,7 @@ internal sealed class SessionWindow : Window
             : _defaults.Model is not null ? "Model from settings.json — click to change"
             : "Claude Code's default model (nothing set in settings.json) — click to change";
 
-        var mode = conv.Model.Length > 0 ? conv.PermissionMode : (_mode ?? _defaults.PermissionMode ?? "default");
+        var mode = conv.Model.Length > 0 ? conv.PermissionMode : StartingMode;
         var modeEnum = ModeGlyph.Parse(mode);
         _modeGlyph.Mode = modeEnum;
         _modePillText.Text = SessionThreadView.ModeLabel(mode);
@@ -987,8 +1002,19 @@ internal sealed class SessionWindow : Window
             int window = ModelContext.WindowFor(model);
             if (ctx > window) window = (int)Math.Min(int.MaxValue, Math.Ceiling(ctx / 1_000_000.0) * 1_000_000);
             double pct = Math.Clamp((double)ctx / window * 100.0, 0, 100);
+            float fill = (float)(pct / 100.0);
             _contextPillText.Text = $"ctx {FormatTokens(ctx)} · {pct:0}%";
-            _contextPillText.Foreground = pct >= 85 ? _p.Err : pct >= 60 ? _p.Await : _p.Muted;
+
+            // The thermometer + its matching text tint follow the floating overlay: same glyph, same
+            // green→yellow→orange→red variants at the same thresholds, hidden below yellow unless the
+            // overlay's green-segment variant is on (and gone entirely if context pressure is off there).
+            _thermoGlyph.Fill = fill;
+            bool crossedYellow = fill >= _thermoGlyph.YellowThreshold;
+            _thermoGlyph.IsVisible = _showContextPressure && (crossedYellow || _showContextGreenSegment);
+            // Below the yellow threshold the readout stays calm (muted), matching the overlay row, which
+            // shows no colour there; at/above it the text warms to the thermometer's variant colour.
+            _contextPillText.Foreground = crossedYellow ? new SolidColorBrush(_thermoGlyph.VariantColor) : _p.Muted;
+
             _contextPill[ToolTip.TipProperty] =
                 $"Context window: {FormatTokens(ctx)} of {FormatTokens(window)} ({pct:0}%). This is what every new message re-sends to the model — the fuller it gets, the more each turn costs, and a compaction is coming as it nears full.";
         }
@@ -1005,7 +1031,7 @@ internal sealed class SessionWindow : Window
     private void ShowModeMenu()
     {
         var flyout = new MenuFlyout { Placement = PlacementMode.TopEdgeAlignedLeft };
-        var configured = _defaults.PermissionMode ?? "default";
+        var configured = _defaults.PermissionMode ?? FallbackMode;
         foreach (var mode in Modes)
         {
             var item = new MenuItem
@@ -1142,6 +1168,18 @@ internal sealed class SessionWindow : Window
         Background = bg, BorderBrush = line, BorderThickness = new Thickness(1), CornerRadius = SessionPalette.PillRadius,
         Padding = new Thickness(10, 4), VerticalAlignment = VerticalAlignment.Center, Child = content,
     };
+
+    /// <summary>Mirrors the floating overlay's context-pressure configuration onto the context pill's
+    /// thermometer: whether the feature is shown at all, its yellow/orange/red colour thresholds, and
+    /// whether the below-yellow green segment is drawn — so this glyph reads exactly like the overlay's.
+    /// The app pushes the current settings when it builds the window.</summary>
+    public void SetContextPressureConfig(bool show, int yellowPercent, int orangePercent, int redPercent, bool greenSegment)
+    {
+        _showContextPressure = show;
+        _showContextGreenSegment = greenSegment;
+        _thermoGlyph.SetThresholds(yellowPercent, orangePercent, redPercent);
+        if (_session is not null) RefreshBar();   // re-evaluate visibility/colour if a session is already attached
+    }
 
     /// <summary>"claude-opus-5" → "Opus 5"; "claude-haiku-4-5-20251001" → "Haiku 4.5"; null → "default model".</summary>
     internal static string ShortModel(string? model)

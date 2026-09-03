@@ -3367,14 +3367,26 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // Context-pressure thermometer: glass tube + bulb with mercury rising; colour steps green→yellow→
-    // orange→red at the configured thresholds.
+    // orange→red at the configured thresholds. Painted through the shared static below so the session
+    // window's ThermoGlyph wears exactly this glyph, in exactly these colours.
     private void DrawThermoIcon(DrawingContext ctx, float fill, double x, double midY)
+        => DrawThermo(ctx, fill, _ctxYellow, _ctxOrange, _ctxRed, x, midY);
+
+    /// <summary>The thermometer's variant colour for a given <paramref name="fill"/> (0..1) and the
+    /// yellow/orange/red fraction thresholds — green below yellow, then warming through the bands. Shared
+    /// so a text readout beside the glyph can be tinted to match it.</summary>
+    internal static Color ThermoColor(float fill, float yellow, float orange, float red) =>
+        fill >= red    ? Color.FromRgb(239, 68, 68)
+      : fill >= orange ? Color.FromRgb(249, 115, 22)
+      : fill >= yellow ? Color.FromRgb(234, 179, 8)
+                       : Color.FromRgb(34, 197, 94);
+
+    /// <summary>Paints the context-pressure thermometer (glass tube + bulb + rising mercury), left edge at
+    /// <paramref name="x"/>, centred on <paramref name="midY"/>, coloured by the given fraction thresholds.
+    /// Static + threshold-parameterised so the session window (<see cref="ThermoGlyph"/>) shares the glyph.</summary>
+    internal static void DrawThermo(DrawingContext ctx, float fill, float yellow, float orange, float red, double x, double midY)
     {
-        Color col = fill >= _ctxRed    ? Color.FromRgb(239, 68, 68)
-                  : fill >= _ctxOrange ? Color.FromRgb(249, 115, 22)
-                  : fill >= _ctxYellow ? Color.FromRgb(234, 179, 8)
-                                       : Color.FromRgb(34, 197, 94);
-        var colBrush = new SolidColorBrush(col);
+        var colBrush = new SolidColorBrush(ThermoColor(fill, yellow, orange, red));
 
         double cx = x + 5;
         var tube = new Rect(cx - 2, midY - 7, 4, 9);

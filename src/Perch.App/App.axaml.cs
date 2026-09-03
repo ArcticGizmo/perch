@@ -1596,6 +1596,11 @@ public partial class App : Application
             LiveLookup = id => _lastSessions.FirstOrDefault(s => s.SessionId == id),
             StartRequested = StartPerchSession,
         };
+        // The context pill's thermometer mirrors the floating overlay's context-pressure settings so the two
+        // read alike (same glyph, variants and thresholds).
+        var cs = Effective;
+        w.SetContextPressureConfig(cs.ShowContextPressure, cs.ContextPressureYellowPercent,
+            cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent, cs.ShowContextGreenSegment);
         w.NewSessionRequested += OpenSessionWindow;
         _sessionWindows.Add(w);
         w.Closed += (_, _) => _sessionWindows.Remove(w);
