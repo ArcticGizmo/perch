@@ -31,7 +31,7 @@ internal sealed class SessionTerminalWindow : Window
     private static readonly FontFamily Mono = new("Cascadia Mono, Cascadia Code, Consolas, Menlo, monospace");
 
     private readonly ComboBox _sessionPicker;   // "New session" (default) or resume an existing one
-    private readonly TextBox _cwdBox;
+    private readonly AutoCompleteBox _cwdBox;   // free-text project folder with search over past projects
     private readonly Button _browseButton;
     private readonly Button _startButton;
     private readonly Button _openUiButton;
@@ -42,6 +42,7 @@ internal sealed class SessionTerminalWindow : Window
 
     private string? _resumeId;
     private bool _launched;
+    private bool _hasFolderSuggestions;   // gates the focus-to-open-dropdown behaviour
     private bool _autoLaunchOnLoad;   // resume/elevation: launch once the terminal is laid out (sized)
     private bool _suppressPicker;
     private SessionHost? _session;
@@ -84,11 +85,21 @@ internal sealed class SessionTerminalWindow : Window
 
         // Deliberately empty: a session must be pointed at a project explicitly — launching at the home
         // dir (or a filesystem root) is a footgun, so Start stays disabled until a real folder is chosen.
-        _cwdBox = new TextBox
+        // Free-text with search: typing filters the folders you've launched sessions in before (seeded in
+        // SeedSessionPicker), so a familiar project is a couple of keystrokes rather than a browse.
+        _cwdBox = new AutoCompleteBox
         {
             Text = "",
-            PlaceholderText = "Select a project folder…", FontSize = 12, MinWidth = 260,
+            FontSize = 12, MinWidth = 260,
             VerticalAlignment = VerticalAlignment.Center,
+        };
+        FolderSearchBox.Configure(_cwdBox, "Search or select a project folder…",
+            Palette.FgBrush, Palette.MutedBrush, Palette.OverlaySurfaceBrush, Palette.BorderBrush,
+            Mono, Mono, borderless: false);
+        // Empty + focused pops the whole recency-ordered list (a 0-char search); typing then filters it.
+        _cwdBox.GotFocus += (_, _) =>
+        {
+            if (_hasFolderSuggestions && string.IsNullOrEmpty(_cwdBox.Text)) _cwdBox.IsDropDownOpen = true;
         };
         _cwdBox.TextChanged += (_, _) => UpdateStartEnabled();
         _browseButton = new Button
@@ -373,6 +384,9 @@ internal sealed class SessionTerminalWindow : Window
         System.Threading.Tasks.Task.Run(() => SessionHistory.ListAll(activeSessionIds)).ContinueWith(t =>
         {
             if (!t.IsCompletedSuccessfully) return;
+            // Distinct project folders across all recorded sessions — the search list for the cwd box. Built
+            // from the same scan so a new session lands in a familiar project without opening the picker.
+            var folders = SessionHistory.DistinctFolders(t.Result);
             Dispatcher.UIThread.Post(() =>
             {
                 if (!IsVisible || _launched) return;
@@ -386,6 +400,9 @@ internal sealed class SessionTerminalWindow : Window
                 _sessionPicker.ItemsSource = items;
                 _sessionPicker.SelectedItem = items.FirstOrDefault(e => e.SessionId == keep) ?? items[0];
                 _suppressPicker = false;
+
+                _cwdBox.ItemsSource = folders;
+                _hasFolderSuggestions = folders.Count > 0;
             });
         });
     }

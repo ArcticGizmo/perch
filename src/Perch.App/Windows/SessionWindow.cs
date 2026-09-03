@@ -80,8 +80,8 @@ internal sealed class SessionWindow : Window
     private readonly SessionThreadView _thread;
 
     // Launcher
-    private readonly TextBox _folderBox;
-    private readonly ComboBox _modelCombo;
+    private readonly AutoCompleteBox _folderBox;   // free-text project folder, searchable over past projects
+    private IReadOnlyList<string> _folderSuggestions = [];  // recency-ordered projects, for Tab-completion
     private readonly SessionButton _newButton;
     private readonly StackPanel _recentsList;
     private readonly TextBox _recentsSearch;
@@ -280,27 +280,23 @@ internal sealed class SessionWindow : Window
         _thread.PermissionAnswered += (item, allow, switchMode) => { _session?.AnswerPermission(item, allow, switchMode); _composer.Focus(); };
         _thread.QuestionAnswered += (item, answers) => { _session?.AnswerQuestion(item, answers); _composer.Focus(); };
 
-        _folderBox = new TextBox
+        _folderBox = new AutoCompleteBox
         {
-            PlaceholderText = "Project folder…", FontFamily = _p.Mono, FontSize = 13, Foreground = _p.Text,
+            FontFamily = _p.Mono, FontSize = 13, Foreground = _p.Text,
             Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0),
-            VerticalAlignment = VerticalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Stretch,
         };
+        FolderSearchBox.Configure(_folderBox, "Project folder…",
+            _p.Text, _p.Muted, _p.Surface, _p.Border, _p.Body, _p.Mono, borderless: true);
+        // Empty + focused pops the whole recency-ordered list (a 0-char search); typing then filters it. The
+        // open is posted so it runs after the click that focused the box settles — setting it inline in
+        // GotFocus loses the race with the pointer press and the list never appears on the first click.
+        _folderBox.GotFocus += (_, _) => Dispatcher.UIThread.Post(OpenFolderDropdownIfEmpty, DispatcherPriority.Input);
+        // Tab completes to the most recent match (CLI-style, without launching); Enter launches.
+        _folderBox.AddHandler(KeyDownEvent, OnFolderKeyDown, RoutingStrategies.Tunnel);
         _folderBox.TextChanged += (_, _) => UpdateNewEnabled();
-        _modelCombo = new ComboBox
-        {
-            ItemsSource = new[] { $"{ShortModel(_defaults.Model ?? CliDefaultModel)} (default)" }.Concat(ModelChoices).ToArray(),
-            SelectedIndex = 0, FontSize = 13, MinWidth = 150, VerticalAlignment = VerticalAlignment.Center,
-        };
         _newButton = new SessionButton(_p, "New session", SessionButtonKind.Primary) { Enabled = false };
-        _newButton.Click += () =>
-        {
-            _resumeId = null;
-            _cwd = _folderBox.Text?.Trim() ?? "";
-            _model = _modelCombo.SelectedIndex > 0 ? _modelCombo.SelectedItem as string : null;
-            StartSession();
-        };
-        _modelCombo.SelectionChanged += (_, _) => { _model = _modelCombo.SelectedIndex > 0 ? _modelCombo.SelectedItem as string : null; RefreshBar(); };
+        _newButton.Click += StartFromFolderBox;
         _recentsList = new StackPanel { Spacing = 2 };
         _recentsHeader = new TextBlock
         {
@@ -443,10 +439,12 @@ internal sealed class SessionWindow : Window
         browse[DockPanel.DockProperty] = Dock.Right;
         browse.Margin = new Thickness(8, 0, 0, 0);
 
+        // Just the launch button — no model picker (Enter in the folder box starts too; the model can be
+        // changed from the top-bar pill once the session is running).
         var row2 = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 10, HorizontalAlignment = HorizontalAlignment.Center,
-            Children = { _modelCombo, _newButton },
+            Children = { _newButton },
         };
 
         var recents = new Border
@@ -499,11 +497,85 @@ internal sealed class SessionWindow : Window
         };
     }
 
+    // Drops the recent-projects list open when the box is empty (a 0-char search). Guarded so it never opens
+    // an empty popup or fights a session that started in the meantime.
+    private void OpenFolderDropdownIfEmpty()
+    {
+        if (_session is null && _folderSuggestions.Count > 0 && string.IsNullOrEmpty(_folderBox.Text))
+            _folderBox.IsDropDownOpen = true;
+    }
+
+    // The most-recent project matching what's typed (recency order; the whole list when the box is empty) —
+    // the target of Tab-completion, mirroring a shell's "complete to the newest match".
+    private string? TopFolderMatch()
+    {
+        if (_folderSuggestions.Count == 0) return null;
+        var q = _folderBox.Text?.Trim() ?? "";
+        return q.Length == 0
+            ? _folderSuggestions[0]
+            : _folderSuggestions.FirstOrDefault(f => f.Contains(q, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void SetFolderText(string path)
+    {
+        _folderBox.Text = path;
+        _folderBox.CaretIndex = path.Length;   // caret to the end, as a shell would after completing
+    }
+
+    // Tab completes to the most recent match without launching (CLI path-completion); Enter launches the
+    // session on whatever folder the box holds (completing first if it isn't a real folder yet).
+    private void OnFolderKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (_session is not null) return;
+
+        if (e.Key == Key.Tab && _folderBox.IsDropDownOpen)
+        {
+            if (TopFolderMatch() is { } top) SetFolderText(top);
+            e.Handled = true;   // never let Tab move focus or start the session
+            return;
+        }
+
+        if (e.Key == Key.Enter)
+        {
+            // An item arrowed to in the open dropdown wins; otherwise take whatever's typed.
+            if (_folderBox.IsDropDownOpen && _folderBox.SelectedItem is string sel && Directory.Exists(sel))
+                SetFolderText(sel);
+
+            var cwd = _folderBox.Text?.Trim() ?? "";
+            if (Directory.Exists(cwd))
+            {
+                _folderBox.IsDropDownOpen = false;
+                StartFromFolderBox();
+                e.Handled = true;
+            }
+            // Not a real folder yet — complete the partial (a second Enter then launches), don't guess-launch.
+            else if (_folderBox.IsDropDownOpen && TopFolderMatch() is { } top)
+            {
+                SetFolderText(top);
+                e.Handled = true;
+            }
+        }
+    }
+
+    // Launch a fresh session on the folder currently in the box (the New-session button and Enter share this).
+    private void StartFromFolderBox()
+    {
+        _resumeId = null;
+        _cwd = _folderBox.Text?.Trim() ?? "";
+        StartSession();
+    }
+
     // Holds the full machine-wide list; RenderRecents applies the search filter on top of it. Only sessions
     // with a resumable id + cwd are ever offered, so filter those out up front.
     private void PopulateRecents(IReadOnlyList<HistoryEntry> entries)
     {
         _allRecents = entries.Where(e => !string.IsNullOrEmpty(e.SessionId) && !string.IsNullOrEmpty(e.Cwd)).ToList();
+
+        // The folder box searches the distinct projects you've launched sessions in before (recency order),
+        // so a familiar project is a few keystrokes — or one focus, which drops the whole list open.
+        _folderSuggestions = SessionHistory.DistinctFolders(entries);
+        _folderBox.ItemsSource = _folderSuggestions;
+
         RenderRecents();
     }
 

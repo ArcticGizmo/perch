@@ -409,6 +409,23 @@ internal static class SessionHistory
             .ToList();
     }
 
+    /// <summary>The distinct project folders across the given session entries, in the entries' own order
+    /// (active-first, newest-first when they come from <see cref="ListAll"/>) — the suggestion list for
+    /// launching a fresh session in a project you've worked in before. Deduplicated case-insensitively and
+    /// filtered to folders that still exist on disk, so a since-deleted/renamed project never surfaces.</summary>
+    public static List<string> DistinctFolders(IEnumerable<HistoryEntry> entries)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var folders = new List<string>();
+        foreach (var e in entries)
+        {
+            var cwd = e.Cwd;
+            if (string.IsNullOrEmpty(cwd) || !seen.Add(cwd)) continue;
+            if (Directory.Exists(cwd)) folders.Add(cwd);
+        }
+        return folders;
+    }
+
     // Derives a friendly project name from the transcript's cwd, plus the /rename title (read once, cached
     // together), falling back to the encoded directory name when no cwd can be recovered.
     private static (string project, string cwd, string? title) ResolveProject(string file, string dir)
