@@ -104,6 +104,15 @@ internal sealed class SessionThreadView : ScrollViewer
         if (_conv is { } c) Bind(c);
     }
 
+    /// <summary>Re-tint after a live theme swap. The palette's brushes are re-coloured in place (so chrome and
+    /// text follow automatically), but each item's markdown baked its code-syntax colours for the old light/
+    /// dark side at build time — rebuild the column so it re-picks them. Cheap; a no-op when unbound.</summary>
+    public void Restyle()
+    {
+        Background = _p.Surface;
+        if (_conv is { } c) Bind(c);
+    }
+
     private void OnChanged(ConversationItem item, ConversationChange change)
     {
         if (change == ConversationChange.Added) AddItem(item);

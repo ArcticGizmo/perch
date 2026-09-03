@@ -30,7 +30,7 @@ internal sealed class SessionButton : Border
         {
             SessionButtonKind.Primary => (p.Brand, p.BrandHover, p.BrandInk, p.Brand),
             SessionButtonKind.Ghost   => (p.Raised2, p.Raised, p.Text, p.Border),
-            _                         => (Brushes.Transparent, p.Raised2, p.Muted, p.Border),
+            _                         => ((IBrush)Brushes.Transparent, p.Raised2, p.Muted, p.Border),
         };
         Background = _rest;
         BorderBrush = line;

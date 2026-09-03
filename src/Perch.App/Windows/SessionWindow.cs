@@ -294,6 +294,9 @@ internal sealed class SessionWindow : Window
         _thread = new SessionThreadView(_p) { IsVisible = false };
         _thread.PermissionAnswered += (item, allow, switchMode) => { _session?.AnswerPermission(item, allow, switchMode); _composer.Focus(); };
         _thread.QuestionAnswered += (item, answers) => { _session?.AnswerQuestion(item, answers); _composer.Focus(); };
+        // Live theme swap: the shared palette's brushes are re-tinted in place (so chrome and text follow with
+        // no work here), but the thread's markdown baked its code-syntax for the old light/dark side — rebuild it.
+        ThemeService.Changed += OnThemeChanged;
 
         _folderBox = new AutoCompleteBox
         {
@@ -1229,7 +1232,18 @@ internal sealed class SessionWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _closed = true;
+        ThemeService.Changed -= OnThemeChanged;
         Detach();
         base.OnClosed(e);
+    }
+
+    // A theme was applied app-wide: the shared SessionPalette already re-tinted every brush in place, so the
+    // window chrome and text have followed; rebuild the thread so its markdown re-picks the new side's
+    // code-syntax colours. Guarded against a window closed mid-swap.
+    private void OnThemeChanged()
+    {
+        if (_closed) return;
+        _thread.Restyle();
+        InvalidateVisual();
     }
 }

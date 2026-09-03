@@ -1,60 +1,66 @@
 using Avalonia;
 using Avalonia.Media;
 using Perch.Avalonia.Rendering;
+using Perch.Theming;
 
 namespace Perch.Avalonia.Theming;
 
 /// <summary>
-/// The rich session UI's own token sheet — the "Distinct Perch identity" the design mockup
-/// (<c>docs/session-ui-mockup.html</c>) locked in: a warm charcoal ground with one accent — the bird's own
-/// body pink (the brand red-orange read too close to the error colour) — deliberately unlike the cool chrome
-/// elsewhere in the app. Like the Markdown viewer's
-/// preview, the session window carries its own palette rather than the active <see cref="Theme"/>; only
-/// its light/dark side follows the theme, and the brand + semantic hues come from <see cref="Palette"/> so
-/// they stay consistent with the overlay's glyphs. Everything visual the session window uses is declared
-/// here, so a sign-off revision is a one-file edit. Instances are built per window open (the brushes are
-/// not the mutable shared <c>Palette.*Brush</c> fills).
+/// The rich session UI's token sheet — every colour, face and metric the session window paints with,
+/// gathered in one place so a sign-off revision is a one-file edit. Instances are built per window open
+/// (the brushes are not the mutable shared <c>Palette.*Brush</c> fills).
+///
+/// <para>The tokens are <em>derived from the active <see cref="Theme"/></em> (see <see cref="From"/>): the
+/// window's chrome, text and accent follow whatever theme the user has selected — pick Nord and the session
+/// window turns Nord, pick a light theme and it goes light — rather than the fixed warm-charcoal identity the
+/// original mockup (<c>docs/session-ui-mockup.html</c>) locked in. The window keeps its own <em>structure</em>
+/// (the layered grounds, washes and line tints the design needs) but sources the hues from the theme's roles,
+/// so it stays consistent with the overlay and the rest of the app under a theme swap.</para>
 /// </summary>
 internal sealed class SessionPalette
 {
-    public bool IsDark { get; private init; }
+    // The brushes are the palette's own, but every one is a fixed instance whose *colour* is mutated in place
+    // by Recolor (mirroring Palette.*Brush) — so a live theme swap re-tints every open session window's chrome
+    // and text without rebuilding a single control. The shared instance (Current) is the one that gets swapped;
+    // the renderer's fixed-side instances (For/From) are built once and left alone.
+    public bool IsDark { get; private set; }
 
     // Grounds & lines
-    public IBrush Ground { get; private init; } = Brushes.Transparent;
-    public IBrush Surface { get; private init; } = Brushes.Transparent;
-    public IBrush Raised { get; private init; } = Brushes.Transparent;
-    public IBrush Raised2 { get; private init; } = Brushes.Transparent;
-    public IBrush Border { get; private init; } = Brushes.Transparent;
-    public IBrush BorderSoft { get; private init; } = Brushes.Transparent;
-    public IBrush Separator { get; private init; } = Brushes.Transparent;
-    public IBrush CodeBg { get; private init; } = Brushes.Transparent;
-    public IBrush CodeBorder { get; private init; } = Brushes.Transparent;
+    public SolidColorBrush Ground { get; } = new(Colors.Transparent);
+    public SolidColorBrush Surface { get; } = new(Colors.Transparent);
+    public SolidColorBrush Raised { get; } = new(Colors.Transparent);
+    public SolidColorBrush Raised2 { get; } = new(Colors.Transparent);
+    public SolidColorBrush Border { get; } = new(Colors.Transparent);
+    public SolidColorBrush BorderSoft { get; } = new(Colors.Transparent);
+    public SolidColorBrush Separator { get; } = new(Colors.Transparent);
+    public SolidColorBrush CodeBg { get; } = new(Colors.Transparent);
+    public SolidColorBrush CodeBorder { get; } = new(Colors.Transparent);
 
     // Text
-    public IBrush Text { get; private init; } = Brushes.Transparent;
-    public IBrush Title { get; private init; } = Brushes.Transparent;
-    public IBrush Muted { get; private init; } = Brushes.Transparent;
-    public IBrush Faint { get; private init; } = Brushes.Transparent;
+    public SolidColorBrush Text { get; } = new(Colors.Transparent);
+    public SolidColorBrush Title { get; } = new(Colors.Transparent);
+    public SolidColorBrush Muted { get; } = new(Colors.Transparent);
+    public SolidColorBrush Faint { get; } = new(Colors.Transparent);
 
     // Brand (the one accent)
-    public IBrush Brand { get; private init; } = Brushes.Transparent;
-    public IBrush BrandHover { get; private init; } = Brushes.Transparent;
-    public IBrush BrandInk { get; private init; } = Brushes.Transparent;
-    public IBrush BrandWash { get; private init; } = Brushes.Transparent;
-    public IBrush BrandLine { get; private init; } = Brushes.Transparent;
+    public SolidColorBrush Brand { get; } = new(Colors.Transparent);
+    public SolidColorBrush BrandHover { get; } = new(Colors.Transparent);
+    public SolidColorBrush BrandInk { get; } = new(Colors.Transparent);
+    public SolidColorBrush BrandWash { get; } = new(Colors.Transparent);
+    public SolidColorBrush BrandLine { get; } = new(Colors.Transparent);
 
     // Semantic (state, never the accent)
-    public IBrush Ok { get; private init; } = Brushes.Transparent;
-    public IBrush Await { get; private init; } = Brushes.Transparent;
-    public IBrush AwaitWash { get; private init; } = Brushes.Transparent;
-    public IBrush AwaitLine { get; private init; } = Brushes.Transparent;
-    public IBrush Err { get; private init; } = Brushes.Transparent;
-    public IBrush Violet { get; private init; } = Brushes.Transparent;
-    public IBrush VioletWash { get; private init; } = Brushes.Transparent;
-    public IBrush VioletLine { get; private init; } = Brushes.Transparent;
-    public IBrush ThinkWash { get; private init; } = Brushes.Transparent;
+    public SolidColorBrush Ok { get; } = new(Colors.Transparent);
+    public SolidColorBrush Await { get; } = new(Colors.Transparent);
+    public SolidColorBrush AwaitWash { get; } = new(Colors.Transparent);
+    public SolidColorBrush AwaitLine { get; } = new(Colors.Transparent);
+    public SolidColorBrush Err { get; } = new(Colors.Transparent);
+    public SolidColorBrush Violet { get; } = new(Colors.Transparent);
+    public SolidColorBrush VioletWash { get; } = new(Colors.Transparent);
+    public SolidColorBrush VioletLine { get; } = new(Colors.Transparent);
+    public SolidColorBrush ThinkWash { get; } = new(Colors.Transparent);
     /// <summary>Plan mode's colour in the session UI (pinned blue; see <c>ModeGlyph.Plan</c>).</summary>
-    public IBrush Plan { get; private init; } = Brushes.Transparent;
+    public SolidColorBrush Plan { get; } = new(Colors.Transparent);
 
     // Type. Each face lists its intended web font first (installed on some machines) then system fallbacks,
     // so the design reads as intended where the fonts exist and degrades to the platform sans elsewhere.
@@ -83,51 +89,84 @@ internal sealed class SessionPalette
         RootMargin = new Thickness(0),
     };
 
-    /// <summary>The palette for the active theme's light/dark side.</summary>
-    public static SessionPalette Current => For(Palette.Active.IsDark);
+    /// <summary>The shared, live session palette for the active theme — the instance every open session
+    /// window paints from. Its brushes are re-tinted in place by <see cref="Apply"/> on a theme swap, so the
+    /// windows follow the theme without rebuilding their chrome. Seeded once from the active theme.</summary>
+    public static SessionPalette Current => _shared ??= From(Palette.Active);
+    private static SessionPalette? _shared;
 
-    public static SessionPalette For(bool dark)
+    /// <summary>Re-tint the shared palette to <paramref name="t"/> in place (mutating every brush's colour), so
+    /// each open session window repaints in the new theme. Called from <c>ThemeService.Apply</c>; owner-drawn
+    /// surfaces are invalidated there, and the thread rebuilds its markdown so code-syntax follows the new
+    /// light/dark side (see <c>SessionThreadView.Restyle</c>).</summary>
+    public static void Apply(Theme t) => (_shared ??= From(t)).Recolor(t);
+
+    /// <summary>Kept for the headless renderer's fixed-side snapshots: builds an independent palette from a
+    /// built-in preset of the requested side (the active theme when it matches, else Midnight/Daylight) so a
+    /// render pass always shows both a dark and a light session window without touching the shared instance.</summary>
+    public static SessionPalette For(bool dark) => From(
+        dark ? (Palette.Active.IsDark ? Palette.Active : Themes.Midnight)
+             : (Palette.Active.IsDark ? Themes.Daylight : Palette.Active));
+
+    /// <summary>Builds an independent session palette from a theme's roles. The window's layered grounds,
+    /// washes and line tints are derived from the theme's surfaces, accent and semantic hues, so the session
+    /// UI tracks the selected theme instead of a fixed identity.</summary>
+    public static SessionPalette From(Theme t)
     {
-        // The accent is the bird's body pink (sampled from the icon: #DD9E8E), not the brand red-orange — the
-        // red read too close to the error colour in a UI full of status hues. The light side deepens it so it
-        // clears contrast on the pale ground.
-        Color brand = dark ? Color.Parse("#DD9E8E") : Color.Parse("#B9675A");
-        Color brandHover = dark ? Color.Parse("#EBB3A4") : Color.Parse("#A5574B");
-        Color ok = Palette.Green, await = Palette.Yellow, err = Palette.Red;
-        Color violet = Palette.SubAgentBrush.Color;
-        Color muted = dark ? Color.Parse("#A4978D") : Color.Parse("#7D6F64");
-
-        return dark
-            ? new SessionPalette
-            {
-                IsDark = true,
-                Ground = B("#161010"), Surface = B("#1E1714"), Raised = B("#26201B"), Raised2 = B("#332A24"),
-                Border = B("#3A2F28"), BorderSoft = B("#2C241F"), Separator = B("#2A221D"),
-                CodeBg = B("#171210"), CodeBorder = B("#33291F"),
-                Text = B("#ECE6E1"), Title = B("#FCF7F3"), Muted = new SolidColorBrush(muted), Faint = B("#7C6F66"),
-                Brand = new SolidColorBrush(brand), BrandHover = new SolidColorBrush(brandHover), BrandInk = B("#2A1410"),
-                BrandWash = Wash(brand, 0x24), BrandLine = Wash(brand, 0x5C),
-                Ok = new SolidColorBrush(ok), Await = new SolidColorBrush(await), Err = new SolidColorBrush(err),
-                AwaitWash = Wash(await, 0x1F), AwaitLine = Wash(await, 0x57),
-                Violet = new SolidColorBrush(violet), VioletWash = Wash(violet, 0x1F), VioletLine = Wash(violet, 0x4D),
-                ThinkWash = Wash(muted, 0x0F), Plan = B("#60A5FA"),
-            }
-            : new SessionPalette
-            {
-                IsDark = false,
-                Ground = B("#EFE7DF"), Surface = B("#FBF7F3"), Raised = B("#FFFFFF"), Raised2 = B("#F2E9E1"),
-                Border = B("#E5DACE"), BorderSoft = B("#EEE5DB"), Separator = B("#ECE2D8"),
-                CodeBg = B("#F4EDE5"), CodeBorder = B("#E6DBCF"),
-                Text = B("#2C231D"), Title = B("#170F0A"), Muted = new SolidColorBrush(muted), Faint = B("#A3968A"),
-                Brand = new SolidColorBrush(brand), BrandHover = new SolidColorBrush(brandHover), BrandInk = B("#FFFFFF"),
-                BrandWash = Wash(brand, 0x1A), BrandLine = Wash(brand, 0x47),
-                Ok = new SolidColorBrush(ok), Await = new SolidColorBrush(await), Err = new SolidColorBrush(err),
-                AwaitWash = Wash(await, 0x1A), AwaitLine = Wash(await, 0x52),
-                Violet = new SolidColorBrush(violet), VioletWash = Wash(violet, 0x1F), VioletLine = Wash(violet, 0x4D),
-                ThinkWash = Wash(muted, 0x0F), Plan = B("#2563EB"),
-            };
+        var p = new SessionPalette();
+        p.Recolor(t);
+        return p;
     }
 
-    private static SolidColorBrush B(string hex) => new(Color.Parse(hex));
-    private static SolidColorBrush Wash(Color c, byte alpha) => new(Color.FromArgb(alpha, c.R, c.G, c.B));
+    /// <summary>Re-point every brush's colour at <paramref name="t"/>'s roles (the single colour-mapping site,
+    /// shared by <see cref="From"/> and the in-place <see cref="Apply"/>).</summary>
+    private void Recolor(Theme t)
+    {
+        bool dark = t.IsDark;
+        IsDark = dark;
+        Color surface = t.Surface.ToColor();
+        Color accent = t.Accent.ToColor();
+        Color muted = t.TextMuted.ToColor();
+        Color await = t.StatusAwaiting.ToColor();
+        Color violet = t.SubAgent.ToColor();
+
+        // Layered grounds: sunken base → surface → raised card → raised-hover, straight from the theme.
+        Ground.Color = t.SurfaceSunken.ToColor();
+        Surface.Color = surface;
+        Raised.Color = t.SurfaceRaised.ToColor();
+        Raised2.Color = t.SurfaceRaisedHover.ToColor();
+        Border.Color = t.Border.ToColor();
+        BorderSoft.Color = Palette.Blend(t.Border.ToColor(), surface, 0.5f);
+        Separator.Color = t.Separator.ToColor();
+        // Code blocks sit a touch deeper than the sunken ground so they read as inset on any theme.
+        CodeBg.Color = Palette.Blend(t.SurfaceSunken.ToColor(), dark ? Colors.Black : Colors.White, 0.28f);
+        CodeBorder.Color = t.Border.ToColor();
+
+        Text.Color = t.TextPrimary.ToColor();
+        Title.Color = t.TextTitle.ToColor();
+        Muted.Color = muted;
+        Faint.Color = Palette.Blend(muted, surface, 0.45f);
+
+        // The one accent is the theme's accent; its ink is whatever reads on it.
+        Brand.Color = accent;
+        BrandHover.Color = t.AccentHover.ToColor();
+        BrandInk.Color = Contrast.BestForeground(t.Accent).ToColor();
+        BrandWash.Color = WashColor(accent, dark ? (byte)0x24 : (byte)0x1A);
+        BrandLine.Color = WashColor(accent, dark ? (byte)0x5C : (byte)0x47);
+
+        Ok.Color = t.StatusRunning.ToColor();
+        Await.Color = await;
+        Err.Color = t.StatusError.ToColor();
+        AwaitWash.Color = WashColor(await, dark ? (byte)0x1F : (byte)0x1A);
+        AwaitLine.Color = WashColor(await, dark ? (byte)0x57 : (byte)0x52);
+
+        Violet.Color = violet;
+        VioletWash.Color = WashColor(violet, 0x1F);
+        VioletLine.Color = WashColor(violet, 0x4D);
+        ThinkWash.Color = WashColor(muted, 0x0F);
+        // Plan mode stays a distinct blue (the theme's burn hue), so it never collides with the accent.
+        Plan.Color = t.Burn.ToColor();
+    }
+
+    private static Color WashColor(Color c, byte alpha) => Color.FromArgb(alpha, c.R, c.G, c.B);
 }
