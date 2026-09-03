@@ -92,7 +92,13 @@ internal sealed class SessionWindow : Window
     // rows on screen and cached by session id. _estimating guards against re-queuing one that's in flight.
     private readonly Dictionary<string, ResumeEstimate> _estimates = new();
     private readonly HashSet<string> _estimating = new();
-    private readonly TextBlock _launchStatus;
+
+    // A floating, viewport-relative toast for launcher errors ("live in a terminal", "already controlled by
+    // another Perch", …). It sits over _center rather than at the bottom of the recents column so a long
+    // recents list can't scroll the message off-screen. Auto-dismisses; click to dismiss early.
+    private readonly Border _toast;
+    private readonly TextBlock _toastText;
+    private readonly DispatcherTimer _toastTimer;
 
     // Composer
     private readonly Border _composerDock;
@@ -315,14 +321,28 @@ internal sealed class SessionWindow : Window
             CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(12, 6), IsVisible = false,
             Margin = new Thickness(0, 0, 0, 10), Child = _recentsSearch,
         };
-        _launchStatus = new TextBlock
-        {
-            FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Err, TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 10, 0, 0), IsVisible = false,
-        };
         _launcher = BuildLauncher();
 
-        _center = new Panel { Children = { _launcher, _thread } };
+        // Floating error toast, layered over the centre so it's visible whatever the recents list is doing.
+        _toastText = new TextBlock
+        {
+            FontFamily = _p.Body, FontSize = 12.5, Foreground = _p.Err, TextWrapping = TextWrapping.Wrap,
+        };
+        _toast = new Border
+        {
+            Background = _p.Surface, BorderBrush = _p.Err, BorderThickness = new Thickness(1),
+            CornerRadius = SessionPalette.CardRadius, Padding = new Thickness(14, 11),
+            Margin = new Thickness(16, 16, 16, 0), MaxWidth = 460,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top,
+            IsVisible = false, Cursor = new Cursor(StandardCursorType.Hand),
+            BoxShadow = BoxShadows.Parse("0 8 24 0 #40000000"),
+            Child = _toastText,
+        };
+        _toast.PointerReleased += (_, _) => HideToast();
+        _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
+        _toastTimer.Tick += (_, _) => HideToast();
+
+        _center = new Panel { Children = { _launcher, _thread, _toast } };
         Content = new DockPanel { Children = { barFrame, _composerDock, _center } };
 
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
@@ -368,7 +388,7 @@ internal sealed class SessionWindow : Window
         _composer.PlaceholderText = running ? "Reply, or type / for a command" : "Session ended — Resume to pick it back up";
         _endButton.IsVisible = running;
         _resumeButton.IsVisible = _session is { HasEnded: true } && _session.SessionId is not null;
-        _launchStatus.IsVisible = false;
+        HideToast();
     }
 
     // ── Public entry points ───────────────────────────────────────────────────────
@@ -440,7 +460,6 @@ internal sealed class SessionWindow : Window
                     _recentsHeader,
                     _recentsSearchFrame,
                     _recentsList,
-                    _launchStatus,
                 },
             },
         };
@@ -797,9 +816,24 @@ internal sealed class SessionWindow : Window
 
     private void LaunchFail(string message)
     {
-        _launchStatus.Text = message;
-        _launchStatus.IsVisible = true;
-        if (_thread.IsVisible) Conv.AddNote(message, NoteKind.Error);
+        // In the launcher, a floating toast (not text at the foot of the recents list, which a long list
+        // pushes off-screen). Once a thread is showing, the error belongs inline as a note instead.
+        if (_thread.IsVisible) { Conv.AddNote(message, NoteKind.Error); return; }
+        ShowToast(message);
+    }
+
+    private void ShowToast(string message)
+    {
+        _toastText.Text = message;
+        _toast.IsVisible = true;
+        _toastTimer.Stop();
+        _toastTimer.Start();
+    }
+
+    private void HideToast()
+    {
+        _toastTimer.Stop();
+        _toast.IsVisible = false;
     }
 
     private void ShowThread()
