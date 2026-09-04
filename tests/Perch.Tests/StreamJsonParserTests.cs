@@ -146,6 +146,17 @@ public class StreamJsonParserTests
         Assert.Null(Assert.IsType<StatusEvent>(Assert.Single(StreamJsonParser.Parse(bare))).Percent);
     }
 
+    [Fact]
+    public void CompactBoundary_ParsesPreAndPostTokens()
+    {
+        // The real shape captured live (claude 2.1.260): the authoritative "compaction succeeded" record.
+        var line = """{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","compactMetadata":{"trigger":"manual","preTokens":8281,"durationMs":81322,"postTokens":5350,"cumulativeDroppedTokens":401532}}""";
+        var ev = Assert.IsType<CompactionCompletedEvent>(Assert.Single(StreamJsonParser.Parse(line)));
+        Assert.Equal(8281, ev.PreTokens);
+        Assert.Equal(5350, ev.PostTokens);
+        Assert.Equal("manual", ev.Trigger);
+    }
+
     [Theory]
     // A nested percent field is still found (the scan is structural, not tied to a fixed key path).
     [InlineData("""{"type":"system","subtype":"status","data":{"compaction":{"percent":63}}}""", 63)]

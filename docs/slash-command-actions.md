@@ -68,6 +68,22 @@ TUI). Some are **inferred** from behaviour/knowledge and want a live spike befor
 
 ## Progress
 
+- **Dogfood round 2 (2026-09-04) — `/compact` success/failure is now authoritative, via `compact_boundary`.**
+  A real capture (session `bfa5388a…`, claude 2.1.260) showed a **successful** compaction being reported as a
+  *failure*. Cause: (a) the CLI's authoritative success record —
+  `{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger","preTokens","postTokens","durationMs",…}}`
+  — was being ignored by the parser, and (b) the fallback heuristic "failed if no context was freed" misfired
+  because the compact turn's own `result` reports the *summarisation's* (large) input, not the reduced
+  context. Fix: parse `compact_boundary` → `CompactionCompletedEvent(pre, post, trigger)`; it settles the
+  progress row as success with the **exact** freed amount (pre − post) and corrects the occupancy to `post`
+  (and suppresses the trailing result's context so it can't clobber that). The `result` path now only marks
+  failure on a real interrupt or `is_error` — never on freed-tokens. A `compact_boundary` with no active row
+  (the CLI's own auto-compaction near the limit) drops a "context auto-compacted" note. Also confirmed: this
+  build emits **no live-percentage** records over stream-json during compaction — only `compact_boundary` at
+  the end — so the live `%` is TUI-only; Perch shows the elapsed timer during and the exact freed tokens at
+  the end. Tests: `CompactBoundary_ParsesPreAndPostTokens`,
+  `Compact_CompactBoundary_FinalisesAsSuccessWithExactFreedTokens`. Added an opt-in `PERCH_SESSION_LOG` raw
+  capture (used to get the record above).
 - **Dogfood round 1 (2026-09-04) — reworked `/compact` + `/autocompact`, pruned the dead commands.**
 - **`/compact` — DONE (code), now a live progress meter.** Feedback: "show a progress meter so we know where
   we are" (the CLI's own bar reads `Compacting conversation… (18s) … 18%`). `SessionConversation` emits a

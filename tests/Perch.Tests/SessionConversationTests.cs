@@ -97,6 +97,31 @@ public class SessionConversationTests
     }
 
     [Fact]
+    public void Compact_CompactBoundary_FinalisesAsSuccessWithExactFreedTokens()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new TurnResultEvent(false, "success", 0.05, InputTokens: 8_281, OutputTokens: 10, DurationMs: 900));
+        conv.AddUserPrompt("/compact");
+        var progress = Assert.IsType<CompactionItem>(conv.Items[^1]);
+
+        // The authoritative success signal (only emitted on a real compaction) carries pre/post tokens.
+        conv.Apply(new CompactionCompletedEvent(PreTokens: 8_281, PostTokens: 5_350, Trigger: "manual"));
+
+        Assert.True(progress.IsDone);
+        Assert.False(progress.Failed);                 // a real success, not the false failure we shipped
+        Assert.Equal(100, progress.Percent);
+        Assert.Equal(2_931, progress.FreedTokens);      // 8281 − 5350
+        Assert.Equal(5_350, conv.ContextTokens);        // context corrected to the post size
+
+        // The compact turn's own result then lands: it must NOT re-open/re-fail the settled row, must clear
+        // the turn, and its (large summarisation) input must NOT clobber the corrected occupancy.
+        conv.Apply(new TurnResultEvent(false, "success", 0.06, InputTokens: 90_000, OutputTokens: 3, DurationMs: 100));
+        Assert.False(progress.Failed);
+        Assert.False(conv.TurnActive);
+        Assert.Equal(5_350, conv.ContextTokens);        // suppressed — still the post size, not 90k
+    }
+
+    [Fact]
     public void Compact_Interrupted_SettlesToCanceledNotSuccess()
     {
         var (conv, _) = Make();

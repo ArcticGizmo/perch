@@ -43,6 +43,7 @@ internal static class StreamJsonParser
     {
         var subtype = TranscriptJson.AsString(root["subtype"]);
         if (subtype == "status") return ParseStatus(root);
+        if (subtype == "compact_boundary") return ParseCompactBoundary(root);
         if (subtype != "init") return [];
         var commands = (root["slash_commands"] as JsonArray)?
             .Select(c => TranscriptJson.AsString(c))
@@ -64,6 +65,20 @@ internal static class StreamJsonParser
                 (root["tools"] as JsonArray)?.Count ?? 0,
                 commands ?? [],
                 mcp ?? []),
+        ];
+    }
+
+    // The authoritative "compaction succeeded" record. compactMetadata carries preTokens/postTokens (the
+    // exact freed amount) and the trigger (manual/auto). Captured live: durationMs, cumulativeDroppedTokens.
+    private static IReadOnlyList<SessionEvent> ParseCompactBoundary(JsonNode root)
+    {
+        var meta = root["compactMetadata"];
+        return
+        [
+            new CompactionCompletedEvent(
+                TranscriptJson.AsLong(meta?["preTokens"]),
+                TranscriptJson.AsLong(meta?["postTokens"]),
+                TranscriptJson.AsString(meta?["trigger"]) ?? ""),
         ];
     }
 

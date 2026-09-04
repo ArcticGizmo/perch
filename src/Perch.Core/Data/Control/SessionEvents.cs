@@ -58,6 +58,13 @@ internal sealed record ModeChangedEvent(string Mode) : SessionEvent;
 /// flight; harmless otherwise.</summary>
 internal sealed record StatusEvent(int? Percent, string? Message) : SessionEvent;
 
+/// <summary>A <c>system</c>/<c>subtype:"compact_boundary"</c> record — the authoritative signal that a
+/// <c>/compact</c> (or an auto-compaction) <em>succeeded</em>, carrying <paramref name="PreTokens"/> and
+/// <paramref name="PostTokens"/> from <c>compactMetadata</c> (so the freed amount is exact) and the
+/// <paramref name="Trigger"/> ("manual"/"auto"). It only appears on success — a failed or interrupted
+/// compaction emits none.</summary>
+internal sealed record CompactionCompletedEvent(long PreTokens, long PostTokens, string Trigger) : SessionEvent;
+
 /// <summary>A turn finished (the <c>result</c> record): outcome plus cost/usage for the whole session so far.
 /// The three input buckets are kept apart because they price very differently — fresh
 /// <paramref name="InputTokens"/> at 1×, <paramref name="CacheCreationTokens"/> at ~1.25×,

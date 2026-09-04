@@ -112,6 +112,9 @@ internal sealed class SessionConversation
     private CompactionItem? _activeCompaction;
     private long _contextBeforeCompaction;
     private bool _compactionInterrupted;
+    // Set by a compact_boundary so the compact turn's own (misleadingly large) result can't overwrite the
+    // corrected post-compaction occupancy; consumed by the next result, and cleared by the next user prompt.
+    private bool _suppressNextResultContext;
 
     public IReadOnlyList<ConversationItem> Items => _items;
 
@@ -257,6 +260,37 @@ internal sealed class SessionConversation
                 }
                 break;
 
+            case CompactionCompletedEvent done:
+            {
+                // The authoritative success signal (only emitted when a compaction actually completed): settle
+                // the progress row with the exact freed amount and correct the context occupancy to the post
+                // size. Turn bookkeeping is left to the turn's own `result`; but that result reports the
+                // summarisation's (large) input, which would clobber the corrected occupancy — so suppress the
+                // next result's context update. (New user prompts clear the flag, so it can't linger.)
+                if (done.PostTokens > 0) { ContextTokens = done.PostTokens; _suppressNextResultContext = true; }
+                long freed = Math.Max(0, done.PreTokens - done.PostTokens);
+                if (_activeCompaction is { IsDone: false } compaction)
+                {
+                    compaction.IsDone = true;
+                    compaction.Failed = false;
+                    compaction.Percent = 100;
+                    compaction.FreedTokens = freed;
+                    Changed?.Invoke(compaction, ConversationChange.Updated);
+                    _activeCompaction = null;
+                    _compactionInterrupted = false;
+                }
+                else
+                {
+                    // No progress row — this is the CLI's own auto-compaction near the limit, which the user
+                    // didn't initiate. Leave a quiet note so the context drop isn't a mystery.
+                    Append(new NoteItem(freed > 0
+                        ? $"context auto-compacted by Claude Code — freed {freed:N0} tokens"
+                        : "context auto-compacted by Claude Code"));
+                }
+                StateChanged?.Invoke();
+                break;
+            }
+
             case ModeChangedEvent mode:
                 if (mode.Mode != PermissionMode)
                 {
@@ -282,20 +316,24 @@ internal sealed class SessionConversation
                 }
                 LastTurn = turn;
                 if (turn.CostUsd > 0) TotalCostUsd = turn.CostUsd;
-                if (turn.ContextTokens > 0) ContextTokens = turn.ContextTokens;   // latest prompt = current occupancy
+                // Latest prompt = current occupancy — except the compact turn's own result, whose input is the
+                // summarisation (much larger than the compacted context); a preceding compact_boundary already
+                // set the true occupancy, so skip this one.
+                if (turn.ContextTokens > 0 && !_suppressNextResultContext) ContextTokens = turn.ContextTokens;
+                _suppressNextResultContext = false;
                 TotalOutputTokens += turn.OutputTokens;
                 TotalFreshInputTokens += turn.FreshInputTokens;
                 if (QueuedPrompts > 0) QueuedPrompts--; else TurnActive = false;
-                // A running /compact is settled by this turn's result: fill the meter and report the context
-                // it reclaimed (before − after, floored at zero).
+                // A compaction still active at the result normally means its `compact_boundary` (the success
+                // signal, handled above) hasn't been seen — so judge it only by hard signals: the user
+                // interrupted, or the turn errored. A clean result settles it as done either way. NEVER infer
+                // failure from freed tokens — a successful compaction's result doesn't necessarily report a
+                // reduced context, which is exactly what made a real success look like a failure.
                 if (_activeCompaction is { IsDone: false } compaction)
                 {
-                    long freed = Math.Max(0, _contextBeforeCompaction - ContextTokens);
                     compaction.IsDone = true;
-                    compaction.FreedTokens = freed;
-                    // Canceled/errored/no-op → a failure state, not a green success: the user interrupted, the
-                    // turn errored, or nothing was reclaimed (an interrupted compaction leaves context intact).
-                    compaction.Failed = _compactionInterrupted || turn.IsError || freed <= 0;
+                    compaction.FreedTokens = Math.Max(0, _contextBeforeCompaction - ContextTokens);
+                    compaction.Failed = _compactionInterrupted || turn.IsError;
                     if (!compaction.Failed) compaction.Percent = 100;
                     Changed?.Invoke(compaction, ConversationChange.Updated);
                     _activeCompaction = null;
@@ -381,6 +419,7 @@ internal sealed class SessionConversation
     public void AddUserPrompt(string text)
     {
         Append(new UserMessageItem(text));
+        _suppressNextResultContext = false;   // a genuine new turn: its result's context is real again
         if (TurnActive) QueuedPrompts++; else TurnActive = true;
         // `/compact` runs as an ordinary turn, but its effect is to shrink the context rather than to answer,
         // so drop a marker that explains the upcoming context drop — the CLI itself emits only progress
