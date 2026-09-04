@@ -278,6 +278,12 @@ internal sealed class SessionConversation
                     Changed?.Invoke(compaction, ConversationChange.Updated);
                     _activeCompaction = null;
                     _compactionInterrupted = false;
+                    // The boundary IS the compaction turn's completion — a manual /compact that then idles may
+                    // emit no `result`, so settle the turn here (unless prompts were queued behind it, which the
+                    // result drains). Otherwise TurnActive stays stuck "working…" and the next prompt queues
+                    // behind a phantom turn, leaving the composer's context/token pills stale. A later result
+                    // for this turn is idempotent (it sets TurnActive false again when the queue is empty).
+                    if (QueuedPrompts == 0) TurnActive = false;
                 }
                 else
                 {
