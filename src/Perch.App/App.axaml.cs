@@ -1623,6 +1623,19 @@ public partial class App : Application
         var cs = Effective;
         w.SetContextPressureConfig(cs.ShowContextPressure, cs.ContextPressureYellowPercent,
             cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent, cs.ShowContextGreenSegment);
+        w.SetAutoCompactConfig(cs.SessionAutoCompactEnabled, cs.SessionAutoCompactThresholdPercent);
+        // The /autocompact modal changed the Perch auto-compaction setting: persist it and push it to every
+        // open session window so they all agree.
+        w.AutoCompactChanged += (enabled, threshold) =>
+        {
+            if (_appSettings is { } s)
+            {
+                s.SessionAutoCompactEnabled = enabled;
+                s.SessionAutoCompactThresholdPercent = threshold;
+                s.Save();
+            }
+            foreach (var sw in _sessionWindows) sw.SetAutoCompactConfig(enabled, threshold);
+        };
         w.NewSessionRequested += OpenSessionWindow;
         w.OpenSettingsRequested += page => OpenSettings(page);   // e.g. /theme → Settings → Appearance
         // /resume overlay pick: replace this window's view (default), or open a separate window (Shift+Enter).

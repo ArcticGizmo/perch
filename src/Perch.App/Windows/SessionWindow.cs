@@ -85,6 +85,13 @@ internal sealed class SessionWindow : Window
     // that call never comes.
     private readonly ThermoGlyph _thermoGlyph;
     private bool _showContextPressure = true, _showContextGreenSegment;
+    // Perch-managed early auto-compaction: when enabled, once the context fill reaches the threshold Perch
+    // fires `/compact` itself (rather than waiting for the CLI's near-full compaction). Pushed from settings
+    // by SetAutoCompactConfig and edited in the /autocompact modal. `_autoCompactArmed` disarms after a fire
+    // and re-arms once the fill drops back below the threshold, so it fires once per crossing, never in a loop.
+    private bool _autoCompactEnabled;
+    private int _autoCompactThreshold = 80;
+    private bool _autoCompactArmed = true;
     private readonly ModeGlyph _modeGlyph;
     private readonly SessionButton _interruptButton, _resumeButton, _endButton, _moreButton;
 
@@ -140,6 +147,9 @@ internal sealed class SessionWindow : Window
     private IReadOnlyList<SlashCommandInfo> _paletteItems = [];
     private int _paletteIndex;
 
+    // In-window /autocompact modal: a scrim + card with an on/off toggle and a threshold slider.
+    private Panel _autoCompactOverlay = null!;
+
     // In-window /resume quick-open: a searchable, keyboard-navigable overlay of this project's sessions.
     private Panel _resumeOverlay = null!;
     private TextBox _resumeSearch = null!;
@@ -174,6 +184,10 @@ internal sealed class SessionWindow : Window
     /// <summary>The ids of sessions currently live in a terminal (so the resume overlay can mark them). The app
     /// wires it to its monitor roster.</summary>
     public Func<IReadOnlySet<string>>? ActiveSessionIdsProvider { get; set; }
+
+    /// <summary>The user changed the Perch auto-compaction setting in the <c>/autocompact</c> modal (enabled,
+    /// threshold %). The app persists it to <c>AppSettings</c> and pushes it back to every session window.</summary>
+    public event Action<bool, int>? AutoCompactChanged;
 
     /// <summary>The session this window currently views, or null on the launcher.</summary>
     public PerchSession? Session => _session;
@@ -473,7 +487,8 @@ internal sealed class SessionWindow : Window
         _toastTimer.Tick += (_, _) => HideToast();
 
         BuildResumeOverlay();
-        _center = new Panel { Children = { _launcher, _thread, _toast, _resumeOverlay } };
+        BuildAutoCompactOverlay();
+        _center = new Panel { Children = { _launcher, _thread, _toast, _resumeOverlay, _autoCompactOverlay } };
         Content = new DockPanel { Children = { barFrame, _composerDock, _center } };
 
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
@@ -1127,6 +1142,7 @@ internal sealed class SessionWindow : Window
             case "login":  RunClaudeAuth("auth login");  return true;
             case "logout": RunClaudeAuth("auth logout"); return true;
             case "mcp":    _ = new McpStatusWindow(Conv.McpServers, _p).ShowDialog(this); return true;
+            case "autocompact": ShowAutoCompactOverlay(); return true;
             default:       return false;
         }
     }
@@ -1146,6 +1162,121 @@ internal sealed class SessionWindow : Window
             Conv.AddNote($"opened a terminal — finish in it: claude {args}");
         else
             Conv.AddNote("couldn't open a terminal for authentication", NoteKind.Error);
+    }
+
+    // ── Auto-compaction modal (/autocompact) ──────────────────────────────────────
+
+    private CheckBox _acToggle = null!;
+    private Slider _acSlider = null!;
+    private TextBlock _acSliderLabel = null!;
+
+    // A small modal: a toggle for Perch-managed early auto-compaction and a slider for the context-fill point
+    // at which Perch runs /compact. Layered over the thread like the resume overlay.
+    private void BuildAutoCompactOverlay()
+    {
+        var title = new TextBlock
+        {
+            Text = "Auto-compaction", FontFamily = _p.Display, FontWeight = FontWeight.Bold, FontSize = 17,
+            Foreground = _p.Title,
+        };
+        var blurb = new TextBlock
+        {
+            Text = "When the context window fills past the point below, Perch runs /compact for you — "
+                 + "summarising the conversation to reclaim room before the model starts costing more per turn.",
+            FontFamily = _p.Body, FontSize = 12.5, Foreground = _p.Muted, TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 14),
+        };
+
+        _acToggle = new CheckBox { Content = "Compact automatically", FontFamily = _p.Body, FontSize = 14, Foreground = _p.Text };
+
+        _acSliderLabel = new TextBlock { FontFamily = _p.Mono, FontSize = 12.5, Foreground = _p.Brand, Margin = new Thickness(0, 12, 0, 2) };
+        _acSlider = new Slider
+        {
+            Minimum = AutoCompactMin, Maximum = AutoCompactMax, TickFrequency = 5, IsSnapToTickEnabled = true,
+            SmallChange = 5, LargeChange = 10,
+        };
+        _acSlider.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == RangeBase.ValueProperty) _acSliderLabel.Text = $"Compact at {(int)_acSlider.Value}% full";
+        };
+        // The slider only bites when the toggle is on.
+        _acToggle.IsCheckedChanged += (_, _) =>
+        {
+            bool on = _acToggle.IsChecked == true;
+            _acSlider.IsEnabled = on;
+            _acSliderLabel.Foreground = on ? _p.Brand : _p.Faint;
+        };
+
+        var save = new SessionButton(_p, "Save", SessionButtonKind.Primary, "↵");
+        save.Click += SaveAutoCompact;
+        var cancel = new SessionButton(_p, "Cancel", SessionButtonKind.Quiet, "esc") { Margin = new Thickness(9, 0, 0, 0) };
+        cancel.Click += CloseAutoCompactOverlay;
+        var actions = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 18, 0, 0) };
+        actions.Children.Add(save);
+        actions.Children.Add(cancel);
+
+        var card = new Border
+        {
+            Background = _p.Surface, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+            CornerRadius = SessionPalette.CardRadius, Padding = new Thickness(20),
+            Width = 440, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(16, 80, 16, 0), BoxShadow = BoxShadows.Parse("0 18 50 0 #66000000"),
+            Child = new StackPanel { Children = { title, blurb, _acToggle, _acSliderLabel, _acSlider, actions } },
+        };
+
+        var scrim = new Border { Background = new SolidColorBrush(Color.FromArgb(0x99, 0, 0, 0)) };
+        scrim.PointerReleased += (_, _) => CloseAutoCompactOverlay();
+
+        _autoCompactOverlay = new Panel { IsVisible = false, Children = { scrim, card } };
+    }
+
+    private void ShowAutoCompactOverlay()
+    {
+        _acToggle.IsChecked = _autoCompactEnabled;
+        _acSlider.Value = _autoCompactThreshold;
+        _acSliderLabel.Text = $"Compact at {_autoCompactThreshold}% full";
+        _acSlider.IsEnabled = _autoCompactEnabled;
+        _acSliderLabel.Foreground = _autoCompactEnabled ? _p.Brand : _p.Faint;
+        _autoCompactOverlay.IsVisible = true;
+    }
+
+    private void CloseAutoCompactOverlay()
+    {
+        _autoCompactOverlay.IsVisible = false;
+        if (_session is { IsRunning: true }) _composer.Focus();
+    }
+
+    // Save: update this window immediately and let the app persist + fan the setting out to sibling windows.
+    private void SaveAutoCompact()
+    {
+        bool enabled = _acToggle.IsChecked == true;
+        int threshold = Math.Clamp((int)_acSlider.Value, AutoCompactMin, AutoCompactMax);
+        SetAutoCompactConfig(enabled, threshold);
+        AutoCompactChanged?.Invoke(enabled, threshold);
+        CloseAutoCompactOverlay();
+        Conv.AddNote(enabled ? $"auto-compaction on · at {threshold}% full" : "auto-compaction off");
+    }
+
+    // Fires /compact once the context fill crosses the threshold (armed → disarmed until it drops back below),
+    // but only on a settled, live session with a real completed turn — never on attach, a queued/running turn,
+    // a pending permission, or while a compaction is already in flight (TurnActive covers that).
+    private void MaybeAutoCompact(double pct)
+    {
+        if (!_autoCompactEnabled) return;
+        if (pct < _autoCompactThreshold) { _autoCompactArmed = true; return; }
+        if (!_autoCompactArmed) return;
+        if (_session is not { IsRunning: true, HasEnded: false } live) return;
+        var conv = Conv;
+        if (conv.LastTurn is null || conv.TurnActive || conv.QueuedPrompts > 0 || conv.PendingPermission is not null) return;
+
+        _autoCompactArmed = false;   // one fire per crossing
+        // Defer the send so it runs after this state-change unwinds (RefreshBar is called from StateChanged).
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_session is not { IsRunning: true, HasEnded: false } s) return;
+            conv.AddNote($"auto-compacting · context reached {(int)pct}%");
+            s.SendPrompt("/compact");
+        });
     }
 
     // ── Resume overlay (/resume) ───────────────────────────────────────────────────
@@ -1603,11 +1734,13 @@ internal sealed class SessionWindow : Window
             // shows no colour there; at/above it the text warms to the thermometer's variant colour.
             _contextPillText.Foreground = crossedYellow ? new SolidColorBrush(_thermoGlyph.VariantColor) : _p.Muted;
 
-            var nearFull = conv.AutoCompact
-                ? "and a compaction is coming as it nears full."
-                : "and — with auto-compaction off — it won't shrink on its own; run /compact to reclaim it.";
+            var nearFull = _autoCompactEnabled
+                ? $"and Perch will auto-compact it at {_autoCompactThreshold}% (/autocompact)."
+                : "and a compaction is coming as it nears full.";
             _contextPill[ToolTip.TipProperty] =
                 $"Context window: {FormatTokens(ctx)} of {FormatTokens(window)} ({pct:0}%). This is what every new message re-sends to the model — the fuller it gets, the more each turn costs, {nearFull}";
+
+            MaybeAutoCompact(pct);
         }
     }
 
@@ -1745,14 +1878,35 @@ internal sealed class SessionWindow : Window
     }
 
     // Esc: dismiss the command palette first, else deny a pending permission, else interrupt the running turn.
-    // (This window-level tunnel handler runs before the composer's, so the palette guard must live here too.)
+    // Ctrl+C with no text selected also interrupts (so it stops a prompt when there's nothing to copy); with a
+    // selection it falls through to the normal copy. (This window-level tunnel handler runs before the
+    // composer's, so the palette guard must live here too.)
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Key == Key.C && e.KeyModifiers == KeyModifiers.Control)
+        {
+            if (HasTextSelection()) return;   // let the copy happen
+            if (_session is { IsRunning: true } live && Conv.TurnActive) { live.Interrupt(); e.Handled = true; }
+            return;
+        }
         if (e.Key != Key.Escape) return;
+        if (_autoCompactOverlay.IsVisible) { CloseAutoCompactOverlay(); e.Handled = true; return; }
         if (_resumeOverlay.IsVisible) { CloseResumeOverlay(); e.Handled = true; return; }
         if (PaletteOpen) { ClosePalette(); e.Handled = true; return; }
         if (Conv.PendingPermission is { } pending) { _session?.AnswerPermission(pending, allow: false, switchMode: false); e.Handled = true; }
         else if (_session is { IsRunning: true } live && Conv.TurnActive) { live.Interrupt(); e.Handled = true; }
+    }
+
+    // Whether the focused control holds a live text selection (so Ctrl+C should copy rather than interrupt).
+    private bool HasTextSelection()
+    {
+        var focused = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement();
+        return focused switch
+        {
+            TextBox tb => tb.SelectionStart != tb.SelectionEnd,
+            SelectableTextBlock stb => !string.IsNullOrEmpty(stb.SelectedText),
+            _ => false,
+        };
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1786,6 +1940,21 @@ internal sealed class SessionWindow : Window
         _thermoGlyph.SetThresholds(yellowPercent, orangePercent, redPercent);
         if (_session is not null) RefreshBar();   // re-evaluate visibility/colour if a session is already attached
     }
+
+    /// <summary>Pushes the Perch auto-compaction setting (enabled + threshold %) from settings. Re-arms the
+    /// trigger so a fresh setting takes effect on the next crossing. The app pushes this when it builds the
+    /// window and again whenever the modal changes it.</summary>
+    public void SetAutoCompactConfig(bool enabled, int thresholdPercent)
+    {
+        _autoCompactEnabled = enabled;
+        _autoCompactThreshold = Math.Clamp(thresholdPercent, AutoCompactMin, AutoCompactMax);
+        _autoCompactArmed = true;
+        if (_session is not null) RefreshBar();
+    }
+
+    // The threshold slider's band. Below ~50% compaction is pointless; above ~95% the CLI's own near-full
+    // compaction gets there first, so Perch's early trigger would rarely beat it.
+    private const int AutoCompactMin = 50, AutoCompactMax = 95;
 
     /// <summary>"claude-opus-5" → "Opus 5"; "claude-haiku-4-5-20251001" → "Haiku 4.5"; null → "default model".</summary>
     internal static string ShortModel(string? model)

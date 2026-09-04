@@ -49,6 +49,10 @@ public class SettingsRegistryTests
         nameof(AppSettings.GitReviewSplitView),
         nameof(AppSettings.GitTreeLight),
         nameof(AppSettings.GitTreeHunkStaging),
+        // Perch-managed session auto-compaction (enable + threshold) is set from the session window's own
+        // /autocompact modal (a slider), not a Settings-window control.
+        nameof(AppSettings.SessionAutoCompactEnabled),
+        nameof(AppSettings.SessionAutoCompactThresholdPercent),
         // Custom themes are managed by the Appearance page's designer, not a catalogue control.
         nameof(AppSettings.CustomThemes),
         nameof(AppSettings.PendingUpdateVersion),

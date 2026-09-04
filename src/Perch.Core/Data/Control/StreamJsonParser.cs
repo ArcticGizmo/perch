@@ -41,7 +41,9 @@ internal static class StreamJsonParser
 
     private static IReadOnlyList<SessionEvent> ParseSystem(JsonNode root)
     {
-        if (TranscriptJson.AsString(root["subtype"]) != "init") return [];
+        var subtype = TranscriptJson.AsString(root["subtype"]);
+        if (subtype == "status") return ParseStatus(root);
+        if (subtype != "init") return [];
         var commands = (root["slash_commands"] as JsonArray)?
             .Select(c => TranscriptJson.AsString(c))
             .Where(c => !string.IsNullOrEmpty(c))
@@ -63,6 +65,57 @@ internal static class StreamJsonParser
                 commands ?? [],
                 mcp ?? []),
         ];
+    }
+
+    // A progress record (the CLI emits these during /compact). Its exact shape isn't pinned down, so read a
+    // percentage defensively and structurally: recursively scan the record for a "percent"/"progress"/"pct"
+    // (or "ratio") numeric field wherever it sits, and, failing that, the first "NN%" in any status string.
+    // A null percent is fine — the UI shows an indeterminate bar and its own elapsed timer.
+    private static IReadOnlyList<SessionEvent> ParseStatus(JsonNode root)
+    {
+        var message = TranscriptJson.AsString(root["message"])
+                   ?? TranscriptJson.AsString(root["status"])
+                   ?? TranscriptJson.AsString(root["text"]);
+        int? percent = FindPercent(root);
+        return [new StatusEvent(percent, message)];
+    }
+
+    // Walk the record for a completion percentage: a numeric field whose name reads like one (a >1 value is
+    // taken as a percent, a 0..1 value as a ratio ×100), else a "NN%" embedded in any string value. Depth is
+    // trivial for a status record, so the recursion cost is negligible.
+    private static int? FindPercent(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var (key, value) in obj)
+                {
+                    var k = key.ToLowerInvariant();
+                    if ((k.Contains("percent") || k.Contains("progress") || k == "pct" || k.Contains("ratio"))
+                        && AsNumber(value) is { } n)
+                        return n <= 1 ? Math.Clamp((int)Math.Round(n * 100), 0, 100)
+                                      : Math.Clamp((int)Math.Round(n), 0, 100);
+                }
+                foreach (var (_, value) in obj)
+                    if (FindPercent(value) is { } p) return p;
+                return null;
+            case JsonArray arr:
+                foreach (var value in arr)
+                    if (FindPercent(value) is { } p) return p;
+                return null;
+            case JsonValue v when v.TryGetValue<string>(out var s):
+                var m = System.Text.RegularExpressions.Regex.Match(s, @"(\d{1,3})\s*%");
+                return m.Success && int.TryParse(m.Groups[1].Value, out var pv) ? Math.Clamp(pv, 0, 100) : null;
+            default:
+                return null;
+        }
+    }
+
+    private static double? AsNumber(JsonNode? n)
+    {
+        if (n is null) return null;
+        try { return n.GetValue<double>(); }
+        catch { try { return n.GetValue<long>(); } catch { return null; } }
     }
 
     private static IReadOnlyList<SessionEvent> ParseAssistant(JsonNode root)

@@ -128,12 +128,39 @@ public class StreamJsonParserTests
         Assert.Equal(4200, ev.FreshInputTokens);
     }
 
+    [Fact]
+    public void CompactStatus_ParsesAPercentFromFieldOrText()
+    {
+        // A numeric progress field.
+        var field = """{"type":"system","subtype":"status","message":"Compacting conversation…","progress":42}""";
+        var a = Assert.IsType<StatusEvent>(Assert.Single(StreamJsonParser.Parse(field)));
+        Assert.Equal(42, a.Percent);
+        Assert.Equal("Compacting conversation…", a.Message);
+
+        // No field, but a "NN%" embedded in the status text (the CLI's readout).
+        var text = """{"type":"system","subtype":"status","message":"Compacting conversation… (18s)  18%"}""";
+        Assert.Equal(18, Assert.IsType<StatusEvent>(Assert.Single(StreamJsonParser.Parse(text))).Percent);
+
+        // Neither: still a StatusEvent (indeterminate — the UI drives its own timer), never a throw.
+        var bare = """{"type":"system","subtype":"status","message":"Working…"}""";
+        Assert.Null(Assert.IsType<StatusEvent>(Assert.Single(StreamJsonParser.Parse(bare))).Percent);
+    }
+
+    [Theory]
+    // A nested percent field is still found (the scan is structural, not tied to a fixed key path).
+    [InlineData("""{"type":"system","subtype":"status","data":{"compaction":{"percent":63}}}""", 63)]
+    // A 0..1 ratio is scaled to a percentage.
+    [InlineData("""{"type":"system","subtype":"status","progress":0.25}""", 25)]
+    // "pct" shorthand.
+    [InlineData("""{"type":"system","subtype":"status","pct":7}""", 7)]
+    public void CompactStatus_FindsAPercentWhereverItSits(string line, int expected) =>
+        Assert.Equal(expected, Assert.IsType<StatusEvent>(Assert.Single(StreamJsonParser.Parse(line))).Percent);
+
     [Theory]
     [InlineData("")]
     [InlineData("not json at all")]
     [InlineData("{\"type\":\"rate_limit_event\",\"rate_limit_info\":{}}")]
     [InlineData("{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_name\":\"SessionStart\"}")]
-    [InlineData("{\"type\":\"system\",\"subtype\":\"status\",\"message\":\"Compacting conversation…\"}")]   // /compact progress — ignored, never a throw
     [InlineData("{\"truncated\":")]
     public void UnknownOrMalformedLines_YieldNothing(string line) =>
         Assert.Empty(StreamJsonParser.Parse(line));

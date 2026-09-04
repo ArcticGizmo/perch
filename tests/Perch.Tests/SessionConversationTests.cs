@@ -70,25 +70,38 @@ public class SessionConversationTests
     }
 
     [Fact]
-    public void Compact_DropsAMarkerAndEchoesInstructions()
+    public void Compact_ShowsAProgressRowThenFinalises()
     {
         var (conv, _) = Make();
-
-        conv.AddUserPrompt("/compact");
-        Assert.Equal("/compact", Assert.IsType<UserMessageItem>(conv.Items[0]).Text);   // the command chip
-        Assert.Equal("compacting the conversation to free up context…",
-            Assert.IsType<NoteItem>(conv.Items[1]).Text);
+        // Seed some context so the freed-tokens figure is meaningful.
+        conv.Apply(new TurnResultEvent(false, "success", 0.05, InputTokens: 60_000, OutputTokens: 10, DurationMs: 900));
 
         conv.AddUserPrompt("/compact keep the failing test details");
-        Assert.Equal("compacting the conversation (keeping: keep the failing test details)…",
-            Assert.IsType<NoteItem>(conv.Items[^1]).Text);
+        Assert.Equal("/compact keep the failing test details", Assert.IsType<UserMessageItem>(conv.Items[^2]).Text);
+        var progress = Assert.IsType<CompactionItem>(conv.Items[^1]);
+        Assert.Equal("keep the failing test details", progress.Instructions);
+        Assert.Null(progress.Percent);       // indeterminate until the CLI reports one
+        Assert.False(progress.IsDone);
 
-        // The compaction turn's result shrinks the reported context, same path as any turn (one result per
-        // queued prompt — the second /compact was queued behind the first).
-        conv.Apply(new TurnResultEvent(false, "success", 0.03, InputTokens: 5000, OutputTokens: 5, DurationMs: 400));
-        conv.Apply(new TurnResultEvent(false, "success", 0.03, InputTokens: 800, OutputTokens: 5, DurationMs: 400));
-        Assert.Equal(800, conv.ContextTokens);
+        // A status record advances the meter.
+        conv.Apply(new StatusEvent(42, "Compacting conversation…"));
+        Assert.Equal(42, progress.Percent);
+
+        // The compaction turn's result finalises the row and reports what it reclaimed.
+        conv.Apply(new TurnResultEvent(false, "success", 0.06, InputTokens: 8_000, OutputTokens: 5, DurationMs: 1200));
+        Assert.True(progress.IsDone);
+        Assert.Equal(100, progress.Percent);
+        Assert.Equal(52_000, progress.FreedTokens);   // 60k before − 8k after
+        Assert.Equal(8_000, conv.ContextTokens);
         Assert.False(conv.TurnActive);
+    }
+
+    [Fact]
+    public void Status_WithoutAnActiveCompaction_IsIgnored()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new StatusEvent(30, "some status"));
+        Assert.Empty(conv.Items);   // a stray status record adds nothing
     }
 
     [Fact]
@@ -97,33 +110,6 @@ public class SessionConversationTests
         var (conv, _) = Make();
         conv.AddUserPrompt("please compact the layout");   // not a /compact command
         Assert.IsType<UserMessageItem>(Assert.Single(conv.Items));
-    }
-
-    [Fact]
-    public void Autocompact_TogglesStateAndMarksIt()
-    {
-        var (conv, _) = Make();
-        Assert.True(conv.AutoCompact);   // on by default (matches the CLI)
-
-        conv.AddUserPrompt("/autocompact");
-        Assert.False(conv.AutoCompact);
-        Assert.Contains("auto-compaction off", Assert.IsType<NoteItem>(conv.Items[^1]).Text);
-
-        conv.AddUserPrompt("/autocompact");
-        Assert.True(conv.AutoCompact);
-        Assert.Contains("auto-compaction on", Assert.IsType<NoteItem>(conv.Items[^1]).Text);
-    }
-
-    [Theory]
-    [InlineData("/autocompact off", false)]
-    [InlineData("/autocompact on", true)]
-    [InlineData("/autocompact disable", false)]
-    [InlineData("/autocompact enable", true)]
-    public void Autocompact_HonoursAnExplicitArgument(string prompt, bool expected)
-    {
-        var (conv, _) = Make();
-        conv.AddUserPrompt(prompt);
-        Assert.Equal(expected, conv.AutoCompact);
     }
 
     [Fact]

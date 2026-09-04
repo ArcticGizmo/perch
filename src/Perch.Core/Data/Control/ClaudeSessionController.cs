@@ -114,10 +114,16 @@ internal sealed class ClaudeSessionController : IDisposable
     private void Pump(Process process)
     {
         var stderr = process.StandardError.ReadToEndAsync();
+        // Opt-in raw capture: set PERCH_SESSION_LOG to a file path to append every stdout line verbatim, for
+        // pinning down record shapes we haven't captured yet (e.g. /compact's progress). Off by default; it
+        // writes the full stream, so it's a deliberate debug switch, not something left on.
+        var rawLog = Environment.GetEnvironmentVariable("PERCH_SESSION_LOG");
         try
         {
             while (process.StandardOutput.ReadLine() is { } line)
             {
+                if (rawLog is { Length: > 0 })
+                    try { File.AppendAllText(rawLog, line + Environment.NewLine); } catch { /* best effort */ }
                 foreach (var ev in StreamJsonParser.Parse(line))
                 {
                     // Normally confirms the pinned/resumed id; if the CLI reports a different one (it shouldn't),

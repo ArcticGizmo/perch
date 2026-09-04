@@ -50,6 +50,14 @@ internal sealed record PermissionRequestEvent(
 /// <summary>Acknowledgement of a <c>set_permission_mode</c> control request.</summary>
 internal sealed record ModeChangedEvent(string Mode) : SessionEvent;
 
+/// <summary>A <c>system</c>/<c>subtype:"status"</c> progress record. The CLI emits these while a long
+/// operation runs — notably <c>/compact</c>, which shows a live "Compacting conversation… (18s) … 18%"
+/// readout. <paramref name="Percent"/> is the completion percentage when one could be read (else null, so
+/// the UI falls back to an indeterminate bar + its own elapsed timer); <paramref name="Message"/> is any
+/// human-readable status text. Only acted on by <see cref="SessionConversation"/> while a compaction is in
+/// flight; harmless otherwise.</summary>
+internal sealed record StatusEvent(int? Percent, string? Message) : SessionEvent;
+
 /// <summary>A turn finished (the <c>result</c> record): outcome plus cost/usage for the whole session so far.
 /// The three input buckets are kept apart because they price very differently — fresh
 /// <paramref name="InputTokens"/> at 1×, <paramref name="CacheCreationTokens"/> at ~1.25×,

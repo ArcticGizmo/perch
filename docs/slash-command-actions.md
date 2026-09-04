@@ -31,19 +31,25 @@ TUI). Some are **inferred** from behaviour/knowledge and want a live spike befor
 | Command | What happens | Headless? | Perch plan |
 |---|---|---|---|
 | `/clear` | **New session id, context wiped** | ✅ verified | **Done** — thread resets on the new init |
-| `/compact` | Compacts context (emits `status` records) | ✅ verified | **Done (code)** — marker + echoes `[instructions]`; live dogfood owed |
-| `/rename` | Renames the session | ⚠ (title record?) | Tier-3 — update the title |
+| `/compact` | Compacts context (emits `status` records) | ✅ verified | **Done (code)** — live progress-meter row (elapsed timer + % + freed tokens); echoes `[instructions]` |
+| `/rename` | Renames the session | ✅ | **Done** — title flows to `TitleChanged` |
 | `/init` | **Writes/updates `CLAUDE.md`** | ✅ (as text; may run a Write turn) | **In catalogue (plain text)** — renders; confirm the file-write turn at dogfood |
-| `/export` | Exports the conversation (file/clipboard) | ⚠ | **In catalogue (plain text)** — confirm what it returns headlessly |
-| `/memory` | Opens a memory file in an editor | ❌ editor | **In catalogue (plain text)** — ⚠ may be TUI-editor-only (could hang the turn); if so, intercept → native memory view. Test first |
-| `/add-dir <path>` | Adds a working directory | ⚠ | **In catalogue (plain text)** now; a native folder picker is the nicer surface later |
+| `/export` | Exports the conversation (file/clipboard) | ❌ "not available in this environment" (dogfood 2026-09-04) | **Removed from the catalogue** |
+| `/memory` | Opens a memory file in an editor | ❌ "not available in this environment" (dogfood 2026-09-04) | **Removed from the catalogue** |
+| `/add-dir <path>` | Adds a working directory | ❌ "not available in this environment" (dogfood 2026-09-04) | **Removed from the catalogue** |
 | `/effort <level>` | Sets reasoning effort | ✅ (`/effort` as text) | **Native** — the effort pill (done) |
-| `/import <path>` | Imports context from a file | ⚠ | **In catalogue (plain text)** — arg rides through in the sent text |
-| `/autocompact` | Toggles auto-compaction | ⚠ | **Done (code)** — tracks state, marks it, tunes the context tooltip; live dogfood owed |
+| `/import <path>` | Imports context from a file | ⚠ (advertised) | **In catalogue (plain text)** — arg rides through in the sent text |
+| `/autocompact` | Perch-managed early auto-compaction | native modal | **Done (code)** — opens a modal (toggle + threshold slider); Perch fires `/compact` at the chosen fill % |
 | `/heapdump` | Writes a heap dump file | ⚠ | **Kept out of the palette** (still works if typed) |
 | `/reload-plugins`, `/reload-skills` | Reloads plugins/skills | ⚠ | **Kept out of the palette** (power-user; still send as text if typed) |
-| `/goal` | Sets/updates the session goal | ⚠ | **In catalogue (plain text)** — renders |
+| `/goal` | Sets/updates the session goal | ⚠ (advertised) | **In catalogue (plain text)** — renders |
 | `/color`, `/fast` | Toggle display prefs | ❌ N/A | **Omitted** — Perch owns its own look |
+
+> **Dogfood finding (2026-09-04):** the commands that return "not available in this environment" over
+> stream-json (`/export`, `/memory`, `/add-dir`) are exactly the ones **absent from the CLI's advertised
+> built-in list**; the advertised commands (`/compact`, `/autocompact`, `/goal`, `/import`, `/init`, …) work.
+> So the advertised list, while a subset for readouts, is a reliable *positive* signal for actions — the
+> non-advertised action commands were pulled from the palette.
 
 ## C. Read-only info (no wizard, no side effect — just render markdown)
 
@@ -62,38 +68,35 @@ TUI). Some are **inferred** from behaviour/knowledge and want a live spike befor
 
 ## Progress
 
-- **Plain-text actions — surfaced (code, 2026-09-04).** `/goal [text]`, `/import <path>` and `/add-dir
-  <path>` added to `SlashCommandCatalog` (Tier 1, plain text); `/init`, `/export`, `/memory` were already
-  there. These need no reaction code — they send as text and the CLI's output renders through `MarkdownView`,
-  and any argument rides through in the sent text (so `/import`/`/add-dir` arg passing is automatic). **What's
-  left is a live spike for the ⚠ ones**: does `/export` return a path or content headlessly; does `/memory`
-  render or block on a TTY editor (if it blocks, intercept it and open a native memory view instead of
-  sending text); does `/add-dir` take effect over stream-json (if so, a native folder picker is the nicer
-  follow-up). **Kept out of the palette** (they still send as text if a power-user types them): `/heapdump`,
-  `/reload-plugins`, `/reload-skills`. **Omitted** (Perch owns its own look): `/color`, `/fast`.
-- **`/autocompact` — DONE (code, 2026-09-04, branch `session-control-poc`).** Sent as plain text (the CLI
-  renders its own confirmation) and Perch mirrors the setting: `SessionConversation.AutoCompact` (a bool,
-  default **on** to match the CLI) is flipped by a bare `/autocompact` or set by an explicit
-  `on`/`off`/`enable`/`disable`/`true`/`false`/`yes`/`no` argument, with a `NoteItem` marker either way. The
-  context-pill tooltip in `SessionWindow` now reads that state — it only promises "a compaction is coming as
-  it nears full" when auto-compaction is on, and otherwise says it won't shrink on its own (run `/compact`).
-  Added `/autocompact` (`[on|off]`) to `SlashCommandCatalog` as a `SessionMutating` entry. Tests:
-  `SessionConversationTests.Autocompact_TogglesStateAndMarksIt` + `Autocompact_HonoursAnExplicitArgument`.
-  **Caveat/dogfood owed:** the CLI never reports the *initial* auto-compaction value, so a session that
-  started with it already off reads as on until the user toggles it here; confirm the real toggle semantics
-  (bare toggle vs. explicit arg) and the confirmation text live.
-- **`/compact` — DONE (code, 2026-09-04, branch `session-control-poc`).** It stays a plain-text send (that's
-  what makes the CLI compact) and Perch *reacts*: `SessionConversation.AddUserPrompt` detects the `/compact`
-  command and appends a `NoteItem` marker after the command chip — "compacting the conversation to free up
-  context…", or "…(keeping: <instructions>)…" when an argument is given (the `[instructions]` ride through in
-  the sent text; nothing extra needed for arg passing). The progress `status` system records the CLI emits
-  while compacting are already ignored by `StreamJsonParser` (`ParseSystem` returns `[]` for any non-`init`
-  subtype) — locked by a `UnknownOrMalformedLines_YieldNothing` InlineData case. Context/usage numbers
-  self-correct on the compaction turn's `result` (the standard `ContextTokens = latest prompt` path). Tests:
-  `SessionConversationTests.Compact_DropsAMarkerAndEchoesInstructions` +
-  `OrdinaryPrompt_DropsNoCompactionMarker`. **Live dogfood owed:** confirm the compaction turn ends with a
-  `result` (so the spinner clears) and that the context pill visibly drops; if a future build emits a
-  `compact_boundary` system record with `pre_tokens`, the marker could be enriched to report tokens freed.
+- **Dogfood round 1 (2026-09-04) — reworked `/compact` + `/autocompact`, pruned the dead commands.**
+- **`/compact` — DONE (code), now a live progress meter.** Feedback: "show a progress meter so we know where
+  we are" (the CLI's own bar reads `Compacting conversation… (18s) … 18%`). `SessionConversation` emits a
+  `CompactionItem` (not a static note) when `/compact` is sent; `SessionThreadView` renders it as a centred
+  card with a **determinate bar when a percentage arrives** and an **indeterminate bar + Perch's own
+  elapsed-seconds timer** otherwise (so it animates even when the stream carries no percent), settling to
+  "✓ Compacted · freed N · Ms" on the turn's result (freed = context before − after). The CLI's
+  `system`/`subtype:"status"` records are parsed into a `StatusEvent` (percent from a numeric field or an
+  `NN%` in the text, defensively; null → indeterminate), consumed only while a compaction is live. Tests:
+  `Compact_ShowsAProgressRowThenFinalises`, `Status_WithoutAnActiveCompaction_IsIgnored`,
+  `StreamJsonParserTests.CompactStatus_ParsesAPercentFromFieldOrText`. **Owed:** confirm the real `status`
+  record shape live so the determinate bar populates (else the elapsed-timer fallback, which is fine).
+- **`/autocompact` — DONE (code), reworked into a Perch-managed modal.** Feedback: "show a modal with a slider
+  to represent where compaction should happen." The old plain-text toggle (+ `AutoCompact` mirror bool) was
+  removed. `/autocompact` is now a **Native** command: `SessionWindow` opens an in-window modal (scrim + card,
+  Esc/scrim close) with an on/off toggle and a threshold **slider** (50–95%). When enabled, Perch runs
+  `/compact` itself once a session's context fill crosses the threshold — `MaybeAutoCompact` fires once per
+  crossing (armed → disarmed until the fill drops back below), guarded to a settled live session with a
+  completed turn (never on attach, a running/queued turn, or a pending permission), deferred to let the
+  state-change unwind, and preceded by an "auto-compacting · context reached N%" note. Persisted in
+  `AppSettings` (`SessionAutoCompactEnabled` default **off** so nothing auto-spends tokens unasked, +
+  `SessionAutoCompactThresholdPercent` default 80; both in `SettingsRegistryTests.NotSettings`), pushed via
+  `SetAutoCompactConfig` and fanned out through the `AutoCompactChanged` app event; the context tooltip
+  reflects it. **Owed:** live dogfood of the modal + a real threshold-crossing fire.
+- **Pruned the dead commands.** `/export`, `/memory`, `/add-dir` returned "not available in this environment"
+  over stream-json (dogfood) and were **removed from the catalogue** — they're the ones absent from the CLI's
+  advertised list. `/goal`, `/import` (both advertised) stay. **Kept out of the palette** (still send as text
+  if typed): `/heapdump`, `/reload-plugins`, `/reload-skills`. **Omitted** (Perch owns its look): `/color`,
+  `/fast`.
 
 ---
 

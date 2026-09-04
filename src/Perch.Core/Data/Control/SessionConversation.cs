@@ -21,6 +21,21 @@ internal sealed class NoteItem(string text, NoteKind kind = NoteKind.Info) : Con
     public NoteKind Kind { get; } = kind;
 }
 
+/// <summary>A <c>/compact</c> in progress (and then complete): a live row with a progress meter. The CLI
+/// runs compaction as a turn and streams <c>status</c> records; <see cref="Percent"/> follows them when a
+/// figure can be read, and the UI always shows its own elapsed timer from <see cref="StartedUtc"/> so it
+/// reads as progress even when no percentage arrives. Finalised by the compaction turn's result.</summary>
+internal sealed class CompactionItem(string? instructions) : ConversationItem
+{
+    public string? Instructions { get; } = instructions;
+    public DateTime StartedUtc { get; } = DateTime.UtcNow;
+    /// <summary>Completion percentage from the CLI's status records, or null → indeterminate (timer-driven).</summary>
+    public int? Percent { get; internal set; }
+    public bool IsDone { get; internal set; }
+    /// <summary>Context tokens reclaimed (before − after), known only once the turn's result lands.</summary>
+    public long FreedTokens { get; internal set; }
+}
+
 /// <summary>An assistant turn: streamed prose, thinking, and tool calls in the order they arrived.
 /// Closed by the turn's <c>result</c> record, after which the next assistant event opens a new item.</summary>
 internal sealed class AssistantMessageItem : ConversationItem
@@ -89,6 +104,11 @@ internal sealed class SessionConversation
     private readonly List<ConversationItem> _items = new();
     private readonly Dictionary<string, (AssistantMessageItem Owner, ToolCallPart Part)> _toolCalls = new();
 
+    // The /compact currently running (its progress row), and the context size just before it, so the freed
+    // amount can be reported when the compaction turn's result lands. Null when no compaction is in flight.
+    private CompactionItem? _activeCompaction;
+    private long _contextBeforeCompaction;
+
     public IReadOnlyList<ConversationItem> Items => _items;
 
     /// <summary>An item was appended or changed in place.</summary>
@@ -121,11 +141,6 @@ internal sealed class SessionConversation
     public long TotalFreshInputTokens { get; private set; }
     /// <summary>A turn is running (prompt sent, no result yet).</summary>
     public bool TurnActive { get; private set; }
-    /// <summary>Whether the CLI will compact the conversation itself as it nears the context limit. Defaults
-    /// to on (Claude Code's default) and is flipped by <c>/autocompact</c>; the context readout's messaging
-    /// reflects it. A best-effort mirror of the CLI setting — the CLI never reports the initial value, so a
-    /// session that started with it already off reads as on until the user toggles it here.</summary>
-    public bool AutoCompact { get; private set; } = true;
     /// <summary>Prompts sent while a turn was running; the CLI drains them in order.</summary>
     public int QueuedPrompts { get; private set; }
     public PermissionItem? PendingPermission { get; private set; }
@@ -229,6 +244,15 @@ internal sealed class SessionConversation
                 break;
             }
 
+            case StatusEvent status:
+                // Only meaningful while a /compact is running: advance its meter when a percentage is read.
+                if (_activeCompaction is { IsDone: false } running && status.Percent is int pct)
+                {
+                    running.Percent = pct;
+                    Changed?.Invoke(running, ConversationChange.Updated);
+                }
+                break;
+
             case ModeChangedEvent mode:
                 if (mode.Mode != PermissionMode)
                 {
@@ -258,6 +282,16 @@ internal sealed class SessionConversation
                 TotalOutputTokens += turn.OutputTokens;
                 TotalFreshInputTokens += turn.FreshInputTokens;
                 if (QueuedPrompts > 0) QueuedPrompts--; else TurnActive = false;
+                // A running /compact is settled by this turn's result: fill the meter and report the context
+                // it reclaimed (before − after, floored at zero).
+                if (_activeCompaction is { IsDone: false } compaction)
+                {
+                    compaction.IsDone = true;
+                    compaction.Percent = 100;
+                    compaction.FreedTokens = Math.Max(0, _contextBeforeCompaction - ContextTokens);
+                    Changed?.Invoke(compaction, ConversationChange.Updated);
+                    _activeCompaction = null;
+                }
                 if (turn.IsError) Append(new NoteItem($"turn failed ({turn.Subtype})", NoteKind.Error));
                 StateChanged?.Invoke();
                 break;
@@ -344,39 +378,18 @@ internal sealed class SessionConversation
         // `status` system records, which the parser ignores (see docs/slash-command-actions.md, Group B). The
         // optional [instructions] ride through in the sent text; echo them so the marker says what was kept.
         // Context/usage figures self-correct on the compaction turn's result (ContextTokens = latest prompt).
-        switch (SlashCommandCatalog.CommandName(text))
+        // `/compact` runs as an ordinary turn, but its effect is to shrink the context rather than to answer,
+        // so it becomes a live progress row (the CLI streams status while it works; the row's meter follows
+        // and its result finalises it below). Snapshot the context size to report how much was freed.
+        // (`/autocompact` is a native command handled by SessionWindow — it opens the auto-compaction modal.)
+        if (SlashCommandCatalog.CommandName(text) == "compact")
         {
-            case "compact":
-            {
-                var kept = CompactInstructions(text);
-                Append(new NoteItem(kept is null
-                    ? "compacting the conversation to free up context…"
-                    : $"compacting the conversation (keeping: {kept})…"));
-                break;
-            }
-            case "autocompact":
-                // `/autocompact` flips (or, with an explicit on/off argument, sets) whether the CLI compacts
-                // itself near the limit. Mirror the resulting state so the context readout can stop promising
-                // an automatic compaction that won't happen; the CLI also renders its own text confirmation.
-                AutoCompact = AutoCompactArg(text) ?? !AutoCompact;
-                Append(new NoteItem(AutoCompact
-                    ? "auto-compaction on — the conversation will compact itself as it nears the context limit"
-                    : "auto-compaction off — it won't compact on its own; run /compact to do it manually"));
-                break;
+            var item = new CompactionItem(CompactInstructions(text));
+            _activeCompaction = item;
+            _contextBeforeCompaction = ContextTokens;
+            Append(item);
         }
         StateChanged?.Invoke();
-    }
-
-    // An explicit on/off argument to `/autocompact` (on|off|true|false|enable|disable…), or null to toggle.
-    private static bool? AutoCompactArg(string text)
-    {
-        var rest = CompactInstructions(text)?.ToLowerInvariant();
-        return rest switch
-        {
-            "on" or "true" or "enable" or "enabled" or "yes" => true,
-            "off" or "false" or "disable" or "disabled" or "no" => false,
-            _ => null,
-        };
     }
 
     // The text after `/compact` (the summarisation instructions), or null when none were given.
@@ -403,6 +416,7 @@ internal sealed class SessionConversation
         QueuedPrompts = 0;
         LastTurn = null;
         ContextTokens = 0;
+        _activeCompaction = null;
         _items.Add(new NoteItem("conversation cleared"));
         Reset?.Invoke();
     }
@@ -441,6 +455,13 @@ internal sealed class SessionConversation
                 a.IsComplete = true;
                 Changed?.Invoke(a, ConversationChange.Updated);
             }
+        // A compaction still in flight didn't get its result — settle its meter so it doesn't spin forever.
+        if (_activeCompaction is { IsDone: false } compaction)
+        {
+            compaction.IsDone = true;
+            Changed?.Invoke(compaction, ConversationChange.Updated);
+            _activeCompaction = null;
+        }
         TurnActive = false;
         QueuedPrompts = 0;
         Append(new NoteItem(

@@ -54,11 +54,8 @@ internal static class SlashCommandCatalog
         new("review",        "",              "Review the working tree's changes",            SlashCommandTier.PlainText),
         new("pr-comments",   "",              "Fetch pull-request comments",                  SlashCommandTier.PlainText),
         new("release-notes", "",              "Show the release notes",                        SlashCommandTier.PlainText),
-        new("export",        "",              "Export the conversation",                       SlashCommandTier.PlainText),
-        new("memory",        "",              "View project and user memory",                  SlashCommandTier.PlainText),
         new("goal",          "[text]",        "Set or show the session goal",                  SlashCommandTier.PlainText),
         new("import",        "<path>",        "Import a file's contents into the context",     SlashCommandTier.PlainText),
-        new("add-dir",       "<path>",        "Add a working directory",                       SlashCommandTier.PlainText),
 
         // Tier 2 — Perch already has a native surface; the palette routes there.
         new("model",         "[name]",        "Switch the model",                              SlashCommandTier.Native),
@@ -67,6 +64,7 @@ internal static class SlashCommandCatalog
         new("config",        "",              "Open Claude Desktop",                           SlashCommandTier.Native),
         new("theme",         "",              "Change the colour theme",                       SlashCommandTier.Native),
         new("mcp",           "",              "MCP server status",                             SlashCommandTier.Native),
+        new("autocompact",   "",              "Auto-compaction settings",                      SlashCommandTier.Native),
         new("resume",        "",              "Resume another session",                        SlashCommandTier.Native),
         new("login",         "",              "Sign in (opens a terminal)",                    SlashCommandTier.Native),
         new("logout",        "",              "Sign out (opens a terminal)",                   SlashCommandTier.Native),
@@ -74,7 +72,6 @@ internal static class SlashCommandCatalog
         // Tier 3 — mutates the session; Perch must react.
         new("clear",         "",              "Start a fresh conversation",                    SlashCommandTier.SessionMutating),
         new("compact",       "[instructions]","Compact the conversation to free up context",   SlashCommandTier.SessionMutating),
-        new("autocompact",   "[on|off]",      "Toggle automatic compaction near the limit",    SlashCommandTier.SessionMutating),
         new("rename",        "[title]",       "Rename this session",                           SlashCommandTier.SessionMutating),
 
         // Tier 4 — TUI-only / defer.

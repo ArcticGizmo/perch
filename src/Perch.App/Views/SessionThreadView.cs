@@ -32,6 +32,7 @@ internal sealed class SessionThreadView : ScrollViewer
     private readonly SessionPalette _p;
     private readonly StackPanel _stack;
     private readonly Dictionary<ConversationItem, ItemView> _views = new();
+    private readonly Dictionary<CompactionItem, CompactionCard> _compactions = new();
     private readonly string _initials;
     private SessionConversation? _conv;
     private bool _stickToBottom = true;
@@ -122,6 +123,7 @@ internal sealed class SessionThreadView : ScrollViewer
         _activityShown = false;   // the row was cleared with the column; re-add it below if the turn is live
         _stack.Children.Clear();
         _views.Clear();
+        _compactions.Clear();
         foreach (var item in conversation.Items) AddItem(item);
         conversation.Changed += OnChanged;
         conversation.Reset += OnReset;
@@ -215,6 +217,7 @@ internal sealed class SessionThreadView : ScrollViewer
             AssistantMessageItem a => BuildAssistant(a),
             PermissionItem p       => new ItemView { Root = Row(BuildPermission(p), null, null) },
             NoteItem n             => new ItemView { Root = Row(BuildNote(n), null, null) },
+            CompactionItem cm      => new ItemView { Root = Row(BuildCompaction(cm), null, null) },
             _                      => new ItemView { Root = new Panel() },
         };
         _views[item] = view;
@@ -235,6 +238,9 @@ internal sealed class SessionThreadView : ScrollViewer
                 int at = _stack.Children.IndexOf(view.Root);
                 if (at >= 0) _stack.Children[at] = fresh;
                 view.Root = fresh;
+                break;
+            case CompactionItem cm:
+                if (_compactions.TryGetValue(cm, out var card)) card.Update(cm);
                 break;
         }
     }
@@ -851,6 +857,88 @@ internal sealed class SessionThreadView : ScrollViewer
         HorizontalAlignment = HorizontalAlignment.Center, TextWrapping = TextWrapping.Wrap,
         TextAlignment = TextAlignment.Center, Margin = new Thickness(0, -8, 0, -8),
     };
+
+    // ── Compaction progress ───────────────────────────────────────────────────────
+
+    private Control BuildCompaction(CompactionItem item)
+    {
+        var card = new CompactionCard(_p, item);
+        _compactions[item] = card;
+        return card.Root;
+    }
+
+    /// <summary>A <c>/compact</c> in progress as a centred card with a live meter: an elapsed-seconds timer
+    /// Perch drives itself (so it reads as motion even when the CLI sends no percentage) and, when a figure
+    /// does arrive, a determinate bar. Settles to a "compacted · freed N" line when the turn's result lands.</summary>
+    private sealed class CompactionCard
+    {
+        private readonly SessionPalette _p;
+        private readonly ProgressBar _bar;
+        private readonly TextBlock _label;
+        private readonly DispatcherTimer _timer;
+        private CompactionItem _item;
+
+        public Border Root { get; }
+
+        public CompactionCard(SessionPalette p, CompactionItem item)
+        {
+            _p = p;
+            _item = item;
+            _label = new TextBlock { FontFamily = p.Mono, FontSize = 12, Foreground = p.Muted, TextWrapping = TextWrapping.Wrap };
+            _bar = new ProgressBar
+            {
+                Minimum = 0, Maximum = 100, Height = 5, CornerRadius = new CornerRadius(3),
+                Foreground = p.Brand, Background = p.Raised2, Margin = new Thickness(0, 9, 0, 0),
+            };
+            Root = new Border
+            {
+                Background = p.Raised, BorderBrush = p.BrandLine, BorderThickness = new Thickness(1),
+                CornerRadius = SessionPalette.CardRadius, Padding = new Thickness(15, 12),
+                MaxWidth = SessionPalette.ThreadMaxWidth * 0.86, HorizontalAlignment = HorizontalAlignment.Center,
+                Child = new StackPanel { Children = { _label, _bar } },
+            };
+            // Perch owns the elapsed timer, so the row animates second-by-second regardless of the stream.
+            _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _timer.Tick += (_, _) => Render();
+            Root.AttachedToVisualTree += (_, _) => { if (!_item.IsDone) _timer.Start(); };
+            Root.DetachedFromVisualTree += (_, _) => _timer.Stop();
+            Render();
+        }
+
+        public void Update(CompactionItem item)
+        {
+            _item = item;
+            Render();
+            if (item.IsDone) _timer.Stop();
+        }
+
+        private void Render()
+        {
+            int secs = Math.Max(0, (int)(DateTime.UtcNow - _item.StartedUtc).TotalSeconds);
+            if (_item.IsDone)
+            {
+                _bar.IsIndeterminate = false;
+                _bar.Value = 100;
+                _bar.Foreground = _p.Ok;
+                var freed = _item.FreedTokens > 0 ? $"  ·  freed {Windows.SessionWindow.FormatTokens(_item.FreedTokens)}" : "";
+                _label.Foreground = _p.Muted;
+                _label.Text = $"✓ Compacted the conversation{freed}  ·  {secs}s";
+            }
+            else if (_item.Percent is int pct)
+            {
+                _bar.IsIndeterminate = false;
+                _bar.Value = Math.Clamp(pct, 0, 100);
+                _label.Text = $"Compacting the conversation…  ({secs}s)  ·  {pct}%";
+            }
+            else
+            {
+                _bar.IsIndeterminate = true;
+                _label.Text = _item.Instructions is { Length: > 0 } kept
+                    ? $"Compacting the conversation (keeping: {kept})…  ({secs}s)"
+                    : $"Compacting the conversation…  ({secs}s)";
+            }
+        }
+    }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
 
