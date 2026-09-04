@@ -32,6 +32,44 @@ public class SessionConversationTests
     }
 
     [Fact]
+    public void SecondInitWithNewId_ClearsConversation()
+    {
+        var (conv, _) = Make();
+        // A live conversation under the first id: a turn with prose, plus a result seeding context/cost.
+        conv.Apply(new SessionInitEvent("sid-1", "claude-opus-5", "default", 16));
+        conv.AddUserPrompt("remember BANANA");
+        conv.Apply(new AssistantTextEvent("OK"));
+        conv.Apply(new TurnResultEvent(false, "success", 0.12, InputTokens: 5000, OutputTokens: 20, DurationMs: 900));
+        Assert.NotEmpty(conv.Items);
+        Assert.True(conv.ContextTokens > 0);
+
+        bool reset = false;
+        conv.Reset += () => reset = true;
+
+        // `/clear` re-bases the session onto a new id with wiped context (a fresh init).
+        conv.Apply(new SessionInitEvent("sid-2", "claude-opus-5", "default", 16));
+
+        Assert.True(reset);
+        Assert.Equal("sid-2", conv.SessionId);
+        var note = Assert.IsType<NoteItem>(Assert.Single(conv.Items));   // only the marker remains
+        Assert.Equal("conversation cleared", note.Text);
+        Assert.Equal(0, conv.ContextTokens);
+        Assert.False(conv.TurnActive);
+        Assert.Null(conv.LastTurn);
+        Assert.Equal(0.12, conv.TotalCostUsd);   // cumulative process spend is kept
+    }
+
+    [Fact]
+    public void FirstInit_MatchingSeededId_DoesNotClear()
+    {
+        var (conv, _) = Make();
+        conv.SetSessionId("sid-1");            // seeded at launch, before init
+        conv.AddUserPrompt("hi");
+        conv.Apply(new SessionInitEvent("sid-1", "claude-opus-5", "default", 16));   // same id → not a clear
+        Assert.IsType<UserMessageItem>(Assert.Single(conv.Items));   // the user prompt survives
+    }
+
+    [Fact]
     public void StreamingDeltas_AccumulateThenFinalise()
     {
         var (conv, log) = Make();

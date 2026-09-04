@@ -64,7 +64,6 @@ internal static class SlashCommandCatalog
         new("config",        "",              "Open Perch settings",                           SlashCommandTier.Native),
         new("mcp",           "",              "MCP server status",                             SlashCommandTier.Native),
         new("resume",        "",              "Resume another session",                        SlashCommandTier.Native),
-        new("help",          "",              "List available commands",                       SlashCommandTier.Native),
 
         // Tier 3 — mutates the session; Perch must react.
         new("clear",         "",              "Start a fresh conversation",                    SlashCommandTier.SessionMutating),
@@ -72,7 +71,6 @@ internal static class SlashCommandCatalog
         new("rename",        "[title]",       "Rename this session",                           SlashCommandTier.SessionMutating),
 
         // Tier 4 — TUI-only / defer.
-        new("agents",        "",              "Manage subagents",                              SlashCommandTier.TuiOnly),
         new("doctor",        "",              "Diagnose the installation",                      SlashCommandTier.TuiOnly),
         new("vim",           "",              "Vim editing mode (terminal only)",              SlashCommandTier.TuiOnly),
     };

@@ -145,13 +145,21 @@ internal sealed class SessionConversation
         switch (ev)
         {
             case SessionInitEvent init:
+            {
+                // A second init with a *different* id means the session was re-based mid-process — the CLI's
+                // response to `/clear` (a fresh session id + wiped context). The id is seeded before the first
+                // init and matches it, so a genuine first init never trips this. Reset the thread to match the
+                // now-empty conversation. (The controller separately migrates the lock + registry to the new id.)
+                bool cleared = SessionId is { Length: > 0 } prev && init.SessionId.Length > 0 && init.SessionId != prev;
                 SessionId = init.SessionId;
                 Model = init.Model;
                 if (init.PermissionMode.Length > 0) PermissionMode = init.PermissionMode;
                 ToolCount = init.ToolCount;
                 SlashCommands = init.SlashCommands ?? [];
+                if (cleared) ClearForNewConversation();
                 StateChanged?.Invoke();
                 break;
+            }
 
             case TextDeltaEvent delta:
             {
@@ -327,6 +335,22 @@ internal sealed class SessionConversation
     }
 
     public void AddNote(string text, NoteKind kind = NoteKind.Info) => Append(new NoteItem(text, kind));
+
+    // `/clear` re-based the session onto a new id with wiped context: drop every conversation item and the
+    // per-conversation turn/context bookkeeping, leaving a marker, and rebuild the view via Reset. Cumulative
+    // process-level spend (cost, total tokens) is kept — it's the same process and billing window.
+    private void ClearForNewConversation()
+    {
+        _items.Clear();
+        _toolCalls.Clear();
+        PendingPermission = null;
+        TurnActive = false;
+        QueuedPrompts = 0;
+        LastTurn = null;
+        ContextTokens = 0;
+        _items.Add(new NoteItem("conversation cleared"));
+        Reset?.Invoke();
+    }
 
     /// <summary>Marks the pending permission answered (the controller already replied to the CLI).</summary>
     public void ResolvePermission(PermissionItem item, bool allowed, string? switchedMode = null, string? answerSummary = null)

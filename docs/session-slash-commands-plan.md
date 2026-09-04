@@ -68,10 +68,17 @@ render/live dogfood still owed (a running dev instance held the Windows-head DLL
       (no-arg commands send immediately; arg commands complete with a trailing space), Esc dismiss, click =
       run. **Native routing:** accepting `/model` or `/effort` opens the existing pill flyout instead of
       sending text (they're already control-request-driven). Other Native-tier entries (`/usage`, `/config`,
-      `/resume`, `/help`, `/mcp`) still just insert text for now — their native surfaces are Tier-2/4 items.
+      `/resume`, `/mcp`) still just insert text for now — their native surfaces are Tier-2/4 items.
 - [x] **Command chip render.** `SessionThreadView.BuildUser` renders a slash-command user message as a compact
       mono chip (brand-tinted) instead of a prose bubble. Assistant command *output* already renders through
       `MarkdownView` (same `text`-block shape) — **verify visually** once a capture is possible.
+- [x] **Rich input highlighting (extensible).** `ComposerHighlighter.Tokenize` (Core, tested) splits composer
+      text into typed spans — `InputTokenKind.Command` (leading `/cmd`, brand + semibold) and `.Link` (http(s)
+      URLs, violet + underline), with the kind enum designed to grow (mentions, etc.). Rendered by a
+      transparent-foreground `TextBox` over a `TextBlock` highlight layer that shares font metrics + width and
+      follows the box's scroll (`PART_ScrollViewer` translate). **Alignment/caret + colours need a visual
+      check** once the Windows head can render — the transparent-overlay technique is metrics-sensitive; if a
+      capture shows drift, the fallback is to match the box's internal presenter offset explicitly.
 - [ ] **Spike harness.** A tiny xUnit/manual harness that sends `/{cmd}` over the controller and asserts
       it comes back as `text` (or the expected `system/status`), so each checkbox below is *verified*, not
       assumed. Capture one fixture line per command into `StreamJsonParserTests` where the shape is new.
@@ -120,10 +127,16 @@ Each: **[ ] add to catalogue → [ ] spike-confirm text routing → [ ] verify m
 
 ## Tier 3 — Mutates the session; Perch must *react*, not just render (highest value)
 
-- [ ] `/clear` — starts a fresh conversation. **Perch must reset the thread** (clear `Items`) and re-point
-      to the new/continuing transcript. Verify whether the session id changes or the transcript resets,
-      and that `SessionConversation` handles a mid-session reset (there is already a `Reset` event path
-      for resume-history — reuse it). This is the most important one to get right.
+- [x] `/clear` — **done (2026-09-04).** Spiked live: `/clear` over stream-json emits a **fresh `init` with a
+      NEW session id** (`b51a3ee4…`→`4e10c49e…`), a result with `num_turns:0`, and genuinely wipes context
+      (the model forgot a planted word). Interop: `SessionConversation.Apply(SessionInitEvent)` now detects a
+      second init whose id differs from the seeded/first id and calls `ClearForNewConversation` — drops all
+      items + per-conversation turn/context bookkeeping, leaves a "conversation cleared" marker, raises
+      `Reset` (the view rebuilds via the existing resume-history path). Cumulative process spend (cost, total
+      tokens) is kept. The **lock + `ControlledSessions` migration to the new id was already handled** by the
+      controller's pump (the "CLI reported a different id" branch), so `SessionId`/overlay row/focus follow
+      the new id for free. Tests: `SessionConversationTests.SecondInitWithNewId_ClearsConversation` +
+      `FirstInit_MatchingSeededId_DoesNotClear`. *(Live dogfood still owed.)*
 - [ ] `/compact` ✅ — compacts context. Emits `system`/`subtype:"status"` records while working. **Drop a
       compaction marker** in the thread (a `NoteItem`) and confirm the conversation continues cleanly
       after (usage/context numbers change). Confirm the status records don't break the parser.
@@ -136,18 +149,25 @@ Each: **[ ] add to catalogue → [ ] spike-confirm text routing → [ ] verify m
 
 Decide per item: **build a native Perch surface**, **map to an existing Perch feature**, or **omit**.
 
-- [ ] `/usage` — **native.** Perch already surfaces usage-endpoint spend/limits; open that panel instead
-      of dumping markdown. (Text fallback works today.)
+- [ ] `/usage` — **native rich panel (agreed 2026-09-04, Claude-Desktop-style — see the reference the user
+      shared).** Intercept `/usage` (don't send text) and render a card in the thread. **All the data already
+      exists:** account limits from `UsageInfo` (via `UsageMonitor`/the app's usage host) — `FiveHourPercent`
+      + `FiveHourResetsAt` ("5-hour limit … resets in … / %"), `SevenDayPercent` + `SevenDayResetsAt` ("Weekly ·
+      all models"), `Scoped` (per-model weekly, "Weekly · Fable"), `ExtraUsage` ("Usage credits · $x of $y");
+      **session** data from `SessionConversation` — `TotalCostUsd` ("Cost"), a session-duration ("Active"), a
+      cache-hit % from `LastTurn` (cache-read ÷ total input), and the per-model "Breakdown" (Input / Output /
+      Cache read / Cache write from `LastTurn`). Reuse the overlay bar look (`UsageBarRenderer`). Needs: pass the
+      latest `UsageInfo` into `SessionWindow` (like `SetContextPressureConfig`), a `UsageCardItem` conversation
+      item (or a flyout), and a `/usage` intercept in the send/accept path. **Not built yet.**
 - [ ] `/config` — **map to Perch Settings** (the registry-driven Settings window). Palette entry opens it.
 - [ ] `/context` (upgrade) — optional native context panel reusing Perch's context indicator; text
       version already covers it.
-- [ ] `/agents` — agent **manager** (interactive in the TUI). Decide: native manager vs `/list-agents`
-      (text) for now. Likely defer the manager.
+- [x] `/agents` — **removed from the catalogue (2026-09-04, user):** no longer supported.
+- [x] `/help` — **removed from the catalogue (2026-09-04, user):** doesn't work here.
 - [ ] `/mcp` — MCP server status/auth. `init` already carries `mcp_servers` (status incl. `needs-auth`);
       render a small native MCP panel from that; auth flows are TUI/browser → defer.
 - [ ] `/resume` — **map to Perch's own launcher/picker** (`SessionHistory.ListAll`), not the TUI picker.
       Already how Perch starts/resumes sessions; palette entry opens the launcher.
-- [ ] `/help` — **native.** Render the palette itself / a help card, not the CLI's TUI help.
 - [ ] `/login`, `/logout` — auth; almost certainly not driveable over stream-json. Defer; if needed, hand
       off to a terminal. Confirm behaviour, then omit from the palette or grey out.
 - [ ] `/vim` — editor mode; **N/A** for the Perch composer. Omit.

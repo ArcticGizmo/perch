@@ -1,0 +1,102 @@
+# Group A (wizard/picker) slash commands — implementation plan
+
+Per-command decisions (user, 2026-09-04) for the interactive built-in commands, sequenced by difficulty.
+Group B (actions) and Group C (read-only) are decided separately. Depends on the palette/catalogue
+foundation already shipped (`docs/session-slash-commands-plan.md`).
+
+## Decisions
+
+| Command | Decision |
+|---|---|
+| `/config` | Open **Claude Desktop** app if possible (shell-launch) |
+| `/model` | Open the **model menu** in the UI (the composer's model pill) |
+| `/resume` | Open a **modal** = the launcher's "recent" list, **filtered to this project** (for now) |
+| `/mcp` | A **modal to configure MCPs** — low priority, experimental (loopback auth may not work) |
+| `/permissions` | A **modal** — low priority, needs more examples first |
+| `/login` / `/logout` | Probably **shell out** to a normal interactive `claude` process |
+| `/terminal-setup` | **Remove** |
+| `/statusline` | **Defer** — bring back later as an enhancement |
+| `/hooks` | **Defer** |
+| `/bug` | **Defer** |
+| `/theme` | Open **Perch Settings → Appearance** (theme section) |
+| `/install-github-app` | **Remove** |
+
+## Step 0 — Native-command dispatch (foundation for all of Group A)
+
+Right now `AcceptPalette` special-cases only `/model` and `/effort` (opens their pills). Generalise this into
+one dispatch so each command below is just a handler:
+
+- A `RunNativeCommand(string name) : bool` in `SessionWindow` — returns true when it handled the command
+  natively (so it is **not** sent to the CLI as text). Called from `AcceptPalette` (palette run) **and** from
+  `SendPrompt` when the whole composer text is exactly a no-arg native command (so typing it and hitting Enter
+  works even if the palette is closed).
+- In-window handlers call methods directly (`ShowModelMenu`, the resume modal).
+- App-level handlers raise **events** the App wires (mirroring the existing `NewSessionRequested`):
+  `OpenClaudeDesktopRequested`, `OpenSettingsSectionRequested(SettingsSection)` (Appearance for `/theme`),
+  and later `ShellCommandRequested(login|logout)`.
+- Catalogue upkeep: `/terminal-setup` and `/install-github-app` are **never added** (already absent). Add
+  `/theme` now; add `/permissions`, `/login`, `/logout` when their steps land; keep `/statusline`, `/hooks`,
+  `/bug` out until their deferred work is picked up.
+
+Small and testable; unblocks everything else. **Do this first.**
+
+## Group 1 — Trivial: route to existing Perch UI (≈ half a day total)
+
+1. **`/model` → model menu.** Already routed in `AcceptPalette`; fold it into `RunNativeCommand`, confirm the
+   catalogue entry, done. *(Effectively done.)*
+2. **`/theme` → Settings → Appearance.** Add `/theme` (Native) to the catalogue. Extend `App.OpenSettings` to
+   take an optional target section and have `SettingsWindow` select it (the Appearance/designer page already
+   exists — Settings is registry-driven, so this is "navigate to surface/section", likely a small addition to
+   `SettingsWindow`). Wire `SessionWindow.OpenSettingsSectionRequested(Appearance)` → `OpenSettings(section)`.
+3. **`/config` → launch Claude Desktop.** New tiny platform capability (e.g. `IExternalApps.LaunchClaudeDesktop`
+   with a Windows impl that resolves the installed Claude Desktop exe / shell-launches it), resolved via
+   `PlatformServices`. `SessionWindow.OpenClaudeDesktopRequested` → App calls it; if not installed, a toast/note
+   ("Claude Desktop isn't installed"). Confirm what "config" should really open with the user if Desktop is
+   absent.
+
+## Group 2 — One modal, reusing the launcher (≈ a day)
+
+4. **`/resume` → project-filtered recents modal.** The launcher already has every piece: `SessionHistory.ListAll`,
+   `RecentRow`, the resume estimate, and `ConfirmHeavyResumeAsync`. Extract the recents list + resume flow into a
+   reusable **`ResumePickerWindow`** (or a lightweight in-window overlay) that:
+   - lists recent sessions **filtered to the current project** (`_cwd`), newest first (reuse `MatchesSearch`/the
+     project grouping),
+   - on pick, opens a **new** Perch session via the existing new-session/resume path (you can't resume *into* the
+     running session — it starts another `SessionWindow`, exactly like the launcher's resume),
+   - carries the refuse-if-live + heavy-resume guards already written.
+   Wire `SessionWindow` `/resume` → open this modal seeded with `_cwd`. Later: a project filter toggle to widen it.
+
+## Group 3 — New config modals: low priority, spike first (multi-day each)
+
+5. **`/permissions` → modal.** Blocked on **more examples** from the user (what the permission rules look like /
+   what editing should do). Spike: does `/permissions` do anything over stream-json, and where do rules live on
+   disk (`settings.json` `permissions`)? Then a read/edit modal. *Park until examples arrive.*
+6. **`/mcp` → MCP config modal.** Experimental. **Spike the auth feasibility first** — the loopback/browser OAuth
+   the CLI uses may not be drivable from Perch. init already carries `mcp_servers` (name + status incl.
+   `needs-auth`), so a **read-only status panel** is a cheap first cut; editing/auth is the risky part. Ship the
+   status view, gate the rest behind the auth spike.
+
+## Group 4 — Shell-out / auth: uncertain, spike first
+
+7. **`/login` / `/logout` → shell out.** Almost certainly needs a real interactive `claude` process (TTY), not
+   the stream-json channel. Spike what `claude` exposes (`claude /login`? a setup-token flow? just launching
+   `claude` and letting the user run it). Likely reuse the terminal-launch seam (`ISessionLauncher.Reopen`
+   pattern) to open a terminal for the auth flow, then Perch picks up the new auth on next poll. Add to the
+   catalogue only once a working path is confirmed.
+
+## Remove now
+
+- `/terminal-setup`, `/install-github-app` — never surface them (both already absent from the catalogue; just
+  don't add them). No code change needed beyond this note.
+
+## Deferred (tracked, not scheduled)
+
+- `/statusline` — revisit later as an **enhancement** (a Perch-native status-line/config surface).
+- `/hooks` — Perch manages its own hook; a general hooks view is out of scope for now.
+- `/bug` — feedback flow; decide later (native form vs. shell-out).
+
+## Suggested order to work through
+
+Step 0 → **1 (model)** → **2 (theme)** → **3 (config/Claude Desktop)** → **4 (resume modal)** → then, when
+prioritised: **6 (mcp status view)**, **7 (login/logout spike)**, **5 (permissions, once examples exist)**.
+Each is independently shippable behind the Step-0 dispatch.

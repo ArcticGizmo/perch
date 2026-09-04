@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
@@ -120,6 +121,12 @@ internal sealed class SessionWindow : Window
     private readonly Border _composerFrame;
     private readonly TextBox _composer;
     private readonly SessionButton _sendButton;
+
+    // Rich input highlighting: the composer's own text is painted transparent and a TextBlock behind it draws
+    // the same text with coloured runs (slash commands, links) from ComposerHighlighter. The two share font
+    // metrics + width so glyphs and caret line up; the layer is translated to follow the box's scroll.
+    private readonly TextBlock _highlightLayer;
+    private ScrollViewer? _composerScroll;
 
     // Command palette (type "/" in the composer): a popover above the composer of the built-in slash commands
     // (docs/session-slash-commands-plan.md). Driven entirely by composer text — focus stays on the composer,
@@ -266,11 +273,27 @@ internal sealed class SessionWindow : Window
         _composer = new TextBox
         {
             PlaceholderText = "Reply, or type / for a command", AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
-            FontSize = SessionPalette.ProseSize, FontFamily = _p.Body, Foreground = _p.Text, CaretBrush = _p.Brand,
+            // The foreground is transparent: the coloured copy is drawn by _highlightLayer behind it. The caret
+            // stays visible (its own brush), and the placeholder uses its own brush too, so the empty state reads.
+            FontSize = SessionPalette.ProseSize, FontFamily = _p.Body, Foreground = Brushes.Transparent, CaretBrush = _p.Brand,
             Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0),
             MinHeight = 24, MaxHeight = 180, IsEnabled = false,
         };
         _composer.AddHandler(KeyDownEvent, OnComposerKeyDown, RoutingStrategies.Tunnel);
+        // The highlight layer sits behind the box with identical metrics so its glyphs sit under the real ones;
+        // it follows the box's internal scroll via a translate transform once the template is up.
+        _highlightLayer = new TextBlock
+        {
+            FontSize = SessionPalette.ProseSize, FontFamily = _p.Body, Foreground = _p.Text,
+            TextWrapping = TextWrapping.Wrap, IsHitTestVisible = false, VerticalAlignment = VerticalAlignment.Top,
+        };
+        _composer.TemplateApplied += (_, e) =>
+        {
+            _composerScroll = e.NameScope.Find<ScrollViewer>("PART_ScrollViewer");
+            if (_composerScroll is { } sv)
+                sv.ScrollChanged += (_, _) => _highlightLayer.RenderTransform = new TranslateTransform(0, -sv.Offset.Y);
+        };
+        var textArea = new Panel { ClipToBounds = true, Children = { _highlightLayer, _composer } };
         _sendButton = new SessionButton(_p, "→", SessionButtonKind.Primary, compact: true)
         {
             Width = 36, Height = 36, HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(0),
@@ -284,7 +307,7 @@ internal sealed class SessionWindow : Window
         };
         var cbar = new DockPanel { Margin = new Thickness(0, 10, 0, 0), Children = { _sendButton, chips } };
         _sendButton[DockPanel.DockProperty] = Dock.Right;
-        var composerStack = new StackPanel { Children = { _composer, cbar } };
+        var composerStack = new StackPanel { Children = { textArea, cbar } };
         _composerFrame = new Border
         {
             MaxWidth = SessionPalette.ThreadMaxWidth, Background = _p.Raised, BorderBrush = _p.Border,
@@ -293,7 +316,7 @@ internal sealed class SessionWindow : Window
         };
         _composer.GotFocus += (_, _) => _composerFrame.BorderBrush = _p.BrandLine;
         _composer.LostFocus += (_, _) => _composerFrame.BorderBrush = _p.Border;
-        _composer.TextChanged += (_, _) => UpdatePaletteFromText();
+        _composer.TextChanged += (_, _) => { UpdateHighlight(); UpdatePaletteFromText(); };
 
         // The command palette floats above the composer frame; it lives inside the composer stack so it shares
         // the tree (Popups take no layout space).
@@ -985,6 +1008,39 @@ internal sealed class SessionWindow : Window
         ClosePalette();
         live.SendPrompt(text);
         _composer.Text = "";
+    }
+
+    // ── Rich input highlighting ────────────────────────────────────────────────────
+
+    // Rebuilds the coloured copy of the composer text behind it. Slash commands and links get their own hue
+    // (the brushes are the shared palette instances, so a theme swap re-tints them in place — no rebuild).
+    private void UpdateHighlight()
+    {
+        var text = _composer.Text ?? "";
+        _highlightLayer.Inlines?.Clear();
+        foreach (var tok in ComposerHighlighter.Tokenize(text, IsKnownCommand))
+        {
+            var run = new Run(text.Substring(tok.Start, tok.Length));
+            switch (tok.Kind)
+            {
+                case InputTokenKind.Command:
+                    run.Foreground = _p.Brand; run.FontWeight = FontWeight.SemiBold; break;
+                case InputTokenKind.Link:
+                    run.Foreground = _p.Violet; run.TextDecorations = TextDecorations.Underline; break;
+                default:
+                    run.Foreground = _p.Text; break;
+            }
+            _highlightLayer.Inlines?.Add(run);
+        }
+    }
+
+    // A slash token counts as a command (and gets coloured) only if it names a real one: a built-in, or a
+    // command the running session advertised in init (which includes skills). Internal plumbing is excluded.
+    private bool IsKnownCommand(string name)
+    {
+        if (SlashCommandCatalog.IsInternal(name)) return false;
+        return SlashCommandCatalog.IsBuiltIn(name)
+            || Conv.SlashCommands.Any(c => string.Equals(c.TrimStart('/'), name, StringComparison.OrdinalIgnoreCase));
     }
 
     // ── Command palette ────────────────────────────────────────────────────────────
