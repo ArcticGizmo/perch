@@ -1536,10 +1536,19 @@ public partial class App : Application
     // that's already open is reused rather than stacking blank ones.
     private void OpenSessionWindow()
     {
-        var idle = _sessionWindows.FirstOrDefault(w => w.SessionId is null);
+        // "New session" is transient, so it must come to the user — never drag the user across virtual
+        // desktops to a launcher left elsewhere. Reuse an idle launcher only if it's already on the desktop
+        // on screen (bringing it forward here); if the only idle one is off on another desktop, leave it be
+        // and open a fresh launcher right here instead. (Moving a window across desktops via the shell is
+        // unreliable for this window; not reusing sidesteps it entirely.)
+        var idle = _sessionWindows.FirstOrDefault(w =>
+            w.SessionId is null &&
+            PlatformServices.VirtualDesktops.IsWindowOnCurrentDesktop(w.TryGetPlatformHandle()?.Handle ?? 0));
         if (idle is not null)
         {
-            BringToFront(idle);
+            if (idle.WindowState == WindowState.Minimized) idle.WindowState = WindowState.Normal;
+            idle.Show();
+            idle.Activate();
             idle.LoadRecents(ActiveSessionIds());
             return;
         }
