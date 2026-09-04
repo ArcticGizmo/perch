@@ -203,7 +203,11 @@ internal sealed class PerchSession : IDisposable
         Conversation.SetSessionId(SessionId);
     }
 
-    public void Interrupt() => _controller?.Interrupt();
+    public void Interrupt()
+    {
+        Conversation.NoteInterrupt();   // so a running /compact settles to "canceled", not a green success
+        _controller?.Interrupt();
+    }
 
     /// <summary>Stops the process. The session stays resumable on disk; <see cref="Ended"/> follows.</summary>
     public void End() => _controller?.Stop();

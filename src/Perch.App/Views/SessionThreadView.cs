@@ -915,8 +915,16 @@ internal sealed class SessionThreadView : ScrollViewer
         private void Render()
         {
             int secs = Math.Max(0, (int)(DateTime.UtcNow - _item.StartedUtc).TotalSeconds);
-            if (_item.IsDone)
+            if (_item.IsDone && _item.Failed)
             {
+                // Interrupted / errored / nothing reclaimed — a canceled state, no green bar.
+                _bar.IsVisible = false;
+                _label.Foreground = _p.Err;
+                _label.Text = $"✕ Compaction canceled  ·  {secs}s";
+            }
+            else if (_item.IsDone)
+            {
+                _bar.IsVisible = true;
                 _bar.IsIndeterminate = false;
                 _bar.Value = 100;
                 _bar.Foreground = _p.Ok;

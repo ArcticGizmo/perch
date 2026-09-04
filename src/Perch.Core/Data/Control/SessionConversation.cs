@@ -32,6 +32,9 @@ internal sealed class CompactionItem(string? instructions) : ConversationItem
     /// <summary>Completion percentage from the CLI's status records, or null → indeterminate (timer-driven).</summary>
     public int? Percent { get; internal set; }
     public bool IsDone { get; internal set; }
+    /// <summary>The compaction was interrupted or errored (nothing reclaimed) — a canceled state, not a
+    /// green success. Set when finalising if the user interrupted, the turn errored, or no context was freed.</summary>
+    public bool Failed { get; internal set; }
     /// <summary>Context tokens reclaimed (before − after), known only once the turn's result lands.</summary>
     public long FreedTokens { get; internal set; }
 }
@@ -108,6 +111,7 @@ internal sealed class SessionConversation
     // amount can be reported when the compaction turn's result lands. Null when no compaction is in flight.
     private CompactionItem? _activeCompaction;
     private long _contextBeforeCompaction;
+    private bool _compactionInterrupted;
 
     public IReadOnlyList<ConversationItem> Items => _items;
 
@@ -286,11 +290,16 @@ internal sealed class SessionConversation
                 // it reclaimed (before − after, floored at zero).
                 if (_activeCompaction is { IsDone: false } compaction)
                 {
+                    long freed = Math.Max(0, _contextBeforeCompaction - ContextTokens);
                     compaction.IsDone = true;
-                    compaction.Percent = 100;
-                    compaction.FreedTokens = Math.Max(0, _contextBeforeCompaction - ContextTokens);
+                    compaction.FreedTokens = freed;
+                    // Canceled/errored/no-op → a failure state, not a green success: the user interrupted, the
+                    // turn errored, or nothing was reclaimed (an interrupted compaction leaves context intact).
+                    compaction.Failed = _compactionInterrupted || turn.IsError || freed <= 0;
+                    if (!compaction.Failed) compaction.Percent = 100;
                     Changed?.Invoke(compaction, ConversationChange.Updated);
                     _activeCompaction = null;
+                    _compactionInterrupted = false;
                 }
                 if (turn.IsError) Append(new NoteItem($"turn failed ({turn.Subtype})", NoteKind.Error));
                 StateChanged?.Invoke();
@@ -387,6 +396,7 @@ internal sealed class SessionConversation
             var item = new CompactionItem(CompactInstructions(text));
             _activeCompaction = item;
             _contextBeforeCompaction = ContextTokens;
+            _compactionInterrupted = false;
             Append(item);
         }
         StateChanged?.Invoke();
@@ -403,6 +413,13 @@ internal sealed class SessionConversation
     }
 
     public void AddNote(string text, NoteKind kind = NoteKind.Info) => Append(new NoteItem(text, kind));
+
+    /// <summary>The user asked to interrupt the turn. If a <c>/compact</c> is running, remember it so its
+    /// progress row settles to a canceled state (not a green success) when the aborted result lands.</summary>
+    public void NoteInterrupt()
+    {
+        if (_activeCompaction is { IsDone: false }) _compactionInterrupted = true;
+    }
 
     // `/clear` re-based the session onto a new id with wiped context: drop every conversation item and the
     // per-conversation turn/context bookkeeping, leaving a marker, and rebuild the view via Reset. Cumulative
@@ -455,10 +472,12 @@ internal sealed class SessionConversation
                 a.IsComplete = true;
                 Changed?.Invoke(a, ConversationChange.Updated);
             }
-        // A compaction still in flight didn't get its result — settle its meter so it doesn't spin forever.
+        // A compaction still in flight didn't get its result — settle its meter (as canceled) so it doesn't
+        // spin forever.
         if (_activeCompaction is { IsDone: false } compaction)
         {
             compaction.IsDone = true;
+            compaction.Failed = true;
             Changed?.Invoke(compaction, ConversationChange.Updated);
             _activeCompaction = null;
         }

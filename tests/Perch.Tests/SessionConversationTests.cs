@@ -97,6 +97,24 @@ public class SessionConversationTests
     }
 
     [Fact]
+    public void Compact_Interrupted_SettlesToCanceledNotSuccess()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new TurnResultEvent(false, "success", 0.05, InputTokens: 60_000, OutputTokens: 10, DurationMs: 900));
+        conv.AddUserPrompt("/compact");
+        var progress = Assert.IsType<CompactionItem>(conv.Items[^1]);
+
+        // The user interrupts; the aborted turn returns with the context unchanged (nothing reclaimed).
+        conv.NoteInterrupt();
+        conv.Apply(new TurnResultEvent(false, "success", 0.05, InputTokens: 60_000, OutputTokens: 2, DurationMs: 500));
+
+        Assert.True(progress.IsDone);
+        Assert.True(progress.Failed);          // canceled, not a green success
+        Assert.NotEqual(100, progress.Percent ?? 0);
+        Assert.Equal(0, progress.FreedTokens);
+    }
+
+    [Fact]
     public void Status_WithoutAnActiveCompaction_IsIgnored()
     {
         var (conv, _) = Make();
