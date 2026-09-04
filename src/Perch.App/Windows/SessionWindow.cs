@@ -495,6 +495,7 @@ internal sealed class SessionWindow : Window
         _effort = session.Effort;
         _folderBox.Text = session.Cwd;
         session.Conversation.StateChanged += RefreshBar;
+        session.TitleChanged += RefreshBar;
         session.Ended += OnSessionEnded;
         _thread.Bind(session.Conversation);
         ShowThread();
@@ -507,6 +508,7 @@ internal sealed class SessionWindow : Window
     {
         if (_session is not { } s) return;
         s.Conversation.StateChanged -= RefreshBar;
+        s.TitleChanged -= RefreshBar;
         s.Ended -= OnSessionEnded;
         _session = null;
     }
@@ -1513,10 +1515,18 @@ internal sealed class SessionWindow : Window
     private void RefreshBar()
     {
         var project = _cwd.Length > 0 ? (System.IO.Path.GetFileName(_cwd.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : _cwd) : "Perch";
-        _projectText.Text = _cwd.Length > 0 ? project : "New session";
+        var label = _cwd.Length > 0 ? project : "New session";
+        // The heading mirrors the session rows: project name, with the /rename custom title appended inline.
+        var title = _session?.Title;
+        _projectText.Inlines?.Clear();
+        _projectText.Inlines?.Add(new Run(label) { FontWeight = FontWeight.Bold, Foreground = _p.Title });
+        if (title is { Length: > 0 })
+            _projectText.Inlines?.Add(new Run($"  ·  {title}") { FontWeight = FontWeight.Normal, Foreground = _p.Muted });
         _pathText.Text = _cwd.Length > 0 ? _cwd : "choose a project to begin";
         _pathText.IsVisible = true;
-        Title = _cwd.Length > 0 ? $"{project} — Perch session" : "Perch session";
+        Title = _cwd.Length > 0
+            ? $"{project}{(title is { Length: > 0 } ? $" · {title}" : "")} — Perch session"
+            : "Perch session";
 
         var conv = Conv;
         _idText.Text = SessionId ?? "";

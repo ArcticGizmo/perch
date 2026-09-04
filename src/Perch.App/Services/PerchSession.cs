@@ -32,8 +32,31 @@ internal sealed class PerchSession : IDisposable
     public bool HasEnded { get; private set; }
     public int ExitCode { get; private set; }
 
+    /// <summary>The session's <c>/rename</c> custom title, if any — read from the transcript on resume and
+    /// updated optimistically when a <c>/rename</c> is sent. Null when never renamed.</summary>
+    public string? Title { get; private set; }
+
     /// <summary>The process exited (UI thread). The conversation already shows the closing note.</summary>
     public event Action<PerchSession>? Ended;
+
+    /// <summary>The session's <see cref="Title"/> changed (UI thread).</summary>
+    public event Action? TitleChanged;
+
+    private void SetTitle(string? title)
+    {
+        if (title == Title) return;
+        Title = title;
+        TitleChanged?.Invoke();
+    }
+
+    // The argument of a "/rename <title>" prompt, or null when it isn't one (or has no title argument).
+    private static string? RenameArg(string text)
+    {
+        var t = text.TrimStart();
+        if (!t.StartsWith("/rename", StringComparison.OrdinalIgnoreCase)) return null;
+        var rest = t["/rename".Length..].Trim();
+        return rest.Length > 0 ? rest : null;
+    }
 
     private PerchSession(ClaudeSessionController? controller, SessionLaunchOptions o)
     {
@@ -95,7 +118,8 @@ internal sealed class PerchSession : IDisposable
             // The CLI replays no usage on --resume, so seed the context gauge from the transcript's last
             // prompt size — the same figure the resume estimate showed on the launcher.
             var (contextTokens, _) = TranscriptReader.ReadContextUsage(path, Cwd);
-            return (lines, clipped, contextTokens);
+            var title = TranscriptReader.ReadTitle(path);   // the /rename custom title, if the session has one
+            return (lines, clipped, contextTokens, title);
         }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
         {
             if (!t.IsCompletedSuccessfully)
@@ -103,9 +127,10 @@ internal sealed class PerchSession : IDisposable
                 Conversation.AddNote("couldn't read the transcript — history unavailable", NoteKind.Error);
                 return;
             }
-            var (lines, clipped, contextTokens) = t.Result;
+            var (lines, clipped, contextTokens, title) = t.Result;
             int n = Conversation.LoadHistory(lines);
             Conversation.SeedContextTokens(contextTokens);
+            SetTitle(title);
             if (clipped && n > 0) Conversation.AddNote("showing the most recent part of a long transcript");
         }));
     }
@@ -128,6 +153,8 @@ internal sealed class PerchSession : IDisposable
         if (_controller is not { IsRunning: true } c) return;
         c.SendPrompt(text);
         Conversation.AddUserPrompt(text);
+        // Optimistically reflect a /rename in the title (the CLI writes the custom-title record to the transcript).
+        if (RenameArg(text) is { } title) SetTitle(title);
     }
 
     /// <summary>Allows/denies a permission card; on allow optionally switches to the CLI's suggested mode.</summary>
