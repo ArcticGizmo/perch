@@ -824,23 +824,39 @@ internal sealed class SessionWindow : Window
     // (live-check + heavy-resume confirm) pass; selected paints the keyboard-highlighted row.
     private Control RecentRow(HistoryEntry e, Func<HistoryEntry, System.Threading.Tasks.Task> onChoose, bool selected = false)
     {
-        bool live = e.IsActive;
-        var dot = new Ellipse { Width = 8, Height = 8, Fill = live ? _p.Err : _p.Faint, VerticalAlignment = VerticalAlignment.Center };
-        var name = new TextBlock { Text = e.ProjectName, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 14, Foreground = _p.Title, TextTrimming = TextTrimming.CharacterEllipsis };
+        // Three states: already controlled by Perch (multi-UI — open another window on it), live in a real
+        // terminal (can't take over), or a plain resumable session on disk.
+        var liveSession = e.SessionId is { } lid ? LiveLookup?.Invoke(lid) : null;
+        bool perchOpen = liveSession is { IsPerchControlled: true };
+        bool terminalLive = e.IsActive && !perchOpen;
+
+        var dot = new Ellipse
+        {
+            Width = 8, Height = 8, VerticalAlignment = VerticalAlignment.Center,
+            Fill = terminalLive ? _p.Err : perchOpen ? _p.Brand : _p.Faint,
+        };
+        // Project name, with the /rename custom title appended inline when the session has one.
+        var name = new TextBlock { FontFamily = _p.Body, FontSize = 14, TextTrimming = TextTrimming.CharacterEllipsis };
+        name.Inlines?.Add(new Run(e.ProjectName) { FontWeight = FontWeight.SemiBold, Foreground = _p.Title });
+        if (!string.IsNullOrWhiteSpace(e.Title))
+            name.Inlines?.Add(new Run($"  ·  {e.Title}") { Foreground = _p.Muted });
         var sub = new TextBlock
         {
-            Text = live ? "live in a terminal — can't control" : (string.IsNullOrWhiteSpace(e.Title) ? e.Cwd : e.Title),
-            FontFamily = live ? _p.Body : _p.Mono, FontSize = 12.5, Foreground = _p.Muted, TextTrimming = TextTrimming.CharacterEllipsis,
+            Text = terminalLive ? "live in a terminal — can't control"
+                 : perchOpen ? "open in Perch — opens another window"
+                 : e.Cwd,
+            FontFamily = terminalLive || perchOpen ? _p.Body : _p.Mono, FontSize = 12.5,
+            Foreground = perchOpen ? _p.Brand : _p.Muted, TextTrimming = TextTrimming.CharacterEllipsis,
         };
         var when = new TextBlock
         {
-            Text = live ? "now" : $"{e.RelativeTime} · {e.SizeLabel}", FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint,
+            Text = terminalLive ? "now" : perchOpen ? "open" : $"{e.RelativeTime} · {e.SizeLabel}",
+            FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint,
             VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(11, 0, 0, 0),
         };
         var text = new StackPanel { Children = { name, sub }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(11, 0, 0, 0) };
-        // The resume estimate (once computed off-thread): what resuming this session will re-send, whether its
-        // cache is likely warm, the theoretical 5-hour share, and a dollar figure.
-        if (!live && e.SessionId is { } id && _estimates.TryGetValue(id, out var est) && est.HasData)
+        // The resume estimate (once computed off-thread) — only for a plain resumable session, not a live one.
+        if (!e.IsActive && e.SessionId is { } id && _estimates.TryGetValue(id, out var est) && est.HasData)
         {
             text.Children.Add(new TextBlock
             {
@@ -856,7 +872,7 @@ internal sealed class SessionWindow : Window
         {
             CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(10, 9),
             Background = selected ? _p.Raised2 : Brushes.Transparent,
-            Cursor = new Cursor(StandardCursorType.Hand), Child = row, Opacity = live ? 0.75 : 1,
+            Cursor = new Cursor(StandardCursorType.Hand), Child = row, Opacity = terminalLive ? 0.75 : 1,
         };
         frame.PointerEntered += (_, _) => { if (!selected) frame.Background = _p.Raised2; };
         frame.PointerExited += (_, _) => { if (!selected) frame.Background = Brushes.Transparent; };
@@ -877,9 +893,18 @@ internal sealed class SessionWindow : Window
         return System.Threading.Tasks.Task.CompletedTask;
     }
 
-    // The guards every resume shares: refuse a session live in a terminal, then warn before a heavy resume.
+    // The guards every resume shares. A Perch-controlled session is already running under Perch, which supports
+    // many UIs on one session — so open another window on it rather than resuming a new process. A session live
+    // in a real terminal can't be taken over. Otherwise: warn before a heavy resume, then run onChoose.
     private async System.Threading.Tasks.Task ChooseResume(HistoryEntry e, Func<HistoryEntry, System.Threading.Tasks.Task> onChoose)
     {
+        var liveSession = e.SessionId is { } sid ? LiveLookup?.Invoke(sid) : null;
+        if (liveSession is { IsPerchControlled: true })
+        {
+            if (_resumeOverlay.IsVisible) CloseResumeOverlay();
+            if (e.SessionId is { } id) ResumeSessionRequested?.Invoke(id, e.Cwd, true);   // → open/view the existing session
+            return;
+        }
         if (e.IsActive)
         {
             LaunchFail($"{e.DisplayName} is live in a terminal — Perch can't take it over while it's running. " +

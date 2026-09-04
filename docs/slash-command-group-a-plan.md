@@ -49,6 +49,13 @@ foundation already shipped (`docs/session-slash-commands-plan.md`).
     reachable from its row) via `ResumeReplace`→`StartSession(replace:true)` (Attach detaches the old view) or,
     if already a live Perch session, `App.ResumeIntoWindow` just attaches it; **Shift+Enter** opens it in a
     separate window. The overlay footer documents the gestures.
+  - **Feedback round 3 (2026-09-04):** (a) the `/rename` **custom title is shown inline** with the project name
+    in every session row (`RecentRow` name = `project · title`). (b) **Perch-controlled sessions are no longer
+    "live in a terminal"** — since Perch supports many UIs on one session, such rows get a **brand-coloured
+    dot**, an "open in Perch — opens another window" sub, and their custom title; clicking them opens/views the
+    existing session (`ChooseResume` → `ResumeSessionRequested(newWindow:true)` → `App.OpenSessionResume` →
+    `ShowSessionView` the existing `PerchSession`) with no heavy-resume confirm. Row state is derived from
+    `LiveLookup(id).IsPerchControlled` (Perch-open) vs `IsActive` (terminal-live) vs resumable.
 
 ## Step 0 — Native-command dispatch (foundation for all of Group A)
 
