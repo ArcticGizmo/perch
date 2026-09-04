@@ -243,17 +243,30 @@ internal sealed class SessionThreadView : ScrollViewer
 
     private Control BuildUser(UserMessageItem u)
     {
-        var bubble = new Border
-        {
-            Background = _p.BrandWash, BorderBrush = _p.BrandLine, BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(16, 16, 5, 16), Padding = new Thickness(15, 11),
-            MaxWidth = SessionPalette.ThreadMaxWidth * 0.76,
-            Child = new SelectableTextBlock
+        // A slash command reads as a command, not prose — render it as a compact mono chip rather than a bubble.
+        Control bubble = SlashCommandCatalog.LooksLikeCommand(u.Text)
+            ? new Border
             {
-                Text = u.Text, FontSize = SessionPalette.ProseSize, FontFamily = _p.Body, Foreground = _p.Title,
-                TextWrapping = TextWrapping.Wrap, LineHeight = SessionPalette.ProseSize * 1.5,
-            },
-        };
+                Background = _p.Raised2, BorderBrush = _p.BrandLine, BorderThickness = new Thickness(1),
+                CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(13, 8),
+                MaxWidth = SessionPalette.ThreadMaxWidth * 0.76, HorizontalAlignment = HorizontalAlignment.Right,
+                Child = new SelectableTextBlock
+                {
+                    Text = u.Text.Trim(), FontSize = 13, FontFamily = _p.Mono, Foreground = _p.Brand,
+                    TextWrapping = TextWrapping.Wrap,
+                },
+            }
+            : new Border
+            {
+                Background = _p.BrandWash, BorderBrush = _p.BrandLine, BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(16, 16, 5, 16), Padding = new Thickness(15, 11),
+                MaxWidth = SessionPalette.ThreadMaxWidth * 0.76,
+                Child = new SelectableTextBlock
+                {
+                    Text = u.Text, FontSize = SessionPalette.ProseSize, FontFamily = _p.Body, Foreground = _p.Title,
+                    TextWrapping = TextWrapping.Wrap, LineHeight = SessionPalette.ProseSize * 1.5,
+                },
+            };
         var who = new Border
         {
             Width = 29, Height = 29, CornerRadius = new CornerRadius(9), Background = _p.Brand,

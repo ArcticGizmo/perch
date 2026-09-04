@@ -121,6 +121,14 @@ internal sealed class SessionWindow : Window
     private readonly TextBox _composer;
     private readonly SessionButton _sendButton;
 
+    // Command palette (type "/" in the composer): a popover above the composer of the built-in slash commands
+    // (docs/session-slash-commands-plan.md). Driven entirely by composer text — focus stays on the composer,
+    // so selection is tracked here and drawn manually rather than via ListBox focus.
+    private readonly Popup _palettePopup;
+    private readonly StackPanel _paletteRows;
+    private IReadOnlyList<SlashCommandInfo> _paletteItems = [];
+    private int _paletteIndex;
+
     /// <summary>Resolves a session id to its live (terminal-hosted) session, if any — the refuse-if-live
     /// guard's oracle. The app wires it to the monitor's latest roster.</summary>
     public Func<string, ClaudeSession?>? LiveLookup { get; set; }
@@ -276,14 +284,52 @@ internal sealed class SessionWindow : Window
         };
         var cbar = new DockPanel { Margin = new Thickness(0, 10, 0, 0), Children = { _sendButton, chips } };
         _sendButton[DockPanel.DockProperty] = Dock.Right;
+        var composerStack = new StackPanel { Children = { _composer, cbar } };
         _composerFrame = new Border
         {
             MaxWidth = SessionPalette.ThreadMaxWidth, Background = _p.Raised, BorderBrush = _p.Border,
             BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(15), Padding = new Thickness(14, 12, 14, 10),
-            Child = new StackPanel { Children = { _composer, cbar } },
+            Child = composerStack,
         };
         _composer.GotFocus += (_, _) => _composerFrame.BorderBrush = _p.BrandLine;
         _composer.LostFocus += (_, _) => _composerFrame.BorderBrush = _p.Border;
+        _composer.TextChanged += (_, _) => UpdatePaletteFromText();
+
+        // The command palette floats above the composer frame; it lives inside the composer stack so it shares
+        // the tree (Popups take no layout space).
+        _paletteRows = new StackPanel { Spacing = 1 };
+        var paletteHint = new TextBlock
+        {
+            Text = "↑↓ select   ·   ↹ complete   ·   ↵ run   ·   esc dismiss",
+            FontFamily = _p.Mono, FontSize = 10.5, Foreground = _p.Faint, Margin = new Thickness(9, 6, 9, 3),
+        };
+        _palettePopup = new Popup
+        {
+            PlacementTarget = _composerFrame, Placement = PlacementMode.Top,
+            HorizontalOffset = 0, VerticalOffset = -8, IsLightDismissEnabled = false,
+            Child = new Border
+            {
+                Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+                CornerRadius = SessionPalette.CardRadius, Padding = new Thickness(6, 6, 6, 2),
+                MinWidth = 420, MaxWidth = SessionPalette.ThreadMaxWidth,
+                BoxShadow = BoxShadows.Parse("0 10 30 0 #55000000"),
+                Child = new StackPanel
+                {
+                    Children =
+                    {
+                        // The full list (a bare "/" shows every command) can be long — scroll it, and keep the
+                        // selected row in view as the arrows move through it.
+                        new ScrollViewer
+                        {
+                            MaxHeight = 320, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = _paletteRows,
+                        },
+                        paletteHint,
+                    },
+                },
+            },
+        };
+        composerStack.Children.Add(_palettePopup);
         // Hidden on the launcher; the thread and the composer appear together once a session starts.
         _composerDock = new Border
         {
@@ -936,8 +982,125 @@ internal sealed class SessionWindow : Window
     {
         var text = _composer.Text?.Trim();
         if (string.IsNullOrEmpty(text) || _session is not { IsRunning: true } live) return;
+        ClosePalette();
         live.SendPrompt(text);
         _composer.Text = "";
+    }
+
+    // ── Command palette ────────────────────────────────────────────────────────────
+
+    // Opens/updates the palette while the composer holds a lone slash-command token: a leading "/" (which on
+    // its own lists every command, alphabetically), then the name being typed. Closes once the user adds a
+    // space (they're onto arguments) or the text stops starting with "/". Only meaningful while running.
+    private void UpdatePaletteFromText()
+    {
+        var t = (_composer.Text ?? "").TrimStart();
+        bool typingCommand = t.StartsWith('/') && !t.Contains(' ') && !t.Contains('\n');
+        if (_session is not { IsRunning: true } || !typingCommand)
+        {
+            ClosePalette();
+            return;
+        }
+        _paletteItems = SlashCommandCatalog.Search(t[1..]);   // "" on a bare "/" → all commands
+        if (_paletteItems.Count == 0) { ClosePalette(); return; }
+        _paletteIndex = Math.Clamp(_paletteIndex, 0, _paletteItems.Count - 1);
+        RenderPalette();
+        _palettePopup.IsOpen = true;
+    }
+
+    private void ClosePalette()
+    {
+        _palettePopup.IsOpen = false;
+        _paletteIndex = 0;
+    }
+
+    private bool PaletteOpen => _palettePopup.IsOpen;
+
+    private void MovePalette(int delta)
+    {
+        if (_paletteItems.Count == 0) return;
+        _paletteIndex = (_paletteIndex + delta + _paletteItems.Count) % _paletteItems.Count;
+        RenderPalette();
+    }
+
+    private void RenderPalette()
+    {
+        _paletteRows.Children.Clear();
+        for (int i = 0; i < _paletteItems.Count; i++)
+            _paletteRows.Children.Add(PaletteRow(_paletteItems[i], i));
+        // Keep the highlighted row visible in the scroll region (after layout settles).
+        if (_paletteIndex >= 0 && _paletteIndex < _paletteRows.Children.Count)
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_paletteIndex < _paletteRows.Children.Count)
+                    (_paletteRows.Children[_paletteIndex] as Control)?.BringIntoView();
+            }, DispatcherPriority.Loaded);
+    }
+
+    private Control PaletteRow(SlashCommandInfo cmd, int index)
+    {
+        var name = new TextBlock { Text = "/" + cmd.Name, FontFamily = _p.Mono, FontSize = 13, FontWeight = FontWeight.SemiBold, Foreground = _p.Brand, VerticalAlignment = VerticalAlignment.Center };
+        var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center, Children = { name } };
+        if (cmd.ArgHint.Length > 0)
+            head.Children.Add(new TextBlock { Text = cmd.ArgHint, FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center });
+        var desc = new TextBlock
+        {
+            Text = cmd.Description, FontFamily = _p.Body, FontSize = 12.5, Foreground = _p.Muted,
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(14, 0, 14, 0),
+        };
+        var tier = new TextBlock { Text = TierLabel(cmd.Tier), FontFamily = _p.Mono, FontSize = 10.5, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center };
+        head[DockPanel.DockProperty] = Dock.Left;
+        tier[DockPanel.DockProperty] = Dock.Right;
+        var row = new DockPanel { LastChildFill = true, Children = { head, tier, desc } };
+        var frame = new Border
+        {
+            CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(9, 7),
+            Background = index == _paletteIndex ? _p.Raised2 : Brushes.Transparent,
+            Cursor = new Cursor(StandardCursorType.Hand), Child = row,
+        };
+        frame.PointerEntered += (_, _) => { _paletteIndex = index; RenderPalette(); };
+        frame.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) { _paletteIndex = index; AcceptPalette(run: true); } };
+        return frame;
+    }
+
+    // A short tag on the right of a palette row, hinting how the command behaves in Perch.
+    private static string TierLabel(SlashCommandTier tier) => tier switch
+    {
+        SlashCommandTier.PlainText       => "text",
+        SlashCommandTier.Native          => "perch",
+        SlashCommandTier.SessionMutating => "session",
+        SlashCommandTier.TuiOnly         => "terminal",
+        _                                => "",
+    };
+
+    // Accept the highlighted command. Model/effort are fully native (pills + control requests), so accepting
+    // those opens the pill rather than sending text that would fight the echo-guard. Otherwise: a no-arg
+    // command with run:true sends immediately; anything with arguments is completed into the composer (with a
+    // trailing space) so the user can add them, then Enter sends. Tab always just completes (run:false).
+    private void AcceptPalette(bool run)
+    {
+        if (_paletteItems.Count == 0) { ClosePalette(); return; }
+        var cmd = _paletteItems[Math.Clamp(_paletteIndex, 0, _paletteItems.Count - 1)];
+        ClosePalette();
+
+        if (cmd.Name is "model" or "effort")
+        {
+            _composer.Text = "";
+            if (cmd.Name == "model") ShowModelMenu(); else ShowEffortMenu();
+            return;
+        }
+
+        if (run && !cmd.TakesArgs)
+        {
+            _composer.Text = "/" + cmd.Name;
+            SendPrompt();
+            return;
+        }
+
+        var text = "/" + cmd.Name + (cmd.TakesArgs ? " " : "");
+        _composer.Text = text;
+        _composer.CaretIndex = text.Length;
+        _composer.Focus();
     }
 
     private void LaunchFail(string message)
@@ -1168,6 +1331,18 @@ internal sealed class SessionWindow : Window
     // Enter sends; Shift+Enter inserts a newline (the TextBox's default).
     private void OnComposerKeyDown(object? sender, KeyEventArgs e)
     {
+        // While the command palette is open it owns the arrow/Tab/Enter keys: navigate, complete, or run.
+        if (PaletteOpen)
+        {
+            switch (e.Key)
+            {
+                case Key.Down: MovePalette(1); e.Handled = true; return;
+                case Key.Up: MovePalette(-1); e.Handled = true; return;
+                case Key.Tab: AcceptPalette(run: false); e.Handled = true; return;
+                case Key.Enter when !e.KeyModifiers.HasFlag(KeyModifiers.Shift): AcceptPalette(run: true); e.Handled = true; return;
+            }
+        }
+
         if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
         {
             // With a permission pending and nothing typed, Enter allows (mirrors the TUI). A question card is
@@ -1180,10 +1355,12 @@ internal sealed class SessionWindow : Window
         }
     }
 
-    // Esc: deny a pending permission, else interrupt the running turn.
+    // Esc: dismiss the command palette first, else deny a pending permission, else interrupt the running turn.
+    // (This window-level tunnel handler runs before the composer's, so the palette guard must live here too.)
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key != Key.Escape) return;
+        if (PaletteOpen) { ClosePalette(); e.Handled = true; return; }
         if (Conv.PendingPermission is { } pending) { _session?.AnswerPermission(pending, allow: false, switchMode: false); e.Handled = true; }
         else if (_session is { IsRunning: true } live && Conv.TurnActive) { live.Interrupt(); e.Handled = true; }
     }

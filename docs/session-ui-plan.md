@@ -71,10 +71,13 @@ commands, `AskUserQuestion`, `@`-mentions) not started. **Nothing has been run l
   and plan pinned blue in the session UI (`SessionPalette.Plan`; the overlay still paints plan in the theme accent,
   which is only blue in Midnight — a theme-role follow-up if it should match everywhere); model + effort share one
   joined "model │ effort" pill; `fable` added to the model list.
-- **Retired from the main path:** `SessionConsoleWindow.cs` deleted (its logic lives in the model/window).
-  `SessionTerminalWindow`, `SessionHost`, `SessionUiWindow`, `TranscriptReadableView` are now **unreferenced**
-  but still compiled — the latter three were never committed, so they were kept rather than destroyed; delete
-  them (and the `Iciclecreek.Avalonia.Terminal` package) once the user agrees.
+- **Dual-surface terminal PoC — DELETED (2026-09-04).** The decision is locked: for one session a user gets
+  the Perch rich UI **or** an external `claude`, never both surfaces at once. So `SessionTerminalWindow`,
+  `SessionHost`, `SessionUiWindow`, `TranscriptReadableView` and the `Iciclecreek.Avalonia.Terminal` package
+  (XTerm.NET / Porta.Pty ConPTY) are gone. `SessionConsoleWindow.cs` was already deleted (its logic lives in
+  the model/window). The rich `SessionWindow` (stream-json ownership) is the only Perch-native surface; the
+  external terminal stays the external terminal, bridged only by `--resume` hand-off, not by co-driving one
+  live session.
 
 ## Owed / open
 - **Design sign-off** on the mockup, then adjust `SessionPalette` (and the real web fonts: Bricolage Grotesque /
@@ -172,7 +175,10 @@ hook** so the UI is iterable via `-- render <dir>`.
 
 ### Phase 2 — 100% coverage (not started)
 - **Slash commands:** verify which work over stream-json (init advertises `slash_commands`; spike — some are
-  TUI-only); surface a command palette.
+  TUI-only); surface a command palette. **→ Broken out as a per-command checklist in
+  `docs/session-slash-commands-plan.md`** (built-in commands only; skills excluded). Key finding: built-in
+  commands **execute** when sent as plain text and return **markdown**, so most interop is palette + render;
+  `/clear`, `/compact`, `/rename` mutate the session and need native reactions.
 - **`AskUserQuestion` + plan approval (`ExitPlanMode`)**: arrive as `tool_use` blocks → first-class UI,
   answered via the permission/tool-result path.
 - **Composer affordances:** `@`-file mentions + autocomplete, input history, model/mode/resume pickers.
