@@ -47,6 +47,12 @@ internal static class StreamJsonParser
             .Where(c => !string.IsNullOrEmpty(c))
             .Select(c => c!)
             .ToList();
+        var mcp = (root["mcp_servers"] as JsonArray)?
+            .Select(s => new McpServerInfo(
+                TranscriptJson.AsString(s?["name"]) ?? "",
+                TranscriptJson.AsString(s?["status"]) ?? ""))
+            .Where(s => s.Name.Length > 0)
+            .ToList();
         return
         [
             new SessionInitEvent(
@@ -54,7 +60,8 @@ internal static class StreamJsonParser
                 TranscriptJson.AsString(root["model"]) ?? "",
                 TranscriptJson.AsString(root["permissionMode"]) ?? "",
                 (root["tools"] as JsonArray)?.Count ?? 0,
-                commands ?? []),
+                commands ?? [],
+                mcp ?? []),
         ];
     }
 

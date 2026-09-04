@@ -8,12 +8,18 @@ namespace Perch.Data.Control;
 /// </summary>
 internal abstract record SessionEvent;
 
+/// <summary>One MCP server the CLI reported in <c>init</c>: its name and connection status
+/// (e.g. "connected", "needs-auth", "failed").</summary>
+internal sealed record McpServerInfo(string Name, string Status);
+
 /// <summary>The <c>system/init</c> handshake: the session exists and identifies itself.
 /// <paramref name="SlashCommands"/> is the CLI's advertised <c>slash_commands</c> list (empty when absent) —
-/// the seed for the rich UI's command palette.</summary>
+/// the seed for the rich UI's command palette. <paramref name="McpServers"/> is the <c>mcp_servers</c> list
+/// (name + status), backing the <c>/mcp</c> status view.</summary>
 internal sealed record SessionInitEvent(
     string SessionId, string Model, string PermissionMode, int ToolCount,
-    IReadOnlyList<string>? SlashCommands = null) : SessionEvent;
+    IReadOnlyList<string>? SlashCommands = null,
+    IReadOnlyList<McpServerInfo>? McpServers = null) : SessionEvent;
 
 /// <summary>A completed assistant text block.</summary>
 internal sealed record AssistantTextEvent(string Text) : SessionEvent;

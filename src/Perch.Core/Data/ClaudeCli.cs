@@ -9,4 +9,7 @@ public static class ClaudeCli
 {
     /// <summary>The command that resumes an existing session by id: <c>claude --resume &lt;sessionId&gt;</c>.</summary>
     public static string ResumeCommand(string sessionId) => $"claude --resume {sessionId}";
+
+    /// <summary>A general <c>claude &lt;args&gt;</c> invocation (e.g. <c>args = "auth login"</c>).</summary>
+    public static string Command(string args) => $"claude {args}";
 }

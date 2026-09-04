@@ -105,6 +105,8 @@ internal sealed class SessionConversation
     public string PermissionMode { get; private set; } = "default";
     public int ToolCount { get; private set; }
     public IReadOnlyList<string> SlashCommands { get; private set; } = [];
+    /// <summary>The MCP servers the CLI reported at init (name + status), backing the <c>/mcp</c> view.</summary>
+    public IReadOnlyList<McpServerInfo> McpServers { get; private set; } = [];
     /// <summary>Cumulative session cost (the CLI's <c>total_cost_usd</c> is a running total).</summary>
     public double TotalCostUsd { get; private set; }
     public TurnResultEvent? LastTurn { get; private set; }
@@ -156,6 +158,7 @@ internal sealed class SessionConversation
                 if (init.PermissionMode.Length > 0) PermissionMode = init.PermissionMode;
                 ToolCount = init.ToolCount;
                 SlashCommands = init.SlashCommands ?? [];
+                if (init.McpServers is { Count: > 0 }) McpServers = init.McpServers;
                 if (cleared) ClearForNewConversation();
                 StateChanged?.Invoke();
                 break;

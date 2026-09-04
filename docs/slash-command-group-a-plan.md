@@ -84,21 +84,21 @@ Small and testable; unblocks everything else. **Do this first.**
 
 ## Group 3 — New config modals: low priority, spike first (multi-day each)
 
-5. **`/permissions` → modal.** Blocked on **more examples** from the user (what the permission rules look like /
-   what editing should do). Spike: does `/permissions` do anything over stream-json, and where do rules live on
-   disk (`settings.json` `permissions`)? Then a read/edit modal. *Park until examples arrive.*
-6. **`/mcp` → MCP config modal.** Experimental. **Spike the auth feasibility first** — the loopback/browser OAuth
-   the CLI uses may not be drivable from Perch. init already carries `mcp_servers` (name + status incl.
-   `needs-auth`), so a **read-only status panel** is a cheap first cut; editing/auth is the risky part. Ship the
-   status view, gate the rest behind the auth spike.
+5. **`/permissions` → modal.** Blocked on **more examples** from the user. *Park until examples arrive.*
+6. **`/mcp` → status view — DONE (read-only, 2026-09-04).** init now carries `mcp_servers` (parsed into
+   `SessionInitEvent.McpServers` → `SessionConversation.McpServers`, fixture-tested). `/mcp` opens
+   `McpStatusWindow`: a modal listing each server with a colour-coded status badge (green connected / amber
+   needs-auth / red failed), and a footer pointing at `claude mcp` for config. **Editing + loopback/browser
+   auth are still deferred** (experimental) — the status view is the cheap first cut. Builds green.
 
-## Group 4 — Shell-out / auth: uncertain, spike first
+## Group 4 — Shell-out / auth — DONE (2026-09-04)
 
-7. **`/login` / `/logout` → shell out.** Almost certainly needs a real interactive `claude` process (TTY), not
-   the stream-json channel. Spike what `claude` exposes (`claude /login`? a setup-token flow? just launching
-   `claude` and letting the user run it). Likely reuse the terminal-launch seam (`ISessionLauncher.Reopen`
-   pattern) to open a terminal for the auth flow, then Perch picks up the new auth on next poll. Add to the
-   catalogue only once a working path is confirmed.
+7. **`/login` / `/logout` → shell out.** Spiked: the CLI exposes `claude auth login` / `auth logout` / `auth
+   status` (login runs a browser OAuth flow → needs a real terminal). Generalised the launcher seam:
+   `ISessionLauncher.RunClaudeCommand(cwd, args, terminal)` (Windows impl reuses `Reopen`'s terminal
+   selection + fallback; Mac stub). `/login`→`auth login`, `/logout`→`auth logout` open a terminal (a note
+   confirms / reports if none). Perch picks up the new auth on its next usage poll. Added `/login`, `/logout`
+   to the catalogue. **Live dogfood owed.**
 
 ## Remove now
 

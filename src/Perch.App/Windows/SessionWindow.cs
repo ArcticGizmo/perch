@@ -1062,6 +1062,9 @@ internal sealed class SessionWindow : Window
             case "theme":  OpenSettingsRequested?.Invoke("appearance"); return true;
             case "config": OpenClaudeDesktop(); return true;
             case "resume": ResumeInProjectRequested?.Invoke(_cwd); return true;
+            case "login":  RunClaudeAuth("auth login");  return true;
+            case "logout": RunClaudeAuth("auth logout"); return true;
+            case "mcp":    _ = new McpStatusWindow(Conv.McpServers, _p).ShowDialog(this); return true;
             default:       return false;
         }
     }
@@ -1071,6 +1074,16 @@ internal sealed class SessionWindow : Window
     {
         if (!PlatformServices.SessionLauncher.OpenClaudeDesktop())
             Conv.AddNote("couldn't open Claude Desktop — it may not be installed", NoteKind.Error);
+    }
+
+    // /login, /logout → shell out to `claude auth …` in a terminal: the OAuth flow opens a browser and prompts
+    // in the terminal, which the stream-json channel can't host. Perch picks up the new auth on its next poll.
+    private void RunClaudeAuth(string args)
+    {
+        if (PlatformServices.SessionLauncher.RunClaudeCommand(_cwd, args, TerminalApp.Auto))
+            Conv.AddNote($"opened a terminal — finish in it: claude {args}");
+        else
+            Conv.AddNote("couldn't open a terminal for authentication", NoteKind.Error);
     }
 
     // ── Rich input highlighting ────────────────────────────────────────────────────

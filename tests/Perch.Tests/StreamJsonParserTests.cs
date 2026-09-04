@@ -30,6 +30,18 @@ public class StreamJsonParserTests
     }
 
     [Fact]
+    public void Init_CapturesMcpServers()
+    {
+        var line = """{"type":"system","subtype":"init","session_id":"s","tools":[],"model":"m","permissionMode":"default","mcp_servers":[{"name":"Atlassian Rovo","status":"needs-auth"},{"name":"Gmail","status":"connected"},{"name":"","status":"x"}]}""";
+        var ev = Assert.IsType<SessionInitEvent>(Assert.Single(StreamJsonParser.Parse(line)));
+        Assert.NotNull(ev.McpServers);
+        Assert.Equal(2, ev.McpServers!.Count);   // the empty-named entry is dropped
+        Assert.Equal("Atlassian Rovo", ev.McpServers[0].Name);
+        Assert.Equal("needs-auth", ev.McpServers[0].Status);
+        Assert.Equal("connected", ev.McpServers[1].Status);
+    }
+
+    [Fact]
     public void AssistantMessage_YieldsOneEventPerBlock()
     {
         var line = """{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"pondering"},{"type":"text","text":"hello"},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"echo hi"}}]},"session_id":"s"}""";

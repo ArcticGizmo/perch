@@ -65,6 +65,8 @@ internal static class SlashCommandCatalog
         new("theme",         "",              "Change the colour theme",                       SlashCommandTier.Native),
         new("mcp",           "",              "MCP server status",                             SlashCommandTier.Native),
         new("resume",        "",              "Resume another session",                        SlashCommandTier.Native),
+        new("login",         "",              "Sign in (opens a terminal)",                    SlashCommandTier.Native),
+        new("logout",        "",              "Sign out (opens a terminal)",                   SlashCommandTier.Native),
 
         // Tier 3 — mutates the session; Perch must react.
         new("clear",         "",              "Start a fresh conversation",                    SlashCommandTier.SessionMutating),
