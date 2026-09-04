@@ -33,9 +33,11 @@ foundation already shipped (`docs/session-slash-commands-plan.md`).
 - **Group 2 (`/resume`) — DONE (2026-09-04).** Reused the launcher rather than a new window: `/resume` raises
   `ResumeInProjectRequested(cwd)` → `App.OpenResumePicker` opens a fresh launcher window and calls
   `SessionWindow.ShowResumePicker(cwd)`, which sets a `_projectFilter` so `RenderRecents` scopes the recents
-  (and the search) to that project ("RESUME IN THIS PROJECT"), pre-fills the folder box, and keeps every
-  existing guard/estimate/resume-flow. Picking a row opens a new session via the normal resume path. Builds
-  green. **Live dogfood owed.** Follow-up: an optional "widen to all projects" toggle.
+  (and the search) to that project, keeping every existing guard/estimate/resume-flow. Picking a row opens a
+  new session via the normal resume path. **Per user feedback (2026-09-04):** resume mode now shows **only the
+  search box + the session list** — the "start a new session" chrome (heading, folder box, New button) is
+  hidden (`_newSessionChrome`), the recents section's top divider stripped, the project shown in the bar/title.
+  Builds green. **Live dogfood owed.** Follow-up: an optional "widen to all projects" toggle.
 
 ## Step 0 — Native-command dispatch (foundation for all of Group A)
 

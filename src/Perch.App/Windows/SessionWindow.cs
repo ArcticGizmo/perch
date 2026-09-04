@@ -101,6 +101,10 @@ internal sealed class SessionWindow : Window
     private readonly TextBox _recentsSearch;
     private readonly Border _recentsSearchFrame;
     private readonly TextBlock _recentsHeader;
+    // The "start a new session" chrome (heading, folder box, New button) and the recents section, kept apart so
+    // /resume can hide the former and show only the search + list.
+    private StackPanel _newSessionChrome = null!;
+    private Border _recentsSection = null!;
     // A spinner shown in the recents area until the (off-thread) machine-wide session scan lands.
     private readonly Border _recentsLoadingRow;
     private IReadOnlyList<HistoryEntry> _allRecents = [];
@@ -541,15 +545,21 @@ internal sealed class SessionWindow : Window
         StartSession();
     }
 
-    /// <summary>Shows the launcher as a resume picker scoped to one project (<c>/resume</c>): the recents list
-    /// filtered to <paramref name="projectCwd"/>, with the folder box pre-filled so a new session there is one
-    /// click too. The app then calls <see cref="LoadRecents"/>.</summary>
+    /// <summary>Shows the launcher as a resume picker scoped to one project (<c>/resume</c>): only the search +
+    /// the recents list filtered to <paramref name="projectCwd"/> — no "start a new session" chrome. The app
+    /// then calls <see cref="LoadRecents"/>.</summary>
     public void ShowResumePicker(string projectCwd)
     {
         _projectFilter = projectCwd;
         _cwd = projectCwd;
-        _folderBox.Text = projectCwd;
-        RefreshBar();
+        Title = $"Resume — {(System.IO.Path.GetFileName(projectCwd.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : projectCwd)}";
+        // Strip the new-session chrome; the recents section becomes the whole content (no top divider/margin).
+        _newSessionChrome.IsVisible = false;
+        _recentsSection.BorderThickness = new Thickness(0);
+        _recentsSection.Padding = new Thickness(0);
+        _recentsSection.Margin = new Thickness(0);
+        _recentsSearch.PlaceholderText = "Search this project's sessions";
+        RefreshBar();      // show the project in the top bar
         RenderRecents();   // apply the filter now; PopulateRecents re-renders once the scan lands
     }
 
@@ -587,7 +597,7 @@ internal sealed class SessionWindow : Window
             Children = { _newButton },
         };
 
-        var recents = new Border
+        _recentsSection = new Border
         {
             BorderBrush = _p.Separator, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(0, 14, 0, 0),
             Margin = new Thickness(0, 20, 0, 0),
@@ -603,9 +613,10 @@ internal sealed class SessionWindow : Window
             },
         };
 
-        var column = new StackPanel
+        // The new-session chrome — hidden in resume-picker mode, where only the search + list show.
+        _newSessionChrome = new StackPanel
         {
-            MaxWidth = 560, HorizontalAlignment = HorizontalAlignment.Stretch, Spacing = 0,
+            Spacing = 0,
             Children =
             {
                 new Border
@@ -628,8 +639,13 @@ internal sealed class SessionWindow : Window
                 folderFrame,
                 new Border { Height = 10 },
                 row2,
-                recents,
             },
+        };
+
+        var column = new StackPanel
+        {
+            MaxWidth = 560, HorizontalAlignment = HorizontalAlignment.Stretch, Spacing = 0,
+            Children = { _newSessionChrome, _recentsSection },
         };
         return new ScrollViewer
         {
