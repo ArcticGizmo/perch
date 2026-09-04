@@ -34,10 +34,14 @@ foundation already shipped (`docs/session-slash-commands-plan.md`).
   `ResumeInProjectRequested(cwd)` → `App.OpenResumePicker` opens a fresh launcher window and calls
   `SessionWindow.ShowResumePicker(cwd)`, which sets a `_projectFilter` so `RenderRecents` scopes the recents
   (and the search) to that project, keeping every existing guard/estimate/resume-flow. Picking a row opens a
-  new session via the normal resume path. **Per user feedback (2026-09-04):** resume mode now shows **only the
-  search box + the session list** — the "start a new session" chrome (heading, folder box, New button) is
-  hidden (`_newSessionChrome`), the recents section's top divider stripped, the project shown in the bar/title.
-  Builds green. **Live dogfood owed.** Follow-up: an optional "widen to all projects" toggle.
+  new session via the normal resume path. **Revised again (2026-09-04, user):** `/resume` now opens an
+  **in-window quick-open overlay** (a scrim + centred card over the thread) instead of a separate window —
+  a search box + a keyboard-navigable list (↑↓ select, Enter resume, Esc/scrim close) of the project's
+  sessions. Shared the row visuals + guards: `RecentRow(e, onChoose, selected)` + `ChooseResume` (live-check +
+  heavy-resume confirm) + `EnsureEstimates(shown, reRender)` now serve both the launcher and the overlay. A
+  pick raises `ResumeSessionRequested(id, cwd)` → `App.OpenSessionResume` (opens/reuses a window). The
+  separate-window path (`ShowResumePicker`/`OpenResumePicker`/`ResumeInProjectRequested`) was removed. Builds
+  green, 1004 tests pass. **Live dogfood owed.**
 
 ## Step 0 — Native-command dispatch (foundation for all of Group A)
 

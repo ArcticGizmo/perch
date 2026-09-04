@@ -108,8 +108,6 @@ internal sealed class SessionWindow : Window
     // A spinner shown in the recents area until the (off-thread) machine-wide session scan lands.
     private readonly Border _recentsLoadingRow;
     private IReadOnlyList<HistoryEntry> _allRecents = [];
-    // Set in resume-picker mode (/resume): scopes the recents list to one project's cwd.
-    private string? _projectFilter;
     // Per-session resume estimate (context tokens, cache warmth, cost), computed lazily off-thread for the
     // rows on screen and cached by session id. _estimating guards against re-queuing one that's in flight.
     private readonly Dictionary<string, ResumeEstimate> _estimates = new();
@@ -142,6 +140,17 @@ internal sealed class SessionWindow : Window
     private IReadOnlyList<SlashCommandInfo> _paletteItems = [];
     private int _paletteIndex;
 
+    // In-window /resume quick-open: a searchable, keyboard-navigable overlay of this project's sessions.
+    private Panel _resumeOverlay = null!;
+    private TextBox _resumeSearch = null!;
+    private StackPanel _resumeList = null!;
+    private Border _resumeSpinnerRow = null!;
+    private TextBlock _resumeSubtitle = null!;
+    private IReadOnlyList<HistoryEntry> _resumeAll = [];
+    private List<HistoryEntry> _resumeShown = new();
+    private int _resumeIndex;
+    private bool _resumeLoaded;
+
     /// <summary>Resolves a session id to its live (terminal-hosted) session, if any — the refuse-if-live
     /// guard's oracle. The app wires it to the monitor's latest roster.</summary>
     public Func<string, ClaudeSession?>? LiveLookup { get; set; }
@@ -157,9 +166,12 @@ internal sealed class SessionWindow : Window
     /// for <c>/theme</c>). The app owns the Settings window, so it handles this.</summary>
     public event Action<string>? OpenSettingsRequested;
 
-    /// <summary><c>/resume</c>: open a resume picker scoped to this project (its cwd). The app opens a fresh
-    /// launcher window filtered to it.</summary>
-    public event Action<string>? ResumeInProjectRequested;
+    /// <summary><c>/resume</c> picked a session: resume it (the app opens/reuses a window for that id).</summary>
+    public event Action<string, string>? ResumeSessionRequested;
+
+    /// <summary>The ids of sessions currently live in a terminal (so the resume overlay can mark them). The app
+    /// wires it to its monitor roster.</summary>
+    public Func<IReadOnlySet<string>>? ActiveSessionIdsProvider { get; set; }
 
     /// <summary>The session this window currently views, or null on the launcher.</summary>
     public PerchSession? Session => _session;
@@ -458,7 +470,8 @@ internal sealed class SessionWindow : Window
         _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
         _toastTimer.Tick += (_, _) => HideToast();
 
-        _center = new Panel { Children = { _launcher, _thread, _toast } };
+        BuildResumeOverlay();
+        _center = new Panel { Children = { _launcher, _thread, _toast, _resumeOverlay } };
         Content = new DockPanel { Children = { barFrame, _composerDock, _center } };
 
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
@@ -543,24 +556,6 @@ internal sealed class SessionWindow : Window
         _cwd = cwd;
         _folderBox.Text = cwd;
         StartSession();
-    }
-
-    /// <summary>Shows the launcher as a resume picker scoped to one project (<c>/resume</c>): only the search +
-    /// the recents list filtered to <paramref name="projectCwd"/> — no "start a new session" chrome. The app
-    /// then calls <see cref="LoadRecents"/>.</summary>
-    public void ShowResumePicker(string projectCwd)
-    {
-        _projectFilter = projectCwd;
-        _cwd = projectCwd;
-        Title = $"Resume — {(System.IO.Path.GetFileName(projectCwd.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : projectCwd)}";
-        // Strip the new-session chrome; the recents section becomes the whole content (no top divider/margin).
-        _newSessionChrome.IsVisible = false;
-        _recentsSection.BorderThickness = new Thickness(0);
-        _recentsSection.Padding = new Thickness(0);
-        _recentsSection.Margin = new Thickness(0);
-        _recentsSearch.PlaceholderText = "Search this project's sessions";
-        RefreshBar();      // show the project in the top bar
-        RenderRecents();   // apply the filter now; PopulateRecents re-renders once the scan lands
     }
 
     /// <summary>Opens straight onto a fresh session in <paramref name="cwd"/> — the CLI's <c>perch [dir]</c>.</summary>
@@ -750,30 +745,25 @@ internal sealed class SessionWindow : Window
         var query = _recentsSearch.Text?.Trim() ?? "";
         bool searching = query.Length > 0;
 
-        // In resume-picker mode (/resume) the pool is scoped to one project; otherwise it's the whole machine.
-        var pool = _projectFilter is { } proj ? _allRecents.Where(e => SameProject(e.Cwd, proj)).ToList() : _allRecents;
-
-        var matches = (searching ? pool.Where(e => MatchesSearch(e, query)) : pool)
+        var matches = (searching ? _allRecents.Where(e => MatchesSearch(e, query)) : _allRecents)
             .Take(searching ? SearchResultCap : RecentShortlist)
             .ToList();
 
         _recentsList.Children.Clear();
         foreach (var e in matches)
-            _recentsList.Children.Add(RecentRow(e));
+            _recentsList.Children.Add(RecentRow(e, ResumeInLauncher));
         if (matches.Count == 0)
             _recentsList.Children.Add(new TextBlock
             {
-                Text = searching ? "no sessions match that search"
-                     : _projectFilter is not null ? "no past sessions in this project" : "no past sessions yet",
+                Text = searching ? "no sessions match that search" : "no past sessions yet",
                 FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint, Margin = new Thickness(10, 4),
             });
 
-        _recentsHeader.Text = searching ? "SEARCH RESULTS"
-            : _projectFilter is not null ? "RESUME IN THIS PROJECT" : "RESUME RECENT";
+        _recentsHeader.Text = searching ? "SEARCH RESULTS" : "RESUME RECENT";
         // The search box only earns its space once there's a corpus to search.
-        _recentsSearchFrame.IsVisible = pool.Count > 0;
+        _recentsSearchFrame.IsVisible = _allRecents.Count > 0;
 
-        EnsureEstimates(matches);
+        EnsureEstimates(matches, RenderRecents);
     }
 
     // Two cwds name the same project when their paths match (trailing separators + case ignored).
@@ -784,7 +774,7 @@ internal sealed class SessionWindow : Window
     // Computes the resume estimate for any on-screen row that lacks one, off the UI thread, then re-renders
     // once so the freshly-cached figures appear. Only the displayed rows pay the transcript read, and each is
     // computed once (cached by session id), so typing in the search box stays cheap.
-    private void EnsureEstimates(IReadOnlyList<HistoryEntry> shown)
+    private void EnsureEstimates(IReadOnlyList<HistoryEntry> shown, Action reRender)
     {
         var todo = shown
             .Where(e => !e.IsActive && !string.IsNullOrEmpty(e.SessionId) && !string.IsNullOrEmpty(e.Path)
@@ -810,9 +800,9 @@ internal sealed class SessionWindow : Window
             if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
-                if (_closed || _session is not null) return;
+                if (_closed) return;
                 foreach (var (id, est) in t.Result) { _estimates[id] = est; _estimating.Remove(id); }
-                RenderRecents();   // repaint the rows now their estimates are known
+                reRender();   // repaint the rows (launcher or resume overlay) now their estimates are known
             });
         });
     }
@@ -828,7 +818,9 @@ internal sealed class SessionWindow : Window
         return true;
     }
 
-    private Control RecentRow(HistoryEntry e)
+    // Shared row for the launcher recents and the in-window resume overlay. onChoose runs after the guards
+    // (live-check + heavy-resume confirm) pass; selected paints the keyboard-highlighted row.
+    private Control RecentRow(HistoryEntry e, Func<HistoryEntry, System.Threading.Tasks.Task> onChoose, bool selected = false)
     {
         bool live = e.IsActive;
         var dot = new Ellipse { Width = 8, Height = 8, Fill = live ? _p.Err : _p.Faint, VerticalAlignment = VerticalAlignment.Center };
@@ -860,27 +852,40 @@ internal sealed class SessionWindow : Window
         when[DockPanel.DockProperty] = Dock.Right;
         var frame = new Border
         {
-            CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(10, 9), Background = Brushes.Transparent,
+            CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(10, 9),
+            Background = selected ? _p.Raised2 : Brushes.Transparent,
             Cursor = new Cursor(StandardCursorType.Hand), Child = row, Opacity = live ? 0.75 : 1,
         };
-        frame.PointerEntered += (_, _) => frame.Background = _p.Raised2;
-        frame.PointerExited += (_, _) => frame.Background = Brushes.Transparent;
+        frame.PointerEntered += (_, _) => { if (!selected) frame.Background = _p.Raised2; };
+        frame.PointerExited += (_, _) => { if (!selected) frame.Background = Brushes.Transparent; };
         frame.PointerReleased += async (_, ev) =>
         {
-            if (ev.InitialPressMouseButton != MouseButton.Left) return;
-            if (live)
-            {
-                LaunchFail($"{e.DisplayName} is live in a terminal — Perch can't take it over while it's running. " +
-                           "Close it there, or use “Elevate to Perch” on its overlay row.");
-                return;
-            }
-            if (!await ConfirmHeavyResumeAsync(e)) return;
-            _resumeId = e.SessionId;
-            _cwd = e.Cwd;
-            _folderBox.Text = e.Cwd;
-            StartSession();
+            if (ev.InitialPressMouseButton == MouseButton.Left) await ChooseResume(e, onChoose);
         };
         return frame;
+    }
+
+    // The launcher's resume: continue the picked session in this (idle) window.
+    private System.Threading.Tasks.Task ResumeInLauncher(HistoryEntry e)
+    {
+        _resumeId = e.SessionId;
+        _cwd = e.Cwd;
+        _folderBox.Text = e.Cwd;
+        StartSession();
+        return System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    // The guards every resume shares: refuse a session live in a terminal, then warn before a heavy resume.
+    private async System.Threading.Tasks.Task ChooseResume(HistoryEntry e, Func<HistoryEntry, System.Threading.Tasks.Task> onChoose)
+    {
+        if (e.IsActive)
+        {
+            LaunchFail($"{e.DisplayName} is live in a terminal — Perch can't take it over while it's running. " +
+                       "Close it there, or use “Elevate to Perch” on its overlay row.");
+            return;
+        }
+        if (!await ConfirmHeavyResumeAsync(e)) return;
+        await onChoose(e);
     }
 
     // A resume that would spend more than this share of a 5-hour window gets an "are you sure?" with the
@@ -1077,7 +1082,7 @@ internal sealed class SessionWindow : Window
             case "effort": ShowEffortMenu(); return true;
             case "theme":  OpenSettingsRequested?.Invoke("appearance"); return true;
             case "config": OpenClaudeDesktop(); return true;
-            case "resume": ResumeInProjectRequested?.Invoke(_cwd); return true;
+            case "resume": ShowResumeOverlay(); return true;
             case "login":  RunClaudeAuth("auth login");  return true;
             case "logout": RunClaudeAuth("auth logout"); return true;
             case "mcp":    _ = new McpStatusWindow(Conv.McpServers, _p).ShowDialog(this); return true;
@@ -1100,6 +1105,185 @@ internal sealed class SessionWindow : Window
             Conv.AddNote($"opened a terminal — finish in it: claude {args}");
         else
             Conv.AddNote("couldn't open a terminal for authentication", NoteKind.Error);
+    }
+
+    // ── Resume overlay (/resume) ───────────────────────────────────────────────────
+
+    // A searchable, keyboard-navigable quick-open of this project's past sessions, layered over the thread.
+    private void BuildResumeOverlay()
+    {
+        _resumeSearch = new TextBox
+        {
+            FontFamily = _p.Body, FontSize = 14, Foreground = _p.Text,
+            PlaceholderText = "Search this project's sessions — name, title or id",
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _resumeSearch.TextChanged += (_, _) => { _resumeIndex = 0; RenderResumeOverlay(); };
+        _resumeSearch.AddHandler(KeyDownEvent, OnResumeSearchKeyDown, RoutingStrategies.Tunnel);
+        var searchFrame = new Border
+        {
+            Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+            CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(12, 8), Margin = new Thickness(0, 0, 0, 10),
+            Child = _resumeSearch, [DockPanel.DockProperty] = Dock.Top,
+        };
+
+        _resumeList = new StackPanel { Spacing = 2 };
+        _resumeSpinnerRow = new Border
+        {
+            Padding = new Thickness(6, 8), [DockPanel.DockProperty] = Dock.Top,
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 11,
+                Children =
+                {
+                    new LoadingSpinner { Stroke = _p.Brand, VerticalAlignment = VerticalAlignment.Center },
+                    new TextBlock { Text = "Finding sessions…", FontFamily = _p.Mono, FontSize = 12.5, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center },
+                },
+            },
+        };
+        _resumeSubtitle = new TextBlock { FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint };
+
+        var close = new SessionButton(_p, "✕", SessionButtonKind.Quiet, compact: true) { [DockPanel.DockProperty] = Dock.Right };
+        close.Click += CloseResumeOverlay;
+        var titleRow = new DockPanel
+        {
+            Margin = new Thickness(0, 0, 0, 12), [DockPanel.DockProperty] = Dock.Top,
+            Children =
+            {
+                close,
+                new StackPanel { Children =
+                {
+                    new TextBlock { Text = "Resume a session", FontFamily = _p.Display, FontWeight = FontWeight.Bold, FontSize = 17, Foreground = _p.Title },
+                    _resumeSubtitle,
+                } },
+            },
+        };
+
+        var card = new Border
+        {
+            Background = _p.Surface, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+            CornerRadius = SessionPalette.CardRadius, Padding = new Thickness(18),
+            Width = 560, MaxHeight = 520, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(16, 64, 16, 0), BoxShadow = BoxShadows.Parse("0 18 50 0 #66000000"),
+            Child = new DockPanel
+            {
+                Children =
+                {
+                    titleRow, searchFrame, _resumeSpinnerRow,
+                    new ScrollViewer
+                    {
+                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = _resumeList,
+                    },
+                },
+            },
+        };
+
+        var scrim = new Border { Background = new SolidColorBrush(Color.FromArgb(0x99, 0, 0, 0)) };
+        scrim.PointerReleased += (_, _) => CloseResumeOverlay();
+
+        _resumeOverlay = new Panel { IsVisible = false, Children = { scrim, card } };
+    }
+
+    private void ShowResumeOverlay()
+    {
+        var project = _cwd;
+        _resumeOverlay.IsVisible = true;
+        _resumeSearch.Text = "";
+        _resumeIndex = 0;
+        _resumeLoaded = false;
+        _resumeAll = [];
+        _resumeShown = new();
+        _resumeList.Children.Clear();
+        _resumeSpinnerRow.IsVisible = true;
+        _resumeSubtitle.Text = System.IO.Path.GetFileName(project.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : project;
+        LoadResumeList(project);
+        Dispatcher.UIThread.Post(() => _resumeSearch.Focus(), DispatcherPriority.Input);
+    }
+
+    private void CloseResumeOverlay()
+    {
+        _resumeOverlay.IsVisible = false;
+        if (_session is { IsRunning: true }) _composer.Focus();
+    }
+
+    private void LoadResumeList(string project)
+    {
+        var active = ActiveSessionIdsProvider?.Invoke() ?? new HashSet<string>();
+        System.Threading.Tasks.Task.Run(() => SessionHistory.ListAll(active)).ContinueWith(t =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_closed || !_resumeOverlay.IsVisible) return;
+                _resumeSpinnerRow.IsVisible = false;
+                if (!t.IsCompletedSuccessfully) { _resumeLoaded = true; RenderResumeOverlay(); return; }
+                _resumeAll = t.Result
+                    .Where(e => !string.IsNullOrEmpty(e.SessionId) && !string.IsNullOrEmpty(e.Cwd) && SameProject(e.Cwd, project))
+                    .ToList();
+                _resumeLoaded = true;
+                RenderResumeOverlay();
+            });
+        });
+    }
+
+    private void RenderResumeOverlay()
+    {
+        if (!_resumeOverlay.IsVisible) return;
+        var query = _resumeSearch.Text?.Trim() ?? "";
+        var matches = (query.Length > 0 ? _resumeAll.Where(e => MatchesSearch(e, query)) : _resumeAll)
+            .Take(SearchResultCap).ToList();
+        _resumeShown = matches;
+        if (matches.Count > 0) _resumeIndex = Math.Clamp(_resumeIndex, 0, matches.Count - 1);
+
+        _resumeList.Children.Clear();
+        for (int i = 0; i < matches.Count; i++)
+            _resumeList.Children.Add(RecentRow(matches[i], ResumeIntoNewWindow, selected: i == _resumeIndex));
+        if (matches.Count == 0 && _resumeLoaded)
+            _resumeList.Children.Add(new TextBlock
+            {
+                Text = query.Length > 0 ? "no sessions match that search" : "no past sessions in this project",
+                FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint, Margin = new Thickness(10, 6),
+            });
+
+        EnsureEstimates(matches, RenderResumeOverlay);
+
+        if (_resumeIndex >= 0 && _resumeIndex < _resumeList.Children.Count)
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_resumeIndex < _resumeList.Children.Count) (_resumeList.Children[_resumeIndex] as Control)?.BringIntoView();
+            }, DispatcherPriority.Loaded);
+    }
+
+    // The overlay's resume: hand the id to the app, which opens (or reuses) a window resuming it — never into
+    // this window, which already owns a running session.
+    private System.Threading.Tasks.Task ResumeIntoNewWindow(HistoryEntry e)
+    {
+        CloseResumeOverlay();
+        if (e.SessionId is { } id) ResumeSessionRequested?.Invoke(id, e.Cwd);
+        return System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    private void MoveResume(int delta)
+    {
+        if (_resumeShown.Count == 0) return;
+        _resumeIndex = (_resumeIndex + delta + _resumeShown.Count) % _resumeShown.Count;
+        RenderResumeOverlay();
+    }
+
+    private async void OnResumeSearchKeyDown(object? sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Down: MoveResume(1); e.Handled = true; break;
+            case Key.Up: MoveResume(-1); e.Handled = true; break;
+            case Key.Enter:
+                e.Handled = true;
+                if (_resumeShown.Count > 0 && _resumeIndex >= 0 && _resumeIndex < _resumeShown.Count)
+                    await ChooseResume(_resumeShown[_resumeIndex], ResumeIntoNewWindow);
+                break;
+            case Key.Escape: CloseResumeOverlay(); e.Handled = true; break;
+        }
     }
 
     // ── Rich input highlighting ────────────────────────────────────────────────────
@@ -1504,6 +1688,7 @@ internal sealed class SessionWindow : Window
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key != Key.Escape) return;
+        if (_resumeOverlay.IsVisible) { CloseResumeOverlay(); e.Handled = true; return; }
         if (PaletteOpen) { ClosePalette(); e.Handled = true; return; }
         if (Conv.PendingPermission is { } pending) { _session?.AnswerPermission(pending, allow: false, switchMode: false); e.Handled = true; }
         else if (_session is { IsRunning: true } live && Conv.TurnActive) { live.Interrupt(); e.Handled = true; }
