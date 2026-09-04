@@ -220,16 +220,19 @@ internal sealed class TranscriptReader
         if (string.IsNullOrEmpty(sessionId))
             return null;
         var path = TranscriptLocator.Resolve(sessionId, cwd);
-        return path == null ? null : _title.GetOrCompute(path, ParseTitle, null);
+        return path == null ? null : _title.GetOrCompute(path, p => ParseTitle(p, tailOnly: false), null);
     }
 
     /// <summary>Reads the <c>/rename</c> title (a <c>custom-title</c> record) straight from a transcript
     /// file, tail-first then head — for callers that already have a path but no live
     /// <see cref="TranscriptReader"/> instance (e.g. the session listing). Null when never renamed or
-    /// unreadable. Never throws.</summary>
-    public static string? ReadTitle(string path)
+    /// unreadable. Never throws. Pass <paramref name="tailOnly"/> to skip the head fallback: a <c>/rename</c>
+    /// record lands at the tail, so a tail-only scan finds it for the common case at a fraction of the IO —
+    /// used by the bulk session listing, where re-reading a 32KB head of every untitled multi-MB transcript
+    /// dominates the scan.</summary>
+    public static string? ReadTitle(string path, bool tailOnly = false)
     {
-        try { return ParseTitle(path); }
+        try { return ParseTitle(path, tailOnly); }
         catch { return null; }
     }
 
@@ -1176,13 +1179,15 @@ internal sealed class TranscriptReader
         return null;
     }
 
-    private static string? ParseTitle(string path)
+    private static string? ParseTitle(string path, bool tailOnly)
     {
         // Scan the tail first — a later /rename lands here. If none and the file spans more than one
-        // window, a title set once early may be in the head, so look there before giving up.
+        // window, a title set once early may be in the head, so look there before giving up (unless the
+        // caller opted out of that second read for a cheap bulk scan).
         long len = new FileInfo(path).Length;
-        return ScanWindowForTitle(TranscriptScan.ReadLinesFrom(path, Math.Max(0, len - TailBytes)))
-            ?? (len > TailBytes ? ScanWindowForTitle(TranscriptScan.ReadLinesFrom(path, 0)) : null);
+        var tail = ScanWindowForTitle(TranscriptScan.ReadLinesFrom(path, Math.Max(0, len - TailBytes)));
+        if (tail != null || tailOnly) return tail;
+        return len > TailBytes ? ScanWindowForTitle(TranscriptScan.ReadLinesFrom(path, 0)) : null;
     }
 
     // Returns the last custom-title (the /rename name) record in the given lines, or null.

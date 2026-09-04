@@ -100,6 +100,8 @@ internal sealed class SessionWindow : Window
     private readonly TextBox _recentsSearch;
     private readonly Border _recentsSearchFrame;
     private readonly TextBlock _recentsHeader;
+    // A spinner shown in the recents area until the (off-thread) machine-wide session scan lands.
+    private readonly Border _recentsLoadingRow;
     private IReadOnlyList<HistoryEntry> _allRecents = [];
     // Per-session resume estimate (context tokens, cache warmth, cost), computed lazily off-thread for the
     // rows on screen and cached by session id. _estimating guards against re-queuing one that's in flight.
@@ -335,6 +337,23 @@ internal sealed class SessionWindow : Window
             CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(12, 6), IsVisible = false,
             Margin = new Thickness(0, 0, 0, 10), Child = _recentsSearch,
         };
+        _recentsLoadingRow = new Border
+        {
+            Padding = new Thickness(10, 8),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 11, VerticalAlignment = VerticalAlignment.Center,
+                Children =
+                {
+                    new LoadingSpinner { Stroke = _p.Brand, VerticalAlignment = VerticalAlignment.Center },
+                    new TextBlock
+                    {
+                        Text = "Finding your sessions…", FontFamily = _p.Mono, FontSize = 12.5,
+                        Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center,
+                    },
+                },
+            },
+        };
         _launcher = BuildLauncher();
 
         // Floating error toast, layered over the centre so it's visible whatever the recents list is doing.
@@ -413,12 +432,24 @@ internal sealed class SessionWindow : Window
         if (_session is not null) return;
         System.Threading.Tasks.Task.Run(() => SessionHistory.ListAll(activeSessionIds)).ContinueWith(t =>
         {
-            if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
                 if (_closed || _session is not null) return;
-                PopulateRecents(t.Result);
+                if (t.IsCompletedSuccessfully) PopulateRecents(t.Result);
+                else RecentsLoadFailed();   // stop the spinner rather than leave it turning forever
             });
+        });
+    }
+
+    // The scan couldn't complete — drop the spinner and say so, in place of the recents list.
+    private void RecentsLoadFailed()
+    {
+        _recentsLoadingRow.IsVisible = false;
+        _recentsList.Children.Clear();
+        _recentsList.Children.Add(new TextBlock
+        {
+            Text = "couldn't read past sessions", FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint,
+            Margin = new Thickness(10, 4),
         });
     }
 
@@ -475,6 +506,7 @@ internal sealed class SessionWindow : Window
                 {
                     _recentsHeader,
                     _recentsSearchFrame,
+                    _recentsLoadingRow,
                     _recentsList,
                 },
             },
@@ -587,12 +619,16 @@ internal sealed class SessionWindow : Window
     // with a resumable id + cwd are ever offered, so filter those out up front.
     private void PopulateRecents(IReadOnlyList<HistoryEntry> entries)
     {
+        _recentsLoadingRow.IsVisible = false;
         _allRecents = entries.Where(e => !string.IsNullOrEmpty(e.SessionId) && !string.IsNullOrEmpty(e.Cwd)).ToList();
 
         // The folder box searches the distinct projects you've launched sessions in before (recency order),
         // so a familiar project is a few keystrokes — or one focus, which drops the whole list open.
         _folderSuggestions = SessionHistory.DistinctFolders(entries);
         _folderBox.ItemsSource = _folderSuggestions;
+        // If the user is already sitting in the (empty) folder box waiting, drop the freshly-loaded list open
+        // now rather than making them click away and back.
+        if (_folderBox.IsFocused) OpenFolderDropdownIfEmpty();
 
         RenderRecents();
     }

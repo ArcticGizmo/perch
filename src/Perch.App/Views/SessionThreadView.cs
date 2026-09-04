@@ -36,6 +36,12 @@ internal sealed class SessionThreadView : ScrollViewer
     private SessionConversation? _conv;
     private bool _stickToBottom = true;
 
+    // "Claude is working" indicator: an avatar-aligned bubble of bouncing dots + the current action, kept as
+    // the last child of _stack while a turn runs (and not paused on a permission). Reused across shows.
+    private readonly Control _activityRow;
+    private readonly TextBlock _activityLabel;
+    private bool _activityShown;
+
     /// <summary>The user answered a permission card: (item, allow, also switch to the suggested mode).</summary>
     public event Action<PermissionItem, bool, bool>? PermissionAnswered;
 
@@ -78,6 +84,29 @@ internal sealed class SessionThreadView : ScrollViewer
             if (e.ExtentDelta.Y != 0 || e.OffsetDelta.Y == 0) return;
             _stickToBottom = Offset.Y + Viewport.Height >= Extent.Height - 24;
         };
+
+        // The working indicator (built once, added/removed from the column as turns come and go).
+        _activityLabel = new TextBlock
+        {
+            FontSize = 13.5, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, Foreground = _p.Muted,
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var activityBubble = new Border
+        {
+            Background = _p.Raised, BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5, 16, 16, 16), Padding = new Thickness(15, 10),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 12, VerticalAlignment = VerticalAlignment.Center,
+                Children =
+                {
+                    new TypingDots { Fill = _p.Brand, VerticalAlignment = VerticalAlignment.Center },
+                    _activityLabel,
+                },
+            },
+        };
+        _activityRow = Row(activityBubble, left: Avatar(), right: null);
     }
 
     /// <summary>Points the view at a conversation (materialising what it already holds) and follows it.</summary>
@@ -87,13 +116,17 @@ internal sealed class SessionThreadView : ScrollViewer
         {
             _conv.Changed -= OnChanged;
             _conv.Reset -= OnReset;
+            _conv.StateChanged -= OnStateChanged;
         }
         _conv = conversation;
+        _activityShown = false;   // the row was cleared with the column; re-add it below if the turn is live
         _stack.Children.Clear();
         _views.Clear();
         foreach (var item in conversation.Items) AddItem(item);
         conversation.Changed += OnChanged;
         conversation.Reset += OnReset;
+        conversation.StateChanged += OnStateChanged;
+        UpdateActivity();
         _stickToBottom = true;
         ScrollToEndSoon();
     }
@@ -117,7 +150,56 @@ internal sealed class SessionThreadView : ScrollViewer
     {
         if (change == ConversationChange.Added) AddItem(item);
         else UpdateItem(item);
+        UpdateActivity();   // a tool flipping status (or a new part) changes what the indicator says
         if (_stickToBottom) ScrollToEndSoon();
+    }
+
+    // Turn-level state moved (a turn opened/closed, a permission became pending): show or hide the indicator.
+    private void OnStateChanged()
+    {
+        UpdateActivity();
+        if (_stickToBottom) ScrollToEndSoon();
+    }
+
+    // Shows the "working" bubble as the last row while a turn runs and isn't paused on a permission; keeps it
+    // pinned to the tail as later items append, and pulls it once the turn settles.
+    private void UpdateActivity()
+    {
+        bool show = _conv is { TurnActive: true, PendingPermission: null };
+        if (show)
+        {
+            _activityLabel.Text = ActivityLabel();
+            if (!_activityShown)
+            {
+                _stack.Children.Add(_activityRow);
+                _activityShown = true;
+            }
+            else if (_stack.Children.Count > 0 && !ReferenceEquals(_stack.Children[^1], _activityRow))
+            {
+                // An item appended after it — move the indicator back to the tail.
+                _stack.Children.Remove(_activityRow);
+                _stack.Children.Add(_activityRow);
+            }
+        }
+        else if (_activityShown)
+        {
+            _stack.Children.Remove(_activityRow);
+            _activityShown = false;
+        }
+    }
+
+    // What the indicator says: the concrete running tool (its summary), else the phase of the open turn.
+    private string ActivityLabel()
+    {
+        if (_conv?.Items is { Count: > 0 } items && items[^1] is AssistantMessageItem { Parts.Count: > 0 } a)
+            return a.Parts[^1] switch
+            {
+                ToolCallPart { Status: ToolCallStatus.Running } tool => tool.Summary is { Length: > 0 } s ? s : $"Running {tool.ToolName}",
+                ThinkingPart                                         => "Thinking…",
+                TextPart { IsStreaming: true }                       => "Responding…",
+                _                                                    => "Working…",
+            };
+        return "Working…";
     }
 
     private void ScrollToEndSoon() =>
@@ -208,14 +290,17 @@ internal sealed class SessionThreadView : ScrollViewer
 
     // ── Assistant ────────────────────────────────────────────────────────────────
 
+    // The bird-mark avatar for Claude's side (assistant turns and the working indicator).
+    private Control Avatar() => new Border
+    {
+        Width = 29, Height = 29, CornerRadius = new CornerRadius(9), Background = _p.Raised2,
+        BorderBrush = _p.Border, BorderThickness = new Thickness(1), VerticalAlignment = VerticalAlignment.Top,
+        Child = MarkImage(19),
+    };
+
     private ItemView BuildAssistant(AssistantMessageItem a)
     {
-        var avatar = new Border
-        {
-            Width = 29, Height = 29, CornerRadius = new CornerRadius(9), Background = _p.Raised2,
-            BorderBrush = _p.Border, BorderThickness = new Thickness(1), VerticalAlignment = VerticalAlignment.Top,
-            Child = MarkImage(19),
-        };
+        var avatar = Avatar();
         var body = new StackPanel();
         // Claude's turn in a bubble too (raised, soft-edged, tail toward the avatar): a bounded surface is
         // easier on the eye than open prose over a long thread. Parts carry their own bottom margins, so the

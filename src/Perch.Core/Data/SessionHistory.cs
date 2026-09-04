@@ -382,26 +382,27 @@ internal static class SessionHistory
     /// <summary>Lists every session transcript across all projects, active first, then newest-first.</summary>
     public static List<HistoryEntry> ListAll(IReadOnlySet<string> activeSessionIds)
     {
-        var entries = new List<HistoryEntry>();
-        foreach (var file in TranscriptLocator.EnumerateTranscripts())
-        {
-            try
+        // Each transcript needs two best-effort reads (cwd from the head, title from the tail), and there can
+        // be many hundreds of them — so fan the per-file work across cores. The reads are independent and the
+        // shared caches are locked, so this is safe; the sort below re-imposes a deterministic order, so the
+        // unordered parallel enumeration is fine.
+        var entries = TranscriptLocator.EnumerateTranscripts()
+            .AsParallel()
+            .Select(file =>
             {
-                var fi = new FileInfo(file);
-                var sessionId = System.IO.Path.GetFileNameWithoutExtension(file);
-                var (project, cwd, title) = ResolveProject(file, System.IO.Path.GetDirectoryName(file) ?? "");
-                entries.Add(new HistoryEntry(
-                    sessionId,
-                    project,
-                    cwd,
-                    file,
-                    fi.LastWriteTime,
-                    activeSessionIds.Contains(sessionId),
-                    fi.Length,
-                    title));
-            }
-            catch { }
-        }
+                try
+                {
+                    var fi = new FileInfo(file);
+                    var sessionId = System.IO.Path.GetFileNameWithoutExtension(file);
+                    var (project, cwd, title) = ResolveProject(file, System.IO.Path.GetDirectoryName(file) ?? "");
+                    return new HistoryEntry(
+                        sessionId, project, cwd, file, fi.LastWriteTime,
+                        activeSessionIds.Contains(sessionId), fi.Length, title);
+                }
+                catch { return null; }
+            })
+            .Where(e => e is not null)
+            .Select(e => e!);
 
         return entries
             .OrderByDescending(e => e.IsActive)
@@ -461,8 +462,9 @@ internal static class SessionHistory
         if (string.IsNullOrEmpty(project))
             project = "session";
 
-        // The explicit /rename name, if any — a tail-first scan (the record lands wherever it was set).
-        string? title = TranscriptReader.ReadTitle(file);
+        // The explicit /rename name, if any — a tail-only scan (a /rename record lands at the tail): the head
+        // fallback would re-read a 32KB window of every untitled multi-MB transcript, which dominated the scan.
+        string? title = TranscriptReader.ReadTitle(file, tailOnly: true);
 
         lock (_cacheLock)
             _projectCache[file] = (project, cwd, title);
