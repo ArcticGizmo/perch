@@ -70,6 +70,63 @@ public class SessionConversationTests
     }
 
     [Fact]
+    public void Compact_DropsAMarkerAndEchoesInstructions()
+    {
+        var (conv, _) = Make();
+
+        conv.AddUserPrompt("/compact");
+        Assert.Equal("/compact", Assert.IsType<UserMessageItem>(conv.Items[0]).Text);   // the command chip
+        Assert.Equal("compacting the conversation to free up context…",
+            Assert.IsType<NoteItem>(conv.Items[1]).Text);
+
+        conv.AddUserPrompt("/compact keep the failing test details");
+        Assert.Equal("compacting the conversation (keeping: keep the failing test details)…",
+            Assert.IsType<NoteItem>(conv.Items[^1]).Text);
+
+        // The compaction turn's result shrinks the reported context, same path as any turn (one result per
+        // queued prompt — the second /compact was queued behind the first).
+        conv.Apply(new TurnResultEvent(false, "success", 0.03, InputTokens: 5000, OutputTokens: 5, DurationMs: 400));
+        conv.Apply(new TurnResultEvent(false, "success", 0.03, InputTokens: 800, OutputTokens: 5, DurationMs: 400));
+        Assert.Equal(800, conv.ContextTokens);
+        Assert.False(conv.TurnActive);
+    }
+
+    [Fact]
+    public void OrdinaryPrompt_DropsNoCompactionMarker()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("please compact the layout");   // not a /compact command
+        Assert.IsType<UserMessageItem>(Assert.Single(conv.Items));
+    }
+
+    [Fact]
+    public void Autocompact_TogglesStateAndMarksIt()
+    {
+        var (conv, _) = Make();
+        Assert.True(conv.AutoCompact);   // on by default (matches the CLI)
+
+        conv.AddUserPrompt("/autocompact");
+        Assert.False(conv.AutoCompact);
+        Assert.Contains("auto-compaction off", Assert.IsType<NoteItem>(conv.Items[^1]).Text);
+
+        conv.AddUserPrompt("/autocompact");
+        Assert.True(conv.AutoCompact);
+        Assert.Contains("auto-compaction on", Assert.IsType<NoteItem>(conv.Items[^1]).Text);
+    }
+
+    [Theory]
+    [InlineData("/autocompact off", false)]
+    [InlineData("/autocompact on", true)]
+    [InlineData("/autocompact disable", false)]
+    [InlineData("/autocompact enable", true)]
+    public void Autocompact_HonoursAnExplicitArgument(string prompt, bool expected)
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt(prompt);
+        Assert.Equal(expected, conv.AutoCompact);
+    }
+
+    [Fact]
     public void StreamingDeltas_AccumulateThenFinalise()
     {
         var (conv, log) = Make();

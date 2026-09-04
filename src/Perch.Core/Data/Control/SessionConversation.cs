@@ -121,6 +121,11 @@ internal sealed class SessionConversation
     public long TotalFreshInputTokens { get; private set; }
     /// <summary>A turn is running (prompt sent, no result yet).</summary>
     public bool TurnActive { get; private set; }
+    /// <summary>Whether the CLI will compact the conversation itself as it nears the context limit. Defaults
+    /// to on (Claude Code's default) and is flipped by <c>/autocompact</c>; the context readout's messaging
+    /// reflects it. A best-effort mirror of the CLI setting — the CLI never reports the initial value, so a
+    /// session that started with it already off reads as on until the user toggles it here.</summary>
+    public bool AutoCompact { get; private set; } = true;
     /// <summary>Prompts sent while a turn was running; the CLI drains them in order.</summary>
     public int QueuedPrompts { get; private set; }
     public PermissionItem? PendingPermission { get; private set; }
@@ -334,7 +339,54 @@ internal sealed class SessionConversation
     {
         Append(new UserMessageItem(text));
         if (TurnActive) QueuedPrompts++; else TurnActive = true;
+        // `/compact` runs as an ordinary turn, but its effect is to shrink the context rather than to answer,
+        // so drop a marker that explains the upcoming context drop — the CLI itself emits only progress
+        // `status` system records, which the parser ignores (see docs/slash-command-actions.md, Group B). The
+        // optional [instructions] ride through in the sent text; echo them so the marker says what was kept.
+        // Context/usage figures self-correct on the compaction turn's result (ContextTokens = latest prompt).
+        switch (SlashCommandCatalog.CommandName(text))
+        {
+            case "compact":
+            {
+                var kept = CompactInstructions(text);
+                Append(new NoteItem(kept is null
+                    ? "compacting the conversation to free up context…"
+                    : $"compacting the conversation (keeping: {kept})…"));
+                break;
+            }
+            case "autocompact":
+                // `/autocompact` flips (or, with an explicit on/off argument, sets) whether the CLI compacts
+                // itself near the limit. Mirror the resulting state so the context readout can stop promising
+                // an automatic compaction that won't happen; the CLI also renders its own text confirmation.
+                AutoCompact = AutoCompactArg(text) ?? !AutoCompact;
+                Append(new NoteItem(AutoCompact
+                    ? "auto-compaction on — the conversation will compact itself as it nears the context limit"
+                    : "auto-compaction off — it won't compact on its own; run /compact to do it manually"));
+                break;
+        }
         StateChanged?.Invoke();
+    }
+
+    // An explicit on/off argument to `/autocompact` (on|off|true|false|enable|disable…), or null to toggle.
+    private static bool? AutoCompactArg(string text)
+    {
+        var rest = CompactInstructions(text)?.ToLowerInvariant();
+        return rest switch
+        {
+            "on" or "true" or "enable" or "enabled" or "yes" => true,
+            "off" or "false" or "disable" or "disabled" or "no" => false,
+            _ => null,
+        };
+    }
+
+    // The text after `/compact` (the summarisation instructions), or null when none were given.
+    private static string? CompactInstructions(string text)
+    {
+        var t = text.TrimStart();
+        int sp = t.IndexOf(' ');
+        if (sp < 0) return null;
+        var rest = t[(sp + 1)..].Trim();
+        return rest.Length > 0 ? rest : null;
     }
 
     public void AddNote(string text, NoteKind kind = NoteKind.Info) => Append(new NoteItem(text, kind));

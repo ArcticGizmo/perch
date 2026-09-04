@@ -1603,8 +1603,11 @@ internal sealed class SessionWindow : Window
             // shows no colour there; at/above it the text warms to the thermometer's variant colour.
             _contextPillText.Foreground = crossedYellow ? new SolidColorBrush(_thermoGlyph.VariantColor) : _p.Muted;
 
+            var nearFull = conv.AutoCompact
+                ? "and a compaction is coming as it nears full."
+                : "and — with auto-compaction off — it won't shrink on its own; run /compact to reclaim it.";
             _contextPill[ToolTip.TipProperty] =
-                $"Context window: {FormatTokens(ctx)} of {FormatTokens(window)} ({pct:0}%). This is what every new message re-sends to the model — the fuller it gets, the more each turn costs, and a compaction is coming as it nears full.";
+                $"Context window: {FormatTokens(ctx)} of {FormatTokens(window)} ({pct:0}%). This is what every new message re-sends to the model — the fuller it gets, the more each turn costs, {nearFull}";
         }
     }
 

@@ -31,19 +31,19 @@ TUI). Some are **inferred** from behaviour/knowledge and want a live spike befor
 | Command | What happens | Headless? | Perch plan |
 |---|---|---|---|
 | `/clear` | **New session id, context wiped** | ✅ verified | **Done** — thread resets on the new init |
-| `/compact` | Compacts context (emits `status` records) | ✅ verified | Tier-3 — drop a marker, continue |
+| `/compact` | Compacts context (emits `status` records) | ✅ verified | **Done (code)** — marker + echoes `[instructions]`; live dogfood owed |
 | `/rename` | Renames the session | ⚠ (title record?) | Tier-3 — update the title |
-| `/init` | **Writes/updates `CLAUDE.md`** | ✅ (as text; may run a Write turn) | Renders; confirm the file-write turn |
-| `/export` | Exports the conversation (file/clipboard) | ⚠ | Confirm what it returns headlessly |
-| `/memory` | Opens a memory file in an editor | ❌ editor | ⚠ likely TUI-only → native memory view or omit |
-| `/add-dir <path>` | Adds a working directory | ⚠ | Native folder picker (nicer) |
+| `/init` | **Writes/updates `CLAUDE.md`** | ✅ (as text; may run a Write turn) | **In catalogue (plain text)** — renders; confirm the file-write turn at dogfood |
+| `/export` | Exports the conversation (file/clipboard) | ⚠ | **In catalogue (plain text)** — confirm what it returns headlessly |
+| `/memory` | Opens a memory file in an editor | ❌ editor | **In catalogue (plain text)** — ⚠ may be TUI-editor-only (could hang the turn); if so, intercept → native memory view. Test first |
+| `/add-dir <path>` | Adds a working directory | ⚠ | **In catalogue (plain text)** now; a native folder picker is the nicer surface later |
 | `/effort <level>` | Sets reasoning effort | ✅ (`/effort` as text) | **Native** — the effort pill (done) |
-| `/import <path>` | Imports context from a file | ⚠ | Confirm arg passing |
-| `/autocompact` | Toggles auto-compaction | ⚠ | Reflect the setting |
-| `/heapdump` | Writes a heap dump file | ⚠ | Power-user; keep out of the palette |
-| `/reload-plugins`, `/reload-skills` | Reloads plugins/skills | ⚠ | Power-user; render-as-text if it works |
-| `/goal` | Sets/updates the session goal | ⚠ | Render-as-text |
-| `/color`, `/fast` | Toggle display prefs | ❌ N/A | Perch owns its own look → omit |
+| `/import <path>` | Imports context from a file | ⚠ | **In catalogue (plain text)** — arg rides through in the sent text |
+| `/autocompact` | Toggles auto-compaction | ⚠ | **Done (code)** — tracks state, marks it, tunes the context tooltip; live dogfood owed |
+| `/heapdump` | Writes a heap dump file | ⚠ | **Kept out of the palette** (still works if typed) |
+| `/reload-plugins`, `/reload-skills` | Reloads plugins/skills | ⚠ | **Kept out of the palette** (power-user; still send as text if typed) |
+| `/goal` | Sets/updates the session goal | ⚠ | **In catalogue (plain text)** — renders |
+| `/color`, `/fast` | Toggle display prefs | ❌ N/A | **Omitted** — Perch owns its own look |
 
 ## C. Read-only info (no wizard, no side effect — just render markdown)
 
@@ -57,6 +57,43 @@ TUI). Some are **inferred** from behaviour/knowledge and want a live spike befor
 - `/help` — doesn't work here (removed 2026-09-04).
 - `/vim` — N/A for the Perch composer.
 - Internal: `__remote-workflow`, `workflow-launch-exec` — never shown.
+
+---
+
+## Progress
+
+- **Plain-text actions — surfaced (code, 2026-09-04).** `/goal [text]`, `/import <path>` and `/add-dir
+  <path>` added to `SlashCommandCatalog` (Tier 1, plain text); `/init`, `/export`, `/memory` were already
+  there. These need no reaction code — they send as text and the CLI's output renders through `MarkdownView`,
+  and any argument rides through in the sent text (so `/import`/`/add-dir` arg passing is automatic). **What's
+  left is a live spike for the ⚠ ones**: does `/export` return a path or content headlessly; does `/memory`
+  render or block on a TTY editor (if it blocks, intercept it and open a native memory view instead of
+  sending text); does `/add-dir` take effect over stream-json (if so, a native folder picker is the nicer
+  follow-up). **Kept out of the palette** (they still send as text if a power-user types them): `/heapdump`,
+  `/reload-plugins`, `/reload-skills`. **Omitted** (Perch owns its own look): `/color`, `/fast`.
+- **`/autocompact` — DONE (code, 2026-09-04, branch `session-control-poc`).** Sent as plain text (the CLI
+  renders its own confirmation) and Perch mirrors the setting: `SessionConversation.AutoCompact` (a bool,
+  default **on** to match the CLI) is flipped by a bare `/autocompact` or set by an explicit
+  `on`/`off`/`enable`/`disable`/`true`/`false`/`yes`/`no` argument, with a `NoteItem` marker either way. The
+  context-pill tooltip in `SessionWindow` now reads that state — it only promises "a compaction is coming as
+  it nears full" when auto-compaction is on, and otherwise says it won't shrink on its own (run `/compact`).
+  Added `/autocompact` (`[on|off]`) to `SlashCommandCatalog` as a `SessionMutating` entry. Tests:
+  `SessionConversationTests.Autocompact_TogglesStateAndMarksIt` + `Autocompact_HonoursAnExplicitArgument`.
+  **Caveat/dogfood owed:** the CLI never reports the *initial* auto-compaction value, so a session that
+  started with it already off reads as on until the user toggles it here; confirm the real toggle semantics
+  (bare toggle vs. explicit arg) and the confirmation text live.
+- **`/compact` — DONE (code, 2026-09-04, branch `session-control-poc`).** It stays a plain-text send (that's
+  what makes the CLI compact) and Perch *reacts*: `SessionConversation.AddUserPrompt` detects the `/compact`
+  command and appends a `NoteItem` marker after the command chip — "compacting the conversation to free up
+  context…", or "…(keeping: <instructions>)…" when an argument is given (the `[instructions]` ride through in
+  the sent text; nothing extra needed for arg passing). The progress `status` system records the CLI emits
+  while compacting are already ignored by `StreamJsonParser` (`ParseSystem` returns `[]` for any non-`init`
+  subtype) — locked by a `UnknownOrMalformedLines_YieldNothing` InlineData case. Context/usage numbers
+  self-correct on the compaction turn's `result` (the standard `ContextTokens = latest prompt` path). Tests:
+  `SessionConversationTests.Compact_DropsAMarkerAndEchoesInstructions` +
+  `OrdinaryPrompt_DropsNoCompactionMarker`. **Live dogfood owed:** confirm the compaction turn ends with a
+  `result` (so the spinner clears) and that the context pill visibly drops; if a future build emits a
+  `compact_boundary` system record with `pre_tokens`, the marker could be enriched to report tokens freed.
 
 ---
 

@@ -133,6 +133,7 @@ public class StreamJsonParserTests
     [InlineData("not json at all")]
     [InlineData("{\"type\":\"rate_limit_event\",\"rate_limit_info\":{}}")]
     [InlineData("{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_name\":\"SessionStart\"}")]
+    [InlineData("{\"type\":\"system\",\"subtype\":\"status\",\"message\":\"Compacting conversation…\"}")]   // /compact progress — ignored, never a throw
     [InlineData("{\"truncated\":")]
     public void UnknownOrMalformedLines_YieldNothing(string line) =>
         Assert.Empty(StreamJsonParser.Parse(line));
