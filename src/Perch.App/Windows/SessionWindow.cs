@@ -104,6 +104,8 @@ internal sealed class SessionWindow : Window
     // A spinner shown in the recents area until the (off-thread) machine-wide session scan lands.
     private readonly Border _recentsLoadingRow;
     private IReadOnlyList<HistoryEntry> _allRecents = [];
+    // Set in resume-picker mode (/resume): scopes the recents list to one project's cwd.
+    private string? _projectFilter;
     // Per-session resume estimate (context tokens, cache warmth, cost), computed lazily off-thread for the
     // rows on screen and cached by session id. _estimating guards against re-queuing one that's in flight.
     private readonly Dictionary<string, ResumeEstimate> _estimates = new();
@@ -150,6 +152,10 @@ internal sealed class SessionWindow : Window
     /// <summary>A native command wants Perch's Settings window opened at a given page key (e.g. "appearance"
     /// for <c>/theme</c>). The app owns the Settings window, so it handles this.</summary>
     public event Action<string>? OpenSettingsRequested;
+
+    /// <summary><c>/resume</c>: open a resume picker scoped to this project (its cwd). The app opens a fresh
+    /// launcher window filtered to it.</summary>
+    public event Action<string>? ResumeInProjectRequested;
 
     /// <summary>The session this window currently views, or null on the launcher.</summary>
     public PerchSession? Session => _session;
@@ -535,6 +541,18 @@ internal sealed class SessionWindow : Window
         StartSession();
     }
 
+    /// <summary>Shows the launcher as a resume picker scoped to one project (<c>/resume</c>): the recents list
+    /// filtered to <paramref name="projectCwd"/>, with the folder box pre-filled so a new session there is one
+    /// click too. The app then calls <see cref="LoadRecents"/>.</summary>
+    public void ShowResumePicker(string projectCwd)
+    {
+        _projectFilter = projectCwd;
+        _cwd = projectCwd;
+        _folderBox.Text = projectCwd;
+        RefreshBar();
+        RenderRecents();   // apply the filter now; PopulateRecents re-renders once the scan lands
+    }
+
     /// <summary>Opens straight onto a fresh session in <paramref name="cwd"/> — the CLI's <c>perch [dir]</c>.</summary>
     public void StartNew(string cwd, string? model = null, string? mode = null)
     {
@@ -716,7 +734,10 @@ internal sealed class SessionWindow : Window
         var query = _recentsSearch.Text?.Trim() ?? "";
         bool searching = query.Length > 0;
 
-        var matches = (searching ? _allRecents.Where(e => MatchesSearch(e, query)) : _allRecents)
+        // In resume-picker mode (/resume) the pool is scoped to one project; otherwise it's the whole machine.
+        var pool = _projectFilter is { } proj ? _allRecents.Where(e => SameProject(e.Cwd, proj)).ToList() : _allRecents;
+
+        var matches = (searching ? pool.Where(e => MatchesSearch(e, query)) : pool)
             .Take(searching ? SearchResultCap : RecentShortlist)
             .ToList();
 
@@ -726,16 +747,23 @@ internal sealed class SessionWindow : Window
         if (matches.Count == 0)
             _recentsList.Children.Add(new TextBlock
             {
-                Text = searching ? "no sessions match that search" : "no past sessions yet",
+                Text = searching ? "no sessions match that search"
+                     : _projectFilter is not null ? "no past sessions in this project" : "no past sessions yet",
                 FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint, Margin = new Thickness(10, 4),
             });
 
-        _recentsHeader.Text = searching ? "SEARCH RESULTS" : "RESUME RECENT";
+        _recentsHeader.Text = searching ? "SEARCH RESULTS"
+            : _projectFilter is not null ? "RESUME IN THIS PROJECT" : "RESUME RECENT";
         // The search box only earns its space once there's a corpus to search.
-        _recentsSearchFrame.IsVisible = _allRecents.Count > 0;
+        _recentsSearchFrame.IsVisible = pool.Count > 0;
 
         EnsureEstimates(matches);
     }
+
+    // Two cwds name the same project when their paths match (trailing separators + case ignored).
+    private static bool SameProject(string a, string b) =>
+        !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b)
+        && string.Equals(a.TrimEnd('\\', '/'), b.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
 
     // Computes the resume estimate for any on-screen row that lacks one, off the UI thread, then re-renders
     // once so the freshly-cached figures appear. Only the displayed rows pay the transcript read, and each is
@@ -1033,6 +1061,7 @@ internal sealed class SessionWindow : Window
             case "effort": ShowEffortMenu(); return true;
             case "theme":  OpenSettingsRequested?.Invoke("appearance"); return true;
             case "config": OpenClaudeDesktop(); return true;
+            case "resume": ResumeInProjectRequested?.Invoke(_cwd); return true;
             default:       return false;
         }
     }

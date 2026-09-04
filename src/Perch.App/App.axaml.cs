@@ -1573,6 +1573,16 @@ public partial class App : Application
         w.Activate();
     }
 
+    // /resume from a running session: a fresh launcher window, its recents scoped to that session's project.
+    private void OpenResumePicker(string cwd)
+    {
+        var w = NewSessionWindow();
+        w.Show();
+        w.ShowResumePicker(cwd);
+        w.Activate();
+        w.LoadRecents(ActiveSessionIds());
+    }
+
     // CLI `perch [dir]`: a fresh session started directly in the folder.
     private void OpenSessionNew(string cwd, string? model, string? mode)
     {
@@ -1612,6 +1622,7 @@ public partial class App : Application
             cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent, cs.ShowContextGreenSegment);
         w.NewSessionRequested += OpenSessionWindow;
         w.OpenSettingsRequested += page => OpenSettings(page);   // e.g. /theme → Settings → Appearance
+        w.ResumeInProjectRequested += OpenResumePicker;          // /resume → project-scoped launcher
         _sessionWindows.Add(w);
         w.Closed += (_, _) => _sessionWindows.Remove(w);
         return w;

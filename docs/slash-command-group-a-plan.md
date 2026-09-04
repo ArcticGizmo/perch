@@ -30,6 +30,12 @@ foundation already shipped (`docs/session-slash-commands-plan.md`).
   (`App.OpenSettings(page)` + `SettingsWindow.NavigateTo("appearance")`), `/config`→`SessionLauncher.
   OpenClaudeDesktop()` (note if not installed). Catalogue: added `/theme`, `/config` description now "Open
   Claude Desktop". Builds green, 30 slash/highlighter tests pass. **Live dogfood owed.**
+- **Group 2 (`/resume`) — DONE (2026-09-04).** Reused the launcher rather than a new window: `/resume` raises
+  `ResumeInProjectRequested(cwd)` → `App.OpenResumePicker` opens a fresh launcher window and calls
+  `SessionWindow.ShowResumePicker(cwd)`, which sets a `_projectFilter` so `RenderRecents` scopes the recents
+  (and the search) to that project ("RESUME IN THIS PROJECT"), pre-fills the folder box, and keeps every
+  existing guard/estimate/resume-flow. Picking a row opens a new session via the normal resume path. Builds
+  green. **Live dogfood owed.** Follow-up: an optional "widen to all projects" toggle.
 
 ## Step 0 — Native-command dispatch (foundation for all of Group A)
 
