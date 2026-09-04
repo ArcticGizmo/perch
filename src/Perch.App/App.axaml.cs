@@ -1611,6 +1611,7 @@ public partial class App : Application
         w.SetContextPressureConfig(cs.ShowContextPressure, cs.ContextPressureYellowPercent,
             cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent, cs.ShowContextGreenSegment);
         w.NewSessionRequested += OpenSessionWindow;
+        w.OpenSettingsRequested += page => OpenSettings(page);   // e.g. /theme → Settings → Appearance
         _sessionWindows.Add(w);
         w.Closed += (_, _) => _sessionWindows.Remove(w);
         return w;
@@ -2382,7 +2383,7 @@ public partial class App : Application
         ApplyEffectiveSettings();
     }
 
-    private void OpenSettings()
+    private void OpenSettings(string? page = null)
     {
         if (_settings is { } w && w.IsVisible)
         {
@@ -2390,6 +2391,7 @@ public partial class App : Application
             // the user is looking at rather than switching them away to wherever it was left. (Settings
             // doesn't go through WindowHost, so it needs the same nudge WindowHost.ShowOrFocus applies.)
             PlatformServices.VirtualDesktops.MoveWindowToCurrentDesktop(w.TryGetPlatformHandle()?.Handle ?? 0);
+            if (page is not null) w.NavigateTo(page);
             w.Activate();
             return;
         }
@@ -2435,6 +2437,7 @@ public partial class App : Application
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);
         _settings.Closed += (_, _) => _settings = null;
         _settings.Show();
+        if (page is not null) _settings.NavigateTo(page);
         _settings.Activate();
     }
 }

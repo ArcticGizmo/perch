@@ -21,6 +21,16 @@ foundation already shipped (`docs/session-slash-commands-plan.md`).
 | `/theme` | Open **Perch Settings → Appearance** (theme section) |
 | `/install-github-app` | **Remove** |
 
+## Progress
+
+- **Step 0 (dispatch) — DONE (2026-09-04).** `SessionWindow.RunNativeCommand(name)` routes model/effort/theme/
+  config; called from both `AcceptPalette` and `SendPrompt` (a bare no-arg native command runs its action
+  instead of being sent). `OpenSettingsRequested(pageKey)` event wired in the App.
+- **Group 1 — DONE (2026-09-04).** `/model`→model pill, `/effort`→effort pill, `/theme`→Settings→Appearance
+  (`App.OpenSettings(page)` + `SettingsWindow.NavigateTo("appearance")`), `/config`→`SessionLauncher.
+  OpenClaudeDesktop()` (note if not installed). Catalogue: added `/theme`, `/config` description now "Open
+  Claude Desktop". Builds green, 30 slash/highlighter tests pass. **Live dogfood owed.**
+
 ## Step 0 — Native-command dispatch (foundation for all of Group A)
 
 Right now `AcceptPalette` special-cases only `/model` and `/effort` (opens their pills). Generalise this into

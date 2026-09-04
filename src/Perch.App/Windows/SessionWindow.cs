@@ -147,6 +147,10 @@ internal sealed class SessionWindow : Window
     /// <summary>The user wants a launcher for another session (the app opens a fresh window).</summary>
     public event Action? NewSessionRequested;
 
+    /// <summary>A native command wants Perch's Settings window opened at a given page key (e.g. "appearance"
+    /// for <c>/theme</c>). The app owns the Settings window, so it handles this.</summary>
+    public event Action<string>? OpenSettingsRequested;
+
     /// <summary>The session this window currently views, or null on the launcher.</summary>
     public PerchSession? Session => _session;
 
@@ -1006,8 +1010,38 @@ internal sealed class SessionWindow : Window
         var text = _composer.Text?.Trim();
         if (string.IsNullOrEmpty(text) || _session is not { IsRunning: true } live) return;
         ClosePalette();
+        // A bare, no-argument native command runs its Perch action instead of going to the CLI as text.
+        if (!text.Contains(' ') && SlashCommandCatalog.CommandName(text) is { } name && RunNativeCommand(name))
+        {
+            _composer.Text = "";
+            return;
+        }
         live.SendPrompt(text);
         _composer.Text = "";
+    }
+
+    // ── Native command dispatch ────────────────────────────────────────────────────
+
+    // Commands Perch answers with its own UI rather than sending to the CLI. Returns true when handled (the
+    // caller then clears the composer and does not send). One place, so both the palette and a typed Enter
+    // route the same way (docs/slash-command-group-a-plan.md, Step 0).
+    private bool RunNativeCommand(string name)
+    {
+        switch (name)
+        {
+            case "model":  ShowModelMenu();  return true;
+            case "effort": ShowEffortMenu(); return true;
+            case "theme":  OpenSettingsRequested?.Invoke("appearance"); return true;
+            case "config": OpenClaudeDesktop(); return true;
+            default:       return false;
+        }
+    }
+
+    // /config → the Claude Desktop app (its GUI settings live there). Best-effort; a note if it isn't installed.
+    private void OpenClaudeDesktop()
+    {
+        if (!PlatformServices.SessionLauncher.OpenClaudeDesktop())
+            Conv.AddNote("couldn't open Claude Desktop — it may not be installed", NoteKind.Error);
     }
 
     // ── Rich input highlighting ────────────────────────────────────────────────────
@@ -1139,12 +1173,8 @@ internal sealed class SessionWindow : Window
         var cmd = _paletteItems[Math.Clamp(_paletteIndex, 0, _paletteItems.Count - 1)];
         ClosePalette();
 
-        if (cmd.Name is "model" or "effort")
-        {
-            _composer.Text = "";
-            if (cmd.Name == "model") ShowModelMenu(); else ShowEffortMenu();
-            return;
-        }
+        // A native command opens its Perch surface (pill, Settings, Claude Desktop) rather than being sent.
+        if (RunNativeCommand(cmd.Name)) { _composer.Text = ""; return; }
 
         if (run && !cmd.TakesArgs)
         {

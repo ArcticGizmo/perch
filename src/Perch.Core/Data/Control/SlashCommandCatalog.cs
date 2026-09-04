@@ -61,7 +61,8 @@ internal static class SlashCommandCatalog
         new("model",         "[name]",        "Switch the model",                              SlashCommandTier.Native),
         new("effort",        "<level>",       "Set reasoning effort for this model",           SlashCommandTier.Native),
         new("usage",         "",              "Plan usage and limits",                         SlashCommandTier.Native),
-        new("config",        "",              "Open Perch settings",                           SlashCommandTier.Native),
+        new("config",        "",              "Open Claude Desktop",                           SlashCommandTier.Native),
+        new("theme",         "",              "Change the colour theme",                       SlashCommandTier.Native),
         new("mcp",           "",              "MCP server status",                             SlashCommandTier.Native),
         new("resume",        "",              "Resume another session",                        SlashCommandTier.Native),
 
