@@ -373,7 +373,7 @@ internal static class SessionHistory
     // runs on a background thread, so guard the cache.
     // Keyed by transcript file; the timestamp is the file's last-write time when resolved, so a session that was
     // renamed (a /rename title record, or a moved cwd) after being cached is re-read once the file grows.
-    private static readonly Dictionary<string, (string Project, string Cwd, string? Title, DateTime Stamp)> _projectCache = new();
+    private static readonly Dictionary<string, (string Project, string Cwd, string? Title, DateTime Stamp, long Length)> _projectCache = new();
     private static readonly object _cacheLock = new();
 
     /// <summary>Transcripts at or above this size are flagged "large": the viewer shows their size in an
@@ -396,7 +396,7 @@ internal static class SessionHistory
                 {
                     var fi = new FileInfo(file);
                     var sessionId = System.IO.Path.GetFileNameWithoutExtension(file);
-                    var (project, cwd, title) = ResolveProject(file, System.IO.Path.GetDirectoryName(file) ?? "", fi.LastWriteTime);
+                    var (project, cwd, title) = ResolveProject(file, System.IO.Path.GetDirectoryName(file) ?? "", fi.LastWriteTime, fi.Length);
                     return new HistoryEntry(
                         sessionId, project, cwd, file, fi.LastWriteTime,
                         activeSessionIds.Contains(sessionId), fi.Length, title);
@@ -429,15 +429,27 @@ internal static class SessionHistory
         return folders;
     }
 
-    // Derives a friendly project name from the transcript's cwd, plus the /rename title (read once, cached
-    // together), falling back to the encoded directory name when no cwd can be recovered.
-    private static (string project, string cwd, string? title) ResolveProject(string file, string dir, DateTime lastWrite)
+    // Derives a friendly project name from the transcript's cwd, plus the /rename title, cached together.
+    // Because the transcript is append-only, a rename can be caught by scanning only the bytes appended since
+    // the last read — so a grown-but-cached file re-reads just its new records, never the whole thing again.
+    private static (string project, string cwd, string? title) ResolveProject(string file, string dir, DateTime lastWrite, long length)
     {
-        lock (_cacheLock)
+        (string Project, string Cwd, string? Title, DateTime Stamp, long Length) cached = default;
+        bool haveCached;
+        lock (_cacheLock) haveCached = _projectCache.TryGetValue(file, out cached);
+
+        // Unchanged since we last looked — reuse everything.
+        if (haveCached && cached.Stamp >= lastWrite)
+            return (cached.Project, cached.Cwd, cached.Title);
+
+        // Grew (append-only): project/cwd don't change, so only the newly-appended records need a look — for a
+        // /rename that landed since. A shrink means the file was replaced → fall through to a full re-read.
+        if (haveCached && length >= cached.Length)
         {
-            // Reuse the cache only while the file hasn't advanced since — a later /rename must be re-read.
-            if (_projectCache.TryGetValue(file, out var cached) && cached.Stamp >= lastWrite)
-                return (cached.Project, cached.Cwd, cached.Title);
+            string? grownTitle = TranscriptReader.ReadTitleFrom(file, cached.Length) ?? cached.Title;
+            lock (_cacheLock)
+                _projectCache[file] = (cached.Project, cached.Cwd, grownTitle, lastWrite, length);
+            return (cached.Project, cached.Cwd, grownTitle);
         }
 
         string cwd = "";
@@ -470,7 +482,7 @@ internal static class SessionHistory
         string? title = TranscriptReader.ReadTitle(file, tailOnly: true);
 
         lock (_cacheLock)
-            _projectCache[file] = (project, cwd, title, lastWrite);
+            _projectCache[file] = (project, cwd, title, lastWrite, length);
         return (project, cwd, title);
     }
 

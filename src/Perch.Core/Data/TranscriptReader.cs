@@ -236,6 +236,18 @@ internal sealed class TranscriptReader
         catch { return null; }
     }
 
+    /// <summary>Scans only the region of the transcript from byte <paramref name="startByte"/> to EOF for a
+    /// <c>/rename</c> title (the last <c>custom-title</c> record in that region), or null if none. Because the
+    /// transcript is append-only, a caller that recorded the file length at its last read can pass it here to
+    /// examine <em>only the newly-appended records</em> — so a rename is caught as it happens without ever
+    /// re-reading old bytes. <paramref name="startByte"/> must be an exact line boundary (a prior file length).
+    /// Never throws.</summary>
+    public static string? ReadTitleFrom(string path, long startByte)
+    {
+        try { return ScanWindowForTitle(TranscriptScan.ReadLinesFrom(path, Math.Max(0, startByte), dropPartialFirst: startByte <= 0)); }
+        catch { return null; }
+    }
+
     /// <summary>
     /// Returns the session's context-window fill (0–1) and the window it's measured against — size,
     /// model, and which signal decided the size (see <see cref="ModelContext.Resolve"/>). Fill is null
