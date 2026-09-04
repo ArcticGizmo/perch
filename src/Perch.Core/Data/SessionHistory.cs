@@ -371,7 +371,9 @@ internal static class SessionHistory
     // won't refresh until restart, which is fine: the live overlay and the switcher's *active* rows read the
     // title from SessionMonitor, not from here — this cache only backs the *closed* (static) rows. Listing
     // runs on a background thread, so guard the cache.
-    private static readonly Dictionary<string, (string Project, string Cwd, string? Title)> _projectCache = new();
+    // Keyed by transcript file; the timestamp is the file's last-write time when resolved, so a session that was
+    // renamed (a /rename title record, or a moved cwd) after being cached is re-read once the file grows.
+    private static readonly Dictionary<string, (string Project, string Cwd, string? Title, DateTime Stamp)> _projectCache = new();
     private static readonly object _cacheLock = new();
 
     /// <summary>Transcripts at or above this size are flagged "large": the viewer shows their size in an
@@ -394,7 +396,7 @@ internal static class SessionHistory
                 {
                     var fi = new FileInfo(file);
                     var sessionId = System.IO.Path.GetFileNameWithoutExtension(file);
-                    var (project, cwd, title) = ResolveProject(file, System.IO.Path.GetDirectoryName(file) ?? "");
+                    var (project, cwd, title) = ResolveProject(file, System.IO.Path.GetDirectoryName(file) ?? "", fi.LastWriteTime);
                     return new HistoryEntry(
                         sessionId, project, cwd, file, fi.LastWriteTime,
                         activeSessionIds.Contains(sessionId), fi.Length, title);
@@ -429,12 +431,13 @@ internal static class SessionHistory
 
     // Derives a friendly project name from the transcript's cwd, plus the /rename title (read once, cached
     // together), falling back to the encoded directory name when no cwd can be recovered.
-    private static (string project, string cwd, string? title) ResolveProject(string file, string dir)
+    private static (string project, string cwd, string? title) ResolveProject(string file, string dir, DateTime lastWrite)
     {
         lock (_cacheLock)
         {
-            if (_projectCache.TryGetValue(file, out var cached))
-                return cached;
+            // Reuse the cache only while the file hasn't advanced since — a later /rename must be re-read.
+            if (_projectCache.TryGetValue(file, out var cached) && cached.Stamp >= lastWrite)
+                return (cached.Project, cached.Cwd, cached.Title);
         }
 
         string cwd = "";
@@ -467,7 +470,7 @@ internal static class SessionHistory
         string? title = TranscriptReader.ReadTitle(file, tailOnly: true);
 
         lock (_cacheLock)
-            _projectCache[file] = (project, cwd, title);
+            _projectCache[file] = (project, cwd, title, lastWrite);
         return (project, cwd, title);
     }
 

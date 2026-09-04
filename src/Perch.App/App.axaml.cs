@@ -1573,6 +1573,19 @@ public partial class App : Application
         w.Activate();
     }
 
+    // /resume "resume here": swap window `w` to the picked session. If it's already a live Perch session, just
+    // view it here; otherwise resume it in place (the previous session keeps running, reachable from its row).
+    private void ResumeIntoWindow(SessionWindow w, string sessionId, string cwd)
+    {
+        if (_perchSessions.FirstOrDefault(s => s.SessionId == sessionId) is { IsRunning: true } existing)
+        {
+            w.Attach(existing);
+            BringToFront(w);
+            return;
+        }
+        w.ResumeReplace(sessionId, cwd);
+    }
+
     // CLI `perch [dir]`: a fresh session started directly in the folder.
     private void OpenSessionNew(string cwd, string? model, string? mode)
     {
@@ -1612,7 +1625,12 @@ public partial class App : Application
             cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent, cs.ShowContextGreenSegment);
         w.NewSessionRequested += OpenSessionWindow;
         w.OpenSettingsRequested += page => OpenSettings(page);   // e.g. /theme → Settings → Appearance
-        w.ResumeSessionRequested += OpenSessionResume;           // /resume overlay pick → open/reuse a window
+        // /resume overlay pick: replace this window's view (default), or open a separate window (Shift+Enter).
+        w.ResumeSessionRequested += (id, cwd, newWindow) =>
+        {
+            if (newWindow) OpenSessionResume(id, cwd);
+            else ResumeIntoWindow(w, id, cwd);
+        };
         w.ActiveSessionIdsProvider = ActiveSessionIds;           // mark sessions live in the resume overlay
         _sessionWindows.Add(w);
         w.Closed += (_, _) => _sessionWindows.Remove(w);

@@ -42,6 +42,13 @@ foundation already shipped (`docs/session-slash-commands-plan.md`).
   pick raises `ResumeSessionRequested(id, cwd)` → `App.OpenSessionResume` (opens/reuses a window). The
   separate-window path (`ShowResumePicker`/`OpenResumePicker`/`ResumeInProjectRequested`) was removed. Builds
   green, 1004 tests pass. **Live dogfood owed.**
+  - **Feedback round 2 (2026-09-04):** (a) **Renamed titles now show** — `SessionHistory`'s per-file project/
+    title cache was never invalidated, so a `/rename` after first caching stayed stale; it now re-reads when
+    the transcript's last-write time advances. (b) **Resume replaces the current window by default** — Enter or
+    click swaps this window's view to the resumed session (the previous one keeps running under the app,
+    reachable from its row) via `ResumeReplace`→`StartSession(replace:true)` (Attach detaches the old view) or,
+    if already a live Perch session, `App.ResumeIntoWindow` just attaches it; **Shift+Enter** opens it in a
+    separate window. The overlay footer documents the gestures.
 
 ## Step 0 — Native-command dispatch (foundation for all of Group A)
 

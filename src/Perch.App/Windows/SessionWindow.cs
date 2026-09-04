@@ -166,8 +166,10 @@ internal sealed class SessionWindow : Window
     /// for <c>/theme</c>). The app owns the Settings window, so it handles this.</summary>
     public event Action<string>? OpenSettingsRequested;
 
-    /// <summary><c>/resume</c> picked a session: resume it (the app opens/reuses a window for that id).</summary>
-    public event Action<string, string>? ResumeSessionRequested;
+    /// <summary><c>/resume</c> picked a session (sessionId, cwd, newWindow): resume it. <c>newWindow</c> false
+    /// replaces this window's view with the resumed session (the current one keeps running in the background);
+    /// true opens it in a separate window.</summary>
+    public event Action<string, string, bool>? ResumeSessionRequested;
 
     /// <summary>The ids of sessions currently live in a terminal (so the resume overlay can mark them). The app
     /// wires it to its monitor roster.</summary>
@@ -273,7 +275,7 @@ internal sealed class SessionWindow : Window
         _interruptButton = new SessionButton(_p, "Interrupt", SessionButtonKind.Quiet, "esc", compact: true) { IsVisible = false };
         _interruptButton.Click += () => _session?.Interrupt();
         _resumeButton = new SessionButton(_p, "Resume", SessionButtonKind.Primary, compact: true) { IsVisible = false };
-        _resumeButton.Click += StartSession;
+        _resumeButton.Click += () => StartSession();
         // Always present while a session runs: the one way to stop the process. Closing the window merely
         // hides this view, so the two intents can't be confused.
         _endButton = new SessionButton(_p, "End session", SessionButtonKind.Quiet, compact: true) { IsVisible = false };
@@ -988,9 +990,21 @@ internal sealed class SessionWindow : Window
 
     // ── Session lifecycle ─────────────────────────────────────────────────────────
 
-    private void StartSession()
+    /// <summary>Resumes <paramref name="sessionId"/> <em>in this window</em>, replacing whatever it currently
+    /// views (the previous session keeps running under the app; <see cref="Attach"/> detaches the view). Used
+    /// by the /resume overlay's default "resume here".</summary>
+    public void ResumeReplace(string sessionId, string cwd)
     {
-        if (_session is { IsRunning: true }) return;
+        _resumeId = sessionId;
+        _cwd = cwd;
+        StartSession(replace: true);
+    }
+
+    private void StartSession(bool replace = false)
+    {
+        // A window already driving a live session normally ignores a start; "resume here" (replace) lets it swap
+        // to a different session instead — Attach detaches the current view, which the app keeps running.
+        if (_session is { IsRunning: true } && !replace) return;
         if (!Directory.Exists(_cwd))
         {
             LaunchFail($"folder not found: {_cwd}");
@@ -1171,6 +1185,12 @@ internal sealed class SessionWindow : Window
                 Children =
                 {
                     titleRow, searchFrame, _resumeSpinnerRow,
+                    new TextBlock
+                    {
+                        Text = "↑↓ select   ·   ↵ resume here   ·   ⇧↵ new window   ·   esc close",
+                        FontFamily = _p.Mono, FontSize = 10.5, Foreground = _p.Faint,
+                        Margin = new Thickness(2, 10, 2, 0), [DockPanel.DockProperty] = Dock.Bottom,
+                    },
                     new ScrollViewer
                     {
                         HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -1238,7 +1258,7 @@ internal sealed class SessionWindow : Window
 
         _resumeList.Children.Clear();
         for (int i = 0; i < matches.Count; i++)
-            _resumeList.Children.Add(RecentRow(matches[i], ResumeIntoNewWindow, selected: i == _resumeIndex));
+            _resumeList.Children.Add(RecentRow(matches[i], e => ResumeChosen(e, newWindow: false), selected: i == _resumeIndex));
         if (matches.Count == 0 && _resumeLoaded)
             _resumeList.Children.Add(new TextBlock
             {
@@ -1255,12 +1275,12 @@ internal sealed class SessionWindow : Window
             }, DispatcherPriority.Loaded);
     }
 
-    // The overlay's resume: hand the id to the app, which opens (or reuses) a window resuming it — never into
-    // this window, which already owns a running session.
-    private System.Threading.Tasks.Task ResumeIntoNewWindow(HistoryEntry e)
+    // The overlay's resume: hand the id to the app. newWindow false replaces this window's view with the
+    // resumed session; true opens it in a separate window (Shift+Enter).
+    private System.Threading.Tasks.Task ResumeChosen(HistoryEntry e, bool newWindow)
     {
         CloseResumeOverlay();
-        if (e.SessionId is { } id) ResumeSessionRequested?.Invoke(id, e.Cwd);
+        if (e.SessionId is { } id) ResumeSessionRequested?.Invoke(id, e.Cwd, newWindow);
         return System.Threading.Tasks.Task.CompletedTask;
     }
 
@@ -1280,7 +1300,10 @@ internal sealed class SessionWindow : Window
             case Key.Enter:
                 e.Handled = true;
                 if (_resumeShown.Count > 0 && _resumeIndex >= 0 && _resumeIndex < _resumeShown.Count)
-                    await ChooseResume(_resumeShown[_resumeIndex], ResumeIntoNewWindow);
+                {
+                    bool newWindow = e.KeyModifiers.HasFlag(KeyModifiers.Shift);   // Shift+Enter → separate window
+                    await ChooseResume(_resumeShown[_resumeIndex], x => ResumeChosen(x, newWindow));
+                }
                 break;
             case Key.Escape: CloseResumeOverlay(); e.Handled = true; break;
         }
