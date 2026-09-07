@@ -222,6 +222,10 @@ internal sealed class SessionMonitor : IDisposable
         // any other change trigger. The rescan re-reads the (now-fresh) cache, so it settles at once.
         _gitStats.StatsUpdated += () => ChangeDetected?.Invoke();
         _pr.Updated += () => ChangeDetected?.Invoke();
+        // A Perch-controlled session's status lives in memory (no file), so a turn starting/finishing fires no
+        // filesystem event — nudge a (debounced) rescan directly, else the overlay would only catch up on the
+        // 30s reconcile poll.
+        Control.ControlledSessions.Changed += RequestScanDebounced;
         EnsureWatcher();
     }
 
@@ -435,6 +439,28 @@ internal sealed class SessionMonitor : IDisposable
 
             if (!IsProcessRunning(pid))
                 return null; // dead pid — drop the stale session file (replay's probe keeps recorded pids alive)
+
+            // A session Perch drives over stream-json is the one case where the CLI's own status is useless:
+            // Claude Code only heartbeats the session file's "status" in interactive TUI mode, so a controlled
+            // session sits at "idle" however hard it's working. When we own it in-process, read its real status
+            // straight from the registry the session window updates (no disk); otherwise the lock is the
+            // cross-process ownership truth (another Perch instance may drive it — we just can't see its status).
+            bool perchControlled;
+            if (Control.ControlledSessions.Activity(sessionId) is { } perchActivity)
+            {
+                perchControlled = true;
+                rawStatus = perchActivity switch
+                {
+                    Control.ControlledActivity.Busy    => "busy",
+                    Control.ControlledActivity.Waiting => "waiting",
+                    _                                  => "idle",
+                };
+                waitingFor = perchActivity == Control.ControlledActivity.Waiting ? "awaiting input" : null;
+            }
+            else
+            {
+                perchControlled = Control.SessionLock.Read(sessionId) is { IsLive: true };
+            }
 
             var prevRaw = _lastRawStatus.TryGetValue(pid, out var p) ? p : null;
             if (rawStatus == "idle" && prevRaw == "busy")
@@ -840,7 +866,11 @@ internal sealed class SessionMonitor : IDisposable
                 pullRequest,
                 jiraTicket,
                 producedMarkdown,
-                ideHost
+                ideHost,
+                // Driven by a Perch session window? The lock sidecar is the cross-process truth (a second
+                // Perch instance's sessions count too); a stale lock (dead owner) reads as not controlled.
+                // Read once above, where it also gates the live-status override.
+                perchControlled
             );
 
             if (status == SessionStatus.NeedsAttention
@@ -1180,6 +1210,7 @@ internal sealed class SessionMonitor : IDisposable
             return;
         _disposed = true;
 
+        Control.ControlledSessions.Changed -= RequestScanDebounced;
         _debounceTimer.Dispose();
         _gitStats.Dispose();
         _pr.Dispose();

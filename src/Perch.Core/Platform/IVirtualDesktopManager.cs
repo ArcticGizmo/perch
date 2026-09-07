@@ -19,4 +19,13 @@ public interface IVirtualDesktopManager
     /// Returns <c>true</c> only when a move was actually performed.
     /// </summary>
     bool MoveWindowToCurrentDesktop(nint windowHandle);
+
+    /// <summary>
+    /// True when the window identified by <paramref name="windowHandle"/> is on the virtual desktop
+    /// currently on screen — so re-focusing it would bring it forward here rather than dragging the user to
+    /// another desktop. Also true (fail-open) when the OS exposes no virtual desktops, when the handle is
+    /// zero/unknown, or on any interop failure, so callers that use this to decide "reuse vs. open fresh"
+    /// default to reuse when the answer is unknowable. Best-effort; never throws.
+    /// </summary>
+    bool IsWindowOnCurrentDesktop(nint windowHandle);
 }

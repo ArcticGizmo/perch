@@ -742,6 +742,16 @@ internal sealed class MarkdownWindow : Window
         Reload();
     }
 
+    /// <summary>Opens a specific absolute file in the editor — the entry point for the session UI's file
+    /// references (a Markdown reference clicked in the thread or the changed-files panel). Call
+    /// <see cref="Retarget"/> first so the project pane is populated; this then loads the chosen file (which
+    /// may sit outside the session's produced/referenced lists, so the tree selection is cleared).</summary>
+    public void OpenPath(string absolutePath)
+    {
+        if (!string.IsNullOrWhiteSpace(absolutePath))
+            _ = TryOpenPath(absolutePath);
+    }
+
     // Scan the session's produced/referenced .md sets and the project .md tree off the UI thread, then
     // build the file pane guarded by IsVisible + the generation token.
     private void Reload()

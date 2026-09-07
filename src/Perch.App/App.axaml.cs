@@ -50,6 +50,23 @@ public partial class App : Application
     private StatsWindow? _statsWindow;
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
+    // Perch-controlled sessions over stream-json (docs/session-ui-plan.md). The app owns every live
+    // PerchSession; a SessionWindow is just a view onto one — closing it leaves the session running, and the
+    // session's overlay row reopens a window onto it. Several sessions/windows may exist at once.
+    private readonly List<Services.PerchSession> _perchSessions = new();
+    private readonly List<SessionWindow> _sessionWindows = new();
+    // PoC: the permission valet (session-control M2), now PARKED in favour of the embedded terminal
+    // (docs/session-control-plan.md). The pipe server still runs (answers "pass" instantly), but there's
+    // no tray toggle to arm it, so _valetArmed stays false and DecideValet always passes. Kept wired so
+    // un-parking is a one-line change rather than a rebuild.
+    private Perch.Data.Control.ValetServer? _valetServer;
+    private ValetPromptWindow? _valetPrompt;
+    // The `perch` CLI's way in: a second `perch --resume …` / `perch [dir]` launch forwards its request here
+    // over a named pipe and this tray opens the session window (docs/session-ui-plan.md, Phase 3).
+    private Perch.Data.Control.ControlServer? _controlServer;
+#pragma warning disable CS0649 // parked: never armed (no tray toggle); DecideValet short-circuits to pass
+    private bool _valetArmed;
+#pragma warning restore CS0649
     private ArcadeMenuWindow? _arcadeWindow;        // shhh
     private SpaceInvadersWindow? _invadersWindow;   // shhh
     private FroggerWindow? _froggerWindow;          // shhh
@@ -154,6 +171,8 @@ public partial class App : Application
                 _hypertreeHost?.Dispose();
                 _daemonHost?.Dispose();
                 _todoHost?.Dispose();
+                _valetServer?.Dispose();
+                _controlServer?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
                 _overlay?.Canvas.ReleaseDocked();   // give the reserved screen edge back to the desktop
@@ -266,6 +285,7 @@ public partial class App : Application
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
                 RefreshOriginIcons(sessions);
+                RefreshComposerActions();   // grow/drop each session window's artifact + markdown glyphs
                 MaybeHandleAutoClose(sessions.Count);
             }, Services.Replay.ReplaySession.Current?.Projector, PlatformServices.IdeHostDetector);
 
@@ -289,9 +309,24 @@ public partial class App : Application
             _monitorHost.PrApproved += OnPrApproved;
             _monitorHost.OpenHistoryRequested += OpenHistory; // the plugin's jump-to-session
 
+            // Permission valet (PoC): accept perch-hook's PreToolUse relays for the whole tray lifetime.
+            _valetServer = new Perch.Data.Control.ValetServer { Decide = DecideValet };
+            _valetServer.Start();
+            // A tray that crashed mid-session leaves {sessionId}.perch-lock behind; drop the dead ones so no
+            // resume is ever refused over phantom ownership (docs/session-ui-plan.md, defence (b)).
+            Task.Run(() => Perch.Data.Control.SessionLock.SweepStale());
+
+            // `perch --resume <id>` / `perch -c` / `perch [dir]`: from a second launch (over the pipe) or from
+            // this launch's own command line (stashed by Program before the tray came up).
+            _controlServer = new Perch.Data.Control.ControlServer { Handle = HandleControlIntent };
+            _controlServer.Start();
+            if (Program.PendingSessionIntent is { } pendingIntent)
+                Dispatcher.UIThread.Post(() => OpenSessionIntent(pendingIntent));
+
             // Row click focuses the session's terminal; the artifact glyph always pops a picker list, and
             // the chosen artifact is opened here.
             _overlay.Canvas.SessionActivated += FocusSession;
+            _overlay.Canvas.NewSessionRequested += OpenSessionWindow;   // "+ New session" row → rich session window
             _overlay.Canvas.ArtifactChosen += OpenArtifact;
             _overlay.Canvas.DaemonListRequested += OpenDaemonList;
 
@@ -354,6 +389,7 @@ public partial class App : Application
 #endif
             _overlay.Canvas.NoteClearRequested += cwd => _monitorHost?.SetProjectNote(cwd, null);
             _overlay.Canvas.TerminateRequested += OnTerminateSession;
+            _overlay.Canvas.ElevateToPerchRequested += OnElevateToPerch;   // PoC: take over a session (M4)
             _overlay.Canvas.ScratchPadRequested += OnOpenScratchPad;
             _overlay.Canvas.ProjectNotesRequested += OnOpenProjectNotePicker;
 
@@ -577,6 +613,9 @@ public partial class App : Application
         _reactionBubbles?.Close();
         _basketball?.Close();
         _flightWindow?.Close();
+        foreach (var w in _sessionWindows.ToArray()) w.Close();
+        // An update restarts the tray: the processes must not be orphaned. Sessions stay resumable on disk.
+        foreach (var s in _perchSessions.ToArray()) s.End();
         _arcadeWindow?.Close();
         _invadersWindow?.Close();
         _froggerWindow?.Close();
@@ -599,6 +638,16 @@ public partial class App : Application
     // isn't done, and rescans so the overlay refreshes.
     private void FocusSession(ClaudeSession session)
     {
+        // A session Perch drives over stream-json lives in a SessionWindow, not a terminal — bring its window
+        // forward (Activate switches to the virtual desktop it's on), or open a fresh view if the user had
+        // closed it, instead of hunting for a terminal that doesn't exist.
+        if (_perchSessions.FirstOrDefault(s => s.SessionId == session.SessionId) is { } owned)
+        {
+            ShowSessionView(owned);
+            _monitorHost?.Acknowledge(session.Pid);
+            return;
+        }
+
         if (int.TryParse(session.Pid, out int pid))
         {
             if (session.IsDesktop)
@@ -626,6 +675,15 @@ public partial class App : Application
             }
         }
         _monitorHost?.Acknowledge(session.Pid);
+    }
+
+    // Un-minimises (if needed) and raises a Perch-owned window — used to focus the embedded terminal that
+    // hosts a Perch-controlled session.
+    private static void BringToFront(Window w)
+    {
+        if (w.WindowState == WindowState.Minimized) w.WindowState = WindowState.Normal;
+        w.Show();
+        w.Activate();
     }
 
     // Focuses a Claude Desktop session. The claude process runs under the Claude Desktop app, whose window
@@ -686,6 +744,30 @@ public partial class App : Application
                 ToastLevel.Error),
         };
         _notifier?.Show(title, body, level, null, null);
+    }
+
+    // Elevate a running terminal session into Perch (session-control — ConPTY pivot): confirm, stop the
+    // external terminal's process, then resume the same session id in Perch's own embedded ConPTY
+    // terminal. The conversation continues under the same id/transcript in a real terminal that lives
+    // inside Perch's rich session window — no orphaned external window.
+    private async void OnElevateToPerch(ClaudeSession session)
+    {
+        if (_overlay is not { } owner) return;
+
+        bool confirmed = await ConfirmDialog.ShowAsync(
+            owner,
+            "Elevate to Perch?",
+            $"Take over {session.DisplayName} (PID {session.Pid}) in a Perch session window? "
+                + "Its current terminal process is stopped and the same conversation resumes inside Perch. "
+                + "(The old terminal window may show teardown output — you can close it.)",
+            "Elevate", "Cancel");
+        if (!confirmed) return;
+
+        // Stop the external process so its --resume can be picked up, then rescan to drop the dead row —
+        // the window's refuse-if-live guard would otherwise (rightly) see it as still running.
+        SessionTerminator.Terminate(session.Pid);
+        _monitorHost?.Rescan();
+        OpenSessionResume(session.SessionId, session.Cwd);
     }
 
     // Opens the artifact the user picked from the overlay's artifact-glyph list. Middle-click asks for a
@@ -993,6 +1075,8 @@ public partial class App : Application
     private void OnNeedsAttention(ClaudeSession session)
     {
         if (IsDaemonSession(session)) return;
+        // Controlled (Perch-window) sessions still alert: you might not be watching the window, so a finished
+        // turn should flash + toast like any other. Clicking through focuses the Perch window (FocusSession).
         _overlay!.Canvas.TriggerAttention(SessionStatus.NeedsAttention);
         _notifications?.Notify(NotificationKind.Done, session);
         CheckAchievements(force: false); // a finish is a natural moment to have crossed a threshold
@@ -1424,6 +1508,37 @@ public partial class App : Application
             w => w.Retarget(session.Cwd, session.SessionId, session.DisplayName, isActive));
     }
 
+    // A session UI file reference wants a specific file opened in the Markdown viewer. Reuses the one viewer
+    // window: retarget it at the session's cwd (so the project pane populates), then open the chosen file.
+    private void OpenSessionFileInViewer(SessionWindow w, string absPath)
+    {
+        var s = w.Session;
+        bool isActive = s?.IsRunning ?? false;
+        _markdownWindow = WindowHost.ShowOrFocus(_markdownWindow,
+            () => new MarkdownWindow(_appSettings ?? AppSettings.Load()),
+            () => _markdownWindow = null,
+            mw =>
+            {
+                if (s is { } sess)
+                    mw.Retarget(sess.Cwd, sess.SessionId ?? "", System.IO.Path.GetFileName(sess.Cwd.TrimEnd('\\', '/')), isActive);
+                mw.OpenPath(absPath);
+            });
+    }
+
+    // A session UI file reference's "View diff": reuse the one git Tree window, pointed at the session's cwd
+    // and asked to land on the chosen file.
+    private void ViewSessionFileDiff(SessionWindow w, string absPath)
+    {
+        var s = w.Session;
+        string cwd = s?.Cwd ?? System.IO.Path.GetDirectoryName(absPath) ?? "";
+        string title = cwd.Length > 0 ? System.IO.Path.GetFileName(cwd.TrimEnd('\\', '/')) : "Changes";
+        bool isActive = s?.IsRunning ?? false;
+        _treeWindow = WindowHost.ShowOrFocus(_treeWindow,
+            () => new GitTreeWindow(_appSettings ?? AppSettings.Load()),
+            () => _treeWindow = null,
+            tw => tw.Retarget(cwd, title, null, isActive, focusPath: absPath));
+    }
+
     // Opens (or focuses) the to-do list window. Edits flow through the shared TodoStore; an edit there
     // saves and re-runs the poller so the overlay strip and reminders track it — see the onChanged callback.
     private void OpenTodos()
@@ -1448,6 +1563,325 @@ public partial class App : Application
 
     private void OpenFlightPath() =>
         _flightWindow = WindowHost.ShowOrFocus(_flightWindow, () => new FlightPathWindow(), () => _flightWindow = null);
+
+    // ── Perch-controlled sessions (docs/session-ui-plan.md) ────────────────────────
+
+    // Tray "New session…" / overlay "+ New session": a fresh window on its launcher. An idle launcher window
+    // that's already open is reused rather than stacking blank ones.
+    private void OpenSessionWindow()
+    {
+        // "New session" is transient, so it must come to the user — never drag the user across virtual
+        // desktops to a launcher left elsewhere. Reuse an idle launcher only if it's already on the desktop
+        // on screen (bringing it forward here); if the only idle one is off on another desktop, leave it be
+        // and open a fresh launcher right here instead. (Moving a window across desktops via the shell is
+        // unreliable for this window; not reusing sidesteps it entirely.)
+        var idle = _sessionWindows.FirstOrDefault(w =>
+            w.SessionId is null &&
+            PlatformServices.VirtualDesktops.IsWindowOnCurrentDesktop(w.TryGetPlatformHandle()?.Handle ?? 0));
+        if (idle is not null)
+        {
+            if (idle.WindowState == WindowState.Minimized) idle.WindowState = WindowState.Normal;
+            idle.Show();
+            idle.Activate();
+            idle.LoadRecents(ActiveSessionIds());
+            return;
+        }
+        var w = NewSessionWindow();
+        w.Show();
+        w.Activate();
+        w.LoadRecents(ActiveSessionIds());
+    }
+
+    // Elevate / CLI --resume: a session already driving that id gets its view shown, else a new window
+    // opens straight onto a resume of it.
+    private void OpenSessionResume(string sessionId, string cwd)
+    {
+        if (_perchSessions.FirstOrDefault(s => s.SessionId == sessionId) is { } existing)
+        {
+            ShowSessionView(existing);
+            return;
+        }
+        var w = NewSessionWindow();
+        w.Show();
+        w.ResumeSession(sessionId, cwd);
+        w.Activate();
+    }
+
+    // /resume "resume here": swap window `w` to the picked session. If it's already a live Perch session, just
+    // view it here; otherwise resume it in place (the previous session keeps running, reachable from its row).
+    private void ResumeIntoWindow(SessionWindow w, string sessionId, string cwd)
+    {
+        if (_perchSessions.FirstOrDefault(s => s.SessionId == sessionId) is { IsRunning: true } existing)
+        {
+            w.Attach(existing);
+            BringToFront(w);
+            return;
+        }
+        w.ResumeReplace(sessionId, cwd);
+    }
+
+    // CLI `perch [dir]`: a fresh session started directly in the folder.
+    private void OpenSessionNew(string cwd, string? model, string? mode)
+    {
+        var w = NewSessionWindow();
+        w.Show();
+        w.StartNew(cwd, model, mode);
+        w.Activate();
+    }
+
+    // The window viewing `session`, brought forward (Activate follows it to its virtual desktop), or a new
+    // view when the user had closed it. Prefers an idle launcher window over stacking another.
+    private void ShowSessionView(Services.PerchSession session)
+    {
+        var w = _sessionWindows.FirstOrDefault(x => ReferenceEquals(x.Session, session))
+             ?? _sessionWindows.FirstOrDefault(x => x.Session is null);
+        if (w is null)
+        {
+            w = NewSessionWindow();
+            w.Show();
+        }
+        w.Attach(session);
+        BringToFront(w);
+    }
+
+    private SessionWindow NewSessionWindow()
+    {
+        var w = new SessionWindow
+        {
+            // Refuse-if-live oracle: the monitor's latest roster (terminal-hosted sessions with a live PID).
+            LiveLookup = id => _lastSessions.FirstOrDefault(s => s.SessionId == id),
+            StartRequested = StartPerchSession,
+        };
+        // The context pill's thermometer mirrors the floating overlay's context-pressure settings so the two
+        // read alike (same glyph, variants and thresholds).
+        var cs = Effective;
+        w.SetContextPressureConfig(cs.ShowContextPressure, cs.ContextPressureYellowPercent,
+            cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent, cs.ShowContextGreenSegment);
+        w.SetAutoCompactConfig(cs.SessionAutoCompactEnabled, cs.SessionAutoCompactThresholdPercent);
+        // Mirror the overlay's enabled, actionable glyphs as quick-action buttons above the composer.
+        w.SetComposerActions(BuildComposerActions(w));
+        // The /autocompact modal changed the Perch auto-compaction setting: persist it and push it to every
+        // open session window so they all agree.
+        w.AutoCompactChanged += (enabled, threshold) =>
+        {
+            if (_appSettings is { } s)
+            {
+                s.SessionAutoCompactEnabled = enabled;
+                s.SessionAutoCompactThresholdPercent = threshold;
+                s.Save();
+            }
+            foreach (var sw in _sessionWindows) sw.SetAutoCompactConfig(enabled, threshold);
+        };
+        w.NewSessionRequested += OpenSessionWindow;
+        w.OpenSettingsRequested += page => OpenSettings(page);   // e.g. /theme → Settings → Appearance
+        // /resume overlay pick: replace this window's view (default), or open a separate window (Shift+Enter).
+        w.ResumeSessionRequested += (id, cwd, newWindow) =>
+        {
+            if (newWindow) OpenSessionResume(id, cwd);
+            else ResumeIntoWindow(w, id, cwd);
+        };
+        w.ActiveSessionIdsProvider = ActiveSessionIds;           // mark sessions live in the resume overlay
+        // File references in the session UI: open a Markdown file in the viewer, or a file's diff in the tree.
+        w.OpenFileInViewerRequested += path => OpenSessionFileInViewer(w, path);
+        w.ViewFileDiffRequested += path => ViewSessionFileDiff(w, path);
+        // A background session needing a decision (permission / question / plan) raises a desktop toast.
+        w.AttentionRequested += (title, body) => _notifier?.Show(title, body, ToastLevel.Warning, null, null);
+        _sessionWindows.Add(w);
+        w.Closed += (_, _) => _sessionWindows.Remove(w);
+        return w;
+    }
+
+    // Builds the composer toolbar's overlay-mirrored quick actions for a given window. Two kinds:
+    //   • Global, settings-gated actions — the to-dos surface and the scratch pad (drawn with the overlay's
+    //     own note glyph so they read identically). Status-only glyphs (mode, context, PR/Jira…) and the
+    //     quick-link app launchers don't belong above a chat composer, so they're not mirrored.
+    //   • Session-specific glyphs that mirror what the floating overlay shows on this session's row — the
+    //     published-Artifact glyph and the produced-Markdown glyph — added only when the attached session
+    //     actually has them (looked up in the latest scan roster). These track the session live because the
+    //     scan callback rebuilds the toolbar as the session produces artifacts / .md files.
+    // The composer-native paperclip is added by the window itself.
+    private IReadOnlyList<ComposerAction> BuildComposerActions(SessionWindow w)
+    {
+        var cs = Effective;
+        var actions = new List<ComposerAction>();
+        if (cs.ShowTodos) actions.Add(new ComposerAction("☑", "To-dos", _ => OpenTodos()));
+        if (cs.ShowNotes)
+            actions.Add(new ComposerAction("", "Scratch pad", _ => OnOpenScratchPad(),
+                GlyphFactory: brush => new Views.NoteGlyph(brush)));
+
+        // The session this window is viewing, as seen by the latest monitor scan (carries HasArtifacts /
+        // HasProducedMarkdown; the live PerchSession itself doesn't compute those).
+        var session = w.SessionId is { } id ? _lastSessions.FirstOrDefault(s => s.SessionId == id) : null;
+        if (session is { HasArtifacts: true })
+        {
+            var arts = session.Artifacts;
+            string tip = arts.Count == 1
+                ? "Artifact — click to open on claude.ai · middle-click for a new window"
+                : $"Artifacts ({arts.Count}) — click to choose · middle-click for a new window";
+            actions.Add(new ComposerAction("", tip,
+                anchor => ShowArtifactMenu(anchor, arts),
+                GlyphFactory: _ => new Views.ArtifactGlyph(),
+                // Middle-click the glyph: a lone artifact opens straight in a new browser window (like the
+                // floating UI); with several, open the picker so the specific one can be middle-clicked.
+                MiddleInvoke: anchor =>
+                {
+                    if (arts.Count == 1) OpenArtifact(arts[0], newWindow: true);
+                    else ShowArtifactMenu(anchor, arts);
+                }));
+        }
+        if (session is { HasProducedMarkdown: true })
+        {
+            var s = session;
+            actions.Add(new ComposerAction("", "Markdown files this session produced",
+                _ => OnOpenMarkdown(s),
+                GlyphFactory: _ => new Views.MarkdownGlyph()));
+        }
+        return actions;
+    }
+
+    // Pushes fresh composer actions to every open session window — called on each scan so a session that
+    // starts publishing an Artifact or writing a .md file mid-conversation grows the matching glyph, exactly
+    // as its floating-overlay row does. Cheap: a WrapPanel rebuild of a handful of buttons.
+    private void RefreshComposerActions()
+    {
+        foreach (var w in _sessionWindows)
+            w.SetComposerActions(BuildComposerActions(w));
+    }
+
+    // The Artifact glyph's click: a small menu of this session's published Artifacts (title → open on
+    // claude.ai), anchored to the toolbar button — the composer-toolbar counterpart of the overlay's
+    // artifact picker. A single artifact still lists (a click never silently navigates). Matching the
+    // floating UI, an item opens in the current browser on left-click and a fresh browser window on
+    // middle-click (see OverlayCanvas.ShowArtifactPicker / WireMiddleClick).
+    private void ShowArtifactMenu(Control anchor, IReadOnlyList<Artifact> artifacts)
+    {
+        if (artifacts.Count == 0) return;
+        var menu = new MenuFlyout { Placement = PlacementMode.Top };
+        foreach (var art in artifacts)
+        {
+            var captured = art;
+            var item = new MenuItem { Header = art.Title is { Length: > 0 } t ? t : art.Url };
+            item.Click += (_, _) => OpenArtifact(captured, newWindow: false);
+            // Middle-click → new browser window. Tunnelled so it wins before the item's own routing, and it
+            // dismisses the flyout itself since a middle-click isn't the menu's normal "invoke" gesture.
+            item.AddHandler(global::Avalonia.Input.InputElement.PointerReleasedEvent, (_, e) =>
+            {
+                if (e.InitialPressMouseButton != global::Avalonia.Input.MouseButton.Middle) return;
+                menu.Hide();
+                OpenArtifact(captured, newWindow: true);
+                e.Handled = true;
+            }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
+            menu.Items.Add(item);
+        }
+        menu.ShowAt(anchor);
+    }
+
+    // Starts and owns a Perch-driven session; the window that asked attaches to the result. The session
+    // outlives its windows: it leaves the roster only when its process ends. Rescans so the overlay picks up
+    // the new row (and the ended one's removal) promptly.
+    private Services.PerchSession StartPerchSession(Services.SessionLaunchOptions options)
+    {
+        var session = Services.PerchSession.Start(options);
+        _perchSessions.Add(session);
+        session.Ended += s =>
+        {
+            _perchSessions.Remove(s);
+            _monitorHost?.Rescan();
+        };
+        _monitorHost?.Rescan();
+        return session;
+    }
+
+    private HashSet<string> ActiveSessionIds() => new(_lastSessions.Select(s => s.SessionId));
+
+    // Pipe-server callback (worker thread): act on the CLI's request on the UI thread and report back.
+    private Task<Perch.Data.Control.ControlReply> HandleControlIntent(Perch.Data.Control.SessionOpenIntent intent)
+    {
+        var tcs = new TaskCompletionSource<Perch.Data.Control.ControlReply>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                OpenSessionIntent(intent);
+                tcs.TrySetResult(new Perch.Data.Control.ControlReply(true, "Opening in Perch."));
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetResult(new Perch.Data.Control.ControlReply(false, $"Perch couldn't open the session: {ex.Message}"));
+            }
+        });
+        return tcs.Task;
+    }
+
+    // Maps a claude-shaped request onto the session windows: a specific id resumes (in the CLI's cwd, as
+    // claude itself would), a bare --resume opens the launcher's recents, -c continues the folder's most
+    // recent transcript (falling back to a fresh session when there is none), else start fresh there.
+    private void OpenSessionIntent(Perch.Data.Control.SessionOpenIntent intent)
+    {
+        if (intent.ResumeId is { } id)
+        {
+            OpenSessionResume(id, intent.Cwd);
+            return;
+        }
+        if (intent.PickResume)
+        {
+            OpenSessionWindow();
+            return;
+        }
+        if (intent.Continue)
+        {
+            var active = ActiveSessionIds();
+            Task.Run(() => SessionHistory.ListAll(active)).ContinueWith(t =>
+            {
+                var latest = t.IsCompletedSuccessfully
+                    ? t.Result.FirstOrDefault(e => !e.IsActive && string.Equals(
+                        e.Cwd.TrimEnd('\\', '/'), intent.Cwd.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                    : null;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (latest is not null) OpenSessionResume(latest.SessionId, latest.Cwd);
+                    else OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode);
+                });
+            });
+            return;
+        }
+        OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode);
+    }
+
+    // The permission valet's verdict (session-control M2), called on the pipe server's worker thread
+    // with the session's tool call blocked until the returned task resolves — so everything but the
+    // "actually show a prompt" path answers pass immediately: valet disarmed, a session this Perch owns
+    // over stream-json (its console already answers can_use_tool), or a read-only tool the interactive
+    // session would overwhelmingly auto-allow (the PoC heuristic — the hook can't see whether Claude
+    // Code would have prompted).
+    private Task<Perch.Data.Control.ValetDecision> DecideValet(Perch.Data.Control.ValetRequest request)
+    {
+        if (!_valetArmed
+            || Perch.Data.Control.ControlledSessions.Owns(request.SessionId)
+            || Perch.Data.Control.ValetProtocol.IsReadOnlyTool(request.ToolName))
+            return Task.FromResult(Perch.Data.Control.ValetDecision.Pass);
+
+        var tcs = new TaskCompletionSource<Perch.Data.Control.ValetDecision>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                if (_valetPrompt is null || !_valetPrompt.IsVisible)
+                {
+                    _valetPrompt = new ValetPromptWindow();
+                    _valetPrompt.Closed += (_, _) => _valetPrompt = null;
+                    _valetPrompt.Show();
+                }
+                _valetPrompt.Enqueue(request, d => tcs.TrySetResult(d));
+            }
+            catch
+            {
+                tcs.TrySetResult(Perch.Data.Control.ValetDecision.Pass);   // UI failed → fail open
+            }
+        });
+        return tcs.Task;
+    }
 
     // The reward for long-pressing the brand mark: the arcade chooser. It hands off to one of the three toys
     // below and closes as it does. All are reused like every other aux window.
@@ -1878,6 +2312,13 @@ public partial class App : Application
         var todosItem = new NativeMenuItem("Todos…");
         todosItem.Click += (_, _) => OpenTodos();
 
+        var newSessionItem = new NativeMenuItem("New session…");
+        newSessionItem.Click += (_, _) => OpenSessionWindow();
+
+        // Note: the permission valet (session-control M2) is parked in favour of the embedded terminal —
+        // its server/hook stay wired but there's no tray toggle to arm it, so it stays dormant (always
+        // "pass"). See docs/session-control-plan.md.
+
         // Reads "Check for Updates…" normally; flips to "Update available" once a pending update is
         // detected (see OnUpdateAvailabilityChanged). Clicking it applies the pending update, else checks.
         _updateItem = new NativeMenuItem("Check for Updates…");
@@ -1904,6 +2345,7 @@ public partial class App : Application
                 flightItem,
                 achievementsItem,
                 todosItem,
+                newSessionItem,
                 _updateItem,
                 new NativeMenuItemSeparator(),
                 exitItem,
@@ -2100,7 +2542,7 @@ public partial class App : Application
         ApplyEffectiveSettings();
     }
 
-    private void OpenSettings()
+    private void OpenSettings(string? page = null)
     {
         if (_settings is { } w && w.IsVisible)
         {
@@ -2108,6 +2550,7 @@ public partial class App : Application
             // the user is looking at rather than switching them away to wherever it was left. (Settings
             // doesn't go through WindowHost, so it needs the same nudge WindowHost.ShowOrFocus applies.)
             PlatformServices.VirtualDesktops.MoveWindowToCurrentDesktop(w.TryGetPlatformHandle()?.Handle ?? 0);
+            if (page is not null) w.NavigateTo(page);
             w.Activate();
             return;
         }
@@ -2153,6 +2596,7 @@ public partial class App : Application
         _settings.SetUpdateAvailable(_updateService?.HasPendingUpdate ?? false, _updateService?.PendingVersion);
         _settings.Closed += (_, _) => _settings = null;
         _settings.Show();
+        if (page is not null) _settings.NavigateTo(page);
         _settings.Activate();
     }
 }

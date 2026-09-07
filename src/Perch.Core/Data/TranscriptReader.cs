@@ -220,16 +220,31 @@ internal sealed class TranscriptReader
         if (string.IsNullOrEmpty(sessionId))
             return null;
         var path = TranscriptLocator.Resolve(sessionId, cwd);
-        return path == null ? null : _title.GetOrCompute(path, ParseTitle, null);
+        return path == null ? null : _title.GetOrCompute(path, p => ParseTitle(p, tailOnly: false), null);
     }
 
     /// <summary>Reads the <c>/rename</c> title (a <c>custom-title</c> record) straight from a transcript
     /// file, tail-first then head — for callers that already have a path but no live
     /// <see cref="TranscriptReader"/> instance (e.g. the session listing). Null when never renamed or
-    /// unreadable. Never throws.</summary>
-    public static string? ReadTitle(string path)
+    /// unreadable. Never throws. Pass <paramref name="tailOnly"/> to skip the head fallback: a <c>/rename</c>
+    /// record lands at the tail, so a tail-only scan finds it for the common case at a fraction of the IO —
+    /// used by the bulk session listing, where re-reading a 32KB head of every untitled multi-MB transcript
+    /// dominates the scan.</summary>
+    public static string? ReadTitle(string path, bool tailOnly = false)
     {
-        try { return ParseTitle(path); }
+        try { return ParseTitle(path, tailOnly); }
+        catch { return null; }
+    }
+
+    /// <summary>Scans only the region of the transcript from byte <paramref name="startByte"/> to EOF for a
+    /// <c>/rename</c> title (the last <c>custom-title</c> record in that region), or null if none. Because the
+    /// transcript is append-only, a caller that recorded the file length at its last read can pass it here to
+    /// examine <em>only the newly-appended records</em> — so a rename is caught as it happens without ever
+    /// re-reading old bytes. <paramref name="startByte"/> must be an exact line boundary (a prior file length).
+    /// Never throws.</summary>
+    public static string? ReadTitleFrom(string path, long startByte)
+    {
+        try { return ScanWindowForTitle(TranscriptScan.ReadLinesFrom(path, Math.Max(0, startByte), dropPartialFirst: startByte <= 0)); }
         catch { return null; }
     }
 
@@ -613,7 +628,27 @@ internal sealed class TranscriptReader
         return raw != null && raw.StartsWith("<local-command-stdout>", StringComparison.Ordinal) ? raw : null;
     }
 
+    /// <summary>
+    /// The context occupancy of a session on disk: the size of its most recent prompt (all input buckets
+    /// summed) and the window that measures against. Used to estimate what resuming the session will cost
+    /// before it is resumed. <c>Used</c> is 0 when no usage record is present. Best-effort; never throws.
+    /// Not memoised — callers that need it repeatedly should cache the derived estimate.
+    /// </summary>
+    public static (long Used, ContextWindowInfo Window) ReadContextUsage(string path, string cwd)
+    {
+        try { return ScanContext(path, cwd); }
+        catch { return (0, UnknownWindow); }
+    }
+
     private static (float? fill, ContextWindowInfo window) ParseContextFill(string path, string cwd)
+    {
+        var (used, window) = ScanContext(path, cwd);
+        return used == 0 ? (null, window) : (Math.Clamp((float)used / window.Tokens, 0f, 1f), window);
+    }
+
+    // The shared scan behind both the fill gauge and the resume estimate: reads the whole transcript,
+    // tracking the newest /model line, the running model id, and the largest + latest prompt sizes.
+    private static (long used, ContextWindowInfo window) ScanContext(string path, string cwd)
     {
         // A /model switch can land anywhere in the transcript, and the most recent one wins — so unlike
         // the activity/title tail-scans we must read the whole file. It's cheap: a substring pre-filter
@@ -703,10 +738,7 @@ internal sealed class TranscriptReader
             ConfiguredModelId: ReadConfiguredModel(cwd),
             MaxObservedPrompt: maxUsed));
 
-        if (latestUsed == 0)
-            return (null, window);
-
-        return (Math.Clamp((float)latestUsed / window.Tokens, 0f, 1f), window);
+        return (latestUsed, window);
     }
 
     // How far apart two assistant turns can be and still count as one continuous burst of work.
@@ -1159,13 +1191,15 @@ internal sealed class TranscriptReader
         return null;
     }
 
-    private static string? ParseTitle(string path)
+    private static string? ParseTitle(string path, bool tailOnly)
     {
         // Scan the tail first — a later /rename lands here. If none and the file spans more than one
-        // window, a title set once early may be in the head, so look there before giving up.
+        // window, a title set once early may be in the head, so look there before giving up (unless the
+        // caller opted out of that second read for a cheap bulk scan).
         long len = new FileInfo(path).Length;
-        return ScanWindowForTitle(TranscriptScan.ReadLinesFrom(path, Math.Max(0, len - TailBytes)))
-            ?? (len > TailBytes ? ScanWindowForTitle(TranscriptScan.ReadLinesFrom(path, 0)) : null);
+        var tail = ScanWindowForTitle(TranscriptScan.ReadLinesFrom(path, Math.Max(0, len - TailBytes)));
+        if (tail != null || tailOnly) return tail;
+        return len > TailBytes ? ScanWindowForTitle(TranscriptScan.ReadLinesFrom(path, 0)) : null;
     }
 
     // Returns the last custom-title (the /rename name) record in the given lines, or null.

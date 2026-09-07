@@ -441,6 +441,15 @@ internal static class HeadlessRenderer
         // captured via CaptureRenderedFrame rather than a detached one-shot bitmap.
         RenderMarkdownWindow(outDir);
 
+        // History viewer's readable transcript view (session-control M1): markdown-rendered prose,
+        // dimmed thinking, and tool expanders (one collapsed, one expanded with a stitched result).
+        RenderHistoryReadable(outDir);
+
+        // The rich Perch-controlled session window (docs/session-ui-plan.md): composed turns — user bubble,
+        // Claude prose under the bird mark, collapsed thinking, tool cards, a pending permission card — in
+        // the window's own warm dark and light palettes, plus the launcher with its recents list.
+        RenderSessionWindow(outDir);
+
         // The project-wide Markdown quick-open palette (VS Code-style fuzzy search), populated with a query so
         // the ranked results and their highlighted matches show.
         RenderMarkdownProjectSearch(outDir);
@@ -1068,6 +1077,201 @@ internal static class HeadlessRenderer
 
     // Shows a real MarkdownWindow seeded with sample data (session file groups + a project folder tree on
     // the left, a rendered preview on the right) and captures its rendered frame.
+    // The history viewer's readable transcript body over synthetic events — the "rich mirror" reading
+    // surface for live sessions (session-control M1). Markdown-heavy assistant prose so the block-level
+    // MarkdownView styling (heading, fenced code, table) can be eyeballed alongside thinking + tools.
+    private static void RenderHistoryReadable(string outDir)
+    {
+        var ts = new DateTime(2026, 8, 27, 10, 15, 0);
+        var events = new List<HistoryEvent>
+        {
+            new()
+            {
+                Kind = HistoryEventKind.UserText, Timestamp = ts, Key = "e0",
+                Summary = "Why is the placement test flaky?",
+                Detail = "Why is the `PlacementMath` test flaky? Show me the fix as a diff and summarise the causes in a table.",
+            },
+            new()
+            {
+                Kind = HistoryEventKind.Thinking, Timestamp = ts, Key = "e1",
+                Summary = "The failure only reproduces at 1.5× DPI…",
+                Detail = "The failure only reproduces at 1.5× DPI — the offset rounds twice, once in Snap and once in ToDip. Reading the test first.",
+            },
+            new()
+            {
+                Kind = HistoryEventKind.ToolCall, Timestamp = ts, Key = "t1",
+                Summary = "Reading PlacementMath.cs",
+                Detail = "{\n  \"file_path\": \"src/Perch.Core/Data/PlacementMath.cs\"\n}",
+                Result = "public static PixelPoint Snap(PixelPoint p, double scale)\n{\n    …\n}",
+            },
+            new()
+            {
+                Kind = HistoryEventKind.ToolCall, Timestamp = ts, Key = "t2",
+                Summary = "Running: dotnet test --filter PlacementMathTests",
+                Detail = "{\n  \"command\": \"dotnet test --filter PlacementMathTests\"\n}",
+                Result = "Passed!  - Failed: 0, Passed: 41",
+            },
+            new()
+            {
+                Kind = HistoryEventKind.AssistantText, Timestamp = ts, Key = "e2",
+                Summary = "Found it — a double-rounding bug.",
+                Detail = "Found it — a **double-rounding** bug.\n\n### The fix\n\n```csharp\n// round once, at the edge\nvar dip = Math.Round(px / scale, MidpointRounding.AwayFromZero);\nreturn new PixelPoint((int)(dip * scale), p.Y);\n```\n\n### Causes\n\n| Cause | Effect |\n|-------|--------|\n| `Snap` rounds pixels | off-by-one at 1.5× |\n| `ToDip` rounds again | drift accumulates |\n\n> Only one of the two conversions may round; the other must stay exact.",
+            },
+        };
+
+        // Templated controls (Expander, SelectableTextBlock) only realise inside a shown window, so this
+        // is captured via CaptureRenderedFrame like the markdown viewer, not a detached one-shot bitmap.
+        var w = new Windows.HistoryWindow { Width = 780, Height = 900 };
+        w.ShowSampleForRender(events, "t2");
+        w.Show();
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        var frame = w.CaptureRenderedFrame();
+        if (frame != null)
+        {
+            using var fs = File.Create(Path.Combine(outDir, "history_readable_1x.png"));
+            frame.Save(fs);
+        }
+        w.Close();
+    }
+
+    // The rich session window over synthetic events (no process): the same scene as the design mockup —
+    // a user bubble, thinking, an edit tool card with its result, a test-run card, prose, and a pending
+    // Bash permission card with the CLI's suggested mode switch. Dark + light (the window's own palette
+    // sides), plus the launcher.
+    private static void RenderSessionWindow(string outDir)
+    {
+        const string cwd = @"C:\src\perch";
+        const string prompt = "Add the {sessionId}.perch-lock sidecar so a normal claude can't hijack a session Perch already controls.";
+        var events = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "acceptEdits", 18),
+            new Perch.Data.Control.AssistantThinkingEvent(
+                "The one place every owned session passes through is ControlledSessions.Register — writing the lock there " +
+                "(and deleting on unregister) keeps it in lock-step with in-process ownership, and the hook's SessionStart can read it cross-process."),
+            new Perch.Data.Control.AssistantTextEvent(
+                "Two small pieces. First, ownership becomes visible on disk — a sidecar beside the session JSON, " +
+                "written when Perch takes a session and removed when it lets go:"),
+            new Perch.Data.Control.ToolUseEvent("t1", "Edit", "Editing ControlledSessions.cs", "{\"file_path\":\"src/Perch.Core/Data/Control/ControlledSessions.cs\"}"),
+            new Perch.Data.Control.ToolResultEvent("t1", "+ SessionLock.Acquire(id, cwd);   // writes {id}.perch-lock", false),
+            new Perch.Data.Control.AssistantTextEvent(
+                "Then the hook checks it at `SessionStart` and warns — fail-open, so it never wedges a session:"),
+            new Perch.Data.Control.ToolUseEvent("t2", "Bash", "Running: dotnet test", "{\"command\":\"dotnet test\"}"),
+            new Perch.Data.Control.ToolResultEvent("t2", "Passed!  -  Failed: 0, Passed: 950, Skipped: 1  ·  19s", false),
+            new Perch.Data.Control.AssistantTextEvent(
+                "Lock lifecycle is wired: written on ownership, deleted on exit, and swept by `perch-hook cleanup`. " +
+                "Want me to commit it?\n\n```csharp\npublic static bool Acquire(string sessionId, string cwd)\n{\n    if (HeldByOther(sessionId) is not null) return false;\n    File.WriteAllText(PathFor(sessionId), Describe(cwd));\n    return true;\n}\n```"),
+            new Perch.Data.Control.ToolUseEvent("t3", "Bash", "Running: git commit -am \"Add {sessionId}.perch-lock ownership sidecar\"",
+                "{\"command\":\"git commit -am \\\"Add {sessionId}.perch-lock ownership sidecar\\\"\"}"),
+            new Perch.Data.Control.PermissionRequestEvent("req-1", "Bash", "git commit",
+                "{\"command\":\"git commit -am \\\"Add {sessionId}.perch-lock ownership sidecar\\\"\"}", "acceptEdits"),
+            // A completed turn's usage, so the live token/context pills have something to show: a big cached
+            // prefix (context is ~62% full) with a little fresh input and output.
+            new Perch.Data.Control.TurnResultEvent(false, "success", 0.42, InputTokens: 1200, OutputTokens: 820,
+                DurationMs: 5400, CacheReadTokens: 617_000, CacheCreationTokens: 2_000),
+        };
+
+        // Sample attachments on the user's message (a pasted image + a dropped file) and a couple of the
+        // overlay's enabled quick actions, so the composer toolbar and the attachment chips are captured.
+        var sampleAttachments = new List<Perch.Data.Control.MessageAttachment>
+        {
+            new() { Kind = Perch.Data.Control.AttachmentKind.Image, Path = @"C:\shots\error-dialog.png", MediaType = "image/png" },
+            new() { Kind = Perch.Data.Control.AttachmentKind.File, Path = @"C:\src\perch\build.log" },
+        };
+        var sampleActions = new List<Windows.ComposerAction>
+        {
+            new("☑", "To-dos", _ => { }),
+            new("", "Scratch pad", _ => { }, GlyphFactory: brush => new Views.NoteGlyph(brush)),
+            new("", "Artifacts (2) — open on claude.ai", _ => { }, GlyphFactory: _ => new Views.ArtifactGlyph()),
+            new("", "Markdown files this session produced", _ => { }, GlyphFactory: _ => new Views.MarkdownGlyph()),
+        };
+
+        Capture(Theming.SessionPalette.For(dark: true), "session_window_1x.png", events);
+        Capture(Theming.SessionPalette.For(dark: false), "session_window_light_1x.png", events);
+
+        // A short scene so the user's message — with its attachment chips (a pasted image + a dropped file) —
+        // sits in view at the top rather than scrolled off a long thread.
+        var attachScene = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "acceptEdits", 18),
+            new Perch.Data.Control.AssistantTextEvent(
+                "Got it — I can see the crash in the screenshot and the stack trace in build.log. " +
+                "It's a null deref in the placement math; I'll patch `PlacementMath.Normalize` and add a guard."),
+            new Perch.Data.Control.TurnResultEvent(false, "success", 0.08, InputTokens: 900, OutputTokens: 120, DurationMs: 1800),
+        };
+        Capture(Theming.SessionPalette.For(dark: true), "session_attachments_1x.png", attachScene, "Here's the crash and the log:", sampleAttachments);
+
+        // Claude asking the user something (AskUserQuestion) — a question card with pickable options, not a
+        // permission gate — plus an already-answered one above it as its receipt.
+        const string askInput =
+            """{"questions":[{"question":"Which would you like, an apple or a banana?","header":"Fruit","options":[{"label":"Apple","description":"Crisp, sweet-tart, and crunchy."},{"label":"Banana","description":"Soft, sweet, easy to peel."}],"multiSelect":false},{"question":"Any toppings?","header":"Extras","options":[{"label":"Nuts","description":""},{"label":"Honey","description":""},{"label":"Yoghurt","description":""}],"multiSelect":true}]}""";
+        var askEvents = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "default", 18),
+            new Perch.Data.Control.AssistantTextEvent("Happy to. Quick check first:"),
+            new Perch.Data.Control.ToolUseEvent("q1", "AskUserQuestion", "Asking: Which would you like, an apple or a banana?", askInput),
+            new Perch.Data.Control.PermissionRequestEvent("req-q1", "AskUserQuestion", "", askInput, null),
+        };
+        Capture(Theming.SessionPalette.For(dark: true), "session_question_1x.png", askEvents, "Ask me to pick between an apple and a banana");
+
+        // Plan mode (ExitPlanMode) — Claude presenting a plan to carry out, as a first-class approval card
+        // (Approve / Approve & accept-edits / Keep planning), the plan rendered as markdown.
+        const string planInput =
+            """{"plan":"## Plan\n\nAdd the `{sessionId}.perch-lock` ownership sidecar:\n\n1. **Write the lock** in `ControlledSessions.Register` (delete on unregister) so ownership is visible on disk.\n2. **Guard at `SessionStart`** in `perch-hook`: if a normal `claude` opens a locked id, warn (fail-open).\n3. **Sweep stale locks** in `perch-hook cleanup` and at tray start.\n\nI'll add unit tests for `SessionLock.Acquire`/`HeldByOther` alongside."}""";
+        var planEvents = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "plan", 18),
+            new Perch.Data.Control.AssistantTextEvent("Here's how I'd approach the ownership sidecar."),
+            new Perch.Data.Control.ToolUseEvent("p1", "ExitPlanMode", "Presenting a plan", planInput),
+            new Perch.Data.Control.PermissionRequestEvent("req-p1", "ExitPlanMode", "", planInput, "acceptEdits"),
+        };
+        Capture(Theming.SessionPalette.For(dark: true), "session_plan_1x.png", planEvents, "Plan out the perch-lock sidecar");
+
+        // The launcher: folder chosen, model picker, and a recents list including a "live elsewhere" row.
+        var now = DateTime.Now;
+        var launcher = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 640 };
+        var win = new Perch.Data.ContextWindowInfo(200_000, "claude-opus-4-8", Perch.Data.ContextWindowSource.ModelId);
+        var estimates = new Dictionary<string, Perch.Data.Control.ResumeEstimate>
+        {
+            ["s1"] = Perch.Data.Control.ResumeEstimate.Compute(58_000, win, TimeSpan.FromHours(2)),   // cold
+            ["s3"] = Perch.Data.Control.ResumeEstimate.Compute(120_000, win, TimeSpan.FromDays(1)),   // cold, heavier
+        };
+        launcher.ShowLauncherSampleForRender(cwd, new List<HistoryEntry>
+        {
+            new("s1", "perch", @"C:\src\perch", "", now.AddHours(-2), false, 84 * 1024, "git-tree refactor"),
+            new("s2", "quartex-api", @"C:\src\quartex-api", "", now.AddMinutes(-1), true, 12 * 1024),
+            new("s3", "landing-site", @"C:\src\landing-site", "", now.AddDays(-1), false, 1400 * 1024, "copy tweaks"),
+        }, estimates);
+        launcher.Show();
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        var launcherFrame = launcher.CaptureRenderedFrame();
+        if (launcherFrame != null)
+        {
+            using var fs = File.Create(Path.Combine(outDir, "session_launcher_1x.png"));
+            launcherFrame.Save(fs);
+        }
+        launcher.Close();
+
+        void Capture(Theming.SessionPalette palette, string file, List<Perch.Data.Control.SessionEvent> scene,
+            string? userPrompt = prompt, IReadOnlyList<Perch.Data.Control.MessageAttachment>? attach = null)
+        {
+            var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
+            w.FeedSampleForRender(cwd, userPrompt, scene, attach);
+            w.SetComposerActions(sampleActions);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
     private static void RenderMarkdownWindow(string outDir)
     {
         const string cwd = @"C:\src\perch";

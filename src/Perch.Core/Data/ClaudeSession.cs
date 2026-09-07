@@ -148,7 +148,8 @@ public record ClaudeSession(
     PullRequestInfo? PullRequest = null,                              // the PR for Cwd's branch, if any
     JiraTicketInfo? JiraTicket = null,                               // the Jira ticket for Cwd's branch, if any
     bool HasProducedMarkdown = false,                                // session wrote/edited at least one .md file
-    IdeHost? IdeHost = null                                          // the editor/IDE hosting the session, if any
+    IdeHost? IdeHost = null,                                         // the editor/IDE hosting the session, if any
+    bool PerchControlled = false                                     // driven by a Perch session window over stream-json
 )
 {
     /// <summary>
@@ -289,7 +290,17 @@ public record ClaudeSession(
     public bool IsBackground =>
         !string.IsNullOrEmpty(Entrypoint)
         && !string.Equals(Entrypoint, "cli", StringComparison.OrdinalIgnoreCase)
-        && !IsDesktop;
+        && !IsDesktop
+        && !IsPerchControlled;
+
+    /// <summary>
+    /// True when a Perch session window drives this session over stream-json (its <c>{sessionId}.perch-lock</c>
+    /// is held by a live process — see <c>SessionLock</c>). Such a session runs headless (its entrypoint is
+    /// not <c>"cli"</c>) but a human <em>is</em> at the keyboard, in Perch, so it is interactive rather than
+    /// <see cref="IsBackground"/>: it lists with the normal sessions, wears the Perch mark, and clicking its
+    /// row focuses the Perch window.
+    /// </summary>
+    public bool IsPerchControlled => PerchControlled;
 
     /// <summary>
     /// The editor/IDE hosting this session — VS Code, Cursor, Windsurf, a JetBrains IDE, … — when it runs

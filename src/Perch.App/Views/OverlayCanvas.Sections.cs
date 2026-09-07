@@ -1,4 +1,7 @@
+using Avalonia;
 using Avalonia.Media;
+using Perch.Avalonia.Rendering;
+using Perch.Avalonia.Theming;
 using Perch.Data;
 
 namespace Perch.Avalonia.Views;
@@ -67,13 +70,15 @@ public sealed partial class OverlayCanvas
         _ => 0,
     };
 
-    // The session rows plus the daemon-worker strip that rides directly beneath them, and the 2px trailing gap
-    // the old PanelBodyHeight added after the block — kept as one movable unit.
+    // The "+ New session" launcher row, the session rows, and the daemon-worker strip that rides directly
+    // beneath them, plus the 2px trailing gap the old PanelBodyHeight added after the block — kept as one
+    // movable unit. The launcher row is always present (even with an empty roster — it's how you start
+    // your first session), so it's an unconditional constant here and in RowsTop.
     private double SessionsSectionHeight
     {
         get
         {
-            double h = 0;
+            double h = NewSessionRowHeight;
             foreach (var r in _rows) h += HeightOf(r);
             if (DaemonStripVisible) h += DaemonStripHeight;
             return h + 2;
@@ -131,11 +136,13 @@ public sealed partial class OverlayCanvas
         }
     }
 
-    // The Sessions unit: one line per display row, then the daemon-worker strip directly beneath.
+    // The Sessions unit: the "+ New session" launcher row, then one line per display row, then the
+    // daemon-worker strip directly beneath.
     private void PaintSessions(DrawingContext ctx, double width, double top)
     {
         _autonomousHeaderRect = default; // re-armed below only when the section is actually drawn
-        double y = top;
+        DrawNewSessionRow(ctx, width, top);
+        double y = top + NewSessionRowHeight;   // must match RowsTop
         for (int i = 0; i < _rows.Count; i++)
         {
             var r = _rows[i];
@@ -146,5 +153,23 @@ public sealed partial class OverlayCanvas
         }
 
         if (DaemonStripVisible) DrawDaemonStrip(ctx, width, y);
+    }
+
+    // The "+ New session" launcher at the top of the session list: a hover wash over the band, a "+"
+    // glyph and an accent caption. Clicking it opens a Perch-controlled session (see NewSessionRequested).
+    // The whole band is the hit target (_newSessionRect), captured for the pointer handlers.
+    private void DrawNewSessionRow(DrawingContext ctx, double width, double top)
+    {
+        var band = new Rect(1, top, width - 2, NewSessionRowHeight);
+        _newSessionRect = band;
+
+        if (_hoveredNewSession)
+            ctx.FillRectangle(RowHoverBrush, band);
+
+        double midY = top + NewSessionRowHeight / 2;
+        double plusCx = HorizPad + 4;
+        var brush = _hoveredNewSession ? Palette.AccentBrush : MutedBrush;
+        DrawPlusGlyph(ctx, brush, plusCx, midY);
+        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("New session", 11, brush), plusCx + 12, midY);
     }
 }

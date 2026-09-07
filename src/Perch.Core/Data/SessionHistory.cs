@@ -371,7 +371,9 @@ internal static class SessionHistory
     // won't refresh until restart, which is fine: the live overlay and the switcher's *active* rows read the
     // title from SessionMonitor, not from here — this cache only backs the *closed* (static) rows. Listing
     // runs on a background thread, so guard the cache.
-    private static readonly Dictionary<string, (string Project, string Cwd, string? Title)> _projectCache = new();
+    // Keyed by transcript file; the timestamp is the file's last-write time when resolved, so a session that was
+    // renamed (a /rename title record, or a moved cwd) after being cached is re-read once the file grows.
+    private static readonly Dictionary<string, (string Project, string Cwd, string? Title, DateTime Stamp, long Length)> _projectCache = new();
     private static readonly object _cacheLock = new();
 
     /// <summary>Transcripts at or above this size are flagged "large": the viewer shows their size in an
@@ -382,26 +384,27 @@ internal static class SessionHistory
     /// <summary>Lists every session transcript across all projects, active first, then newest-first.</summary>
     public static List<HistoryEntry> ListAll(IReadOnlySet<string> activeSessionIds)
     {
-        var entries = new List<HistoryEntry>();
-        foreach (var file in TranscriptLocator.EnumerateTranscripts())
-        {
-            try
+        // Each transcript needs two best-effort reads (cwd from the head, title from the tail), and there can
+        // be many hundreds of them — so fan the per-file work across cores. The reads are independent and the
+        // shared caches are locked, so this is safe; the sort below re-imposes a deterministic order, so the
+        // unordered parallel enumeration is fine.
+        var entries = TranscriptLocator.EnumerateTranscripts()
+            .AsParallel()
+            .Select(file =>
             {
-                var fi = new FileInfo(file);
-                var sessionId = System.IO.Path.GetFileNameWithoutExtension(file);
-                var (project, cwd, title) = ResolveProject(file, System.IO.Path.GetDirectoryName(file) ?? "");
-                entries.Add(new HistoryEntry(
-                    sessionId,
-                    project,
-                    cwd,
-                    file,
-                    fi.LastWriteTime,
-                    activeSessionIds.Contains(sessionId),
-                    fi.Length,
-                    title));
-            }
-            catch { }
-        }
+                try
+                {
+                    var fi = new FileInfo(file);
+                    var sessionId = System.IO.Path.GetFileNameWithoutExtension(file);
+                    var (project, cwd, title) = ResolveProject(file, System.IO.Path.GetDirectoryName(file) ?? "", fi.LastWriteTime, fi.Length);
+                    return new HistoryEntry(
+                        sessionId, project, cwd, file, fi.LastWriteTime,
+                        activeSessionIds.Contains(sessionId), fi.Length, title);
+                }
+                catch { return null; }
+            })
+            .Where(e => e is not null)
+            .Select(e => e!);
 
         return entries
             .OrderByDescending(e => e.IsActive)
@@ -409,14 +412,44 @@ internal static class SessionHistory
             .ToList();
     }
 
-    // Derives a friendly project name from the transcript's cwd, plus the /rename title (read once, cached
-    // together), falling back to the encoded directory name when no cwd can be recovered.
-    private static (string project, string cwd, string? title) ResolveProject(string file, string dir)
+    /// <summary>The distinct project folders across the given session entries, in the entries' own order
+    /// (active-first, newest-first when they come from <see cref="ListAll"/>) — the suggestion list for
+    /// launching a fresh session in a project you've worked in before. Deduplicated case-insensitively and
+    /// filtered to folders that still exist on disk, so a since-deleted/renamed project never surfaces.</summary>
+    public static List<string> DistinctFolders(IEnumerable<HistoryEntry> entries)
     {
-        lock (_cacheLock)
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var folders = new List<string>();
+        foreach (var e in entries)
         {
-            if (_projectCache.TryGetValue(file, out var cached))
-                return cached;
+            var cwd = e.Cwd;
+            if (string.IsNullOrEmpty(cwd) || !seen.Add(cwd)) continue;
+            if (Directory.Exists(cwd)) folders.Add(cwd);
+        }
+        return folders;
+    }
+
+    // Derives a friendly project name from the transcript's cwd, plus the /rename title, cached together.
+    // Because the transcript is append-only, a rename can be caught by scanning only the bytes appended since
+    // the last read — so a grown-but-cached file re-reads just its new records, never the whole thing again.
+    private static (string project, string cwd, string? title) ResolveProject(string file, string dir, DateTime lastWrite, long length)
+    {
+        (string Project, string Cwd, string? Title, DateTime Stamp, long Length) cached = default;
+        bool haveCached;
+        lock (_cacheLock) haveCached = _projectCache.TryGetValue(file, out cached);
+
+        // Unchanged since we last looked — reuse everything.
+        if (haveCached && cached.Stamp >= lastWrite)
+            return (cached.Project, cached.Cwd, cached.Title);
+
+        // Grew (append-only): project/cwd don't change, so only the newly-appended records need a look — for a
+        // /rename that landed since. A shrink means the file was replaced → fall through to a full re-read.
+        if (haveCached && length >= cached.Length)
+        {
+            string? grownTitle = TranscriptReader.ReadTitleFrom(file, cached.Length) ?? cached.Title;
+            lock (_cacheLock)
+                _projectCache[file] = (cached.Project, cached.Cwd, grownTitle, lastWrite, length);
+            return (cached.Project, cached.Cwd, grownTitle);
         }
 
         string cwd = "";
@@ -444,11 +477,12 @@ internal static class SessionHistory
         if (string.IsNullOrEmpty(project))
             project = "session";
 
-        // The explicit /rename name, if any — a tail-first scan (the record lands wherever it was set).
-        string? title = TranscriptReader.ReadTitle(file);
+        // The explicit /rename name, if any — a tail-only scan (a /rename record lands at the tail): the head
+        // fallback would re-read a 32KB window of every untitled multi-MB transcript, which dominated the scan.
+        string? title = TranscriptReader.ReadTitle(file, tailOnly: true);
 
         lock (_cacheLock)
-            _projectCache[file] = (project, cwd, title);
+            _projectCache[file] = (project, cwd, title, lastWrite, length);
         return (project, cwd, title);
     }
 

@@ -17,6 +17,11 @@ namespace Perch.Avalonia.Services;
 /// </summary>
 internal static class ThemeService
 {
+    /// <summary>Raised after a theme has been applied app-wide. Windows that hold their own per-window palette
+    /// (the session UI's <see cref="SessionPalette"/>) subscribe to rebuild the parts that can't retint from an
+    /// in-place brush swap alone — chrome and text follow automatically; markdown code-syntax needs a rebuild.</summary>
+    public static event Action? Changed;
+
     /// <summary>The built-in theme for <paramref name="id"/>, or Midnight for an unknown/missing id.</summary>
     public static Theme Resolve(string? id) => Themes.ById(id) ?? Themes.Midnight;
 
@@ -31,14 +36,19 @@ internal static class ThemeService
     public static void Apply(Theme theme, IClassicDesktopStyleApplicationLifetime? desktop, CvdType cvd = CvdType.None)
     {
         Palette.Apply(theme, cvd);
+        // Re-tint the session UI's own palette in place (it aliases these brushes into every open session
+        // window's chrome, so one call re-colours them all — the CVD-simulated Palette.Active, to match).
+        SessionPalette.Apply(Palette.Active);
         // Flip the Fluent variant so templated controls (buttons, textboxes, scrollbars, ColorPicker) match
         // a light/dark theme — the owner-drawn surfaces already follow Palette. Windows that manage their own
         // per-window variant (GitTree, Markdown) still override this locally.
         if (Application.Current is { } app)
             app.RequestedThemeVariant = theme.IsDark ? ThemeVariant.Dark : ThemeVariant.Light;
-        if (desktop is null) return;
-        foreach (var window in desktop.Windows)
-            Repaint(window);
+        if (desktop is not null)
+            foreach (var window in desktop.Windows)
+                Repaint(window);
+        // Let per-window palettes rebuild what an in-place brush swap can't (markdown code-syntax polarity).
+        Changed?.Invoke();
     }
 
     // Invalidate a window and every visual under it, so owner-drawn controls repaint in the new palette.

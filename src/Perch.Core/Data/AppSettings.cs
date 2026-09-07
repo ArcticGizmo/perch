@@ -112,6 +112,14 @@ internal sealed class AppSettings
     // fill is being read at all. Defaults to false; a missing key keeps it off.
     public bool ShowContextGreenSegment { get; set; } = false;
 
+    // Perch-managed early auto-compaction for rich (Perch-controlled) sessions: when on, Perch runs
+    // `/compact` itself once a session's context fill reaches SessionAutoCompactThresholdPercent, rather
+    // than waiting for the CLI's own near-full compaction. Opt-in (off by default, so nothing auto-spends
+    // tokens unless the user asks); set from the session window's /autocompact modal. Threshold is a whole
+    // percentage of the context window, clamped to a sane band by the modal's slider.
+    public bool SessionAutoCompactEnabled { get; set; } = false;
+    public int SessionAutoCompactThresholdPercent { get; set; } = 80;
+
     // Whether to draw the permission-mode badge (Plan / Accept edits / Auto / Bypass) next to a
     // session in the overlay. Off hides the badge and lets the session name reclaim its width; the
     // mode itself is still tracked, just not shown. Defaults to true; a missing key keeps it on.

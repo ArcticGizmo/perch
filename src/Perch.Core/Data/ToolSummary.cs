@@ -41,6 +41,9 @@ internal static class ToolSummary
                 return "Searching web: " + Clip(Str("query") ?? "");
             case "TodoWrite":
                 return "Updating todos";
+            case "AskUserQuestion":
+                var first = input?["questions"] is JsonArray { Count: > 0 } qs ? qs[0]?["question"]?.GetValue<string>() : null;
+                return "Asking: " + Clip(first ?? "a question");
             default:
                 return tool;
         }

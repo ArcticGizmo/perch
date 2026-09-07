@@ -32,6 +32,29 @@ public class SessionHistoryTests
     }
 
     [Fact]
+    public void DistinctFolders_DedupsCaseInsensitively_KeepsOrder_AndDropsMissing()
+    {
+        var real = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        var realUpper = real.ToUpperInvariant();
+        var other = Directory.GetParent(real)!.FullName;
+        var missing = Path.Combine(real, "does-not-exist-" + Guid.NewGuid().ToString("N"));
+
+        HistoryEntry Entry(string cwd) =>
+            new("id", "proj", cwd, "path.jsonl", DateTime.Now, false);
+
+        var folders = SessionHistory.DistinctFolders(new[]
+        {
+            Entry(real),        // kept — exists
+            Entry(realUpper),   // dropped — same folder, different case
+            Entry(missing),     // dropped — no longer on disk
+            Entry(""),          // dropped — empty
+            Entry(other),       // kept — a second real folder, order preserved
+        });
+
+        Assert.Equal(new[] { real, other }, folders);
+    }
+
+    [Fact]
     public void ListAll_SurfacesRenameTitleAsDisplayName()
     {
         var entries = SessionHistory.ListAll(new HashSet<string>());

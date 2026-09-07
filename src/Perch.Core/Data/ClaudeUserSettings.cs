@@ -19,18 +19,21 @@ internal static class ClaudeUserSettings
     // (Claude Code silently ignores unknown fields) so reconcile can find and replace *only ours*.
     //
     // The set mirrors plugins/perch/hooks/hooks.json (minus the dropped UserPromptSubmit): each event
-    // fires perch-hook with the arg the binary switches on. We use the exec form (command + args)
+    // fires perch-hook with the args the binary switches on. We use the exec form (command + args)
     // rather than a single command string so a bin path containing spaces (e.g. the "Perch (Dev)"
-    // profile) needs no shell quoting.
-    private static readonly (string Event, string Arg)[] ManagedHooks =
+    // profile) needs no shell quoting. The valet entry (session-control M2) bakes this profile's pipe
+    // name in as a second arg, so a dev tray and an installed release tray never intercept each other's
+    // sessions (the hook process itself can't tell which profile registered it).
+    private static readonly (string Event, string[] Args)[] ManagedHooks =
     {
-        ("PreToolUse",   "mode"),
-        ("PostToolUse",  "mode"),
-        ("Stop",         "mode"),
-        ("SubagentStop", "agentstop"),
-        ("TeammateIdle", "teammateidle"),
-        ("SessionStart", "start"),
-        ("SessionEnd",   "cleanup"),
+        ("PreToolUse",   ["mode"]),
+        ("PreToolUse",   ["valet", Control.ValetProtocol.PipeName]),
+        ("PostToolUse",  ["mode"]),
+        ("Stop",         ["mode"]),
+        ("SubagentStop", ["agentstop"]),
+        ("TeammateIdle", ["teammateidle"]),
+        ("SessionStart", ["start"]),
+        ("SessionEnd",   ["cleanup"]),
     };
 
     private const string ManagedNote = "Added by Perch. Safe to delete if Perch is uninstalled.";
@@ -76,14 +79,14 @@ internal static class ClaudeUserSettings
 
             StripManaged(hooks, OwnedBy(isDev, hookBinaryPath));
 
-            foreach (var (evt, arg) in ManagedHooks)
+            foreach (var (evt, hookArgs) in ManagedHooks)
             {
                 if (hooks[evt] is not JsonArray arr)
                 {
                     arr = new JsonArray();
                     hooks[evt] = arr;
                 }
-                arr.Add(NewEntry(hookBinaryPath, arg, version, isDev));
+                arr.Add(NewEntry(hookBinaryPath, hookArgs, version, isDev));
             }
 
             if (hooks.Count == 0) root.Remove("hooks");
@@ -135,14 +138,14 @@ internal static class ClaudeUserSettings
     // Builds one { "matcher": "", "hooks": [ <command object> ] } entry for a single managed hook. The
     // _perch.dev flag records which profile wrote it, so a dev instance can strip only its own (see
     // OwnedBy); it rides alongside the durable command-path signal in case an external rewrite drops it.
-    private static JsonObject NewEntry(string bin, string arg, string version, bool isDev) => new()
+    private static JsonObject NewEntry(string bin, string[] hookArgs, string version, bool isDev) => new()
     {
         ["matcher"] = "",
         ["hooks"] = new JsonArray(new JsonObject
         {
             ["type"]    = "command",
             ["command"] = bin,
-            ["args"]    = new JsonArray(JsonValue.Create(arg)),
+            ["args"]    = new JsonArray(hookArgs.Select(a => (JsonNode?)JsonValue.Create(a)).ToArray()),
             ["_perch"]  = new JsonObject
             {
                 ["managed"] = true,
@@ -249,6 +252,29 @@ internal static class ClaudeUserSettings
         CommentHandling     = JsonCommentHandling.Skip,
     };
 
+    /// <summary>
+    /// What a new Claude Code session starts with, per <c>~/.claude/settings.json</c>: the <c>model</c>,
+    /// <c>permissions.defaultMode</c> and <c>effortLevel</c> keys. Each is null when unset (the CLI then
+    /// applies its own built-in default). Read best-effort; a missing or malformed file yields all-null.
+    /// </summary>
+    public static SessionDefaults ReadSessionDefaults()
+    {
+        try
+        {
+            var path = ClaudePaths.UserSettingsFile;
+            if (!File.Exists(path)) return SessionDefaults.None;
+            var root = JsonNode.Parse(File.ReadAllText(path), documentOptions: ReadOptions) as JsonObject;
+            return new SessionDefaults(
+                TranscriptJson.AsString(root?["model"]),
+                TranscriptJson.AsString((root?["permissions"] as JsonObject)?["defaultMode"]),
+                TranscriptJson.AsString(root?["effortLevel"]));
+        }
+        catch
+        {
+            return SessionDefaults.None;
+        }
+    }
+
     /// <summary>True when <c>env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</c> is set to "1".</summary>
     public static bool IsAgentTeamsEnabled()
     {
@@ -308,4 +334,11 @@ internal static class ClaudeUserSettings
             return false;
         }
     }
+}
+
+/// <summary>The user's configured session defaults from <c>settings.json</c> (see
+/// <see cref="ClaudeUserSettings.ReadSessionDefaults"/>); null = not set there.</summary>
+internal sealed record SessionDefaults(string? Model, string? PermissionMode, string? Effort)
+{
+    public static readonly SessionDefaults None = new(null, null, null);
 }

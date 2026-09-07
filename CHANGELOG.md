@@ -9,6 +9,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.0] - 2026-09-07
+
+**Experimental — a Perch-native window for running Claude Code sessions.** It does a lot and is rough in
+places; treat it as a preview, not a promise.
+
+- Start or resume Claude Code sessions in a Perch window (searchable projects + recents)
+- Streaming replies, thinking, and tool calls, as they land
+- Permission prompts as proper cards — allow, deny, or switch mode
+- Plan-mode approval — review the plan, then approve or keep planning
+- Answer Claude's questions by clicking, not by guessing the syntax
+- Model, effort, and permission-mode pills, switchable mid-session
+- Slash-command palette — /clear, /compact, /rename, /resume, /mcp and the rest
+- Mention files with @, recall past prompts with ↑, copy any message
+- Attach, paste, or drag in images; images from a resumed session show inline
+- A changed-files panel with git diffs, beside the conversation
+- Jump to the latest reply, or back to your previous prompt
+- A desktop nudge when a backgrounded session needs a decision
+- Open sessions straight from a terminal: `perch --resume`, `perch <dir>`
+- Perch-run sessions sit in the normal session list, marked as yours
+
+---
+
 ## [v0.3.75] - 2026-08-27
 
 - IDE and Claude Desktop sessions show the host app's icon as their status dot, tinted to the status colour

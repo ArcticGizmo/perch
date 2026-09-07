@@ -42,6 +42,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double RowHeight        = 46;
     private const double SubRowHeight     = 24;
     private const double SectionRowHeight = 26;
+    private const double NewSessionRowHeight = 26; // the "+ New session" launcher row atop the session rows
     private const double SubIndent        = 22;
     private const double BarRowHeight     = 18;
     private const double UsageStripPad    = 14; // padding around the usage bars; the strip's own height is
@@ -872,6 +873,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// <summary>Cache key for the Claude Desktop app icon (desktop sessions share one host, so one key).</summary>
     internal const string DesktopOriginKey = "claude-desktop";
 
+    /// <summary>Cache key for the Perch mark on sessions a Perch session window drives (the brand bitmap).</summary>
+    internal const string PerchOriginKey = "perch-session";
+
     // The global scratch-pad note button that leads the quick-links row: its hit-rect (captured at paint
     // time) and hover state. Clicking it opens the scratch pad (see RouteClick / ScratchPadRequested).
     private Rect _noteButtonRect;
@@ -1001,10 +1005,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         InvalidateVisual();
     }
 
-    // Top of the first session row: below the header and whichever strips are showing (the Todo section sits
-    // between Hypertree and the rows). Mirrors the painted layout so hit-testing lines up (guarded by the
-    // expanded/rows check in HitTestRow).
-    private double RowsTop => _sectionTop.GetValueOrDefault(OverlaySection.Sessions);
+    // Top of the first session row: below the header, whichever strips are showing (the Todo section sits
+    // between Hypertree and the rows), and the "+ New session" launcher row that heads the Sessions section.
+    // Mirrors the painted layout so hit-testing lines up (guarded by the expanded/rows check in HitTestRow).
+    private double RowsTop => _sectionTop.GetValueOrDefault(OverlaySection.Sessions) + NewSessionRowHeight;
 
     // The top of a given display row.
     private double RowTop(int index)
@@ -1343,6 +1347,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private int _hoveredArtifactRow = -1;
     private int _hoveredMarkdownRow = -1;
     private int _hoveredPrRow = -1;
+    private bool _hoveredNewSession;      // the "+ New session" launcher row (session-control)
+    private Rect _newSessionRect;         // captured at paint for hit-testing
     private readonly Dictionary<int, Rect> _artifactRects = new();
     private readonly Dictionary<int, Rect> _mdRects = new();
     private readonly Dictionary<int, Rect> _thermoRects = new();
@@ -1472,6 +1478,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// a Core-internal type.</summary>
     internal event Action<ClaudeSession>? SessionActivated;
 
+    /// <summary>Raised when the user clicks the "+ New session" launcher row atop the session list — the
+    /// app opens a Perch-controlled session (the embedded terminal), so a session can be started from the
+    /// overlay rather than a tray menu (session-control).</summary>
+    internal event Action? NewSessionRequested;
+
     /// <summary>Raised when the user picks an artifact from the artifact glyph's popover list; the app
     /// opens it. The list is always shown (even for a single artifact), so this is the only artifact path.</summary>
     internal event Action<Artifact, bool>? ArtifactChosen; // bool: open in a new browser window (middle-click)
@@ -1520,6 +1531,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// viewer/editor for the session's working directory (seeded with the files it produced/referenced).
     /// Internal — <see cref="ClaudeSession"/> is a Core-internal type.</summary>
     internal event Action<ClaudeSession>? MarkdownRequested;
+
+    /// <summary>Raised when the user picks "Elevate to Perch (PoC)" on a session row (session-control M4):
+    /// the app terminates the terminal-side process and resumes the same session id in the console window,
+    /// so the conversation continues under Perch's full control. PoC affordance — see
+    /// <c>docs/session-control-plan.md</c>.</summary>
+    internal event Action<ClaudeSession>? ElevateToPerchRequested;
 
     /// <summary>Raised when the user picks "Clear note" for a session; carries the working directory
     /// (<see cref="ClaudeSession.Cwd"/>) for the app to delete its <c>project.note</c> sidecar.</summary>
@@ -2565,17 +2582,21 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // space, and is a bit of fun. The real icon's silhouette is tinted once resolved; until then (or when
         // it can't be resolved) a brand vector mark / monitor glyph stands in, in the same status colour.
         // Plain terminal and background/SDK sessions keep the plain coloured dot.
-        string? hostKey = session.IsDesktop ? DesktopOriginKey
+        string? hostKey = session.IsPerchControlled ? PerchOriginKey
+                        : session.IsDesktop ? DesktopOriginKey
                         : session.IsIde     ? session.IdeHost!.Executable
                         : null;
         double dotCx = HorizPad + 4;   // the status-dot centre — host icons line up on it
-        if (_showIdeStatusIcons && (session.IsDesktop || session.IsIde))
+        // A Perch-driven session always wears the Perch mark (it's how you tell it apart from a terminal
+        // session, and where a click will land), independent of the IDE-icon preference.
+        if (session.IsPerchControlled && !_originIcons.ContainsKey(PerchOriginKey)) _originIcons[PerchOriginKey] = Brand;
+        if (session.IsPerchControlled || (_showIdeStatusIcons && (session.IsDesktop || session.IsIde)))
         {
             var hostBrush = new SolidColorBrush(dotColor);
             var tinted = hostKey is not null ? TintedIcon(hostKey, dotColor) : null;
             if (tinted is not null)
             {
-                DrawOriginBitmap(ctx, dotCx, nameMidY, tinted);
+                DrawOriginBitmap(ctx, dotCx, nameMidY, tinted, flip: !session.IsPerchControlled);
             }
             else
             {
@@ -2588,12 +2609,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                       * Matrix.CreateTranslation(dotCx, nameMidY);
                 using (ctx.PushTransform(m))
                 {
-                    if (session.IsDesktop) DrawDesktopIcon(ctx, dotCx - native / 2, nameMidY, hostBrush);
-                    else                   DrawIdeIcon(ctx, dotCx - native / 2, nameMidY, session.IdeHost!.Kind, hostBrush);
+                    if (session.IsPerchControlled)  ctx.DrawEllipse(hostBrush, null, new Point(dotCx, nameMidY), 4, 4);
+                    else if (session.IsDesktop)     DrawDesktopIcon(ctx, dotCx - native / 2, nameMidY, hostBrush);
+                    else                            DrawIdeIcon(ctx, dotCx - native / 2, nameMidY, session.IdeHost!.Kind, hostBrush);
                 }
             }
             _originRects[rowIndex]  = new Rect(dotCx - 8, nameMidY - 8, 16, 16);
-            _originLabels[rowIndex] = session.IsDesktop ? "Claude Desktop" : session.IdeHost!.DisplayName;
+            _originLabels[rowIndex] = session.IsPerchControlled ? "Perch session" : session.IsDesktop ? "Claude Desktop" : session.IdeHost!.DisplayName;
         }
         else
         {
@@ -3007,17 +3029,23 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // Draws the host-app icon (rendered from its executable) fit into a dot-scale box centred on (cx, cy) —
     // the status-dot centre — so it lines up with the plain dots on other rows. Shell-extracted icons come
-    // out vertically flipped (see the quick-links strip), so mirror about the horizontal axis to right them.
-    private static void DrawOriginBitmap(DrawingContext ctx, double cx, double cy, Bitmap icon)
+    // out vertically flipped (see the quick-links strip), so by default mirror about the horizontal axis to
+    // right them; a bitmap decoded straight from a PNG asset (the Perch mark) is already upright, so it opts out.
+    private static void DrawOriginBitmap(DrawingContext ctx, double cx, double cy, Bitmap icon, bool flip = true)
     {
         var src = icon.Size;
         double scale = Math.Min(OriginIconSize / src.Width, OriginIconSize / src.Height);
         double w = src.Width * scale, h = src.Height * scale;
         var dst = new Rect(cx - w / 2, cy - h / 2, w, h);
-        var flip = Matrix.CreateTranslation(0, -cy)
-                 * Matrix.CreateScale(1, -1)
-                 * Matrix.CreateTranslation(0, cy);
-        using (ctx.PushTransform(flip))
+        if (!flip)
+        {
+            ctx.DrawImage(icon, new Rect(src), dst);
+            return;
+        }
+        var mirror = Matrix.CreateTranslation(0, -cy)
+                   * Matrix.CreateScale(1, -1)
+                   * Matrix.CreateTranslation(0, cy);
+        using (ctx.PushTransform(mirror))
             ctx.DrawImage(icon, new Rect(src), dst);
     }
 
@@ -3153,7 +3181,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // The pinned-note glyph: a small dog-eared page (folded top-right corner) with two short "text"
     // lines, in the sticky-note amber. Marks a row that carries a note; hovering it pops the full text.
-    private static void DrawNoteIcon(DrawingContext ctx, double x, double midY, IBrush? brush = null)
+    internal static void DrawNoteIcon(DrawingContext ctx, double x, double midY, IBrush? brush = null)
     {
         var pen = new Pen(brush ?? NoteBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
         const double w = 10, h = 12, fold = 3.5;
@@ -3187,9 +3215,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // The artifact glyph: two staggered rounded-square outlines in amber (brighter when hovered).
     // Clickable — hit-testing + hover wiring land in 4.11.
-    private static void DrawArtifactIcon(DrawingContext ctx, double x, double midY, bool hovered)
+    private static void DrawArtifactIcon(DrawingContext ctx, double x, double midY, bool hovered) =>
+        DrawArtifactIcon(ctx, x, midY, hovered ? ArtifactHover : ArtifactBrush);
+
+    /// <summary>The artifact glyph tinted with an explicit brush — lets the composer toolbar draw the exact
+    /// same mark as the overlay row (see <see cref="Views.ArtifactGlyph"/>). Defaults to the ambient amber.</summary>
+    internal static void DrawArtifactIcon(DrawingContext ctx, double x, double midY, IBrush? brush)
     {
-        var pen = new Pen(hovered ? ArtifactHover : ArtifactBrush, 1.4, null, PenLineCap.Flat, PenLineJoin.Round);
+        var pen = new Pen(brush ?? ArtifactBrush, 1.4, null, PenLineCap.Flat, PenLineJoin.Round);
         const double side = 8, offset = 3, radius = 2;
         double top = midY - (side + offset) / 2;
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(x, top, side, side), radius));
@@ -3199,9 +3232,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // The Markdown glyph: the canonical Markdown mark — a rounded-rect badge holding an "M" and a
     // down-arrow — marking a session that produced a .md file. Clickable (opens the Markdown window); rests
     // dimmed so it stays ambient and brightens on hover.
-    private static void DrawMdIcon(DrawingContext ctx, double x, double midY, bool hovered)
+    private static void DrawMdIcon(DrawingContext ctx, double x, double midY, bool hovered) =>
+        DrawMdIcon(ctx, x, midY, hovered ? MarkdownBrush : MarkdownDimBrush);
+
+    /// <summary>The Markdown glyph tinted with an explicit brush — lets the composer toolbar draw the exact
+    /// same mark as the overlay row (see <see cref="Views.MarkdownGlyph"/>). Defaults to the full-strength pink.</summary>
+    internal static void DrawMdIcon(DrawingContext ctx, double x, double midY, IBrush? brush)
     {
-        var pen = new Pen(hovered ? MarkdownBrush : MarkdownDimBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = new Pen(brush ?? MarkdownBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
         const double w = 16, h = 11, radius = 2.5;
         double left = x, top = midY - h / 2;
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(left, top, w, h), radius));
@@ -3339,14 +3377,26 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // Context-pressure thermometer: glass tube + bulb with mercury rising; colour steps green→yellow→
-    // orange→red at the configured thresholds.
+    // orange→red at the configured thresholds. Painted through the shared static below so the session
+    // window's ThermoGlyph wears exactly this glyph, in exactly these colours.
     private void DrawThermoIcon(DrawingContext ctx, float fill, double x, double midY)
+        => DrawThermo(ctx, fill, _ctxYellow, _ctxOrange, _ctxRed, x, midY);
+
+    /// <summary>The thermometer's variant colour for a given <paramref name="fill"/> (0..1) and the
+    /// yellow/orange/red fraction thresholds — green below yellow, then warming through the bands. Shared
+    /// so a text readout beside the glyph can be tinted to match it.</summary>
+    internal static Color ThermoColor(float fill, float yellow, float orange, float red) =>
+        fill >= red    ? Color.FromRgb(239, 68, 68)
+      : fill >= orange ? Color.FromRgb(249, 115, 22)
+      : fill >= yellow ? Color.FromRgb(234, 179, 8)
+                       : Color.FromRgb(34, 197, 94);
+
+    /// <summary>Paints the context-pressure thermometer (glass tube + bulb + rising mercury), left edge at
+    /// <paramref name="x"/>, centred on <paramref name="midY"/>, coloured by the given fraction thresholds.
+    /// Static + threshold-parameterised so the session window (<see cref="ThermoGlyph"/>) shares the glyph.</summary>
+    internal static void DrawThermo(DrawingContext ctx, float fill, float yellow, float orange, float red, double x, double midY)
     {
-        Color col = fill >= _ctxRed    ? Color.FromRgb(239, 68, 68)
-                  : fill >= _ctxOrange ? Color.FromRgb(249, 115, 22)
-                  : fill >= _ctxYellow ? Color.FromRgb(234, 179, 8)
-                                       : Color.FromRgb(34, 197, 94);
-        var colBrush = new SolidColorBrush(col);
+        var colBrush = new SolidColorBrush(ThermoColor(fill, yellow, orange, red));
 
         double cx = x + 5;
         var tube = new Rect(cx - 2, midY - 7, 4, 9);
@@ -3377,7 +3427,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         Color c = Palette.ModeColor(mode);
         if (alpha < 255) c = Color.FromArgb((byte)alpha, c.R, c.G, c.B);
-        var brush = new SolidColorBrush(c);
+        DrawModeChevrons(ctx, new SolidColorBrush(c), x, midY);
+    }
+
+    /// <summary>The mode badge's glyph — two fast-forward chevrons (~11×8 DIPs, left edge at <paramref name="x"/>,
+    /// centred on <paramref name="midY"/>) — shared with the session window so its mode pill and menu wear
+    /// exactly the badge the overlay rows do.</summary>
+    internal static void DrawModeChevrons(DrawingContext ctx, IBrush brush, double x, double midY)
+    {
         const double hh = 4, w = 5;
         Chevron(ctx, brush, x, midY, hh, w);
         Chevron(ctx, brush, x + w + 1, midY, hh, w);
@@ -3628,6 +3685,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int row = HitTestRow(p);
         if (row != _hoveredRow) { _hoveredRow = row; InvalidateVisual(); }
 
+        // The "+ New session" launcher band (guard on ShowFullPanel — its rect is stale in dense mode).
+        bool overNewSession = ShowFullPanel && _newSessionRect.Width > 0 && _newSessionRect.Contains(p);
+        if (overNewSession != _hoveredNewSession) { _hoveredNewSession = overNewSession; InvalidateVisual(); }
+
         int ql = HitTestQuickLink(p);
         if (ql != _hoveredQuickLink) { _hoveredQuickLink = ql; InvalidateVisual(); }
 
@@ -3711,7 +3772,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // the media buttons + the mic strip's app name + the social region's controls); rows show only the highlight.
         Cursor = overResize ? ResizeCursor
             : (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
-               || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion)
+               || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -3794,9 +3855,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
-        bool changed = _hoveredRow != -1 || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredHyperHeader || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
+        bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredHyperHeader || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
         _hoveredSocial = false;
+        _hoveredNewSession = false;
         _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHyperHeader = _hoveredAutonomousHeader = false;
         _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredTodoRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
         _hoveredUpdateIcon = false;
@@ -4152,6 +4214,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+        // The "+ New session" launcher band atop the rows (not in Rearrange preview, where it's inert chrome).
+        if (!RearrangeMode && ShowFullPanel && _newSessionRect.Width > 0 && _newSessionRect.Contains(p))
+        {
+            NewSessionRequested?.Invoke();
+            return;
+        }
+
         int row = HitTestRow(p);
         if (row >= 0)
         {
@@ -4369,6 +4438,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             // The todo list is global (not tied to this session), but the row menu is a handy place to
             // reach it — the same window the tray's "Todos…" and the overlay strip open.
             actions.Add(MenuItem("Todos…", () => TodosRequested?.Invoke()));
+
+            // Elevate to Perch (PoC, session-control M4): take over this terminal session over
+            // stream-json. Only a real interactive CLI session can be elevated (not sub-agents, desktop,
+            // or one Perch already owns).
+            if (!subRow && s.Entrypoint == "cli" && !Perch.Data.Control.ControlledSessions.Owns(s.SessionId))
+                actions.Add(MenuItem("Elevate to Perch (PoC)…", () => ElevateToPerchRequested?.Invoke(s)));
 
             // 3. Terminate — the one destructive item, isolated in its own group. Sub-agent rows have no
             //    process of their own, so nothing to kill.

@@ -21,6 +21,15 @@ public interface ISessionLauncher
     bool Reopen(string cwd, string sessionId, TerminalApp terminal);
 
     /// <summary>
+    /// Opens a new terminal in <paramref name="cwd"/> running <c>claude &lt;claudeArgs&gt;</c> with the user's
+    /// preferred <paramref name="terminal"/> — the general shell-out used for interactive subcommands Perch
+    /// can't drive over stream-json (e.g. <c>auth login</c> / <c>auth logout</c>, whose browser flow needs a
+    /// real terminal). Returns true if a terminal was launched; false when none could be found (or the platform
+    /// doesn't implement this yet). Best-effort; never throws.
+    /// </summary>
+    bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal);
+
+    /// <summary>
     /// Launches (or re-activates) the Claude Desktop app — the host of a <c>claude-desktop</c> session that
     /// isn't showing a window. Activating an already-running instance simply brings its window forward, so
     /// this doubles as "un-hide the app closed to the tray". Returns true when the launch was issued, false

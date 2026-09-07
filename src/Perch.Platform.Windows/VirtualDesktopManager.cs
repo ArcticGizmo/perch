@@ -53,6 +53,33 @@ public sealed class VirtualDesktopManager : IVirtualDesktopManager
         }
     }
 
+    public bool IsWindowOnCurrentDesktop(nint windowHandle)
+    {
+        // Fail-open: unknowable → "yes, on current" so a reuse-vs-new caller defaults to reuse.
+        if (windowHandle == 0 || !OperatingSystem.IsWindows()) return true;
+
+        IVirtualDesktopManagerCom? vdm = null;
+        try
+        {
+            var type = Type.GetTypeFromCLSID(CLSID_VirtualDesktopManager);
+            if (type is null) return true;
+            vdm = Activator.CreateInstance(type) as IVirtualDesktopManagerCom;
+            if (vdm is null) return true;
+
+            // hr != 0 → the shell couldn't answer; treat as "on current" (fail-open).
+            int hr = vdm.IsWindowOnCurrentVirtualDesktop((IntPtr)windowHandle, out int onCurrent);
+            return hr != 0 || onCurrent != 0;
+        }
+        catch
+        {
+            return true;
+        }
+        finally
+        {
+            if (vdm is not null) Marshal.FinalReleaseComObject(vdm);
+        }
+    }
+
     // The id of the desktop currently on screen. First choice is the foreground window: whatever the user is
     // looking at is on the current desktop by definition. But that can be a transient menu popup, or a window
     // pinned to all desktops — both of which report GUID_NULL — so fall back to the first enumerated top-level

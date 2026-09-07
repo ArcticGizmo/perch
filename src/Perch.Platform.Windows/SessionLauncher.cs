@@ -15,15 +15,18 @@ namespace Perch.Platform.Windows;
 /// </summary>
 public sealed class SessionLauncher : ISessionLauncher
 {
-    public bool Reopen(string cwd, string sessionId, TerminalApp terminal)
+    public bool Reopen(string cwd, string sessionId, TerminalApp terminal) =>
+        RunClaudeCommand(cwd, $"--resume {sessionId}", terminal);
+
+    public bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal)
     {
-        string inner = ClaudeCli.ResumeCommand(sessionId);
+        string inner = ClaudeCli.Command(claudeArgs);
 
         // Try the preferred terminal first.
         if (TryStart(StartInfo(terminal, cwd, inner))) return true;
 
         // If an explicit choice failed (wt alias disabled, pwsh missing, …), fall back to a plain console so
-        // reopening still works. CommandPrompt is already that fallback, so don't try it twice.
+        // the command still runs. CommandPrompt is already that fallback, so don't try it twice.
         if (terminal != TerminalApp.CommandPrompt && TryStart(StartInfo(TerminalApp.CommandPrompt, cwd, inner)))
             return true;
 

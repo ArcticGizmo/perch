@@ -1,4 +1,6 @@
 ﻿using System.Diagnostics;
+using System.IO.Pipes;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -12,13 +14,19 @@ using System.Text.Json.Nodes;
 //
 // Events (mapped from Claude Code hooks):
 //   mode         PreToolUse / PostToolUse / Stop  → write {sid}.mode (permission mode)
+//   valet        PreToolUse                       → permission valet: relay the request to the tray's
+//                                                   named pipe and echo an explicit user decision back
+//                                                   (arg 2 = pipe name, baked in by the registering tray)
 //   agentstop    SubagentStop                     → drop agent-{id}.stopped beside the agent transcript
 //   teammateidle TeammateIdle                     → drop agent-{id}.idle beside the matching transcript
 //   start        SessionStart                     → launch the tray if the user opted into auto-start
 //   cleanup      SessionEnd                       → remove this session's sidecars + sweep agent markers
 //
 // Two invariants keep a stale hook from ever wedging a Claude Code session: it always exits 0, and it
-// never writes a "block" decision to stdout. Honours CLAUDE_CONFIG_DIR (data view) and PERCH_DEV
+// never volunteers a decision on stdout — the only outputs it ever writes are `valet` relaying a choice a
+// user explicitly made in the Perch UI, and `start`'s advisory systemMessage when a normal claude opens a
+// session Perch is already controlling ({sid}.perch-lock); every failure path is silent, which Claude Code
+// treats as "no opinion" (normal permission flow). Honours CLAUDE_CONFIG_DIR (data view) and PERCH_DEV
 // (which profile's settings to read) exactly like the app, so dev/hermetic testing works end to end.
 
 string action = args.Length > 0 ? args[0] : "";
@@ -53,9 +61,17 @@ try
             WriteMode(sessionsDir, f);
             break;
 
-        // SessionStart also seeds the initial mode (if present), then may launch the tray.
+        // The permission valet (session-control M2): also PreToolUse, kept separate from `mode` so the
+        // sidecar write can never be delayed by pipe IO.
+        case "valet":
+            HandleValet(payload, args.Length > 1 ? args[1] : null);
+            break;
+
+        // SessionStart also seeds the initial mode (if present), warns if the id is Perch-controlled, then
+        // may launch the tray.
         case "start":
             WriteMode(sessionsDir, f);
+            WarnIfPerchControlled(sessionsDir, f);
             HandleStart(f);
             break;
 
@@ -133,13 +149,82 @@ static void HandleStart(Dictionary<string, string?> f)
     LaunchPerch();
 }
 
+// SessionStart guard (docs/session-ui-plan.md, collision defence (c)): Perch writes {sid}.perch-lock for
+// every session it drives over stream-json. If a *normal* `claude --resume <sid>` opens that id while
+// the owning Perch is alive, two processes would append to one transcript — so tell the user, via the
+// hook's systemMessage (shown in the terminal, not fed to the model). Perch's own controlled session
+// fires this hook too; it carries PERCH_SESSION_OWNER=<tray pid> in its environment, which is how it's
+// recognised as the legitimate owner and left silent. A lock whose owner has exited is stale: deleted,
+// no warning. Fail-open everywhere — never blocks the session, and the message is advisory only.
+static void WarnIfPerchControlled(string sessionsDir, Dictionary<string, string?> f)
+{
+    try
+    {
+        string? sid = f["session_id"];
+        string? source = f["source"];
+        if (string.IsNullOrEmpty(sid)) return;
+        if (!string.IsNullOrEmpty(source) && source != "startup" && source != "resume") return;
+
+        string lockPath = Path.Combine(sessionsDir, sid + ".perch-lock");
+        if (!File.Exists(lockPath)) return;
+
+        var l = ReadFields(File.ReadAllBytes(lockPath), "pid", "profile");
+        string? pid = l["pid"];
+        if (string.Equals(pid, Environment.GetEnvironmentVariable("PERCH_SESSION_OWNER"), StringComparison.Ordinal))
+            return;   // this IS the Perch-controlled session starting
+        if (!IsProcessAlive(pid))
+        {
+            TryDelete(lockPath);   // stale lock from a tray that exited without cleaning up
+            return;
+        }
+
+        string who = string.IsNullOrEmpty(l["profile"]) ? "Perch" : l["profile"]!;
+        var output = new JsonObject
+        {
+            ["systemMessage"] =
+                $"⚠ Perch: session {sid[..Math.Min(8, sid.Length)]} is currently controlled by {who} (pid {pid}). " +
+                "Two writers on one transcript will corrupt it — continue it from the Perch window instead, " +
+                "or close it there first.",
+        };
+        Console.Out.Write(output.ToJsonString());
+    }
+    catch { /* fail open */ }
+}
+
+// True when the recorded owner pid is a live process. Unparseable → treat as dead (stale).
+static bool IsProcessAlive(string? pidText)
+{
+    if (!int.TryParse(pidText, out int pid) || pid <= 0) return false;
+    try
+    {
+        using var p = Process.GetProcessById(pid);
+        return !p.HasExited;
+    }
+    catch { return false; }
+}
+
 // SessionEnd: remove this session's sidecars, and sweep any agent stop/idle markers it left behind.
 static void HandleCleanup(string sessionsDir, Dictionary<string, string?> f)
 {
     string? sid = f["session_id"];
     if (!string.IsNullOrEmpty(sid))
+    {
         foreach (string ext in new[] { ".mode", ".notify", ".history", ".afk" /* legacy */ })
             TryDelete(Path.Combine(sessionsDir, sid + ext));
+        // The ownership lock goes only when it's ours (the controlled session itself ending) or stale — a
+        // normal claude that briefly opened a Perch-controlled id must not strip Perch's live ownership.
+        try
+        {
+            string lockPath = Path.Combine(sessionsDir, sid + ".perch-lock");
+            if (File.Exists(lockPath))
+            {
+                string? pid = ReadFields(File.ReadAllBytes(lockPath), "pid")["pid"];
+                bool ours = string.Equals(pid, Environment.GetEnvironmentVariable("PERCH_SESSION_OWNER"), StringComparison.Ordinal);
+                if (ours || !IsProcessAlive(pid)) TryDelete(lockPath);
+            }
+        }
+        catch { }
+    }
 
     string? sub = SubagentsDir(f["transcript_path"]);
     if (sub is not null && Directory.Exists(sub))
@@ -151,6 +236,82 @@ static void HandleCleanup(string sessionsDir, Dictionary<string, string?> f)
         }
         catch { }
     }
+}
+
+// The permission valet (session-control M2): forward the raw PreToolUse payload to the tray's named
+// pipe and, only when the tray relays an explicit user choice ("allow"/"deny"), echo it to Claude Code
+// as hookSpecificOutput JSON. Fail-open at every step — no tray listening (a missing pipe fails the
+// connect instantly, so a quit Perch costs ~nothing per tool call), a "pass" reply, a missed deadline,
+// or any error → exit silently, leaving the normal permission flow (allowlists, the terminal prompt)
+// untouched. The tray replies "pass" immediately unless it is actually showing prompt UI. The pipe name
+// is baked into the registration by the tray profile that wrote it (so dev and release trays never
+// intercept each other's sessions); the env-derived fallback covers a hand-authored registration.
+static void HandleValet(byte[] payload, string? pipeName)
+{
+    if (string.IsNullOrEmpty(pipeName))
+        pipeName = ProfileFolder() == "Perch (Dev)" ? "perch-valet-dev" : "perch-valet";
+
+    try
+    {
+        using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        try { pipe.Connect(200); } catch { return; }   // no tray → no opinion
+
+        // Newlines in the compact payload can only be inter-token whitespace (a literal newline inside
+        // a JSON string is invalid), so blanking them lets the payload travel as one line.
+        for (int i = 0; i < payload.Length; i++)
+            if (payload[i] is (byte)'\n' or (byte)'\r')
+                payload[i] = (byte)' ';
+
+        pipe.Write(payload, 0, payload.Length);
+        pipe.WriteByte((byte)'\n');
+        pipe.Flush();
+
+        // The tray auto-passes an unanswered prompt well before this; the deadline is the backstop that
+        // keeps a wedged tray from stalling the session for hook-timeout minutes.
+        string? reply = ReadLineWithDeadline(pipe, 20_000);
+        if (reply is null) return;
+
+        var r = ReadFields(Encoding.UTF8.GetBytes(reply), "decision", "reason");
+        string? decision = r["decision"];
+        if (decision is not ("allow" or "deny")) return;
+
+        var output = new JsonObject
+        {
+            ["hookSpecificOutput"] = new JsonObject
+            {
+                ["hookEventName"] = "PreToolUse",
+                ["permissionDecision"] = decision,
+                ["permissionDecisionReason"] = r["reason"]
+                    ?? (decision == "allow" ? "Approved by the user in Perch." : "Denied by the user in Perch."),
+            },
+        };
+        Console.Out.Write(output.ToJsonString());
+    }
+    catch { /* fail open */ }
+}
+
+// Reads one newline-terminated UTF-8 line from the pipe, or null when the deadline passes or it closes.
+static string? ReadLineWithDeadline(NamedPipeClientStream pipe, int deadlineMs)
+{
+    var ms = new MemoryStream();
+    var buf = new byte[4096];
+    long deadline = Environment.TickCount64 + deadlineMs;
+    while (Environment.TickCount64 < deadline)
+    {
+        var read = pipe.ReadAsync(buf, 0, buf.Length);
+        int remaining = (int)Math.Max(1, deadline - Environment.TickCount64);
+        if (!read.Wait(remaining)) return null;
+        int n = read.Result;
+        if (n <= 0) return null;
+        for (int i = 0; i < n; i++)
+        {
+            if (buf[i] != (byte)'\n') continue;
+            ms.Write(buf, 0, i);
+            return Encoding.UTF8.GetString(ms.ToArray());
+        }
+        ms.Write(buf, 0, n);
+    }
+    return null;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────────

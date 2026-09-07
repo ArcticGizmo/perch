@@ -11,4 +11,7 @@ namespace Perch.Platform.Mac;
 public sealed class VirtualDesktopManager : IVirtualDesktopManager
 {
     public bool MoveWindowToCurrentDesktop(nint windowHandle) => false;
+
+    // No public API to query a window's Space, so fail-open: "on current" → callers reuse as before.
+    public bool IsWindowOnCurrentDesktop(nint windowHandle) => true;
 }

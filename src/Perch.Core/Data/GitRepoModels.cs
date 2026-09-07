@@ -101,3 +101,20 @@ public readonly record struct GitDiffFile(
 
 /// <summary>A parsed unified diff — the changed files, in the order git emitted them.</summary>
 public readonly record struct GitDiff(IReadOnlyList<GitDiffFile> Files);
+
+/// <summary>
+/// One working-tree change with its <c>+</c>/<c>-</c> line counts, for the session UI's "changed files"
+/// panel. <see cref="Kind"/> is the overall change (staged slot preferred, else unstaged; an untracked file
+/// reads as <see cref="GitChangeKind.Added"/>). <see cref="Added"/>/<see cref="Removed"/> come from
+/// <c>git diff --numstat HEAD</c> for a tracked change, or the whole-file line count for an untracked one;
+/// both are 0 for a binary change (flagged by <see cref="Binary"/>) or a pure rename. <see cref="OrigPath"/>
+/// is the pre-rename path when <see cref="Kind"/> is <see cref="GitChangeKind.Renamed"/>, else null.
+/// </summary>
+public readonly record struct GitChangeStat(
+    string Path,
+    string? OrigPath,
+    GitChangeKind Kind,
+    int Added,
+    int Removed,
+    bool Binary,
+    bool Untracked);

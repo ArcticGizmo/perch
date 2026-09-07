@@ -17,17 +17,19 @@ internal static class TranscriptScan
     public static IEnumerable<string> ReadLines(string path) => ReadLinesFrom(path, 0);
 
     /// <summary>
-    /// Lines from byte offset <paramref name="start"/> onward. When <paramref name="start"/> is non-zero
-    /// the (almost certainly partial) first line is discarded, so a mid-file seek still yields whole
-    /// records.
+    /// Lines from byte offset <paramref name="start"/> onward. When <paramref name="start"/> is non-zero the
+    /// first line is, by default, discarded (a mid-file seek almost certainly lands inside a line, so this
+    /// yields whole records). Pass <paramref name="dropPartialFirst"/> = false when <paramref name="start"/> is
+    /// known to be an exact line boundary (e.g. a previously recorded file length) so the first appended record
+    /// isn't dropped.
     /// </summary>
-    public static IEnumerable<string> ReadLinesFrom(string path, long start)
+    public static IEnumerable<string> ReadLinesFrom(string path, long start, bool dropPartialFirst = true)
     {
         using var fs = OpenShared(path);
         if (start > 0)
             fs.Seek(start, SeekOrigin.Begin);
         using var reader = new StreamReader(fs);
-        if (start > 0)
+        if (start > 0 && dropPartialFirst)
             reader.ReadLine();   // drop the partial line the seek landed in the middle of
 
         string? line;
