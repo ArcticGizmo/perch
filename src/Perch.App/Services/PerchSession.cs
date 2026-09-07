@@ -148,14 +148,47 @@ internal sealed class PerchSession : IDisposable
         Ended?.Invoke(this);
     }
 
-    public void SendPrompt(string text)
+    public void SendPrompt(string text) => SendPrompt(text, null);
+
+    /// <summary>Sends a prompt with attachments. Image attachments ride along as base64 content blocks;
+    /// dropped-file attachments are display-only here (their paths are already in <paramref name="text"/>).</summary>
+    public void SendPrompt(string text, IReadOnlyList<MessageAttachment>? attachments)
     {
         if (_controller is not { IsRunning: true } c) return;
-        c.SendPrompt(text);
-        Conversation.AddUserPrompt(text);
+        c.SendPrompt(text, BuildImageContents(attachments));
+        Conversation.AddUserPrompt(text, attachments);
         // Optimistically reflect a /rename in the title (the CLI writes the custom-title record to the transcript).
         if (RenameArg(text) is { } title) SetTitle(title);
     }
+
+    // Reads each image attachment off disk and base64-encodes it for the outgoing content block. Best-effort:
+    // an unreadable image is dropped rather than aborting the send. Null when there are no images.
+    private static IReadOnlyList<ImageContent>? BuildImageContents(IReadOnlyList<MessageAttachment>? attachments)
+    {
+        if (attachments is null) return null;
+        List<ImageContent>? images = null;
+        foreach (var a in attachments)
+        {
+            if (a.Kind != AttachmentKind.Image) continue;
+            try
+            {
+                var bytes = File.ReadAllBytes(a.Path);
+                var media = a.MediaType ?? MediaTypeForPath(a.Path);
+                (images ??= []).Add(new ImageContent(media, Convert.ToBase64String(bytes)));
+            }
+            catch { /* skip an image we can't read */ }
+        }
+        return images;
+    }
+
+    /// <summary>The image media type for a file path, by extension (defaults to png).</summary>
+    internal static string MediaTypeForPath(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".gif"            => "image/gif",
+        ".webp"           => "image/webp",
+        _                 => "image/png",
+    };
 
     /// <summary>Allows/denies a permission card; on allow optionally switches to the CLI's suggested mode.</summary>
     public void AnswerPermission(PermissionItem item, bool allow, bool switchMode)

@@ -12,7 +12,9 @@ using Markdig.Extensions.TaskLists;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
+using Perch.Avalonia.Views;
 using Perch.Data;
+using Perch.Data.Control;
 
 namespace Perch.Avalonia.Rendering;
 
@@ -193,9 +195,10 @@ internal sealed class MarkdownView
             FontSize = size, FontWeight = FontWeight.SemiBold, Foreground = _s.Title,
             TextWrapping = TextWrapping.Wrap,
         };
-        var inlines = new InlineCollection();
-        if (h.Inline != null) AppendInlines(inlines, h.Inline, new Run2(size, _s.Title, Bold: true));
-        text.Inlines = inlines;
+        var sink = new InlineSink();
+        if (h.Inline != null) AppendInlines(sink, h.Inline, new Run2(size, _s.Title, Bold: true));
+        text.Inlines = sink.Inlines;
+        LinkText.Attach(text, sink.Links);
 
         // h1/h2 carry a bottom rule, like the GitHub/VS Code preview. Extra space above to set them apart.
         if (h.Level <= 2)
@@ -214,9 +217,10 @@ internal sealed class MarkdownView
         var tb = Paragraph("", fg);
         if (p.Inline != null)
         {
-            var inlines = new InlineCollection();
-            AppendInlines(inlines, p.Inline, new Run2(BodySize, fg));
-            tb.Inlines = inlines;
+            var sink = new InlineSink();
+            AppendInlines(sink, p.Inline, new Run2(BodySize, fg));
+            tb.Inlines = sink.Inlines;
+            LinkText.Attach(tb, sink.Links);
         }
         return tb;
     }
@@ -447,11 +451,12 @@ internal sealed class MarkdownView
                     FontSize = BodySize, Foreground = _s.Fg, TextWrapping = TextWrapping.Wrap,
                     FontWeight = header ? FontWeight.SemiBold : FontWeight.Normal,
                 };
-                var inlines = new InlineCollection();
+                var sink = new InlineSink();
                 foreach (var b in cell)
                     if (b is LeafBlock { Inline: { } inl })
-                        AppendInlines(inlines, inl, new Run2(BodySize, _s.Fg, Bold: header));
-                tb.Inlines = inlines;
+                        AppendInlines(sink, inl, new Run2(BodySize, _s.Fg, Bold: header));
+                tb.Inlines = sink.Inlines;
+                LinkText.Attach(tb, sink.Links);
 
                 var cellBorder = new Border
                 {
@@ -480,20 +485,34 @@ internal sealed class MarkdownView
     private readonly record struct Run2(double Size, IBrush Brush, bool Bold = false, bool Italic = false,
         bool Strike = false, bool Link = false);
 
-    private void AppendInlines(InlineCollection sink, ContainerInline container, Run2 style)
+    // Accumulates the inlines of one prose block plus the char-ranges of any http(s) links in it (so
+    // LinkText can make them clickable). Pos mirrors, char for char, what the block's TextLayout will
+    // count — every Run by its text length, an InlineUIContainer (checkbox) as one position — so a hit-test
+    // index maps back to the right link span.
+    private sealed class InlineSink
+    {
+        public readonly InlineCollection Inlines = new();
+        public readonly List<UrlSpan> Links = new();
+        public int Pos;
+        public void Add(global::Avalonia.Controls.Documents.Inline run, int charLen) { Inlines.Add(run); Pos += charLen; }
+        public void MarkLink(int start, string? url) { if (!string.IsNullOrEmpty(url)) Links.Add(new UrlSpan(start, Pos - start, url)); }
+    }
+
+    private void AppendInlines(InlineSink sink, ContainerInline container, Run2 style)
     {
         foreach (var inline in container)
         {
             switch (inline)
             {
                 case LiteralInline lit:
-                    sink.Add(Styled(lit.Content.ToString(), style));
+                    var litText = lit.Content.ToString();
+                    sink.Add(Styled(litText, style), litText.Length);
                     break;
                 case CodeInline code:
                     sink.Add(new Run(code.Content)
                     {
                         FontFamily = Mono, Foreground = _s.CodeFg, Background = _s.CodeBg, FontSize = style.Size,
-                    });
+                    }, code.Content.Length);
                     break;
                 case EmphasisInline em:
                     var s = em.DelimiterChar == '~' ? style with { Strike = true }
@@ -502,22 +521,29 @@ internal sealed class MarkdownView
                     AppendInlines(sink, em, s);
                     break;
                 case LinkInline link:
+                    int linkStart = sink.Pos;
                     if (link.IsImage)
-                        sink.Add(Styled($"🖼 {link.Url}", style with { Brush = _s.Link, Link = true }));
+                    {
+                        var imgText = $"🖼 {link.Url}";
+                        sink.Add(Styled(imgText, style with { Brush = _s.Link, Link = true }), imgText.Length);
+                    }
                     else
                         AppendInlines(sink, link, style with { Brush = _s.Link, Link = true, Strike = false });
+                    sink.MarkLink(linkStart, link.Url);
                     break;
                 case AutolinkInline auto:
-                    sink.Add(Styled(auto.Url, style with { Brush = _s.Link, Link = true }));
+                    int autoStart = sink.Pos;
+                    sink.Add(Styled(auto.Url, style with { Brush = _s.Link, Link = true }), auto.Url.Length);
+                    sink.MarkLink(autoStart, auto.Url);
                     break;
                 case TaskList task:
                     sink.Add(new InlineUIContainer(Checkbox(task.Checked, style.Size))
                     {
                         BaselineAlignment = BaselineAlignment.Center,
-                    });
+                    }, 1);
                     break;
                 case LineBreakInline br:
-                    sink.Add(new Run(br.IsHard ? "\n" : " ") { Foreground = style.Brush });
+                    sink.Add(new Run(br.IsHard ? "\n" : " ") { Foreground = style.Brush }, 1);
                     break;
                 case ContainerInline cc:
                     AppendInlines(sink, cc, style);

@@ -1171,8 +1171,35 @@ internal static class HeadlessRenderer
                 DurationMs: 5400, CacheReadTokens: 617_000, CacheCreationTokens: 2_000),
         };
 
+        // Sample attachments on the user's message (a pasted image + a dropped file) and a couple of the
+        // overlay's enabled quick actions, so the composer toolbar and the attachment chips are captured.
+        var sampleAttachments = new List<Perch.Data.Control.MessageAttachment>
+        {
+            new() { Kind = Perch.Data.Control.AttachmentKind.Image, Path = @"C:\shots\error-dialog.png", MediaType = "image/png" },
+            new() { Kind = Perch.Data.Control.AttachmentKind.File, Path = @"C:\src\perch\build.log" },
+        };
+        var sampleActions = new List<Windows.ComposerAction>
+        {
+            new("☑", "To-dos", _ => { }),
+            new("", "Scratch pad", _ => { }, GlyphFactory: brush => new Views.NoteGlyph(brush)),
+            new("", "Artifacts (2) — open on claude.ai", _ => { }, GlyphFactory: _ => new Views.ArtifactGlyph()),
+            new("", "Markdown files this session produced", _ => { }, GlyphFactory: _ => new Views.MarkdownGlyph()),
+        };
+
         Capture(Theming.SessionPalette.For(dark: true), "session_window_1x.png", events);
         Capture(Theming.SessionPalette.For(dark: false), "session_window_light_1x.png", events);
+
+        // A short scene so the user's message — with its attachment chips (a pasted image + a dropped file) —
+        // sits in view at the top rather than scrolled off a long thread.
+        var attachScene = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "acceptEdits", 18),
+            new Perch.Data.Control.AssistantTextEvent(
+                "Got it — I can see the crash in the screenshot and the stack trace in build.log. " +
+                "It's a null deref in the placement math; I'll patch `PlacementMath.Normalize` and add a guard."),
+            new Perch.Data.Control.TurnResultEvent(false, "success", 0.08, InputTokens: 900, OutputTokens: 120, DurationMs: 1800),
+        };
+        Capture(Theming.SessionPalette.For(dark: true), "session_attachments_1x.png", attachScene, "Here's the crash and the log:", sampleAttachments);
 
         // Claude asking the user something (AskUserQuestion) — a question card with pickable options, not a
         // permission gate — plus an already-answered one above it as its receipt.
@@ -1213,10 +1240,12 @@ internal static class HeadlessRenderer
         }
         launcher.Close();
 
-        void Capture(Theming.SessionPalette palette, string file, List<Perch.Data.Control.SessionEvent> scene, string? userPrompt = prompt)
+        void Capture(Theming.SessionPalette palette, string file, List<Perch.Data.Control.SessionEvent> scene,
+            string? userPrompt = prompt, IReadOnlyList<Perch.Data.Control.MessageAttachment>? attach = null)
         {
             var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
-            w.FeedSampleForRender(cwd, userPrompt, scene);
+            w.FeedSampleForRender(cwd, userPrompt, scene, attach);
+            w.SetComposerActions(sampleActions);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

@@ -19,6 +19,32 @@ public class SessionConversationTests
     }
 
     [Fact]
+    public void AddUserPrompt_CarriesAttachments()
+    {
+        var (conv, _) = Make();
+        var attachments = new List<MessageAttachment>
+        {
+            new() { Kind = AttachmentKind.Image, Path = @"C:\tmp\shot.png", MediaType = "image/png" },
+            new() { Kind = AttachmentKind.File, Path = @"C:\tmp\notes.txt" },
+        };
+        conv.AddUserPrompt("look at these", attachments);
+
+        var item = Assert.IsType<UserMessageItem>(Assert.Single(conv.Items));
+        Assert.Equal("look at these", item.Text);
+        Assert.Equal(2, item.Attachments.Count);
+        Assert.Equal("shot.png", item.Attachments[0].DisplayName);
+        Assert.Equal(AttachmentKind.File, item.Attachments[1].Kind);
+    }
+
+    [Fact]
+    public void AddUserPrompt_NoAttachments_IsEmptyNotNull()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("plain");
+        Assert.Empty(Assert.IsType<UserMessageItem>(Assert.Single(conv.Items)).Attachments);
+    }
+
+    [Fact]
     public void Init_SeedsIdentity()
     {
         var (conv, _) = Make();

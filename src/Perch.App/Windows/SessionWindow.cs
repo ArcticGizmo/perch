@@ -8,6 +8,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
@@ -18,6 +19,13 @@ using Perch.Data;
 using Perch.Data.Control;
 
 namespace Perch.Avalonia.Windows;
+
+/// <summary>One quick-action icon in the composer toolbar, mirroring a glyph the user has enabled in the
+/// floating overlay. The app builds these (it owns <c>AppSettings</c> and the actions). Icon precedence:
+/// <see cref="GlyphFactory"/> (an owner-drawn control matching the overlay's exact glyph, tinted with the
+/// toolbar's foreground brush) → <see cref="Icon"/> (a bitmap) → <see cref="Glyph"/> (drawn as text).</summary>
+internal sealed record ComposerAction(string Glyph, string Tooltip, Action<Control> Invoke, Bitmap? Icon = null,
+    Func<IBrush, Control>? GlyphFactory = null, Action<Control>? MiddleInvoke = null);
 
 /// <summary>
 /// The rich Perch-native session client (docs/session-ui-plan.md, Phase 1): Perch owns a Claude Code
@@ -133,6 +141,16 @@ internal sealed class SessionWindow : Window
     private readonly TextBox _composer;
     private readonly SessionButton _sendButton;
 
+    // Attachments staged on the next message (dropped/pasted images shown as chips; dropped non-image files
+    // go straight into the text as a path). The tray sits above the text area and hides when empty.
+    private readonly WrapPanel _attachTray;
+    private readonly List<MessageAttachment> _pendingAttachments = new();
+
+    // Composer quick-action toolbar (the overlay's enabled, actionable glyphs mirrored above the input).
+    private readonly WrapPanel _composerToolbar;
+    private IReadOnlyList<ComposerAction> _overlayActions = [];
+    private string? _overlayActionsSig;   // guards the toolbar against needless rebuilds on every scan
+
     // Rich input highlighting: the composer's own text is painted transparent and a TextBlock behind it draws
     // the same text with coloured runs (slash commands, links) from ComposerHighlighter. The two share font
     // metrics + width so glyphs and caret line up; the layer is translated to follow the box's scroll.
@@ -146,6 +164,12 @@ internal sealed class SessionWindow : Window
     private readonly StackPanel _paletteRows;
     private IReadOnlyList<SlashCommandInfo> _paletteItems = [];
     private int _paletteIndex;
+
+    // Skills (user/project/plugin slash commands) offered in the palette below the built-ins. Discovered off
+    // the UI thread from disk + the session's advertised command list; rebuilt when the cwd or that list
+    // changes. See SkillCatalog + MaybeRebuildSkills.
+    private IReadOnlyList<SlashCommandInfo> _skillCommands = [];
+    private (string Cwd, int Advertised) _skillsBuiltFor = ("", -1);
 
     // In-window /autocompact modal: a scrim + card with an on/off toggle and a threshold slider.
     private Panel _autoCompactOverlay = null!;
@@ -349,7 +373,11 @@ internal sealed class SessionWindow : Window
         };
         var cbar = new DockPanel { Margin = new Thickness(0, 10, 0, 0), Children = { _sendButton, chips } };
         _sendButton[DockPanel.DockProperty] = Dock.Right;
-        var composerStack = new StackPanel { Children = { textArea, cbar } };
+        // The quick-action toolbar (enabled overlay glyphs, filled by SetComposerActions) and the staged
+        // attachments tray sit above the text area; both hide until they have content.
+        _composerToolbar = new WrapPanel { IsVisible = false, Margin = new Thickness(0, 0, 0, 9) };
+        _attachTray = new WrapPanel { IsVisible = false, Margin = new Thickness(0, 0, 0, 2) };
+        var composerStack = new StackPanel { Children = { _composerToolbar, _attachTray, textArea, cbar } };
         _composerFrame = new Border
         {
             MaxWidth = SessionPalette.ThreadMaxWidth, Background = _p.Raised, BorderBrush = _p.Border,
@@ -359,6 +387,14 @@ internal sealed class SessionWindow : Window
         _composer.GotFocus += (_, _) => _composerFrame.BorderBrush = _p.BrandLine;
         _composer.LostFocus += (_, _) => _composerFrame.BorderBrush = _p.Border;
         _composer.TextChanged += (_, _) => { UpdateHighlight(); UpdatePaletteFromText(); };
+
+        // Drag-and-drop files/images onto the composer, and paste images from the clipboard. Both the frame
+        // and the inner text box are drop targets, and the handlers run even if the TextBox marks the event
+        // handled (handledEventsToo) — a file drop over the text area must still reach us.
+        DragDrop.SetAllowDrop(_composerFrame, true);
+        DragDrop.SetAllowDrop(_composer, true);
+        _composerFrame.AddHandler(DragDrop.DragOverEvent, OnComposerDragOver, handledEventsToo: true);
+        _composerFrame.AddHandler(DragDrop.DropEvent, OnComposerDrop, handledEventsToo: true);
 
         // The command palette floats above the composer frame; it lives inside the composer stack so it shares
         // the tree (Popups take no layout space).
@@ -492,6 +528,7 @@ internal sealed class SessionWindow : Window
         Content = new DockPanel { Children = { barFrame, _composerDock, _center } };
 
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
+        RenderComposerToolbar();   // the attach buttons show from the start; the app adds overlay actions later
         RefreshBar();
     }
 
@@ -1112,17 +1149,206 @@ internal sealed class SessionWindow : Window
 
     private void SendPrompt()
     {
-        var text = _composer.Text?.Trim();
-        if (string.IsNullOrEmpty(text) || _session is not { IsRunning: true } live) return;
+        var text = _composer.Text?.Trim() ?? "";
+        if (_session is not { IsRunning: true } live) return;
+        if (text.Length == 0 && _pendingAttachments.Count == 0) return;   // nothing to send
         ClosePalette();
-        // A bare, no-argument native command runs its Perch action instead of going to the CLI as text.
-        if (!text.Contains(' ') && SlashCommandCatalog.CommandName(text) is { } name && RunNativeCommand(name))
+        // A bare, no-argument native command runs its Perch action instead of going to the CLI as text (only
+        // when there are no attachments — an attachment always means a real message to the model).
+        if (_pendingAttachments.Count == 0 && !text.Contains(' ')
+            && SlashCommandCatalog.CommandName(text) is { } name && RunNativeCommand(name))
         {
             _composer.Text = "";
             return;
         }
-        live.SendPrompt(text);
+        live.SendPrompt(text, _pendingAttachments.Count > 0 ? _pendingAttachments.ToList() : null);
         _composer.Text = "";
+        ClearAttachments();
+    }
+
+    // ── Composer attachments (drag-drop + paste) ───────────────────────────────────
+
+    private static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"];
+    private static bool IsImagePath(string path) => ImageExtensions.Contains(System.IO.Path.GetExtension(path).ToLowerInvariant());
+
+    private void OnComposerDragOver(object? sender, DragEventArgs e)
+    {
+        // Accept file drops (images become chips, other files insert their path); ignore anything else.
+        e.DragEffects = e.DataTransfer.Contains(DataFormat.File) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void OnComposerDrop(object? sender, DragEventArgs e)
+    {
+        e.Handled = true;
+        if (e.DataTransfer.TryGetFiles() is not { } files) return;
+        foreach (var item in files)
+        {
+            var path = item.TryGetLocalPath();
+            if (string.IsNullOrEmpty(path)) continue;
+            if (IsImagePath(path))
+                AddAttachment(new MessageAttachment
+                {
+                    Kind = AttachmentKind.Image, Path = path, MediaType = PerchSession.MediaTypeForPath(path),
+                });
+            else
+                InsertPathIntoComposer(path);
+        }
+        if (_session is { IsRunning: true }) _composer.Focus();
+    }
+
+    // Insert a dropped (non-image) file's path at the caret — quoted if it has spaces — so Claude can read it.
+    private void InsertPathIntoComposer(string path)
+    {
+        var token = path.Contains(' ') ? $"\"{path}\"" : path;
+        var text = _composer.Text ?? "";
+        int caret = Math.Clamp(_composer.CaretIndex, 0, text.Length);
+        var lead = caret > 0 && !char.IsWhiteSpace(text[caret - 1]) ? " " : "";
+        var insert = lead + token + " ";
+        _composer.Text = text[..caret] + insert + text[caret..];
+        _composer.CaretIndex = caret + insert.Length;
+    }
+
+    // Ctrl+V handler: stage a clipboard image as an attachment if one is present. The clipboard's bitmap is
+    // saved to a temp PNG so the attachment has a real path to open/preview; when there's no image, this is a
+    // no-op and the normal text paste stands.
+    private async System.Threading.Tasks.Task TryPasteImageAsync()
+    {
+        try
+        {
+            if (Clipboard is not { } clip) return;
+            var data = await clip.TryGetDataAsync();
+            if (data is null) return;
+            try
+            {
+                if (await data.TryGetBitmapAsync() is not { } bmp) return;
+                if (SaveTempBitmap(bmp) is { } path)
+                    AddAttachment(new MessageAttachment { Kind = AttachmentKind.Image, Path = path, MediaType = "image/png" });
+            }
+            finally { (data as IDisposable)?.Dispose(); }
+        }
+        catch { /* clipboard read is best-effort */ }
+    }
+
+    // Write a pasted bitmap to a per-session temp folder (as PNG) so the attachment has a real path.
+    private string? SaveTempBitmap(Bitmap bmp)
+    {
+        try
+        {
+            var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "perch-attach", SessionId ?? "new");
+            Directory.CreateDirectory(dir);
+            var path = System.IO.Path.Combine(dir, $"paste-{DateTime.Now:yyyyMMdd-HHmmss-fff}.png");
+            bmp.Save(path);
+            return path;
+        }
+        catch { return null; }
+    }
+
+    private void AddAttachment(MessageAttachment a) { _pendingAttachments.Add(a); RenderAttachTray(); }
+    private void RemoveAttachment(MessageAttachment a) { _pendingAttachments.Remove(a); RenderAttachTray(); }
+    private void ClearAttachments() { _pendingAttachments.Clear(); RenderAttachTray(); }
+
+    private void RenderAttachTray()
+    {
+        _attachTray.Children.Clear();
+        foreach (var a in _pendingAttachments)
+        {
+            var chip = a;
+            _attachTray.Children.Add(new AttachmentChip(_p, chip, removable: true, onRemove: () => RemoveAttachment(chip)));
+        }
+        _attachTray.IsVisible = _pendingAttachments.Count > 0;
+    }
+
+    // ── Composer quick-action toolbar ──────────────────────────────────────────────
+
+    /// <summary>Sets the overlay-mirrored quick actions (the app builds them from the currently *enabled*
+    /// overlay glyphs and knows how to perform each). The composer-native attach buttons are always shown
+    /// alongside. Pushed by the app when it builds the window.</summary>
+    public void SetComposerActions(IReadOnlyList<ComposerAction> actions)
+    {
+        // Called on every monitor scan; only redraw when the visible set actually changed (glyph + tooltip
+        // capture the count/identity), so a hovering pointer isn't reset a few times a second.
+        var sig = string.Join("|", actions.Select(a => $"{a.Glyph}␟{a.Tooltip}␟{a.GlyphFactory is not null}␟{a.Icon is not null}"));
+        _overlayActions = actions;
+        if (sig == _overlayActionsSig) return;
+        _overlayActionsSig = sig;
+        RenderComposerToolbar();
+    }
+
+    private void RenderComposerToolbar()
+    {
+        _composerToolbar.Children.Clear();
+        // Composer-native attach: one paperclip — pick any file, images become chips, other files insert their
+        // path. The discoverable face of drag-drop/paste.
+        _composerToolbar.Children.Add(ToolbarButton("📎", "Attach a file or image", _ => PickAttachmentsFireAndForget()));
+        // Then the overlay's enabled, actionable glyphs — separated by a thin divider when there are any.
+        if (_overlayActions.Count > 0)
+        {
+            _composerToolbar.Children.Add(new Border
+            {
+                Width = 1, Height = 18, Background = _p.Border, Margin = new Thickness(4, 6, 8, 6),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            foreach (var a in _overlayActions)
+                _composerToolbar.Children.Add(ToolbarButton(a.Glyph, a.Tooltip, a.Invoke, a.Icon, a.GlyphFactory, a.MiddleInvoke));
+        }
+        _composerToolbar.IsVisible = true;
+    }
+
+    private Control ToolbarButton(string glyph, string tip, Action<Control> invoke, Bitmap? icon = null, Func<IBrush, Control>? glyphFactory = null, Action<Control>? middleInvoke = null)
+    {
+        Control content = glyphFactory is not null
+            ? glyphFactory(_p.Muted)
+            : icon is not null
+                ? new Image { Source = icon, Width = 18, Height = 18, Stretch = Stretch.Uniform }
+                : new TextBlock
+                {
+                    Text = glyph, FontSize = 14.5, Foreground = _p.Muted,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                };
+        var b = new Border
+        {
+            Width = 30, Height = 30, CornerRadius = SessionPalette.ButtonRadius, Background = Brushes.Transparent,
+            Cursor = new Cursor(StandardCursorType.Hand), Child = content, Margin = new Thickness(0, 0, 3, 0),
+            VerticalAlignment = VerticalAlignment.Center, [ToolTip.TipProperty] = tip,
+        };
+        b.PointerEntered += (_, _) => b.Background = _p.Raised2;
+        b.PointerExited += (_, _) => b.Background = Brushes.Transparent;
+        b.PointerReleased += (_, e) =>
+        {
+            if (e.InitialPressMouseButton == MouseButton.Left) invoke(b);
+            else if (e.InitialPressMouseButton == MouseButton.Middle && middleInvoke is not null) { middleInvoke(b); e.Handled = true; }
+        };
+        return b;
+    }
+
+    // Fire-and-forget wrapper for the paperclip button (the toolbar action is synchronous).
+    private void PickAttachmentsFireAndForget() => _ = PickAttachmentsAsync();
+
+    // The paperclip: pick one or more files; images become chips, other files insert their path.
+    private async System.Threading.Tasks.Task PickAttachmentsAsync()
+    {
+        try
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Attach a file or image", AllowMultiple = true,
+            });
+            foreach (var f in files)
+            {
+                var path = f.TryGetLocalPath();
+                if (string.IsNullOrEmpty(path)) continue;
+                if (IsImagePath(path))
+                    AddAttachment(new MessageAttachment
+                    {
+                        Kind = AttachmentKind.Image, Path = path, MediaType = PerchSession.MediaTypeForPath(path),
+                    });
+                else
+                    InsertPathIntoComposer(path);
+            }
+        }
+        catch (Exception ex) { Conv.AddNote($"couldn't attach: {ex.Message}", NoteKind.Error); }
+        if (_session is { IsRunning: true }) _composer.Focus();
     }
 
     // ── Native command dispatch ────────────────────────────────────────────────────
@@ -1497,7 +1723,8 @@ internal sealed class SessionWindow : Window
     {
         if (SlashCommandCatalog.IsInternal(name)) return false;
         return SlashCommandCatalog.IsBuiltIn(name)
-            || Conv.SlashCommands.Any(c => string.Equals(c.TrimStart('/'), name, StringComparison.OrdinalIgnoreCase));
+            || Conv.SlashCommands.Any(c => string.Equals(c.TrimStart('/'), name, StringComparison.OrdinalIgnoreCase))
+            || _skillCommands.Any(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
     }
 
     // ── Command palette ────────────────────────────────────────────────────────────
@@ -1514,7 +1741,7 @@ internal sealed class SessionWindow : Window
             ClosePalette();
             return;
         }
-        _paletteItems = SlashCommandCatalog.Search(t[1..]);   // "" on a bare "/" → all commands
+        _paletteItems = SlashCommandCatalog.Search(t[1..], _skillCommands);   // "" on a bare "/" → all commands
         if (_paletteItems.Count == 0) { ClosePalette(); return; }
         _paletteIndex = Math.Clamp(_paletteIndex, 0, _paletteItems.Count - 1);
         RenderPalette();
@@ -1583,6 +1810,7 @@ internal sealed class SessionWindow : Window
         SlashCommandTier.Native          => "perch",
         SlashCommandTier.SessionMutating => "session",
         SlashCommandTier.TuiOnly         => "terminal",
+        SlashCommandTier.Skill           => "skill",
         _                                => "",
     };
 
@@ -1698,6 +1926,30 @@ internal sealed class SessionWindow : Window
 
         _interruptButton.IsVisible = _session is { IsRunning: true } && conv.TurnActive;
         UpdateNewEnabled();
+        MaybeRebuildSkills();
+    }
+
+    // Rebuilds the palette's skill list off the UI thread when the cwd or the session's advertised command
+    // set changes (the latter arrives with init, and again after a /clear). Cheap signature check first so
+    // the common RefreshBar (fired on every state change) does no work once the list is current.
+    private void MaybeRebuildSkills()
+    {
+        var signature = (_cwd, Conv.SlashCommands.Count);
+        if (signature == _skillsBuiltFor) return;
+        _skillsBuiltFor = signature;
+
+        var cwd = _cwd;
+        var advertised = Conv.SlashCommands.ToList();
+        Task.Run(() =>
+        {
+            try { return SlashCommandCatalog.ToPaletteItems(SkillCatalog.ForSession(cwd, advertised)); }
+            catch { return (IReadOnlyList<SlashCommandInfo>)[]; }
+        }).ContinueWith(t =>
+        {
+            if (t.IsFaulted) return;
+            _skillCommands = t.Result;
+            if (PaletteOpen) UpdatePaletteFromText();   // fold newly-found skills into an open palette
+        }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     // Fills the two informational pills from the live conversation: cumulative tokens in/out, and how full
@@ -1853,6 +2105,11 @@ internal sealed class SessionWindow : Window
     // Enter sends; Shift+Enter inserts a newline (the TextBox's default).
     private void OnComposerKeyDown(object? sender, KeyEventArgs e)
     {
+        // Ctrl+V: let the normal text paste happen, but also check the clipboard for an image to stage as an
+        // attachment (an image isn't text, so nothing is pasted into the box for it).
+        if (e.Key == Key.V && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+            _ = TryPasteImageAsync();
+
         // While the command palette is open it owns the arrow/Tab/Enter keys: navigate, complete, or run.
         if (PaletteOpen)
         {
@@ -1974,10 +2231,11 @@ internal sealed class SessionWindow : Window
 
     /// <summary>HeadlessRenderer: show the thread over synthetic events (no process), so the composed turns —
     /// bubble, prose, thinking, tool cards, a pending permission card — can be captured.</summary>
-    internal void FeedSampleForRender(string cwd, string? userPrompt, IEnumerable<SessionEvent> events)
+    internal void FeedSampleForRender(string cwd, string? userPrompt, IEnumerable<SessionEvent> events,
+        IReadOnlyList<MessageAttachment>? attachments = null)
     {
         var sample = PerchSession.ForRender(cwd);
-        if (userPrompt is not null) sample.Conversation.AddUserPrompt(userPrompt);
+        if (userPrompt is not null) sample.Conversation.AddUserPrompt(userPrompt, attachments);
         foreach (var ev in events) sample.Conversation.Apply(ev);
         Attach(sample);
         // A render-only session has no process, so pose it as a live one.

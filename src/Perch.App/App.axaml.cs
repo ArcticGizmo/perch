@@ -285,6 +285,7 @@ public partial class App : Application
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
                 RefreshOriginIcons(sessions);
+                RefreshComposerActions();   // grow/drop each session window's artifact + markdown glyphs
                 MaybeHandleAutoClose(sessions.Count);
             }, Services.Replay.ReplaySession.Current?.Projector, PlatformServices.IdeHostDetector);
 
@@ -1624,6 +1625,8 @@ public partial class App : Application
         w.SetContextPressureConfig(cs.ShowContextPressure, cs.ContextPressureYellowPercent,
             cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent, cs.ShowContextGreenSegment);
         w.SetAutoCompactConfig(cs.SessionAutoCompactEnabled, cs.SessionAutoCompactThresholdPercent);
+        // Mirror the overlay's enabled, actionable glyphs as quick-action buttons above the composer.
+        w.SetComposerActions(BuildComposerActions(w));
         // The /autocompact modal changed the Perch auto-compaction setting: persist it and push it to every
         // open session window so they all agree.
         w.AutoCompactChanged += (enabled, threshold) =>
@@ -1648,6 +1651,91 @@ public partial class App : Application
         _sessionWindows.Add(w);
         w.Closed += (_, _) => _sessionWindows.Remove(w);
         return w;
+    }
+
+    // Builds the composer toolbar's overlay-mirrored quick actions for a given window. Two kinds:
+    //   • Global, settings-gated actions — the to-dos surface and the scratch pad (drawn with the overlay's
+    //     own note glyph so they read identically). Status-only glyphs (mode, context, PR/Jira…) and the
+    //     quick-link app launchers don't belong above a chat composer, so they're not mirrored.
+    //   • Session-specific glyphs that mirror what the floating overlay shows on this session's row — the
+    //     published-Artifact glyph and the produced-Markdown glyph — added only when the attached session
+    //     actually has them (looked up in the latest scan roster). These track the session live because the
+    //     scan callback rebuilds the toolbar as the session produces artifacts / .md files.
+    // The composer-native paperclip is added by the window itself.
+    private IReadOnlyList<ComposerAction> BuildComposerActions(SessionWindow w)
+    {
+        var cs = Effective;
+        var actions = new List<ComposerAction>();
+        if (cs.ShowTodos) actions.Add(new ComposerAction("☑", "To-dos", _ => OpenTodos()));
+        if (cs.ShowNotes)
+            actions.Add(new ComposerAction("", "Scratch pad", _ => OnOpenScratchPad(),
+                GlyphFactory: brush => new Views.NoteGlyph(brush)));
+
+        // The session this window is viewing, as seen by the latest monitor scan (carries HasArtifacts /
+        // HasProducedMarkdown; the live PerchSession itself doesn't compute those).
+        var session = w.SessionId is { } id ? _lastSessions.FirstOrDefault(s => s.SessionId == id) : null;
+        if (session is { HasArtifacts: true })
+        {
+            var arts = session.Artifacts;
+            string tip = arts.Count == 1
+                ? "Artifact — click to open on claude.ai · middle-click for a new window"
+                : $"Artifacts ({arts.Count}) — click to choose · middle-click for a new window";
+            actions.Add(new ComposerAction("", tip,
+                anchor => ShowArtifactMenu(anchor, arts),
+                GlyphFactory: _ => new Views.ArtifactGlyph(),
+                // Middle-click the glyph: a lone artifact opens straight in a new browser window (like the
+                // floating UI); with several, open the picker so the specific one can be middle-clicked.
+                MiddleInvoke: anchor =>
+                {
+                    if (arts.Count == 1) OpenArtifact(arts[0], newWindow: true);
+                    else ShowArtifactMenu(anchor, arts);
+                }));
+        }
+        if (session is { HasProducedMarkdown: true })
+        {
+            var s = session;
+            actions.Add(new ComposerAction("", "Markdown files this session produced",
+                _ => OnOpenMarkdown(s),
+                GlyphFactory: _ => new Views.MarkdownGlyph()));
+        }
+        return actions;
+    }
+
+    // Pushes fresh composer actions to every open session window — called on each scan so a session that
+    // starts publishing an Artifact or writing a .md file mid-conversation grows the matching glyph, exactly
+    // as its floating-overlay row does. Cheap: a WrapPanel rebuild of a handful of buttons.
+    private void RefreshComposerActions()
+    {
+        foreach (var w in _sessionWindows)
+            w.SetComposerActions(BuildComposerActions(w));
+    }
+
+    // The Artifact glyph's click: a small menu of this session's published Artifacts (title → open on
+    // claude.ai), anchored to the toolbar button — the composer-toolbar counterpart of the overlay's
+    // artifact picker. A single artifact still lists (a click never silently navigates). Matching the
+    // floating UI, an item opens in the current browser on left-click and a fresh browser window on
+    // middle-click (see OverlayCanvas.ShowArtifactPicker / WireMiddleClick).
+    private void ShowArtifactMenu(Control anchor, IReadOnlyList<Artifact> artifacts)
+    {
+        if (artifacts.Count == 0) return;
+        var menu = new MenuFlyout { Placement = PlacementMode.Top };
+        foreach (var art in artifacts)
+        {
+            var captured = art;
+            var item = new MenuItem { Header = art.Title is { Length: > 0 } t ? t : art.Url };
+            item.Click += (_, _) => OpenArtifact(captured, newWindow: false);
+            // Middle-click → new browser window. Tunnelled so it wins before the item's own routing, and it
+            // dismisses the flyout itself since a middle-click isn't the menu's normal "invoke" gesture.
+            item.AddHandler(global::Avalonia.Input.InputElement.PointerReleasedEvent, (_, e) =>
+            {
+                if (e.InitialPressMouseButton != global::Avalonia.Input.MouseButton.Middle) return;
+                menu.Hide();
+                OpenArtifact(captured, newWindow: true);
+                e.Handled = true;
+            }, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
+            menu.Items.Add(item);
+        }
+        menu.ShowAt(anchor);
     }
 
     // Starts and owns a Perch-driven session; the window that asked attaches to the result. The session

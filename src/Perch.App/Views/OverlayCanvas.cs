@@ -3181,7 +3181,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // The pinned-note glyph: a small dog-eared page (folded top-right corner) with two short "text"
     // lines, in the sticky-note amber. Marks a row that carries a note; hovering it pops the full text.
-    private static void DrawNoteIcon(DrawingContext ctx, double x, double midY, IBrush? brush = null)
+    internal static void DrawNoteIcon(DrawingContext ctx, double x, double midY, IBrush? brush = null)
     {
         var pen = new Pen(brush ?? NoteBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
         const double w = 10, h = 12, fold = 3.5;
@@ -3215,9 +3215,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // The artifact glyph: two staggered rounded-square outlines in amber (brighter when hovered).
     // Clickable — hit-testing + hover wiring land in 4.11.
-    private static void DrawArtifactIcon(DrawingContext ctx, double x, double midY, bool hovered)
+    private static void DrawArtifactIcon(DrawingContext ctx, double x, double midY, bool hovered) =>
+        DrawArtifactIcon(ctx, x, midY, hovered ? ArtifactHover : ArtifactBrush);
+
+    /// <summary>The artifact glyph tinted with an explicit brush — lets the composer toolbar draw the exact
+    /// same mark as the overlay row (see <see cref="Views.ArtifactGlyph"/>). Defaults to the ambient amber.</summary>
+    internal static void DrawArtifactIcon(DrawingContext ctx, double x, double midY, IBrush? brush)
     {
-        var pen = new Pen(hovered ? ArtifactHover : ArtifactBrush, 1.4, null, PenLineCap.Flat, PenLineJoin.Round);
+        var pen = new Pen(brush ?? ArtifactBrush, 1.4, null, PenLineCap.Flat, PenLineJoin.Round);
         const double side = 8, offset = 3, radius = 2;
         double top = midY - (side + offset) / 2;
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(x, top, side, side), radius));
@@ -3227,9 +3232,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // The Markdown glyph: the canonical Markdown mark — a rounded-rect badge holding an "M" and a
     // down-arrow — marking a session that produced a .md file. Clickable (opens the Markdown window); rests
     // dimmed so it stays ambient and brightens on hover.
-    private static void DrawMdIcon(DrawingContext ctx, double x, double midY, bool hovered)
+    private static void DrawMdIcon(DrawingContext ctx, double x, double midY, bool hovered) =>
+        DrawMdIcon(ctx, x, midY, hovered ? MarkdownBrush : MarkdownDimBrush);
+
+    /// <summary>The Markdown glyph tinted with an explicit brush — lets the composer toolbar draw the exact
+    /// same mark as the overlay row (see <see cref="Views.MarkdownGlyph"/>). Defaults to the full-strength pink.</summary>
+    internal static void DrawMdIcon(DrawingContext ctx, double x, double midY, IBrush? brush)
     {
-        var pen = new Pen(hovered ? MarkdownBrush : MarkdownDimBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = new Pen(brush ?? MarkdownBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
         const double w = 16, h = 11, radius = 2.5;
         double left = x, top = midY - h / 2;
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(left, top, w, h), radius));

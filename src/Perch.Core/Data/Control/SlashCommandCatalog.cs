@@ -16,6 +16,9 @@ internal enum SlashCommandTier
     /// <summary>TUI-only or not meaningful headless. Shown for discoverability but may not do anything over
     /// stream-json; needs a native reimplementation or is simply N/A.</summary>
     TuiOnly,
+    /// <summary>A user/project/plugin skill (not a built-in). Executes as plain text like <see
+    /// cref="PlainText"/>; the distinct tier just lets the palette tag it "skill". See <see cref="SkillCatalog"/>.</summary>
+    Skill,
 }
 
 /// <summary>One built-in slash command in the palette: its name (no leading slash), an argument hint, a
@@ -104,6 +107,37 @@ internal static class SlashCommandCatalog
             .Select(r => byName[r.Path])
             .ToList();
     }
+
+    /// <summary>As <see cref="Search(string,int)"/>, but appends a group of <paramref name="skills"/> after
+    /// the built-in matches: on a blank query, every skill alphabetically; otherwise the fuzzy-ranked skill
+    /// matches capped to <paramref name="limit"/>. Built-ins always lead; skills are already <see
+    /// cref="SlashCommandTier.Skill"/>-tiered by <see cref="ToPaletteItems"/>.</summary>
+    public static IReadOnlyList<SlashCommandInfo> Search(
+        string query, IReadOnlyList<SlashCommandInfo> skills, int limit = 8)
+    {
+        var builtIns = Search(query, limit);
+        if (skills.Count == 0) return builtIns;
+
+        query = query.Trim();
+        IEnumerable<SlashCommandInfo> skillMatches;
+        if (query.Length == 0)
+        {
+            skillMatches = skills.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase);
+        }
+        else
+        {
+            var byName = skills
+                .GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+            skillMatches = FuzzyMatch.Rank(query, byName.Keys.ToList(), limit).Select(r => byName[r.Path]);
+        }
+        return builtIns.Concat(skillMatches).ToList();
+    }
+
+    /// <summary>Turns discovered <see cref="SkillInfo"/>s into palette rows — <see
+    /// cref="SlashCommandTier.Skill"/>, no argument hint, the front-matter one-liner as the description.</summary>
+    public static IReadOnlyList<SlashCommandInfo> ToPaletteItems(IReadOnlyList<SkillInfo> skills) =>
+        skills.Select(s => new SlashCommandInfo(s.Command, "", s.Description, SlashCommandTier.Skill)).ToList();
 
     /// <summary>Whether composer text should be treated as a slash command: a leading <c>/</c> followed by a
     /// letter (so a lone <c>/</c>, or a path/regex the user is pasting, isn't mistaken for one).</summary>

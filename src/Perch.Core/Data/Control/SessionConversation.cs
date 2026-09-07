@@ -7,9 +7,13 @@ internal enum ConversationChange { Added, Updated }
 /// parts), a permission prompt, or a system note. The rich session UI binds one control per item.</summary>
 internal abstract class ConversationItem;
 
-internal sealed class UserMessageItem(string text) : ConversationItem
+internal sealed class UserMessageItem(string text, IReadOnlyList<MessageAttachment>? attachments = null) : ConversationItem
 {
     public string Text { get; } = text;
+
+    /// <summary>Files/images the user attached to this message (empty when none). Display-only — the file
+    /// paths and image content blocks are already on their way to the CLI by the time this is recorded.</summary>
+    public IReadOnlyList<MessageAttachment> Attachments { get; } = attachments ?? [];
 }
 
 internal enum NoteKind { Info, Error }
@@ -421,10 +425,11 @@ internal sealed class SessionConversation
         return text;
     }
 
-    /// <summary>Records a prompt the user sent (the controller already wrote it to the CLI).</summary>
-    public void AddUserPrompt(string text)
+    /// <summary>Records a prompt the user sent (the controller already wrote it to the CLI), with any
+    /// attachments for display.</summary>
+    public void AddUserPrompt(string text, IReadOnlyList<MessageAttachment>? attachments = null)
     {
-        Append(new UserMessageItem(text));
+        Append(new UserMessageItem(text, attachments));
         _suppressNextResultContext = false;   // a genuine new turn: its result's context is real again
         if (TurnActive) QueuedPrompts++; else TurnActive = true;
         // `/compact` runs as an ordinary turn, but its effect is to shrink the context rather than to answer,

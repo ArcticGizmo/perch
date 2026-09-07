@@ -1,0 +1,429 @@
+<title>Perch</title>
+<meta name="description" content="A desktop watcher for every Claude Code session, from one floating panel." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700&family=Public+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" />
+
+<style>
+  /* ---- Tokens: light is the bare :root, dark redefines only tokens ---- */
+  :root {
+    --bg:        #ECEEF2;
+    --surface:   #FFFFFF;
+    --surface-2: #F5F6F9;
+    --ink:       #191D25;
+    --ink-soft:  #545C6A;
+    --ink-faint: #8A93A1;
+    --line:      #DCE0E7;
+    --accent:    #B96C12;
+    --accent-2:  #8A4E0C;
+    --run:   #2FA268;
+    --await: #C08A1E;
+    --attn:  #D9524A;
+    --idle:  #7C8695;
+    --shadow: 0 1px 2px rgba(20,24,32,.06), 0 12px 32px -12px rgba(20,24,32,.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:        #12151B;
+      --surface:   #1A1F29;
+      --surface-2: #20262F;
+      --ink:       #E7EAF0;
+      --ink-soft:  #9AA3B1;
+      --ink-faint: #6B7482;
+      --line:      #2A313D;
+      --accent:    #E8A13C;
+      --accent-2:  #F2B65E;
+      --run:   #4ED08A;
+      --await: #E8B84B;
+      --attn:  #F06A62;
+      --idle:  #6C7684;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 18px 44px -16px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:        #12151B;
+    --surface:   #1A1F29;
+    --surface-2: #20262F;
+    --ink:       #E7EAF0;
+    --ink-soft:  #9AA3B1;
+    --ink-faint: #6B7482;
+    --line:      #2A313D;
+    --accent:    #E8A13C;
+    --accent-2:  #F2B65E;
+    --run:   #4ED08A;
+    --await: #E8B84B;
+    --attn:  #F06A62;
+    --idle:  #6C7684;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 18px 44px -16px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Public Sans", system-ui, -apple-system, sans-serif;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: clamp(1.5rem, 4vw, 3.5rem) clamp(1.1rem, 4vw, 2rem) 3rem;
+  }
+
+  a { color: var(--accent-2); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .72rem;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--accent-2);
+    margin: 0 0 .9rem;
+  }
+
+  /* ---- Masthead ---- */
+  .mast { display: flex; align-items: center; gap: .8rem; margin-bottom: 1.4rem; }
+  .mark { flex: none; width: 40px; height: 40px; }
+  .wordmark {
+    font-family: "Bricolage Grotesque", sans-serif;
+    font-weight: 700;
+    font-size: clamp(2.3rem, 6vw, 3.4rem);
+    line-height: 1;
+    letter-spacing: -.02em;
+    margin: 0;
+  }
+  .thesis {
+    font-size: clamp(1.15rem, 2.4vw, 1.5rem);
+    line-height: 1.35;
+    font-weight: 500;
+    max-width: 30ch;
+    text-wrap: balance;
+    margin: 0;
+    color: var(--ink);
+  }
+  .thesis b { color: var(--accent-2); font-weight: 600; }
+  .platforms {
+    display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.4rem;
+  }
+  .chip {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .74rem;
+    padding: .28rem .6rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--ink-soft);
+    background: var(--surface);
+  }
+
+  /* ---- Hero split ---- */
+  .split {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: clamp(1.5rem, 4vw, 2.5rem);
+    align-items: start;
+    margin-top: 2.4rem;
+  }
+  @media (min-width: 780px) {
+    .split { grid-template-columns: 1fr minmax(300px, 360px); }
+  }
+  .lede p { color: var(--ink-soft); font-size: 1.02rem; max-width: 46ch; }
+  .lede p:first-child { margin-top: 0; }
+
+  .install-label {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .72rem; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-faint); margin: 1.6rem 0 .5rem;
+  }
+  .install {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .82rem;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: .7rem .85rem;
+    overflow-x: auto;
+    white-space: nowrap;
+    color: var(--ink);
+  }
+  .install .prompt { color: var(--ink-faint); user-select: none; }
+
+  /* ---- The panel mock: committed dark device, both themes ---- */
+  .device { display: flex; justify-content: center; }
+  .panel {
+    width: 100%;
+    max-width: 360px;
+    background: #171B22;
+    border: 1px solid #2A313D;
+    border-radius: 14px;
+    box-shadow: 0 20px 50px -18px rgba(0,0,0,.55);
+    overflow: hidden;
+    font-size: 13px;
+    color: #E7EAF0;
+  }
+  .panel-head {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .65rem .8rem;
+    background: #1E242E;
+    border-bottom: 1px solid #2A313D;
+  }
+  .panel-head .title {
+    font-family: "Bricolage Grotesque", sans-serif;
+    font-weight: 600; font-size: 14px; letter-spacing: -.01em;
+  }
+  .counts { margin-left: auto; display: flex; gap: .55rem;
+    font-family: "IBM Plex Mono", monospace; font-size: 11px; color: #97A0AE; }
+  .counts span { display: inline-flex; align-items: center; gap: .28rem; }
+
+  .usage { padding: .7rem .8rem .3rem; display: grid; gap: .55rem; border-bottom: 1px solid #232A34; }
+  .bar-row { display: grid; grid-template-columns: 66px 1fr 34px; align-items: center; gap: .5rem;
+    font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: #97A0AE; }
+  .track { height: 6px; border-radius: 999px; background: #2A313D; overflow: hidden; }
+  .fill { height: 100%; border-radius: 999px; }
+  .fill.s { width: 68%; background: linear-gradient(90deg,#4ED08A,#E8B84B); }
+  .fill.w { width: 41%; background: linear-gradient(90deg,#4ED08A,#59B6E0); }
+  .bar-row .pct { text-align: right; color: #C6CCD6; }
+
+  .rows { padding: .35rem 0 .45rem; }
+  .row { display: grid; grid-template-columns: 12px 1fr auto; align-items: baseline;
+    gap: .55rem; padding: .42rem .85rem; }
+  .row.sub { padding-left: 1.9rem; grid-template-columns: 10px 1fr auto; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; align-self: center; }
+  .row.sub .dot { width: 6px; height: 6px; }
+  .dot.run { background: #4ED08A; box-shadow: 0 0 0 3px rgba(78,208,138,.16); }
+  .dot.await { background: #E8B84B; box-shadow: 0 0 0 3px rgba(232,184,75,.16); }
+  .dot.attn { background: #F06A62; box-shadow: 0 0 0 3px rgba(240,106,98,.16); }
+  .dot.idle { background: #6C7684; }
+  .dot.run, .dot.attn { animation: pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .62; } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none !important; } }
+
+  .name { font-weight: 600; font-size: 12.5px; }
+  .row.sub .name { font-weight: 500; color: #C6CCD6; }
+  .meta { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: #8A93A1;
+    display: block; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .timer { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: #B7BEC9;
+    font-variant-numeric: tabular-nums; align-self: center; }
+  .badge { font-family: "IBM Plex Mono", monospace; font-size: 9.5px; text-transform: uppercase;
+    letter-spacing: .05em; padding: .1rem .34rem; border-radius: 4px;
+    background: rgba(232,184,75,.14); color: #E8B84B; align-self: center; }
+  .tag-attn { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: #F06A62; align-self: center; }
+
+  /* ---- States ladder ---- */
+  section { margin-top: clamp(2.6rem, 6vw, 3.8rem); }
+  .sec-title {
+    font-family: "Bricolage Grotesque", sans-serif;
+    font-weight: 600; font-size: 1.4rem; letter-spacing: -.01em; margin: 0 0 .3rem;
+  }
+  .sec-sub { color: var(--ink-soft); margin: 0 0 1.3rem; max-width: 54ch; }
+
+  .states { display: grid; gap: 0; border-top: 1px solid var(--line); }
+  .state { display: grid; grid-template-columns: 1.2rem 8.5rem 1fr;
+    gap: .9rem; align-items: baseline; padding: .85rem .2rem;
+    border-bottom: 1px solid var(--line); }
+  @media (max-width: 560px) { .state { grid-template-columns: 1.2rem 1fr; }
+    .state .sdesc { grid-column: 2; } }
+  .state .sdot { width: 11px; height: 11px; border-radius: 50%; align-self: center; }
+  .sname { font-weight: 600; font-family: "Bricolage Grotesque", sans-serif; }
+  .sdesc { color: var(--ink-soft); font-size: .96rem; }
+  .sd-run { background: var(--run); } .sd-idle { background: var(--idle); }
+  .sd-await { background: var(--await); } .sd-attn { background: var(--attn); }
+
+  /* ---- Feature grid ---- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: .9rem; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1.1rem 1.15rem 1.2rem;
+    box-shadow: var(--shadow);
+  }
+  .card h3 {
+    font-family: "Bricolage Grotesque", sans-serif;
+    font-size: 1.02rem; font-weight: 600; margin: 0 0 .4rem;
+    display: flex; align-items: center; gap: .5rem;
+  }
+  .card h3 .kb { width: 9px; height: 9px; border-radius: 2px; background: var(--accent); flex: none; }
+  .card p { margin: 0; color: var(--ink-soft); font-size: .93rem; line-height: 1.5; }
+  .card p b { color: var(--ink); font-weight: 600; }
+
+  /* ---- How it works ---- */
+  .how {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1.3rem 1.4rem;
+    display: grid; gap: .5rem;
+  }
+  .how p { margin: 0; color: var(--ink-soft); max-width: 68ch; }
+  .how code { font-family: "IBM Plex Mono", monospace; font-size: .84em;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 5px;
+    padding: .05rem .32rem; color: var(--ink); }
+
+  footer { margin-top: 3rem; padding-top: 1.3rem; border-top: 1px solid var(--line);
+    color: var(--ink-faint); font-size: .82rem; font-family: "IBM Plex Mono", monospace;
+    display: flex; flex-wrap: wrap; gap: .4rem 1.2rem; justify-content: space-between; }
+</style>
+
+<div class="wrap">
+
+  <p class="eyebrow">Windows &amp; macOS tray app</p>
+
+  <header class="mast">
+    <svg class="mark" viewBox="0 0 40 40" aria-hidden="true" fill="none">
+      <line x1="6" y1="32" x2="34" y2="32" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round"/>
+      <path d="M14 20 C10 16 6 18 5 15 C10 15 12 17 14 18 Z" fill="var(--accent)"/>
+      <ellipse cx="22" cy="20" rx="8" ry="6.5" fill="var(--accent)"/>
+      <circle cx="29" cy="15.5" r="4.4" fill="var(--accent)"/>
+      <path d="M33 15 L38 16.4 L33 17.6 Z" fill="var(--accent-2)"/>
+      <circle cx="30.2" cy="14.7" r="1.1" fill="var(--bg)"/>
+      <line x1="20" y1="26" x2="20" y2="31" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="25" y1="26" x2="25" y2="31" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"/>
+    </svg>
+    <h1 class="wordmark">Perch</h1>
+  </header>
+
+  <p class="thesis">Keep an eye on <b>every Claude&nbsp;Code session</b> from one floating panel &mdash; without alt-tabbing through a dozen terminals.</p>
+
+  <div class="platforms">
+    <span class="chip">Windows + macOS</span>
+    <span class="chip">System tray / menu bar</span>
+    <span class="chip">.NET 10 &middot; Avalonia</span>
+    <span class="chip">Reads ~/.claude</span>
+  </div>
+
+  <div class="split">
+    <div class="lede">
+      <p>Perch watches your active Claude&nbsp;Code sessions by reading Claude's own session files, and updates in near real time. One always-on-top panel shows what each session is doing at a glance.</p>
+      <p>When a session <b>finishes</b>, gets stuck on a <b>permission prompt</b>, or needs you &mdash; a dot changes colour, the panel flashes open, and a notification fires. Click a row to jump straight to that session's terminal.</p>
+
+      <p class="install-label">Install on Windows</p>
+      <div class="install"><span class="prompt">PS&gt; </span>irm https://raw.githubusercontent.com/ArcticGizmo/perch/main/install.ps1 | iex</div>
+    </div>
+
+    <div class="device">
+      <div class="panel" role="img" aria-label="Example of the Perch overlay panel showing four sessions in different states">
+        <div class="panel-head">
+          <svg width="18" height="18" viewBox="0 0 40 40" aria-hidden="true" fill="none">
+            <ellipse cx="22" cy="20" rx="8" ry="6.5" fill="#E8A13C"/>
+            <circle cx="29" cy="15.5" r="4.4" fill="#E8A13C"/>
+            <path d="M33 15 L38 16.4 L33 17.6 Z" fill="#F2B65E"/>
+            <path d="M14 20 C10 16 6 18 5 15 C10 15 12 17 14 18 Z" fill="#E8A13C"/>
+          </svg>
+          <span class="title">Perch</span>
+          <span class="counts">
+            <span><i class="dot run" style="width:7px;height:7px;box-shadow:none"></i>2</span>
+            <span><i class="dot await" style="width:7px;height:7px;box-shadow:none"></i>1</span>
+            <span><i class="dot attn" style="width:7px;height:7px;box-shadow:none"></i>1</span>
+          </span>
+        </div>
+
+        <div class="usage">
+          <div class="bar-row"><span>Session 5h</span><span class="track"><span class="fill s"></span></span><span class="pct">68%</span></div>
+          <div class="bar-row"><span>Weekly</span><span class="track"><span class="fill w"></span></span><span class="pct">41%</span></div>
+        </div>
+
+        <div class="rows">
+          <div class="row">
+            <span class="dot run"></span>
+            <span><span class="name">perch</span><span class="meta">Edit &middot; OverlayCanvas.cs</span></span>
+            <span class="timer">0:42</span>
+          </div>
+          <div class="row sub">
+            <span class="dot run"></span>
+            <span><span class="name">Explore &middot; sub-agent</span><span class="meta">Grep &middot; src/</span></span>
+            <span class="timer">0:11</span>
+          </div>
+          <div class="row">
+            <span class="dot await"></span>
+            <span><span class="name">invoice-api</span><span class="meta">Bash &middot; npm run migrate</span></span>
+            <span class="badge">Plan</span>
+          </div>
+          <div class="row">
+            <span class="dot attn"></span>
+            <span><span class="name">docs-site</span><span class="meta">Finished &middot; 3 files changed</span></span>
+            <span class="tag-attn">done</span>
+          </div>
+          <div class="row">
+            <span class="dot idle"></span>
+            <span><span class="name">playground</span><span class="meta">Idle</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <h2 class="sec-title">Four states, colour-coded</h2>
+    <p class="sec-sub">Every session sits in one of four states &mdash; an escalation ladder from working quietly to needing you now. The header count and the flash tell you which without opening the list.</p>
+    <div class="states">
+      <div class="state">
+        <span class="sdot sd-run"></span>
+        <span class="sname">Running</span>
+        <span class="sdesc">Actively executing, with the latest tool call and a live runtime timer ticking beneath it.</span>
+      </div>
+      <div class="state">
+        <span class="sdot sd-idle"></span>
+        <span class="sname">Idle</span>
+        <span class="sdesc">Open, but not doing anything right now &mdash; nothing to act on.</span>
+      </div>
+      <div class="state">
+        <span class="sdot sd-await"></span>
+        <span class="sname">Awaiting Input</span>
+        <span class="sdesc">Stopped on a permission prompt or a question, waiting for your answer.</span>
+      </div>
+      <div class="state">
+        <span class="sdot sd-attn"></span>
+        <span class="sname">Needs Attention</span>
+        <span class="sdesc">Finished recently and waiting to be acknowledged &mdash; the panel flashes and a notification fires.</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="sec-title">What it does</h2>
+    <p class="sec-sub">One panel, plus the readouts and pings that keep you out of the terminals until something actually wants you.</p>
+    <div class="grid">
+      <div class="card">
+        <h3><span class="kb"></span>Overlay panel</h3>
+        <p>Per-session rows with a status dot, the current tool call and an elapsed timer. <b>Sub-agents</b> (Task runs) nest under their parent. Click a row to focus that terminal; drag to reposition. Shrink it to a slim <b>edge-docked strip</b> that expands on hover.</p>
+      </div>
+      <div class="card">
+        <h3><span class="kb"></span>Usage &amp; rate limits</h3>
+        <p><b>Session (5-hour)</b> and <b>Weekly (7-day)</b> bars, colour-coded green to red with reset counters and an expected-rate marker. Pulls the same account usage as Claude's <b>/usage</b> &mdash; and never calls out when the feature's off.</p>
+      </div>
+      <div class="card">
+        <h3><span class="kb"></span>Notifications</h3>
+        <p>Desktop <b>toasts</b> and system <b>chimes</b> when a session finishes or starts waiting &mdash; click one to jump to it. Optional <b>push to your phone</b> via ntfy, with an away-override that fires when your workstation is locked.</p>
+      </div>
+      <div class="card">
+        <h3><span class="kb"></span>Stats &amp; history</h3>
+        <p>A dashboard of sessions, active time, prompts, tool calls, tokens and <b>estimated cost</b> &mdash; scoped Today / 7d / 30d / All time, broken down by project, tool and model. Read any transcript in a clean <b>Readable</b> view.</p>
+      </div>
+      <div class="card">
+        <h3><span class="kb"></span>Permission badges</h3>
+        <p>Each session shows its permission mode inline &mdash; <b>Plan</b>, <b>Accept&nbsp;Edits</b>, <b>Auto</b> or <b>Bypass</b> &mdash; so you can tell a locked-down session from one running loose at a glance.</p>
+      </div>
+      <div class="card">
+        <h3><span class="kb"></span>Zero-setup hooks</h3>
+        <p>No plugin to install: Perch points <b>~/.claude/settings.json</b> at its own fast <b>perch-hook</b> binary, keeps it current across updates, and removes it cleanly on uninstall. That unlocks the badges and optional <b>auto-start</b>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="how">
+      <h2 class="sec-title" style="margin-bottom:.2rem">How it works</h2>
+      <p>Perch reads Claude&nbsp;Code's own files under <code>~/.claude/</code> &mdash; live session state from <code>sessions/{id}.json</code> and its sidecars, and append-only transcripts from <code>projects/</code> &mdash; opened shared-read and parsed defensively, so a half-written file never crashes it. Heavy work runs off the UI thread; the panel never freezes. No account, no telemetry, no network calls beyond the optional usage lookup and phone push.</p>
+    </div>
+  </section>
+
+  <footer>
+    <span>Perch &middot; a desktop watcher for Claude Code</span>
+    <span>github.com/ArcticGizmo/perch</span>
+  </footer>
+
+</div>

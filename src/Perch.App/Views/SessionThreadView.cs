@@ -262,17 +262,7 @@ internal sealed class SessionThreadView : ScrollViewer
                     TextWrapping = TextWrapping.Wrap,
                 },
             }
-            : new Border
-            {
-                Background = _p.BrandWash, BorderBrush = _p.BrandLine, BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(16, 16, 5, 16), Padding = new Thickness(15, 11),
-                MaxWidth = SessionPalette.ThreadMaxWidth * 0.76,
-                Child = new SelectableTextBlock
-                {
-                    Text = u.Text, FontSize = SessionPalette.ProseSize, FontFamily = _p.Body, Foreground = _p.Title,
-                    TextWrapping = TextWrapping.Wrap, LineHeight = SessionPalette.ProseSize * 1.5,
-                },
-            };
+            : BubbleForText(u.Text);
         var who = new Border
         {
             Width = 29, Height = 29, CornerRadius = new CornerRadius(9), Background = _p.Brand,
@@ -285,7 +275,37 @@ internal sealed class SessionThreadView : ScrollViewer
             },
         };
         bubble.HorizontalAlignment = HorizontalAlignment.Right;
-        return Row(bubble, left: null, right: who);
+
+        // Attachments (dropped/pasted files + images) ride under the bubble as chips, right-aligned to match.
+        Control middle = bubble;
+        if (u.Attachments.Count > 0)
+        {
+            var tray = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
+            foreach (var a in u.Attachments) tray.Children.Add(new AttachmentChip(_p, a));
+            middle = new StackPanel
+            {
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Children = { bubble, tray },
+            };
+        }
+        return Row(middle, left: null, right: who);
+    }
+
+    // The user's warm bubble for a plain text message, with any URLs in it made clickable.
+    private Border BubbleForText(string text)
+    {
+        var prose = new SelectableTextBlock
+        {
+            Text = text, FontSize = SessionPalette.ProseSize, FontFamily = _p.Body, Foreground = _p.Title,
+            TextWrapping = TextWrapping.Wrap, LineHeight = SessionPalette.ProseSize * 1.5,
+        };
+        LinkText.AttachDetected(prose, text);
+        return new Border
+        {
+            Background = _p.BrandWash, BorderBrush = _p.BrandLine, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(16, 16, 5, 16), Padding = new Thickness(15, 11),
+            MaxWidth = SessionPalette.ThreadMaxWidth * 0.76, Child = prose,
+        };
     }
 
     // Every row shares one three-column layout: a left gutter for Claude's mark, the content column, and a
@@ -542,6 +562,7 @@ internal sealed class SessionThreadView : ScrollViewer
             _outText.Text = text;
             _outText.Foreground = part.Status == ToolCallStatus.Failed ? _p.Err : _p.Muted;
             _out.IsVisible = text.Length > 0;
+            LinkText.AttachDetected(_outText, text);   // any URLs in tool output become clickable
         }
 
         private static string Glyph(string tool) => tool switch

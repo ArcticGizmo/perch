@@ -1,5 +1,3 @@
-using System.Text.RegularExpressions;
-
 namespace Perch.Data.Control;
 
 /// <summary>A kind of span the composer highlights. Extensible — add a kind here, a matcher in
@@ -23,15 +21,8 @@ internal readonly record struct InputToken(int Start, int Length, InputTokenKind
 /// commands today, hyperlinks and (later) mentions and the like. UI-free and deterministic so the rules are
 /// unit-testable; the renderer maps each <see cref="InputToken"/> to a coloured run.
 /// </summary>
-internal static partial class ComposerHighlighter
+internal static class ComposerHighlighter
 {
-    // http/https URLs. Deliberately liberal on the body (any non-space); trailing punctuation is trimmed below
-    // so a link at the end of a sentence doesn't swallow the full stop or closing bracket.
-    [GeneratedRegex(@"https?://\S+", RegexOptions.IgnoreCase)]
-    private static partial Regex LinkRegex();
-
-    private const string TrailingTrim = ").],;:!?\"'";
-
     /// <summary>Splits <paramref name="text"/> into an ordered, gap-free list of tokens covering the whole
     /// string (plain stretches come back as <see cref="InputTokenKind.Text"/>). A leading slash token is only
     /// marked a <see cref="InputTokenKind.Command"/> when <paramref name="isKnownCommand"/> recognises its
@@ -56,13 +47,9 @@ internal static partial class ComposerHighlighter
                 specials.Add(new InputToken(ws, end - ws, InputTokenKind.Command));
         }
 
-        // Links anywhere in the text.
-        foreach (Match m in LinkRegex().Matches(text))
-        {
-            int len = m.Length;
-            while (len > 0 && TrailingTrim.IndexOf(text[m.Index + len - 1]) >= 0) len--;
-            if (len > 0) specials.Add(new InputToken(m.Index, len, InputTokenKind.Link));
-        }
+        // Links anywhere in the text (shared detector, so composer highlighting and clickable links agree).
+        foreach (var u in UrlDetect.Find(text))
+            specials.Add(new InputToken(u.Start, u.Length, InputTokenKind.Link));
 
         specials.Sort((a, b) => a.Start.CompareTo(b.Start));
 

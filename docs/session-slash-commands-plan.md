@@ -36,7 +36,8 @@ Three mechanisms, in preference order:
   commands *not* in the list (e.g. `/cost`, `/status`) still execute as text. So: **seed the palette from
   `SessionConversation.SlashCommands`, but don't treat it as the whole truth** — carry a curated built-in
   catalogue (below) and merge. Filter out entries containing `:` or matching the known skills list to
-  keep skills out of the *built-in* palette section (show them in a separate "Skills" group if wanted).
+  keep skills out of the *built-in* palette section (they're now shown as their own `skill`-tagged group
+  below the built-ins — see `SkillCatalog` in the foundation checklist).
 - **Some commands mutate the session** (`/clear`, `/compact`, `/rename`) — Perch can't just render their
   output, it must react (reset the thread, drop a marker, update the title). These are the load-bearing
   ones; see the Tier-3 items.
@@ -56,14 +57,22 @@ render/live dogfood still owed (a running dev instance held the Windows-head DLL
 - [x] **Curated built-in catalogue.** `src/Perch.Core/Data/Control/SlashCommandCatalog.cs` — a static table
       (`SlashCommandInfo`: name, arg-hint, one-liner, `SlashCommandTier`) + `Search` (fuzzy, via `FuzzyMatch`),
       `LooksLikeCommand`, `CommandName`, `IsBuiltIn`, `IsInternal`. Tests: `tests/SlashCommandCatalogTests.cs`.
-      This is the palette's backbone since `init` under-reports; **skills are excluded by scope** (a Skills
-      group sourced from `init.SlashCommands` minus built-ins/internal is the deferred follow-up).
+      This is the palette's backbone since `init` under-reports.
+- [x] **Skills in the palette (the former deferred follow-up).** `src/Perch.Core/Data/Control/SkillCatalog.cs`
+      discovers user/project/plugin skills from the on-disk `SKILL.md` trees and returns them for a session;
+      `SlashCommandCatalog.Search(query, skills, …)` appends them (tier `Skill`, tag "skill") after the
+      built-ins, and `ToPaletteItems` tiers them. **Availability differs by source, so the sources differ:**
+      user + project skills (`~/.claude/skills`, `<cwd>/.claude/skills`) come straight from disk (always
+      live), but plugin skills are taken from the session's advertised `init.SlashCommands` (the plugins tree
+      holds every *installed* marketplace, only *enabled* plugins are live) with descriptions filled in from
+      disk. `SessionWindow.MaybeRebuildSkills` builds the list off the UI thread when the cwd/advertised set
+      changes. Tests: `tests/SkillCatalogTests.cs` (+ fixture `skills`/`plugins` trees under `fixtures/claude`).
 - [x] **Composer `/`-detection.** `SessionWindow._composer.TextChanged` → `UpdatePaletteFromText`: a lone
       slash-command token (leading `/`, no space yet) opens the palette; a space or non-command text closes it.
 - [x] **Command palette / autocomplete.** A `Popup` above the composer, driven entirely by composer text
       (focus stays on the composer; selection tracked and drawn manually). A bare `/` lists **every** command
       alphabetically in a scrollable popup (the selection scrolls into view); typing fuzzy-filters. Rows show
-      `/name` + arg hint + description + a tier tag (`text`/`perch`/`session`/`terminal`). Keys: ↑↓ select
+      `/name` + arg hint + description + a tier tag (`text`/`perch`/`session`/`terminal`/`skill`). Keys: ↑↓ select
       (wraps), ↹ complete, ↵ run
       (no-arg commands send immediately; arg commands complete with a trailing space), Esc dismiss, click =
       run. **Native routing:** accepting `/model` or `/effort` opens the existing pill flyout instead of

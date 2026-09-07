@@ -161,15 +161,33 @@ internal sealed class ClaudeSessionController : IDisposable
     }
 
     /// <summary>Queues a user prompt; the CLI runs a full agentic turn per prompt.</summary>
-    public void SendPrompt(string text) => WriteLine(new JsonObject
+    public void SendPrompt(string text) => SendPrompt(text, null);
+
+    /// <summary>Queues a user prompt, optionally with image attachments. The wire message's <c>content</c> is
+    /// a block array (the Anthropic Messages shape the stream-json input consumes): a <c>text</c> block plus
+    /// one <c>image</c> block per attachment (base64). Text-only sends stay exactly as before.</summary>
+    public void SendPrompt(string text, IReadOnlyList<ImageContent>? images)
     {
-        ["type"] = "user",
-        ["message"] = new JsonObject
+        var content = new JsonArray();
+        if (!string.IsNullOrEmpty(text))
+            content.Add(new JsonObject { ["type"] = "text", ["text"] = text });
+        if (images is not null)
+            foreach (var img in images)
+                content.Add(new JsonObject
+                {
+                    ["type"] = "image",
+                    ["source"] = new JsonObject
+                    {
+                        ["type"] = "base64", ["media_type"] = img.MediaType, ["data"] = img.Base64,
+                    },
+                });
+        if (content.Count == 0) return;   // nothing to send
+        WriteLine(new JsonObject
         {
-            ["role"] = "user",
-            ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }),
-        },
-    });
+            ["type"] = "user",
+            ["message"] = new JsonObject { ["role"] = "user", ["content"] = content },
+        });
+    }
 
     /// <summary>Answers a <see cref="PermissionRequestEvent"/>. On allow the tool's input is echoed back
     /// as <c>updatedInput</c> — unchanged, or <paramref name="updatedInput"/> when the caller edited it (how
