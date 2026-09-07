@@ -61,6 +61,8 @@ internal sealed class SessionPalette
     public SolidColorBrush ThinkWash { get; } = new(Colors.Transparent);
     /// <summary>Plan mode's colour in the session UI (pinned blue; see <c>ModeGlyph.Plan</c>).</summary>
     public SolidColorBrush Plan { get; } = new(Colors.Transparent);
+    public SolidColorBrush PlanWash { get; } = new(Colors.Transparent);
+    public SolidColorBrush PlanLine { get; } = new(Colors.Transparent);
 
     // Type. Each face lists its intended web font first (installed on some machines) then system fallbacks,
     // so the design reads as intended where the fonts exist and degrades to the platform sans elsewhere.
@@ -166,6 +168,8 @@ internal sealed class SessionPalette
         ThinkWash.Color = WashColor(muted, 0x0F);
         // Plan mode stays a distinct blue (the theme's burn hue), so it never collides with the accent.
         Plan.Color = t.Burn.ToColor();
+        PlanWash.Color = WashColor(Plan.Color, dark ? (byte)0x1F : (byte)0x1A);
+        PlanLine.Color = WashColor(Plan.Color, dark ? (byte)0x57 : (byte)0x52);
     }
 
     private static Color WashColor(Color c, byte alpha) => Color.FromArgb(alpha, c.R, c.G, c.B);

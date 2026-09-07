@@ -37,6 +37,25 @@ internal sealed class SessionThreadView : ScrollViewer
     private SessionConversation? _conv;
     private bool _stickToBottom = true;
 
+    // Every user-prompt row in order, so "jump to previous prompt" can walk upward through them; plus the cached
+    // scroll state the window's floating jump buttons watch (recomputed on every scroll/layout change).
+    private readonly List<Control> _userRows = new();
+    private bool _atBottom = true;
+    private bool _hasPromptAbove;
+
+    // A prompt whose top is within this many DIPs of the viewport top counts as "here", not "above" — so a
+    // repeated ↑ steps to the next one up rather than re-selecting the prompt already pinned to the top.
+    private const double PromptAboveEpsilon = 6;
+
+    /// <summary>True when the view is scrolled to (or near) the tail — the "jump to bottom" button hides.</summary>
+    public bool AtBottom => _atBottom;
+
+    /// <summary>True when a user prompt sits above the viewport — the "jump to previous prompt" button shows.</summary>
+    public bool HasPromptAbove => _hasPromptAbove;
+
+    /// <summary>Raised when <see cref="AtBottom"/> or <see cref="HasPromptAbove"/> changes.</summary>
+    public event Action? ScrollStateChanged;
+
     // "Claude is working" indicator: an avatar-aligned bubble of bouncing dots + the current action, kept as
     // the last child of _stack while a turn runs (and not paused on a permission). Reused across shows.
     private readonly Control _activityRow;
@@ -93,6 +112,7 @@ internal sealed class SessionThreadView : ScrollViewer
         // bottom away before we've scrolled to it, and must not be read as "the user scrolled up".
         ScrollChanged += (_, e) =>
         {
+            RecomputeScrollState();   // keep the floating jump buttons in sync with every scroll/growth
             if (e.ExtentDelta.Y != 0 || e.OffsetDelta.Y == 0) return;
             _stickToBottom = Offset.Y + Viewport.Height >= Extent.Height - 24;
         };
@@ -132,6 +152,7 @@ internal sealed class SessionThreadView : ScrollViewer
         }
         _conv = conversation;
         _activityShown = false;   // the row was cleared with the column; re-add it below if the turn is live
+        _userRows.Clear();
         _stack.Children.Clear();
         _views.Clear();
         _compactions.Clear();
@@ -218,6 +239,56 @@ internal sealed class SessionThreadView : ScrollViewer
     private void ScrollToEndSoon() =>
         Dispatcher.UIThread.Post(() => { if (_stickToBottom) ScrollToEnd(); }, DispatcherPriority.Background);
 
+    // ── Jump buttons (docs/session-composer-enhancements-plan.md §4) ──────────────
+
+    /// <summary>Scroll to the tail and resume following it (the "jump to bottom" button).</summary>
+    public void JumpToBottom()
+    {
+        _stickToBottom = true;
+        ScrollToEnd();
+        RecomputeScrollState();
+    }
+
+    /// <summary>Scroll to the nearest user prompt above the current viewport top, placing it near the top — so
+    /// repeated clicks walk upward through earlier prompts. No-op when nothing is above.</summary>
+    public void JumpToPreviousPrompt()
+    {
+        // The closest prompt above = the one with the greatest content-top still above the viewport top.
+        double bestTop = double.NegativeInfinity;
+        foreach (var row in _userRows)
+        {
+            if (row.TranslatePoint(new Point(0, 0), this) is not { } p) continue;
+            if (p.Y >= -PromptAboveEpsilon) continue;             // at/below the viewport top — not "above"
+            double top = Offset.Y + p.Y;                          // p is viewport-relative; +Offset → content Y
+            if (top > bestTop) bestTop = top;
+        }
+        if (double.IsNegativeInfinity(bestTop)) return;
+        double max = Math.Max(0, Extent.Height - Viewport.Height);
+        Offset = new Vector(Offset.X, Math.Clamp(bestTop - 12, 0, max));
+        _stickToBottom = false;
+        RecomputeScrollState();
+    }
+
+    // Recompute whether the tail is in view and whether any prompt sits above it, and notify the window when
+    // either flips.
+    private void RecomputeScrollState()
+    {
+        bool atBottom = Offset.Y + Viewport.Height >= Extent.Height - 24;
+        bool above = false;
+        if (Viewport.Height > 0)
+            foreach (var row in _userRows)
+                if (row.TranslatePoint(new Point(0, 0), this) is { } p && p.Y < -PromptAboveEpsilon)
+                {
+                    above = true;
+                    break;
+                }
+
+        if (atBottom == _atBottom && above == _hasPromptAbove) return;
+        _atBottom = atBottom;
+        _hasPromptAbove = above;
+        ScrollStateChanged?.Invoke();
+    }
+
     // ── Items ────────────────────────────────────────────────────────────────────
 
     private void AddItem(ConversationItem item)
@@ -233,6 +304,8 @@ internal sealed class SessionThreadView : ScrollViewer
         };
         _views[item] = view;
         _stack.Children.Add(view.Root);
+        if (item is UserMessageItem) _userRows.Add(view.Root);
+        Dispatcher.UIThread.Post(RecomputeScrollState, DispatcherPriority.Background);
     }
 
     private void UpdateItem(ConversationItem item)
@@ -273,7 +346,7 @@ internal sealed class SessionThreadView : ScrollViewer
                     TextWrapping = TextWrapping.Wrap,
                 },
             }
-            : BubbleForText(u.Text);
+            : BubbleForText(u.Text, u.Attachments);
         var who = new Border
         {
             Width = 29, Height = 29, CornerRadius = new CornerRadius(9), Background = _p.Brand,
@@ -288,22 +361,50 @@ internal sealed class SessionThreadView : ScrollViewer
         bubble.HorizontalAlignment = HorizontalAlignment.Right;
 
         // Attachments (dropped/pasted files + images) ride under the bubble as chips, right-aligned to match.
+        // An image-only message (e.g. a resumed "[Image #1]" whose text stripped to nothing) shows just the
+        // chips — no empty bubble above them.
+        bool hasText = !string.IsNullOrWhiteSpace(u.Text);
         Control middle = bubble;
         if (u.Attachments.Count > 0)
         {
             var tray = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
             foreach (var a in u.Attachments) tray.Children.Add(new AttachmentChip(_p, a));
-            middle = new StackPanel
-            {
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Children = { bubble, tray },
-            };
+            middle = hasText
+                ? new StackPanel { HorizontalAlignment = HorizontalAlignment.Right, Children = { bubble, tray } }
+                : tray;
         }
-        return Row(middle, left: null, right: who);
+        return Row(WithCopy(middle, () => u.Text, userSide: true), left: null, right: who);
     }
 
-    // The user's warm bubble for a plain text message, with any URLs in it made clickable.
-    private Border BubbleForText(string text)
+    // Wraps a message bubble so a hover-revealed "copy" button floats at its interior top corner (the user's
+    // is top-left, Claude's top-right, each away from that side's avatar). The text is read lazily on click,
+    // so a still-streaming assistant bubble copies whatever it holds at that moment.
+    private Control WithCopy(Control content, Func<string?> text, bool userSide)
+    {
+        var btn = new CopyButton(_p, text)
+        {
+            HorizontalAlignment = userSide ? HorizontalAlignment.Left : HorizontalAlignment.Right,
+            Margin = userSide ? new Thickness(9, 9, 0, 0) : new Thickness(0, 9, 9, 0),
+        };
+        var grid = new Grid
+        {
+            Background = Brushes.Transparent,
+            HorizontalAlignment = userSide ? HorizontalAlignment.Right : HorizontalAlignment.Stretch,
+        };
+        grid.Children.Add(content);
+        grid.Children.Add(btn);
+        grid.PointerEntered += (_, _) => btn.Reveal(true);
+        grid.PointerExited += (_, _) => btn.Reveal(false);
+        return grid;
+    }
+
+    // The plain text of an assistant turn (its rendered prose blocks, joined) for the copy button.
+    private static string AssistantPlainText(AssistantMessageItem a) =>
+        string.Join("\n\n", a.Parts.OfType<TextPart>().Select(p => p.Text).Where(t => !string.IsNullOrWhiteSpace(t)));
+
+    // The user's warm bubble for a plain text message, with any URLs made clickable and any "[Image #N]"
+    // placeholder (a resumed message that carried an image) made hover-preview + click-to-open.
+    private Border BubbleForText(string text, IReadOnlyList<MessageAttachment>? attachments = null)
     {
         var prose = new SelectableTextBlock
         {
@@ -311,11 +412,15 @@ internal sealed class SessionThreadView : ScrollViewer
             TextWrapping = TextWrapping.Wrap, LineHeight = SessionPalette.ProseSize * 1.5,
         };
         LinkText.AttachDetected(prose, text);
+        // The popup ImageRefText floats needs a rooted parent, so the prose lives inside a host panel.
+        var host = new Panel { Children = { prose } };
+        if (attachments is { Count: > 0 })
+            ImageRefText.Attach(prose, host, text, attachments, _p);
         return new Border
         {
             Background = _p.BrandWash, BorderBrush = _p.BrandLine, BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(16, 16, 5, 16), Padding = new Thickness(15, 11),
-            MaxWidth = SessionPalette.ThreadMaxWidth * 0.76, Child = prose,
+            MaxWidth = SessionPalette.ThreadMaxWidth * 0.76, Child = host,
         };
     }
 
@@ -361,7 +466,7 @@ internal sealed class SessionThreadView : ScrollViewer
             CornerRadius = new CornerRadius(5, 16, 16, 16), Padding = new Thickness(15, 12, 15, 2),
             Child = body,
         };
-        var view = new ItemView { Root = Row(bubble, left: avatar, right: null), Body = body };
+        var view = new ItemView { Root = Row(WithCopy(bubble, () => AssistantPlainText(a), userSide: false), left: avatar, right: null), Body = body };
         SyncParts(view, a);
         return view;
     }
@@ -663,6 +768,7 @@ internal sealed class SessionThreadView : ScrollViewer
         var r = item.Request;
         if (item.Resolution != PermissionResolution.Pending) return BuildPermissionReceipt(item);
         if (item.IsQuestion) return BuildQuestion(item);
+        if (item.IsPlan) return BuildPlanCard(item);
 
         var badge = new StackPanel
         {
@@ -730,6 +836,73 @@ internal sealed class SessionThreadView : ScrollViewer
             Foreground = _p.Faint, Margin = new Thickness(2, 0, 0, 0),
         };
         return new StackPanel { Spacing = 6, Children = { card, meta } };
+    }
+
+    // Claude presenting a plan to carry out (ExitPlanMode): the plan rendered as markdown, with Approve /
+    // Approve & <suggested mode> / Keep planning. Approve is the normal permission allow (which lets the CLI
+    // leave plan mode and proceed); Keep planning denies, so Claude stays in plan mode. Plan-blue, so it reads
+    // as a decision beat distinct from a tool-permission gate.
+    private Control BuildPlanCard(PermissionItem item)
+    {
+        var r = item.Request;
+        var badge = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 7,
+            Children =
+            {
+                new Ellipse { Width = 8, Height = 8, Fill = _p.Plan, VerticalAlignment = VerticalAlignment.Center },
+                new TextBlock
+                {
+                    Text = "PLAN — REVIEW", FontFamily = _p.Mono, FontSize = 11.5, FontWeight = FontWeight.Bold,
+                    Foreground = _p.Plan, LetterSpacing = 0.6, VerticalAlignment = VerticalAlignment.Center,
+                },
+            },
+        };
+        var title = new TextBlock
+        {
+            Text = "Proceed with this plan?", FontFamily = _p.Display, FontWeight = FontWeight.Bold, FontSize = 15.5,
+            Foreground = _p.Title, Margin = new Thickness(15, 6, 15, 2), TextWrapping = TextWrapping.Wrap,
+        };
+        // The plan itself, as markdown; a long plan scrolls inside the card rather than pushing the buttons away.
+        var planText = PlanApprovalInput.Parse(r.InputJson) is { Length: > 0 } md ? md : "_(no plan text)_";
+        var body = new ScrollViewer
+        {
+            MaxHeight = 360, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new Thickness(15, 8, 15, 0),
+            Content = Prose(planText),
+        };
+
+        var approve = new SessionButton(_p, "Approve", SessionButtonKind.Primary, "↵");
+        approve.Click += () => PermissionAnswered?.Invoke(item, true, false);
+        var keep = new SessionButton(_p, "Keep planning", SessionButtonKind.Quiet, "esc");
+        keep.Click += () => PermissionAnswered?.Invoke(item, false, false);
+        var actions = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(15, 14, 15, 15) };
+        actions.Children.Add(approve);
+        if (r.SuggestedMode is { Length: > 0 } mode)
+        {
+            var approveMode = new SessionButton(_p, $"Approve & {ModeLabel(mode)}", SessionButtonKind.Ghost)
+            {
+                Margin = new Thickness(9, 0, 0, 0),
+            };
+            approveMode.Click += () => PermissionAnswered?.Invoke(item, true, true);
+            actions.Children.Add(approveMode);
+        }
+        keep.Margin = new Thickness(9, 0, 0, 0);
+        actions.Children.Add(keep);
+
+        return new Border
+        {
+            BorderBrush = _p.PlanLine, BorderThickness = new Thickness(1), Background = _p.PlanWash,
+            CornerRadius = new CornerRadius(14), ClipToBounds = true,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new Border { Padding = new Thickness(15, 12, 15, 4), Child = badge },
+                    title, body, actions,
+                },
+            },
+        };
     }
 
     // Claude asking the user something (AskUserQuestion): one block per question — header chip, the question,
@@ -868,19 +1041,22 @@ internal sealed class SessionThreadView : ScrollViewer
         var r = item.Request;
         var (glyph, brush, word) = item.Resolution switch
         {
-            PermissionResolution.Allowed => ("✓", _p.Ok, item.IsQuestion ? "Answered" : "Allowed"),
-            PermissionResolution.Denied  => ("✕", _p.Err, item.IsQuestion ? "Skipped" : "Denied"),
+            PermissionResolution.Allowed => ("✓", _p.Ok, item.IsQuestion ? "Answered" : item.IsPlan ? "Approved plan" : "Allowed"),
+            PermissionResolution.Denied  => ("✕", _p.Err, item.IsQuestion ? "Skipped" : item.IsPlan ? "Kept planning" : "Denied"),
             _                            => ("◌", _p.Faint, "Expired"),
         };
+        bool prose = item.IsQuestion || item.IsPlan;   // question/plan detail reads as prose, not a mono command
         var detail = item.IsQuestion
             ? (item.AnswerSummary is { Length: > 0 } s ? s : ToolSummary.Describe(r.ToolName, ParseOrNull(r.InputJson)))
-            : ToolSummary.Clip(CommandText(r));
+            : item.IsPlan
+                ? PlanGist(r.InputJson)
+                : ToolSummary.Clip(CommandText(r));
         var text = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
         text.Inlines = new InlineCollection
         {
             new Run(glyph + "  ") { Foreground = brush, FontWeight = FontWeight.Bold, FontSize = 13 },
-            new Run(item.IsQuestion ? word : word + " " + r.ToolName) { Foreground = _p.Muted, FontWeight = FontWeight.SemiBold, FontSize = 13, FontFamily = _p.Body },
-            new Run("  ·  " + detail) { Foreground = _p.Faint, FontSize = 12.5, FontFamily = item.IsQuestion ? _p.Body : _p.Mono },
+            new Run(prose ? word : word + " " + r.ToolName) { Foreground = _p.Muted, FontWeight = FontWeight.SemiBold, FontSize = 13, FontFamily = _p.Body },
+            new Run("  ·  " + detail) { Foreground = _p.Faint, FontSize = 12.5, FontFamily = prose ? _p.Body : _p.Mono },
         };
         if (item.SwitchedMode is { Length: > 0 } switched)
             text.Inlines.Add(new Run($"  ·  now {ModeLabel(switched)}") { Foreground = _p.Violet, FontSize = 12.5, FontFamily = _p.Body });
@@ -927,6 +1103,16 @@ internal sealed class SessionThreadView : ScrollViewer
         if (r.Description.Length > 0) return r.Description;
         var pretty = PrettyJson(r.InputJson);
         return pretty.Length > 800 ? pretty[..800] + "…" : pretty;
+    }
+
+    // A one-line gist of a plan for its resolved receipt: the first meaningful line, stripped of markdown marks.
+    internal static string PlanGist(string inputJson)
+    {
+        var plan = PlanApprovalInput.Parse(inputJson) ?? "";
+        var first = plan.Split('\n')
+                        .Select(l => l.Trim().TrimStart('#', '-', '*', ' '))
+                        .FirstOrDefault(l => l.Length > 0) ?? "";
+        return ToolSummary.Clip(first);
     }
 
     internal static string ModeLabel(string mode) => mode switch

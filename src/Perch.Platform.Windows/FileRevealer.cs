@@ -44,4 +44,18 @@ public sealed class FileRevealer : IFileRevealer
             catch { /* give up quietly */ }
         }
     }
+
+    public void OpenWith(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+        try
+        {
+            // The shell's "Open with…" chooser dialog.
+            var psi = new ProcessStartInfo("rundll32.exe") { UseShellExecute = false };
+            psi.ArgumentList.Add("shell32.dll,OpenAs_RunDLL");
+            psi.ArgumentList.Add(path);
+            Process.Start(psi);
+        }
+        catch { /* best-effort */ }
+    }
 }

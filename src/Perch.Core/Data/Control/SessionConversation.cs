@@ -94,6 +94,9 @@ internal sealed class PermissionItem(PermissionRequestEvent request) : Conversat
     /// <summary>The mode the user switched to when allowing (the CLI's suggestion), if any.</summary>
     public string? SwitchedMode { get; internal set; }
     public bool IsQuestion => Request.ToolName == AskUserQuestionInput.ToolName;
+    /// <summary>True when this is an <c>ExitPlanMode</c> approval — Claude presenting a plan to carry out, not
+    /// a tool-run permission. The UI shows a plan-approval card.</summary>
+    public bool IsPlan => Request.ToolName == PlanApprovalInput.ToolName;
     /// <summary>For a question: what was answered, as a one-line receipt.</summary>
     public string? AnswerSummary { get; internal set; }
 }
@@ -110,6 +113,10 @@ internal sealed class SessionConversation
 {
     private readonly List<ConversationItem> _items = new();
     private readonly Dictionary<string, (AssistantMessageItem Owner, ToolCallPart Part)> _toolCalls = new();
+
+    // The session id a history load is for, so an image-bearing user line can resolve its cached image files
+    // (~/.claude/image-cache/{sessionId}/{N}.ext). Set on the scratch conversation in LoadHistory; null live.
+    private string? _historySessionId;
 
     // The /compact currently running (its progress row), and the context size just before it, so the freed
     // amount can be reported when the compaction turn's result lands. Null when no compaction is in flight.
@@ -364,9 +371,9 @@ internal sealed class SessionConversation
     /// echoes) become user items. Everything loaded is closed (no turn bookkeeping) and <see cref="Reset"/>
     /// is raised once. Returns how many items were added. Never throws on a bad line.
     /// </summary>
-    public int LoadHistory(IEnumerable<string> transcriptLines)
+    public int LoadHistory(IEnumerable<string> transcriptLines, string? sessionId = null)
     {
-        var scratch = new SessionConversation();
+        var scratch = new SessionConversation { _historySessionId = sessionId };
         foreach (var line in transcriptLines)
         {
             try { scratch.ApplyTranscriptLine(line); }
@@ -394,7 +401,11 @@ internal sealed class SessionConversation
         if (root["isSidechain"]?.GetValue<bool>() == true) return;   // a sub-agent's line, not this thread
         if (TranscriptJson.AsString(root["type"]) == "user" && GenuineUserPrompt(root) is { } prompt)
         {
-            Append(new UserMessageItem(prompt));
+            // A resumed message that carried a pasted image: recover the image as an attachment. The "[Image #N]"
+            // placeholder is kept in the text (it gives context, and the view makes the token itself hover/click
+            // to the image) — the k-th token pairs with the k-th image attachment.
+            var images = TranscriptImages.Extract(TranscriptJson.ContentArray(root), prompt, _historySessionId);
+            Append(new UserMessageItem(prompt, images.Count > 0 ? images : null));
             return;
         }
         foreach (var ev in StreamJsonParser.Parse(line)) Apply(ev);
@@ -424,6 +435,15 @@ internal sealed class SessionConversation
             return null;
         return text;
     }
+
+    /// <summary>Every user prompt in the thread, oldest first, for the composer's ↑/↓ input-history recall.
+    /// Includes resumed history (it reads the same <see cref="UserMessageItem"/>s) and skips blank entries
+    /// (an image-only message whose text stripped to nothing).</summary>
+    public IReadOnlyList<string> UserPromptHistory() =>
+        _items.OfType<UserMessageItem>()
+              .Select(u => u.Text)
+              .Where(t => !string.IsNullOrWhiteSpace(t))
+              .ToList();
 
     /// <summary>Records a prompt the user sent (the controller already wrote it to the CLI), with any
     /// attachments for display.</summary>

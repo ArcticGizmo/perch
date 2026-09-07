@@ -367,6 +367,50 @@ public class SessionConversationTests
     }
 
     [Fact]
+    public void LoadHistory_RecoversPastedImageAsAttachment_KeepingPlaceholder()
+    {
+        var (conv, _) = Make();
+        // A resumed user message with a "[Image #1]" token plus the image block. No image-cache file exists for
+        // this synthetic id, so it takes the base64-decode fallback and writes the bytes to a temp file.
+        var line =
+            """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Image #1] do nothing, just testing"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8gd29ybGQ="}}]}}""";
+
+        Assert.Equal(1, conv.LoadHistory(new[] { line }, "synthetic-session-id"));
+
+        var u = Assert.IsType<UserMessageItem>(conv.Items[0]);
+        Assert.Equal("[Image #1] do nothing, just testing", u.Text);   // the placeholder stays (the token is interactive)
+        var att = Assert.Single(u.Attachments);
+        Assert.Equal(AttachmentKind.Image, att.Kind);
+        Assert.Equal("image/png", att.MediaType);
+        Assert.True(File.Exists(att.Path));
+    }
+
+    [Fact]
+    public void UserPromptHistory_IsOldestFirst_SkippingBlanks()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("first prompt");
+        conv.AddUserPrompt("second prompt");
+        conv.AddUserPrompt("", new[] { new MessageAttachment { Kind = AttachmentKind.Image, Path = @"C:\tmp\x.png" } });
+
+        Assert.Equal(new[] { "first prompt", "second prompt" }, conv.UserPromptHistory());
+    }
+
+    [Fact]
+    public void ExitPlanMode_IsAPendingPlanItem_NotAQuestion()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("build a thing");
+        conv.Apply(new PermissionRequestEvent("r1", "ExitPlanMode", "", """{"plan":"## Steps\n1. do it"}""", "acceptEdits"));
+
+        var p = Assert.IsType<PermissionItem>(conv.PendingPermission);
+        Assert.True(p.IsPlan);
+        Assert.False(p.IsQuestion);
+        Assert.Equal(PermissionResolution.Pending, p.Resolution);
+        Assert.Equal("## Steps\n1. do it", PlanApprovalInput.Parse(p.Request.InputJson));
+    }
+
+    [Fact]
     public void SessionEnded_SettlesEverythingInFlight()
     {
         var (conv, _) = Make();

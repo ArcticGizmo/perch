@@ -77,6 +77,14 @@ running the tray app.
 
 ## Conventions & gotchas
 
+- **A file path shown in a bounded/one-line space must keep the *file name* and sacrifice the leading
+  directory** (how VS Code truncates paths). When a row can't fit the whole path, the **tail (the name) always
+  stays legible** and the **head (the directory) is what gets elided** — never the reverse. Two ways to do it:
+  set `TextTrimming = TextTrimming.PrefixCharacterEllipsis` on a single text block (leading ellipsis, keeps the
+  end), or a `DockPanel` with the name pinned (never trimmed) and the directory as the fill child carrying the
+  leading ellipsis. **Never** use plain `TextTrimming.CharacterEllipsis` on a path (it trims the name off the
+  right). Applies to every path list/pill: the changed-files panel (`SessionWindow.Changes.cs`), the composer's
+  `@`-mention rows, the image viewer caption, and any future one.
 - **Never use `TextBox.Watermark` — set placeholder text via `PlaceholderText`.** `Watermark` is obsolete
   in Avalonia (CS0618) and banned here: a source-scan test (`UiConventionTests`) fails the build if the word
   `Watermark` appears anywhere under `src/`.

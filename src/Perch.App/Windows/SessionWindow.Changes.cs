@@ -222,9 +222,18 @@ internal sealed partial class SessionWindow
                 },
             };
 
-            var name = PathLeaf.Of(s.Path);
-            var dir = s.Path.Length > name.Length ? s.Path[..^name.Length] : "";
-            var pathText = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
+            // A collapsed untracked directory arrives with a trailing slash; keep it as a "/" suffix so the row
+            // reads as a folder, but strip it before splitting name/dir (else "artefacts/" − "artefacts" leaves
+            // "a" as the dir prefix → "aartefacts").
+            var normalized = s.Path.Replace('\\', '/');
+            bool isDir = normalized.EndsWith('/');
+            var trimmed = normalized.TrimEnd('/');
+            var leaf = PathLeaf.Of(trimmed);
+            var dir = trimmed.Length > leaf.Length ? trimmed[..^leaf.Length] : "";
+            var name = leaf + (isDir ? "/" : "");
+            // Filename-priority (CLAUDE.md path-display convention): leading ellipsis, so a cramped row sacrifices
+            // the directory head and always keeps the file name (the tail) legible.
+            var pathText = new TextBlock { TextTrimming = TextTrimming.PrefixCharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
             pathText.Inlines = new InlineCollection();
             if (dir.Length > 0) pathText.Inlines.Add(new Run(dir) { Foreground = _p.Faint, FontSize = 12, FontFamily = _p.Mono });
             pathText.Inlines.Add(new Run(name) { Foreground = _p.Title, FontSize = 12.5, FontFamily = _p.Mono });
@@ -257,11 +266,12 @@ internal sealed partial class SessionWindow
             return row;
         }
 
-        // The status letter + hue for a change: green add / untracked, blue-ish modified, red delete, violet
-        // rename/copy. Drawn as a coloured letter on a raised chip.
+        // The status letter + hue for a change: green add (new/untracked included), amber modified, red delete,
+        // violet rename/copy. Drawn as a coloured letter on a raised chip. (Untracked new files read as "A"
+        // too — a bare "?" looked like a broken/missing glyph.)
         private (string Letter, IBrush Color) KindGlyph(GitChangeStat s) => s.Kind switch
         {
-            GitChangeKind.Added       => (s.Untracked ? "?" : "A", _p.Ok),
+            GitChangeKind.Added       => ("A", _p.Ok),
             GitChangeKind.Modified    => ("M", _p.Await),
             GitChangeKind.Deleted     => ("D", _p.Err),
             GitChangeKind.Renamed     => ("R", _p.Violet),

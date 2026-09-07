@@ -1684,6 +1684,8 @@ public partial class App : Application
         // File references in the session UI: open a Markdown file in the viewer, or a file's diff in the tree.
         w.OpenFileInViewerRequested += path => OpenSessionFileInViewer(w, path);
         w.ViewFileDiffRequested += path => ViewSessionFileDiff(w, path);
+        // A background session needing a decision (permission / question / plan) raises a desktop toast.
+        w.AttentionRequested += (title, body) => _notifier?.Show(title, body, ToastLevel.Warning, null, null);
         _sessionWindows.Add(w);
         w.Closed += (_, _) => _sessionWindows.Remove(w);
         return w;

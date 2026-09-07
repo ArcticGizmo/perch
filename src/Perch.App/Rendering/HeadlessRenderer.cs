@@ -1214,6 +1214,19 @@ internal static class HeadlessRenderer
         };
         Capture(Theming.SessionPalette.For(dark: true), "session_question_1x.png", askEvents, "Ask me to pick between an apple and a banana");
 
+        // Plan mode (ExitPlanMode) — Claude presenting a plan to carry out, as a first-class approval card
+        // (Approve / Approve & accept-edits / Keep planning), the plan rendered as markdown.
+        const string planInput =
+            """{"plan":"## Plan\n\nAdd the `{sessionId}.perch-lock` ownership sidecar:\n\n1. **Write the lock** in `ControlledSessions.Register` (delete on unregister) so ownership is visible on disk.\n2. **Guard at `SessionStart`** in `perch-hook`: if a normal `claude` opens a locked id, warn (fail-open).\n3. **Sweep stale locks** in `perch-hook cleanup` and at tray start.\n\nI'll add unit tests for `SessionLock.Acquire`/`HeldByOther` alongside."}""";
+        var planEvents = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "plan", 18),
+            new Perch.Data.Control.AssistantTextEvent("Here's how I'd approach the ownership sidecar."),
+            new Perch.Data.Control.ToolUseEvent("p1", "ExitPlanMode", "Presenting a plan", planInput),
+            new Perch.Data.Control.PermissionRequestEvent("req-p1", "ExitPlanMode", "", planInput, "acceptEdits"),
+        };
+        Capture(Theming.SessionPalette.For(dark: true), "session_plan_1x.png", planEvents, "Plan out the perch-lock sidecar");
+
         // The launcher: folder chosen, model picker, and a recents list including a "live elsewhere" row.
         var now = DateTime.Now;
         var launcher = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 640 };

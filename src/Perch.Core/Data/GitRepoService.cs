@@ -36,7 +36,9 @@ internal sealed class GitRepoService
     private static readonly string LogFormat = $"--format=%H{Us}%h{Us}%an{Us}%aI{Us}%s{Us}%P{Us}%B";
 
     /// <summary>The working tree's status (branch, ahead/behind, changed paths), or null when
-    /// <paramref name="cwd"/> isn't a readable git repo. Runs <c>git status --porcelain=v2 --branch</c>.</summary>
+    /// <paramref name="cwd"/> isn't a readable git repo. Runs <c>git status --porcelain=v2 --branch</c>
+    /// (untracked directories stay collapsed to a single <c>dir/</c> entry — the default; expanding them with
+    /// <c>-uall</c> can walk a huge tree, and the changed-files panel then renders each folder as its own row).</summary>
     public GitRepoStatus? GetStatus(string cwd)
     {
         if (!IsRepo(cwd))
@@ -164,6 +166,11 @@ internal sealed class GitRepoService
     /// whole-file diff (<see cref="GetUntrackedDiff"/>). Empty when <paramref name="cwd"/> isn't a repo.
     /// Best-effort and never throws. Runs off the UI thread (spawns git).
     /// </summary>
+    // A ceiling on how many untracked files we'll open a per-file `git diff --no-index` for. Each is a process
+    // spawn; a repo with a large untracked tree would otherwise storm the disk. Beyond it, untracked files still
+    // list (as new) but without line counts.
+    private const int MaxUntrackedDiffs = 100;
+
     public IReadOnlyList<GitChangeStat> GetChangeStats(string cwd)
     {
         var status = GetStatus(cwd);
@@ -174,16 +181,21 @@ internal sealed class GitRepoService
         var numstat = exit == 0 ? ParseNumstat(stdout) : new Dictionary<string, (int, int, bool)>();
 
         var list = new List<GitChangeStat>(st.Changes.Count);
+        int untrackedDiffs = 0;
         foreach (var ch in st.Changes)
         {
             int added = 0, removed = 0;
             bool binary = false;
             if (ch.Untracked)
             {
-                // A new file git isn't tracking yet: its whole content is "added". GetUntrackedDiff renders it
-                // as an added-file diff, which also flags binary.
-                if (GetUntrackedDiff(cwd, ch.Path) is { Files.Count: > 0 } d)
+                // A new file git isn't tracking yet: its whole content is "added". Skip a collapsed directory
+                // entry (a trailing slash) — diffing it would recurse the whole folder — and cap the number of
+                // per-file diffs so a big untracked tree can't spawn a storm of git processes.
+                bool isDir = ch.Path.EndsWith('/') || ch.Path.EndsWith('\\');
+                if (!isDir && untrackedDiffs < MaxUntrackedDiffs
+                    && GetUntrackedDiff(cwd, ch.Path) is { Files.Count: > 0 } d)
                 {
+                    untrackedDiffs++;
                     var f = d.Files[0];
                     binary = f.IsBinary;
                     added = f.Hunks.Sum(h => h.Lines.Count(l => l.Kind == GitDiffLineKind.Added));

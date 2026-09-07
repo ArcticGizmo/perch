@@ -41,7 +41,7 @@ internal sealed class AttachmentChip : Border
 
     private Control BuildImage()
     {
-        var bmp = TryLoad(240);
+        var bmp = TryLoad(320);   // the little inline thumbnail; the hover preview loads full-res separately
         Control thumb = bmp is not null
             ? new Image { Source = bmp, Height = 46, MaxWidth = 120, Stretch = Stretch.UniformToFill }
             : new TextBlock { Text = "🖼", FontSize = 20, Margin = new Thickness(10, 8) };
@@ -52,7 +52,7 @@ internal sealed class AttachmentChip : Border
             MaxWidth = 160, Margin = new Thickness(9, 0, 11, 0),
         };
         var row = new StackPanel { Orientation = Orientation.Horizontal, Children = { thumb, name } };
-        if (bmp is not null) WirePreview(bmp);
+        if (bmp is not null) WirePreview();
         ToolTip.SetTip(this, "Click to open");
         return row;
     }
@@ -106,9 +106,15 @@ internal sealed class AttachmentChip : Border
         return dock;
     }
 
-    // A hover preview: a larger copy of the image floating above the chip.
-    private void WirePreview(Bitmap bmp)
+    // A hover preview: a larger, full-resolution copy of the image floating above the chip. Loaded lazily on
+    // the first hover so a long thread doesn't decode every image up front — and at native resolution (not the
+    // upscaled thumbnail), which is what kept the old preview looking soft.
+    private Bitmap? _previewBmp;
+    private Image? _previewImage;
+
+    private void WirePreview()
     {
+        _previewImage = new Image { MaxWidth = 560, MaxHeight = 560, Stretch = Stretch.Uniform };
         _preview = new Popup
         {
             PlacementTarget = this, Placement = PlacementMode.Top, VerticalOffset = -6,
@@ -118,11 +124,19 @@ internal sealed class AttachmentChip : Border
                 Background = _p.Surface, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
                 CornerRadius = SessionPalette.CardRadius, Padding = new Thickness(6),
                 BoxShadow = BoxShadows.Parse("0 10 30 0 #66000000"),
-                Child = new Image { Source = bmp, MaxWidth = 420, MaxHeight = 420, Stretch = Stretch.Uniform },
+                Child = _previewImage,
             },
         };
         LogicalChildren.Add(_preview);
-        PointerEntered += (_, _) => { if (_preview is { } pv) pv.IsOpen = true; };
+        PointerEntered += (_, _) =>
+        {
+            if (_previewBmp is null && _previewImage is { } img)
+            {
+                _previewBmp = TryLoadFull();
+                if (_previewBmp is not null) img.Source = _previewBmp;
+            }
+            if (_previewBmp is not null && _preview is { } pv) pv.IsOpen = true;
+        };
         PointerExited += (_, _) => { if (_preview is { } pv) pv.IsOpen = false; };
     }
 
@@ -136,8 +150,17 @@ internal sealed class AttachmentChip : Border
         catch { return null; }
     }
 
+    // Full native resolution, for the hover preview and the in-app viewer (no decode-to-width recompression).
+    private Bitmap? TryLoadFull()
+    {
+        try { return new Bitmap(_a.Path); }
+        catch { return null; }
+    }
+
+    // Images open in the in-app viewer (which offers reveal / open-with); a plain file uses the OS handler.
     private void Open()
     {
+        if (_a.Kind == AttachmentKind.Image) { Windows.ImageViewerWindow.ShowFor(_a.Path); return; }
         try { PlatformServices.UrlOpener.Open(_a.Path); } catch { }
     }
 }

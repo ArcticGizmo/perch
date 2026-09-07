@@ -22,7 +22,7 @@ internal sealed class PerchSession : IDisposable
     public string Cwd { get; }
     /// <summary>The model as launched or last switched to (the CLI reports the launch model in init only).</summary>
     public string? Model { get; private set; }
-    public string? PermissionMode { get; }
+    public string? PermissionMode { get; private set; }
     /// <summary>The effort level as launched or last set; null = the CLI's default ("auto").</summary>
     public string? Effort { get; private set; }
 
@@ -133,7 +133,7 @@ internal sealed class PerchSession : IDisposable
                 return;
             }
             var (lines, clipped, contextTokens, title) = t.Result;
-            int n = Conversation.LoadHistory(lines);
+            int n = Conversation.LoadHistory(lines, sessionId);
             Conversation.SeedContextTokens(contextTokens);
             SetTitle(title);
             if (clipped && n > 0) Conversation.AddNote("showing the most recent part of a long transcript");
@@ -239,7 +239,16 @@ internal sealed class PerchSession : IDisposable
         Conversation.ResolvePermission(item, allowed: true, answerSummary: AskUserQuestionInput.Summarise(questions, answers));
     }
 
-    public void SetPermissionMode(string mode) => _controller?.SetPermissionMode(mode);
+    /// <summary>Switches the permission mode for the rest of the session. The displayed mode updates
+    /// optimistically (the CLI defers the <c>set_permission_mode</c> ack until the next turn, so waiting on it
+    /// leaves the pill stale); the ack's own "permission mode → X" note still lands when it arrives.</summary>
+    public void SetPermissionMode(string mode)
+    {
+        if (_controller is not { IsRunning: true } c) return;
+        c.SetPermissionMode(mode);
+        PermissionMode = mode;
+        Conversation.SetSessionId(SessionId);   // nudge StateChanged so the mode pill refreshes now
+    }
 
     /// <summary>Switches the model for the rest of the session (control request; no ack is surfaced).</summary>
     public void SetModel(string model)

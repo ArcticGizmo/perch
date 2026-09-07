@@ -44,4 +44,17 @@ public sealed class FileRevealer : IFileRevealer
             catch { /* give up quietly */ }
         }
     }
+
+    public void OpenWith(string path)
+    {
+        // macOS has no simple CLI "Open with…" chooser; open with the default handler as the closest action.
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try
+        {
+            var psi = new ProcessStartInfo("open") { UseShellExecute = false };
+            psi.ArgumentList.Add(path);
+            Process.Start(psi);
+        }
+        catch { /* best-effort */ }
+    }
 }

@@ -107,6 +107,15 @@ internal sealed partial class SessionWindow : Window
     private readonly Panel _center;
     private readonly Control _launcher;
     private readonly SessionThreadView _thread;
+    private readonly Border _jumpBottomBtn, _jumpPromptBtn;   // floating "jump to bottom" / "jump to last prompt"
+
+    // Background attention: a paused-turn prompt (permission / question / plan) arriving while this window
+    // isn't active raises a desktop toast so the user working elsewhere doesn't miss it. The decider is
+    // edge-triggered (one cue per pending item); the app wires AttentionRequested to the notifier.
+    private readonly SessionAttention _attention = new();
+
+    /// <summary>Raised (title, body) when a background session needs the user's attention.</summary>
+    public event Action<string, string>? AttentionRequested;
 
     // Launcher
     private readonly AutoCompleteBox _folderBox;   // free-text project folder, searchable over past projects
@@ -170,6 +179,23 @@ internal sealed partial class SessionWindow : Window
     // changes. See SkillCatalog + MaybeRebuildSkills.
     private IReadOnlyList<SlashCommandInfo> _skillCommands = [];
     private (string Cwd, int Advertised) _skillsBuiltFor = ("", -1);
+
+    // File mentions (type "@" in the composer): a popover of the project's files, fuzzy-filtered, mirroring the
+    // command palette (docs/session-composer-enhancements-plan.md §1). The file list is scanned off the UI
+    // thread once per cwd; _mentionStart is the caret index of the "@" that opened the current token.
+    private readonly Popup _mentionPopup;
+    private readonly StackPanel _mentionRows;
+    private IReadOnlyList<string> _projectFiles = [];
+    private string _projectFilesFor = "";
+    private IReadOnlyList<string> _mentionItems = [];
+    private int _mentionIndex;
+    private int _mentionStart = -1;
+
+    // Input history (↑/↓ in the composer recalls this session's past prompts). _historyIndex is -1 when not
+    // navigating; _historyDraft stashes the in-progress text so ↓ past the newest restores it.
+    private int _historyIndex = -1;
+    private string _historyDraft = "";
+    private bool _suppressHistoryReset;
 
     // In-window /autocompact modal: a scrim + card with an on/off toggle and a threshold slider.
     private Panel _autoCompactOverlay = null!;
@@ -366,7 +392,12 @@ internal sealed partial class SessionWindow : Window
             if (_composerScroll is { } sv)
                 sv.ScrollChanged += (_, _) => _highlightLayer.RenderTransform = new TranslateTransform(0, -sv.Offset.Y);
         };
-        var textArea = new Panel { ClipToBounds = true, Children = { _highlightLayer, _composer } };
+        // The coloured highlight layer sits ON TOP of the transparent-text box (hit-test-transparent) so the
+        // box's selection rectangle paints *behind* the glyphs — otherwise selecting text hid it under a solid
+        // accent block. The selection brush is a soft brand wash that reads under the coloured glyphs.
+        _composer.SelectionBrush = _p.BrandWash;
+        _composer.SelectionForegroundBrush = Brushes.Transparent;   // the layer already draws the (coloured) glyphs
+        var textArea = new Panel { ClipToBounds = true, Children = { _composer, _highlightLayer } };
         _sendButton = new SessionButton(_p, "→", SessionButtonKind.Primary, compact: true)
         {
             Width = 36, Height = 36, HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(0),
@@ -401,7 +432,13 @@ internal sealed partial class SessionWindow : Window
         };
         _composer.GotFocus += (_, _) => _composerFrame.BorderBrush = _p.BrandLine;
         _composer.LostFocus += (_, _) => _composerFrame.BorderBrush = _p.Border;
-        _composer.TextChanged += (_, _) => { UpdateHighlight(); UpdatePaletteFromText(); };
+        _composer.TextChanged += (_, _) =>
+        {
+            UpdateHighlight();
+            UpdatePaletteFromText();
+            UpdateMentionsFromText();
+            if (!_suppressHistoryReset) _historyIndex = -1;   // any real edit stops history navigation
+        };
 
         // Drag-and-drop files/images onto the composer, and paste images from the clipboard. Both the frame
         // and the inner text box are drop targets, and the handlers run even if the TextBox marks the event
@@ -446,6 +483,38 @@ internal sealed partial class SessionWindow : Window
             },
         };
         composerStack.Children.Add(_palettePopup);
+
+        // The file-mention popup mirrors the command palette (type "@" for a fuzzy file picker).
+        _mentionRows = new StackPanel { Spacing = 1 };
+        _mentionPopup = new Popup
+        {
+            PlacementTarget = _composerFrame, Placement = PlacementMode.Top,
+            HorizontalOffset = 0, VerticalOffset = -8, IsLightDismissEnabled = false,
+            Child = new Border
+            {
+                Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+                CornerRadius = SessionPalette.CardRadius, Padding = new Thickness(6, 6, 6, 2),
+                MinWidth = 420, MaxWidth = SessionPalette.ThreadMaxWidth,
+                BoxShadow = BoxShadows.Parse("0 10 30 0 #55000000"),
+                Child = new StackPanel
+                {
+                    Children =
+                    {
+                        new ScrollViewer
+                        {
+                            MaxHeight = 320, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = _mentionRows,
+                        },
+                        new TextBlock
+                        {
+                            Text = "↑↓ select   ·   ↹/↵ insert path   ·   esc dismiss",
+                            FontFamily = _p.Mono, FontSize = 10.5, Foreground = _p.Faint, Margin = new Thickness(9, 6, 9, 3),
+                        },
+                    },
+                },
+            },
+        };
+        composerStack.Children.Add(_mentionPopup);
         // Hidden on the launcher; the thread and the composer appear together once a session starts.
         _composerDock = new Border
         {
@@ -540,13 +609,31 @@ internal sealed partial class SessionWindow : Window
         _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
         _toastTimer.Tick += (_, _) => HideToast();
 
+        // Floating scroll buttons, bottom-right over the thread (above the composer). Shown only when useful.
+        _jumpPromptBtn = JumpButton("↑", "Jump to the previous prompt", () => _thread.JumpToPreviousPrompt());
+        _jumpBottomBtn = JumpButton("↓", "Jump to the latest", () => _thread.JumpToBottom());
+        var jumpStack = new StackPanel
+        {
+            Orientation = Orientation.Vertical, Spacing = 9,
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 20, 16),
+            Children = { _jumpPromptBtn, _jumpBottomBtn },
+        };
+        _thread.ScrollStateChanged += UpdateJumpButtons;
+
         BuildResumeOverlay();
         BuildAutoCompactOverlay();
-        _center = new Panel { Children = { _launcher, _thread, _toast, _resumeOverlay, _autoCompactOverlay } };
+        _center = new Panel { Children = { _launcher, _thread, jumpStack, _toast, _resumeOverlay, _autoCompactOverlay } };
         _changesPanel = BuildChangesPanel();   // docked to the right of the centre; hidden until toggled on
-        Content = new DockPanel { Children = { barFrame, _composerDock, _changesPanel, _center } };
+        // Dock order matters: the changed-files panel docks Right *before* the composer docks Bottom, so the
+        // panel spans the full height (down past the composer) and the composer + thread stay aligned to its
+        // left — rather than the composer running full-width underneath the panel.
+        Content = new DockPanel { Children = { barFrame, _changesPanel, _composerDock, _center } };
 
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
+        // Focus changes can turn a pending prompt into a "background" one (or acknowledge it), so re-evaluate.
+        Activated += (_, _) => MaybeAlert(active: true);
+        Deactivated += (_, _) => MaybeAlert(active: false);
         RenderComposerToolbar();   // the attach buttons show from the start; the app adds overlay actions later
         RefreshBar();
     }
@@ -566,11 +653,13 @@ internal sealed partial class SessionWindow : Window
         _effort = session.Effort;
         _folderBox.Text = session.Cwd;
         session.Conversation.StateChanged += RefreshBar;
+        session.Conversation.StateChanged += OnStateForAlert;
         session.TitleChanged += RefreshBar;
         session.Ended += OnSessionEnded;
         session.Conversation.Changed += OnConversationChangedForChanges;   // live-refresh the changed-files panel
         _thread.Cwd = session.Cwd;   // set before Bind so tool cards built during materialisation arm file refs
         _thread.Bind(session.Conversation);
+        ScanProjectFilesAsync();     // warm the "@"-mention file list for this project
         ShowThread();
         if (_changesOpen) RefreshChangesNow();
         ApplyRunState();
@@ -582,6 +671,7 @@ internal sealed partial class SessionWindow : Window
     {
         if (_session is not { } s) return;
         s.Conversation.StateChanged -= RefreshBar;
+        s.Conversation.StateChanged -= OnStateForAlert;
         s.TitleChanged -= RefreshBar;
         s.Ended -= OnSessionEnded;
         s.Conversation.Changed -= OnConversationChangedForChanges;
@@ -1176,6 +1266,8 @@ internal sealed partial class SessionWindow : Window
         if (_session is not { IsRunning: true } live) return;
         if (text.Length == 0 && _pendingAttachments.Count == 0) return;   // nothing to send
         ClosePalette();
+        CloseMention();
+        _historyIndex = -1;   // a fresh send ends any history navigation
         // A bare, no-argument native command runs its Perch action instead of going to the CLI as text (only
         // when there are no attachments — an attachment always means a real message to the model).
         if (_pendingAttachments.Count == 0 && !text.Contains(' ')
@@ -1863,6 +1955,180 @@ internal sealed partial class SessionWindow : Window
         _composer.Focus();
     }
 
+    // ── File mentions (docs/session-composer-enhancements-plan.md §1) ─────────────
+
+    // Scans the project's files (gitignore-aware) off the UI thread, once per cwd, for the "@" picker.
+    private void ScanProjectFilesAsync()
+    {
+        var cwd = _cwd;
+        if (string.IsNullOrEmpty(cwd) || cwd == _projectFilesFor) return;
+        _projectFilesFor = cwd;
+        Task.Run(() => ProjectFileScan.Scan(cwd)).ContinueWith(t =>
+        {
+            if (!t.IsCompletedSuccessfully) return;
+            var files = t.Result.RelativePaths;
+            Dispatcher.UIThread.Post(() => { if (_cwd == cwd) _projectFiles = files; });
+        });
+    }
+
+    // The active "@token" at the caret, or null: a "@" that starts the line or follows whitespace, with no
+    // whitespace between it and the caret. Returns the "@" index and the text typed after it.
+    private (int Start, string Query)? ActiveMention()
+    {
+        var text = _composer.Text ?? "";
+        int caret = Math.Clamp(_composer.CaretIndex, 0, text.Length);
+        for (int i = caret - 1; i >= 0; i--)
+        {
+            char c = text[i];
+            if (c == '@')
+                return (i == 0 || char.IsWhiteSpace(text[i - 1])) ? (i, text[(i + 1)..caret]) : null;
+            if (char.IsWhiteSpace(c)) return null;   // a boundary before any "@"
+        }
+        return null;
+    }
+
+    private void UpdateMentionsFromText()
+    {
+        if (_session is not { IsRunning: true } || ActiveMention() is not { } m)
+        {
+            CloseMention();
+            return;
+        }
+        _mentionStart = m.Start;
+        _mentionItems = RankFiles(m.Query);
+        if (_mentionItems.Count == 0) { CloseMention(); return; }
+        _mentionIndex = Math.Clamp(_mentionIndex, 0, _mentionItems.Count - 1);
+        RenderMention();
+        _mentionPopup.IsOpen = true;
+    }
+
+    private const int MaxMentionRows = 40;
+
+    // Fuzzy-rank the project files for a query (bare "@" → the first files alphabetically), best first.
+    private IReadOnlyList<string> RankFiles(string query)
+    {
+        if (_projectFiles.Count == 0) return [];
+        if (query.Length == 0) return _projectFiles.Take(MaxMentionRows).ToList();
+        var scored = new List<(int Score, string Path)>();
+        foreach (var f in _projectFiles)
+            if (FuzzyMatch.TryMatch(query, f, out var r)) scored.Add((r.Score, f));
+        scored.Sort((a, b) => b.Score != a.Score
+            ? b.Score.CompareTo(a.Score)
+            : string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase));
+        return scored.Take(MaxMentionRows).Select(s => s.Path).ToList();
+    }
+
+    private bool MentionOpen => _mentionPopup.IsOpen;
+
+    private void CloseMention()
+    {
+        _mentionPopup.IsOpen = false;
+        _mentionIndex = 0;
+        _mentionStart = -1;
+    }
+
+    private void MoveMention(int delta)
+    {
+        if (_mentionItems.Count == 0) return;
+        _mentionIndex = (_mentionIndex + delta + _mentionItems.Count) % _mentionItems.Count;
+        RenderMention();
+    }
+
+    private void RenderMention()
+    {
+        _mentionRows.Children.Clear();
+        for (int i = 0; i < _mentionItems.Count; i++)
+            _mentionRows.Children.Add(MentionRow(_mentionItems[i], i));
+        if (_mentionIndex >= 0 && _mentionIndex < _mentionRows.Children.Count)
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_mentionIndex < _mentionRows.Children.Count)
+                    (_mentionRows.Children[_mentionIndex] as Control)?.BringIntoView();
+            }, DispatcherPriority.Loaded);
+    }
+
+    private Control MentionRow(string path, int index)
+    {
+        int slash = path.LastIndexOf('/');
+        var dir = slash >= 0 ? path[..slash] : "";
+        var name = slash >= 0 ? path[(slash + 1)..] : path;
+        // VS Code-style: the file name always shows in full on the left; the containing directory rides to its
+        // right, dimmed, and truncates from its *start* (leading ellipsis) so the closest folders stay visible.
+        var nameBlock = new TextBlock
+        {
+            Text = name, FontFamily = _p.Mono, FontSize = 13, FontWeight = FontWeight.SemiBold, Foreground = _p.Brand,
+            VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Left,
+        };
+        var dirBlock = new TextBlock
+        {
+            Text = dir, FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Faint,
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.PrefixCharacterEllipsis,
+            Margin = new Thickness(12, 0, 0, 0),
+        };
+        var line = new DockPanel { LastChildFill = true, Children = { nameBlock, dirBlock } };
+        var frame = new Border
+        {
+            CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(9, 7),
+            Background = index == _mentionIndex ? _p.Raised2 : Brushes.Transparent,
+            Cursor = new Cursor(StandardCursorType.Hand), Child = line,
+        };
+        frame.PointerEntered += (_, _) => { _mentionIndex = index; RenderMention(); };
+        frame.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) { _mentionIndex = index; AcceptMention(); } };
+        return frame;
+    }
+
+    // Replace the "@token" at the caret with "@path " (the @ mention syntax the CLI expands), caret after it.
+    private void AcceptMention()
+    {
+        if (_mentionItems.Count == 0 || _mentionStart < 0) { CloseMention(); return; }
+        var path = _mentionItems[Math.Clamp(_mentionIndex, 0, _mentionItems.Count - 1)];
+        var text = _composer.Text ?? "";
+        int caret = Math.Clamp(_composer.CaretIndex, 0, text.Length);
+        if (_mentionStart > text.Length) { CloseMention(); return; }
+        var insert = "@" + path + " ";
+        var newText = text[.._mentionStart] + insert + text[caret..];
+        _suppressHistoryReset = true;
+        _composer.Text = newText;
+        _composer.CaretIndex = _mentionStart + insert.Length;
+        _suppressHistoryReset = false;
+        CloseMention();
+        _composer.Focus();
+    }
+
+    // ── Input history (docs/session-composer-enhancements-plan.md §2) ─────────────
+
+    // Recall a past prompt: direction -1 = older (↑), +1 = newer (↓). Stashes the in-progress draft on the
+    // first ↑ and restores it when ↓ walks past the newest. Returns false when there's nothing to recall.
+    private bool RecallHistory(int direction)
+    {
+        var prompts = _session?.Conversation.UserPromptHistory() ?? [];
+        if (prompts.Count == 0) return false;
+        if (_historyIndex == -1)
+        {
+            if (direction > 0) return false;         // ↓ does nothing when not already navigating
+            _historyDraft = _composer.Text ?? "";
+            _historyIndex = prompts.Count;           // one past the end → first ↑ lands on the newest
+        }
+        int next = _historyIndex + direction;
+        if (next >= prompts.Count)                   // walked past the newest → back to the draft
+        {
+            _historyIndex = -1;
+            SetComposerTextSilently(_historyDraft);
+            return true;
+        }
+        _historyIndex = Math.Max(0, next);
+        SetComposerTextSilently(prompts[_historyIndex]);
+        return true;
+    }
+
+    private void SetComposerTextSilently(string text)
+    {
+        _suppressHistoryReset = true;
+        _composer.Text = text;
+        _composer.CaretIndex = text.Length;
+        _suppressHistoryReset = false;
+    }
+
     private void LaunchFail(string message)
     {
         // In the launcher, a floating toast (not text at the foot of the recents list, which a long list
@@ -1891,6 +2157,58 @@ internal sealed partial class SessionWindow : Window
         _thread.IsVisible = true;
         _composerDock.IsVisible = true;
         _changesToggle.IsVisible = true;   // the changed-files toggle rides with the thread, not the launcher
+        UpdateJumpButtons();
+    }
+
+    // ── Jump buttons (docs/session-composer-enhancements-plan.md §4) ──────────────
+
+    // A round, translucent scroll button that floats over the thread.
+    private Border JumpButton(string glyph, string tip, Action onClick)
+    {
+        var b = new Border
+        {
+            Width = 34, Height = 34, CornerRadius = new CornerRadius(17),
+            Background = _p.Raised2, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+            Cursor = new Cursor(StandardCursorType.Hand), IsVisible = false,
+            BoxShadow = BoxShadows.Parse("0 6 18 0 #40000000"), [ToolTip.TipProperty] = tip,
+            Child = new TextBlock
+            {
+                Text = glyph, FontSize = 16, Foreground = _p.Muted, FontWeight = FontWeight.Bold,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        b.PointerEntered += (_, _) => b.Background = _p.Border;
+        b.PointerExited += (_, _) => b.Background = _p.Raised2;
+        b.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) onClick(); };
+        return b;
+    }
+
+    // ── Background attention ─────────────────────────────────────────────────────
+
+    private void OnStateForAlert() => MaybeAlert();
+
+    // Raise a desktop cue when a paused-turn prompt is pending while this window isn't the active one. The
+    // decider fires at most once per pending item; passing the activation explicitly avoids racing IsActive
+    // during the Activated/Deactivated events themselves.
+    private void MaybeAlert(bool? active = null)
+    {
+        if (_session is null) return;
+        if (!_attention.Evaluate(Conv.PendingPermission, active ?? IsActive)) return;
+        var p = Conv.PendingPermission!;
+        string what = p.IsQuestion ? "has a question for you"
+            : p.IsPlan ? "has a plan to review"
+            : "needs your permission to continue";
+        var project = _cwd.Length > 0 && System.IO.Path.GetFileName(_cwd.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : "A session";
+        AttentionRequested?.Invoke("Perch — a session needs you", $"{project} {what}.");
+    }
+
+    // Show each jump button only when it would do something: "to bottom" when not already at the tail; "to last
+    // prompt" when a prompt exists but is scrolled out of view. Hidden entirely off the thread.
+    private void UpdateJumpButtons()
+    {
+        bool onThread = _thread.IsVisible;
+        _jumpBottomBtn.IsVisible = onThread && !_thread.AtBottom;
+        _jumpPromptBtn.IsVisible = onThread && _thread.HasPromptAbove;
     }
 
     // ── Bar ──────────────────────────────────────────────────────────────────────
@@ -1925,7 +2243,11 @@ internal sealed partial class SessionWindow : Window
             : _defaults.Model is not null ? "Model from settings.json — click to change"
             : "Claude Code's default model (nothing set in settings.json) — click to change";
 
-        var mode = conv.Model.Length > 0 ? conv.PermissionMode : StartingMode;
+        // A mid-session mode switch (session.PermissionMode, set optimistically) beats the CLI's reported mode
+        // (conv.PermissionMode, which only updates on the deferred ack) — mirroring how the model pill works.
+        var mode = _session?.PermissionMode is { Length: > 0 } switchedMode && switchedMode != _mode ? switchedMode
+                 : conv.Model.Length > 0 ? conv.PermissionMode
+                 : StartingMode;
         var modeEnum = ModeGlyph.Parse(mode);
         _modeGlyph.Mode = modeEnum;
         _modePillText.Text = SessionThreadView.ModeLabel(mode);
@@ -2042,7 +2364,7 @@ internal sealed partial class SessionWindow : Window
             var chosen = mode;
             item.Click += (_, _) =>
             {
-                if (_session is { IsRunning: true } live) live.SetPermissionMode(chosen);   // acked as ModeChanged
+                if (_session is { IsRunning: true } live) live.SetPermissionMode(chosen);   // optimistic; nudges RefreshBar
                 else { _mode = chosen; RefreshBar(); }
             };
             flyout.Items.Add(item);
@@ -2146,6 +2468,26 @@ internal sealed partial class SessionWindow : Window
             }
         }
 
+        // The file-mention popup owns the same keys while open: navigate, then Tab/Enter inserts the path.
+        if (MentionOpen)
+        {
+            switch (e.Key)
+            {
+                case Key.Down: MoveMention(1); e.Handled = true; return;
+                case Key.Up: MoveMention(-1); e.Handled = true; return;
+                case Key.Tab: AcceptMention(); e.Handled = true; return;
+                case Key.Enter when !e.KeyModifiers.HasFlag(KeyModifiers.Shift): AcceptMention(); e.Handled = true; return;
+            }
+        }
+
+        // ↑/↓ with no popup open recalls this session's past prompts (↑ only from the very start of the text,
+        // so arrowing through a multi-line draft still works; ↓ only once recall is under way).
+        if (!PaletteOpen && !MentionOpen)
+        {
+            if (e.Key == Key.Up && (_historyIndex != -1 || _composer.CaretIndex == 0) && RecallHistory(-1)) { e.Handled = true; return; }
+            if (e.Key == Key.Down && _historyIndex != -1 && RecallHistory(1)) { e.Handled = true; return; }
+        }
+
         if (e.Key == Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
         {
             // With a permission pending and nothing typed, Enter allows (mirrors the TUI). A question card is
@@ -2174,6 +2516,7 @@ internal sealed partial class SessionWindow : Window
         if (_autoCompactOverlay.IsVisible) { CloseAutoCompactOverlay(); e.Handled = true; return; }
         if (_resumeOverlay.IsVisible) { CloseResumeOverlay(); e.Handled = true; return; }
         if (PaletteOpen) { ClosePalette(); e.Handled = true; return; }
+        if (MentionOpen) { CloseMention(); e.Handled = true; return; }
         if (Conv.PendingPermission is { } pending) { _session?.AnswerPermission(pending, allow: false, switchMode: false); e.Handled = true; }
         else if (_session is { IsRunning: true } live && Conv.TurnActive) { live.Interrupt(); e.Handled = true; }
     }

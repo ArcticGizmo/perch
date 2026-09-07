@@ -86,9 +86,15 @@ commands, `AskUserQuestion`, `@`-mentions) not started. **Nothing has been run l
 - **Live dogfood** (never run by a human): launch from tray, full turn, a permission answered in-UI, mode
   switch, interrupt (still unproven at the protocol level), hand-back, `perch --resume <id>` from a terminal
   with the tray running and not running, the hook warning when a normal `claude --resume` opens a controlled id.
-- Phase 2: verify which slash commands work as plain text over stream-json (init now exposes
-  `SlashCommands`), command palette, `AskUserQuestion`/`ExitPlanMode` cards, `@`-file mentions, input history.
-- A permission prompt in a background window has no attention cue yet (no flash/toast).
+- Phase 2: slash-command palette, `AskUserQuestion` card, **`ExitPlanMode` plan-approval card** (done
+  2026-09-07 — `PlanApprovalInput` + `PermissionItem.IsPlan` + `SessionThreadView.BuildPlanCard`; Approve /
+  Approve & <suggested mode> / Keep planning; render `session_plan_1x.png`), `@`-file mentions + input
+  history (done — see `docs/session-composer-enhancements-plan.md`). Still owed: verifying which slash
+  commands work as plain text over stream-json live.
+- **Background attention cue (done 2026-09-07):** a paused-turn prompt (permission / question / plan) arriving
+  while the session window isn't active raises a desktop toast — `Perch.Core/Data/Control/SessionAttention`
+  (edge-triggered, unit-tested) → `SessionWindow.AttentionRequested` → the app's `INotifier`. Follow-up: a
+  taskbar flash, and routing the toast click to focus the specific session window.
 
 This doc is the single source of truth for a fresh session picking this up. Branch: `session-control-poc`.
 
