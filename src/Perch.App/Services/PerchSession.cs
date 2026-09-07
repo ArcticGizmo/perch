@@ -85,6 +85,11 @@ internal sealed class PerchSession : IDisposable
             throw;
         }
         session.Conversation.SetSessionId(controller.SessionId);
+        // The CLI doesn't heartbeat the session-file status over stream-json, so publish our own live status
+        // (busy/waiting/idle) into the in-process ControlledSessions registry the overlay reads. StateChanged
+        // fires at turn/permission boundaries — exactly the transitions that move the status.
+        session.Conversation.StateChanged += session.PublishActivity;
+        session.PublishActivity();   // seed the real status from the (empty) starting state
         if (o.ResumeId is { } resumeId)
         {
             session.Conversation.AddNote($"resumed session {Shorten(resumeId)}");
@@ -143,9 +148,29 @@ internal sealed class PerchSession : IDisposable
         if (HasEnded) return;
         HasEnded = true;
         ExitCode = code;
+        // Stop publishing status; the controller has already unregistered the session (and dropped its lock),
+        // so the overlay no longer sees it as controlled and won't read a stale "busy".
+        Conversation.StateChanged -= PublishActivity;
         Conversation.SessionEnded(code, stderrTail);
         _controller?.Dispose();
         Ended?.Invoke(this);
+    }
+
+    /// <summary>Publishes the session's live status into the in-process <see cref="ControlledSessions"/>
+    /// registry so the overlay reflects it. No-op for the process-less render session. A rebased id (/clear)
+    /// needs no cleanup — the controller has already re-registered under the new id, and this writes to it.</summary>
+    private void PublishActivity()
+    {
+        if (_controller is null || HasEnded) return;
+        var id = SessionId;
+        if (string.IsNullOrEmpty(id)) return;
+
+        // A pending permission/question means the session is blocked on the user; otherwise a live turn is
+        // busy and a settled one idle.
+        var activity = Conversation.PendingPermission is not null ? ControlledActivity.Waiting
+            : Conversation.TurnActive ? ControlledActivity.Busy
+            : ControlledActivity.Idle;
+        ControlledSessions.SetActivity(id, activity);
     }
 
     public void SendPrompt(string text) => SendPrompt(text, null);

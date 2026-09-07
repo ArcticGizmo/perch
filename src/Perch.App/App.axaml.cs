@@ -1075,6 +1075,8 @@ public partial class App : Application
     private void OnNeedsAttention(ClaudeSession session)
     {
         if (IsDaemonSession(session)) return;
+        // Controlled (Perch-window) sessions still alert: you might not be watching the window, so a finished
+        // turn should flash + toast like any other. Clicking through focuses the Perch window (FocusSession).
         _overlay!.Canvas.TriggerAttention(SessionStatus.NeedsAttention);
         _notifications?.Notify(NotificationKind.Done, session);
         CheckAchievements(force: false); // a finish is a natural moment to have crossed a threshold
