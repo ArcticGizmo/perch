@@ -541,4 +541,45 @@ public class GitRepoServiceTests
         Assert.Null(GitRepoService.BuildLineSubsetPatch(raw, "@@ -1,1 +1,3 @@", System.Array.Empty<int>(), stage: true));
         Assert.Null(GitRepoService.BuildLineSubsetPatch(raw, "@@ -1,1 +1,3 @@", new[] { 0 }, stage: true)); // index 0 is context
     }
+
+    // ---- ParseNumstat (changed-files panel line markers) ----------------------------------------------
+
+    [Fact]
+    public void Numstat_ReadsAddedRemovedPerPath()
+    {
+        var map = GitRepoService.ParseNumstat("12\t3\tsrc/Foo.cs\n0\t7\tdocs/old.md\n");
+
+        Assert.Equal((12, 3, false), map["src/Foo.cs"]);
+        Assert.Equal((0, 7, false), map["docs/old.md"]);
+    }
+
+    [Fact]
+    public void Numstat_BinaryChangeIsDashDash_ZeroCountsAndFlagged()
+    {
+        var map = GitRepoService.ParseNumstat("-\t-\tassets/icon.png\n");
+
+        Assert.True(map["assets/icon.png"].Binary);
+        Assert.Equal(0, map["assets/icon.png"].Added);
+        Assert.Equal(0, map["assets/icon.png"].Removed);
+    }
+
+    [Fact]
+    public void Numstat_ToleratesCrlfAndBlankLines_KeepsPathsWithSpaces()
+    {
+        var map = GitRepoService.ParseNumstat("5\t1\tmy dir/a b.cs\r\n\r\n");
+
+        Assert.Single(map);
+        Assert.Equal((5, 1, false), map["my dir/a b.cs"]);
+    }
+
+    [Fact]
+    public void Numstat_SkipsMalformedLines()
+    {
+        // A line without two tabs isn't a numstat row (a rename's "{old => new}" header still has 2 tabs and
+        // is kept verbatim as a key; a truncated line is dropped).
+        var map = GitRepoService.ParseNumstat("not a numstat line\n4\t4\tkept.cs\n");
+
+        Assert.Single(map);
+        Assert.True(map.ContainsKey("kept.cs"));
+    }
 }

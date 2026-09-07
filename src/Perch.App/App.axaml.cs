@@ -1508,6 +1508,37 @@ public partial class App : Application
             w => w.Retarget(session.Cwd, session.SessionId, session.DisplayName, isActive));
     }
 
+    // A session UI file reference wants a specific file opened in the Markdown viewer. Reuses the one viewer
+    // window: retarget it at the session's cwd (so the project pane populates), then open the chosen file.
+    private void OpenSessionFileInViewer(SessionWindow w, string absPath)
+    {
+        var s = w.Session;
+        bool isActive = s?.IsRunning ?? false;
+        _markdownWindow = WindowHost.ShowOrFocus(_markdownWindow,
+            () => new MarkdownWindow(_appSettings ?? AppSettings.Load()),
+            () => _markdownWindow = null,
+            mw =>
+            {
+                if (s is { } sess)
+                    mw.Retarget(sess.Cwd, sess.SessionId ?? "", System.IO.Path.GetFileName(sess.Cwd.TrimEnd('\\', '/')), isActive);
+                mw.OpenPath(absPath);
+            });
+    }
+
+    // A session UI file reference's "View diff": reuse the one git Tree window, pointed at the session's cwd
+    // and asked to land on the chosen file.
+    private void ViewSessionFileDiff(SessionWindow w, string absPath)
+    {
+        var s = w.Session;
+        string cwd = s?.Cwd ?? System.IO.Path.GetDirectoryName(absPath) ?? "";
+        string title = cwd.Length > 0 ? System.IO.Path.GetFileName(cwd.TrimEnd('\\', '/')) : "Changes";
+        bool isActive = s?.IsRunning ?? false;
+        _treeWindow = WindowHost.ShowOrFocus(_treeWindow,
+            () => new GitTreeWindow(_appSettings ?? AppSettings.Load()),
+            () => _treeWindow = null,
+            tw => tw.Retarget(cwd, title, null, isActive, focusPath: absPath));
+    }
+
     // Opens (or focuses) the to-do list window. Edits flow through the shared TodoStore; an edit there
     // saves and re-runs the poller so the overlay strip and reminders track it — see the onChanged callback.
     private void OpenTodos()
@@ -1650,6 +1681,9 @@ public partial class App : Application
             else ResumeIntoWindow(w, id, cwd);
         };
         w.ActiveSessionIdsProvider = ActiveSessionIds;           // mark sessions live in the resume overlay
+        // File references in the session UI: open a Markdown file in the viewer, or a file's diff in the tree.
+        w.OpenFileInViewerRequested += path => OpenSessionFileInViewer(w, path);
+        w.ViewFileDiffRequested += path => ViewSessionFileDiff(w, path);
         _sessionWindows.Add(w);
         w.Closed += (_, _) => _sessionWindows.Remove(w);
         return w;

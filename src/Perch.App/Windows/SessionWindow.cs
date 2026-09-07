@@ -47,7 +47,7 @@ internal sealed record ComposerAction(string Glyph, string Tooltip, Action<Contr
 /// (<see cref="LiveLookup"/>) or controlled by another Perch (<see cref="SessionLock.HeldByOther"/>); the
 /// controller pins the id and writes the lock before the process starts.</para>
 /// </summary>
-internal sealed class SessionWindow : Window
+internal sealed partial class SessionWindow : Window
 {
     private static readonly string[] Modes = ["default", "auto", "plan", "acceptEdits", "bypassPermissions"];
 
@@ -213,6 +213,13 @@ internal sealed class SessionWindow : Window
     /// threshold %). The app persists it to <c>AppSettings</c> and pushes it back to every session window.</summary>
     public event Action<bool, int>? AutoCompactChanged;
 
+    /// <summary>A file reference was picked to open in the Markdown viewer (absolute path). The app owns the
+    /// viewer window, so it handles this.</summary>
+    public event Action<string>? OpenFileInViewerRequested;
+
+    /// <summary>A file reference's "View diff" was picked (absolute path). The app opens the git tree on it.</summary>
+    public event Action<string>? ViewFileDiffRequested;
+
     /// <summary>The session this window currently views, or null on the launcher.</summary>
     public PerchSession? Session => _session;
 
@@ -375,9 +382,17 @@ internal sealed class SessionWindow : Window
         _sendButton[DockPanel.DockProperty] = Dock.Right;
         // The quick-action toolbar (enabled overlay glyphs, filled by SetComposerActions) and the staged
         // attachments tray sit above the text area; both hide until they have content.
-        _composerToolbar = new WrapPanel { IsVisible = false, Margin = new Thickness(0, 0, 0, 9) };
+        _composerToolbar = new WrapPanel { IsVisible = false };
+        // The quick-action glyphs fill the row's left; the changed-files toggle sits at its far right.
+        _changesToggle = BuildChangesToggle();
+        var composerHeader = new DockPanel
+        {
+            Margin = new Thickness(0, 0, 0, 9),
+            Children = { _changesToggle, _composerToolbar },
+        };
+        _changesToggle[DockPanel.DockProperty] = Dock.Right;
         _attachTray = new WrapPanel { IsVisible = false, Margin = new Thickness(0, 0, 0, 2) };
-        var composerStack = new StackPanel { Children = { _composerToolbar, _attachTray, textArea, cbar } };
+        var composerStack = new StackPanel { Children = { composerHeader, _attachTray, textArea, cbar } };
         _composerFrame = new Border
         {
             MaxWidth = SessionPalette.ThreadMaxWidth, Background = _p.Raised, BorderBrush = _p.Border,
@@ -443,6 +458,9 @@ internal sealed class SessionWindow : Window
         _thread = new SessionThreadView(_p) { IsVisible = false };
         _thread.PermissionAnswered += (item, allow, switchMode) => { _session?.AnswerPermission(item, allow, switchMode); _composer.Focus(); };
         _thread.QuestionAnswered += (item, answers) => { _session?.AnswerQuestion(item, answers); _composer.Focus(); };
+        // File references in tool cards route their open/diff intents up to the app (which owns those windows).
+        _thread.OpenFileRequested += p => OpenFileInViewerRequested?.Invoke(p);
+        _thread.ViewDiffRequested += p => ViewFileDiffRequested?.Invoke(p);
         // Live theme swap: the shared palette's brushes are re-tinted in place (so chrome and text follow with
         // no work here), but the thread's markdown baked its code-syntax for the old light/dark side — rebuild it.
         ThemeService.Changed += OnThemeChanged;
@@ -525,7 +543,8 @@ internal sealed class SessionWindow : Window
         BuildResumeOverlay();
         BuildAutoCompactOverlay();
         _center = new Panel { Children = { _launcher, _thread, _toast, _resumeOverlay, _autoCompactOverlay } };
-        Content = new DockPanel { Children = { barFrame, _composerDock, _center } };
+        _changesPanel = BuildChangesPanel();   // docked to the right of the centre; hidden until toggled on
+        Content = new DockPanel { Children = { barFrame, _composerDock, _changesPanel, _center } };
 
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
         RenderComposerToolbar();   // the attach buttons show from the start; the app adds overlay actions later
@@ -549,8 +568,11 @@ internal sealed class SessionWindow : Window
         session.Conversation.StateChanged += RefreshBar;
         session.TitleChanged += RefreshBar;
         session.Ended += OnSessionEnded;
+        session.Conversation.Changed += OnConversationChangedForChanges;   // live-refresh the changed-files panel
+        _thread.Cwd = session.Cwd;   // set before Bind so tool cards built during materialisation arm file refs
         _thread.Bind(session.Conversation);
         ShowThread();
+        if (_changesOpen) RefreshChangesNow();
         ApplyRunState();
         RefreshBar();
         if (session.IsRunning) _composer.Focus();
@@ -562,6 +584,7 @@ internal sealed class SessionWindow : Window
         s.Conversation.StateChanged -= RefreshBar;
         s.TitleChanged -= RefreshBar;
         s.Ended -= OnSessionEnded;
+        s.Conversation.Changed -= OnConversationChangedForChanges;
         _session = null;
     }
 
@@ -1867,6 +1890,7 @@ internal sealed class SessionWindow : Window
         _launcher.IsVisible = false;
         _thread.IsVisible = true;
         _composerDock.IsVisible = true;
+        _changesToggle.IsVisible = true;   // the changed-files toggle rides with the thread, not the launcher
     }
 
     // ── Bar ──────────────────────────────────────────────────────────────────────

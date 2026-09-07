@@ -49,6 +49,17 @@ internal sealed class SessionThreadView : ScrollViewer
     /// <summary>The user answered an AskUserQuestion card: question text → chosen labels.</summary>
     public event Action<PermissionItem, IReadOnlyDictionary<string, IReadOnlyList<string>>>? QuestionAnswered;
 
+    /// <summary>A file reference (a tool card's filename) was picked to open in the Markdown viewer — the
+    /// absolute path. Routed out because the app owns the viewer window.</summary>
+    public event Action<string>? OpenFileRequested;
+
+    /// <summary>A file reference's "View diff" was picked — the absolute path (opens the git tree on it).</summary>
+    public event Action<string>? ViewDiffRequested;
+
+    /// <summary>The session's working directory, used to resolve a tool's file path to an absolute one. Set
+    /// before <see cref="Bind"/> so tool cards built during materialisation can arm their file references.</summary>
+    public string Cwd { get; set; } = "";
+
     // A subclass keeps the base control's template/styles only if it says so — without this the
     // ScrollViewer has no presenter, so nothing scrolls and no bar appears.
     protected override Type StyleKeyOverride => typeof(ScrollViewer);
@@ -392,7 +403,8 @@ internal sealed class SessionThreadView : ScrollViewer
                     c = BuildThinking(th);
                     break;
                 case ToolCallPart tool:
-                    var card = new ToolCard(_p, tool);
+                    var card = new ToolCard(_p, tool, Cwd,
+                        path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path));
                     view.Tools[tool] = card;
                     c = card.Root;
                     break;
@@ -411,7 +423,10 @@ internal sealed class SessionThreadView : ScrollViewer
         Margin = new Thickness(0, 0, 0, 11),
     };
 
-    private Control Prose(string md) => MarkdownView.Build(md, _p.Prose);
+    // Prose renders through the shared Markdown view; inline-code file references become clickable (Ctrl+click
+    // a Markdown file to view, right-click any file for view/diff/reveal/editor) when they resolve on disk.
+    private Control Prose(string md) => MarkdownView.Build(md, _p.Prose,
+        new MarkdownView.FileRefContext(Cwd, p => OpenFileRequested?.Invoke(p), p => ViewDiffRequested?.Invoke(p)));
 
     // Collapsible thinking disclosure: a one-line summary, the full thought on click.
     private Control BuildThinking(ThinkingPart th)
@@ -473,7 +488,8 @@ internal sealed class SessionThreadView : ScrollViewer
 
         public Border Root { get; }
 
-        public ToolCard(SessionPalette p, ToolCallPart part)
+        public ToolCard(SessionPalette p, ToolCallPart part, string cwd,
+            Action<string> openFile, Action<string> viewDiff)
         {
             _p = p;
             _part = part;
@@ -488,12 +504,45 @@ internal sealed class SessionThreadView : ScrollViewer
                 },
             };
             var (verb, obj) = SplitSummary(part.Summary);
-            var summary = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
-            summary.Inlines = new InlineCollection
+            // A file tool's object is a real file: render the filename as its own interactive token (left-click
+            // opens a Markdown file in the viewer; right-click offers view/diff/reveal/editor) instead of a plain
+            // inline run. Everything else keeps the two-run inline summary.
+            Control summary;
+            if (FilePathOf(part, cwd) is { } filePath)
             {
-                new Run(verb + " ") { Foreground = p.Title, FontWeight = FontWeight.SemiBold, FontSize = 14, FontFamily = p.Body },
-                new Run(obj) { Foreground = p.Muted, FontSize = 13, FontFamily = p.Mono },
-            };
+                var name = new TextBlock
+                {
+                    Text = obj.Length > 0 ? obj : PathLeaf.Of(filePath), Foreground = p.Muted, FontSize = 13,
+                    FontFamily = p.Mono, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+                };
+                FileRef.Attach(name, filePath, openFile, viewDiff,
+                    FileRef.IsMarkdown(filePath) ? () => openFile(filePath) : null);
+                summary = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center,
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = verb + " ", Foreground = p.Title, FontWeight = FontWeight.SemiBold, FontSize = 14,
+                            FontFamily = p.Body, VerticalAlignment = VerticalAlignment.Center,
+                        },
+                        name,
+                    },
+                };
+            }
+            else
+            {
+                summary = new TextBlock
+                {
+                    TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
+                    Inlines = new InlineCollection
+                    {
+                        new Run(verb + " ") { Foreground = p.Title, FontWeight = FontWeight.SemiBold, FontSize = 14, FontFamily = p.Body },
+                        new Run(obj) { Foreground = p.Muted, FontSize = 13, FontFamily = p.Mono },
+                    },
+                };
+            }
             _dot = new Ellipse { Width = 7, Height = 7, VerticalAlignment = VerticalAlignment.Center };
             _status = new TextBlock { FontSize = 12, FontWeight = FontWeight.SemiBold, FontFamily = p.Mono, VerticalAlignment = VerticalAlignment.Center };
             var status = new StackPanel
@@ -577,6 +626,26 @@ internal sealed class SessionThreadView : ScrollViewer
             "AskUserQuestion"      => "?",
             _                      => "•",
         };
+
+        // The absolute file path a file tool operates on, or null for a non-file tool / missing path. Claude
+        // Code passes absolute paths, but a relative one is resolved against the session cwd defensively.
+        private static string? FilePathOf(ToolCallPart part, string cwd)
+        {
+            string? raw = part.ToolName switch
+            {
+                "Read" or "Edit" or "MultiEdit" or "Write" => InputString(part.InputJson, "file_path"),
+                "NotebookEdit"                             => InputString(part.InputJson, "notebook_path"),
+                _                                          => null,
+            };
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            try
+            {
+                return System.IO.Path.IsPathRooted(raw) || string.IsNullOrEmpty(cwd)
+                    ? raw
+                    : System.IO.Path.Combine(cwd, raw);
+            }
+            catch { return raw; }
+        }
 
         // "Editing Foo.cs" → ("Editing", "Foo.cs"); "Running: npm test" → ("Running", "npm test").
         private static (string Verb, string Object) SplitSummary(string summary)

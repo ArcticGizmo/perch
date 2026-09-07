@@ -27,6 +27,8 @@ internal static class PlatformServices
     public static IVirtualDesktopManager VirtualDesktops { get; } = new Impl.VirtualDesktopManager();
     public static IImageClipboard ImageClipboard { get; } = new Impl.ImageClipboard();
     public static IUrlOpener UrlOpener { get; } = new Impl.UrlOpener();
+    // Reveal a file in the OS file manager / open it in VS Code (the session UI's file-reference actions).
+    public static IFileRevealer FileRevealer { get; } = new Impl.FileRevealer();
     // Resolves a session's host editor/IDE from its process ancestry (drives the overlay's IDE glyph).
     public static IIdeHostDetector IdeHostDetector { get; } = new Impl.IdeHostDetector();
 #if WINDOWS

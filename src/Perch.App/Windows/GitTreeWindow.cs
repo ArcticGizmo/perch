@@ -609,12 +609,16 @@ internal sealed class GitTreeWindow : Window
     /// <summary>Point the window at a session's repo and (re)load it. Safe to call on the already-open
     /// window (the reused-window refresh path); it bumps the generation so any in-flight load is ignored.
     /// Re-targeting a different repo resets the base-ref override to auto.</summary>
-    public void Retarget(string cwd, string title, PullRequestInfo? pr, bool isActive)
+    public void Retarget(string cwd, string title, PullRequestInfo? pr, bool isActive, string? focusPath = null)
     {
         if (!string.Equals(cwd, _cwd, StringComparison.Ordinal))
             _baseOverride = null; // a new repo: re-decide the base automatically
         _cwd = cwd;
         _isActive = isActive;
+        // A caller (the session UI's "View diff") can ask the tree to land on a specific file. Convert the
+        // absolute path to the repo-relative, forward-slash form git status reports, so the tip node's file
+        // reselection (below) matches it. Consumed once by the next RefreshStatus.
+        _pendingFocusFile = ToRepoRelative(cwd, focusPath);
         _titleText.Text = title;
         if (pr is { } p)
         {
@@ -696,7 +700,10 @@ internal sealed class GitTreeWindow : Window
 
                     int idx = keepNode is not null ? IndexOfNodeKey(_nodes, keepNode) : -1;
                     if (idx < 0) idx = FirstSelectable(_nodes); // default: the tip (never the base node)
-                    _pendingFilePath = keepFile;                // OnNodeSelected reselects this file after load
+                    // A one-shot focus request (Retarget's focusPath) takes precedence over the default when
+                    // we're not preserving a prior selection — land the tip node on that file.
+                    _pendingFilePath = keepFile ?? _pendingFocusFile;   // OnNodeSelected reselects this file after load
+                    _pendingFocusFile = null;
                     _pendingWipStaged = keepStaged;             // …on the same side (staged/unstaged)
                     _nodesList.SelectedIndex = idx;
 
@@ -796,6 +803,20 @@ internal sealed class GitTreeWindow : Window
     // ---- node selection -> files pane ----
 
     private string? _pendingFilePath; // file to reselect once a node's files have loaded (refresh path)
+    private string? _pendingFocusFile; // one-shot Retarget focus request, consumed by the next RefreshStatus
+
+    // Converts an absolute path to the repo-relative, forward-slash form git status reports (what WIP file
+    // nodes carry), so a focus request matches. Null passes through; a path outside the repo returns null.
+    private static string? ToRepoRelative(string cwd, string? abs)
+    {
+        if (string.IsNullOrWhiteSpace(abs) || string.IsNullOrEmpty(cwd)) return abs;
+        try
+        {
+            var rel = System.IO.Path.GetRelativePath(cwd, abs).Replace('\\', '/');
+            return rel.StartsWith("../", StringComparison.Ordinal) ? null : rel;
+        }
+        catch { return null; }
+    }
 
     private void OnNodeSelected(object? sender, SelectionChangedEventArgs e)
     {

@@ -157,6 +157,88 @@ internal sealed class GitRepoService
         return exit >= 0 ? ParseUnifiedDiff(stdout) : null;
     }
 
+    /// <summary>
+    /// The working tree's changed files with their <c>+</c>/<c>-</c> line counts — the data the session UI's
+    /// "changed files" panel lists. Reads <see cref="GetStatus"/> for the file set + kinds and
+    /// <c>git diff --numstat HEAD</c> for tracked line counts; an untracked file's additions come from its
+    /// whole-file diff (<see cref="GetUntrackedDiff"/>). Empty when <paramref name="cwd"/> isn't a repo.
+    /// Best-effort and never throws. Runs off the UI thread (spawns git).
+    /// </summary>
+    public IReadOnlyList<GitChangeStat> GetChangeStats(string cwd)
+    {
+        var status = GetStatus(cwd);
+        if (status is not { } st)
+            return [];
+
+        var (exit, stdout) = RunGit(cwd, GitTimeoutMs, "--no-optional-locks", "diff", "--numstat", "HEAD");
+        var numstat = exit == 0 ? ParseNumstat(stdout) : new Dictionary<string, (int, int, bool)>();
+
+        var list = new List<GitChangeStat>(st.Changes.Count);
+        foreach (var ch in st.Changes)
+        {
+            int added = 0, removed = 0;
+            bool binary = false;
+            if (ch.Untracked)
+            {
+                // A new file git isn't tracking yet: its whole content is "added". GetUntrackedDiff renders it
+                // as an added-file diff, which also flags binary.
+                if (GetUntrackedDiff(cwd, ch.Path) is { Files.Count: > 0 } d)
+                {
+                    var f = d.Files[0];
+                    binary = f.IsBinary;
+                    added = f.Hunks.Sum(h => h.Lines.Count(l => l.Kind == GitDiffLineKind.Added));
+                }
+            }
+            else if (numstat.TryGetValue(ch.Path, out var v))
+            {
+                (added, removed, binary) = v;
+            }
+            list.Add(new GitChangeStat(ch.Path, ch.OrigPath, OverallKind(ch), added, removed, binary, ch.Untracked));
+        }
+        return list;
+    }
+
+    // The single "overall" change kind for a status entry: an untracked file reads as Added, otherwise the
+    // staged slot when it changed, else the unstaged slot.
+    private static GitChangeKind OverallKind(GitFileChange ch) =>
+        ch.Untracked ? GitChangeKind.Added
+        : ch.Staged != GitChangeKind.None ? ch.Staged
+        : ch.Unstaged;
+
+    /// <summary>
+    /// Parses <c>git diff --numstat</c> output into a <c>path → (added, removed, binary)</c> map. Each line is
+    /// <c>&lt;added&gt;\t&lt;removed&gt;\t&lt;path&gt;</c>; a binary change shows <c>-\t-\t&lt;path&gt;</c>
+    /// (added/removed 0, binary true). A rename's <c>{old =&gt; new}</c> path form is kept verbatim as the key
+    /// (it won't match a plain status path, so such an entry simply contributes no counts). Tolerates CRLF;
+    /// never throws. Pure and unit-tested.
+    /// </summary>
+    internal static Dictionary<string, (int Added, int Removed, bool Binary)> ParseNumstat(string output)
+    {
+        var map = new Dictionary<string, (int, int, bool)>(StringComparer.Ordinal);
+        foreach (var raw in output.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.Length == 0)
+                continue;
+            var tab1 = line.IndexOf('\t');
+            if (tab1 < 0)
+                continue;
+            var tab2 = line.IndexOf('\t', tab1 + 1);
+            if (tab2 < 0)
+                continue;
+            var addTok = line[..tab1];
+            var remTok = line[(tab1 + 1)..tab2];
+            var path = line[(tab2 + 1)..];
+            if (path.Length == 0)
+                continue;
+            bool binary = addTok == "-" || remTok == "-";
+            int added = binary ? 0 : (int.TryParse(addTok, out var a) ? a : 0);
+            int removed = binary ? 0 : (int.TryParse(remTok, out var r) ? r : 0);
+            map[path] = (added, removed, binary);
+        }
+        return map;
+    }
+
     // ---- write operations (Phase 2 commit authoring) --------------------------------------------------
     //
     // Unlike the read side, these intentionally take git's index lock (no --no-optional-locks) and surface

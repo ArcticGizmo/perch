@@ -83,12 +83,18 @@ internal sealed class MarkdownView
         .UsePipeTables().UseEmphasisExtras().UseTaskLists().UseAutoLinks().UsePreciseSourceLocation().Build();
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
 
+    /// <summary>Optional wiring that makes inline-code file references clickable: the session cwd to resolve
+    /// a relative path against, and the routed open/diff actions. Only a code span that resolves to a real
+    /// file on disk is armed (so arbitrary code — <c>SessionStart</c>, <c>foo()</c> — stays inert).</summary>
+    internal sealed record FileRefContext(string Cwd, Action<string> OpenViewer, Action<string> ViewDiff);
+
     private readonly MarkdownStyle _s;
+    private readonly FileRefContext? _files;
 
     private double BodySize => _s.BodySize;
     private double BlockGap => _s.BlockGap;   // vertical space below a block
 
-    private MarkdownView(MarkdownStyle s) => _s = s;
+    private MarkdownView(MarkdownStyle s, FileRefContext? files) { _s = s; _files = files; }
 
     /// <summary>The 0-based source line a rendered element came from, stamped on paragraphs, headings, list
     /// items, table rows and code blocks so a click can map to the right line (not just the enclosing block).
@@ -121,13 +127,22 @@ internal sealed class MarkdownView
     }
 
     /// <summary>Parses <paramref name="md"/> and returns a control tree ready to drop into a scroll viewer.</summary>
-    public static Control Build(string md, MarkdownStyle style) => Build(md, style, out _);
+    public static Control Build(string md, MarkdownStyle style) => Build(md, style, null, out _);
+
+    /// <summary>As <see cref="Build(string, MarkdownStyle)"/>, with inline-code file references made clickable
+    /// via <paramref name="files"/> (null leaves them inert).</summary>
+    public static Control Build(string md, MarkdownStyle style, FileRefContext? files) => Build(md, style, files, out _);
 
     /// <summary>As <see cref="Build(string, MarkdownStyle)"/>, also returning the source-line anchors for the
     /// top-level blocks (in document order) so the caller can wire two-way cursor sync.</summary>
-    public static Control Build(string md, MarkdownStyle style, out IReadOnlyList<PreviewAnchor> anchors)
+    public static Control Build(string md, MarkdownStyle style, out IReadOnlyList<PreviewAnchor> anchors) =>
+        Build(md, style, null, out anchors);
+
+    /// <summary>The full builder: parses <paramref name="md"/>, optionally arms inline-code file references
+    /// (<paramref name="files"/>), and returns the control tree plus its source-line anchors.</summary>
+    public static Control Build(string md, MarkdownStyle style, FileRefContext? files, out IReadOnlyList<PreviewAnchor> anchors)
     {
-        var view = new MarkdownView(style);
+        var view = new MarkdownView(style, files);
         var list = new List<PreviewAnchor>();
         anchors = list;
         var root = new StackPanel { Margin = style.RootMargin };
@@ -199,6 +214,7 @@ internal sealed class MarkdownView
         if (h.Inline != null) AppendInlines(sink, h.Inline, new Run2(size, _s.Title, Bold: true));
         text.Inlines = sink.Inlines;
         LinkText.Attach(text, sink.Links);
+        AttachFileRefs(text, sink);
 
         // h1/h2 carry a bottom rule, like the GitHub/VS Code preview. Extra space above to set them apart.
         if (h.Level <= 2)
@@ -221,6 +237,7 @@ internal sealed class MarkdownView
             AppendInlines(sink, p.Inline, new Run2(BodySize, fg));
             tb.Inlines = sink.Inlines;
             LinkText.Attach(tb, sink.Links);
+            AttachFileRefs(tb, sink);
         }
         return tb;
     }
@@ -457,6 +474,7 @@ internal sealed class MarkdownView
                         AppendInlines(sink, inl, new Run2(BodySize, _s.Fg, Bold: header));
                 tb.Inlines = sink.Inlines;
                 LinkText.Attach(tb, sink.Links);
+                AttachFileRefs(tb, sink);
 
                 var cellBorder = new Border
                 {
@@ -493,9 +511,43 @@ internal sealed class MarkdownView
     {
         public readonly InlineCollection Inlines = new();
         public readonly List<UrlSpan> Links = new();
+        public readonly List<(int Start, int Length, string Text)> Codes = new();   // inline-code spans (file-ref candidates)
         public int Pos;
         public void Add(global::Avalonia.Controls.Documents.Inline run, int charLen) { Inlines.Add(run); Pos += charLen; }
         public void MarkLink(int start, string? url) { if (!string.IsNullOrEmpty(url)) Links.Add(new UrlSpan(start, Pos - start, url)); }
+    }
+
+    // Arm any inline-code spans in this block that resolve to a real file (relative to the session cwd, or an
+    // absolute path). Gating on existence keeps it accurate — arbitrary code spans never become file links.
+    private void AttachFileRefs(SelectableTextBlock tb, InlineSink sink)
+    {
+        if (_files is not { } f || sink.Codes.Count == 0)
+            return;
+        List<FileRef.FileSpan>? spans = null;
+        foreach (var (start, len, text) in sink.Codes)
+            if (ResolveFile(f.Cwd, text) is { } abs)
+                (spans ??= new()).Add(new FileRef.FileSpan(start, len, abs));
+        if (spans is { Count: > 0 })
+            FileRef.AttachInline(tb, spans, f.OpenViewer, f.ViewDiff);
+    }
+
+    // The absolute path a code span points at, or null when it isn't a real file. A cheap pre-filter (must
+    // contain a '.', '/' or '\') skips the disk check for plainly non-path code like `true` or `SessionStart`.
+    private static string? ResolveFile(string cwd, string text)
+    {
+        text = text.Trim();
+        if (text.Length is 0 or > 260 || text.IndexOfAny(['.', '/', '\\']) < 0)
+            return null;
+        try
+        {
+            if (System.IO.Path.IsPathRooted(text))
+                return System.IO.File.Exists(text) ? text : null;
+            if (string.IsNullOrEmpty(cwd))
+                return null;
+            var abs = System.IO.Path.GetFullPath(System.IO.Path.Combine(cwd, text));
+            return System.IO.File.Exists(abs) ? abs : null;
+        }
+        catch { return null; }
     }
 
     private void AppendInlines(InlineSink sink, ContainerInline container, Run2 style)
@@ -509,6 +561,7 @@ internal sealed class MarkdownView
                     sink.Add(Styled(litText, style), litText.Length);
                     break;
                 case CodeInline code:
+                    sink.Codes.Add((sink.Pos, code.Content.Length, code.Content));   // a possible file reference
                     sink.Add(new Run(code.Content)
                     {
                         FontFamily = Mono, Foreground = _s.CodeFg, Background = _s.CodeBg, FontSize = style.Size,
