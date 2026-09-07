@@ -200,6 +200,14 @@ internal sealed partial class SessionWindow : Window
     // In-window /autocompact modal: a scrim + card with an on/off toggle and a threshold slider.
     private Panel _autoCompactOverlay = null!;
 
+    // In-window /usage readout: a scrim + card of labelled percentage bars (5-hour, weekly, model-scoped,
+    // monthly spend) with a time-to-reset countdown on each — the account rate-limit picture, painted from
+    // the same UsageInfo the floating overlay strip uses, so it never dumps the CLI's markdown into the thread.
+    private Panel _usageOverlay = null!;
+    private StackPanel _usageBars = null!;
+    private TextBlock _usageStatus = null!;
+    private bool _usageRefreshing;
+
     // In-window /resume quick-open: a searchable, keyboard-navigable overlay of this project's sessions.
     private Panel _resumeOverlay = null!;
     private TextBox _resumeSearch = null!;
@@ -245,6 +253,16 @@ internal sealed partial class SessionWindow : Window
 
     /// <summary>A file reference's "View diff" was picked (absolute path). The app opens the git tree on it.</summary>
     public event Action<string>? ViewFileDiffRequested;
+
+    /// <summary>Supplies the last-known account usage reading (the tray's <see cref="UsageMonitorHost.Last"/>),
+    /// so <c>/usage</c> can paint its overlay from the same data the floating strip uses. Null-safe: the
+    /// overlay falls back to <see cref="UsageInfo.Empty"/> when unset.</summary>
+    public Func<UsageInfo>? UsageProvider { get; set; }
+
+    /// <summary>Forces a fresh usage fetch (the tray's <see cref="UsageMonitorHost.RefreshAsync"/>), so the
+    /// <c>/usage</c> overlay can show current numbers on open and on the Refresh button — independent of the
+    /// 5-minute poll and of whether the overlay's usage strip is even enabled.</summary>
+    public Func<Task<UsageInfo>>? UsageRefresh { get; set; }
 
     /// <summary>The session this window currently views, or null on the launcher.</summary>
     public PerchSession? Session => _session;
@@ -627,7 +645,8 @@ internal sealed partial class SessionWindow : Window
 
         BuildResumeOverlay();
         BuildAutoCompactOverlay();
-        _center = new Panel { Children = { _launcher, _thread, jumpStack, _toast, _resumeOverlay, _autoCompactOverlay } };
+        BuildUsageOverlay();
+        _center = new Panel { Children = { _launcher, _thread, jumpStack, _toast, _resumeOverlay, _autoCompactOverlay, _usageOverlay } };
         _changesPanel = BuildChangesPanel();   // docked to the right of the centre; hidden until toggled on
         // Dock order matters: the changed-files panel docks Right *before* the composer docks Bottom, so the
         // panel spans the full height (down past the composer) and the composer + thread stay aligned to its
@@ -1490,6 +1509,7 @@ internal sealed partial class SessionWindow : Window
             case "logout": RunClaudeAuth("auth logout"); return true;
             case "mcp":    _ = new McpStatusWindow(Conv.McpServers, _p).ShowDialog(this); return true;
             case "autocompact": ShowAutoCompactOverlay(); return true;
+            case "usage":  ShowUsageOverlay(); return true;
             default:       return false;
         }
     }
@@ -1625,6 +1645,218 @@ internal sealed partial class SessionWindow : Window
             s.SendPrompt("/compact");
         });
     }
+
+    // ── Usage overlay (/usage) ─────────────────────────────────────────────────────
+
+    // A scrim + card that paints the account's rate-limit windows as labelled percentage bars with a
+    // time-to-reset countdown on each — the same UsageInfo the floating overlay strip reads, so /usage stays
+    // out of the chat and reads at a glance. Layered over the thread like the resume/autocompact overlays.
+    private void BuildUsageOverlay()
+    {
+        _usageBars = new StackPanel { Spacing = 16 };
+        _usageStatus = new TextBlock
+        {
+            FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var close = new SessionButton(_p, "✕", SessionButtonKind.Quiet, compact: true) { [DockPanel.DockProperty] = Dock.Right };
+        close.Click += CloseUsageOverlay;
+        var titleRow = new DockPanel
+        {
+            Margin = new Thickness(0, 0, 0, 16), [DockPanel.DockProperty] = Dock.Top,
+            Children =
+            {
+                close,
+                new StackPanel { Children =
+                {
+                    new TextBlock { Text = "Plan usage", FontFamily = _p.Display, FontWeight = FontWeight.Bold, FontSize = 17, Foreground = _p.Title },
+                    new TextBlock { Text = "Rate-limit windows for your Claude plan", FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint },
+                } },
+            },
+        };
+
+        var refresh = new SessionButton(_p, "Refresh", SessionButtonKind.Quiet, "⟳");
+        refresh.Click += () => _ = RefreshUsageAsync();
+        var done = new SessionButton(_p, "Done", SessionButtonKind.Primary, "esc") { Margin = new Thickness(9, 0, 0, 0) };
+        done.Click += CloseUsageOverlay;
+        var actions = new DockPanel
+        {
+            Margin = new Thickness(0, 18, 0, 0), [DockPanel.DockProperty] = Dock.Bottom,
+            Children =
+            {
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right,
+                    [DockPanel.DockProperty] = Dock.Right, Children = { refresh, done },
+                },
+                _usageStatus,
+            },
+        };
+
+        var card = new Border
+        {
+            Background = _p.Surface, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+            CornerRadius = SessionPalette.CardRadius, Padding = new Thickness(20),
+            Width = 460, MaxHeight = 560, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(16, 72, 16, 0), BoxShadow = BoxShadows.Parse("0 18 50 0 #66000000"),
+            Child = new DockPanel
+            {
+                Children =
+                {
+                    titleRow, actions,
+                    new ScrollViewer
+                    {
+                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = _usageBars,
+                    },
+                },
+            },
+        };
+
+        var scrim = new Border { Background = new SolidColorBrush(Color.FromArgb(0x99, 0, 0, 0)) };
+        scrim.PointerReleased += (_, _) => CloseUsageOverlay();
+
+        _usageOverlay = new Panel { IsVisible = false, Children = { scrim, card } };
+    }
+
+    private void ShowUsageOverlay()
+    {
+        // Paint the cached reading immediately so the card is never empty, then kick off a fresh fetch.
+        RenderUsageBars(UsageProvider?.Invoke() ?? UsageInfo.Empty, refreshing: false);
+        _usageOverlay.IsVisible = true;
+        _ = RefreshUsageAsync();
+    }
+
+    private void CloseUsageOverlay()
+    {
+        _usageOverlay.IsVisible = false;
+        if (_session is { IsRunning: true }) _composer.Focus();
+    }
+
+    // Fetches a fresh reading off the UI thread (UsageMonitorHost.RefreshAsync never throws) and repaints. The
+    // card shows the cached bars tagged "Refreshing…" meanwhile. Guarded against a double fetch and a card that
+    // closed mid-flight. A no-op when the app didn't wire a refresh (e.g. the headless render harness).
+    private async Task RefreshUsageAsync()
+    {
+        if (UsageRefresh is not { } refresh || _usageRefreshing) return;
+        _usageRefreshing = true;
+        RenderUsageBars(UsageProvider?.Invoke() ?? UsageInfo.Empty, refreshing: true);
+
+        UsageInfo fresh;
+        try { fresh = await refresh(); }
+        catch { fresh = UsageProvider?.Invoke() ?? UsageInfo.Empty; }
+        finally { _usageRefreshing = false; }
+
+        if (_closed || !_usageOverlay.IsVisible) return;
+        RenderUsageBars(fresh, refreshing: false);
+    }
+
+    // Rebuilds the bar list + status from a reading. Session (5h) and the weekly windows always show once real
+    // data exists; the model-scoped weekly buckets and the monthly extra-usage spend show when the account has
+    // them. A pristine/empty reading shows a hint instead of blank bars.
+    private void RenderUsageBars(UsageInfo u, bool refreshing)
+    {
+        _usageBars.Children.Clear();
+        var now = DateTime.Now;
+        bool stale = u.IsStale(now);
+        bool hasData = u.FiveHourPercent is not null || u.SevenDayPercent is not null
+            || u.Scoped.Count > 0 || u.ExtraUsage is { Enabled: true };
+
+        if (hasData)
+        {
+            _usageBars.Children.Add(UsageBar("Session · 5 hours", u.FiveHourPercent, u.FiveHourResetsAt, now, stale));
+            _usageBars.Children.Add(UsageBar("Weekly · all models", u.SevenDayPercent, u.SevenDayResetsAt, now, stale));
+            foreach (var s in u.Scoped)
+                _usageBars.Children.Add(UsageBar($"Weekly · {s.Label}", s.Percent, s.ResetsAt, now, stale));
+            if (u.ExtraUsage is { Enabled: true } x)
+                _usageBars.Children.Add(UsageBar("Monthly extra usage", x.Percent, null, now, stale,
+                    valueText: x.Compact, resetText: x.LimitReached ? "limit reached" : "rolls on the billing month"));
+        }
+        else if (!refreshing)
+        {
+            _usageBars.Children.Add(new TextBlock
+            {
+                Text = "No usage data yet. Perch reads this from your Claude account — if you're not signed in, run /login.",
+                FontFamily = _p.Body, FontSize = 13, Foreground = _p.Muted, TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        _usageStatus.Text = refreshing ? "Refreshing…"
+            : stale
+                ? (!string.IsNullOrEmpty(u.Error) ? u.Error
+                    : u.LastUpdated == DateTime.MinValue ? "No usage data yet"
+                    : $"Updated {Ago(now - u.LastUpdated)} ago — couldn't refresh")
+                : $"Updated {Ago(now - u.LastUpdated)} ago";
+        _usageStatus.Foreground = stale && !refreshing ? _p.Await : _p.Faint;
+    }
+
+    // One labelled bar: caption + right-aligned value over a rounded track whose fill length and colour track
+    // the percentage (Palette.UsageColor), with a muted "resets in …" countdown beneath. A null percent draws
+    // an em-dash and an empty track; valueText replaces the percentage (the spend bar's dollar figure); when
+    // stale every colour is blended toward the surface so the reading reads as "last known".
+    private Control UsageBar(string caption, double? percent, DateTime? resetsAt, DateTime now, bool stale,
+        string? valueText = null, string? resetText = null)
+    {
+        Color usage = percent is { } p ? Palette.UsageColor(Math.Clamp(p, 0, 100)) : _p.Muted.Color;
+        if (stale) usage = Palette.Blend(usage, _p.Surface.Color, 0.5f);
+
+        var cap = new TextBlock
+        {
+            Text = caption, FontFamily = _p.Body, FontSize = 13.5, Foreground = _p.Muted,
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var val = new TextBlock
+        {
+            Text = valueText ?? (percent is { } pv ? $"{(int)Math.Round(Math.Clamp(pv, 0, 100))}%" : "—"),
+            FontFamily = _p.Mono, FontSize = 13.5, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(usage),
+            [DockPanel.DockProperty] = Dock.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0),
+        };
+
+        var track = new Border
+        {
+            Height = 10, CornerRadius = new CornerRadius(5), Background = _p.Raised2, ClipToBounds = true,
+            Margin = new Thickness(0, 7, 0, 0),
+        };
+        double fillPct = Math.Clamp(percent ?? 0, 0, 100);
+        if (percent is not null && fillPct > 0)
+        {
+            var grid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions
+                {
+                    new ColumnDefinition(new GridLength(fillPct, GridUnitType.Star)),
+                    new ColumnDefinition(new GridLength(Math.Max(0.0001, 100 - fillPct), GridUnitType.Star)),
+                },
+            };
+            var fill = new Border { Background = new SolidColorBrush(usage), CornerRadius = new CornerRadius(5) };
+            Grid.SetColumn(fill, 0);
+            grid.Children.Add(fill);
+            track.Child = grid;
+        }
+
+        var col = new StackPanel { Children = { new DockPanel { Children = { val, cap } }, track } };
+
+        string? sub = resetText;
+        if (sub is null && resetsAt is { } r && r > now) sub = $"resets in {Until(r - now)}";
+        if (sub is not null)
+            col.Children.Add(new TextBlock
+            {
+                Text = sub, FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint, Margin = new Thickness(0, 5, 0, 0),
+            });
+
+        return col;
+    }
+
+    // Compact "time remaining" and "time since" phrasings for the countdowns and the status line.
+    private static string Until(TimeSpan t) =>
+        t.TotalDays >= 1  ? $"{(int)t.TotalDays}d {t.Hours}h"
+      : t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes}m"
+                          : $"{Math.Max(1, (int)t.TotalMinutes)}m";
+
+    private static string Ago(TimeSpan t) =>
+        t.TotalHours >= 1   ? $"{(int)t.TotalHours}h"
+      : t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m"
+                            : $"{Math.Max(1, (int)t.TotalSeconds)}s";
 
     // ── Resume overlay (/resume) ───────────────────────────────────────────────────
 
@@ -2519,6 +2751,7 @@ internal sealed partial class SessionWindow : Window
             return;
         }
         if (e.Key != Key.Escape) return;
+        if (_usageOverlay.IsVisible) { CloseUsageOverlay(); e.Handled = true; return; }
         if (_autoCompactOverlay.IsVisible) { CloseAutoCompactOverlay(); e.Handled = true; return; }
         if (_resumeOverlay.IsVisible) { CloseResumeOverlay(); e.Handled = true; return; }
         if (PaletteOpen) { ClosePalette(); e.Handled = true; return; }
@@ -2617,6 +2850,13 @@ internal sealed partial class SessionWindow : Window
         _endButton.IsVisible = true;
         _resumeButton.IsVisible = false;
         RefreshBar();
+    }
+
+    /// <summary>HeadlessRenderer: seed a fixed usage reading and open the /usage overlay for a capture.</summary>
+    internal void ShowUsageOverlayForRender(UsageInfo info)
+    {
+        UsageProvider = () => info;
+        ShowUsageOverlay();
     }
 
     /// <summary>HeadlessRenderer: the launcher with a sample recents list (and optional seeded resume

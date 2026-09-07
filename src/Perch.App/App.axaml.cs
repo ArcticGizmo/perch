@@ -1658,6 +1658,10 @@ public partial class App : Application
         w.SetContextPressureConfig(cs.ShowContextPressure, cs.ContextPressureYellowPercent,
             cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent, cs.ShowContextGreenSegment);
         w.SetAutoCompactConfig(cs.SessionAutoCompactEnabled, cs.SessionAutoCompactThresholdPercent);
+        // /usage overlay reads the same account rate-limit data the floating strip does — the tray's cached
+        // last reading, with a forced fetch on open/Refresh (works even when the overlay usage strip is off).
+        w.UsageProvider = () => _usageHost?.Last ?? UsageInfo.Empty;
+        w.UsageRefresh = () => _usageHost?.RefreshAsync() ?? Task.FromResult(UsageInfo.Empty);
         // Mirror the overlay's enabled, actionable glyphs as quick-action buttons above the composer.
         w.SetComposerActions(BuildComposerActions(w));
         // The /autocompact modal changed the Perch auto-compaction setting: persist it and push it to every

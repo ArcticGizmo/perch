@@ -1226,6 +1226,20 @@ internal static class HeadlessRenderer
         };
         Capture(Theming.SessionPalette.For(dark: true), "session_plan_1x.png", planEvents, "Plan out the perch-lock sidecar");
 
+        // The /usage overlay: account rate-limit windows as labelled bars with reset countdowns — 5-hour
+        // session, weekly (all models), a model-scoped weekly bucket, and monthly extra-usage spend.
+        var usageNow = DateTime.Now;
+        var usage = new Perch.Data.UsageInfo(
+            FiveHourPercent: 47, SevenDayPercent: 72,
+            FiveHourResetsAt: usageNow.AddHours(2).AddMinutes(38), SevenDayResetsAt: usageNow.AddDays(3).AddHours(5),
+            LastUpdated: usageNow.AddMinutes(-1), Ok: true, Error: null)
+        {
+            Scoped = new[] { new Perch.Data.ScopedUsage("Opus", 88, usageNow.AddDays(3).AddHours(5)) },
+            ExtraUsage = new Perch.Data.ExtraUsageInfo(true, 12.5m, 100m, "AUD", 2, false),
+        };
+        CaptureUsage(Theming.SessionPalette.For(dark: true), "session_usage_1x.png", usage);
+        CaptureUsage(Theming.SessionPalette.For(dark: false), "session_usage_light_1x.png", usage);
+
         // The launcher: folder chosen, model picker, and a recents list including a "live elsewhere" row.
         var now = DateTime.Now;
         var launcher = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 640 };
@@ -1258,6 +1272,23 @@ internal static class HeadlessRenderer
             var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
             w.FeedSampleForRender(cwd, userPrompt, scene, attach);
             w.SetComposerActions(sampleActions);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
+        void CaptureUsage(Theming.SessionPalette palette, string file, Perch.Data.UsageInfo info)
+        {
+            var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
+            w.FeedSampleForRender(cwd, prompt, events);
+            w.ShowUsageOverlayForRender(info);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
