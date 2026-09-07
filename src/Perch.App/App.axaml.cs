@@ -1692,9 +1692,13 @@ public partial class App : Application
     }
 
     // Builds the composer toolbar's overlay-mirrored quick actions for a given window. Two kinds:
-    //   • Global, settings-gated actions — the to-dos surface and the scratch pad (drawn with the overlay's
-    //     own note glyph so they read identically). Status-only glyphs (mode, context, PR/Jira…) and the
-    //     quick-link app launchers don't belong above a chat composer, so they're not mirrored.
+    //   • The project note (settings-gated on ShowNotes) — the same line-drawn note glyph the overlay paints,
+    //     but keyed to THIS session's project (its cwd) rather than the global scratch pad, since a note above
+    //     a session's composer is naturally about that project. Unlike the floating UI (where a row's note
+    //     glyph only appears once a note exists, with a right-click "Add note…" to create one) the composer
+    //     has no right-click affordance, so the glyph shows whenever ShowNotes is on — click to add/edit.
+    //     The to-dos surface and status-only glyphs (mode, context, PR/Jira…) and the quick-link app
+    //     launchers aren't project-scoped, so they don't belong above a chat composer and aren't mirrored.
     //   • Session-specific glyphs that mirror what the floating overlay shows on this session's row — the
     //     published-Artifact glyph and the produced-Markdown glyph — added only when the attached session
     //     actually has them (looked up in the latest scan roster). These track the session live because the
@@ -1704,9 +1708,8 @@ public partial class App : Application
     {
         var cs = Effective;
         var actions = new List<ComposerAction>();
-        if (cs.ShowTodos) actions.Add(new ComposerAction("☑", "To-dos", _ => OpenTodos()));
-        if (cs.ShowNotes)
-            actions.Add(new ComposerAction("", "Scratch pad", _ => OnOpenScratchPad(),
+        if (cs.ShowNotes && w.Cwd is { Length: > 0 } noteCwd)
+            actions.Add(new ComposerAction("", "Project note", _ => OpenProjectNote(noteCwd),
                 GlyphFactory: brush => new Views.NoteGlyph(brush)));
 
         // The session this window is viewing, as seen by the latest monitor scan (carries HasArtifacts /
@@ -2128,6 +2131,19 @@ public partial class App : Application
             StickyNoteWindow.ForProject(
                 session.ProjectName, host.ReadProjectNote(session.Cwd),
                 text => host.SetProjectNote(session.Cwd, text)));
+    }
+
+    // The composer's project note — opens the sticky-note editor on the note shared by every session in the
+    // given working directory (the same project.note sidecar the overlay's row note uses), prefilled and
+    // re-read for freshness. Keyed by cwd so opening it from the composer, a session row, or the picker all
+    // focus the same window. Best-effort: no monitor host yet just no-ops.
+    private void OpenProjectNote(string cwd)
+    {
+        if (_monitorHost is not { } host) return;
+        OpenStickyNote("projnote:" + cwd, () =>
+            StickyNoteWindow.ForProject(
+                PathLeaf.Of(cwd), host.ReadProjectNote(cwd),
+                text => host.SetProjectNote(cwd, text)));
     }
 
     // The global scratch pad — opened from the note button leading the overlay's quick-links row. Multi-line

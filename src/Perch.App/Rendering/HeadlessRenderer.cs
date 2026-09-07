@@ -1180,8 +1180,7 @@ internal static class HeadlessRenderer
         };
         var sampleActions = new List<Windows.ComposerAction>
         {
-            new("☑", "To-dos", _ => { }),
-            new("", "Scratch pad", _ => { }, GlyphFactory: brush => new Views.NoteGlyph(brush)),
+            new("", "Project note", _ => { }, GlyphFactory: brush => new Views.NoteGlyph(brush)),
             new("", "Artifacts (2) — open on claude.ai", _ => { }, GlyphFactory: _ => new Views.ArtifactGlyph()),
             new("", "Markdown files this session produced", _ => { }, GlyphFactory: _ => new Views.MarkdownGlyph()),
         };

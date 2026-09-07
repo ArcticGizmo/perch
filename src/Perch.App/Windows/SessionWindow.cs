@@ -252,6 +252,10 @@ internal sealed partial class SessionWindow : Window
     /// <summary>The id of the session this window views (known from launch), or null on the launcher.</summary>
     public string? SessionId => _session?.SessionId;
 
+    /// <summary>The working directory this window is bound to (the session's cwd, a resumed recent's folder,
+    /// or the launcher pick), or "" before a project is chosen. Keys the composer's project note.</summary>
+    public string Cwd => _cwd;
+
     public SessionWindow(SessionPalette? palette = null)
     {
         _p = palette ?? SessionPalette.Current;
@@ -1394,8 +1398,10 @@ internal sealed partial class SessionWindow : Window
     {
         _composerToolbar.Children.Clear();
         // Composer-native attach: one paperclip — pick any file, images become chips, other files insert their
-        // path. The discoverable face of drag-drop/paste.
-        _composerToolbar.Children.Add(ToolbarButton("📎", "Attach a file or image", _ => PickAttachmentsFireAndForget()));
+        // path. The discoverable face of drag-drop/paste. Owner-drawn (AttachGlyph), not the OS paperclip emoji
+        // — that renders as "Clippy" on Windows, which we don't ship for copyright reasons.
+        _composerToolbar.Children.Add(ToolbarButton("", "Attach a file or image", _ => PickAttachmentsFireAndForget(),
+            glyphFactory: brush => new AttachGlyph(brush)));
         // Then the overlay's enabled, actionable glyphs — separated by a thin divider when there are any.
         if (_overlayActions.Count > 0)
         {

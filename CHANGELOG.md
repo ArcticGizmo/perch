@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.1] - 2026-09-07
+
+- Session composer draws its own attach paperclip, not the one that was basically Clippy
+- Dropped the to-do checkbox from the session composer (to-dos were never project-scoped)
+- The session composer's note now belongs to its project, not the global scratch pad
+
+---
+
 ## [v0.4.0] - 2026-09-07
 
 **Experimental — a Perch-native window for running Claude Code sessions.** It does a lot and is rough in
