@@ -14,10 +14,27 @@ public class ControlProtocolTests
     [Fact]
     public void NoSessionArgs_IsNotAnIntent()
     {
+        // FromArgs never invents a session for a bare or tray-only launch: `--autostarted` (the hook) and
+        // `--tray` are ignored as unknown flags. A bare `perch` becomes "start fresh here" only via Program's
+        // interactive-terminal check + StartFresh below — not from parsing.
         Assert.Null(SessionOpenIntent.FromArgs([], Here));
         Assert.Null(SessionOpenIntent.FromArgs(["--autostarted"], Here));
+        Assert.Null(SessionOpenIntent.FromArgs(["--tray"], Here));
         Assert.Null(SessionOpenIntent.FromArgs(["render", "out"], Here));
         Assert.Null(SessionOpenIntent.FromArgs([@"C:\definitely\not\a\real\dir\xyz"], Here));
+    }
+
+    [Fact]
+    public void StartFresh_IsACwdOnlyIntent()
+    {
+        var i = SessionOpenIntent.StartFresh(@"C:\proj");
+        Assert.Equal(@"C:\proj", i.Cwd);
+        Assert.Null(i.ResumeId);
+        Assert.False(i.Continue);
+        Assert.False(i.PickResume);
+        Assert.Null(i.Model);
+        // Round-trips over the pipe like any other intent (a running tray receives it as "open a session here").
+        Assert.Equal(i, SessionOpenIntent.Parse(i.ToJson()));
     }
 
     [Fact]

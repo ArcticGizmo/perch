@@ -65,6 +65,9 @@ internal static class Program
         // `perch` as a claude-shaped CLI: `perch --resume [id]`, `perch -c`, `perch [dir]` open a Perch
         // session window. Parsed here (unknown flags are ignored, so a plain tray launch is untouched) and
         // acted on at the single-instance gate below: forwarded to the running tray, or kept for this one.
+        // A bare `perch` with no session argument becomes "start a fresh session in the cwd" too, but only
+        // for a genuine interactive terminal launch — synthesised after Velopack's Run() (so IsFirstRun is
+        // known). See the block below.
         var sessionIntent = isReplay ? null : Perch.Data.Control.SessionOpenIntent.FromArgs(args, Environment.CurrentDirectory);
 
         // Velopack install/update/uninstall lifecycle. The fast callbacks keep the per-user PATH entry
@@ -91,6 +94,17 @@ internal static class Program
         velopack
             .OnFirstRun(_ => IsFirstRun = true)
             .Run();
+
+        // Bare `perch` typed at a terminal is the claude-shaped "start a session here": when nothing on the
+        // command line asked for a specific session, open a fresh one in the current directory — but only for
+        // a genuine interactive launch. Tray-only launches never do this: the SessionStart hook's
+        // `--autostarted`, a first run after install, and the non-interactive starters (the login item, the
+        // Start-menu/desktop shortcut, a double-click, Velopack's update restart) all fail the terminal check
+        // and so just bring up the tray. `--tray` forces tray-only even from a terminal (e.g. `dotnet run`).
+        bool trayOnly = AutoStarted || IsFirstRun
+            || args.Any(a => string.Equals(a, "--tray", StringComparison.OrdinalIgnoreCase));
+        if (sessionIntent is null && !isReplay && !trayOnly && LaunchedFromTerminal())
+            sessionIntent = Perch.Data.Control.SessionOpenIntent.StartFresh(Environment.CurrentDirectory);
 
         // A replay instance gets its own mutex so it runs alongside a live tray instead of no-op'ing
         // against it — you can watch a recording play while your real sessions keep running.
@@ -183,8 +197,37 @@ internal static class Program
     {
         [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool AttachConsole(int dwProcessId);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool FreeConsole();
     }
 #endif
+
+    // True when this launch came from an interactive terminal — the signal that a bare `perch` should open a
+    // session (like `claude`), rather than just bring up the tray. False for a double-click, a Start-menu /
+    // desktop shortcut, the login item, Velopack's update restart, and the SessionStart hook, none of which
+    // want a session window. On Windows a GUI-subsystem process has a parent console only when started from a
+    // terminal; we probe by attaching and immediately detaching, so the long-lived tray is never tied to the
+    // terminal window's lifetime (a lingering attach would let closing the terminal kill the tray — and
+    // ForwardSessionIntent re-attaches on its own for the reply). Off Windows, a terminal launch has a tty on
+    // stdin while `open`/launchd do not.
+    private static bool LaunchedFromTerminal()
+    {
+#if WINDOWS
+        const int ATTACH_PARENT_PROCESS = -1;
+        const int ERROR_ACCESS_DENIED = 5;
+        if (NativeConsole.AttachConsole(ATTACH_PARENT_PROCESS))
+        {
+            NativeConsole.FreeConsole();
+            return true;
+        }
+        // Already attached to a console (rare for a WinExe) still means an interactive launch.
+        return System.Runtime.InteropServices.Marshal.GetLastWin32Error() == ERROR_ACCESS_DENIED;
+#else
+        try { return !Console.IsInputRedirected; }
+        catch { return false; }
+#endif
+    }
 
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>()

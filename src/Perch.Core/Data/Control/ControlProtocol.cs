@@ -83,6 +83,10 @@ internal sealed record SessionOpenIntent(
         return new SessionOpenIntent(cwd ?? currentDir, resumeId, pick && resumeId is null, cont && resumeId is null, model, mode);
     }
 
+    /// <summary>An intent to start a fresh session in <paramref name="cwd"/> — the bare <c>perch</c> case
+    /// (nothing on the command line asked for a specific session), synthesised for an interactive launch.</summary>
+    public static SessionOpenIntent StartFresh(string cwd) => new(cwd);
+
     public string ToJson()
     {
         var o = new JsonObject { ["cwd"] = Cwd };
