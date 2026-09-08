@@ -1246,6 +1246,10 @@ internal static class HeadlessRenderer
         CaptureUsage(Theming.SessionPalette.For(dark: true), "session_usage_1x.png", usage);
         CaptureUsage(Theming.SessionPalette.For(dark: false), "session_usage_light_1x.png", usage);
 
+        // The Ctrl+F find bar: a query washing the matching messages/tool cards, the current one outlined.
+        CaptureFind(Theming.SessionPalette.For(dark: true), "session_find_1x.png", "session");
+        CaptureFind(Theming.SessionPalette.For(dark: false), "session_find_light_1x.png", "session");
+
         // The launcher: folder chosen, model picker, and a recents list including a "live elsewhere" row.
         var now = DateTime.Now;
         var launcher = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 640 };
@@ -1295,6 +1299,23 @@ internal static class HeadlessRenderer
             var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
             w.FeedSampleForRender(cwd, prompt, events);
             w.ShowUsageOverlayForRender(info);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
+        void CaptureFind(Theming.SessionPalette palette, string file, string query)
+        {
+            var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
+            w.FeedSampleForRender(cwd, prompt, events);
+            w.ShowFindForRender(query);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

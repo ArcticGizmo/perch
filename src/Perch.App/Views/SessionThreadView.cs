@@ -37,6 +37,12 @@ internal sealed class SessionThreadView : ScrollViewer
     private SessionConversation? _conv;
     private bool _stickToBottom = true;
 
+    // Ctrl+F find: each item's Root is wrapped in a highlight Border (transparent until a search lights it up),
+    // tracked per item so a match can be washed, outlined and scrolled to. See Search / ShowMatch / ClearSearch.
+    private readonly Dictionary<ConversationItem, Border> _wraps = new();
+    private readonly List<Border> _searchHits = new();   // matching item wrappers, in conversation order
+    private int _searchCurrent = -1;                      // index into _searchHits of the outlined match, or -1
+
     // Every user-prompt row in order, so "jump to previous prompt" can walk upward through them; plus the cached
     // scroll state the window's floating jump buttons watch (recomputed on every scroll/layout change).
     private readonly List<Control> _userRows = new();
@@ -155,6 +161,9 @@ internal sealed class SessionThreadView : ScrollViewer
         _userRows.Clear();
         _stack.Children.Clear();
         _views.Clear();
+        _wraps.Clear();
+        _searchHits.Clear();
+        _searchCurrent = -1;
         _compactions.Clear();
         foreach (var item in conversation.Items) AddItem(item);
         conversation.Changed += OnChanged;
@@ -303,7 +312,15 @@ internal sealed class SessionThreadView : ScrollViewer
             _                      => new ItemView { Root = new Panel() },
         };
         _views[item] = view;
-        _stack.Children.Add(view.Root);
+        // Every item sits in a highlight wrapper (inert until Ctrl+F lights it up). The 1px transparent border
+        // is always present so toggling the outline on a match never shifts the layout.
+        var wrap = new Border
+        {
+            Child = view.Root, CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1), BorderBrush = Brushes.Transparent, Background = Brushes.Transparent,
+        };
+        _wraps[item] = wrap;
+        _stack.Children.Add(wrap);
         if (item is UserMessageItem) _userRows.Add(view.Root);
         Dispatcher.UIThread.Post(RecomputeScrollState, DispatcherPriority.Background);
     }
@@ -317,10 +334,9 @@ internal sealed class SessionThreadView : ScrollViewer
                 SyncParts(view, a);
                 break;
             case PermissionItem p:
-                // A resolved card becomes a compact receipt: rebuild and swap in place.
+                // A resolved card becomes a compact receipt: rebuild and swap inside the item's wrapper.
                 var fresh = Row(BuildPermission(p), null, null);
-                int at = _stack.Children.IndexOf(view.Root);
-                if (at >= 0) _stack.Children[at] = fresh;
+                if (_wraps.TryGetValue(item, out var wrap)) wrap.Child = fresh;
                 view.Root = fresh;
                 break;
             case CompactionItem cm:
@@ -328,6 +344,77 @@ internal sealed class SessionThreadView : ScrollViewer
                 break;
         }
     }
+
+    // ── Ctrl+F find ────────────────────────────────────────────────────────────────
+
+    /// <summary>Number of items currently matching the last <see cref="Search"/>.</summary>
+    public int MatchCount => _searchHits.Count;
+
+    /// <summary>Index of the outlined (current) match within the match set, or -1 when none is current.</summary>
+    public int CurrentMatch => _searchCurrent;
+
+    /// <summary>Recompute the set of conversation items whose text contains <paramref name="query"/>
+    /// (case-insensitive), washing each match; returns the match count. A blank query clears the search.
+    /// Item-level: a whole message/tool card is a match — matches aren't highlighted character-by-character.</summary>
+    public int Search(string query)
+    {
+        ClearSearch();
+        if (_conv is null || string.IsNullOrWhiteSpace(query)) return 0;
+        foreach (var item in _conv.Items)
+            if (_wraps.TryGetValue(item, out var wrap)
+                && SearchableText(item).Contains(query, StringComparison.OrdinalIgnoreCase))
+            {
+                wrap.Background = _p.BrandWash;
+                _searchHits.Add(wrap);
+            }
+        return _searchHits.Count;
+    }
+
+    /// <summary>Scroll the match at <paramref name="index"/> (wrapped into range) into view and outline it as
+    /// the current match, un-outlining the previous one; a no-op when there are no matches.</summary>
+    public void ShowMatch(int index)
+    {
+        if (_searchHits.Count == 0) return;
+        int n = _searchHits.Count;
+        index = ((index % n) + n) % n;
+        if (_searchCurrent >= 0 && _searchCurrent < n)
+            _searchHits[_searchCurrent].BorderBrush = Brushes.Transparent;   // demote the old current
+        _searchCurrent = index;
+        var cur = _searchHits[index];
+        cur.BorderBrush = _p.Brand;
+        cur.BringIntoView();   // the scroll handler recomputes tail-follow from the new offset
+    }
+
+    /// <summary>Clear all find highlighting and match state (find bar closed, or the query emptied).</summary>
+    public void ClearSearch()
+    {
+        foreach (var w in _searchHits)
+        {
+            w.Background = Brushes.Transparent;
+            w.BorderBrush = Brushes.Transparent;
+        }
+        _searchHits.Clear();
+        _searchCurrent = -1;
+    }
+
+    // The text a Ctrl+F query is matched against, per item: the user's prose, a system note, or an assistant
+    // turn's prose + thinking + tool names/summaries/results. Permission cards contribute their tool name.
+    private static string SearchableText(ConversationItem item) => item switch
+    {
+        UserMessageItem u      => u.Text,
+        NoteItem n             => n.Text,
+        AssistantMessageItem a => string.Join('\n', a.Parts.Select(PartText)),
+        PermissionItem p       => p.Request.ToolName,
+        _                      => "",
+    };
+
+    private static string PartText(AssistantPart part) => part switch
+    {
+        TextPart t     => t.Text,
+        ThinkingPart t => t.Text,
+        ToolCallPart t => $"{t.ToolName} {t.Summary} {t.ResultPreview}",
+        _              => "",
+    };
 
     // ── User ─────────────────────────────────────────────────────────────────────
 
