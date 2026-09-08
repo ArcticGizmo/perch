@@ -1717,8 +1717,37 @@ public partial class App : Application
                 GlyphFactory: brush => new Views.NoteGlyph(brush)));
 
         // The session this window is viewing, as seen by the latest monitor scan (carries HasArtifacts /
-        // HasProducedMarkdown; the live PerchSession itself doesn't compute those).
+        // HasProducedMarkdown / PullRequest / JiraTicket / ExternalNotify / RemoteControlled; the live
+        // PerchSession itself doesn't compute those).
         var session = w.SessionId is { } id ? _lastSessions.FirstOrDefault(s => s.SessionId == id) : null;
+
+        // The session-row integration glyphs, mirrored onto the composer alongside the note — each shown only
+        // when this session actually has it and the integration is enabled, exactly as the floating overlay
+        // row shows them (and they track live because RefreshComposerActions re-runs on every scan). PR and
+        // Jira are deep-links; the external-notify and remote-control marks are indicators whose click mirrors
+        // the overlay's secondary action (toggle the opt-in / show the QR code).
+        if (cs.ShowPullRequests && session?.PullRequest is { } pr)
+            actions.Add(new ComposerAction("", $"PR #{pr.Number} · {pr.State} — open on GitHub · middle-click for a new window",
+                _ => PlatformServices.UrlOpener.Open(pr.Url),
+                GlyphFactory: _ => new Views.PrGlyph(pr.State, pr.ChecksRollup),
+                MiddleInvoke: _ => PlatformServices.UrlOpener.OpenInNewWindow(pr.Url)));
+
+        if (cs.ShowJiraTicket && session?.JiraTicket is { } jira)
+            actions.Add(new ComposerAction("", $"{jira.Key} — open in Jira · middle-click for a new window",
+                _ => PlatformServices.UrlOpener.Open(jira.Url),
+                GlyphFactory: _ => new Views.JiraGlyph(),
+                MiddleInvoke: _ => PlatformServices.UrlOpener.OpenInNewWindow(jira.Url)));
+
+        if (session is { ExternalNotify: true } notifySession)
+            actions.Add(new ComposerAction("", "External notifications on for this session — click to turn off",
+                _ => OnToggleExternalNotify(notifySession.SessionId),
+                GlyphFactory: _ => new Views.MailGlyph()));
+
+        if (session is { RemoteControlled: true } rcSession)
+            actions.Add(new ComposerAction("", "Remote-controlled — click for the QR code",
+                _ => ShowQrCode(rcSession),
+                GlyphFactory: _ => new Views.RemoteGlyph()));
+
         if (session is { HasArtifacts: true })
         {
             var arts = session.Artifacts;

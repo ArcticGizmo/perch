@@ -1181,6 +1181,12 @@ internal static class HeadlessRenderer
         var sampleActions = new List<Windows.ComposerAction>
         {
             new("", "Project note", _ => { }, GlyphFactory: brush => new Views.NoteGlyph(brush)),
+            new("", "PR #128 · Open — open on GitHub", _ => { },
+                GlyphFactory: _ => new Views.PrGlyph(Perch.Data.PrState.Open, Perch.Data.PrChecksRollup.Passing)),
+            new("", "SFTY-1234 — open in Jira", _ => { }, GlyphFactory: _ => new Views.JiraGlyph()),
+            new("", "External notifications on for this session — click to turn off", _ => { },
+                GlyphFactory: _ => new Views.MailGlyph()),
+            new("", "Remote-controlled — click for the QR code", _ => { }, GlyphFactory: _ => new Views.RemoteGlyph()),
             new("", "Artifacts (2) — open on claude.ai", _ => { }, GlyphFactory: _ => new Views.ArtifactGlyph()),
             new("", "Markdown files this session produced", _ => { }, GlyphFactory: _ => new Views.MarkdownGlyph()),
         };
