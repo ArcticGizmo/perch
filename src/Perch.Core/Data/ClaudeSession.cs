@@ -273,15 +273,25 @@ public record ClaudeSession(
     /// <summary>The environment named by <see cref="EnvSlug"/>, if still in the config-dir set.</summary>
     public ClaudeConfigDir? EnvDir => ClaudeConfigSet.ForSlug(EnvSlug);
 
+    /// <summary>
+    /// The environment to show for this session: the one it reported, else the directory its sidecars
+    /// live in <em>when that directory belongs to one environment alone</em>. Null when neither can
+    /// say. The fallback matters for every setup that shares nothing — a plain
+    /// <c>CLAUDE_CONFIG_DIR</c> per environment attributes perfectly by path and writes no slug, and
+    /// dropping to <see cref="EnvSlug"/> alone would have shown such a machine nothing at all.
+    /// </summary>
+    public ClaudeConfigDir? AttributedEnvDir =>
+        EnvDir ?? (ConfigDir is { } dir && !ClaudeConfigSet.SharesSessionsDir(dir) ? dir : null);
+
     /// <summary>The sessions directory that owns this session's sidecars.</summary>
     public string SessionsDir => ConfigDir?.SessionsDir ?? ClaudePaths.SessionsDir;
 
     /// <summary>Label of the dir the sidecars live in. For display prefer <see cref="EnvLabel"/>.</summary>
     public string? ConfigLabel => ConfigDir?.Label;
 
-    /// <summary>The running environment's label ("InFlight"), or null when unknown. Only worth showing
-    /// when the machine has several — see <see cref="ClaudeConfigSet.IsMulti"/>.</summary>
-    public string? EnvLabel => EnvDir?.Label;
+    /// <summary>The label to show for this session's environment, or null when unknown. Only worth
+    /// showing when the machine has several — see <see cref="ClaudeConfigSet.IsMulti"/>.</summary>
+    public string? EnvLabel => AttributedEnvDir?.Label;
 
     /// <summary>The organization this session's config dir is signed in to, or null. With one login
     /// across several organizations it is the only thing that tells the environments apart.</summary>

@@ -112,6 +112,36 @@ internal static class ClaudeConfigSet
         return result;
     }
 
+    // Cached against the identity of the set it was derived from: the answer only changes when the
+    // set does, and the question is asked once per session per scan - resolving links each time would
+    // put a syscall on that path.
+    private static IReadOnlyList<ClaudeConfigDir>? _sharingDerivedFrom;
+    private static HashSet<string> _sharedSessionRoots = [];
+
+    /// <summary>
+    /// True when another config dir resolves to the same <c>sessions</c> directory, so which dir a
+    /// sidecar was found in attributes it to nothing. False when the directory belongs to this
+    /// environment alone, in which case the path <em>is</em> the attribution.
+    /// </summary>
+    public static bool SharesSessionsDir(ClaudeConfigDir dir)
+    {
+        var all = All;
+        if (!ReferenceEquals(_sharingDerivedFrom, all))
+        {
+            var seen = new HashSet<string>(ClaudeConfigDir.PathComparer);
+            var shared = new HashSet<string>(ClaudeConfigDir.PathComparer);
+            foreach (var candidate in all)
+            {
+                var real = ResolveReal(candidate.SessionsDir);
+                if (!seen.Add(real)) shared.Add(real);
+            }
+            _sharedSessionRoots = shared;
+            _sharingDerivedFrom = all;
+        }
+
+        return _sharedSessionRoots.Contains(ResolveReal(dir.SessionsDir));
+    }
+
     /// <summary>Re-probes if the set hasn't been derived recently.</summary>
     public static void RefreshIfStale()
     {

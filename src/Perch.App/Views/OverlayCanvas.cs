@@ -2765,11 +2765,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         // Which environment is running this session, labelled with the organization where known (the
         // only discriminator under one login) and warn-coloured on a mismatch with the declared org.
-        // From EnvDir, never ConfigDir: with sessions/ shared, that would read the same on every row.
-        // No chip when the environment is unknown.
+        // AttributedEnvDir rather than ConfigDir: where sessions/ is shared the latter is the primary
+        // for every session, so the chip would read the same on every row. No chip when unknown.
         string envText = "";
         bool envMismatch = false;
-        if (_showConfigLabels && session.EnvDir is { } sessionEnv)
+        if (_showConfigLabels && session.AttributedEnvDir is { } sessionEnv)
         {
             envText = sessionEnv.Org ?? sessionEnv.Label;
             envMismatch = sessionEnv.OrgState == OrgState.Mismatch;

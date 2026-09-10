@@ -137,6 +137,48 @@ public class MultiConfigDirSessionTests : IDisposable
     }
 
     [Fact]
+    public void AttributedEnvDir_FallsBackToThePathWhenTheDirectoryIsNotShared()
+    {
+        // Every setup that shares nothing - a plain CLAUDE_CONFIG_DIR per environment - attributes
+        // perfectly by path and writes no slug. Showing nothing there would have been a regression on
+        // behaviour that already worked.
+        var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
+
+        Assert.Null(session.EnvSlug);
+        Assert.Equal(_env, session.AttributedEnvDir);
+        Assert.Equal("InFlight", session.EnvLabel);
+    }
+
+    [Fact]
+    public void AttributedEnvDir_IsNullWhenTheSessionsDirectoryIsSharedAndNothingWasReported()
+    {
+        // Two config dirs, one physical sessions directory: the path attributes nothing, so with no
+        // slug there is nothing honest to show.
+        var alias = new ClaudeConfigDir(
+            Path.Combine(_root, ".claude-envs", "envs", "alias"), _env.RealRoot + "-alias", "alias");
+        Directory.CreateDirectory(alias.Root);
+        if (!TryLinkDirectory(alias.SessionsDir, _env.SessionsDir))
+            return;   // no link support on this host
+        ClaudeConfigSet.SetForTesting([_hub, _env, alias]);
+
+        var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
+
+        Assert.Null(session.EnvSlug);
+        Assert.Null(session.AttributedEnvDir);
+        Assert.Null(session.EnvLabel);
+    }
+
+    [Fact]
+    public void AttributedEnvDir_PrefersWhatTheSessionReported()
+    {
+        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.slug"), "inflight");
+
+        var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
+
+        Assert.Equal(_env, session.AttributedEnvDir);
+    }
+
+    [Fact]
     public void ForSlug_DoesNotFallBackToThePrimary()
     {
         // The whole point of the lookup: an unknown slug is unknown. Falling back would attribute a
