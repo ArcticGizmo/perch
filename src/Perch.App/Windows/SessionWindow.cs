@@ -200,6 +200,20 @@ internal sealed partial class SessionWindow : Window
     // In-window /autocompact modal: a scrim + card with an on/off toggle and a threshold slider.
     private Panel _autoCompactOverlay = null!;
 
+    // In-window /usage readout: a scrim + card of labelled percentage bars (5-hour, weekly, model-scoped,
+    // monthly spend) with a time-to-reset countdown on each — the account rate-limit picture, painted from
+    // the same UsageInfo the floating overlay strip uses, so it never dumps the CLI's markdown into the thread.
+    private Panel _usageOverlay = null!;
+    private StackPanel _usageBars = null!;
+    private TextBlock _usageStatus = null!;
+    private bool _usageRefreshing;
+
+    // Ctrl+F find bar over the thread: a search box + match counter + prev/next + close, driving the thread
+    // view's item-level search (wash + outline + scroll-to). Hidden until Ctrl+F; Esc / ✕ close it.
+    private Border _findBar = null!;
+    private TextBox _findBox = null!;
+    private TextBlock _findCount = null!;
+
     // In-window /resume quick-open: a searchable, keyboard-navigable overlay of this project's sessions.
     private Panel _resumeOverlay = null!;
     private TextBox _resumeSearch = null!;
@@ -245,6 +259,24 @@ internal sealed partial class SessionWindow : Window
 
     /// <summary>A file reference's "View diff" was picked (absolute path). The app opens the git tree on it.</summary>
     public event Action<string>? ViewFileDiffRequested;
+
+    /// <summary>Show a QR code for a URL (title, url) — /remote-control's claude.ai session link. The app owns
+    /// the QR window, so it handles this.</summary>
+    public event Action<string, string>? ShowQrRequested;
+
+    /// <summary>The composer toolbar's "…" overflow was clicked (the anchor control) — the app opens a menu to
+    /// activate features whose glyph isn't showing yet (remote control, notifications, git history).</summary>
+    public event Action<Control>? ComposerOverflowRequested;
+
+    /// <summary>Supplies the last-known account usage reading (the tray's <see cref="UsageMonitorHost.Last"/>),
+    /// so <c>/usage</c> can paint its overlay from the same data the floating strip uses. Null-safe: the
+    /// overlay falls back to <see cref="UsageInfo.Empty"/> when unset.</summary>
+    public Func<UsageInfo>? UsageProvider { get; set; }
+
+    /// <summary>Forces a fresh usage fetch (the tray's <see cref="UsageMonitorHost.RefreshAsync"/>), so the
+    /// <c>/usage</c> overlay can show current numbers on open and on the Refresh button — independent of the
+    /// 5-minute poll and of whether the overlay's usage strip is even enabled.</summary>
+    public Func<Task<UsageInfo>>? UsageRefresh { get; set; }
 
     /// <summary>The session this window currently views, or null on the launcher.</summary>
     public PerchSession? Session => _session;
@@ -627,7 +659,9 @@ internal sealed partial class SessionWindow : Window
 
         BuildResumeOverlay();
         BuildAutoCompactOverlay();
-        _center = new Panel { Children = { _launcher, _thread, jumpStack, _toast, _resumeOverlay, _autoCompactOverlay } };
+        BuildUsageOverlay();
+        BuildFindBar();
+        _center = new Panel { Children = { _launcher, _thread, jumpStack, _toast, _findBar, _resumeOverlay, _autoCompactOverlay, _usageOverlay } };
         _changesPanel = BuildChangesPanel();   // docked to the right of the centre; hidden until toggled on
         // Dock order matters: the changed-files panel docks Right *before* the composer docks Bottom, so the
         // panel spans the full height (down past the composer) and the composer + thread stay aligned to its
@@ -660,6 +694,7 @@ internal sealed partial class SessionWindow : Window
         session.Conversation.StateChanged += OnStateForAlert;
         session.TitleChanged += RefreshBar;
         session.Ended += OnSessionEnded;
+        session.RemoteControlChanged += OnRemoteControlChanged;   // pop the QR when remote control turns on
         session.Conversation.Changed += OnConversationChangedForChanges;   // live-refresh the changed-files panel
         _thread.Cwd = session.Cwd;   // set before Bind so tool cards built during materialisation arm file refs
         _thread.Bind(session.Conversation);
@@ -678,6 +713,7 @@ internal sealed partial class SessionWindow : Window
         s.Conversation.StateChanged -= OnStateForAlert;
         s.TitleChanged -= RefreshBar;
         s.Ended -= OnSessionEnded;
+        s.RemoteControlChanged -= OnRemoteControlChanged;
         s.Conversation.Changed -= OnConversationChangedForChanges;
         _session = null;
     }
@@ -1413,6 +1449,10 @@ internal sealed partial class SessionWindow : Window
             foreach (var a in _overlayActions)
                 _composerToolbar.Children.Add(ToolbarButton(a.Glyph, a.Tooltip, a.Invoke, a.Icon, a.GlyphFactory, a.MiddleInvoke));
         }
+        // Trailing "…" overflow: activate features whose glyph isn't showing yet (remote control, external
+        // notifications, git history). The app builds the menu from live session state.
+        _composerToolbar.Children.Add(ToolbarButton("⋯", "More — remote control, notifications, git history…",
+            anchor => ComposerOverflowRequested?.Invoke(anchor)));
         _composerToolbar.IsVisible = true;
     }
 
@@ -1490,6 +1530,9 @@ internal sealed partial class SessionWindow : Window
             case "logout": RunClaudeAuth("auth logout"); return true;
             case "mcp":    _ = new McpStatusWindow(Conv.McpServers, _p).ShowDialog(this); return true;
             case "autocompact": ShowAutoCompactOverlay(); return true;
+            case "usage":  ShowUsageOverlay(); return true;
+            case "remote-control":
+            case "rc":     ToggleRemoteControl(); return true;
             default:       return false;
         }
     }
@@ -1499,6 +1542,32 @@ internal sealed partial class SessionWindow : Window
     {
         if (!PlatformServices.SessionLauncher.OpenClaudeDesktop())
             Conv.AddNote("couldn't open Claude Desktop — it may not be installed", NoteKind.Error);
+    }
+
+    // /remote-control (/rc) → connect this session to the mobile app / claude.ai. Unlike most built-ins this
+    // is NOT a stream-json slash command (it isn't advertised); it's the CLI's `remote_control` *control
+    // request*, the same one the IDE integrations use (found by protocol spike — docs/session-control-poc.md).
+    // Perch sends it in-process, then the ack's session URL pops a QR (OnRemoteControlChanged). Already on:
+    // just re-show the QR from the stored URL rather than re-enabling.
+    private void ToggleRemoteControl()
+    {
+        if (_session is not { IsRunning: true } s)
+        {
+            Conv.AddNote("start or resume the session before enabling remote control", NoteKind.Error);
+            return;
+        }
+        if (s is { RemoteControlEnabled: true, RemoteControlUrl: { Length: > 0 } url })
+            ShowQrRequested?.Invoke("Remote control", url);
+        else
+            s.RequestRemoteControl(true);
+    }
+
+    // The remote_control ack landed (UI thread): on enable, pop the QR for the claude.ai session link. The
+    // note ("remote control on — <url>") is already in the thread from PerchSession; this adds the QR.
+    private void OnRemoteControlChanged(RemoteControlEvent ev)
+    {
+        if (ev.SessionUrl is { Length: > 0 } url)
+            ShowQrRequested?.Invoke("Remote control", url);
     }
 
     // /login, /logout → shell out to `claude auth …` in a terminal: the OAuth flow opens a browser and prompts
@@ -1624,6 +1693,328 @@ internal sealed partial class SessionWindow : Window
             conv.AddNote($"auto-compacting · context reached {(int)pct}%");
             s.SendPrompt("/compact");
         });
+    }
+
+    // ── Usage overlay (/usage) ─────────────────────────────────────────────────────
+
+    // A scrim + card that paints the account's rate-limit windows as labelled percentage bars with a
+    // time-to-reset countdown on each — the same UsageInfo the floating overlay strip reads, so /usage stays
+    // out of the chat and reads at a glance. Layered over the thread like the resume/autocompact overlays.
+    private void BuildUsageOverlay()
+    {
+        _usageBars = new StackPanel { Spacing = 16 };
+        _usageStatus = new TextBlock
+        {
+            FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var close = new SessionButton(_p, "✕", SessionButtonKind.Quiet, compact: true) { [DockPanel.DockProperty] = Dock.Right };
+        close.Click += CloseUsageOverlay;
+        var titleRow = new DockPanel
+        {
+            Margin = new Thickness(0, 0, 0, 16), [DockPanel.DockProperty] = Dock.Top,
+            Children =
+            {
+                close,
+                new StackPanel { Children =
+                {
+                    new TextBlock { Text = "Plan usage", FontFamily = _p.Display, FontWeight = FontWeight.Bold, FontSize = 17, Foreground = _p.Title },
+                    new TextBlock { Text = "Rate-limit windows for your Claude plan", FontFamily = _p.Mono, FontSize = 12, Foreground = _p.Faint },
+                } },
+            },
+        };
+
+        var refresh = new SessionButton(_p, "Refresh", SessionButtonKind.Quiet, "⟳");
+        refresh.Click += () => _ = RefreshUsageAsync();
+        var done = new SessionButton(_p, "Done", SessionButtonKind.Primary, "esc") { Margin = new Thickness(9, 0, 0, 0) };
+        done.Click += CloseUsageOverlay;
+        var actions = new DockPanel
+        {
+            Margin = new Thickness(0, 18, 0, 0), [DockPanel.DockProperty] = Dock.Bottom,
+            Children =
+            {
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right,
+                    [DockPanel.DockProperty] = Dock.Right, Children = { refresh, done },
+                },
+                _usageStatus,
+            },
+        };
+
+        var card = new Border
+        {
+            Background = _p.Surface, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+            CornerRadius = SessionPalette.CardRadius, Padding = new Thickness(20),
+            Width = 460, MaxHeight = 560, VerticalAlignment = VerticalAlignment.Top, HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(16, 72, 16, 0), BoxShadow = BoxShadows.Parse("0 18 50 0 #66000000"),
+            Child = new DockPanel
+            {
+                Children =
+                {
+                    titleRow, actions,
+                    new ScrollViewer
+                    {
+                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = _usageBars,
+                    },
+                },
+            },
+        };
+
+        var scrim = new Border { Background = new SolidColorBrush(Color.FromArgb(0x99, 0, 0, 0)) };
+        scrim.PointerReleased += (_, _) => CloseUsageOverlay();
+
+        _usageOverlay = new Panel { IsVisible = false, Children = { scrim, card } };
+    }
+
+    private void ShowUsageOverlay()
+    {
+        // Paint the cached reading immediately so the card is never empty, then kick off a fresh fetch.
+        RenderUsageBars(UsageProvider?.Invoke() ?? UsageInfo.Empty, refreshing: false);
+        _usageOverlay.IsVisible = true;
+        _ = RefreshUsageAsync();
+    }
+
+    private void CloseUsageOverlay()
+    {
+        _usageOverlay.IsVisible = false;
+        if (_session is { IsRunning: true }) _composer.Focus();
+    }
+
+    // Fetches a fresh reading off the UI thread (UsageMonitorHost.RefreshAsync never throws) and repaints. The
+    // card shows the cached bars tagged "Refreshing…" meanwhile. Guarded against a double fetch and a card that
+    // closed mid-flight. A no-op when the app didn't wire a refresh (e.g. the headless render harness).
+    private async Task RefreshUsageAsync()
+    {
+        if (UsageRefresh is not { } refresh || _usageRefreshing) return;
+        _usageRefreshing = true;
+        RenderUsageBars(UsageProvider?.Invoke() ?? UsageInfo.Empty, refreshing: true);
+
+        UsageInfo fresh;
+        try { fresh = await refresh(); }
+        catch { fresh = UsageProvider?.Invoke() ?? UsageInfo.Empty; }
+        finally { _usageRefreshing = false; }
+
+        if (_closed || !_usageOverlay.IsVisible) return;
+        RenderUsageBars(fresh, refreshing: false);
+    }
+
+    // Rebuilds the bar list + status from a reading. Session (5h) and the weekly windows always show once real
+    // data exists; the model-scoped weekly buckets and the monthly extra-usage spend show when the account has
+    // them. A pristine/empty reading shows a hint instead of blank bars.
+    private void RenderUsageBars(UsageInfo u, bool refreshing)
+    {
+        _usageBars.Children.Clear();
+        var now = DateTime.Now;
+        bool stale = u.IsStale(now);
+        bool hasData = u.FiveHourPercent is not null || u.SevenDayPercent is not null
+            || u.Scoped.Count > 0 || u.ExtraUsage is { Enabled: true };
+
+        if (hasData)
+        {
+            _usageBars.Children.Add(UsageBar("Session · 5 hours", u.FiveHourPercent, u.FiveHourResetsAt, now, stale));
+            _usageBars.Children.Add(UsageBar("Weekly · all models", u.SevenDayPercent, u.SevenDayResetsAt, now, stale));
+            foreach (var s in u.Scoped)
+                _usageBars.Children.Add(UsageBar($"Weekly · {s.Label}", s.Percent, s.ResetsAt, now, stale));
+            if (u.ExtraUsage is { Enabled: true } x)
+                _usageBars.Children.Add(UsageBar("Monthly extra usage", x.Percent, null, now, stale,
+                    valueText: x.Compact, resetText: x.LimitReached ? "limit reached" : "rolls on the billing month"));
+        }
+        else if (!refreshing)
+        {
+            _usageBars.Children.Add(new TextBlock
+            {
+                Text = "No usage data yet. Perch reads this from your Claude account — if you're not signed in, run /login.",
+                FontFamily = _p.Body, FontSize = 13, Foreground = _p.Muted, TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        _usageStatus.Text = refreshing ? "Refreshing…"
+            : stale
+                ? (!string.IsNullOrEmpty(u.Error) ? u.Error
+                    : u.LastUpdated == DateTime.MinValue ? "No usage data yet"
+                    : $"Updated {Ago(now - u.LastUpdated)} ago — couldn't refresh")
+                : $"Updated {Ago(now - u.LastUpdated)} ago";
+        _usageStatus.Foreground = stale && !refreshing ? _p.Await : _p.Faint;
+    }
+
+    // One labelled bar: caption + right-aligned value over a rounded track whose fill length and colour track
+    // the percentage (Palette.UsageColor), with a muted "resets in …" countdown beneath. A null percent draws
+    // an em-dash and an empty track; valueText replaces the percentage (the spend bar's dollar figure); when
+    // stale every colour is blended toward the surface so the reading reads as "last known".
+    private Control UsageBar(string caption, double? percent, DateTime? resetsAt, DateTime now, bool stale,
+        string? valueText = null, string? resetText = null)
+    {
+        Color usage = percent is { } p ? Palette.UsageColor(Math.Clamp(p, 0, 100)) : _p.Muted.Color;
+        if (stale) usage = Palette.Blend(usage, _p.Surface.Color, 0.5f);
+
+        var cap = new TextBlock
+        {
+            Text = caption, FontFamily = _p.Body, FontSize = 13.5, Foreground = _p.Muted,
+            VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var val = new TextBlock
+        {
+            Text = valueText ?? (percent is { } pv ? $"{(int)Math.Round(Math.Clamp(pv, 0, 100))}%" : "—"),
+            FontFamily = _p.Mono, FontSize = 13.5, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(usage),
+            [DockPanel.DockProperty] = Dock.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0),
+        };
+
+        var track = new Border
+        {
+            Height = 10, CornerRadius = new CornerRadius(5), Background = _p.Raised2, ClipToBounds = true,
+            Margin = new Thickness(0, 7, 0, 0),
+        };
+        double fillPct = Math.Clamp(percent ?? 0, 0, 100);
+        if (percent is not null && fillPct > 0)
+        {
+            var grid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions
+                {
+                    new ColumnDefinition(new GridLength(fillPct, GridUnitType.Star)),
+                    new ColumnDefinition(new GridLength(Math.Max(0.0001, 100 - fillPct), GridUnitType.Star)),
+                },
+            };
+            var fill = new Border { Background = new SolidColorBrush(usage), CornerRadius = new CornerRadius(5) };
+            Grid.SetColumn(fill, 0);
+            grid.Children.Add(fill);
+            track.Child = grid;
+        }
+
+        var col = new StackPanel { Children = { new DockPanel { Children = { val, cap } }, track } };
+
+        string? sub = resetText;
+        if (sub is null && resetsAt is { } r && r > now) sub = $"resets in {Until(r - now)}";
+        if (sub is not null)
+            col.Children.Add(new TextBlock
+            {
+                Text = sub, FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint, Margin = new Thickness(0, 5, 0, 0),
+            });
+
+        return col;
+    }
+
+    // Compact "time remaining" and "time since" phrasings for the countdowns and the status line.
+    private static string Until(TimeSpan t) =>
+        t.TotalDays >= 1  ? $"{(int)t.TotalDays}d {t.Hours}h"
+      : t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes}m"
+                          : $"{Math.Max(1, (int)t.TotalMinutes)}m";
+
+    private static string Ago(TimeSpan t) =>
+        t.TotalHours >= 1   ? $"{(int)t.TotalHours}h"
+      : t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m"
+                            : $"{Math.Max(1, (int)t.TotalSeconds)}s";
+
+    // ── Find bar (Ctrl+F) ──────────────────────────────────────────────────────────
+
+    // A compact find bar pinned top-right over the thread: a query box, an "n/m" counter, prev/next and close.
+    // It drives SessionThreadView's item-level search (each matching message/tool card is washed; the current
+    // one is outlined and scrolled into view). Enter / Shift+Enter step; Esc or ✕ close.
+    private void BuildFindBar()
+    {
+        _findBox = new TextBox
+        {
+            FontFamily = _p.Body, FontSize = 13, Foreground = _p.Text, Width = 220,
+            PlaceholderText = "Find in conversation", Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0), Padding = new Thickness(0), VerticalAlignment = VerticalAlignment.Center,
+        };
+        _findBox.TextChanged += (_, _) => RunFind(jumpToFirst: true);
+        _findBox.AddHandler(KeyDownEvent, OnFindBoxKeyDown, RoutingStrategies.Tunnel);
+
+        _findCount = new TextBlock
+        {
+            FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Faint, MinWidth = 46,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var prev = new SessionButton(_p, "↑", SessionButtonKind.Quiet, compact: true);
+        prev.Click += () => StepFind(-1);
+        var next = new SessionButton(_p, "↓", SessionButtonKind.Quiet, compact: true);
+        next.Click += () => StepFind(1);
+        var close = new SessionButton(_p, "✕", SessionButtonKind.Quiet, compact: true);
+        close.Click += CloseFind;
+
+        _findBar = new Border
+        {
+            IsVisible = false,
+            Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+            CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(12, 7),
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 12, 20, 0), BoxShadow = BoxShadows.Parse("0 10 30 0 #55000000"),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
+                Children = { _findBox, _findCount, prev, next, close },
+            },
+        };
+    }
+
+    // Ctrl+F: open the find bar (over a live thread only), or close it if already open.
+    private void ToggleFind()
+    {
+        if (_findBar.IsVisible) CloseFind();
+        else OpenFind();
+    }
+
+    private void OpenFind()
+    {
+        if (!_thread.IsVisible) return;   // nothing to search on the launcher
+        _findBar.IsVisible = true;
+        _findBox.Focus();
+        _findBox.SelectAll();
+        RunFind(jumpToFirst: true);
+    }
+
+    private void CloseFind()
+    {
+        _findBar.IsVisible = false;
+        _thread.ClearSearch();
+        if (_session is { IsRunning: true }) _composer.Focus();
+    }
+
+    // Re-run the query, wash the matches, update the counter, and optionally jump to the first hit.
+    private void RunFind(bool jumpToFirst)
+    {
+        int n = _thread.Search(_findBox.Text ?? "");
+        if (n > 0 && jumpToFirst) _thread.ShowMatch(0);
+        UpdateFindCount();
+    }
+
+    // Step to the next (+1) / previous (-1) match, wrapping around.
+    private void StepFind(int delta)
+    {
+        if (_thread.MatchCount > 0)
+        {
+            int cur = _thread.CurrentMatch;
+            _thread.ShowMatch(cur < 0 ? 0 : cur + delta);
+        }
+        UpdateFindCount();
+    }
+
+    private void UpdateFindCount()
+    {
+        int n = _thread.MatchCount;
+        _findCount.Text = string.IsNullOrWhiteSpace(_findBox.Text) ? ""
+            : n == 0 ? "0/0"
+            : $"{_thread.CurrentMatch + 1}/{n}";
+    }
+
+    // Enter / Shift+Enter step through matches; Esc closes — kept off the composer by handling here.
+    private void OnFindBoxKeyDown(object? sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Enter:
+                StepFind(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1);
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                CloseFind();
+                e.Handled = true;
+                break;
+        }
     }
 
     // ── Resume overlay (/resume) ───────────────────────────────────────────────────
@@ -2518,7 +2909,16 @@ internal sealed partial class SessionWindow : Window
             if (_session is { IsRunning: true } live && Conv.TurnActive) { live.Interrupt(); e.Handled = true; }
             return;
         }
+        // Ctrl+F: find in the conversation. Handled at the window (tunnel) so it beats the composer.
+        if (e.Key == Key.F && e.KeyModifiers == KeyModifiers.Control)
+        {
+            ToggleFind();
+            e.Handled = true;
+            return;
+        }
         if (e.Key != Key.Escape) return;
+        if (_findBar.IsVisible) { CloseFind(); e.Handled = true; return; }
+        if (_usageOverlay.IsVisible) { CloseUsageOverlay(); e.Handled = true; return; }
         if (_autoCompactOverlay.IsVisible) { CloseAutoCompactOverlay(); e.Handled = true; return; }
         if (_resumeOverlay.IsVisible) { CloseResumeOverlay(); e.Handled = true; return; }
         if (PaletteOpen) { ClosePalette(); e.Handled = true; return; }
@@ -2617,6 +3017,20 @@ internal sealed partial class SessionWindow : Window
         _endButton.IsVisible = true;
         _resumeButton.IsVisible = false;
         RefreshBar();
+    }
+
+    /// <summary>HeadlessRenderer: seed a fixed usage reading and open the /usage overlay for a capture.</summary>
+    internal void ShowUsageOverlayForRender(UsageInfo info)
+    {
+        UsageProvider = () => info;
+        ShowUsageOverlay();
+    }
+
+    /// <summary>HeadlessRenderer: open the Ctrl+F find bar with a query and light up its matches for a capture.</summary>
+    internal void ShowFindForRender(string query)
+    {
+        _findBar.IsVisible = true;
+        _findBox.Text = query;   // TextChanged → RunFind → search + jump to the first match
     }
 
     /// <summary>HeadlessRenderer: the launcher with a sample recents list (and optional seeded resume

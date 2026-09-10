@@ -50,6 +50,13 @@ internal sealed record PermissionRequestEvent(
 /// <summary>Acknowledgement of a <c>set_permission_mode</c> control request.</summary>
 internal sealed record ModeChangedEvent(string Mode) : SessionEvent;
 
+/// <summary>The CLI's answer to Perch's <c>remote_control</c> control request (enable/disable Remote Control
+/// for this session — the mechanism the IDE integrations use, not exposed as a stream-json slash command). On
+/// enable, <paramref name="SessionUrl"/> is the claude.ai link (also the QR target) and
+/// <paramref name="BridgeSessionId"/> the bridge id; both are null on disable. <paramref name="Error"/> is set
+/// when the CLI refused (e.g. Remote Control unavailable on the account).</summary>
+internal sealed record RemoteControlEvent(string? SessionUrl, string? BridgeSessionId, string? Error = null) : SessionEvent;
+
 /// <summary>A <c>system</c>/<c>subtype:"status"</c> progress record. The CLI emits these while a long
 /// operation runs — notably <c>/compact</c>, which shows a live "Compacting conversation… (18s) … 18%"
 /// readout. <paramref name="Percent"/> is the completion percentage when one could be read (else null, so

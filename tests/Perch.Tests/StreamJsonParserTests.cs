@@ -104,6 +104,29 @@ public class StreamJsonParserTests
     }
 
     [Fact]
+    public void ControlResponse_RemoteControlAck_YieldsRemoteControlEvent()
+    {
+        // Enable ack (shape captured live from claude 2.1.263): the inner response carries the claude.ai
+        // session URL and bridge id, matched by Perch's "perch-rc" request id.
+        var enable = """{"type":"control_response","response":{"subtype":"success","request_id":"perch-rc","response":{"session_url":"https://claude.ai/code/session_017mAetP5THaUYGmHDFo7w6y","connect_url":"https://claude.ai/code?environment=","environment_id":"","bridge_epoch":1,"bridge_session_id":"cse_017mAetP5THaUYGmHDFo7w6y"}}}""";
+        var on = Assert.IsType<RemoteControlEvent>(Assert.Single(StreamJsonParser.Parse(enable)));
+        Assert.Equal("https://claude.ai/code/session_017mAetP5THaUYGmHDFo7w6y", on.SessionUrl);
+        Assert.Equal("cse_017mAetP5THaUYGmHDFo7w6y", on.BridgeSessionId);
+        Assert.Null(on.Error);
+
+        // Disable ack: empty success → a RemoteControlEvent with no URL (off).
+        var disable = """{"type":"control_response","response":{"subtype":"success","request_id":"perch-rc"}}""";
+        var off = Assert.IsType<RemoteControlEvent>(Assert.Single(StreamJsonParser.Parse(disable)));
+        Assert.Null(off.SessionUrl);
+
+        // Error ack (e.g. remote control unavailable): surfaces the message.
+        var err = """{"type":"control_response","response":{"subtype":"error","request_id":"perch-rc","error":"Remote control is not available"}}""";
+        var failed = Assert.IsType<RemoteControlEvent>(Assert.Single(StreamJsonParser.Parse(err)));
+        Assert.Null(failed.SessionUrl);
+        Assert.Equal("Remote control is not available", failed.Error);
+    }
+
+    [Fact]
     public void Result_YieldsTurnResult()
     {
         var line = """{"type":"result","subtype":"success","is_error":false,"duration_ms":2318,"num_turns":1,"session_id":"s","total_cost_usd":0.062387,"usage":{"input_tokens":10,"output_tokens":47},"result":"hello"}""";

@@ -222,8 +222,25 @@ internal static class StreamJsonParser
 
     private static IReadOnlyList<SessionEvent> ParseControlResponse(JsonNode root)
     {
+        var response = root["response"];
+
+        // Perch's remote_control ack, matched by the request id Perch stamps on the request
+        // (ClaudeSessionController.RemoteControlRequestId). Enable carries the session URL + bridge id in the
+        // inner response; disable is an empty success; a refusal comes back as an error subtype.
+        if (TranscriptJson.AsString(response?["request_id"])?.StartsWith("perch-rc", StringComparison.Ordinal) == true)
+        {
+            if (TranscriptJson.AsString(response?["subtype"]) == "success")
+            {
+                var inner = response?["response"];
+                return [new RemoteControlEvent(
+                    TranscriptJson.AsString(inner?["session_url"]),
+                    TranscriptJson.AsString(inner?["bridge_session_id"]))];
+            }
+            return [new RemoteControlEvent(null, null, TranscriptJson.AsString(response?["error"]) ?? "remote control failed")];
+        }
+
         // Only the set_permission_mode ack carries information the UI shows; other acks are ignored.
-        var mode = TranscriptJson.AsString(root["response"]?["response"]?["mode"]);
+        var mode = TranscriptJson.AsString(response?["response"]?["mode"]);
         return mode is { Length: > 0 } ? [new ModeChangedEvent(mode)] : [];
     }
 

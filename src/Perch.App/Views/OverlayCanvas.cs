@@ -3152,7 +3152,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // The remote-control "broadcast" glyph: a source dot with two quarter-arc waves rising up-right.
-    private static void DrawRemoteIcon(DrawingContext ctx, double originX, double midY)
+    // internal so the composer toolbar's RemoteGlyph can paint the exact same mark (see Views.RemoteGlyph).
+    internal static void DrawRemoteIcon(DrawingContext ctx, double originX, double midY)
     {
         var pen = new Pen(RemoteBrush, 2.25, lineCap: PenLineCap.Round);
         double oy = midY + 4;
@@ -3162,7 +3163,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // The external-notify glyph: an envelope outline with a "V" flap.
-    private static void DrawMailIcon(DrawingContext ctx, double x, double midY)
+    // internal so the composer toolbar's MailGlyph can paint the exact same mark (see Views.MailGlyph).
+    internal static void DrawMailIcon(DrawingContext ctx, double x, double midY)
     {
         var pen = new Pen(MailBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
         const double w = 11, h = 8;
@@ -3276,7 +3278,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // GitHub pull-request glyph: the git-merge octicon — a left "base" branch (two nodes joined by a
     // vertical line) with a "source" node on the right curving down to merge into it. Coloured by the PR's
     // state (open/draft/merged/closed); hover brightens. The nodes are filled dots, the lines stroked.
-    private static void DrawPrIcon(DrawingContext ctx, double x, double midY, PrState state, PrChecksRollup checks, bool hovered)
+    // internal so the composer toolbar's PrGlyph can paint the exact same state-coloured mark (see Views.PrGlyph).
+    internal static void DrawPrIcon(DrawingContext ctx, double x, double midY, PrState state, PrChecksRollup checks, bool hovered)
     {
         IBrush brush = state switch
         {
@@ -3330,7 +3333,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Jira ticket glyph: a small luggage-tag pointing left, drawn in Jira's brand blue so it reads as a
     // deep-link rather than a status. The click affordance is the hand cursor + the dwell tooltip (which
     // names the key); the glyph itself doesn't change on hover, matching the other single-action markers.
-    private static void DrawJiraIcon(DrawingContext ctx, double x, double midY)
+    // internal so the composer toolbar's JiraGlyph can paint the exact same tag (see Views.JiraGlyph).
+    internal static void DrawJiraIcon(DrawingContext ctx, double x, double midY)
     {
         var brush = Palette.JiraBrush;
         var pen = new Pen(brush, 1.4, null, PenLineCap.Round, PenLineJoin.Round);

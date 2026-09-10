@@ -1658,6 +1658,10 @@ public partial class App : Application
         w.SetContextPressureConfig(cs.ShowContextPressure, cs.ContextPressureYellowPercent,
             cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent, cs.ShowContextGreenSegment);
         w.SetAutoCompactConfig(cs.SessionAutoCompactEnabled, cs.SessionAutoCompactThresholdPercent);
+        // /usage overlay reads the same account rate-limit data the floating strip does — the tray's cached
+        // last reading, with a forced fetch on open/Refresh (works even when the overlay usage strip is off).
+        w.UsageProvider = () => _usageHost?.Last ?? UsageInfo.Empty;
+        w.UsageRefresh = () => _usageHost?.RefreshAsync() ?? Task.FromResult(UsageInfo.Empty);
         // Mirror the overlay's enabled, actionable glyphs as quick-action buttons above the composer.
         w.SetComposerActions(BuildComposerActions(w));
         // The /autocompact modal changed the Perch auto-compaction setting: persist it and push it to every
@@ -1684,6 +1688,8 @@ public partial class App : Application
         // File references in the session UI: open a Markdown file in the viewer, or a file's diff in the tree.
         w.OpenFileInViewerRequested += path => OpenSessionFileInViewer(w, path);
         w.ViewFileDiffRequested += path => ViewSessionFileDiff(w, path);
+        w.ShowQrRequested += ShowQrCode;   // /remote-control → QR for the claude.ai session link
+        w.ComposerOverflowRequested += anchor => ShowComposerOverflowMenu(anchor, w);   // "…" activate menu
         // A background session needing a decision (permission / question / plan) raises a desktop toast.
         w.AttentionRequested += (title, body) => _notifier?.Show(title, body, ToastLevel.Warning, null, null);
         _sessionWindows.Add(w);
@@ -1713,8 +1719,41 @@ public partial class App : Application
                 GlyphFactory: brush => new Views.NoteGlyph(brush)));
 
         // The session this window is viewing, as seen by the latest monitor scan (carries HasArtifacts /
-        // HasProducedMarkdown; the live PerchSession itself doesn't compute those).
+        // HasProducedMarkdown / PullRequest / JiraTicket / ExternalNotify / RemoteControlled; the live
+        // PerchSession itself doesn't compute those).
         var session = w.SessionId is { } id ? _lastSessions.FirstOrDefault(s => s.SessionId == id) : null;
+
+        // The session-row integration glyphs, mirrored onto the composer alongside the note — each shown only
+        // when this session actually has it and the integration is enabled, exactly as the floating overlay
+        // row shows them (and they track live because RefreshComposerActions re-runs on every scan). PR and
+        // Jira are deep-links; the external-notify and remote-control marks are indicators whose click mirrors
+        // the overlay's secondary action (toggle the opt-in / show the QR code).
+        if (cs.ShowPullRequests && session?.PullRequest is { } pr)
+            actions.Add(new ComposerAction("", $"PR #{pr.Number} · {pr.State} — open on GitHub · middle-click for a new window",
+                _ => PlatformServices.UrlOpener.Open(pr.Url),
+                GlyphFactory: _ => new Views.PrGlyph(pr.State, pr.ChecksRollup),
+                MiddleInvoke: _ => PlatformServices.UrlOpener.OpenInNewWindow(pr.Url)));
+
+        if (cs.ShowJiraTicket && session?.JiraTicket is { } jira)
+            actions.Add(new ComposerAction("", $"{jira.Key} — open in Jira · middle-click for a new window",
+                _ => PlatformServices.UrlOpener.Open(jira.Url),
+                GlyphFactory: _ => new Views.JiraGlyph(),
+                MiddleInvoke: _ => PlatformServices.UrlOpener.OpenInNewWindow(jira.Url)));
+
+        if (session is { ExternalNotify: true } notifySession)
+            actions.Add(new ComposerAction("", "External notifications on for this session — click to turn off",
+                _ => OnToggleExternalNotify(notifySession.SessionId),
+                GlyphFactory: _ => new Views.MailGlyph()));
+
+        // Shown once RC is on — either observed on disk (scan) or enabled in-process via Perch's control
+        // request (RemoteControlEnabled, which lights the glyph immediately, before the next scan). Clicking
+        // opens a small menu: show the QR again, or stop remote control.
+        bool rcOn = (session?.RemoteControlled ?? false) || (w.Session?.RemoteControlEnabled ?? false);
+        if (rcOn)
+            actions.Add(new ComposerAction("", "Remote control — show the QR code or stop",
+                anchor => ShowRemoteControlMenu(anchor, w),
+                GlyphFactory: _ => new Views.RemoteGlyph()));
+
         if (session is { HasArtifacts: true })
         {
             var arts = session.Artifacts;
@@ -1777,6 +1816,88 @@ public partial class App : Application
             menu.Items.Add(item);
         }
         menu.ShowAt(anchor);
+    }
+
+    // The remote-control glyph's menu: re-show the claude.ai QR, or stop remote control. The QR URL is the
+    // one the CLI's remote_control ack returned (PerchSession.RemoteControlUrl); if that's unknown (RC seen
+    // only on disk) fall back to the bridge-id deep link the overlay uses.
+    private void ShowRemoteControlMenu(Control anchor, SessionWindow w)
+    {
+        var menu = new MenuFlyout { Placement = PlacementMode.Top };
+        string? url = w.Session?.RemoteControlUrl;
+        if (string.IsNullOrEmpty(url) && w.SessionId is { } id
+            && _lastSessions.FirstOrDefault(x => x.SessionId == id)?.BridgeSessionId is { Length: > 0 } bridge)
+            url = $"https://claude.ai/code/{bridge}";
+
+        if (!string.IsNullOrEmpty(url))
+        {
+            var capUrl = url;
+            var qr = new MenuItem { Header = "Show QR code" };
+            qr.Click += (_, _) => ShowQrCode("Remote control", capUrl);
+            menu.Items.Add(qr);
+        }
+        var stop = new MenuItem { Header = "Stop remote control" };
+        stop.Click += (_, _) => w.Session?.RequestRemoteControl(false);
+        menu.Items.Add(stop);
+        menu.ShowAt(anchor);
+    }
+
+    // The composer toolbar's "…" overflow: activate features whose glyph isn't showing yet — remote control,
+    // this session's external notifications, and a jump to the git history. Built per-open from live state so
+    // each entry reads on/off correctly.
+    private void ShowComposerOverflowMenu(Control anchor, SessionWindow w)
+    {
+        var menu = new MenuFlyout { Placement = PlacementMode.Top };
+        var s = w.Session;
+        var scan = w.SessionId is { } id ? _lastSessions.FirstOrDefault(x => x.SessionId == id) : null;
+
+        // Remote control (live session only — it's a control request to the running process).
+        if (s is { IsRunning: true })
+        {
+            bool on = s.RemoteControlEnabled || (scan?.RemoteControlled ?? false);
+            var rc = new MenuItem { Header = on ? "Stop remote control" : "Turn on remote control" };
+            rc.Click += (_, _) => s.RequestRemoteControl(!on);
+            menu.Items.Add(rc);
+        }
+
+        // External notifications for this session — the per-session opt-in when the feature is on globally,
+        // else a jump to set it up.
+        if (scan is { } sc && _appSettings?.ExternalNotificationsEnabled == true)
+        {
+            var sid = sc.SessionId;
+            bool on = sc.ExternalNotify;
+            var n = new MenuItem { Header = on ? "Stop external notifications" : "Send external notifications" };
+            n.Click += (_, _) => OnToggleExternalNotify(sid);
+            menu.Items.Add(n);
+        }
+        else
+        {
+            var n = new MenuItem { Header = "Set up external notifications…" };
+            n.Click += (_, _) => OpenSettings("notify");
+            menu.Items.Add(n);
+        }
+
+        // Git history for this session's working directory (reuses the one Tree window).
+        var git = new MenuItem { Header = "View git history" };
+        git.Click += (_, _) => OpenGitHistoryForSession(w);
+        menu.Items.Add(git);
+
+        menu.ShowAt(anchor);
+    }
+
+    // Opens/focuses the git Tree window on a session window's working directory (the "View git history"
+    // overflow entry). Mirrors ViewSessionFileDiff without a specific file to land on.
+    private void OpenGitHistoryForSession(SessionWindow w)
+    {
+        var s = w.Session;
+        string cwd = s?.Cwd ?? w.Cwd;
+        if (string.IsNullOrEmpty(cwd)) return;
+        string title = System.IO.Path.GetFileName(cwd.TrimEnd('\\', '/'));
+        bool isActive = s?.IsRunning ?? false;
+        _treeWindow = WindowHost.ShowOrFocus(_treeWindow,
+            () => new GitTreeWindow(_appSettings ?? AppSettings.Load()),
+            () => _treeWindow = null,
+            tw => tw.Retarget(cwd, title.Length > 0 ? title : "Changes", null, isActive));
     }
 
     // Starts and owns a Perch-driven session; the window that asked attaches to the result. The session
@@ -2052,8 +2173,16 @@ public partial class App : Application
     private void ShowQrCode(ClaudeSession session)
     {
         if (string.IsNullOrEmpty(session.BridgeSessionId)) return;
+        ShowQrCode(session.DisplayName, $"https://claude.ai/code/{session.BridgeSessionId}");
+    }
+
+    // Shows a QR for an arbitrary title + URL — used by a rich session window's /remote-control, which gets
+    // the canonical claude.ai session URL straight from the CLI's remote_control ack.
+    private void ShowQrCode(string title, string url)
+    {
+        if (string.IsNullOrEmpty(url)) return;
         _qrWindow?.Close();
-        _qrWindow = new QrWindow(session.DisplayName, $"https://claude.ai/code/{session.BridgeSessionId}");
+        _qrWindow = new QrWindow(title, url);
         _qrWindow.Closed += (_, _) => _qrWindow = null;
         _qrWindow.Show();
         _qrWindow.Activate();

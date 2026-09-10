@@ -11,6 +11,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
 using Perch.Data;
@@ -31,11 +32,32 @@ internal sealed class SessionThreadView : ScrollViewer
 {
     private readonly SessionPalette _p;
     private readonly StackPanel _stack;
+    private readonly Canvas _highlightLayer;   // translucent find-match rectangles, above the thread, click-through
     private readonly Dictionary<ConversationItem, ItemView> _views = new();
     private readonly Dictionary<CompactionItem, CompactionCard> _compactions = new();
     private readonly string _initials;
     private SessionConversation? _conv;
     private bool _stickToBottom = true;
+
+    // Ctrl+F find. Each item's Root is wrapped in a Border (so a hidden/collapsed section can be located by
+    // its visible card). Matches are painted as translucent rectangles in an overlay layer above the thread
+    // (_highlightLayer): every occurrence dim, the current one brighter — so all hits are visible at a glance
+    // for scanning, and the layer scrolls with the content it sits over. See Search/ShowMatch/ClearSearch.
+    private readonly Dictionary<ConversationItem, Border> _wraps = new();
+    private readonly List<FindMatch> _matches = new();   // every occurrence, in reading order
+    private int _matchCurrent = -1;                       // index into _matches of the current match, or -1
+
+    // One find hit. A visible occurrence carries its <see cref="Text"/> block + [Start,Start+Length) so its
+    // exact glyph rectangles can be lit; a collapsed/non-text occurrence (<see cref="CardOnly"/>) lights the
+    // whole <see cref="Anchor"/> card instead — collapsed sections fold to one hit so "next" skips their innards.
+    private sealed class FindMatch
+    {
+        public required Control Anchor;
+        public TextBlock? Text;
+        public int Start;
+        public int Length;
+        public bool CardOnly;
+    }
 
     // Every user-prompt row in order, so "jump to previous prompt" can walk upward through them; plus the cached
     // scroll state the window's floating jump buttons watch (recomputed on every scroll/layout change).
@@ -105,7 +127,10 @@ internal sealed class SessionThreadView : ScrollViewer
             Margin = new Thickness(22, 26, 22, 20),
             HorizontalAlignment = HorizontalAlignment.Stretch,   // + MaxWidth → centred column
         };
-        Content = _stack;
+        // The find-match overlay sits above the thread in the same scrolled coordinate space, so its
+        // translucent rectangles ride along as the content scrolls. Click-through so it never eats selection.
+        _highlightLayer = new Canvas { IsHitTestVisible = false };
+        Content = new Panel { Children = { _stack, _highlightLayer } };
 
         // Follow the tail only while the user is at (or near) the bottom; scrolling up pins the view. Only a
         // change the *user* made (offset moved, extent unchanged) re-evaluates — content growing pushes the
@@ -113,9 +138,13 @@ internal sealed class SessionThreadView : ScrollViewer
         ScrollChanged += (_, e) =>
         {
             RecomputeScrollState();   // keep the floating jump buttons in sync with every scroll/growth
-            if (e.ExtentDelta.Y != 0 || e.OffsetDelta.Y == 0) return;
+            // A reflow (extent changed — expand/collapse, streaming) moves match rectangles; repaint them.
+            if (e.ExtentDelta.Y != 0) { if (_matches.Count > 0) RefreshHighlightLayer(); return; }
+            if (e.OffsetDelta.Y == 0) return;
             _stickToBottom = Offset.Y + Viewport.Height >= Extent.Height - 24;
         };
+        // A width change reflows text (wraps differently) → recompute match rectangles.
+        SizeChanged += (_, _) => { if (_matches.Count > 0) RefreshHighlightLayer(); };
 
         // The working indicator (built once, added/removed from the column as turns come and go).
         _activityLabel = new TextBlock
@@ -155,6 +184,10 @@ internal sealed class SessionThreadView : ScrollViewer
         _userRows.Clear();
         _stack.Children.Clear();
         _views.Clear();
+        _wraps.Clear();
+        _matches.Clear();
+        _matchCurrent = -1;
+        _highlightLayer.Children.Clear();
         _compactions.Clear();
         foreach (var item in conversation.Items) AddItem(item);
         conversation.Changed += OnChanged;
@@ -303,7 +336,15 @@ internal sealed class SessionThreadView : ScrollViewer
             _                      => new ItemView { Root = new Panel() },
         };
         _views[item] = view;
-        _stack.Children.Add(view.Root);
+        // Every item sits in a highlight wrapper (inert until Ctrl+F lights it up). The 1px transparent border
+        // is always present so toggling the outline on a match never shifts the layout.
+        var wrap = new Border
+        {
+            Child = view.Root, CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1), BorderBrush = Brushes.Transparent, Background = Brushes.Transparent,
+        };
+        _wraps[item] = wrap;
+        _stack.Children.Add(wrap);
         if (item is UserMessageItem) _userRows.Add(view.Root);
         Dispatcher.UIThread.Post(RecomputeScrollState, DispatcherPriority.Background);
     }
@@ -317,16 +358,161 @@ internal sealed class SessionThreadView : ScrollViewer
                 SyncParts(view, a);
                 break;
             case PermissionItem p:
-                // A resolved card becomes a compact receipt: rebuild and swap in place.
+                // A resolved card becomes a compact receipt: rebuild and swap inside the item's wrapper.
                 var fresh = Row(BuildPermission(p), null, null);
-                int at = _stack.Children.IndexOf(view.Root);
-                if (at >= 0) _stack.Children[at] = fresh;
+                if (_wraps.TryGetValue(item, out var wrap)) wrap.Child = fresh;
                 view.Root = fresh;
                 break;
             case CompactionItem cm:
                 if (_compactions.TryGetValue(cm, out var card)) card.Update(cm);
                 break;
         }
+    }
+
+    // ── Ctrl+F find ────────────────────────────────────────────────────────────────
+
+    /// <summary>Number of occurrences from the last <see cref="Search"/> (a collapsed section counts once).</summary>
+    public int MatchCount => _matches.Count;
+
+    /// <summary>Index of the shown match, or -1 when none is current.</summary>
+    public int CurrentMatch => _matchCurrent;
+
+    /// <summary>Recompute every occurrence of <paramref name="query"/> in the thread (case-insensitive),
+    /// walking the actual rendered text controls so matches are per-occurrence, not per-message. Returns the
+    /// count. Text that's currently collapsed (a hidden thinking/tool body) collapses to a single hit anchored
+    /// to its visible card, so stepping doesn't sit on one collapsed section once per hidden value inside it.</summary>
+    public int Search(string query)
+    {
+        ClearSearch();
+        if (_conv is null || string.IsNullOrWhiteSpace(query)) return 0;
+
+        foreach (var item in _conv.Items)
+        {
+            if (!_wraps.TryGetValue(item, out var wrap)) continue;
+            var collapsedSeen = new HashSet<Control>();   // dedup: one hit per collapsed section within this item
+            foreach (var tb in wrap.Child?.GetVisualDescendants().OfType<TextBlock>() ?? [])
+            {
+                var text = BlockText(tb);
+                if (string.IsNullOrEmpty(text) || text.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+
+                if (!tb.IsEffectivelyVisible)
+                {
+                    // Collapsed: one hit for the whole hidden section, lighting/scrolling its visible card.
+                    var anchor = NearestVisibleAncestor(tb) ?? wrap;
+                    if (collapsedSeen.Add(anchor))
+                        _matches.Add(new FindMatch { Anchor = anchor, CardOnly = true });
+                    continue;
+                }
+
+                // A visible occurrence: one hit per position, lit by its exact glyph rectangles.
+                for (int i = text.IndexOf(query, StringComparison.OrdinalIgnoreCase); i >= 0;
+                     i = text.IndexOf(query, i + Math.Max(1, query.Length), StringComparison.OrdinalIgnoreCase))
+                    _matches.Add(new FindMatch { Anchor = tb, Text = tb, Start = i, Length = query.Length });
+            }
+        }
+        RefreshHighlightLayer();
+        return _matches.Count;
+    }
+
+    /// <summary>Make the match at <paramref name="index"/> (wrapped into range) current — repaint the overlay
+    /// so it reads brighter than the rest — and scroll it into view. A no-op when there are no matches.</summary>
+    public void ShowMatch(int index)
+    {
+        if (_matches.Count == 0) return;
+        int n = _matches.Count;
+        _matchCurrent = ((index % n) + n) % n;
+        RefreshHighlightLayer();
+        _matches[_matchCurrent].Anchor.BringIntoView();   // the scroll handler recomputes tail-follow
+    }
+
+    /// <summary>Clear all find highlighting and match state (find bar closed, or the query emptied).</summary>
+    public void ClearSearch()
+    {
+        _highlightLayer.Children.Clear();
+        _matches.Clear();
+        _matchCurrent = -1;
+    }
+
+    // Repaint the overlay: every match dim, the current one brighter. Rectangles are computed from each match's
+    // glyph geometry (or its collapsed card's bounds) and placed in the layer's coordinate space, which is the
+    // scrolled content's — so they track the text as it scrolls. Cheap; called on search, navigation and reflow.
+    private void RefreshHighlightLayer()
+    {
+        _highlightLayer.Children.Clear();
+        if (_matches.Count == 0) return;
+
+        var dim = new SolidColorBrush(Tint(0x2E));
+        var cur = new SolidColorBrush(Tint(0x66));
+        for (int i = 0; i < _matches.Count; i++)
+        {
+            var brush = i == _matchCurrent ? cur : dim;
+            foreach (var r in RectsFor(_matches[i]))
+            {
+                var box = new Border { Background = brush, CornerRadius = new CornerRadius(2), IsHitTestVisible = false };
+                Canvas.SetLeft(box, r.X);
+                Canvas.SetTop(box, r.Y);
+                box.Width = r.Width;
+                box.Height = r.Height;
+                _highlightLayer.Children.Add(box);
+            }
+        }
+    }
+
+    private Color Tint(byte alpha) { var c = _p.Brand.Color; return Color.FromArgb(alpha, c.R, c.G, c.B); }
+
+    // A match's rectangle(s) in the highlight layer's space: a visible occurrence yields its exact glyph run(s)
+    // from the text layout; a collapsed/card hit yields the whole card's bounds. Empty when the control isn't
+    // laid out yet or can't be mapped into the layer.
+    private IEnumerable<Rect> RectsFor(FindMatch m)
+    {
+        if (!m.CardOnly && m.Text is { } tb && tb.IsEffectivelyVisible)
+        {
+            var pad = tb.Padding;
+            foreach (var r in HitRanges(tb, m.Start, m.Length))
+                if (tb.TranslatePoint(new Point(r.X + pad.Left, r.Y + pad.Top), _highlightLayer) is { } tl)
+                    yield return new Rect(tl.X, tl.Y, r.Width, r.Height);
+            yield break;
+        }
+
+        if (m.Anchor.Bounds is { Width: > 0, Height: > 0 } b
+            && m.Anchor.TranslatePoint(new Point(0, 0), _highlightLayer) is { } origin)
+            yield return new Rect(origin.X, origin.Y, b.Width, b.Height);
+    }
+
+    // The glyph rectangles of [start, start+length) in a text block, or empty if the layout can't map them.
+    private static IReadOnlyList<Rect> HitRanges(TextBlock tb, int start, int length)
+    {
+        try { return tb.TextLayout.HitTestTextRange(start, length).ToList(); }
+        catch { return []; }
+    }
+
+    // The nearest ancestor of a hidden control that is itself effectively visible — the collapsed section's
+    // visible card, which is what we light and scroll to for a collapsed match.
+    private static Control? NearestVisibleAncestor(Visual v) =>
+        v.GetVisualAncestors().OfType<Control>().FirstOrDefault(c => c.IsEffectivelyVisible);
+
+    // A text block's plain text for searching AND for selection offsets. Markdown prose/code are built from
+    // inline Runs, so their TextBlock.Text is empty — fall back to the inlines' concatenated text, which is
+    // exactly the character stream the TextLayout (and thus SelectionStart/SelectionEnd) indexes into.
+    private static string BlockText(TextBlock tb)
+    {
+        if (!string.IsNullOrEmpty(tb.Text)) return tb.Text;
+        if (tb.Inlines is not { Count: > 0 } inlines) return "";
+        var sb = new System.Text.StringBuilder();
+        AppendInlineText(inlines, sb);
+        return sb.ToString();
+    }
+
+    private static void AppendInlineText(InlineCollection inlines, System.Text.StringBuilder sb)
+    {
+        foreach (var inline in inlines)
+            switch (inline)
+            {
+                case Run r: sb.Append(r.Text); break;
+                case LineBreak: sb.Append('\n'); break;
+                case Span s when s.Inlines is { } inner: AppendInlineText(inner, sb); break;
+            }
     }
 
     // ── User ─────────────────────────────────────────────────────────────────────
