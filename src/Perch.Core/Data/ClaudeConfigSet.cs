@@ -61,6 +61,17 @@ internal static class ClaudeConfigSet
     /// <summary>Raised off the UI thread when a probe changed the set.</summary>
     public static event Action? Changed;
 
+    /// <summary>The environment with this slug, else null. Kept for the <c>.slug</c> marker an earlier
+    /// hook wrote: a session running when Perch updates has one of those and nothing newer.</summary>
+    public static ClaudeConfigDir? ForSlug(string? slug)
+    {
+        if (string.IsNullOrWhiteSpace(slug)) return null;
+        foreach (var dir in All)
+            if (dir.Slug is { Length: > 0 } s && string.Equals(s, slug, StringComparison.OrdinalIgnoreCase))
+                return dir;
+        return null;
+    }
+
     /// <summary>
     /// The config dir at this root, else null — deliberately no fallback to the primary, which would
     /// attribute a session to whichever dir happens to be first. Matched on the resolved path as well

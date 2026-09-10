@@ -126,6 +126,19 @@ public class MultiConfigDirSessionTests : IDisposable
     }
 
     [Fact]
+    public void Scan_StillReadsTheSlugMarkerAnEarlierHookWrote()
+    {
+        // A session already running when Perch updates has only the old marker. Ignoring it blanked an
+        // attribution that was working a moment earlier - which is exactly what happened in dogfood.
+        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.slug"), "inflight");
+
+        var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
+
+        Assert.Equal(_env.Root, session.ReportedConfigDir);
+        Assert.Equal(_env, session.EnvDir);
+    }
+
+    [Fact]
     public void Scan_LeavesTheConfigDirUnreportedWithNoSidecar()
     {
         // Only sessions that started before the hook wrote the marker. Unknown stays unknown here;

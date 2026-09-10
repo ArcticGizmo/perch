@@ -756,8 +756,13 @@ internal sealed class SessionMonitor : IDisposable
             var mode = ReadPermissionMode(Path.Combine(configDir.SessionsDir, $"{sessionId}.mode"));
 
             // Which config dir it reported - see ClaudeSession.ReportedConfigDir for why this cannot
-            // come from configDir. Absent is null, never guessed.
-            var reportedDir = ReadMarker(Path.Combine(configDir.SessionsDir, $"{sessionId}.configdir"));
+            // come from configDir. Absent is null, never guessed. The `.slug` marker is what an earlier
+            // hook wrote: a session already running when Perch updates has only that one, and dropping
+            // it would blank an attribution that was working a moment ago.
+            var reportedDir =
+                ReadMarker(Path.Combine(configDir.SessionsDir, $"{sessionId}.configdir"))
+                ?? ClaudeConfigSet.ForSlug(
+                       ReadMarker(Path.Combine(configDir.SessionsDir, $"{sessionId}.slug")))?.Root;
 
             // External-notification opt-in: the presence of a {sessionId}.notify marker is the signal.
             // Written/removed by both the overlay's right-click toggle and the plugin's /afk command.
