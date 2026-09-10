@@ -91,16 +91,6 @@ internal static class ClaudeConfigSet
         return null;
     }
 
-    /// <summary>The config dir owning <paramref name="sessionsDir"/>, else <see cref="Primary"/>.</summary>
-    public static ClaudeConfigDir ForSessionsDir(string? sessionsDir)
-    {
-        if (string.IsNullOrEmpty(sessionsDir)) return Primary;
-        foreach (var dir in All)
-            if (ClaudeConfigDir.PathComparer.Equals(dir.SessionsDir, sessionsDir))
-                return dir;
-        return Primary;
-    }
-
     /// <summary>The distinct <c>projects</c> trees, by resolved real path. Normally one entry: config
     /// dirs tend to link onto the same physical tree, and enumerating each would surface every
     /// transcript once per config dir.</summary>

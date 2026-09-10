@@ -1,4 +1,4 @@
-namespace Perch.Data;
+﻿namespace Perch.Data;
 
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
@@ -70,7 +70,6 @@ public sealed record ClaudeConfigDir
     public string PluginsDir => Path.Combine(Root, "plugins");
     public string DaemonDir => Path.Combine(Root, "daemon");
     public string DaemonRosterFile => Path.Combine(DaemonDir, "roster.json");
-    public string SkillsDir => Path.Combine(Root, "skills");
     public string ImageCacheDir => Path.Combine(Root, "image-cache");
 
     /// <summary>Per-account and never shared between config dirs — never merge or cross-read.</summary>

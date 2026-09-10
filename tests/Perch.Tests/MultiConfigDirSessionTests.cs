@@ -90,8 +90,8 @@ public class MultiConfigDirSessionTests : IDisposable
 
         Assert.Equal(_hub, hubSession.ConfigDir);
         Assert.Equal(_env, envSession.ConfigDir);
-        Assert.Equal("InFlight", envSession.ConfigLabel);
-        Assert.Equal("Redux InFlight", envSession.ConfigOrg);
+        Assert.Equal("InFlight", envSession.ConfigDir?.Label);
+        Assert.Equal("Redux InFlight", envSession.ConfigDir?.Org);
         Assert.Equal(_env.SessionsDir, envSession.SessionsDir);
     }
 

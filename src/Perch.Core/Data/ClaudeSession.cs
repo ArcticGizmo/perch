@@ -306,16 +306,9 @@ public record ClaudeSession(
     /// <summary>The sessions directory that owns this session's sidecars.</summary>
     public string SessionsDir => ConfigDir?.SessionsDir ?? ClaudePaths.SessionsDir;
 
-    /// <summary>Label of the dir the sidecars live in. For display prefer <see cref="EnvLabel"/>.</summary>
-    public string? ConfigLabel => ConfigDir?.Label;
-
     /// <summary>The label to show for this session's environment, or null when unknown. Only worth
     /// showing when the machine has several — see <see cref="ClaudeConfigSet.IsMulti"/>.</summary>
     public string? EnvLabel => AttributedEnvDir?.Label;
-
-    /// <summary>The organization this session's config dir is signed in to, or null. With one login
-    /// across several organizations it is the only thing that tells the environments apart.</summary>
-    public string? ConfigOrg => ConfigDir?.Org;
 
     /// <summary>
     /// True while this session is connected to the mobile app / claude.ai via /remote-control —
