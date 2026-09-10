@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.4] - 2026-09-10
+
+- Session tool calls read like the terminal: Edit and Write show a diff, not raw JSON
+- Expanding a tool card reveals formatted output, never the underlying JSON
+- Read, Grep and Glob cards summarise their result at a glance ("Read 42 lines", "12 files")
+- Full tool output is one click away — the 60-character teaser has been retired
+
+---
+
 ## [v0.4.3] - 2026-09-10
 
 - Session context gauge no longer counts each turn's cache re-reads as fresh context (it was, eagerly)

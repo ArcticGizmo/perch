@@ -32,8 +32,10 @@ internal sealed record AssistantThinkingEvent(string Text) : SessionEvent;
 /// (for the expandable arguments on a tool card).</summary>
 internal sealed record ToolUseEvent(string ToolUseId, string ToolName, string Summary, string InputJson = "{}") : SessionEvent;
 
-/// <summary>A tool finished; <paramref name="Preview"/> is a clipped, single-block text preview.</summary>
-internal sealed record ToolResultEvent(string ToolUseId, string Preview, bool IsError) : SessionEvent;
+/// <summary>A tool finished; <paramref name="Text"/> is its result as text (all text blocks joined), capped
+/// at a generous length so the card can show the whole thing on expand — not the old 60-char preview. The
+/// card derives its own one-line collapsed summary from it.</summary>
+internal sealed record ToolResultEvent(string ToolUseId, string Text, bool IsError) : SessionEvent;
 
 /// <summary>A streaming text delta (only emitted with <c>--include-partial-messages</c>). Deltas
 /// accumulate into the block a later <see cref="AssistantTextEvent"/> finalises.</summary>

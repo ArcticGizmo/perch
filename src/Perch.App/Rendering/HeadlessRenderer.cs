@@ -1152,12 +1152,19 @@ internal static class HeadlessRenderer
             new Perch.Data.Control.AssistantTextEvent(
                 "Two small pieces. First, ownership becomes visible on disk — a sidecar beside the session JSON, " +
                 "written when Perch takes a session and removed when it lets go:"),
-            new Perch.Data.Control.ToolUseEvent("t1", "Edit", "Editing ControlledSessions.cs", "{\"file_path\":\"src/Perch.Core/Data/Control/ControlledSessions.cs\"}"),
-            new Perch.Data.Control.ToolResultEvent("t1", "+ SessionLock.Acquire(id, cwd);   // writes {id}.perch-lock", false),
+            new Perch.Data.Control.ToolUseEvent("t0", "Read", "Reading ControlledSessions.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/Control/ControlledSessions.cs\"}"),
+            new Perch.Data.Control.ToolResultEvent("t0",
+                "     1\tusing System.Collections.Concurrent;\n     2\t\n     3\tnamespace Perch.Data.Control;\n     4\t\n" +
+                "     5\tinternal static class ControlledSessions\n     6\t{\n     7\t    private static readonly ConcurrentDictionary<string, string> _owned = new();\n     8\t}", false),
+            new Perch.Data.Control.ToolUseEvent("t1", "Edit", "Editing ControlledSessions.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/Control/ControlledSessions.cs\",\"old_string\":\"public static void Register(string id, string cwd)\\n{\\n    _owned[id] = cwd;\\n}\",\"new_string\":\"public static void Register(string id, string cwd)\\n{\\n    _owned[id] = cwd;\\n    SessionLock.Acquire(id, cwd);   // writes {id}.perch-lock\\n}\"}"),
+            new Perch.Data.Control.ToolResultEvent("t1", "The file ControlledSessions.cs has been updated.", false),
             new Perch.Data.Control.AssistantTextEvent(
                 "Then the hook checks it at `SessionStart` and warns — fail-open, so it never wedges a session:"),
             new Perch.Data.Control.ToolUseEvent("t2", "Bash", "Running: dotnet test", "{\"command\":\"dotnet test\"}"),
-            new Perch.Data.Control.ToolResultEvent("t2", "Passed!  -  Failed: 0, Passed: 950, Skipped: 1  ·  19s", false),
+            new Perch.Data.Control.ToolResultEvent("t2",
+                "Passed!  -  Failed: 0, Passed: 950, Skipped: 1  ·  19s\n\nRestored Perch.Core.csproj (in 412 ms).\nPerch.Tests -> bin/Debug/net10.0/Perch.Tests.dll\nDuration: 19.2s", false),
             new Perch.Data.Control.AssistantTextEvent(
                 "Lock lifecycle is wired: written on ownership, deleted on exit, and swept by `perch-hook cleanup`. " +
                 "Want me to commit it?\n\n```csharp\npublic static bool Acquire(string sessionId, string cwd)\n{\n    if (HeldByOther(sessionId) is not null) return false;\n    File.WriteAllText(PathFor(sessionId), Describe(cwd));\n    return true;\n}\n```"),

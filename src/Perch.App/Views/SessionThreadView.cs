@@ -773,7 +773,17 @@ internal sealed class SessionThreadView : ScrollViewer
         private readonly Ellipse _dot;
         private readonly TextBlock _status;
         private readonly Border _out;
-        private readonly SelectableTextBlock _outText;
+        private readonly StackPanel _bodyStack;
+        // For an Edit/MultiEdit/Write tool, the unified line diff of its input (built once) so the card shows a
+        // terminal-style +/- diff instead of a raw JSON dump; null for every other tool.
+        private readonly IReadOnlyList<GitDiffLine>? _diffLines;
+        // A card toggles only when it has something worth showing: an edit's diff (the formatted detail), the
+        // full result text when that's more than the one-line collapsed preview, or — for a tool we don't know
+        // how to format — its raw input. Recomputed in Update because the result arrives after construction.
+        private bool _expandable;
+        private readonly TextBlock _chevron;   // ▸/▾ affordance in the header, shown only when expandable
+        private readonly Border _headerBorder;
+        private Control? _diffPanel;   // the rendered diff, built lazily and reused across status updates
         private ToolCallPart _part;
         private bool _expanded;
 
@@ -784,6 +794,9 @@ internal sealed class SessionThreadView : ScrollViewer
         {
             _p = p;
             _part = part;
+
+            _diffLines = EditDiff.Build(part.ToolName, ParseOrNull(part.InputJson));
+            _expanded = _diffLines is { Count: > 0 };   // an edit's diff shows by default; other detail stays closed
 
             var icon = new Border
             {
@@ -836,10 +849,14 @@ internal sealed class SessionThreadView : ScrollViewer
             }
             _dot = new Ellipse { Width = 7, Height = 7, VerticalAlignment = VerticalAlignment.Center };
             _status = new TextBlock { FontSize = 12, FontWeight = FontWeight.SemiBold, FontFamily = p.Mono, VerticalAlignment = VerticalAlignment.Center };
+            _chevron = new TextBlock
+            {
+                FontSize = 11, Foreground = p.Faint, VerticalAlignment = VerticalAlignment.Center, IsVisible = false,
+            };
             var status = new StackPanel
             {
                 Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
-                Children = { _dot, _status },
+                Children = { _dot, _status, _chevron },
             };
 
             var header = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,11,*,11,Auto") };
@@ -848,34 +865,29 @@ internal sealed class SessionThreadView : ScrollViewer
             header.Children.Add(summary);
             Grid.SetColumn(status, 4);
             header.Children.Add(status);
-            var headerBorder = new Border
+            _headerBorder = new Border
             {
                 Padding = new Thickness(13, 10), Child = header, Background = Brushes.Transparent,
-                Cursor = new Cursor(StandardCursorType.Hand),
             };
-            headerBorder.PointerReleased += (_, e) =>
+            _headerBorder.PointerReleased += (_, e) =>
             {
-                if (e.InitialPressMouseButton != MouseButton.Left) return;
+                if (e.InitialPressMouseButton != MouseButton.Left || !_expandable) return;
                 _expanded = !_expanded;
                 Update(_part);
             };
 
-            _outText = new SelectableTextBlock
-            {
-                FontFamily = p.Mono, FontSize = 12, LineHeight = 12 * 1.65, Foreground = p.Muted,
-                TextWrapping = TextWrapping.Wrap,
-            };
+            _bodyStack = new StackPanel { Spacing = 10 };
             _out = new Border
             {
                 BorderBrush = p.BorderSoft, BorderThickness = new Thickness(0, 1, 0, 0), Background = p.CodeBg,
-                Padding = new Thickness(14, 11), IsVisible = false, Child = _outText,
+                Padding = new Thickness(14, 11), IsVisible = false, Child = _bodyStack,
             };
 
             Root = new Border
             {
                 BorderBrush = p.Border, BorderThickness = new Thickness(1), CornerRadius = SessionPalette.CardRadius,
                 Background = p.Surface, ClipToBounds = true, Margin = new Thickness(0, 0, 0, 12),
-                Child = new StackPanel { Children = { headerBorder, _out } },
+                Child = new StackPanel { Children = { _headerBorder, _out } },
             };
             Update(part);
         }
@@ -893,16 +905,149 @@ internal sealed class SessionThreadView : ScrollViewer
             _status.Foreground = brush;
             _status.Text = label;
 
-            var text = part.ResultPreview;
-            if (_expanded)
+            bool failed = part.Status == ToolCallStatus.Failed;
+            bool hasDiff = _diffLines is { Count: > 0 };
+            bool known = ToolSummary.IsKnown(part.ToolName);
+            var input = ParseOrNull(part.InputJson);
+            string full = part.ResultText;
+            // The collapsed one-liner: a per-tool summary where a count reads better ("Read 42 lines",
+            // "12 files"), else the first line of the output.
+            string collapsed = ToolResultFormat.CollapsedSummary(part.ToolName, input, full) ?? ShortLine(full);
+            // Bash/PowerShell clip their command in the header; keep the full one to show (and to make the card
+            // expandable) when it was clipped.
+            string? command = ToolResultFormat.Command(part.ToolName, input);
+
+            // A card toggles when it has a diff, more result than the collapsed line conveys, a long command to
+            // reveal, or (unknown tool) a raw input we couldn't format. Recomputed here because the result
+            // lands after the card is first built.
+            bool moreResult = full.Length > 0 && collapsed != full;
+            _expandable = hasDiff || moreResult || !known || command is { Length: > 60 };
+            _chevron.IsVisible = _expandable;
+            _chevron.Text = _expanded ? "▾" : "▸";
+            _headerBorder.Cursor = _expandable ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+            bool showExpanded = _expandable && _expanded;
+            _bodyStack.Children.Clear();
+
+            if (hasDiff)
             {
-                var args = PrettyJson(part.InputJson);
-                text = text.Length > 0 ? args + "\n\n" + text : args;
+                // An edit tool: the +/- diff is the formatted detail the toggle shows/hides (never raw JSON).
+                // A failed edit also surfaces its error, so the reason is visible even when the diff is closed.
+                if (showExpanded) _bodyStack.Children.Add(_diffPanel ??= BuildDiffPanel(_diffLines!));
+                if (failed && full.Length > 0) _bodyStack.Children.Add(MonoText(full, true));
             }
-            _outText.Text = text;
-            _outText.Foreground = part.Status == ToolCallStatus.Failed ? _p.Err : _p.Muted;
-            _out.IsVisible = text.Length > 0;
-            LinkText.AttachDetected(_outText, text);   // any URLs in tool output become clickable
+            else if (showExpanded)
+            {
+                // Expanded: the full result output in a height-capped, scrollable mono panel, headed by the full
+                // shell command for Bash/PowerShell (its header clips it). Only an *unknown* tool — one we can't
+                // format — shows its raw input instead; a known tool never dumps JSON.
+                if (!known)
+                    _bodyStack.Children.Add(MonoText(PrettyJson(part.InputJson), false));
+                else if (command is { Length: > 0 })
+                    _bodyStack.Children.Add(MonoText((part.ToolName == "PowerShell" ? "PS> " : "$ ") + command, false));
+                if (full.Length > 0) _bodyStack.Children.Add(BuildOutputPanel(full, failed));
+            }
+            else if (collapsed.Length > 0)
+            {
+                // Collapsed: the per-tool one-line summary.
+                _bodyStack.Children.Add(MonoText(collapsed, failed));
+            }
+            _out.IsVisible = _bodyStack.Children.Count > 0;
+        }
+
+        // A single-line summary of a tool result for the collapsed card: its first non-blank line, clipped.
+        private static string ShortLine(string full)
+        {
+            if (full.Length == 0) return "";
+            int nl = full.IndexOf('\n');
+            var first = (nl >= 0 ? full[..nl] : full).Trim();
+            const int max = 100;
+            return first.Length <= max ? first : first[..max].TrimEnd() + "…";
+        }
+
+        // The full tool output, expanded: a selectable mono block (URLs clickable) inside a height-capped
+        // scroll region, so a big Read/Bash result reads in full without pushing the rest of the thread away.
+        private Control BuildOutputPanel(string full, bool failed) => new ScrollViewer
+        {
+            MaxHeight = 320, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = MonoText(full, failed),
+        };
+
+        // A mono result/argument block (URLs made clickable), coloured for a failed tool.
+        private Control MonoText(string text, bool failed)
+        {
+            var tb = new SelectableTextBlock
+            {
+                Text = text, FontFamily = _p.Mono, FontSize = 12, LineHeight = 12 * 1.65,
+                Foreground = failed ? _p.Err : _p.Muted, TextWrapping = TextWrapping.Wrap,
+            };
+            LinkText.AttachDetected(tb, text);   // any URLs in tool output become clickable
+            return tb;
+        }
+
+        // Renders a unified line diff as a terminal-style panel: a "+N -M" summary, then one row per line —
+        // a non-selectable +/- marker column beside the (selectable) code, with a faint band tinting changed
+        // rows. The delta hues mirror DiffView so the session UI and the git tree colour edits identically.
+        private Control BuildDiffPanel(IReadOnlyList<GitDiffLine> lines)
+        {
+            var (addFg, remFg, addBand, remBand) = _p.IsDark
+                ? (Color.FromRgb(0x3F, 0xB9, 0x50), Color.FromRgb(0xF8, 0x51, 0x49),
+                   Color.FromArgb(36, 0x3F, 0xB9, 0x50), Color.FromArgb(36, 0xF8, 0x51, 0x49))
+                : (Color.FromRgb(0x1F, 0x88, 0x3D), Color.FromRgb(0xCF, 0x22, 0x2E),
+                   Color.FromArgb(30, 0x1F, 0x88, 0x3D), Color.FromArgb(28, 0xCF, 0x22, 0x2E));
+            IBrush addFgB = new SolidColorBrush(addFg), remFgB = new SolidColorBrush(remFg);
+            IBrush addBandB = new SolidColorBrush(addBand), remBandB = new SolidColorBrush(remBand);
+
+            var stack = new StackPanel();
+            var (added, removed) = EditDiff.Counts(lines);
+            stack.Children.Add(new TextBlock
+            {
+                Margin = new Thickness(0, 0, 0, 7), FontFamily = _p.Mono, FontSize = 11.5, FontWeight = FontWeight.SemiBold,
+                Inlines = new InlineCollection
+                {
+                    new Run($"+{added}") { Foreground = addFgB },
+                    new Run("   "),
+                    new Run($"-{removed}") { Foreground = remFgB },
+                },
+            });
+
+            const int cap = 200;   // a very long diff (e.g. a big new file) is clipped with a trailing note
+            int shown = 0;
+            foreach (var l in lines)
+            {
+                if (shown >= cap)
+                {
+                    stack.Children.Add(new TextBlock
+                    {
+                        Text = $"… {lines.Count - shown} more line{(lines.Count - shown == 1 ? "" : "s")}",
+                        FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Faint, Margin = new Thickness(0, 5, 0, 0),
+                    });
+                    break;
+                }
+                shown++;
+
+                (IBrush fg, IBrush? band, string marker) = l.Kind switch
+                {
+                    GitDiffLineKind.Added   => ((IBrush)addFgB, (IBrush?)addBandB, "+"),
+                    GitDiffLineKind.Removed => ((IBrush)remFgB, (IBrush?)remBandB, "-"),
+                    GitDiffLineKind.Meta    => ((IBrush)_p.Faint, (IBrush?)null, ""),
+                    _                       => ((IBrush)_p.Muted, (IBrush?)null, " "),
+                };
+                var rowGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("14,*") };
+                rowGrid.Children.Add(new TextBlock
+                {
+                    Text = marker, FontFamily = _p.Mono, FontSize = 12, LineHeight = 12 * 1.55, Foreground = fg,
+                    VerticalAlignment = VerticalAlignment.Top,
+                });
+                var code = new SelectableTextBlock
+                {
+                    Text = l.Text.Length == 0 ? " " : l.Text, FontFamily = _p.Mono, FontSize = 12,
+                    LineHeight = 12 * 1.55, Foreground = fg, TextWrapping = TextWrapping.Wrap,
+                };
+                Grid.SetColumn(code, 1);
+                rowGrid.Children.Add(code);
+                stack.Children.Add(new Border { Background = band ?? Brushes.Transparent, Child = rowGrid });
+            }
+            return stack;
         }
 
         private static string Glyph(string tool) => tool switch

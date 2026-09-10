@@ -79,7 +79,9 @@ internal sealed class ToolCallPart(string toolUseId, string toolName, string sum
     public string Summary { get; } = summary;
     public string InputJson { get; } = inputJson;
     public ToolCallStatus Status { get; internal set; } = ToolCallStatus.Running;
-    public string ResultPreview { get; internal set; } = "";
+    /// <summary>The tool's result as text (capped at ~8k chars), or empty until it lands. The card shows a
+    /// one-line summary of it collapsed and the whole thing on expand.</summary>
+    public string ResultText { get; internal set; } = "";
 }
 
 internal enum PermissionResolution { Pending, Allowed, Denied, Expired }
@@ -248,7 +250,7 @@ internal sealed class SessionConversation
                 if (_toolCalls.Remove(result.ToolUseId, out var call))
                 {
                     call.Part.Status = result.IsError ? ToolCallStatus.Failed : ToolCallStatus.Done;
-                    call.Part.ResultPreview = result.Preview;
+                    call.Part.ResultText = result.Text;
                     Changed?.Invoke(call.Owner, ConversationChange.Updated);
                 }
                 break;

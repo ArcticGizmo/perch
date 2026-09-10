@@ -183,22 +183,32 @@ internal static class StreamJsonParser
             if (TranscriptJson.BlockType(block) != "tool_result") continue;
             events.Add(new ToolResultEvent(
                 TranscriptJson.AsString(block?["tool_use_id"]) ?? "",
-                PreviewOf(block?["content"]),
+                ResultTextOf(block?["content"]),
                 block?["is_error"]?.GetValue<bool>() ?? false));
         }
         return events;
     }
 
-    // tool_result content is a plain string in some records and a block array in others.
-    private static string PreviewOf(JsonNode? content)
+    // A single tool result can be very large (a Read of a 15k-char file), but a thread holds thousands of
+    // them, so keep the whole text only up to this cap — enough to read a command's full output on expand
+    // without letting one giant result balloon the conversation's memory.
+    private const int MaxResultChars = 8_000;
+
+    // tool_result content is a plain string in some records and a block array in others. Returns the full
+    // result text (blocks joined), trimmed and capped at MaxResultChars with a truncation note — the tool
+    // card shows all of it on expand and derives its own short collapsed line, so nothing is clipped here.
+    private static string ResultTextOf(JsonNode? content)
     {
         var text = TranscriptJson.AsString(content);
         if (text is null && content is JsonArray blocks)
-            text = string.Join(" ", blocks
+            text = string.Join("\n", blocks
                 .Where(b => TranscriptJson.BlockType(b) == "text")
                 .Select(b => TranscriptJson.AsString(b?["text"]))
                 .Where(t => !string.IsNullOrEmpty(t)));
-        return ToolSummary.Clip(text ?? "");
+        text = (text ?? "").Trim();
+        return text.Length <= MaxResultChars
+            ? text
+            : text[..MaxResultChars].TrimEnd() + $"\n… (+{text.Length - MaxResultChars:N0} more characters)";
     }
 
     private static IReadOnlyList<SessionEvent> ParseStreamEvent(JsonNode root)

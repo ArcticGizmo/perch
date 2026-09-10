@@ -269,7 +269,7 @@ public class SessionConversationTests
                 var tool = Assert.IsType<ToolCallPart>(p);
                 Assert.Equal("Read", tool.ToolName);
                 Assert.Equal(ToolCallStatus.Done, tool.Status);
-                Assert.Equal("class Foo {}", tool.ResultPreview);
+                Assert.Equal("class Foo {}", tool.ResultText);
                 Assert.Contains("Foo.cs", tool.InputJson);
             },
             p => Assert.Equal("Done.", Assert.IsType<TextPart>(p).Text));
@@ -287,7 +287,7 @@ public class SessionConversationTests
         conv.Apply(new ToolResultEvent("t1", "exit 1", true));
         var tool = Assert.IsType<ToolCallPart>(Assert.IsType<AssistantMessageItem>(conv.Items[0]).Parts[0]);
         Assert.Equal(ToolCallStatus.Failed, tool.Status);
-        Assert.Equal("exit 1", tool.ResultPreview);
+        Assert.Equal("exit 1", tool.ResultText);
     }
 
     [Fact]
@@ -387,7 +387,7 @@ public class SessionConversationTests
             {
                 var t = Assert.IsType<ToolCallPart>(p);
                 Assert.Equal(ToolCallStatus.Done, t.Status);
-                Assert.Equal("class A {}", t.ResultPreview);
+                Assert.Equal("class A {}", t.ResultText);
             },
             p => Assert.Equal("Fixed.", Assert.IsType<TextPart>(p).Text));
         Assert.Equal("thanks", Assert.IsType<UserMessageItem>(conv.Items[2]).Text);

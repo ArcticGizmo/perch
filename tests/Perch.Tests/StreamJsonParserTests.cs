@@ -81,13 +81,35 @@ public class StreamJsonParserTests
         var stringResult = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}}""";
         var ev = Assert.IsType<ToolResultEvent>(Assert.Single(StreamJsonParser.Parse(stringResult)));
         Assert.Equal("toolu_1", ev.ToolUseId);
-        Assert.Equal("ok", ev.Preview);
+        Assert.Equal("ok", ev.Text);
         Assert.False(ev.IsError);
 
         var blockResult = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":[{"type":"text","text":"boom"}],"is_error":true}]}}""";
         var err = Assert.IsType<ToolResultEvent>(Assert.Single(StreamJsonParser.Parse(blockResult)));
-        Assert.Equal("boom", err.Preview);
+        Assert.Equal("boom", err.Text);
         Assert.True(err.IsError);
+    }
+
+    // A tool_result line carrying a plain-string body of the given length.
+    private static string ResultLine(string body) =>
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t\",\"content\":\"" + body + "\"}]}}";
+
+    [Fact]
+    public void ToolResult_KeepsFullText_NotA60CharPreview()
+    {
+        // The card renders the whole result now (and derives its own short line), so the parser must not clip.
+        var body = new string('x', 500);
+        var ev = Assert.IsType<ToolResultEvent>(Assert.Single(StreamJsonParser.Parse(ResultLine(body))));
+        Assert.Equal(body, ev.Text);
+    }
+
+    [Fact]
+    public void ToolResult_CapsHugeOutputWithANote()
+    {
+        var body = new string('y', 20_000);
+        var ev = Assert.IsType<ToolResultEvent>(Assert.Single(StreamJsonParser.Parse(ResultLine(body))));
+        Assert.True(ev.Text.Length < body.Length);
+        Assert.Contains("more characters", ev.Text);
     }
 
     [Fact]

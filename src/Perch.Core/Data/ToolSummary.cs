@@ -9,6 +9,15 @@ namespace Perch.Data;
 /// </summary>
 internal static class ToolSummary
 {
+    /// <summary>True for the built-in Claude Code tools this class describes with a bespoke phrase (the
+    /// <see cref="Describe"/> switch's cases). The session UI uses it to decide a tool card is worth
+    /// formatting rather than falling back to a raw-JSON dump — an unknown tool is the only case where the
+    /// raw input is still shown, because it's all we have.</summary>
+    public static bool IsKnown(string tool) => tool is
+        "Read" or "Edit" or "MultiEdit" or "Write" or "NotebookEdit" or
+        "Bash" or "PowerShell" or "Grep" or "Glob" or "Task" or "Agent" or
+        "WebFetch" or "WebSearch" or "TodoWrite" or "AskUserQuestion";
+
     /// <summary>Maps a tool name + its input to a short present-tense phrase.</summary>
     public static string Describe(string tool, JsonNode? input)
     {
