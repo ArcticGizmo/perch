@@ -61,12 +61,8 @@ internal static class ClaudeConfigSet
     /// <summary>Raised off the UI thread when a probe changed the set.</summary>
     public static event Action? Changed;
 
-    /// <summary>
-    /// The environment with this slug, or null when the slug is unknown, empty, or names an
-    /// environment that has since been renamed or removed. Null is the answer to render as "unknown";
-    /// falling back to the primary here would attribute a session to whichever environment happens to
-    /// be first, which is the mistake this lookup exists to avoid.
-    /// </summary>
+    /// <summary>The environment with this slug, else null — deliberately no fallback to the primary,
+    /// which would attribute a session to whichever environment happens to be first.</summary>
     public static ClaudeConfigDir? ForSlug(string? slug)
     {
         if (string.IsNullOrWhiteSpace(slug)) return null;
@@ -192,9 +188,8 @@ internal static class ClaudeConfigDiscovery
     private const string EnvsDirName = ".claude-envs";
     private const string EnvsSubDirName = "envs";
 
-    // The manifest was renamed `envs.json` -> `manifest.json`; both are read so a machine mid-migration
-    // keeps its labels. The manifest supplies labels and declared orgs only, never membership, so a miss
-    // costs display detail and nothing else - which is precisely how the rename went unnoticed.
+    // Renamed `envs.json` -> `manifest.json`; both are read. It supplies labels and declared orgs but
+    // never membership, so a miss costs display detail and reports nothing - how the rename went unseen.
     private static readonly string[] ManifestFileNames = ["manifest.json", "envs.json"];
 
     /// <summary>
@@ -253,11 +248,10 @@ internal static class ClaudeConfigDiscovery
                     Add(Make(child, slug: Path.GetFileName(child)));
         }
 
-        // A shared store is not a config dir. Where environments share `sessions/` or `projects/` by
-        // link, the store they point at holds those very directories, so the marker test matches it -
-        // and a false positive here is worse than a missing environment, because a discovered dir is a
-        // hook-install target. The store is identified by mechanism rather than by name: it is whatever
-        // another candidate's linked subdirectory actually resolves into.
+        // A shared store is not a config dir: it holds the very `sessions/` and `projects/` the marker
+        // test looks for, and a false positive is worse than a missing environment because a discovered
+        // dir is a hook-install target. Identified by mechanism - whatever a linked subdir resolves
+        // into - never by name.
         var storeRoots = new HashSet<string>(ClaudeConfigDir.PathComparer);
         foreach (var dir in ordered)
             foreach (var linked in new[] { dir.SessionsDir, dir.ProjectsDir })
@@ -268,8 +262,7 @@ internal static class ClaudeConfigDiscovery
                 if (!string.IsNullOrEmpty(owner)) storeRoots.Add(Normalize(owner));
             }
 
-        // Never drop the primary: it is where non-session-specific paths resolve, and a set with no
-        // primary has no floor to fall back to.
+        // Never drop the primary: it is the floor every non-session-specific path falls back to.
         return ordered
             .Where(d => d.Equals(primary) || !storeRoots.Contains(d.RealRoot))
             .ToList();

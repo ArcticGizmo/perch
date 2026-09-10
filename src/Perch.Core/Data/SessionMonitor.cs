@@ -755,10 +755,8 @@ internal sealed class SessionMonitor : IDisposable
 
             var mode = ReadPermissionMode(Path.Combine(configDir.SessionsDir, $"{sessionId}.mode"));
 
-            // Which environment is running this session. Where sessions/ is shared by link the sidecar's
-            // directory attributes nothing, so the hook records CLAUDE_ENVS_SLUG - which only something
-            // running inside the session can see - into a {sessionId}.slug sidecar. Absent for a bare
-            // `claude` and for any session that started before the hook wrote them: null, never guessed.
+            // Which environment is running it - see ClaudeSession.EnvSlug for why this cannot come
+            // from configDir. Absent is null, never guessed.
             var envSlug = ReadEnvSlug(Path.Combine(configDir.SessionsDir, $"{sessionId}.slug"));
 
             // External-notification opt-in: the presence of a {sessionId}.notify marker is the signal.
@@ -1077,11 +1075,8 @@ internal sealed class SessionMonitor : IDisposable
         }
     }
 
-    /// <summary>
-    /// The environment slug from a <c>{sessionId}.slug</c> sidecar, or null. Validated on the way in
-    /// because the value arrives from a file and is compared against a config dir's own slug: anything
-    /// that is not a plain slug is treated as absent rather than trusted.
-    /// </summary>
+    /// <summary>The environment slug from a <c>{sessionId}.slug</c> sidecar, or null. Validated on the
+    /// way in: it arrives from a file, so anything but a plain slug is treated as absent.</summary>
     private static string? ReadEnvSlug(string path)
     {
         try

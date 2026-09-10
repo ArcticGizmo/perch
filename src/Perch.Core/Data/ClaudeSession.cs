@@ -254,35 +254,34 @@ public record ClaudeSession(
     public string DisplayName => Title ?? ProjectName;
 
     /// <summary>
-    /// The config directory this session's sidecars physically live in — the one its
-    /// <c>{pid}.json</c> was found in. **This is the write target**, not an ownership claim: every
-    /// write on the session's behalf must land here, and writing to the primary instead succeeds and
-    /// does nothing. Null for a session not produced by a scan (a sample or test instance).
-    ///
-    /// <para>Where a scheme shares <c>sessions/</c> across environments by link, this is the primary
-    /// for every session and says nothing about which environment ran it — see
-    /// <see cref="EnvSlug"/>.</para>
+    /// The config directory this session's sidecars live in — the write target, not an ownership
+    /// claim: writing to the primary instead succeeds and does nothing. Null for a session not
+    /// produced by a scan. For "which environment is running this", see <see cref="EnvSlug"/>.
     /// </summary>
     public ClaudeConfigDir? ConfigDir { get; init; }
 
     /// <summary>
-    /// The claude-envs environment that is running this session, from a <c>{sessionId}.slug</c>
-    /// sidecar the hook writes out of <c>CLAUDE_ENVS_SLUG</c>. Null when it cannot be known: a bare
-    /// <c>claude</c> sets no slug, and a session that started before the hook learned to record one
-    /// never wrote the sidecar. Null means "unknown" and must never be rendered as an environment.
+    /// The environment running this session, from the <c>{sessionId}.slug</c> sidecar the hook writes
+    /// out of <c>CLAUDE_ENVS_SLUG</c>. It has to come from inside the session: a scheme that shares
+    /// <c>sessions/</c> across environments by link puts every environment's sidecars in one
+    /// directory, leaving <see cref="ConfigDir"/> the primary for all of them and attributing nothing.
+    /// Null where it cannot be known — a bare <c>claude</c> sets no slug — and null must render as
+    /// nothing rather than as a guess.
     /// </summary>
     public string? EnvSlug { get; init; }
 
-    /// <summary>The environment named by <see cref="EnvSlug"/>, when it is still in the config-dir
-    /// set. Use this for display; use <see cref="ConfigDir"/> to decide where to write.</summary>
+    /// <summary>The environment named by <see cref="EnvSlug"/>, if still in the config-dir set.</summary>
     public ClaudeConfigDir? EnvDir => ClaudeConfigSet.ForSlug(EnvSlug);
 
     /// <summary>The sessions directory that owns this session's sidecars.</summary>
     public string SessionsDir => ConfigDir?.SessionsDir ?? ClaudePaths.SessionsDir;
 
-    /// <summary>The config dir's label ("Hub", "InFlight"), or null. Only worth showing when the
-    /// machine has several — see <see cref="ClaudeConfigSet.IsMulti"/>.</summary>
+    /// <summary>Label of the dir the sidecars live in. For display prefer <see cref="EnvLabel"/>.</summary>
     public string? ConfigLabel => ConfigDir?.Label;
+
+    /// <summary>The running environment's label ("InFlight"), or null when unknown. Only worth showing
+    /// when the machine has several — see <see cref="ClaudeConfigSet.IsMulti"/>.</summary>
+    public string? EnvLabel => EnvDir?.Label;
 
     /// <summary>The organization this session's config dir is signed in to, or null. With one login
     /// across several organizations it is the only thing that tells the environments apart.</summary>

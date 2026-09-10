@@ -1703,7 +1703,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // Either the machine has several config dirs, or the listed sessions span more than one. A
         // session with no config dir (a sample) never gets a chip either way.
         _showConfigLabels = ClaudeConfigSet.IsMulti
-            || sessions.Select(s => s.ConfigLabel).Where(l => l != null).Distinct().Count() > 1;
+            || sessions.Select(s => s.EnvLabel).Where(l => l != null).Distinct().Count() > 1;
 
         // Deliberately *not* collapsing when the session list empties. The panel keeps its strips at zero
         // sessions (see Draw), so an empty roster is still worth having open — and clearing _expanded would
@@ -2763,15 +2763,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         const double GitGap = 4;
         double gitW = showGit ? gitAddW + GitGap + gitDelW + 8 : 0;
 
-        // Which environment this session belongs to, labelled with the organization where known (the
-        // only discriminator under one login) and warn-coloured when it is signed in to a different
-        // organization than declared.
+        // Which environment is running this session, labelled with the organization where known (the
+        // only discriminator under one login) and warn-coloured on a mismatch with the declared org.
+        // From EnvDir, never ConfigDir: with sessions/ shared, that would read the same on every row.
+        // No chip when the environment is unknown.
         string envText = "";
         bool envMismatch = false;
-        if (_showConfigLabels && session.ConfigDir is { } sessionConfig)
+        if (_showConfigLabels && session.EnvDir is { } sessionEnv)
         {
-            envText = sessionConfig.Org ?? sessionConfig.Label;
-            envMismatch = sessionConfig.OrgState == OrgState.Mismatch;
+            envText = sessionEnv.Org ?? sessionEnv.Label;
+            envMismatch = sessionEnv.OrgState == OrgState.Mismatch;
         }
         envText = envText.Length > 0 ? OverlayDraw.Truncate(envText, StatusSize, EnvChipMaxWidth) : "";
         double envW = envText.Length > 0 ? OverlayDraw.MeasureWidth(envText, StatusSize) + 8 : 0;

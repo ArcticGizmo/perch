@@ -88,16 +88,12 @@ return 0;
 // ── event handlers ────────────────────────────────────────────────────────────────
 
 // Record the session's permission mode so the overlay can badge it.
-// Which claude-envs environment is running this session.
+// Which claude-envs environment is running this session. The launchers export CLAUDE_ENVS_SLUG, and a
+// hook runs *inside* the session, so this is the only party that can read it without reaching into
+// another process's memory (Perch.Data.ClaudeSession.EnvSlug covers why the path cannot say).
 //
-// A scheme that shares `sessions/` across environments by link puts every environment's sidecars in
-// one physical directory, so the directory a sidecar sits in no longer says who owns it. The launchers
-// export CLAUDE_ENVS_SLUG alongside CLAUDE_CONFIG_DIR for exactly this, and a hook runs *inside* the
-// session, so it is the only party that can see it without reading another process's memory.
-//
-// Written on `start` only - which covers a resume, since SessionStart fires again - so the hot `mode`
-// path stays a single write. A bare `claude` sets no slug and gets no sidecar, which is the honest
-// answer rather than a guessed one.
+// On `start` only - which covers a resume, since SessionStart fires again - so the hot `mode` path
+// stays one write. A bare `claude` sets no slug and gets no sidecar.
 static void WriteEnvSlug(string sessionsDir, Dictionary<string, string?> f)
 {
     string? sid = f["session_id"];
@@ -105,7 +101,7 @@ static void WriteEnvSlug(string sessionsDir, Dictionary<string, string?> f)
     if (string.IsNullOrEmpty(sid) || string.IsNullOrWhiteSpace(slug) || !Directory.Exists(sessionsDir))
         return;
 
-    // Defensive: the slug becomes part of no path here, but it is read back as one downstream.
+    // It becomes part of no path here, but it is read back as one downstream.
     foreach (char c in slug)
         if (!char.IsAsciiLetterOrDigit(c) && c != '-' && c != '_')
             return;
