@@ -13,12 +13,14 @@ internal sealed class RemoteGlyph : Control
 {
     public RemoteGlyph()
     {
-        // The broadcast waves rise up-right from a source dot; the glyph is bottom-heavy, so it's drawn a
-        // touch above centre to sit in the box (~11 wide, ~13 tall).
-        Width = 15;
-        Height = 16;
+        Width = 14;
+        Height = 14;
     }
 
+    // The broadcast glyph isn't symmetric about its origin — the source dot sits at (originX, midY+4) with the
+    // waves rising up-right — so centre it by its actual bounds: horizontally originX-2..originX+9 (centre
+    // originX+3.5), vertically midY-5..midY+6 (centre midY+0.5). Solving for the box centre keeps it aligned
+    // with the other toolbar glyphs (which are symmetric and just draw at the midpoint).
     public override void Render(DrawingContext ctx) =>
-        OverlayCanvas.DrawRemoteIcon(ctx, 2.5, Bounds.Height / 2 - 2);
+        OverlayCanvas.DrawRemoteIcon(ctx, Bounds.Width / 2 - 3.5, Bounds.Height / 2 - 0.5);
 }

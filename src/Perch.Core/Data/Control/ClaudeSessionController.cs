@@ -231,6 +231,22 @@ internal sealed class ClaudeSessionController : IDisposable
         });
     }
 
+    /// <summary>The request id Perch stamps on its <c>remote_control</c> control request, so the ack is
+    /// recognised in the output stream (<see cref="StreamJsonParser.ParseControlResponse"/>) rather than
+    /// mistaken for another control ack. A fixed string is fine — only one is ever in flight.</summary>
+    public const string RemoteControlRequestId = "perch-rc";
+
+    /// <summary>Enables or disables Remote Control for the live session via the CLI's <c>remote_control</c>
+    /// control request — the same mechanism the IDE integrations use (it is <em>not</em> a stream-json slash
+    /// command). The enable ack carries the claude.ai session URL + bridge id, decoded into a
+    /// <see cref="RemoteControlEvent"/>; disable acks empty. Discovered by protocol spike (2026-09-08).</summary>
+    public void RequestRemoteControl(bool enabled) => WriteLine(new JsonObject
+    {
+        ["type"] = "control_request",
+        ["request_id"] = RemoteControlRequestId,
+        ["request"] = new JsonObject { ["subtype"] = "remote_control", ["enabled"] = enabled },
+    });
+
     /// <summary>Switches the model mid-session — the Agent SDK's <c>setModel</c> control request.</summary>
     public void SetModel(string model)
     {

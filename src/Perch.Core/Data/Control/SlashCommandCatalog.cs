@@ -64,6 +64,8 @@ internal static class SlashCommandCatalog
         new("model",         "[name]",        "Switch the model",                              SlashCommandTier.Native),
         new("effort",        "<level>",       "Set reasoning effort for this model",           SlashCommandTier.Native),
         new("usage",         "",              "Plan usage and limits",                         SlashCommandTier.Native),
+        new("remote-control","",              "Connect this session to the mobile app / claude.ai", SlashCommandTier.Native),
+        new("rc",            "",              "Connect this session to the mobile app / claude.ai", SlashCommandTier.Native),
         new("config",        "",              "Open Claude Desktop",                           SlashCommandTier.Native),
         new("theme",         "",              "Change the colour theme",                       SlashCommandTier.Native),
         new("mcp",           "",              "MCP server status",                             SlashCommandTier.Native),

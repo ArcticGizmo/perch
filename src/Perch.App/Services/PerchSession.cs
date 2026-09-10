@@ -42,6 +42,14 @@ internal sealed class PerchSession : IDisposable
     /// <summary>The session's <see cref="Title"/> changed (UI thread).</summary>
     public event Action? TitleChanged;
 
+    /// <summary>Remote Control was enabled or disabled for this session (UI thread). Carries the CLI's ack —
+    /// <see cref="RemoteControlEvent.SessionUrl"/> is set on enable (the claude.ai / QR target).</summary>
+    public event Action<RemoteControlEvent>? RemoteControlChanged;
+
+    /// <summary>Whether Remote Control is currently on for this session, and its claude.ai session URL.</summary>
+    public bool RemoteControlEnabled { get; private set; }
+    public string? RemoteControlUrl { get; private set; }
+
     private void SetTitle(string? title)
     {
         if (title == Title) return;
@@ -73,7 +81,13 @@ internal sealed class PerchSession : IDisposable
     {
         var controller = new ClaudeSessionController();
         var session = new PerchSession(controller, o);
-        controller.EventReceived += ev => Dispatcher.UIThread.Post(() => session.Conversation.Apply(ev));
+        controller.EventReceived += ev => Dispatcher.UIThread.Post(() =>
+        {
+            // Remote-control acks aren't conversation items — route them to the session's own signal (which
+            // still drops a note); everything else folds into the conversation model.
+            if (ev is RemoteControlEvent rc) session.OnRemoteControl(rc);
+            else session.Conversation.Apply(ev);
+        });
         controller.Exited += (code, err) => Dispatcher.UIThread.Post(() => session.OnExited(code, err));
         try
         {
@@ -274,6 +288,37 @@ internal sealed class PerchSession : IDisposable
     {
         Conversation.NoteInterrupt();   // so a running /compact settles to "canceled", not a green success
         _controller?.Interrupt();
+    }
+
+    /// <summary>Enables/disables Remote Control for the live session (the CLI's <c>remote_control</c> control
+    /// request). The ack arrives asynchronously as a <see cref="RemoteControlEvent"/> → <see cref="OnRemoteControl"/>.</summary>
+    public void RequestRemoteControl(bool enabled)
+    {
+        if (_controller is not { IsRunning: true } c) return;
+        c.RequestRemoteControl(enabled);
+    }
+
+    // The CLI's remote_control ack (UI thread): update state, drop a note, and fan out to the window (which
+    // pops the QR on enable). An error ack surfaces as an error note and leaves state unchanged.
+    private void OnRemoteControl(RemoteControlEvent ev)
+    {
+        if (ev.Error is { Length: > 0 } err)
+        {
+            Conversation.AddNote($"remote control unavailable: {err}", NoteKind.Error);
+        }
+        else if (ev.SessionUrl is { Length: > 0 } url)
+        {
+            RemoteControlEnabled = true;
+            RemoteControlUrl = url;
+            Conversation.AddNote($"remote control on — {url}");
+        }
+        else
+        {
+            RemoteControlEnabled = false;
+            RemoteControlUrl = null;
+            Conversation.AddNote("remote control off");
+        }
+        RemoteControlChanged?.Invoke(ev);
     }
 
     /// <summary>Stops the process. The session stays resumable on disk; <see cref="Ended"/> follows.</summary>
