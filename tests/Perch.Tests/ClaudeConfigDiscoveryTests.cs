@@ -90,50 +90,6 @@ public class ClaudeConfigDiscoveryTests : IDisposable
     }
 
     [Fact]
-    public void SharedStore_IsNotMistakenForAConfigDir()
-    {
-        // Environments that share sessions/ and projects/ by link point at a store holding those very
-        // directories, so the marker test matches the store too. A false positive is worse than a
-        // missing environment: a discovered dir is a hook-install target. Identified by mechanism -
-        // the store is whatever a linked subdirectory resolves into - not by being called "shared".
-        Hub("sessions");
-        var shared = MakeConfigDir(Path.Combine(_home, ".claude-envs", "shared"),
-            ["sessions", "projects", "settings.json"]);
-        var env = Env("inflight", ".claude.json", "settings.json");
-
-        // The env's sessions/ and projects/ resolve into the shared store, as junctions would.
-        var links = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            [Path.Combine(env, "sessions")] = Path.Combine(shared, "sessions"),
-            [Path.Combine(env, "projects")] = Path.Combine(shared, "projects"),
-        };
-        Directory.CreateDirectory(Path.Combine(env, "sessions"));
-        Directory.CreateDirectory(Path.Combine(env, "projects"));
-
-        var dirs = Discover(p => links.TryGetValue(p, out var target) ? target : p);
-
-        Assert.Contains(dirs, d => d.Slug == "inflight");
-        Assert.DoesNotContain(dirs, d => d.Root.EndsWith("shared", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
-    public void SharedStore_ExclusionNeverDropsThePrimary()
-    {
-        // Degenerate but reachable: point the primary's own sessions/ at a store. The set must still
-        // have a primary - it is the floor every non-session-specific path falls back to.
-        var hub = Hub("sessions", "projects");
-        var shared = MakeConfigDir(Path.Combine(_home, ".claude-envs", "shared"), ["sessions"]);
-        var links = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            [Path.Combine(hub, "sessions")] = Path.Combine(shared, "sessions"),
-        };
-
-        var dirs = Discover(p => links.TryGetValue(p, out var target) ? target : p);
-
-        Assert.Contains(dirs, d => d.IsHub);
-    }
-
-    [Fact]
     public void Manifest_SuppliesLabelAndDeclaredOrg()
     {
         Hub("sessions");

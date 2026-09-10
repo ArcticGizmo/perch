@@ -232,10 +232,12 @@ internal static class ClaudeConfigDiscovery
     private static readonly string[] ManifestFileNames = ["manifest.json", "envs.json"];
 
     /// <summary>
-    /// Every config dir under <paramref name="home"/>, with <paramref name="primary"/> first. A
-    /// manifest supplies labels and declared organizations only — never filesystem facts, which it
-    /// was observed to get wrong in both directions; membership is always decided by
-    /// <see cref="LooksLikeConfigDir"/>.
+    /// The primary, the hub, every directory under the manifest's environment root, and any
+    /// <c>.claude*</c> directory beside the hub — whichever pass <see cref="LooksLikeConfigDir"/>,
+    /// primary first.
+    ///
+    /// <para>The manifest supplies labels and declared organizations only — never filesystem facts,
+    /// which it was observed to get wrong in both directions.</para>
     /// </summary>
     /// <param name="linkResolver">Injected so a test can exercise de-duplication without minting real
     /// junctions, which need elevation on Windows.</param>
@@ -274,37 +276,17 @@ internal static class ClaudeConfigDiscovery
                     declaredOrg: declared?.Org, declaredAccount: declared?.Account));
             }
 
-        // Generalises past the conventional scheme: any `.claude*` directory beside the hub, and its
-        // immediate children, passing the marker test.
+        // A config dir beside the hub, so discovery is not hard-wired to the conventional
+        // envs/<slug> layout. Siblings only, deliberately: descending into their children is what
+        // found the scheme's own shared store, which holds the very `sessions/` and `projects/` the
+        // marker test looks for - and a false positive is worse than a miss, because a discovered dir
+        // is a hook-install target. A store is never itself a `.claude*` sibling.
         foreach (var sibling in SafeDirectories(home))
-        {
-            if (!Path.GetFileName(sibling).StartsWith(".claude", StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (LooksLikeConfigDir(sibling))
+            if (Path.GetFileName(sibling).StartsWith(".claude", StringComparison.OrdinalIgnoreCase)
+                && LooksLikeConfigDir(sibling))
                 Add(Make(sibling));
-            foreach (var child in SafeDirectories(sibling))
-                if (LooksLikeConfigDir(child))
-                    Add(Make(child, slug: Path.GetFileName(child)));
-        }
 
-        // A shared store is not a config dir: it holds the very `sessions/` and `projects/` the marker
-        // test looks for, and a false positive is worse than a missing environment because a discovered
-        // dir is a hook-install target. Identified by mechanism - whatever a linked subdir resolves
-        // into - never by name.
-        var storeRoots = new HashSet<string>(ClaudeConfigDir.PathComparer);
-        foreach (var dir in ordered)
-            foreach (var linked in new[] { dir.SessionsDir, dir.ProjectsDir })
-            {
-                var real = Normalize(linkResolver(linked));
-                if (ClaudeConfigDir.PathComparer.Equals(real, Normalize(linked))) continue;   // not a link
-                var owner = Path.GetDirectoryName(real);
-                if (!string.IsNullOrEmpty(owner)) storeRoots.Add(Normalize(owner));
-            }
-
-        // Never drop the primary: it is the floor every non-session-specific path falls back to.
-        return ordered
-            .Where(d => d.Equals(primary) || !storeRoots.Contains(d.RealRoot))
-            .ToList();
+        return ordered;
 
         ClaudeConfigDir Make(string root, string? slug = null, string? label = null, bool isHub = false,
                              string? declaredOrg = null, string? declaredAccount = null)
