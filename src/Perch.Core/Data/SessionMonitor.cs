@@ -755,9 +755,9 @@ internal sealed class SessionMonitor : IDisposable
 
             var mode = ReadPermissionMode(Path.Combine(configDir.SessionsDir, $"{sessionId}.mode"));
 
-            // Which environment is running it - see ClaudeSession.EnvSlug for why this cannot come
-            // from configDir. Absent is null, never guessed.
-            var envSlug = ReadEnvSlug(Path.Combine(configDir.SessionsDir, $"{sessionId}.slug"));
+            // Which config dir it reported - see ClaudeSession.ReportedConfigDir for why this cannot
+            // come from configDir. Absent is null, never guessed.
+            var reportedDir = ReadMarker(Path.Combine(configDir.SessionsDir, $"{sessionId}.configdir"));
 
             // External-notification opt-in: the presence of a {sessionId}.notify marker is the signal.
             // Written/removed by both the overlay's right-click toggle and the plugin's /afk command.
@@ -905,7 +905,7 @@ internal sealed class SessionMonitor : IDisposable
             )
             {
                 ConfigDir = configDir,
-                EnvSlug = envSlug,
+                ReportedConfigDir = reportedDir,
             };
 
             if (status == SessionStatus.NeedsAttention
@@ -1075,19 +1075,15 @@ internal sealed class SessionMonitor : IDisposable
         }
     }
 
-    /// <summary>The environment slug from a <c>{sessionId}.slug</c> sidecar, or null. Validated on the
-    /// way in: it arrives from a file, so anything but a plain slug is treated as absent.</summary>
-    private static string? ReadEnvSlug(string path)
+    /// <summary>The single-line body of a session marker sidecar, or null. Capped because it is read
+    /// from a file; the value is only ever compared against a known config dir, never opened.</summary>
+    private static string? ReadMarker(string path)
     {
         try
         {
             if (!File.Exists(path)) return null;
-            var slug = File.ReadAllText(path).Trim();
-            if (slug.Length is 0 or > 64) return null;
-            foreach (char c in slug)
-                if (!char.IsAsciiLetterOrDigit(c) && c != '-' && c != '_')
-                    return null;
-            return slug;
+            var body = File.ReadAllText(path).Trim();
+            return body.Length is 0 or > 512 ? null : body;
         }
         catch { return null; }
     }

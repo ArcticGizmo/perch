@@ -261,17 +261,16 @@ public record ClaudeSession(
     public ClaudeConfigDir? ConfigDir { get; init; }
 
     /// <summary>
-    /// The environment running this session, from the <c>{sessionId}.slug</c> sidecar the hook writes
-    /// out of <c>CLAUDE_ENVS_SLUG</c>. It has to come from inside the session: a scheme that shares
+    /// The config dir this session reported running under, from the <c>{sessionId}.configdir</c>
+    /// sidecar the hook writes. It has to come from inside the session: a scheme that shares
     /// <c>sessions/</c> across environments by link puts every environment's sidecars in one
     /// directory, leaving <see cref="ConfigDir"/> the primary for all of them and attributing nothing.
-    /// Null where it cannot be known — a bare <c>claude</c> sets no slug — and null must render as
-    /// nothing rather than as a guess.
+    /// Null only for a session that started before the hook wrote the marker.
     /// </summary>
-    public string? EnvSlug { get; init; }
+    public string? ReportedConfigDir { get; init; }
 
-    /// <summary>The environment named by <see cref="EnvSlug"/>, if still in the config-dir set.</summary>
-    public ClaudeConfigDir? EnvDir => ClaudeConfigSet.ForSlug(EnvSlug);
+    /// <summary>The dir named by <see cref="ReportedConfigDir"/>, if still in the config-dir set.</summary>
+    public ClaudeConfigDir? EnvDir => ClaudeConfigSet.ForRoot(ReportedConfigDir);
 
     /// <summary>
     /// The environment to show for this session: the one it reported, else the directory its sidecars
@@ -282,6 +281,27 @@ public record ClaudeSession(
     /// </summary>
     public ClaudeConfigDir? AttributedEnvDir =>
         EnvDir ?? (ConfigDir is { } dir && !ClaudeConfigSet.SharesSessionsDir(dir) ? dir : null);
+
+    /// <summary>
+    /// How to name this session's environment where two of them report the same organization — which
+    /// happens the moment the stock config is signed in to an org an environment also uses. Falls back
+    /// to the organization alone when it is unambiguous, since that is the more useful label.
+    /// </summary>
+    public string? EnvDisplay
+    {
+        get
+        {
+            if (AttributedEnvDir is not { } dir) return null;
+            var org = dir.Org;
+            if (string.IsNullOrEmpty(org)) return dir.Label;
+
+            int sharing = 0;
+            foreach (var other in ClaudeConfigSet.All)
+                if (string.Equals(other.Org, org, StringComparison.OrdinalIgnoreCase) && ++sharing > 1)
+                    return dir.DisplayName;   // "Hub · Quartex PDG" vs "PDG · Quartex PDG"
+            return org;
+        }
+    }
 
     /// <summary>The sessions directory that owns this session's sidecars.</summary>
     public string SessionsDir => ConfigDir?.SessionsDir ?? ClaudePaths.SessionsDir;

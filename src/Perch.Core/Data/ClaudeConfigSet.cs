@@ -61,13 +61,21 @@ internal static class ClaudeConfigSet
     /// <summary>Raised off the UI thread when a probe changed the set.</summary>
     public static event Action? Changed;
 
-    /// <summary>The environment with this slug, else null — deliberately no fallback to the primary,
-    /// which would attribute a session to whichever environment happens to be first.</summary>
-    public static ClaudeConfigDir? ForSlug(string? slug)
+    /// <summary>
+    /// The config dir at this root, else null — deliberately no fallback to the primary, which would
+    /// attribute a session to whichever dir happens to be first. Matched on the resolved path as well
+    /// as the literal one, so a root reported through a link still finds its dir. The value is only
+    /// ever compared, never opened: it arrives from a file written by a hook.
+    /// </summary>
+    public static ClaudeConfigDir? ForRoot(string? root)
     {
-        if (string.IsNullOrWhiteSpace(slug)) return null;
+        if (string.IsNullOrWhiteSpace(root)) return null;
+
+        var normalized = ClaudeConfigDiscovery.Normalize(root);
+        var real = ResolveReal(normalized);
         foreach (var dir in All)
-            if (dir.Slug is { Length: > 0 } s && string.Equals(s, slug, StringComparison.OrdinalIgnoreCase))
+            if (ClaudeConfigDir.PathComparer.Equals(dir.Root, normalized)
+                || ClaudeConfigDir.PathComparer.Equals(dir.RealRoot, real))
                 return dir;
         return null;
     }

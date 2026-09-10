@@ -2771,7 +2771,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool envMismatch = false;
         if (_showConfigLabels && session.AttributedEnvDir is { } sessionEnv)
         {
-            envText = sessionEnv.Org ?? sessionEnv.Label;
+            envText = session.EnvDisplay ?? sessionEnv.Label;
             envMismatch = sessionEnv.OrgState == OrgState.Mismatch;
         }
         envText = envText.Length > 0 ? OverlayDraw.Truncate(envText, StatusSize, EnvChipMaxWidth) : "";

@@ -95,56 +95,113 @@ public class MultiConfigDirSessionTests : IDisposable
         Assert.Equal(_env.SessionsDir, envSession.SessionsDir);
     }
 
-    // ── which environment is running a session ────────────────────────────────────────────────────
+    // ── which config dir is running a session ─────────────────────────────
     //
-    // Where sessions/ is shared by link the sidecar's directory attributes nothing, so the hook
-    // records CLAUDE_ENVS_SLUG - visible only from inside the session - into {sessionId}.slug.
+    // Where sessions/ is shared by link the sidecar's own directory attributes nothing, so the hook
+    // records the config dir it ran under - visible only from inside the session - into
+    // {sessionId}.configdir.
 
     [Fact]
-    public void Scan_ReadsTheRunningEnvironmentFromTheSlugSidecar()
+    public void Scan_ReadsTheReportedConfigDirFromItsSidecar()
     {
-        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.slug"), "inflight");
+        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.configdir"), _env.Root);
 
         var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
 
-        Assert.Equal("inflight", session.EnvSlug);
+        Assert.Equal(_env.Root, session.ReportedConfigDir);
         Assert.Equal(_env, session.EnvDir);
     }
 
     [Fact]
-    public void Scan_LeavesTheEnvironmentUnknownWithNoSidecar()
+    public void Scan_AttributesABareClaudeSessionToTheStockConfigDir()
     {
-        // A bare `claude` writes no slug, and neither did any session started before the hook learned
-        // to. Unknown must stay unknown: attributing it to the primary would invent an environment.
+        // The reason for recording the dir rather than the slug: a bare `claude` sets no slug but does
+        // have a config dir, and the organization is readable from the .claude.json there. Recording
+        // only the slug threw that away and left the session unlabelled.
+        File.WriteAllText(Path.Combine(_hub.SessionsDir, $"{_hubSessionId}.configdir"), _hub.Root);
+
         var session = Assert.Single(Scan(), s => s.SessionId == _hubSessionId);
 
-        Assert.Null(session.EnvSlug);
+        Assert.Equal(_hub, session.EnvDir);
+    }
+
+    [Fact]
+    public void Scan_LeavesTheConfigDirUnreportedWithNoSidecar()
+    {
+        // Only sessions that started before the hook wrote the marker. Unknown stays unknown here;
+        // whether the path can stand in for it is AttributedEnvDir's business, not this property's.
+        var session = Assert.Single(Scan(), s => s.SessionId == _hubSessionId);
+
+        Assert.Null(session.ReportedConfigDir);
         Assert.Null(session.EnvDir);
     }
 
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    [InlineData("../escape")]
-    [InlineData("has space")]
-    public void Scan_RejectsASlugSidecarThatIsNotAPlainSlug(string written)
+    [InlineData(@"C:\somewhere\that\is\not\a\config\dir")]
+    public void Scan_IgnoresAMarkerThatNamesNoKnownConfigDir(string written)
     {
-        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.slug"), written);
+        // The body is compared against the known set and never opened, so an unrecognised one is
+        // simply unknown rather than something to trust.
+        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.configdir"), written);
 
         var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
 
-        Assert.Null(session.EnvSlug);
+        Assert.Null(session.EnvDir);
     }
+
+    [Fact]
+    public void EnvDisplay_NamesTheDirectoryWhenTwoOfThemReportTheSameOrganization()
+    {
+        // Reachable the moment the stock config is signed in to an org an environment also uses, which
+        // is exactly what happened on the owner's machine. The organization alone would then read the
+        // same on both rows.
+        var twin = new ClaudeConfigDir(
+            Path.Combine(_root, ".claude-envs", "envs", "twin"),
+            Path.Combine(_root, ".claude-envs", "envs", "twin"),
+            "twin", "Twin", declaredOrg: "Redux InFlight");
+        ClaudeConfigSet.SetForTesting([_hub, _env, twin]);
+        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.configdir"), _env.Root);
+
+        var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
+
+        Assert.Equal("InFlight · Redux InFlight", session.EnvDisplay);
+    }
+
+    [Fact]
+    public void EnvDisplay_IsJustTheOrganizationWhenItIsUnambiguous()
+    {
+        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.configdir"), _env.Root);
+
+        var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
+
+        Assert.Equal("Redux InFlight", session.EnvDisplay);
+    }
+
+    [Fact]
+    public void ForRoot_DoesNotFallBackToThePrimary()
+    {
+        // The whole point of the lookup: an unknown root is unknown. Falling back would attribute a
+        // session to whichever dir happens to be first in the set.
+        Assert.Equal(_env, ClaudeConfigSet.ForRoot(_env.Root));
+        Assert.Equal(_hub, ClaudeConfigSet.ForRoot(_hub.Root));
+        Assert.Null(ClaudeConfigSet.ForRoot(Path.Combine(_root, ".claude-envs", "envs", "removed")));
+        Assert.Null(ClaudeConfigSet.ForRoot(null));
+        Assert.Null(ClaudeConfigSet.ForRoot("  "));
+    }
+
+
 
     [Fact]
     public void AttributedEnvDir_FallsBackToThePathWhenTheDirectoryIsNotShared()
     {
         // Every setup that shares nothing - a plain CLAUDE_CONFIG_DIR per environment - attributes
-        // perfectly by path and writes no slug. Showing nothing there would have been a regression on
-        // behaviour that already worked.
+        // perfectly by path, and a session predating the hook reports nothing. Showing nothing there
+        // would have been a regression on behaviour that already worked.
         var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
 
-        Assert.Null(session.EnvSlug);
+        Assert.Null(session.ReportedConfigDir);
         Assert.Equal(_env, session.AttributedEnvDir);
         Assert.Equal("InFlight", session.EnvLabel);
     }
@@ -163,7 +220,7 @@ public class MultiConfigDirSessionTests : IDisposable
 
         var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
 
-        Assert.Null(session.EnvSlug);
+        Assert.Null(session.ReportedConfigDir);
         Assert.Null(session.AttributedEnvDir);
         Assert.Null(session.EnvLabel);
     }
@@ -171,23 +228,11 @@ public class MultiConfigDirSessionTests : IDisposable
     [Fact]
     public void AttributedEnvDir_PrefersWhatTheSessionReported()
     {
-        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.slug"), "inflight");
+        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.configdir"), _env.Root);
 
         var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
 
         Assert.Equal(_env, session.AttributedEnvDir);
-    }
-
-    [Fact]
-    public void ForSlug_DoesNotFallBackToThePrimary()
-    {
-        // The whole point of the lookup: an unknown slug is unknown. Falling back would attribute a
-        // session to whichever environment happens to be first in the set.
-        Assert.Equal(_env, ClaudeConfigSet.ForSlug("inflight"));
-        Assert.Equal(_env, ClaudeConfigSet.ForSlug("InFlight"));   // slugs compare case-insensitively
-        Assert.Null(ClaudeConfigSet.ForSlug("removed-env"));
-        Assert.Null(ClaudeConfigSet.ForSlug(null));
-        Assert.Null(ClaudeConfigSet.ForSlug("  "));
     }
 
     [Fact]

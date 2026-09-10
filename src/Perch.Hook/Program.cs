@@ -71,7 +71,7 @@ try
         // may launch the tray.
         case "start":
             WriteMode(sessionsDir, f);
-            WriteEnvSlug(sessionsDir, f);
+            WriteConfigDir(sessionsDir, f);
             WarnIfPerchControlled(sessionsDir, f);
             HandleStart(f);
             break;
@@ -88,25 +88,26 @@ return 0;
 // ── event handlers ────────────────────────────────────────────────────────────────
 
 // Record the session's permission mode so the overlay can badge it.
-// Which claude-envs environment is running this session. The launchers export CLAUDE_ENVS_SLUG, and a
-// hook runs *inside* the session, so this is the only party that can read it without reaching into
-// another process's memory (Perch.Data.ClaudeSession.EnvSlug covers why the path cannot say).
+// Which config dir this session is running under. A hook runs *inside* the session, so it is the only
+// party that can know without reaching into another process's memory (Perch.Data.ClaudeSession
+// .ReportedConfigDir covers why the sidecar's own location cannot say).
+//
+// The config dir rather than CLAUDE_ENVS_SLUG, because it is known for *every* session: a bare
+// `claude` sets no slug but still has a config dir, and its organization is readable from the
+// .claude.json there. The slug remains derivable - it is the directory's own name.
 //
 // On `start` only - which covers a resume, since SessionStart fires again - so the hot `mode` path
-// stays one write. A bare `claude` sets no slug and gets no sidecar.
-static void WriteEnvSlug(string sessionsDir, Dictionary<string, string?> f)
+// stays one write.
+static void WriteConfigDir(string sessionsDir, Dictionary<string, string?> f)
 {
     string? sid = f["session_id"];
-    string? slug = Environment.GetEnvironmentVariable("CLAUDE_ENVS_SLUG");
-    if (string.IsNullOrEmpty(sid) || string.IsNullOrWhiteSpace(slug) || !Directory.Exists(sessionsDir))
-        return;
+    if (string.IsNullOrEmpty(sid) || !Directory.Exists(sessionsDir)) return;
 
-    // It becomes part of no path here, but it is read back as one downstream.
-    foreach (char c in slug)
-        if (!char.IsAsciiLetterOrDigit(c) && c != '-' && c != '_')
-            return;
-
-    try { File.WriteAllText(Path.Combine(sessionsDir, sid + ".slug"), slug.Trim()); } catch { }
+    try
+    {
+        File.WriteAllText(Path.Combine(sessionsDir, sid + ".configdir"), ResolveClaudeDir());
+    }
+    catch { }
 }
 
 static void WriteMode(string sessionsDir, Dictionary<string, string?> f)
@@ -231,7 +232,9 @@ static void HandleCleanup(string sessionsDir, Dictionary<string, string?> f)
     string? sid = f["session_id"];
     if (!string.IsNullOrEmpty(sid))
     {
-        foreach (string ext in new[] { ".mode", ".notify", ".history", ".slug", ".afk" /* legacy */ })
+        // .slug is the marker this replaced; kept here so the ones already written get cleaned up.
+        foreach (string ext in new[]
+                 { ".mode", ".notify", ".history", ".configdir", ".slug" /* legacy */, ".afk" /* legacy */ })
             TryDelete(Path.Combine(sessionsDir, sid + ext));
         // The ownership lock goes only when it's ours (the controlled session itself ending) or stale — a
         // normal claude that briefly opened a Perch-controlled id must not strip Perch's live ownership.
