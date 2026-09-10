@@ -1315,8 +1315,12 @@ internal static class HeadlessRenderer
         {
             var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
             w.FeedSampleForRender(cwd, prompt, events);
-            w.ShowFindForRender(query);
             w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            // Open find only after layout, so the search sees real effective-visibility (a collapsed thinking
+            // body reads as hidden → one collapsed hit, a visible paragraph → a selected occurrence).
+            w.ShowFindForRender(query);
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
             var frame = w.CaptureRenderedFrame();

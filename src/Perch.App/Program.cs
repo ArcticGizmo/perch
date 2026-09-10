@@ -100,8 +100,12 @@ internal static class Program
         // a genuine interactive launch. Tray-only launches never do this: the SessionStart hook's
         // `--autostarted`, a first run after install, and the non-interactive starters (the login item, the
         // Start-menu/desktop shortcut, a double-click, Velopack's update restart) all fail the terminal check
-        // and so just bring up the tray. `--tray` forces tray-only even from a terminal (e.g. `dotnet run`).
-        bool trayOnly = AutoStarted || IsFirstRun
+        // and so just bring up the tray. `--tray` forces tray-only even from a terminal.
+        //
+        // The dev profile is excluded: a dev instance is launched with `dotnet run` (a child of the console
+        // `dotnet`, so it trips the terminal check every time), and popping a session on every dev launch is
+        // just noise — a dev who wants a session passes an explicit arg (`-- <dir>` / `-- -c`), which still works.
+        bool trayOnly = AutoStarted || IsFirstRun || Perch.Data.AppProfile.IsDev
             || args.Any(a => string.Equals(a, "--tray", StringComparison.OrdinalIgnoreCase));
         if (sessionIntent is null && !isReplay && !trayOnly && LaunchedFromTerminal())
             sessionIntent = Perch.Data.Control.SessionOpenIntent.StartFresh(Environment.CurrentDirectory);

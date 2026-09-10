@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.2] - 2026-09-10
+
+- `/remote-control` (`/rc`) connects a Perch session to your phone or claude.ai, QR and all
+- `/usage` opens as its own panel — usage bars with reset countdowns, not a wall of chat
+- Search the conversation with Ctrl+F
+- Composer glyphs for pull requests, Jira tickets, notifications and remote control
+- A "…" menu on the composer to switch those on when they aren't showing
+- Typing `perch` in a terminal opens a session right there
+
+---
+
 ## [v0.4.1] - 2026-09-07
 
 - Session composer draws its own attach paperclip, not the one that was basically Clippy
