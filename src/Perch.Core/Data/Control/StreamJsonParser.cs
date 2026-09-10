@@ -158,6 +158,18 @@ internal static class StreamJsonParser
                     break;
             }
         }
+
+        // This one message's usage is the size of the prompt behind it — the true current context occupancy.
+        // (The turn's `result` usage sums every round-trip, so it can't be read as occupancy; see
+        // AssistantUsageEvent.) Emitted last so it lands after the message's own content.
+        var usage = root["message"]?["usage"];
+        if (usage is not null)
+        {
+            long ctx = TranscriptJson.AsLong(usage["input_tokens"])
+                     + TranscriptJson.AsLong(usage["cache_read_input_tokens"])
+                     + TranscriptJson.AsLong(usage["cache_creation_input_tokens"]);
+            if (ctx > 0) events.Add(new AssistantUsageEvent(ctx));
+        }
         return events;
     }
 

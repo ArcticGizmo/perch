@@ -72,6 +72,13 @@ internal sealed record StatusEvent(int? Percent, string? Message) : SessionEvent
 /// compaction emits none.</summary>
 internal sealed record CompactionCompletedEvent(long PreTokens, long PostTokens, string Trigger) : SessionEvent;
 
+/// <summary>The token usage of a <em>single</em> assistant message (<c>message.usage</c> on one model
+/// response). Its input buckets summed are the size of that one prompt — i.e. the point-in-time context
+/// occupancy — which the newest such event tracks. This is the honest occupancy signal, unlike
+/// <see cref="TurnResultEvent"/>, whose usage is the turn <em>aggregate</em> summed across every tool-use
+/// round-trip in the turn (so an agentic turn's result can read many times a single prompt's size).</summary>
+internal sealed record AssistantUsageEvent(long ContextTokens) : SessionEvent;
+
 /// <summary>A turn finished (the <c>result</c> record): outcome plus cost/usage for the whole session so far.
 /// The three input buckets are kept apart because they price very differently — fresh
 /// <paramref name="InputTokens"/> at 1×, <paramref name="CacheCreationTokens"/> at ~1.25×,

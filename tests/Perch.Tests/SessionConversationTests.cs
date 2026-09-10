@@ -61,10 +61,12 @@ public class SessionConversationTests
     public void SecondInitWithNewId_ClearsConversation()
     {
         var (conv, _) = Make();
-        // A live conversation under the first id: a turn with prose, plus a result seeding context/cost.
+        // A live conversation under the first id: a turn with prose, a per-message usage (the occupancy), plus
+        // a result seeding cost.
         conv.Apply(new SessionInitEvent("sid-1", "claude-opus-5", "default", 16));
         conv.AddUserPrompt("remember BANANA");
         conv.Apply(new AssistantTextEvent("OK"));
+        conv.Apply(new AssistantUsageEvent(5000));
         conv.Apply(new TurnResultEvent(false, "success", 0.12, InputTokens: 5000, OutputTokens: 20, DurationMs: 900));
         Assert.NotEmpty(conv.Items);
         Assert.True(conv.ContextTokens > 0);
@@ -96,11 +98,38 @@ public class SessionConversationTests
     }
 
     [Fact]
+    public void ContextTokens_TrackLatestMessage_NotTheTurnAggregate()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new SessionInitEvent("sid-1", "claude-opus-5", "default", 16));
+        conv.AddUserPrompt("do a big agentic task");
+
+        // An agentic turn with many tool-use round-trips, each re-reading the ~127k cached context. Every
+        // assistant message's usage reports that single prompt's size — the true current occupancy.
+        for (int i = 0; i < 9; i++)
+        {
+            conv.Apply(new ToolUseEvent($"t{i}", "Read", "Reading", "{}"));
+            conv.Apply(new AssistantUsageEvent(127_000));
+            conv.Apply(new ToolResultEvent($"t{i}", "…", false));
+        }
+
+        // The result's usage is the turn AGGREGATE — every round-trip's cache reads summed (~1.14M). Reading
+        // that as occupancy is the bug that made the pill show "1.2M · 59%"; occupancy must stay the latest
+        // message's size.
+        conv.Apply(new TurnResultEvent(false, "success", 0.4,
+            InputTokens: 20, OutputTokens: 3_000, DurationMs: 5000,
+            CacheReadTokens: 1_143_000, CacheCreationTokens: 5_000));
+
+        Assert.Equal(127_000, conv.ContextTokens);            // the latest message, not the ~1.14M aggregate
+        Assert.True(conv.TotalFreshInputTokens >= 5_000);     // cumulative totals still come from the result
+    }
+
+    [Fact]
     public void Compact_ShowsAProgressRowThenFinalises()
     {
         var (conv, _) = Make();
-        // Seed some context so the freed-tokens figure is meaningful.
-        conv.Apply(new TurnResultEvent(false, "success", 0.05, InputTokens: 60_000, OutputTokens: 10, DurationMs: 900));
+        // Seed some context (from a real per-message usage) so the freed-tokens figure is meaningful.
+        conv.Apply(new AssistantUsageEvent(60_000));
 
         conv.AddUserPrompt("/compact keep the failing test details");
         Assert.Equal("/compact keep the failing test details", Assert.IsType<UserMessageItem>(conv.Items[^2]).Text);
@@ -167,7 +196,7 @@ public class SessionConversationTests
     public void Compact_Interrupted_SettlesToCanceledNotSuccess()
     {
         var (conv, _) = Make();
-        conv.Apply(new TurnResultEvent(false, "success", 0.05, InputTokens: 60_000, OutputTokens: 10, DurationMs: 900));
+        conv.Apply(new AssistantUsageEvent(60_000));
         conv.AddUserPrompt("/compact");
         var progress = Assert.IsType<CompactionItem>(conv.Items[^1]);
 

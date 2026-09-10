@@ -41,6 +41,14 @@ public interface IWindowChrome
     /// the docked column too tall, drooping under the taskbar). Null when unavailable (off-platform stub).</summary>
     MonitorGeometry? GetMonitorGeometryAt(int x, int y);
 
+    /// <summary>Reads, live from the OS, the geometry of the monitor showing the current <em>foreground</em>
+    /// window — the window that has focus right now. When <c>perch</c> is run at a terminal the foreground
+    /// window is that terminal, so this is how the CLI process learns which monitor the launch came from (to
+    /// pass to the tray, which then opens the session window there rather than on the primary). Sampled in the
+    /// launching process, since by the time the tray shows the window the foreground may have moved. Null when
+    /// there is no foreground window or off-platform (stub).</summary>
+    MonitorGeometry? GetForegroundMonitorGeometry();
+
     /// <summary>Forces the window to the foreground and gives it keyboard focus, working around the OS
     /// foreground-lock that otherwise stops a background tray process from stealing focus (needed by the
     /// session switcher, which a global hotkey summons and which must accept typing immediately). Unlike

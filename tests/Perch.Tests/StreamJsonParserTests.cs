@@ -57,6 +57,25 @@ public class StreamJsonParserTests
     }
 
     [Fact]
+    public void AssistantMessage_EmitsUsageAsContextOccupancy()
+    {
+        // message.usage is one model response's prompt size — the true context occupancy. All three input
+        // buckets sum (2 + 120_000 + 8_000 = 128_002); output_tokens is not part of the prompt.
+        var line = """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":2,"cache_read_input_tokens":120000,"cache_creation_input_tokens":8000,"output_tokens":500}},"session_id":"s"}""";
+        var events = StreamJsonParser.Parse(line);
+        Assert.Equal("hi", Assert.IsType<AssistantTextEvent>(events[0]).Text);
+        var usage = Assert.IsType<AssistantUsageEvent>(events[^1]);   // emitted after the message's content
+        Assert.Equal(128_002, usage.ContextTokens);
+    }
+
+    [Fact]
+    public void AssistantMessage_WithoutUsage_EmitsNoUsageEvent()
+    {
+        var line = """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]},"session_id":"s"}""";
+        Assert.DoesNotContain(StreamJsonParser.Parse(line), e => e is AssistantUsageEvent);
+    }
+
+    [Fact]
     public void ToolResult_HandlesStringAndBlockContent()
     {
         var stringResult = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}}""";

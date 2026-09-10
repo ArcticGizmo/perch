@@ -92,6 +92,12 @@ public class ControlProtocolTests
         var pick = new SessionOpenIntent(@"C:\proj", PickResume: true);
         Assert.Equal(pick, SessionOpenIntent.Parse(pick.ToJson()));
 
+        // The launch-monitor hint (the terminal's monitor) survives the round trip, so the tray places the
+        // window where the CLI process sampled it.
+        var withMon = new SessionOpenIntent(@"C:\proj",
+            OriginMonitor: new Perch.Platform.MonitorGeometry(-1920, 0, 1920, 1080, -1920, 0, 1920, 1040, 1.5));
+        Assert.Equal(withMon, SessionOpenIntent.Parse(withMon.ToJson()));
+
         Assert.Null(SessionOpenIntent.Parse("nope"));
         Assert.Null(SessionOpenIntent.Parse("{\"resume\":\"x\"}"));   // no cwd → unusable
 

@@ -404,6 +404,11 @@ internal sealed class MarkdownView
             {
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                // Reserve a row for the horizontal bar instead of letting the Fluent auto-hide bar float over
+                // the content: on a one-line code block the overlaid bar sits right on top of the only line
+                // and swallows the text. AllowAutoHide=false lays the bar out beneath the code (and it only
+                // appears at all when the line actually overflows, per the Auto visibility above).
+                AllowAutoHide = false,
                 Content = text,
             },
         };

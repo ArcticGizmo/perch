@@ -9,6 +9,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.3] - 2026-09-10
+
+- Session context gauge no longer counts each turn's cache re-reads as fresh context (it was, eagerly)
+- Long one-line code blocks stop hiding behind their own scrollbar
+- A terminal-launched session opens on the monitor the terminal is on
+- `perch` hands the terminal back its prompt instead of holding it hostage until you quit
+
+---
+
 ## [v0.4.2] - 2026-09-10
 
 - `/remote-control` (`/rc`) connects a Perch session to your phone or claude.ai, QR and all

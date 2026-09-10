@@ -27,7 +27,8 @@ internal sealed record SessionOpenIntent(
     bool PickResume = false,
     bool Continue = false,
     string? Model = null,
-    string? PermissionMode = null)
+    string? PermissionMode = null,
+    Perch.Platform.MonitorGeometry? OriginMonitor = null)
 {
     /// <summary>Parses claude-shaped arguments. Returns null when nothing in <paramref name="args"/> asks for
     /// a session (no recognised flag and no existing-directory positional) — unknown flags such as
@@ -95,6 +96,13 @@ internal sealed record SessionOpenIntent(
         if (Continue) o["continue"] = true;
         if (Model is not null) o["model"] = Model;
         if (PermissionMode is not null) o["mode"] = PermissionMode;
+        if (OriginMonitor is { } m)
+            o["monitor"] = new JsonObject
+            {
+                ["bx"] = m.BoundsX, ["by"] = m.BoundsY, ["bw"] = m.BoundsWidth, ["bh"] = m.BoundsHeight,
+                ["wx"] = m.WorkX,   ["wy"] = m.WorkY,   ["ww"] = m.WorkWidth,   ["wh"] = m.WorkHeight,
+                ["scale"] = m.Scale,
+            };
         return o.ToJsonString();
     }
 
@@ -111,12 +119,30 @@ internal sealed record SessionOpenIntent(
                 o["pick"]?.GetValue<bool>() ?? false,
                 o["continue"]?.GetValue<bool>() ?? false,
                 TranscriptJson.AsString(o["model"]),
-                TranscriptJson.AsString(o["mode"]));
+                TranscriptJson.AsString(o["mode"]),
+                ParseMonitor(o["monitor"] as JsonObject));
         }
         catch
         {
             return null;
         }
+    }
+
+    // Reads the optional launch-monitor hint back. A missing or malformed object → null (no hint), so the
+    // tray falls back to its default placement rather than throwing.
+    private static Perch.Platform.MonitorGeometry? ParseMonitor(JsonObject? m)
+    {
+        if (m is null) return null;
+        try
+        {
+            int I(string k) => m[k]?.GetValue<int>() ?? 0;
+            double scale = m["scale"]?.GetValue<double>() ?? 1.0;
+            return new Perch.Platform.MonitorGeometry(
+                I("bx"), I("by"), I("bw"), I("bh"),
+                I("wx"), I("wy"), I("ww"), I("wh"),
+                scale);
+        }
+        catch { return null; }
     }
 
     // Session ids are UUIDs; the CLI tolerates anything identifier-ish, and so do we (the controller

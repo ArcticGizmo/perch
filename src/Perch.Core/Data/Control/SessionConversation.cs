@@ -317,6 +317,18 @@ internal sealed class SessionConversation
                 StateChanged?.Invoke();
                 break;
 
+            case AssistantUsageEvent usage:
+                // The newest single message's prompt size is the current context occupancy. Honour the
+                // compaction suppression flag: the summarisation message's usage is the (large) pre-compaction
+                // context, and a following compact_boundary sets the true post size — don't let a late
+                // summary message clobber it.
+                if (usage.ContextTokens > 0 && !_suppressNextResultContext)
+                {
+                    ContextTokens = usage.ContextTokens;
+                    StateChanged?.Invoke();
+                }
+                break;
+
             case TurnResultEvent turn:
             {
                 // Close every open assistant item of this turn — a permission prompt splits a turn into two
@@ -333,11 +345,16 @@ internal sealed class SessionConversation
                 }
                 LastTurn = turn;
                 if (turn.CostUsd > 0) TotalCostUsd = turn.CostUsd;
-                // Latest prompt = current occupancy — except the compact turn's own result, whose input is the
-                // summarisation (much larger than the compacted context); a preceding compact_boundary already
-                // set the true occupancy, so skip this one.
-                if (turn.ContextTokens > 0 && !_suppressNextResultContext) ContextTokens = turn.ContextTokens;
+                // Occupancy is normally NOT read from the result: its usage aggregates every round-trip in the
+                // turn, so an agentic turn's result reads as a multiple of the real prompt size. The per-message
+                // AssistantUsageEvent carries the honest occupancy instead. The sole exception is a compaction
+                // turn that emitted no compact_boundary — there the result is the only post-compaction size we
+                // get, so let it set occupancy (which also drives FreedTokens below). A boundary, when present,
+                // already set the true post size and raised the suppress flag, so this is skipped then.
+                if (_activeCompaction is { IsDone: false } && turn.ContextTokens > 0 && !_suppressNextResultContext)
+                    ContextTokens = turn.ContextTokens;
                 _suppressNextResultContext = false;
+                // The result still supplies the cumulative session totals (per-turn amounts, correct to sum).
                 TotalOutputTokens += turn.OutputTokens;
                 TotalFreshInputTokens += turn.FreshInputTokens;
                 if (QueuedPrompts > 0) QueuedPrompts--; else TurnActive = false;

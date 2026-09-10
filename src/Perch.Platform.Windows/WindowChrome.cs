@@ -41,6 +41,7 @@ public sealed class WindowChrome : IWindowChrome
     private const int DWMWCP_DONOTROUND = 1; // square corners
 
     [DllImport("user32.dll")] private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
     [DllImport("user32.dll")] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
     [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
     private const uint MONITOR_DEFAULTTONEAREST = 2;
@@ -145,21 +146,44 @@ public sealed class WindowChrome : IWindowChrome
         try
         {
             IntPtr mon = MonitorFromPoint(new POINT { X = x, Y = y }, MONITOR_DEFAULTTONEAREST);
-            if (mon == IntPtr.Zero) return null;
-            var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
-            if (!GetMonitorInfo(mon, ref mi)) return null;
-
-            double scale = 1.0;
-            try { if (GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, out uint dpiX, out _) == 0 && dpiX >= 48) scale = dpiX / 96.0; }
-            catch { /* pre-8.1 or shcore missing — 1.0 is a safe default */ }
-
-            var b = mi.rcMonitor; var wa = mi.rcWork;
-            return new MonitorGeometry(
-                b.left, b.top, b.right - b.left, b.bottom - b.top,
-                wa.left, wa.top, wa.right - wa.left, wa.bottom - wa.top,
-                scale);
+            return Geometry(mon);
         }
         catch { return null; }
+    }
+
+    /// <summary>Reads the monitor showing the foreground window (<c>GetForegroundWindow</c> +
+    /// <c>MonitorFromWindow</c> + <c>GetMonitorInfo</c>). At a terminal launch the foreground window is that
+    /// terminal, so this reports the monitor the launch came from. Best-effort; null when there is no
+    /// foreground window or the read fails.</summary>
+    public MonitorGeometry? GetForegroundMonitorGeometry()
+    {
+        try
+        {
+            IntPtr fg = GetForegroundWindow();
+            if (fg == IntPtr.Zero) return null;
+            IntPtr mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+            return Geometry(mon);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Converts a monitor handle to <see cref="MonitorGeometry"/> (bounds, work area, DPI scale).
+    /// Null on a zero handle or a failed <c>GetMonitorInfo</c>.</summary>
+    private static MonitorGeometry? Geometry(IntPtr mon)
+    {
+        if (mon == IntPtr.Zero) return null;
+        var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(mon, ref mi)) return null;
+
+        double scale = 1.0;
+        try { if (GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, out uint dpiX, out _) == 0 && dpiX >= 48) scale = dpiX / 96.0; }
+        catch { /* pre-8.1 or shcore missing — 1.0 is a safe default */ }
+
+        var b = mi.rcMonitor; var wa = mi.rcWork;
+        return new MonitorGeometry(
+            b.left, b.top, b.right - b.left, b.bottom - b.top,
+            wa.left, wa.top, wa.right - wa.left, wa.bottom - wa.top,
+            scale);
     }
 
     /// <summary>Forces the window to the foreground and hands it keyboard focus. Windows blocks a process

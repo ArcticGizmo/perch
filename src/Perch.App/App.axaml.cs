@@ -1594,7 +1594,7 @@ public partial class App : Application
 
     // Elevate / CLI --resume: a session already driving that id gets its view shown, else a new window
     // opens straight onto a resume of it.
-    private void OpenSessionResume(string sessionId, string cwd)
+    private void OpenSessionResume(string sessionId, string cwd, MonitorGeometry? origin = null)
     {
         if (_perchSessions.FirstOrDefault(s => s.SessionId == sessionId) is { } existing)
         {
@@ -1602,6 +1602,7 @@ public partial class App : Application
             return;
         }
         var w = NewSessionWindow();
+        PlaceOnLaunchMonitor(w, origin);
         w.Show();
         w.ResumeSession(sessionId, cwd);
         w.Activate();
@@ -1621,12 +1622,30 @@ public partial class App : Application
     }
 
     // CLI `perch [dir]`: a fresh session started directly in the folder.
-    private void OpenSessionNew(string cwd, string? model, string? mode)
+    private void OpenSessionNew(string cwd, string? model, string? mode, MonitorGeometry? origin = null)
     {
         var w = NewSessionWindow();
+        PlaceOnLaunchMonitor(w, origin);
         w.Show();
         w.StartNew(cwd, model, mode);
         w.Activate();
+    }
+
+    // Positions a not-yet-shown session window centred on the monitor the CLI launch came from (the terminal's
+    // monitor, sampled in the launching process and carried in the intent). No hint → leave the window's own
+    // CenterScreen default. The hint's bounds/work area are physical pixels in this machine's virtual-desktop
+    // space, so they're valid to position against directly; we size the window in physical pixels using the
+    // target monitor's scale so the centring is right even across a DPI boundary.
+    private static void PlaceOnLaunchMonitor(SessionWindow w, MonitorGeometry? origin)
+    {
+        if (origin is not { } m || m.WorkWidth <= 0 || m.WorkHeight <= 0) return;
+        double scale = m.Scale > 0 ? m.Scale : 1.0;
+        int physW = (int)Math.Round(w.Width * scale);
+        int physH = (int)Math.Round(w.Height * scale);
+        int x = m.WorkX + Math.Max(0, (m.WorkWidth - physW) / 2);
+        int y = m.WorkY + Math.Max(0, (m.WorkHeight - physH) / 2);
+        w.WindowStartupLocation = WindowStartupLocation.Manual;
+        w.Position = new PixelPoint(x, y);
     }
 
     // The window viewing `session`, brought forward (Activate follows it to its virtual desktop), or a new
@@ -1944,7 +1963,7 @@ public partial class App : Application
     {
         if (intent.ResumeId is { } id)
         {
-            OpenSessionResume(id, intent.Cwd);
+            OpenSessionResume(id, intent.Cwd, intent.OriginMonitor);
             return;
         }
         if (intent.PickResume)
@@ -1963,13 +1982,13 @@ public partial class App : Application
                     : null;
                 Dispatcher.UIThread.Post(() =>
                 {
-                    if (latest is not null) OpenSessionResume(latest.SessionId, latest.Cwd);
-                    else OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode);
+                    if (latest is not null) OpenSessionResume(latest.SessionId, latest.Cwd, intent.OriginMonitor);
+                    else OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode, intent.OriginMonitor);
                 });
             });
             return;
         }
-        OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode);
+        OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode, intent.OriginMonitor);
     }
 
     // The permission valet's verdict (session-control M2), called on the pipe server's worker thread

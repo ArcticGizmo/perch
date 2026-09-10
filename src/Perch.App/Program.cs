@@ -1,4 +1,5 @@
-﻿using Avalonia;
+﻿using System.Diagnostics;
+using Avalonia;
 using Avalonia.Headless;
 using Avalonia.Media.Imaging;
 using Perch.Avalonia.Rendering;
@@ -62,13 +63,20 @@ internal static class Program
 
         AutoStarted = args.Any(a => string.Equals(a, "--autostarted", StringComparison.OrdinalIgnoreCase));
 
+        // A detached-tray relaunch (see DetachTray): a `perch` typed at a terminal handed us the session
+        // intent through a small JSON file and started us in the background, so the terminal was freed at
+        // once. Read it back (and delete it) as our pending intent; we then run as an ordinary in-process
+        // tray — no terminal detection, and so no second relaunch.
+        var relaunchIntent = ReadRelaunchIntent(args);
+
         // `perch` as a claude-shaped CLI: `perch --resume [id]`, `perch -c`, `perch [dir]` open a Perch
         // session window. Parsed here (unknown flags are ignored, so a plain tray launch is untouched) and
         // acted on at the single-instance gate below: forwarded to the running tray, or kept for this one.
         // A bare `perch` with no session argument becomes "start a fresh session in the cwd" too, but only
         // for a genuine interactive terminal launch — synthesised after Velopack's Run() (so IsFirstRun is
         // known). See the block below.
-        var sessionIntent = isReplay ? null : Perch.Data.Control.SessionOpenIntent.FromArgs(args, Environment.CurrentDirectory);
+        var sessionIntent = relaunchIntent
+            ?? (isReplay ? null : Perch.Data.Control.SessionOpenIntent.FromArgs(args, Environment.CurrentDirectory));
 
         // Velopack install/update/uninstall lifecycle. The fast callbacks keep the per-user PATH entry
         // in sync so the plugin (and the user) can invoke `perch` from any terminal; the first-run hook
@@ -107,8 +115,17 @@ internal static class Program
         // just noise — a dev who wants a session passes an explicit arg (`-- <dir>` / `-- -c`), which still works.
         bool trayOnly = AutoStarted || IsFirstRun || Perch.Data.AppProfile.IsDev
             || args.Any(a => string.Equals(a, "--tray", StringComparison.OrdinalIgnoreCase));
-        if (sessionIntent is null && !isReplay && !trayOnly && LaunchedFromTerminal())
+        bool fromTerminal = !isReplay && LaunchedFromTerminal();
+        if (sessionIntent is null && !trayOnly && fromTerminal)
             sessionIntent = Perch.Data.Control.SessionOpenIntent.StartFresh(Environment.CurrentDirectory);
+
+        // Remember which monitor the launching terminal is on so the tray opens the session window there
+        // rather than on the primary. It has to be sampled *here*, in the CLI process, because the terminal
+        // is the foreground window at this instant — by the time the tray shows the window (a pipe hop later)
+        // the foreground may have moved. The hint rides along in the intent; a null (off-Windows, or no
+        // foreground) just leaves the tray's default placement. See docs/session-launch-monitor-plan.md.
+        if (sessionIntent is not null && fromTerminal)
+            sessionIntent = sessionIntent with { OriginMonitor = PlatformServices.WindowChrome.GetForegroundMonitorGeometry() };
 
         // A replay instance gets its own mutex so it runs alongside a live tray instead of no-op'ing
         // against it — you can watch a recording play while your real sessions keep running.
@@ -120,6 +137,16 @@ internal static class Program
             // control pipe (this process is just the CLI); anything else is the classic silent no-op.
             return sessionIntent is null ? 0 : ForwardSessionIntent(sessionIntent);
         }
+
+        // No tray is running yet. A genuine interactive terminal launch shouldn't tie the shell up for the
+        // tray's whole lifetime (like `code .` returning at once): relaunch the tray as a detached background
+        // process, hand it the intent, and give the terminal its prompt back. Skipped for a relaunch we
+        // started ourselves (it *is* the background tray), for dev runs (`dotnet run` should stay in the
+        // foreground for logs), and for non-terminal launches — the login item, a double-click, the hook, an
+        // update restart — which have no terminal to free and must run the tray in-process as before.
+        if (fromTerminal && relaunchIntent is null && !Perch.Data.AppProfile.IsDev)
+            return DetachTray(sessionIntent);
+
         PendingSessionIntent = sessionIntent;
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
@@ -174,6 +201,80 @@ internal static class Program
             Console.Error.WriteLine($"Perch is running but couldn't be reached: {ex.Message}");
             return 1;
         }
+    }
+
+    // Starts the tray as a detached background process and returns to the shell at once — the `code .` shape,
+    // so a terminal launch doesn't stay bound to the tray for its whole lifetime (which POSIX shells like Git
+    // Bash wait on regardless of the GUI subsystem). The session intent is handed over through a short-lived
+    // JSON file (so every field — cwd, resume/continue, model, and the launch-monitor hint — survives without
+    // reconstructing a command line), read back and deleted by the relaunched process. Falls back to running
+    // in-process if the relaunch can't be started.
+    private static int DetachTray(Perch.Data.Control.SessionOpenIntent? intent)
+    {
+        AttachParentConsole(); // so a relaunch failure is visible; nothing is printed on success
+        var exe = Environment.ProcessPath;
+        if (exe is null)   // no image path to relaunch — run in the foreground rather than fail the launch
+        {
+            PendingSessionIntent = intent;
+            BuildAvaloniaApp().StartWithClassicDesktopLifetime([]);
+            return 0;
+        }
+
+        var psi = new ProcessStartInfo { FileName = exe, UseShellExecute = true };
+        try
+        {
+            if (intent is not null)
+            {
+                var file = Path.Combine(Path.GetTempPath(), $"perch-intent-{Guid.NewGuid():N}.json");
+                File.WriteAllText(file, intent.ToJson());
+                psi.ArgumentList.Add("--open-intent-file");
+                psi.ArgumentList.Add(file);
+                if (Directory.Exists(intent.Cwd)) psi.WorkingDirectory = intent.Cwd;
+            }
+            else
+            {
+                psi.ArgumentList.Add("--tray");   // no session to open, just bring the tray up
+            }
+
+            // Give up our single-instance claim *before* the child boots, so the destroyed named mutex lets
+            // the detached tray create it fresh (a still-open handle would make the child think a tray already
+            // runs and forward to a process that's exiting).
+            _instanceMutex?.Dispose();
+            _instanceMutex = null;
+
+            Process.Start(psi);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            // Couldn't detach — recover by running the tray in the foreground (we already released the mutex,
+            // and no other instance exists, so we're still the single tray).
+            Console.Error.WriteLine($"Perch couldn't start in the background, running in the foreground: {ex.Message}");
+            PendingSessionIntent = intent;
+            BuildAvaloniaApp().StartWithClassicDesktopLifetime([]);
+            return 0;
+        }
+    }
+
+    // Reads (and deletes) the session-intent handoff file named by `--open-intent-file <path>`, if present —
+    // the DetachTray relaunch's channel. Null when the flag is absent or the file can't be read/parsed.
+    private static Perch.Data.Control.SessionOpenIntent? ReadRelaunchIntent(string[] args)
+    {
+        var path = ArgValue(args, "--open-intent-file");
+        if (path is null) return null;
+        Perch.Data.Control.SessionOpenIntent? intent = null;
+        try { intent = Perch.Data.Control.SessionOpenIntent.Parse(File.ReadAllText(path)); } catch { }
+        try { File.Delete(path); } catch { }
+        return intent;
+    }
+
+    // The value following a `--flag <value>` pair, or null when the flag is absent or has no following value.
+    private static string? ArgValue(string[] args, string name)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
+                return args[i + 1];
+        return null;
     }
 
     // Attaches this WinExe to the launching terminal's console (Windows only) and reopens the standard
