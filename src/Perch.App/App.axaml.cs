@@ -724,7 +724,7 @@ public partial class App : Application
             "Terminate", "Cancel");
         if (!confirmed) return;
 
-        var result = SessionTerminator.Terminate(session.Pid);
+        var result = SessionTerminator.Terminate(session.Pid, session.SessionsDir);
 
         // The kill leaves the {pid}.json behind, so no watcher event fires — rescan to drop the row (the
         // monitor discards a session file whose pid is dead).
@@ -765,7 +765,7 @@ public partial class App : Application
 
         // Stop the external process so its --resume can be picked up, then rescan to drop the dead row —
         // the window's refuse-if-live guard would otherwise (rightly) see it as still running.
-        SessionTerminator.Terminate(session.Pid);
+        SessionTerminator.Terminate(session.Pid, session.SessionsDir);
         _monitorHost?.Rescan();
         OpenSessionResume(session.SessionId, session.Cwd);
     }

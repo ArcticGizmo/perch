@@ -45,9 +45,14 @@ public static class SessionTerminator
     /// <c>claude.exe</c>, so a name check alone would not save it. When identity can't be established the
     /// kill is refused (<see cref="TerminateResult.NotTheSession"/>) rather than risked.</para>
     ///
+    /// <para><paramref name="sessionsDir"/> must be the owning config dir's
+    /// (<see cref="ClaudeSession.SessionsDir"/>): the identity check reads that session's own
+    /// <c>{pid}.json</c>, and looking in the wrong dir finds no file, so the kill is refused as
+    /// <see cref="TerminateResult.NotTheSession"/>. Defaults to the primary.</para>
+    ///
     /// Never throws.
     /// </summary>
-    public static TerminateResult Terminate(string pid)
+    public static TerminateResult Terminate(string pid, string? sessionsDir = null)
     {
         if (!int.TryParse(pid, out int id) || id <= 0)
             return TerminateResult.NotTheSession;
@@ -65,7 +70,7 @@ public static class SessionTerminator
 
         using (process)
         {
-            if (!IsRecordedSession(process, id))
+            if (!IsRecordedSession(process, id, sessionsDir))
                 return TerminateResult.NotTheSession;
 
             try
@@ -88,9 +93,9 @@ public static class SessionTerminator
     // True when `process` is the same process the session file for `id` describes, judged by start time.
     // A missing/unreadable session file or an unreadable start time means we can't establish identity, so
     // this returns false and the caller refuses the kill.
-    private static bool IsRecordedSession(Process process, int id)
+    private static bool IsRecordedSession(Process process, int id, string? sessionsDir)
     {
-        if (ReadStartedAt(id) is not { } startedAt)
+        if (ReadStartedAt(id, sessionsDir) is not { } startedAt)
             return false;
 
         try
@@ -107,11 +112,11 @@ public static class SessionTerminator
     // The startedAt from ~/.claude/sessions/{pid}.json as a local time, or null when the file is absent,
     // unparseable, or carries no usable startedAt. Read with FileShare.ReadWrite like every other reader —
     // Claude Code writes these live.
-    private static DateTime? ReadStartedAt(int id)
+    private static DateTime? ReadStartedAt(int id, string? sessionsDir)
     {
         try
         {
-            var path = Path.Combine(ClaudePaths.SessionsDir, $"{id}.json");
+            var path = Path.Combine(sessionsDir ?? ClaudePaths.SessionsDir, $"{id}.json");
             if (!File.Exists(path))
                 return null;
 

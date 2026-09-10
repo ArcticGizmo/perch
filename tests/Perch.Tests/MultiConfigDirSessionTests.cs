@@ -1,0 +1,245 @@
+using Perch.Data;
+using Perch.Data.Control;
+using Perch.Platform;
+using Xunit;
+
+namespace Perch.Tests;
+
+/// <summary>
+/// Session discovery and the control paths across <em>several</em> config directories — the
+/// regression being guarded: a session's <c>{pid}.json</c> lands under whichever config dir launched
+/// it, and Perch listed only the one it resolved at start-up, taking the mode sidecar, the notify
+/// marker, the lock and the terminate identity check with it. The write cases matter most, since a
+/// sidecar written to the wrong config dir <em>succeeds</em> and does nothing.
+/// </summary>
+public class MultiConfigDirSessionTests : IDisposable
+{
+    // Pids no real process owns; an injected probe keeps them alive for the scan.
+    private const string HubPid = "2147483645";
+    private const string EnvPid = "2147483644";
+
+    private readonly string _root;
+    private readonly ClaudeConfigDir _hub;
+    private readonly ClaudeConfigDir _env;
+    private readonly string _hubSessionId = "hub-" + Guid.NewGuid().ToString("N");
+    private readonly string _envSessionId = "env-" + Guid.NewGuid().ToString("N");
+
+    private sealed class AlwaysAlive : IProcessProbe
+    {
+        public bool IsAlive(int pid) => true;
+    }
+
+    public MultiConfigDirSessionTests()
+    {
+        _root = Path.Combine(Path.GetTempPath(), "perch-multi-" + Guid.NewGuid().ToString("N"));
+        var hubRoot = Path.Combine(_root, ".claude");
+        var envRoot = Path.Combine(_root, ".claude-envs", "envs", "inflight");
+        Directory.CreateDirectory(Path.Combine(hubRoot, "sessions"));
+        Directory.CreateDirectory(Path.Combine(envRoot, "sessions"));
+
+        _hub = new ClaudeConfigDir(hubRoot, hubRoot, isHub: true);
+        _env = new ClaudeConfigDir(envRoot, envRoot, "inflight", "InFlight",
+            declaredOrg: "Redux InFlight");
+
+        WriteSession(_hub, HubPid, _hubSessionId, @"C:\fixtures\proj");
+        WriteSession(_env, EnvPid, _envSessionId, @"C:\fixtures\envproj");
+
+        ClaudeConfigSet.SetForTesting([_hub, _env]);
+    }
+
+    public void Dispose()
+    {
+        ClaudeConfigSet.SetForTesting(null);
+        try { Directory.Delete(_root, recursive: true); } catch { /* best-effort */ }
+    }
+
+    private static void WriteSession(
+        ClaudeConfigDir dir, string pid, string sessionId, string cwd, long? startedAt = null)
+    {
+        Directory.CreateDirectory(dir.SessionsDir);
+        var updatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var started = startedAt ?? updatedAt - 1000;
+        File.WriteAllText(Path.Combine(dir.SessionsDir, $"{pid}.json"), $$"""
+            { "pid": {{pid}}, "sessionId": "{{sessionId}}", "status": "idle",
+              "cwd": "{{cwd.Replace("\\", "\\\\")}}", "startedAt": {{started}}, "updatedAt": {{updatedAt}} }
+            """);
+    }
+
+    private static IReadOnlyList<ClaudeSession> Scan()
+    {
+        using var monitor = new SessionMonitor(new AlwaysAlive());
+        return monitor.Scan();
+    }
+
+    [Fact]
+    public void Scan_ListsSessionsFromEveryConfigDir()
+    {
+        var sessions = Scan();
+
+        Assert.Contains(sessions, s => s.SessionId == _hubSessionId);
+        Assert.Contains(sessions, s => s.SessionId == _envSessionId);
+    }
+
+    [Fact]
+    public void Scan_TagsEachSessionWithTheConfigDirItWasFoundIn()
+    {
+        var sessions = Scan();
+
+        var hubSession = Assert.Single(sessions, s => s.SessionId == _hubSessionId);
+        var envSession = Assert.Single(sessions, s => s.SessionId == _envSessionId);
+
+        Assert.Equal(_hub, hubSession.ConfigDir);
+        Assert.Equal(_env, envSession.ConfigDir);
+        Assert.Equal("InFlight", envSession.ConfigLabel);
+        Assert.Equal("Redux InFlight", envSession.ConfigOrg);
+        Assert.Equal(_env.SessionsDir, envSession.SessionsDir);
+    }
+
+    [Fact]
+    public void Scan_DoesNotDuplicateSessionsWhenConfigDirsResolveToTheSamePlace()
+    {
+        // Two records for one physical directory, as a junctioned config dir gives.
+        var alias = new ClaudeConfigDir(
+            Path.Combine(_root, ".claude-envs", "envs", "alias"), _env.RealRoot, "alias");
+        ClaudeConfigSet.SetForTesting([_hub, _env, alias]);
+
+        Assert.Single(Scan(), s => s.SessionId == _envSessionId);
+    }
+
+    [Fact]
+    public void Scan_SkipsAConfigDirWithNoSessionsDirectory()
+    {
+        // An environment never signed into has no sessions/ yet. Must not throw or hide the others.
+        var bare = Path.Combine(_root, ".claude-envs", "envs", "pdg");
+        Directory.CreateDirectory(bare);
+        ClaudeConfigSet.SetForTesting([_hub, _env, new ClaudeConfigDir(bare, bare, "pdg")]);
+
+        var sessions = Scan();
+        Assert.Contains(sessions, s => s.SessionId == _hubSessionId);
+        Assert.Contains(sessions, s => s.SessionId == _envSessionId);
+    }
+
+    [Fact]
+    public void Scan_ReadsTheModeSidecarFromTheOwningConfigDir()
+    {
+        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.mode"), "acceptEdits");
+        // A decoy under the hub, so this proves the read is scoped rather than finding *a* file.
+        File.WriteAllText(Path.Combine(_hub.SessionsDir, $"{_envSessionId}.mode"), "plan");
+
+        var envSession = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
+        Assert.Equal(PermissionMode.AcceptEdits, envSession.Mode);
+    }
+
+    [Fact]
+    public void Scan_ReadsTheNotifyMarkerFromTheOwningConfigDir()
+    {
+        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.notify"), _envSessionId);
+
+        var sessions = Scan();
+        Assert.True(Assert.Single(sessions, s => s.SessionId == _envSessionId).ExternalNotify);
+        Assert.False(Assert.Single(sessions, s => s.SessionId == _hubSessionId).ExternalNotify);
+    }
+
+    [Fact]
+    public void ToggleExternalNotify_WritesIntoTheOwningConfigDir()
+    {
+        using var monitor = new SessionMonitor(new AlwaysAlive());
+        monitor.Scan();   // attribution comes from the scan
+
+        Assert.True(monitor.ToggleExternalNotify(_envSessionId));
+
+        var expected = Path.Combine(_env.SessionsDir, $"{_envSessionId}.notify");
+        Assert.True(File.Exists(expected));
+        Assert.False(File.Exists(Path.Combine(_hub.SessionsDir, $"{_envSessionId}.notify")));
+
+        Assert.False(monitor.ToggleExternalNotify(_envSessionId));
+        Assert.False(File.Exists(expected));
+    }
+
+    [Fact]
+    public void SessionLock_IsWrittenAndReadInTheOwningConfigDir()
+    {
+        Assert.True(SessionLock.Acquire(_envSessionId, @"C:\fixtures\envproj", _env.SessionsDir));
+
+        Assert.True(File.Exists(Path.Combine(_env.SessionsDir, _envSessionId + SessionLock.Extension)));
+        Assert.False(File.Exists(Path.Combine(_hub.SessionsDir, _envSessionId + SessionLock.Extension)));
+
+        Assert.NotNull(SessionLock.Read(_envSessionId, _env.SessionsDir));
+        // The wrong dir finds nothing - why the monitor passes the session's own when deciding
+        // whether it is Perch-controlled.
+        Assert.Null(SessionLock.Read(_envSessionId, _hub.SessionsDir));
+
+        SessionLock.Release(_envSessionId, _env.SessionsDir);
+        Assert.False(File.Exists(Path.Combine(_env.SessionsDir, _envSessionId + SessionLock.Extension)));
+    }
+
+    [Fact]
+    public void SweepStale_ClearsDeadLocksFromEveryConfigDir()
+    {
+        // A lock owned by a pid that cannot be alive, in each config dir.
+        foreach (var dir in new[] { _hub, _env })
+            File.WriteAllText(Path.Combine(dir.SessionsDir, "stale-" + dir.Label + SessionLock.Extension),
+                """{ "sessionId": "stale", "pid": "2147483643", "cwd": "", "profile": "", "since": "" }""");
+
+        SessionLock.SweepStale();
+
+        foreach (var dir in new[] { _hub, _env })
+            Assert.Empty(Directory.GetFiles(dir.SessionsDir, "*" + SessionLock.Extension));
+    }
+
+    [Fact]
+    public void Terminate_LooksForTheIdentityFileInTheGivenConfigDir()
+    {
+        // Needs a genuinely live process: Terminate returns AlreadyGone for an unknown pid before it
+        // ever reaches the identity check, so a fake pid cannot exercise this.
+        using var child = StartSleeper();
+        try
+        {
+            var pid = child.Id.ToString();
+            WriteSession(_env, pid, "term-" + Guid.NewGuid().ToString("N"), @"C:\fixtures\envproj",
+                startedAt: new DateTimeOffset(child.StartTime).ToUnixTimeMilliseconds());
+
+            // Wrong config dir: no identity file, so the kill is refused rather than risked.
+            Assert.Equal(TerminateResult.NotTheSession,
+                SessionTerminator.Terminate(pid, _hub.SessionsDir));
+            Assert.False(child.HasExited);
+
+            // Owning config dir: identity checks out and it is killed.
+            Assert.Equal(TerminateResult.Terminated,
+                SessionTerminator.Terminate(pid, _env.SessionsDir));
+            Assert.True(child.WaitForExit(10_000));
+        }
+        finally
+        {
+            try { if (!child.HasExited) child.Kill(entireProcessTree: true); } catch { }
+        }
+    }
+
+    private static System.Diagnostics.Process StartSleeper()
+    {
+        var psi = OperatingSystem.IsWindows()
+            ? new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c timeout /t 30 /nobreak")
+            : new System.Diagnostics.ProcessStartInfo("/bin/sleep", "30");
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        psi.RedirectStandardOutput = true;
+        var process = System.Diagnostics.Process.Start(psi);
+        Assert.NotNull(process);
+        return process!;
+    }
+
+    [Fact]
+    public void HistoryTrigger_IsConsumedFromEveryConfigDir()
+    {
+        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.history"), "");
+
+        using var monitor = new SessionMonitor(new AlwaysAlive());
+        var opened = new List<string>();
+        monitor.OpenHistoryRequested += id => opened.Add(id);
+        monitor.Scan();
+
+        Assert.Contains(_envSessionId, opened);
+        // One-shot: deleted, so it cannot re-fire.
+        Assert.False(File.Exists(Path.Combine(_env.SessionsDir, $"{_envSessionId}.history")));
+    }
+}

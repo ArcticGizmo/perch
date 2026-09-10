@@ -29,38 +29,48 @@ internal static class TranscriptLocator
         if (string.IsNullOrEmpty(sessionId))
             return null;
 
-        if (!string.IsNullOrEmpty(cwd))
+        foreach (var projects in ClaudeConfigSet.DistinctProjectsDirs())
         {
-            var direct = Path.Combine(ClaudePaths.ProjectsDir, EncodeProjectDir(cwd), sessionId + ".jsonl");
-            if (File.Exists(direct))
-                return direct;
-        }
-
-        try
-        {
-            foreach (var dir in Directory.EnumerateDirectories(ClaudePaths.ProjectsDir))
+            if (!string.IsNullOrEmpty(cwd))
             {
-                var candidate = Path.Combine(dir, sessionId + ".jsonl");
-                if (File.Exists(candidate))
-                    return candidate;
+                var direct = Path.Combine(projects, EncodeProjectDir(cwd), sessionId + ".jsonl");
+                if (File.Exists(direct))
+                    return direct;
             }
-        }
-        catch
-        {
-            // Projects dir missing or unreadable — nothing to resolve.
+
+            try
+            {
+                foreach (var dir in Directory.EnumerateDirectories(projects))
+                {
+                    var candidate = Path.Combine(dir, sessionId + ".jsonl");
+                    if (File.Exists(candidate))
+                        return candidate;
+                }
+            }
+            catch { /* missing or unreadable — try the next */ }
         }
 
         return null;
     }
 
-    /// <summary>Every project directory under <c>~/.claude/projects</c>; empty when none exist or the
-    /// directory can't be read.</summary>
+    /// <summary>Every project directory across the config dirs' <c>projects</c> trees, collapsed by
+    /// resolved path first — config dirs sharing a junctioned <c>projects</c> would otherwise yield
+    /// every transcript once per config dir.</summary>
     public static IEnumerable<string> EnumerateProjectDirectories()
     {
-        if (!Directory.Exists(ClaudePaths.ProjectsDir))
-            return [];
-        try { return Directory.EnumerateDirectories(ClaudePaths.ProjectsDir); }
-        catch { return []; }
+        foreach (var projects in ClaudeConfigSet.DistinctProjectsDirs())
+        {
+            IEnumerable<string> dirs;
+            try
+            {
+                if (!Directory.Exists(projects))
+                    continue;
+                dirs = Directory.EnumerateDirectories(projects);
+            }
+            catch { continue; }
+            foreach (var dir in dirs)
+                yield return dir;
+        }
     }
 
     /// <summary>Every session transcript (<c>*.jsonl</c>) across all project directories. Best-effort:

@@ -190,8 +190,8 @@ internal static class RecordingExporter
         TryCopySidecar($"{sid}.mode", $"{baseEntry}/{ReplayFormat.SidecarsDir}/{sid}.mode");
         TryCopySidecar($"{sid}.notify", $"{baseEntry}/{ReplayFormat.SidecarsDir}/{sid}.notify");
 
-        var notePath = Path.Combine(ClaudePaths.SessionsDir, $"{sid}.note");
-        if (File.Exists(notePath))
+        var notePath = FindSidecar(sid, ".note");
+        if (notePath != null)
         {
             try
             {
@@ -210,8 +210,8 @@ internal static class RecordingExporter
 
         void TryCopySidecar(string fileName, string entry)
         {
-            var path = Path.Combine(ClaudePaths.SessionsDir, fileName);
-            try { if (File.Exists(path)) WriteEntry(archive, entry, File.ReadAllText(path)); }
+            var path = FindSidecar(sid, Path.GetExtension(fileName));
+            try { if (path != null) WriteEntry(archive, entry, File.ReadAllText(path)); }
             catch { }
         }
     }
@@ -225,25 +225,44 @@ internal static class RecordingExporter
             writer.WriteLine(redact ? TranscriptRedactor.RedactLine(line, placeholderCwd) : line);
     }
 
-    // Finds the on-disk sessions/{pid}.json whose sessionId matches, or null. Best-effort.
+    // Searched across every config dir: exporting is driven from history, so the session is often
+    // gone and nothing says which config dir owned it.
+    private static string? FindSidecar(string sessionId, string extension)
+    {
+        foreach (var dir in ClaudeConfigSet.All)
+        {
+            try
+            {
+                var path = Path.Combine(dir.SessionsDir, sessionId + extension);
+                if (File.Exists(path)) return path;
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    // The sessions/{pid}.json whose sessionId matches, across every config dir. Best-effort.
     private static string? FindSessionSnapshot(string sessionId)
     {
-        try
+        foreach (var dir in ClaudeConfigSet.All)
         {
-            if (!Directory.Exists(ClaudePaths.SessionsDir))
-                return null;
-            foreach (var file in Directory.EnumerateFiles(ClaudePaths.SessionsDir, "*.json"))
+            try
             {
-                try
+                if (!Directory.Exists(dir.SessionsDir))
+                    continue;
+                foreach (var file in Directory.EnumerateFiles(dir.SessionsDir, "*.json"))
                 {
-                    var node = JsonNode.Parse(File.ReadAllText(file));
-                    if (node?["sessionId"]?.GetValue<string>() == sessionId)
-                        return File.ReadAllText(file);
+                    try
+                    {
+                        var node = JsonNode.Parse(File.ReadAllText(file));
+                        if (node?["sessionId"]?.GetValue<string>() == sessionId)
+                            return File.ReadAllText(file);
+                    }
+                    catch { }
                 }
-                catch { }
             }
+            catch { }
         }
-        catch { }
         return null;
     }
 

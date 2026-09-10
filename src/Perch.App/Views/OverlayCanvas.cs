@@ -57,6 +57,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double RcIconWidth      = 14;
     private const double MailIconWidth    = 16;
     private const double ModeBadgeWidth   = 16;
+    // An org name can be long and the row's width is contended, so the chip truncates. Below the
+    // minimum it is dropped rather than shown as an ellipsis.
+    private const double EnvChipMaxWidth  = 96;
+    private const double MinEnvChipWidth  = 26;
     private const double WarnIconWidth    = 14;
     private const double ThermoIconWidth  = 12;
     private const double ArtifactIconWidth = 16;
@@ -763,7 +767,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private float _ctxYellow = 0.60f, _ctxOrange = 0.75f, _ctxRed = 0.90f;
 
     // Rate-limit usage strip (5-hour + weekly bars), shown between the header and the rows when expanded.
-    private UsageInfo _usage = UsageInfo.Empty;
+    // One reading per distinct account+organization (see AccountUsage); a single config dir yields
+    // one entry and the strip renders as it always did.
+    private IReadOnlyList<AccountUsage> _accounts = AccountUsage.None;
+
+    private UsageInfo _usage => _accounts.Count > 0 ? _accounts[0].Info : UsageInfo.Empty;
     private bool _usageEnabled = true;
     private bool _showExpectedRate = true;
     private bool _showMonthlySpend;
@@ -771,21 +779,28 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // The monthly extra-usage spend bar shows only when the user opted in AND the account has extra usage
     // switched on (the endpoint's is_enabled). It's independent of the rate-limit bars, so the whole strip
     // is visible when either the rate bars or the spend bar has something to draw.
-    private bool ShowSpendBar => _showMonthlySpend && _usage.ExtraUsage is { Enabled: true };
-    private bool UsageStripVisible => _usageEnabled || ShowSpendBar;
+    private bool ShowSpendBarFor(UsageInfo usage) => _showMonthlySpend && usage.ExtraUsage is { Enabled: true };
+    private bool ShowSpendBar => ShowSpendBarFor(_usage);
+    private bool UsageStripVisible => _usageEnabled || _accounts.Any(a => ShowSpendBarFor(a.Info));
 
     /// <summary>Feeds the latest account-wide rate-limit usage (on the UI thread) and repaints the strip.
     /// Internal because <see cref="UsageInfo"/> is a Core-internal type shared via InternalsVisibleTo.</summary>
-    internal void UpdateUsage(UsageInfo usage)
+    internal void UpdateUsage(UsageInfo usage) => UpdateUsage([AccountUsage.Single(usage)]);
+
+    /// <summary>Feeds the latest rate-limit readings (on the UI thread) and repaints the strip.
+    /// Internal because <see cref="AccountUsage"/> is Core-internal, shared via InternalsVisibleTo.</summary>
+    internal void UpdateUsage(IReadOnlyList<AccountUsage> accounts)
     {
         // A scoped window appearing or disappearing between polls changes the bar count, and so the
         // panel height — that needs a relayout, not just a repaint, or the strip paints past the panel.
         // The bar count is now partly data-driven: a poll can switch the account's extra-usage on or off,
         // making the spend bar (and possibly the whole strip) appear or vanish. So relayout whenever the
         // count changes — even to zero — and otherwise repaint only when the strip is actually showing.
+        // The number of labelled blocks changes the height too, not just the bar count.
         int before = UsageBarCount;
-        _usage = usage;
-        if (UsageBarCount != before) RemeasurePanel();
+        int labelsBefore = UsageLabelRowCount;
+        _accounts = accounts is { Count: > 0 } ? accounts : AccountUsage.None;
+        if (UsageBarCount != before || UsageLabelRowCount != labelsBefore) RemeasurePanel();
         else if (UsageStripVisible) InvalidateVisual();
     }
 
@@ -1360,6 +1375,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // tooltip can name the editor ("Visual Studio Code", "PyCharm", …). Only IDE-hosted rows get an entry.
     private readonly Dictionary<int, Rect> _originRects = new();
     private readonly Dictionary<int, string> _originLabels = new();
+    // The per-row config-dir chip and the fuller label its hover tooltip shows.
+    private readonly Dictionary<int, Rect> _envRects = new();
+    private readonly Dictionary<int, string> _envLabels = new();
+    // Off unless there is more than one config dir, so a single-dir machine looks unchanged.
+    private bool _showConfigLabels;
     private readonly Dictionary<int, Rect> _prRects = new();
     private readonly Dictionary<int, Rect> _jiraRects = new();
     // The expand/collapse chevron on a sub-agent row that has children — captured at paint time so a
@@ -1619,7 +1639,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, Origin, NoteButton, SocialStatus, ReactionSummary, Game }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, Origin, NoteButton, SocialStatus, ReactionSummary, Game, ConfigEnv }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1679,6 +1699,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         else _autonomousExpanded = false;
 
         _rows = rows;
+
+        // Either the machine has several config dirs, or the listed sessions span more than one. A
+        // session with no config dir (a sample) never gets a chip either way.
+        _showConfigLabels = ClaudeConfigSet.IsMulti
+            || sessions.Select(s => s.ConfigLabel).Where(l => l != null).Distinct().Count() > 1;
+
         // Deliberately *not* collapsing when the session list empties. The panel keeps its strips at zero
         // sessions (see Draw), so an empty roster is still worth having open — and clearing _expanded would
         // throw away the user's expand state every time the last session ended.
@@ -1844,6 +1870,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _noteRects.Clear();
                 _originRects.Clear();
                 _originLabels.Clear();
+                _envRects.Clear();
+                _envLabels.Clear();
                 _prRects.Clear();
                 _jiraRects.Clear();
                 _subChevronRects.Clear();
@@ -2106,25 +2134,66 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // When the rate bars are on: Session + Weekly are always drawn and scoped windows only when the endpoint
     // returns them. The monthly spend bar adds one more when enabled. Either can be off, so the strip's
     // height rides on both the reading and the two toggles. UpdateUsage relayouts when this changes.
-    private int UsageBarCount => (_usageEnabled ? 2 + _usage.Scoped.Count : 0) + (ShowSpendBar ? 1 : 0);
-    private double UsageStripHeight => UsageBarCount * BarRowHeight + UsageStripPad;
+    private int UsageBarCount
+    {
+        get
+        {
+            int bars = 0;
+            foreach (var account in _accounts)
+                bars += (_usageEnabled ? 2 + account.Info.Scoped.Count : 0)
+                      + (ShowSpendBarFor(account.Info) ? 1 : 0);
+            return bars;
+        }
+    }
+
+    // Only when there is more than one reading to tell apart, so the single-account strip is unchanged.
+    private int UsageLabelRowCount =>
+        _accounts.Count > 1 ? _accounts.Count(a => a.Label.Length > 0) : 0;
+
+    // From the measured line height, not a constant: a shorter box clips the glyph bottoms.
+    private double UsageLabelRowHeight =>
+        Math.Ceiling(OverlayDraw.Text("Ag", FeedCaptionSize, MutedBrush).Height) + 4;
+
+    private double UsageStripHeight =>
+        UsageBarCount * BarRowHeight + UsageLabelRowCount * UsageLabelRowHeight + UsageStripPad;
 
     private void DrawUsageBars(DrawingContext ctx, double width)
     {
-        bool stale = _usage.IsStale(DateTime.Now);
         double rowTop = UsageStripTop + 2;
+        bool labelled = _accounts.Count > 1;
+
+        foreach (var account in _accounts)
+        {
+            // Captioned with the organization, the only thing distinguishing the readings.
+            if (labelled && account.Label.Length > 0)
+            {
+                double labelH = UsageLabelRowHeight;
+                var caption = OverlayDraw.Text(
+                    OverlayDraw.Truncate(account.Label, FeedCaptionSize, width - HorizPad * 2),
+                    FeedCaptionSize, MutedBrush, FontWeight.SemiBold);
+                OverlayDraw.TextLeftMid(ctx, caption, HorizPad, rowTop + labelH / 2);
+                rowTop += labelH;
+            }
+            rowTop = DrawUsageBlock(ctx, width, rowTop, account.Info);
+        }
+    }
+
+    // One reading's bars, returning the next free y.
+    private double DrawUsageBlock(DrawingContext ctx, double width, double rowTop, UsageInfo usage)
+    {
+        bool stale = usage.IsStale(DateTime.Now);
 
         if (_usageEnabled)
         {
             double? sessionExpected = _showExpectedRate
-                ? UsageBarRenderer.ElapsedPercent(_usage.FiveHourResetsAt, TimeSpan.FromHours(5)) : null;
+                ? UsageBarRenderer.ElapsedPercent(usage.FiveHourResetsAt, TimeSpan.FromHours(5)) : null;
             double? weeklyExpected = _showExpectedRate
-                ? UsageBarRenderer.ElapsedPercent(_usage.SevenDayResetsAt, TimeSpan.FromDays(7)) : null;
-            DrawUsageBar(ctx, width, rowTop,                "Session", _usage.FiveHourPercent, sessionExpected, stale);
-            DrawUsageBar(ctx, width, rowTop + BarRowHeight, "Weekly",  _usage.SevenDayPercent, weeklyExpected,  stale);
+                ? UsageBarRenderer.ElapsedPercent(usage.SevenDayResetsAt, TimeSpan.FromDays(7)) : null;
+            DrawUsageBar(ctx, width, rowTop,                "Session", usage.FiveHourPercent, sessionExpected, stale);
+            DrawUsageBar(ctx, width, rowTop + BarRowHeight, "Weekly",  usage.SevenDayPercent, weeklyExpected,  stale);
             rowTop += BarRowHeight * 2;
 
-            foreach (var s in _usage.Scoped)
+            foreach (var s in usage.Scoped)
             {
                 double? expected = _showExpectedRate
                     ? UsageBarRenderer.ElapsedPercent(s.ResetsAt, TimeSpan.FromDays(7)) : null;
@@ -2133,16 +2202,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             }
         }
 
-        // The monthly extra-usage spend bar sits at the foot of the strip: fill = spent/limit, dollars on
-        // the right instead of a percentage, and no pace marker (the window has no reported reset).
-        if (ShowSpendBar)
+        // Foot of the block: fill = spent/limit, dollars instead of a percentage, no pace marker.
+        if (ShowSpendBarFor(usage))
         {
-            var e = _usage.ExtraUsage!;
+            var e = usage.ExtraUsage!;
             UsageBarRenderer.Draw(ctx, HorizPad, width - HorizPad, rowTop + BarRowHeight / 2,
                 "Credits", e.Percent, expectedPct: null, stale, 10, 10,
                 MutedColor, UsageTrackColor, ExpectedMarkColor, BgColor,
                 captionW: 46, pctW: 90, trackH: 7, valueText: e.Compact);
+            rowTop += BarRowHeight;
         }
+
+        return rowTop;
     }
 
     // The overlay's compact bar: a HorizPad inset on both sides, narrow caption/pct columns, the
@@ -2483,6 +2554,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private int HitTestMetrics(Point p)      => HitRect(_metricsRects, p);
     private int HitTestNoteIcon(Point p)     => HitRect(_noteRects, p);
     private int HitTestOriginIcon(Point p)   => HitRect(_originRects, p);
+    private int HitTestEnvChip(Point p)      => HitRect(_envRects, p);
 
     private static int HitRect(Dictionary<int, Rect> rects, Point p)
     {
@@ -2691,8 +2763,22 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         const double GitGap = 4;
         double gitW = showGit ? gitAddW + GitGap + gitDelW + 8 : 0;
 
+        // Which environment this session belongs to, labelled with the organization where known (the
+        // only discriminator under one login) and warn-coloured when it is signed in to a different
+        // organization than declared.
+        string envText = "";
+        bool envMismatch = false;
+        if (_showConfigLabels && session.ConfigDir is { } sessionConfig)
+        {
+            envText = sessionConfig.Org ?? sessionConfig.Label;
+            envMismatch = sessionConfig.OrgState == OrgState.Mismatch;
+        }
+        envText = envText.Length > 0 ? OverlayDraw.Truncate(envText, StatusSize, EnvChipMaxWidth) : "";
+        double envW = envText.Length > 0 ? OverlayDraw.MeasureWidth(envText, StatusSize) + 8 : 0;
+
         double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - originW - mailW
-                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW - jiraW - mdW;
+                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW - jiraW - mdW
+                         - envW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
 
@@ -2744,12 +2830,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(nameTrunc, NameSize, FgBrush), nameX, nameMidY);
 
         // Git churn immediately right of the name: "+added" green, "-deleted" red.
+        double afterNameX = nameX + nameW + 6;
         if (showGit)
         {
-            double gitX = nameX + nameW + 6;
-            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(gitAdd, StatusSize, GitAddBrush), gitX, nameMidY);
+            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(gitAdd, StatusSize, GitAddBrush), afterNameX, nameMidY);
             OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(gitDel, StatusSize, GitDelBrush),
-                gitX + gitAddW + GitGap, nameMidY);
+                afterNameX + gitAddW + GitGap, nameMidY);
+            afterNameX += gitAddW + GitGap + gitDelW + 6;
         }
 
         double statusX = width - HorizPad - statusW;
@@ -2783,6 +2870,23 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             double burnX = statusX - thermoW - badgeW - taskW - metricsW - burnW;
             OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(burnLabel, StatusSize, BurnBrush), burnX, nameMidY);
+        }
+        // After the name/git run rather than in the right cluster: on a busy row that cluster reaches
+        // far enough left to sit on top of the git churn, which is placed off the name.
+        if (envW > 0)
+        {
+            double clusterLeft = statusX - thermoW - badgeW - taskW - metricsW - burnW;
+            double available = clusterLeft - afterNameX - 6;
+            if (available >= MinEnvChipWidth)
+            {
+                var text = OverlayDraw.Truncate(envText, StatusSize, available);
+                double drawnW = OverlayDraw.MeasureWidth(text, StatusSize);
+                OverlayDraw.TextLeftMid(ctx,
+                    OverlayDraw.Text(text, StatusSize, envMismatch ? WarnBrush : MutedBrush),
+                    afterNameX, nameMidY);
+                _envRects[rowIndex] = new Rect(afterNameX, nameMidY - 9, drawnW, 18);
+                _envLabels[rowIndex] = EnvTooltipText(session.ConfigDir!);
+            }
         }
 
         double lineLeft = HorizPad + 14;
@@ -3790,6 +3894,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitRect(_prRects, p) is var pr && pr >= 0 ? (TipKind.Pr, pr) :
             HitRect(_jiraRects, p) is var jr && jr >= 0 ? (TipKind.Jira, jr) :
             HitTestOriginIcon(p) is var oi && oi >= 0 ? (TipKind.Origin, oi) :
+            HitTestEnvChip(p)    is var ev && ev >= 0 ? (TipKind.ConfigEnv, ev) :
             _mediaTitleRect.Contains(p)               ? (TipKind.Media, -1) :
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             _noteButtonRect.Width > 0
@@ -3828,6 +3933,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Pr:      ShowPrTooltip(_tipRow);      break;
             case TipKind.Jira:    ShowJiraTooltip(_tipRow);    break;
             case TipKind.Origin:  ShowOriginTooltip(_tipRow);  break;
+            case TipKind.ConfigEnv: ShowEnvTooltip(_tipRow);   break;
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
             case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
             case TipKind.ReactionSummary: ShowReactionSummaryTooltip(_tipRow); break;
@@ -5376,6 +5482,29 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Tooltip().ShowText(label, ToScreen(r.Left, r.Bottom + 4));
     }
 
+    // Spells out the config dir behind the chip.
+    private void ShowEnvTooltip(int row)
+    {
+        if (!_envRects.TryGetValue(row, out var r)) return;
+        if (!_envLabels.TryGetValue(row, out var label)) return;
+        Tooltip().ShowText(label, ToScreen(r.Left, r.Bottom + 4));
+    }
+
+    private static string EnvTooltipText(ClaudeConfigDir dir)
+    {
+        var parts = new List<string> { "Environment: " + dir.Label };
+        if (dir.Org is { Length: > 0 } org) parts.Add("Organization: " + org);
+        if (dir.Account.Email is { Length: > 0 } email) parts.Add("Account: " + email);
+        parts.Add("Config dir: " + dir.Root);
+        parts.Add(dir.OrgState switch
+        {
+            OrgState.Mismatch => $"Signed in to a different organization than declared ({dir.DeclaredOrg})",
+            OrgState.NotSignedIn => "Not signed in yet",
+            _ => "",
+        });
+        return string.Join("\n", parts.Where(x => x.Length > 0));
+    }
+
     private void ShowTaskTooltip(int row)
     {
         if (row < 0 || row >= _rows.Count || _rows[row].Session is not { } s) return;
@@ -5416,25 +5545,36 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         var now = DateTime.Now;
         var lines = new List<OverlayTooltip.Line> { new("Plan usage", OverlayTooltip.FgColor, true) };
-        if (_usageEnabled)
-        {
-            lines.Add(new(UsageLine("Session", _usage.FiveHourPercent, _usage.FiveHourResetsAt, now), OverlayTooltip.FgColor, false));
-            lines.Add(new(UsageLine("Weekly",  _usage.SevenDayPercent, _usage.SevenDayResetsAt, now), OverlayTooltip.FgColor, false));
-            foreach (var s in _usage.Scoped)
-                lines.Add(new(UsageLine(s.Label, s.Percent, s.ResetsAt, now), OverlayTooltip.FgColor, false));
-        }
-        if (ShowSpendBar)
-            lines.Add(new($"Monthly spend  {_usage.ExtraUsage!.Detailed}", OverlayTooltip.FgColor, false));
 
-        if (_usage.IsStale(now))
+        // With several accounts each block gets a heading, so no number is ambiguous.
+        bool labelled = _accounts.Count > 1;
+        foreach (var account in _accounts)
         {
-            var reason = _usage.Error;
-            if (string.IsNullOrEmpty(reason))
-                reason = _usage.LastUpdated == DateTime.MinValue
-                    ? "No usage data yet"
-                    : $"Updated {Ago(now - _usage.LastUpdated)} ago — couldn't refresh";
-            lines.Add(new(reason, OverlayTooltip.MutedColor, false));
+            var usage = account.Info;
+            if (labelled && account.Label.Length > 0)
+                lines.Add(new(account.Label, OverlayTooltip.MutedColor, true));
+
+            if (_usageEnabled)
+            {
+                lines.Add(new(UsageLine("Session", usage.FiveHourPercent, usage.FiveHourResetsAt, now), OverlayTooltip.FgColor, false));
+                lines.Add(new(UsageLine("Weekly",  usage.SevenDayPercent, usage.SevenDayResetsAt, now), OverlayTooltip.FgColor, false));
+                foreach (var s in usage.Scoped)
+                    lines.Add(new(UsageLine(s.Label, s.Percent, s.ResetsAt, now), OverlayTooltip.FgColor, false));
+            }
+            if (ShowSpendBarFor(usage))
+                lines.Add(new($"Monthly spend  {usage.ExtraUsage!.Detailed}", OverlayTooltip.FgColor, false));
+
+            if (usage.IsStale(now))
+            {
+                var reason = usage.Error;
+                if (string.IsNullOrEmpty(reason))
+                    reason = usage.LastUpdated == DateTime.MinValue
+                        ? "No usage data yet"
+                        : $"Updated {Ago(now - usage.LastUpdated)} ago — couldn't refresh";
+                lines.Add(new(reason, OverlayTooltip.MutedColor, false));
+            }
         }
+
         // Open to the left of the overlay's left edge so it never covers the strip.
         Tooltip().ShowLines(lines, ToScreen(0, UsageStripTop), placeLeft: true);
     }

@@ -254,6 +254,25 @@ public record ClaudeSession(
     public string DisplayName => Title ?? ProjectName;
 
     /// <summary>
+    /// The config directory this session belongs to — the one its <c>{pid}.json</c> was found in,
+    /// which is the only attribution there is (the sidecar itself records no config dir). Every write
+    /// on the session's behalf must land here; writing to the primary instead succeeds and does
+    /// nothing. Null for a session not produced by a scan (a sample or test instance).
+    /// </summary>
+    public ClaudeConfigDir? ConfigDir { get; init; }
+
+    /// <summary>The sessions directory that owns this session's sidecars.</summary>
+    public string SessionsDir => ConfigDir?.SessionsDir ?? ClaudePaths.SessionsDir;
+
+    /// <summary>The config dir's label ("Hub", "InFlight"), or null. Only worth showing when the
+    /// machine has several — see <see cref="ClaudeConfigSet.IsMulti"/>.</summary>
+    public string? ConfigLabel => ConfigDir?.Label;
+
+    /// <summary>The organization this session's config dir is signed in to, or null. With one login
+    /// across several organizations it is the only thing that tells the environments apart.</summary>
+    public string? ConfigOrg => ConfigDir?.Org;
+
+    /// <summary>
     /// True while this session is connected to the mobile app / claude.ai via /remote-control —
     /// i.e. its session file carries a <c>bridgeSessionId</c>. That id is also the deep-link target
     /// encoded into the QR code (https://claude.ai/code/{BridgeSessionId}).

@@ -22,6 +22,33 @@ internal static class SampleData
     /// a needs-attention session that's stuck, remote-controlled and has produced Markdown docs; an idle session; an API-error row; and
     /// a background/SDK session that groups under the Autonomous section.
     /// </summary>
+    /// <summary>
+    /// The same rows re-tagged across two config dirs, one of them signed in to a different
+    /// organization than its manifest declares. Seeds the multi-environment surface: the per-row
+    /// environment chip only appears when there is more than one config dir to tell apart.
+    /// </summary>
+    public static IReadOnlyList<ClaudeSession> MultiConfigSessions()
+    {
+        var hub = new ClaudeConfigDir(@"C:\Users\sample\.claude", isHub: true);
+        var env = new ClaudeConfigDir(@"C:\Users\sample\.claude-envs\envs\inflight",
+            slug: "inflight", label: "InFlight", declaredOrg: "Redux InFlight");
+        var rows = Sessions();
+        return [.. rows.Select((s, i) => s with { ConfigDir = i % 2 == 0 ? hub : env })];
+    }
+
+    /// <summary>Two readings, as several config dirs on different organizations produce.</summary>
+    public static IReadOnlyList<AccountUsage> MultiAccountUsage()
+    {
+        var second = Usage() with
+        {
+            FiveHourPercent = 12,
+            SevenDayPercent = 74,
+            Scoped = [],
+            ExtraUsage = null,
+        };
+        return [new("Redux InFlight", Usage()), new("Redux InTuition", second)];
+    }
+
     public static IReadOnlyList<ClaudeSession> Sessions()
     {
         var now = DateTime.Now;

@@ -107,7 +107,9 @@ internal sealed class SessionMonitor : IDisposable
 
     private bool _jiraEnabled;
 
-    private readonly string _sessionsDir = ClaudePaths.SessionsDir;
+    // Which config dir each session was found in, refreshed on every scan, so the entry points can
+    // stay keyed by session id (all their callers have) and still write to the owning directory.
+    private readonly Dictionary<string, ClaudeConfigDir> _sessionDirs = new();
 
     private readonly Dictionary<string, string> _lastRawStatus = new();
     private readonly Dictionary<string, DateTime> _idleSince = new();
@@ -158,7 +160,9 @@ internal sealed class SessionMonitor : IDisposable
     // PIDs we have an exit subscription for, keyed by the same string PID used everywhere else.
     private readonly Dictionary<string, Process> _trackedProcesses = new();
 
-    private FileSystemWatcher? _watcher;
+    // One per config dir's sessions directory, attached lazily: an env's sessions/ is created the
+    // first time it is signed into, so it routinely does not exist at start-up.
+    private readonly Dictionary<string, FileSystemWatcher> _watchers = new(ClaudeConfigDir.PathComparer);
     private readonly System.Threading.Timer _debounceTimer;
     private bool _disposed;
 
@@ -226,40 +230,54 @@ internal sealed class SessionMonitor : IDisposable
         // filesystem event — nudge a (debounced) rescan directly, else the overlay would only catch up on the
         // 30s reconcile poll.
         Control.ControlledSessions.Changed += RequestScanDebounced;
-        EnsureWatcher();
+        // A config dir appearing needs a watcher and a rescan of what is already in it.
+        ClaudeConfigSet.Changed += RequestScanDebounced;
+        EnsureWatchers();
     }
 
     public IReadOnlyList<ClaudeSession> Scan()
     {
-        // The sessions directory may be created after we start; (re)attach the watcher lazily.
-        EnsureWatcher();
+        // Rate-limited internally; a sessions directory can appear long after start-up.
+        ClaudeConfigSet.RefreshIfStale();
+        EnsureWatchers();
 
-        if (!Directory.Exists(_sessionsDir))
+        var dirs = ClaudeConfigSet.All;
+        var sessions = new List<ClaudeSession>();
+        var now = Clock.Now;
+        bool anyDir = false;
+
+        // The gather completes before the pruning below, so per-pid state is reconciled against the
+        // union of all dirs rather than evicted by whichever was scanned last.
+        _sessionDirs.Clear();
+        foreach (var dir in dirs)
+        {
+            string[] files;
+            try
+            {
+                if (!Directory.Exists(dir.SessionsDir))
+                    continue;
+                anyDir = true;
+                files = Directory.GetFiles(dir.SessionsDir, "*.json");
+            }
+            catch { continue; }   // an unreadable dir must not sink the whole scan
+
+            foreach (var file in files)
+            {
+                var session = ReadSession(file, now, dir);
+                if (session == null)
+                    continue;
+                sessions.Add(session);
+                if (!string.IsNullOrEmpty(session.SessionId))
+                    _sessionDirs[session.SessionId] = dir;
+            }
+        }
+
+        if (!anyDir)
         {
             NextNeedsAttentionDeadline = null;
             SyncProcessSubscriptions(new HashSet<string>());
             SessionsChanged?.Invoke([]);
             return [];
-        }
-
-        var sessions = new List<ClaudeSession>();
-        var now = Clock.Now;
-
-        string[] files;
-        try
-        {
-            files = Directory.GetFiles(_sessionsDir, "*.json");
-        }
-        catch
-        {
-            return [];
-        }
-
-        foreach (var file in files)
-        {
-            var session = ReadSession(file, now);
-            if (session != null)
-                sessions.Add(session);
         }
 
         var activePids = sessions.Select(s => s.Pid).ToHashSet();
@@ -295,7 +313,10 @@ internal sealed class SessionMonitor : IDisposable
     /// </summary>
     public bool ToggleExternalNotify(string sessionId)
     {
-        var marker = Path.Combine(_sessionsDir, $"{sessionId}.notify");
+        // The marker is read back from the owning dir, so a write to the primary would appear to
+        // succeed while doing nothing.
+        var sessionsDir = SessionsDirFor(sessionId);
+        var marker = Path.Combine(sessionsDir, $"{sessionId}.notify");
         try
         {
             if (File.Exists(marker))
@@ -303,7 +324,7 @@ internal sealed class SessionMonitor : IDisposable
                 File.Delete(marker);
                 return false;
             }
-            Directory.CreateDirectory(_sessionsDir);
+            Directory.CreateDirectory(sessionsDir);
             File.WriteAllText(marker, sessionId);
             return true;
         }
@@ -327,6 +348,11 @@ internal sealed class SessionMonitor : IDisposable
         if (ProjectNotePath(cwd) is { } path)
             WriteNote(path, text);
     }
+
+    /// <summary>The sessions directory its sidecar was found in on the last scan, falling back to the
+    /// primary for an id never seen (just started, or launched by Perch itself).</summary>
+    public string SessionsDirFor(string sessionId) =>
+        _sessionDirs.TryGetValue(sessionId, out var dir) ? dir.SessionsDir : ClaudePaths.SessionsDir;
 
     /// <summary>Reads the project note shared by sessions under <paramref name="cwd"/> (its
     /// <c>project.note</c> sidecar), or null when unset. See <see cref="SetProjectNote"/>.</summary>
@@ -390,7 +416,8 @@ internal sealed class SessionMonitor : IDisposable
         return earliest;
     }
 
-    private ClaudeSession? ReadSession(string filePath, DateTime now)
+    // configDir is where this sidecar was found; everything read beside it must use the same dir.
+    private ClaudeSession? ReadSession(string filePath, DateTime now, ClaudeConfigDir configDir)
     {
         try
         {
@@ -459,7 +486,7 @@ internal sealed class SessionMonitor : IDisposable
             }
             else
             {
-                perchControlled = Control.SessionLock.Read(sessionId) is { IsLive: true };
+                perchControlled = Control.SessionLock.Read(sessionId, configDir.SessionsDir) is { IsLive: true };
             }
 
             var prevRaw = _lastRawStatus.TryGetValue(pid, out var p) ? p : null;
@@ -726,12 +753,12 @@ internal sealed class SessionMonitor : IDisposable
                 ? sessionId[..Math.Min(8, sessionId.Length)]
                 : PathLeaf.Of(cwd);
 
-            var mode = ReadPermissionMode(Path.Combine(_sessionsDir, $"{sessionId}.mode"));
+            var mode = ReadPermissionMode(Path.Combine(configDir.SessionsDir, $"{sessionId}.mode"));
 
             // External-notification opt-in: the presence of a {sessionId}.notify marker is the signal.
             // Written/removed by both the overlay's right-click toggle and the plugin's /afk command.
             var externalNotify = !string.IsNullOrEmpty(sessionId)
-                && File.Exists(Path.Combine(_sessionsDir, $"{sessionId}.notify"));
+                && File.Exists(Path.Combine(configDir.SessionsDir, $"{sessionId}.notify"));
 
             // Project note: a short human annotation shared by every session in this cwd, from a
             // project.note sidecar in the project's transcript dir. Written/removed by the overlay's
@@ -790,7 +817,7 @@ internal sealed class SessionMonitor : IDisposable
                 ? DetectStuck(sessionId, cwd)
                 : null;
 
-            var (contextFill, context) = _transcripts.GetContextFill(sessionId, cwd);
+            var (contextFill, context) = _transcripts.GetContextFill(sessionId, cwd, configDir);
 
             // Live token burn rate (tokens/min): only meaningful while the session is actively working,
             // where recent assistant turns give a current pace. Cached by mtime like the other readers.
@@ -871,7 +898,10 @@ internal sealed class SessionMonitor : IDisposable
                 // Perch instance's sessions count too); a stale lock (dead owner) reads as not controlled.
                 // Read once above, where it also gates the live-status override.
                 perchControlled
-            );
+            )
+            {
+                ConfigDir = configDir,
+            };
 
             if (status == SessionStatus.NeedsAttention
                 && (fireSubsCompletion || fireCompletionSettled))
@@ -957,22 +987,28 @@ internal sealed class SessionMonitor : IDisposable
     // Deleting the file re-fires the watcher, but the next Scan finds nothing to do, so it settles.
     private void ProcessHistoryRequests()
     {
-        string[] files;
-        try
+        // /history runs inside a session, so the trigger lands in that session's own config dir.
+        foreach (var dir in ClaudeConfigSet.All)
         {
-            files = Directory.GetFiles(_sessionsDir, "*.history");
-        }
-        catch
-        {
-            return;
-        }
+            string[] files;
+            try
+            {
+                if (!Directory.Exists(dir.SessionsDir))
+                    continue;
+                files = Directory.GetFiles(dir.SessionsDir, "*.history");
+            }
+            catch
+            {
+                continue;
+            }
 
-        foreach (var file in files)
-        {
-            var sessionId = Path.GetFileNameWithoutExtension(file);
-            try { File.Delete(file); } catch { }
-            if (!string.IsNullOrEmpty(sessionId))
-                OpenHistoryRequested?.Invoke(sessionId);
+            foreach (var file in files)
+            {
+                var sessionId = Path.GetFileNameWithoutExtension(file);
+                try { File.Delete(file); } catch { }
+                if (!string.IsNullOrEmpty(sessionId))
+                    OpenHistoryRequested?.Invoke(sessionId);
+            }
         }
     }
 
@@ -1089,16 +1125,34 @@ internal sealed class SessionMonitor : IDisposable
 
     // ----- Event-driven trigger plumbing -------------------------------------------------
 
-    private void EnsureWatcher()
+    // Attaches a watcher per config dir and drops those whose dir has left the set. Called from Scan,
+    // so a directory that appears later picks one up on the next pass.
+    private void EnsureWatchers()
     {
-        if (_watcher != null || _disposed)
+        if (_disposed)
             return;
-        if (!Directory.Exists(_sessionsDir))
+
+        var live = new HashSet<string>(ClaudeConfigDir.PathComparer);
+        foreach (var dir in ClaudeConfigSet.All)
+        {
+            live.Add(dir.SessionsDir);
+            if (!_watchers.ContainsKey(dir.SessionsDir))
+                AttachWatcher(dir.SessionsDir);
+        }
+
+        foreach (var path in _watchers.Keys.Where(k => !live.Contains(k)).ToList())
+            if (_watchers.Remove(path, out var stale))
+                DetachWatcher(stale);
+    }
+
+    private void AttachWatcher(string sessionsDir)
+    {
+        if (!Directory.Exists(sessionsDir))
             return;
 
         try
         {
-            var watcher = new FileSystemWatcher(_sessionsDir)
+            var watcher = new FileSystemWatcher(sessionsDir)
             {
                 // Watch every file in the directory: *.json session files and their sibling
                 // *.mode files. Re-scanning is cheap and idempotent, so a slightly broad
@@ -1117,13 +1171,28 @@ internal sealed class SessionMonitor : IDisposable
             watcher.Error += OnWatcherError;
             watcher.EnableRaisingEvents = true;
 
-            _watcher = watcher;
+            _watchers[sessionsDir] = watcher;
         }
         catch
         {
             // If the watcher can't be created the reconciliation poll still keeps state fresh.
-            _watcher = null;
+            _watchers.Remove(sessionsDir);
         }
+    }
+
+    private void DetachWatcher(FileSystemWatcher watcher)
+    {
+        try
+        {
+            watcher.EnableRaisingEvents = false;
+            watcher.Created -= OnFileEvent;
+            watcher.Changed -= OnFileEvent;
+            watcher.Deleted -= OnFileEvent;
+            watcher.Renamed -= OnFileEvent;
+            watcher.Error -= OnWatcherError;
+            watcher.Dispose();
+        }
+        catch { }
     }
 
     private void OnFileEvent(object sender, FileSystemEventArgs e) => RequestScanDebounced();
@@ -1138,23 +1207,14 @@ internal sealed class SessionMonitor : IDisposable
 
     private void OnWatcherError(object sender, ErrorEventArgs e)
     {
-        // The watcher buffer overflowed (or the dir went away). Tear it down so the next Scan
-        // re-attaches a fresh one, and force an immediate reconciliation scan.
-        try
+        // The buffer overflowed (or the dir went away). Drop only the failing watcher so the next Scan
+        // re-attaches it, and force a reconciliation scan.
+        if (sender is FileSystemWatcher failed)
         {
-            if (_watcher != null)
-            {
-                _watcher.EnableRaisingEvents = false;
-                _watcher.Created -= OnFileEvent;
-                _watcher.Changed -= OnFileEvent;
-                _watcher.Deleted -= OnFileEvent;
-                _watcher.Renamed -= OnFileEvent;
-                _watcher.Error -= OnWatcherError;
-                _watcher.Dispose();
-            }
+            foreach (var entry in _watchers.Where(e => ReferenceEquals(e.Value, failed)).ToList())
+                _watchers.Remove(entry.Key);
+            DetachWatcher(failed);
         }
-        catch { }
-        _watcher = null;
 
         ChangeDetected?.Invoke();
     }
@@ -1211,25 +1271,14 @@ internal sealed class SessionMonitor : IDisposable
         _disposed = true;
 
         Control.ControlledSessions.Changed -= RequestScanDebounced;
+        ClaudeConfigSet.Changed -= RequestScanDebounced;
         _debounceTimer.Dispose();
         _gitStats.Dispose();
         _pr.Dispose();
 
-        if (_watcher != null)
-        {
-            try
-            {
-                _watcher.EnableRaisingEvents = false;
-                _watcher.Created -= OnFileEvent;
-                _watcher.Changed -= OnFileEvent;
-                _watcher.Deleted -= OnFileEvent;
-                _watcher.Renamed -= OnFileEvent;
-                _watcher.Error -= OnWatcherError;
-                _watcher.Dispose();
-            }
-            catch { }
-            _watcher = null;
-        }
+        foreach (var watcher in _watchers.Values)
+            DetachWatcher(watcher);
+        _watchers.Clear();
 
         foreach (var proc in _trackedProcesses.Values)
         {

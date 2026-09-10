@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
@@ -60,16 +60,19 @@ internal static partial class TranscriptImages
             var mediaType = TranscriptJson.AsString(source?["media_type"]);
 
             // Primary: the file Claude already cached on disk. No decode, no write — just point a chip at it.
+            // Per config dir and created on demand. Probed rather than threaded through: the caller
+            // has a session id, and a file-exists sweep over a few directories is cheap.
             if (!string.IsNullOrEmpty(sessionId))
-            {
-                var dir = Path.Combine(ClaudePaths.ClaudeDir, "image-cache", sessionId);
-                foreach (var ext in ExtensionOrder(mediaType))
+                foreach (var configDir in ClaudeConfigSet.All)
                 {
-                    var candidate = Path.Combine(dir, $"{number}.{ext}");
-                    if (File.Exists(candidate))
-                        return new MessageAttachment { Kind = AttachmentKind.Image, Path = candidate, MediaType = mediaType ?? MediaOf(ext) };
+                    var dir = Path.Combine(configDir.ImageCacheDir, sessionId);
+                    foreach (var ext in ExtensionOrder(mediaType))
+                    {
+                        var candidate = Path.Combine(dir, $"{number}.{ext}");
+                        if (File.Exists(candidate))
+                            return new MessageAttachment { Kind = AttachmentKind.Image, Path = candidate, MediaType = mediaType ?? MediaOf(ext) };
+                    }
                 }
-            }
 
             // Fallback: decode the transcript's own base64 to a stable temp file (hashed, so re-resume reuses).
             var data = TranscriptJson.AsString(source?["data"]);

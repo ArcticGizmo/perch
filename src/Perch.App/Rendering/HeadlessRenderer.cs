@@ -287,6 +287,17 @@ internal static class HeadlessRenderer
         rearrangeProbe.RearrangeMode = true;
         RenderControl(rearrangeProbe, Path.Combine(outDir, "overlay_sections_rearrange_1x.png"), 96);
 
+        // Several config dirs: each row carries its environment chip (warn-coloured on an org that
+        // disagrees with the manifest) and the usage strip splits into a captioned block per account.
+        var multiConfigProbe = new OverlayCanvas();
+        multiConfigProbe.Update(SampleData.MultiConfigSessions());
+        multiConfigProbe.UpdateUsage(SampleData.MultiAccountUsage());
+        multiConfigProbe.UpdateSystemMetrics(SampleData.SystemMetrics());
+        multiConfigProbe.UpdateSessionMetrics(SampleData.SessionMetrics());
+        multiConfigProbe.SetQuickLinks(links, icons);
+        RenderControl(multiConfigProbe, Path.Combine(outDir, "overlay_multi_config_1x.png"), 96);
+        RenderControl(multiConfigProbe, Path.Combine(outDir, "overlay_multi_config_1.5x.png"), 144);
+
         // Empty roster: no sessions at all, so the header reads "no sessions" and the rows are simply
         // absent — but the strips the session list has nothing to do with (machine metrics, plan limits,
         // quick links, Hypertree branches) all stay, which is the whole point of this surface.
