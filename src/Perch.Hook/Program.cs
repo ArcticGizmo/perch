@@ -71,6 +71,7 @@ try
         // may launch the tray.
         case "start":
             WriteMode(sessionsDir, f);
+            WriteEnvSlug(sessionsDir, f);
             WarnIfPerchControlled(sessionsDir, f);
             HandleStart(f);
             break;
@@ -87,6 +88,31 @@ return 0;
 // ── event handlers ────────────────────────────────────────────────────────────────
 
 // Record the session's permission mode so the overlay can badge it.
+// Which claude-envs environment is running this session.
+//
+// A scheme that shares `sessions/` across environments by link puts every environment's sidecars in
+// one physical directory, so the directory a sidecar sits in no longer says who owns it. The launchers
+// export CLAUDE_ENVS_SLUG alongside CLAUDE_CONFIG_DIR for exactly this, and a hook runs *inside* the
+// session, so it is the only party that can see it without reading another process's memory.
+//
+// Written on `start` only - which covers a resume, since SessionStart fires again - so the hot `mode`
+// path stays a single write. A bare `claude` sets no slug and gets no sidecar, which is the honest
+// answer rather than a guessed one.
+static void WriteEnvSlug(string sessionsDir, Dictionary<string, string?> f)
+{
+    string? sid = f["session_id"];
+    string? slug = Environment.GetEnvironmentVariable("CLAUDE_ENVS_SLUG");
+    if (string.IsNullOrEmpty(sid) || string.IsNullOrWhiteSpace(slug) || !Directory.Exists(sessionsDir))
+        return;
+
+    // Defensive: the slug becomes part of no path here, but it is read back as one downstream.
+    foreach (char c in slug)
+        if (!char.IsAsciiLetterOrDigit(c) && c != '-' && c != '_')
+            return;
+
+    try { File.WriteAllText(Path.Combine(sessionsDir, sid + ".slug"), slug.Trim()); } catch { }
+}
+
 static void WriteMode(string sessionsDir, Dictionary<string, string?> f)
 {
     string? sid = f["session_id"], mode = f["permission_mode"];
@@ -209,7 +235,7 @@ static void HandleCleanup(string sessionsDir, Dictionary<string, string?> f)
     string? sid = f["session_id"];
     if (!string.IsNullOrEmpty(sid))
     {
-        foreach (string ext in new[] { ".mode", ".notify", ".history", ".afk" /* legacy */ })
+        foreach (string ext in new[] { ".mode", ".notify", ".history", ".slug", ".afk" /* legacy */ })
             TryDelete(Path.Combine(sessionsDir, sid + ext));
         // The ownership lock goes only when it's ours (the controlled session itself ending) or stale — a
         // normal claude that briefly opened a Perch-controlled id must not strip Perch's live ownership.

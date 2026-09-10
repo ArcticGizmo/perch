@@ -1,4 +1,4 @@
-using Perch.Data;
+﻿using Perch.Data;
 using Xunit;
 
 namespace Perch.Tests;
@@ -41,9 +41,9 @@ public class ClaudeConfigDiscoveryTests : IDisposable
         return root;
     }
 
-    private void WriteManifest(string body) =>
+    private void WriteManifest(string body, string fileName = "envs.json") =>
         File.WriteAllText(
-            Path.Combine(Directory.CreateDirectory(Path.Combine(_home, ".claude-envs")).FullName, "envs.json"),
+            Path.Combine(Directory.CreateDirectory(Path.Combine(_home, ".claude-envs")).FullName, fileName),
             body);
 
     private ClaudeConfigDir Primary(string root) => new(root, root, isHub: true);
@@ -68,6 +68,69 @@ public class ClaudeConfigDiscoveryTests : IDisposable
     {
         var dirs = Discover();
         Assert.Single(dirs);
+    }
+
+    [Fact]
+    public void Manifest_IsAlsoReadFromItsCurrentName()
+    {
+        // The manifest was renamed envs.json -> manifest.json. It supplies labels and declared orgs
+        // only, never membership, so missing it costs display detail and reports nothing wrong - which
+        // is exactly how the rename went unnoticed on a live machine.
+        Hub("sessions");
+        Env("inflight", "sessions", ".claude.json");
+        WriteManifest("""
+            { "shared": ["projects", "sessions", "plugins"],
+              "environments": [ { "slug": "inflight", "label": "InFlight", "product": "inflight",
+                                  "org": "Redux InFlight" } ] }
+            """, "manifest.json");
+
+        var env = Assert.Single(Discover(), d => d.Slug == "inflight");
+        Assert.Equal("InFlight", env.Label);
+        Assert.Equal("Redux InFlight", env.DeclaredOrg);
+    }
+
+    [Fact]
+    public void SharedStore_IsNotMistakenForAConfigDir()
+    {
+        // Environments that share sessions/ and projects/ by link point at a store holding those very
+        // directories, so the marker test matches the store too. A false positive is worse than a
+        // missing environment: a discovered dir is a hook-install target. Identified by mechanism -
+        // the store is whatever a linked subdirectory resolves into - not by being called "shared".
+        Hub("sessions");
+        var shared = MakeConfigDir(Path.Combine(_home, ".claude-envs", "shared"),
+            ["sessions", "projects", "settings.json"]);
+        var env = Env("inflight", ".claude.json", "settings.json");
+
+        // The env's sessions/ and projects/ resolve into the shared store, as junctions would.
+        var links = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Path.Combine(env, "sessions")] = Path.Combine(shared, "sessions"),
+            [Path.Combine(env, "projects")] = Path.Combine(shared, "projects"),
+        };
+        Directory.CreateDirectory(Path.Combine(env, "sessions"));
+        Directory.CreateDirectory(Path.Combine(env, "projects"));
+
+        var dirs = Discover(p => links.TryGetValue(p, out var target) ? target : p);
+
+        Assert.Contains(dirs, d => d.Slug == "inflight");
+        Assert.DoesNotContain(dirs, d => d.Root.EndsWith("shared", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void SharedStore_ExclusionNeverDropsThePrimary()
+    {
+        // Degenerate but reachable: point the primary's own sessions/ at a store. The set must still
+        // have a primary - it is the floor every non-session-specific path falls back to.
+        var hub = Hub("sessions", "projects");
+        var shared = MakeConfigDir(Path.Combine(_home, ".claude-envs", "shared"), ["sessions"]);
+        var links = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Path.Combine(hub, "sessions")] = Path.Combine(shared, "sessions"),
+        };
+
+        var dirs = Discover(p => links.TryGetValue(p, out var target) ? target : p);
+
+        Assert.Contains(dirs, d => d.IsHub);
     }
 
     [Fact]

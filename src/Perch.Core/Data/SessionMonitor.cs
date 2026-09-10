@@ -755,6 +755,12 @@ internal sealed class SessionMonitor : IDisposable
 
             var mode = ReadPermissionMode(Path.Combine(configDir.SessionsDir, $"{sessionId}.mode"));
 
+            // Which environment is running this session. Where sessions/ is shared by link the sidecar's
+            // directory attributes nothing, so the hook records CLAUDE_ENVS_SLUG - which only something
+            // running inside the session can see - into a {sessionId}.slug sidecar. Absent for a bare
+            // `claude` and for any session that started before the hook wrote them: null, never guessed.
+            var envSlug = ReadEnvSlug(Path.Combine(configDir.SessionsDir, $"{sessionId}.slug"));
+
             // External-notification opt-in: the presence of a {sessionId}.notify marker is the signal.
             // Written/removed by both the overlay's right-click toggle and the plugin's /afk command.
             var externalNotify = !string.IsNullOrEmpty(sessionId)
@@ -901,6 +907,7 @@ internal sealed class SessionMonitor : IDisposable
             )
             {
                 ConfigDir = configDir,
+                EnvSlug = envSlug,
             };
 
             if (status == SessionStatus.NeedsAttention
@@ -1068,6 +1075,26 @@ internal sealed class SessionMonitor : IDisposable
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// The environment slug from a <c>{sessionId}.slug</c> sidecar, or null. Validated on the way in
+    /// because the value arrives from a file and is compared against a config dir's own slug: anything
+    /// that is not a plain slug is treated as absent rather than trusted.
+    /// </summary>
+    private static string? ReadEnvSlug(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return null;
+            var slug = File.ReadAllText(path).Trim();
+            if (slug.Length is 0 or > 64) return null;
+            foreach (char c in slug)
+                if (!char.IsAsciiLetterOrDigit(c) && c != '-' && c != '_')
+                    return null;
+            return slug;
+        }
+        catch { return null; }
     }
 
     private static PermissionMode ReadPermissionMode(string path)

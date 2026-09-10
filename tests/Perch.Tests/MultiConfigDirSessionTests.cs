@@ -1,4 +1,4 @@
-using Perch.Data;
+﻿using Perch.Data;
 using Perch.Data.Control;
 using Perch.Platform;
 using Xunit;
@@ -93,6 +93,59 @@ public class MultiConfigDirSessionTests : IDisposable
         Assert.Equal("InFlight", envSession.ConfigLabel);
         Assert.Equal("Redux InFlight", envSession.ConfigOrg);
         Assert.Equal(_env.SessionsDir, envSession.SessionsDir);
+    }
+
+    // ── which environment is running a session ────────────────────────────────────────────────────
+    //
+    // Where sessions/ is shared by link the sidecar's directory attributes nothing, so the hook
+    // records CLAUDE_ENVS_SLUG - visible only from inside the session - into {sessionId}.slug.
+
+    [Fact]
+    public void Scan_ReadsTheRunningEnvironmentFromTheSlugSidecar()
+    {
+        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.slug"), "inflight");
+
+        var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
+
+        Assert.Equal("inflight", session.EnvSlug);
+        Assert.Equal(_env, session.EnvDir);
+    }
+
+    [Fact]
+    public void Scan_LeavesTheEnvironmentUnknownWithNoSidecar()
+    {
+        // A bare `claude` writes no slug, and neither did any session started before the hook learned
+        // to. Unknown must stay unknown: attributing it to the primary would invent an environment.
+        var session = Assert.Single(Scan(), s => s.SessionId == _hubSessionId);
+
+        Assert.Null(session.EnvSlug);
+        Assert.Null(session.EnvDir);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("../escape")]
+    [InlineData("has space")]
+    public void Scan_RejectsASlugSidecarThatIsNotAPlainSlug(string written)
+    {
+        File.WriteAllText(Path.Combine(_env.SessionsDir, $"{_envSessionId}.slug"), written);
+
+        var session = Assert.Single(Scan(), s => s.SessionId == _envSessionId);
+
+        Assert.Null(session.EnvSlug);
+    }
+
+    [Fact]
+    public void ForSlug_DoesNotFallBackToThePrimary()
+    {
+        // The whole point of the lookup: an unknown slug is unknown. Falling back would attribute a
+        // session to whichever environment happens to be first in the set.
+        Assert.Equal(_env, ClaudeConfigSet.ForSlug("inflight"));
+        Assert.Equal(_env, ClaudeConfigSet.ForSlug("InFlight"));   // slugs compare case-insensitively
+        Assert.Null(ClaudeConfigSet.ForSlug("removed-env"));
+        Assert.Null(ClaudeConfigSet.ForSlug(null));
+        Assert.Null(ClaudeConfigSet.ForSlug("  "));
     }
 
     [Fact]

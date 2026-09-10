@@ -254,12 +254,28 @@ public record ClaudeSession(
     public string DisplayName => Title ?? ProjectName;
 
     /// <summary>
-    /// The config directory this session belongs to — the one its <c>{pid}.json</c> was found in,
-    /// which is the only attribution there is (the sidecar itself records no config dir). Every write
-    /// on the session's behalf must land here; writing to the primary instead succeeds and does
-    /// nothing. Null for a session not produced by a scan (a sample or test instance).
+    /// The config directory this session's sidecars physically live in — the one its
+    /// <c>{pid}.json</c> was found in. **This is the write target**, not an ownership claim: every
+    /// write on the session's behalf must land here, and writing to the primary instead succeeds and
+    /// does nothing. Null for a session not produced by a scan (a sample or test instance).
+    ///
+    /// <para>Where a scheme shares <c>sessions/</c> across environments by link, this is the primary
+    /// for every session and says nothing about which environment ran it — see
+    /// <see cref="EnvSlug"/>.</para>
     /// </summary>
     public ClaudeConfigDir? ConfigDir { get; init; }
+
+    /// <summary>
+    /// The claude-envs environment that is running this session, from a <c>{sessionId}.slug</c>
+    /// sidecar the hook writes out of <c>CLAUDE_ENVS_SLUG</c>. Null when it cannot be known: a bare
+    /// <c>claude</c> sets no slug, and a session that started before the hook learned to record one
+    /// never wrote the sidecar. Null means "unknown" and must never be rendered as an environment.
+    /// </summary>
+    public string? EnvSlug { get; init; }
+
+    /// <summary>The environment named by <see cref="EnvSlug"/>, when it is still in the config-dir
+    /// set. Use this for display; use <see cref="ConfigDir"/> to decide where to write.</summary>
+    public ClaudeConfigDir? EnvDir => ClaudeConfigSet.ForSlug(EnvSlug);
 
     /// <summary>The sessions directory that owns this session's sidecars.</summary>
     public string SessionsDir => ConfigDir?.SessionsDir ?? ClaudePaths.SessionsDir;

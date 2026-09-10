@@ -61,6 +61,21 @@ internal static class ClaudeConfigSet
     /// <summary>Raised off the UI thread when a probe changed the set.</summary>
     public static event Action? Changed;
 
+    /// <summary>
+    /// The environment with this slug, or null when the slug is unknown, empty, or names an
+    /// environment that has since been renamed or removed. Null is the answer to render as "unknown";
+    /// falling back to the primary here would attribute a session to whichever environment happens to
+    /// be first, which is the mistake this lookup exists to avoid.
+    /// </summary>
+    public static ClaudeConfigDir? ForSlug(string? slug)
+    {
+        if (string.IsNullOrWhiteSpace(slug)) return null;
+        foreach (var dir in All)
+            if (dir.Slug is { Length: > 0 } s && string.Equals(s, slug, StringComparison.OrdinalIgnoreCase))
+                return dir;
+        return null;
+    }
+
     /// <summary>The config dir owning <paramref name="sessionsDir"/>, else <see cref="Primary"/>.</summary>
     public static ClaudeConfigDir ForSessionsDir(string? sessionsDir)
     {
@@ -175,8 +190,12 @@ internal static class ClaudeConfigSet
 internal static class ClaudeConfigDiscovery
 {
     private const string EnvsDirName = ".claude-envs";
-    private const string ManifestFileName = "envs.json";
     private const string EnvsSubDirName = "envs";
+
+    // The manifest was renamed `envs.json` -> `manifest.json`; both are read so a machine mid-migration
+    // keeps its labels. The manifest supplies labels and declared orgs only, never membership, so a miss
+    // costs display detail and nothing else - which is precisely how the rename went unnoticed.
+    private static readonly string[] ManifestFileNames = ["manifest.json", "envs.json"];
 
     /// <summary>
     /// Every config dir under <paramref name="home"/>, with <paramref name="primary"/> first. A
@@ -197,7 +216,12 @@ internal static class ClaudeConfigDiscovery
 
         Add(primary);
 
-        var manifest = ReadManifest(Path.Combine(home, EnvsDirName, ManifestFileName));
+        EnvManifest? manifest = null;
+        foreach (var name in ManifestFileNames)
+        {
+            manifest = ReadManifest(Path.Combine(home, EnvsDirName, name));
+            if (manifest is not null) break;
+        }
 
         // Always in the set: Perch may have been started from an environment shell.
         var hubRoot = manifest?.Hub is { Length: > 0 } declaredHub
@@ -229,7 +253,26 @@ internal static class ClaudeConfigDiscovery
                     Add(Make(child, slug: Path.GetFileName(child)));
         }
 
-        return ordered;
+        // A shared store is not a config dir. Where environments share `sessions/` or `projects/` by
+        // link, the store they point at holds those very directories, so the marker test matches it -
+        // and a false positive here is worse than a missing environment, because a discovered dir is a
+        // hook-install target. The store is identified by mechanism rather than by name: it is whatever
+        // another candidate's linked subdirectory actually resolves into.
+        var storeRoots = new HashSet<string>(ClaudeConfigDir.PathComparer);
+        foreach (var dir in ordered)
+            foreach (var linked in new[] { dir.SessionsDir, dir.ProjectsDir })
+            {
+                var real = Normalize(linkResolver(linked));
+                if (ClaudeConfigDir.PathComparer.Equals(real, Normalize(linked))) continue;   // not a link
+                var owner = Path.GetDirectoryName(real);
+                if (!string.IsNullOrEmpty(owner)) storeRoots.Add(Normalize(owner));
+            }
+
+        // Never drop the primary: it is where non-session-specific paths resolve, and a set with no
+        // primary has no floor to fall back to.
+        return ordered
+            .Where(d => d.Equals(primary) || !storeRoots.Contains(d.RealRoot))
+            .ToList();
 
         ClaudeConfigDir Make(string root, string? slug = null, string? label = null, bool isHub = false,
                              string? declaredOrg = null, string? declaredAccount = null)
