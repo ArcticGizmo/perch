@@ -120,7 +120,7 @@ internal static class SessionLock
     {
         int removed = 0;
         // A crashed tray can have left locks under any config dir.
-        foreach (var dir in ClaudeConfigSet.All)
+        foreach (var dir in ClaudeConfigSet.DistinctSessionsDirs())
         {
             try
             {

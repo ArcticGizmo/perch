@@ -241,7 +241,7 @@ internal sealed class SessionMonitor : IDisposable
         ClaudeConfigSet.RefreshIfStale();
         EnsureWatchers();
 
-        var dirs = ClaudeConfigSet.All;
+        var dirs = ClaudeConfigSet.DistinctSessionsDirs();
         var sessions = new List<ClaudeSession>();
         var now = Clock.Now;
         bool anyDir = false;
@@ -988,7 +988,7 @@ internal sealed class SessionMonitor : IDisposable
     private void ProcessHistoryRequests()
     {
         // /history runs inside a session, so the trigger lands in that session's own config dir.
-        foreach (var dir in ClaudeConfigSet.All)
+        foreach (var dir in ClaudeConfigSet.DistinctSessionsDirs())
         {
             string[] files;
             try
@@ -1133,7 +1133,7 @@ internal sealed class SessionMonitor : IDisposable
             return;
 
         var live = new HashSet<string>(ClaudeConfigDir.PathComparer);
-        foreach (var dir in ClaudeConfigSet.All)
+        foreach (var dir in ClaudeConfigSet.DistinctSessionsDirs())
         {
             live.Add(dir.SessionsDir);
             if (!_watchers.ContainsKey(dir.SessionsDir))

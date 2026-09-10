@@ -84,6 +84,23 @@ internal static class ClaudeConfigSet
         return result;
     }
 
+    /// <summary>
+    /// The config dirs whose <c>sessions</c> directories are physically distinct, keeping the first
+    /// owner of each. A scheme may share <c>sessions/</c> by link the way it shares <c>projects/</c>,
+    /// and enumerating each config dir's own path would then list every session once per config dir.
+    /// Where it <em>is</em> shared the surviving owner is the primary, which is the honest answer:
+    /// a session file in a directory belonging to every environment belongs to none in particular.
+    /// </summary>
+    public static IReadOnlyList<ClaudeConfigDir> DistinctSessionsDirs()
+    {
+        var seen = new HashSet<string>(ClaudeConfigDir.PathComparer);
+        var result = new List<ClaudeConfigDir>();
+        foreach (var dir in All)
+            if (seen.Add(ResolveReal(dir.SessionsDir)))
+                result.Add(dir);
+        return result;
+    }
+
     /// <summary>Re-probes if the set hasn't been derived recently.</summary>
     public static void RefreshIfStale()
     {

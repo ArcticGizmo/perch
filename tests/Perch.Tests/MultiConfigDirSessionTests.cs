@@ -107,6 +107,59 @@ public class MultiConfigDirSessionTests : IDisposable
     }
 
     [Fact]
+    public void Scan_ListsSessionsOnceWhenConfigDirsShareOneSessionsDirectoryByLink()
+    {
+        // A scheme may share sessions/ by link the way it shares projects/ - the upstream claude-envs
+        // manifest does exactly that. Each config dir then has its own path to one physical directory,
+        // so enumerating per config dir would list every session once per dir.
+        var linked = Path.Combine(_root, ".claude-envs", "envs", "linked");
+        Directory.CreateDirectory(linked);
+        if (!TryLinkDirectory(Path.Combine(linked, "sessions"), _hub.SessionsDir))
+            return;   // no link support on this host; the injected-resolver case still covers the logic
+
+        var shared = new ClaudeConfigDir(linked, linked, "linked");
+        ClaudeConfigSet.SetForTesting([_hub, _env, shared]);
+
+        Assert.Single(Scan(), s => s.SessionId == _hubSessionId);
+    }
+
+    // A directory link the platform allows without elevation: a junction on Windows (which needs
+    // neither Developer Mode nor admin), a symlink elsewhere. False when neither works.
+    private static bool TryLinkDirectory(string link, string target)
+    {
+        try
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                Directory.CreateSymbolicLink(link, target);
+                return Directory.ResolveLinkTarget(link, returnFinalTarget: true) is not null;
+            }
+
+            var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            psi.ArgumentList.Add("/c");
+            psi.ArgumentList.Add("mklink");
+            psi.ArgumentList.Add("/J");
+            psi.ArgumentList.Add(link);
+            psi.ArgumentList.Add(target);
+            using var process = System.Diagnostics.Process.Start(psi);
+            if (process is null) return false;
+            process.WaitForExit(10_000);
+            return process.ExitCode == 0
+                && Directory.ResolveLinkTarget(link, returnFinalTarget: true) is not null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    [Fact]
     public void Scan_SkipsAConfigDirWithNoSessionsDirectory()
     {
         // An environment never signed into has no sessions/ yet. Must not throw or hide the others.
