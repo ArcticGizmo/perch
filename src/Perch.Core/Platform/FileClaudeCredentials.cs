@@ -4,16 +4,16 @@ namespace Perch.Platform;
 
 /// <summary>
 /// The portable <see cref="IClaudeCredentials"/>: reads the raw JSON from
-/// <c>~/.claude/.credentials.json</c> (<see cref="ClaudePaths.CredentialsFile"/>). This is how Claude Code
+/// the given config dir's <c>.credentials.json</c>. This is how Claude Code
 /// stores the blob on Windows and Linux, and it is also the macOS fallback if the Keychain read fails
 /// (see the macOS implementation). Opened with <see cref="FileShare.ReadWrite"/> because Claude Code
 /// rewrites the token in place during a refresh. Never throws — a missing/locked/garbage file reads as null.
 /// </summary>
 public sealed class FileClaudeCredentials : IClaudeCredentials
 {
-    public string? ReadCredentialsJson()
+    public string? ReadCredentialsJson(ClaudeConfigDir configDir)
     {
-        var path = ClaudePaths.CredentialsFile;
+        var path = configDir.CredentialsFile;
         if (!File.Exists(path))
             return null;
         try

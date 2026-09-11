@@ -103,3 +103,30 @@ internal sealed record UsageInfo(
 
     public bool IsStale(DateTime now) => !Ok || now - LastUpdated > StaleAfter;
 }
+
+/// <summary>
+/// One usage reading and the label identifying it. The poll authenticates with a config dir's own
+/// token and config dirs are signed in separately, so there is no longer a single "the" reading:
+/// dirs sharing an account <em>and</em> organization get one entry between them, a different
+/// organization gets its own. One config dir yields one entry, rendered exactly as before.
+/// </summary>
+/// <param name="Label">Empty when a single reading makes a label redundant.</param>
+internal sealed record AccountUsage(string Label, UsageInfo Info)
+{
+    /// <summary>The single unlabelled reading.</summary>
+    public static AccountUsage Single(UsageInfo info) => new("", info);
+
+    /// <summary>The "no data yet" state.</summary>
+    public static IReadOnlyList<AccountUsage> None { get; } = [Single(UsageInfo.Empty)];
+
+    /// <summary>The organization when known — with one login across several organizations it is the
+    /// only discriminator — otherwise the dirs' own labels. Never the email: it is typically the same
+    /// for every environment, so it distinguishes nothing.</summary>
+    public static string LabelFor(IReadOnlyList<ClaudeConfigDir> dirs)
+    {
+        if (dirs.Count == 0) return "";
+        var org = dirs[0].Org;
+        if (!string.IsNullOrWhiteSpace(org)) return org!;
+        return string.Join(" · ", dirs.Select(d => d.Label));
+    }
+}

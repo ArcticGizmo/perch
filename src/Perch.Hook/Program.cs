@@ -71,6 +71,7 @@ try
         // may launch the tray.
         case "start":
             WriteMode(sessionsDir, f);
+            WriteConfigDir(sessionsDir, f);
             WarnIfPerchControlled(sessionsDir, f);
             HandleStart(f);
             break;
@@ -87,6 +88,28 @@ return 0;
 // ── event handlers ────────────────────────────────────────────────────────────────
 
 // Record the session's permission mode so the overlay can badge it.
+// Which config dir this session is running under. A hook runs *inside* the session, so it is the only
+// party that can know without reaching into another process's memory (Perch.Data.ClaudeSession
+// .ReportedConfigDir covers why the sidecar's own location cannot say).
+//
+// The config dir rather than CLAUDE_ENVS_SLUG, because it is known for *every* session: a bare
+// `claude` sets no slug but still has a config dir, and its organization is readable from the
+// .claude.json there. The slug remains derivable - it is the directory's own name.
+//
+// On `start` only - which covers a resume, since SessionStart fires again - so the hot `mode` path
+// stays one write.
+static void WriteConfigDir(string sessionsDir, Dictionary<string, string?> f)
+{
+    string? sid = f["session_id"];
+    if (string.IsNullOrEmpty(sid) || !Directory.Exists(sessionsDir)) return;
+
+    try
+    {
+        File.WriteAllText(Path.Combine(sessionsDir, sid + ".configdir"), ResolveClaudeDir());
+    }
+    catch { }
+}
+
 static void WriteMode(string sessionsDir, Dictionary<string, string?> f)
 {
     string? sid = f["session_id"], mode = f["permission_mode"];
@@ -209,7 +232,9 @@ static void HandleCleanup(string sessionsDir, Dictionary<string, string?> f)
     string? sid = f["session_id"];
     if (!string.IsNullOrEmpty(sid))
     {
-        foreach (string ext in new[] { ".mode", ".notify", ".history", ".afk" /* legacy */ })
+        // .slug is the marker this replaced; kept here so the ones already written get cleaned up.
+        foreach (string ext in new[]
+                 { ".mode", ".notify", ".history", ".configdir", ".slug" /* legacy */, ".afk" /* legacy */ })
             TryDelete(Path.Combine(sessionsDir, sid + ext));
         // The ownership lock goes only when it's ours (the controlled session itself ending) or stale — a
         // normal claude that briefly opened a Perch-controlled id must not strip Perch's live ownership.

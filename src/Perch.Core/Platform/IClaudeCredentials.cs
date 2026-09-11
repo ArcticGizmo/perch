@@ -14,6 +14,8 @@
 /// </summary>
 public interface IClaudeCredentials
 {
-    /// <summary>The raw credentials JSON, or null when unavailable.</summary>
-    string? ReadCredentialsJson();
+    /// <summary>The raw credentials JSON for <paramref name="configDir"/>, or null when unavailable.
+    /// Per config dir because the blob is per account and each is signed in separately; reading one
+    /// dir's token for another would report the wrong account's limits.</summary>
+    string? ReadCredentialsJson(Perch.Data.ClaudeConfigDir configDir);
 }

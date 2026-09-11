@@ -22,10 +22,18 @@ public sealed class KeychainClaudeCredentials : IClaudeCredentials
 
     private readonly FileClaudeCredentials _file = new();
 
-    public string? ReadCredentialsJson()
+    /// <summary>
+    /// The config dir's own file is tried <em>first</em>, since it is unambiguously that dir's token,
+    /// whereas the Keychain item is a single service-scoped entry. Whether Claude Code creates a
+    /// distinct Keychain item per <c>CLAUDE_CONFIG_DIR</c> is <b>unverified</b> (not checked on a
+    /// Mac); if it does not, config dirs without their own file share whatever the one item holds.
+    /// </summary>
+    public string? ReadCredentialsJson(Perch.Data.ClaudeConfigDir configDir)
     {
+        var file = _file.ReadCredentialsJson(configDir);
+        if (!string.IsNullOrWhiteSpace(file)) return file;
         var json = ReadFromKeychain();
-        return string.IsNullOrWhiteSpace(json) ? _file.ReadCredentialsJson() : json;
+        return string.IsNullOrWhiteSpace(json) ? null : json;
     }
 
     // `security find-generic-password -s "<service>" -w` prints just the secret (the JSON blob) to stdout,

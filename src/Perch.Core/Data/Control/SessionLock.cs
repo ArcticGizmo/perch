@@ -34,18 +34,24 @@ internal static class SessionLock
     /// from "a normal claude opened a Perch-controlled id" (warn).</summary>
     public const string OwnerEnvVar = "PERCH_SESSION_OWNER";
 
-    public static string PathFor(string sessionId) => Path.Combine(ClaudePaths.SessionsDir, sessionId + Extension);
+    /// <summary>The lock path inside the <em>owning</em> config dir's sessions directory. Omit
+    /// <paramref name="sessionsDir"/> only for a session Perch launched itself (it runs under the
+    /// primary); otherwise pass <see cref="ClaudeSession.SessionsDir"/>, since a lock written to the
+    /// wrong dir is never read back.</summary>
+    public static string PathFor(string sessionId, string? sessionsDir = null) =>
+        Path.Combine(sessionsDir ?? ClaudePaths.SessionsDir, sessionId + Extension);
 
     /// <summary>Writes the lock for <paramref name="sessionId"/>, owned by this process. Returns false when
     /// another <em>live</em> process already holds it (the caller should refuse to control the session) or
     /// the write failed; a stale lock is overwritten.</summary>
-    public static bool Acquire(string sessionId, string cwd)
+    public static bool Acquire(string sessionId, string cwd, string? sessionsDir = null)
     {
         if (string.IsNullOrEmpty(sessionId)) return false;
+        sessionsDir ??= ClaudePaths.SessionsDir;
         try
         {
-            if (Read(sessionId) is { } existing && existing.IsLive && !existing.IsOurs) return false;
-            Directory.CreateDirectory(ClaudePaths.SessionsDir);
+            if (Read(sessionId, sessionsDir) is { } existing && existing.IsLive && !existing.IsOurs) return false;
+            Directory.CreateDirectory(sessionsDir);
             var o = new JsonObject
             {
                 ["sessionId"] = sessionId,
@@ -55,7 +61,7 @@ internal static class SessionLock
                 ["profile"] = AppProfile.DataFolderName,
                 ["since"] = DateTime.UtcNow.ToString("o"),
             };
-            File.WriteAllText(PathFor(sessionId), o.ToJsonString());
+            File.WriteAllText(PathFor(sessionId, sessionsDir), o.ToJsonString());
             return true;
         }
         catch
@@ -66,23 +72,23 @@ internal static class SessionLock
 
     /// <summary>Deletes the lock if this process holds it (or it is stale). Another live owner's lock is
     /// left alone.</summary>
-    public static void Release(string? sessionId)
+    public static void Release(string? sessionId, string? sessionsDir = null)
     {
         if (string.IsNullOrEmpty(sessionId)) return;
         try
         {
-            var info = Read(sessionId);
-            if (info is null || info.IsOurs || !info.IsLive) File.Delete(PathFor(sessionId));
+            var info = Read(sessionId, sessionsDir);
+            if (info is null || info.IsOurs || !info.IsLive) File.Delete(PathFor(sessionId, sessionsDir));
         }
         catch { /* best effort */ }
     }
 
     /// <summary>Reads the lock, or null when absent/unreadable.</summary>
-    public static SessionLockInfo? Read(string sessionId)
+    public static SessionLockInfo? Read(string sessionId, string? sessionsDir = null)
     {
         try
         {
-            var path = PathFor(sessionId);
+            var path = PathFor(sessionId, sessionsDir);
             if (!File.Exists(path)) return null;
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var reader = new StreamReader(fs);
@@ -105,29 +111,33 @@ internal static class SessionLock
 
     /// <summary>The live owner of <paramref name="sessionId"/> other than this process, or null when the
     /// session is free (no lock, our own lock, or a stale one).</summary>
-    public static SessionLockInfo? HeldByOther(string sessionId) =>
-        Read(sessionId) is { } info && info.IsLive && !info.IsOurs ? info : null;
+    public static SessionLockInfo? HeldByOther(string sessionId, string? sessionsDir = null) =>
+        Read(sessionId, sessionsDir) is { } info && info.IsLive && !info.IsOurs ? info : null;
 
     /// <summary>Deletes every lock whose owning process has exited. Run at tray start-up so a crash never
     /// leaves phantom ownership behind. Returns how many were removed.</summary>
     public static int SweepStale()
     {
         int removed = 0;
-        try
+        // A crashed tray can have left locks under any config dir.
+        foreach (var dir in ClaudeConfigSet.DistinctSessionsDirs())
         {
-            if (!Directory.Exists(ClaudePaths.SessionsDir)) return 0;
-            foreach (var file in Directory.EnumerateFiles(ClaudePaths.SessionsDir, "*" + Extension))
+            try
             {
-                var id = Path.GetFileName(file);
-                id = id[..^Extension.Length];
-                var info = Read(id);
-                if (info is null || !info.IsLive)
+                if (!Directory.Exists(dir.SessionsDir)) continue;
+                foreach (var file in Directory.EnumerateFiles(dir.SessionsDir, "*" + Extension))
                 {
-                    try { File.Delete(file); removed++; } catch { }
+                    var id = Path.GetFileName(file);
+                    id = id[..^Extension.Length];
+                    var info = Read(id, dir.SessionsDir);
+                    if (info is null || !info.IsLive)
+                    {
+                        try { File.Delete(file); removed++; } catch { }
+                    }
                 }
             }
+            catch { /* best effort, per dir */ }
         }
-        catch { /* best effort */ }
         return removed;
     }
 

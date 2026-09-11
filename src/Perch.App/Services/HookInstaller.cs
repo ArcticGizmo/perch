@@ -38,7 +38,7 @@ internal static class HookInstaller
 
     /// <summary>
     /// Copy-if-newer the shipped binary to <see cref="HookBinaryPath"/>, record the tray location, then
-    /// reconcile the managed hook block in <c>~/.claude/settings.json</c>. Safe to call on every launch.
+    /// reconcile the managed hook block in every config dir. Safe to call on every launch.
     /// </summary>
     public static void Install()
     {
@@ -53,12 +53,8 @@ internal static class HookInstaller
             }
 
             WriteMarker();
-
-            // Only wire hooks once a binary actually exists at the stable path (a dev run without a
-            // published perch-hook alongside it has nothing to point at — skip rather than write a
-            // dangling command).
-            if (File.Exists(HookBinaryPath))
-                ClaudeUserSettings.ReconcileHooks(HookBinaryPath, AppInfo.Version, AppProfile.IsDev);
+            ReconcileAll();
+            WatchForNewConfigDirs();
         }
         catch
         {
@@ -67,12 +63,68 @@ internal static class HookInstaller
     }
 
     /// <summary>
-    /// Removes the managed hook block from <c>~/.claude/settings.json</c> and deletes the stable bin
-    /// dir. Called from the Velopack uninstall callback (see <c>Program</c>).
+    /// Reconciles the managed hook block in <em>every</em> config dir. The hook only fires for a
+    /// session if it is registered in that session's own config dir, and nothing else would repair a
+    /// dir left with stale entries — the hook's own self-heal only ever strips.
+    /// </summary>
+    private static void ReconcileAll()
+    {
+        // A dev run without a published perch-hook beside it has nothing to point at; skip rather than
+        // write a dangling command.
+        if (!File.Exists(HookBinaryPath)) return;
+
+        // Serialised: the config-dir watcher can fire while a reconcile is still running, and two
+        // passes must not interleave writes to one settings file.
+        lock (ReconcileGate)
+        {
+            foreach (var dir in ClaudeConfigSet.All)
+            {
+                try
+                {
+                    ClaudeUserSettings.ReconcileHooks(
+                        dir.UserSettingsFile, HookBinaryPath, AppInfo.Version, AppProfile.IsDev);
+                }
+                catch { /* one unwritable dir must not stop the rest */ }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Re-reconciles when the config-dir set changes. A config dir can appear long after start-up — an
+    /// environment signed into for the first time materialises its directory then — and a once-at-launch
+    /// install would leave it hook-less until the next Perch launch. Its sessions would still be listed
+    /// (Claude Code writes the session file itself, not the hook), but with no permission mode, no
+    /// sub-agent/teammate alerts and no sidecar cleanup.
+    ///
+    /// <para>Note the irreducible race: Claude Code reads its settings when a session starts, so a
+    /// session already running in a brand-new config dir when the hooks land does not pick them up. The
+    /// next session in that dir does.</para>
+    /// </summary>
+    private static void WatchForNewConfigDirs()
+    {
+        if (_watching) return;
+        _watching = true;
+        // Changed is raised from the discovery probe, which runs on the caller's thread (the scan, on
+        // the UI thread) — so the file IO goes to the pool.
+        ClaudeConfigSet.Changed += () => Task.Run(ReconcileAll);
+    }
+
+    private static readonly object ReconcileGate = new();
+    private static bool _watching;
+
+    /// <summary>
+    /// Removes the managed hook block from every config dir's <c>settings.json</c> and deletes the
+    /// stable bin dir. Called from the Velopack uninstall callback (see <c>Program</c>). Fans out over
+    /// the same set <see cref="Install"/> writes to, or uninstalling would leave the other config dirs
+    /// invoking a deleted binary.
     /// </summary>
     public static void Uninstall()
     {
-        try { ClaudeUserSettings.RemoveManagedHooks(AppProfile.IsDev, HookBinaryPath); } catch { }
+        foreach (var dir in ClaudeConfigSet.All)
+        {
+            try { ClaudeUserSettings.RemoveManagedHooks(dir.UserSettingsFile, AppProfile.IsDev, HookBinaryPath); }
+            catch { }
+        }
         try { if (Directory.Exists(BinDir)) Directory.Delete(BinDir, recursive: true); } catch { }
     }
 

@@ -27,10 +27,21 @@ internal sealed class UsageMonitor
     // Where the OAuth blob lives is OS-specific (file on Windows/Linux, Keychain on macOS) — behind a seam.
     private readonly IClaudeCredentials _credentials;
 
+    // The config dir whose credentials this monitor authenticates with. One per distinct
+    // account/organization, since a shared monitor would report one account's limits for all of them.
+    private readonly ClaudeConfigDir _configDir;
+
     // The most recent successful reading, so a failed fetch can still surface last-known values.
     private UsageInfo _last = UsageInfo.Empty;
 
-    public UsageMonitor(IClaudeCredentials credentials) => _credentials = credentials;
+    public UsageMonitor(IClaudeCredentials credentials, ClaudeConfigDir? configDir = null)
+    {
+        _credentials = credentials;
+        _configDir = configDir ?? ClaudeConfigSet.Primary;
+    }
+
+    /// <summary>The config dir this monitor polls as.</summary>
+    public ClaudeConfigDir ConfigDir => _configDir;
 
     /// <summary>
     /// Fetches the current usage. Always resolves (never throws): on failure the result has
@@ -188,7 +199,7 @@ internal sealed class UsageMonitor
 
     private string? ReadAccessToken()
     {
-        var json = _credentials.ReadCredentialsJson();
+        var json = _credentials.ReadCredentialsJson(_configDir);
         if (string.IsNullOrEmpty(json))
             return null;
 
@@ -209,14 +220,19 @@ internal sealed class UsageMonitor
     {
         try
         {
-            var dir = ClaudePaths.SessionsDir;
-            if (!Directory.Exists(dir))
-                return FallbackVersion;
-
-            var newest = new DirectoryInfo(dir)
-                .EnumerateFiles("*.json")
-                .OrderByDescending(f => f.LastWriteTimeUtc)
-                .FirstOrDefault();
+            // Newest across every config dir: the CLI is one binary whichever dir launched it.
+            FileInfo? newest = null;
+            foreach (var configDir in ClaudeConfigSet.All)
+            {
+                if (!Directory.Exists(configDir.SessionsDir))
+                    continue;
+                var candidate = new DirectoryInfo(configDir.SessionsDir)
+                    .EnumerateFiles("*.json")
+                    .OrderByDescending(f => f.LastWriteTimeUtc)
+                    .FirstOrDefault();
+                if (candidate is not null && (newest is null || candidate.LastWriteTimeUtc > newest.LastWriteTimeUtc))
+                    newest = candidate;
+            }
             if (newest is null)
                 return FallbackVersion;
 

@@ -254,6 +254,63 @@ public record ClaudeSession(
     public string DisplayName => Title ?? ProjectName;
 
     /// <summary>
+    /// The config directory this session's sidecars live in — the write target, not an ownership
+    /// claim: writing to the primary instead succeeds and does nothing. Null for a session not
+    /// produced by a scan. For "which environment is running this", see <see cref="EnvSlug"/>.
+    /// </summary>
+    public ClaudeConfigDir? ConfigDir { get; init; }
+
+    /// <summary>
+    /// The config dir this session reported running under, from the <c>{sessionId}.configdir</c>
+    /// sidecar the hook writes. It has to come from inside the session: a scheme that shares
+    /// <c>sessions/</c> across environments by link puts every environment's sidecars in one
+    /// directory, leaving <see cref="ConfigDir"/> the primary for all of them and attributing nothing.
+    /// Null only for a session that started before the hook wrote the marker.
+    /// </summary>
+    public string? ReportedConfigDir { get; init; }
+
+    /// <summary>The dir named by <see cref="ReportedConfigDir"/>, if still in the config-dir set.</summary>
+    public ClaudeConfigDir? EnvDir => ClaudeConfigSet.ForRoot(ReportedConfigDir);
+
+    /// <summary>
+    /// The environment to show for this session: the one it reported, else the directory its sidecars
+    /// live in <em>when that directory belongs to one environment alone</em>. Null when neither can
+    /// say. The fallback matters for every setup that shares nothing — a plain
+    /// <c>CLAUDE_CONFIG_DIR</c> per environment attributes perfectly by path and writes no slug, and
+    /// dropping to <see cref="EnvSlug"/> alone would have shown such a machine nothing at all.
+    /// </summary>
+    public ClaudeConfigDir? AttributedEnvDir =>
+        EnvDir ?? (ConfigDir is { } dir && !ClaudeConfigSet.SharesSessionsDir(dir) ? dir : null);
+
+    /// <summary>
+    /// How to name this session's environment where two of them report the same organization — which
+    /// happens the moment the stock config is signed in to an org an environment also uses. Falls back
+    /// to the organization alone when it is unambiguous, since that is the more useful label.
+    /// </summary>
+    public string? EnvDisplay
+    {
+        get
+        {
+            if (AttributedEnvDir is not { } dir) return null;
+            var org = dir.Org;
+            if (string.IsNullOrEmpty(org)) return dir.Label;
+
+            int sharing = 0;
+            foreach (var other in ClaudeConfigSet.All)
+                if (string.Equals(other.Org, org, StringComparison.OrdinalIgnoreCase) && ++sharing > 1)
+                    return dir.DisplayName;   // "Hub · Quartex PDG" vs "PDG · Quartex PDG"
+            return org;
+        }
+    }
+
+    /// <summary>The sessions directory that owns this session's sidecars.</summary>
+    public string SessionsDir => ConfigDir?.SessionsDir ?? ClaudePaths.SessionsDir;
+
+    /// <summary>The label to show for this session's environment, or null when unknown. Only worth
+    /// showing when the machine has several — see <see cref="ClaudeConfigSet.IsMulti"/>.</summary>
+    public string? EnvLabel => AttributedEnvDir?.Label;
+
+    /// <summary>
     /// True while this session is connected to the mobile app / claude.ai via /remote-control —
     /// i.e. its session file carries a <c>bridgeSessionId</c>. That id is also the deep-link target
     /// encoded into the QR code (https://claude.ai/code/{BridgeSessionId}).

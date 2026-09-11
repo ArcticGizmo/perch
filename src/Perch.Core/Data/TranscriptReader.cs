@@ -253,14 +253,18 @@ internal sealed class TranscriptReader
     /// model, and which signal decided the size (see <see cref="ModelContext.Resolve"/>). Fill is null
     /// when no usage data is available. Best-effort; never throws.
     /// </summary>
-    public (float? Fill, ContextWindowInfo Window) GetContextFill(string sessionId, string cwd)
+    /// <param name="configDir">The session's own config dir, whose <c>settings.json</c> supplies the
+    /// configured-model fallback. Per config dir, so the primary's would be the wrong file.</param>
+    public (float? Fill, ContextWindowInfo Window) GetContextFill(
+        string sessionId, string cwd, ClaudeConfigDir? configDir = null)
     {
         if (string.IsNullOrEmpty(sessionId))
             return (null, UnknownWindow);
         var path = TranscriptLocator.Resolve(sessionId, cwd);
         if (path == null)
             return (null, UnknownWindow);
-        return _contextFill.GetOrCompute(path, p => ParseContextFill(p, cwd), (null, UnknownWindow));
+        return _contextFill.GetOrCompute(
+            path, p => ParseContextFill(p, cwd, configDir), (null, UnknownWindow));
     }
 
     private static readonly ContextWindowInfo UnknownWindow =
@@ -634,21 +638,24 @@ internal sealed class TranscriptReader
     /// before it is resumed. <c>Used</c> is 0 when no usage record is present. Best-effort; never throws.
     /// Not memoised — callers that need it repeatedly should cache the derived estimate.
     /// </summary>
-    public static (long Used, ContextWindowInfo Window) ReadContextUsage(string path, string cwd)
+    public static (long Used, ContextWindowInfo Window) ReadContextUsage(
+        string path, string cwd, ClaudeConfigDir? configDir = null)
     {
-        try { return ScanContext(path, cwd); }
+        try { return ScanContext(path, cwd, configDir); }
         catch { return (0, UnknownWindow); }
     }
 
-    private static (float? fill, ContextWindowInfo window) ParseContextFill(string path, string cwd)
+    private static (float? fill, ContextWindowInfo window) ParseContextFill(
+        string path, string cwd, ClaudeConfigDir? configDir)
     {
-        var (used, window) = ScanContext(path, cwd);
+        var (used, window) = ScanContext(path, cwd, configDir);
         return used == 0 ? (null, window) : (Math.Clamp((float)used / window.Tokens, 0f, 1f), window);
     }
 
     // The shared scan behind both the fill gauge and the resume estimate: reads the whole transcript,
     // tracking the newest /model line, the running model id, and the largest + latest prompt sizes.
-    private static (long used, ContextWindowInfo window) ScanContext(string path, string cwd)
+    private static (long used, ContextWindowInfo window) ScanContext(
+        string path, string cwd, ClaudeConfigDir? configDir)
     {
         // A /model switch can land anywhere in the transcript, and the most recent one wins — so unlike
         // the activity/title tail-scans we must read the whole file. It's cheap: a substring pre-filter
@@ -735,7 +742,7 @@ internal sealed class TranscriptReader
             ModelLineName: latestDisplayName,
             ModelIdSinceLine: modelIdSinceLine,
             RunningModelId: latestModelId,
-            ConfiguredModelId: ReadConfiguredModel(cwd),
+            ConfiguredModelId: ReadConfiguredModel(cwd, configDir),
             MaxObservedPrompt: maxUsed));
 
         return (latestUsed, window);
@@ -824,12 +831,12 @@ internal sealed class TranscriptReader
     /// <summary>
     /// Reads the configured default <c>model</c> from Claude Code's settings, in the same precedence
     /// Claude Code applies: project-local (<c>.claude/settings.local.json</c>) over project
-    /// (<c>.claude/settings.json</c>) over user (<c>~/.claude/settings.json</c>). The first file that
+    /// (<c>.claude/settings.json</c>) over the owning config dir's user settings. The first file that
     /// carries a non-blank <c>model</c> wins. Returns null when none do (e.g. the model is inherited
     /// from a managed/enterprise layer we don't read), which the caller maps to the default window.
     /// Best-effort; never throws.
     /// </summary>
-    private static string? ReadConfiguredModel(string cwd)
+    private static string? ReadConfiguredModel(string cwd, ClaudeConfigDir? configDir)
     {
         var candidates = new List<string>();
         if (!string.IsNullOrEmpty(cwd))
@@ -837,7 +844,7 @@ internal sealed class TranscriptReader
             candidates.Add(Path.Combine(cwd, ".claude", "settings.local.json"));
             candidates.Add(Path.Combine(cwd, ".claude", "settings.json"));
         }
-        candidates.Add(ClaudePaths.UserSettingsFile);
+        candidates.Add((configDir ?? ClaudeConfigSet.Primary).UserSettingsFile);
 
         foreach (var path in candidates)
         {
