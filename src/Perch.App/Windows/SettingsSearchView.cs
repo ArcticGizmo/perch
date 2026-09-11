@@ -155,7 +155,7 @@ internal sealed class SettingsSearchView : StackPanel
         Control right = d switch
         {
             { Kind: SettingKind.Toggle } when d.GetBool is not null || d.GetBoolRaw is not null => LiveToggle(d),
-            { Kind: SettingKind.List }                                                           => EditButton(() => Navigate?.Invoke("quicklinks")),
+            { Kind: SettingKind.List }                                                           => EditButton(() => Navigate?.Invoke(ListPageFor(d.Id))),
             _                                                                                     => EditButton(() => OpenEditor(d)),
         };
         right.VerticalAlignment = VerticalAlignment.Center;
@@ -170,6 +170,14 @@ internal sealed class SettingsSearchView : StackPanel
             BorderThickness = new Thickness(0, 0, 0, 1),
         };
     }
+
+    // The page a List-kind result's "Edit" button jumps to. Most list settings are managed on the quick-links
+    // page; config directories have their own editor. (Descriptor ids use hyphens; page keys don't.)
+    private static string ListPageFor(string id) => id switch
+    {
+        "config-dirs" => "configdirs",
+        _             => "quicklinks",
+    };
 
     private PerchToggle LiveToggle(SettingDescriptor d)
     {

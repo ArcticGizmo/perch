@@ -221,6 +221,7 @@ internal sealed class SettingsWindow : Window
         AddPage(nav, "social",       "Social",          BuildSocialPage);
         AddPage(nav, "shortcuts",    "Shortcuts",       BuildHotkeysPage);
         AddPage(nav, "quicklinks",   "Quick Links",     BuildQuickLinksPage);
+        AddPage(nav, "configdirs",   "Config directories", BuildConfigDirsPage);
         AddPage(nav, "export",       "Export",          BuildExportPage);
         AddPage(nav, "about",        "About",           BuildAboutPage);
         AddPage(nav, "changelog",    "Changelog",       BuildChangelogPage);
@@ -1806,6 +1807,186 @@ internal sealed class SettingsWindow : Window
         _settings.QuickLinks = _quickLinks.Select(l => l.Clone()).ToList();
         _settings.Save();
         _hooks.QuickLinksChanged?.Invoke();
+    }
+
+    // ── Config directories (config-dir discovery, Layer 1) ──────────────────────────
+    private StackPanel? _configDirsList;
+
+    private void BuildConfigDirsPage(StackPanel page)
+    {
+        page.Children.Add(SettingsUi.BodyText(
+            "Perch watches your ~/.claude config directory by default. If you run Claude Code with " +
+            "CLAUDE_CONFIG_DIR pointed at other directories (for example one per org, via a launcher), those " +
+            "are auto-discovered — and you can add one that lives somewhere unusual. Edit a row to rename its " +
+            "label (shown on its session rows), or remove ones you don't want. Only the primary, directories " +
+            "you add, and ones a running session reports are ever written to (a hook install); the rest are " +
+            "read-only."));
+
+        page.Children.Add(SettingsUi.Separator());
+
+        _configDirsList = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+        page.Children.Add(_configDirsList);
+
+        var addRow = SettingsUi.ButtonRow();
+        var addBtn = SettingsUi.FlatButton("Add config directory…");
+        addBtn.Click += async (_, _) => await AddOrEditConfigDir(null);
+        addRow.Children.Add(addBtn);
+        page.Children.Add(addRow);
+
+        page.Children.Add(SettingsUi.Separator());
+
+        page.Children.Add(SettingsUi.TitleRow("Config labels",
+            DisplayToggle(_settings.ShowConfigDirLabels, v => _settings.ShowConfigDirLabels = v)));
+        page.Children.Add(SettingsUi.BodyText(
+            "Show each session's config directory label on its row (only when more than one config directory " +
+            "is in play). Off hides every chip regardless of the per-directory labels."));
+
+        RebuildConfigDirsList();
+    }
+
+    private void RebuildConfigDirsList()
+    {
+        _configDirsList!.Children.Clear();
+        foreach (var d in ClaudeConfigSet.Instance.All)
+            _configDirsList.Children.Add(BuildConfigDirRow(d));
+    }
+
+    private Control BuildConfigDirRow(ClaudeConfigDir d)
+    {
+        bool isPrimary = d.Provenance == ConfigDirProvenance.Primary;
+        var grid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"),
+            Margin = new Thickness(0, 0, 0, 10),
+        };
+
+        // Title (the effective label) + path + a provenance/validity meta line. Non-toggleable, like Quick
+        // Links: the row is a display summary and all edits go through the modal.
+        var textStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        var custom = CurrentConfigDirLabel(d);
+        textStack.Children.Add(new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(custom) ? d.Label : custom,
+            FontSize = 14, FontWeight = FontWeight.Bold, Foreground = Palette.TitleBrush,
+        });
+        textStack.Children.Add(new TextBlock
+        {
+            // A path keeps its tail (folder name) legible — leading ellipsis, never trailing.
+            Text = d.Root, FontSize = 12, Foreground = Palette.MutedBrush,
+            TextTrimming = TextTrimming.PrefixCharacterEllipsis, Margin = new Thickness(0, 2, 0, 0),
+        });
+        bool looksValid = isPrimary || ClaudeConfigDiscovery.LooksLikeConfigDir(d.Root);
+        var meta = ProvenanceLabel(d.Provenance);
+        if (isPrimary && string.IsNullOrWhiteSpace(custom)) meta += "  ·  no chip unless labelled";
+        if (!looksValid) meta += "  ·  ⚠ doesn't look like a Claude config directory yet";
+        textStack.Children.Add(new TextBlock
+        {
+            Text = meta, FontSize = 12,
+            Foreground = looksValid ? Palette.MutedBrush : new SolidColorBrush(Palette.Danger),
+            Margin = new Thickness(0, 1, 0, 0),
+        });
+        Grid.SetColumn(textStack, 0);
+        grid.Children.Add(textStack);
+
+        var edit = SettingsUi.FlatButton("Edit");
+        edit.VerticalAlignment = VerticalAlignment.Center;
+        edit.Click += async (_, _) => await AddOrEditConfigDir(d);
+        Grid.SetColumn(edit, 1);
+        grid.Children.Add(edit);
+
+        if (!isPrimary)
+        {
+            var remove = SettingsUi.FlatButton("Remove");
+            remove.Foreground = new SolidColorBrush(Palette.Danger);
+            remove.Margin = new Thickness(6, 0, 0, 0);
+            remove.VerticalAlignment = VerticalAlignment.Center;
+            remove.Click += (_, _) => RemoveConfigDir(d);
+            Grid.SetColumn(remove, 2);
+            grid.Children.Add(remove);
+        }
+
+        return grid;
+    }
+
+    private static string ProvenanceLabel(ConfigDirProvenance p) => p switch
+    {
+        ConfigDirProvenance.Primary      => "primary",
+        ConfigDirProvenance.Declared     => "added",
+        ConfigDirProvenance.SelfReported => "auto · reported by a session",
+        _                                => "auto · discovered (read-only)",
+    };
+
+    /// <summary>The user's custom label for a dir (keyed by its real path), or null when none is set.</summary>
+    private string? CurrentConfigDirLabel(ClaudeConfigDir d) =>
+        _settings.ConfigDirLabels?.FirstOrDefault(e =>
+            ClaudeConfigDir.PathComparer.Equals(
+                Path.TrimEndingDirectorySeparator(e.Path ?? ""), d.RealRoot))?.Label;
+
+    // Set or clear a dir's custom label (keyed by real path). The modal is the sole caller, so the whole edit
+    // is one transaction — nothing is written until Save.
+    private void SetConfigDirLabel(string realRootKey, string label)
+    {
+        var trimmed = label.Trim();
+        var list = _settings.ConfigDirLabels ??= new();
+        list.RemoveAll(e => ClaudeConfigDir.PathComparer.Equals(
+            Path.TrimEndingDirectorySeparator(e.Path ?? ""), realRootKey));
+        if (trimmed.Length > 0)
+            list.Add(new ConfigDirLabel { Path = realRootKey, Label = trimmed });
+        if (list.Count == 0) _settings.ConfigDirLabels = null;
+    }
+
+    private void RemoveConfigDir(ClaudeConfigDir d)
+    {
+        // Un-declare it (if it was added) and hide it by real path, so an auto-discovered dir stays gone
+        // across refreshes and a later self-report can't resurrect it. The primary has no Remove button.
+        _settings.DeclaredConfigDirs?.RemoveAll(x => ClaudeConfigDir.PathComparer.Equals(
+            Path.TrimEndingDirectorySeparator(x), Path.TrimEndingDirectorySeparator(d.Root)));
+
+        var hidden = _settings.HiddenConfigDirs ??= new();
+        if (!hidden.Any(x => ClaudeConfigDir.PathComparer.Equals(Path.TrimEndingDirectorySeparator(x), d.RealRoot)))
+            hidden.Add(d.RealRoot);
+        PersistConfigDirs();
+    }
+
+    // The add/edit transaction: a modal collects the directory (add only) and label, and only Save commits.
+    private async System.Threading.Tasks.Task AddOrEditConfigDir(ClaudeConfigDir? existing)
+    {
+        var dlg = new ConfigDirDialog(existing, existing is null ? null : CurrentConfigDirLabel(existing));
+        if (!await dlg.ShowDialog<bool>(this)) return;
+
+        if (existing is null)
+        {
+            var path = dlg.DirPath;
+            if (string.IsNullOrEmpty(path)) return;
+
+            var list = _settings.DeclaredConfigDirs ??= new();
+            if (!list.Any(d => ClaudeConfigDir.PathComparer.Equals(
+                    Path.TrimEndingDirectorySeparator(d), Path.TrimEndingDirectorySeparator(path))))
+                list.Add(path);
+
+            // Adding a dir un-hides it — re-adding one you previously removed brings it back.
+            var real = Path.TrimEndingDirectorySeparator(ClaudeConfigSet.ResolveReal(path));
+            _settings.HiddenConfigDirs?.RemoveAll(x =>
+                ClaudeConfigDir.PathComparer.Equals(Path.TrimEndingDirectorySeparator(x), real));
+            SetConfigDirLabel(real, dlg.DirLabel);
+        }
+        else
+        {
+            SetConfigDirLabel(existing.RealRoot, dlg.DirLabel);
+        }
+        PersistConfigDirs();
+    }
+
+    private void PersistConfigDirs()
+    {
+        _settings.Save();
+        // Re-feed discovery with the edited lists (idempotent; forces an immediate refresh so the overlay
+        // and this page reflect the change without a restart).
+        ClaudeConfigSet.ConfigureFromSettings(
+            () => _settings.DeclaredConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>(),
+            () => _settings.ConfigDirLabels ?? (IReadOnlyList<ConfigDirLabel>)Array.Empty<ConfigDirLabel>(),
+            () => _settings.HiddenConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>());
+        RebuildConfigDirsList();
     }
 
 

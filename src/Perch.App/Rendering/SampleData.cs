@@ -15,6 +15,13 @@ namespace Perch.Avalonia.Rendering;
 /// </summary>
 internal static class SampleData
 {
+    // Two sample config dirs so the render (and the live preview) exercise the multi-config-dir directory
+    // chip (Layer 1). WorkDir is a launcher-style env; the primary stands in for ~/.claude. The renderer
+    // installs a two-dir set (SetForTesting) so ClaudeConfigSet.IsMulti is true and the chip draws on the
+    // sessions tagged with WorkDir below.
+    internal static readonly ClaudeConfigDir WorkDir =
+        new(@"C:\Users\me\.claude-envs\envs\work", slug: "work")
+        { Provenance = ConfigDirProvenance.Declared };
     /// <summary>
     /// A cross-section of session states, chosen to light up every overlay glyph at once: a running
     /// session with a sub-agent/teammate tree, mode badge, note, context fill, burn rate, git churn and a
@@ -49,7 +56,11 @@ internal static class SampleData
                     new("Extract core", "extracting core", TaskState.Completed),
                     new("Port overlay", "porting overlay", TaskState.Pending),
                     new("Cutover", "cutting over", TaskState.Pending),
-                }),
+                })
+            {
+                // Attributed to a non-primary config dir, so the multi-dir "work" chip renders on this row.
+                ConfigDir = WorkDir, ReportedConfigDir = WorkDir.Root,
+            },
             new ClaudeSession("5678", "s2", SessionStatus.AwaitingInput, @"C:\src\api", "api", now,
                 ExternalNotify: true,
                 // A project note — the row shows the amber note glyph.
@@ -94,7 +105,10 @@ internal static class SampleData
             new ClaudeSession("8801", "s8", SessionStatus.Running, @"C:\src\ext", "extension", now,
                 IdeHost: new IdeHost(IdeHostKind.VsCode, "Visual Studio Code", "code")),
             new ClaudeSession("8802", "s9", SessionStatus.Idle, @"C:\src\agent", "agent", now,
-                IdeHost: new IdeHost(IdeHostKind.Cursor, "Cursor", "cursor")),
+                IdeHost: new IdeHost(IdeHostKind.Cursor, "Cursor", "cursor"))
+            {
+                ConfigDir = WorkDir, ReportedConfigDir = WorkDir.Root,
+            },
             new ClaudeSession("8803", "s10", SessionStatus.AwaitingInput, @"C:\src\svc", "service", now,
                 IdeHost: new IdeHost(IdeHostKind.JetBrains, "PyCharm", "pycharm64")),
         ];

@@ -752,6 +752,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showTaskProgress = true;
     private bool _showBurnRate = true;
     private bool _showGitStats = true;
+    private bool _showConfigDirLabels = true;
     private bool _showPullRequests;
     private bool _showJiraTickets;
     private bool _showNoteLine = true;
@@ -1183,6 +1184,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (_showMarkdown == show) return;
         _showMarkdown = show;
+        InvalidateVisual();
+    }
+
+    /// <summary>Show/hide the per-session config-directory label chip (only ever drawn when more than one
+    /// config directory is in play). Off hides every dir chip regardless of the per-dir labels.</summary>
+    public void SetShowConfigDirLabels(bool show)
+    {
+        if (_showConfigDirLabels == show) return;
+        _showConfigDirLabels = show;
         InvalidateVisual();
     }
 
@@ -2691,8 +2701,15 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         const double GitGap = 4;
         double gitW = showGit ? gitAddW + GitGap + gitDelW + 8 : 0;
 
+        // Config-dir chip (Layer 1): the directory a session is attributed to, shown only when more than
+        // one config dir is in play — otherwise every session shares the primary and the label is noise.
+        // Org-free: it labels by directory (slug / dir name), never an org. See ClaudeSession.AttributedConfigDir.
+        string? dirLabel = _showConfigDirLabels && ClaudeConfigSet.Instance.IsMulti && session.AttributedConfigDir is { DisplayLabel: { Length: > 0 } l } ? l : null;
+        bool showDir = dirLabel is not null;
+        double dirW = showDir ? OverlayDraw.MeasureWidth(dirLabel!, StatusSize) + 14 : 0;
+
         double nameMax = width - HorizPad * 3 - 8 - statusW - badgeW - rcW - originW - mailW
-                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW - jiraW - mdW;
+                         - artW - warnW - thermoW - taskW - metricsW - burnW - gitW - noteW - prW - jiraW - mdW - dirW;
         string nameTrunc = OverlayDraw.Truncate(session.DisplayName, NameSize, nameMax);
         double nameW = OverlayDraw.MeasureWidth(nameTrunc, NameSize);
 
@@ -2783,6 +2800,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             double burnX = statusX - thermoW - badgeW - taskW - metricsW - burnW;
             OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(burnLabel, StatusSize, BurnBrush), burnX, nameMidY);
+        }
+        if (showDir)
+        {
+            double dirX = statusX - thermoW - badgeW - taskW - metricsW - burnW - dirW;
+            DrawDirChip(ctx, dirX, nameMidY, dirLabel!, dirW);
         }
 
         double lineLeft = HorizPad + 14;
@@ -3427,6 +3449,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     }
 
     // The permission-mode badge: two fast-forward chevrons in the mode's colour, faded when idle.
+    // A small rounded pill labelling which config directory a session is attributed to (config-dir
+    // discovery, Layer 1), drawn only in the multi-config-dir case. Height is derived from the font's
+    // measured line height (never a magic pixel value), so the label can't clip on a DPI change — per the
+    // owner-drawn text rule. x is the pill's left edge; w is the width the row layout reserved for it.
+    private void DrawDirChip(DrawingContext ctx, double x, double midY, string label, double w)
+    {
+        var ft = OverlayDraw.Text(label, StatusSize, MutedBrush);
+        double h = ft.Height + 4;
+        OverlayDraw.Pill(ctx, FeedHoverBrush, new Rect(x, midY - h / 2, Math.Max(0, w - 4), h));
+        OverlayDraw.TextLeftMid(ctx, ft, x + 6, midY);
+    }
+
     private static void DrawModeBadge(DrawingContext ctx, PermissionMode mode, double x, double midY, int alpha)
     {
         Color c = Palette.ModeColor(mode);

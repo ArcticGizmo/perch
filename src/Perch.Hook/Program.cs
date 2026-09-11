@@ -37,7 +37,8 @@ try
         "session_id", "permission_mode", "transcript_path", "agent_transcript_path",
         "agent_id", "teammate_name", "source");
 
-    string sessionsDir = Path.Combine(ResolveClaudeDir(), "sessions");
+    string claudeDir = ResolveClaudeDir();
+    string sessionsDir = Path.Combine(claudeDir, "sessions");
 
     // If Perch was removed without running its uninstaller, our hook entries would linger. Detect that
     // on the infrequent session-lifecycle events (never the per-tool-call `mode` hot path) and strip
@@ -71,6 +72,7 @@ try
         // may launch the tray.
         case "start":
             WriteMode(sessionsDir, f);
+            WriteConfigDir(sessionsDir, claudeDir, f);
             WarnIfPerchControlled(sessionsDir, f);
             HandleStart(f);
             break;
@@ -92,6 +94,18 @@ static void WriteMode(string sessionsDir, Dictionary<string, string?> f)
     string? sid = f["session_id"], mode = f["permission_mode"];
     if (!string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(mode) && Directory.Exists(sessionsDir))
         File.WriteAllText(Path.Combine(sessionsDir, sid + ".mode"), mode);
+}
+
+// Self-report which config dir this session ran under, so Perch can attribute it even when the
+// sessions/ folder is *shared* across several config dirs (a junctioned launcher layout, where the
+// folder alone can't say who ran the session). Written on SessionStart only (covers resume) so the
+// per-tool-call hot path stays a single write. Org-free: the marker carries the directory, nothing more.
+// See docs/config-dir-plan.md M3 and ClaudeSession.ReportedConfigDir.
+static void WriteConfigDir(string sessionsDir, string claudeDir, Dictionary<string, string?> f)
+{
+    string? sid = f["session_id"];
+    if (!string.IsNullOrEmpty(sid) && !string.IsNullOrEmpty(claudeDir) && Directory.Exists(sessionsDir))
+        File.WriteAllText(Path.Combine(sessionsDir, sid + ".configdir"), claudeDir);
 }
 
 // SubagentStop: a sub-agent finished (or a teammate ended a turn). Drop agent-{id}.stopped beside its
@@ -209,7 +223,7 @@ static void HandleCleanup(string sessionsDir, Dictionary<string, string?> f)
     string? sid = f["session_id"];
     if (!string.IsNullOrEmpty(sid))
     {
-        foreach (string ext in new[] { ".mode", ".notify", ".history", ".afk" /* legacy */ })
+        foreach (string ext in new[] { ".mode", ".notify", ".history", ".configdir", ".slug" /* legacy */, ".afk" /* legacy */ })
             TryDelete(Path.Combine(sessionsDir, sid + ext));
         // The ownership lock goes only when it's ours (the controlled session itself ending) or stale — a
         // normal claude that briefly opened a Perch-controlled id must not strip Perch's live ownership.

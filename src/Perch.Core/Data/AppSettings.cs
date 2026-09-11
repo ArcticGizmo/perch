@@ -457,6 +457,35 @@ internal sealed class AppSettings
         if (list.Count > RecentEmojiCap) list.RemoveRange(RecentEmojiCap, list.Count - RecentEmojiCap);
     }
 
+    // Config-dir discovery (Layer 1). The user-declared list of extra Claude Code config directories
+    // (each a CLAUDE_CONFIG_DIR root) Perch should watch alongside the primary ~/.claude — the
+    // *backbone* of discovery, authoritative over the convention scan. Null/empty means "none declared"
+    // (Perch still auto-discovers convention dirs, but only declared/self-reported ones are ever written
+    // to; see the M4 safe-write policy). Managed by the dedicated declared-config-dirs editor page, not a
+    // registry toggle (like QuickLinks) — see docs/config-dir-plan.md. A missing key keeps it empty.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? DeclaredConfigDirs { get; set; }
+
+    // Config-dir discovery (Layer 1). User-assigned display labels for config dirs, keyed by resolved real
+    // path (see ConfigDirLabel). Drives the overlay's per-session directory chip: a dir with an entry shows
+    // that label instead of its slug/dir-name, and a labelled *primary* shows a chip where it normally
+    // wouldn't. A dir with no entry uses its default (the primary shows nothing). Managed by the config-
+    // directories editor page. A missing key keeps it empty.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ConfigDirLabel>? ConfigDirLabels { get; set; }
+
+    // Config-dir discovery (Layer 1). Config dirs the user has removed (hidden) from the set, keyed by
+    // resolved real path. Discovery excludes them so an auto-discovered (convention/self-reported) dir stays
+    // gone across refreshes and a later self-report can't resurrect it; re-adding one via the editor un-hides
+    // it. The primary can never be hidden. Managed by the config-directories editor page.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? HiddenConfigDirs { get; set; }
+
+    // Config-dir discovery (Layer 1). Whether the per-session config-directory label (the small chip on a
+    // session row, shown only when more than one config directory is in play) is drawn at all. On by default;
+    // turning it off hides every dir chip regardless of the per-dir labels. Toggle "Config labels".
+    public bool ShowConfigDirLabels { get; set; } = true;
+
     // Whether the overlay floats (classic panel) or docks (reserves a screen-edge column via the OS so
     // maximized windows can't cover it). Defaults to Floating, so an older settings file keeps today's
     // behaviour. Ctrl+Shift+W (HotkeyToggleDocked) collapses/expands the docked column. See OverlayCanvas.

@@ -541,6 +541,13 @@ public partial class App : Application
                     // mode is no longer "on login" — e.g. the settings file was edited while Perch was shut.
                     SyncLoginItem(settings.StartMode);
 
+                    // Feed the user-declared config dirs into discovery (Layer 1) before wiring hooks, so
+                    // declared dirs enter the set and become hook-install targets this launch.
+                    ClaudeConfigSet.ConfigureFromSettings(
+                        () => settings.DeclaredConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>(),
+                        () => settings.ConfigDirLabels ?? (IReadOnlyList<ConfigDirLabel>)Array.Empty<ConfigDirLabel>(),
+                        () => settings.HiddenConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>());
+
                     HookInstaller.Install();
                     await MigrateOffPlugin();
                 });

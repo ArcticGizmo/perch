@@ -37,6 +37,11 @@ internal static class HeadlessRenderer
         // developer's settings and re-ran the first-run Quick Start.
         AppSettings.DisablePersistence();
 
+        // Config-dir discovery (Layer 1): pose a two-dir set so the multi-config-dir directory chip renders
+        // on the sample rows tagged with SampleData.WorkDir. The real primary stays first, so ClaudePaths
+        // is untouched. Render is a one-shot process, so there's nothing to reset.
+        ClaudeConfigSet.SetForTesting(new[] { ClaudeConfigSet.Instance.Primary, SampleData.WorkDir });
+
         Directory.CreateDirectory(outDir);
 
         AppBuilder.Configure<App>()
@@ -1119,11 +1124,11 @@ internal static class HeadlessRenderer
         var now = DateTime.Now;
         var picker = new Windows.HistorySearchWindow(new List<HistoryEntry>
         {
-            new("s2", "quartex-api", @"C:\src\quartex-api", "", now.AddMinutes(-1), true, 12 * 1024),
+            new("s2", "acme-api", @"C:\src\acme-api", "", now.AddMinutes(-1), true, 12 * 1024),
             new("s1", "perch", @"C:\src\perch", "", now.AddHours(-2), false, 84 * 1024, "git-tree refactor"),
             new("s4", "perch", @"C:\src\perch", "", now.AddHours(-6), false, 240 * 1024, "history viewer facelift"),
             new("s3", "landing-site", @"C:\src\personal\landing-site", "", now.AddDays(-1), false, 1400 * 1024, "copy tweaks"),
-            new("s5", "quartex-mobile", @"C:\src\quartex-mobile", "", now.AddDays(-3), false, 52 * 1024),
+            new("s5", "acme-mobile", @"C:\src\acme-mobile", "", now.AddDays(-3), false, 52 * 1024),
         }, "s1")
         { Width = 580 };
         picker.Show();
@@ -1272,7 +1277,7 @@ internal static class HeadlessRenderer
         launcher.ShowLauncherSampleForRender(cwd, new List<HistoryEntry>
         {
             new("s1", "perch", @"C:\src\perch", "", now.AddHours(-2), false, 84 * 1024, "git-tree refactor"),
-            new("s2", "quartex-api", @"C:\src\quartex-api", "", now.AddMinutes(-1), true, 12 * 1024),
+            new("s2", "acme-api", @"C:\src\acme-api", "", now.AddMinutes(-1), true, 12 * 1024),
             new("s3", "landing-site", @"C:\src\landing-site", "", now.AddDays(-1), false, 1400 * 1024, "copy tweaks"),
         }, estimates);
         launcher.Show();

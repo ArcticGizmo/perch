@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.6] - 2026-09-11
+
+- Perch watches every Claude Code config directory, not just ~/.claude
+- Sessions and transcripts are found and attributed across all of them
+- Session rows show which config directory they belong to (when you run several)
+- New Config directories settings page to add, rename, or remove them
+- Launcher-style per-org directories auto-discovered; declare unusual ones by hand
+- "Config labels" toggle to hide the directory chips (the default directory never had one)
+
+---
+
 ## [v0.4.5] - 2026-09-11
 
 - Session history now renders in the rich session UI — bubbles, tool cards, diffs, Markdown

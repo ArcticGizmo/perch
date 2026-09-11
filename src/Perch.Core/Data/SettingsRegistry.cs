@@ -372,6 +372,25 @@ internal static class SettingsRegistry
             ["quick", "links", "launch", "apps", "shortcut", "icons", "tools"], PreviewTarget.QuickLinks,
             nameof(AppSettings.QuickLinks)),
 
+        Info("config-dirs", "Config directories",
+            "Extra Claude Code config directories (CLAUDE_CONFIG_DIR roots) Perch watches alongside " +
+            "~/.claude, so sessions and transcripts in each are found and attributed. Rename each dir's " +
+            "label (shown on session rows) or remove ones you don't want.",
+            SettingSurface.Integrations, SettingKind.List,
+            ["config", "dir", "directory", "directories", "claude", "org", "multi", "env", "environment",
+             "workspace", "CLAUDE_CONFIG_DIR", "declared", "label", "labels", "rename", "name", "display",
+             "chip", "hide", "remove", "suppress"], PreviewTarget.None,
+            nameof(AppSettings.DeclaredConfigDirs), nameof(AppSettings.ConfigDirLabels),
+            nameof(AppSettings.HiddenConfigDirs)),
+
+        Toggle("config-labels", "Config labels",
+            "Show each session's config directory label on its row (only when more than one config " +
+            "directory is in play). Rename the labels on the Config directories page.",
+            SettingSurface.Integrations,
+            ["config", "label", "labels", "directory", "dir", "chip", "org", "env", "environment",
+             "session", "row", "name"], PreviewTarget.ConfigDirLabel, nameof(AppSettings.ShowConfigDirLabels),
+            s => s.ShowConfigDirLabels, (s, v) => s.ShowConfigDirLabels = v),
+
         Toggle("hypertree", "Hypertree",
             "The Hypertree branch section under the quick links.",
             SettingSurface.Integrations, ["hypertree", "branch", "worktree", "desktop", "integration"],

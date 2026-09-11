@@ -162,6 +162,49 @@ public record ClaudeSession(
     /// <summary>True when this session's most recent request to the API failed and it stopped.</summary>
     public bool HasApiError => Status == SessionStatus.ApiError;
 
+    /// <summary>
+    /// The Claude Code config directory this session's sidecars were found in — its <b>write target</b>
+    /// for the lock / notify / mode markers (config-dir discovery, Layer 1). Null for a session not
+    /// produced by a scan (sample data, a hand-built test session), which falls back to the primary via
+    /// <see cref="SessionsDir"/>. Internal because <see cref="ClaudeConfigDir"/> is a Core-internal type
+    /// shared with the app head via InternalsVisibleTo. See <see cref="SessionMonitor.SessionsDirFor"/>.
+    /// </summary>
+    internal ClaudeConfigDir? ConfigDir { get; init; }
+
+    /// <summary>The <c>sessions/</c> directory that owns this session — its <see cref="ConfigDir"/>'s,
+    /// falling back to the primary. The correct target for any per-session write.</summary>
+    internal string SessionsDir => ConfigDir?.SessionsDir ?? ClaudePaths.SessionsDir;
+
+    /// <summary>
+    /// The config-dir <b>root</b> a session's hook stamped into its <c>{sessionId}.configdir</c> marker at
+    /// start (M3). This is how attribution survives a <b>shared</b> <c>sessions/</c> — where several config
+    /// dirs junction onto one physical folder and <see cref="ConfigDir"/> (which dir the file sat in) can't
+    /// tell them apart. Null when the marker is absent (an unshared layout, or a session that started before
+    /// the hook landed — attribution is forward-only). See <see cref="AttributedConfigDir"/>.
+    /// </summary>
+    internal string? ReportedConfigDir { get; init; }
+
+    /// <summary>The legacy <c>{sessionId}.slug</c> self-report marker, accepted as a fallback so an
+    /// in-flight session carrying only the old marker still attributes. Null when absent.</summary>
+    internal string? ReportedSlug { get; init; }
+
+    /// <summary>The set entry the self-report marker resolves to (by root, else legacy slug), or null when
+    /// there is no marker or it names a dir not in the set. Never falls back to the primary.</summary>
+    internal ClaudeConfigDir? EnvDir =>
+        ClaudeConfigSet.Instance.ForRoot(ReportedConfigDir)
+        ?? ClaudeConfigSet.Instance.ForSlug(ReportedSlug);
+
+    /// <summary>
+    /// The config dir this session is <b>attributed</b> to, org-free: the self-reported <see cref="EnvDir"/>
+    /// when one is known (the only thing that works under a shared <c>sessions/</c>), otherwise the
+    /// directory the sidecars sat in (<see cref="ConfigDir"/>) — but only when that dir's <c>sessions/</c>
+    /// is <b>not</b> shared, so a shared layout without a marker resolves to nothing rather than guessing.
+    /// Null when it can't be determined. This is what the overlay chip labels by.
+    /// </summary>
+    internal ClaudeConfigDir? AttributedConfigDir =>
+        EnvDir
+        ?? (ConfigDir is { } c && !ClaudeConfigSet.Instance.SharesSessionsDir(c) ? c : null);
+
     /// <summary>Running sub-agents under this session; never null.</summary>
     public IReadOnlyList<SubAgent> SubAgents { get; init; } = SubAgents ?? [];
 

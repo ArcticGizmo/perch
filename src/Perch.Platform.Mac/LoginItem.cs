@@ -16,7 +16,7 @@ namespace Perch.Platform.Mac;
 /// </summary>
 public sealed class LoginItem : ILoginItem
 {
-    private static string Label => "com.quartexsoftware.perch" + (AppProfile.IsDev ? ".dev" : "");
+    private static string Label => "com.arcticgizmo.perch" + (AppProfile.IsDev ? ".dev" : "");
 
     private static string PlistPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
