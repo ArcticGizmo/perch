@@ -63,6 +63,7 @@ internal enum PreviewTarget
     QuickLinks,
     PerchReacts,
     FeedStrip,
+    ConfigDirLabel,
 }
 
 /// <summary>

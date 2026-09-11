@@ -36,6 +36,11 @@ internal static class HookInstaller
     // .app bundle to launch. Refreshed on every launch.
     private static string MarkerPath => Path.Combine(BinDir, "perch.path");
 
+    // Serialises hook reconciliation so the startup install and a ClaudeConfigSet.Changed-driven
+    // re-reconcile (WatchForNewConfigDirs) can't interleave writes to the same settings files.
+    private static readonly object ReconcileGate = new();
+    private static bool _watching;
+
     /// <summary>
     /// Copy-if-newer the shipped binary to <see cref="HookBinaryPath"/>, record the tray location, then
     /// reconcile the managed hook block in <c>~/.claude/settings.json</c>. Safe to call on every launch.
@@ -58,7 +63,11 @@ internal static class HookInstaller
             // published perch-hook alongside it has nothing to point at — skip rather than write a
             // dangling command).
             if (File.Exists(HookBinaryPath))
-                ClaudeUserSettings.ReconcileHooks(HookBinaryPath, AppInfo.Version, AppProfile.IsDev);
+                ReconcileAll();
+
+            // Keep the hooks in step as config dirs appear/vanish (declared, self-reported). Idempotent
+            // to arm; the reconcile it triggers is serialised with the startup one.
+            WatchForNewConfigDirs();
         }
         catch
         {
@@ -67,12 +76,51 @@ internal static class HookInstaller
     }
 
     /// <summary>
-    /// Removes the managed hook block from <c>~/.claude/settings.json</c> and deletes the stable bin
-    /// dir. Called from the Velopack uninstall callback (see <c>Program</c>).
+    /// Reconciles Perch's managed hooks into <b>every writable</b> config dir in the set — the primary,
+    /// declared dirs, and dirs a session has self-reported. A convention-only dir (found only by the
+    /// pattern scan) is deliberately <b>not</b> written to: the M4 safe-write policy reads from anything
+    /// discovered but never installs a hook into a dir Perch merely guessed at, until a declaration or a
+    /// self-report promotes it. Best-effort per dir. Serialised under one gate.
+    /// </summary>
+    public static void ReconcileAll()
+    {
+        if (!File.Exists(HookBinaryPath)) return;
+        lock (ReconcileGate)
+        {
+            foreach (var dir in ClaudeConfigSet.Instance.All)
+            {
+                if (!dir.IsWritable) continue;
+                try { ClaudeUserSettings.ReconcileHooks(dir.UserSettingsFile, HookBinaryPath, AppInfo.Version, AppProfile.IsDev); }
+                catch { /* one bad dir must not stop the rest */ }
+            }
+        }
+    }
+
+    /// <summary>Re-reconciles hooks whenever the config-dir set changes (a dir was declared or a session
+    /// self-reported one), on the thread pool. Idempotent — arms the subscription at most once.</summary>
+    public static void WatchForNewConfigDirs()
+    {
+        lock (ReconcileGate)
+        {
+            if (_watching) return;
+            _watching = true;
+        }
+        ClaudeConfigSet.Changed += () => System.Threading.Tasks.Task.Run(ReconcileAll);
+    }
+
+    /// <summary>
+    /// Removes the managed hook block from every config dir in the set and deletes the stable bin dir.
+    /// Called from the Velopack uninstall callback (see <c>Program</c>). Removal is safe in any dir (it
+    /// only ever strips Perch's own entries), so it fans over the whole set, not just the writable ones.
     /// </summary>
     public static void Uninstall()
     {
-        try { ClaudeUserSettings.RemoveManagedHooks(AppProfile.IsDev, HookBinaryPath); } catch { }
+        lock (ReconcileGate)
+        {
+            foreach (var dir in ClaudeConfigSet.Instance.All)
+                try { ClaudeUserSettings.RemoveManagedHooks(dir.UserSettingsFile, AppProfile.IsDev, HookBinaryPath); }
+                catch { }
+        }
         try { if (Directory.Exists(BinDir)) Directory.Delete(BinDir, recursive: true); } catch { }
     }
 

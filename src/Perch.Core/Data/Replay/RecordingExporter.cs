@@ -190,8 +190,7 @@ internal static class RecordingExporter
         TryCopySidecar($"{sid}.mode", $"{baseEntry}/{ReplayFormat.SidecarsDir}/{sid}.mode");
         TryCopySidecar($"{sid}.notify", $"{baseEntry}/{ReplayFormat.SidecarsDir}/{sid}.notify");
 
-        var notePath = Path.Combine(ClaudePaths.SessionsDir, $"{sid}.note");
-        if (File.Exists(notePath))
+        if (FindSidecar($"{sid}.note") is { } notePath)
         {
             try
             {
@@ -210,10 +209,22 @@ internal static class RecordingExporter
 
         void TryCopySidecar(string fileName, string entry)
         {
-            var path = Path.Combine(ClaudePaths.SessionsDir, fileName);
-            try { if (File.Exists(path)) WriteEntry(archive, entry, File.ReadAllText(path)); }
+            if (FindSidecar(fileName) is { } path)
+                try { WriteEntry(archive, entry, File.ReadAllText(path)); } catch { }
+        }
+    }
+
+    // A session sidecar by name, searched across every distinct sessions/ dir in the config-dir set (a
+    // non-primary session's sidecars live only in its own dir); null when absent. Pinned = primary only.
+    private static string? FindSidecar(string fileName)
+    {
+        foreach (var dir in ClaudeConfigSet.Instance.DistinctSessionsDirs())
+        {
+            var path = Path.Combine(dir, fileName);
+            try { if (File.Exists(path)) return path; }
             catch { }
         }
+        return null;
     }
 
     private static void CopyTranscript(
@@ -225,25 +236,29 @@ internal static class RecordingExporter
             writer.WriteLine(redact ? TranscriptRedactor.RedactLine(line, placeholderCwd) : line);
     }
 
-    // Finds the on-disk sessions/{pid}.json whose sessionId matches, or null. Best-effort.
+    // Finds the on-disk sessions/{pid}.json whose sessionId matches, across every distinct sessions/ dir
+    // in the config-dir set, or null. Best-effort.
     private static string? FindSessionSnapshot(string sessionId)
     {
-        try
+        foreach (var dir in ClaudeConfigSet.Instance.DistinctSessionsDirs())
         {
-            if (!Directory.Exists(ClaudePaths.SessionsDir))
-                return null;
-            foreach (var file in Directory.EnumerateFiles(ClaudePaths.SessionsDir, "*.json"))
+            try
             {
-                try
+                if (!Directory.Exists(dir))
+                    continue;
+                foreach (var file in Directory.EnumerateFiles(dir, "*.json"))
                 {
-                    var node = JsonNode.Parse(File.ReadAllText(file));
-                    if (node?["sessionId"]?.GetValue<string>() == sessionId)
-                        return File.ReadAllText(file);
+                    try
+                    {
+                        var node = JsonNode.Parse(File.ReadAllText(file));
+                        if (node?["sessionId"]?.GetValue<string>() == sessionId)
+                            return File.ReadAllText(file);
+                    }
+                    catch { }
                 }
-                catch { }
             }
+            catch { }
         }
-        catch { }
         return null;
     }
 

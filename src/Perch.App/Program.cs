@@ -41,6 +41,11 @@ internal static class Program
         if (args.Length > 0 && args[0] == "render")
             return HeadlessRenderer.RenderAll(args.Length > 1 ? args[1] : ".", args.Length > 2 ? args[2] : null);
 
+        // `perch configdirs` prints the discovered config-dir set (primary + declared + convention),
+        // deduped by real path — an internal diagnostic for config-dir discovery (Layer 1). Read-only.
+        if (args.Length > 0 && string.Equals(args[0], "configdirs", StringComparison.OrdinalIgnoreCase))
+            return DumpConfigDirs();
+
         // A stale older plugin might still invoke `perch handle <event>` — short-circuit to a no-op
         // so it never launches a second tray. (Matches the WinForms entry point.)
         if (args.Length > 0 && string.Equals(args[0], "handle", StringComparison.OrdinalIgnoreCase))
@@ -161,6 +166,31 @@ internal static class Program
     // OS login registration, and the managed hook block in ~/.claude/settings.json (plus the stable
     // perch-hook copy). Each step is independent and swallowed — a cleanup that can't finish must never
     // leave the caller's uninstall looking failed.
+    // Diagnostic dump of the discovered config-dir set. Wires the declared roots from settings, forces a
+    // refresh, then lists each dir with its provenance and real path (link-resolved). Read-only.
+    private static int DumpConfigDirs()
+    {
+        AttachParentConsole();
+        try
+        {
+            var settings = Perch.Data.AppSettings.Load();
+            Perch.Data.ClaudeConfigSet.ConfigureFromSettings(
+                () => settings.DeclaredConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>(),
+                () => settings.ConfigDirLabels ?? (IReadOnlyList<Perch.Data.ConfigDirLabel>)Array.Empty<Perch.Data.ConfigDirLabel>(),
+                () => settings.HiddenConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>());
+        }
+        catch { }
+
+        var set = Perch.Data.ClaudeConfigSet.Instance;
+        Console.WriteLine($"Perch config dirs ({set.All.Count}; pinned={Perch.Data.ClaudeConfigSet.IsPinned}):");
+        foreach (var dir in set.All)
+        {
+            var real = dir.Root == dir.RealRoot ? "" : $"  -> {dir.RealRoot}";
+            Console.WriteLine($"  [{dir.Provenance,-12}] {dir.Label,-16} {dir.Root}{real}");
+        }
+        return 0;
+    }
+
     private static int RunUninstallCleanup()
     {
         AttachParentConsole();

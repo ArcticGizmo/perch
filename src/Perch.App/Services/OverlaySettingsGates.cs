@@ -31,6 +31,7 @@ internal static class OverlaySettingsGates
         c.SetShowNoteLine(s.ShowNotes);
         c.SetShowBurnRate(s.ShowBurnRate);
         c.SetShowGitStats(s.ShowGitStats);
+        c.SetShowConfigDirLabels(s.ShowConfigDirLabels);
         c.SetShowPullRequests(s.ShowPullRequests);
         c.SetShowJiraTickets(s.ShowJiraTicket);
         c.SetShowDaemonProcesses(s.ShowDaemonProcesses);

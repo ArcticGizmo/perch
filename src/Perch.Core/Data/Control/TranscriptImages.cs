@@ -59,15 +59,20 @@ internal static partial class TranscriptImages
             var source = block?["source"];
             var mediaType = TranscriptJson.AsString(source?["media_type"]);
 
-            // Primary: the file Claude already cached on disk. No decode, no write — just point a chip at it.
+            // Primary: the file Claude already cached on disk. No decode, no write — just point a chip at
+            // it. Probe each config dir's image-cache (a non-primary session's cache lives under its own
+            // dir); under a pinned CLAUDE_CONFIG_DIR this is just the primary.
             if (!string.IsNullOrEmpty(sessionId))
             {
-                var dir = Path.Combine(ClaudePaths.ClaudeDir, "image-cache", sessionId);
-                foreach (var ext in ExtensionOrder(mediaType))
+                foreach (var cfg in ClaudeConfigSet.Instance.All)
                 {
-                    var candidate = Path.Combine(dir, $"{number}.{ext}");
-                    if (File.Exists(candidate))
-                        return new MessageAttachment { Kind = AttachmentKind.Image, Path = candidate, MediaType = mediaType ?? MediaOf(ext) };
+                    var dir = Path.Combine(cfg.ImageCacheDir, sessionId);
+                    foreach (var ext in ExtensionOrder(mediaType))
+                    {
+                        var candidate = Path.Combine(dir, $"{number}.{ext}");
+                        if (File.Exists(candidate))
+                            return new MessageAttachment { Kind = AttachmentKind.Image, Path = candidate, MediaType = mediaType ?? MediaOf(ext) };
+                    }
                 }
             }
 

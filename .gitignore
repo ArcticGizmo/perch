@@ -495,3 +495,6 @@ captures
 # Supabase CLI local state (link ref, branches) - machine-specific, never committed.
 backend/supabase/.temp/
 backend/supabase/.branches/
+
+# Local, throwaway config-dir discovery test shims (claude-envs-shaped). Never committed.
+local-tests/

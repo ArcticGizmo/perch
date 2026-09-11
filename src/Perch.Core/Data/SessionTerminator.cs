@@ -104,28 +104,34 @@ public static class SessionTerminator
         }
     }
 
-    // The startedAt from ~/.claude/sessions/{pid}.json as a local time, or null when the file is absent,
-    // unparseable, or carries no usable startedAt. Read with FileShare.ReadWrite like every other reader —
-    // Claude Code writes these live.
+    // The startedAt from a {pid}.json as a local time, or null when the file is absent, unparseable, or
+    // carries no usable startedAt. Searches every distinct sessions/ dir in the config-dir set — a
+    // non-primary session's file lives only in its own dir — and reads with FileShare.ReadWrite like every
+    // other reader, since Claude Code writes these live. Under a pinned CLAUDE_CONFIG_DIR this is just the
+    // primary dir.
     private static DateTime? ReadStartedAt(int id)
     {
-        try
+        foreach (var dir in ClaudeConfigSet.Instance.DistinctSessionsDirs())
         {
-            var path = Path.Combine(ClaudePaths.SessionsDir, $"{id}.json");
-            if (!File.Exists(path))
-                return null;
+            try
+            {
+                var path = Path.Combine(dir, $"{id}.json");
+                if (!File.Exists(path))
+                    continue;
 
-            string json;
-            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-            using (var reader = new StreamReader(fs))
-                json = reader.ReadToEnd();
+                string json;
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (var reader = new StreamReader(fs))
+                    json = reader.ReadToEnd();
 
-            var ms = JsonNode.Parse(json)?["startedAt"]?.GetValue<long>() ?? 0;
-            return ms > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime : null;
+                var ms = JsonNode.Parse(json)?["startedAt"]?.GetValue<long>() ?? 0;
+                return ms > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime : null;
+            }
+            catch
+            {
+                // Try the next dir.
+            }
         }
-        catch
-        {
-            return null;
-        }
+        return null;
     }
 }

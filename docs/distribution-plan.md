@@ -96,7 +96,7 @@ than with a fresh third-party OV cert.
 **Verify before committing:**
 
 - **Eligibility** — a legal entity in good standing for **3+ years**, or an individual passing
-  identity validation. Quartex Software may qualify as the org.
+  identity validation. A sponsoring organisation may qualify as the entity.
 - **Region availability** for identity validation started US/Canada-centric and expanded over time.
   **Confirm Australia is covered** — this is the most likely blocker.
 
@@ -312,7 +312,7 @@ hooks correctly.
 
 ## Open questions
 
-- Is Quartex Software a registered entity 3+ years old, and is AU in Trusted Signing's identity-
+- Is there a registered entity 3+ years old to sponsor, and is AU in Trusted Signing's identity-
   validation regions? Decides A1 vs A2.
 - Move `install.ps1` off `raw.githubusercontent.com` (GitHub Pages, or a domain) for a shorter URL and no
   proxy-blocking? Pure URL swap whenever it's wanted — the script is unchanged.
