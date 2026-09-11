@@ -413,6 +413,45 @@ internal sealed class SessionConversation
         return scratch._items.Count;
     }
 
+    /// <summary>Read-only viewer: sets the session id used to recover a transcript's pasted-image attachments
+    /// (<c>~/.claude/image-cache/{sessionId}/…</c>). Call once before feeding lines with
+    /// <see cref="AppendTranscriptLine"/>.</summary>
+    public void UseHistorySession(string? sessionId) => _historySessionId = sessionId;
+
+    /// <summary>Read-only viewer: folds one transcript line into the conversation <em>in order</em>, appending
+    /// (unlike <see cref="LoadHistory"/>'s front-insert) and raising <see cref="Changed"/> so a bound view adds
+    /// it incrementally — no rebuild, so an active session can be tailed without losing the view's scroll
+    /// position or its expanded tool cards. Same per-line rules as <see cref="LoadHistory"/> (sidechain skip,
+    /// genuine user-prompt detection, image recovery). Never throws on a bad line.</summary>
+    public void AppendTranscriptLine(string line)
+    {
+        try { ApplyTranscriptLine(line); } catch { /* a malformed line is skipped, never fatal */ }
+    }
+
+    /// <summary>Read-only viewer: settle a fully-loaded, <em>inactive</em> transcript. A transcript records no
+    /// <c>result</c>, so assistant items stay open and a tool whose result was never written stays "running";
+    /// this closes them so a finished history reads as closed (no live spinners) rather than mid-turn. Do NOT
+    /// call while tailing an active session — its last tool may still be genuinely running.</summary>
+    public void FinalizeHistory()
+    {
+        foreach (var (owner, part) in _toolCalls.Values)
+        {
+            if (part.Status == ToolCallStatus.Running) part.Status = ToolCallStatus.Done;
+            Changed?.Invoke(owner, ConversationChange.Updated);
+        }
+        _toolCalls.Clear();
+        for (int i = _items.Count - 1; i >= 0; i--)
+            if (_items[i] is AssistantMessageItem { IsComplete: false } a)
+            {
+                FreezeStreaming(a);
+                a.IsComplete = true;
+            }
+        // A closed transcript has no live turn — settle the bookkeeping so the view shows no "working" row.
+        TurnActive = false;
+        QueuedPrompts = 0;
+        StateChanged?.Invoke();
+    }
+
     private void ApplyTranscriptLine(string line)
     {
         if (string.IsNullOrWhiteSpace(line)) return;

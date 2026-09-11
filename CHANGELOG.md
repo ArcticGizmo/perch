@@ -9,6 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.5] - 2026-09-11
+
+- Session history now renders in the rich session UI — bubbles, tool cards, diffs, Markdown
+- File paths in a viewed transcript are clickable (open, diff, reveal)
+- Session-history search is a command palette — filter by name, path or id
+- Session history shows a header for the open session, full id and all
+- Session jump buttons stay put and gained start/end (they'd been playing musical chairs)
+- Retired the raw-JSON history view (the readable one had made it redundant)
+- `perch` from Git Bash hands your prompt back (it had been quietly holding mintty hostage)
+
+---
+
 ## [v0.4.4] - 2026-09-10
 
 - Session tool calls read like the terminal: Edit and Write show a diff, not raw JSON

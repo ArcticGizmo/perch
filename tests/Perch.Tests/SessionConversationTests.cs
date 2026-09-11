@@ -396,6 +396,42 @@ public class SessionConversationTests
     }
 
     [Fact]
+    public void AppendTranscriptLine_AppendsInOrder_ForTheReadOnlyViewer()
+    {
+        var (conv, _) = Make();
+        // The history viewer feeds lines one at a time, appending in transcript order (unlike LoadHistory's
+        // front-insert), so a bound thread can grow incrementally as an active session is tailed.
+        conv.AppendTranscriptLine("""{"type":"user","message":{"role":"user","content":"first prompt"}}""");
+        conv.AppendTranscriptLine("""{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"answer one"}]}}""");
+        conv.AppendTranscriptLine("""{"type":"user","message":{"role":"user","content":[{"type":"text","text":"second prompt"}]}}""");
+        conv.AppendTranscriptLine("not json");   // a malformed/partial line is skipped, never fatal
+
+        Assert.Equal(3, conv.Items.Count);
+        Assert.Equal("first prompt", Assert.IsType<UserMessageItem>(conv.Items[0]).Text);
+        Assert.IsType<AssistantMessageItem>(conv.Items[1]);
+        Assert.Equal("second prompt", Assert.IsType<UserMessageItem>(conv.Items[2]).Text);
+    }
+
+    [Fact]
+    public void FinalizeHistory_ClosesAToolThatNeverRecordedItsResult()
+    {
+        var (conv, _) = Make();
+        // A transcript records no `result`, and here the tool_use has no matching tool_result (the session was
+        // interrupted mid-tool). Finalising an inactive transcript settles it so the history reads as closed.
+        conv.AppendTranscriptLine("""{"type":"user","message":{"role":"user","content":"do a thing"}}""");
+        conv.AppendTranscriptLine("""{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a.cs"}}]}}""");
+
+        var a = Assert.IsType<AssistantMessageItem>(conv.Items[1]);
+        Assert.False(a.IsComplete);
+        Assert.Equal(ToolCallStatus.Running, Assert.IsType<ToolCallPart>(a.Parts[0]).Status);
+
+        conv.FinalizeHistory();
+
+        Assert.True(a.IsComplete);
+        Assert.Equal(ToolCallStatus.Done, Assert.IsType<ToolCallPart>(a.Parts[0]).Status);
+    }
+
+    [Fact]
     public void LoadHistory_RecoversPastedImageAsAttachment_KeepingPlaceholder()
     {
         var (conv, _) = Make();

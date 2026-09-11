@@ -63,7 +63,9 @@ internal sealed class SessionThreadView : ScrollViewer
     // scroll state the window's floating jump buttons watch (recomputed on every scroll/layout change).
     private readonly List<Control> _userRows = new();
     private bool _atBottom = true;
+    private bool _atTop = true;
     private bool _hasPromptAbove;
+    private bool _hasPromptBelow;
 
     // A prompt whose top is within this many DIPs of the viewport top counts as "here", not "above" — so a
     // repeated ↑ steps to the next one up rather than re-selecting the prompt already pinned to the top.
@@ -72,10 +74,17 @@ internal sealed class SessionThreadView : ScrollViewer
     /// <summary>True when the view is scrolled to (or near) the tail — the "jump to bottom" button hides.</summary>
     public bool AtBottom => _atBottom;
 
+    /// <summary>True when the view is scrolled to (or near) the very top — the "jump to top" button hides.</summary>
+    public bool AtTop => _atTop;
+
     /// <summary>True when a user prompt sits above the viewport — the "jump to previous prompt" button shows.</summary>
     public bool HasPromptAbove => _hasPromptAbove;
 
-    /// <summary>Raised when <see cref="AtBottom"/> or <see cref="HasPromptAbove"/> changes.</summary>
+    /// <summary>True when a user prompt sits below the viewport top — the "jump to next prompt" button shows.</summary>
+    public bool HasPromptBelow => _hasPromptBelow;
+
+    /// <summary>Raised when <see cref="AtBottom"/>, <see cref="AtTop"/>, <see cref="HasPromptAbove"/> or
+    /// <see cref="HasPromptBelow"/> changes.</summary>
     public event Action? ScrollStateChanged;
 
     // "Claude is working" indicator: an avatar-aligned bubble of bouncing dots + the current action, kept as
@@ -282,6 +291,34 @@ internal sealed class SessionThreadView : ScrollViewer
         RecomputeScrollState();
     }
 
+    /// <summary>Scroll to the very top of the thread (the "jump to top" button).</summary>
+    public void JumpToTop()
+    {
+        _stickToBottom = false;
+        Offset = new Vector(Offset.X, 0);
+        RecomputeScrollState();
+    }
+
+    /// <summary>Scroll to the nearest user prompt below the current viewport top, placing it near the top — so
+    /// repeated clicks walk downward through later prompts. No-op when nothing is below.</summary>
+    public void JumpToNextPrompt()
+    {
+        // The closest prompt below = the one with the least content-top still below the viewport top.
+        double bestTop = double.PositiveInfinity;
+        foreach (var row in _userRows)
+        {
+            if (row.TranslatePoint(new Point(0, 0), this) is not { } p) continue;
+            if (p.Y <= PromptAboveEpsilon) continue;             // at/above the viewport top — not "below"
+            double top = Offset.Y + p.Y;                          // p is viewport-relative; +Offset → content Y
+            if (top < bestTop) bestTop = top;
+        }
+        if (double.IsPositiveInfinity(bestTop)) return;
+        double max = Math.Max(0, Extent.Height - Viewport.Height);
+        Offset = new Vector(Offset.X, Math.Clamp(bestTop - 12, 0, max));
+        _stickToBottom = false;
+        RecomputeScrollState();
+    }
+
     /// <summary>Scroll to the nearest user prompt above the current viewport top, placing it near the top — so
     /// repeated clicks walk upward through earlier prompts. No-op when nothing is above.</summary>
     public void JumpToPreviousPrompt()
@@ -307,18 +344,21 @@ internal sealed class SessionThreadView : ScrollViewer
     private void RecomputeScrollState()
     {
         bool atBottom = Offset.Y + Viewport.Height >= Extent.Height - 24;
-        bool above = false;
+        bool atTop = Offset.Y <= 8;
+        bool above = false, below = false;
         if (Viewport.Height > 0)
             foreach (var row in _userRows)
-                if (row.TranslatePoint(new Point(0, 0), this) is { } p && p.Y < -PromptAboveEpsilon)
+                if (row.TranslatePoint(new Point(0, 0), this) is { } p)
                 {
-                    above = true;
-                    break;
+                    if (p.Y < -PromptAboveEpsilon) above = true;
+                    else if (p.Y > PromptAboveEpsilon) below = true;
                 }
 
-        if (atBottom == _atBottom && above == _hasPromptAbove) return;
+        if (atBottom == _atBottom && atTop == _atTop && above == _hasPromptAbove && below == _hasPromptBelow) return;
         _atBottom = atBottom;
+        _atTop = atTop;
         _hasPromptAbove = above;
+        _hasPromptBelow = below;
         ScrollStateChanged?.Invoke();
     }
 

@@ -1428,7 +1428,15 @@ public partial class App : Application
     private void OpenHistory(string? sessionId)
     {
         _historyWindow = WindowHost.ShowOrFocus(_historyWindow,
-            () => new HistoryWindow(),
+            () =>
+            {
+                var h = new HistoryWindow();
+                // File references in the read-only render route to the same app-owned viewer/tree windows the
+                // live session UI uses, keyed to the selected transcript's own cwd/session (not a live session).
+                h.OpenFileInViewerRequested += (cwd, sid, active, path) => OpenFileInViewer(cwd, sid, active, path);
+                h.ViewFileDiffRequested += (cwd, active, path) => ViewFileDiff(cwd, active, path);
+                return h;
+            },
             () => _historyWindow = null,
             w =>
             {
@@ -1513,26 +1521,36 @@ public partial class App : Application
     private void OpenSessionFileInViewer(SessionWindow w, string absPath)
     {
         var s = w.Session;
-        bool isActive = s?.IsRunning ?? false;
+        OpenFileInViewer(s?.Cwd ?? "", s?.SessionId ?? "", s?.IsRunning ?? false, absPath);
+    }
+
+    // Opens (or focuses) the one Markdown viewer on a file, pointed at the owning session's cwd/id. Shared by
+    // the live session UI and the read-only history viewer (which passes the transcript entry's context).
+    private void OpenFileInViewer(string cwd, string sessionId, bool isActive, string absPath)
+    {
         _markdownWindow = WindowHost.ShowOrFocus(_markdownWindow,
             () => new MarkdownWindow(_appSettings ?? AppSettings.Load()),
             () => _markdownWindow = null,
             mw =>
             {
-                if (s is { } sess)
-                    mw.Retarget(sess.Cwd, sess.SessionId ?? "", System.IO.Path.GetFileName(sess.Cwd.TrimEnd('\\', '/')), isActive);
+                if (cwd.Length > 0)
+                    mw.Retarget(cwd, sessionId, System.IO.Path.GetFileName(cwd.TrimEnd('\\', '/')), isActive);
                 mw.OpenPath(absPath);
             });
     }
 
-    // A session UI file reference's "View diff": reuse the one git Tree window, pointed at the session's cwd
-    // and asked to land on the chosen file.
     private void ViewSessionFileDiff(SessionWindow w, string absPath)
     {
         var s = w.Session;
-        string cwd = s?.Cwd ?? System.IO.Path.GetDirectoryName(absPath) ?? "";
+        ViewFileDiff(s?.Cwd ?? System.IO.Path.GetDirectoryName(absPath) ?? "", s?.IsRunning ?? false, absPath);
+    }
+
+    // A file reference's "View diff": reuse the one git Tree window, pointed at the owning session's cwd and
+    // asked to land on the chosen file. Shared by the live session UI and the read-only history viewer.
+    private void ViewFileDiff(string cwd, bool isActive, string absPath)
+    {
+        if (cwd.Length == 0) cwd = System.IO.Path.GetDirectoryName(absPath) ?? "";
         string title = cwd.Length > 0 ? System.IO.Path.GetFileName(cwd.TrimEnd('\\', '/')) : "Changes";
-        bool isActive = s?.IsRunning ?? false;
         _treeWindow = WindowHost.ShowOrFocus(_treeWindow,
             () => new GitTreeWindow(_appSettings ?? AppSettings.Load()),
             () => _treeWindow = null,

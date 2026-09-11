@@ -142,9 +142,11 @@ internal static class Program
         // tray's whole lifetime (like `code .` returning at once): relaunch the tray as a detached background
         // process, hand it the intent, and give the terminal its prompt back. Skipped for a relaunch we
         // started ourselves (it *is* the background tray), for dev runs (`dotnet run` should stay in the
-        // foreground for logs), and for non-terminal launches — the login item, a double-click, the hook, an
-        // update restart — which have no terminal to free and must run the tray in-process as before.
-        if (fromTerminal && relaunchIntent is null && !Perch.Data.AppProfile.IsDev)
+        // foreground for logs), for the autostarted (hook) and first-run launches — those must run in-process
+        // so their flags (auto-close-after-last-session, one-time plugin install) survive, since DetachTray
+        // hands the child only the session intent — and for non-terminal launches (login item, double-click,
+        // update restart), which have no terminal to free and run the tray in-process as before.
+        if (fromTerminal && relaunchIntent is null && !AutoStarted && !IsFirstRun && !Perch.Data.AppProfile.IsDev)
             return DetachTray(sessionIntent);
 
         PendingSessionIntent = sessionIntent;
@@ -300,11 +302,22 @@ internal static class Program
 #if WINDOWS
     private static class NativeConsole
     {
+        public const int STD_INPUT_HANDLE = -10;
+        public const int STD_OUTPUT_HANDLE = -11;
+        public const uint FILE_TYPE_CHAR = 0x0002;
+        public const uint FILE_TYPE_PIPE = 0x0003;
+
         [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool AttachConsole(int dwProcessId);
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool FreeConsole();
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr GetStdHandle(int nStdHandle);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        public static extern uint GetFileType(IntPtr hFile);
     }
 #endif
 
@@ -319,6 +332,14 @@ internal static class Program
     private static bool LaunchedFromTerminal()
     {
 #if WINDOWS
+        // MSYS2 / Git Bash export MSYSTEM (e.g. "MINGW64") into every process they launch. Their mintty parent
+        // has no Win32 console (so AttachConsole below fails) and MSYS hands native GUI children no usable
+        // Win32 std handles either (so the pipe/char probe can't see the terminal), which is exactly what made
+        // `perch` from Git Bash run the tray in-process and hang the shell. This env var is the one dependable
+        // signal that a Git Bash-family shell launched us. See docs/session-launch-monitor-plan.md.
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("MSYSTEM")))
+            return true;
+
         const int ATTACH_PARENT_PROCESS = -1;
         const int ERROR_ACCESS_DENIED = 5;
         if (NativeConsole.AttachConsole(ATTACH_PARENT_PROCESS))
@@ -327,12 +348,30 @@ internal static class Program
             return true;
         }
         // Already attached to a console (rare for a WinExe) still means an interactive launch.
-        return System.Runtime.InteropServices.Marshal.GetLastWin32Error() == ERROR_ACCESS_DENIED;
+        if (System.Runtime.InteropServices.Marshal.GetLastWin32Error() == ERROR_ACCESS_DENIED)
+            return true;
+        // Other shells (cmd, PowerShell, Windows Terminal) that didn't attach above but did hand us a
+        // connected console (CHAR) or pipe (PIPE) std handle — a GUI double-click, the login item, the hook
+        // and the update restart get none.
+        return StdHandleIsInteractive(NativeConsole.STD_INPUT_HANDLE)
+            || StdHandleIsInteractive(NativeConsole.STD_OUTPUT_HANDLE);
 #else
         try { return !Console.IsInputRedirected; }
         catch { return false; }
 #endif
     }
+
+#if WINDOWS
+    // True when a standard handle is a console (CHAR) or a pipe (PIPE) — an interactive/shell launch — rather
+    // than absent (a GUI double-click / service-style launch leaves the handle null or invalid).
+    private static bool StdHandleIsInteractive(int which)
+    {
+        var handle = NativeConsole.GetStdHandle(which);
+        if (handle == IntPtr.Zero || handle == new IntPtr(-1)) return false;
+        uint type = NativeConsole.GetFileType(handle) & 0x7FFF; // drop FILE_TYPE_REMOTE
+        return type is NativeConsole.FILE_TYPE_CHAR or NativeConsole.FILE_TYPE_PIPE;
+    }
+#endif
 
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>()

@@ -1082,47 +1082,27 @@ internal static class HeadlessRenderer
     // MarkdownView styling (heading, fenced code, table) can be eyeballed alongside thinking + tools.
     private static void RenderHistoryReadable(string outDir)
     {
-        var ts = new DateTime(2026, 8, 27, 10, 15, 0);
-        var events = new List<HistoryEvent>
+        const string prompt = "Why is the `PlacementMath` test flaky? Show me the fix as a diff and summarise the causes in a table.";
+        var events = new List<Perch.Data.Control.SessionEvent>
         {
-            new()
-            {
-                Kind = HistoryEventKind.UserText, Timestamp = ts, Key = "e0",
-                Summary = "Why is the placement test flaky?",
-                Detail = "Why is the `PlacementMath` test flaky? Show me the fix as a diff and summarise the causes in a table.",
-            },
-            new()
-            {
-                Kind = HistoryEventKind.Thinking, Timestamp = ts, Key = "e1",
-                Summary = "The failure only reproduces at 1.5× DPI…",
-                Detail = "The failure only reproduces at 1.5× DPI — the offset rounds twice, once in Snap and once in ToDip. Reading the test first.",
-            },
-            new()
-            {
-                Kind = HistoryEventKind.ToolCall, Timestamp = ts, Key = "t1",
-                Summary = "Reading PlacementMath.cs",
-                Detail = "{\n  \"file_path\": \"src/Perch.Core/Data/PlacementMath.cs\"\n}",
-                Result = "public static PixelPoint Snap(PixelPoint p, double scale)\n{\n    …\n}",
-            },
-            new()
-            {
-                Kind = HistoryEventKind.ToolCall, Timestamp = ts, Key = "t2",
-                Summary = "Running: dotnet test --filter PlacementMathTests",
-                Detail = "{\n  \"command\": \"dotnet test --filter PlacementMathTests\"\n}",
-                Result = "Passed!  - Failed: 0, Passed: 41",
-            },
-            new()
-            {
-                Kind = HistoryEventKind.AssistantText, Timestamp = ts, Key = "e2",
-                Summary = "Found it — a double-rounding bug.",
-                Detail = "Found it — a **double-rounding** bug.\n\n### The fix\n\n```csharp\n// round once, at the edge\nvar dip = Math.Round(px / scale, MidpointRounding.AwayFromZero);\nreturn new PixelPoint((int)(dip * scale), p.Y);\n```\n\n### Causes\n\n| Cause | Effect |\n|-------|--------|\n| `Snap` rounds pixels | off-by-one at 1.5× |\n| `ToDip` rounds again | drift accumulates |\n\n> Only one of the two conversions may round; the other must stay exact.",
-            },
+            new Perch.Data.Control.SessionInitEvent("f1a2b3c4-0000-4000-8000-000000000000", "claude-opus-5", "default", 18),
+            new Perch.Data.Control.AssistantThinkingEvent(
+                "The failure only reproduces at 1.5× DPI — the offset rounds twice, once in Snap and once in ToDip. Reading the test first."),
+            new Perch.Data.Control.ToolUseEvent("t1", "Read", "Reading PlacementMath.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/PlacementMath.cs\"}"),
+            new Perch.Data.Control.ToolResultEvent("t1",
+                "public static PixelPoint Snap(PixelPoint p, double scale)\n{\n    …\n}", false),
+            new Perch.Data.Control.ToolUseEvent("t2", "Bash", "Running: dotnet test --filter PlacementMathTests",
+                "{\"command\":\"dotnet test --filter PlacementMathTests\"}"),
+            new Perch.Data.Control.ToolResultEvent("t2", "Passed!  - Failed: 0, Passed: 41", false),
+            new Perch.Data.Control.AssistantTextEvent(
+                "Found it — a **double-rounding** bug.\n\n### The fix\n\n```csharp\n// round once, at the edge\nvar dip = Math.Round(px / scale, MidpointRounding.AwayFromZero);\nreturn new PixelPoint((int)(dip * scale), p.Y);\n```\n\n### Causes\n\n| Cause | Effect |\n|-------|--------|\n| `Snap` rounds pixels | off-by-one at 1.5× |\n| `ToDip` rounds again | drift accumulates |\n\n> Only one of the two conversions may round; the other must stay exact."),
         };
 
-        // Templated controls (Expander, SelectableTextBlock) only realise inside a shown window, so this
-        // is captured via CaptureRenderedFrame like the markdown viewer, not a detached one-shot bitmap.
+        // The read-only thread realises its templated controls only inside a shown window, so this is captured
+        // via CaptureRenderedFrame like the markdown viewer, not a detached one-shot bitmap.
         var w = new Windows.HistoryWindow { Width = 780, Height = 900 };
-        w.ShowSampleForRender(events, "t2");
+        w.ShowSampleForRender(@"C:\src\perch", prompt, events);
         w.Show();
         Dispatcher.UIThread.RunJobs();
         AvaloniaHeadlessPlatform.ForceRenderTimerTick();
@@ -1133,6 +1113,29 @@ internal static class HeadlessRenderer
             frame.Save(fs);
         }
         w.Close();
+
+        // The session search palette: a command-palette modal over a list of rich session rows
+        // (project/title, cwd, when · size, a live dot).
+        var now = DateTime.Now;
+        var picker = new Windows.HistorySearchWindow(new List<HistoryEntry>
+        {
+            new("s2", "quartex-api", @"C:\src\quartex-api", "", now.AddMinutes(-1), true, 12 * 1024),
+            new("s1", "perch", @"C:\src\perch", "", now.AddHours(-2), false, 84 * 1024, "git-tree refactor"),
+            new("s4", "perch", @"C:\src\perch", "", now.AddHours(-6), false, 240 * 1024, "history viewer facelift"),
+            new("s3", "landing-site", @"C:\src\personal\landing-site", "", now.AddDays(-1), false, 1400 * 1024, "copy tweaks"),
+            new("s5", "quartex-mobile", @"C:\src\quartex-mobile", "", now.AddDays(-3), false, 52 * 1024),
+        }, "s1")
+        { Width = 580 };
+        picker.Show();
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        var pickerFrame = picker.CaptureRenderedFrame();
+        if (pickerFrame != null)
+        {
+            using var fs = File.Create(Path.Combine(outDir, "history_selector_1x.png"));
+            pickerFrame.Save(fs);
+        }
+        picker.Close();
     }
 
     // The rich session window over synthetic events (no process): the same scene as the design mockup —

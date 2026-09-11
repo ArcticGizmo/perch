@@ -107,7 +107,8 @@ internal sealed partial class SessionWindow : Window
     private readonly Panel _center;
     private readonly Control _launcher;
     private readonly SessionThreadView _thread;
-    private readonly Border _jumpBottomBtn, _jumpPromptBtn;   // floating "jump to bottom" / "jump to last prompt"
+    // Floating scroll column: top / prev-prompt / next-prompt / bottom — fixed slots, each disabled when it wouldn't move.
+    private readonly Border _jumpTopBtn, _jumpPrevBtn, _jumpNextBtn, _jumpBottomBtn;
 
     // Background attention: a paused-turn prompt (permission / question / plan) arriving while this window
     // isn't active raises a desktop toast so the user working elsewhere doesn't miss it. The decider is
@@ -645,15 +646,18 @@ internal sealed partial class SessionWindow : Window
         _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
         _toastTimer.Tick += (_, _) => HideToast();
 
-        // Floating scroll buttons, bottom-right over the thread (above the composer). Shown only when useful.
-        _jumpPromptBtn = JumpButton("↑", "Jump to the previous prompt", () => _thread.JumpToPreviousPrompt());
-        _jumpBottomBtn = JumpButton("↓", "Jump to the latest", () => _thread.JumpToBottom());
+        // Floating scroll column, bottom-right over the thread (above the composer). The four buttons hold a
+        // fixed column so they never jump around; each is disabled when it wouldn't move the view.
+        _jumpTopBtn = JumpButton("⤒", "Jump to the start", () => _thread.JumpToTop());
+        _jumpPrevBtn = JumpButton("↑", "Jump to the previous prompt", () => _thread.JumpToPreviousPrompt());
+        _jumpNextBtn = JumpButton("↓", "Jump to the next prompt", () => _thread.JumpToNextPrompt());
+        _jumpBottomBtn = JumpButton("⤓", "Jump to the latest", () => _thread.JumpToBottom());
         var jumpStack = new StackPanel
         {
             Orientation = Orientation.Vertical, Spacing = 9,
             HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom,
             Margin = new Thickness(0, 0, 20, 16),
-            Children = { _jumpPromptBtn, _jumpBottomBtn },
+            Children = { _jumpTopBtn, _jumpPrevBtn, _jumpNextBtn, _jumpBottomBtn },
         };
         _thread.ScrollStateChanged += UpdateJumpButtons;
 
@@ -2599,13 +2603,25 @@ internal sealed partial class SessionWindow : Window
         AttentionRequested?.Invoke("Perch — a session needs you", $"{project} {what}.");
     }
 
-    // Show each jump button only when it would do something: "to bottom" when not already at the tail; "to last
-    // prompt" when a prompt exists but is scrolled out of view. Hidden entirely off the thread.
+    // The four buttons hold a fixed column (start / prev / next / latest) so they never jump around; each is
+    // enabled only when it would move the view (something above/below, a prompt above/below), and dimmed +
+    // click-through-disabled otherwise. The whole column hides only off the thread (e.g. the launcher).
     private void UpdateJumpButtons()
     {
         bool onThread = _thread.IsVisible;
-        _jumpBottomBtn.IsVisible = onThread && !_thread.AtBottom;
-        _jumpPromptBtn.IsVisible = onThread && _thread.HasPromptAbove;
+        _jumpTopBtn.IsVisible = _jumpPrevBtn.IsVisible = _jumpNextBtn.IsVisible = _jumpBottomBtn.IsVisible = onThread;
+        SetJumpEnabled(_jumpTopBtn, onThread && !_thread.AtTop);
+        SetJumpEnabled(_jumpPrevBtn, onThread && _thread.HasPromptAbove);
+        SetJumpEnabled(_jumpNextBtn, onThread && _thread.HasPromptBelow);
+        SetJumpEnabled(_jumpBottomBtn, onThread && !_thread.AtBottom);
+    }
+
+    // A disabled jump button keeps its slot but reads as inert: dimmed, resting fill, no pointer/hover.
+    private void SetJumpEnabled(Border b, bool enabled)
+    {
+        b.IsEnabled = enabled;
+        b.Opacity = enabled ? 1 : 0.32;
+        b.Background = _p.Raised2;   // clear any lingering hover fill when it goes inert
     }
 
     // ── Bar ──────────────────────────────────────────────────────────────────────
