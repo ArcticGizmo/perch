@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.8] - 2026-09-16
+
+- Config directories show which org each one is signed into
+- Hover a session's directory chip to see its org
+
+---
+
 ## [v0.4.7] - 2026-09-16
 
 - Inline `code` reads as coloured text, not a black highlighter block

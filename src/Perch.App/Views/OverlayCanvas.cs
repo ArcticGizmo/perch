@@ -1372,6 +1372,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private readonly Dictionary<int, string> _originLabels = new();
     private readonly Dictionary<int, Rect> _prRects = new();
     private readonly Dictionary<int, Rect> _jiraRects = new();
+    private readonly Dictionary<int, Rect> _dirRects = new();
+
+    // Layer-2 live-org lookup for the config-dir chip's hover tooltip. Cached (mtime-invalidated) so a
+    // repaint/hover never re-parses .claude.json needlessly. Swappable for the render/preview harness.
+    private IOrgProvider _orgProvider = new OrgProvider();
+    internal void SetOrgProvider(IOrgProvider provider) => _orgProvider = provider;
     // The expand/collapse chevron on a sub-agent row that has children — captured at paint time so a
     // click can toggle that node (see RouteClick). Only rows with children get an entry.
     private readonly Dictionary<int, Rect> _subChevronRects = new();
@@ -1629,7 +1635,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, Origin, NoteButton, SocialStatus, ReactionSummary, Game }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -1856,6 +1862,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 _originLabels.Clear();
                 _prRects.Clear();
                 _jiraRects.Clear();
+                _dirRects.Clear();
                 _subChevronRects.Clear();
 
                 // Paint every visible section at the top recorded by the preceding measure pass, in the user's
@@ -2805,6 +2812,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             double dirX = statusX - thermoW - badgeW - taskW - metricsW - burnW - dirW;
             DrawDirChip(ctx, dirX, nameMidY, dirLabel!, dirW);
+            _dirRects[rowIndex] = new Rect(dirX, nameMidY - 9, Math.Max(0, dirW - 4), 18);
         }
 
         double lineLeft = HorizPad + 14;
@@ -3827,6 +3835,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitTestMetrics(p)    is var me && me >= 0 ? (TipKind.Metrics, me) :
             HitRect(_prRects, p) is var pr && pr >= 0 ? (TipKind.Pr, pr) :
             HitRect(_jiraRects, p) is var jr && jr >= 0 ? (TipKind.Jira, jr) :
+            HitRect(_dirRects, p) is var di && di >= 0 ? (TipKind.Dir, di) :
             HitTestOriginIcon(p) is var oi && oi >= 0 ? (TipKind.Origin, oi) :
             _mediaTitleRect.Contains(p)               ? (TipKind.Media, -1) :
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
@@ -3865,6 +3874,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Mic:     ShowMicTooltip();            break;
             case TipKind.Pr:      ShowPrTooltip(_tipRow);      break;
             case TipKind.Jira:    ShowJiraTooltip(_tipRow);    break;
+            case TipKind.Dir:     ShowDirTooltip(_tipRow);     break;
             case TipKind.Origin:  ShowOriginTooltip(_tipRow);  break;
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
             case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
@@ -4730,6 +4740,28 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             new(jira.Key, OverlayTooltip.FgColor, true),
             new("Click to open in Jira", OverlayTooltip.MutedColor, false),
         };
+        Tooltip().ShowLines(lines, ToScreen(r.Left, r.Bottom + 4));
+    }
+
+    // Hover tooltip for the config-dir chip (Layer 2): the dir's label on a bold line, and beneath it the
+    // org that dir's credential is signed into *right now* (read best-effort from .claude.json). The chip
+    // itself stays org-free (it labels by directory); the live org is revealed on demand here, so a crowded
+    // row gains no permanent org text.
+    private void ShowDirTooltip(int row)
+    {
+        if (row < 0 || row >= _rows.Count || _rows[row].Session?.AttributedConfigDir is not { } dir) return;
+        if (!_dirRects.TryGetValue(row, out var r)) return;
+
+        var label = dir.DisplayLabel is { Length: > 0 } dl ? dl : dir.Label;
+        var lines = new List<OverlayTooltip.Line> { new(label, OverlayTooltip.FgColor, true) };
+        // Use the cached provider for the common (org-bound) case; fall back to a direct sign-in read only
+        // when there's no org, so a personal/signed-out dir still reads accurately. One phrasing source
+        // (OrgDisplay) keeps this in step with the settings page.
+        var org = _orgProvider.GetLive(dir);
+        string signIn = org is not null
+            ? Perch.Avalonia.Services.OrgDisplay.SignInText(new ClaudeSignIn(SignInState.Org, org, org.AccountEmail))
+            : Perch.Avalonia.Services.OrgDisplay.SignInText(ClaudeJsonReader.ReadSignIn(dir));
+        lines.Add(new(signIn, OverlayTooltip.MutedColor, false));
         Tooltip().ShowLines(lines, ToScreen(r.Left, r.Bottom + 4));
     }
 

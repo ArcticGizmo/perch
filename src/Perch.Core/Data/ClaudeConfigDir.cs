@@ -87,6 +87,11 @@ internal sealed record ClaudeConfigDir
     /// <summary><c>{root}/.credentials.json</c> — the OAuth tokens the usage poll reads.</summary>
     public string CredentialsFile => Path.Combine(Root, ".credentials.json");
 
+    /// <summary><c>{root}/.claude.json</c> — the OAuth <b>org binding</b> (<c>oauthAccount</c>). A path
+    /// only: this type stays org-free and never reads it (Layer 1). The Layer-2
+    /// <see cref="ClaudeJsonReader"/> reads it to observe the dir's <i>live</i> org.</summary>
+    public string ClaudeJsonFile => Path.Combine(Root, ".claude.json");
+
     /// <summary><c>{root}/settings.json</c> — the user-scope Claude Code settings.</summary>
     public string UserSettingsFile => Path.Combine(Root, "settings.json");
 

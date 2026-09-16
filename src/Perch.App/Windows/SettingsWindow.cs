@@ -1885,6 +1885,15 @@ internal sealed class SettingsWindow : Window
             Foreground = looksValid ? Palette.MutedBrush : new SolidColorBrush(Palette.Danger),
             Margin = new Thickness(0, 1, 0, 0),
         });
+        // Live sign-in (Layer 2): what this dir's credential is signed into right now, read best-effort
+        // from its .claude.json. Always shown — including the primary and signed-out/personal dirs — so
+        // it's always clear what each directory is doing.
+        textStack.Children.Add(new TextBlock
+        {
+            Text = OrgDisplay.SignInText(ClaudeJsonReader.ReadSignIn(d)),
+            FontSize = 12, Foreground = Palette.MutedBrush,
+            Margin = new Thickness(0, 1, 0, 0),
+        });
         Grid.SetColumn(textStack, 0);
         grid.Children.Add(textStack);
 

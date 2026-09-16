@@ -25,6 +25,7 @@ public class ClaudeConfigDirTests
         Assert.Equal(Path.Combine(root, "daemon"), dir.DaemonDir);
         Assert.Equal(Path.Combine(root, "daemon", "roster.json"), dir.DaemonRosterFile);
         Assert.Equal(Path.Combine(root, ".credentials.json"), dir.CredentialsFile);
+        Assert.Equal(Path.Combine(root, ".claude.json"), dir.ClaudeJsonFile);
         Assert.Equal(Path.Combine(root, "settings.json"), dir.UserSettingsFile);
         Assert.Equal(Path.Combine(root, "image-cache"), dir.ImageCacheDir);
     }
