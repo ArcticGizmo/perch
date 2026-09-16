@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.10] - 2026-09-16
+
+- Session windows launched from the CLI come to the front, as intended
+- Fixed the composer caret drifting from your text on long, scrolling messages
+- Artifact glyph works again for newly published artifacts (claude.ai moved the URLs; we caught up)
+
+---
+
 ## [v0.4.9] - 2026-09-16
 
 - Usage bars split per org — a set per account in use, plus the default

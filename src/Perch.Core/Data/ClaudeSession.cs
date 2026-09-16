@@ -92,7 +92,7 @@ public record SubAgent(
 /// Re-publishing reuses the same URL, so artifacts are de-duplicated by <see cref="Url"/>.
 /// </summary>
 public record Artifact(
-    string Url,    // https://claude.ai/code/artifact/{id} — the page to open
+    string Url,    // https://claude.ai/artifact/{id} (older sessions: /code/artifact/{uuid}) — the page to open
     string Title   // the artifact's title, shown in the picker when a session has several
 );
 

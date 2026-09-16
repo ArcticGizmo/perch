@@ -696,7 +696,19 @@ public partial class App : Application
     {
         if (w.WindowState == WindowState.Minimized) w.WindowState = WindowState.Normal;
         w.Show();
+        ForceFront(w);
+    }
+
+    // Raises an already-shown window to the top and hands it focus. A background tray isn't the foreground
+    // process, so Windows silently ignores the SetForegroundWindow inside Activate() — the window only flashes
+    // in the taskbar (worst for a CLI launch, where the terminal stays on top). ForceForeground borrows the
+    // current foreground thread's input queue to lift the restriction, the same trick the session switcher uses
+    // for its hotkey. Best-effort and cross-platform (the Mac chrome no-ops); call after Show().
+    private static void ForceFront(Window w)
+    {
         w.Activate();
+        if (w.TryGetPlatformHandle() is { } handle)
+            PlatformServices.WindowChrome.ForceForeground(handle.Handle);
     }
 
     // Focuses a Claude Desktop session. The claude process runs under the Claude Desktop app, whose window
@@ -1613,13 +1625,13 @@ public partial class App : Application
         {
             if (idle.WindowState == WindowState.Minimized) idle.WindowState = WindowState.Normal;
             idle.Show();
-            idle.Activate();
+            ForceFront(idle);
             idle.LoadRecents(ActiveSessionIds());
             return;
         }
         var w = NewSessionWindow();
         w.Show();
-        w.Activate();
+        ForceFront(w);
         w.LoadRecents(ActiveSessionIds());
     }
 
@@ -1636,7 +1648,7 @@ public partial class App : Application
         PlaceOnLaunchMonitor(w, origin);
         w.Show();
         w.ResumeSession(sessionId, cwd);
-        w.Activate();
+        ForceFront(w);
     }
 
     // /resume "resume here": swap window `w` to the picked session. If it's already a live Perch session, just
@@ -1659,7 +1671,7 @@ public partial class App : Application
         PlaceOnLaunchMonitor(w, origin);
         w.Show();
         w.StartNew(cwd, model, mode);
-        w.Activate();
+        ForceFront(w);
     }
 
     // Positions a not-yet-shown session window centred on the monitor the CLI launch came from (the terminal's

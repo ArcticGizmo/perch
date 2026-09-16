@@ -1277,6 +1277,13 @@ internal static class HeadlessRenderer
         CaptureFind(Theming.SessionPalette.For(dark: true), "session_find_1x.png", "session");
         CaptureFind(Theming.SessionPalette.For(dark: false), "session_find_light_1x.png", "session");
 
+        // The composer holding a long, wrapping draft — the transparent-TextBox + coloured-overlay control has
+        // regressed before (caret drift, then clipped lines), so capture it filled to eyeball that every line
+        // renders, aligns, and the surface scrolls at its cap rather than growing without bound.
+        var longDraft = string.Concat(System.Linq.Enumerable.Repeat(
+            "asdf aj3eha3klh ak3jhakjfh 3kahe3kljhaf 3ejhalefh al3wjfhawl j3fhalwjhf h asdflhjsa dflhasdlf asdfha sdhfl this is a log. ", 12));
+        CaptureComposer(Theming.SessionPalette.For(dark: true), "session_composer_long_1x.png", longDraft);
+
         // The launcher: folder chosen, model picker, and a recents list including a "live elsewhere" row.
         var now = DateTime.Now;
         var launcher = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 640 };
@@ -1327,6 +1334,25 @@ internal static class HeadlessRenderer
             w.FeedSampleForRender(cwd, prompt, events);
             w.ShowUsageOverlayForRender(info);
             w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
+        void CaptureComposer(Theming.SessionPalette palette, string file, string draft)
+        {
+            var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
+            w.FeedSampleForRender(cwd, prompt, events);
+            w.SetComposerActions(sampleActions);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            w.SetComposerTextForRender(draft);   // after Show, so the box's template (and presenter) is up
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
             var frame = w.CaptureRenderedFrame();

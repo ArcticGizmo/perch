@@ -64,6 +64,10 @@ internal sealed partial class SessionWindow : Window
     private readonly SessionDefaults _defaults = ClaudeUserSettings.ReadSessionDefaults();
     private const string CliDefaultModel = "opus";   // Claude Code's built-in default when settings.json sets none
 
+    // How tall the composer text area grows before it scrolls (shared by the TextBox and its text-area panel so
+    // the two agree; see SyncHighlightLayer for why they must).
+    private const double ComposerMaxHeight = 180;
+
     private readonly SessionPalette _p;
     private PerchSession? _session;
     private readonly SessionConversation _emptyConversation = new();
@@ -166,6 +170,9 @@ internal sealed partial class SessionWindow : Window
     // metrics + width so glyphs and caret line up; the layer is translated to follow the box's scroll.
     private readonly TextBlock _highlightLayer;
     private ScrollViewer? _composerScroll;
+    // The TextBox's own text presenter, grabbed from its template. The highlight layer is pinned to this
+    // element's exact geometry (content width + origin) so the two wrap identically and the caret can't drift.
+    private global::Avalonia.Controls.Presenters.TextPresenter? _composerPresenter;
 
     // Command palette (type "/" in the composer): a popover above the composer of the built-in slash commands
     // (docs/session-slash-commands-plan.md). Driven entirely by composer text — focus stays on the composer,
@@ -413,8 +420,14 @@ internal sealed partial class SessionWindow : Window
             // stays visible (its own brush), and the placeholder uses its own brush too, so the empty state reads.
             FontSize = SessionPalette.ProseSize, FontFamily = _p.Body, Foreground = Brushes.Transparent, CaretBrush = _p.Brand,
             Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0),
-            MinHeight = 24, MaxHeight = 180, IsEnabled = false,
+            MinHeight = 24, IsEnabled = false,
         };
+        // The box never scrolls itself — it grows to fit its text, and an outer ScrollViewer (textScroll below)
+        // caps the pair at ComposerMaxHeight and scrolls. This keeps the box and the highlight layer the exact
+        // same height so the coloured glyphs stay pinned under the transparent ones; letting the box scroll
+        // internally (while the full-height layer didn't) was what clipped the lower lines / drifted the caret.
+        _composer[ScrollViewer.VerticalScrollBarVisibilityProperty] = ScrollBarVisibility.Disabled;
+        _composer[ScrollViewer.HorizontalScrollBarVisibilityProperty] = ScrollBarVisibility.Disabled;
         _composer.AddHandler(KeyDownEvent, OnComposerKeyDown, RoutingStrategies.Tunnel);
         // The highlight layer sits behind the box with identical metrics so its glyphs sit under the real ones;
         // it follows the box's internal scroll via a translate transform once the template is up.
@@ -426,15 +439,33 @@ internal sealed partial class SessionWindow : Window
         _composer.TemplateApplied += (_, e) =>
         {
             _composerScroll = e.NameScope.Find<ScrollViewer>("PART_ScrollViewer");
+            _composerPresenter = e.NameScope.Find<global::Avalonia.Controls.Presenters.TextPresenter>("PART_TextPresenter");
             if (_composerScroll is { } sv)
-                sv.ScrollChanged += (_, _) => _highlightLayer.RenderTransform = new TranslateTransform(0, -sv.Offset.Y);
+                sv.ScrollChanged += (_, _) => SyncHighlightLayer();
+            SyncHighlightLayer();
         };
+        // Re-pin the layer after every layout pass on the box — catches scrolls, resizes and the box growing
+        // as lines are added, all of which move or resize the presenter.
+        _composer.LayoutUpdated += (_, _) => SyncHighlightLayer();
         // The coloured highlight layer sits ON TOP of the transparent-text box (hit-test-transparent) so the
         // box's selection rectangle paints *behind* the glyphs — otherwise selecting text hid it under a solid
         // accent block. The selection brush is a soft brand wash that reads under the coloured glyphs.
         _composer.SelectionBrush = _p.BrandWash;
         _composer.SelectionForegroundBrush = Brushes.Transparent;   // the layer already draws the (coloured) glyphs
-        var textArea = new Panel { ClipToBounds = true, Children = { _composer, _highlightLayer } };
+        // The box and its highlight layer grow together to their full content height (neither scrolls itself);
+        // the outer textScroll caps the pair and scrolls. They are therefore always the same size, so the
+        // coloured glyphs stay exactly under the transparent ones.
+        var textArea = new Panel { Children = { _composer, _highlightLayer } };
+        // Grow the composer up to ComposerMaxHeight, then scroll the whole text surface (box + layer as one
+        // unit, so they can't disagree). The box's caret still pulls itself into view — its bring-into-view
+        // request bubbles here.
+        var textScroll = new ScrollViewer
+        {
+            MaxHeight = ComposerMaxHeight,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = textArea,
+        };
         _sendButton = new SessionButton(_p, "→", SessionButtonKind.Primary, compact: true)
         {
             Width = 36, Height = 36, HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(0),
@@ -460,7 +491,7 @@ internal sealed partial class SessionWindow : Window
         };
         _changesToggle[DockPanel.DockProperty] = Dock.Right;
         _attachTray = new WrapPanel { IsVisible = false, Margin = new Thickness(0, 0, 0, 2) };
-        var composerStack = new StackPanel { Children = { composerHeader, _attachTray, textArea, cbar } };
+        var composerStack = new StackPanel { Children = { composerHeader, _attachTray, textScroll, cbar } };
         _composerFrame = new Border
         {
             MaxWidth = SessionPalette.ThreadMaxWidth, Background = _p.Raised, BorderBrush = _p.Border,
@@ -2213,6 +2244,30 @@ internal sealed partial class SessionWindow : Window
 
     // Rebuilds the coloured copy of the composer text behind it. Slash commands and links get their own hue
     // (the brushes are the shared palette instances, so a theme swap re-tints them in place — no rebuild).
+    // Pins the coloured highlight layer to the TextBox's own text presenter, so the visible (coloured) glyphs
+    // sit exactly under the real (transparent) ones and the caret can never drift from the text. The presenter
+    // is inset from the control's edge (a caret/scrollbar allowance), so it wraps at a narrower width than a
+    // naive full-width TextBlock would — matching that width is what stops the caret pulling away as more lines
+    // wrap. Its origin relative to the box already folds in both any content-alignment inset and the box's
+    // scroll offset, so one translate keeps the layer aligned whether the box has grown or is scrolling.
+    private void SyncHighlightLayer()
+    {
+        if (_composerPresenter is not { } presenter)
+        {
+            // Presenter not found (an unexpected TextBox template) — fall back to following just the scroll
+            // offset, the layer's original behaviour, rather than leaving it un-synced.
+            _highlightLayer.RenderTransform = new TranslateTransform(0, -(_composerScroll?.Offset.Y ?? 0));
+            return;
+        }
+        var w = presenter.Bounds.Width;
+        if (w > 0 && (double.IsNaN(_highlightLayer.Width) || Math.Abs(_highlightLayer.Width - w) > 0.5))
+            _highlightLayer.Width = w;
+        var origin = presenter.TranslatePoint(default, _composer) ?? new Point(0, -(_composerScroll?.Offset.Y ?? 0));
+        if (_highlightLayer.RenderTransform is not TranslateTransform t
+            || Math.Abs(t.X - origin.X) > 0.5 || Math.Abs(t.Y - origin.Y) > 0.5)
+            _highlightLayer.RenderTransform = new TranslateTransform(origin.X, origin.Y);
+    }
+
     private void UpdateHighlight()
     {
         var text = _composer.Text ?? "";
@@ -3033,6 +3088,18 @@ internal sealed partial class SessionWindow : Window
         _endButton.IsVisible = true;
         _resumeButton.IsVisible = false;
         RefreshBar();
+    }
+
+    /// <summary>HeadlessRenderer: type sample text into the composer so its highlight overlay + auto-grow/scroll
+    /// can be eyeballed. This control has no automated coverage and has regressed before (caret drift, clipped
+    /// lines), so a capture of a long wrapping draft is the standing way to check it.</summary>
+    internal void SetComposerTextForRender(string text)
+    {
+        _composer.IsEnabled = true;
+        _composer.Text = text;
+        _composer.CaretIndex = text.Length;
+        Dispatcher.UIThread.RunJobs();
+        SyncHighlightLayer();
     }
 
     /// <summary>HeadlessRenderer: seed a fixed usage reading and open the /usage overlay for a capture.</summary>

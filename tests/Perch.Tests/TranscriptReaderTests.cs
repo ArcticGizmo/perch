@@ -267,9 +267,13 @@ public class TranscriptReaderTests
     {
         var reader = new TranscriptReader();
         var artifacts = reader.GetArtifacts("sessA", Cwd);
-        var artifact = Assert.Single(artifacts);
-        Assert.Equal("Sales Chart", artifact.Title);
-        Assert.Contains("/code/artifact/abc123", artifact.Url);
+        // Both URL schemes are recognised: the original claude.ai/code/artifact/{uuid} and the current
+        // claude.ai/artifact/{id}. First-seen order is preserved.
+        Assert.Equal(2, artifacts.Count);
+        Assert.Equal("Sales Chart", artifacts[0].Title);
+        Assert.Contains("/code/artifact/abc123", artifacts[0].Url);
+        Assert.Equal("Quarterly Report", artifacts[1].Title);
+        Assert.Contains("/artifact/NewScheme22CharIdAbcd", artifacts[1].Url);
     }
 
     [Fact]

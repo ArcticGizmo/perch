@@ -569,15 +569,18 @@ internal sealed class TranscriptReader
 
         foreach (var line in TranscriptScan.ReadLines(path))
         {
-            // Cheap pre-filter: only the publish result records carry the artifact URL stem.
-            if (!line.Contains("code/artifact"))
+            // Cheap pre-filter: only the publish result records carry the artifact URL stem. Both the
+            // original scheme (claude.ai/code/artifact/{uuid}) and the current one (claude.ai/artifact/{id})
+            // share the "/artifact/" segment, so that's what we key on — the earlier "code/artifact" filter
+            // silently dropped every artifact published under the new, shorter URL.
+            if (!line.Contains("/artifact/"))
                 continue;
 
             try
             {
                 var result = JsonNode.Parse(line)?["toolUseResult"];
                 var url = result?["url"]?.GetValue<string>();
-                if (string.IsNullOrEmpty(url) || !url.Contains("/code/artifact/"))
+                if (string.IsNullOrEmpty(url) || !url.Contains("/artifact/"))
                     continue;
 
                 var title = result?["title"]?.GetValue<string>();
