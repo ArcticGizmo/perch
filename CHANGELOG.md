@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.9] - 2026-09-16
+
+- Usage bars split per org — a set per account in use, plus the default
+- Condensed the bar labels to 5h / 7d / F / $
+- Dropped the currency code from the credits bar (the "$" already gives it away)
+- Hovering a set shows only that org's usage
+- Config dirs sharing one account collapse to a single set
+
+---
+
 ## [v0.4.8] - 2026-09-16
 
 - Config directories show which org each one is signed into

@@ -1,0 +1,594 @@
+<title>Usage Across Orgs</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#f4f6f8; --surface:#ffffff; --surface-2:#eef1f4;
+    --text:#171b21; --muted:#5b6673; --faint:#8a939e;
+    --border:#dde2e8; --border-strong:#c9d0d8;
+    --accent:#127c72; --accent-soft:#e2f1ef;
+    --ok:#2f9c63; --warn:#b7841f; --crit:#c8483d;
+    --shadow:0 1px 2px rgba(16,24,32,.06), 0 6px 20px rgba(16,24,32,.06);
+    /* overlay-panel mock: fixed dark in BOTH themes — it is a screenshot of Perch's overlay */
+    --p-bg:#14171b; --p-surface:#1b1f24; --p-text:#e7eaee; --p-muted:#8a929c;
+    --p-faint:#646c76; --p-track:#2a3037; --p-line:#242a31;
+    --p-ok:#42b277; --p-warn:#d8a53a; --p-crit:#e05b4d;
+  }
+  :root:not([data-theme="light"]){
+    @media (prefers-color-scheme:dark){
+      --bg:#0e1013; --surface:#16191d; --surface-2:#1c2025;
+      --text:#e7eaee; --muted:#98a1ab; --faint:#6f7883;
+      --border:#262b31; --border-strong:#333a42;
+      --accent:#2fb8a8; --accent-soft:#12302d;
+      --ok:#3fae6f; --warn:#d8a53a; --crit:#db5b4f;
+      --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0e1013; --surface:#16191d; --surface-2:#1c2025;
+    --text:#e7eaee; --muted:#98a1ab; --faint:#6f7883;
+    --border:#262b31; --border-strong:#333a42;
+    --accent:#2fb8a8; --accent-soft:#12302d;
+    --ok:#3fae6f; --warn:#d8a53a; --crit:#db5b4f;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.28);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    line-height:1.5; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding-inline:20px; padding-block:0 64px}
+
+  /* ── Masthead ── */
+  header.top{padding-block:40px 24px}
+  .eyebrow{font:600 12px/1 "IBM Plex Mono", monospace; letter-spacing:.16em; text-transform:uppercase; color:var(--accent); margin:0 0 14px}
+  h1{font-weight:700; font-size:clamp(30px,4.4vw,46px); line-height:1.04; letter-spacing:-.02em; text-wrap:balance; margin:0 0 14px}
+  .lede{max-width:64ch; font-size:16.5px; color:var(--muted); margin:0}
+  .lede b{color:var(--text); font-weight:600}
+
+  /* ── Sticky control bar ── */
+  .controls{
+    position:sticky; top:0; z-index:20; margin-top:26px;
+    display:flex; flex-wrap:wrap; align-items:center; gap:18px 26px;
+    padding:14px 18px; background:color-mix(in srgb, var(--surface) 88%, transparent);
+    backdrop-filter:blur(8px); border:1px solid var(--border); border-radius:12px;
+    box-shadow:var(--shadow);
+  }
+  .ctl{display:flex; align-items:center; gap:12px}
+  .ctl label{font:600 12px/1 "IBM Plex Mono",monospace; letter-spacing:.1em; text-transform:uppercase; color:var(--muted)}
+  input[type=range]{width:190px; accent-color:var(--accent); cursor:pointer}
+  .count{font:600 15px/1 "IBM Plex Mono",monospace; color:var(--text); min-width:2ch; font-variant-numeric:tabular-nums}
+  .legend{display:flex; gap:16px; margin-left:auto; flex-wrap:wrap}
+  .legend .k{display:flex; align-items:center; gap:7px; font:500 12px/1 "IBM Plex Mono",monospace; color:var(--muted)}
+  .dot{width:11px; height:11px; border-radius:3px; display:inline-block}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.crit{background:var(--crit)}
+
+  /* ── Concept grid ── */
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:22px; margin-top:28px}
+  .concept{
+    display:flex; flex-direction:column; background:var(--surface);
+    border:1px solid var(--border); border-radius:14px; overflow:hidden; box-shadow:var(--shadow);
+  }
+  .concept > .head{display:flex; align-items:baseline; gap:10px; padding:16px 18px 0}
+  .concept h2{font-size:18px; font-weight:600; letter-spacing:-.01em; margin:0}
+  .verdict{margin-left:auto; font:600 10.5px/1 "IBM Plex Mono",monospace; letter-spacing:.06em; text-transform:uppercase; padding:5px 8px; border-radius:999px; white-space:nowrap}
+  .verdict.scales{color:var(--ok); background:color-mix(in srgb,var(--ok) 16%,transparent)}
+  .verdict.limited{color:var(--warn); background:color-mix(in srgb,var(--warn) 16%,transparent)}
+  .verdict.risky{color:var(--crit); background:color-mix(in srgb,var(--crit) 16%,transparent)}
+  .rationale{padding:8px 18px 0; margin:0; font-size:13.5px; color:var(--muted); min-height:2.9em}
+  .stage{padding:16px 18px; display:flex; justify-content:center}
+  .tradeoff{margin:0; padding:0 18px 16px; font-size:12.5px; color:var(--faint)}
+  .tradeoff b{color:var(--muted); font-weight:600}
+
+  /* ── The Perch overlay panel mock (always dark) ── */
+  .panel{
+    width:min(298px,100%); background:var(--p-bg); color:var(--p-text);
+    border:1px solid #23282e; border-radius:10px; padding:12px 12px 13px;
+    font-family:"IBM Plex Sans",system-ui,sans-serif;
+    box-shadow:0 8px 22px rgba(0,0,0,.35);
+  }
+  .panel .cap{display:flex; align-items:center; gap:8px; font:600 10px/1 "IBM Plex Mono",monospace; letter-spacing:.16em; color:var(--p-faint); text-transform:uppercase; margin-bottom:11px}
+  .panel .cap .n{margin-left:auto; color:var(--p-muted); letter-spacing:.06em}
+  .num{font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums}
+
+  /* bars */
+  .track{height:6px; border-radius:3px; background:var(--p-track); overflow:hidden; flex:1}
+  .fill{height:100%; border-radius:3px; transition:width .35s ease}
+  .fill.ok{background:var(--p-ok)} .fill.warn{background:var(--p-warn)} .fill.crit{background:var(--p-crit)}
+  .txt-ok{color:var(--p-ok)} .txt-warn{color:var(--p-warn)} .txt-crit{color:var(--p-crit)}
+
+  /* concept: stacked */
+  .oblock{padding:7px 0; border-top:1px solid var(--p-line)}
+  .oblock:first-of-type{border-top:0; padding-top:2px}
+  .oname{font-size:12.5px; font-weight:600; color:var(--p-text); margin-bottom:5px; letter-spacing:.01em}
+  .metric{display:flex; align-items:center; gap:8px; margin:3.5px 0}
+  .mlabel{font:500 10px/1 "IBM Plex Mono",monospace; color:var(--p-faint); width:20px; letter-spacing:.04em}
+  .mval{font:500 10.5px/1 "IBM Plex Mono",monospace; width:52px; text-align:right; font-variant-numeric:tabular-nums}
+
+  /* concept: tabs */
+  .tabstrip{display:flex; flex-wrap:wrap; gap:5px; margin-bottom:11px}
+  .tab{font:500 10.5px/1 "IBM Plex Mono",monospace; color:var(--p-muted); background:var(--p-surface); border:1px solid #262c33; padding:5px 8px; border-radius:6px; cursor:pointer}
+  .tab .pip{display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:5px; vertical-align:middle}
+  .tab[aria-selected="true"]{color:#0e1013; background:var(--p-text); border-color:var(--p-text); font-weight:600}
+  .tab:focus-visible{outline:2px solid var(--p-warn); outline-offset:2px}
+
+  /* concept: rings */
+  .rings{display:grid; grid-template-columns:repeat(4,1fr); gap:12px 8px}
+  .ring{display:flex; flex-direction:column; align-items:center; gap:5px}
+  .ring svg{display:block}
+  .ring .rlabel{font:500 9.5px/1.1 "IBM Plex Mono",monospace; color:var(--p-muted); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:center}
+  .ring .rpct{font:600 12px/1 "IBM Plex Mono",monospace; fill:var(--p-text)}
+
+  /* concept: matrix */
+  .matrix{display:grid; grid-template-columns:1fr repeat(4,27px); gap:3px; font-variant-numeric:tabular-nums}
+  .matrix .mh{font:600 9px/1 "IBM Plex Mono",monospace; color:var(--p-faint); text-align:center; padding-bottom:3px; letter-spacing:.04em}
+  .matrix .mh.l{text-align:left}
+  .matrix .rn{font:500 11px/26px "IBM Plex Sans",sans-serif; color:var(--p-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:4px}
+  .cell{height:26px; border-radius:4px; display:flex; align-items:center; justify-content:center; font:600 9.5px/1 "IBM Plex Mono",monospace}
+  .cell.ok{background:color-mix(in srgb,var(--p-ok) 26%,#14171b); color:#bfe6cf}
+  .cell.warn{background:color-mix(in srgb,var(--p-warn) 34%,#14171b); color:#f3dca2}
+  .cell.crit{background:color-mix(in srgb,var(--p-crit) 46%,#14171b); color:#ffd9d3}
+
+  /* concept: attention */
+  .attn{display:flex; flex-direction:column; gap:8px}
+  .arow{display:flex; align-items:center; gap:8px}
+  .arow .an{font-size:12px; font-weight:600; width:66px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .arow .aw{font:500 9.5px/1 "IBM Plex Mono",monospace; color:var(--p-faint); width:22px}
+  .arow .av{font:600 10.5px/1 "IBM Plex Mono",monospace; width:34px; text-align:right}
+  .healthy{margin-top:3px; padding-top:9px; border-top:1px solid var(--p-line); font:500 11px/1.4 "IBM Plex Mono",monospace; color:var(--p-muted); display:flex; align-items:center; gap:7px}
+  .allok{font:500 11.5px/1.5 "IBM Plex Sans",sans-serif; color:var(--p-ok); display:flex; align-items:center; gap:7px}
+
+  /* concept: dense table */
+  .dense{display:grid; grid-template-columns:1fr 42px 26px 22px 34px; gap:2px 5px; align-items:center; font-variant-numeric:tabular-nums}
+  .dense .dh{font:600 9px/1 "IBM Plex Mono",monospace; color:var(--p-faint); letter-spacing:.04em; padding-bottom:4px}
+  .dense .dh.r{text-align:right}
+  .dense .dn{font-size:11.5px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:3px 0}
+  .dense .db{display:flex; align-items:center}
+  .dense .dv{font:500 10.5px/1 "IBM Plex Mono",monospace; text-align:right}
+
+  /* concept: concentric rings */
+  .rlegend{display:flex; gap:12px; flex-wrap:wrap; font:500 9px/1.3 "IBM Plex Mono",monospace; color:var(--p-faint); margin-bottom:12px; letter-spacing:.02em}
+  .rlegend b{color:var(--p-muted); font-weight:600}
+  .conc{display:grid; grid-template-columns:repeat(3,1fr); gap:14px 6px}
+  .conc .ring{display:flex; flex-direction:column; align-items:center; gap:6px}
+  .conc .rlabel{font:500 9.5px/1.1 "IBM Plex Mono",monospace; color:var(--p-muted); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:center}
+
+  /* concept: vertical micro-bars */
+  .vwrap{display:flex; flex-wrap:wrap; gap:13px 11px; align-items:flex-end}
+  .vcol{display:flex; flex-direction:column; align-items:center; gap:6px}
+  .vset{display:flex; align-items:flex-end; gap:2px; height:50px}
+  .vtrack{position:relative; width:7px; height:50px; background:var(--p-track); border-radius:2px; overflow:hidden}
+  .vfill{position:absolute; left:0; bottom:0; width:100%; border-radius:2px; transition:height .35s ease}
+  .vfill.ok{background:var(--p-ok)} .vfill.warn{background:var(--p-warn)} .vfill.crit{background:var(--p-crit)}
+  .vcode{font:600 10px/1 "IBM Plex Mono",monospace; color:var(--p-muted); letter-spacing:.06em}
+
+  /* concept: tabs with preview lines */
+  .minitabs{display:flex; flex-wrap:wrap; gap:5px; margin-bottom:11px}
+  .mtab{display:flex; flex-direction:column; gap:6px; min-width:60px; padding:6px 7px; background:var(--p-surface); border:1px solid #262c33; border-radius:7px; cursor:pointer; text-align:left}
+  .mtab[aria-selected="true"]{border-color:var(--p-text); background:#232830}
+  .mtab:focus-visible{outline:2px solid var(--p-warn); outline-offset:2px}
+  .mtname{font:500 10px/1 "IBM Plex Mono",monospace; color:var(--p-muted); max-width:66px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .mtab[aria-selected="true"] .mtname{color:var(--p-text); font-weight:600}
+  .mtline{height:3px; border-radius:2px; background:var(--p-track); overflow:hidden}
+  .mtfill{display:block; height:100%; border-radius:2px}
+  .mtfill.ok{background:var(--p-ok)} .mtfill.warn{background:var(--p-warn)} .mtfill.crit{background:var(--p-crit)}
+
+  /* pace-first: marker bars */
+  .pblk{padding:6px 0; border-top:1px solid var(--p-line)}
+  .pblk:first-of-type{border-top:0; padding-top:2px}
+  .pbarrow{display:flex; align-items:center; gap:8px; margin:3.5px 0}
+  .pbar{position:relative; flex:1; height:8px; background:var(--p-track); border-radius:3px}
+  .pbar .pfill{position:absolute; left:0; top:0; height:100%; border-radius:3px}
+  .pbar .pfill.ok{background:var(--p-ok)} .pbar .pfill.warn{background:var(--p-warn)} .pbar .pfill.crit{background:var(--p-crit)}
+  .pmark{position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--p-text); border-radius:1px; transform:translateX(-1px)}
+
+  /* pace-first: divergence from pace */
+  .divlist{display:flex; flex-direction:column; gap:7px}
+  .divrow{display:flex; align-items:center; gap:8px}
+  .dvname{font-size:11.5px; font-weight:500; width:62px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .divtrack{position:relative; flex:1; height:15px; background:var(--p-track); border-radius:3px; overflow:hidden}
+  .divzero{position:absolute; left:50%; top:0; bottom:0; width:1px; background:var(--p-faint)}
+  .divbar{position:absolute; top:2px; bottom:2px; border-radius:2px}
+  .divbar.under{background:var(--p-ok)} .divbar.over{background:var(--p-warn)} .divbar.hot{background:var(--p-crit)}
+  .dvval{font:600 10.5px/1 "IBM Plex Mono",monospace; width:32px; text-align:right; font-variant-numeric:tabular-nums}
+
+  /* pace-first: dumbbell (expected vs now) */
+  .dumblist{display:flex; flex-direction:column; gap:9px}
+  .dumb{display:flex; align-items:center; gap:8px}
+  .dbn{font-size:11.5px; font-weight:500; width:62px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .dbtrack{position:relative; flex:1; height:14px}
+  .dbaxis{position:absolute; left:0; right:0; top:50%; height:2px; transform:translateY(-1px); background:var(--p-track); border-radius:1px}
+  .dbconn{position:absolute; top:50%; height:3px; transform:translateY(-1.5px); border-radius:2px}
+  .dbconn.ok{background:var(--p-ok)} .dbconn.warn{background:var(--p-warn)} .dbconn.crit{background:var(--p-crit)}
+  .dbdot{position:absolute; top:50%; width:9px; height:9px; border-radius:50%; transform:translate(-50%,-50%)}
+  .dbdot.exp{background:var(--p-bg); border:2px solid var(--p-muted)}
+  .dbdot.act.ok{background:var(--p-ok)} .dbdot.act.warn{background:var(--p-warn)} .dbdot.act.crit{background:var(--p-crit)}
+
+  /* pace-first: burn trajectory */
+  .trajgrid{display:grid; grid-template-columns:repeat(3,1fr); gap:13px 6px}
+  .traj{display:flex; flex-direction:column; align-items:center; gap:5px}
+  .traj .rlabel{font:500 9.5px/1.1 "IBM Plex Mono",monospace; color:var(--p-muted); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:center}
+
+  /* variations section head */
+  .section-head{margin-top:46px; margin-bottom:2px}
+  .section-head em{font-style:italic; color:var(--text)}
+  .section-head h2{font-size:23px; font-weight:600; letter-spacing:-.015em; margin:0 0 6px}
+  .section-head p{margin:0; color:var(--muted); font-size:14px; max-width:62ch}
+
+  footer{margin-top:40px; padding-top:22px; border-top:1px solid var(--border)}
+  footer h3{font-size:13px; font-weight:600; letter-spacing:.02em; margin:0 0 12px; color:var(--text)}
+  .notes{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px}
+  .note{font-size:13px; color:var(--muted)}
+  .note b{display:block; color:var(--text); font-weight:600; margin-bottom:3px; font-size:13px}
+  .note.lean{border-left:3px solid var(--accent); padding-left:12px}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none !important}}
+  @media (max-width:640px){ header.top{padding-block:28px 18px} .legend{margin-left:0; width:100%} }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <p class="eyebrow">Perch · overlay concepts</p>
+    <h1>Usage across orgs</h1>
+    <p class="lede">Perch's usage bars assume one account. With a config directory per org, each carries its
+      own four readouts — Session <b>5h</b>, Weekly <b>7d</b>, Fable <b>F</b> and Credits <b>$</b>. Ways to
+      show that in a slim overlay — <b>drag the slider</b> to watch each cope, or buckle, as the orgs pile up.</p>
+  </header>
+
+  <div class="controls">
+    <div class="ctl">
+      <label for="orgCount">Orgs</label>
+      <input type="range" id="orgCount" min="2" max="12" value="6" step="1">
+      <span class="count" id="orgCountOut">6</span>
+    </div>
+    <div class="legend" aria-label="Headroom thresholds">
+      <span class="k"><span class="dot ok"></span>&lt; 60% ok</span>
+      <span class="k"><span class="dot warn"></span>60–85% watch</span>
+      <span class="k"><span class="dot crit"></span>85%+ near limit</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <article class="concept">
+      <div class="head"><h2>Stacked blocks</h2><span class="verdict limited">≤ 3 orgs</span></div>
+      <p class="rationale">Today's bars, once per org: every metric labelled and full-width. Nothing to learn.</p>
+      <div class="stage"><div class="panel" data-render="stacked"></div></div>
+      <p class="tradeoff"><b>Buckles:</b> three bars per org — the panel grows unbounded and eats the overlay.</p>
+    </article>
+
+    <article class="concept">
+      <div class="head"><h2>Tabs</h2><span class="verdict scales">many</span></div>
+      <p class="rationale">A tab strip of orgs; the selected one shows full bars. Pips flag orgs needing a look.</p>
+      <div class="stage"><div class="panel" data-render="tabs"></div></div>
+      <p class="tradeoff"><b>Trade:</b> constant height, but you only see one org's budget at a time.</p>
+    </article>
+
+    <article class="concept">
+      <div class="head"><h2>Headroom rings</h2><span class="verdict scales">many</span></div>
+      <p class="rationale">One ring per org, filled and coloured by its worst metric. A wrap-around grid.</p>
+      <div class="stage"><div class="panel" data-render="rings"></div></div>
+      <p class="tradeoff"><b>Trade:</b> instant "who's hot", but a ring hides which limit and the exact spend.</p>
+    </article>
+
+    <article class="concept">
+      <div class="head"><h2>Heat matrix</h2><span class="verdict scales">many</span></div>
+      <p class="rationale">Orgs down, metrics across; each cell coloured by its own severity. Densest option.</p>
+      <div class="stage"><div class="panel" data-render="matrix"></div></div>
+      <p class="tradeoff"><b>Trade:</b> a whole estate at a glance — but it reads as a spreadsheet, not a gauge.</p>
+    </article>
+
+    <article class="concept">
+      <div class="head"><h2>Attention list</h2><span class="verdict scales">any</span></div>
+      <p class="rationale">Only orgs nearing a limit, worst first; the calm ones fold into a single tally.</p>
+      <div class="stage"><div class="panel" data-render="attn"></div></div>
+      <p class="tradeoff"><b>Trade:</b> scales to any count and leads with risk — but hides steady-state totals.</p>
+    </article>
+
+    <article class="concept">
+      <div class="head"><h2>Dense table</h2><span class="verdict scales">many</span></div>
+      <p class="rationale">One line per org, sorted hottest first: a mini 5h bar, then 7d, F and spend.</p>
+      <div class="stage"><div class="panel" data-render="dense"></div></div>
+      <p class="tradeoff"><b>Trade:</b> precise and compact; the sparkbars are small and there's a lot to scan.</p>
+    </article>
+  </div>
+
+  <div class="section-head">
+    <h2>Variations you asked for</h2>
+    <p>Concentric rings with an on-pace tick, vertical micro-bars capped to a two-letter code, and tabs
+      that preview every org under its header. Same slider drives these too.</p>
+  </div>
+
+  <div class="grid">
+    <article class="concept">
+      <div class="head"><h2>Concentric rings</h2><span class="verdict scales">many</span></div>
+      <p class="rationale">All four metrics as nested rings per org — 5h, 7d, F, $, outside in. The tick
+        marks where an even burn would sit; fill past it means running hot.</p>
+      <div class="stage"><div class="panel" data-render="concentric"></div></div>
+      <p class="tradeoff"><b>Trade:</b> pace-aware and complete, but four rings in one glyph asks the eye to work.</p>
+    </article>
+
+    <article class="concept">
+      <div class="head"><h2>Vertical micro-bars</h2><span class="verdict scales">many</span></div>
+      <p class="rationale">Each org is a tiny four-bar column — 5h, 7d, F, $ — beneath a two-letter code.
+        An equaliser of orgs.</p>
+      <div class="stage"><div class="panel" data-render="vbars"></div></div>
+      <p class="tradeoff"><b>Trade:</b> very compact and wraps wide; two letters can collide (initrode vs initech).</p>
+    </article>
+
+    <article class="concept">
+      <div class="head"><h2>Tabs + preview lines</h2><span class="verdict scales">many</span></div>
+      <p class="rationale">The tab approach, but every header carries a mini headroom line — read all orgs at a
+        glance, open one for full bars.</p>
+      <div class="stage"><div class="panel" data-render="tabsmini"></div></div>
+      <p class="tradeoff"><b>Trade:</b> the best of both worlds, at the cost of a taller tab strip.</p>
+    </article>
+  </div>
+
+  <div class="section-head">
+    <h2>Pace-first ideas</h2>
+    <p>You called the expected-rate mark the valuable part — so here are four where the actual-vs-expected
+      gap <em>is</em> the visualisation, not a tick added on top.</p>
+  </div>
+
+  <div class="grid">
+    <article class="concept">
+      <div class="head"><h2>Pace-marker bars</h2><span class="verdict limited">≤ 4 orgs</span></div>
+      <p class="rationale">Today's bar — fill for used, a bright line for the expected pace — kept exactly, one org per block.</p>
+      <div class="stage"><div class="panel" data-render="pmbars"></div></div>
+      <p class="tradeoff"><b>Trade:</b> the most faithful to what you have; still grows tall with many orgs.</p>
+    </article>
+
+    <article class="concept">
+      <div class="head"><h2>Divergence from pace</h2><span class="verdict scales">any</span></div>
+      <p class="rationale">Only the gap: a bar left of centre is under pace, right is over. Sorted most-over first.</p>
+      <div class="stage"><div class="panel" data-render="diverge"></div></div>
+      <p class="tradeoff"><b>Trade:</b> "who's ahead of budget" leaps out; it drops the absolute fill level.</p>
+    </article>
+
+    <article class="concept">
+      <div class="head"><h2>Expected vs now</h2><span class="verdict scales">many</span></div>
+      <p class="rationale">A lollipop per org: hollow dot where an even burn would sit, filled dot where you actually are.</p>
+      <div class="stage"><div class="panel" data-render="dumbbell"></div></div>
+      <p class="tradeoff"><b>Trade:</b> expected and actual read as one comparison; shown for the 5-hour window.</p>
+    </article>
+
+    <article class="concept">
+      <div class="head"><h2>Burn trajectory</h2><span class="verdict scales">many</span></div>
+      <p class="rationale">Your slope against the even-burn diagonal. Steeper than the dashes and you hit the cap early.</p>
+      <div class="stage"><div class="panel" data-render="trajectory"></div></div>
+      <p class="tradeoff"><b>Trade:</b> projects overspend, not just current state; needs a moment to read.</p>
+    </article>
+  </div>
+
+  <footer>
+    <h3>Notes for building it</h3>
+    <div class="notes">
+      <p class="note lean"><b>Leaning</b>Keep the expected-rate mark front and centre: a divergence-from-pace list to triage many orgs at once, opening a full pace-marker bar for the one you're working in.</p>
+      <p class="note"><b>Single dir is unchanged</b>None of this shows unless more than one config directory is in play — exactly how the directory chips already gate.</p>
+      <p class="note"><b>Polling cost</b>Each org means another <span class="num">/api/oauth/usage</span> call against its own token. Stagger the cadence; the endpoint throttles.</p>
+      <p class="note"><b>macOS caveat</b>Tokens live per-dir on Windows/Linux, but in one shared Keychain on macOS — per-org usage there needs a spike first.</p>
+    </div>
+  </footer>
+</div>
+
+<script>
+  // Hand-tuned sample estate: real dirs first, then plausible orgs. Deterministic so the demo reads
+  // with a real spread of healthy / watch / near-limit — not random noise.
+  //   h5 = Session (5h)   wk = Weekly (7d)   fab = Fable (F)   used/cap = Credits ($)
+  //   h5p / wkp = how far through that window (elapsed %) — the "on-pace" mark: usage past it = burning hot.
+  const ORGS = [
+    {name:"initrode",  h5:62, wk:34, fab:45, used:12, cap:80,  h5p:70, wkp:40},
+    {name:"cyberdyne", h5:18, wk:51, fab:22, used:0,  cap:50,  h5p:30, wkp:60},
+    {name:"acme",      h5:88, wk:72, fab:61, used:44, cap:60,  h5p:55, wkp:65},
+    {name:"globex",    h5:41, wk:29, fab:30, used:5,  cap:40,  h5p:60, wkp:50},
+    {name:"initech",   h5:74, wk:91, fab:83, used:70, cap:75,  h5p:50, wkp:80},
+    {name:"umbrella",  h5:9,  wk:14, fab:5,  used:0,  cap:30,  h5p:40, wkp:30},
+    {name:"hooli",     h5:55, wk:63, fab:40, used:22, cap:50,  h5p:45, wkp:55},
+    {name:"soylent",   h5:94, wk:47, fab:28, used:8,  cap:40,  h5p:65, wkp:70},
+    {name:"vandelay",  h5:33, wk:22, fab:12, used:3,  cap:25,  h5p:40, wkp:25},
+    {name:"wonka",     h5:67, wk:80, fab:55, used:38, cap:45,  h5p:50, wkp:60},
+    {name:"stark",     h5:12, wk:8,  fab:3,  used:0,  cap:100, h5p:20, wkp:15},
+    {name:"wayne",     h5:49, wk:58, fab:47, used:60, cap:120, h5p:55, wkp:45},
+  ];
+
+  const sev = p => p>=85 ? "crit" : p>=60 ? "warn" : "ok";
+  const spendPct = o => o.cap ? (o.used/o.cap)*100 : 0;
+  const peak = o => Math.max(o.h5, o.wk, o.fab, spendPct(o));
+  const bar = p => `<div class="track"><div class="fill ${sev(p)}" style="width:${Math.min(100,p)}%"></div></div>`;
+  const dlt = o => o.h5 - o.h5p;                            // 5h: actual minus expected (pace)
+  const psev = d => d<=2 ? "ok" : d<=15 ? "warn" : "crit";  // colour by how far OVER pace you are
+
+  const tabState = new WeakMap();   // panel -> selected index
+
+  const RENDER = {
+    stacked(panel, orgs){
+      panel.innerHTML = `<div class="cap">Usage<span class="n">${orgs.length} orgs</span></div>` +
+        orgs.map(o=>`<div class="oblock"><div class="oname">${o.name}</div>
+          <div class="metric"><span class="mlabel">5h</span>${bar(o.h5)}<span class="mval num txt-${sev(o.h5)}">${o.h5}%</span></div>
+          <div class="metric"><span class="mlabel">7d</span>${bar(o.wk)}<span class="mval num txt-${sev(o.wk)}">${o.wk}%</span></div>
+          <div class="metric"><span class="mlabel">F</span>${bar(o.fab)}<span class="mval num txt-${sev(o.fab)}">${o.fab}%</span></div>
+          <div class="metric"><span class="mlabel">$</span>${bar(spendPct(o))}<span class="mval num">$${o.used}/${o.cap}</span></div>
+        </div>`).join("");
+    },
+    tabs(panel, orgs){
+      let sel = tabState.get(panel) ?? 0;
+      if (sel >= orgs.length) sel = 0;
+      tabState.set(panel, sel);
+      const o = orgs[sel];
+      panel.innerHTML = `<div class="cap">Usage<span class="n">${orgs.length} orgs</span></div>
+        <div class="tabstrip" role="tablist">${orgs.map((g,i)=>
+          `<button class="tab" role="tab" aria-selected="${i===sel}" data-i="${i}"><span class="pip" style="background:var(--p-${sev(peak(g))})"></span>${g.name}</button>`).join("")}</div>
+        <div class="oblock" style="border-top:0">
+          <div class="oname">${o.name}</div>
+          <div class="metric"><span class="mlabel">5h</span>${bar(o.h5)}<span class="mval num txt-${sev(o.h5)}">${o.h5}%</span></div>
+          <div class="metric"><span class="mlabel">7d</span>${bar(o.wk)}<span class="mval num txt-${sev(o.wk)}">${o.wk}%</span></div>
+          <div class="metric"><span class="mlabel">F</span>${bar(o.fab)}<span class="mval num txt-${sev(o.fab)}">${o.fab}%</span></div>
+          <div class="metric"><span class="mlabel">$</span>${bar(spendPct(o))}<span class="mval num">$${o.used}/${o.cap}</span></div>
+        </div>`;
+      panel.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{
+        tabState.set(panel, +b.dataset.i); RENDER.tabs(panel, orgs);
+      }));
+    },
+    rings(panel, orgs){
+      const C = 2*Math.PI*18;
+      panel.innerHTML = `<div class="cap">Usage<span class="n">${orgs.length} orgs</span></div>
+        <div class="rings">${orgs.map(o=>{
+          const p = Math.round(peak(o)), s = sev(p);
+          return `<div class="ring"><svg width="46" height="46" viewBox="0 0 44 44">
+            <circle cx="22" cy="22" r="18" fill="none" stroke="var(--p-track)" stroke-width="4"></circle>
+            <circle cx="22" cy="22" r="18" fill="none" stroke="var(--p-${s})" stroke-width="4"
+              stroke-linecap="round" stroke-dasharray="${C}" stroke-dashoffset="${C*(1-p/100)}"
+              transform="rotate(-90 22 22)"></circle>
+            <text x="22" y="22" text-anchor="middle" dominant-baseline="central" class="rpct">${p}</text>
+          </svg><span class="rlabel">${o.name}</span></div>`;
+        }).join("")}</div>`;
+    },
+    matrix(panel, orgs){
+      panel.innerHTML = `<div class="cap">Usage<span class="n">${orgs.length} orgs</span></div>
+        <div class="matrix">
+          <div class="mh l"></div><div class="mh">5h</div><div class="mh">7d</div><div class="mh">F</div><div class="mh">$</div>
+          ${orgs.map(o=>{
+            const sp = Math.round(spendPct(o));
+            return `<div class="rn">${o.name}</div>
+              <div class="cell ${sev(o.h5)}">${o.h5}</div>
+              <div class="cell ${sev(o.wk)}">${o.wk}</div>
+              <div class="cell ${sev(o.fab)}">${o.fab}</div>
+              <div class="cell ${sev(sp)}">${sp}</div>`;
+          }).join("")}
+        </div>`;
+    },
+    attn(panel, orgs){
+      const ranked = [...orgs].sort((a,b)=>peak(b)-peak(a));
+      const hot = ranked.filter(o=>peak(o)>=60);
+      const calm = ranked.length - hot.length;
+      const which = o => [["5h",o.h5],["7d",o.wk],["F",o.fab],["$",spendPct(o)]].sort((a,b)=>b[1]-a[1])[0][0];
+      let body;
+      if (hot.length===0){
+        body = `<div class="allok"><span class="dot ok" style="width:9px;height:9px"></span>All ${orgs.length} orgs have headroom</div>`;
+      } else {
+        body = `<div class="attn">${hot.map(o=>{
+          const p=Math.round(peak(o));
+          return `<div class="arow"><span class="an">${o.name}</span><span class="aw">${which(o)}</span>${bar(p)}<span class="av num txt-${sev(p)}">${p}%</span></div>`;
+        }).join("")}</div>` +
+        (calm>0 ? `<div class="healthy"><span class="dot ok" style="width:9px;height:9px"></span>${calm} more with headroom</div>` : "");
+      }
+      panel.innerHTML = `<div class="cap">Needs attention<span class="n">${orgs.length} orgs</span></div>${body}`;
+    },
+    dense(panel, orgs){
+      const ranked = [...orgs].sort((a,b)=>peak(b)-peak(a));
+      panel.innerHTML = `<div class="cap">Usage<span class="n">${orgs.length} orgs</span></div>
+        <div class="dense">
+          <div class="dh">org</div><div class="dh">5h</div><div class="dh r">7d</div><div class="dh r">F</div><div class="dh r">$</div>
+          ${ranked.map(o=>`
+            <div class="dn">${o.name}</div>
+            <div class="db">${bar(o.h5)}</div>
+            <div class="dv num txt-${sev(o.wk)}">${o.wk}%</div>
+            <div class="dv num txt-${sev(o.fab)}">${o.fab}%</div>
+            <div class="dv num">$${o.used}</div>`).join("")}
+        </div>`;
+    },
+    concentric(panel, orgs){
+      const arc = (cx,cy,r,pct,sv)=>{ const C=2*Math.PI*r; return `
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--p-track)" stroke-width="3.4"></circle>
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--p-${sv})" stroke-width="3.4" stroke-linecap="round"
+          stroke-dasharray="${C}" stroke-dashoffset="${C*(1-Math.min(100,pct)/100)}" transform="rotate(-90 ${cx} ${cy})"></circle>`; };
+      const tick = (cx,cy,r,p)=>{ const a=(-90+p/100*360)*Math.PI/180;
+        const x1=cx+(r-3)*Math.cos(a), y1=cy+(r-3)*Math.sin(a), x2=cx+(r+3)*Math.cos(a), y2=cy+(r+3)*Math.sin(a);
+        return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--p-text)" stroke-width="1.5" stroke-linecap="round"></line>`; };
+      panel.innerHTML = `<div class="cap">Usage<span class="n">${orgs.length} orgs</span></div>
+        <div class="rlegend"><span><b>rings</b> 5h · 7d · F · $ (out→in)</span><span><b>|</b> tick = on-pace</span></div>
+        <div class="conc">${orgs.map(o=>`<div class="ring"><svg width="56" height="56" viewBox="0 0 56 56">
+            ${arc(28,28,22,o.h5,sev(o.h5))}
+            ${arc(28,28,16.5,o.wk,sev(o.wk))}
+            ${arc(28,28,11,o.fab,sev(o.fab))}
+            ${arc(28,28,5.5,spendPct(o),sev(spendPct(o)))}
+            ${tick(28,28,22,o.h5p)}
+            ${tick(28,28,16.5,o.wkp)}
+          </svg><span class="rlabel">${o.name}</span></div>`).join("")}</div>`;
+    },
+    vbars(panel, orgs){
+      const vb = p => `<div class="vtrack"><div class="vfill ${sev(p)}" style="height:${Math.min(100,p)}%"></div></div>`;
+      panel.innerHTML = `<div class="cap">Usage<span class="n">${orgs.length} orgs</span></div>
+        <div class="rlegend"><span><b>bars</b> 5h · 7d · F · $ per org</span></div>
+        <div class="vwrap">${orgs.map(o=>`<div class="vcol"><div class="vset">${vb(o.h5)}${vb(o.wk)}${vb(o.fab)}${vb(spendPct(o))}</div><div class="vcode">${o.name.slice(0,2).toUpperCase()}</div></div>`).join("")}</div>`;
+    },
+    tabsmini(panel, orgs){
+      let sel = tabState.get(panel) ?? 0;
+      if (sel >= orgs.length) sel = 0;
+      tabState.set(panel, sel);
+      const o = orgs[sel];
+      panel.innerHTML = `<div class="cap">Usage<span class="n">${orgs.length} orgs</span></div>
+        <div class="minitabs" role="tablist">${orgs.map((g,i)=>{ const p=Math.round(peak(g));
+          return `<button class="mtab" role="tab" aria-selected="${i===sel}" data-i="${i}"><span class="mtname">${g.name}</span><span class="mtline"><span class="mtfill ${sev(p)}" style="width:${p}%"></span></span></button>`; }).join("")}</div>
+        <div class="oblock" style="border-top:0">
+          <div class="oname">${o.name}</div>
+          <div class="metric"><span class="mlabel">5h</span>${bar(o.h5)}<span class="mval num txt-${sev(o.h5)}">${o.h5}%</span></div>
+          <div class="metric"><span class="mlabel">7d</span>${bar(o.wk)}<span class="mval num txt-${sev(o.wk)}">${o.wk}%</span></div>
+          <div class="metric"><span class="mlabel">F</span>${bar(o.fab)}<span class="mval num txt-${sev(o.fab)}">${o.fab}%</span></div>
+          <div class="metric"><span class="mlabel">$</span>${bar(spendPct(o))}<span class="mval num">$${o.used}/${o.cap}</span></div>
+        </div>`;
+      panel.querySelectorAll(".mtab").forEach(b=>b.addEventListener("click",()=>{
+        tabState.set(panel, +b.dataset.i); RENDER.tabsmini(panel, orgs);
+      }));
+    },
+    pmbars(panel, orgs){
+      const row = (lab,val,act,exp,mark)=>`<div class="pbarrow"><span class="mlabel">${lab}</span>
+        <div class="pbar"><div class="pfill ${sev(act)}" style="width:${Math.min(100,act)}%"></div>${mark?`<span class="pmark" style="left:${exp}%"></span>`:""}</div>
+        <span class="mval num txt-${sev(act)}">${val}</span></div>`;
+      panel.innerHTML = `<div class="cap">Usage<span class="n">${orgs.length} orgs</span></div>
+        <div class="rlegend"><span><b>fill</b> used</span><span><b>|</b> expected pace</span></div>` +
+        orgs.map(o=>`<div class="pblk"><div class="oname">${o.name}</div>
+          ${row("5h", o.h5+"%", o.h5, o.h5p, true)}
+          ${row("7d", o.wk+"%", o.wk, o.wkp, true)}
+          ${row("F", o.fab+"%", o.fab, 0, false)}
+          ${row("$", "$"+o.used, spendPct(o), 0, false)}
+        </div>`).join("");
+    },
+    diverge(panel, orgs){
+      const ranked = [...orgs].sort((a,b)=>dlt(b)-dlt(a)), S = 50;
+      panel.innerHTML = `<div class="cap">5h vs pace<span class="n">${orgs.length} orgs</span></div>
+        <div class="rlegend"><span><b>left</b> under pace</span><span><b>right</b> over pace</span></div>
+        <div class="divlist">${ranked.map(o=>{
+          const d = Math.round(dlt(o)), w = Math.min(1, Math.abs(d)/S)*50;
+          const style = d>=0 ? `left:50%; width:${w}%` : `left:${50-w}%; width:${w}%`;
+          const cls = d<=2 ? "under" : d<=15 ? "over" : "hot";
+          return `<div class="divrow"><span class="dvname">${o.name}</span><div class="divtrack"><div class="divzero"></div><div class="divbar ${cls}" style="${style}"></div></div><span class="dvval num">${d>0?"+":""}${d}</span></div>`;
+        }).join("")}</div>`;
+    },
+    dumbbell(panel, orgs){
+      const ranked = [...orgs].sort((a,b)=>dlt(b)-dlt(a));
+      panel.innerHTML = `<div class="cap">5h · expected vs now<span class="n">${orgs.length} orgs</span></div>
+        <div class="rlegend"><span><b>○</b> expected</span><span><b>●</b> now</span></div>
+        <div class="dumblist">${ranked.map(o=>{
+          const e=o.h5p, a=o.h5, lo=Math.min(e,a), hi=Math.max(e,a), s=psev(dlt(o));
+          return `<div class="dumb"><span class="dbn">${o.name}</span><div class="dbtrack"><div class="dbaxis"></div><div class="dbconn ${s}" style="left:${lo}%; width:${hi-lo}%"></div><div class="dbdot exp" style="left:${e}%"></div><div class="dbdot act ${s}" style="left:${a}%"></div></div></div>`;
+        }).join("")}</div>`;
+    },
+    trajectory(panel, orgs){
+      panel.innerHTML = `<div class="cap">5h burn trajectory<span class="n">${orgs.length} orgs</span></div>
+        <div class="rlegend"><span><b>&#8211; &#8211;</b> expected</span><span><b>&#8212;</b> your pace</span></div>
+        <div class="trajgrid">${orgs.map(o=>{
+          const s=psev(dlt(o)), px=4+o.h5p/100*52, py=38-o.h5/100*34;
+          return `<div class="traj"><svg width="60" height="42" viewBox="0 0 60 42">
+            <line x1="4" y1="38" x2="56" y2="38" stroke="var(--p-line)" stroke-width="1"></line>
+            <line x1="4" y1="4" x2="4" y2="38" stroke="var(--p-line)" stroke-width="1"></line>
+            <line x1="4" y1="38" x2="56" y2="4" stroke="var(--p-faint)" stroke-width="1" stroke-dasharray="2 2"></line>
+            <line x1="4" y1="38" x2="${px}" y2="${py}" stroke="var(--p-${s})" stroke-width="1.8" stroke-linecap="round"></line>
+            <circle cx="${px}" cy="${py}" r="2.4" fill="var(--p-${s})"></circle>
+          </svg><span class="rlabel">${o.name}</span></div>`;
+        }).join("")}</div>`;
+    },
+  };
+
+  const panels = [...document.querySelectorAll(".panel")];
+  function renderAll(n){
+    const orgs = ORGS.slice(0, n);
+    panels.forEach(p => RENDER[p.dataset.render](p, orgs));
+  }
+
+  const slider = document.getElementById("orgCount");
+  const out = document.getElementById("orgCountOut");
+  slider.addEventListener("input", ()=>{ out.textContent = slider.value; renderAll(+slider.value); });
+  renderAll(+slider.value);
+</script>

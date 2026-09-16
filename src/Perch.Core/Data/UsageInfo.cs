@@ -51,9 +51,10 @@ internal sealed record ExtraUsageInfo(
         return $"{(v < 0 ? "-" : "")}{Symbol}{body}";
     }
 
-    /// <summary>The right-column caption for the spend bar, e.g. <c>$0/$100 AUD</c>. The ISO code is
-    /// appended because the bare "$" is shared by AUD/USD/CAD/… — the reader needs to know which.</summary>
-    public string Compact => $"{Amount(Used)}/{Amount(Limit)} {Currency.ToUpperInvariant()}";
+    /// <summary>The right-column caption for the spend bar, e.g. <c>$0/$100</c>. The ISO code is deliberately
+    /// omitted to save width in the narrow overlay strip; the tooltip's <see cref="Detailed"/> still carries it
+    /// for readers who need to disambiguate the shared "$" (AUD/USD/CAD/…).</summary>
+    public string Compact => $"{Amount(Used)}/{Amount(Limit)}";
 
     /// <summary>The fuller phrasing for the tooltip, e.g. <c>$0.00 of $100.00 AUD</c>.</summary>
     public string Detailed =>

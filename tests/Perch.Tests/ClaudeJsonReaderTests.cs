@@ -158,16 +158,16 @@ public class ClaudeJsonReaderTests : IDisposable
     {
         // Env-dir shape (CLAUDE_CONFIG_DIR set): the real login is INSIDE; the parent must not override it.
         var envs = Path.Combine(_dir, "envs");
-        var root = Path.Combine(envs, "incontrol");
+        var root = Path.Combine(envs, "acme");
         Directory.CreateDirectory(root);
         File.WriteAllText(Path.Combine(root, ".claude.json"),
-            """{ "oauthAccount": { "organizationUuid": "in1", "organizationName": "InControl" } }""");
+            """{ "oauthAccount": { "organizationUuid": "acme1", "organizationName": "Acme Corp" } }""");
         File.WriteAllText(Path.Combine(envs, ".claude.json"),
             """{ "oauthAccount": { "organizationUuid": "other", "organizationName": "Other" } }""");
 
         var s = ClaudeJsonReader.ReadSignIn(new ClaudeConfigDir(root));
 
-        Assert.Equal("in1", s.Org!.Uuid); // inside wins over the parent
+        Assert.Equal("acme1", s.Org!.Uuid); // inside wins over the parent
     }
 
     [Fact]

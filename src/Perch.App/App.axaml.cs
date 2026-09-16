@@ -286,6 +286,7 @@ public partial class App : Application
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
                 RefreshOriginIcons(sessions);
                 RefreshComposerActions();   // grow/drop each session window's artifact + markdown glyphs
+                UpdateUsageDirs(sessions);  // one usage bar-set per org currently in use (+ the default)
                 MaybeHandleAutoClose(sessions.Count);
             }, Services.Replay.ReplaySession.Current?.Projector, PlatformServices.IdeHostDetector);
 
@@ -497,6 +498,11 @@ public partial class App : Application
             // (the Quick Start is about to show) record silently instead, so pre-existing history doesn't bury
             // the wizard in cards.
             CheckAchievements(force: true, present: settings.FirstRunComplete);
+            // Re-evaluate which orgs the usage strip polls when the config-dir set changes (the primary can
+            // change, dirs can be declared/discovered). The event fires off-thread, so marshal to the UI thread.
+            ClaudeConfigSet.Changed += () =>
+                Dispatcher.UIThread.Post(() => UpdateUsageDirs(_lastSessions ?? []));
+            UpdateUsageDirs(_lastSessions ?? []);       // seed with whatever's already live (else just the primary)
             if (settings.ShowUsage) _usageHost.Start(); // initial usage fetch (polls every 5 min thereafter)
             if (settings.ShowServiceStatus) _statusHost.Start(); // initial fetch (polls every 2 min thereafter)
             if (settings.ShowMediaController) _mediaHost.Start(); // begin listening to the system media session
@@ -1704,8 +1710,13 @@ public partial class App : Application
         w.SetAutoCompactConfig(cs.SessionAutoCompactEnabled, cs.SessionAutoCompactThresholdPercent);
         // /usage overlay reads the same account rate-limit data the floating strip does — the tray's cached
         // last reading, with a forced fetch on open/Refresh (works even when the overlay usage strip is off).
-        w.UsageProvider = () => _usageHost?.Last ?? UsageInfo.Empty;
-        w.UsageRefresh = () => _usageHost?.RefreshAsync() ?? Task.FromResult(UsageInfo.Empty);
+        w.UsageProvider = () => _usageHost?.LastPrimaryUsage ?? UsageInfo.Empty;
+        w.UsageRefresh = async () =>
+        {
+            if (_usageHost is null) return UsageInfo.Empty;
+            await _usageHost.RefreshAsync();
+            return _usageHost.LastPrimaryUsage;
+        };
         // Mirror the overlay's enabled, actionable glyphs as quick-action buttons above the composer.
         w.SetComposerActions(BuildComposerActions(w));
         // The /autocompact modal changed the Perch auto-compaction setting: persist it and push it to every
@@ -2442,6 +2453,12 @@ public partial class App : Application
     // the vector/monitor mark. Each distinct host is resolved once, off the UI thread; until an icon lands
     // the canvas shows its fallback. An IDE with only a bare base name (the detector couldn't resolve the
     // full path) is skipped, since there's nothing for the shell to render.
+    // Tells the usage host which orgs to poll: the config dir of every live session, plus the default (always).
+    // Runs on the UI thread (from the scan callback, or a marshalled ClaudeConfigSet.Changed).
+    private void UpdateUsageDirs(IReadOnlyList<ClaudeSession> sessions) =>
+        _usageHost?.SetActiveDirs(UsageDirSelection.InUse(
+            sessions.Select(s => s.AttributedConfigDir), ClaudeConfigSet.Instance.Primary));
+
     private void RefreshOriginIcons(IReadOnlyList<ClaudeSession> sessions)
     {
         if (_overlay is null) return;

@@ -24,13 +24,56 @@ internal sealed class UsageMonitor
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
 
-    // Where the OAuth blob lives is OS-specific (file on Windows/Linux, Keychain on macOS) — behind a seam.
-    private readonly IClaudeCredentials _credentials;
+    // Reads the OAuth access token to authenticate the poll. A source rather than a fixed credential store,
+    // so one org's usage is polled with that org's token: the primary dir goes through IClaudeCredentials
+    // (file on Windows/Linux, Keychain on macOS), a non-primary dir reads its own .credentials.json file.
+    private readonly Func<string?> _readToken;
 
     // The most recent successful reading, so a failed fetch can still surface last-known values.
     private UsageInfo _last = UsageInfo.Empty;
 
-    public UsageMonitor(IClaudeCredentials credentials) => _credentials = credentials;
+    public UsageMonitor(Func<string?> readToken) => _readToken = readToken;
+
+    /// <summary>The primary-account monitor: token from the OS credential store behind
+    /// <see cref="IClaudeCredentials"/>.</summary>
+    public static UsageMonitor ForPrimary(IClaudeCredentials credentials) =>
+        new(() => TokenFromJson(credentials.ReadCredentialsJson()));
+
+    /// <summary>A per-dir monitor: token from that config dir's own <c>.credentials.json</c> file. On macOS the
+    /// token lives in the per-user Keychain rather than this file, so a non-primary dir may resolve none.</summary>
+    public static UsageMonitor ForConfigDir(ClaudeConfigDir dir) =>
+        new(() => TokenFromJson(ReadFile(dir.CredentialsFile)));
+
+    /// <summary>Extracts <c>claudeAiOauth.accessToken</c> from a credentials blob; null if absent/unparseable.</summary>
+    internal static string? TokenFromJson(string? json)
+    {
+        if (string.IsNullOrEmpty(json))
+            return null;
+        try
+        {
+            return JsonNode.Parse(json)?.AsObject()["claudeAiOauth"]?["accessToken"]?.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? ReadFile(string path)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            return null;
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(fs);
+            return reader.ReadToEnd();
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// Fetches the current usage. Always resolves (never throws): on failure the result has
@@ -40,7 +83,7 @@ internal sealed class UsageMonitor
     {
         try
         {
-            var token = ReadAccessToken();
+            var token = _readToken();
             if (string.IsNullOrEmpty(token))
                 return Fail("Couldn't read Claude credentials — sign in to Claude Code");
 
@@ -184,23 +227,6 @@ internal sealed class UsageMonitor
             resetsAt = dto.LocalDateTime;
 
         return (percent, resetsAt);
-    }
-
-    private string? ReadAccessToken()
-    {
-        var json = _credentials.ReadCredentialsJson();
-        if (string.IsNullOrEmpty(json))
-            return null;
-
-        try
-        {
-            var root = JsonNode.Parse(json)?.AsObject();
-            return root?["claudeAiOauth"]?["accessToken"]?.ToString();
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     // Use the version from the most recently-updated session file so our User-Agent matches the

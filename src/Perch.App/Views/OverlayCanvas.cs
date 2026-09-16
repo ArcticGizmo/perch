@@ -46,7 +46,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private const double SubIndent        = 22;
     private const double BarRowHeight     = 18;
     private const double UsageStripPad    = 14; // padding around the usage bars; the strip's own height is
-                                                // UsageStripHeight (bar count varies with scoped windows)
+                                                // UsageStripHeight (bar count varies with scoped windows + orgs)
+    private const double UsageHeaderHeight = 15; // the org-name heading above each per-org set of bars
+    private const double UsageSetGap       = 6;  // gap below one org's set before the next org's heading
     private const double SysMetricsStripHeight = 50; // system CPU + RAM bars + padding, shown only when expanded
     private const double MetricsBarWidth  = 28; // width reserved for a session row's CPU/RAM mini-bars
     private const double QuickLinksRowHeight = 24; // height of the quick-links icon strip below the usage bars
@@ -763,30 +765,42 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private bool _showWaitingTimer = true;
     private float _ctxYellow = 0.60f, _ctxOrange = 0.75f, _ctxRed = 0.90f;
 
-    // Rate-limit usage strip (5-hour + weekly bars), shown between the header and the rows when expanded.
-    private UsageInfo _usage = UsageInfo.Empty;
+    // Rate-limit usage strip: one set of bars (5h + 7d + scoped + credits) per org currently in use, each
+    // under the org's name. Shown between the header and the rows when expanded.
+    private IReadOnlyList<OrgUsage> _orgUsages = [];
+    // Per-set Y bounds recorded during paint, so a hover shows only the org under the cursor (not all of them).
+    private readonly List<(double Top, double Bottom, OrgUsage Set)> _usageSetBounds = new();
     private bool _usageEnabled = true;
     private bool _showExpectedRate = true;
     private bool _showMonthlySpend;
 
-    // The monthly extra-usage spend bar shows only when the user opted in AND the account has extra usage
-    // switched on (the endpoint's is_enabled). It's independent of the rate-limit bars, so the whole strip
-    // is visible when either the rate bars or the spend bar has something to draw.
-    private bool ShowSpendBar => _showMonthlySpend && _usage.ExtraUsage is { Enabled: true };
-    private bool UsageStripVisible => _usageEnabled || ShowSpendBar;
+    // Before the first poll (or when the account list is momentarily empty) show a single placeholder set for
+    // the primary, so the strip reserves its space and the two windows render as "—" rather than vanishing.
+    private IReadOnlyList<OrgUsage> UsageSets =>
+        _orgUsages.Count > 0 ? _orgUsages
+        : [new OrgUsage(ClaudeConfigSet.Instance.Primary, null, UsageInfo.Empty)];
 
-    /// <summary>Feeds the latest account-wide rate-limit usage (on the UI thread) and repaints the strip.
-    /// Internal because <see cref="UsageInfo"/> is a Core-internal type shared via InternalsVisibleTo.</summary>
-    internal void UpdateUsage(UsageInfo usage)
+    // The monthly extra-usage spend bar shows only when the user opted in AND that org's account has extra
+    // usage switched on (the endpoint's is_enabled). It's independent of the rate-limit bars, so the whole
+    // strip is visible when either the rate bars or any org's spend bar has something to draw.
+    private bool SpendBarFor(OrgUsage u) => _showMonthlySpend && u.Usage.ExtraUsage is { Enabled: true };
+    private bool UsageStripVisible => _usageEnabled || UsageSets.Any(SpendBarFor);
+
+    // The bars one org's set contributes (2 windows + its scoped models when the rate bars are on, plus its
+    // spend bar when enabled). Its heading adds one more row on top when the set draws anything.
+    private int SetBarCount(OrgUsage u) => (_usageEnabled ? 2 + u.Usage.Scoped.Count : 0) + (SpendBarFor(u) ? 1 : 0);
+
+    /// <summary>Feeds the latest per-org usage readings (on the UI thread) and repaints the strip.
+    /// Internal because <see cref="OrgUsage"/> is a Core-internal type shared via InternalsVisibleTo.</summary>
+    internal void UpdateUsage(IReadOnlyList<OrgUsage> usages)
     {
-        // A scoped window appearing or disappearing between polls changes the bar count, and so the
-        // panel height — that needs a relayout, not just a repaint, or the strip paints past the panel.
-        // The bar count is now partly data-driven: a poll can switch the account's extra-usage on or off,
-        // making the spend bar (and possibly the whole strip) appear or vanish. So relayout whenever the
-        // count changes — even to zero — and otherwise repaint only when the strip is actually showing.
-        int before = UsageBarCount;
-        _usage = usage;
-        if (UsageBarCount != before) RemeasurePanel();
+        // Sets appearing/disappearing (an org comes into use), a scoped window arriving, or an account's
+        // extra-usage flipping all change the strip's height — that needs a relayout, not just a repaint, or
+        // the strip paints past the panel. Relayout whenever the measured height changes; otherwise repaint
+        // only when the strip is actually showing.
+        double before = UsageStripHeight;
+        _orgUsages = usages;
+        if (UsageStripHeight != before) RemeasurePanel();
         else if (UsageStripVisible) InvalidateVisual();
     }
 
@@ -2120,46 +2134,84 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private double SystemInfoTop => _sectionTop.GetValueOrDefault(OverlaySection.SystemInfo);
     private double UsageStripTop => _sectionTop.GetValueOrDefault(OverlaySection.ClaudeMetrics);
 
-    // When the rate bars are on: Session + Weekly are always drawn and scoped windows only when the endpoint
-    // returns them. The monthly spend bar adds one more when enabled. Either can be off, so the strip's
-    // height rides on both the reading and the two toggles. UpdateUsage relayouts when this changes.
-    private int UsageBarCount => (_usageEnabled ? 2 + _usage.Scoped.Count : 0) + (ShowSpendBar ? 1 : 0);
-    private double UsageStripHeight => UsageBarCount * BarRowHeight + UsageStripPad;
+    // Height is the sum over the in-use orgs: each set that draws anything contributes its heading row, its
+    // bars (5h + 7d always, one per scoped window, plus a credits bar when enabled) and a trailing gap.
+    // UpdateUsage relayouts when this changes (a set arriving/leaving, a scoped window, an extra-usage flip).
+    private double UsageStripHeight
+    {
+        get
+        {
+            double h = UsageStripPad;
+            foreach (var set in UsageSets)
+            {
+                int bars = SetBarCount(set);
+                if (bars > 0) h += UsageHeaderHeight + bars * BarRowHeight + UsageSetGap;
+            }
+            return h;
+        }
+    }
 
     private void DrawUsageBars(DrawingContext ctx, double width)
     {
-        bool stale = _usage.IsStale(DateTime.Now);
+        var now = DateTime.Now;
         double rowTop = UsageStripTop + 2;
+        _usageSetBounds.Clear();
 
-        if (_usageEnabled)
+        foreach (var set in UsageSets)
         {
-            double? sessionExpected = _showExpectedRate
-                ? UsageBarRenderer.ElapsedPercent(_usage.FiveHourResetsAt, TimeSpan.FromHours(5)) : null;
-            double? weeklyExpected = _showExpectedRate
-                ? UsageBarRenderer.ElapsedPercent(_usage.SevenDayResetsAt, TimeSpan.FromDays(7)) : null;
-            DrawUsageBar(ctx, width, rowTop,                "Session", _usage.FiveHourPercent, sessionExpected, stale);
-            DrawUsageBar(ctx, width, rowTop + BarRowHeight, "Weekly",  _usage.SevenDayPercent, weeklyExpected,  stale);
-            rowTop += BarRowHeight * 2;
+            if (SetBarCount(set) == 0) continue;
+            var u = set.Usage;
+            bool stale = u.IsStale(now);
+            double setTop = rowTop;
 
-            foreach (var s in _usage.Scoped)
+            // The org's name heads its set of bars (always shown, even for a single account).
+            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(set.Header, 10.5, FgBrush, FontWeight.SemiBold),
+                HorizPad, rowTop + UsageHeaderHeight / 2);
+            rowTop += UsageHeaderHeight;
+
+            if (_usageEnabled)
             {
-                double? expected = _showExpectedRate
-                    ? UsageBarRenderer.ElapsedPercent(s.ResetsAt, TimeSpan.FromDays(7)) : null;
-                DrawUsageBar(ctx, width, rowTop, s.Label, s.Percent, expected, stale);
+                double? sessionExpected = _showExpectedRate
+                    ? UsageBarRenderer.ElapsedPercent(u.FiveHourResetsAt, TimeSpan.FromHours(5)) : null;
+                double? weeklyExpected = _showExpectedRate
+                    ? UsageBarRenderer.ElapsedPercent(u.SevenDayResetsAt, TimeSpan.FromDays(7)) : null;
+                DrawUsageBar(ctx, width, rowTop,                "5h", u.FiveHourPercent, sessionExpected, stale);
+                DrawUsageBar(ctx, width, rowTop + BarRowHeight, "7d", u.SevenDayPercent, weeklyExpected,  stale);
+                rowTop += BarRowHeight * 2;
+
+                foreach (var s in u.Scoped)
+                {
+                    double? expected = _showExpectedRate
+                        ? UsageBarRenderer.ElapsedPercent(s.ResetsAt, TimeSpan.FromDays(7)) : null;
+                    DrawUsageBar(ctx, width, rowTop, UsageLabels.Short(s.Label), s.Percent, expected, stale);
+                    rowTop += BarRowHeight;
+                }
+            }
+
+            // The monthly extra-usage spend bar sits at the foot of the set: fill = spent/limit, dollars on
+            // the right instead of a percentage, and no pace marker (the window has no reported reset).
+            if (SpendBarFor(set))
+            {
+                var e = u.ExtraUsage!;
+                UsageBarRenderer.Draw(ctx, HorizPad, width - HorizPad, rowTop + BarRowHeight / 2,
+                    "$", e.Percent, expectedPct: null, stale, 10, 10,
+                    MutedColor, UsageTrackColor, ExpectedMarkColor, BgColor,
+                    captionW: 24, pctW: 90, trackH: 7, valueText: e.Compact);
                 rowTop += BarRowHeight;
             }
-        }
 
-        // The monthly extra-usage spend bar sits at the foot of the strip: fill = spent/limit, dollars on
-        // the right instead of a percentage, and no pace marker (the window has no reported reset).
-        if (ShowSpendBar)
-        {
-            var e = _usage.ExtraUsage!;
-            UsageBarRenderer.Draw(ctx, HorizPad, width - HorizPad, rowTop + BarRowHeight / 2,
-                "Credits", e.Percent, expectedPct: null, stale, 10, 10,
-                MutedColor, UsageTrackColor, ExpectedMarkColor, BgColor,
-                captionW: 46, pctW: 90, trackH: 7, valueText: e.Compact);
+            rowTop += UsageSetGap;
+            _usageSetBounds.Add((setTop, rowTop, set));
         }
+    }
+
+    // The set (org) whose painted band contains the point, or -1 (over strip padding / no data).
+    private int UsageSetIndexAt(Point p)
+    {
+        for (int i = 0; i < _usageSetBounds.Count; i++)
+            if (p.Y >= _usageSetBounds[i].Top && p.Y < _usageSetBounds[i].Bottom)
+                return i;
+        return -1;
     }
 
     // The overlay's compact bar: a HorizPad inset on both sides, narrow caption/pct columns, the
@@ -2169,7 +2221,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         UsageBarRenderer.Draw(ctx, HorizPad, width - HorizPad, rowTop + BarRowHeight / 2,
             caption, percent, expectedPct, stale, 10, 10,
             MutedColor, UsageTrackColor, ExpectedMarkColor, BgColor,
-            captionW: 46, pctW: 34, trackH: 7);
+            captionW: 24, pctW: 34, trackH: 7);
 
     // ── Quick-links row ────────────────────────────────────────────────────────
     // The enabled quick-link icons side-by-side, centred horizontally. Each slot shows its pre-decoded
@@ -3844,7 +3896,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             HitTestGameIcon(p) is var gi && gi >= 0 ? (TipKind.Game, gi) :
             HitTestReactionSummary(p) is var rs && rs >= 0 ? (TipKind.ReactionSummary, rs) :
             HitTestSocialStatus(p) is var ss && ss >= 0 ? (TipKind.SocialStatus, ss) :
-            InUsageStrip(p)                           ? (TipKind.Usage, -1) :
+            InUsageStrip(p)                           ? (TipKind.Usage, UsageSetIndexAt(p)) :
                                                         (TipKind.None, -1);
 
         if (kind == _tipKind && row == _tipRow) return;
@@ -3865,7 +3917,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _dwellTimer?.Stop();
         switch (_tipKind)
         {
-            case TipKind.Usage:   ShowUsageTooltip();          break;
+            case TipKind.Usage:   ShowUsageTooltip(_tipRow);   break;
             case TipKind.Thermo:  ShowThermoTooltip(_tipRow);  break;
             case TipKind.Warn:    ShowWarnTooltip(_tipRow);    break;
             case TipKind.Task:    ShowTaskTooltip(_tipRow);    break;
@@ -5482,28 +5534,43 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Tooltip().ShowText(text, ToScreen(r.Left, r.Bottom + 4));
     }
 
-    private void ShowUsageTooltip()
+    private void ShowUsageTooltip(int setIndex)
     {
         var now = DateTime.Now;
-        var lines = new List<OverlayTooltip.Line> { new("Plan usage", OverlayTooltip.FgColor, true) };
-        if (_usageEnabled)
-        {
-            lines.Add(new(UsageLine("Session", _usage.FiveHourPercent, _usage.FiveHourResetsAt, now), OverlayTooltip.FgColor, false));
-            lines.Add(new(UsageLine("Weekly",  _usage.SevenDayPercent, _usage.SevenDayResetsAt, now), OverlayTooltip.FgColor, false));
-            foreach (var s in _usage.Scoped)
-                lines.Add(new(UsageLine(s.Label, s.Percent, s.ResetsAt, now), OverlayTooltip.FgColor, false));
-        }
-        if (ShowSpendBar)
-            lines.Add(new($"Monthly spend  {_usage.ExtraUsage!.Detailed}", OverlayTooltip.FgColor, false));
 
-        if (_usage.IsStale(now))
+        // Hovering a set shows only that org; over the strip's padding (index -1) falls back to all of them.
+        List<OrgUsage> shown = setIndex >= 0 && setIndex < _usageSetBounds.Count
+            ? [_usageSetBounds[setIndex].Set]
+            : UsageSets.Where(s => SetBarCount(s) > 0).ToList();
+
+        var lines = new List<OverlayTooltip.Line>();
+        if (shown.Count != 1)
+            lines.Add(new("Plan usage", OverlayTooltip.FgColor, true));  // multi-org: an overall title over the sub-headers
+
+        foreach (var set in shown)
         {
-            var reason = _usage.Error;
-            if (string.IsNullOrEmpty(reason))
-                reason = _usage.LastUpdated == DateTime.MinValue
-                    ? "No usage data yet"
-                    : $"Updated {Ago(now - _usage.LastUpdated)} ago — couldn't refresh";
-            lines.Add(new(reason, OverlayTooltip.MutedColor, false));
+            var u = set.Usage;
+            lines.Add(new(set.Header, OverlayTooltip.FgColor, true));  // org heading (the title when only one shows)
+
+            if (_usageEnabled)
+            {
+                lines.Add(new(UsageLine("Session", u.FiveHourPercent, u.FiveHourResetsAt, now), OverlayTooltip.FgColor, false));
+                lines.Add(new(UsageLine("Weekly",  u.SevenDayPercent, u.SevenDayResetsAt, now), OverlayTooltip.FgColor, false));
+                foreach (var s in u.Scoped)
+                    lines.Add(new(UsageLine(s.Label, s.Percent, s.ResetsAt, now), OverlayTooltip.FgColor, false));
+            }
+            if (SpendBarFor(set))
+                lines.Add(new($"Monthly spend  {u.ExtraUsage!.Detailed}", OverlayTooltip.FgColor, false));
+
+            if (u.IsStale(now))
+            {
+                var reason = u.Error;
+                if (string.IsNullOrEmpty(reason))
+                    reason = u.LastUpdated == DateTime.MinValue
+                        ? "No usage data yet"
+                        : $"Updated {Ago(now - u.LastUpdated)} ago — couldn't refresh";
+                lines.Add(new(reason, OverlayTooltip.MutedColor, false));
+            }
         }
         // Open to the left of the overlay's left edge so it never covers the strip.
         Tooltip().ShowLines(lines, ToScreen(0, UsageStripTop), placeLeft: true);

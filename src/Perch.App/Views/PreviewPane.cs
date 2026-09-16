@@ -32,7 +32,7 @@ internal sealed class PreviewPane : Border
         // Seed once with the shared sample overlay state — the same rows/usage/metrics the render harness
         // uses, so every glyph a setting can toggle is present to be shown or hidden.
         _canvas.Update(SampleData.Sessions());
-        _canvas.UpdateUsage(SampleData.Usage());
+        _canvas.UpdateUsage(SampleData.OrgUsages());
         _canvas.UpdateSystemMetrics(SampleData.SystemMetrics());
         _canvas.UpdateSessionMetrics(SampleData.SessionMetrics());
         _canvas.SetDaemonWorkers(SampleData.DaemonWorkers());

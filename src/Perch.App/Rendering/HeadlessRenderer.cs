@@ -61,7 +61,7 @@ internal static class HeadlessRenderer
         canvas.SetShowMarkdown(true);   // off by default; enabled here so the sample row shows the glyph
         canvas.Update(SampleData.Sessions());
         ResolveIdeIcons(canvas);   // real host-editor icons for IDE-hosted sample rows (fake paths → vector mark)
-        canvas.UpdateUsage(SampleData.Usage());
+        canvas.UpdateUsage(SampleData.OrgUsages());
         canvas.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));
         canvas.UpdateSessionMetrics(new Dictionary<string, SessionMetrics>
         {
@@ -243,7 +243,7 @@ internal static class HeadlessRenderer
         {
             var c = new OverlayCanvas();
             c.Update(SampleData.Sessions());
-            c.UpdateUsage(SampleData.Usage());
+            c.UpdateUsage(SampleData.OrgUsages());
             c.UpdateSystemMetrics(SampleData.SystemMetrics());
             c.UpdateSessionMetrics(SampleData.SessionMetrics());
             c.SetQuickLinks(links, icons);
@@ -277,7 +277,7 @@ internal static class HeadlessRenderer
         // live pointer, so it isn't in the static render.)
         var rearrangeProbe = new OverlayCanvas();
         rearrangeProbe.Update(SampleData.Sessions());
-        rearrangeProbe.UpdateUsage(SampleData.Usage());
+        rearrangeProbe.UpdateUsage(SampleData.OrgUsages());
         rearrangeProbe.UpdateSystemMetrics(SampleData.SystemMetrics());
         rearrangeProbe.UpdateSessionMetrics(SampleData.SessionMetrics());
         rearrangeProbe.SetQuickLinks(links, icons);
@@ -297,7 +297,7 @@ internal static class HeadlessRenderer
         // quick links, Hypertree branches) all stay, which is the whole point of this surface.
         var emptyProbe = new OverlayCanvas();
         emptyProbe.Update([]);
-        emptyProbe.UpdateUsage(SampleData.Usage());
+        emptyProbe.UpdateUsage(SampleData.OrgUsages());
         emptyProbe.UpdateSystemMetrics(new SystemMetrics(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000));
         emptyProbe.SetQuickLinks(links, icons);
         emptyProbe.SetHypertree(SampleHypertree());
@@ -673,7 +673,7 @@ internal static class HeadlessRenderer
         // notes), one with the row glyphs gated off, to prove a mutated clone re-gates what renders.
         var previewOn = new OverlayCanvas();
         previewOn.Update(SampleData.Sessions());
-        previewOn.UpdateUsage(SampleData.Usage());
+        previewOn.UpdateUsage(SampleData.OrgUsages());
         previewOn.UpdateSystemMetrics(SampleData.SystemMetrics());
         previewOn.UpdateSessionMetrics(SampleData.SessionMetrics());
         OverlaySettingsGates.Apply(previewOn, PreviewSettings(allGlyphsOn: true));
@@ -681,7 +681,7 @@ internal static class HeadlessRenderer
 
         var previewOff = new OverlayCanvas();
         previewOff.Update(SampleData.Sessions());
-        previewOff.UpdateUsage(SampleData.Usage());
+        previewOff.UpdateUsage(SampleData.OrgUsages());
         OverlaySettingsGates.Apply(previewOff, PreviewSettings(allGlyphsOn: false));
         RenderControl(previewOff, Path.Combine(outDir, "overlay_preview_off_1x.png"), 96);
 
@@ -914,7 +914,7 @@ internal static class HeadlessRenderer
     {
         var canvas = new OverlayCanvas();
         canvas.Update(SampleData.Sessions());
-        canvas.UpdateUsage(SampleData.Usage());
+        canvas.UpdateUsage(SampleData.OrgUsages());
         canvas.UpdateSystemMetrics(SampleData.SystemMetrics());
         // Seed the docked side before entering docked mode (only the horizontal anchor matters here).
         canvas.SetInitialPlacements(null, null, new OverlayPlacement { HAnchor = side });

@@ -482,7 +482,7 @@ internal sealed class OnboardingWindow : Window
             new ClaudeSession("5678", "s2", SessionStatus.AwaitingInput, @"C:\src\api", "api", now),
             new ClaudeSession("5566", "s7", SessionStatus.Running, @"C:\src\thoughts", "claude-thoughts", now),
         ]);
-        canvas.UpdateUsage(SampleData.Usage());
+        canvas.UpdateUsage(SampleData.OrgUsages());
         canvas.UpdateMedia(SampleData.Media());   // one movable-section example (the now-playing strip)
         canvas.SetQuickLinks(
             [new QuickLink { Name = "GitHub" }, new QuickLink { Name = "Jira" }, new QuickLink { Name = "Slack" }],

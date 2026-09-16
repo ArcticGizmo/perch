@@ -135,6 +135,34 @@ internal static class SampleData
         };
     }
 
+    /// <summary>Two orgs' worth of readings for the per-org usage strip — exercises the org headings, a
+    /// second set, the condensed labels and the credits bar. The dirs are synthetic; the resolved orgs give
+    /// the headings real names.</summary>
+    public static IReadOnlyList<OrgUsage> OrgUsages()
+    {
+        var now = DateTime.Now;
+        var acme = new UsageInfo(
+            FiveHourPercent: 62, SevenDayPercent: 28,
+            FiveHourResetsAt: now.AddHours(2), SevenDayResetsAt: now.AddDays(4),
+            LastUpdated: now, Ok: true, Error: null)
+        {
+            Scoped = [new ScopedUsage("Fable", 41, now.AddDays(4))],
+            ExtraUsage = new ExtraUsageInfo(true, 24.80m, 100m, "AUD", 2, false),
+        };
+        var beta = new UsageInfo(
+            FiveHourPercent: 88, SevenDayPercent: 63,
+            FiveHourResetsAt: now.AddHours(1), SevenDayResetsAt: now.AddDays(2),
+            LastUpdated: now, Ok: true, Error: null)
+        {
+            Scoped = [new ScopedUsage("Fable", 72, now.AddDays(2))],
+        };
+        return
+        [
+            new OrgUsage(new ClaudeConfigDir(@"C:\Users\sample\.claude"), new Org("org-a") { Name = "Acme Corp" }, acme),
+            new OrgUsage(new ClaudeConfigDir(@"C:\envs\beta\.claude", slug: "beta"), new Org("org-b") { Name = "Beta Inc" }, beta),
+        ];
+    }
+
     /// <summary>Whole-machine CPU + RAM strip reading for the metrics header.</summary>
     public static SystemMetrics SystemMetrics() =>
         new(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000);
