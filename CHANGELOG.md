@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.11] - 2026-09-16
+
+- Perch-controlled sessions surface their background sub-agents on the overlay (they'd been working unseen)
+- Session window gained a "Running" strip of the sub-agents working right now
+
+---
+
 ## [v0.4.10] - 2026-09-16
 
 - Session windows launched from the CLI come to the front, as intended

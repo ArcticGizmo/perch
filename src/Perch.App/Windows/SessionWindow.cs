@@ -91,6 +91,14 @@ internal sealed partial class SessionWindow : Window
     // Live usage readout beside the settings chips: cumulative tokens in/out, and context-window pressure.
     private readonly TextBlock _tokensPillText, _contextPillText;
     private readonly Border _tokensPill, _contextPill;
+
+    // Fixed strip under the header that mirrors what the floating overlay shows for THIS session: a chip per
+    // background sub-agent/teammate currently working. Fed by the same SessionMonitor scan that drives the
+    // overlay (the app hands each window its own ClaudeSession after every scan), so the two never disagree.
+    // Hidden whenever nothing is running — controlled sessions run their sub-agents in the background, so this
+    // is the only place inside the window that surfaces them. See UpdateBackgroundActivity.
+    private readonly Border _activityStrip;
+    private readonly WrapPanel _activityChips;
     // The context pill's thermometer — the overlay's own glyph/variants (OverlayCanvas.DrawThermo), at the
     // thresholds the floating UI is configured with. Show/threshold/green-segment mirror settings, pushed
     // by the app via SetContextPressureConfig; default to AppSettings' own defaults so it reads sanely if
@@ -697,11 +705,28 @@ internal sealed partial class SessionWindow : Window
         BuildUsageOverlay();
         BuildFindBar();
         _center = new Panel { Children = { _launcher, _thread, jumpStack, _toast, _findBar, _resumeOverlay, _autoCompactOverlay, _usageOverlay } };
+        // Header-anchored "running now" strip: one chip per working sub-agent/teammate under this session. A
+        // DockPanel (caption pinned left, chips filling) so the WrapPanel is width-constrained and wraps.
+        _activityChips = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        var activityCaption = new TextBlock
+        {
+            Text = "RUNNING", FontFamily = _p.Mono, FontSize = 10.5, LetterSpacing = 1.1, Foreground = _p.Faint,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0),
+            [DockPanel.DockProperty] = Dock.Left,
+        };
+        _activityStrip = new Border
+        {
+            Background = _p.Surface, BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(0, 0, 0, 1),
+            Padding = new Thickness(18, 7), IsVisible = false, [DockPanel.DockProperty] = Dock.Top,
+            Child = new DockPanel { VerticalAlignment = VerticalAlignment.Center, Children = { activityCaption, _activityChips } },
+        };
+
         _changesPanel = BuildChangesPanel();   // docked to the right of the centre; hidden until toggled on
         // Dock order matters: the changed-files panel docks Right *before* the composer docks Bottom, so the
         // panel spans the full height (down past the composer) and the composer + thread stay aligned to its
-        // left — rather than the composer running full-width underneath the panel.
-        Content = new DockPanel { Children = { barFrame, _changesPanel, _composerDock, _center } };
+        // left — rather than the composer running full-width underneath the panel. The activity strip docks
+        // Top right below the header bar, above the thread.
+        Content = new DockPanel { Children = { barFrame, _activityStrip, _changesPanel, _composerDock, _center } };
 
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
         // Focus changes can turn a pending prompt into a "background" one (or acknowledge it), so re-evaluate.
@@ -3029,6 +3054,60 @@ internal sealed partial class SessionWindow : Window
         Background = bg, BorderBrush = line, BorderThickness = new Thickness(1), CornerRadius = SessionPalette.PillRadius,
         Padding = new Thickness(10, 4), VerticalAlignment = VerticalAlignment.Center, Child = content,
     };
+
+    /// <summary>
+    /// Mirrors the floating overlay's live sub-agent view onto this window: a chip per background
+    /// sub-agent/teammate currently working under the session, from the very same <see cref="ClaudeSession"/>
+    /// the overlay renders (the app resolves it by id and pushes it after each scan). A controlled session
+    /// runs its sub-agents in the background, so this strip is the only place their activity surfaces inside
+    /// the window. Passing null — or a session with nothing running — hides the strip. Call on the UI thread.
+    /// </summary>
+    public void UpdateBackgroundActivity(ClaudeSession? mine)
+    {
+        // Only agents actually working now — an idle or interrupted (stale) teammate isn't "running".
+        // SelfAndDescendants so a sub-agent nested under another still shows.
+        var running = mine?.SubAgents
+            .SelectMany(a => a.SelfAndDescendants())
+            .Where(a => !a.IsIdle && !a.IsStale)
+            .ToList() ?? [];
+
+        _activityChips.Children.Clear();
+        foreach (var agent in running)
+            _activityChips.Children.Add(BuildAgentChip(agent));
+        _activityStrip.IsVisible = running.Count > 0;
+    }
+
+    // One overlay-style chip for a working sub-agent/teammate: a dot in the theme's sub-agent hue, the
+    // agent's label, and its present-tense activity when known.
+    private Control BuildAgentChip(SubAgent a)
+    {
+        var label = a.IsTeammate
+            ? (string.IsNullOrEmpty(a.Name) ? a.Description : a.Name!)
+            : (string.IsNullOrEmpty(a.Description) ? a.AgentType : a.Description);
+        if (string.IsNullOrWhiteSpace(label)) label = "sub-agent";
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7, VerticalAlignment = VerticalAlignment.Center };
+        row.Children.Add(new Ellipse { Width = 7, Height = 7, Fill = _p.Violet, VerticalAlignment = VerticalAlignment.Center });
+        row.Children.Add(new TextBlock
+        {
+            Text = ClipChip(label, 34), FontFamily = _p.Body, FontSize = 12, FontWeight = FontWeight.SemiBold,
+            Foreground = _p.Text, VerticalAlignment = VerticalAlignment.Center,
+        });
+        if (!string.IsNullOrWhiteSpace(a.Activity))
+            row.Children.Add(new TextBlock
+            {
+                Text = ClipChip(a.Activity!, 40), FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Faint,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+
+        var chip = Pill(row, _p.VioletWash, _p.VioletLine);
+        chip.Margin = new Thickness(0, 2, 8, 2);
+        chip[ToolTip.TipProperty] = string.IsNullOrWhiteSpace(a.Activity) ? label : $"{label} — {a.Activity}";
+        return chip;
+    }
+
+    private static string ClipChip(string s, int max) =>
+        s.Length <= max ? s : s[..(max - 1)].TrimEnd() + "…";
 
     /// <summary>Mirrors the floating overlay's context-pressure configuration onto the context pill's
     /// thermometer: whether the feature is shown at all, its yellow/orange/red colour thresholds, and

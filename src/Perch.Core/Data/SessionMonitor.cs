@@ -214,6 +214,16 @@ internal sealed class SessionMonitor : IDisposable
     /// </summary>
     public DateTime? NextNeedsAttentionDeadline { get; private set; }
 
+    /// <summary>
+    /// True after the last <see cref="Scan"/> when at least one session Perch drives over stream-json is
+    /// actively working (<see cref="SessionStatus.Running"/>). A controlled session does <em>not</em>
+    /// heartbeat its <c>sessions/{id}.json</c> status, so nothing incidental (no file-watcher event) triggers
+    /// a rescan while it works — yet that is exactly the window in which a background sub-agent it launched is
+    /// mid-run and must be sampled to surface in the overlay. The host polls on a short cadence while this
+    /// holds, closing the gap left by the 30s reconcile (which is far too coarse to catch a sub-agent).
+    /// </summary>
+    public bool HasWorkingControlledSession { get; private set; }
+
     /// <param name="processProbe">How pid liveness is tested. Defaults to the real OS probe; replay
     /// injects one backed by the recording so dead recorded pids report alive within their window.</param>
     /// <param name="ideDetector">How a session's host IDE is resolved from its process ancestry. Defaults to
@@ -282,6 +292,7 @@ internal sealed class SessionMonitor : IDisposable
         if (!anyDir)
         {
             NextNeedsAttentionDeadline = null;
+            HasWorkingControlledSession = false;
             SyncProcessSubscriptions(new HashSet<string>());
             SessionsChanged?.Invoke([]);
             return [];
@@ -303,6 +314,10 @@ internal sealed class SessionMonitor : IDisposable
 
         SyncProcessSubscriptions(activePids);
         NextNeedsAttentionDeadline = ComputeNextDeadline();
+        // Drives the host's short-cadence poll: a controlled session that is working needs sampling for its
+        // (background) sub-agents, which the CLI never heartbeats into the session file. See the property.
+        HasWorkingControlledSession =
+            sessions.Any(s => s.IsPerchControlled && s.Status == SessionStatus.Running);
 
         SessionsChanged?.Invoke(sessions);
 

@@ -282,6 +282,7 @@ public partial class App : Application
             {
                 _lastSessions = sessions;
                 _overlay!.Canvas.Update(sessions);
+                RefreshSessionActivity(sessions);   // mirror each session's live sub-agents into its own window
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
                 RefreshOriginIcons(sessions);
@@ -1855,6 +1856,18 @@ public partial class App : Application
     {
         foreach (var w in _sessionWindows)
             w.SetComposerActions(BuildComposerActions(w));
+    }
+
+    // Push each open session window its own live ClaudeSession (matched by id) so its header strip can show
+    // the same background sub-agents the overlay does. A window with no live session (the launcher, or an
+    // ended one) gets null and hides the strip. Runs on the UI thread from the monitor scan callback.
+    private void RefreshSessionActivity(IReadOnlyList<ClaudeSession> sessions)
+    {
+        foreach (var w in _sessionWindows)
+        {
+            var mine = w.SessionId is { } id ? sessions.FirstOrDefault(s => s.SessionId == id) : null;
+            w.UpdateBackgroundActivity(mine);
+        }
     }
 
     // The Artifact glyph's click: a small menu of this session's published Artifacts (title → open on

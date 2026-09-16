@@ -16,6 +16,13 @@ internal sealed class SessionMonitorHost : IDisposable
     // event or the deadline timer misses. The deadline timer below is what makes "done" fire on time.
     private static readonly TimeSpan ReconcileInterval = TimeSpan.FromSeconds(30);
 
+    // Short-cadence poll that runs ONLY while a Perch-controlled session is actively working
+    // (SessionMonitor.HasWorkingControlledSession). A controlled session doesn't heartbeat its session
+    // file, so no file event fires while it runs a turn — and a background sub-agent it launches lives
+    // and dies well inside the 30s reconcile, so the overlay never sampled it. Polling here catches the
+    // sub-agent's working window. Off whenever no controlled session is working, so it costs nothing at rest.
+    private static readonly TimeSpan ControlledPollInterval = TimeSpan.FromSeconds(2);
+
     private readonly SessionMonitor _monitor;
     private readonly Action<IReadOnlyList<ClaudeSession>> _onSessions;
 
@@ -25,6 +32,7 @@ internal sealed class SessionMonitorHost : IDisposable
     // _deadlineTimer + ArmDeadlineTimer. Ticks on the UI thread, so the Scan it drives is UI-thread-safe.
     private readonly DispatcherTimer _deadlineTimer;
     private readonly DispatcherTimer _reconcileTimer;
+    private readonly DispatcherTimer _controlledPollTimer;
 
     /// <summary>Raised when a session newly needs attention (finished) — the app flashes the overlay.</summary>
     public event Action<ClaudeSession>? NeedsAttention;
@@ -76,6 +84,8 @@ internal sealed class SessionMonitorHost : IDisposable
         _deadlineTimer.Tick += (_, _) => { _deadlineTimer.Stop(); _monitor.Scan(); };
         _reconcileTimer = new DispatcherTimer { Interval = ReconcileInterval };
         _reconcileTimer.Tick += (_, _) => _monitor.Scan();
+        _controlledPollTimer = new DispatcherTimer { Interval = ControlledPollInterval };
+        _controlledPollTimer.Tick += (_, _) => _monitor.Scan();
     }
 
     /// <summary>Whether the monitor flags stuck sessions (feeds the overlay's warning glyph). Off by
@@ -156,6 +166,22 @@ internal sealed class SessionMonitorHost : IDisposable
     {
         _onSessions(sessions);
         ArmDeadlineTimer();
+        UpdateControlledPoll();
+    }
+
+    // Runs the short-cadence poll only while a controlled session is working, so its background sub-agents
+    // are sampled during their run; stops it the moment none is, keeping the overlay quiet at rest. See
+    // ControlledPollInterval / SessionMonitor.HasWorkingControlledSession.
+    private void UpdateControlledPoll()
+    {
+        if (_monitor.HasWorkingControlledSession)
+        {
+            if (!_controlledPollTimer.IsEnabled) _controlledPollTimer.Start();
+        }
+        else if (_controlledPollTimer.IsEnabled)
+        {
+            _controlledPollTimer.Stop();
+        }
     }
 
     // Arms the one-shot timer for the monitor's next needs-attention deadline (or leaves it stopped when
@@ -173,6 +199,7 @@ internal sealed class SessionMonitorHost : IDisposable
     {
         _deadlineTimer.Stop();
         _reconcileTimer.Stop();
+        _controlledPollTimer.Stop();
         _monitor.SessionsChanged -= OnSessionsChanged;
         _monitor.Dispose();
     }
