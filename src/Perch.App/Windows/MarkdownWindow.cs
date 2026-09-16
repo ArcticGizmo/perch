@@ -1334,7 +1334,11 @@ internal sealed class MarkdownWindow : Window
             Fg: p.Fg, Muted: p.Muted, Title: p.Title, Link: p.Accent,
             CodeFg: p.Code, CodeBg: p.CodeBg, QuoteBar: p.Border, Rule: p.Separator,
             TableBorder: p.Border, TableHeaderBg: p.CodeBg,
-            Syntax: _previewLight ? CodeSyntax.Light() : CodeSyntax.Dark());
+            Syntax: _previewLight ? CodeSyntax.Light() : CodeSyntax.Dark())
+        {
+            // The doc viewer keeps its VS Code-preview inline-code chip (coloured text on a subtle fill).
+            InlineCode = p.Code, InlineCodeBg = p.CodeBg,
+        };
 
         var root = MarkdownView.Build(md, style, out var anchors);
         _previewAnchors = anchors;

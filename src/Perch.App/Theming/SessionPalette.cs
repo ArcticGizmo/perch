@@ -35,6 +35,10 @@ internal sealed class SessionPalette
     public SolidColorBrush Separator { get; } = new(Colors.Transparent);
     public SolidColorBrush CodeBg { get; } = new(Colors.Transparent);
     public SolidColorBrush CodeBorder { get; } = new(Colors.Transparent);
+    /// <summary>Foreground for inline <c>`code`</c> in assistant prose — a distinct coloured monospace (the
+    /// theme's teal role) rather than a highlighted block, and deliberately not the accent so it never reads
+    /// as a link. Fenced code blocks keep their inset <see cref="CodeBg"/> panel.</summary>
+    public SolidColorBrush Code { get; } = new(Colors.Transparent);
 
     // Text
     public SolidColorBrush Text { get; } = new(Colors.Transparent);
@@ -89,6 +93,7 @@ internal sealed class SessionPalette
         BlockGap = 11,
         BodyFont = Body,
         RootMargin = new Thickness(0),
+        InlineCode = Code,   // teal monospace, no block fill (InlineCodeBg left null)
     };
 
     /// <summary>The shared, live session palette for the active theme — the instance every open session
@@ -143,6 +148,8 @@ internal sealed class SessionPalette
         // Code blocks sit a touch deeper than the sunken ground so they read as inset on any theme.
         CodeBg.Color = Palette.Blend(t.SurfaceSunken.ToColor(), dark ? Colors.Black : Colors.White, 0.28f);
         CodeBorder.Color = t.Border.ToColor();
+        // Inline `code` colour: the theme's teal role — a classic code hue, clear of the (often blue) accent.
+        Code.Color = t.Teal.ToColor();
 
         Text.Color = t.TextPrimary.ToColor();
         Title.Color = t.TextTitle.ToColor();

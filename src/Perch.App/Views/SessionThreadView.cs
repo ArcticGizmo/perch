@@ -67,9 +67,14 @@ internal sealed class SessionThreadView : ScrollViewer
     private bool _hasPromptAbove;
     private bool _hasPromptBelow;
 
-    // A prompt whose top is within this many DIPs of the viewport top counts as "here", not "above" — so a
-    // repeated ↑ steps to the next one up rather than re-selecting the prompt already pinned to the top.
-    private const double PromptAboveEpsilon = 6;
+    // A jump parks the target prompt this far below the viewport top (a small breathing gap, not glued to the edge).
+    private const double PromptLandGap = 12;
+
+    // A prompt whose top is within this many DIPs of the viewport top counts as "here" — neither above nor below —
+    // so a jump to the next/previous prompt steps past the one just landed on rather than re-selecting it. This
+    // MUST exceed PromptLandGap: after a jump the target sits at exactly PromptLandGap, and if the epsilon were
+    // smaller that prompt would read as "below" and the opposite-direction jump would snap straight back to it.
+    private const double PromptAboveEpsilon = PromptLandGap + 2;
 
     /// <summary>True when the view is scrolled to (or near) the tail — the "jump to bottom" button hides.</summary>
     public bool AtBottom => _atBottom;
@@ -120,6 +125,12 @@ internal sealed class SessionThreadView : ScrollViewer
         public StackPanel? Body;                                     // assistant: the parts column
         public readonly Dictionary<AssistantPart, Control> Parts = new();
         public readonly Dictionary<ToolCallPart, ToolCard> Tools = new();
+        // Consecutive read-only tools (Read/Grep/Glob) fold into one collapsible summary line, terminal-style,
+        // so routine exploration doesn't dominate the transcript. OpenGroup is the run currently being filled —
+        // null once any other part (text, a non-collapsible tool) breaks the run; Groups maps each folded tool
+        // to its group so a status flip can refresh the summary.
+        public ToolGroup? OpenGroup;
+        public readonly Dictionary<ToolCallPart, ToolGroup> Groups = new();
     }
 
     public SessionThreadView(SessionPalette palette)
@@ -314,7 +325,7 @@ internal sealed class SessionThreadView : ScrollViewer
         }
         if (double.IsPositiveInfinity(bestTop)) return;
         double max = Math.Max(0, Extent.Height - Viewport.Height);
-        Offset = new Vector(Offset.X, Math.Clamp(bestTop - 12, 0, max));
+        Offset = new Vector(Offset.X, Math.Clamp(bestTop - PromptLandGap, 0, max));
         _stickToBottom = false;
         RecomputeScrollState();
     }
@@ -334,7 +345,7 @@ internal sealed class SessionThreadView : ScrollViewer
         }
         if (double.IsNegativeInfinity(bestTop)) return;
         double max = Math.Max(0, Extent.Height - Viewport.Height);
-        Offset = new Vector(Offset.X, Math.Clamp(bestTop - 12, 0, max));
+        Offset = new Vector(Offset.X, Math.Clamp(bestTop - PromptLandGap, 0, max));
         _stickToBottom = false;
         RecomputeScrollState();
     }
@@ -719,11 +730,33 @@ internal sealed class SessionThreadView : ScrollViewer
                         break;
                     case ToolCallPart tool when view.Tools.TryGetValue(tool, out var card):
                         card.Update(tool);
+                        if (view.Groups.TryGetValue(tool, out var g)) g.Refresh();   // fold summary tracks status
                         break;
                 }
                 continue;
             }
 
+            // A read-only tool (Read/Grep/Glob) folds into the current group instead of a full card; anything
+            // else — prose, thinking, a tool with side effects — closes the run so the next fold starts fresh.
+            if (part is ToolCallPart tp && IsFoldable(tp.ToolName))
+            {
+                var card = new ToolCard(_p, tp, Cwd,
+                    path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path));
+                view.Tools[tp] = card;
+                var group = view.OpenGroup;
+                if (group is null)
+                {
+                    group = new ToolGroup(_p);
+                    view.OpenGroup = group;
+                    body.Children.Add(group.Root);
+                }
+                group.Add(tp, card);
+                view.Groups[tp] = group;
+                view.Parts[part] = card.Root;   // marks the part seen; the card lives inside the group's body
+                continue;
+            }
+
+            view.OpenGroup = null;   // this part breaks any open fold
             Control c;
             switch (part)
             {
@@ -746,6 +779,10 @@ internal sealed class SessionThreadView : ScrollViewer
             body.Children.Add(c);
         }
     }
+
+    // The read-only exploration tools that fold into a single collapsible summary line. Deliberately narrow —
+    // side-effecting or result-heavy tools (Bash, Edit/Write, Task, WebFetch, …) stay full cards.
+    private static bool IsFoldable(string tool) => tool is "Read" or "Grep" or "Glob";
 
     private SelectableTextBlock StreamingText(string text) => new()
     {
@@ -1129,6 +1166,94 @@ internal sealed class SessionThreadView : ScrollViewer
             int cut = summary.IndexOf(' ');
             if (cut < 0) return (summary.TrimEnd(':'), "");
             return (summary[..cut].TrimEnd(':'), summary[(cut + 1)..]);
+        }
+    }
+
+    // ── Tool fold ────────────────────────────────────────────────────────────────
+
+    /// <summary>A run of consecutive read-only tools (Read/Grep/Glob) folded behind one muted summary line —
+    /// "Searched for 3 patterns, read 1 file" — the way the terminal condenses routine exploration. Collapsed
+    /// by default (the whole point is to keep it out of the way); a click reveals the full tool cards inside.
+    /// The summary and its status tint re-derive from the folded calls as each one lands.</summary>
+    private sealed class ToolGroup
+    {
+        private readonly SessionPalette _p;
+        private readonly TextBlock _chevron;
+        private readonly TextBlock _label;
+        private readonly StackPanel _body;   // the folded tool cards, hidden until expanded
+        private readonly List<ToolCallPart> _parts = new();
+        private bool _expanded;
+
+        public Border Root { get; }
+
+        public ToolGroup(SessionPalette p)
+        {
+            _p = p;
+            _chevron = new TextBlock
+            {
+                Text = "▸", Foreground = p.Faint, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
+            };
+            _label = new TextBlock
+            {
+                Foreground = p.Muted, FontSize = 12.5, FontFamily = p.Mono, VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            var header = new Border
+            {
+                Padding = new Thickness(6, 5), Cursor = new Cursor(StandardCursorType.Hand), Background = Brushes.Transparent,
+                Child = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal, Spacing = 8,
+                    Children = { _chevron, _label },
+                },
+            };
+            _body = new StackPanel { IsVisible = false, Margin = new Thickness(0, 4, 0, 0) };
+            header.PointerReleased += (_, e) =>
+            {
+                if (e.InitialPressMouseButton != MouseButton.Left) return;
+                _expanded = !_expanded;
+                _body.IsVisible = _expanded;
+                _chevron.Text = _expanded ? "▾" : "▸";
+            };
+            Root = new Border
+            {
+                Margin = new Thickness(0, 0, 0, 12),
+                Child = new StackPanel { Children = { header, _body } },
+            };
+        }
+
+        // Fold another read-only call in: its card joins the (hidden) body and the summary re-derives.
+        public void Add(ToolCallPart part, ToolCard card)
+        {
+            _parts.Add(part);
+            _body.Children.Add(card.Root);
+            Refresh();
+        }
+
+        // Re-derive the summary line and its tint from the folded calls (called as each one's status lands).
+        public void Refresh()
+        {
+            _label.Text = Summarize(_parts);
+            bool anyFailed = _parts.Exists(p => p.Status == ToolCallStatus.Failed);
+            _label.Foreground = anyFailed ? _p.Err : _p.Muted;
+            _chevron.Foreground = anyFailed ? _p.Err : _p.Faint;
+        }
+
+        // "Searched for 3 patterns, read 1 file": Grep/Glob count as patterns, Read as files, present ones only.
+        private static string Summarize(IReadOnlyList<ToolCallPart> parts)
+        {
+            int patterns = 0, reads = 0;
+            foreach (var p in parts)
+            {
+                if (p.ToolName is "Grep" or "Glob") patterns++;
+                else if (p.ToolName == "Read") reads++;
+            }
+            var bits = new List<string>();
+            if (patterns > 0) bits.Add($"searched for {patterns} pattern{(patterns == 1 ? "" : "s")}");
+            if (reads > 0) bits.Add($"read {reads} file{(reads == 1 ? "" : "s")}");
+            string s = bits.Count > 0 ? string.Join(", ", bits)
+                                      : $"{parts.Count} tool call{(parts.Count == 1 ? "" : "s")}";
+            return char.ToUpperInvariant(s[0]) + s[1..];
         }
     }
 

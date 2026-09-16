@@ -39,6 +39,16 @@ internal sealed record MarkdownStyle(
 
     /// <summary>Padding around the whole document.</summary>
     public Thickness RootMargin { get; init; } = new(22, 16);
+
+    /// <summary>Foreground for inline <c>`code`</c> spans; null falls back to <see cref="CodeFg"/>. Kept
+    /// separate from the fenced-block <see cref="CodeFg"/> so inline code can read as a distinct coloured
+    /// monospace (the Claude-desktop look) instead of the block's plain body text.</summary>
+    public IBrush? InlineCode { get; init; }
+
+    /// <summary>Optional fill behind inline <c>`code`</c> spans; null (the default) paints none, so inline
+    /// code reads as a text-colour change rather than a highlighted block. The doc viewer opts back into a
+    /// subtle fill for its VS Code-preview look.</summary>
+    public IBrush? InlineCodeBg { get; init; }
 }
 
 /// <summary>The per-token-kind colours for fenced-code syntax highlighting (<see cref="CodeHighlight"/>),
@@ -567,10 +577,12 @@ internal sealed class MarkdownView
                     break;
                 case CodeInline code:
                     sink.Codes.Add((sink.Pos, code.Content.Length, code.Content));   // a possible file reference
-                    sink.Add(new Run(code.Content)
+                    var codeRun = new Run(code.Content)
                     {
-                        FontFamily = Mono, Foreground = _s.CodeFg, Background = _s.CodeBg, FontSize = style.Size,
-                    }, code.Content.Length);
+                        FontFamily = Mono, Foreground = _s.InlineCode ?? _s.CodeFg, FontSize = style.Size,
+                    };
+                    if (_s.InlineCodeBg is { } codeBg) codeRun.Background = codeBg;   // else: coloured text, no block
+                    sink.Add(codeRun, code.Content.Length);
                     break;
                 case EmphasisInline em:
                     var s = em.DelimiterChar == '~' ? style with { Strike = true }

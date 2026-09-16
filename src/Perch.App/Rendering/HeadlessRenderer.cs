@@ -1157,6 +1157,18 @@ internal static class HeadlessRenderer
             new Perch.Data.Control.AssistantThinkingEvent(
                 "The one place every owned session passes through is ControlledSessions.Register — writing the lock there " +
                 "(and deleting on unregister) keeps it in lock-step with in-process ownership, and the hook's SessionStart can read it cross-process."),
+            // A short burst of read-only exploration — folds into one "Searched for 2 patterns, read 1 file"
+            // summary line (collapsed by default), demonstrating the terminal-style tool fold.
+            new Perch.Data.Control.ToolUseEvent("e1", "Grep", "Searching SessionLock|Acquire",
+                "{\"pattern\":\"SessionLock|Acquire\"}"),
+            new Perch.Data.Control.ToolResultEvent("e1", "3 files", false),
+            new Perch.Data.Control.ToolUseEvent("e2", "Glob", "Finding **/*Lock*.cs",
+                "{\"pattern\":\"**/*Lock*.cs\"}"),
+            new Perch.Data.Control.ToolResultEvent("e2", "2 files", false),
+            new Perch.Data.Control.ToolUseEvent("e3", "Read", "Reading SessionLock.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/Control/SessionLock.cs\"}"),
+            new Perch.Data.Control.ToolResultEvent("e3",
+                "     1\tnamespace Perch.Data.Control;\n     2\t\n     3\tinternal static class SessionLock\n     4\t{\n     5\t}", false),
             new Perch.Data.Control.AssistantTextEvent(
                 "Two small pieces. First, ownership becomes visible on disk — a sidecar beside the session JSON, " +
                 "written when Perch takes a session and removed when it lets go:"),

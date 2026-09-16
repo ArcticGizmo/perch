@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.7] - 2026-09-16
+
+- Inline `code` reads as coloured text, not a black highlighter block
+- Consecutive Read, Grep and Glob calls fold into one line ("Searched for 3 patterns, read 1 file")
+- Jump to next prompt no longer snaps back to the one you just jumped from
+
+---
+
 ## [v0.4.6] - 2026-09-11
 
 - Perch watches every Claude Code config directory, not just ~/.claude
