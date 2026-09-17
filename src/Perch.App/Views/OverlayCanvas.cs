@@ -1392,6 +1392,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // repaint/hover never re-parses .claude.json needlessly. Swappable for the render/preview harness.
     private IOrgProvider _orgProvider = new OrgProvider();
     internal void SetOrgProvider(IOrgProvider provider) => _orgProvider = provider;
+
+    // Account guardrails (Layer 2, M2): the user's "this directory must run on one of these accounts" rules.
+    // A session under a rule's path but signed into a forbidden org gets the pulsing red mismatch outline.
+    // Pushed in from AppSettings via OverlaySettingsGates. Empty ⇒ the whole feature is inert (no per-row work).
+    private IReadOnlyList<AccountRule> _accountRules = System.Array.Empty<AccountRule>();
+    public void SetAccountRules(IReadOnlyList<AccountRule>? rules)
+    {
+        _accountRules = rules ?? System.Array.Empty<AccountRule>();
+        InvalidateVisual();
+    }
+    // Set during paint whenever a mismatch row is drawn, so the pulse timer runs only while one is on screen.
+    private bool _anyMismatchThisFrame;
     // The expand/collapse chevron on a sub-agent row that has children — captured at paint time so a
     // click can toggle that node (see RouteClick). Only rows with children get an entry.
     private readonly Dictionary<int, Rect> _subChevronRects = new();
@@ -1813,7 +1825,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         return new(CurrentFloatingWidth, Draw(null, CurrentFloatingWidth));
     }
 
-    public override void Render(DrawingContext ctx) => Draw(ctx, Bounds.Width);
+    public override void Render(DrawingContext ctx)
+    {
+        _anyMismatchThisFrame = false;
+        Draw(ctx, Bounds.Width);
+        UpdatePulseTimer();
+    }
 
     // Measure-or-paint: returns the content height; paints only when ctx is non-null.
     private double Draw(DrawingContext? ctx, double width)
@@ -2604,6 +2621,18 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double rowH = SessionRowHeight(session);
         ctx.DrawLine(SepPen, new Point(HorizPad, top), new Point(width - HorizPad, top));
 
+        // Account guardrail (Layer 2, M2): is this session signed into an org its directory rule forbids?
+        // Computed up front so a wrong-account row can wear a faint red wash under its content (here) and a
+        // pulsing red outline over everything (at the end of the method).
+        var (mismatch, mismatchText) = AccountMismatch(session);
+        if (mismatch)
+        {
+            _anyMismatchThisFrame = true;
+            var d = MismatchColor;
+            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(38, d.R, d.G, d.B)),
+                new Rect(1, top + 1, width - 2, rowH - 1));
+        }
+
         if (rowIndex == _hoveredRow)
             ctx.FillRectangle(RowHoverBrush, new Rect(1, top + 1, width - 2, rowH - 1));
 
@@ -2621,6 +2650,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // When the waiting timer is off, an awaiting row keeps its "input ↩" status but drops the "waiting
         // on you" activity + elapsed line (see SecondLineContent), so it renders single-line.
         var (activity, elapsed) = SecondLineContent(session);
+        // A mismatch commandeers the second line: the wrong-account warning is the headline, not the activity.
+        if (mismatch) { activity = mismatchText; elapsed = ""; }
         bool activityLine = !string.IsNullOrEmpty(activity) || !string.IsNullOrEmpty(elapsed);
         bool awaiting = session.Status == SessionStatus.AwaitingInput && _showWaitingTimer;
         // The "Session notes" indicator toggle (off by default) gates the note glyph on the row. The note's
@@ -2633,9 +2664,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double firstLineY = top + 32;                                  // the activity/elapsed slot
         double nameMidY   = activityLine ? top + 15 : top + rowH / 2;
 
-        IBrush secondLine = awaiting
-            ? new SolidColorBrush(WarmWaitingColor(session.AwaitingElapsed() ?? TimeSpan.Zero))
-            : MutedBrush;
+        IBrush secondLine = mismatch
+            ? new SolidColorBrush(MismatchColor)
+            : awaiting
+                ? new SolidColorBrush(WarmWaitingColor(session.AwaitingElapsed() ?? TimeSpan.Zero))
+                : MutedBrush;
 
         var dotColor = session.Status switch
         {
@@ -2890,6 +2923,70 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // solid colour block + label, holding then fading to draw maximum focus. See ShowPrBanner.
         if (session.SessionId == _prBannerId && PrBannerOpacity() is > 0 and var prOp)
             DrawPrBanner(ctx, top, rowH, width, prOp);
+
+        // The wrong-account alarm: a thick, pulsing red outline framing the whole row, drawn after everything
+        // (even the PR banner) so nothing can hide it. The wash went down under the content up top.
+        if (mismatch)
+        {
+            var d = MismatchColor;
+            byte a = (byte)(140 + 115 * PulseIntensity());   // alpha breathes 140..255
+            var pen = new Pen(new SolidColorBrush(Color.FromArgb(a, d.R, d.G, d.B)), 2.5);
+            ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(2.5, top + 2.5, width - 5, rowH - 4), 5));
+        }
+    }
+
+    // ── Account guardrail mismatch (Layer 2, M2) ───────────────────────────────
+    // The fixed destructive red (theme-independent by design — see Palette/FixedColors).
+    private static Color MismatchColor => Palette.Danger;
+
+    // Does an account rule govern this session's directory, and if so is it on a forbidden org? Returns the
+    // wrong-account state and the red second-line text ("⚠ Acme ≠ Contoso"). Cheap when no rules are set.
+    private (bool Mismatch, string Text) AccountMismatch(ClaudeSession session)
+    {
+        if (_accountRules.Count == 0) return (false, "");
+        var rule = AccountGuard.RuleFor(session.Cwd, _accountRules);
+        if (rule is null) return (false, "");
+        var dir = session.AttributedConfigDir ?? ClaudeConfigSet.Instance.Primary;
+        var live = _orgProvider.GetLive(dir);
+        if (AccountGuard.Evaluate(rule, live?.Uuid) != AccountVerdict.Mismatch) return (false, "");
+        string on = live?.DisplayName ?? "another account";
+        return (true, $"⚠ {MismatchExpectedLabel(rule)} ≠ {on}");
+    }
+
+    // The allowed account(s) a rule expects, condensed for the row: one name, or "Acme +2" for several.
+    private static string MismatchExpectedLabel(AccountRule rule)
+    {
+        var names = rule.Allowed
+            .Select(a => string.IsNullOrWhiteSpace(a.Name) ? a.Email : a.Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToList();
+        if (names.Count == 0) return "the allowed account";
+        return names.Count == 1 ? names[0]! : $"{names[0]} +{names.Count - 1}";
+    }
+
+    // A smooth 0→1→0 breathing curve (~1.1s period) off the wall clock, driving the outline's pulsing alpha.
+    private static double PulseIntensity()
+    {
+        const double periodMs = 1100;
+        double phase = (DateTime.Now.TimeOfDay.TotalMilliseconds % periodMs) / periodMs;
+        return 0.5 - 0.5 * Math.Cos(phase * 2 * Math.PI);
+    }
+
+    // Runs a ~17fps repaint only while a mismatch outline is on screen (see _anyMismatchThisFrame), so the
+    // pulse animates without spinning a timer when nothing is wrong. Mirrors UpdateTickTimer.
+    private DispatcherTimer? _pulseTimer;
+    private void UpdatePulseTimer()
+    {
+        _pulseTimer ??= CreatePulseTimer();
+        if (_anyMismatchThisFrame && !_pulseTimer.IsEnabled) _pulseTimer.Start();
+        else if (!_anyMismatchThisFrame && _pulseTimer.IsEnabled) _pulseTimer.Stop();
+    }
+
+    private DispatcherTimer CreatePulseTimer()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
+        t.Tick += (_, _) => InvalidateVisual();
+        return t;
     }
 
     private Color WarmWaitingColor(TimeSpan waited)
@@ -5183,6 +5280,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _dwellTimer?.Stop();
         _tickTimer?.Stop();
         _autoCloseBarTimer?.Stop();
+        _pulseTimer?.Stop();
         base.OnDetachedFromVisualTree(e);
     }
 

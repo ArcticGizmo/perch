@@ -1841,7 +1841,143 @@ internal sealed class SettingsWindow : Window
             "Show each session's config directory label on its row (only when more than one config directory " +
             "is in play). Off hides every chip regardless of the per-directory labels."));
 
+        page.Children.Add(SettingsUi.Separator());
+
+        page.Children.Add(SettingsUi.SectionTitle("Account guardrails"));
+        page.Children.Add(SettingsUi.BodyText(
+            "Catch sessions running on the wrong Claude account. Declare that everything under a directory must " +
+            "be signed into one of the accounts you pick; a session there on a different org gets an aggressive " +
+            "red outline on its overlay row. The most specific (deepest) path wins. Alerting only — Perch never " +
+            "blocks the session."));
+
+        _accountRulesList = new StackPanel { Margin = new Thickness(0, 4, 0, 8) };
+        page.Children.Add(_accountRulesList);
+
+        var addRuleRow = SettingsUi.ButtonRow();
+        var addRuleBtn = SettingsUi.FlatButton("Add account rule…");
+        addRuleBtn.Click += async (_, _) => await AddOrEditAccountRule(null);
+        addRuleRow.Children.Add(addRuleBtn);
+        page.Children.Add(addRuleRow);
+
         RebuildConfigDirsList();
+        RebuildAccountRulesList();
+    }
+
+    // ── Account guardrails (org discovery, Layer 2 / M2) ────────────────────────────
+    private StackPanel? _accountRulesList;
+
+    private void RebuildAccountRulesList()
+    {
+        _accountRulesList!.Children.Clear();
+        var rules = _settings.AccountRules;
+        if (rules is null || rules.Count == 0)
+        {
+            _accountRulesList.Children.Add(new TextBlock
+            {
+                Text = "No account rules yet.", FontSize = 12, Foreground = Palette.MutedBrush,
+                Margin = new Thickness(0, 0, 0, 4),
+            });
+            return;
+        }
+        foreach (var r in rules)
+            _accountRulesList.Children.Add(BuildAccountRuleRow(r));
+    }
+
+    private Control BuildAccountRuleRow(AccountRule rule)
+    {
+        var grid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"),
+            Margin = new Thickness(0, 0, 0, 10),
+        };
+
+        var textStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        textStack.Children.Add(new TextBlock
+        {
+            Text = rule.Path, FontSize = 14, FontWeight = FontWeight.Bold, Foreground = Palette.TitleBrush,
+            TextTrimming = TextTrimming.PrefixCharacterEllipsis,
+        });
+        string allowed = rule.Allowed.Count == 0
+            ? "⚠ no accounts chosen — rule inactive"
+            : "Allowed: " + string.Join(", ", rule.Allowed.Select(AccountLabel));
+        textStack.Children.Add(new TextBlock
+        {
+            Text = allowed, FontSize = 12,
+            Foreground = rule.Allowed.Count == 0 ? new SolidColorBrush(Palette.Danger) : Palette.MutedBrush,
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0),
+        });
+        Grid.SetColumn(textStack, 0);
+        grid.Children.Add(textStack);
+
+        var edit = SettingsUi.FlatButton("Edit");
+        edit.VerticalAlignment = VerticalAlignment.Center;
+        edit.Click += async (_, _) => await AddOrEditAccountRule(rule);
+        Grid.SetColumn(edit, 1);
+        grid.Children.Add(edit);
+
+        var remove = SettingsUi.FlatButton("Remove");
+        remove.Foreground = new SolidColorBrush(Palette.Danger);
+        remove.Margin = new Thickness(6, 0, 0, 0);
+        remove.VerticalAlignment = VerticalAlignment.Center;
+        remove.Click += (_, _) =>
+        {
+            _settings.AccountRules?.Remove(rule);
+            if (_settings.AccountRules is { Count: 0 }) _settings.AccountRules = null;
+            PersistAccountRules();
+        };
+        Grid.SetColumn(remove, 2);
+        grid.Children.Add(remove);
+
+        return grid;
+    }
+
+    /// <summary>Display label for an allowed account: name (email), falling back to whatever is known.</summary>
+    private static string AccountLabel(AccountRef a) =>
+        !string.IsNullOrWhiteSpace(a.Name) && !string.IsNullOrWhiteSpace(a.Email) ? $"{a.Name} ({a.Email})"
+        : !string.IsNullOrWhiteSpace(a.Name) ? a.Name!
+        : !string.IsNullOrWhiteSpace(a.Email) ? a.Email!
+        : a.Uuid;
+
+    private async System.Threading.Tasks.Task AddOrEditAccountRule(AccountRule? existing)
+    {
+        var dlg = new AccountRuleDialog(existing, DiscoverKnownAccounts(existing));
+        if (await dlg.ShowDialog<bool>(this) != true) return;
+
+        var path = dlg.RulePath;
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        var list = _settings.AccountRules ??= new();
+        var target = existing ?? new AccountRule();
+        target.Path = path;
+        target.Allowed = dlg.SelectedAccounts;
+        if (existing is null) list.Add(target);
+        PersistAccountRules();
+    }
+
+    /// <summary>The accounts offered in the rule dialog: every org currently signed into a discovered config
+    /// dir (keyed by uuid), unioned with any accounts already on the rule being edited (so an account that
+    /// isn't signed in anywhere right now stays visible and selectable).</summary>
+    private static IReadOnlyList<AccountRef> DiscoverKnownAccounts(AccountRule? existing)
+    {
+        var byUuid = new Dictionary<string, AccountRef>(StringComparer.Ordinal);
+        foreach (var dir in ClaudeConfigSet.Instance.All)
+        {
+            var signIn = ClaudeJsonReader.ReadSignIn(dir);
+            if (signIn.Org is { } org && !string.IsNullOrWhiteSpace(org.Uuid))
+                byUuid[org.Uuid] = new AccountRef { Uuid = org.Uuid, Name = org.Name, Email = org.AccountEmail };
+        }
+        if (existing is not null)
+            foreach (var a in existing.Allowed)
+                if (!string.IsNullOrWhiteSpace(a.Uuid) && !byUuid.ContainsKey(a.Uuid))
+                    byUuid[a.Uuid] = a;
+        return byUuid.Values.OrderBy(a => a.Name ?? a.Email ?? a.Uuid, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private void PersistAccountRules()
+    {
+        _settings.Save();
+        _hooks.DisplayChanged?.Invoke();   // re-push AccountRules onto the live overlay via OverlaySettingsGates
+        RebuildAccountRulesList();
     }
 
     private void RebuildConfigDirsList()

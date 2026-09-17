@@ -112,6 +112,25 @@ internal static class HeadlessRenderer
 
         canvas.SetUpdateAvailable(false);
 
+        // Account guardrail mismatch (Layer 2, M2): a rule binds C:\src\perch to "Acme Corp", but the stub org
+        // provider reports that dir is signed into Contoso — so that session wears the pulsing red mismatch
+        // outline + red "⚠ Acme Corp ≠ Contoso" line (captured at a fixed pulse phase; the animation timer
+        // doesn't tick in headless).
+        var mismatchProbe = new OverlayCanvas();
+        mismatchProbe.SetOrgProvider(new OrgProvider(
+            _ => new Org("contoso-uuid") { Name = "Contoso", AccountEmail = "jon@contoso.com" }, _ => 0L));
+        mismatchProbe.Update(SampleData.Sessions());
+        mismatchProbe.SetAccountRules(new[]
+        {
+            new AccountRule
+            {
+                Path = @"C:\src\perch",
+                Allowed = new() { new AccountRef { Uuid = "acme-uuid", Name = "Acme Corp", Email = "jon@acme.com" } },
+            },
+        });
+        RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_1x.png"), 96);
+        RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_1.5x.png"), 144);
+
         var probe = new OverlayCanvas();
         probe.Update(SampleData.Sessions());
         probe.StartAutoCloseCountdown(20_000);

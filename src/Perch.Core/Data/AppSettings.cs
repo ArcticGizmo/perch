@@ -486,6 +486,14 @@ internal sealed class AppSettings
     // turning it off hides every dir chip regardless of the per-dir labels. Toggle "Config labels".
     public bool ShowConfigDirLabels { get; set; } = true;
 
+    // Account guardrails (org discovery, Layer 2 / M2). User-declared "this directory must run on one of these
+    // Claude accounts" rules (see AccountRule): a session whose working directory is at or under a rule's path
+    // but signed into a different org than the rule allows gets an aggressive mismatch outline on its row.
+    // Alerting only — Perch never blocks the session. Longest matching path wins. Managed by the Config
+    // directories settings page. Null/empty means "no guardrails". A missing key keeps it empty.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<AccountRule>? AccountRules { get; set; }
+
     // Whether the overlay floats (classic panel) or docks (reserves a screen-edge column via the OS so
     // maximized windows can't cover it). Defaults to Floating, so an older settings file keeps today's
     // behaviour. Ctrl+Shift+W (HotkeyToggleDocked) collapses/expands the docked column. See OverlayCanvas.

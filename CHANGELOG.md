@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.14] - 2026-09-17
+
+- Account guardrails: flag sessions signed into the wrong Claude org
+- Bind a directory to the accounts allowed under it (Config directories settings)
+- Wrong-account rows get an aggressive pulsing-red outline (subtlety was not the goal)
+
+---
+
 ## [v0.4.13] - 2026-09-17
 
 - Session composer shows the current git branch, beside the permission mode

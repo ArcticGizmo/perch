@@ -383,6 +383,17 @@ internal static class SettingsRegistry
             nameof(AppSettings.DeclaredConfigDirs), nameof(AppSettings.ConfigDirLabels),
             nameof(AppSettings.HiddenConfigDirs)),
 
+        Info("account-rules", "Account guardrails",
+            "Warn when a session runs on the wrong Claude account. Declare that everything under a directory " +
+            "must be signed into one of the accounts you choose; a session there on a different org gets an " +
+            "aggressive mismatch outline on its row. Alerting only — sessions are never blocked. Managed on " +
+            "the Config directories page.",
+            SettingSurface.Integrations, SettingKind.List,
+            ["account", "accounts", "org", "organization", "guard", "guardrail", "mismatch", "wrong", "login",
+             "path", "directory", "dir", "rule", "rules", "allow", "allowed", "warn", "alert", "env",
+             "environment", "workspace", "claude"], PreviewTarget.None,
+            nameof(AppSettings.AccountRules)),
+
         Toggle("config-labels", "Config labels",
             "Show each session's config directory label on its row (only when more than one config " +
             "directory is in play). Rename the labels on the Config directories page.",
