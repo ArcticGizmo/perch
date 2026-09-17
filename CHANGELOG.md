@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.16] - 2026-09-17
+
+- Choose how long friends' statuses stay visible (the old 12 hours was stingy; now 2 days)
+
+---
+
 ## [v0.4.15] - 2026-09-17
 
 - Collapse any usage account to a compact chip, or expand it back

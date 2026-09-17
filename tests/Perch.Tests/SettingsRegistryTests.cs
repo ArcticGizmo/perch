@@ -21,6 +21,9 @@ public class SettingsRegistryTests
         // The social region's expand/collapse is UI state toggled by the region's own chevron on the overlay,
         // not a Settings-window control.
         nameof(AppSettings.SocialRegionExpanded),
+        // How long a friend's status stays visible before going stale is set from the Friends window's own
+        // "Status visibility" dropdown, not a Settings-window control.
+        nameof(AppSettings.SocialStatusFreshnessHours),
         // The Todo and Hypertree sections' expand/collapse are UI state toggled by each section's own
         // chevron on the overlay, not Settings-window controls.
         nameof(AppSettings.TodosExpanded),

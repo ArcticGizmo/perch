@@ -55,8 +55,9 @@ public sealed partial class OverlayCanvas
     // unseen dot above: opening the pane clears the dot but never un-hides a dismissed row. Runtime-only.
     private readonly Dictionary<Guid, Guid> _dismissedStatus = new();
 
-    // Statuses older than this are filtered out of the roster to keep it fresh.
-    private static readonly TimeSpan StatusFreshness = TimeSpan.FromHours(12);
+    // Statuses older than this are filtered out of the roster to keep it fresh. Configurable from the Friends
+    // window (AppSettings.SocialStatusFreshnessHours); defaults to 2 days.
+    private TimeSpan _statusFreshness = TimeSpan.FromHours(48);
 
     // The friends actually shown: those with a current status — one that exists, was posted within StatusFreshness,
     // and hasn't been dismissed since. Ordered as the roster delivered them (most-recently-active first). Cheap to
@@ -69,7 +70,7 @@ public sealed partial class OverlayCanvas
         foreach (var f in r.Friends)
         {
             if (f.Latest is not { } latest) continue;
-            if (now - latest.CreatedAt > StatusFreshness) continue;
+            if (now - latest.CreatedAt > _statusFreshness) continue;
             if (_dismissedStatus.GetValueOrDefault(f.Profile.Id) == latest.Id) continue;
             list.Add(f);
         }
@@ -123,6 +124,17 @@ public sealed partial class OverlayCanvas
         count = Math.Clamp(count, 1, 20);
         if (_maxFriends == count) return;
         _maxFriends = count;
+        if (SocialRegionVisible && _regionExpanded) RemeasurePanel();
+    }
+
+    /// <summary>Sets how long a friend's status stays in the roster before it's filtered out as stale
+    /// (AppSettings.SocialStatusFreshnessHours, clamped 1..168h). Changing it can add/drop rows and so change the
+    /// region height, so relayout when it actually differs.</summary>
+    public void SetSocialStatusFreshness(int hours)
+    {
+        var span = TimeSpan.FromHours(Math.Clamp(hours, 1, 168));
+        if (_statusFreshness == span) return;
+        _statusFreshness = span;
         if (SocialRegionVisible && _regionExpanded) RemeasurePanel();
     }
 

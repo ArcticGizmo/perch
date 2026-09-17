@@ -763,6 +763,9 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(SettingsUi.DividerRow("Friends shown at once",
             "How many friends the roster shows before the rest fold into a “+N more” line.",
             BuildFriendsShownStepper()));
+        page.Children.Add(SettingsUi.DividerRow("Keep statuses for",
+            "How long a friend's status stays in the roster before it drops off as stale.",
+            BuildStatusFreshnessDropdown()));
         _largeReactionsToggle = DisplayToggle(_settings.ShowLargeReactions, v => _settings.ShowLargeReactions = v);
         page.Children.Add(SettingsUi.DividerRow("Show large reactions",
             "When a friend reacts to your status, float it as a big emoji bubble that wobbles up the screen — pop it with a click.",
@@ -812,6 +815,40 @@ internal sealed class SettingsWindow : Window
         row.Children.Add(value);
         row.Children.Add(inc);
         return row;
+    }
+
+    // Presets for how long a friend's status stays visible before it's filtered out as stale, stored as hours in
+    // AppSettings.SocialStatusFreshnessHours. Default (2 days) is the third entry.
+    private static readonly (string Label, int Hours)[] StatusFreshnessPresets =
+    {
+        ("12 hours", 12), ("1 day", 24), ("2 days", 48), ("3 days", 72), ("1 week", 168),
+    };
+
+    // A dropdown for the status-visibility window, applied live like the other display gates. An off-preset stored
+    // value (never set by this UI, but possible from an edited file) snaps to the nearest preset on open.
+    private Control BuildStatusFreshnessDropdown()
+    {
+        int current = _settings.SocialStatusFreshnessHours;
+        int selected = 0, bestDelta = int.MaxValue;
+        for (int i = 0; i < StatusFreshnessPresets.Length; i++)
+        {
+            int delta = Math.Abs(StatusFreshnessPresets[i].Hours - current);
+            if (delta < bestDelta) { bestDelta = delta; selected = i; }
+        }
+
+        var combo = SettingsUi.Dropdown(StatusFreshnessPresets.Select(p => p.Label), selected);
+        combo.Width = 130;
+        combo.HorizontalAlignment = HorizontalAlignment.Right;
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (combo.SelectedIndex < 0 || combo.SelectedIndex >= StatusFreshnessPresets.Length) return;
+            int hours = StatusFreshnessPresets[combo.SelectedIndex].Hours;
+            if (hours == _settings.SocialStatusFreshnessHours) return;
+            _settings.SocialStatusFreshnessHours = hours;
+            _settings.Save();
+            _hooks.DisplayChanged?.Invoke();
+        };
+        return combo;
     }
 
     private void RefreshSocialPage()

@@ -597,6 +597,11 @@ internal sealed class AppSettings
     // line. Default 3 to keep the region compact in the narrow overlay.
     public int MaxFriendsShown { get; set; } = 3;
 
+    // How long (in hours) a friend's posted status stays visible in the roster before it's considered stale and
+    // filtered out. Set from the Friends window (a dropdown of presets), not a Settings-window control. Default
+    // 48 (2 days) — long enough that a status posted yesterday is still there today. Clamped 1..168 on read.
+    public int SocialStatusFreshnessHours { get; set; } = 48;
+
     // "Big reactions": when a friend reacts to your own status, float the reaction as a large emoji bubble
     // that wobbles up the screen and pops if you click it. On by default (only ever fires once Social is on
     // and someone reacts to you); the effect itself carries a "turn these off" control, which flips this.
