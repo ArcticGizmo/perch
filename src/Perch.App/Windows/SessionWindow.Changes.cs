@@ -76,9 +76,14 @@ internal sealed partial class SessionWindow
 
     private void RefreshChangesNow() => _changesPanel.Refresh(_session?.Cwd ?? _cwd);
 
-    // A tool result landed (a file was likely written): coalesce a refresh while the panel is open.
+    // A tool result landed (a file was likely written, or the branch switched): coalesce a branch re-read
+    // regardless of the panel, and a changed-files refresh while the panel is open.
     private void OnConversationChangedForChanges(ConversationItem item, ConversationChange change)
     {
+        _branchRefreshTimer ??= BuildBranchTimer();
+        _branchRefreshTimer.Stop();
+        _branchRefreshTimer.Start();
+
         if (!_changesOpen) return;
         _changesRefreshTimer ??= BuildChangesTimer();
         _changesRefreshTimer.Stop();
@@ -89,6 +94,14 @@ internal sealed partial class SessionWindow
     {
         var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
         t.Tick += (_, _) => { t.Stop(); if (_changesOpen) RefreshChangesNow(); };
+        return t;
+    }
+
+    // The branch chip's coalescing timer — a checkout mid-session (a Bash tool result) should update the bar.
+    private DispatcherTimer BuildBranchTimer()
+    {
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+        t.Tick += (_, _) => { t.Stop(); RefreshBranchAsync(); };
         return t;
     }
 

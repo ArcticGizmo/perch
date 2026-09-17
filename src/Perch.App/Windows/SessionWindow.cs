@@ -84,6 +84,14 @@ internal sealed partial class SessionWindow : Window
     // Session bar
     private readonly TextBlock _projectText, _pathText, _idText, _statusText;
     private readonly Border _idLine;
+    // The current git branch of the session's repo (⑂ name, with ahead/behind), shown as a pill beside the
+    // permission-mode pill in the composer footer — mirrors what Claude Desktop surfaces. Hidden on a non-repo
+    // or detached HEAD. Loaded off the UI thread (GetStatus) with a generation guard; re-read (coalesced) when
+    // a tool result may have switched branch.
+    private readonly TextBlock _branchText;
+    private readonly Border _branchPill;
+    private int _branchGen;
+    private DispatcherTimer? _branchRefreshTimer;
     // Composer settings pills: one joined "model │ effort" pill (the two are related — effort is per model) and
     // the permission-mode pill.
     private readonly TextBlock _modelPillText, _modePillText, _effortPillText;
@@ -383,6 +391,17 @@ internal sealed partial class SessionWindow : Window
         _modePill[ToolTip.TipProperty] = "Permission mode — click to change";
         _modePill.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowModeMenu(); };
 
+        // Git-branch pill, beside the mode pill so the current branch stays in view while composing. A drawn
+        // git-branch icon (not a font glyph — U+2442 is faint/absent in some fonts) + branch name; ApplyBranch
+        // appends ↑ahead/↓behind. Hidden until a repo status lands (non-repo / detached HEAD stay hidden).
+        _branchText = new TextBlock { FontSize = 12.5, FontWeight = FontWeight.SemiBold, Foreground = _p.Muted, FontFamily = _p.Body, VerticalAlignment = VerticalAlignment.Center };
+        _branchPill = Pill(new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
+            Children = { BranchIcon(14, _p.Muted), _branchText },
+        }, _p.Raised2, _p.BorderSoft);
+        _branchPill.IsVisible = false;
+
         // Informational (not clickable): tokens in/out this session, and how full the context window is. Both
         // hidden until a turn lands, so the launcher and a just-opened session stay uncluttered.
         _tokensPillText = new TextBlock { FontSize = 12, FontFamily = _p.Mono, Foreground = _p.Muted, VerticalAlignment = VerticalAlignment.Center };
@@ -483,7 +502,7 @@ internal sealed partial class SessionWindow : Window
         var chips = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
-            Children = { _modelEffortPill, _modePill, _tokensPill, _contextPill },
+            Children = { _modelEffortPill, _modePill, _branchPill, _tokensPill, _contextPill },
         };
         var cbar = new DockPanel { Margin = new Thickness(0, 10, 0, 0), Children = { _sendButton, chips } };
         _sendButton[DockPanel.DockProperty] = Dock.Right;
@@ -2653,7 +2672,44 @@ internal sealed partial class SessionWindow : Window
         _thread.IsVisible = true;
         _composerDock.IsVisible = true;
         _changesToggle.IsVisible = true;   // the changed-files toggle rides with the thread, not the launcher
+        RefreshBranchAsync();              // surface the repo's current branch in the bar
         UpdateJumpButtons();
+    }
+
+    // Reads the session repo's current branch off the UI thread and paints the bar chip. A generation guard
+    // drops a stale load (folder switched under it); a non-repo or detached HEAD hides the chip.
+    private void RefreshBranchAsync()
+    {
+        var cwd = _session?.Cwd ?? _cwd;
+        int gen = ++_branchGen;
+        if (string.IsNullOrEmpty(cwd)) { _branchPill.IsVisible = false; return; }
+        Task.Run(() => GitRepoService.IsRepo(cwd) ? new GitRepoService().GetStatus(cwd) : null)
+            .ContinueWith(t => Dispatcher.UIThread.Post(() =>
+            {
+                if (_closed || gen != _branchGen) return;
+                ApplyBranch(t.IsCompletedSuccessfully ? t.Result : null);
+            }));
+    }
+
+    // Paints the branch chip from a status snapshot: ⑂ name, plus ↑ahead (green) / ↓behind (amber) when the
+    // branch has diverged from its upstream, with the upstream + counts in the tooltip.
+    private void ApplyBranch(GitRepoStatus? status)
+    {
+        if (status?.Branch is not { Length: > 0 } branch)
+        {
+            _branchPill.IsVisible = false;
+            return;
+        }
+        var s = status.Value;
+        _branchText.Inlines?.Clear();
+        _branchText.Inlines?.Add(new Run(branch) { Foreground = _p.Muted });
+        if (s.Ahead > 0) _branchText.Inlines?.Add(new Run($"  ↑{s.Ahead}") { Foreground = _p.Ok });
+        if (s.Behind > 0) _branchText.Inlines?.Add(new Run($"  ↓{s.Behind}") { Foreground = _p.Await });
+        _branchPill[ToolTip.TipProperty] = s.Upstream is { Length: > 0 } up
+            ? $"On branch {branch} · tracking {up}"
+              + (s.Ahead > 0 || s.Behind > 0 ? $"  ({s.Ahead} ahead, {s.Behind} behind)" : "")
+            : $"On branch {branch}";
+        _branchPill.IsVisible = true;
     }
 
     // ── Jump buttons (docs/session-composer-enhancements-plan.md §4) ──────────────
@@ -3070,6 +3126,33 @@ internal sealed partial class SessionWindow : Window
         Padding = new Thickness(10, 4), VerticalAlignment = VerticalAlignment.Center, Child = content,
     };
 
+    // A small owner-drawn git-branch glyph (a two-commit lane with a branch diverging up-right), so the branch
+    // pill's icon doesn't depend on a font carrying U+2442. Coordinates in a 16×16 space, scaled by the Viewbox.
+    private static Control BranchIcon(double size, IBrush color)
+    {
+        const double r = 1.9;
+        Ellipse Node(double cx, double cy) => new()
+        {
+            Width = r * 2, Height = r * 2, Fill = color,
+            [Canvas.LeftProperty] = cx - r, [Canvas.TopProperty] = cy - r,
+        };
+        global::Avalonia.Controls.Shapes.Path Line(string data) => new()
+        {
+            Stroke = color, StrokeThickness = 1.5, StrokeLineCap = PenLineCap.Round, Data = Geometry.Parse(data),
+        };
+        var canvas = new Canvas
+        {
+            Width = 16, Height = 16,
+            Children =
+            {
+                Line("M 5,5 L 5,11"),              // the main lane, between its two commits
+                Line("M 5,8 C 5,6 7.5,5.5 11,5.5"), // the branch peeling off the lane to the right-hand commit
+                Node(5, 4), Node(5, 12), Node(11, 5.5),
+            },
+        };
+        return new Viewbox { Width = size, Height = size, Child = canvas, VerticalAlignment = VerticalAlignment.Center };
+    }
+
     /// <summary>
     /// Mirrors the floating overlay's live sub-agent view onto this window: a chip per background
     /// sub-agent/teammate currently working under the session, from the very same <see cref="ClaudeSession"/>
@@ -3181,6 +3264,11 @@ internal sealed partial class SessionWindow : Window
         _composer.PlaceholderText = "Reply, or type / for a command";
         _endButton.IsVisible = true;
         _resumeButton.IsVisible = false;
+        // The sample cwd isn't a real repo, and the live branch read is async anyway — seed a fixed status so
+        // the bar's branch chip is captured. Bump the generation so the in-flight (null) load from ShowThread
+        // is dropped rather than hiding the chip back.
+        _branchGen++;
+        ApplyBranch(new GitRepoStatus("inc-exploration", "origin/inc-exploration", 2, 0, []));
         RefreshBar();
     }
 

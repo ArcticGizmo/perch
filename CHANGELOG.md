@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.13] - 2026-09-17
+
+- Session composer shows the current git branch, beside the permission mode
+- Branch pill flags how far ahead or behind its upstream you are
+
+---
+
 ## [v0.4.12] - 2026-09-17
 
 - Fixed the "Claude is asking" card spilling its question off the page (it now wraps, politely)
