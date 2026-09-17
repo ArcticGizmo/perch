@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.15] - 2026-09-17
+
+- Collapse any usage account to a compact chip, or expand it back
+- Known idle accounts appear as chips, polled quietly in the background
+- Usage bars colour by pace, not raw level — behind green, near yellow, over red
+- Credits bar still colours by actual spend (dollars don't have a pace)
+- Expected-rate marker is always on — it was never worth a toggle
+
+---
+
 ## [v0.4.14] - 2026-09-17
 
 - Account guardrails: flag sessions signed into the wrong Claude org

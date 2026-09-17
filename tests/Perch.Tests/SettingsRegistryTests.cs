@@ -25,6 +25,9 @@ public class SettingsRegistryTests
         // chevron on the overlay, not Settings-window controls.
         nameof(AppSettings.TodosExpanded),
         nameof(AppSettings.HypertreeExpanded),
+        // The usage strip's per-account collapse overrides, toggled by clicking an account on the overlay —
+        // not a Settings-window control.
+        nameof(AppSettings.UsageAccountCollapsed),
         // The secret arcade's unlock flag and the daily Wordle's saved progress are hidden toy state, not
         // user-facing settings controls.
         nameof(AppSettings.ArcadeUnlocked),

@@ -89,6 +89,59 @@ public class UsageOrgTests
         Assert.Equal(2, result.Count);
     }
 
+    [Fact]
+    public void Resolve_TagsActiveDirs_AndAppendsIdleKnownDirs()
+    {
+        var primary = Dir(@"C:\Users\me\.claude");
+        var work = Dir(@"C:\envs\work\.claude");   // active (a live session)
+        var idle = Dir(@"C:\envs\idle\.claude");   // known but not in use
+
+        var active = new[] { primary, work };
+        var known = new[] { primary, work, idle };
+
+        var result = UsageDirSelection.Resolve(active, known,
+            d => new Org("u-" + d.RealRoot) { AccountEmail = d.RealRoot });
+
+        // Active dirs lead (in order), then the idle-but-known one; activity is tagged.
+        Assert.Equal(new[] { primary, work, idle }, result.Select(r => r.Dir));
+        Assert.Equal(new[] { true, true, false }, result.Select(r => r.Active));
+    }
+
+    [Fact]
+    public void Resolve_SameAccountActiveAndIdle_ShownOnceAsActive()
+    {
+        var primary = Dir(@"C:\Users\me\.claude");
+        var idleDup = Dir(@"C:\envs\dup\.claude");   // idle dir signed into the SAME account as primary
+
+        var acme = new Org("org-acme") { AccountEmail = "me@example.com" };
+
+        var result = UsageDirSelection.Resolve(
+            active: new[] { primary },
+            allKnown: new[] { primary, idleDup },
+            resolveOrg: _ => acme);
+
+        // The account collapses to one entry, and the active one wins (idle duplicate dropped).
+        var only = Assert.Single(result);
+        Assert.Equal(primary, only.Dir);
+        Assert.True(only.Active);
+    }
+
+    [Fact]
+    public void Resolve_NullOrgIdleDirs_AreNotCollapsed()
+    {
+        var primary = Dir(@"C:\Users\me\.claude");
+        var idleA = Dir(@"C:\envs\a\.claude");   // signed out
+        var idleB = Dir(@"C:\envs\b\.claude");   // signed out
+
+        var result = UsageDirSelection.Resolve(
+            active: new[] { primary },
+            allKnown: new[] { primary, idleA, idleB },
+            resolveOrg: d => d.Equals(primary) ? new Org("p") { AccountEmail = "p@x" } : null);
+
+        Assert.Equal(new[] { primary, idleA, idleB }, result.Select(r => r.Dir));
+        Assert.Equal(new[] { true, false, false }, result.Select(r => r.Active));
+    }
+
     [Theory]
     [InlineData("Fable", "F")]
     [InlineData("Claude Fable 5.1", "F")]

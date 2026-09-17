@@ -163,6 +163,39 @@ internal static class SampleData
         ];
     }
 
+    /// <summary>A larger estate (seven orgs) with a real spread of healthy / watch / near-limit readings, for
+    /// eyeballing the multi-org strip: the first two are Active (full bars), the rest are known-but-idle
+    /// (compact chips by default) — the mixed view the overlay shows at startup. Exercises the chip wrap, the
+    /// label-free mini-bars, the pace ticks, and the fresh-window "safe zone" (the "redux" account: barely any
+    /// time elapsed and barely any usage → green, not yellow).</summary>
+    public static IReadOnlyList<OrgUsage> OrgUsagesMany()
+    {
+        var now = DateTime.Now;
+        UsageInfo U(int h5, int wk, int fab, decimal? spend, decimal cap, double h5In, double wkIn) => new(
+            FiveHourPercent: h5, SevenDayPercent: wk,
+            FiveHourResetsAt: now.AddHours(5 - h5In), SevenDayResetsAt: now.AddDays(7 - wkIn),
+            LastUpdated: now, Ok: true, Error: null)
+        {
+            Scoped = [new ScopedUsage("Fable", fab, now.AddDays(3))],
+            ExtraUsage = spend is { } s ? new ExtraUsageInfo(true, s, cap, "AUD", 2, false) : null,
+        };
+        (string name, UsageInfo u)[] orgs =
+        [
+            ("redux",     U(0,  0,  0,  null, 0m,  0.4, 0.3)),   // fresh window, ~no usage → safe-zone green
+            ("initrode",  U(62, 34, 45, 12m, 80m,  3.5, 2.8)),
+            ("cyberdyne", U(18, 51, 22, null, 50m, 1.5, 4.2)),
+            ("acme",      U(88, 72, 61, 44m, 60m,  2.7, 4.6)),
+            ("globex",    U(41, 29, 30, null, 40m, 3.0, 3.5)),
+            ("initech",   U(74, 91, 83, 70m, 75m,  2.5, 5.6)),
+            ("umbrella",  U(9,  14, 5,  null, 30m, 2.0, 2.1)),
+        ];
+        return orgs
+            .Select((o, i) => new OrgUsage(
+                new ClaudeConfigDir($@"C:\envs\{o.name}\.claude", slug: o.name),
+                new Org($"org-{i}") { Name = o.name }, o.u, Active: i < 2))   // first two active, rest idle
+            .ToList();
+    }
+
     /// <summary>Whole-machine CPU + RAM strip reading for the metrics header.</summary>
     public static SystemMetrics SystemMetrics() =>
         new(CpuPercent: 37.5, UsedRamBytes: 12_000_000_000, TotalRamBytes: 32_000_000_000);

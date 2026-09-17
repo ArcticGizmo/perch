@@ -49,6 +49,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                                                 // UsageStripHeight (bar count varies with scoped windows + orgs)
     private const double UsageHeaderHeight = 15; // the org-name heading above each per-org set of bars
     private const double UsageSetGap       = 6;  // gap below one org's set before the next org's heading
+    // Condensed multi-org chips (the collapsed strip): a wrapping grid of tiny per-org tiles.
+    private const double ChipMinWidth = 86;  // target minimum chip width; the row divides evenly at/above this
+    private const double ChipGap      = 6;   // gap between chips (both axes)
+    private const double ChipPadH     = 7;   // chip inner horizontal padding
+    private const double ChipPadV     = 5;   // chip inner vertical padding
+    private const double ChipNameH    = 13;  // the org-name line inside a chip
+    private const double ChipBarH     = 3;   // one mini metric bar's height
+    private const double ChipBarGap   = 3;   // gap between mini metric bars
     private const double SysMetricsStripHeight = 50; // system CPU + RAM bars + padding, shown only when expanded
     private const double MetricsBarWidth  = 28; // width reserved for a session row's CPU/RAM mini-bars
     private const double QuickLinksRowHeight = 24; // height of the quick-links icon strip below the usage bars
@@ -768,11 +776,24 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Rate-limit usage strip: one set of bars (5h + 7d + scoped + credits) per org currently in use, each
     // under the org's name. Shown between the header and the rows when expanded.
     private IReadOnlyList<OrgUsage> _orgUsages = [];
-    // Per-set Y bounds recorded during paint, so a hover shows only the org under the cursor (not all of them).
-    private readonly List<(double Top, double Bottom, OrgUsage Set)> _usageSetBounds = new();
+    // Per-set painted rects recorded during paint, so a hover shows only the org under the cursor (not all
+    // of them). A full Rect (not just a Y band) so the condensed chip grid — many orgs across one row —
+    // resolves the hovered org by column too; the stacked layout stores a full-width band, unchanged in feel.
+    private readonly List<(Rect Rect, OrgUsage Set)> _usageSetBounds = new();
+    // The click/hover target for collapsing/expanding an account — deliberately NARROWER than the tooltip
+    // band: for an expanded account it's just the name (clicking the bars must not collapse it, and the hover
+    // wash stays on the name); for a collapsed account it's the whole chip tile. Rebuilt each paint.
+    private readonly List<(Rect Rect, OrgUsage Set)> _usageToggleRects = new();
     private bool _usageEnabled = true;
-    private bool _showExpectedRate = true;
     private bool _showMonthlySpend;
+    // Per-account collapse: each account is shown either as full stacked bars or a compact chip. The default
+    // follows activity (active account → bars, known-but-idle account → chip); this map holds the user's
+    // explicit per-account overrides (keyed by UsageKey), seeded from AppSettings.UsageAccountCollapsed.
+    private Dictionary<string, bool> _usageCollapsed = new(StringComparer.Ordinal);
+    // The account whose collapse/expand target (name, or chip) the cursor is over — for the scoped hover wash.
+    private OrgUsage? _hoveredUsageSet;
+    private static readonly IBrush ChipFillBrush  = new SolidColorBrush(Color.FromArgb(20, 255, 255, 255));
+    private static readonly IBrush ChipHoverBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
 
     // Before the first poll (or when the account list is momentarily empty) show a single placeholder set for
     // the primary, so the strip reserves its space and the two windows render as "—" rather than vanishing.
@@ -812,13 +833,6 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         RemeasurePanel();
     }
 
-    /// <summary>Show/hide the expected-rate marker on each usage bar.</summary>
-    public void SetShowExpectedRate(bool show)
-    {
-        if (_showExpectedRate == show) return;
-        _showExpectedRate = show;
-        InvalidateVisual();
-    }
 
     /// <summary>Show/hide the monthly extra-usage spend bar. Changes the bar (and possibly strip) count, so
     /// relayout rather than a bare repaint.</summary>
@@ -826,6 +840,47 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         if (_showMonthlySpend == show) return;
         _showMonthlySpend = show;
+        RemeasurePanel();
+    }
+
+    /// <summary>Raised when the user clicks an account to collapse/expand it — carries the account's stable
+    /// key and the new collapsed state, which the app persists into <c>AppSettings.UsageAccountCollapsed</c>.</summary>
+    public event Action<string, bool>? UsageAccountCollapseChanged;
+
+    // The orgs that actually draw something (a set with no bars is skipped, exactly as the stacked layout does).
+    private IEnumerable<OrgUsage> DrawableUsageSets => UsageSets.Where(s => SetBarCount(s) > 0);
+
+    // A stable per-account key for the collapse map: the org UUID (survives dir moves + renames) when the
+    // account is signed in, else the resolved config-dir path (the only identity an idle/unsigned dir has).
+    private static string UsageKey(OrgUsage set) =>
+        set.Org?.Uuid is { Length: > 0 } uuid ? uuid : set.Dir.RealRoot;
+
+    // Whether an account renders as a chip. The user's explicit toggle wins; absent one, the default follows
+    // activity — an active account shows full bars, a known-but-idle account shows a chip.
+    private bool IsUsageCollapsed(OrgUsage set) =>
+        _usageCollapsed.TryGetValue(UsageKey(set), out var v) ? v : !set.Active;
+
+    private IEnumerable<OrgUsage> ExpandedUsageSets => DrawableUsageSets.Where(s => !IsUsageCollapsed(s));
+    private IEnumerable<OrgUsage> CollapsedUsageSets => DrawableUsageSets.Where(IsUsageCollapsed);
+
+    /// <summary>Seeds the per-account collapse overrides (from AppSettings) without raising the change event.
+    /// Call once at wire-up.</summary>
+    public void SetUsageCollapsedAccounts(IReadOnlyDictionary<string, bool>? overrides)
+    {
+        _usageCollapsed = overrides is null
+            ? new(StringComparer.Ordinal)
+            : new(overrides, StringComparer.Ordinal);
+        if (UsageStripVisible) RemeasurePanel();
+    }
+
+    // Routed from RouteClick: clicking an account's bars collapses just it to a chip; clicking its chip
+    // expands it back. Persisted per account so idle-by-default and the user's intent both survive a restart.
+    private void ToggleUsageAccount(OrgUsage set)
+    {
+        string key = UsageKey(set);
+        bool collapsed = !IsUsageCollapsed(set);
+        _usageCollapsed[key] = collapsed;
+        UsageAccountCollapseChanged?.Invoke(key, collapsed);
         RemeasurePanel();
     }
 
@@ -1835,6 +1890,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Measure-or-paint: returns the content height; paints only when ctx is non-null.
     private double Draw(DrawingContext? ctx, double width)
     {
+        // Remember the width this measure/paint pass lays out at, so width-dependent section heights (the
+        // condensed usage chip grid) measure at the same width they paint at — Draw is the one entry both
+        // the measure (ctx null) and the paint go through.
+        _layoutWidth = width;
+
         // Docked collapsed: a narrow full-height reserved strip showing status counts (dense-strip art).
         if (_docked && _dockCollapsed) return DrawDockedStrip(ctx, width);
         if (_denseCtl.IsClosedStrip) return DrawStrip(ctx, width);
@@ -2151,55 +2211,98 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private double SystemInfoTop => _sectionTop.GetValueOrDefault(OverlaySection.SystemInfo);
     private double UsageStripTop => _sectionTop.GetValueOrDefault(OverlaySection.ClaudeMetrics);
 
-    // Height is the sum over the in-use orgs: each set that draws anything contributes its heading row, its
-    // bars (5h + 7d always, one per scoped window, plus a credits bar when enabled) and a trailing gap.
-    // UpdateUsage relayouts when this changes (a set arriving/leaving, a scoped window, an extra-usage flip).
+    // Height = the expanded (full-bars) accounts stacked, then the collapsed accounts as a chip grid. Each
+    // expanded set contributes its heading row + bars (5h + 7d, one per scoped window, plus a credits bar
+    // when enabled) + a trailing gap; the chip grid adds rows × chip height. UpdateUsage / a collapse toggle
+    // relayout when this changes.
     private double UsageStripHeight
     {
         get
         {
             double h = UsageStripPad;
-            foreach (var set in UsageSets)
+            foreach (var set in ExpandedUsageSets)
+                h += UsageHeaderHeight + SetBarCount(set) * BarRowHeight + UsageSetGap;
+
+            var collapsed = CollapsedUsageSets.ToList();
+            if (collapsed.Count > 0)
             {
-                int bars = SetBarCount(set);
-                if (bars > 0) h += UsageHeaderHeight + bars * BarRowHeight + UsageSetGap;
+                var g = ComputeChipGrid(PanelContentWidth, collapsed);
+                h += g.Rows * g.ChipH + Math.Max(0, g.Rows - 1) * ChipGap;
+                // A little breathing room between the stacked bars above and the chips (only when both show).
+                if (ExpandedUsageSets.Any()) h += ChipGap;
             }
             return h;
         }
     }
 
+    // The chip grid geometry for a set of collapsed accounts — computed once and shared by the height getter
+    // and the paint so the measured height and the painted layout can't drift. The column WIDTH is fixed by
+    // how many ChipMinWidth-or-wider tiles fit the content width — so a single chip stays that compact width
+    // (e.g. ~half the panel), it doesn't stretch to fill the row. Every chip is sized to the tallest set's
+    // bar count so the rows line up.
+    private readonly record struct ChipGrid(int Cols, int Rows, double ChipW, double ChipH, double Left);
+    private ChipGrid ComputeChipGrid(double width, IReadOnlyList<OrgUsage> sets)
+    {
+        int count = Math.Max(1, sets.Count);
+        double avail = Math.Max(ChipMinWidth, width - 2 * HorizPad);
+        // Column count is how many tiles fit the width — NOT clamped to the chip count, so one lone chip keeps
+        // the same compact column width the grid would give it rather than expanding across the whole strip.
+        int cols = Math.Max(1, (int)((avail + ChipGap) / (ChipMinWidth + ChipGap)));
+        int rows = (count + cols - 1) / cols;
+        double chipW = (avail - (cols - 1) * ChipGap) / cols;
+
+        int maxBars = 0;
+        foreach (var set in sets) maxBars = Math.Max(maxBars, SetBarCount(set));
+        double barsH = maxBars > 0 ? maxBars * ChipBarH + (maxBars - 1) * ChipBarGap : 0;
+        double chipH = ChipPadV * 2 + ChipNameH + barsH;
+
+        return new ChipGrid(cols, rows, chipW, chipH, HorizPad);
+    }
+
+    // The width the current Draw pass is laying out at (stashed at the top of Draw). Used to measure the
+    // chip grid so its height matches the paint. Falls back to the control bounds before the first Draw.
+    private double _layoutWidth;
+    private double PanelContentWidth => _layoutWidth > 0 ? _layoutWidth : Math.Max(0, Bounds.Width);
+
     private void DrawUsageBars(DrawingContext ctx, double width)
     {
         var now = DateTime.Now;
-        double rowTop = UsageStripTop + 2;
         _usageSetBounds.Clear();
+        _usageToggleRects.Clear();
+        double rowTop = UsageStripTop + 2;
 
-        foreach (var set in UsageSets)
+        // 1. Expanded accounts: the full stacked bars, one block per account (active accounts by default).
+        foreach (var set in ExpandedUsageSets)
         {
-            if (SetBarCount(set) == 0) continue;
             var u = set.Usage;
             bool stale = u.IsStale(now);
             double setTop = rowTop;
 
-            // The org's name heads its set of bars (always shown, even for a single account).
-            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text(set.Header, 10.5, FgBrush, FontWeight.SemiBold),
-                HorizPad, rowTop + UsageHeaderHeight / 2);
+            // The org's name heads its set of bars. It — and only it — is the collapse target: a pill-sized
+            // hit box around the name, so clicking the bars never collapses the account and the hover wash
+            // stays on the name rather than washing the whole band.
+            var nameFt = OverlayDraw.Text(set.Header, 10.5, FgBrush, FontWeight.SemiBold);
+            var nameRect = new Rect(HorizPad - 4, setTop,
+                Math.Min(width - 2 * (HorizPad - 4), nameFt.Width + 8), UsageHeaderHeight);
+            if (ReferenceEquals(_hoveredUsageSet, set))
+                OverlayDraw.Panel(ctx, new Rect(nameRect.X, nameRect.Y + 1, nameRect.Width, nameRect.Height - 2),
+                    ChipHoverBrush, null, 5);
+            OverlayDraw.TextLeftMid(ctx, nameFt, HorizPad, rowTop + UsageHeaderHeight / 2);
+            _usageToggleRects.Add((nameRect, set));
             rowTop += UsageHeaderHeight;
 
             if (_usageEnabled)
             {
-                double? sessionExpected = _showExpectedRate
-                    ? UsageBarRenderer.ElapsedPercent(u.FiveHourResetsAt, TimeSpan.FromHours(5)) : null;
-                double? weeklyExpected = _showExpectedRate
-                    ? UsageBarRenderer.ElapsedPercent(u.SevenDayResetsAt, TimeSpan.FromDays(7)) : null;
+                // Expected-rate is always on — the pace marker + pace-relative colouring are core to the bar.
+                double? sessionExpected = UsageBarRenderer.ElapsedPercent(u.FiveHourResetsAt, TimeSpan.FromHours(5));
+                double? weeklyExpected  = UsageBarRenderer.ElapsedPercent(u.SevenDayResetsAt, TimeSpan.FromDays(7));
                 DrawUsageBar(ctx, width, rowTop,                "5h", u.FiveHourPercent, sessionExpected, stale);
                 DrawUsageBar(ctx, width, rowTop + BarRowHeight, "7d", u.SevenDayPercent, weeklyExpected,  stale);
                 rowTop += BarRowHeight * 2;
 
                 foreach (var s in u.Scoped)
                 {
-                    double? expected = _showExpectedRate
-                        ? UsageBarRenderer.ElapsedPercent(s.ResetsAt, TimeSpan.FromDays(7)) : null;
+                    double? expected = UsageBarRenderer.ElapsedPercent(s.ResetsAt, TimeSpan.FromDays(7));
                     DrawUsageBar(ctx, width, rowTop, UsageLabels.Short(s.Label), s.Percent, expected, stale);
                     rowTop += BarRowHeight;
                 }
@@ -2218,17 +2321,125 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             }
 
             rowTop += UsageSetGap;
-            _usageSetBounds.Add((setTop, rowTop, set));
+            // A full-width band from this set's heading to the next — the hover/click resolves by Y here.
+            _usageSetBounds.Add((new Rect(0, setTop, width, rowTop - setTop), set));
+        }
+
+        // 2. Collapsed accounts (idle-by-default, or ones the user collapsed): a wrapping chip grid below.
+        var collapsed = CollapsedUsageSets.ToList();
+        if (collapsed.Count > 0)
+        {
+            if (rowTop > UsageStripTop + 2) rowTop += ChipGap;   // breathing room after the stacked bars
+            DrawUsageChips(ctx, width, now, collapsed, rowTop);
         }
     }
 
-    // The set (org) whose painted band contains the point, or -1 (over strip padding / no data).
+    // The collapsed view: one tiny chip per account, laid out in a wrapping grid. Each chip is the org's name
+    // over its metric bars drawn miniature (no captions, no percentages) but keeping the severity colour and
+    // the expected-pace tick — the whole idle estate at a glance. Clicking a chip expands that account.
+    private void DrawUsageChips(DrawingContext ctx, double width, DateTime now, IReadOnlyList<OrgUsage> sets, double top)
+    {
+        var g = ComputeChipGrid(width, sets);
+        int col = 0;
+        double x = g.Left, y = top;
+
+        foreach (var set in sets)
+        {
+            var chip = new Rect(x, y, g.ChipW, g.ChipH);
+            DrawUsageChip(ctx, chip, set, now);
+            _usageSetBounds.Add((chip, set));
+            _usageToggleRects.Add((chip, set));   // the whole compact tile expands the account
+
+            if (++col >= g.Cols) { col = 0; x = g.Left; y += g.ChipH + ChipGap; }
+            else x += g.ChipW + ChipGap;
+        }
+    }
+
+    private void DrawUsageChip(DrawingContext ctx, Rect chip, OrgUsage set, DateTime now)
+    {
+        var u = set.Usage;
+        bool stale = u.IsStale(now);
+        bool hovered = ReferenceEquals(_hoveredUsageSet, set);
+
+        // A faint tile, brightened on hover so the click-to-expand affordance reads.
+        OverlayDraw.Panel(ctx, chip, hovered ? ChipHoverBrush : ChipFillBrush, null, 5);
+
+        double innerL = chip.X + ChipPadH, innerR = chip.Right - ChipPadH;
+        double barW = Math.Max(6, innerR - innerL);
+
+        // Org name (truncated to the chip), dimmed when the reading is stale.
+        var nameBrush = stale ? MutedBrush : FgBrush;
+        var nameFt = OverlayDraw.Text(OverlayDraw.Truncate(set.Header, 10, barW, FontWeight.SemiBold),
+            10, nameBrush, FontWeight.SemiBold);
+        OverlayDraw.TextLeftMid(ctx, nameFt, innerL, chip.Y + ChipPadV + ChipNameH / 2);
+
+        // The metric bars, tiny and label-free: 5h, 7d, each scoped window, then the credits spend bar.
+        double barY = chip.Y + ChipPadV + ChipNameH;
+        if (_usageEnabled)
+        {
+            double? sessionExp = UsageBarRenderer.ElapsedPercent(u.FiveHourResetsAt, TimeSpan.FromHours(5));
+            double? weeklyExp  = UsageBarRenderer.ElapsedPercent(u.SevenDayResetsAt, TimeSpan.FromDays(7));
+            DrawMiniBar(ctx, innerL, barY, barW, u.FiveHourPercent, sessionExp, stale); barY += ChipBarH + ChipBarGap;
+            DrawMiniBar(ctx, innerL, barY, barW, u.SevenDayPercent, weeklyExp,  stale); barY += ChipBarH + ChipBarGap;
+            foreach (var s in u.Scoped)
+            {
+                double? exp = UsageBarRenderer.ElapsedPercent(s.ResetsAt, TimeSpan.FromDays(7));
+                DrawMiniBar(ctx, innerL, barY, barW, s.Percent, exp, stale); barY += ChipBarH + ChipBarGap;
+            }
+        }
+        if (SpendBarFor(set))
+            DrawMiniBar(ctx, innerL, barY, barW, u.ExtraUsage!.Percent, null, stale);
+    }
+
+    // One label-free metric bar for a chip: a pill track, a fill coloured like the full bar (pace-relative
+    // when an expected mark exists, else absolute), and a neutral expected-rate tick — the miniature of
+    // UsageBarRenderer.Draw, sharing its colour rules.
+    private void DrawMiniBar(DrawingContext ctx, double x, double y, double w, double? percent,
+                             double? expectedPct, bool stale)
+    {
+        Color track = stale ? Palette.Blend(UsageTrackColor, BgColor, 0.4f) : UsageTrackColor;
+        OverlayDraw.Pill(ctx, new SolidColorBrush(track), new Rect(x, y, w, ChipBarH));
+
+        if (percent is { } p)
+        {
+            double clamped = Math.Clamp(p, 0, 100);
+            Color fill = expectedPct is { } paceExp
+                ? Palette.PaceColor(clamped, paceExp)
+                : Palette.UsageColor(clamped);
+            if (stale) fill = Palette.Blend(fill, BgColor, 0.5f);
+            double fw = Math.Round(w * clamped / 100.0);
+            if (fw > 0) OverlayDraw.Pill(ctx, new SolidColorBrush(fill), new Rect(x, y, fw, ChipBarH));
+        }
+
+        if (expectedPct is { } ep && w > 0)
+        {
+            double markX = x + Math.Round(w * ep / 100.0);
+            Color mark = stale ? Palette.Blend(ExpectedMarkColor, BgColor, 0.5f) : ExpectedMarkColor;
+            ctx.DrawRectangle(new SolidColorBrush(mark), null,
+                new Rect(markX - 0.5, y - 1, 1.5, ChipBarH + 2));
+        }
+    }
+
+    // The set (org) whose painted rect contains the point, or -1 (over strip padding / no data). A full
+    // Rect test so the condensed chip grid resolves by column as well as row; the stacked band spans the
+    // full width, so there it's effectively a Y test as before.
     private int UsageSetIndexAt(Point p)
     {
         for (int i = 0; i < _usageSetBounds.Count; i++)
-            if (p.Y >= _usageSetBounds[i].Top && p.Y < _usageSetBounds[i].Bottom)
+            if (_usageSetBounds[i].Rect.Contains(p))
                 return i;
         return -1;
+    }
+
+    // The account whose collapse/expand target (an expanded account's name, or a collapsed account's chip)
+    // the point is over, or null. Narrower than UsageSetIndexAt (which spans the whole set for the tooltip):
+    // clicking or hovering an expanded account's bars is deliberately not a toggle.
+    private OrgUsage? UsageToggleAt(Point p)
+    {
+        foreach (var (rect, set) in _usageToggleRects)
+            if (rect.Contains(p))
+                return set;
+        return null;
     }
 
     // The overlay's compact bar: a HorizPad inset on both sides, narrow caption/pct columns, the
@@ -3965,9 +4176,12 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // Hand cursor over clickable glyphs (quick links + Hypertree branch lines + daemon worker lines +
         // artifacts + the update badge + outage footer + the scratch-pad note button + a row's note glyph +
         // the media buttons + the mic strip's app name + the social region's controls); rows show only the highlight.
+        // Clickable only over an account's collapse/expand target — its name (expanded) or its chip (collapsed).
+        bool overUsageToggle = InUsageStrip(p) && UsageToggleAt(p) is not null;
         Cursor = overResize ? ResizeCursor
             : (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
-               || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession)
+               || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
+               || overUsageToggle)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -3977,6 +4191,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Picks whichever info glyph (or the usage strip) the cursor is over and (re)arms the dwell timer.
     private void UpdateDwell(Point p)
     {
+        // Usage hover wash (independent of the dwell tooltip): highlight only the collapse/expand target the
+        // cursor is over — an expanded account's name, or a collapsed account's chip — not the whole band.
+        OrgUsage? hoverUsage = InUsageStrip(p) ? UsageToggleAt(p) : null;
+        if (!ReferenceEquals(hoverUsage, _hoveredUsageSet)) { _hoveredUsageSet = hoverUsage; InvalidateVisual(); }
+
         (TipKind kind, int row) =
             HitTestThermoIcon(p) is var th && th >= 0 ? (TipKind.Thermo, th) :
             HitTestWarnIcon(p)   is var wa && wa >= 0 ? (TipKind.Warn, wa) :
@@ -4054,6 +4273,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredHyperHeader || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
+        if (_hoveredUsageSet is not null) { _hoveredUsageSet = null; changed = true; }
         _hoveredSocial = false;
         _hoveredNewSession = false;
         _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHyperHeader = _hoveredAutonomousHeader = false;
@@ -4451,6 +4671,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (HitTestTodoRow(p) >= 0)
         {
             TodosRequested?.Invoke();
+            return;
+        }
+
+        // The usage strip: clicking an account's NAME collapses just it to a chip; clicking its chip expands
+        // it back (per-account, persisted). Clicking the bars themselves (or the strip padding) does nothing.
+        if (InUsageStrip(p) && UsageToggleAt(p) is { } usageSet)
+        {
+            ToggleUsageAccount(usageSet);
             return;
         }
 

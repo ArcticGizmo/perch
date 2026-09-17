@@ -495,7 +495,6 @@ internal sealed class UsageBarsView : Control
 
     private UsageInfo _usage = UsageInfo.Empty;
     private bool _on = true;
-    private bool _showExpectedRate = true;
 
     public UsageBarsView() => Height = MeasuredHeight;
 
@@ -505,7 +504,6 @@ internal sealed class UsageBarsView : Control
 
     public void SetUsage(UsageInfo usage) { _usage = usage; Height = MeasuredHeight; InvalidateVisual(); }
     public void SetOn(bool on) { _on = on; InvalidateVisual(); }
-    public void SetShowExpectedRate(bool show) { _showExpectedRate = show; InvalidateVisual(); }
 
     public override void Render(DrawingContext ctx)
     {
@@ -524,15 +522,15 @@ internal sealed class UsageBarsView : Control
         }
 
         bool stale = _usage.IsStale(DateTime.Now);
-        double? sessionExpected = _showExpectedRate ? UsageBarRenderer.ElapsedPercent(_usage.FiveHourResetsAt, TimeSpan.FromHours(5)) : null;
-        double? weeklyExpected = _showExpectedRate ? UsageBarRenderer.ElapsedPercent(_usage.SevenDayResetsAt, TimeSpan.FromDays(7)) : null;
+        double? sessionExpected = UsageBarRenderer.ElapsedPercent(_usage.FiveHourResetsAt, TimeSpan.FromHours(5));
+        double? weeklyExpected = UsageBarRenderer.ElapsedPercent(_usage.SevenDayResetsAt, TimeSpan.FromDays(7));
         DrawBar(ctx, 0, "Session", _usage.FiveHourPercent, sessionExpected, stale);
         DrawBar(ctx, BarRowHeight, "Weekly", _usage.SevenDayPercent, weeklyExpected, stale);
 
         double scopedTop = BarRowHeight * 2;
         foreach (var s in _usage.Scoped)
         {
-            double? expected = _showExpectedRate ? UsageBarRenderer.ElapsedPercent(s.ResetsAt, TimeSpan.FromDays(7)) : null;
+            double? expected = UsageBarRenderer.ElapsedPercent(s.ResetsAt, TimeSpan.FromDays(7));
             DrawBar(ctx, scopedTop, s.Label, s.Percent, expected, stale);
             scopedTop += BarRowHeight;
         }

@@ -55,7 +55,11 @@ internal static class UsageBarRenderer
         if (percent is { } p)
         {
             double clamped = Math.Clamp(p, 0, 100);
-            Color barColor = Palette.UsageColor(clamped);
+            // Pace-aware bars (a rate-limit window with an expected mark) colour by the gap to that mark;
+            // bars with no expected mark (the credits spend bar) keep the absolute-level colouring.
+            Color barColor = expectedPct is { } paceExp
+                ? Palette.PaceColor(clamped, paceExp)
+                : Palette.UsageColor(clamped);
             if (stale) barColor = Palette.Blend(barColor, bgBlend, 0.5f);
 
             double fillW = Math.Round(trackW * clamped / 100.0);
@@ -73,16 +77,12 @@ internal static class UsageBarRenderer
             textColor = capColor;
         }
 
-        // Expected-rate marker: thin vertical bar at the elapsed-time position. It turns red once actual
-        // usage has pulled ahead of the expected pace — but only once the window is at least 5% elapsed,
-        // so it doesn't flip red on the first sip of usage while the expected line still sits near zero
-        // (where any reading trivially "exceeds" it).
+        // Expected-rate marker: a thin neutral tick at the elapsed-time position, marking where usage "should"
+        // be. It no longer recolours by over/under pace — the bar's own fill colour now carries that.
         if (expectedPct is { } ep && trackW > 0)
         {
             double markerX = trackLeft + Math.Round(trackW * ep / 100.0);
-            bool overRate  = ep >= 5 && percent is { } actual && actual > ep;
-            Color baseMark = overRate ? Palette.Red : expectedMark;
-            Color markerColor = stale ? Palette.Blend(baseMark, bgBlend, 0.5f) : baseMark;
+            Color markerColor = stale ? Palette.Blend(expectedMark, bgBlend, 0.5f) : expectedMark;
             ctx.DrawRectangle(new SolidColorBrush(markerColor), null,
                 new Rect(markerX - 1, trackY - 1, 2, trackH + 2));
         }

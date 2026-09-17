@@ -65,7 +65,6 @@ internal static class OnboardingTiers
         [
             new OnboardingItem("usage-bars",      OnboardingTier.Basic),
             new OnboardingItem("system-metrics",  OnboardingTier.Basic),
-            new OnboardingItem("expected-rate",   OnboardingTier.Intermediate),
             new OnboardingItem("monthly-spend",   OnboardingTier.Intermediate),
             new OnboardingItem("session-metrics", OnboardingTier.Intermediate),
             new OnboardingItem("service-status",  OnboardingTier.KitchenSink),

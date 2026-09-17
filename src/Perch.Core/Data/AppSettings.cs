@@ -83,11 +83,6 @@ internal sealed class AppSettings
     // Defaults to true; a missing key in an older settings file keeps this default.
     public bool ShowUsage { get; set; } = true;
 
-    // When on, a thin marker on each usage bar shows where consumption should be given the
-    // elapsed time in the current window (e.g. after 2 days of a 7-day period the marker sits
-    // at ~28%). Defaults to true; only visible while ShowUsage is also true.
-    public bool ShowExpectedUsageRate { get; set; } = true;
-
     // Whether to show a monthly "extra usage" spend bar in the usage strip — this billing month's overage
     // spend against the account's monthly cap (dollars, from the /usage endpoint's extra_usage block).
     // Off by default: many accounts never enable extra usage, and even when on it only appears while the
@@ -157,6 +152,13 @@ internal sealed class AppSettings
     // Whether the overlay's Hypertree section is expanded (showing the branch lines) or collapsed to just
     // its header. Toggled by the section's own chevron. Defaults to expanded.
     public bool HypertreeExpanded { get; set; } = true;
+
+    // Per-account collapse state for the usage strip: an account renders as full stacked bars or a compact
+    // chip. The default follows activity (active account → bars, known-but-idle account → chip); this map
+    // holds only the accounts the user has explicitly toggled, keyed by org UUID (or the config-dir path
+    // when the account isn't signed in). Toggled by clicking an account on the overlay — not a Settings-window
+    // control.
+    public Dictionary<string, bool> UsageAccountCollapsed { get; set; } = new();
 
     // Secret "Perch Arcade" state. Once the brand mark has been long-pressed to reveal the arcade, this
     // flips true and stays true — the overlay header's right-click menu then carries a quick "Perch Arcade"

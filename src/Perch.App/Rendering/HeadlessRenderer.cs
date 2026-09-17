@@ -77,6 +77,34 @@ internal static class HeadlessRenderer
         RenderControl(canvas, Path.Combine(outDir, "overlay_1x.png"), 96);
         RenderControl(canvas, Path.Combine(outDir, "overlay_1.5x.png"), 144);
 
+        // Multi-org usage, per-account collapse: active accounts show full stacked bars, known-but-idle
+        // accounts show as compact chips (all their bars, no labels, keeping the severity colour + pace tick).
+        // The six-org sample marks the first two active and the rest idle, so the default render is the mixed
+        // startup view. Then: everything collapsed to chips (the user collapsed the active ones too), and an
+        // idle account expanded back to full bars — both via the per-account override map.
+        var usageManyProbe = new OverlayCanvas();
+        usageManyProbe.Update(SampleData.Sessions());
+        usageManyProbe.SetShowMonthlySpend(true);   // so the "$" bar shows on the orgs that have extra usage
+        usageManyProbe.UpdateUsage(SampleData.OrgUsagesMany());
+        usageManyProbe.SetQuickLinks(links, icons);
+        RenderControl(usageManyProbe, Path.Combine(outDir, "overlay_usage_mixed_1x.png"), 96);
+        RenderControl(usageManyProbe, Path.Combine(outDir, "overlay_usage_mixed_1.5x.png"), 144);
+
+        // All accounts collapsed to chips (org-{0}/org-{1} are the two active ones the user collapsed).
+        usageManyProbe.SetUsageCollapsedAccounts(new Dictionary<string, bool>
+        {
+            ["org-0"] = true, ["org-1"] = true,
+        });
+        RenderControl(usageManyProbe, Path.Combine(outDir, "overlay_usage_all_chips_1x.png"), 96);
+
+        // One idle account (org-4 / initech) expanded to full bars while the actives stay collapsed — proves
+        // the override works both ways and the mixed stacked-over-chips layout holds.
+        usageManyProbe.SetUsageCollapsedAccounts(new Dictionary<string, bool>
+        {
+            ["org-0"] = true, ["org-1"] = true, ["org-4"] = false,
+        });
+        RenderControl(usageManyProbe, Path.Combine(outDir, "overlay_usage_idle_expanded_1x.png"), 96);
+
         // Widened panel: the floating overlay is horizontally resizable (drag the left-edge grip), with the
         // default width as the floor. Render one at a generous width so the reflow — longer session names, the
         // right-aligned status/glyphs riding the new right edge, the strips stretching — stays under review.

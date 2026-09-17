@@ -158,12 +158,6 @@ internal static class SettingsRegistry
             PreviewTarget.UsageBars, nameof(AppSettings.ShowUsage),
             s => s.ShowUsage, (s, v) => s.ShowUsage = v),
 
-        Toggle("expected-rate", "Expected-rate marker",
-            "A marker showing where consumption should be for the elapsed time.",
-            SettingSurface.UsageBars, ["expected", "rate", "pace", "marker", "ahead", "behind"],
-            PreviewTarget.ExpectedRate, nameof(AppSettings.ShowExpectedUsageRate),
-            s => s.ShowExpectedUsageRate, (s, v) => s.ShowExpectedUsageRate = v),
-
         Toggle("monthly-spend", "Monthly spend",
             "A bar showing this month's extra-usage spend against your monthly limit.",
             SettingSurface.UsageBars,

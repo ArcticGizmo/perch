@@ -131,6 +131,23 @@ public static class Palette
         _    => Red,
     };
 
+    /// <summary>Colour a pace-aware usage bar by how far <em>actual</em> usage is from the <em>expected</em>
+    /// (elapsed-time) mark, not by its absolute level: comfortably under pace reads green, near pace yellow,
+    /// over pace red. Both are percentages (0–100).</summary>
+    public static Color PaceColor(double actual, double expected)
+    {
+        // Safe zone at the very start of a window: while little time has elapsed AND little budget is used,
+        // read green — a tiny actual-vs-expected gap shouldn't flip the bar yellow when nothing's happening.
+        if (expected < 10 && actual < 10) return Green;
+
+        return (actual - expected) switch
+        {
+            < -10 => Green,    // more than 10 points behind the expected pace
+            <=  10 => Yellow,  // within ±10 points of pace
+            _      => Red,     // more than 10 points over the expected pace
+        };
+    }
+
     // Maps an Agent-Teams member colour name onto the shared palette so a given teammate is tinted the
     // same way everywhere. Unknown/missing names fall back to the neutral team accent.
     public static Color TeamColor(string? name) => name?.Trim().ToLowerInvariant() switch

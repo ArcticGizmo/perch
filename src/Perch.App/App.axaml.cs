@@ -372,6 +372,13 @@ public partial class App : Application
             _overlay.Canvas.QuietModeRequested += OnQuietModeRequested;
             _overlay.Canvas.SystemMetricsToggleRequested += SetSystemMetricsEnabled;
             _overlay.Canvas.UsageToggleRequested += SetUsageEnabled;
+            // Per-account usage collapse: clicking an account collapses its bars to a chip (or expands a chip).
+            // Seeded from the persisted overrides; each toggle is written back (not a Settings-window control).
+            _overlay.Canvas.SetUsageCollapsedAccounts(settings.UsageAccountCollapsed);
+            _overlay.Canvas.UsageAccountCollapseChanged += (key, collapsed) =>
+            {
+                if (_appSettings is { } s) { s.UsageAccountCollapsed[key] = collapsed; s.Save(); }
+            };
             _overlay.Canvas.HistoryRequested += OpenHistory;
             _overlay.Canvas.QrRequested += ShowQrCode;
             _overlay.Canvas.ExternalNotifyToggleRequested += OnToggleExternalNotify;
@@ -2478,11 +2485,13 @@ public partial class App : Application
     // the vector/monitor mark. Each distinct host is resolved once, off the UI thread; until an icon lands
     // the canvas shows its fallback. An IDE with only a bare base name (the detector couldn't resolve the
     // full path) is skipped, since there's nothing for the shell to render.
-    // Tells the usage host which orgs to poll: the config dir of every live session, plus the default (always).
-    // Runs on the UI thread (from the scan callback, or a marshalled ClaudeConfigSet.Changed).
+    // Tells the usage host which orgs to poll: the ACTIVE set (the config dir of every live session, plus the
+    // default, always) and the full KNOWN set (every discovered config dir), so the strip can also show idle
+    // accounts as chips. Runs on the UI thread (from the scan callback, or a marshalled ClaudeConfigSet.Changed).
     private void UpdateUsageDirs(IReadOnlyList<ClaudeSession> sessions) =>
-        _usageHost?.SetActiveDirs(UsageDirSelection.InUse(
-            sessions.Select(s => s.AttributedConfigDir), ClaudeConfigSet.Instance.Primary));
+        _usageHost?.SetDirs(
+            UsageDirSelection.InUse(sessions.Select(s => s.AttributedConfigDir), ClaudeConfigSet.Instance.Primary),
+            ClaudeConfigSet.Instance.All);
 
     private void RefreshOriginIcons(IReadOnlyList<ClaudeSession> sessions)
     {

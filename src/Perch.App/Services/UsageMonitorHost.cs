@@ -23,13 +23,25 @@ internal sealed class UsageMonitorHost : IDisposable
     private readonly IOrgProvider _orgs = new OrgProvider();
     private readonly DispatcherTimer _timer;
 
-    // One monitor per active dir, cached by resolved real root so a dir that comes and goes keeps its
-    // last-good reading (for dimming) across membership churn.
+    // How often the idle (known-but-not-in-use) accounts are refreshed, in poll ticks: every Nth poll they're
+    // fetched, and reused from the last reading in between — active accounts refresh every tick, idle ones
+    // ~every 15 min, so the throttled endpoint isn't hit for every idle account on every tick.
+    private const int IdleEvery = 3;
+
+    // One monitor per dir, cached by resolved real root so a dir that comes and goes keeps its last-good
+    // reading (for dimming) across membership churn.
     private readonly Dictionary<string, UsageMonitor> _monitors = new(ClaudeConfigDir.PathComparer);
+    // Active dirs (a live session's + the primary) and the full known set (adds idle-but-known accounts). The
+    // strip shows both: active default to full bars, idle to compact chips.
     private IReadOnlyList<ClaudeConfigDir> _activeDirs = [];
+    private IReadOnlyList<ClaudeConfigDir> _knownDirs = [];
+    // Last produced reading per dir (by real root), so an idle account skipped on this tick still renders from
+    // its previous value rather than blanking.
+    private readonly Dictionary<string, OrgUsage> _lastByRoot = new(ClaudeConfigDir.PathComparer);
 
     private bool _started;
     private bool _polling;
+    private int _pollCount;
 
     /// <summary>The most recent set of readings, cached so a surface opened mid-run (the Settings usage bars)
     /// can seed itself without waiting for the next poll. Empty until the first poll completes.</summary>
@@ -52,21 +64,27 @@ internal sealed class UsageMonitorHost : IDisposable
         _timer.Tick += (_, _) => _ = Poll();
     }
 
-    /// <summary>Sets which config dirs to poll (the orgs in use, primary always included). Adds/prunes the
-    /// per-dir monitors and, when the membership actually changes, kicks an immediate poll so a newly-active
-    /// org's bars appear promptly. Call on the UI thread.</summary>
-    public void SetActiveDirs(IReadOnlyList<ClaudeConfigDir> dirs)
+    /// <summary>Sets which config dirs to poll: the <paramref name="active"/> ones (a live session's + the
+    /// primary) and the full <paramref name="known"/> set (which adds idle-but-known accounts). Adds/prunes the
+    /// per-dir monitors over the union and, when the membership actually changes, kicks an immediate poll so a
+    /// newly-active or newly-discovered account appears promptly. Call on the UI thread.</summary>
+    public void SetDirs(IReadOnlyList<ClaudeConfigDir> active, IReadOnlyList<ClaudeConfigDir> known)
     {
-        bool changed = !SameSequence(dirs, _activeDirs);
-        _activeDirs = dirs;
+        bool changed = !SameSequence(active, _activeDirs) || !SameSequence(known, _knownDirs);
+        _activeDirs = active;
+        _knownDirs = known;
 
-        foreach (var d in dirs)
+        // Monitors (and the reuse cache) span the union of active + known.
+        var union = active.Concat(known).ToList();
+        foreach (var d in union)
             if (!_monitors.ContainsKey(d.RealRoot))
                 _monitors[d.RealRoot] = MonitorFor(d);
 
-        var keep = new HashSet<string>(dirs.Select(d => d.RealRoot), ClaudeConfigDir.PathComparer);
+        var keep = new HashSet<string>(union.Select(d => d.RealRoot), ClaudeConfigDir.PathComparer);
         foreach (var stale in _monitors.Keys.Where(k => !keep.Contains(k)).ToList())
             _monitors.Remove(stale);
+        foreach (var stale in _lastByRoot.Keys.Where(k => !keep.Contains(k)).ToList())
+            _lastByRoot.Remove(stale);
 
         if (changed && _started)
             _ = Poll();
@@ -109,20 +127,36 @@ internal sealed class UsageMonitorHost : IDisposable
         _polling = true;
         try
         {
-            var dirs = _activeDirs.Count > 0 ? _activeDirs : new[] { ClaudeConfigSet.Instance.Primary };
+            _pollCount++;
+            var active = _activeDirs.Count > 0 ? _activeDirs : new[] { ClaudeConfigSet.Instance.Primary };
+            var known = _knownDirs.Count > 0 ? _knownDirs : active;
 
-            // Resolve each dir's org first (cheap, cached), then collapse dirs that share an account so the same
-            // account isn't polled — or shown — twice. Only the survivors hit the network.
-            var resolved = dirs.Select(d => (Dir: d, Org: _orgs.GetLive(d)));
-            var deduped = UsageDirSelection.DedupeAccounts(resolved);
+            // Resolve every account (active first, then idle-but-known), collapsing dirs that share an account
+            // so it's polled — and shown — once, and tagging each active/idle.
+            var accounts = UsageDirSelection.Resolve(active, known, d => _orgs.GetLive(d));
 
-            var results = new List<OrgUsage>(deduped.Count);
-            foreach (var (dir, org) in deduped)
+            // Idle accounts refresh only every IdleEvery-th tick (incl. the first); in between they're reused
+            // from their last reading, so we don't hit the throttled endpoint for every idle account every tick.
+            bool pollIdle = (_pollCount % IdleEvery) == 1;
+
+            var results = new List<OrgUsage>(accounts.Count);
+            foreach (var (dir, org, isActive) in accounts)
             {
-                if (!_monitors.TryGetValue(dir.RealRoot, out var mon))
-                    _monitors[dir.RealRoot] = mon = MonitorFor(dir);
-                var info = await mon.FetchAsync();     // off-thread IO, never throws
-                results.Add(new OrgUsage(dir, org, info));
+                OrgUsage row;
+                if (isActive || pollIdle || !_lastByRoot.TryGetValue(dir.RealRoot, out var prev))
+                {
+                    if (!_monitors.TryGetValue(dir.RealRoot, out var mon))
+                        _monitors[dir.RealRoot] = mon = MonitorFor(dir);
+                    var info = await mon.FetchAsync();     // off-thread IO, never throws
+                    row = new OrgUsage(dir, org, info, isActive);
+                }
+                else
+                {
+                    // Reuse the idle account's last reading (keep its org/activity current).
+                    row = prev with { Org = org, Active = isActive };
+                }
+                _lastByRoot[dir.RealRoot] = row;
+                results.Add(row);
             }
             Last = results;
             _onUsage(results);

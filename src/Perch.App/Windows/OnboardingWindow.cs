@@ -492,7 +492,6 @@ internal sealed class OnboardingWindow : Window
         OverlaySettingsGates.Apply(canvas, new AppSettings
         {
             ShowUsage = true,
-            ShowExpectedUsageRate = true,
             ShowMediaController = true,
         });
         canvas.IsHitTestVisible = false;   // a picture, not a control

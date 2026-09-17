@@ -19,7 +19,6 @@ internal static class OverlaySettingsGates
     public static void Apply(OverlayCanvas c, AppSettings s)
     {
         c.SetShowUsage(s.ShowUsage);
-        c.SetShowExpectedRate(s.ShowExpectedUsageRate);
         c.SetShowMonthlySpend(s.ShowMonthlySpend);
         c.SetShowSystemMetrics(s.ShowSystemMetrics);
         c.SetShowSessionMetrics(s.ShowSessionMetrics);
