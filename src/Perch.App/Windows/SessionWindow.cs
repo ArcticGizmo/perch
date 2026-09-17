@@ -1146,8 +1146,18 @@ internal sealed partial class SessionWindow : Window
         frame.PointerReleased += async (_, ev) =>
         {
             if (ev.InitialPressMouseButton == MouseButton.Left) await ChooseResume(e, onChoose);
+            else if (ev.InitialPressMouseButton == MouseButton.Right) CopySessionId(e);
         };
         return frame;
+    }
+
+    // Right-click a recent row to copy its session id — handy for `claude --resume`, bug reports, or pointing
+    // Perch at it elsewhere. Confirms with the launcher's floating toast so the copy isn't silent.
+    private void CopySessionId(HistoryEntry e)
+    {
+        if (e.SessionId is not { Length: > 0 } id) return;
+        Clipboard?.SetTextAsync(id);
+        ShowToast($"Session ID copied  ·  {id}", _p.Ok);
     }
 
     // The launcher's resume: continue the picked session in this (idle) window.
@@ -2618,9 +2628,14 @@ internal sealed partial class SessionWindow : Window
         ShowToast(message);
     }
 
-    private void ShowToast(string message)
+    // The floating toast doubles as an error banner and a neutral confirmation, so it recolours per call
+    // (errors read red; a copy/success reads in the accent given). Defaults to the error hue for old callers.
+    private void ShowToast(string message, IBrush? accent = null)
     {
+        accent ??= _p.Err;
         _toastText.Text = message;
+        _toastText.Foreground = accent;
+        _toast.BorderBrush = accent;
         _toast.IsVisible = true;
         _toastTimer.Stop();
         _toastTimer.Start();

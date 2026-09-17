@@ -1236,7 +1236,7 @@ internal static class HeadlessRenderer
         // Claude asking the user something (AskUserQuestion) — a question card with pickable options, not a
         // permission gate — plus an already-answered one above it as its receipt.
         const string askInput =
-            """{"questions":[{"question":"Which would you like, an apple or a banana?","header":"Fruit","options":[{"label":"Apple","description":"Crisp, sweet-tart, and crunchy."},{"label":"Banana","description":"Soft, sweet, easy to peel."}],"multiSelect":false},{"question":"Any toppings?","header":"Extras","options":[{"label":"Nuts","description":""},{"label":"Honey","description":""},{"label":"Yoghurt","description":""}],"multiSelect":true}]}""";
+            """{"questions":[{"question":"How much version history do you want? V1 actually only keeps a two-slot model, so a full browsable timeline would be new ground.","header":"History depth","options":[{"label":"Full browsable history","description":"A version timeline: v1..vN all viewable, with an active draft. You can open/preview any past published version and roll a new draft from it."},{"label":"V1 two-slot model","description":"Exactly like V1: latest-published + one draft, shown as chips and a non-interactive version badge. Simpler; no timeline browser."}],"multiSelect":false},{"question":"Any toppings?","header":"Extras","options":[{"label":"Nuts","description":""},{"label":"Honey","description":""},{"label":"Yoghurt","description":""}],"multiSelect":true}]}""";
         var askEvents = new List<Perch.Data.Control.SessionEvent>
         {
             new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "default", 18),

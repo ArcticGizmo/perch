@@ -1441,22 +1441,28 @@ internal sealed class SessionThreadView : ScrollViewer
         foreach (var q in questions)
         {
             var block = new StackPanel { Margin = new Thickness(15, 8, 15, 2), Spacing = 8 };
-            var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            // Title chip on its own row, then the question wraps underneath as smaller prose — a horizontal
+            // StackPanel gives children unconstrained width, so TextWrapping there never fires and the
+            // question runs off the page.
+            var head = new StackPanel { Orientation = Orientation.Vertical, Spacing = 6 };
             if (q.Header.Length > 0)
                 head.Children.Add(new Border
                 {
                     Background = _p.Raised2, BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(1),
-                    CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(8, 2), VerticalAlignment = VerticalAlignment.Center,
+                    CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(8, 2),
+                    HorizontalAlignment = HorizontalAlignment.Left,
                     Child = new TextBlock { Text = q.Header, FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Muted },
                 });
             head.Children.Add(new TextBlock
             {
-                Text = q.Question, FontFamily = _p.Display, FontWeight = FontWeight.Bold, FontSize = 15.5,
-                Foreground = _p.Title, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center,
+                Text = q.Question, FontFamily = _p.Display, FontWeight = FontWeight.SemiBold, FontSize = 13.5,
+                Foreground = _p.Title, TextWrapping = TextWrapping.Wrap,
+                // Line the question up with the chip's *label*, which is inset by the chip border (1) + padding (8).
+                Margin = new Thickness(9, 0, 0, 0),
             });
             block.Children.Add(head);
             if (q.MultiSelect)
-                block.Children.Add(new TextBlock { Text = "choose any that apply", FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint });
+                block.Children.Add(new TextBlock { Text = "choose any that apply", FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint, Margin = new Thickness(9, 0, 0, 0) });
 
             var options = new WrapPanel { Orientation = Orientation.Horizontal };
             foreach (var o in q.Options)

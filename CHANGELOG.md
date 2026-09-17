@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.12] - 2026-09-17
+
+- Fixed the "Claude is asking" card spilling its question off the page (it now wraps, politely)
+- Right-click a recent session to copy its ID
+
+---
+
 ## [v0.4.11] - 2026-09-16
 
 - Perch-controlled sessions surface their background sub-agents on the overlay (they'd been working unseen)
