@@ -7,3 +7,9 @@
 # fuller config for local `supabase start`, run `supabase init --workdir backend` once to regenerate it
 # (that only adds local-dev sections; it doesn't change what `db push` does).
 project_id = "perch"
+
+# Edge Functions. The account-deletion function (GDPR erasure) verifies the caller's JWT at the gateway
+# (defence in depth) and again inside the function via auth.getUser(). See
+# docs/social-account-deletion-plan.md and backend/supabase/functions/delete-account/.
+[functions.delete-account]
+verify_jwt = true

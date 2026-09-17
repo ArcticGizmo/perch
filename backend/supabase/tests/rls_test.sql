@@ -8,7 +8,7 @@
 -- exactly how auth.uid() resolves a signed-in user in production.
 
 begin;
-select plan(15);
+select plan(23);
 
 -- ── fixtures (as the privileged migration role, before dropping to `authenticated`) ─────────────
 -- Three users: alice, bob (will befriend alice), carol (a stranger).
@@ -126,7 +126,7 @@ select throws_ok(
   $$insert into public.reactions (post_id, reactor, emoji)
       select id, '11111111-1111-1111-1111-111111111111', '👍'
       from public.posts where author = '22222222-2222-2222-2222-222222222222' limit 1$$,
-  '23505',   -- unique_violation (post_id, reactor)
+  '23505', NULL,   -- match on SQLSTATE (unique_violation on post_id,reactor), not the message text
   'reactions: one reaction per user per post is enforced');
 reset role;
 
@@ -141,7 +141,7 @@ insert into public.posts (author, body)
 select throws_ok(
   $$insert into public.posts (author, body)
       values ('33333333-3333-3333-3333-333333333333', 'one too many')$$,
-  '23514',   -- check_violation raised by enforce_post_rate_limit()
+  '23514', NULL,   -- check_violation raised by enforce_post_rate_limit(); match on SQLSTATE, not message
   'rate limit: the 11th post in a minute is rejected');
 
 -- ── M6: moderation kill-switch ───────────────────────────────────────────────────
@@ -166,9 +166,82 @@ select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
 select throws_ok(
   $$insert into public.friendships (requester, addressee, status)
       values ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', 'pending')$$,
-  '23505',   -- unique_violation on friendships_unordered
+  '23505', NULL,   -- unique_violation on friendships_unordered; match on SQLSTATE, not message
   'friendship: a reverse-direction duplicate is rejected by the unordered unique index');
 reset role;
+
+-- ── account deletion / GDPR erasure: the cascade ─────────────────────────────────
+-- The delete-account Edge Function removes a user with auth.admin.deleteUser(), i.e. it deletes the
+-- auth.users row. profiles.id references auth.users ON DELETE CASCADE, and every social table references
+-- profiles(id) ON DELETE CASCADE — except reports.reporter, which is ON DELETE SET NULL so a report the
+-- user FILED survives, anonymised. This proves that whole chain in one delete. See
+-- docs/social-account-deletion-plan.md §3 and PRIVACY.md §4. (Asserted as the owner — we want the ground
+-- truth of which rows physically remain, not an RLS-filtered view.)
+
+-- Extra fixtures so there is one of every dependent row to erase. alice and bob are accepted friends; alice
+-- reacted to bob's post (both from earlier). Add a game + move between them, and two reports.
+insert into public.games (id, player_red, player_yellow)
+  values ('aaaaaaaa-0000-0000-0000-000000000001',
+          '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222');
+insert into public.moves (game_id, mover, ply, col)
+  values ('aaaaaaaa-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 0, 3);
+
+-- A report alice FILED about carol (reporter = alice) — must be RETAINED with reporter nulled on erasure.
+insert into public.reports (id, reporter, reported, reason) values
+  ('bbbbbbbb-0000-0000-0000-000000000001',
+   '11111111-1111-1111-1111-111111111111', '33333333-3333-3333-3333-333333333333', 'filed by alice');
+-- A report carol filed ABOUT alice (reported = alice) — must CASCADE away when alice is erased.
+insert into public.reports (id, reporter, reported, reason) values
+  ('cccccccc-0000-0000-0000-000000000001',
+   '33333333-3333-3333-3333-333333333333', '11111111-1111-1111-1111-111111111111', 'about alice');
+
+-- Erase alice exactly as the function does: delete the auth.users row and let the cascade run.
+delete from auth.users where id = '11111111-1111-1111-1111-111111111111';
+
+-- 16) the profile row is gone (auth.users -> profiles cascade).
+select is(
+  (select count(*)::int from public.profiles where id = '11111111-1111-1111-1111-111111111111'),
+  0, 'erasure: profile row cascades from auth.users');
+
+-- 17) alice's posts are gone.
+select is(
+  (select count(*)::int from public.posts where author = '11111111-1111-1111-1111-111111111111'),
+  0, 'erasure: the user''s posts cascade');
+
+-- 18) alice's reactions are gone (her 🔥 on bob's post).
+select is(
+  (select count(*)::int from public.reactions where reactor = '11111111-1111-1111-1111-111111111111'),
+  0, 'erasure: the user''s reactions cascade');
+
+-- 19) friendship edges touching alice are gone.
+select is(
+  (select count(*)::int from public.friendships
+     where requester = '11111111-1111-1111-1111-111111111111'
+        or addressee = '11111111-1111-1111-1111-111111111111'),
+  0, 'erasure: friendship edges cascade');
+
+-- 20) games alice was in are gone.
+select is(
+  (select count(*)::int from public.games
+     where player_red = '11111111-1111-1111-1111-111111111111'
+        or player_yellow = '11111111-1111-1111-1111-111111111111'),
+  0, 'erasure: games cascade');
+
+-- 21) and their moves with them.
+select is(
+  (select count(*)::int from public.moves where game_id = 'aaaaaaaa-0000-0000-0000-000000000001'),
+  0, 'erasure: moves cascade with the game');
+
+-- 22) a report ABOUT alice cascades away (reported = alice).
+select is(
+  (select count(*)::int from public.reports where id = 'cccccccc-0000-0000-0000-000000000001'),
+  0, 'erasure: a report about the deleted user cascades away');
+
+-- 23) a report the deleted user FILED is retained, with reporter anonymised to null (ON DELETE SET NULL).
+select is(
+  (select count(*)::int from public.reports
+     where id = 'bbbbbbbb-0000-0000-0000-000000000001' and reporter is null),
+  1, 'erasure: a report the user filed is retained but reporter is nulled');
 
 select * from finish();
 rollback;

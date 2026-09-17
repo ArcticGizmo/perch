@@ -48,7 +48,7 @@ select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
 select throws_ok(
   $$insert into public.games (player_red, player_yellow)
       values ('33333333-3333-3333-3333-333333333333', '11111111-1111-1111-1111-111111111111')$$,
-  '42501', 'games_create: cannot start a game with a non-friend');
+  '42501', NULL, 'games_create: cannot start a game with a non-friend');
 reset role;
 
 -- 3) A third party cannot even see the game.
@@ -62,7 +62,7 @@ reset role;
 select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
 select throws_ok(
   $$select public.drop_disc('a0000000-0000-0000-0000-000000000001', 3)$$,
-  '23514', 'drop_disc: a move out of turn is rejected');
+  '23514', NULL, 'drop_disc: a move out of turn is rejected');
 reset role;
 
 -- 5,6) A legal move is recorded and passes the turn to the opponent.
@@ -97,7 +97,7 @@ select is(
 select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
 select throws_ok(
   $$select public.drop_disc('a0000000-0000-0000-0000-000000000001', 2)$$,
-  '23514', 'drop_disc: no moves after the game is over');
+  '23514', NULL, 'drop_disc: no moves after the game is over');
 reset role;
 
 -- 10) A third party cannot see the moves either.
@@ -132,7 +132,7 @@ insert into public.moves (game_id, mover, ply, col)
 select throws_ok(
   $$insert into public.moves (game_id, mover, ply, col)
       values ('a0000000-0000-0000-0000-000000000003', '33333333-3333-3333-3333-333333333333', 30, 3)$$,
-  '23514', 'moves rate limit: too many moves in a short window is rejected');
+  '23514', NULL, 'moves rate limit: too many moves in a short window is rejected');
 
 -- 13) A third party's delete removes nothing — RLS filters the rows out, so the game survives.
 select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
@@ -167,7 +167,7 @@ select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
 select throws_ok(
   $$insert into public.game_requests (requester, addressee)
       values ('33333333-3333-3333-3333-333333333333', '11111111-1111-1111-1111-111111111111')$$,
-  '42501', 'game invite: a stranger cannot invite');
+  '42501', NULL, 'game invite: a stranger cannot invite');
 
 -- 17) A third party cannot see the invite.
 select is(
@@ -179,7 +179,7 @@ reset role;
 select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
 select throws_ok(
   $$select public.accept_game_request('c0000000-0000-0000-0000-000000000001')$$,
-  '42501', 'accept: only the invitee can accept');
+  '42501', NULL, 'accept: only the invitee can accept');
 reset role;
 
 -- 19) The invitee accepts → a game is created and the request is gone.
@@ -195,14 +195,17 @@ select is(
           and status = 'in_progress') then 0 else 1 end),
   0, 'accept: the request is gone and an in-progress game now exists');
 
--- 20) The accepted game is seeded with the inviter's opening move (red, col 4) and it's the invitee's turn.
+-- The accept-created game is the alice(red)/bob(yellow) game that is NOT one of the two earlier fixtures
+-- (...0002 resigned, ...0003 the rate-limit game). We can't order by created_at to find "the newest" — every
+-- row in this single test transaction shares the same now(), so that tiebreak is undefined; exclude the known
+-- ids to pin the one accept_game_request() just made.
+-- 20) The accepted game is seeded with the inviter's opening move (red) and it's the invitee's turn.
 select is(
   (select move_count::int || ':' || turn::text
      from public.games
     where player_red = '11111111-1111-1111-1111-111111111111'
       and player_yellow = '22222222-2222-2222-2222-222222222222'
-      and status = 'in_progress'
-    order by created_at desc limit 1),
+      and id not in ('a0000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000003')),
   '1:yellow', 'accept: the invite''s opening move is seeded and it is the invitee''s turn');
 
 -- 21) That opening move is red's disc in column 4 at ply 0.
@@ -212,7 +215,7 @@ select is(
     where game_id = (select id from public.games
                        where player_red = '11111111-1111-1111-1111-111111111111'
                          and player_yellow = '22222222-2222-2222-2222-222222222222'
-                       order by created_at desc limit 1)
+                         and id not in ('a0000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000003'))
       and ply = 0),
   '11111111-1111-1111-1111-111111111111:4', 'accept: move 0 is the inviter''s disc in the chosen column');
 
