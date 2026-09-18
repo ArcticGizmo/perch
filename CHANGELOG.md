@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.19] - 2026-09-18
+
+- Runs Claude's "Do you trust the files in this folder?" check before starting a session (Perch's headless launch had been quietly skipping it)
+- Trust decisions are shared with Claude Code — accept once, either side honours it
+- Trusting a folder trusts its subfolders; your home folder never asks
+
+---
+
 ## [v0.4.18] - 2026-09-18
 
 - Choose which Claude account a new session runs under

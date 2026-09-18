@@ -1441,6 +1441,16 @@ internal sealed partial class SessionWindow : Window
             return;
         }
 
+        // Quick safety check ("Do you trust the files in this folder?"). Perch launches Claude headlessly
+        // (`-p`), where Claude Code skips its own trust dialog, so Perch enforces the same gate here before
+        // spawning. Cleared once granted for this folder (survives a failed persist); a different folder
+        // re-checks. Runs the store IO off the UI thread, hence the async detour.
+        if (!DirectoryTrust.SameDir(_trustGrantedCwd, _cwd))
+        {
+            _ = EnsureTrustedThenStartAsync(replace);
+            return;
+        }
+
         // Collision defences (docs/session-ui-plan.md §Phase 4 (a)): never drive an id that is already
         // running in a real terminal, or under another Perch instance.
         if (_resumeId is { } rid)
@@ -1472,6 +1482,43 @@ internal sealed partial class SessionWindow : Window
             return;
         }
         Attach(session);
+    }
+
+    // The folder the user has cleared the trust check for this window; null until granted. Compared
+    // tolerantly (see DirectoryTrust.SameDir) so it survives a folder re-typed with different casing/slashes.
+    private string? _trustGrantedCwd;
+
+    /// <summary>Runs the "do you trust this folder?" gate, then resumes <see cref="StartSession"/>. Reads the
+    /// (possibly large) trust store off the UI thread; only prompts when the folder isn't already trusted —
+    /// including via an ancestor, or by an earlier acceptance in Claude Code itself.</summary>
+    private async System.Threading.Tasks.Task EnsureTrustedThenStartAsync(bool replace)
+    {
+        var cwd = _cwd;
+        // Same config dir the spawn will pin (fresh sessions honour the account selector; a resume inherits
+        // Perch's environment), so trust is read/written in the file that launch will actually use.
+        var configDir = _resumeId is null ? EffectiveConfigDir(cwd) : null;
+
+        bool trusted;
+        try { trusted = await System.Threading.Tasks.Task.Run(() => DirectoryTrust.Evaluate(configDir, cwd)); }
+        catch { trusted = false; }
+
+        if (!trusted)
+        {
+            bool ok = await ConfirmDialog.ShowAsync(this,
+                "Do you trust the files in this folder?",
+                $"{cwd}\n\nQuick safety check: is this a project you created or one you trust — like your own " +
+                "code, a well-known open-source project, or work from your team? Claude Code will be able to " +
+                "read, edit, and execute files in this folder. If you're not sure, review what's in it first.",
+                "Yes, proceed", "No, cancel");
+            if (!ok) { LaunchFail("not started — folder not trusted"); return; }
+            // Persist so this folder (and its subfolders) won't ask again — the same store Claude Code reads.
+            _ = System.Threading.Tasks.Task.Run(() => DirectoryTrust.Grant(configDir, cwd));
+        }
+
+        // The window may have closed or attached a session while the dialog was up.
+        if (_closed || (_session is { IsRunning: true } && !replace)) return;
+        _trustGrantedCwd = cwd;
+        StartSession(replace);
     }
 
     private void OnSessionEnded(PerchSession session)
