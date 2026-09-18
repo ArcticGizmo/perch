@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.17] - 2026-09-18
+
+- Delete your Social account and all your data, for good (GDPR erasure, behind a type-your-handle prompt)
+- Export your Social data to a JSON file
+- Social keeps only your current status now — the post history it never showed you is gone
+- Added a privacy policy, a support email, and links to both from the About page
+- Moved Sign out up beside Post, Friends and Change handle
+
+---
+
 ## [v0.4.16] - 2026-09-17
 
 - Choose how long friends' statuses stay visible (the old 12 hours was stingy; now 2 days)

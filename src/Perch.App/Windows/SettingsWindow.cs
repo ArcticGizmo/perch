@@ -2255,6 +2255,13 @@ internal sealed class SettingsWindow : Window
 
         page.Children.Add(LinkRow("GitHub repository", AppInfo.RepoUrl));
         page.Children.Add(LinkRow("Report an issue on GitHub", AppInfo.IssuesUrl));
+        page.Children.Add(LinkRow($"Email {AppInfo.SupportEmail}", "mailto:" + AppInfo.SupportEmail));
+
+        var privacyRow = SettingsUi.ButtonRow();
+        var privacyBtn = SettingsUi.FlatButton("View privacy policy");
+        privacyBtn.Click += (_, _) => OpenUrl(AppInfo.PrivacyUrl);
+        privacyRow.Children.Add(privacyBtn);
+        page.Children.Add(privacyRow);
 
         page.Children.Add(SettingsUi.Separator());
 

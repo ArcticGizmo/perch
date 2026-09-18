@@ -11,6 +11,9 @@ internal static class AppInfo
     public const string RepoUrl   = "https://github.com/ArcticGizmo/perch";
     public const string IssuesUrl = RepoUrl + "/issues/new";
 
+    /// <summary>The privacy policy (PRIVACY.md), rendered on GitHub so it opens on any install.</summary>
+    public const string PrivacyUrl = RepoUrl + "/blob/main/PRIVACY.md";
+
     /// <summary>Support/privacy contact, shown in the account-deletion dialog and the privacy policy.</summary>
     public const string SupportEmail = "support@arcticgizmo.dev";
 
