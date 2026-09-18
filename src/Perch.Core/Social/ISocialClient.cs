@@ -37,6 +37,16 @@ public interface ISocialClient
     /// <summary>Clears the stored token and local session, returning to <see cref="AuthState.SignedOut"/>.</summary>
     Task SignOutAsync(CancellationToken ct = default);
 
+    /// <summary>
+    /// Permanently deletes the signed-in user's account and <em>all</em> their social data — the GDPR
+    /// right-to-erasure path. The actual erasure is server-side (a privileged delete of the auth user, whose
+    /// <c>ON DELETE CASCADE</c> removes every social row; reports the user filed survive anonymised). On
+    /// success the local session is cleared and the client ends up <see cref="AuthState.SignedOut"/>. This is
+    /// irreversible. Throws <see cref="SocialException"/> if the caller isn't signed in or the server rejects
+    /// the request — in which case the session is left intact so the user can retry.
+    /// </summary>
+    Task DeleteAccountAsync(CancellationToken ct = default);
+
     /// <summary>The signed-in user's own profile, or null if signed out / no handle claimed.</summary>
     Task<Profile?> GetMeAsync(CancellationToken ct = default);
 

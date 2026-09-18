@@ -234,6 +234,38 @@ public sealed class SupabaseSocialClientTests
         Assert.Contains(friends, f => f.Profile.Handle == "linus" && f.State == FriendshipState.Accepted);
     }
 
+    [Fact]
+    public async Task DeleteAccount_calls_the_function_then_signs_out_and_forgets_the_token()
+    {
+        var hit = false;
+        var (client, secrets) = await SignedInClient(req =>
+        {
+            if (req.RequestUri!.AbsolutePath == "/functions/v1/delete-account" && req.Method == HttpMethod.Post)
+            { hit = true; return (HttpStatusCode.OK, """{"ok":true}"""); }
+            return null;
+        });
+        Assert.True(client.Current.SignedIn);
+
+        await client.DeleteAccountAsync();
+
+        Assert.True(hit);                                             // the Edge Function was invoked
+        Assert.False(client.Current.SignedIn);                       // local session cleared
+        Assert.Null(secrets.Get("supabase.refresh_token"));          // stored token forgotten
+    }
+
+    [Fact]
+    public async Task DeleteAccount_failure_throws_and_leaves_the_session_intact()
+    {
+        var (client, secrets) = await SignedInClient(req =>
+            req.RequestUri!.AbsolutePath == "/functions/v1/delete-account"
+                ? (HttpStatusCode.InternalServerError, """{"error":"delete_failed"}""")
+                : null);
+
+        await Assert.ThrowsAsync<SocialException>(() => client.DeleteAccountAsync());
+        Assert.True(client.Current.SignedIn);                        // still signed in — nothing cleared
+        Assert.Equal("rt2", secrets.Get("supabase.refresh_token"));  // token retained for a retry
+    }
+
     // Builds a client already signed in via a restore, layering the caller's route overrides on top of the
     // default token + profile responses.
     private static async Task<(SupabaseSocialClient client, InMemorySecretStore secrets)> SignedInClient(

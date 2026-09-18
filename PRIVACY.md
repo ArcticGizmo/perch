@@ -117,7 +117,7 @@ Deleting your Perch account removes the email the sign-in system stored, but it 
 from your GitHub account's list of authorized apps — that's controlled by GitHub, not us. To remove it,
 revoke Perch here:
 
-**https://github.com/settings/connections/applications/[PERCH_GITHUB_CLIENT_ID]**
+**https://github.com/settings/connections/applications/Ov23lipDKYVRDzCU5K9W**
 
 (or GitHub → Settings → Applications → Authorized OAuth Apps → Perch → Revoke access).
 
@@ -157,5 +157,5 @@ revision. Material changes to the Social feature will be noted in the changelog.
 
 ## 10. Contact
 
-Questions or requests about your data: **[contact email / method]**, or open an issue at
+Questions or requests about your data: **support@arcticgizmo.dev**, or open an issue at
 https://github.com/ArcticGizmo/perch/issues.

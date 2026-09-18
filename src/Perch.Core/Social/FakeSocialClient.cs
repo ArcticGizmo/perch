@@ -45,6 +45,30 @@ public sealed partial class FakeSocialClient : ISocialClient
         return Task.CompletedTask;
     }
 
+    public Task DeleteAccountAsync(CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            if (!_signedIn) throw new SocialException("You're not signed in.");
+            // Mirror the backend erasure: everything tied to the user is gone. In the fake, that's the whole
+            // in-memory world from this signed-in user's point of view — so reads come back empty afterwards.
+            _profiles.Clear();
+            _edges.Clear();
+            _posts.Clear();
+            _reactions.Clear();
+            _blocked.Clear();
+            _blockedByOthers.Clear();
+            _subscribers.Clear();
+            _games.Clear();
+            _gameSubs.Clear();
+            _gameRequests.Clear();
+            _me = null;
+            _signedIn = false;
+        }
+        AuthChanged?.Invoke(AuthState.SignedOut);
+        return Task.CompletedTask;
+    }
+
     public Task<Profile?> GetMeAsync(CancellationToken ct = default)
     {
         lock (_gate) return Task.FromResult(_me);

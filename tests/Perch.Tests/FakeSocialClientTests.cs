@@ -393,4 +393,34 @@ public sealed class FakeSocialClientTests
         await c.SignInAsync();                 // signed in, but no handle yet
         await Assert.ThrowsAsync<SocialException>(() => c.PostAsync("hi"));
     }
+
+    [Fact]
+    public async Task Deleting_your_account_wipes_your_data_and_signs_you_out()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        c.SimulatePost(ada.Id, "friend post");
+        await c.PostAsync("my post");
+        Assert.NotEmpty(await c.GetFeedAsync());           // there is data to erase
+
+        AuthState? raised = null;
+        c.AuthChanged += s => raised = s;
+
+        await c.DeleteAccountAsync();
+
+        Assert.False(c.Current.SignedIn);                  // signed out
+        Assert.Null(c.Current.Me);
+        Assert.False(raised!.SignedIn);                    // AuthChanged fired the signed-out state
+        Assert.Empty(await c.GetFeedAsync());              // no data leaks back
+        Assert.Empty(await c.GetFriendsAsync());
+        await Assert.ThrowsAsync<SocialException>(() => c.PostAsync("can't"));   // needs a handle again
+    }
+
+    [Fact]
+    public async Task Deleting_when_signed_out_throws()
+    {
+        var c = new FakeSocialClient();
+        await Assert.ThrowsAsync<SocialException>(() => c.DeleteAccountAsync());
+    }
 }
