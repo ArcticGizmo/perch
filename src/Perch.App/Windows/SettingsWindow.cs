@@ -948,8 +948,19 @@ internal sealed class SettingsWindow : Window
         actions.Children.Add(post);
         actions.Children.Add(friends);
         actions.Children.Add(changeHandle);
+        actions.Children.Add(MakeSignOut());
         _socialBody.Children.Add(actions);
         _socialBody.Children.Add(handleEditor);
+
+        // Your data (GDPR portability): download everything we store for you as JSON.
+        _socialBody.Children.Add(SettingsUi.Separator());
+        _socialBody.Children.Add(SettingsUi.FieldCaption("Your data"));
+        _socialBody.Children.Add(SettingsUi.BodyText(
+            "Download everything Perch Social stores for you — your profile, posts, reactions, friends, and "
+            + "blocks — as a JSON file."));
+        var export = SettingsUi.FlatButton("Download my data (JSON)…");
+        export.Click += async (_, _) => await RunSocial(export, ExportMyDataToFileAsync);
+        _socialBody.Children.Add(Left(export));
 
         // Developer testing tool — only when the debug flag is set (env or .env.local PERCH_SOCIAL_DEBUG).
         // Drives a second "puppet" account so the whole loop can be tested from one machine.
@@ -962,14 +973,66 @@ internal sealed class SettingsWindow : Window
             _socialBody.Children.Add(Left(debug));
         }
 
-        AddSignOut();
+        // Sign out now sits up in the actions row; only the danger zone hangs off the bottom here.
+        AddDeleteAccount();
     }
 
-    private void AddSignOut()
+    private Button MakeSignOut()
     {
         var signOut = SettingsUi.FlatButton("Sign out");
         signOut.Click += async (_, _) => await RunSocial(signOut, () => _social!.SignOutAsync(default));
-        _socialBody!.Children.Add(Left(signOut));
+        return signOut;
+    }
+
+    // The signed-in-without-handle branch has no actions row, so it gets a standalone sign-out + danger zone.
+    private void AddSignOut()
+    {
+        _socialBody!.Children.Add(Left(MakeSignOut()));
+        AddDeleteAccount();
+    }
+
+    // GDPR erasure: a destructive "delete account and data" behind a type-to-confirm modal (DeleteAccountDialog).
+    // Shown wherever we're signed in — with or without a claimed handle.
+    private void AddDeleteAccount()
+    {
+        _socialBody!.Children.Add(SettingsUi.Separator());
+        _socialBody.Children.Add(SettingsUi.FieldCaption("Danger zone"));
+        _socialBody.Children.Add(SettingsUi.BodyText(
+            "Permanently delete your Social account and all your data. This can't be undone."));
+
+        var del = SettingsUi.FlatButton("Delete account and data…");
+        del.Foreground = new SolidColorBrush(Palette.Danger);
+        del.Click += async (_, _) =>
+        {
+            var confirmed = await DeleteAccountDialog.ShowAsync(this, _social!.Current.Me?.Handle);
+            if (!confirmed) return;
+            // Success raises AuthChanged → RefreshSocialPage rebuilds the body to the signed-out view.
+            await RunSocial(del, () => _social.DeleteAccountAsync(default));
+        };
+        _socialBody.Children.Add(Left(del));
+    }
+
+    // Gathers the user's Social data and writes it to a JSON file they pick (GDPR portability). Cancelling
+    // the save picker is a no-op. Runs through RunSocial, so a failure surfaces on the status line.
+    private async Task ExportMyDataToFileAsync()
+    {
+        var data = await _social!.ExportMyDataAsync(default);
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            data, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+        var handle = _social.Current.Me?.Handle ?? "perch";
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Save your Perch data",
+            SuggestedFileName = $"perch-{handle}-data.json",
+            DefaultExtension = "json",
+            FileTypeChoices = new[] { new FilePickerFileType("JSON") { Patterns = new[] { "*.json" } } },
+        });
+        if (file is null) return;   // cancelled
+
+        await using var stream = await file.OpenWriteAsync();
+        await using var writer = new System.IO.StreamWriter(stream);
+        await writer.WriteAsync(json);
     }
 
     // Runs a Social action with a busy state + inline error surfacing. A successful action raises AuthChanged,
@@ -2192,6 +2255,13 @@ internal sealed class SettingsWindow : Window
 
         page.Children.Add(LinkRow("GitHub repository", AppInfo.RepoUrl));
         page.Children.Add(LinkRow("Report an issue on GitHub", AppInfo.IssuesUrl));
+        page.Children.Add(LinkRow($"Email {AppInfo.SupportEmail}", "mailto:" + AppInfo.SupportEmail));
+
+        var privacyRow = SettingsUi.ButtonRow();
+        var privacyBtn = SettingsUi.FlatButton("View privacy policy");
+        privacyBtn.Click += (_, _) => OpenUrl(AppInfo.PrivacyUrl);
+        privacyRow.Children.Add(privacyBtn);
+        page.Children.Add(privacyRow);
 
         page.Children.Add(SettingsUi.Separator());
 

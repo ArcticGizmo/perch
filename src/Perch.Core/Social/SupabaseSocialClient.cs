@@ -208,6 +208,15 @@ public sealed partial class SupabaseSocialClient : ISocialClient
 
     public Task SignOutAsync(CancellationToken ct = default)
     {
+        ClearSession();
+        return Task.CompletedTask;
+    }
+
+    // Drops the local session to signed-out: clears the in-memory tokens/identity and forgets the stored
+    // refresh token, then raises AuthChanged. Shared by SignOutAsync and DeleteAccountAsync (after the
+    // server-side erasure) so both land in exactly the same clean state.
+    private void ClearSession()
+    {
         lock (_gate)
         {
             _accessToken = null;
@@ -219,7 +228,57 @@ public sealed partial class SupabaseSocialClient : ISocialClient
         }
         _secrets.Delete(RefreshTokenKey);
         AuthChanged?.Invoke(AuthState.SignedOut);
-        return Task.CompletedTask;
+    }
+
+    public async Task DeleteAccountAsync(CancellationToken ct = default)
+    {
+        // Erasure is the server's job: the delete-account Edge Function verifies the caller from this token
+        // and deletes the auth user, whose ON DELETE CASCADE tears down every social row (reports the user
+        // filed are kept anonymised). We only need a valid access token to authenticate the call.
+        var token = await ValidAccessTokenAsync(ct);
+        using var req = Rest(HttpMethod.Post, "/functions/v1/delete-account", token);
+        using var resp = await _http.SendAsync(req, ct);
+        // On a non-2xx this throws and we leave the session intact, so the user can retry; nothing was
+        // half-done server-side (it's a single cascading delete). Only on success do we forget the (now
+        // dead) token and drop to signed-out.
+        await EnsureOkAsync(resp, "delete your account", ct);
+        ClearSession();
+    }
+
+    public async Task<AccountExport> ExportMyDataAsync(CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        var me = await GetMeAsync(ct);
+
+        // Your own posts and your own reactions — scoped to you server-side by the eq filters (and RLS).
+        var posts = await GetRowsAsync<PostRow>(
+            $"/rest/v1/posts?author=eq.{uid}&select=id,author,body,mood_emoji,created_at&order=created_at.desc",
+            "export your posts", token, ct);
+        var reactions = await GetRowsAsync<ReactionRow>(
+            $"/rest/v1/reactions?reactor=eq.{uid}&select=post_id,reactor,emoji",
+            "export your reactions", token, ct);
+
+        var friends = await GetFriendsAsync(ct);
+        var blocked = await GetBlockedAsync(ct);
+
+        return new AccountExport(
+            DateTimeOffset.UtcNow,
+            me,
+            posts.Select(p => new ExportedPost(p.Id, p.Body, p.MoodEmoji, p.CreatedAt)).ToList(),
+            reactions.Select(r => new ExportedReaction(r.PostId, r.Emoji)).ToList(),
+            friends.Select(f => new ExportedFriend(f.Profile.Handle, f.State)).ToList(),
+            blocked.Select(b => b.Handle).ToList());
+    }
+
+    // A GET that deserialises a JSON array, with the shared ok/error handling. Returns an empty array on a
+    // null/empty body.
+    private async Task<T[]> GetRowsAsync<T>(string path, string what, string token, CancellationToken ct)
+    {
+        using var req = Rest(HttpMethod.Get, path, token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, what, ct);
+        return await resp.Content.ReadFromJsonAsync<T[]>(Json, ct) ?? [];
     }
 
     // ── profile ────────────────────────────────────────────────────────────────────────────────────

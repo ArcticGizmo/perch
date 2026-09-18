@@ -50,12 +50,24 @@ public sealed class FakeSocialClientTests
 
         c.SimulatePost(ada.Id, "first");
         await c.PostAsync("mine");
-        c.SimulatePost(ada.Id, "latest");
+        c.SimulatePost(ada.Id, "latest");           // replaces ada's "first" — one current status per user
 
         var feed = await c.GetFeedAsync();
-        Assert.Equal(3, feed.Count);
-        Assert.Equal("latest", feed[0].Body);      // newest first
+        Assert.Equal(2, feed.Count);                // ada's current status + mine; "first" is gone
+        Assert.Equal("latest", feed[0].Body);       // newest first
         Assert.Contains(feed, f => f.Author.Handle == "myself" && f.Body == "mine");
+        Assert.DoesNotContain(feed, f => f.Body == "first");   // superseded status not retained
+    }
+
+    [Fact]
+    public async Task Posting_again_replaces_your_previous_status()
+    {
+        var c = SignedIn();
+        await c.PostAsync("old status");
+        await c.PostAsync("new status");            // one current status per user — replaces "old status"
+
+        var mine = Assert.Single(await c.GetFeedAsync());
+        Assert.Equal("new status", mine.Body);
     }
 
     [Fact]
@@ -392,5 +404,63 @@ public sealed class FakeSocialClientTests
         var c = new FakeSocialClient();
         await c.SignInAsync();                 // signed in, but no handle yet
         await Assert.ThrowsAsync<SocialException>(() => c.PostAsync("hi"));
+    }
+
+    [Fact]
+    public async Task Deleting_your_account_wipes_your_data_and_signs_you_out()
+    {
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        c.SimulatePost(ada.Id, "friend post");
+        await c.PostAsync("my post");
+        Assert.NotEmpty(await c.GetFeedAsync());           // there is data to erase
+
+        AuthState? raised = null;
+        c.AuthChanged += s => raised = s;
+
+        await c.DeleteAccountAsync();
+
+        Assert.False(c.Current.SignedIn);                  // signed out
+        Assert.Null(c.Current.Me);
+        Assert.False(raised!.SignedIn);                    // AuthChanged fired the signed-out state
+        Assert.Empty(await c.GetFeedAsync());              // no data leaks back
+        Assert.Empty(await c.GetFriendsAsync());
+        await Assert.ThrowsAsync<SocialException>(() => c.PostAsync("can't"));   // needs a handle again
+    }
+
+    [Fact]
+    public async Task Deleting_when_signed_out_throws()
+    {
+        var c = new FakeSocialClient();
+        await Assert.ThrowsAsync<SocialException>(() => c.DeleteAccountAsync());
+    }
+
+    [Fact]
+    public async Task Export_returns_only_your_own_data()
+    {
+        var c = SignedIn("myself");
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        await c.PostAsync("hello world");                       // my post
+        var adaPost = c.SimulatePost(ada.Id, "ada's post");     // a friend's post — must NOT be in my export
+        await c.ReactAsync(adaPost.Value, "🔥", on: true);       // my reaction on their post — IS my data
+        var spammer = c.SeedUser("spammer");
+        await c.BlockAsync(spammer.Id);
+
+        var export = await c.ExportMyDataAsync();
+
+        Assert.Equal("myself", export.Profile!.Handle);
+        Assert.Equal("hello world", Assert.Single(export.Posts).Body);   // only my post, not ada's
+        Assert.Equal("🔥", Assert.Single(export.Reactions).Emoji);        // my reaction
+        Assert.Contains(export.Friends, f => f.Handle == "ada" && f.State == FriendshipState.Accepted);
+        Assert.Contains("spammer", export.Blocked);
+    }
+
+    [Fact]
+    public async Task Export_when_signed_out_throws()
+    {
+        var c = new FakeSocialClient();
+        await Assert.ThrowsAsync<SocialException>(() => c.ExportMyDataAsync());
     }
 }

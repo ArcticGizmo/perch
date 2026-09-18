@@ -45,6 +45,53 @@ public sealed partial class FakeSocialClient : ISocialClient
         return Task.CompletedTask;
     }
 
+    public Task DeleteAccountAsync(CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            if (!_signedIn) throw new SocialException("You're not signed in.");
+            // Mirror the backend erasure: everything tied to the user is gone. In the fake, that's the whole
+            // in-memory world from this signed-in user's point of view — so reads come back empty afterwards.
+            _profiles.Clear();
+            _edges.Clear();
+            _posts.Clear();
+            _reactions.Clear();
+            _blocked.Clear();
+            _blockedByOthers.Clear();
+            _subscribers.Clear();
+            _games.Clear();
+            _gameSubs.Clear();
+            _gameRequests.Clear();
+            _me = null;
+            _signedIn = false;
+        }
+        AuthChanged?.Invoke(AuthState.SignedOut);
+        return Task.CompletedTask;
+    }
+
+    public Task<AccountExport> ExportMyDataAsync(CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            RequireMe();
+            var posts = _posts.Where(p => p.Author.Id == _me!.Id)
+                .OrderByDescending(p => p.CreatedAt)
+                .Select(p => new ExportedPost(p.Id, p.Body, p.MoodEmoji, p.CreatedAt))
+                .ToList();
+            var reactions = _reactions
+                .SelectMany(post => post.Value.SelectMany(byEmoji => byEmoji.Value
+                    .Where(reactor => reactor == _me!.Id)
+                    .Select(_ => new ExportedReaction(post.Key, byEmoji.Key))))
+                .ToList();
+            var friends = _edges
+                .Where(e => e.Value != FriendshipState.Blocked && _profiles.ContainsKey(e.Key))
+                .Select(e => new ExportedFriend(_profiles[e.Key].Handle, e.Value))
+                .ToList();
+            var blocked = _blocked.Where(_profiles.ContainsKey).Select(id => _profiles[id].Handle).ToList();
+            return Task.FromResult(new AccountExport(DateTimeOffset.UtcNow, _me, posts, reactions, friends, blocked));
+        }
+    }
+
     public Task<Profile?> GetMeAsync(CancellationToken ct = default)
     {
         lock (_gate) return Task.FromResult(_me);
@@ -135,6 +182,7 @@ public sealed partial class FakeSocialClient : ISocialClient
             body = body?.Trim() ?? "";
             if (body.Length == 0) throw new SocialException("A status can't be empty.");
             if (body.Length > 280) throw new SocialException("A status can't be longer than 280 characters.");
+            RemoveAuthorPostsLocked(_me!.Id);   // one current status per user (mirrors the backend keep-latest)
             item = new FeedItem(Guid.NewGuid(), _me!, body, moodEmoji, DateTimeOffset.UtcNow);
             _posts.Add(item);
         }
@@ -298,6 +346,7 @@ public sealed partial class FakeSocialClient : ISocialClient
         {
             if (!_profiles.TryGetValue(authorId, out var author))
                 throw new SocialException("Unknown seed author.");
+            RemoveAuthorPostsLocked(authorId);   // one current status per user (mirrors the backend keep-latest)
             item = new FeedItem(Guid.NewGuid(), author, body, moodEmoji, DateTimeOffset.UtcNow);
             _posts.Add(item);
             visible = CanSeeLocked(authorId);
@@ -310,6 +359,15 @@ public sealed partial class FakeSocialClient : ISocialClient
 
     private Profile? FindByHandleLocked(string handle) =>
         _profiles.Values.FirstOrDefault(p => string.Equals(p.Handle, handle, StringComparison.OrdinalIgnoreCase));
+
+    // Keep only the author's latest status (mirrors the backend keep-latest trigger): drop their older posts
+    // and any reactions on those posts (reactions cascade with the post server-side).
+    private void RemoveAuthorPostsLocked(Guid authorId)
+    {
+        var removedIds = _posts.Where(p => p.Author.Id == authorId).Select(p => p.Id).ToList();
+        _posts.RemoveAll(p => p.Author.Id == authorId);
+        foreach (var id in removedIds) _reactions.Remove(id);
+    }
 
     // Mirrors the backend rule after M6: your own post is always visible; a friend's post is visible only while
     // the edge is accepted AND neither of you has blocked the other. A block kills visibility both directions.
