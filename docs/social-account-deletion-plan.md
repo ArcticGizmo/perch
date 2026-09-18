@@ -277,16 +277,16 @@ to Delete when we do it.
 
 ## 13. Milestones
 
-- [ ] **D0** — `functions/delete-account/index.ts` + `config.toml` entry; deploy manually; smoke-test with a
-  puppet account (create, then delete, confirm rows gone in the dashboard).
-- [ ] **D1** — pgTAP cascade test in `rls_test.sql`.
-- [ ] **D2** — `ISocialClient.DeleteAccountAsync` + `SupabaseSocialClient` (+ `ClearSession` refactor) +
-  `FakeSocialClient`; unit tests.
-- [ ] **D3** — Settings → Social button + confirm dialog + toast + AuthChanged wiring; the exact
-  `github.com/settings/connections/applications/<CLIENT_ID>` deep-link (needs the OAuth `client_id` in
-  config, §12).
-- [ ] **D4** — `functions-deploy.yml` CI; fold a short "Account deletion" section into
-  `backend/supabase/README.md` and `social-feed-implementation.md §7`.
-- [ ] **D4a** — **`PRIVACY.md`** (§9): what we store, what deletion removes, and the exact retained
-  anonymised-report shape; link it from the README and Settings → Social.
+- [x] **D0 (code)** — `functions/delete-account/index.ts` + `config.toml` entry. **Still owed (manual):**
+  deploy to the live project and smoke-test with a puppet account (create, delete, confirm rows gone).
+- [x] **D1** — pgTAP cascade test in `rls_test.sql` (tests 16–23); deletes `auth.users` to exercise the full
+  chain. Whole suite runs 44/44 green (fixed pre-existing `throws_ok`/`now()` test bugs along the way).
+- [x] **D2** — `ISocialClient.DeleteAccountAsync` + `SupabaseSocialClient` (POST + `ClearSession` refactor) +
+  `FakeSocialClient`; unit tests. Full .NET suite 1173 green.
+- [x] **D3** — Settings → Social "Danger zone" button + `DeleteAccountDialog` type-to-confirm + GitHub revoke
+  deep-link (`AppInfo.SocialGitHubClientId`) + `AuthChanged` rebuild.
+- [x] **D4** — `functions-deploy.yml` CI; "Account deletion" section in `backend/supabase/README.md` and a
+  §7 checklist item in `social-feed-implementation.md`.
+- [x] **D4a** — **`PRIVACY.md`** (§9): what we store, what deletion removes, and the exact retained
+  anonymised-report shape; all placeholders filled.
 - [ ] **D5** (optional) — data export companion (§10).

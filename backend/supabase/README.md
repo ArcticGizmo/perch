@@ -103,6 +103,35 @@ supabase db reset --workdir backend    # applies everything in migrations/ in or
 supabase test db --workdir backend     # runs tests/ (pgTAP)
 ```
 
+## Account deletion (Edge Function)
+
+Self-service GDPR erasure lives in a Supabase **Edge Function**, `functions/delete-account/`. It verifies
+the caller from their own access token (`auth.getUser()` - no forgeable id) and calls
+`auth.admin.deleteUser()` with the `service_role` key injected into the function runtime. Deleting the
+`auth.users` row cascades through every social table (`profiles` -> friendships/posts/reactions/blocks/
+games/moves/moderation); `reports.reporter` is `ON DELETE SET NULL`, so reports the user filed are retained
+anonymised. See `docs/social-account-deletion-plan.md` and the repo-root `PRIVACY.md`.
+
+Deploy it (no DB password needed - it targets the project by ref):
+
+```bash
+supabase functions deploy delete-account --project-ref ecrehwttqpgdpzroazwp --workdir backend
+```
+
+`SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` are injected automatically - nothing to
+set. CI redeploys on any change under `functions/` via `.github/workflows/functions-deploy.yml` (it reuses
+the `SUPABASE_ACCESS_TOKEN` + `SUPABASE_PROJECT_REF` secrets already added for migrations).
+
+Smoke test with a puppet account (see below): create it, mint its access token, then
+
+```bash
+curl -X POST "https://ecrehwttqpgdpzroazwp.supabase.co/functions/v1/delete-account" \
+  -H "apikey: <publishable-key>" -H "Authorization: Bearer <puppet-access-token>"
+```
+
+expect `{"ok":true}`, then confirm the user is gone from **Authentication -> Users** and its rows have
+vanished (`select * from profiles where id = '<uid>'`).
+
 ## Testing from one machine (puppet account)
 
 GitHub sign-in gives you one identity, so the friends/posts/reactions loop is impossible to exercise

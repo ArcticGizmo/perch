@@ -199,3 +199,7 @@ step stays behind `ISocialClient`, so a macOS head implements the same contract.
 - [ ] Per-user post rate limit; block + server-side delete available.
 - [ ] Nothing from `~/.claude` is ever auto-posted; compose is manual and explicit.
 - [ ] TLS/HTTPS only; transport degrades WS → SSE → long-poll for firewalled users.
+- [ ] Self-service account deletion (GDPR erasure): the `delete-account` Edge Function verifies the caller
+  from their own token and `deleteUser`s them; the FK cascade wipes every social row, and reports the user
+  filed are anonymised (`reports.reporter` is `ON DELETE SET NULL`). See `docs/social-account-deletion-plan.md`
+  and `PRIVACY.md §4`.
