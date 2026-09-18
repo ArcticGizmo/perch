@@ -53,8 +53,8 @@ friends. It requires you to **sign in with GitHub**, and it stores data on a hos
 | **Handle** (unique) | `profiles` | How friends find and recognise you. |
 | **Display name** (optional) | `profiles` | Free text you choose, ≤40 chars. |
 | **Mood emoji** (optional) | `profiles` | A status glyph. |
-| **Status posts** | `posts` | The text you post, ≤280 chars, plus timestamp. |
-| **Reactions** | `reactions` | Emoji you add to posts you can see. |
+| **Your current status** | `posts` | Your latest status text (≤280 chars) + timestamp. Only the current one is kept — posting a new status replaces the previous, we don't keep a history. |
+| **Reactions** | `reactions` | Emoji you add to a status you can see; they clear when the status they were on is replaced. |
 | **Friend connections** | `friendships` | Who you've added / who's added you. |
 | **Blocks** | `blocks` | People you've blocked (private to you). |
 | **Connect 4 games** | `games`, `moves` | Games you play with friends. |

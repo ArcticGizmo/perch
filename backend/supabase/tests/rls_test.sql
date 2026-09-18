@@ -8,7 +8,7 @@
 -- exactly how auth.uid() resolves a signed-in user in production.
 
 begin;
-select plan(23);
+select plan(25);
 
 -- ── fixtures (as the privileged migration role, before dropping to `authenticated`) ─────────────
 -- Three users: alice, bob (will befriend alice), carol (a stranger).
@@ -130,19 +130,31 @@ select throws_ok(
   'reactions: one reaction per user per post is enforced');
 reset role;
 
--- ── M6: per-user post rate limit ─────────────────────────────────────────────────
--- carol has 1 post; add 9 more (total 10, all under the ceiling), then the 11th must be rejected.
--- Inserted as the owner (RLS bypassed) but the BEFORE INSERT trigger still fires for every row.
-insert into public.posts (author, body)
-  select '33333333-3333-3333-3333-333333333333', 'flood ' || g
-  from generate_series(1, 9) g;
-
--- 11) the 11th post within the minute is rejected by the rate-limit trigger.
+-- ── post model: min-interval flood guard + one current status per author ──────────
+-- carol posted 'carol here' in the fixtures, so the keep-latest trigger stamped her last_posted_at = now().
+-- now() is frozen for this transaction, so a second post lands 0s later — inside the 5s interval.
+-- 11) a post within the interval of the author's previous one is rejected by the flood guard.
 select throws_ok(
   $$insert into public.posts (author, body)
-      values ('33333333-3333-3333-3333-333333333333', 'one too many')$$,
+      values ('33333333-3333-3333-3333-333333333333', 'too soon')$$,
   '23514', NULL,   -- check_violation raised by enforce_post_rate_limit(); match on SQLSTATE, not message
-  'rate limit: the 11th post in a minute is rejected');
+  'flood guard: a second post within the interval is rejected');
+
+-- Push carol's last_posted_at into the past so a fresh post is allowed, then post again. The AFTER INSERT
+-- keep-latest trigger must drop her previous status, leaving exactly one row — her newest.
+update public.profiles set last_posted_at = now() - interval '1 minute'
+  where id = '33333333-3333-3333-3333-333333333333';
+insert into public.posts (author, body)
+  values ('33333333-3333-3333-3333-333333333333', 'carol newest');
+
+-- 12) exactly one post remains for the author (the superseded one was pruned)…
+select is(
+  (select count(*)::int from public.posts where author = '33333333-3333-3333-3333-333333333333'),
+  1, 'keep-latest: only the current status is retained per author');
+-- 13) …and it is the newest.
+select is(
+  (select body from public.posts where author = '33333333-3333-3333-3333-333333333333'),
+  'carol newest', 'keep-latest: the retained post is the newest');
 
 -- ── M6: moderation kill-switch ───────────────────────────────────────────────────
 -- Suspend bob (as the owner — the moderation table has no policies, so only service_role touches it).

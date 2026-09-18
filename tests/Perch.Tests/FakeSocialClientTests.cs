@@ -50,12 +50,24 @@ public sealed class FakeSocialClientTests
 
         c.SimulatePost(ada.Id, "first");
         await c.PostAsync("mine");
-        c.SimulatePost(ada.Id, "latest");
+        c.SimulatePost(ada.Id, "latest");           // replaces ada's "first" — one current status per user
 
         var feed = await c.GetFeedAsync();
-        Assert.Equal(3, feed.Count);
-        Assert.Equal("latest", feed[0].Body);      // newest first
+        Assert.Equal(2, feed.Count);                // ada's current status + mine; "first" is gone
+        Assert.Equal("latest", feed[0].Body);       // newest first
         Assert.Contains(feed, f => f.Author.Handle == "myself" && f.Body == "mine");
+        Assert.DoesNotContain(feed, f => f.Body == "first");   // superseded status not retained
+    }
+
+    [Fact]
+    public async Task Posting_again_replaces_your_previous_status()
+    {
+        var c = SignedIn();
+        await c.PostAsync("old status");
+        await c.PostAsync("new status");            // one current status per user — replaces "old status"
+
+        var mine = Assert.Single(await c.GetFeedAsync());
+        Assert.Equal("new status", mine.Body);
     }
 
     [Fact]

@@ -292,3 +292,22 @@ to Delete when we do it.
 - [x] **D5** — data export companion (§10): `ISocialClient.ExportMyDataAsync` (profile + own posts + own
   reactions + friend handles + blocked handles) in both clients, and a Settings → Social "Your data →
   Download my data (JSON)…" save-to-file. Tests added; full .NET suite 1176 green.
+
+## 14. Follow-up: one current status per user (data minimisation)
+
+Reviewing the export surfaced that we retained **all** past posts and reactions, though the product only
+ever shows a user's **latest** status (the overlay roster; there is no history/feed view — `GetFeedAsync`
+is internal to the roster computation and the debug tool only). Keeping the rest is data we use nowhere, so
+a "status" is now a single current row per author.
+
+- **Migration** `20260918120000_posts_current_only.sql`: an `AFTER INSERT` trigger (`posts_keep_latest`)
+  deletes the author's other posts on each new one (reactions on the superseded status cascade away); a
+  one-off backfill collapses existing history. Reactions on a replaced status disappearing is *correct* for
+  a current-status model.
+- **Flood guard** moves off the old rolling-minute row count (which relied on the history we removed) to a
+  **minimum interval** (5s) between posts, tracked by a new **server-managed** `profiles.last_posted_at`
+  (the authenticated UPDATE grant is narrowed to handle/display_name/mood so a client can't reset its own
+  guard). `now()` is the transaction time, so real posts (one per transaction) space out by wall-seconds.
+- **Fake** mirrors keep-latest (posting replaces the author's prior status); it does **not** simulate the
+  interval (rate limiting was always server-only). **pgTAP** exercises both the interval reject and the
+  keep-latest prune (46/46). **PRIVACY.md** §3.1 updated to say only the current status is kept.
