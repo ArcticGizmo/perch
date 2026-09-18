@@ -948,6 +948,7 @@ internal sealed class SettingsWindow : Window
         actions.Children.Add(post);
         actions.Children.Add(friends);
         actions.Children.Add(changeHandle);
+        actions.Children.Add(MakeSignOut());
         _socialBody.Children.Add(actions);
         _socialBody.Children.Add(handleEditor);
 
@@ -972,14 +973,21 @@ internal sealed class SettingsWindow : Window
             _socialBody.Children.Add(Left(debug));
         }
 
-        AddSignOut();
+        // Sign out now sits up in the actions row; only the danger zone hangs off the bottom here.
+        AddDeleteAccount();
     }
 
-    private void AddSignOut()
+    private Button MakeSignOut()
     {
         var signOut = SettingsUi.FlatButton("Sign out");
         signOut.Click += async (_, _) => await RunSocial(signOut, () => _social!.SignOutAsync(default));
-        _socialBody!.Children.Add(Left(signOut));
+        return signOut;
+    }
+
+    // The signed-in-without-handle branch has no actions row, so it gets a standalone sign-out + danger zone.
+    private void AddSignOut()
+    {
+        _socialBody!.Children.Add(Left(MakeSignOut()));
         AddDeleteAccount();
     }
 
