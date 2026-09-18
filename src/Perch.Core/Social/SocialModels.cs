@@ -151,3 +151,25 @@ public sealed record AuthState(bool SignedIn, Profile? Me, SocialFault Fault = S
 
 /// <summary>A newly created post's id, returned from <see cref="ISocialClient.PostAsync"/>.</summary>
 public readonly record struct PostId(Guid Value);
+
+/// <summary>
+/// A downloadable snapshot of the signed-in user's own Social data — the GDPR data-portability (Art. 20)
+/// companion to deletion. Every field is the caller's own, read under their normal permissions; nothing
+/// about other people is included beyond the friend/blocked handles the user themselves hold.
+/// </summary>
+public sealed record AccountExport(
+    DateTimeOffset ExportedAt,
+    Profile? Profile,
+    IReadOnlyList<ExportedPost> Posts,
+    IReadOnlyList<ExportedReaction> Reactions,
+    IReadOnlyList<ExportedFriend> Friends,
+    IReadOnlyList<string> Blocked);
+
+/// <summary>One of the user's own status posts, in an export.</summary>
+public sealed record ExportedPost(Guid Id, string Body, string? MoodEmoji, DateTimeOffset CreatedAt);
+
+/// <summary>One reaction the user made — which post, and the emoji.</summary>
+public sealed record ExportedReaction(Guid PostId, string Emoji);
+
+/// <summary>A friend edge the user holds — the other person's handle and the edge state.</summary>
+public sealed record ExportedFriend(string Handle, FriendshipState State);

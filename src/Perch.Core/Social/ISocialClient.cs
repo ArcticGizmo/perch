@@ -47,6 +47,14 @@ public interface ISocialClient
     /// </summary>
     Task DeleteAccountAsync(CancellationToken ct = default);
 
+    /// <summary>
+    /// Gathers the signed-in user's own Social data — their profile, their posts and reactions, their friend
+    /// handles, and who they've blocked — into a snapshot the UI can save as JSON (GDPR data portability,
+    /// Art. 20). Read-only; every read is under the caller's normal permissions. Throws
+    /// <see cref="SocialException"/> if not signed in.
+    /// </summary>
+    Task<AccountExport> ExportMyDataAsync(CancellationToken ct = default);
+
     /// <summary>The signed-in user's own profile, or null if signed out / no handle claimed.</summary>
     Task<Profile?> GetMeAsync(CancellationToken ct = default);
 

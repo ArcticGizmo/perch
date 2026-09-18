@@ -266,6 +266,43 @@ public sealed class SupabaseSocialClientTests
         Assert.Equal("rt2", secrets.Get("supabase.refresh_token"));  // token retained for a retry
     }
 
+    [Fact]
+    public async Task Export_gathers_profile_posts_reactions_friends_and_blocks()
+    {
+        var (client, _) = await SignedInClient(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            var q = req.RequestUri!.Query;
+            if (path == "/rest/v1/posts" && req.Method == HttpMethod.Get && q.Contains("author=eq."))
+                return (HttpStatusCode.OK, PostsJson("my status"));
+            if (path == "/rest/v1/reactions" && q.Contains("reactor=eq."))
+                return (HttpStatusCode.OK,
+                    ("""[{"post_id":"aaaaaaaa-0000-4000-8000-000000000009","reactor":"UID","emoji":"🔥"}]""")
+                        .Replace("UID", Uid));
+            if (path == "/rest/v1/friendships")
+                return (HttpStatusCode.OK,
+                    ("""[{"requester":"UID","addressee":"OTHER","status":"accepted"}]""")
+                        .Replace("UID", Uid).Replace("OTHER", Other));
+            if (path == "/rest/v1/profiles" && q.Contains("in."))
+                return (HttpStatusCode.OK,
+                    ("""[{"id":"OTHER","handle":"grace","display_name":null,"mood_emoji":null}]""")
+                        .Replace("OTHER", Other));
+            if (path == "/rest/v1/rpc/list_blocked")
+                return (HttpStatusCode.OK,
+                    ("""[{"id":"OTHER2","handle":"spammer","display_name":null,"mood_emoji":null}]""")
+                        .Replace("OTHER2", Other2));
+            return null;
+        });
+
+        var export = await client.ExportMyDataAsync();
+
+        Assert.Equal("ada", export.Profile!.Handle);                       // from the signed-in profile
+        Assert.Equal("my status", Assert.Single(export.Posts).Body);       // only my own posts (author=eq)
+        Assert.Equal("🔥", Assert.Single(export.Reactions).Emoji);          // only my reactions (reactor=eq)
+        Assert.Contains(export.Friends, f => f.Handle == "grace" && f.State == FriendshipState.Accepted);
+        Assert.Contains("spammer", export.Blocked);
+    }
+
     // Builds a client already signed in via a restore, layering the caller's route overrides on top of the
     // default token + profile responses.
     private static async Task<(SupabaseSocialClient client, InMemorySecretStore secrets)> SignedInClient(

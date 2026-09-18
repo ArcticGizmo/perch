@@ -245,6 +245,42 @@ public sealed partial class SupabaseSocialClient : ISocialClient
         ClearSession();
     }
 
+    public async Task<AccountExport> ExportMyDataAsync(CancellationToken ct = default)
+    {
+        var uid = RequireUser();
+        var token = await ValidAccessTokenAsync(ct);
+        var me = await GetMeAsync(ct);
+
+        // Your own posts and your own reactions — scoped to you server-side by the eq filters (and RLS).
+        var posts = await GetRowsAsync<PostRow>(
+            $"/rest/v1/posts?author=eq.{uid}&select=id,author,body,mood_emoji,created_at&order=created_at.desc",
+            "export your posts", token, ct);
+        var reactions = await GetRowsAsync<ReactionRow>(
+            $"/rest/v1/reactions?reactor=eq.{uid}&select=post_id,reactor,emoji",
+            "export your reactions", token, ct);
+
+        var friends = await GetFriendsAsync(ct);
+        var blocked = await GetBlockedAsync(ct);
+
+        return new AccountExport(
+            DateTimeOffset.UtcNow,
+            me,
+            posts.Select(p => new ExportedPost(p.Id, p.Body, p.MoodEmoji, p.CreatedAt)).ToList(),
+            reactions.Select(r => new ExportedReaction(r.PostId, r.Emoji)).ToList(),
+            friends.Select(f => new ExportedFriend(f.Profile.Handle, f.State)).ToList(),
+            blocked.Select(b => b.Handle).ToList());
+    }
+
+    // A GET that deserialises a JSON array, with the shared ok/error handling. Returns an empty array on a
+    // null/empty body.
+    private async Task<T[]> GetRowsAsync<T>(string path, string what, string token, CancellationToken ct)
+    {
+        using var req = Rest(HttpMethod.Get, path, token);
+        using var resp = await _http.SendAsync(req, ct);
+        await EnsureOkAsync(resp, what, ct);
+        return await resp.Content.ReadFromJsonAsync<T[]>(Json, ct) ?? [];
+    }
+
     // ── profile ────────────────────────────────────────────────────────────────────────────────────
 
     public async Task<Profile?> GetMeAsync(CancellationToken ct = default)

@@ -289,4 +289,6 @@ to Delete when we do it.
   §7 checklist item in `social-feed-implementation.md`.
 - [x] **D4a** — **`PRIVACY.md`** (§9): what we store, what deletion removes, and the exact retained
   anonymised-report shape; all placeholders filled.
-- [ ] **D5** (optional) — data export companion (§10).
+- [x] **D5** — data export companion (§10): `ISocialClient.ExportMyDataAsync` (profile + own posts + own
+  reactions + friend handles + blocked handles) in both clients, and a Settings → Social "Your data →
+  Download my data (JSON)…" save-to-file. Tests added; full .NET suite 1176 green.

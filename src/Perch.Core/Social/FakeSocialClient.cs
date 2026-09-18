@@ -69,6 +69,29 @@ public sealed partial class FakeSocialClient : ISocialClient
         return Task.CompletedTask;
     }
 
+    public Task<AccountExport> ExportMyDataAsync(CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            RequireMe();
+            var posts = _posts.Where(p => p.Author.Id == _me!.Id)
+                .OrderByDescending(p => p.CreatedAt)
+                .Select(p => new ExportedPost(p.Id, p.Body, p.MoodEmoji, p.CreatedAt))
+                .ToList();
+            var reactions = _reactions
+                .SelectMany(post => post.Value.SelectMany(byEmoji => byEmoji.Value
+                    .Where(reactor => reactor == _me!.Id)
+                    .Select(_ => new ExportedReaction(post.Key, byEmoji.Key))))
+                .ToList();
+            var friends = _edges
+                .Where(e => e.Value != FriendshipState.Blocked && _profiles.ContainsKey(e.Key))
+                .Select(e => new ExportedFriend(_profiles[e.Key].Handle, e.Value))
+                .ToList();
+            var blocked = _blocked.Where(_profiles.ContainsKey).Select(id => _profiles[id].Handle).ToList();
+            return Task.FromResult(new AccountExport(DateTimeOffset.UtcNow, _me, posts, reactions, friends, blocked));
+        }
+    }
+
     public Task<Profile?> GetMeAsync(CancellationToken ct = default)
     {
         lock (_gate) return Task.FromResult(_me);

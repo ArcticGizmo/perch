@@ -423,4 +423,32 @@ public sealed class FakeSocialClientTests
         var c = new FakeSocialClient();
         await Assert.ThrowsAsync<SocialException>(() => c.DeleteAccountAsync());
     }
+
+    [Fact]
+    public async Task Export_returns_only_your_own_data()
+    {
+        var c = SignedIn("myself");
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+        await c.PostAsync("hello world");                       // my post
+        var adaPost = c.SimulatePost(ada.Id, "ada's post");     // a friend's post — must NOT be in my export
+        await c.ReactAsync(adaPost.Value, "🔥", on: true);       // my reaction on their post — IS my data
+        var spammer = c.SeedUser("spammer");
+        await c.BlockAsync(spammer.Id);
+
+        var export = await c.ExportMyDataAsync();
+
+        Assert.Equal("myself", export.Profile!.Handle);
+        Assert.Equal("hello world", Assert.Single(export.Posts).Body);   // only my post, not ada's
+        Assert.Equal("🔥", Assert.Single(export.Reactions).Emoji);        // my reaction
+        Assert.Contains(export.Friends, f => f.Handle == "ada" && f.State == FriendshipState.Accepted);
+        Assert.Contains("spammer", export.Blocked);
+    }
+
+    [Fact]
+    public async Task Export_when_signed_out_throws()
+    {
+        var c = new FakeSocialClient();
+        await Assert.ThrowsAsync<SocialException>(() => c.ExportMyDataAsync());
+    }
 }
