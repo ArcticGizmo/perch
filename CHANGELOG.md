@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.18] - 2026-09-18
+
+- Choose which Claude account a new session runs under
+- The account picker honours guardrails, offering only a folder's allowed accounts
+- A single allowed account locks the picker with a padlock (nothing left to pick)
+- Session footer shows which account you're actually on
+- Composer chips wrap to a second line instead of quietly running off the edge
+
+---
+
 ## [v0.4.17] - 2026-09-18
 
 - Delete your Social account and all your data, for good (GDPR erasure, behind a type-your-handle prompt)

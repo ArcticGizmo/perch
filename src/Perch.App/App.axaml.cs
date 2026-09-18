@@ -1721,6 +1721,8 @@ public partial class App : Application
             // Refuse-if-live oracle: the monitor's latest roster (terminal-hosted sessions with a live PID).
             LiveLookup = id => _lastSessions.FirstOrDefault(s => s.SessionId == id),
             StartRequested = StartPerchSession,
+            // Live account guardrails so the launcher's account selector reflects the current rules.
+            AccountRulesProvider = () => _appSettings?.AccountRules,
         };
         // The context pill's thermometer mirrors the floating overlay's context-pressure settings so the two
         // read alike (same glyph, variants and thresholds).

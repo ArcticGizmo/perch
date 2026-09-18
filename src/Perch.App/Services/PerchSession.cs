@@ -25,6 +25,9 @@ internal sealed class PerchSession : IDisposable
     public string? PermissionMode { get; private set; }
     /// <summary>The effort level as launched or last set; null = the CLI's default ("auto").</summary>
     public string? Effort { get; private set; }
+    /// <summary>The config dir this session was launched under (injected as <c>CLAUDE_CONFIG_DIR</c>), or null
+    /// when it inherited Perch's environment (→ the primary account). Drives the footer's account chip.</summary>
+    public string? ConfigDir { get; }
 
     /// <summary>Known from launch (pinned or resumed id).</summary>
     public string? SessionId => _controller?.SessionId ?? Conversation.SessionId;
@@ -73,6 +76,7 @@ internal sealed class PerchSession : IDisposable
         Model = o.Model;
         PermissionMode = o.PermissionMode;
         Effort = o.Effort;
+        ConfigDir = o.ConfigDir;
     }
 
     /// <summary>Launches a session (fresh in the folder, or resuming <see cref="SessionLaunchOptions.ResumeId"/>).
@@ -91,7 +95,7 @@ internal sealed class PerchSession : IDisposable
         controller.Exited += (code, err) => Dispatcher.UIThread.Post(() => session.OnExited(code, err));
         try
         {
-            controller.Start(o.Cwd, o.Model, o.PermissionMode, o.ResumeId, effort: o.Effort);
+            controller.Start(o.Cwd, o.Model, o.PermissionMode, o.ResumeId, effort: o.Effort, configDir: o.ConfigDir);
         }
         catch
         {
@@ -347,4 +351,5 @@ internal sealed record SessionLaunchOptions(
     string? Model = null,
     string? PermissionMode = null,
     string? Effort = null,
-    string? ResumeId = null);
+    string? ResumeId = null,
+    string? ConfigDir = null);

@@ -80,6 +80,16 @@ internal sealed partial class SessionWindow : Window
     private string? _model;
     private string? _mode;
     private string? _effort;
+    // Account selection (config dir → CLAUDE_CONFIG_DIR). Null everywhere = inherit Perch's own environment (the
+    // historical behaviour). The launcher shows a selector only when there's a choice to make (>1 signed-in
+    // account, or a guardrail governs the folder); the set is resolved from the config dirs' live sign-ins +
+    // AccountRules against _cwd, so it re-resolves whenever the folder changes.
+    private IReadOnlyList<AccountChoice> _signIns = System.Array.Empty<AccountChoice>();
+    private AccountChoiceSet? _accountChoices;
+    private bool _accountPicked;        // did the user explicitly choose from the menu (vs. the resolved default)?
+    private string? _accountPickKey;    // that pick's account Key (dedup identity); valid when _accountPicked
+    private int _accountGen;            // generation guard for the off-thread sign-in read
+    private int _accountChipGen;        // generation guard for the footer account chip's off-thread org read
 
     // Session bar
     private readonly TextBlock _projectText, _pathText, _idText, _statusText;
@@ -91,6 +101,10 @@ internal sealed partial class SessionWindow : Window
     private readonly TextBlock _branchText;
     private readonly Border _branchPill;
     private int _branchGen;
+    // Account chip beside the branch chip: which Claude account the running session is under. Shown only when the
+    // machine has more than one account (otherwise it's redundant). Painted by RefreshAccountChipAsync.
+    private readonly TextBlock _accountChipText;
+    private readonly Border _accountChip;
     private DispatcherTimer? _branchRefreshTimer;
     // Composer settings pills: one joined "model │ effort" pill (the two are related — effort is per model) and
     // the permission-mode pill.
@@ -142,6 +156,15 @@ internal sealed partial class SessionWindow : Window
     private readonly AutoCompleteBox _folderBox;   // free-text project folder, searchable over past projects
     private IReadOnlyList<string> _folderSuggestions = [];  // recency-ordered projects, for Tab-completion
     private readonly SessionButton _newButton;
+    // Optional account (config-dir) selector: a clickable pill + a warning line, shown between the folder box and
+    // the New button only when there's a choice to make. Built in BuildLauncher; populated by RefreshAccounts.
+    private Border _accountRow = null!;
+    private Border _accountPill = null!;
+    private TextBlock _accountPillText = null!;
+    private TextBlock _accountWarning = null!;
+    private Control _accountChevron = null!;   // shown when the selector is changeable
+    private Control _accountLock = null!;       // shown instead when a guardrail leaves exactly one option
+    private bool _accountLocked;                // guardrail forces a single account → read-only, no menu
     private readonly StackPanel _recentsList;
     private readonly TextBox _recentsSearch;
     private readonly Border _recentsSearchFrame;
@@ -256,6 +279,11 @@ internal sealed partial class SessionWindow : Window
     /// <summary>Starts a session on the app's behalf (so the app owns it): (cwd, model, mode, resumeId) → the
     /// live session. Throws when the process can't start.</summary>
     public Func<SessionLaunchOptions, PerchSession>? StartRequested { get; set; }
+
+    /// <summary>The account guardrails (<see cref="AppSettings.AccountRules"/>) that govern which account a
+    /// folder may run under. Read live from the app (which owns <c>AppSettings</c>) so the account selector
+    /// reflects the current rules. Null/absent = no guardrails.</summary>
+    public Func<IReadOnlyList<AccountRule>?>? AccountRulesProvider { get; set; }
 
     /// <summary>The user wants a launcher for another session (the app opens a fresh window).</summary>
     public event Action? NewSessionRequested;
@@ -402,6 +430,16 @@ internal sealed partial class SessionWindow : Window
         }, _p.Raised2, _p.BorderSoft);
         _branchPill.IsVisible = false;
 
+        // Account chip: which Claude account this session runs under, beside the branch chip. Hidden until
+        // RefreshAccountChipAsync resolves it (and only on multi-account machines).
+        _accountChipText = new TextBlock { FontSize = 12.5, FontWeight = FontWeight.SemiBold, Foreground = _p.Muted, FontFamily = _p.Body, VerticalAlignment = VerticalAlignment.Center };
+        _accountChip = Pill(new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
+            Children = { AccountIcon(13, _p.Muted), _accountChipText },
+        }, _p.Raised2, _p.BorderSoft);
+        _accountChip.IsVisible = false;
+
         // Informational (not clickable): tokens in/out this session, and how full the context window is. Both
         // hidden until a turn lands, so the launcher and a just-opened session stay uncluttered.
         _tokensPillText = new TextBlock { FontSize = 12, FontFamily = _p.Mono, Foreground = _p.Muted, VerticalAlignment = VerticalAlignment.Center };
@@ -495,15 +533,20 @@ internal sealed partial class SessionWindow : Window
         };
         _sendButton = new SessionButton(_p, "→", SessionButtonKind.Primary, compact: true)
         {
-            Width = 36, Height = 36, HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(0),
+            Width = 36, Height = 36, HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top, Padding = new Thickness(0),
             [ToolTip.TipProperty] = "Send  ↵   ·   new line  ⇧↵   ·   interrupt  esc",
         };
         _sendButton.Click += SendPrompt;
-        var chips = new StackPanel
+        // A WrapPanel (not a horizontal StackPanel) so a crowded footer flows onto a second line instead of
+        // clipping. WrapPanel has no Spacing, so each chip carries its own right/bottom gap; the panel's negative
+        // bottom margin absorbs the trailing row's gap so a single row keeps its original height.
+        var chips = new WrapPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 0, -6) };
+        foreach (var chip in new Control[] { _modelEffortPill, _modePill, _branchPill, _accountChip, _tokensPill, _contextPill })
         {
-            Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
-            Children = { _modelEffortPill, _modePill, _branchPill, _tokensPill, _contextPill },
-        };
+            chip.Margin = new Thickness(0, 0, 8, 6);
+            chips.Children.Add(chip);
+        }
         var cbar = new DockPanel { Margin = new Thickness(0, 10, 0, 0), Children = { _sendButton, chips } };
         _sendButton[DockPanel.DockProperty] = Dock.Right;
         // The quick-action toolbar (enabled overlay glyphs, filled by SetComposerActions) and the staged
@@ -643,7 +686,13 @@ internal sealed partial class SessionWindow : Window
         _folderBox.GotFocus += (_, _) => Dispatcher.UIThread.Post(OpenFolderDropdownIfEmpty, DispatcherPriority.Input);
         // Tab completes to the most recent match (CLI-style, without launching); Enter launches.
         _folderBox.AddHandler(KeyDownEvent, OnFolderKeyDown, RoutingStrategies.Tunnel);
-        _folderBox.TextChanged += (_, _) => UpdateNewEnabled();
+        _folderBox.TextChanged += (_, _) =>
+        {
+            UpdateNewEnabled();
+            // The account guardrails are folder-dependent, so re-resolve the selector when the folder changes
+            // (launcher mode only; a window driving a session ignores it).
+            if (_session is null) RefreshAccounts();
+        };
         _newButton = new SessionButton(_p, "New session", SessionButtonKind.Primary) { Enabled = false };
         _newButton.Click += StartFromFolderBox;
         _recentsList = new StackPanel { Spacing = 2 };
@@ -880,6 +929,60 @@ internal sealed partial class SessionWindow : Window
             Children = { _newButton },
         };
 
+        // Optional account selector: pick which Claude account (config dir) the session runs under. Hidden until
+        // RefreshAccounts decides there's a choice to make (>1 signed-in account, or a guardrail governs the
+        // folder). See docs/session-account-selector-plan.md.
+        _accountPillText = new TextBlock
+        {
+            FontSize = 12.5, FontWeight = FontWeight.SemiBold, Foreground = _p.Title, FontFamily = _p.Body,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var accountCaption = new TextBlock
+        {
+            Text = "Account", FontSize = 12.5, Foreground = _p.Muted, FontFamily = _p.Body,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _accountChevron = new TextBlock
+        {
+            Text = "▾", FontSize = 11, Foreground = _p.Muted, FontFamily = _p.Body,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0),
+        };
+        // The lock (shown instead of the chevron when a guardrail leaves one option) carries the "why" tooltip.
+        _accountLock = new Border
+        {
+            Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, IsVisible = false,
+            Child = LockIcon(12, _p.Muted), [ToolTip.TipProperty] = "restricted by account guardrails",
+        };
+        _accountPill = new Border
+        {
+            Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+            CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(12, 5), Cursor = new Cursor(StandardCursorType.Hand),
+            [ToolTip.TipProperty] = "Which Claude account this session runs under — click to change",
+            Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { _accountPillText, _accountChevron, _accountLock } },
+        };
+        _accountPill.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowAccountMenu(); };
+        _accountWarning = new TextBlock
+        {
+            FontSize = 12, Foreground = _p.Await, FontFamily = _p.Body, TextWrapping = TextWrapping.Wrap,
+            TextAlignment = TextAlignment.Center, Margin = new Thickness(0, 6, 0, 0), IsVisible = false,
+        };
+        _accountRow = new Border
+        {
+            IsVisible = false, Margin = new Thickness(0, 10, 0, 0),
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Center,
+                        Children = { accountCaption, _accountPill },
+                    },
+                    _accountWarning,
+                },
+            },
+        };
+
         _recentsSection = new Border
         {
             BorderBrush = _p.Separator, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(0, 14, 0, 0),
@@ -920,6 +1023,7 @@ internal sealed partial class SessionWindow : Window
                     TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 18),
                 },
                 folderFrame,
+                _accountRow,
                 new Border { Height = 10 },
                 row2,
             },
@@ -1357,7 +1461,10 @@ internal sealed partial class SessionWindow : Window
         PerchSession session;
         try
         {
-            session = start(new SessionLaunchOptions(_cwd, _model, StartingMode, _effort, _resumeId));
+            // Account selection applies to fresh sessions only; a resume must run under the dir that owns the
+            // transcript, so it keeps inheriting Perch's environment (docs/session-account-selector-plan.md).
+            var configDir = _resumeId is null ? EffectiveConfigDir(_cwd) : null;
+            session = start(new SessionLaunchOptions(_cwd, _model, StartingMode, _effort, _resumeId, configDir));
         }
         catch (Exception ex)
         {
@@ -2673,6 +2780,7 @@ internal sealed partial class SessionWindow : Window
         _composerDock.IsVisible = true;
         _changesToggle.IsVisible = true;   // the changed-files toggle rides with the thread, not the launcher
         RefreshBranchAsync();              // surface the repo's current branch in the bar
+        RefreshAccountChipAsync();         // …and which account the session runs under
         UpdateJumpButtons();
     }
 
@@ -2976,6 +3084,198 @@ internal sealed partial class SessionWindow : Window
         flyout.ShowAt(_effortHalf);
     }
 
+    // ── Account selector ───────────────────────────────────────────────────────────
+
+    /// <summary>Reads every discovered config dir's live sign-in off the UI thread, then resolves the account
+    /// choices for the current folder + guardrails and updates the selector. A generation guard drops stale
+    /// results (the folder changed again before this read landed).</summary>
+    private void RefreshAccounts()
+    {
+        var cwd = _folderBox.Text?.Trim() ?? "";
+        var rules = AccountRulesProvider?.Invoke();
+        int gen = ++_accountGen;
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var signIns = ReadSignIns();
+            var set = SessionAccountChoice.Resolve(cwd, signIns, rules);
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (gen != _accountGen || _session is not null) return;   // superseded, or a session attached
+                _signIns = signIns;
+                _accountChoices = set;
+                _accountPicked = false;   // folder/guardrail may have changed the valid set — re-apply the default
+                _accountPickKey = null;
+                // A guardrail that leaves exactly one option locks the selector: nothing to change, so it reads
+                // read-only with a lock rather than a clickable chevron.
+                _accountLocked = set.Restricted && !set.GuardrailUnsatisfiable && set.Options.Count == 1;
+                _accountRow.IsVisible = set.ShowSelector;
+                _accountWarning.IsVisible = set.GuardrailUnsatisfiable;
+                _accountWarning.Text = set.GuardrailUnsatisfiable
+                    ? "No signed-in account matches this folder's guardrail — it'll run under your current login."
+                    : "";
+                _accountChevron.IsVisible = !_accountLocked;
+                _accountLock.IsVisible = _accountLocked;
+                _accountPill.Cursor = new Cursor(_accountLocked ? StandardCursorType.Arrow : StandardCursorType.Hand);
+                _accountPill[ToolTip.TipProperty] = _accountLocked
+                    ? "Account is restricted by account guardrails"
+                    : "Which Claude account this session runs under — click to change";
+                UpdateAccountPill();
+            });
+        });
+    }
+
+    /// <summary>Every discovered config dir paired with the account it is currently signed into (org + email).
+    /// Pure IO — reads each dir's <c>.claude.json</c>; called on a background thread by
+    /// <see cref="RefreshAccounts"/> and once synchronously by <see cref="EffectiveConfigDir"/> so a
+    /// single-allowed guardrail is honoured even on the quick CLI path where the selector was never shown. The
+    /// resolver de-duplicates, so two dirs signed into the same account collapse to one choice.</summary>
+    private static IReadOnlyList<AccountChoice> ReadSignIns()
+    {
+        var list = new List<AccountChoice>();
+        foreach (var dir in ClaudeConfigSet.Instance.All)
+        {
+            var signIn = ClaudeJsonReader.ReadSignIn(dir);
+            list.Add(new AccountChoice(dir, signIn.Org, signIn.Email));
+        }
+        return list;
+    }
+
+    private void ShowAccountMenu()
+    {
+        if (_accountLocked || _accountChoices is not { } set) return;   // locked → nothing to change
+        var flyout = new MenuFlyout { Placement = PlacementMode.TopEdgeAlignedLeft };
+        // Fall back to the default (the inherit/primary account) when the guardrail left nothing to list, so the
+        // menu still names the account the session will run under.
+        var items = set.Options.Count > 0 ? set.Options
+                  : set.Default is { } d ? new[] { d } : System.Array.Empty<AccountChoice>();
+        foreach (var choice in items)
+        {
+            // "(default)" marks the account tied to the primary config dir — the real default — never a
+            // guardrail-forced pick.
+            bool isDefault = set.Primary is { } prim && prim.Key == choice.Key;
+            var email = choice.Org?.AccountEmail ?? choice.Email;
+            var name = choice.Label + (isDefault ? "  (default)" : "");
+            var header = string.IsNullOrWhiteSpace(email) || string.Equals(email, choice.Label, StringComparison.OrdinalIgnoreCase)
+                ? name : $"{name}  ·  {email}";
+            var item = new MenuItem { Header = header };
+            var picked = choice;
+            item.Click += (_, _) => PickAccount(picked);
+            flyout.Items.Add(item);
+        }
+        if (flyout.Items.Count > 0) flyout.ShowAt(_accountPill);
+    }
+
+    private void PickAccount(AccountChoice choice)
+    {
+        _accountPicked = true;
+        _accountPickKey = choice.Key;
+        UpdateAccountPill();
+    }
+
+    /// <summary>The account currently selected: the user's explicit pick when it's still valid under this
+    /// folder's guardrail, else the resolver's default.</summary>
+    private static AccountChoice? SelectedChoice(AccountChoiceSet set, bool picked, string? pickKey)
+    {
+        if (picked && pickKey is not null)
+        {
+            var match = set.Options.FirstOrDefault(o => o.Key == pickKey);
+            if (match is not null) return match;   // pick no longer valid → fall through to the default
+        }
+        return set.Default;
+    }
+
+    private void UpdateAccountPill()
+    {
+        if (_accountChoices is not { } set) return;
+        var choice = SelectedChoice(set, _accountPicked, _accountPickKey);
+        if (choice is null) { _accountPillText.Text = ""; return; }
+        // "(default)" marks only the primary config dir's account, and never in the locked (guardrail-forced)
+        // state where the lock already explains the choice.
+        bool isDefault = !_accountLocked && set.Primary is { } d && d.Key == choice.Key;
+        _accountPillText.Text = isDefault ? $"{choice.Label} (default)" : choice.Label;
+    }
+
+    /// <summary>The config dir to launch under (injected as <c>CLAUDE_CONFIG_DIR</c>), or <c>null</c> to inherit
+    /// Perch's own environment. Resolves synchronously from <paramref name="cwd"/> so a single-allowed guardrail
+    /// is enforced as the default on every path, including the launcher-less CLI open; a user's explicit menu
+    /// pick (tracked by account identity) wins when still valid.</summary>
+    private string? EffectiveConfigDir(string cwd)
+    {
+        var set = SessionAccountChoice.Resolve(cwd, ReadSignIns(), AccountRulesProvider?.Invoke());
+        return set.InjectRootFor(SelectedChoice(set, _accountPicked, _accountPickKey));
+    }
+
+    // Reads the running session's account off the UI thread and paints the footer chip. Only shown on
+    // multi-account machines (otherwise it's redundant); a generation guard drops a stale load.
+    private void RefreshAccountChipAsync()
+    {
+        int gen = ++_accountChipGen;
+        if (!ClaudeConfigSet.Instance.IsMulti) { _accountChip.IsVisible = false; return; }
+        var root = _session?.ConfigDir;   // null = inherited → primary account
+        Task.Run(() =>
+        {
+            var dir = (root is { Length: > 0 } r ? ClaudeConfigSet.Instance.ForRoot(r) : null)
+                      ?? ClaudeConfigSet.Instance.Primary;
+            var signIn = ClaudeJsonReader.ReadSignIn(dir);
+            return new AccountChoice(dir, signIn.Org, signIn.Email);
+        }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        {
+            if (_closed || gen != _accountChipGen) return;
+            if (!t.IsCompletedSuccessfully) { _accountChip.IsVisible = false; return; }
+            var choice = t.Result;
+            _accountChipText.Text = choice.Label;
+            var email = choice.Org?.AccountEmail ?? choice.Email;
+            _accountChip[ToolTip.TipProperty] = string.IsNullOrWhiteSpace(email)
+                ? $"Running under account: {choice.Label}"
+                : $"Running under account: {choice.Label} · {email}";
+            _accountChip.IsVisible = true;
+        }));
+    }
+
+    // A small owner-drawn account glyph (head + shoulders) so the account chip doesn't lean on a font emoji.
+    // Coordinates in a 16×16 space, scaled by the Viewbox.
+    private static Control AccountIcon(double size, IBrush color)
+    {
+        var canvas = new Canvas
+        {
+            Width = 16, Height = 16,
+            Children =
+            {
+                new Ellipse { Width = 6, Height = 6, Fill = color, [Canvas.LeftProperty] = 5.0, [Canvas.TopProperty] = 2.0 },   // head
+                new global::Avalonia.Controls.Shapes.Path
+                {
+                    Fill = color,
+                    Data = Geometry.Parse("M2.5,14 C2.5,10.8 5,9.5 8,9.5 C11,9.5 13.5,10.8 13.5,14 Z"),   // shoulders
+                },
+            },
+        };
+        return new Viewbox { Width = size, Height = size, Child = canvas, VerticalAlignment = VerticalAlignment.Center };
+    }
+
+    // A small owner-drawn padlock (closed shackle + body) for the guardrail-locked account selector.
+    // Coordinates in a 16×16 space, scaled by the Viewbox.
+    private static Control LockIcon(double size, IBrush color)
+    {
+        var canvas = new Canvas
+        {
+            Width = 16, Height = 16,
+            Children =
+            {
+                new global::Avalonia.Controls.Shapes.Path   // shackle (open-bottomed arch)
+                {
+                    Stroke = color, StrokeThickness = 1.6, StrokeLineCap = PenLineCap.Round,
+                    Data = Geometry.Parse("M5,7.5 L5,5.5 A3,3 0 0 1 11,5.5 L11,7.5"),
+                },
+                new Rectangle   // body
+                {
+                    Width = 9, Height = 7, RadiusX = 1.5, RadiusY = 1.5, Fill = color,
+                    [Canvas.LeftProperty] = 3.5, [Canvas.TopProperty] = 7.5,
+                },
+            },
+        };
+        return new Viewbox { Width = size, Height = size, Child = canvas, VerticalAlignment = VerticalAlignment.Center };
+    }
+
     private async System.Threading.Tasks.Task CopySessionIdAsync()
     {
         if (SessionId is not { } id || Clipboard is not { } clip) return;
@@ -3269,6 +3569,12 @@ internal sealed partial class SessionWindow : Window
         // is dropped rather than hiding the chip back.
         _branchGen++;
         ApplyBranch(new GitRepoStatus("inc-exploration", "origin/inc-exploration", 2, 0, []));
+        // The render config set is pinned (single account), so the live account read would hide the chip — seed a
+        // sample so the footer's account chip (and its wrapping alongside the other chips) is captured.
+        _accountChipGen++;
+        _accountChipText.Text = "Redux InControl";
+        _accountChip[ToolTip.TipProperty] = "Running under account: Redux InControl";
+        _accountChip.IsVisible = true;
         RefreshBar();
     }
 

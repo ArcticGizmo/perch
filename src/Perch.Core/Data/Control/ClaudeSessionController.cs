@@ -42,9 +42,12 @@ internal sealed class ClaudeSessionController : IDisposable
     /// terminal session into Perch" (session-control M4). Otherwise a fresh GUID is pinned via
     /// <c>--session-id</c> (or <paramref name="newSessionId"/> when the caller chose one), so the id — and
     /// with it the <see cref="ControlledSessions"/> registration and the <see cref="SessionLock"/> sidecar —
-    /// exist <em>before</em> the CLI's <c>init</c>, closing the pre-init window of the collision defences.</summary>
+    /// exist <em>before</em> the CLI's <c>init</c>, closing the pre-init window of the collision defences.
+    /// <paramref name="configDir"/> pins the account: when set it is injected as <c>CLAUDE_CONFIG_DIR</c> on the
+    /// child's environment (not the command line), so the CLI reads that dir's <c>.credentials.json</c> and runs
+    /// under that account. <c>null</c> inherits Perch's own environment (the historical behaviour).</summary>
     public void Start(string cwd, string? model = null, string? permissionMode = null, string? resumeSessionId = null,
-        string? newSessionId = null, string? effort = null)
+        string? newSessionId = null, string? effort = null, string? configDir = null)
     {
         if (IsRunning) throw new InvalidOperationException("Session already running.");
 
@@ -75,6 +78,10 @@ internal sealed class ClaudeSessionController : IDisposable
         // Lets perch-hook (a child of this claude) tell "Perch's own controlled session starting" from "a
         // normal claude opened a Perch-controlled id" — see SessionLock / collision defence (c).
         psi.Environment[SessionLock.OwnerEnvVar] = Environment.ProcessId.ToString();
+        // Account selection: pin the config dir (and with it, that account's credentials) for this session only.
+        // Set on the child env — never the command line — so an odd path can't break arg parsing or inject.
+        if (!string.IsNullOrWhiteSpace(configDir))
+            psi.Environment["CLAUDE_CONFIG_DIR"] = configDir;
 
         // Ownership is claimed before the process exists so nothing can race the pre-init window; a
         // failed launch releases it again below.
