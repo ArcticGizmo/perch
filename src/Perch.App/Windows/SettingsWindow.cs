@@ -970,6 +970,28 @@ internal sealed class SettingsWindow : Window
         var signOut = SettingsUi.FlatButton("Sign out");
         signOut.Click += async (_, _) => await RunSocial(signOut, () => _social!.SignOutAsync(default));
         _socialBody!.Children.Add(Left(signOut));
+        AddDeleteAccount();
+    }
+
+    // GDPR erasure: a destructive "delete account and data" behind a type-to-confirm modal (DeleteAccountDialog).
+    // Shown wherever we're signed in — with or without a claimed handle.
+    private void AddDeleteAccount()
+    {
+        _socialBody!.Children.Add(SettingsUi.Separator());
+        _socialBody.Children.Add(SettingsUi.FieldCaption("Danger zone"));
+        _socialBody.Children.Add(SettingsUi.BodyText(
+            "Permanently delete your Social account and all your data. This can't be undone."));
+
+        var del = SettingsUi.FlatButton("Delete account and data…");
+        del.Foreground = new SolidColorBrush(Palette.Danger);
+        del.Click += async (_, _) =>
+        {
+            var confirmed = await DeleteAccountDialog.ShowAsync(this, _social!.Current.Me?.Handle);
+            if (!confirmed) return;
+            // Success raises AuthChanged → RefreshSocialPage rebuilds the body to the signed-out view.
+            await RunSocial(del, () => _social.DeleteAccountAsync(default));
+        };
+        _socialBody.Children.Add(Left(del));
     }
 
     // Runs a Social action with a busy state + inline error surfacing. A successful action raises AuthChanged,
