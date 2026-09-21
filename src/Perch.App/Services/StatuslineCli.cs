@@ -189,29 +189,7 @@ internal static class StatuslineCli
     }
 
     // ── helpers ────────────────────────────────────────────────────────────────────────
-    // Applies a profile to settings.json. A Perch profile is compiled to a standalone Node script that
-    // settings.json runs directly (`node "…"`) — Perch is never in the refresh loop. An external profile
-    // is written verbatim. Returns false if the script couldn't be written or settings.json couldn't be
-    // updated.
-    private static bool Apply(StatuslineProfile p)
-    {
-        if (p.IsPerch)
-        {
-            if (string.IsNullOrEmpty(p.Template)) return false;
-            var path = StatuslineScript.DefaultScriptPath;
-            try
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                File.WriteAllText(path, StatuslineScript.Generate(p));
-            }
-            catch
-            {
-                return false;
-            }
-            return ClaudeUserSettings.SetStatusLine(StatuslineScript.CommandFor(path), p.Padding);
-        }
-        return !string.IsNullOrWhiteSpace(p.Command) && ClaudeUserSettings.SetStatusLine(p.Command!, p.Padding);
-    }
+    private static bool Apply(StatuslineProfile p) => StatuslineInstaller.Apply(p, out _);
 
     private static string Preview(StatuslineProfile p) =>
         p.Template is { Length: > 0 } t

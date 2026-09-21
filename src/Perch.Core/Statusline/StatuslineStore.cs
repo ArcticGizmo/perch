@@ -23,6 +23,13 @@ internal static class StatuslineStore
         System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData),
         AppProfile.DataFolderName, "statusline.json");
 
+    // Mirrors AppSettings.DisablePersistence: the headless `render` process poses the designer window and
+    // closes it, which would otherwise Save default profiles over a user's real statusline.json. Render
+    // (and tests using the default path) call this so every default-path Save becomes a no-op. Path-taking
+    // Save overloads are unaffected — the test seam still writes to its throwaway files.
+    private static bool _persistenceDisabled;
+    public static void DisablePersistence() => _persistenceDisabled = true;
+
     public static StatuslineConfig Load() => Load(DefaultPath);
 
     public static StatuslineConfig Load(string path)
@@ -41,7 +48,11 @@ internal static class StatuslineStore
         return Seeded();
     }
 
-    public static bool Save(StatuslineConfig config) => Save(DefaultPath, config);
+    public static bool Save(StatuslineConfig config)
+    {
+        if (_persistenceDisabled) return true;   // render/tests: never touch the real statusline.json
+        return Save(DefaultPath, config);
+    }
 
     public static bool Save(string path, StatuslineConfig config)
     {

@@ -36,6 +36,9 @@ internal static class HeadlessRenderer
         // initial TextChanged) once saved throwaway defaults over the real settings file, which wiped the
         // developer's settings and re-ran the first-run Quick Start.
         AppSettings.DisablePersistence();
+        // The statusline designer window Saves its profile library on close; posing it here must not write
+        // over a real statusline.json (same hazard AppSettings.DisablePersistence guards against).
+        Perch.Statusline.StatuslineStore.DisablePersistence();
 
         // Config-dir discovery (Layer 1): pose a two-dir set so the multi-config-dir directory chip renders
         // on the sample rows tagged with SampleData.WorkDir. The real primary stays first, so ClaudePaths
@@ -811,6 +814,24 @@ internal static class HeadlessRenderer
                 frame.Save(fs);
             }
             wm.Close();
+        }
+
+        // Statusline designer (M2): the profile rail, the mustache editor with its insert chips, the live
+        // ANSI-coloured preview, and the data explorer beside it. Templated controls (TextBox/Button/
+        // ScrollViewer) only pick up their styles inside a shown window, so it's captured via
+        // CaptureRenderedFrame like the onboarding window rather than a detached one-shot bitmap.
+        {
+            var w = new Windows.StatuslineDesignerWindow { Width = 1000, Height = 640 };
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "statusline_designer_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
         }
 
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
