@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.21] - 2026-09-21
+
+- Retuned the usage bar's pace colours: green stays longer early on, red arrives the moment you're over pace
+
+---
+
 ## [v0.4.20] - 2026-09-21
 
 - Session replies render as Markdown while they stream, not only once the whole answer lands
