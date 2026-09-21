@@ -57,17 +57,22 @@ embedded engine is a faithful JS port of `StatuslineTemplate`; a **parity test**
 script under `node` and diffs its stdout against the C# engine byte-for-byte, so the two can't drift.
 `perch statusline render` remains only as a local preview aid — nothing in `settings.json` calls it.
 
-### M2 — Designer window *(next)*
-Owner-drawn Avalonia window mirroring the mockup: template editor (toolbar chips), live preview
-(`OverlayDraw`/`StatuslineRenderer` against `StatuslineSample`, `COLUMNS` control), data explorer (from
-`StatuslineTokens`, click-to-insert, sample values + badges), profile rail (toggle Perch ⇄ imported,
-Back up / Import buttons). Reuse the `PreviewPane`/`WindowHost.ShowOrFocus` idioms; open from the tray/
-overlay menu. Then a `SettingsRegistry` entry so it's discoverable from Settings.
+### M2 — Designer window *(done)*
+`StatuslineDesignerWindow` (opened from the tray, "Statusline designer…"; single reused instance via
+`WindowHost`, torn down in `CloseAuxWindows`). Template editor with insert chips; a live ANSI-coloured
+preview rendered through the C# `StatuslineTemplate` engine against `StatuslineSample` (colours straight
+from `StatusColors`, so preview == terminal); data explorer from `StatuslineTokens` (sample values +
+caveat badges, click-to-insert at the caret); profile rail toggling Perch ⇄ imported with New / Back up
+current / Import. "Set active" runs the shared `StatuslineInstaller` (also used by the CLI). Profile
+library saved on close. Render-verified via `HeadlessRenderer` (`statusline_designer_1x.png`);
+`StatuslineStore.DisablePersistence` keeps `render` from overwriting a real `statusline.json`.
 
 ### Later
-Per-segment Powerline styling; `git.changes`/`dirty` in the generated script (cheap numstat) so those
-tokens light up; additional target languages besides the default Node (Bash+jq, PowerShell) as a
-per-profile choice; OSC 8 link support.
+A `SettingsRegistry` entry so the designer is discoverable/searchable from Settings; a `COLUMNS`-width
+preview control + horizontal-scroll for long lines; renaming polish and delete-profile; per-segment
+Powerline styling; `git.changes`/`dirty` in the generated script (cheap numstat) so those tokens light
+up; additional target languages besides the default Node (Bash+jq, PowerShell) as a per-profile choice;
+OSC 8 link support.
 
 ## Try it (experiment now, before M2)
 
