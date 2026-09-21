@@ -718,15 +718,10 @@ internal sealed class SessionThreadView : ScrollViewer
             {
                 switch (part)
                 {
-                    case TextPart t when t.IsStreaming && existing is SelectableTextBlock stb:
-                        stb.Text = t.Text;
-                        break;
-                    case TextPart t when !t.IsStreaming && existing is SelectableTextBlock:
-                        // Finalised: the plain accumulator gives way to the rich Markdown render.
-                        var rendered = Prose(t.Text);
-                        int at = body.Children.IndexOf(existing);
-                        if (at >= 0) body.Children[at] = rendered; else body.Children.Add(rendered);
-                        view.Parts[part] = rendered;
+                    // A live prose part streams Markdown into its own control (smooth pacing + incremental
+                    // render). More deltas advance its target; the turn ending settles it with a clean build.
+                    case TextPart t when existing is StreamingProse sp:
+                        if (t.IsStreaming) sp.SetTarget(t.Text); else sp.Finalize(t.Text);
                         break;
                     case ToolCallPart tool when view.Tools.TryGetValue(tool, out var card):
                         card.Update(tool);
@@ -784,17 +779,156 @@ internal sealed class SessionThreadView : ScrollViewer
     // side-effecting or result-heavy tools (Bash, Edit/Write, Task, WebFetch, …) stay full cards.
     private static bool IsFoldable(string tool) => tool is "Read" or "Grep" or "Glob";
 
-    private SelectableTextBlock StreamingText(string text) => new()
+    // A live streaming prose part: renders Markdown *as it arrives* (like Claude Desktop) rather than plain
+    // text swapped for Markdown only at the end. Reveals the accumulated text at a smooth, self-pacing cadence
+    // and keeps the render cheap by only re-parsing the trailing, still-forming block. Grows the tail → asks to
+    // re-stick to the bottom (the model's per-delta scroll can't see the paced growth between deltas).
+    private StreamingProse StreamingText(string text)
     {
-        Text = text, FontSize = SessionPalette.ProseSize, FontFamily = _p.Body, Foreground = _p.Text,
-        TextWrapping = TextWrapping.Wrap, LineHeight = SessionPalette.ProseSize * 1.62,
-        Margin = new Thickness(0, 0, 0, 11),
-    };
+        var sp = new StreamingProse(md => Prose(md), () => { if (_stickToBottom) ScrollToEndSoon(); });
+        sp.SetTarget(text);
+        return sp;
+    }
 
     // Prose renders through the shared Markdown view; inline-code file references become clickable (Ctrl+click
     // a Markdown file to view, right-click any file for view/diff/reveal/editor) when they resolve on disk.
     private Control Prose(string md) => MarkdownView.Build(md, _p.Prose,
         new MarkdownView.FileRefContext(Cwd, p => OpenFileRequested?.Invoke(p), p => ViewDiffRequested?.Invoke(p)));
+
+    /// <summary>
+    /// A streaming assistant prose block that renders Markdown live and smoothly, mimicking Claude Desktop.
+    /// Two things it does that a plain accumulator does not:
+    /// <list type="bullet">
+    /// <item><b>Live formatting.</b> Instead of showing raw text until the turn ends, it renders the revealed
+    /// text as Markdown continuously. To stay cheap it splits the text at the last complete block boundary
+    /// (<see cref="MarkdownView.SettledPrefixLength"/>): the settled prefix is built once and left alone, and
+    /// only the short trailing block is re-parsed on each frame.</item>
+    /// <item><b>Smooth pacing.</b> Deltas arrive in bursts; this reveals them at a steady ~25fps cadence that
+    /// speeds up when it falls behind, so text flows in rather than jumping in chunks.</item>
+    /// </list>
+    /// When the part finalises it paces to the end and then does one clean, whole-message Markdown build, so
+    /// the settled result is identical to a non-streamed render (any transient artifact — e.g. a loose list
+    /// briefly split across the settle boundary — is corrected).
+    /// </summary>
+    private sealed class StreamingProse : StackPanel
+    {
+        private const double FrameMs = 40;   // ~25fps: smooth to the eye, easy on layout
+        private const int MinStep = 3;       // chars revealed per frame at rest (a gentle typewriter)
+        private const int CatchUpDivisor = 3; // when behind, reveal ~1/3 of the backlog per frame to catch up
+
+        private readonly Func<string, Control> _render;
+        private readonly Action _grew;
+        private readonly DispatcherTimer _timer;
+
+        private string _target = "";   // full accumulated text (may run ahead of what's shown)
+        private int _shown;            // chars currently revealed
+        private bool _finalizing;      // the part has ended; pace to the tail then do the clean build
+        private bool _completed;       // the clean final build is in place; ignore further updates
+        private string _finalText = "";
+
+        private string _settled = "";  // the settled-prefix substring currently rendered
+        private Control? _settledView; // its (build-once) control
+        private Control? _tailView;    // the trailing in-progress block, rebuilt each frame
+
+        public StreamingProse(Func<string, Control> render, Action grew)
+        {
+            _render = render;
+            _grew = grew;
+            _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(FrameMs) };
+            _timer.Tick += (_, _) => Tick();
+        }
+
+        /// <summary>More streamed text arrived (the accumulated total). Resume pacing toward it.</summary>
+        public void SetTarget(string text)
+        {
+            if (_completed) return;
+            _target = text;
+            EnsureRunning();
+        }
+
+        /// <summary>The part ended: pace out whatever is left, then settle with one clean Markdown build.</summary>
+        public void Finalize(string text)
+        {
+            if (_completed) return;
+            _target = text;
+            _finalText = text;
+            _finalizing = true;
+            EnsureRunning();
+        }
+
+        private void EnsureRunning()
+        {
+            if (_shown < _target.Length)
+            {
+                if (!_timer.IsEnabled) _timer.Start();
+            }
+            else if (_finalizing)
+            {
+                CompleteNow();
+            }
+        }
+
+        private void Tick()
+        {
+            if (_shown >= _target.Length)
+            {
+                if (_finalizing) { CompleteNow(); return; }
+                _timer.Stop();
+                return;
+            }
+            int remaining = _target.Length - _shown;
+            int step = Math.Max(MinStep, remaining / CatchUpDivisor);
+            _shown = Math.Min(_target.Length, _shown + step);
+            RenderRevealed(_target[.._shown]);
+            _grew();
+            if (_shown >= _target.Length && _finalizing) CompleteNow();
+        }
+
+        // Render the revealed text: (re)build the settled prefix only when a new block boundary appears, and
+        // always rebuild the short trailing block. The boundary is found by scanning only the tail (everything
+        // before _settled is already stable), so a frame's parse cost is bounded by the in-progress block, not
+        // the whole message. Two stacked build roots read as one document because Prose uses no root margin.
+        private void RenderRevealed(string revealed)
+        {
+            string tailText = revealed[_settled.Length..];
+            int commitInTail = MarkdownView.SettledPrefixLength(tailText);
+            if (commitInTail > 0)
+            {
+                _settled = revealed[..(_settled.Length + commitInTail)];
+                tailText = revealed[_settled.Length..];
+                var built = _render(_settled);
+                if (_settledView is { } old && Children.IndexOf(old) is >= 0 and var i) Children[i] = built;
+                else Children.Insert(0, built);
+                _settledView = built;
+            }
+
+            var tail = _render(tailText);
+            if (_tailView is { } oldTail && Children.IndexOf(oldTail) is >= 0 and var j) Children[j] = tail;
+            else Children.Add(tail);
+            _tailView = tail;
+        }
+
+        // Replace the paced, split rendering with one authoritative whole-message build — identical to how a
+        // finalised, non-streamed prose part renders.
+        private void CompleteNow()
+        {
+            if (_completed) return;
+            _completed = true;
+            _timer.Stop();
+            Children.Clear();
+            _settledView = _tailView = null;
+            _settled = "";
+            Children.Add(_render(_finalText));
+            _grew();
+        }
+
+        // Detached mid-stream (session reset / cleared): stop ticking so an orphaned control isn't updated.
+        protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+        {
+            base.OnDetachedFromVisualTree(e);
+            _timer.Stop();
+        }
+    }
 
     // Collapsible thinking disclosure: a one-line summary, the full thought on click.
     private Control BuildThinking(ThinkingPart th)

@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.20] - 2026-09-21
+
+- Session replies render as Markdown while they stream, not only once the whole answer lands
+- Streamed text is paced smoothly, so it flows in rather than arriving in bursts
+
+---
+
 ## [v0.4.19] - 2026-09-18
 
 - Runs Claude's "Do you trust the files in this folder?" check before starting a session (Perch's headless launch had been quietly skipping it)

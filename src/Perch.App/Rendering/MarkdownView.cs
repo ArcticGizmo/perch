@@ -136,6 +136,25 @@ internal sealed class MarkdownView
         public int EndLine { get; set; }               // inclusive; filled so the ranges tile the document
     }
 
+    /// <summary>The source offset at which the last top-level block begins — so a streaming renderer can treat
+    /// everything before it as settled (complete blocks whose meaning can't change as more text arrives) and
+    /// only re-render the trailing, still-forming block. Returns 0 when there are fewer than two top-level
+    /// blocks (nothing has settled yet). Best-effort: any parse trouble yields 0 (render the whole thing).</summary>
+    public static int SettledPrefixLength(string md)
+    {
+        if (string.IsNullOrEmpty(md)) return 0;
+        try
+        {
+            Block? last = null;
+            int count = 0;
+            foreach (var b in Markdown.Parse(md, Pipeline)) { last = b; count++; }
+            if (count < 2 || last is null) return 0;
+            int start = last.Span.Start;
+            return start > 0 && start <= md.Length ? start : 0;
+        }
+        catch { return 0; }
+    }
+
     /// <summary>Parses <paramref name="md"/> and returns a control tree ready to drop into a scroll viewer.</summary>
     public static Control Build(string md, MarkdownStyle style) => Build(md, style, null, out _);
 
