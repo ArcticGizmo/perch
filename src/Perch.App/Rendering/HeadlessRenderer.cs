@@ -820,15 +820,24 @@ internal static class HeadlessRenderer
         // ANSI-coloured preview, and the data explorer beside it. Templated controls (TextBox/Button/
         // ScrollViewer) only pick up their styles inside a shown window, so it's captured via
         // CaptureRenderedFrame like the onboarding window rather than a detached one-shot bitmap.
+        foreach (var (profile, height, file) in new[]
+                 {
+                     ((string?)null, 640, "statusline_designer_1x.png"),                    // default (Perch Default)
+                     ("Rate-aware verbose", 1180, "statusline_designer_rateaware_1x.png"),  // pace-coloured rate windows
+                 })
         {
-            var w = new Windows.StatuslineDesignerWindow { Width = 1000, Height = 640 };
+            var w = new Windows.StatuslineDesignerWindow(Perch.Statusline.StatuslineStore.Seeded())
+            {
+                Width = 1000, Height = height,
+            };
+            if (profile is not null) w.SelectForRender(profile);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
             var frame = w.CaptureRenderedFrame();
             if (frame != null)
             {
-                using var fs = File.Create(Path.Combine(outDir, "statusline_designer_1x.png"));
+                using var fs = File.Create(Path.Combine(outDir, file));
                 frame.Save(fs);
             }
             w.Close();

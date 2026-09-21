@@ -57,6 +57,12 @@ public sealed class StatuslineScriptTests
         // two-line template
         { StatuslineDefaults.All[2].Template!,
           """{"model":{"display_name":"Opus"},"effort":{"level":"high"},"git":{"branch":"main"},"context_window":{"used_percentage":34},"prompt_cache":{"warm":true,"ttl":"1h"},"rate_limits":{"five_hour":{"used_percentage":23.5}}}""" },
+        // formatters added for the rate-aware example
+        { "{{a|human}} {{b|human}} {{c|human}}", """{"a":999,"b":68000,"c":2500000}""" },
+        { "{{a|dur}} {{b|dur}} {{c|dur}}", """{"a":45000,"b":300000,"c":4500000}""" },
+        // pace with a reset far in the future → expected clamps to 0 (< 15 → green), independent of each
+        // process's wall clock, so the C# engine and the Node script still agree byte-for-byte
+        { "{{u|bar:10|pace:r:18000}} {{u|round|pace:r:18000}}%", """{"u":40,"r":4102444800}""" },
     };
 
     [Theory]

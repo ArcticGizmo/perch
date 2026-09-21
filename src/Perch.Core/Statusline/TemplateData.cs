@@ -53,16 +53,26 @@ internal sealed class TemplateData
     public static double? Num(JsonNode? n)
     {
         if (n is null) return null;
-        return n.GetValueKind() switch
+        switch (n.GetValueKind())
         {
-            System.Text.Json.JsonValueKind.Number => n.GetValue<double>(),
-            System.Text.Json.JsonValueKind.True   => 1,
-            System.Text.Json.JsonValueKind.False  => 0,
-            System.Text.Json.JsonValueKind.String =>
-                double.TryParse(n.GetValue<string>(), NumberStyles.Any, CultureInfo.InvariantCulture, out var d)
-                    ? d : null,
-            _ => null,
-        };
+            case System.Text.Json.JsonValueKind.Number:
+                // A JsonValue backed by a CLR long (e.g. a value we assigned, not parsed from text) throws
+                // on GetValue<double>(); a text-parsed one only reads as double. Try each so both work.
+                if (n is JsonValue v)
+                {
+                    if (v.TryGetValue<double>(out var d)) return d;
+                    if (v.TryGetValue<long>(out var l)) return l;
+                    if (v.TryGetValue<decimal>(out var m)) return (double)m;
+                }
+                return null;
+            case System.Text.Json.JsonValueKind.True:  return 1;
+            case System.Text.Json.JsonValueKind.False: return 0;
+            case System.Text.Json.JsonValueKind.String:
+                return double.TryParse(n.GetValue<string>(), NumberStyles.Any, CultureInfo.InvariantCulture, out var s)
+                    ? s : null;
+            default:
+                return null;
+        }
     }
 
     /// <summary>The node as display text. Integers print without a decimal point; other numbers use the
@@ -76,7 +86,7 @@ internal sealed class TemplateData
             case System.Text.Json.JsonValueKind.True:   return "true";
             case System.Text.Json.JsonValueKind.False:  return "false";
             case System.Text.Json.JsonValueKind.Number:
-                var d = n.GetValue<double>();
+                var d = Num(n) ?? 0;
                 return d == System.Math.Floor(d) && !double.IsInfinity(d)
                     ? ((long)d).ToString(CultureInfo.InvariantCulture)
                     : d.ToString(CultureInfo.InvariantCulture);

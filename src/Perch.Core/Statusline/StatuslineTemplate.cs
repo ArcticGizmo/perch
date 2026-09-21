@@ -220,8 +220,12 @@ internal static class StatuslineTemplate
                 case "lower": text = text.ToLowerInvariant(); break;
                 case "bar":   text = Bar(num ?? 0, ParseInt(arg, 10)); break;
                 case "trunc": text = Trunc(text, ParseInt(arg, 20)); break;
+                case "human": text = Human(num ?? 0); break;
+                case "dur":   text = Dur(num ?? 0); break;
+                case "until": text = Until(num); break;
                 case "default": if (text.Length == 0) text = arg ?? ""; break;
                 case "color": color = StatusColors.Parse(arg); break;
+                case "pace":  color = Pace(num ?? 0, arg, data); break;
             }
         }
         return (text, color);
@@ -248,4 +252,67 @@ internal static class StatuslineTemplate
 
     private static string Trunc(string s, int max) =>
         s.Length <= max ? s : (max <= 1 ? s[..max] : s[..(max - 1)] + "…");
+
+    // Humanise a count the way a status line does: 999 -> "999", 68000 -> "68k", 2_500_000 -> "2M".
+    private static string Human(double n)
+    {
+        if (n < 1000) return ((long)System.Math.Floor(n)).ToString(CultureInfo.InvariantCulture);
+        if (n < 1_000_000) return ((long)System.Math.Floor(n / 1000)).ToString(CultureInfo.InvariantCulture) + "k";
+        return ((long)System.Math.Floor(n / 1_000_000)).ToString(CultureInfo.InvariantCulture) + "M";
+    }
+
+    // Humanise a millisecond duration: 850 -> "850ms", 45000 -> "45s", 300000 -> "5m", 4_500_000 -> "1h 15m".
+    private static string Dur(double ms)
+    {
+        if (ms < 1000) return ((long)System.Math.Floor(ms)).ToString(CultureInfo.InvariantCulture) + "ms";
+        long s = (long)System.Math.Floor(ms / 1000);
+        if (s < 60) return s.ToString(CultureInfo.InvariantCulture) + "s";
+        if (s < 3600) return (s / 60).ToString(CultureInfo.InvariantCulture) + "m";
+        return (s / 3600).ToString(CultureInfo.InvariantCulture) + "h " + ((s % 3600) / 60).ToString(CultureInfo.InvariantCulture) + "m";
+    }
+
+    // Time remaining until a unix-epoch-seconds reset, as "1h 30m" / "12m". Empty for an absent value or a
+    // reset already in the past (clamped to 0). Reads the wall clock — the one non-deterministic filter.
+    private static string Until(double? epochSeconds)
+    {
+        if (epochSeconds is not { } epoch) return "";
+        long m = (long)System.Math.Floor((epoch - UnixNow()) / 60);
+        if (m < 0) m = 0;
+        return m >= 60
+            ? (m / 60).ToString(CultureInfo.InvariantCulture) + "h " + (m % 60).ToString(CultureInfo.InvariantCulture) + "m"
+            : m.ToString(CultureInfo.InvariantCulture) + "m";
+    }
+
+    // Colour a rate-limit reading by pace: compares the actual used-percentage against the percentage
+    // *expected* by now (how far through the window we are), using the same thresholds as the overlay's
+    // usage bars (Palette.PaceColor). <paramref name="arg"/> is "<resetsPath>:<windowSeconds>". Returns
+    // Default (uncoloured) when the reset time isn't available, so it degrades gracefully.
+    private static StatusColor Pace(double actual, string? arg, TemplateData data)
+    {
+        if (arg is null) return StatusColor.Default;
+        int cut = arg.LastIndexOf(':');
+        if (cut < 0) return StatusColor.Default;
+        if (!int.TryParse(arg[(cut + 1)..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var window) || window <= 0)
+            return StatusColor.Default;
+        if (!data.TryGet(arg[..cut], out var node) || TemplateData.Num(node) is not { } resets)
+            return StatusColor.Default;
+
+        double remaining = resets - UnixNow();
+        double expected = System.Math.Clamp((window - remaining) / window * 100.0, 0, 100);
+        return PaceColor(actual, expected);
+    }
+
+    // Mirrors Perch.Theming.Palette.PaceColor: green well behind or barely-started, yellow around pace,
+    // red over. Kept here (not referencing the UI Palette) so Perch.Core stays UI-free and the generated
+    // Node script can port the exact same rule.
+    internal static StatusColor PaceColor(double actual, double expected)
+    {
+        if (expected < 15) return StatusColor.Green;   // safe zone while the window has barely begun
+        double d = actual - expected;
+        if (d < -10) return StatusColor.Green;         // more than 10 points behind the expected pace
+        if (d <= 1) return StatusColor.Yellow;         // from 10 under up to 1 over
+        return StatusColor.Red;                        // more than 1 point over
+    }
+
+    private static double UnixNow() => System.DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 }

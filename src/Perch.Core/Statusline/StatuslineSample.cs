@@ -1,5 +1,7 @@
 namespace Perch.Statusline;
 
+using System.Text.Json.Nodes;
+
 /// <summary>A representative statusLine stdin payload used by the designer's live preview and by tests.
 /// It mirrors the shape Claude Code sends (model, workspace, cost, context_window, prompt_cache,
 /// rate_limits, pr, effort, vim, version, output_style) and includes the Perch-injected <c>git</c>
@@ -37,6 +39,7 @@ internal static class StatuslineSample
         "five_hour": { "used_percentage": 23.5 },
         "seven_day": { "used_percentage": 41.2 }
       },
+      "exceeds_200k_tokens": false,
       "pr": {
         "number": 30,
         "review_state": "pending",
@@ -48,5 +51,19 @@ internal static class StatuslineSample
     }
     """;
 
-    public static TemplateData Data() => TemplateData.Parse(Json);
+    /// <summary>The sample payload as template data, with the rate-limit <c>resets_at</c> stamps injected
+    /// relative to now so the pace-colour filter has something live to work with: the 5h window is ~halfway
+    /// through with the reading behind pace (green), the 7d window is ~40% through with the reading a touch
+    /// over pace (red) — so a designer preview shows two different pace colours rather than a static one.</summary>
+    public static TemplateData Data()
+    {
+        var data = TemplateData.Parse(Json);
+        long now = System.DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        if (data.Root["rate_limits"] is JsonObject rl)
+        {
+            if (rl["five_hour"] is JsonObject f) f["resets_at"] = now + 9000;    // 2.5h of 5h left → expected ~50
+            if (rl["seven_day"] is JsonObject s) s["resets_at"] = now + 370000;  // ~4.3d of 7d left → expected ~39
+        }
+        return data;
+    }
 }

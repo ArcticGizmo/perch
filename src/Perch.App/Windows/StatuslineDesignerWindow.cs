@@ -56,9 +56,14 @@ internal sealed class StatuslineDesignerWindow : Window
     private TextBlock _editorHeader = null!;
     private DispatcherTimer? _appliedTimer;
 
-    public StatuslineDesignerWindow()
+    public StatuslineDesignerWindow() : this(StatuslineStore.Load()) { }
+
+    /// <summary>Test/preview seam: build against a supplied config instead of the on-disk library, so
+    /// <c>HeadlessRenderer</c> renders a deterministic set (and the seeded built-in examples) rather than
+    /// whatever happens to be saved.</summary>
+    internal StatuslineDesignerWindow(StatuslineConfig config)
     {
-        _config = StatuslineStore.Load();
+        _config = config;
         _selected = _config.Active ?? _config.Profiles[0];
 
         Title = $"Statusline designer{Perch.Data.AppProfile.DisplaySuffix}";
@@ -382,6 +387,13 @@ internal sealed class StatuslineDesignerWindow : Window
         border.PointerExited  += (_, _) => border.Background = Brushes.Transparent;
         border.PointerPressed += (_, _) => Insert("{{" + tok.Path + "}}");
         return border;
+    }
+
+    /// <summary>Test/preview hook: select a profile by name so <c>HeadlessRenderer</c> can capture a
+    /// specific example (e.g. the pace-coloured "Rate-aware verbose"). No-op if the name is unknown.</summary>
+    internal void SelectForRender(string name)
+    {
+        if (_config.Find(name) is { } p) SelectProfile(p);
     }
 
     // ── behaviour ────────────────────────────────────────────────────────────────────────

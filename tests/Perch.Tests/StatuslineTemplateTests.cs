@@ -156,4 +156,73 @@ public sealed class StatuslineTemplateTests
         Assert.Contains("Opus", outp);
         Assert.Contains("PR#30", outp);
     }
+
+    // ── formatters + pace, added for the rate-aware example ──────────────────────────────
+    [Fact]
+    public void Human_formats_counts()
+    {
+        Assert.Equal("68k", Render("{{context_window.total_input_tokens|human}}"));   // 68000
+        var d = TemplateData.Parse("""{"a":999,"b":1500,"c":2500000}""");
+        Assert.Equal("999", Render("{{a|human}}", d));
+        Assert.Equal("1k", Render("{{b|human}}", d));
+        Assert.Equal("2M", Render("{{c|human}}", d));
+    }
+
+    [Fact]
+    public void Dur_humanises_milliseconds()
+    {
+        var d = TemplateData.Parse("""{"a":850,"b":45000,"c":300000,"d":4500000}""");
+        Assert.Equal("850ms", Render("{{a|dur}}", d));
+        Assert.Equal("45s", Render("{{b|dur}}", d));
+        Assert.Equal("5m", Render("{{c|dur}}", d));
+        Assert.Equal("1h 15m", Render("{{d|dur}}", d));
+    }
+
+    [Fact]
+    public void Until_counts_down_to_a_reset()
+    {
+        long resets = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 90 * 60 + 30;   // ~1h 30m out
+        var d = TemplateData.Parse($$"""{"r":{{resets}}}""");
+        Assert.Equal("1h 30m", Render("{{r|until}}", d));
+
+        long pastEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 500;
+        var past = TemplateData.Parse($$"""{"r":{{pastEpoch}}}""");
+        Assert.Equal("0m", Render("{{r|until}}", past));
+    }
+
+    [Fact]
+    public void PaceColor_matches_the_usage_bar_rule()
+    {
+        Assert.Equal(StatusColor.Green,  StatuslineTemplate.PaceColor(30, 50));  // >10 behind pace
+        Assert.Equal(StatusColor.Yellow, StatuslineTemplate.PaceColor(50, 50));  // on pace
+        Assert.Equal(StatusColor.Red,    StatuslineTemplate.PaceColor(70, 50));  // over pace
+        Assert.Equal(StatusColor.Green,  StatuslineTemplate.PaceColor(90, 10));  // safe zone (expected < 15)
+    }
+
+    [Fact]
+    public void Pace_filter_colours_a_rate_window_by_expected_burn()
+    {
+        long resets = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 9000;   // 2.5h of a 5h window left → expected ~50%
+
+        StatusColor ColorOf(int used)
+        {
+            var d = TemplateData.Parse($$"""{"u":{{used}},"r":{{resets}}}""");
+            return StatuslineTemplate.Render("{{u|pace:r:18000}}", d)[0].Color;
+        }
+
+        Assert.Equal(StatusColor.Green,  ColorOf(30));   // behind pace
+        Assert.Equal(StatusColor.Yellow, ColorOf(45));   // ~on pace (d ≈ -5)
+        Assert.Equal(StatusColor.Red,    ColorOf(70));   // over pace
+    }
+
+    [Fact]
+    public void Rate_aware_example_renders()
+    {
+        var tpl = StatuslineDefaults.All.First(p => p.Name == "Rate-aware verbose").Template!;
+        var outp = Render(tpl);   // Data() injects resets_at, so the rate windows appear
+        Assert.Contains("Context", outp);
+        Assert.Contains("5h", outp);
+        Assert.Contains("7d", outp);
+        Assert.Contains("Opus", outp);
+    }
 }

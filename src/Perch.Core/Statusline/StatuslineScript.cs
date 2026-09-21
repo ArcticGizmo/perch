@@ -90,6 +90,19 @@ internal static class StatuslineScript
           return '█'.repeat(f) + '░'.repeat(cells - f);
         }
         const trunc = (s, max) => s.length <= max ? s : (max <= 1 ? s.slice(0, max) : s.slice(0, max - 1) + '…');
+        const human = n => n < 1000 ? String(Math.floor(n)) : n < 1e6 ? String(Math.floor(n / 1000)) + 'k' : String(Math.floor(n / 1e6)) + 'M';
+        function dur(ms) { if (ms < 1000) return Math.floor(ms) + 'ms'; const s = Math.floor(ms / 1000); if (s < 60) return s + 's'; if (s < 3600) return Math.floor(s / 60) + 'm'; return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm'; }
+        function until(epoch) { if (epoch === null || epoch === undefined) return ''; let m = Math.floor((epoch - Date.now() / 1000) / 60); if (m < 0) m = 0; return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm'; }
+        function paceColor(actual, expected) { if (expected < 15) return 'green'; const d = actual - expected; if (d < -10) return 'green'; if (d <= 1) return 'yellow'; return 'red'; }
+        function pace(actual, arg, ctx) {
+          if (!arg) return null;
+          const cut = arg.lastIndexOf(':'); if (cut < 0) return null;
+          const win = parseInt(arg.slice(cut + 1), 10); if (!(win > 0)) return null;
+          const r = num(lookup(arg.slice(0, cut), ctx)); if (r === null) return null;
+          const remaining = r - Date.now() / 1000;
+          const expected = Math.min(Math.max((win - remaining) / win * 100, 0), 100);
+          return paceColor(actual, expected);
+        }
 
         function applyVar(spec, ctx) {
           const parts = spec.split('|');
@@ -108,8 +121,12 @@ internal static class StatuslineScript
               case 'lower': text = text.toLowerCase(); break;
               case 'bar':   text = bar(n || 0, pint(arg, 10)); break;
               case 'trunc': text = trunc(text, pint(arg, 20)); break;
+              case 'human': text = human(n || 0); break;
+              case 'dur':   text = dur(n || 0); break;
+              case 'until': text = until(n); break;
               case 'default': if (text.length === 0) text = arg || ''; break;
               case 'color': color = arg; break;
+              case 'pace':  color = pace(n || 0, arg, ctx); break;
             }
           }
           return { text, color };

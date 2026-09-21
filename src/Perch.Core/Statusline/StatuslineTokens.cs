@@ -70,7 +70,9 @@ internal static class StatuslineTokens
         new Group("rate_limits", new[]
         {
             new TokenDescriptor("rate_limits.five_hour.used_percentage", TokenBadge.WhenPresent),
+            new TokenDescriptor("rate_limits.five_hour.resets_at", TokenBadge.WhenPresent),
             new TokenDescriptor("rate_limits.seven_day.used_percentage", TokenBadge.WhenPresent),
+            new TokenDescriptor("rate_limits.seven_day.resets_at", TokenBadge.WhenPresent),
         }),
         new Group("pr", new[]
         {
