@@ -77,12 +77,45 @@ public sealed class StatuslineConfigTests : IDisposable
     }
 
     [Fact]
-    public void Load_backfills_active_from_first_profile_when_unset()
+    public void Load_merges_saved_user_profiles_after_the_code_builtins()
     {
         File.WriteAllText(_path,
-            """{ "profiles": [ { "name": "A", "kind": "Perch", "template": "{{model.display_name}}" } ] }""");
+            """{ "activeName": "mine", "profiles": [ { "name": "mine", "kind": "External", "command": "foo" } ] }""");
         var cfg = StatuslineStore.Load(_path);
-        Assert.Equal("A", cfg.Active!.Name);
+
+        Assert.NotNull(cfg.Find(StatuslineDefaults.PerchDefaultName));   // built-in, from code
+        Assert.NotNull(cfg.Find("mine"));                               // user profile, from the file
+        Assert.Equal("mine", cfg.Active!.Name);
+    }
+
+    [Fact]
+    public void A_new_code_builtin_appears_even_with_an_existing_saved_file()
+    {
+        // A file written before "Rate-aware verbose" existed in code (only an unrelated user profile).
+        File.WriteAllText(_path,
+            """{ "activeName": "mine", "profiles": [ { "name": "mine", "kind": "Perch", "template": "x" } ] }""");
+        var cfg = StatuslineStore.Load(_path);
+
+        // The code built-in shows up with no migration step.
+        Assert.NotNull(cfg.Find("Rate-aware verbose"));
+        Assert.NotNull(cfg.Find("mine"));
+    }
+
+    [Fact]
+    public void Unedited_builtins_are_not_persisted_but_edits_are()
+    {
+        var cfg = StatuslineStore.Seeded();
+        StatuslineStore.Save(_path, cfg);
+        Assert.DoesNotContain("\"Name\"", File.ReadAllText(_path));   // nothing but ActiveName — built-ins live in code
+
+        cfg.Find("Minimal")!.Template = "EDITED {{model.display_name}}";
+        StatuslineStore.Save(_path, cfg);
+        Assert.Contains("EDITED", File.ReadAllText(_path));           // an edited built-in is persisted as an override
+
+        var loaded = StatuslineStore.Load(_path);
+        Assert.Equal("EDITED {{model.display_name}}", loaded.Find("Minimal")!.Template);
+        Assert.NotNull(loaded.Find(StatuslineDefaults.PerchDefaultName));   // the others still come from code
+        Assert.NotNull(loaded.Find("Rate-aware verbose"));
     }
 
     [Fact]

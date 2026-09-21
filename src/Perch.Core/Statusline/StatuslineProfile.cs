@@ -32,7 +32,21 @@ internal sealed class StatuslineProfile
     /// <c>settings.json → statusLine.padding</c>. 0 = flush.</summary>
     public int Padding { get; set; }
 
+    /// <summary>True for a profile that comes from <see cref="StatuslineDefaults"/> (code), false for one
+    /// the user created/imported. Derived on load (never persisted): a built-in is only written to disk
+    /// when the user has edited it, so new code examples always appear and unedited ones track the code.</summary>
+    [JsonIgnore]
+    public bool Builtin { get; set; }
+
     public bool IsPerch => Kind == ProfileKind.Perch;
+
+    /// <summary>Whether two profiles carry the same content (ignores <see cref="Builtin"/>) — used to tell
+    /// an edited built-in (an override worth persisting) from an untouched one (comes from code).</summary>
+    public bool SameContentAs(StatuslineProfile other) =>
+        Kind == other.Kind
+        && Padding == other.Padding
+        && string.Equals(Template ?? "", other.Template ?? "", System.StringComparison.Ordinal)
+        && string.Equals(Command ?? "", other.Command ?? "", System.StringComparison.Ordinal);
 }
 
 /// <summary>The persisted statusline configuration: the saved profiles plus which one is active. Stored
