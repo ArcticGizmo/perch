@@ -334,6 +334,86 @@ internal static class ClaudeUserSettings
             return false;
         }
     }
+
+    // ── statusLine (Perch's statusline designer) ─────────────────────────────────────
+    // The root-level "statusLine" block Claude Code invokes on each refresh. Perch owns the profile
+    // library elsewhere (Perch.Statusline.StatuslineStore); applying a profile is what writes this block.
+    // Read/write preserve every other key, mirroring the env/hook helpers above.
+
+    /// <summary>The current <c>statusLine.command</c> string in <c>~/.claude/settings.json</c>, or null
+    /// when there is no status line configured. Used to back up whatever's already there (Perch's or an
+    /// external tool's) before switching profiles.</summary>
+    public static string? ReadStatusLineCommand() => ReadStatusLineCommand(ClaudePaths.UserSettingsFile);
+
+    /// <summary>As <see cref="ReadStatusLineCommand()"/>, against an explicit settings file (test seam).</summary>
+    public static string? ReadStatusLineCommand(string settingsPath)
+    {
+        try
+        {
+            if (!File.Exists(settingsPath)) return null;
+            var root = JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: ReadOptions) as JsonObject;
+            return TranscriptJson.AsString((root?["statusLine"] as JsonObject)?["command"]);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Writes the <c>statusLine</c> block (<c>type: "command"</c>, the given command and
+    /// padding), preserving every other setting. Returns true on a successful write.</summary>
+    public static bool SetStatusLine(string command, int padding = 0) =>
+        SetStatusLine(ClaudePaths.UserSettingsFile, command, padding);
+
+    /// <summary>As <see cref="SetStatusLine(string,int)"/>, against an explicit settings file (test seam).</summary>
+    public static bool SetStatusLine(string settingsPath, string command, int padding = 0)
+    {
+        try
+        {
+            var root = File.Exists(settingsPath)
+                ? JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: ReadOptions) as JsonObject ?? new JsonObject()
+                : new JsonObject();
+
+            root["statusLine"] = new JsonObject
+            {
+                ["type"]    = "command",
+                ["command"] = command,
+                ["padding"] = padding,
+            };
+
+            Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+            File.WriteAllText(settingsPath, root.ToJsonString(WriteOptions));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Removes the <c>statusLine</c> block entirely (revert to no status line), preserving every
+    /// other setting. Returns true if the file was rewritten.</summary>
+    public static bool ClearStatusLine() => ClearStatusLine(ClaudePaths.UserSettingsFile);
+
+    /// <summary>As <see cref="ClearStatusLine()"/>, against an explicit settings file (test seam).</summary>
+    public static bool ClearStatusLine(string settingsPath)
+    {
+        try
+        {
+            if (!File.Exists(settingsPath)) return false;
+            if (JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: ReadOptions) is not JsonObject root
+                || !root.ContainsKey("statusLine"))
+                return false;
+
+            root.Remove("statusLine");
+            File.WriteAllText(settingsPath, root.ToJsonString(WriteOptions));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }
 
 /// <summary>The user's configured session defaults from <c>settings.json</c> (see
