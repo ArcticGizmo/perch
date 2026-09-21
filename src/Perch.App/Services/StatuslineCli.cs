@@ -117,10 +117,14 @@ internal static class StatuslineCli
 
         cfg.ActiveName = p.Name;
         StatuslineStore.Save(cfg);
-        if (!Apply(p)) { w.WriteLine("Couldn't write ~/.claude/settings.json."); return 1; }
+        if (!Apply(p)) { w.WriteLine("Couldn't write the script or ~/.claude/settings.json."); return 1; }
 
         w.WriteLine($"Active profile: {p.Name}");
-        if (p.IsPerch) w.WriteLine($"Preview: {Preview(p)}");
+        if (p.IsPerch)
+        {
+            w.WriteLine($"Generated standalone script: {StatuslineScript.DefaultScriptPath}");
+            w.WriteLine($"Preview: {Preview(p)}");
+        }
         return 0;
     }
 
@@ -162,8 +166,9 @@ internal static class StatuslineCli
         StatuslineStore.Save(cfg);   // materialise the file if it didn't exist yet
         var active = cfg.Active;
         if (active is null) { w.WriteLine("No profiles to install."); return 1; }
-        Apply(active);
+        if (!Apply(active)) { w.WriteLine("Couldn't write the script or ~/.claude/settings.json."); return 1; }
         w.WriteLine($"Installed {cfg.Profiles.Count} profiles; active: {active.Name}.");
+        if (active.IsPerch) w.WriteLine($"Standalone script: {StatuslineScript.DefaultScriptPath}");
         w.WriteLine("Open a new Claude Code session to see it.");
         return 0;
     }
@@ -171,9 +176,12 @@ internal static class StatuslineCli
     private static int Help(StreamWriter w)
     {
         w.WriteLine("perch statusline — design and switch Claude Code status lines");
-        w.WriteLine("  (render)               read stdin JSON, print the active profile's line");
+        w.WriteLine("  Perch profiles compile to a standalone Node script; settings.json runs that");
+        w.WriteLine("  directly (node \"…\"), so perch itself is never called at refresh time.");
+        w.WriteLine();
+        w.WriteLine("  (render)               local preview: read stdin JSON, print the active line");
         w.WriteLine("  list                   list saved profiles");
-        w.WriteLine("  use <name>             make a profile active (writes settings.json)");
+        w.WriteLine("  use <name>             activate a profile (generates the script + writes settings.json)");
         w.WriteLine("  backup [name]          save the current settings.json status line as a profile");
         w.WriteLine("  import <name> <cmd>    save a non-Perch command as a profile");
         w.WriteLine("  install                seed default profiles and apply the active one");
@@ -181,15 +189,26 @@ internal static class StatuslineCli
     }
 
     // ── helpers ────────────────────────────────────────────────────────────────────────
-    // Writes the profile into settings.json: a Perch profile points the command at this exe's
-    // `statusline` render path; an external profile writes its command verbatim.
+    // Applies a profile to settings.json. A Perch profile is compiled to a standalone Node script that
+    // settings.json runs directly (`node "…"`) — Perch is never in the refresh loop. An external profile
+    // is written verbatim. Returns false if the script couldn't be written or settings.json couldn't be
+    // updated.
     private static bool Apply(StatuslineProfile p)
     {
         if (p.IsPerch)
         {
-            var exe = Environment.ProcessPath;
-            if (exe is null) return false;
-            return ClaudeUserSettings.SetStatusLine($"\"{exe}\" statusline", p.Padding);
+            if (string.IsNullOrEmpty(p.Template)) return false;
+            var path = StatuslineScript.DefaultScriptPath;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, StatuslineScript.Generate(p));
+            }
+            catch
+            {
+                return false;
+            }
+            return ClaudeUserSettings.SetStatusLine(StatuslineScript.CommandFor(path), p.Padding);
         }
         return !string.IsNullOrWhiteSpace(p.Command) && ClaudeUserSettings.SetStatusLine(p.Command!, p.Padding);
     }

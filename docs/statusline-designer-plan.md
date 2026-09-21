@@ -43,10 +43,19 @@ Payload highlights (all real, current fields): `model.{id,display_name}`, `works
 (the data-explorer catalogue), `GitHead` (branch from `.git/HEAD`, no subprocess). Fully unit-tested
 (`StatuslineTemplateTests`, `StatuslineConfigTests`, `StatuslineSettingsTests`).
 
-### M1 — CLI *(done)*
+### M1 — CLI + standalone script *(done)*
 `perch statusline` (`src/Perch.App/Services/StatuslineCli.cs`, dispatched at the top of `Program.Main`
 before Avalonia). `ClaudeUserSettings.{Read,Set,Clear}StatusLine` read/write the settings.json block,
-preserving every other key. Render path verified live end-to-end (ANSI + git branch + UTF-8 glyphs).
+preserving every other key.
+
+**Perch is not in the refresh loop.** Applying a Perch profile *compiles* it to a **standalone Node
+script** (`StatuslineScript`, `~/.claude/perch-statusline.mjs`) with the engine + template + git-branch
+reader baked in; `settings.json → statusLine.command` is `node "…"`, which runs directly. Node is chosen
+because Claude Code already requires it, so the script has a guaranteed cross-platform runtime and no
+extra dependency (no jq/python/pwsh). The status line keeps working even if Perch is uninstalled. The
+embedded engine is a faithful JS port of `StatuslineTemplate`; a **parity test** runs the generated
+script under `node` and diffs its stdout against the C# engine byte-for-byte, so the two can't drift.
+`perch statusline render` remains only as a local preview aid — nothing in `settings.json` calls it.
 
 ### M2 — Designer window *(next)*
 Owner-drawn Avalonia window mirroring the mockup: template editor (toolbar chips), live preview
@@ -56,8 +65,9 @@ Back up / Import buttons). Reuse the `PreviewPane`/`WindowHost.ShowOrFocus` idio
 overlay menu. Then a `SettingsRegistry` entry so it's discoverable from Settings.
 
 ### Later
-Per-segment Powerline styling; `git.changes`/`dirty` injection (cheap numstat) so those tokens light up;
-"eject to standalone script" (Bash/pwsh/node) so a profile runs without Perch; OSC 8 link support.
+Per-segment Powerline styling; `git.changes`/`dirty` in the generated script (cheap numstat) so those
+tokens light up; additional target languages besides the default Node (Bash+jq, PowerShell) as a
+per-profile choice; OSC 8 link support.
 
 ## Try it (experiment now, before M2)
 
@@ -70,7 +80,7 @@ echo '{"model":{"display_name":"Opus"},"cwd":"C:/path/to/repo","cost":{"total_co
 
 perch statusline list                    # saved profiles + what's in settings.json now
 perch statusline backup                  # stash your current status line as an imported profile (safe!)
-perch statusline use "Two-line Pro"      # activate a profile -> writes ~/.claude/settings.json
+perch statusline use "Two-line Pro"      # generate ~/.claude/perch-statusline.mjs + point settings.json at it
 perch statusline import ccstatusline "npx -y ccstatusline@latest"
 perch statusline install                 # seed defaults + apply the active one
 ```

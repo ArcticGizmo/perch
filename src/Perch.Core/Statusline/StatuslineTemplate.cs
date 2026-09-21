@@ -139,14 +139,12 @@ internal static class StatuslineTemplate
         }
     }
 
-    // Coalesce a run into the previous segment when the colour matches — keeps the ANSI output tidy.
+    // One segment per node (no coalescing): keeps the ANSI byte stream identical to the generated
+    // standalone Node script, which wraps each token separately — so the parity test can diff them.
     private static void Add(List<StatuslineSegment> outp, string text, StatusColor color)
     {
         if (text.Length == 0) return;
-        if (outp.Count > 0 && outp[^1].Color == color)
-            outp[^1] = outp[^1] with { Text = outp[^1].Text + text };
-        else
-            outp.Add(new StatuslineSegment(text, color));
+        outp.Add(new StatuslineSegment(text, color));
     }
 
     private static bool SectionActive(SectionNode s, TemplateData data) => s.Mode switch
@@ -215,8 +213,8 @@ internal static class StatuslineTemplate
             switch (name)
             {
                 case "money": text = (num ?? 0).ToString("0.00", CultureInfo.InvariantCulture); break;
-                case "round": text = System.Math.Round(num ?? 0).ToString("0", CultureInfo.InvariantCulture); break;
-                case "pct":   text = System.Math.Round(num ?? 0).ToString("0", CultureInfo.InvariantCulture) + "%"; break;
+                case "round": text = Round(num ?? 0).ToString("0", CultureInfo.InvariantCulture); break;
+                case "pct":   text = Round(num ?? 0).ToString("0", CultureInfo.InvariantCulture) + "%"; break;
                 case "k":     text = FmtK(num ?? 0); break;
                 case "upper": text = text.ToUpperInvariant(); break;
                 case "lower": text = text.ToLowerInvariant(); break;
@@ -237,9 +235,13 @@ internal static class StatuslineTemplate
             ? (n / 1000).ToString(System.Math.Abs(n) >= 10000 ? "0" : "0.0", CultureInfo.InvariantCulture) + "k"
             : ((long)n).ToString(CultureInfo.InvariantCulture);
 
+    // Round half away from zero, matching JavaScript's Math.round for the (non-negative) values a
+    // status line deals in — so the C# preview and the generated Node script agree.
+    private static double Round(double v) => System.Math.Round(v, System.MidpointRounding.AwayFromZero);
+
     private static string Bar(double pct, int cells)
     {
-        int filled = (int)System.Math.Round(System.Math.Clamp(pct, 0, 100) / 100.0 * cells);
+        int filled = (int)Round(System.Math.Clamp(pct, 0, 100) / 100.0 * cells);
         filled = System.Math.Clamp(filled, 0, cells);
         return new string('█', filled) + new string('░', cells - filled);
     }

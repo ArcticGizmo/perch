@@ -1,0 +1,221 @@
+namespace Perch.Statusline;
+
+using System.IO;
+using System.Text.Json;
+using Perch.Data;
+
+/// <summary>
+/// Generates a <b>standalone</b> statusline command from a Perch template — a self-contained Node
+/// script (<c>.mjs</c>) with the engine and the template baked in. <c>settings.json</c> points straight
+/// at it (<c>node "…"</c>), so Perch is never invoked at refresh time and the status line keeps working
+/// even if Perch is uninstalled or not running. Node is chosen because Claude Code already requires it,
+/// so the script has a guaranteed runtime and is identical across Windows/macOS/Linux.
+///
+/// <para>The embedded engine is a faithful port of <see cref="StatuslineTemplate"/> (same tokens,
+/// conditionals, filters, truecolor palette and rounding), including reading <c>git.branch</c> straight
+/// off <c>.git/HEAD</c> — the one field Perch used to inject — so nothing is lost by dropping Perch from
+/// the loop. A parity test renders the same cases through both and diffs the bytes.</para>
+/// </summary>
+internal static class StatuslineScript
+{
+    /// <summary>Where <c>use</c>/<c>install</c> write the active Perch profile's script: beside Claude
+    /// Code's own config (the docs' example location for status line scripts), independent of Perch's
+    /// install dir.</summary>
+    public static string DefaultScriptPath => Path.Combine(ClaudePaths.ClaudeDir, "perch-statusline.mjs");
+
+    /// <summary>The <c>settings.json → statusLine.command</c> that runs a generated script.</summary>
+    public static string CommandFor(string scriptPath) => $"node \"{scriptPath}\"";
+
+    /// <summary>Builds the standalone script for a Perch profile (its <see cref="StatuslineProfile.Template"/>
+    /// baked in). Throws if the profile has no template.</summary>
+    public static string Generate(StatuslineProfile profile)
+    {
+        var template = profile.Template
+            ?? throw new System.InvalidOperationException("profile has no template");
+
+        // JSON-encode both — a JSON string literal is also a valid JS string literal, so this is safe
+        // against quotes, backslashes and newlines in the template.
+        var templateLiteral = JsonSerializer.Serialize(template);
+        var nameLiteral = JsonSerializer.Serialize(profile.Name);
+
+        return Body
+            .Replace("@@TEMPLATE@@", templateLiteral)
+            .Replace("@@NAME@@", nameLiteral);
+    }
+
+    // The script body. @@TEMPLATE@@ / @@NAME@@ are replaced with JSON string literals. Kept as a raw
+    // string literal so backslashes (\x1b, regex escapes) are literal. Everything is defensive: any
+    // failure prints nothing rather than a stack trace into the status bar.
+    private const string Body = """
+        #!/usr/bin/env node
+        // Perch statusline — standalone, generated from profile @@NAME@@.
+        // Self-contained: edit freely; no Perch process is involved at runtime.
+        import { readFileSync, existsSync, statSync } from 'node:fs';
+        import { join, dirname, isAbsolute, resolve } from 'node:path';
+
+        const TEMPLATE = @@TEMPLATE@@;
+
+        const COL = {
+          teal:[70,198,184], amber:[227,168,78], green:[95,191,127], red:[229,104,106],
+          yellow:[227,179,65], blue:[91,155,214], violet:[176,133,224], muted:[139,149,166],
+        };
+        const ansi = (t, c) => COL[c] ? `\x1b[38;2;${COL[c][0]};${COL[c][1]};${COL[c][2]}m${t}\x1b[0m` : t;
+
+        function lookup(path, ctx) {
+          let v = ctx;
+          for (const part of path.split('.')) {
+            if (v != null && typeof v === 'object' && Object.prototype.hasOwnProperty.call(v, part)) v = v[part];
+            else return undefined;
+          }
+          return v;
+        }
+        const truthy = v =>
+          !(v === undefined || v === null || v === false || v === 0 || v === '' || (Array.isArray(v) && v.length === 0));
+        function num(v) {
+          if (v === undefined || v === null) return null;
+          if (typeof v === 'number') return v;
+          if (typeof v === 'boolean') return v ? 1 : 0;
+          if (typeof v === 'string') { const n = parseFloat(v); return Number.isNaN(n) ? null : n; }
+          return null;
+        }
+        const str = v => (v === undefined || v === null) ? '' : (typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v));
+
+        const pint = (a, fb) => { const v = parseInt(a, 10); return (!Number.isNaN(v) && v > 0) ? v : fb; };
+        const fmtK = n => Math.abs(n) >= 1000
+          ? (n / 1000).toFixed(Math.abs(n) >= 10000 ? 0 : 1) + 'k'
+          : String(Math.trunc(n));
+        function bar(p, cells) {
+          let f = Math.round(Math.min(Math.max(p, 0), 100) / 100 * cells);
+          f = Math.min(Math.max(f, 0), cells);
+          return '█'.repeat(f) + '░'.repeat(cells - f);
+        }
+        const trunc = (s, max) => s.length <= max ? s : (max <= 1 ? s.slice(0, max) : s.slice(0, max - 1) + '…');
+
+        function applyVar(spec, ctx) {
+          const parts = spec.split('|');
+          const val = lookup(parts[0].trim(), ctx);
+          let text = str(val); const n = num(val); let color = null;
+          for (let i = 1; i < parts.length; i++) {
+            const f = parts[i].trim(); if (!f) continue;
+            const ci = f.indexOf(':'); const name = (ci < 0 ? f : f.slice(0, ci)).trim();
+            const arg = ci < 0 ? null : f.slice(ci + 1).trim();
+            switch (name) {
+              case 'money': text = (n || 0).toFixed(2); break;
+              case 'round': text = String(Math.round(n || 0)); break;
+              case 'pct':   text = String(Math.round(n || 0)) + '%'; break;
+              case 'k':     text = fmtK(n || 0); break;
+              case 'upper': text = text.toUpperCase(); break;
+              case 'lower': text = text.toLowerCase(); break;
+              case 'bar':   text = bar(n || 0, pint(arg, 10)); break;
+              case 'trunc': text = trunc(text, pint(arg, 20)); break;
+              case 'default': if (text.length === 0) text = arg || ''; break;
+              case 'color': color = arg; break;
+            }
+          }
+          return { text, color };
+        }
+
+        function tokenize(t) {
+          const re = /\{\{([#/^!]?)([^}]*)\}\}/g; const out = []; let last = 0, m;
+          while ((m = re.exec(t))) {
+            if (m.index > last) out.push({ t: 'text', v: t.slice(last, m.index) });
+            const sig = m[1], body = m[2].trim();
+            if (sig === '!') { /* comment */ }
+            else if (sig === '#') out.push({ t: 'open', v: body });
+            else if (sig === '^') out.push({ t: 'inv', v: body });
+            else if (sig === '/') out.push({ t: 'close', v: body });
+            else out.push({ t: 'var', v: body });
+            last = re.lastIndex;
+          }
+          if (last < t.length) out.push({ t: 'text', v: t.slice(last) });
+          return out;
+        }
+        function build(toks) {
+          let i = 0;
+          const walk = () => {
+            const nodes = [];
+            while (i < toks.length) {
+              const tk = toks[i];
+              if (tk.t === 'close') { i++; return nodes; }
+              if (tk.t === 'open' || tk.t === 'inv') { i++; nodes.push({ kind: tk.t, v: tk.v, kids: walk() }); }
+              else { nodes.push(tk); i++; }
+            }
+            return nodes;
+          };
+          return walk();
+        }
+        const evalTruthy = (p, ctx) => truthy(lookup(p.trim(), ctx));
+        function evalExpr(expr, ctx) {
+          expr = expr.trim();
+          const m = expr.match(/^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
+          if (!m) return evalTruthy(expr, ctx);
+          const l = lookup(m[1].trim(), ctx), op = m[2]; let r = m[3].trim();
+          const ln = num(l), rn = Number(r), rNum = r !== '' && Number.isFinite(rn);
+          if (ln !== null && rNum) {
+            switch (op) {
+              case '==': return ln === rn; case '!=': return ln !== rn;
+              case '>': return ln > rn; case '<': return ln < rn;
+              case '>=': return ln >= rn; case '<=': return ln <= rn;
+            }
+          }
+          const unq = s => (s.length >= 2 && ((s[0] === "'" && s.slice(-1) === "'") || (s[0] === '"' && s.slice(-1) === '"'))) ? s.slice(1, -1) : s;
+          const ls = str(l), rs = unq(r);
+          return op === '==' ? ls === rs : op === '!=' ? ls !== rs : false;
+        }
+        function renderNodes(nodes, ctx) {
+          let out = '';
+          for (const n of nodes) {
+            if (n.t === 'text') out += n.v;
+            else if (n.t === 'var') { const { text, color } = applyVar(n.v, ctx); if (text.length) out += ansi(text, color); }
+            else if (n.kind === 'open') {
+              let cond;
+              if (n.v.startsWith('if ')) cond = evalExpr(n.v.slice(3), ctx);
+              else if (n.v.startsWith('unless ')) cond = !evalExpr(n.v.slice(7), ctx);
+              else cond = evalTruthy(n.v, ctx);
+              if (cond) out += renderNodes(n.kids, ctx);
+            } else if (n.kind === 'inv') {
+              if (!evalTruthy(n.v, ctx)) out += renderNodes(n.kids, ctx);
+            }
+          }
+          return out;
+        }
+        const render = (tpl, ctx) => renderNodes(build(tokenize(tpl)), ctx);
+
+        // git.branch straight off .git/HEAD — no subprocess, no Perch.
+        function findGitDir(dir) {
+          let d = dir;
+          while (d) {
+            const g = join(d, '.git');
+            if (existsSync(g)) {
+              if (statSync(g).isDirectory()) return g;
+              const m = readFileSync(g, 'utf8').trim().match(/^gitdir:\s*(.+)$/);
+              if (m) { const p = m[1].trim(); return isAbsolute(p) ? p : resolve(d, p); }
+              return null;
+            }
+            const parent = dirname(d);
+            if (parent === d) break;
+            d = parent;
+          }
+          return null;
+        }
+        function gitBranch(dir) {
+          try {
+            const gd = findGitDir(dir); if (!gd) return null;
+            const head = join(gd, 'HEAD'); if (!existsSync(head)) return null;
+            const t = readFileSync(head, 'utf8').trim(); const pfx = 'ref: refs/heads/';
+            return t.startsWith(pfx) ? (t.slice(pfx.length).trim() || null) : null;
+          } catch { return null; }
+        }
+        function injectGit(p) {
+          const cwd = p.cwd || (p.workspace && p.workspace.current_dir) || '';
+          if (!cwd) return;
+          const b = gitBranch(cwd);
+          if (b) p.git = Object.assign({}, p.git, { branch: b });
+        }
+
+        let payload = {};
+        try { payload = JSON.parse(readFileSync(0, 'utf8') || '{}'); } catch { }
+        try { injectGit(payload); } catch { }
+        try { process.stdout.write(render(TEMPLATE, payload)); } catch { }
+        """;
+}

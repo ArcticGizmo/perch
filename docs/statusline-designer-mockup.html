@@ -428,10 +428,10 @@ function loadActive(){
 function settingsSnippet(){
   const p=activeProfile();
   const cmd = p.kind==="perch"
-    ? `perch statusline --profile "${p.name}"`
+    ? `node "~/.claude/perch-statusline.mjs"`
     : p.cmd;
   const com = p.kind==="perch"
-    ? "// Perch renders your template from stdin JSON"
+    ? "// standalone script Perch generated — perch not in the loop"
     : "// imported verbatim — Perch just runs it";
   return `<span class="k-com">${com}</span>
 {
