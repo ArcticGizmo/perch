@@ -895,6 +895,39 @@ internal static class HeadlessRenderer
             w.Close();
         }
 
+        // Config-dir picker: inject a second writable config dir so "Set active" shows the target selector
+        // (a multi-org setup). Reset the set afterwards so no other capture is affected.
+        {
+            var primary = ClaudeConfigSet.Instance.Primary;
+            var second = new ClaudeConfigDir(Path.Combine(ClaudeConfigSet.Home, ".claude-work"), slug: "work")
+            {
+                Provenance = ConfigDirProvenance.Declared,
+            };
+            ClaudeConfigSet.SetForTesting(new[] { primary, second });
+            try
+            {
+                var w = new Windows.StatuslineDesignerWindow(Perch.Statusline.StatuslineStore.Seeded())
+                {
+                    Width = 1000, Height = 640,
+                };
+                w.SelectForRender("Minimal");   // an editable-looking preview; the picker sits by "Set active"
+                w.Show();
+                Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                var frame = w.CaptureRenderedFrame();
+                if (frame != null)
+                {
+                    using var fs = File.Create(Path.Combine(outDir, "statusline_designer_configdir_1x.png"));
+                    frame.Save(fs);
+                }
+                w.Close();
+            }
+            finally
+            {
+                ClaudeConfigSet.ResetForTesting();
+            }
+        }
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }

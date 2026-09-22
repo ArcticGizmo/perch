@@ -14,11 +14,11 @@ internal static class StatuslineSample
       "version": "2.1.90",
       "output_style": { "name": "default" },
       "session_id": "5f2c9a10-3b7e-4d1a-9c22-1e8a6b0d4477",
-      "cwd": "/home/jhowell/git/personal/perch",
+      "cwd": "/home/user/git/personal/perch",
       "workspace": {
-        "current_dir": "/home/jhowell/git/personal/perch",
-        "project_dir": "/home/jhowell/git/personal/perch",
-        "repo": { "host": "github.com", "owner": "jhowell", "name": "perch" }
+        "current_dir": "/home/user/git/personal/perch",
+        "project_dir": "/home/user/git/personal/perch",
+        "repo": { "host": "github.com", "owner": "user", "name": "perch" }
       },
       "cost": {
         "total_cost_usd": 0.4213,
@@ -43,11 +43,11 @@ internal static class StatuslineSample
       "pr": {
         "number": 30,
         "review_state": "pending",
-        "url": "https://github.com/jhowell/perch/pull/30"
+        "url": "https://github.com/user/perch/pull/30"
       },
       "effort": { "level": "high" },
       "vim": { "mode": "NORMAL" },
-      "git": { "branch": "statusline-designer", "staged": 2, "unstaged": 3, "changes": 5, "dirty": true }
+      "git": { "branch": "feat-0001", "staged": 2, "unstaged": 3, "changes": 5, "dirty": true }
     }
     """;
 

@@ -118,6 +118,33 @@ public sealed class StatuslineConfigTests : IDisposable
         Assert.NotNull(loaded.Find("Rate-aware verbose"));
     }
 
+    // ── config-dir-targeted apply (multi config dir) ────────────────────────────────────
+    [Fact]
+    public void Apply_targets_a_specific_config_dirs_settings_and_script()
+    {
+        var dir = new Perch.Data.ClaudeConfigDir(_dir);
+        var profile = new StatuslineProfile { Name = "t", Kind = ProfileKind.Perch, Template = "{{model.display_name}}" };
+
+        Assert.True(StatuslineInstaller.Apply(profile, dir, out var scriptPath));
+
+        // the generated script lands INSIDE this config dir, and its own settings.json points at it
+        Assert.Equal(Path.Combine(_dir, "perch-statusline.mjs"), scriptPath);
+        Assert.True(File.Exists(scriptPath));
+        Assert.True(File.Exists(Path.Combine(_dir, "settings.json")));
+        Assert.Equal(StatuslineScript.CommandFor(scriptPath!), StatuslineInstaller.CurrentCommand(dir));
+    }
+
+    [Fact]
+    public void Apply_to_a_config_dir_writes_an_external_command_verbatim()
+    {
+        var dir = new Perch.Data.ClaudeConfigDir(_dir);
+        var profile = new StatuslineProfile { Name = "ext", Kind = ProfileKind.External, Command = "npx ccstatusline" };
+
+        Assert.True(StatuslineInstaller.Apply(profile, dir, out var scriptPath));
+        Assert.Null(scriptPath);
+        Assert.Equal("npx ccstatusline", StatuslineInstaller.CurrentCommand(dir));
+    }
+
     [Fact]
     public void Upsert_replaces_by_name_case_insensitively()
     {

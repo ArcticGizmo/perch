@@ -11,6 +11,7 @@ using Avalonia.Media.TextFormatting;
 using Avalonia.Threading;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
+using Perch.Data;
 using Perch.Statusline;
 
 namespace Perch.Avalonia.Windows;
@@ -63,6 +64,9 @@ internal sealed class StatuslineDesignerWindow : Window
     private WrapPanel _chips = null!;
     private TextBlock _softBreakHint = null!;
     private Border _lockBanner = null!;
+    private TextBlock _writesLabel = null!;
+    private ComboBox _configDirCombo = null!;
+    private List<ClaudeConfigDir> _writableDirs = new();
     private DispatcherTimer? _appliedTimer;
 
     // editor gutter + autocomplete
@@ -444,6 +448,7 @@ internal sealed class StatuslineDesignerWindow : Window
 
         // settings.json command + apply
         _commandLabel = new TextBlock { Foreground = Muted, FontFamily = Mono, FontSize = 11, TextWrapping = TextWrapping.Wrap };
+        _writesLabel = new TextBlock { Foreground = Muted, FontSize = 11, TextWrapping = TextWrapping.Wrap };
         _applyButton = new Button
         {
             Content = "Set active", Background = Accent, Foreground = new SolidColorBrush(Color.FromRgb(7, 18, 15)),
@@ -453,13 +458,37 @@ internal sealed class StatuslineDesignerWindow : Window
         };
         _applyButton.Click += (_, _) => ApplySelected();
 
+        // Config-dir target: when more than one WRITABLE config dir exists (multiple orgs), let the user pick
+        // which one's settings.json + script this profile is applied to — or "All". A single dir hides the
+        // picker and just targets the primary (the usual case).
+        _writableDirs = ClaudeConfigSet.Instance.All.Where(d => d.IsWritable).ToList();
+        _configDirCombo = new ComboBox
+        {
+            Background = Panel, Foreground = Fg, BorderBrush = Stroke, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 4), MinWidth = 200,
+            IsVisible = _writableDirs.Count > 1,
+        };
+        foreach (var d in _writableDirs) _configDirCombo.Items.Add(DirComboLabel(d));
+        if (_writableDirs.Count > 1) _configDirCombo.Items.Add("All directories");
+        _configDirCombo.SelectedIndex = 0;
+        _configDirCombo.SelectionChanged += (_, _) => UpdateCommandLabel();
+
         var applyRow = new DockPanel { LastChildFill = true };
         DockPanel.SetDock(_applyButton, Dock.Right);
         applyRow.Children.Add(_applyButton);
         applyRow.Children.Add(new StackPanel
         {
-            VerticalAlignment = VerticalAlignment.Center,
-            Children = { new TextBlock { Text = "Writes ~/.claude/settings.json", Foreground = Muted, FontSize = 11 }, _commandLabel },
+            VerticalAlignment = VerticalAlignment.Center, Spacing = 4,
+            Children =
+            {
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal, Spacing = 8, IsVisible = _writableDirs.Count > 1,
+                    Children = { new TextBlock { Text = "Apply to", Foreground = Muted, FontSize = 11, VerticalAlignment = VerticalAlignment.Center }, _configDirCombo },
+                },
+                _writesLabel,
+                _commandLabel,
+            },
         });
 
         // Built-in profiles are read-only: this banner replaces the editing affordances and offers a copy.
@@ -784,9 +813,43 @@ internal sealed class StatuslineDesignerWindow : Window
 
     private void UpdateCommandLabel()
     {
+        var targets = SelectedApplyTargets();
+        // What "Set active" will write into: name the target settings.json (or "N directories" for all).
+        _writesLabel.Text = targets.Count == 1
+            ? $"Writes {Tildify(targets[0].UserSettingsFile)}"
+            : $"Writes settings.json in {targets.Count} directories";
+
+        // For a Perch profile the command is the same node-script invocation everywhere (each dir gets its own
+        // copy of the script); show the single-target path when there's just one target.
         _commandLabel.Text = _selected.IsPerch
-            ? StatuslineScript.CommandFor(StatuslineInstaller.ScriptPath)
+            ? StatuslineScript.CommandFor(targets.Count == 1
+                ? StatuslineScript.ScriptPathFor(targets[0].Root)
+                : StatuslineScript.DefaultScriptPath)
             : (string.IsNullOrWhiteSpace(_selected.Command) ? "(no command yet)" : _selected.Command);
+    }
+
+    // The config dir(s) "Set active" writes into: the single writable dir when there's one, otherwise the
+    // combo selection (a specific dir, or every writable dir for the "All directories" item).
+    private List<ClaudeConfigDir> SelectedApplyTargets()
+    {
+        if (_writableDirs.Count == 0) return new List<ClaudeConfigDir>();
+        if (!_configDirCombo.IsVisible) return new List<ClaudeConfigDir> { _writableDirs[0] };
+        int idx = _configDirCombo.SelectedIndex;
+        if (idx >= 0 && idx < _writableDirs.Count) return new List<ClaudeConfigDir> { _writableDirs[idx] };
+        return new List<ClaudeConfigDir>(_writableDirs);   // the trailing "All directories" item
+    }
+
+    private static string DirComboLabel(ClaudeConfigDir d) =>
+        d.Provenance == ConfigDirProvenance.Primary
+            ? $"Default  ·  {Tildify(d.Root)}"
+            : $"{(string.IsNullOrWhiteSpace(d.CustomLabel) ? d.Label : d.CustomLabel)}  ·  {Tildify(d.Root)}";
+
+    private static string Tildify(string path)
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return !string.IsNullOrEmpty(home) && path.StartsWith(home, StringComparison.OrdinalIgnoreCase)
+            ? "~" + path[home.Length..].Replace('\\', '/')
+            : path;
     }
 
     private void ApplySelected()
@@ -794,10 +857,16 @@ internal sealed class StatuslineDesignerWindow : Window
         CommitName();
         _config.ActiveName = _selected.Name;
         StatuslineStore.Save(_config);
-        if (StatuslineInstaller.Apply(_selected, out _))
+
+        var targets = SelectedApplyTargets();
+        bool ok = targets.Count > 0;
+        foreach (var dir in targets)
+            ok &= StatuslineInstaller.Apply(_selected, dir, out _);
+
+        if (ok)
         {
             RefreshRail();
-            Flash(_applyButton, "Active ✓");
+            Flash(_applyButton, targets.Count > 1 ? $"Active in {targets.Count} ✓" : "Active ✓");
         }
         else
         {

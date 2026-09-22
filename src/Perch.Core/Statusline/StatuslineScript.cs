@@ -18,10 +18,14 @@ using Perch.Data;
 /// </summary>
 internal static class StatuslineScript
 {
-    /// <summary>Where <c>use</c>/<c>install</c> write the active Perch profile's script: beside Claude
-    /// Code's own config (the docs' example location for status line scripts), independent of Perch's
-    /// install dir.</summary>
-    public static string DefaultScriptPath => Path.Combine(ClaudePaths.ClaudeDir, "perch-statusline.mjs");
+    /// <summary>The generated script's path inside a given config dir — <c>{root}/perch-statusline.mjs</c>.
+    /// Each config dir gets its own copy so its <c>settings.json</c> points at a script beside it and the
+    /// dirs stay independent (see the config-dir-targeted <see cref="StatuslineInstaller.Apply"/>).</summary>
+    public static string ScriptPathFor(string configRoot) => Path.Combine(configRoot, "perch-statusline.mjs");
+
+    /// <summary>Where <c>use</c>/<c>install</c> write the active Perch profile's script by default: beside
+    /// Claude Code's own config (the docs' example location), independent of Perch's install dir.</summary>
+    public static string DefaultScriptPath => ScriptPathFor(ClaudePaths.ClaudeDir);
 
     /// <summary>The <c>settings.json → statusLine.command</c> that runs a generated script.</summary>
     public static string CommandFor(string scriptPath) => $"node \"{scriptPath}\"";
