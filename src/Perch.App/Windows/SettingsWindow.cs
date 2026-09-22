@@ -107,6 +107,12 @@ internal sealed class SettingsHooks
     /// <summary>Open the drag-to-place initial-placement editor (also on the overlay header menu).</summary>
     public Action? OpenPlacements;
 
+    /// <summary>Open the per-config-directory Agent Teams modal (the multi-dir form of the single toggle).</summary>
+    public Action? OpenAgentTeams;
+
+    /// <summary>Open the status-line designer (also on the tray menu).</summary>
+    public Action? OpenStatuslineDesigner;
+
     /// <summary>Open the Social compose / friends windows (also on the overlay's right-click menu).</summary>
     public Action? OpenSocialCompose;
     public Action? OpenSocialFriends;
@@ -1918,9 +1924,10 @@ internal sealed class SettingsWindow : Window
             "Perch watches your ~/.claude config directory by default. If you run Claude Code with " +
             "CLAUDE_CONFIG_DIR pointed at other directories (for example one per org, via a launcher), those " +
             "are auto-discovered — and you can add one that lives somewhere unusual. Edit a row to rename its " +
-            "label (shown on its session rows), or remove ones you don't want. Only the primary, directories " +
-            "you add, and ones a running session reports are ever written to (a hook install); the rest are " +
-            "read-only."));
+            "label (shown on its session rows), turn its Perch hooks on or off (needed for the accept-edits " +
+            "badge, session control and auto-start), or remove ones you don't want. The primary is always " +
+            "hooked; directories you add default to hooked; auto-discovered ones default off (Perch won't hook " +
+            "a directory it only guessed at unless you turn it on), but you can enable any of them from Edit."));
 
         page.Children.Add(SettingsUi.Separator());
 
@@ -1940,6 +1947,19 @@ internal sealed class SettingsWindow : Window
         page.Children.Add(SettingsUi.BodyText(
             "Show each session's config directory label on its row (only when more than one config directory " +
             "is in play). Off hides every chip regardless of the per-directory labels."));
+
+        page.Children.Add(SettingsUi.Separator());
+
+        page.Children.Add(SettingsUi.SectionTitle("Status lines"));
+        page.Children.Add(SettingsUi.BodyText(
+            "Design the Claude Code status line and apply it to any config directory. A status line is set per " +
+            "directory (it lives in that directory's settings.json), so the designer is where you pick which " +
+            "directories each one applies to."));
+        var slRow = SettingsUi.ButtonRow();
+        var slBtn = SettingsUi.FlatButton("Open status line designer…");
+        slBtn.Click += (_, _) => _hooks.OpenStatuslineDesigner?.Invoke();
+        slRow.Children.Add(slBtn);
+        page.Children.Add(slRow);
 
         page.Children.Add(SettingsUi.Separator());
 
@@ -2130,6 +2150,14 @@ internal sealed class SettingsWindow : Window
             FontSize = 12, Foreground = Palette.MutedBrush,
             Margin = new Thickness(0, 1, 0, 0),
         });
+        // Hooks state as a plain status line (matching the other meta lines); the on/off control lives in the
+        // Edit dialog. Primary is always hooked; declared/reported dirs default on, auto-discovered off.
+        bool hooksOn = HookPolicy.IsEnabled(d.Provenance, d.RealRoot, HooksDisabledList, HooksEnabledList);
+        textStack.Children.Add(new TextBlock
+        {
+            Text = $"Perch hooks: {(hooksOn ? "true" : "false")}",
+            FontSize = 12, Foreground = Palette.MutedBrush, Margin = new Thickness(0, 1, 0, 0),
+        });
         Grid.SetColumn(textStack, 0);
         grid.Children.Add(textStack);
 
@@ -2180,6 +2208,32 @@ internal sealed class SettingsWindow : Window
         if (list.Count == 0) _settings.ConfigDirLabels = null;
     }
 
+    private IReadOnlyCollection<string> HooksDisabledList =>
+        _settings.HooksDisabledDirs ?? (IReadOnlyCollection<string>)Array.Empty<string>();
+    private IReadOnlyCollection<string> HooksEnabledList =>
+        _settings.HooksEnabledDirs ?? (IReadOnlyCollection<string>)Array.Empty<string>();
+
+    // Record a config dir's chosen hooks state (keyed by real path): clear both override lists, then add an
+    // override only when the choice differs from the provenance default (so a dir left at its default carries
+    // no entry). The primary is never routed here. Does not persist/reconcile on its own; the config-dir Save
+    // path (PersistConfigDirs + an explicit reconcile) does both.
+    private void SetConfigDirHooksState(string realRootKey, ConfigDirProvenance provenance, bool enabled)
+    {
+        _settings.HooksDisabledDirs?.RemoveAll(x => ClaudeConfigDir.PathComparer.Equals(
+            Path.TrimEndingDirectorySeparator(x), realRootKey));
+        _settings.HooksEnabledDirs?.RemoveAll(x => ClaudeConfigDir.PathComparer.Equals(
+            Path.TrimEndingDirectorySeparator(x), realRootKey));
+
+        if (enabled != HookPolicy.DefaultEnabled(provenance))
+        {
+            if (enabled) (_settings.HooksEnabledDirs ??= new()).Add(realRootKey);
+            else (_settings.HooksDisabledDirs ??= new()).Add(realRootKey);
+        }
+
+        if (_settings.HooksDisabledDirs is { Count: 0 }) _settings.HooksDisabledDirs = null;
+        if (_settings.HooksEnabledDirs is { Count: 0 }) _settings.HooksEnabledDirs = null;
+    }
+
     private void RemoveConfigDir(ClaudeConfigDir d)
     {
         // Un-declare it (if it was added) and hide it by real path, so an auto-discovered dir stays gone
@@ -2190,13 +2244,38 @@ internal sealed class SettingsWindow : Window
         var hidden = _settings.HiddenConfigDirs ??= new();
         if (!hidden.Any(x => ClaudeConfigDir.PathComparer.Equals(Path.TrimEndingDirectorySeparator(x), d.RealRoot)))
             hidden.Add(d.RealRoot);
+
+        // Strip our hooks from the dir we're dropping (once it's hidden it leaves the set, so ReconcileAll
+        // can't reach it) and clear its hooks overrides so a later re-add starts clean.
+        SetConfigDirHooksState(d.RealRoot, d.Provenance, HookPolicy.DefaultEnabled(d.Provenance));
+        _ = System.Threading.Tasks.Task.Run(() => Perch.Avalonia.Services.HookInstaller.RemoveFromDir(d));
         PersistConfigDirs();
     }
 
-    // The add/edit transaction: a modal collects the directory (add only) and label, and only Save commits.
+    // The add/edit transaction: a modal collects the directory (add only), its label, and whether Perch's
+    // hooks are installed there — only Save commits. The primary is always hooked (toggle locked on);
+    // everything else is a real on/off, defaulting on for a directory you add and off for an auto-discovered
+    // one (you can still turn it on — Perch just won't hook a guessed directory silently).
     private async System.Threading.Tasks.Task AddOrEditConfigDir(ClaudeConfigDir? existing)
     {
-        var dlg = new ConfigDirDialog(existing, existing is null ? null : CurrentConfigDirLabel(existing));
+        // A new dir becomes a declared dir (default on); an edited dir keeps its provenance.
+        var prov = existing?.Provenance ?? ConfigDirProvenance.Declared;
+        bool hooksEditable = prov != ConfigDirProvenance.Primary;
+        bool hooksEnabled = existing is null
+            ? HookPolicy.DefaultEnabled(prov)
+            : HookPolicy.IsEnabled(prov, existing.RealRoot, HooksDisabledList, HooksEnabledList);
+        string hooksNote = prov switch
+        {
+            ConfigDirProvenance.Primary =>
+                "The primary directory is always hooked — the accept-edits badge, session control and auto-start depend on it.",
+            ConfigDirProvenance.Convention =>
+                "Auto-discovered directories aren't hooked by default. Turn this on to install Perch's hooks (accept-edits badge, session control, auto-start) here.",
+            _ =>
+                "Perch's hooks power the accept-edits badge, session control and auto-start for sessions in this directory.",
+        };
+
+        var dlg = new ConfigDirDialog(existing, existing is null ? null : CurrentConfigDirLabel(existing),
+            hooksEnabled, hooksEditable, hooksNote);
         if (!await dlg.ShowDialog<bool>(this)) return;
 
         if (existing is null)
@@ -2213,13 +2292,18 @@ internal sealed class SettingsWindow : Window
             var real = Path.TrimEndingDirectorySeparator(ClaudeConfigSet.ResolveReal(path));
             _settings.HiddenConfigDirs?.RemoveAll(x =>
                 ClaudeConfigDir.PathComparer.Equals(Path.TrimEndingDirectorySeparator(x), real));
+            SetConfigDirHooksState(real, prov, dlg.HooksEnabled);
             SetConfigDirLabel(real, dlg.DirLabel);
         }
         else
         {
+            if (hooksEditable) SetConfigDirHooksState(existing.RealRoot, prov, dlg.HooksEnabled);
             SetConfigDirLabel(existing.RealRoot, dlg.DirLabel);
         }
         PersistConfigDirs();
+        // A hooks change on an already-present dir doesn't move discovery membership (so no Changed →
+        // auto-reconcile fires); reconcile explicitly so the toggle takes effect now.
+        _ = System.Threading.Tasks.Task.Run(Perch.Avalonia.Services.HookInstaller.ReconcileAll);
     }
 
     private void PersistConfigDirs()

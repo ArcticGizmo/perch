@@ -563,6 +563,12 @@ public partial class App : Application
                         () => settings.ConfigDirLabels ?? (IReadOnlyList<ConfigDirLabel>)Array.Empty<ConfigDirLabel>(),
                         () => settings.HiddenConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>());
 
+                    // Which dirs the user turned hooks off / on for (read live on every reconcile).
+                    HookInstaller.DisabledRealRootsProvider =
+                        () => settings.HooksDisabledDirs ?? (IReadOnlyList<string>)Array.Empty<string>();
+                    HookInstaller.EnabledRealRootsProvider =
+                        () => settings.HooksEnabledDirs ?? (IReadOnlyList<string>)Array.Empty<string>();
+
                     HookInstaller.Install();
                     await MigrateOffPlugin();
                 });
@@ -1512,6 +1518,14 @@ public partial class App : Application
 
         _placementEditor = WindowHost.ShowOrFocus(_placementEditor,
             () => new PlacementEditorWindow(ctx), () => _placementEditor = null);
+    }
+
+    // The per-config-directory Agent Teams modal (the multi-dir form of the single toggle). Opened only from
+    // the settings catalogue, so the settings window owns it.
+    private void OpenAgentTeamsEditor()
+    {
+        if (_settings is not { } owner) return;
+        _ = new AgentTeamsDialog(ClaudeConfigSet.Instance.All).ShowDialog<bool>(owner);
     }
 
     // Persists the chosen placements (null = "use the default") and applies them: the floating one lands
@@ -2843,6 +2857,8 @@ public partial class App : Application
             OpenAchievements = OpenAchievements,
             OpenQuickStart = ShowOnboarding,
             OpenPlacements = OpenPlacementEditor,
+            OpenAgentTeams = OpenAgentTeamsEditor,
+            OpenStatuslineDesigner = OpenStatuslineDesigner,
             OpenSocialCompose = OpenCompose,
             OpenSocialFriends = OpenFriends,
             OpenSocialDebug = OpenSocialDebug,

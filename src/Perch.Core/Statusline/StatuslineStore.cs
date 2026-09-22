@@ -54,10 +54,11 @@ internal static class StatuslineStore
     /// <summary>The library with no saved file — just the code built-ins.</summary>
     public static StatuslineConfig Seeded() => Merge(null);
 
-    // Effective library = code built-ins (each overridden by a saved profile of the same name only when the
-    // saved one *differs*), then the user's own saved profiles in their saved order. So a brand-new code
-    // built-in appears automatically, an unedited built-in always tracks the code, and an edited one keeps
-    // the user's version.
+    // Effective library = the code built-ins (always, verbatim from StatuslineDefaults), then the user's own
+    // saved profiles in their saved order. Built-in templates are CODE-FIRST: they're never read from disk,
+    // so a brand-new code example appears automatically and an existing one always tracks the code. A saved
+    // profile whose name matches a built-in is a stale/legacy entry (built-ins are read-only in the UI, so no
+    // legitimate same-name override can exist) and is dropped — the code built-in owns that name.
     private static StatuslineConfig Merge(StatuslineConfig? saved)
     {
         var savedProfiles = saved?.Profiles ?? new List<StatuslineProfile>();
@@ -68,21 +69,12 @@ internal static class StatuslineStore
         {
             def.Builtin = true;
             builtinNames.Add(def.Name);
-            var overridden = savedProfiles.FirstOrDefault(p => NameEq(p.Name, def.Name));
-            if (overridden is not null && !overridden.SameContentAs(def))
-            {
-                overridden.Builtin = true;
-                result.Profiles.Add(overridden);
-            }
-            else
-            {
-                result.Profiles.Add(def);
-            }
+            result.Profiles.Add(def);
         }
 
         foreach (var p in savedProfiles)
         {
-            if (builtinNames.Contains(p.Name)) continue;   // built-in override already placed above
+            if (builtinNames.Contains(p.Name)) continue;   // a built-in owns this name — ignore the disk copy
             p.Builtin = false;
             result.Profiles.Add(p);
         }
@@ -103,15 +95,14 @@ internal static class StatuslineStore
     {
         try
         {
-            // Persist only deltas from code: user profiles, and built-ins the user has edited. An unedited
-            // built-in is skipped entirely, so it always comes from StatuslineDefaults on the next load.
+            // Code-first: only the user's OWN profiles ever touch disk. A built-in template lives solely in
+            // StatuslineDefaults and is never persisted — not even the active one, and not even if it was
+            // mutated in memory — so it can never drift from the code or leave a stale copy behind. Anything
+            // carrying a built-in name is therefore skipped (built-in names are reserved for code).
+            var builtinNames = new HashSet<string>(StatuslineDefaults.All.Select(d => d.Name), StringComparer.OrdinalIgnoreCase);
             var toSave = new StatuslineConfig { ActiveName = config.ActiveName };
             foreach (var p in config.Profiles)
-            {
-                var def = StatuslineDefaults.All.FirstOrDefault(d => NameEq(d.Name, p.Name));
-                if (def is not null && p.SameContentAs(def)) continue;   // untouched built-in — lives in code
-                toSave.Profiles.Add(p);
-            }
+                if (!builtinNames.Contains(p.Name)) toSave.Profiles.Add(p);
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(toSave, Options));
@@ -122,6 +113,4 @@ internal static class StatuslineStore
             return false;
         }
     }
-
-    private static bool NameEq(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 }

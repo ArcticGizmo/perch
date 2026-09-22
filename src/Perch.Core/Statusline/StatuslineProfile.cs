@@ -39,14 +39,6 @@ internal sealed class StatuslineProfile
     public bool Builtin { get; set; }
 
     public bool IsPerch => Kind == ProfileKind.Perch;
-
-    /// <summary>Whether two profiles carry the same content (ignores <see cref="Builtin"/>) — used to tell
-    /// an edited built-in (an override worth persisting) from an untouched one (comes from code).</summary>
-    public bool SameContentAs(StatuslineProfile other) =>
-        Kind == other.Kind
-        && Padding == other.Padding
-        && string.Equals(Template ?? "", other.Template ?? "", System.StringComparison.Ordinal)
-        && string.Equals(Command ?? "", other.Command ?? "", System.StringComparison.Ordinal);
 }
 
 /// <summary>The persisted statusline configuration: the saved profiles plus which one is active. Stored
@@ -62,7 +54,10 @@ internal sealed class StatuslineConfig
         Profiles.FirstOrDefault(p => string.Equals(p.Name, name, System.StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The active profile, falling back to the first profile when the active name is unset or
-    /// dangling, and null only when there are no profiles at all.</summary>
+    /// dangling, and null only when there are no profiles at all. Computed from <see cref="ActiveName"/> +
+    /// <see cref="Profiles"/>, so it is never persisted — only the name is (a built-in's content must never
+    /// reach disk).</summary>
+    [JsonIgnore]
     public StatuslineProfile? Active =>
         (ActiveName is { } n ? Find(n) : null) ?? Profiles.FirstOrDefault();
 

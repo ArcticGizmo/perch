@@ -123,7 +123,10 @@ internal static class ClaudeUserSettings
                 || root["hooks"] is not JsonObject hooks)
                 return false;
 
-            StripManaged(hooks, OwnedBy(isDev, devBinaryPath));
+            // Only rewrite when we actually removed one of our own entries — so calling this on a directory
+            // that has no Perch hooks (e.g. an auto-discovered dir the user left hooks off for) never touches
+            // its file, and ReconcileAll can safely strip every not-hooked dir without gratuitous writes.
+            if (!StripManaged(hooks, OwnedBy(isDev, devBinaryPath))) return false;
             if (hooks.Count == 0) root.Remove("hooks");
 
             File.WriteAllText(path, root.ToJsonString(WriteOptions));
@@ -158,9 +161,10 @@ internal static class ClaudeUserSettings
 
     // Removes every command object the caller owns (per <paramref name="owned"/>) from the hooks map,
     // dropping any entry (and any event key) left empty. Snapshots the keys/indices first since we mutate
-    // as we go.
-    private static void StripManaged(JsonObject hooks, Func<JsonNode?, bool> owned)
+    // as we go. Returns true if it removed anything (so a caller can skip an otherwise no-op rewrite).
+    private static bool StripManaged(JsonObject hooks, Func<JsonNode?, bool> owned)
     {
+        bool removed = false;
         foreach (var evt in hooks.Select(kv => kv.Key).ToList())
         {
             if (hooks[evt] is not JsonArray entries) continue;
@@ -172,7 +176,10 @@ internal static class ClaudeUserSettings
 
                 for (int j = hookList.Count - 1; j >= 0; j--)
                     if (owned(hookList[j]))
+                    {
                         hookList.RemoveAt(j);
+                        removed = true;
+                    }
 
                 if (hookList.Count == 0)
                     entries.RemoveAt(i);
@@ -181,6 +188,7 @@ internal static class ClaudeUserSettings
             if (entries.Count == 0)
                 hooks.Remove(evt);
         }
+        return removed;
     }
 
     // The ownership predicate for a strip pass. Release (isDev == false) is authoritative and owns every
@@ -275,16 +283,20 @@ internal static class ClaudeUserSettings
         }
     }
 
-    /// <summary>True when <c>env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</c> is set to "1".</summary>
-    public static bool IsAgentTeamsEnabled()
+    /// <summary>True when <c>env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</c> is "1" in the <b>primary</b>
+    /// config dir's settings.json.</summary>
+    public static bool IsAgentTeamsEnabled() => IsAgentTeamsEnabled(ClaudePaths.UserSettingsFile);
+
+    /// <summary>As <see cref="IsAgentTeamsEnabled()"/>, against a specific config dir's settings file — so a
+    /// multi-config-dir setup can read the flag per directory (each dir is a separate settings.json).</summary>
+    public static bool IsAgentTeamsEnabled(string settingsPath)
     {
         try
         {
-            var path = ClaudePaths.UserSettingsFile;
-            if (!File.Exists(path))
+            if (!File.Exists(settingsPath))
                 return false;
 
-            var root = JsonNode.Parse(File.ReadAllText(path), documentOptions: ReadOptions) as JsonObject;
+            var root = JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: ReadOptions) as JsonObject;
             // ToString() rather than GetValue<string>() so a numeric 1 doesn't throw — either reads "1".
             return (root?["env"] as JsonObject)?[AgentTeamsEnvKey]?.ToString() == "1";
         }
@@ -295,15 +307,20 @@ internal static class ClaudeUserSettings
     }
 
     /// <summary>
-    /// Sets or clears <c>env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</c> in <c>~/.claude/settings.json</c>,
-    /// preserving every other setting. Enabling writes "1"; disabling removes the key (and the env
-    /// object if that empties it). Returns true on a successful write.
+    /// Sets or clears <c>env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</c> in the <b>primary</b> config dir's
+    /// settings.json, preserving every other setting. Enabling writes "1"; disabling removes the key (and the
+    /// env object if that empties it). Returns true on a successful write.
     /// </summary>
-    public static bool SetAgentTeamsEnabled(bool enabled)
+    public static bool SetAgentTeamsEnabled(bool enabled) =>
+        SetAgentTeamsEnabled(ClaudePaths.UserSettingsFile, enabled);
+
+    /// <summary>As <see cref="SetAgentTeamsEnabled(bool)"/>, against a specific config dir's settings file —
+    /// so a multi-config-dir setup can flip the flag per directory (each dir is a separate settings.json).</summary>
+    public static bool SetAgentTeamsEnabled(string settingsPath, bool enabled)
     {
         try
         {
-            var path = ClaudePaths.UserSettingsFile;
+            var path = settingsPath;
             var root = File.Exists(path)
                 ? JsonNode.Parse(File.ReadAllText(path), documentOptions: ReadOptions) as JsonObject ?? new JsonObject()
                 : new JsonObject();

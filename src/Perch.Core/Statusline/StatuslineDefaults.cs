@@ -54,28 +54,24 @@ internal static class StatuslineDefaults
         },
         new StatuslineProfile
         {
-            // A three-line, information-dense line modelled on a classic jq/bash statusline: path + branch,
-            // then model·effort with token counts and session duration, then the context bar with the 5h/7d
-            // rate-limit windows. The rate-limit readings are PACE-COLOURED — green when behind the expected
-            // burn for how far through the window you are, yellow around pace, red over — the same rule the
-            // overlay's usage bars use. Context has no reset/window, so it has no expected rate and stays a
-            // steady green.
+            // A tuned take on "Rate-aware verbose": a " | " lead-in before the branch, a "·" between model and
+            // effort, a slightly narrower (10-cell) context bar, and muted reset times on the rate-limit
+            // windows. Same three rows — path+branch, model·effort with token counts and duration, then the
+            // context bar plus the pace-coloured 5h/7d windows.
             Name = "Rate-aware verbose",
             Kind = ProfileKind.Perch,
             Template =
                 "📁 {{workspace.current_dir|color:green}}\\\n" +
-                "{{#if git.branch}}  🍃 {{git.branch|color:green}}\\\n" +
+                "{{#if git.branch}} | 🍃 {{git.branch|color:green}}\\\n" +
                 "{{#if git.dirty}}  (+{{git.staged|color:muted}},-{{git.unstaged|color:muted}})\\\n" +
                 "{{/if}}\\\n" +
                 "{{/if}}\n" +
-                "[{{model.display_name}}{{#if effort.level}} | {{effort.level}}{{/if}}]  \\\n" +
-                "🔽 {{context_window.total_input_tokens|human}}  🔼 {{context_window.total_output_tokens|human}}  \\\n" +
-                "⏱ {{cost.total_duration_ms|dur}}\n" +
+                "[{{model.display_name}}{{#if effort.level}} · {{effort.level}}{{/if}}]  🔽 {{context_window.total_input_tokens|human}}  🔼 {{context_window.total_output_tokens|human}}  ⏱ {{cost.total_duration_ms|dur}}\n" +
                 "Context \\\n" +
-                "{{context_window.used_percentage|bar:16|color:green}} {{context_window.total_input_tokens|human}}/{{context_window.context_window_size|human}} ({{context_window.used_percentage|round}}%)\\\n" +
-                "{{#if rate_limits.five_hour}}  |  5h {{rate_limits.five_hour.used_percentage|bar:10|pace:rate_limits.five_hour.resets_at:18000}} {{rate_limits.five_hour.used_percentage|round|pace:rate_limits.five_hour.resets_at:18000}}% {{rate_limits.five_hour.resets_at|until}}\\\n" +
+                "{{context_window.used_percentage|bar:10|color:green}} {{context_window.total_input_tokens|human}}/{{context_window.context_window_size|human}} ({{context_window.used_percentage|round}}%)\\\n" +
+                "{{#if rate_limits.five_hour}} | 5h {{rate_limits.five_hour.used_percentage|bar:10|pace:rate_limits.five_hour.resets_at:18000}} {{rate_limits.five_hour.used_percentage|round|pace:rate_limits.five_hour.resets_at:18000}}% {{rate_limits.five_hour.resets_at|until|color:muted}}\\\n" +
                 "{{/if}}\\\n" +
-                "{{#if rate_limits.seven_day}}  |  7d {{rate_limits.seven_day.used_percentage|bar:10|pace:rate_limits.seven_day.resets_at:604800}} {{rate_limits.seven_day.used_percentage|round|pace:rate_limits.seven_day.resets_at:604800}}% {{rate_limits.seven_day.resets_at|until}}\\\n" +
+                "{{#if rate_limits.seven_day}} | 7d {{rate_limits.seven_day.used_percentage|bar:10|pace:rate_limits.seven_day.resets_at:604800}} {{rate_limits.seven_day.used_percentage|round|pace:rate_limits.seven_day.resets_at:604800}}% {{rate_limits.seven_day.resets_at|until|color:muted}}\\\n" +
                 "{{/if}}",
         },
     };

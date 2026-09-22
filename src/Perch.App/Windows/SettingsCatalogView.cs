@@ -205,6 +205,15 @@ internal sealed class SettingsCatalogView : StackPanel
 
     private Control? CompactControl(SettingDescriptor d)
     {
+        // A per-config-directory feature (its state lives in each dir's own settings.json) shows a single
+        // on/off toggle when there's one config dir, but with several it can't be one switch — swap to an
+        // "Edit…" button that opens a per-dir modal. Agent Teams is the only one today.
+        if (d.Id == "agent-teams" && ClaudeConfigSet.Instance.IsMulti)
+        {
+            var edit = SettingsUi.FlatButton("Edit…");
+            edit.Click += (_, _) => _hooks.OpenAgentTeams?.Invoke();
+            return edit;
+        }
         if (d.Kind == SettingKind.Toggle && (d.GetBool is not null || d.GetBoolRaw is not null)) return LiveToggle(d);
         if (d is { Kind: SettingKind.Stepper, GetInt: not null, SetInt: not null }) return LiveStepper(d);
         return null;

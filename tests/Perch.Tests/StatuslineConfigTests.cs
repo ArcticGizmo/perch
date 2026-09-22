@@ -102,20 +102,42 @@ public sealed class StatuslineConfigTests : IDisposable
     }
 
     [Fact]
-    public void Unedited_builtins_are_not_persisted_but_edits_are()
+    public void Builtins_are_never_persisted_even_when_mutated_or_active()
     {
         var cfg = StatuslineStore.Seeded();
         StatuslineStore.Save(_path, cfg);
-        Assert.DoesNotContain("\"Name\"", File.ReadAllText(_path));   // nothing but ActiveName — built-ins live in code
+        var json = File.ReadAllText(_path);
+        Assert.DoesNotContain("\"Name\"", json);       // no profile content — built-ins live in code
+        Assert.DoesNotContain("\"Template\"", json);   // and the active built-in's template is not dumped either
 
+        // Code-first: a built-in is read-only, so even a direct in-memory mutation must not reach disk, and on
+        // reload the template comes back from code unchanged.
         cfg.Find("Minimal")!.Template = "EDITED {{model.display_name}}";
         StatuslineStore.Save(_path, cfg);
-        Assert.Contains("EDITED", File.ReadAllText(_path));           // an edited built-in is persisted as an override
+        Assert.DoesNotContain("EDITED", File.ReadAllText(_path));
 
         var loaded = StatuslineStore.Load(_path);
-        Assert.Equal("EDITED {{model.display_name}}", loaded.Find("Minimal")!.Template);
-        Assert.NotNull(loaded.Find(StatuslineDefaults.PerchDefaultName));   // the others still come from code
+        Assert.NotEqual("EDITED {{model.display_name}}", loaded.Find("Minimal")!.Template);
+        Assert.NotNull(loaded.Find(StatuslineDefaults.PerchDefaultName));
         Assert.NotNull(loaded.Find("Rate-aware verbose"));
+    }
+
+    [Fact]
+    public void A_stale_saved_builtin_override_is_ignored_and_the_code_version_wins()
+    {
+        // A legacy file that saved a built-in ("Rate-aware verbose") verbatim — with its soft breaks stripped.
+        // It must NOT shadow the code built-in; the code template (with soft breaks) always wins.
+        File.WriteAllText(_path,
+            """{ "activeName": "Rate-aware verbose", "profiles": [ { "name": "Rate-aware verbose", "kind": "Perch", "template": "collapsed no soft breaks" } ] }""");
+
+        var loaded = StatuslineStore.Load(_path);
+        var codeTemplate = StatuslineDefaults.All.First(p => p.Name == "Rate-aware verbose").Template;
+        Assert.Equal(codeTemplate, loaded.Find("Rate-aware verbose")!.Template);   // from code, not the stale disk copy
+
+        // And re-saving drops the stale entry entirely.
+        StatuslineStore.Save(_path, loaded);
+        Assert.DoesNotContain("collapsed no soft breaks", File.ReadAllText(_path));
+        Assert.DoesNotContain("\"Name\"", File.ReadAllText(_path));
     }
 
     // ── config-dir-targeted apply (multi config dir) ────────────────────────────────────

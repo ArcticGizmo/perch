@@ -354,4 +354,39 @@ public sealed class StatuslineTemplateTests
         Assert.Contains("7d", outp);
         Assert.Contains("Opus", outp);
     }
+
+    [Fact]
+    public void My_status_line_example_renders()
+    {
+        var tpl = StatuslineDefaults.All.First(p => p.Name == "My Status Line").Template!;
+        var outp = Render(tpl);
+        Assert.Contains("Context", outp);
+        Assert.Contains("5h", outp);
+        Assert.Contains("7d", outp);
+        Assert.Contains("Opus", outp);
+        // Its distinguishing touch vs "Rate-aware verbose": a "·" between model and effort level.
+        Assert.Contains("· high", outp);
+    }
+
+    [Fact]
+    public void My_status_line_keeps_the_model_row_as_one_unbroken_line()
+    {
+        // The model/tokens/duration row is a single segment (no soft breaks inside it), matching the authored
+        // profile — the earlier version split it across soft breaks and drifted from the original.
+        var tpl = StatuslineDefaults.All.First(p => p.Name == "My Status Line").Template!;
+        Assert.Contains(
+            "{{/if}}]  🔽 {{context_window.total_input_tokens|human}}  🔼 {{context_window.total_output_tokens|human}}  ⏱ {{cost.total_duration_ms|dur}}",
+            tpl);
+        Assert.DoesNotContain("]  \\\n", tpl);   // no soft break right after the model bracket
+    }
+
+    [Fact]
+    public void Every_builtin_example_renders_without_throwing()
+    {
+        foreach (var p in StatuslineDefaults.All)
+        {
+            var outp = Render(p.Template!);
+            Assert.False(string.IsNullOrEmpty(outp), $"'{p.Name}' rendered empty");
+        }
+    }
 }
