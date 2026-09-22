@@ -843,6 +843,26 @@ internal static class HeadlessRenderer
             w.Close();
         }
 
+        // Autocomplete list posed open (editor mid-token) so the completion rows + sample values render.
+        {
+            var w = new Windows.StatuslineDesignerWindow(Perch.Statusline.StatuslineStore.Seeded())
+            {
+                Width = 1000, Height = 640,
+            };
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            w.ShowCompletionsForRender("{{context_win");
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "statusline_designer_autocomplete_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
         return 0;
     }

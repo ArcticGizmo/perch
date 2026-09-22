@@ -51,7 +51,8 @@ internal static class StatuslineDefaults
             Name = "Rate-aware verbose",
             Kind = ProfileKind.Perch,
             Template =
-                "📁 {{workspace.current_dir|color:green}}{{#if git.branch}}  🍃 {{git.branch|color:green}}{{/if}}\n" +
+                "📁 {{workspace.current_dir|color:green}}{{#if git.branch}}  🍃 {{git.branch|color:green}}" +
+                "{{#if git.dirty}}  (+{{git.staged|color:muted}},-{{git.unstaged|color:muted}}){{/if}}{{/if}}\n" +
                 "[{{model.display_name}}{{#if effort.level}} · {{effort.level}}{{/if}}]  " +
                 "🔽 {{context_window.total_input_tokens|human}}  🔼 {{context_window.total_output_tokens|human}}  " +
                 "⏱ {{cost.total_duration_ms|dur}}\n" +

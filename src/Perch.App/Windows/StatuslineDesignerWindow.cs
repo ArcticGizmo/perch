@@ -1,10 +1,13 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
+using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.TextFormatting;
 using Avalonia.Threading;
 using Perch.Avalonia.Theming;
 using Perch.Statusline;
@@ -36,7 +39,9 @@ internal sealed class StatuslineDesignerWindow : Window
     // real status bar; token colours come straight from StatusColors so preview == ANSI output.
     private static readonly IBrush TermBg = new SolidColorBrush(Color.FromRgb(0x07, 0x09, 0x0d));
     private static readonly IBrush TermFg = new SolidColorBrush(Color.FromRgb(0xc9, 0xd3, 0xe0));
+    private static readonly IBrush GutterBg = new SolidColorBrush(Color.FromRgb(0x0c, 0x10, 0x16));
     private static readonly FontFamily Mono = new("Cascadia Code,Consolas,Menlo,monospace");
+    private const double EditorPadTop = 8;
 
     private readonly StatuslineConfig _config;
     private readonly TemplateData _sample = StatuslineSample.Data();
@@ -55,6 +60,14 @@ internal sealed class StatuslineDesignerWindow : Window
     private Button _applyButton = null!;
     private TextBlock _editorHeader = null!;
     private DispatcherTimer? _appliedTimer;
+
+    // editor gutter + autocomplete
+    private StackPanel _gutter = null!;
+    private StackPanel _completionPanel = null!;
+    private Border _completionHost = null!;
+    private List<(string Path, string Value)> _completions = new();
+    private int _completionIndex, _completionStart, _completionLen;
+    private bool _suppress;   // guards the completion refresh while we programmatically set editor text
 
     public StatuslineDesignerWindow() : this(StatuslineStore.Load()) { }
 
@@ -251,19 +264,58 @@ internal sealed class StatuslineDesignerWindow : Window
                  })
             chips.Children.Add(Chip(label, insert));
 
+        // The editor is a growing (non-self-scrolling) TextBox beside a line-number gutter, both inside one
+        // ScrollViewer so they scroll as a unit — the same trick the session composer uses. Horizontal
+        // scrolling is disabled so the box is width-constrained and wraps; the gutter numbers each *logical*
+        // line, sized to that line's wrapped height so numbers stay aligned to the first visual row.
         _templateBox = new TextBox
         {
-            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 130,
+            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
             FontFamily = Mono, FontSize = 13, Foreground = Fg,
-            Background = TermBg, BorderBrush = Stroke, BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8), Padding = new Thickness(12),
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+            Padding = new Thickness(8, EditorPadTop, 8, 8), VerticalAlignment = VerticalAlignment.Top,
         };
         _templateBox.TextChanged += (_, _) =>
         {
             if (_selected.IsPerch) { _selected.Template = _templateBox.Text ?? ""; UpdatePreview(); }
+            RebuildGutter();
+            if (!_suppress) UpdateCompletions();
+        };
+        _templateBox.AddHandler(InputElement.KeyDownEvent, OnEditorKeyDown, RoutingStrategies.Tunnel);
+        _templateBox.PropertyChanged += (_, e) => { if (e.Property == Visual.BoundsProperty) RebuildGutter(); };
+
+        _gutter = new StackPanel();
+        var gutterHost = new Border
+        {
+            Background = GutterBg, Width = 42, Padding = new Thickness(4, EditorPadTop, 6, 8), Child = _gutter,
+        };
+        var editorRow = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(gutterHost, Dock.Left);
+        editorRow.Children.Add(gutterHost);
+        editorRow.Children.Add(_templateBox);
+
+        var editorScroll = new ScrollViewer
+        {
+            Content = editorRow, MinHeight = 150, MaxHeight = 320,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        var editorBorder = new Border
+        {
+            Background = TermBg, BorderBrush = Stroke, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8), Child = editorScroll, ClipToBounds = true,
         };
 
-        _perchEditor = new StackPanel { Spacing = 10, Children = { chips, _templateBox } };
+        // Autocomplete: an inline list below the editor (no focus stealing) driven by the caret's current
+        // token; Tab/Enter accept, ↑/↓ move, Esc dismisses. Each row shows the token and its sample value.
+        _completionPanel = new StackPanel();
+        _completionHost = new Border
+        {
+            Background = Panel, BorderBrush = Stroke, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6), Child = _completionPanel, IsVisible = false,
+        };
+
+        _perchEditor = new StackPanel { Spacing = 8, Children = { chips, editorBorder, _completionHost } };
 
         // external command editor
         _commandBox = new TextBox
@@ -396,6 +448,15 @@ internal sealed class StatuslineDesignerWindow : Window
         if (_config.Find(name) is { } p) SelectProfile(p);
     }
 
+    /// <summary>Test/preview hook: pose the editor mid-token so the autocomplete list is on screen for a
+    /// render capture.</summary>
+    internal void ShowCompletionsForRender(string partial)
+    {
+        _templateBox.Text = partial;
+        _templateBox.CaretIndex = partial.Length;
+        UpdateCompletions();
+    }
+
     // ── behaviour ────────────────────────────────────────────────────────────────────────
     private void SelectProfile(StatuslineProfile p)
     {
@@ -498,6 +559,160 @@ internal sealed class StatuslineDesignerWindow : Window
         box.Text = t[..at] + text + t[at..];
         box.CaretIndex = at + text.Length;
         box.Focus();
+    }
+
+    // ── line-number gutter ───────────────────────────────────────────────────────────────
+    // One number per logical line, each sized to that line's *wrapped* height (measured with the editor's
+    // own font at its current text width) so a number sits beside the first visual row of its line and the
+    // continuation rows stay blank.
+    private void RebuildGutter()
+    {
+        if (_gutter is null) return;
+        _gutter.Children.Clear();
+
+        var text = _templateBox.Text ?? "";
+        var lines = text.Split('\n');
+        double width = _templateBox.Bounds.Width - 16;   // minus the 8+8 horizontal padding
+        var typeface = new Typeface(Mono);
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            double h = 20;   // fallback before the editor has been arranged
+            if (width > 10)
+            {
+                var layout = new TextLayout(lines[i].Length == 0 ? " " : lines[i], typeface, 13, Muted,
+                    textAlignment: TextAlignment.Left, textWrapping: TextWrapping.Wrap, maxWidth: width);
+                h = layout.Height;
+            }
+            _gutter.Children.Add(new TextBlock
+            {
+                Text = (i + 1).ToString(), Height = h, FontFamily = Mono, FontSize = 13,
+                Foreground = Muted, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+            });
+        }
+    }
+
+    // ── autocomplete ─────────────────────────────────────────────────────────────────────
+    private void OnEditorKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (!_completionHost.IsVisible) return;
+        switch (e.Key)
+        {
+            case Key.Down:   MoveCompletion(1);  e.Handled = true; break;
+            case Key.Up:     MoveCompletion(-1); e.Handled = true; break;
+            case Key.Enter:
+            case Key.Tab:    AcceptCompletion(); e.Handled = true; break;
+            case Key.Escape: CloseCompletion();  e.Handled = true; break;
+        }
+    }
+
+    // The token path being typed at the caret (the run of [\w.] chars), or null when the caret isn't inside
+    // an open {{ … }} or is in the filter part (after a |), where we don't complete paths.
+    private (string Word, int Start)? CurrentWord()
+    {
+        var text = _templateBox.Text ?? "";
+        int caret = Math.Clamp(_templateBox.CaretIndex, 0, text.Length);
+
+        int open = -1;
+        for (int i = Math.Min(caret, text.Length) - 2; i >= 0; i--)
+        {
+            if (text[i] == '{' && text[i + 1] == '{') { open = i; break; }
+            if (text[i] == '}' && text[i + 1] == '}') break;   // a closed tag sits between us and any {{
+        }
+        if (open < 0) return null;
+        for (int i = open + 2; i < caret; i++) if (text[i] == '|') return null;   // in the filter part
+
+        int s = caret;
+        while (s > open + 2 && (char.IsLetterOrDigit(text[s - 1]) || text[s - 1] == '_' || text[s - 1] == '.'))
+            s--;
+        return (text[s..caret], s);
+    }
+
+    private void UpdateCompletions()
+    {
+        if (!_selected.IsPerch || CurrentWord() is not { } cw) { CloseCompletion(); return; }
+        var (word, start) = cw;
+        var q = word.ToLowerInvariant();
+
+        var matches = StatuslineTokens.Groups.SelectMany(g => g.Tokens)
+            .Where(t => q.Length == 0 || t.Path.ToLowerInvariant().Contains(q))
+            .OrderByDescending(t => t.Path.StartsWith(word, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(t => t.Path, StringComparer.Ordinal)
+            .Take(8)
+            .Select(t => (t.Path, Value: SampleValue(t.Path)))
+            .ToList();
+
+        // Nothing to offer, or the word is already the one exact match — don't nag.
+        if (matches.Count == 0 || (matches.Count == 1 && matches[0].Path == word)) { CloseCompletion(); return; }
+
+        _completions = matches;
+        _completionStart = start;
+        _completionLen = word.Length;
+        _completionIndex = 0;
+        RebuildCompletionRows();
+        _completionHost.IsVisible = true;
+    }
+
+    private void RebuildCompletionRows()
+    {
+        _completionPanel.Children.Clear();
+        for (int i = 0; i < _completions.Count; i++)
+        {
+            var (path, val) = _completions[i];
+            var dock = new DockPanel { LastChildFill = true };
+            var valText = new TextBlock
+            {
+                Text = val, FontFamily = Mono, FontSize = 11, Foreground = Palette.AccentBrush,
+                HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(10, 0, 0, 0),
+            };
+            DockPanel.SetDock(valText, Dock.Right);
+            dock.Children.Add(valText);
+            dock.Children.Add(new TextBlock { Text = path, FontFamily = Mono, FontSize = 12, Foreground = Fg });
+
+            int idx = i;
+            var row = new Border
+            {
+                Padding = new Thickness(9, 5), Child = dock,
+                Background = i == _completionIndex ? Tint(Accent) : Brushes.Transparent,
+                Cursor = new Cursor(StandardCursorType.Hand),
+            };
+            row.PointerPressed += (_, _) => { _completionIndex = idx; AcceptCompletion(); };
+            _completionPanel.Children.Add(row);
+        }
+    }
+
+    private void MoveCompletion(int delta)
+    {
+        if (_completions.Count == 0) return;
+        _completionIndex = Math.Clamp(_completionIndex + delta, 0, _completions.Count - 1);
+        RebuildCompletionRows();
+    }
+
+    private void AcceptCompletion()
+    {
+        if (_completions.Count == 0) { CloseCompletion(); return; }
+        var path = _completions[Math.Clamp(_completionIndex, 0, _completions.Count - 1)].Path;
+        var t = _templateBox.Text ?? "";
+        int end = Math.Min(_completionStart + _completionLen, t.Length);
+
+        _suppress = true;
+        _templateBox.Text = t[.._completionStart] + path + t[end..];
+        _templateBox.CaretIndex = _completionStart + path.Length;
+        _suppress = false;
+
+        CloseCompletion();
+        _templateBox.Focus();
+    }
+
+    private void CloseCompletion()
+    {
+        if (_completionHost is not null) _completionHost.IsVisible = false;
+    }
+
+    private string SampleValue(string path)
+    {
+        var v = _sample.TryGet(path, out var n) ? TemplateData.Str(n) : "";
+        return v.Length > 24 ? v[..23] + "…" : v;
     }
 
     // ── small builders / helpers ─────────────────────────────────────────────────────────────

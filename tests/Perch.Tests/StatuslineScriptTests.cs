@@ -33,6 +33,23 @@ public sealed class StatuslineScriptTests
             StatuslineScript.CommandFor("C:\\a b\\perch-statusline.mjs"));
 
     [Fact]
+    public void Generate_gates_git_counts_on_template_use()
+    {
+        var withCounts = StatuslineScript.Generate(new StatuslineProfile
+        {
+            Name = "g", Template = "{{git.branch}} (+{{git.staged}},-{{git.unstaged}})",
+        });
+        Assert.Contains("const NEED_GIT_COUNTS = true;", withCounts);
+        Assert.Contains("execFileSync", withCounts);   // the git subprocess is present
+
+        var withoutCounts = StatuslineScript.Generate(new StatuslineProfile
+        {
+            Name = "b", Template = "{{model.display_name}} {{git.branch}}",   // branch only, no counts
+        });
+        Assert.Contains("const NEED_GIT_COUNTS = false;", withoutCounts);
+    }
+
+    [Fact]
     public void Generate_requires_a_template() =>
         Assert.Throws<InvalidOperationException>(() =>
             StatuslineScript.Generate(new StatuslineProfile { Name = "x", Template = null }));

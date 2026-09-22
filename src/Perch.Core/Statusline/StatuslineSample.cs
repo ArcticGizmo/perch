@@ -47,7 +47,7 @@ internal static class StatuslineSample
       },
       "effort": { "level": "high" },
       "vim": { "mode": "NORMAL" },
-      "git": { "branch": "statusline-designer", "changes": 4, "dirty": true }
+      "git": { "branch": "statusline-designer", "staged": 2, "unstaged": 3, "changes": 5, "dirty": true }
     }
     """;
 

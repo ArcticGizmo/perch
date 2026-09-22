@@ -88,6 +88,8 @@ internal static class StatuslineTokens
         new Group("git · Perch extras", new[]
         {
             new TokenDescriptor("git.branch", TokenBadge.PerchExtra),
+            new TokenDescriptor("git.staged", TokenBadge.PerchExtra),
+            new TokenDescriptor("git.unstaged", TokenBadge.PerchExtra),
             new TokenDescriptor("git.changes", TokenBadge.PerchExtra),
             new TokenDescriptor("git.dirty", TokenBadge.PerchExtra),
         }),

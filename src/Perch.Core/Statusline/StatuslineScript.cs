@@ -38,9 +38,15 @@ internal static class StatuslineScript
         var templateLiteral = JsonSerializer.Serialize(template);
         var nameLiteral = JsonSerializer.Serialize(profile.Name);
 
+        // Only spawn `git` for staged/unstaged counts when the template actually asks for them — branch is
+        // free (a .git/HEAD read), but the counts need a subprocess, so unused templates stay fast.
+        var needsCounts = template.Contains("git.staged") || template.Contains("git.unstaged")
+                       || template.Contains("git.changes") || template.Contains("git.dirty");
+
         return Body
             .Replace("@@TEMPLATE@@", templateLiteral)
-            .Replace("@@NAME@@", nameLiteral);
+            .Replace("@@NAME@@", nameLiteral)
+            .Replace("@@GITCOUNTS@@", needsCounts ? "true" : "false");
     }
 
     // The script body. @@TEMPLATE@@ / @@NAME@@ are replaced with JSON string literals. Kept as a raw
@@ -52,8 +58,10 @@ internal static class StatuslineScript
         // Self-contained: edit freely; no Perch process is involved at runtime.
         import { readFileSync, existsSync, statSync } from 'node:fs';
         import { join, dirname, isAbsolute, resolve } from 'node:path';
+        import { execFileSync } from 'node:child_process';
 
         const TEMPLATE = @@TEMPLATE@@;
+        const NEED_GIT_COUNTS = @@GITCOUNTS@@;
 
         const COL = {
           teal:[70,198,184], amber:[227,168,78], green:[95,191,127], red:[229,104,106],
@@ -223,11 +231,27 @@ internal static class StatuslineScript
             return t.startsWith(pfx) ? (t.slice(pfx.length).trim() || null) : null;
           } catch { return null; }
         }
+        // staged/unstaged file counts — this one does shell out to git (like a classic bash statusline),
+        // but only when the template needs it (NEED_GIT_COUNTS). Any failure yields nothing.
+        function gitCounts(dir) {
+          try {
+            const opt = { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 };
+            const count = args => execFileSync('git', args, opt).split('\n').filter(l => l.trim().length > 0).length;
+            const staged = count(['diff', '--cached', '--numstat']);
+            const unstaged = count(['diff', '--numstat']);
+            const changes = staged + unstaged;
+            return { staged, unstaged, changes, dirty: changes > 0 };
+          } catch { return null; }
+        }
         function injectGit(p) {
           const cwd = p.cwd || (p.workspace && p.workspace.current_dir) || '';
           if (!cwd) return;
           const b = gitBranch(cwd);
           if (b) p.git = Object.assign({}, p.git, { branch: b });
+          if (NEED_GIT_COUNTS) {
+            const c = gitCounts(cwd);
+            if (c) p.git = Object.assign({}, p.git, c);
+          }
         }
 
         let payload = {};
