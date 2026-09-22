@@ -2158,7 +2158,7 @@ internal sealed class SettingsWindow : Window
         ConfigDirProvenance.Primary      => "primary",
         ConfigDirProvenance.Declared     => "added",
         ConfigDirProvenance.SelfReported => "auto · reported by a session",
-        _                                => "auto · discovered (read-only)",
+        _                                => "auto · discovered",
     };
 
     /// <summary>The user's custom label for a dir (keyed by its real path), or null when none is set.</summary>

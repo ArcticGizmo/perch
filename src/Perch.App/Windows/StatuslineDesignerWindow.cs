@@ -775,9 +775,9 @@ internal sealed class StatuslineDesignerWindow : Window
     // ── apply area (per config dir) ───────────────────────────────────────────────────────
     // Rebuilt on profile change / re-activation. One "Set active" for a single config dir, or a labelled row
     // PER config dir (each with its own button + what's active there) for a multi-org setup. EVERY dir in
-    // the set is an eligible target: applying a status line is a deliberate per-dir click, so — unlike an
-    // automatic hook install — it is NOT gated on the safe-write policy's IsWritable. Detected dirs are
-    // targetable too.
+    // the set is an eligible target: applying a status line is a deliberate per-dir click, so it targets any
+    // config dir Perch knows about — auto-detected ones included. (Automatic hook installs are a separate
+    // policy in HookInstaller; nothing here is "read-only".)
     private void RebuildApplyArea()
     {
         if (_applyArea is null) return;
@@ -798,14 +798,15 @@ internal sealed class StatuslineDesignerWindow : Window
     }
 
     // One apply row: a "Set active" button plus (in the multi-dir list) the dir's label and what's active in
-    // it now. dir == null is the "All directories" row (applies to every writable dir at once).
+    // it now. dir == null is the "All directories" row (applies to every dir at once). When this profile is
+    // already active in the dir the button sits in its dimmed "✓ Active" state, so it's obvious at a glance
+    // where the profile is and isn't applied (this replaces the old transient "Active ✓" flash).
     private Control ApplyDirRow(ClaudeConfigDir? dir, bool showLabel)
     {
         bool isAll = dir is null;
         var btn = new Button
         {
-            Content = "Set active", Background = Accent, Foreground = new SolidColorBrush(Color.FromRgb(7, 18, 15)),
-            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(6), Padding = new Thickness(14, 7),
+            CornerRadius = new CornerRadius(6), Padding = new Thickness(12, 7), Margin = new Thickness(8, 0, 14, 0),
             FontWeight = FontWeight.SemiBold, Cursor = new Cursor(StandardCursorType.Hand),
             HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center,
         };
@@ -815,6 +816,7 @@ internal sealed class StatuslineDesignerWindow : Window
         {
             texts.Children.Add(new TextBlock { Text = "All directories", Foreground = Fg, FontSize = 12.5, FontWeight = FontWeight.SemiBold });
             texts.Children.Add(new TextBlock { Text = $"apply to every directory ({_applyDirs.Count})", Foreground = Muted, FontSize = 10.5 });
+            StyleApplyButton(btn, _applyDirs.Count > 0 && _applyDirs.All(d => DirStatus(d).IsThisProfile));
             btn.Click += (_, _) => { if (ApplyProfileTo(_applyDirs)) RebuildApplyArea(); else Flash(btn, "Failed"); };
         }
         else
@@ -827,6 +829,7 @@ internal sealed class StatuslineDesignerWindow : Window
             var (statusText, isThis) = DirStatus(dir!);
             var status = new TextBlock { Text = statusText, Foreground = isThis ? Accent : Muted, FontSize = 10.5, FontFamily = Mono, TextTrimming = TextTrimming.CharacterEllipsis };
             texts.Children.Add(status);
+            StyleApplyButton(btn, isThis);
 
             btn.Click += (_, _) =>
             {
@@ -834,7 +837,7 @@ internal sealed class StatuslineDesignerWindow : Window
                 {
                     var (t, isNow) = DirStatus(dir!);
                     status.Text = t; status.Foreground = isNow ? Accent : Muted;
-                    Flash(btn, "Active ✓");
+                    StyleApplyButton(btn, isNow);
                 }
                 else Flash(btn, "Failed");
             };
@@ -845,6 +848,19 @@ internal sealed class StatuslineDesignerWindow : Window
         dock.Children.Add(btn);
         dock.Children.Add(texts);
         return new Border { Padding = new Thickness(0, 3), Child = dock };
+    }
+
+    // Fill+dark when actionable ("Set active"); dimmed outline with a tick when this profile is already the
+    // active one in that dir. Kept clickable while applied so re-applying after an edit still works.
+    private static readonly IBrush ApplyBtnFg = new SolidColorBrush(Color.FromRgb(7, 18, 15));
+    private void StyleApplyButton(Button b, bool applied)
+    {
+        b.Content = applied ? "✓ Active" : "Set active";
+        b.Background = applied ? Tint(Accent) : Accent;
+        b.Foreground = applied ? Accent : ApplyBtnFg;
+        b.BorderBrush = applied ? Accent : Brushes.Transparent;
+        b.BorderThickness = new Thickness(applied ? 1 : 0);
+        b.Opacity = applied ? 0.9 : 1.0;
     }
 
     // What's currently active in a config dir, and whether it's THIS profile — read from its settings.json

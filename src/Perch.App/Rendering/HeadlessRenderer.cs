@@ -895,24 +895,27 @@ internal static class HeadlessRenderer
             w.Close();
         }
 
-        // Config-dir picker: inject a second writable config dir so "Set active" shows the target selector
-        // (a multi-org setup). Reset the set afterwards so no other capture is affected.
+        // Config-dir per-dir apply list (a multi-org setup). One detected dir has the selected profile
+        // pre-applied so its button shows the dimmed "✓ Active" state; the other doesn't, so it shows the
+        // solid "Set active" — the at-a-glance applied/not-applied contrast. Uses a real temp dir so the
+        // status read (settings.json + script header) resolves; cleaned up and the set reset afterwards.
         {
             var primary = ClaudeConfigSet.Instance.Primary;
-            // Convention = auto-DETECTED (not declared). It's still an eligible apply target — applying a
-            // status line is an explicit per-dir click, not gated on the safe-write policy.
-            var second = new ClaudeConfigDir(Path.Combine(ClaudeConfigSet.Home, ".claude-work"), slug: "work")
-            {
-                Provenance = ConfigDirProvenance.Convention,
-            };
-            ClaudeConfigSet.SetForTesting(new[] { primary, second });
+            var appliedDir = Path.Combine(Path.GetTempPath(), "perch-render-cfgdir-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(appliedDir);
             try
             {
-                var w = new Windows.StatuslineDesignerWindow(Perch.Statusline.StatuslineStore.Seeded())
+                var seeded = Perch.Statusline.StatuslineStore.Seeded();
+                var applied = new ClaudeConfigDir(appliedDir, slug: "work") { Provenance = ConfigDirProvenance.Convention };
+                var notApplied = new ClaudeConfigDir(Path.Combine(ClaudeConfigSet.Home, ".claude-play"), slug: "play")
                 {
-                    Width = 1000, Height = 640,
+                    Provenance = ConfigDirProvenance.Convention,
                 };
-                w.SelectForRender("Minimal");   // an editable-looking preview; the picker sits by "Set active"
+                Perch.Statusline.StatuslineInstaller.Apply(seeded.Find("Minimal")!, applied, out _);
+                ClaudeConfigSet.SetForTesting(new[] { primary, applied, notApplied });
+
+                var w = new Windows.StatuslineDesignerWindow(seeded) { Width = 1000, Height = 640 };
+                w.SelectForRender("Minimal");
                 w.Show();
                 Dispatcher.UIThread.RunJobs();
                 AvaloniaHeadlessPlatform.ForceRenderTimerTick();
@@ -927,6 +930,7 @@ internal static class HeadlessRenderer
             finally
             {
                 ClaudeConfigSet.ResetForTesting();
+                try { Directory.Delete(appliedDir, recursive: true); } catch { }
             }
         }
 

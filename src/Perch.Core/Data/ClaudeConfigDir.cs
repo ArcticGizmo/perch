@@ -50,16 +50,11 @@ internal sealed record ClaudeConfigDir
         : Provenance == ConfigDirProvenance.Primary ? ""
         : Label;
 
-    /// <summary>How this dir earned its place in the set. Gates the safe-write policy (M4): only
-    /// declared and self-reported dirs are ever written to.</summary>
+    /// <summary>How this dir earned its place in the set — used for labelling and as the input to the hook
+    /// install policy (see <see cref="ConfigDirProvenance"/>). It carries <b>no</b> "read-only" meaning:
+    /// every config dir is a valid target for a deliberate write (e.g. applying a status line). Automatic
+    /// hook installs have their own separate policy in <c>HookInstaller</c>.</summary>
     public ConfigDirProvenance Provenance { get; init; } = ConfigDirProvenance.Primary;
-
-    /// <summary>Whether the safe-write policy permits writing into this dir (a hook install). True for
-    /// <see cref="ConfigDirProvenance.Primary"/>/<see cref="ConfigDirProvenance.Declared"/>/
-    /// <see cref="ConfigDirProvenance.SelfReported"/>; false for a <see cref="ConfigDirProvenance.Convention"/>-only
-    /// dir, which Perch lists and reads but never writes into until it is promoted by a declaration or a
-    /// self-report.</summary>
-    public bool IsWritable => Provenance is not ConfigDirProvenance.Convention;
 
     public ClaudeConfigDir(string root, string? realRoot = null, string? slug = null)
     {
@@ -120,9 +115,10 @@ internal sealed record ClaudeConfigDir
 }
 
 /// <summary>
-/// How a <see cref="ClaudeConfigDir"/> entered the set. Ordered by trust: the safe-write policy (M4)
-/// permits hook installs into <see cref="Primary"/>, <see cref="Declared"/> and
-/// <see cref="SelfReported"/> dirs, but never into a dir found <see cref="Convention"/> only.
+/// How a <see cref="ClaudeConfigDir"/> entered the set. A labelling/provenance signal — <b>not</b> a
+/// permission: any config dir can be a deliberate write target. It is only the input to the separate
+/// automatic-hook-install policy (<c>HookInstaller</c>), which by default does not wire itself into a dir
+/// found by the convention scan alone.
 /// </summary>
 internal enum ConfigDirProvenance
 {
@@ -132,7 +128,6 @@ internal enum ConfigDirProvenance
     Declared,
     /// <summary>A running session's hook reported this dir (a <c>.configdir</c> marker was seen).</summary>
     SelfReported,
-    /// <summary>Matched only by the convention scan (a sibling <c>~/.claude*</c> or a scheme manifest).
-    /// Read from, but never written to.</summary>
+    /// <summary>Matched only by the convention scan (a sibling <c>~/.claude*</c> or a scheme manifest).</summary>
     Convention,
 }

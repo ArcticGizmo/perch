@@ -76,11 +76,11 @@ internal static class HookInstaller
     }
 
     /// <summary>
-    /// Reconciles Perch's managed hooks into <b>every writable</b> config dir in the set — the primary,
-    /// declared dirs, and dirs a session has self-reported. A convention-only dir (found only by the
-    /// pattern scan) is deliberately <b>not</b> written to: the M4 safe-write policy reads from anything
-    /// discovered but never installs a hook into a dir Perch merely guessed at, until a declaration or a
-    /// self-report promotes it. Best-effort per dir. Serialised under one gate.
+    /// Reconciles Perch's managed hooks into the primary, declared, and self-reported config dirs. A
+    /// convention-only dir (found only by the pattern scan) is deliberately <b>not</b> auto-hooked — Perch
+    /// never wires itself into a dir it merely guessed at until the user brings it in explicitly. This is a
+    /// standalone hook policy, independent of any read-only notion (there is none): applying a status line,
+    /// say, is allowed into any dir; only this automatic hook install is held back. Best-effort per dir.
     /// </summary>
     public static void ReconcileAll()
     {
@@ -89,7 +89,7 @@ internal static class HookInstaller
         {
             foreach (var dir in ClaudeConfigSet.Instance.All)
             {
-                if (!dir.IsWritable) continue;
+                if (dir.Provenance == ConfigDirProvenance.Convention) continue;
                 try { ClaudeUserSettings.ReconcileHooks(dir.UserSettingsFile, HookBinaryPath, AppInfo.Version, AppProfile.IsDev); }
                 catch { /* one bad dir must not stop the rest */ }
             }
