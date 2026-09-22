@@ -60,6 +60,9 @@ internal sealed class StatuslineDesignerWindow : Window
     private TextBlock _commandLabel = null!;
     private Button _applyButton = null!;
     private TextBlock _editorHeader = null!;
+    private WrapPanel _chips = null!;
+    private TextBlock _softBreakHint = null!;
+    private Border _lockBanner = null!;
     private DispatcherTimer? _appliedTimer;
 
     // editor gutter + autocomplete
@@ -246,8 +249,58 @@ internal sealed class StatuslineDesignerWindow : Window
             Cursor = new Cursor(StandardCursorType.Hand),
             Child = dock,
         };
-        border.PointerPressed += (_, _) => SelectProfile(p);
+        border.PointerPressed += (_, e) =>
+        {
+            // Left-press selects; let a right-press fall through to the context menu without selecting.
+            if (e.GetCurrentPoint(border).Properties.IsRightButtonPressed) return;
+            SelectProfile(p);
+        };
+
+        // Right-click: duplicate (always) and, for user/imported profiles, delete. Built-ins can't be
+        // deleted — they come from code and would just reappear on the next load.
+        var menu = new ContextMenu();
+        var dup = new MenuItem { Header = "Duplicate to edit" };
+        dup.Click += (_, _) => DuplicateForEdit(p);
+        menu.Items.Add(dup);
+        if (!p.Builtin)
+        {
+            var del = new MenuItem { Header = "Delete" };
+            del.Click += (_, _) => DeleteProfile(p);
+            menu.Items.Add(del);
+        }
+        border.ContextMenu = menu;
         return border;
+    }
+
+    private void DuplicateForEdit(StatuslineProfile src)
+    {
+        var copy = new StatuslineProfile
+        {
+            Name = UniqueName($"{src.Name} copy"),
+            Kind = src.Kind,
+            Template = src.Template,
+            Command = src.Command,
+            Padding = src.Padding,
+        };   // Builtin defaults to false → the copy is fully editable
+        _config.Profiles.Add(copy);
+        RefreshRail();
+        SelectProfile(copy);
+        Dispatcher.UIThread.Post(() => _nameBox.Focus());   // land in the name field ready to rename
+    }
+
+    private void DeleteProfile(StatuslineProfile p)
+    {
+        if (p.Builtin) return;
+        int idx = _config.Profiles.IndexOf(p);
+        _config.Profiles.Remove(p);
+        if (ReferenceEquals(p, _config.Active)) _config.ActiveName = null;   // Active falls back to first
+        if (ReferenceEquals(p, _selected))
+        {
+            var next = _config.Profiles.ElementAtOrDefault(System.Math.Min(idx, _config.Profiles.Count - 1))
+                       ?? _config.Profiles.FirstOrDefault();
+            if (next is not null) SelectProfile(next);   // reselect (also refreshes the rail)
+        }
+        else RefreshRail();
     }
 
     // ── centre: editor + preview ───────────────────────────────────────────────────────────
@@ -264,7 +317,8 @@ internal sealed class StatuslineDesignerWindow : Window
         _nameBox.LostFocus += (_, _) => CommitName();
 
         // toolbar chips (Perch only)
-        var chips = new WrapPanel { Orientation = Orientation.Horizontal };
+        _chips = new WrapPanel { Orientation = Orientation.Horizontal };
+        var chips = _chips;
         foreach (var (label, insert) in new[]
                  {
                      ("{{model.display_name}}", "{{model.display_name}}"),
@@ -289,6 +343,10 @@ internal sealed class StatuslineDesignerWindow : Window
             Background = Brushes.Transparent, BorderThickness = new Thickness(0),
             Padding = new Thickness(8, EditorPadTop, 8, 8), VerticalAlignment = VerticalAlignment.Top,
             MinHeight = 150,
+            // Our minimal HighlightTextBox template carries no Fluent ControlTheme, so the selection brush
+            // is otherwise unset (null) and dragging a selection shows nothing. Give it a visible wash; the
+            // syntax colours stay legible through the semi-transparent teal.
+            SelectionBrush = new SolidColorBrush(Color.FromArgb(0x59, 0x46, 0xc6, 0xb8)),
         };
         // The box neither self-scrolls nor is left to measure its own (under-measured, clipped) height:
         // RebuildGutter measures each wrapped line and sets the box Height explicitly to the exact content
@@ -300,12 +358,18 @@ internal sealed class StatuslineDesignerWindow : Window
         _templateBox.SetHighlighter(t => StatuslineSourceHighlighter.Highlight(t, hlFace, 13));
         _templateBox.TextChanged += (_, _) =>
         {
-            if (_selected.IsPerch) { _selected.Template = _templateBox.Text ?? ""; UpdatePreview(); }
+            if (_selected.IsPerch && !_selected.Builtin) { _selected.Template = _templateBox.Text ?? ""; }
+            if (_selected.IsPerch) UpdatePreview();
             RebuildGutter();
-            if (!_suppress) UpdateCompletions();
+            if (!_suppress && !_selected.Builtin) UpdateCompletions();
         };
         _templateBox.AddHandler(InputElement.KeyDownEvent, OnEditorKeyDown, RoutingStrategies.Tunnel);
-        _templateBox.PropertyChanged += (_, e) => { if (e.Property == Visual.BoundsProperty) RebuildGutter(); };
+        _templateBox.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == Visual.BoundsProperty) RebuildGutter();
+            else if (e.Property == TextBox.CaretIndexProperty || e.Property == InputElement.IsFocusedProperty)
+                HighlightPreviewForCaret();
+        };
 
         _gutter = new StackPanel();
         var gutterHost = new Border
@@ -332,7 +396,13 @@ internal sealed class StatuslineDesignerWindow : Window
             CornerRadius = new CornerRadius(6), Child = _completionPanel, IsVisible = false,
         };
 
-        _perchEditor = new StackPanel { Spacing = 8, Children = { chips, editorBorder, _completionHost } };
+        _softBreakHint = new TextBlock
+        {
+            Text = "Tip: Shift+Enter inserts a soft line break — it wraps the editor into readable chunks without splitting the status line.",
+            Foreground = Muted, FontSize = 11, TextWrapping = TextWrapping.Wrap,
+        };
+
+        _perchEditor = new StackPanel { Spacing = 8, Children = { chips, _softBreakHint, editorBorder, _completionHost } };
 
         // external command editor
         _commandBox = new TextBox
@@ -341,7 +411,7 @@ internal sealed class StatuslineDesignerWindow : Window
             Background = TermBg, BorderBrush = Stroke, BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8), Padding = new Thickness(12),
         };
-        _commandBox.TextChanged += (_, _) => { if (!_selected.IsPerch) { _selected.Command = _commandBox.Text ?? ""; UpdateCommandLabel(); } };
+        _commandBox.TextChanged += (_, _) => { if (!_selected.IsPerch && !_selected.Builtin) { _selected.Command = _commandBox.Text ?? ""; UpdateCommandLabel(); } };
         _extEditor = new StackPanel
         {
             Spacing = 8, IsVisible = false,
@@ -356,12 +426,18 @@ internal sealed class StatuslineDesignerWindow : Window
             },
         };
 
-        // preview
+        // preview — a status line is one long row, so let it scroll horizontally rather than clip the tail.
         _preview = new StackPanel { Spacing = 2 };
+        var previewScroll = new ScrollViewer
+        {
+            Content = _preview,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
         var previewBox = new Border
         {
             Background = TermBg, BorderBrush = Stroke, BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8), Padding = new Thickness(14, 12), Child = _preview,
+            CornerRadius = new CornerRadius(8), Padding = new Thickness(14, 12), Child = previewScroll,
         };
 
         // settings.json command + apply
@@ -384,6 +460,30 @@ internal sealed class StatuslineDesignerWindow : Window
             Children = { new TextBlock { Text = "Writes ~/.claude/settings.json", Foreground = Muted, FontSize = 11 }, _commandLabel },
         });
 
+        // Built-in profiles are read-only: this banner replaces the editing affordances and offers a copy.
+        var dupBtn = new Button
+        {
+            Content = "Duplicate to edit", Background = Accent, Foreground = new SolidColorBrush(Color.FromRgb(7, 18, 15)),
+            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(6), Padding = new Thickness(12, 6),
+            FontWeight = FontWeight.SemiBold, Cursor = new Cursor(StandardCursorType.Hand),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        dupBtn.Click += (_, _) => DuplicateForEdit(_selected);
+        var lockDock = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(dupBtn, Dock.Right);
+        lockDock.Children.Add(dupBtn);
+        lockDock.Children.Add(new TextBlock
+        {
+            Text = "Built-in profile — read-only. Duplicate it to make an editable copy.",
+            Foreground = Muted, FontSize = 12, TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        _lockBanner = new Border
+        {
+            Background = Tint(Accent), BorderBrush = Stroke, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8), Padding = new Thickness(12, 8), IsVisible = false, Child = lockDock,
+        };
+
         return new StackPanel
         {
             Spacing = 10,
@@ -391,6 +491,7 @@ internal sealed class StatuslineDesignerWindow : Window
             {
                 _editorHeader,
                 _nameBox,
+                _lockBanner,
                 _perchEditor,
                 _extEditor,
                 Eyebrow("Live preview"),
@@ -474,6 +575,27 @@ internal sealed class StatuslineDesignerWindow : Window
         UpdateCompletions();
     }
 
+    /// <summary>Test/preview hook: load a template and place the caret so a render capture shows the
+    /// caret-driven preview highlight (and any soft breaks). Requires the selected profile be a Perch one.</summary>
+    internal void PoseTemplateForRender(string template, int caret)
+    {
+        // Pose an EDITABLE scratch profile (built-ins are read-only) so the capture shows a normal editing
+        // session — the caret-driven highlight, the dimmed siblings and the soft-break hint.
+        var scratch = new StatuslineProfile { Name = "Scratch", Kind = ProfileKind.Perch, Template = template };
+        _config.Profiles.Add(scratch);
+        SelectProfile(scratch);
+
+        // Placing the caret (a click) doesn't pop completions — only typing does. Keep suppression on for
+        // the life of this single-use render window so a deferred TextChanged can't reopen the popup.
+        _suppress = true;
+        _templateBox.Focus();   // the highlight only shows for a focused editor (as when the user clicks in)
+        _templateBox.CaretIndex = Math.Clamp(caret, 0, template.Length);
+        CloseCompletion();
+        UpdatePreview();
+        RebuildGutter();
+        HighlightPreviewForCaret();
+    }
+
 
     // ── behaviour ────────────────────────────────────────────────────────────────────────
     private void SelectProfile(StatuslineProfile p)
@@ -485,6 +607,17 @@ internal sealed class StatuslineDesignerWindow : Window
         _extEditor.IsVisible = !p.IsPerch;
         if (p.IsPerch) _templateBox.Text = p.Template ?? "";
         else _commandBox.Text = p.Command ?? "";
+
+        // Built-in profiles are locked: editing is disabled and the user is steered to duplicate-to-edit.
+        bool locked = p.Builtin;
+        _lockBanner.IsVisible = locked;
+        _nameBox.IsReadOnly = locked;
+        _templateBox.IsReadOnly = locked;
+        _commandBox.IsReadOnly = locked;
+        _chips.IsVisible = !locked;
+        _softBreakHint.IsVisible = !locked;
+        if (locked) CloseCompletion();
+
         RefreshRail();
         UpdatePreview();
         UpdateCommandLabel();
@@ -493,6 +626,7 @@ internal sealed class StatuslineDesignerWindow : Window
     private void UpdatePreview()
     {
         _preview.Children.Clear();
+        _previewRuns.Clear();
         if (!_selected.IsPerch)
         {
             _preview.Children.Add(new TextBlock
@@ -503,7 +637,7 @@ internal sealed class StatuslineDesignerWindow : Window
             return;
         }
 
-        var segments = StatuslineTemplate.Render(_selected.Template ?? "", _sample);
+        var placed = StatuslineTemplate.RenderPlaced(_selected.Template ?? "", _sample);
 
         // split into lines on embedded newlines so a multi-line template previews as multiple rows
         var line = new List<Run>();
@@ -515,17 +649,71 @@ internal sealed class StatuslineDesignerWindow : Window
             _preview.Children.Add(new TextBlock { FontFamily = Mono, FontSize = 13, Foreground = TermFg, Inlines = inlines });
             line = new List<Run>();
         }
-        foreach (var seg in segments)
+        foreach (var ps in placed)
         {
-            var parts = seg.Text.Split('\n');
+            var baseFg = BrushFor(ps.Segment.Color);
+            var parts = ps.Segment.Text.Split('\n');
             for (int i = 0; i < parts.Length; i++)
             {
                 if (i > 0) FlushLine();
-                if (parts[i].Length > 0)
-                    line.Add(new Run(parts[i]) { Foreground = BrushFor(seg.Color) });
+                if (parts[i].Length == 0) continue;
+                var run = new Run(parts[i]) { Foreground = baseFg };
+                line.Add(run);
+                // Track EVERY run (with its base colour) so the caret can light one up and dim the rest.
+                // Only single-line {{…}} segments are caret targets (IsTag + real source span).
+                bool isTag = ps.IsTag && parts.Length == 1;
+                _previewRuns.Add(new PreviewRun(run, baseFg,
+                    isTag ? ps.SourceStart : -1, isTag ? ps.SourceStart + ps.SourceLength : -1, isTag));
             }
         }
         FlushLine();
+        HighlightPreviewForCaret();
+    }
+
+    // Light up, in the live preview, the element the editor caret currently sits inside (the rendered
+    // output of the {{…}} token spanning the caret) and DIM every other element so it stands out. When the
+    // caret isn't in a token (or the editor isn't focused), everything shows at full strength.
+    private readonly record struct PreviewRun(Run Run, IBrush BaseFg, int Start, int End, bool IsTag);
+    private readonly List<PreviewRun> _previewRuns = new();
+    private readonly Dictionary<IBrush, IBrush> _dimCache = new();
+    private IBrush? _previewHiBrush;
+    private void HighlightPreviewForCaret()
+    {
+        if (!_selected.IsPerch) return;
+        _previewHiBrush ??= new SolidColorBrush(Color.FromArgb(0x40, 0x46, 0xc6, 0xb8));
+        // Only while the editor is focused — otherwise the caret resting at 0 on open would light up the
+        // first token unprompted. Caret placement is what should reveal the matching preview element.
+        int caret = _templateBox.IsFocused ? _templateBox.CaretIndex : -1;
+        int match = caret < 0 ? -1 : _previewRuns.FindIndex(r => r.IsTag && caret >= r.Start && caret < r.End);
+
+        for (int i = 0; i < _previewRuns.Count; i++)
+        {
+            var r = _previewRuns[i];
+            if (match < 0)                       // nothing selected → all elements at full strength
+            {
+                r.Run.Background = null;
+                r.Run.Foreground = r.BaseFg;
+            }
+            else if (i == match)                 // the caret's element: highlighted, full colour
+            {
+                r.Run.Background = _previewHiBrush;
+                r.Run.Foreground = r.BaseFg;
+            }
+            else                                  // every other element: dimmed
+            {
+                r.Run.Background = null;
+                r.Run.Foreground = Dim(r.BaseFg);
+            }
+        }
+    }
+
+    private IBrush Dim(IBrush b)
+    {
+        if (_dimCache.TryGetValue(b, out var d)) return d;
+        var dimmed = b is ISolidColorBrush s
+            ? new SolidColorBrush(Color.FromArgb(0x4D, s.Color.R, s.Color.G, s.Color.B))
+            : b;
+        return _dimCache[b] = dimmed;
     }
 
     private void UpdateCommandLabel()
@@ -553,6 +741,7 @@ internal sealed class StatuslineDesignerWindow : Window
 
     private void CommitName()
     {
+        if (_selected.Builtin) { _nameBox.Text = _selected.Name; return; }   // built-ins are read-only
         var name = (_nameBox.Text ?? "").Trim();
         if (name.Length == 0 || name == _selected.Name) { _nameBox.Text = _selected.Name; return; }
         // reject a collision with a different profile
@@ -570,7 +759,7 @@ internal sealed class StatuslineDesignerWindow : Window
 
     private void Insert(string text)
     {
-        if (!_selected.IsPerch) return;
+        if (!_selected.IsPerch || _templateBox.IsReadOnly) return;   // never mutate a locked built-in
         var box = _templateBox;
         int at = Math.Clamp(box.CaretIndex, 0, (box.Text ?? "").Length);
         var t = box.Text ?? "";
@@ -595,23 +784,34 @@ internal sealed class StatuslineDesignerWindow : Window
         var typeface = new Typeface(Mono);
         _gutter.Children.Clear();
         double total = 0;
+        int lineNo = 0;
         for (int i = 0; i < lines.Length; i++)
         {
             var layout = new TextLayout(lines[i].Length == 0 ? " " : lines[i], typeface, 13, Muted,
                 textAlignment: TextAlignment.Left, textWrapping: TextWrapping.Wrap, maxWidth: width);
             double h = layout.Height;
             total += h;
+
+            // A physical line whose predecessor ended with a soft break ("\") is a continuation of the same
+            // status line, not a new one — mark it with a dim glyph and don't advance the line number.
+            bool continuation = i > 0 && lines[i - 1].EndsWith("\\", StringComparison.Ordinal);
+            if (!continuation) lineNo++;
             _gutter.Children.Add(new TextBlock
             {
-                Text = (i + 1).ToString(), Height = h, FontFamily = Mono, FontSize = 13,
-                Foreground = Muted, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+                Text = continuation ? "·" : lineNo.ToString(), Height = h, FontFamily = Mono, FontSize = 13,
+                Foreground = Muted, Opacity = continuation ? 0.5 : 1, TextAlignment = TextAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
             });
         }
 
-        // Drive the box height from the same measurement the gutter uses, so the box sizes to its wrapped
-        // content exactly (Avalonia's own wrapped-height measure came up ~a line short and clipped). +8 slack
-        // covers rounding; the centre column scrolls if the whole editor grows tall.
-        double target = System.Math.Max(150, total + EditorPadTop + 8 + 8);
+        // Drive the box height from a whole-text measurement (exactly how the presenter lays it out) plus a
+        // full extra line of slack, so the final wrapped row can never be clipped (Avalonia's own wrapped
+        // measure runs ~a line short). The centre column scrolls if the whole editor grows tall.
+        var whole = new TextLayout(text.Length == 0 ? " " : text, typeface, 13, Muted,
+            textAlignment: TextAlignment.Left, textWrapping: TextWrapping.Wrap, maxWidth: width);
+        double lineH = whole.TextLines.Count > 0 ? whole.Height / whole.TextLines.Count : 18;
+        double content = System.Math.Max(total, whole.Height);
+        double target = System.Math.Max(150, content + EditorPadTop + 8 + lineH);
         if (double.IsNaN(_templateBox.Height) || System.Math.Abs(_templateBox.Height - target) > 0.5)
             _templateBox.Height = target;
     }
@@ -619,6 +819,17 @@ internal sealed class StatuslineDesignerWindow : Window
     // ── autocomplete ─────────────────────────────────────────────────────────────────────
     private void OnEditorKeyDown(object? sender, KeyEventArgs e)
     {
+        // Shift+Enter inserts a *soft break*: a "\" + newline the editor wraps for readability but the
+        // renderer joins back into one line (see StatuslineTemplate.StripSoftBreaks). Plain Enter still
+        // makes a real line break. Handled here so the base TextBox doesn't also insert a bare newline.
+        if (e.Key == Key.Enter && e.KeyModifiers.HasFlag(KeyModifiers.Shift) && _selected.IsPerch && !_templateBox.IsReadOnly)
+        {
+            if (_completionHost.IsVisible) CloseCompletion();
+            Insert("\\\n");
+            e.Handled = true;
+            return;
+        }
+
         if (!_completionHost.IsVisible) return;
         switch (e.Key)
         {

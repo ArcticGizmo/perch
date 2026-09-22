@@ -130,6 +130,69 @@ public sealed class StatuslineTemplateTests
         Assert.Equal("aOpus\nb", outp);
     }
 
+    // ── soft breaks ("\" + newline: editor readability wraps that must NOT split the line) ─────────
+    [Fact]
+    public void Soft_break_joins_the_line()
+    {
+        Assert.Equal("abcdef", Render("abc\\\ndef"));
+        Assert.Equal("aOpus b", Render("a{{model.display_name}}\\\n b"));
+        Assert.Equal("aOpus b", Render("a{{model.display_name}} \\\r\nb"));   // CRLF form
+    }
+
+    [Fact]
+    public void Soft_break_does_not_swallow_a_hard_newline()
+    {
+        // A bare newline (no preceding backslash) still splits; only "\<newline>" is joined.
+        Assert.Equal("a\nb", Render("a\nb"));
+        Assert.Equal("a\\b", Render("a\\b"));   // a lone backslash (not before a newline) is literal
+    }
+
+    // ── RenderPlaced: rendered segments carry their source span (for the caret→preview highlight) ──
+    [Fact]
+    public void RenderPlaced_reports_tag_source_spans_in_original_coordinates()
+    {
+        const string tpl = "hi {{model.display_name}}!";
+        var placed = StatuslineTemplate.RenderPlaced(tpl, StatuslineSample.Data());
+
+        var tag = placed.Single(p => p.IsTag);
+        Assert.Equal("Opus", tag.Segment.Text);
+        int start = tpl.IndexOf("{{model", StringComparison.Ordinal);
+        Assert.Equal(start, tag.SourceStart);
+        Assert.Equal("{{model.display_name}}".Length, tag.SourceLength);
+        // the span brackets the whole {{…}} token, so a caret anywhere inside maps to this element
+        Assert.True(start <= start + 5 && start + 5 < tag.SourceStart + tag.SourceLength);
+    }
+
+    [Fact]
+    public void RenderPlaced_only_the_caret_token_covers_a_given_offset()
+    {
+        // Regression: at caret 0 only the leading {{model.display_name}} should match — not a later
+        // {{git.branch}}. Every tag's span must bracket exactly its own token.
+        var tpl = StatuslineDefaults.All.First(p => p.Name == StatuslineDefaults.PerchDefaultName).Template!;
+        var placed = StatuslineTemplate.RenderPlaced(tpl, StatuslineSample.Data());
+        var tags = placed.Where(p => p.IsTag).ToList();
+
+        int Covering(int caret) => tags.Count(t => caret >= t.SourceStart && caret < t.SourceStart + t.SourceLength);
+        Assert.Equal(1, Covering(0));    // only model.display_name spans offset 0
+
+        // no two tag spans overlap (sorted by start, each begins at/after the previous one's end)
+        var sorted = tags.OrderBy(t => t.SourceStart).ToList();
+        for (int i = 1; i < sorted.Count; i++)
+            Assert.True(sorted[i].SourceStart >= sorted[i - 1].SourceStart + sorted[i - 1].SourceLength);
+    }
+
+    [Fact]
+    public void RenderPlaced_keeps_spans_aligned_past_a_soft_break()
+    {
+        // The var sits AFTER a soft break; its reported span must be in the ORIGINAL string's coordinates
+        // (including the "\<newline>"), so the editor caret over it hit-tests correctly.
+        const string tpl = "a\\\n{{model.display_name}}";
+        var placed = StatuslineTemplate.RenderPlaced(tpl, StatuslineSample.Data());
+        var tag = placed.Single(p => p.IsTag);
+        Assert.Equal("Opus", tag.Segment.Text);
+        Assert.Equal(tpl.IndexOf("{{model", StringComparison.Ordinal), tag.SourceStart);
+    }
+
     // ── colour ───────────────────────────────────────────────────────────────────────
     [Fact]
     public void Color_filter_sets_a_segment_colour()

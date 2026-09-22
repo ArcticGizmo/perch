@@ -28,6 +28,12 @@ internal enum StatusColor
 /// live inside <see cref="Text"/> so a multi-line template renders as multiple terminal rows.</summary>
 internal readonly record struct StatuslineSegment(string Text, StatusColor Color);
 
+/// <summary>A rendered <see cref="StatuslineSegment"/> plus the span of template source that produced it
+/// (character offsets into the original template). <see cref="IsTag"/> is true when it came from a
+/// <c>{{…}}</c> token (as opposed to literal text). The designer preview uses this to highlight the
+/// element under the editor caret. See <see cref="StatuslineTemplate.RenderPlaced"/>.</summary>
+internal readonly record struct PlacedSegment(StatuslineSegment Segment, int SourceStart, int SourceLength, bool IsTag);
+
 /// <summary>Maps <see cref="StatusColor"/> roles to concrete RGB, shared by the ANSI renderer and any
 /// UI preview so both agree on the palette. The values mirror the designer mockup's colour classes and
 /// sit in the Perch palette family.</summary>

@@ -204,7 +204,9 @@ internal static class StatuslineScript
           }
           return out;
         }
-        const render = (tpl, ctx) => renderNodes(build(tokenize(tpl)), ctx);
+        // A backslash before a newline is a soft break (editor readability wrap) — drop it so it doesn't
+        // split the line. Mirrors StatuslineTemplate.StripSoftBreaks.
+        const render = (tpl, ctx) => renderNodes(build(tokenize(tpl.replace(/\\\r?\n/g, ''))), ctx);
 
         // git.branch straight off .git/HEAD — no subprocess, no Perch.
         function findGitDir(dir) {

@@ -56,6 +56,12 @@ internal static class StatuslineSourceHighlighter
             i = blockEnd;
         }
 
+        // Soft-break markers ("\" before a newline): paint the backslash muted so it reads as a
+        // readability wrap, not literal content. The renderer drops it (StatuslineTemplate.StripSoftBreaks).
+        for (int k = 0; k + 1 < n; k++)
+            if (text[k] == '\\' && (text[k + 1] == '\n' || (text[k + 1] == '\r' && k + 2 < n && text[k + 2] == '\n')))
+                Paint(k, 1, Delim, null);
+
         return Coalesce(fg, bg, face, fontSize);
     }
 

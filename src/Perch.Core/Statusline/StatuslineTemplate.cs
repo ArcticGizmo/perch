@@ -2,6 +2,7 @@ namespace Perch.Statusline;
 
 using System.Collections.Generic;
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 
 /// <summary>
@@ -35,19 +36,61 @@ internal static class StatuslineTemplate
     /// segments.</summary>
     public static IReadOnlyList<StatuslineSegment> Render(string template, TemplateData data)
     {
-        var nodes = Parse(Tokenize(template));
+        var (stripped, _) = StripSoftBreaks(template);
+        var nodes = Parse(Tokenize(stripped));
         var segments = new List<StatuslineSegment>();
         RenderNodes(nodes, data, segments);
         return segments;
+    }
+
+    /// <summary>Renders like <see cref="Render"/>, but keeps every rendered segment tagged with the
+    /// <em>source span</em> of the template token it came from (in the ORIGINAL template's character
+    /// coordinates, before soft-break stripping). The designer preview uses this to light up the element
+    /// under the editor caret. Segments from a <c>{{…}}</c> token carry <see cref="PlacedSegment.IsTag"/>.</summary>
+    public static IReadOnlyList<PlacedSegment> RenderPlaced(string template, TemplateData data)
+    {
+        var (stripped, map) = StripSoftBreaks(template);
+        var nodes = Parse(Tokenize(stripped));
+        var placed = new List<PlacedSegment>();
+        RenderNodesPlaced(nodes, data, map, placed);
+        return placed;
     }
 
     /// <summary>Convenience: render straight to an ANSI (or plain) string.</summary>
     public static string RenderToString(string template, TemplateData data, bool color = true) =>
         StatuslineRenderer.ToAnsi(Render(template, data), color);
 
+    // ── soft breaks ─────────────────────────────────────────────────────────────────────
+    // A backslash immediately before a newline is a *soft break*: a readability wrap the editor inserts
+    // (Shift+Enter) that must NOT split the rendered status line. We drop the "\<newline>" pair before
+    // tokenising so the surrounding text joins seamlessly. The map records, for each surviving character
+    // (and a trailing sentinel), its index in the ORIGINAL template, so RenderPlaced can report source
+    // spans in original coordinates for caret hit-testing. The generated Node script mirrors this strip.
+    private static (string Stripped, int[] Map) StripSoftBreaks(string t)
+    {
+        var sb = new StringBuilder(t.Length);
+        var map = new List<int>(t.Length + 1);
+        int i = 0;
+        while (i < t.Length)
+        {
+            if (t[i] == '\\' && i + 1 < t.Length && t[i + 1] == '\r' && i + 2 < t.Length && t[i + 2] == '\n') { i += 3; continue; }
+            if (t[i] == '\\' && i + 1 < t.Length && t[i + 1] == '\n') { i += 2; continue; }
+            map.Add(i);
+            sb.Append(t[i]);
+            i++;
+        }
+        map.Add(t.Length);   // sentinel: end-of-stripped maps to end-of-original
+        return (sb.ToString(), map.ToArray());
+    }
+
+    private static int MapIndex(int[] map, int strippedIndex) =>
+        strippedIndex < 0 ? 0 : strippedIndex >= map.Length ? map[^1] : map[strippedIndex];
+
     // ── tokenising ─────────────────────────────────────────────────────────────────────
     private enum Kind { Text, Var, Open, Inverted, Close }
-    private readonly record struct Token(Kind Kind, string Value);
+    // Start/Len are the token's span in the (soft-break-stripped) template — carried so RenderPlaced can
+    // report which source characters produced each rendered segment.
+    private readonly record struct Token(Kind Kind, string Value, int Start, int Len);
 
     private static List<Token> Tokenize(string tpl)
     {
@@ -56,29 +99,29 @@ internal static class StatuslineTemplate
         foreach (Match m in Tag.Matches(tpl))
         {
             if (m.Index > last)
-                toks.Add(new Token(Kind.Text, tpl[last..m.Index]));
+                toks.Add(new Token(Kind.Text, tpl[last..m.Index], last, m.Index - last));
 
             var sig = m.Groups[1].Value;
             var body = m.Groups[2].Value.Trim();
             switch (sig)
             {
                 case "!": break;                                   // comment — dropped
-                case "#": toks.Add(new Token(Kind.Open, body)); break;
-                case "^": toks.Add(new Token(Kind.Inverted, body)); break;
-                case "/": toks.Add(new Token(Kind.Close, body)); break;
-                default:  toks.Add(new Token(Kind.Var, body)); break;
+                case "#": toks.Add(new Token(Kind.Open, body, m.Index, m.Length)); break;
+                case "^": toks.Add(new Token(Kind.Inverted, body, m.Index, m.Length)); break;
+                case "/": toks.Add(new Token(Kind.Close, body, m.Index, m.Length)); break;
+                default:  toks.Add(new Token(Kind.Var, body, m.Index, m.Length)); break;
             }
             last = m.Index + m.Length;
         }
         if (last < tpl.Length)
-            toks.Add(new Token(Kind.Text, tpl[last..]));
+            toks.Add(new Token(Kind.Text, tpl[last..], last, tpl.Length - last));
         return toks;
     }
 
     // ── parsing to a node tree ──────────────────────────────────────────────────────────
     private enum Mode { If, Unless, Truthy, InvertedTruthy }
 
-    private abstract class Node { }
+    private abstract class Node { public int SrcStart = -1, SrcLen; }
     private sealed class TextNode : Node { public string Text = ""; }
     private sealed class VarNode : Node { public string Spec = ""; }
     private sealed class SectionNode : Node
@@ -101,7 +144,7 @@ internal static class StatuslineTemplate
                 if (tk.Kind == Kind.Open || tk.Kind == Kind.Inverted)
                 {
                     i++;
-                    var section = new SectionNode { Children = Walk() };
+                    var section = new SectionNode { Children = Walk(), SrcStart = tk.Start, SrcLen = tk.Len };
                     if (tk.Kind == Kind.Inverted) { section.Mode = Mode.InvertedTruthy; section.Expr = tk.Value; }
                     else if (tk.Value.StartsWith("if ", System.StringComparison.Ordinal))
                         { section.Mode = Mode.If; section.Expr = tk.Value[3..].Trim(); }
@@ -110,8 +153,8 @@ internal static class StatuslineTemplate
                     else { section.Mode = Mode.Truthy; section.Expr = tk.Value; }
                     nodes.Add(section);
                 }
-                else if (tk.Kind == Kind.Var) { nodes.Add(new VarNode { Spec = tk.Value }); i++; }
-                else { nodes.Add(new TextNode { Text = tk.Value }); i++; }
+                else if (tk.Kind == Kind.Var) { nodes.Add(new VarNode { Spec = tk.Value, SrcStart = tk.Start, SrcLen = tk.Len }); i++; }
+                else { nodes.Add(new TextNode { Text = tk.Value, SrcStart = tk.Start, SrcLen = tk.Len }); i++; }
             }
             return nodes;
         }
@@ -145,6 +188,35 @@ internal static class StatuslineTemplate
     {
         if (text.Length == 0) return;
         outp.Add(new StatuslineSegment(text, color));
+    }
+
+    // Mirror of RenderNodes that keeps each segment's source span (original template coords, via the map).
+    private static void RenderNodesPlaced(List<Node> nodes, TemplateData data, int[] map, List<PlacedSegment> outp)
+    {
+        foreach (var n in nodes)
+        {
+            switch (n)
+            {
+                case TextNode t:
+                    AddPlaced(outp, t.Text, StatusColor.Default, t, map, isTag: false);
+                    break;
+                case VarNode v:
+                    var (text, color) = ApplyVar(v.Spec, data);
+                    AddPlaced(outp, text, color, v, map, isTag: true);
+                    break;
+                case SectionNode s:
+                    if (SectionActive(s, data)) RenderNodesPlaced(s.Children, data, map, outp);
+                    break;
+            }
+        }
+    }
+
+    private static void AddPlaced(List<PlacedSegment> outp, string text, StatusColor color, Node node, int[] map, bool isTag)
+    {
+        if (text.Length == 0) return;
+        int a = node.SrcStart < 0 ? 0 : MapIndex(map, node.SrcStart);
+        int b = node.SrcStart < 0 ? 0 : MapIndex(map, node.SrcStart + node.SrcLen);
+        outp.Add(new PlacedSegment(new StatuslineSegment(text, color), a, System.Math.Max(0, b - a), isTag));
     }
 
     private static bool SectionActive(SectionNode s, TemplateData data) => s.Mode switch

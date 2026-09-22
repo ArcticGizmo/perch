@@ -843,6 +843,29 @@ internal static class HeadlessRenderer
             w.Close();
         }
 
+        // Caret-driven preview highlight + a soft break: the caret sits inside the context bar token, which
+        // lights up in the live preview; the "\" wraps the editor line without splitting the rendered line.
+        {
+            var w = new Windows.StatuslineDesignerWindow(Perch.Statusline.StatuslineStore.Seeded())
+            {
+                Width = 1000, Height = 640,
+            };
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            var tpl = "{{model.display_name}}  ctx {{context_window.used_percentage|bar:10|color:teal}}\\\n"
+                    + "  {{context_window.used_percentage|pct}}  ${{cost.total_cost_usd|money}}";
+            w.PoseTemplateForRender(tpl, tpl.IndexOf("bar:10", StringComparison.Ordinal));
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "statusline_designer_carethl_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
         // Autocomplete posed open (editor mid-token) so the completion rows render: a field path, a filter
         // name, and a colour arg (drawn as swatches). Syntax highlighting shows in the editor text too.
         foreach (var (partial, file) in new[]

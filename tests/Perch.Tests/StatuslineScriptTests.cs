@@ -80,6 +80,9 @@ public sealed class StatuslineScriptTests
         // pace with a reset far in the future → expected clamps to 0 (< 15 → green), independent of each
         // process's wall clock, so the C# engine and the Node script still agree byte-for-byte
         { "{{u|bar:10|pace:r:18000}} {{u|round|pace:r:18000}}%", """{"u":40,"r":4102444800}""" },
+        // soft breaks ("\" + newline) must be dropped identically by both engines
+        { "ctx {{context_window.used_percentage|pct}}\\\n  ${{cost.total_cost_usd|money}}",
+          """{"context_window":{"used_percentage":34},"cost":{"total_cost_usd":0.4213}}""" },
     };
 
     [Theory]
