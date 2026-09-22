@@ -9,6 +9,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.TextFormatting;
 using Avalonia.Threading;
+using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
 using Perch.Statusline;
 
@@ -51,7 +52,7 @@ internal sealed class StatuslineDesignerWindow : Window
     private StackPanel _railPerch = null!;
     private StackPanel _railExt = null!;
     private TextBox _nameBox = null!;
-    private TextBox _templateBox = null!;
+    private HighlightTextBox _templateBox = null!;
     private TextBox _commandBox = null!;
     private Panel _perchEditor = null!;
     private Panel _extEditor = null!;
@@ -67,7 +68,20 @@ internal sealed class StatuslineDesignerWindow : Window
     private Border _completionHost = null!;
     private List<(string Path, string Value)> _completions = new();
     private int _completionIndex, _completionStart, _completionLen;
+    private CompKind _completionKind;
     private bool _suppress;   // guards the completion refresh while we programmatically set editor text
+
+    // What the caret is positioned to complete: a field path, a filter name, a color:name arg, or the
+    // if/unless keyword right after a {{# sigil.
+    private enum CompKind { Path, Filter, Color, Section }
+
+    private static readonly (string Name, string Sig)[] FilterCatalog =
+    {
+        ("bar", "N-cell bar"), ("money", "0.00"), ("pct", "rounded %"), ("round", "whole number"),
+        ("k", "1.2k"), ("human", "68k / 2M"), ("dur", "1h 15m"), ("until", "countdown"),
+        ("upper", "UPPERCASE"), ("lower", "lowercase"), ("trunc", "trunc:N"), ("default", "default:X"),
+        ("color", "color:name"), ("pace", "pace:resets:secs"),
+    };
 
     public StatuslineDesignerWindow() : this(StatuslineStore.Load()) { }
 
@@ -268,13 +282,18 @@ internal sealed class StatuslineDesignerWindow : Window
         // ScrollViewer so they scroll as a unit — the same trick the session composer uses. Horizontal
         // scrolling is disabled so the box is width-constrained and wraps; the gutter numbers each *logical*
         // line, sized to that line's wrapped height so numbers stay aligned to the first visual row.
-        _templateBox = new TextBox
+        _templateBox = new HighlightTextBox
         {
             AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
-            FontFamily = Mono, FontSize = 13, Foreground = Fg,
+            FontFamily = Mono, FontSize = 13, Foreground = TermFg, CaretBrush = TermFg,
             Background = Brushes.Transparent, BorderThickness = new Thickness(0),
             Padding = new Thickness(8, EditorPadTop, 8, 8), VerticalAlignment = VerticalAlignment.Top,
         };
+        // Grow rather than self-scroll (the outer ScrollViewer + gutter scroll as a unit); wrap, don't scroll sideways.
+        ScrollViewer.SetHorizontalScrollBarVisibility(_templateBox, ScrollBarVisibility.Disabled);
+        ScrollViewer.SetVerticalScrollBarVisibility(_templateBox, ScrollBarVisibility.Disabled);
+        var hlFace = new Typeface(Mono);
+        _templateBox.SetHighlighter(t => StatuslineSourceHighlighter.Highlight(t, hlFace, 13));
         _templateBox.TextChanged += (_, _) =>
         {
             if (_selected.IsPerch) { _selected.Template = _templateBox.Text ?? ""; UpdatePreview(); }
@@ -606,9 +625,9 @@ internal sealed class StatuslineDesignerWindow : Window
         }
     }
 
-    // The token path being typed at the caret (the run of [\w.] chars), or null when the caret isn't inside
-    // an open {{ … }} or is in the filter part (after a |), where we don't complete paths.
-    private (string Word, int Start)? CurrentWord()
+    // What the caret is positioned to complete (kind + the partial word + where it starts), or null when
+    // the caret isn't inside an open {{ … }} or is somewhere we don't offer completions (a numeric arg).
+    private (CompKind Kind, string Word, int Start)? CurrentCompletion()
     {
         var text = _templateBox.Text ?? "";
         int caret = Math.Clamp(_templateBox.CaretIndex, 0, text.Length);
@@ -617,35 +636,68 @@ internal sealed class StatuslineDesignerWindow : Window
         for (int i = Math.Min(caret, text.Length) - 2; i >= 0; i--)
         {
             if (text[i] == '{' && text[i + 1] == '{') { open = i; break; }
-            if (text[i] == '}' && text[i + 1] == '}') break;   // a closed tag sits between us and any {{
+            if (text[i] == '}' && text[i + 1] == '}') break;
         }
         if (open < 0) return null;
-        for (int i = open + 2; i < caret; i++) if (text[i] == '|') return null;   // in the filter part
+        int content = open + 2;
 
+        // In the filter part? (a | between the block open and the caret)
+        int lastBar = -1;
+        for (int i = content; i < caret; i++) if (text[i] == '|') lastBar = i;
+        if (lastBar >= 0)
+        {
+            int colon = -1;
+            for (int i = lastBar + 1; i < caret; i++) if (text[i] == ':') colon = i;
+            if (colon >= 0)
+            {
+                // an arg — only color: completes (to a colour name); numeric args don't
+                if (!text[(lastBar + 1)..colon].Trim().Equals("color", StringComparison.OrdinalIgnoreCase))
+                    return null;
+                int p = colon + 1; while (p < caret && char.IsWhiteSpace(text[p])) p++;
+                return (CompKind.Color, text[p..caret], p);
+            }
+            int q = lastBar + 1; while (q < caret && char.IsWhiteSpace(text[q])) q++;
+            return (CompKind.Filter, text[q..caret], q);
+        }
+
+        // The head: a field path, or the if/unless keyword right after a {{# sigil.
         int s = caret;
-        while (s > open + 2 && (char.IsLetterOrDigit(text[s - 1]) || text[s - 1] == '_' || text[s - 1] == '.'))
-            s--;
-        return (text[s..caret], s);
+        while (s > content && (char.IsLetterOrDigit(text[s - 1]) || text[s - 1] == '_' || text[s - 1] == '.')) s--;
+        var kind = text[content..s].Trim() == "#" ? CompKind.Section : CompKind.Path;
+        return (kind, text[s..caret], s);
     }
 
     private void UpdateCompletions()
     {
-        if (!_selected.IsPerch || CurrentWord() is not { } cw) { CloseCompletion(); return; }
-        var (word, start) = cw;
+        if (!_selected.IsPerch || CurrentCompletion() is not { } c) { CloseCompletion(); return; }
+        var (kind, word, start) = c;
         var q = word.ToLowerInvariant();
 
-        var matches = StatuslineTokens.Groups.SelectMany(g => g.Tokens)
-            .Where(t => q.Length == 0 || t.Path.ToLowerInvariant().Contains(q))
-            .OrderByDescending(t => t.Path.StartsWith(word, StringComparison.OrdinalIgnoreCase))
-            .ThenBy(t => t.Path, StringComparer.Ordinal)
-            .Take(8)
-            .Select(t => (t.Path, Value: SampleValue(t.Path)))
-            .ToList();
+        var matches = kind switch
+        {
+            CompKind.Filter => FilterCatalog
+                .Where(f => q.Length == 0 || f.Name.Contains(q))
+                .OrderByDescending(f => f.Name.StartsWith(q, StringComparison.Ordinal)).ThenBy(f => f.Name)
+                .Select(f => (f.Name, Value: f.Sig)).ToList(),
+            CompKind.Color => StatusColors.Names
+                .Where(cn => q.Length == 0 || cn.Contains(q))
+                .OrderByDescending(cn => cn.StartsWith(q, StringComparison.Ordinal)).ThenBy(cn => cn)
+                .Select(cn => (cn, Value: "")).ToList(),
+            CompKind.Section => new[] { ("if", "conditional"), ("unless", "conditional") }
+                .Where(k => q.Length == 0 || k.Item1.Contains(q)).Select(k => (k.Item1, Value: k.Item2)).ToList(),
+            _ => StatuslineTokens.Groups.SelectMany(g => g.Tokens)
+                .Where(t => q.Length == 0 || t.Path.ToLowerInvariant().Contains(q))
+                .OrderByDescending(t => t.Path.StartsWith(word, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(t => t.Path, StringComparer.Ordinal)
+                .Take(8)
+                .Select(t => (t.Path, Value: SampleValue(t.Path))).ToList(),
+        };
 
         // Nothing to offer, or the word is already the one exact match — don't nag.
-        if (matches.Count == 0 || (matches.Count == 1 && matches[0].Path == word)) { CloseCompletion(); return; }
+        if (matches.Count == 0 || (matches.Count == 1 && matches[0].Item1 == word)) { CloseCompletion(); return; }
 
         _completions = matches;
+        _completionKind = kind;
         _completionStart = start;
         _completionLen = word.Length;
         _completionIndex = 0;
@@ -658,16 +710,25 @@ internal sealed class StatuslineDesignerWindow : Window
         _completionPanel.Children.Clear();
         for (int i = 0; i < _completions.Count; i++)
         {
-            var (path, val) = _completions[i];
+            var (label, val) = _completions[i];
+
+            // A colour name is drawn in the colour it names, as a swatch.
+            IBrush labelBrush = Fg;
+            if (_completionKind == CompKind.Color && StatusColors.Parse(label) is var role && role != StatusColor.Default)
+            {
+                var (r, g, b) = StatusColors.Rgb(role);
+                labelBrush = new SolidColorBrush(Color.FromRgb(r, g, b));
+            }
+
             var dock = new DockPanel { LastChildFill = true };
             var valText = new TextBlock
             {
-                Text = val, FontFamily = Mono, FontSize = 11, Foreground = Palette.AccentBrush,
+                Text = val, FontFamily = Mono, FontSize = 11, Foreground = Muted,
                 HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(10, 0, 0, 0),
             };
             DockPanel.SetDock(valText, Dock.Right);
             dock.Children.Add(valText);
-            dock.Children.Add(new TextBlock { Text = path, FontFamily = Mono, FontSize = 12, Foreground = Fg });
+            dock.Children.Add(new TextBlock { Text = label, FontFamily = Mono, FontSize = 12, Foreground = labelBrush });
 
             int idx = i;
             var row = new Border

@@ -843,7 +843,14 @@ internal static class HeadlessRenderer
             w.Close();
         }
 
-        // Autocomplete list posed open (editor mid-token) so the completion rows + sample values render.
+        // Autocomplete posed open (editor mid-token) so the completion rows render: a field path, a filter
+        // name, and a colour arg (drawn as swatches). Syntax highlighting shows in the editor text too.
+        foreach (var (partial, file) in new[]
+                 {
+                     ("{{context_win", "statusline_designer_autocomplete_1x.png"),
+                     ("{{model.display_name|co", "statusline_designer_autocomplete_filter_1x.png"),
+                     ("{{context_window.used_percentage|color:te", "statusline_designer_autocomplete_color_1x.png"),
+                 })
         {
             var w = new Windows.StatuslineDesignerWindow(Perch.Statusline.StatuslineStore.Seeded())
             {
@@ -851,13 +858,13 @@ internal static class HeadlessRenderer
             };
             w.Show();
             Dispatcher.UIThread.RunJobs();
-            w.ShowCompletionsForRender("{{context_win");
+            w.ShowCompletionsForRender(partial);
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
             var frame = w.CaptureRenderedFrame();
             if (frame != null)
             {
-                using var fs = File.Create(Path.Combine(outDir, "statusline_designer_autocomplete_1x.png"));
+                using var fs = File.Create(Path.Combine(outDir, file));
                 frame.Save(fs);
             }
             w.Close();
