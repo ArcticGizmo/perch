@@ -58,14 +58,11 @@ internal sealed class StatuslineDesignerWindow : Window
     private Panel _perchEditor = null!;
     private Panel _extEditor = null!;
     private StackPanel _preview = null!;
-    private TextBlock _commandLabel = null!;
-    private Button _applyButton = null!;
     private TextBlock _editorHeader = null!;
     private WrapPanel _chips = null!;
     private TextBlock _softBreakHint = null!;
     private Border _lockBanner = null!;
-    private TextBlock _writesLabel = null!;
-    private ComboBox _configDirCombo = null!;
+    private StackPanel _applyArea = null!;
     private List<ClaudeConfigDir> _writableDirs = new();
     private DispatcherTimer? _appliedTimer;
 
@@ -110,6 +107,10 @@ internal sealed class StatuslineDesignerWindow : Window
 
         Content = BuildContent();
         SelectProfile(_selected);
+
+        // The config-dir set can change while this reused single-instance window is open (a session self-
+        // reports a dir, or the user declares one) — refresh the per-dir apply rows each time it's activated.
+        Activated += (_, _) => RebuildApplyArea();
     }
 
     protected override void OnClosed(EventArgs e)
@@ -417,7 +418,7 @@ internal sealed class StatuslineDesignerWindow : Window
             Background = TermBg, BorderBrush = Stroke, BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8), Padding = new Thickness(12),
         };
-        _commandBox.TextChanged += (_, _) => { if (!_selected.IsPerch && !_selected.Builtin) { _selected.Command = _commandBox.Text ?? ""; UpdateCommandLabel(); } };
+        _commandBox.TextChanged += (_, _) => { if (!_selected.IsPerch && !_selected.Builtin) { _selected.Command = _commandBox.Text ?? ""; RebuildApplyArea(); } };
         _extEditor = new StackPanel
         {
             Spacing = 8, IsVisible = false,
@@ -446,50 +447,10 @@ internal sealed class StatuslineDesignerWindow : Window
             CornerRadius = new CornerRadius(8), Padding = new Thickness(14, 12), Child = previewScroll,
         };
 
-        // settings.json command + apply
-        _commandLabel = new TextBlock { Foreground = Muted, FontFamily = Mono, FontSize = 11, TextWrapping = TextWrapping.Wrap };
-        _writesLabel = new TextBlock { Foreground = Muted, FontSize = 11, TextWrapping = TextWrapping.Wrap };
-        _applyButton = new Button
-        {
-            Content = "Set active", Background = Accent, Foreground = new SolidColorBrush(Color.FromRgb(7, 18, 15)),
-            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(6), Padding = new Thickness(14, 7),
-            FontWeight = FontWeight.SemiBold, Cursor = new Cursor(StandardCursorType.Hand),
-            HorizontalAlignment = HorizontalAlignment.Right,
-        };
-        _applyButton.Click += (_, _) => ApplySelected();
-
-        // Config-dir target: when more than one WRITABLE config dir exists (multiple orgs), let the user pick
-        // which one's settings.json + script this profile is applied to — or "All". A single dir hides the
-        // picker and just targets the primary (the usual case).
-        _writableDirs = ClaudeConfigSet.Instance.All.Where(d => d.IsWritable).ToList();
-        _configDirCombo = new ComboBox
-        {
-            Background = Panel, Foreground = Fg, BorderBrush = Stroke, BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6), Padding = new Thickness(8, 4), MinWidth = 200,
-            IsVisible = _writableDirs.Count > 1,
-        };
-        foreach (var d in _writableDirs) _configDirCombo.Items.Add(DirComboLabel(d));
-        if (_writableDirs.Count > 1) _configDirCombo.Items.Add("All directories");
-        _configDirCombo.SelectedIndex = 0;
-        _configDirCombo.SelectionChanged += (_, _) => UpdateCommandLabel();
-
-        var applyRow = new DockPanel { LastChildFill = true };
-        DockPanel.SetDock(_applyButton, Dock.Right);
-        applyRow.Children.Add(_applyButton);
-        applyRow.Children.Add(new StackPanel
-        {
-            VerticalAlignment = VerticalAlignment.Center, Spacing = 4,
-            Children =
-            {
-                new StackPanel
-                {
-                    Orientation = Orientation.Horizontal, Spacing = 8, IsVisible = _writableDirs.Count > 1,
-                    Children = { new TextBlock { Text = "Apply to", Foreground = Muted, FontSize = 11, VerticalAlignment = VerticalAlignment.Center }, _configDirCombo },
-                },
-                _writesLabel,
-                _commandLabel,
-            },
-        });
+        // Apply area: one "Set active" for the usual single-config-dir case, or a row PER writable config
+        // dir (each with its own button and a note of what's active there) when a multi-org setup has more
+        // than one. Rebuilt on profile change and when the window is re-activated (dirs can be added).
+        _applyArea = new StackPanel { Spacing = 6 };
 
         // Built-in profiles are read-only: this banner replaces the editing affordances and offers a copy.
         var dupBtn = new Button
@@ -528,7 +489,7 @@ internal sealed class StatuslineDesignerWindow : Window
                 Eyebrow("Live preview"),
                 previewBox,
                 new Border { Height = 4 },
-                applyRow,
+                _applyArea,
             },
         };
     }
@@ -715,7 +676,7 @@ internal sealed class StatuslineDesignerWindow : Window
 
         RefreshRail();
         UpdatePreview();
-        UpdateCommandLabel();
+        RebuildApplyArea();
     }
 
     private void UpdatePreview()
@@ -811,32 +772,120 @@ internal sealed class StatuslineDesignerWindow : Window
         return _dimCache[b] = dimmed;
     }
 
-    private void UpdateCommandLabel()
+    // ── apply area (per config dir) ───────────────────────────────────────────────────────
+    // Rebuilt on profile change / re-activation. One "Set active" for a single config dir, or a labelled row
+    // PER writable dir (each with its own button + what's active there) for a multi-org setup, plus a note
+    // for any dirs discovered but not enabled.
+    private void RebuildApplyArea()
     {
-        var targets = SelectedApplyTargets();
-        // What "Set active" will write into: name the target settings.json (or "N directories" for all).
-        _writesLabel.Text = targets.Count == 1
-            ? $"Writes {Tildify(targets[0].UserSettingsFile)}"
-            : $"Writes settings.json in {targets.Count} directories";
+        if (_applyArea is null) return;
+        _applyArea.Children.Clear();
+        var set = ClaudeConfigSet.Instance;
+        _writableDirs = set.All.Where(d => d.IsWritable).ToList();
 
-        // For a Perch profile the command is the same node-script invocation everywhere (each dir gets its own
-        // copy of the script); show the single-target path when there's just one target.
-        _commandLabel.Text = _selected.IsPerch
-            ? StatuslineScript.CommandFor(targets.Count == 1
-                ? StatuslineScript.ScriptPathFor(targets[0].Root)
-                : StatuslineScript.DefaultScriptPath)
-            : (string.IsNullOrWhiteSpace(_selected.Command) ? "(no command yet)" : _selected.Command);
+        if (_writableDirs.Count <= 1)
+        {
+            _applyArea.Children.Add(ApplyDirRow(_writableDirs.Count == 1 ? _writableDirs[0] : set.Primary, showLabel: false));
+        }
+        else
+        {
+            _applyArea.Children.Add(Eyebrow("Set active in"));
+            foreach (var d in _writableDirs) _applyArea.Children.Add(ApplyDirRow(d, showLabel: true));
+            _applyArea.Children.Add(ApplyDirRow(null, showLabel: true));   // the "All directories" row
+        }
+
+        int hidden = set.All.Count(d => !d.IsWritable);
+        if (hidden > 0)
+            _applyArea.Children.Add(new TextBlock
+            {
+                Text = hidden == 1
+                    ? "1 more directory was found but isn't enabled — add it in Settings › Config directories to apply here."
+                    : $"{hidden} more directories were found but aren't enabled — add them in Settings › Config directories to apply here.",
+                Foreground = Muted, FontSize = 10.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0),
+            });
     }
 
-    // The config dir(s) "Set active" writes into: the single writable dir when there's one, otherwise the
-    // combo selection (a specific dir, or every writable dir for the "All directories" item).
-    private List<ClaudeConfigDir> SelectedApplyTargets()
+    // One apply row: a "Set active" button plus (in the multi-dir list) the dir's label and what's active in
+    // it now. dir == null is the "All directories" row (applies to every writable dir at once).
+    private Control ApplyDirRow(ClaudeConfigDir? dir, bool showLabel)
     {
-        if (_writableDirs.Count == 0) return new List<ClaudeConfigDir>();
-        if (!_configDirCombo.IsVisible) return new List<ClaudeConfigDir> { _writableDirs[0] };
-        int idx = _configDirCombo.SelectedIndex;
-        if (idx >= 0 && idx < _writableDirs.Count) return new List<ClaudeConfigDir> { _writableDirs[idx] };
-        return new List<ClaudeConfigDir>(_writableDirs);   // the trailing "All directories" item
+        bool isAll = dir is null;
+        var btn = new Button
+        {
+            Content = "Set active", Background = Accent, Foreground = new SolidColorBrush(Color.FromRgb(7, 18, 15)),
+            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(6), Padding = new Thickness(14, 7),
+            FontWeight = FontWeight.SemiBold, Cursor = new Cursor(StandardCursorType.Hand),
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = 1 };
+        if (isAll)
+        {
+            texts.Children.Add(new TextBlock { Text = "All directories", Foreground = Fg, FontSize = 12.5, FontWeight = FontWeight.SemiBold });
+            texts.Children.Add(new TextBlock { Text = $"apply to every writable directory ({_writableDirs.Count})", Foreground = Muted, FontSize = 10.5 });
+            btn.Click += (_, _) => { if (ApplyProfileTo(_writableDirs)) RebuildApplyArea(); else Flash(btn, "Failed"); };
+        }
+        else
+        {
+            if (showLabel)
+                texts.Children.Add(new TextBlock { Text = DirComboLabel(dir!), Foreground = Fg, FontSize = 12.5, FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.PrefixCharacterEllipsis });
+            else
+                texts.Children.Add(new TextBlock { Text = $"Writes {Tildify(dir!.UserSettingsFile)}", Foreground = Muted, FontSize = 11, TextWrapping = TextWrapping.Wrap });
+
+            var (statusText, isThis) = DirStatus(dir!);
+            var status = new TextBlock { Text = statusText, Foreground = isThis ? Accent : Muted, FontSize = 10.5, FontFamily = Mono, TextTrimming = TextTrimming.CharacterEllipsis };
+            texts.Children.Add(status);
+
+            btn.Click += (_, _) =>
+            {
+                if (ApplyProfileTo(new List<ClaudeConfigDir> { dir! }))
+                {
+                    var (t, isNow) = DirStatus(dir!);
+                    status.Text = t; status.Foreground = isNow ? Accent : Muted;
+                    Flash(btn, "Active ✓");
+                }
+                else Flash(btn, "Failed");
+            };
+        }
+
+        var dock = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(btn, Dock.Right);
+        dock.Children.Add(btn);
+        dock.Children.Add(texts);
+        return new Border { Padding = new Thickness(0, 3), Child = dock };
+    }
+
+    // What's currently active in a config dir, and whether it's THIS profile — read from its settings.json
+    // (and, for a Perch line, the profile name baked into its generated script's header).
+    private (string Text, bool IsThisProfile) DirStatus(ClaudeConfigDir dir)
+    {
+        var cmd = StatuslineInstaller.CurrentCommand(dir);
+        if (string.IsNullOrWhiteSpace(cmd)) return ("— no status line set", false);
+
+        var perchCmd = StatuslineScript.CommandFor(StatuslineScript.ScriptPathFor(dir.Root));
+        if (string.Equals(cmd, perchCmd, StringComparison.OrdinalIgnoreCase))
+        {
+            var name = StatuslineScript.ProfileNameFromScript(StatuslineScript.ScriptPathFor(dir.Root));
+            if (name is null) return ("active: a Perch status line", false);
+            bool isThis = string.Equals(name, _selected.Name, StringComparison.Ordinal);
+            return (isThis ? $"active: {name}  ✓" : $"active: {name}", isThis);
+        }
+        return ("active: " + (cmd.Length > 44 ? cmd[..43] + "…" : cmd), false);
+    }
+
+    // Applies the selected profile to each target dir; persists the library + active name. Returns false if
+    // any write failed. No UI side effects — the caller flashes / refreshes.
+    private bool ApplyProfileTo(List<ClaudeConfigDir> targets)
+    {
+        if (targets.Count == 0) return false;
+        CommitName();
+        _config.ActiveName = _selected.Name;
+        StatuslineStore.Save(_config);
+        bool ok = true;
+        foreach (var dir in targets)
+            ok &= StatuslineInstaller.Apply(_selected, dir, out _);
+        if (ok) RefreshRail();
+        return ok;
     }
 
     private static string DirComboLabel(ClaudeConfigDir d) =>
@@ -850,28 +899,6 @@ internal sealed class StatuslineDesignerWindow : Window
         return !string.IsNullOrEmpty(home) && path.StartsWith(home, StringComparison.OrdinalIgnoreCase)
             ? "~" + path[home.Length..].Replace('\\', '/')
             : path;
-    }
-
-    private void ApplySelected()
-    {
-        CommitName();
-        _config.ActiveName = _selected.Name;
-        StatuslineStore.Save(_config);
-
-        var targets = SelectedApplyTargets();
-        bool ok = targets.Count > 0;
-        foreach (var dir in targets)
-            ok &= StatuslineInstaller.Apply(_selected, dir, out _);
-
-        if (ok)
-        {
-            RefreshRail();
-            Flash(_applyButton, targets.Count > 1 ? $"Active in {targets.Count} ✓" : "Active ✓");
-        }
-        else
-        {
-            Flash(_applyButton, "Failed");
-        }
     }
 
     private void CommitName()
@@ -889,7 +916,7 @@ internal sealed class StatuslineDesignerWindow : Window
         _selected.Name = name;
         if (wasActive) _config.ActiveName = name;
         RefreshRail();
-        UpdateCommandLabel();
+        RebuildApplyArea();
     }
 
     private void Insert(string text)

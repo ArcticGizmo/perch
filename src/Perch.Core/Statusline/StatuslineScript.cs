@@ -2,6 +2,7 @@ namespace Perch.Statusline;
 
 using System.IO;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Perch.Data;
 
 /// <summary>
@@ -26,6 +27,29 @@ internal static class StatuslineScript
     /// <summary>Where <c>use</c>/<c>install</c> write the active Perch profile's script by default: beside
     /// Claude Code's own config (the docs' example location), independent of Perch's install dir.</summary>
     public static string DefaultScriptPath => ScriptPathFor(ClaudePaths.ClaudeDir);
+
+    // The header line a generated script carries: "… generated from profile <json-name>." — lets a reader
+    // name which profile a config dir's active script came from without re-parsing the whole thing.
+    private static readonly Regex HeaderName =
+        new(@"generated from profile (""(?:[^""\\]|\\.)*"")", RegexOptions.Compiled);
+
+    /// <summary>The Perch profile name baked into a generated script's header, or null when the file is
+    /// missing/unreadable or isn't a Perch-generated script. Best-effort — used to show which config dir is
+    /// running which profile.</summary>
+    public static string? ProfileNameFromScript(string scriptPath)
+    {
+        try
+        {
+            if (!File.Exists(scriptPath)) return null;
+            var head = File.ReadAllText(scriptPath);
+            var m = HeaderName.Match(head);
+            return m.Success ? JsonSerializer.Deserialize<string>(m.Groups[1].Value) : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     /// <summary>The <c>settings.json → statusLine.command</c> that runs a generated script.</summary>
     public static string CommandFor(string scriptPath) => $"node \"{scriptPath}\"";

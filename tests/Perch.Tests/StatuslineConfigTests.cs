@@ -135,6 +135,19 @@ public sealed class StatuslineConfigTests : IDisposable
     }
 
     [Fact]
+    public void ProfileNameFromScript_reads_the_baked_in_header_name()
+    {
+        var script = StatuslineScript.Generate(new StatuslineProfile { Name = "My Status Line", Template = "{{model.display_name}}" });
+        var path = Path.Combine(_dir, "s.mjs");
+        File.WriteAllText(path, script);
+
+        Assert.Equal("My Status Line", StatuslineScript.ProfileNameFromScript(path));
+        Assert.Null(StatuslineScript.ProfileNameFromScript(Path.Combine(_dir, "does-not-exist.mjs")));
+        File.WriteAllText(path, "// not a perch script");
+        Assert.Null(StatuslineScript.ProfileNameFromScript(path));
+    }
+
+    [Fact]
     public void Apply_to_a_config_dir_writes_an_external_command_verbatim()
     {
         var dir = new Perch.Data.ClaudeConfigDir(_dir);
