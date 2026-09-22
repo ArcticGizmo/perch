@@ -67,12 +67,20 @@ current / Import. "Set active" runs the shared `StatuslineInstaller` (also used 
 library saved on close. Render-verified via `HeadlessRenderer` (`statusline_designer_1x.png`);
 `StatuslineStore.DisablePersistence` keeps `render` from overwriting a real `statusline.json`.
 
+### Done since
+- **Pace-coloured rate windows** + a `Rate-aware verbose` built-in that ports a classic bash statusline
+  (`human`/`dur`/`until`/`pace` filters; `pace:<resetsPath>:<windowSeconds>` uses `Palette.PaceColor`).
+- **Built-ins are code, not the file** — the store merges `StatuslineDefaults` with the saved deltas, so a
+  new example appears with no migration; only user edits/imports/active persist.
+- **git counts** — the generated Node script injects `git.staged/unstaged/changes/dirty` (gated on use).
+- **Editor**: wrap-aware line-number gutter + inline autocomplete (token list with sample values).
+
 ### Later
 A `SettingsRegistry` entry so the designer is discoverable/searchable from Settings; a `COLUMNS`-width
-preview control + horizontal-scroll for long lines; renaming polish and delete-profile; per-segment
-Powerline styling; `git.changes`/`dirty` in the generated script (cheap numstat) so those tokens light
-up; additional target languages besides the default Node (Bash+jq, PowerShell) as a per-profile choice;
-OSC 8 link support.
+preview control + horizontal-scroll for long lines (the preview still clips a long single line);
+delete-profile; per-segment Powerline styling; additional target languages besides the default Node
+(Bash+jq, PowerShell) as a per-profile choice; OSC 8 link support. **Not yet:** live dogfood (nothing
+`use`d against a real `settings.json` yet; the git-count subprocess is unrun) and merge to `main`.
 
 ## Try it (experiment now, before M2)
 
