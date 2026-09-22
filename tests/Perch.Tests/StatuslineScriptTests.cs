@@ -83,6 +83,12 @@ public sealed class StatuslineScriptTests
         // soft breaks ("\" + newline) must be dropped identically by both engines
         { "ctx {{context_window.used_percentage|pct}}\\\n  ${{cost.total_cost_usd|money}}",
           """{"context_window":{"used_percentage":34},"cost":{"total_cost_usd":0.4213}}""" },
+        // {{sep}} collapse: the empty middle conditional must drop one divider, both engines alike
+        { "{{a}}{{sep}}{{#if m}}{{m}}{{/if}}{{sep}}{{b}}", """{"a":"AAA","b":"BBB"}""" },
+        { "{{a}}{{sep:·}}{{#if m}}{{m}}{{/if}}{{sep:·}}{{b}}", """{"a":"AAA","m":"MID","b":"BBB"}""" },
+        // custom hex colours (named + hex, 3- and 6-digit) render the same truecolor escapes
+        { "{{a|color:#ff8800}} {{b|color:1a2b3c}} {{c|color:#f80}} {{d|color:teal}}",
+          """{"a":"A","b":"B","c":"C","d":"D"}""" },
     };
 
     [Theory]

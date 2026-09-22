@@ -25,8 +25,12 @@ internal enum StatusColor
 
 /// <summary>One coloured run of a rendered statusline: literal text plus the colour it should paint in.
 /// A rendered line is an ordered list of these (see <see cref="StatuslineTemplate.Render"/>); newlines
-/// live inside <see cref="Text"/> so a multi-line template renders as multiple terminal rows.</summary>
-internal readonly record struct StatuslineSegment(string Text, StatusColor Color);
+/// live inside <see cref="Text"/> so a multi-line template renders as multiple terminal rows.
+///
+/// <para><see cref="Rgb"/> carries a <em>custom</em> truecolor (packed <c>0xRRGGBB</c>) from a
+/// <c>color:#rrggbb</c> filter; it is <c>-1</c> when no custom colour was given, in which case
+/// <see cref="Color"/> (a named/semantic role) applies. A custom RGB always wins over the role.</para></summary>
+internal readonly record struct StatuslineSegment(string Text, StatusColor Color, int Rgb = -1);
 
 /// <summary>A rendered <see cref="StatuslineSegment"/> plus the span of template source that produced it
 /// (character offsets into the original template). <see cref="IsTag"/> is true when it came from a
@@ -71,6 +75,21 @@ internal static class StatusColors
     /// <summary>All named roles a template author can pass to <c>| color:</c> (excludes Default).</summary>
     public static readonly string[] Names =
         { "teal", "amber", "green", "red", "yellow", "blue", "violet", "muted" };
+
+    /// <summary>Parses a hex colour arg (<c>#46c6b8</c>, <c>46c6b8</c>, or 3-digit <c>#abc</c>) to a packed
+    /// <c>0xRRGGBB</c> int, or -1 when it isn't valid hex. Terminals render 24-bit truecolor, so any hex
+    /// works — the ANSI renderer and the generated Node script parse it the same way.</summary>
+    public static int ParseHex(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return -1;
+        var h = s[0] == '#' ? s[1..] : s;
+        if (h.Length == 3)   // #abc → #aabbcc
+            h = new string(new[] { h[0], h[0], h[1], h[1], h[2], h[2] });
+        if (h.Length != 6) return -1;
+        foreach (var c in h)
+            if (!Uri.IsHexDigit(c)) return -1;
+        return System.Convert.ToInt32(h, 16);
+    }
 }
 
 /// <summary>Turns rendered <see cref="StatuslineSegment"/>s into the string a statusline command prints
@@ -88,9 +107,12 @@ internal static class StatuslineRenderer
         var sb = new StringBuilder();
         foreach (var seg in segments)
         {
-            if (color && seg.Color != StatusColor.Default && seg.Text.Length > 0)
+            bool coloured = seg.Rgb >= 0 || seg.Color != StatusColor.Default;
+            if (color && coloured && seg.Text.Length > 0)
             {
-                var (r, g, b) = StatusColors.Rgb(seg.Color);
+                var (r, g, b) = seg.Rgb >= 0
+                    ? ((byte)((seg.Rgb >> 16) & 0xFF), (byte)((seg.Rgb >> 8) & 0xFF), (byte)(seg.Rgb & 0xFF))
+                    : StatusColors.Rgb(seg.Color);
                 sb.Append("\x1b[38;2;").Append(r).Append(';').Append(g).Append(';').Append(b).Append('m');
                 sb.Append(seg.Text);
                 sb.Append(Reset);

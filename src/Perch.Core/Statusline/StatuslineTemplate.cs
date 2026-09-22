@@ -37,9 +37,9 @@ internal static class StatuslineTemplate
     public static IReadOnlyList<StatuslineSegment> Render(string template, TemplateData data)
     {
         var (stripped, _) = StripSoftBreaks(template);
-        var nodes = Parse(Tokenize(stripped));
-        var segments = new List<StatuslineSegment>();
-        RenderNodes(nodes, data, segments);
+        var pieces = RenderPieces(Parse(Tokenize(stripped)), data);
+        var segments = new List<StatuslineSegment>(pieces.Count);
+        foreach (var p in pieces) segments.Add(new StatuslineSegment(p.Text, p.Color, p.Rgb));
         return segments;
     }
 
@@ -50,9 +50,14 @@ internal static class StatuslineTemplate
     public static IReadOnlyList<PlacedSegment> RenderPlaced(string template, TemplateData data)
     {
         var (stripped, map) = StripSoftBreaks(template);
-        var nodes = Parse(Tokenize(stripped));
-        var placed = new List<PlacedSegment>();
-        RenderNodesPlaced(nodes, data, map, placed);
+        var pieces = RenderPieces(Parse(Tokenize(stripped)), data);
+        var placed = new List<PlacedSegment>(pieces.Count);
+        foreach (var p in pieces)
+        {
+            int a = p.SrcStart < 0 ? 0 : MapIndex(map, p.SrcStart);
+            int b = p.SrcStart < 0 ? 0 : MapIndex(map, p.SrcStart + p.SrcLen);
+            placed.Add(new PlacedSegment(new StatuslineSegment(p.Text, p.Color, p.Rgb), a, System.Math.Max(0, b - a), p.IsTag));
+        }
         return placed;
     }
 
@@ -86,8 +91,25 @@ internal static class StatuslineTemplate
     private static int MapIndex(int[] map, int strippedIndex) =>
         strippedIndex < 0 ? 0 : strippedIndex >= map.Length ? map[^1] : map[strippedIndex];
 
+    /// <summary>The default glyph a bare <c>{{sep}}</c> renders (surrounded by single spaces). A
+    /// <c>{{sep:X}}</c> uses <c>X</c> instead.</summary>
+    private const string DefaultSepGlyph = "|";
+
+    // Reads the display text of a {{sep}} / {{sep:glyph}} token — always " glyph " so the caller doesn't
+    // need to add spacing. Returns null when the trimmed body isn't a separator token.
+    private static string? SepText(string body)
+    {
+        if (body == "sep") return " " + DefaultSepGlyph + " ";
+        if (body.StartsWith("sep:", System.StringComparison.Ordinal))
+        {
+            var glyph = body[4..].Trim();
+            return glyph.Length == 0 ? " " + DefaultSepGlyph + " " : " " + glyph + " ";
+        }
+        return null;
+    }
+
     // ── tokenising ─────────────────────────────────────────────────────────────────────
-    private enum Kind { Text, Var, Open, Inverted, Close }
+    private enum Kind { Text, Var, Open, Inverted, Close, Separator }
     // Start/Len are the token's span in the (soft-break-stripped) template — carried so RenderPlaced can
     // report which source characters produced each rendered segment.
     private readonly record struct Token(Kind Kind, string Value, int Start, int Len);
@@ -109,7 +131,12 @@ internal static class StatuslineTemplate
                 case "#": toks.Add(new Token(Kind.Open, body, m.Index, m.Length)); break;
                 case "^": toks.Add(new Token(Kind.Inverted, body, m.Index, m.Length)); break;
                 case "/": toks.Add(new Token(Kind.Close, body, m.Index, m.Length)); break;
-                default:  toks.Add(new Token(Kind.Var, body, m.Index, m.Length)); break;
+                default:
+                    // {{sep}} / {{sep:glyph}} is a smart separator (parsed before the var/filter split so a
+                    // pipe glyph doesn't read as a filter); everything else is a value interpolation.
+                    if (SepText(body) is { } sep) toks.Add(new Token(Kind.Separator, sep, m.Index, m.Length));
+                    else toks.Add(new Token(Kind.Var, body, m.Index, m.Length));
+                    break;
             }
             last = m.Index + m.Length;
         }
@@ -124,6 +151,7 @@ internal static class StatuslineTemplate
     private abstract class Node { public int SrcStart = -1, SrcLen; }
     private sealed class TextNode : Node { public string Text = ""; }
     private sealed class VarNode : Node { public string Spec = ""; }
+    private sealed class SepNode : Node { public string Text = ""; }   // a {{sep}} smart divider
     private sealed class SectionNode : Node
     {
         public Mode Mode;
@@ -154,6 +182,7 @@ internal static class StatuslineTemplate
                     nodes.Add(section);
                 }
                 else if (tk.Kind == Kind.Var) { nodes.Add(new VarNode { Spec = tk.Value, SrcStart = tk.Start, SrcLen = tk.Len }); i++; }
+                else if (tk.Kind == Kind.Separator) { nodes.Add(new SepNode { Text = tk.Value, SrcStart = tk.Start, SrcLen = tk.Len }); i++; }
                 else { nodes.Add(new TextNode { Text = tk.Value, SrcStart = tk.Start, SrcLen = tk.Len }); i++; }
             }
             return nodes;
@@ -162,61 +191,77 @@ internal static class StatuslineTemplate
     }
 
     // ── rendering ─────────────────────────────────────────────────────────────────────
-    private static void RenderNodes(List<Node> nodes, TemplateData data, List<StatuslineSegment> outp)
+    // One rendered atom before it becomes a StatuslineSegment/PlacedSegment. Carrying the sep flag + source
+    // span here lets Render and RenderPlaced share the same walk (and the same {{sep}} collapse), so the
+    // preview, the ANSI string and the parity path can never diverge. IsTag = came from a {{…}} token.
+    private readonly record struct Piece(string Text, StatusColor Color, int Rgb, bool IsSep, bool IsTag, int SrcStart, int SrcLen);
+
+    private static List<Piece> RenderPieces(List<Node> nodes, TemplateData data)
     {
-        foreach (var n in nodes)
+        var pieces = new List<Piece>();
+        Walk(nodes);
+        return CollapseSeps(pieces);
+
+        void Walk(List<Node> ns)
         {
-            switch (n)
+            foreach (var n in ns)
             {
-                case TextNode t:
-                    Add(outp, t.Text, StatusColor.Default);
-                    break;
-                case VarNode v:
-                    var (text, color) = ApplyVar(v.Spec, data);
-                    if (text.Length > 0) Add(outp, text, color);
-                    break;
-                case SectionNode s:
-                    if (SectionActive(s, data)) RenderNodes(s.Children, data, outp);
-                    break;
+                switch (n)
+                {
+                    case TextNode t:
+                        if (t.Text.Length > 0)
+                            pieces.Add(new Piece(t.Text, StatusColor.Default, -1, false, false, t.SrcStart, t.SrcLen));
+                        break;
+                    case VarNode v:
+                        var (text, color, rgb) = ApplyVar(v.Spec, data);
+                        if (text.Length > 0)
+                            pieces.Add(new Piece(text, color, rgb, false, true, v.SrcStart, v.SrcLen));
+                        break;
+                    case SepNode sp:
+                        pieces.Add(new Piece(sp.Text, StatusColor.Default, -1, true, true, sp.SrcStart, sp.SrcLen));
+                        break;
+                    case SectionNode s:
+                        if (SectionActive(s, data)) Walk(s.Children);
+                        break;
+                }
             }
         }
     }
 
-    // One segment per node (no coalescing): keeps the ANSI byte stream identical to the generated
-    // standalone Node script, which wraps each token separately — so the parity test can diff them.
-    private static void Add(List<StatuslineSegment> outp, string text, StatusColor color)
+    // Smart-separator collapse: split the rendered pieces into cells at each {{sep}}, drop cells whose text
+    // is empty/whitespace, and rejoin the surviving cells with a single separator between them. This makes a
+    // {{sep}} vanish when the content on either side renders nothing — no leading, trailing or doubled
+    // dividers (the classic "aaaa |  | bbbb" problem). Templates with no {{sep}} pass through unchanged.
+    private static List<Piece> CollapseSeps(List<Piece> pieces)
     {
-        if (text.Length == 0) return;
-        outp.Add(new StatuslineSegment(text, color));
-    }
+        bool hasSep = false;
+        foreach (var p in pieces) if (p.IsSep) { hasSep = true; break; }
+        if (!hasSep) return pieces;
 
-    // Mirror of RenderNodes that keeps each segment's source span (original template coords, via the map).
-    private static void RenderNodesPlaced(List<Node> nodes, TemplateData data, int[] map, List<PlacedSegment> outp)
-    {
-        foreach (var n in nodes)
+        var cells = new List<List<Piece>> { new() };
+        var seps = new List<Piece>();
+        foreach (var p in pieces)
         {
-            switch (n)
-            {
-                case TextNode t:
-                    AddPlaced(outp, t.Text, StatusColor.Default, t, map, isTag: false);
-                    break;
-                case VarNode v:
-                    var (text, color) = ApplyVar(v.Spec, data);
-                    AddPlaced(outp, text, color, v, map, isTag: true);
-                    break;
-                case SectionNode s:
-                    if (SectionActive(s, data)) RenderNodesPlaced(s.Children, data, map, outp);
-                    break;
-            }
+            if (p.IsSep) { seps.Add(p); cells.Add(new List<Piece>()); }
+            else cells[^1].Add(p);
         }
-    }
 
-    private static void AddPlaced(List<PlacedSegment> outp, string text, StatusColor color, Node node, int[] map, bool isTag)
-    {
-        if (text.Length == 0) return;
-        int a = node.SrcStart < 0 ? 0 : MapIndex(map, node.SrcStart);
-        int b = node.SrcStart < 0 ? 0 : MapIndex(map, node.SrcStart + node.SrcLen);
-        outp.Add(new PlacedSegment(new StatuslineSegment(text, color), a, System.Math.Max(0, b - a), isTag));
+        static bool NonEmpty(List<Piece> cell)
+        {
+            foreach (var x in cell) if (!string.IsNullOrWhiteSpace(x.Text)) return true;
+            return false;
+        }
+
+        var outp = new List<Piece>();
+        bool any = false;
+        for (int i = 0; i < cells.Count; i++)
+        {
+            if (!NonEmpty(cells[i])) continue;
+            if (any) outp.Add(seps[i - 1]);   // the separator immediately preceding this surviving cell
+            outp.AddRange(cells[i]);
+            any = true;
+        }
+        return outp;
     }
 
     private static bool SectionActive(SectionNode s, TemplateData data) => s.Mode switch
@@ -266,13 +311,14 @@ internal static class StatuslineTemplate
             ? s[1..^1] : s;
 
     // ── the {{value|filters}} pipeline ──────────────────────────────────────────────────
-    private static (string Text, StatusColor Color) ApplyVar(string spec, TemplateData data)
+    private static (string Text, StatusColor Color, int Rgb) ApplyVar(string spec, TemplateData data)
     {
         var parts = spec.Split('|');
         var found = data.TryGet(parts[0].Trim(), out var node);
         var text = found ? TemplateData.Str(node) : "";
         var num = found ? TemplateData.Num(node) : null;
         var color = StatusColor.Default;
+        var rgb = -1;   // a custom truecolor from color:#rrggbb; -1 = none (the named `color` applies)
 
         for (int i = 1; i < parts.Length; i++)
         {
@@ -296,11 +342,17 @@ internal static class StatuslineTemplate
                 case "dur":   text = Dur(num ?? 0); break;
                 case "until": text = Until(num); break;
                 case "default": if (text.Length == 0) text = arg ?? ""; break;
-                case "color": color = StatusColors.Parse(arg); break;
-                case "pace":  color = Pace(num ?? 0, arg, data); break;
+                case "color":
+                    // A hex arg (#rrggbb / rrggbb / #rgb) is a custom truecolor; anything else is a named
+                    // role. Setting one clears the other so the last color: filter wins.
+                    var hex = StatusColors.ParseHex(arg);
+                    if (hex >= 0) { rgb = hex; }
+                    else { color = StatusColors.Parse(arg); rgb = -1; }
+                    break;
+                case "pace":  color = Pace(num ?? 0, arg, data); rgb = -1; break;
             }
         }
-        return (text, color);
+        return (text, color, rgb);
     }
 
     private static int ParseInt(string? s, int fallback) =>

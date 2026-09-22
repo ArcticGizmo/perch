@@ -67,7 +67,20 @@ internal static class StatuslineScript
           teal:[70,198,184], amber:[227,168,78], green:[95,191,127], red:[229,104,106],
           yellow:[227,179,65], blue:[91,155,214], violet:[176,133,224], muted:[139,149,166],
         };
-        const ansi = (t, c) => COL[c] ? `\x1b[38;2;${COL[c][0]};${COL[c][1]};${COL[c][2]}m${t}\x1b[0m` : t;
+        // A colour is a named role (COL) or a custom hex (#rrggbb / rrggbb / #rgb) — terminals do truecolor.
+        function hex(s) {
+          if (!s) return null;
+          let h = s[0] === '#' ? s.slice(1) : s;
+          if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+          if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+          return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+        }
+        const ansi = (t, c) => {
+          const rgb = c ? (COL[c] || hex(c)) : null;
+          return rgb ? `\x1b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m${t}\x1b[0m` : t;
+        };
+        const sepText = (body) => body === 'sep' ? ' | '
+          : body.startsWith('sep:') ? ' ' + (body.slice(4).trim() || '|') + ' ' : null;
 
         function lookup(path, ctx) {
           let v = ctx;
@@ -149,7 +162,7 @@ internal static class StatuslineScript
             else if (sig === '#') out.push({ t: 'open', v: body });
             else if (sig === '^') out.push({ t: 'inv', v: body });
             else if (sig === '/') out.push({ t: 'close', v: body });
-            else out.push({ t: 'var', v: body });
+            else { const sp = sepText(body); if (sp !== null) out.push({ t: 'sep', v: sp }); else out.push({ t: 'var', v: body }); }
             last = re.lastIndex;
           }
           if (last < t.length) out.push({ t: 'text', v: t.slice(last) });
@@ -187,26 +200,52 @@ internal static class StatuslineScript
           const ls = str(l), rs = unq(r);
           return op === '==' ? ls === rs : op === '!=' ? ls !== rs : false;
         }
-        function renderNodes(nodes, ctx) {
-          let out = '';
-          for (const n of nodes) {
-            if (n.t === 'text') out += n.v;
-            else if (n.t === 'var') { const { text, color } = applyVar(n.v, ctx); if (text.length) out += ansi(text, color); }
-            else if (n.kind === 'open') {
-              let cond;
-              if (n.v.startsWith('if ')) cond = evalExpr(n.v.slice(3), ctx);
-              else if (n.v.startsWith('unless ')) cond = !evalExpr(n.v.slice(7), ctx);
-              else cond = evalTruthy(n.v, ctx);
-              if (cond) out += renderNodes(n.kids, ctx);
-            } else if (n.kind === 'inv') {
-              if (!evalTruthy(n.v, ctx)) out += renderNodes(n.kids, ctx);
+        // Render to an array of pieces {text,color,isSep} so the {{sep}} collapse can drop empty cells.
+        function renderPieces(nodes, ctx) {
+          const pieces = [];
+          const walk = (ns) => {
+            for (const n of ns) {
+              if (n.t === 'text') { if (n.v.length) pieces.push({ text: n.v, color: null, isSep: false }); }
+              else if (n.t === 'var') { const { text, color } = applyVar(n.v, ctx); if (text.length) pieces.push({ text, color, isSep: false }); }
+              else if (n.t === 'sep') pieces.push({ text: n.v, color: null, isSep: true });
+              else if (n.kind === 'open') {
+                let cond;
+                if (n.v.startsWith('if ')) cond = evalExpr(n.v.slice(3), ctx);
+                else if (n.v.startsWith('unless ')) cond = !evalExpr(n.v.slice(7), ctx);
+                else cond = evalTruthy(n.v, ctx);
+                if (cond) walk(n.kids);
+              } else if (n.kind === 'inv') {
+                if (!evalTruthy(n.v, ctx)) walk(n.kids);
+              }
             }
+          };
+          walk(nodes);
+          return pieces;
+        }
+        // Drop {{sep}} dividers whose adjacent cell is empty/whitespace and collapse doubled ones — so a
+        // separator vanishes when a side renders nothing. Mirrors StatuslineTemplate.CollapseSeps.
+        function collapse(pieces) {
+          if (!pieces.some(p => p.isSep)) return pieces;
+          const cells = [[]], seps = [];
+          for (const p of pieces) { if (p.isSep) { seps.push(p); cells.push([]); } else cells[cells.length - 1].push(p); }
+          const nonEmpty = c => c.some(x => x.text.trim().length > 0);
+          const out = []; let any = false;
+          for (let i = 0; i < cells.length; i++) {
+            if (!nonEmpty(cells[i])) continue;
+            if (any) out.push(seps[i - 1]);
+            for (const x of cells[i]) out.push(x);
+            any = true;
           }
           return out;
         }
         // A backslash before a newline is a soft break (editor readability wrap) — drop it so it doesn't
         // split the line. Mirrors StatuslineTemplate.StripSoftBreaks.
-        const render = (tpl, ctx) => renderNodes(build(tokenize(tpl.replace(/\\\r?\n/g, ''))), ctx);
+        const render = (tpl, ctx) => {
+          const pieces = collapse(renderPieces(build(tokenize(tpl.replace(/\\\r?\n/g, ''))), ctx));
+          let out = '';
+          for (const p of pieces) out += ansi(p.text, p.color);
+          return out;
+        };
 
         // git.branch straight off .git/HEAD — no subprocess, no Perch.
         function findGitDir(dir) {

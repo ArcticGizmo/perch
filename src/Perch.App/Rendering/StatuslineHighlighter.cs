@@ -119,8 +119,15 @@ internal static class StatuslineSourceHighlighter
         var argBrush = Arg;
         if (t[k..nameEnd].Trim().Equals("color", StringComparison.OrdinalIgnoreCase))
         {
-            var role = StatusColors.Parse(t[(colon + 1)..b].Trim());
-            if (role != StatusColor.Default) { var (r, g, bl) = StatusColors.Rgb(role); argBrush = B(r, g, bl); }
+            var argText = t[(colon + 1)..b].Trim();
+            var hex = StatusColors.ParseHex(argText);   // a custom hex arg draws in its own colour
+            if (hex >= 0)
+                argBrush = B((byte)((hex >> 16) & 0xFF), (byte)((hex >> 8) & 0xFF), (byte)(hex & 0xFF));
+            else if (StatusColors.Parse(argText) is var role && role != StatusColor.Default)
+            {
+                var (r, g, bl) = StatusColors.Rgb(role);
+                argBrush = B(r, g, bl);
+            }
         }
         Paint(colon + 1, b - (colon + 1), argBrush, null);
     }

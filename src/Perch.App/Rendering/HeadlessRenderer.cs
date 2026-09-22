@@ -852,8 +852,10 @@ internal static class HeadlessRenderer
             };
             w.Show();
             Dispatcher.UIThread.RunJobs();
-            var tpl = "{{model.display_name}}  ctx {{context_window.used_percentage|bar:10|color:teal}}\\\n"
-                    + "  {{context_window.used_percentage|pct}}  ${{cost.total_cost_usd|money}}";
+            var tpl = "{{model.display_name|color:#e0a84e}}{{sep}}\\\n"
+                    + "ctx {{context_window.used_percentage|bar:10|color:teal}}{{sep}}\\\n"
+                    + "{{#if pr.number}}PR#{{pr.number}}{{/if}}{{sep}}\\\n"
+                    + "${{cost.total_cost_usd|money}}";
             w.PoseTemplateForRender(tpl, tpl.IndexOf("bar:10", StringComparison.Ordinal));
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

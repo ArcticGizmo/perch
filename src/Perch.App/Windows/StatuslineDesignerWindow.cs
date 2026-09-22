@@ -322,6 +322,7 @@ internal sealed class StatuslineDesignerWindow : Window
         foreach (var (label, insert) in new[]
                  {
                      ("{{model.display_name}}", "{{model.display_name}}"),
+                     ("{{sep}}", "{{sep}}"),
                      ("#if …", "{{#if EXPR}}{{/if}}"),
                      ("#unless …", "{{#unless EXPR}}{{/unless}}"),
                      ("^ inverted", "{{^PATH}}{{/PATH}}"),
@@ -329,6 +330,7 @@ internal sealed class StatuslineDesignerWindow : Window
                      ("| money", "| money"),
                      ("| pct", "| pct"),
                      ("| color:teal", "| color:teal"),
+                     ("| color:#hex", "| color:#46c6b8"),
                  })
             chips.Children.Add(Chip(label, insert));
 
@@ -522,7 +524,69 @@ internal sealed class StatuslineDesignerWindow : Window
             foreach (var tok in group.Tokens)
                 stack.Children.Add(TokenRow(tok));
         }
+
+        // A quick reference for the styling filters and the structure tags, with what each does and a
+        // click-to-insert. Placing the caret after a token then clicking a filter appends it there.
+        stack.Children.Add(RefHeader("Filters — click to add after a token"));
+        foreach (var (syntax, desc, insert) in new[]
+                 {
+                     ("| bar:10", "block progress bar from a 0–100 value", "| bar:10"),
+                     ("| pct", "round and add %  ·  34.2 → 34%", "| pct"),
+                     ("| round", "nearest whole number  ·  23.5 → 24", "| round"),
+                     ("| money", "two decimals  ·  0.4213 → 0.42", "| money"),
+                     ("| k", "thousands  ·  68000 → 68k", "| k"),
+                     ("| human", "compact count  ·  2500000 → 2M", "| human"),
+                     ("| dur", "duration from ms  ·  845000 → 14m", "| dur"),
+                     ("| until", "countdown to an epoch reset time", "| until"),
+                     ("| upper / lower", "change case", "| upper"),
+                     ("| trunc:20", "ellipsize to N characters", "| trunc:20"),
+                     ("| default:n/a", "fallback text when the value is empty", "| default:n/a"),
+                     ("| color:teal", "named colour (teal/amber/green/red/…)", "| color:teal"),
+                     ("| color:#46c6b8", "custom hex colour — any 24-bit truecolor", "| color:#46c6b8"),
+                     ("| pace:resets_at:18000", "colour by burn vs. how far through the window", "| pace:resets_at:18000"),
+                 })
+            stack.Children.Add(RefRow(syntax, desc, insert));
+
+        stack.Children.Add(RefHeader("Structure"));
+        foreach (var (syntax, desc, insert) in new[]
+                 {
+                     ("{{sep}}", "smart divider — vanishes when a neighbour is empty (no doubled/trailing bars)", "{{sep}}"),
+                     ("{{sep:·}}", "smart divider with a custom glyph", "{{sep:·}}"),
+                     ("{{#if x}}…{{/if}}", "show when x is truthy — also x > 80, s == 'ok'", "{{#if EXPR}}{{/if}}"),
+                     ("{{#unless x}}…{{/unless}}", "show when x is falsy", "{{#unless EXPR}}{{/unless}}"),
+                     ("{{^x}}…{{/x}}", "inverted — show when x is empty/false", "{{^PATH}}{{/PATH}}"),
+                 })
+            stack.Children.Add(RefRow(syntax, desc, insert));
+
         return stack;
+    }
+
+    private static TextBlock RefHeader(string text) => new()
+    {
+        Text = text, Foreground = Accent, FontFamily = Mono, FontSize = 11,
+        FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 14, 0, 2),
+    };
+
+    private Control RefRow(string syntax, string desc, string insert)
+    {
+        var stack = new StackPanel
+        {
+            Spacing = 1,
+            Children =
+            {
+                new TextBlock { Text = syntax, Foreground = Fg, FontFamily = Mono, FontSize = 11.5, TextWrapping = TextWrapping.Wrap },
+                new TextBlock { Text = desc, Foreground = Muted, FontSize = 10.5, TextWrapping = TextWrapping.Wrap },
+            },
+        };
+        var border = new Border
+        {
+            Padding = new Thickness(8, 5), CornerRadius = new CornerRadius(6),
+            Cursor = new Cursor(StandardCursorType.Hand), Background = Brushes.Transparent, Child = stack,
+        };
+        border.PointerEntered += (_, _) => border.Background = Panel;
+        border.PointerExited  += (_, _) => border.Background = Brushes.Transparent;
+        border.PointerPressed += (_, _) => Insert(insert);
+        return border;
     }
 
     private Control TokenRow(TokenDescriptor tok)
@@ -570,7 +634,9 @@ internal sealed class StatuslineDesignerWindow : Window
     /// render capture.</summary>
     internal void ShowCompletionsForRender(string partial)
     {
-        _templateBox.Text = partial;
+        var scratch = new StatuslineProfile { Name = "Scratch", Kind = ProfileKind.Perch, Template = partial };
+        _config.Profiles.Add(scratch);
+        SelectProfile(scratch);   // editable, so the editor + preview reflect the posed text
         _templateBox.CaretIndex = partial.Length;
         UpdateCompletions();
     }
@@ -651,7 +717,7 @@ internal sealed class StatuslineDesignerWindow : Window
         }
         foreach (var ps in placed)
         {
-            var baseFg = BrushFor(ps.Segment.Color);
+            var baseFg = BrushForSeg(ps.Segment);
             var parts = ps.Segment.Text.Split('\n');
             for (int i = 0; i < parts.Length; i++)
             {
@@ -1058,6 +1124,16 @@ internal sealed class StatuslineDesignerWindow : Window
         if (_brushes.TryGetValue(c, out var b)) return b;
         var (r, g, bl) = StatusColors.Rgb(c);
         return _brushes[c] = new SolidColorBrush(Color.FromRgb(r, g, bl));
+    }
+
+    // A rendered segment's brush: a custom hex RGB (color:#rrggbb) wins over the named role.
+    private readonly Dictionary<int, IBrush> _rgbBrushes = new();
+    private IBrush BrushForSeg(StatuslineSegment seg)
+    {
+        if (seg.Rgb < 0) return BrushFor(seg.Color);
+        if (_rgbBrushes.TryGetValue(seg.Rgb, out var b)) return b;
+        var c = Color.FromRgb((byte)((seg.Rgb >> 16) & 0xFF), (byte)((seg.Rgb >> 8) & 0xFF), (byte)(seg.Rgb & 0xFF));
+        return _rgbBrushes[seg.Rgb] = new SolidColorBrush(c);
     }
 
     private static IBrush Tint(IBrush accent) =>

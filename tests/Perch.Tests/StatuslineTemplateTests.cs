@@ -193,6 +193,72 @@ public sealed class StatuslineTemplateTests
         Assert.Equal(tpl.IndexOf("{{model", StringComparison.Ordinal), tag.SourceStart);
     }
 
+    // ── smart separators ({{sep}}) ─────────────────────────────────────────────────────
+    [Fact]
+    public void Separator_joins_present_cells()
+    {
+        var d = TemplateData.Parse("""{"a":"AAA","b":"BBB"}""");
+        Assert.Equal("AAA | BBB", Render("{{a}}{{sep}}{{b}}", d));
+    }
+
+    [Fact]
+    public void Separator_collapses_when_a_middle_cell_is_empty()
+    {
+        // The classic "aaaa |  | bbbb" problem: an empty conditional between two seps → one sep, not two.
+        const string tpl = "{{a}}{{sep}}{{#if mid}}{{mid}}{{/if}}{{sep}}{{b}}";
+        Assert.Equal("AAA | BBB", Render(tpl, TemplateData.Parse("""{"a":"AAA","b":"BBB"}""")));
+        Assert.Equal("AAA | MID | BBB", Render(tpl, TemplateData.Parse("""{"a":"AAA","b":"BBB","mid":"MID"}""")));
+    }
+
+    [Fact]
+    public void Separator_drops_at_the_ends()
+    {
+        Assert.Equal("BBB", Render("{{a}}{{sep}}{{b}}", TemplateData.Parse("""{"b":"BBB"}""")));   // leading empty
+        Assert.Equal("AAA", Render("{{a}}{{sep}}{{b}}", TemplateData.Parse("""{"a":"AAA"}""")));   // trailing empty
+    }
+
+    [Fact]
+    public void Separator_custom_glyph()
+    {
+        var d = TemplateData.Parse("""{"a":"A","b":"B"}""");
+        Assert.Equal("A · B", Render("{{a}}{{sep:·}}{{b}}", d));
+    }
+
+    // ── custom hex colours ─────────────────────────────────────────────────────────────
+    [Fact]
+    public void Color_hex_sets_a_custom_rgb()
+    {
+        var segs = StatuslineTemplate.Render("{{model.display_name|color:#ff8800}}", StatuslineSample.Data());
+        var seg = Assert.Single(segs);
+        Assert.Equal("Opus", seg.Text);
+        Assert.Equal(0xff8800, seg.Rgb);
+    }
+
+    [Fact]
+    public void Color_hex_three_digit_expands()
+    {
+        var segs = StatuslineTemplate.Render("{{model.display_name|color:#f80}}", StatuslineSample.Data());
+        Assert.Equal(0xff8800, segs[0].Rgb);
+    }
+
+    [Fact]
+    public void Color_hex_emits_truecolor_ansi()
+    {
+        var ansi = StatuslineTemplate.RenderToString("{{model.display_name|color:1a2b3c}}", StatuslineSample.Data());
+        Assert.Contains("\x1b[38;2;26;43;60m", ansi);   // 0x1a,0x2b,0x3c
+    }
+
+    [Fact]
+    public void ParseHex_accepts_forms_and_rejects_junk()
+    {
+        Assert.Equal(0x46c6b8, StatusColors.ParseHex("#46c6b8"));
+        Assert.Equal(0x46c6b8, StatusColors.ParseHex("46c6b8"));
+        Assert.Equal(0xffffff, StatusColors.ParseHex("#fff"));
+        Assert.Equal(-1, StatusColors.ParseHex("teal"));
+        Assert.Equal(-1, StatusColors.ParseHex("#zzzzzz"));
+        Assert.Equal(-1, StatusColors.ParseHex(""));
+    }
+
     // ── colour ───────────────────────────────────────────────────────────────────────
     [Fact]
     public void Color_filter_sets_a_segment_colour()
