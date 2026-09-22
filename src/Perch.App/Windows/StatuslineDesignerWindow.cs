@@ -9,7 +9,6 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.TextFormatting;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
 using Perch.Statusline;
@@ -65,8 +64,6 @@ internal sealed class StatuslineDesignerWindow : Window
 
     // editor gutter + autocomplete
     private StackPanel _gutter = null!;
-    private readonly TranslateTransform _gutterTransform = new();
-    private ScrollViewer? _innerScroll;   // the editor's own scroll viewer, once its template has applied
     private StackPanel _completionPanel = null!;
     private Border _completionHost = null!;
     private List<(string Path, string Value)> _completions = new();
@@ -290,14 +287,15 @@ internal sealed class StatuslineDesignerWindow : Window
             AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
             FontFamily = Mono, FontSize = 13, Foreground = TermFg, CaretBrush = TermFg,
             Background = Brushes.Transparent, BorderThickness = new Thickness(0),
-            Padding = new Thickness(8, EditorPadTop, 8, 8), VerticalAlignment = VerticalAlignment.Stretch,
+            Padding = new Thickness(8, EditorPadTop, 8, 8), VerticalAlignment = VerticalAlignment.Top,
+            MinHeight = 150,
         };
-        // The box fills a fixed-height frame and scrolls its OWN content (wrapping, no sideways scroll). A
-        // grow-to-content box under-measured its wrapped height and clipped the last line; a fixed frame that
-        // the box scrolls inside is exact. The line-number gutter is a sibling synced to the box's scroll
-        // offset (HookInnerScroll), so numbers track the text as it scrolls.
+        // The box neither self-scrolls nor is left to measure its own (under-measured, clipped) height:
+        // RebuildGutter measures each wrapped line and sets the box Height explicitly to the exact content
+        // height, so it grows precisely with no clipping. The centre column's ScrollViewer scrolls the whole
+        // editor when a template is very tall. Both axes Disabled = wrap, no internal scrollbars.
         ScrollViewer.SetHorizontalScrollBarVisibility(_templateBox, ScrollBarVisibility.Disabled);
-        ScrollViewer.SetVerticalScrollBarVisibility(_templateBox, ScrollBarVisibility.Auto);
+        ScrollViewer.SetVerticalScrollBarVisibility(_templateBox, ScrollBarVisibility.Disabled);
         var hlFace = new Typeface(Mono);
         _templateBox.SetHighlighter(t => StatuslineSourceHighlighter.Highlight(t, hlFace, 13));
         _templateBox.TextChanged += (_, _) =>
@@ -307,16 +305,12 @@ internal sealed class StatuslineDesignerWindow : Window
             if (!_suppress) UpdateCompletions();
         };
         _templateBox.AddHandler(InputElement.KeyDownEvent, OnEditorKeyDown, RoutingStrategies.Tunnel);
-        _templateBox.PropertyChanged += (_, e) =>
-        {
-            if (e.Property == Visual.BoundsProperty) { RebuildGutter(); HookInnerScroll(); }
-        };
+        _templateBox.PropertyChanged += (_, e) => { if (e.Property == Visual.BoundsProperty) RebuildGutter(); };
 
-        _gutter = new StackPanel { RenderTransform = _gutterTransform };
+        _gutter = new StackPanel();
         var gutterHost = new Border
         {
-            Background = GutterBg, Width = 42, Padding = new Thickness(4, EditorPadTop, 6, 8),
-            ClipToBounds = true, Child = _gutter,
+            Background = GutterBg, Width = 42, Padding = new Thickness(4, EditorPadTop, 6, 8), Child = _gutter,
         };
         var editorRow = new DockPanel { LastChildFill = true };
         DockPanel.SetDock(gutterHost, Dock.Left);
@@ -326,7 +320,7 @@ internal sealed class StatuslineDesignerWindow : Window
         var editorBorder = new Border
         {
             Background = TermBg, BorderBrush = Stroke, BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8), Height = 200, Child = editorRow, ClipToBounds = true,
+            CornerRadius = new CornerRadius(8), Child = editorRow, ClipToBounds = true,
         };
 
         // Autocomplete: an inline list below the editor (no focus stealing) driven by the caret's current
@@ -480,6 +474,7 @@ internal sealed class StatuslineDesignerWindow : Window
         UpdateCompletions();
     }
 
+
     // ── behaviour ────────────────────────────────────────────────────────────────────────
     private void SelectProfile(StatuslineProfile p)
     {
@@ -584,17 +579,6 @@ internal sealed class StatuslineDesignerWindow : Window
         box.Focus();
     }
 
-    // Locate the editor's own ScrollViewer once its template has applied, and keep the gutter's vertical
-    // offset in lockstep with it, so line numbers scroll with the text.
-    private void HookInnerScroll()
-    {
-        if (_innerScroll is not null) return;
-        _innerScroll = _templateBox.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
-        if (_innerScroll is null) return;
-        _innerScroll.ScrollChanged += (_, _) => _gutterTransform.Y = -_innerScroll.Offset.Y;
-        _gutterTransform.Y = -_innerScroll.Offset.Y;
-    }
-
     // ── line-number gutter ───────────────────────────────────────────────────────────────
     // One number per logical line, each sized to that line's *wrapped* height (measured with the editor's
     // own font at its current text width) so a number sits beside the first visual row of its line and the
@@ -602,28 +586,34 @@ internal sealed class StatuslineDesignerWindow : Window
     private void RebuildGutter()
     {
         if (_gutter is null) return;
-        _gutter.Children.Clear();
 
         var text = _templateBox.Text ?? "";
         var lines = text.Split('\n');
         double width = _templateBox.Bounds.Width - 16;   // minus the 8+8 horizontal padding
-        var typeface = new Typeface(Mono);
+        if (width <= 10) return;   // not arranged yet; a later Bounds change re-runs this with a real width
 
+        var typeface = new Typeface(Mono);
+        _gutter.Children.Clear();
+        double total = 0;
         for (int i = 0; i < lines.Length; i++)
         {
-            double h = 20;   // fallback before the editor has been arranged
-            if (width > 10)
-            {
-                var layout = new TextLayout(lines[i].Length == 0 ? " " : lines[i], typeface, 13, Muted,
-                    textAlignment: TextAlignment.Left, textWrapping: TextWrapping.Wrap, maxWidth: width);
-                h = layout.Height;
-            }
+            var layout = new TextLayout(lines[i].Length == 0 ? " " : lines[i], typeface, 13, Muted,
+                textAlignment: TextAlignment.Left, textWrapping: TextWrapping.Wrap, maxWidth: width);
+            double h = layout.Height;
+            total += h;
             _gutter.Children.Add(new TextBlock
             {
                 Text = (i + 1).ToString(), Height = h, FontFamily = Mono, FontSize = 13,
                 Foreground = Muted, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
             });
         }
+
+        // Drive the box height from the same measurement the gutter uses, so the box sizes to its wrapped
+        // content exactly (Avalonia's own wrapped-height measure came up ~a line short and clipped). +8 slack
+        // covers rounding; the centre column scrolls if the whole editor grows tall.
+        double target = System.Math.Max(150, total + EditorPadTop + 8 + 8);
+        if (double.IsNaN(_templateBox.Height) || System.Math.Abs(_templateBox.Height - target) > 0.5)
+            _templateBox.Height = target;
     }
 
     // ── autocomplete ─────────────────────────────────────────────────────────────────────
