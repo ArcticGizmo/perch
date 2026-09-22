@@ -899,9 +899,11 @@ internal static class HeadlessRenderer
         // (a multi-org setup). Reset the set afterwards so no other capture is affected.
         {
             var primary = ClaudeConfigSet.Instance.Primary;
+            // Convention = auto-DETECTED (not declared). It's still an eligible apply target — applying a
+            // status line is an explicit per-dir click, not gated on the safe-write policy.
             var second = new ClaudeConfigDir(Path.Combine(ClaudeConfigSet.Home, ".claude-work"), slug: "work")
             {
-                Provenance = ConfigDirProvenance.Declared,
+                Provenance = ConfigDirProvenance.Convention,
             };
             ClaudeConfigSet.SetForTesting(new[] { primary, second });
             try

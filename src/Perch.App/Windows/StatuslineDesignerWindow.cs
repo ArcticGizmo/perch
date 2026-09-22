@@ -63,7 +63,7 @@ internal sealed class StatuslineDesignerWindow : Window
     private TextBlock _softBreakHint = null!;
     private Border _lockBanner = null!;
     private StackPanel _applyArea = null!;
-    private List<ClaudeConfigDir> _writableDirs = new();
+    private List<ClaudeConfigDir> _applyDirs = new();
     private DispatcherTimer? _appliedTimer;
 
     // editor gutter + autocomplete
@@ -774,35 +774,27 @@ internal sealed class StatuslineDesignerWindow : Window
 
     // ── apply area (per config dir) ───────────────────────────────────────────────────────
     // Rebuilt on profile change / re-activation. One "Set active" for a single config dir, or a labelled row
-    // PER writable dir (each with its own button + what's active there) for a multi-org setup, plus a note
-    // for any dirs discovered but not enabled.
+    // PER config dir (each with its own button + what's active there) for a multi-org setup. EVERY dir in
+    // the set is an eligible target: applying a status line is a deliberate per-dir click, so — unlike an
+    // automatic hook install — it is NOT gated on the safe-write policy's IsWritable. Detected dirs are
+    // targetable too.
     private void RebuildApplyArea()
     {
         if (_applyArea is null) return;
         _applyArea.Children.Clear();
         var set = ClaudeConfigSet.Instance;
-        _writableDirs = set.All.Where(d => d.IsWritable).ToList();
+        _applyDirs = set.All.ToList();
 
-        if (_writableDirs.Count <= 1)
+        if (_applyDirs.Count <= 1)
         {
-            _applyArea.Children.Add(ApplyDirRow(_writableDirs.Count == 1 ? _writableDirs[0] : set.Primary, showLabel: false));
+            _applyArea.Children.Add(ApplyDirRow(_applyDirs.Count == 1 ? _applyDirs[0] : set.Primary, showLabel: false));
         }
         else
         {
             _applyArea.Children.Add(Eyebrow("Set active in"));
-            foreach (var d in _writableDirs) _applyArea.Children.Add(ApplyDirRow(d, showLabel: true));
+            foreach (var d in _applyDirs) _applyArea.Children.Add(ApplyDirRow(d, showLabel: true));
             _applyArea.Children.Add(ApplyDirRow(null, showLabel: true));   // the "All directories" row
         }
-
-        int hidden = set.All.Count(d => !d.IsWritable);
-        if (hidden > 0)
-            _applyArea.Children.Add(new TextBlock
-            {
-                Text = hidden == 1
-                    ? "1 more directory was found but isn't enabled — add it in Settings › Config directories to apply here."
-                    : $"{hidden} more directories were found but aren't enabled — add them in Settings › Config directories to apply here.",
-                Foreground = Muted, FontSize = 10.5, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 0),
-            });
     }
 
     // One apply row: a "Set active" button plus (in the multi-dir list) the dir's label and what's active in
@@ -822,8 +814,8 @@ internal sealed class StatuslineDesignerWindow : Window
         if (isAll)
         {
             texts.Children.Add(new TextBlock { Text = "All directories", Foreground = Fg, FontSize = 12.5, FontWeight = FontWeight.SemiBold });
-            texts.Children.Add(new TextBlock { Text = $"apply to every writable directory ({_writableDirs.Count})", Foreground = Muted, FontSize = 10.5 });
-            btn.Click += (_, _) => { if (ApplyProfileTo(_writableDirs)) RebuildApplyArea(); else Flash(btn, "Failed"); };
+            texts.Children.Add(new TextBlock { Text = $"apply to every directory ({_applyDirs.Count})", Foreground = Muted, FontSize = 10.5 });
+            btn.Click += (_, _) => { if (ApplyProfileTo(_applyDirs)) RebuildApplyArea(); else Flash(btn, "Failed"); };
         }
         else
         {
