@@ -42,6 +42,21 @@ internal static class HookInstaller
     private static bool _watching;
 
     /// <summary>
+    /// Source of the config dirs the user turned hooks OFF for (resolved real paths), wired from
+    /// <c>AppSettings.HooksDisabledDirs</c> — the opt-OUT for directories that default on. Read live on every
+    /// <see cref="ReconcileAll"/> so a settings change takes effect on the next reconcile. Null/throwing means
+    /// "nothing disabled". See <see cref="HookPolicy"/>.
+    /// </summary>
+    public static Func<IReadOnlyList<string>>? DisabledRealRootsProvider { get; set; }
+
+    /// <summary>
+    /// Source of the config dirs the user turned hooks ON for (resolved real paths), wired from
+    /// <c>AppSettings.HooksEnabledDirs</c> — the opt-IN for auto-discovered directories that default off.
+    /// Read live on every <see cref="ReconcileAll"/>. Null/throwing means "no opt-ins". See <see cref="HookPolicy"/>.
+    /// </summary>
+    public static Func<IReadOnlyList<string>>? EnabledRealRootsProvider { get; set; }
+
+    /// <summary>
     /// Copy-if-newer the shipped binary to <see cref="HookBinaryPath"/>, record the tray location, then
     /// reconcile the managed hook block in <c>~/.claude/settings.json</c>. Safe to call on every launch.
     /// </summary>
@@ -76,23 +91,57 @@ internal static class HookInstaller
     }
 
     /// <summary>
-    /// Reconciles Perch's managed hooks into <b>every writable</b> config dir in the set — the primary,
-    /// declared dirs, and dirs a session has self-reported. A convention-only dir (found only by the
-    /// pattern scan) is deliberately <b>not</b> written to: the M4 safe-write policy reads from anything
-    /// discovered but never installs a hook into a dir Perch merely guessed at, until a declaration or a
-    /// self-report promotes it. Best-effort per dir. Serialised under one gate.
+    /// Reconciles Perch's managed hooks across the whole config-dir set per <see cref="HookPolicy"/>: install
+    /// into every directory hooks are on for, strip our block from every one they're off for. The primary is
+    /// always hooked; declared / self-reported dirs default on (opt-out); an auto-discovered (convention) dir
+    /// defaults off but can be opted in. Stripping a directory that has none of our hooks is a no-op that
+    /// never touches its file, so a merely pattern-matched dir is never silently written. Best-effort per dir.
     /// </summary>
     public static void ReconcileAll()
     {
         if (!File.Exists(HookBinaryPath)) return;
         lock (ReconcileGate)
         {
+            var disabled = RealRootSet(DisabledRealRootsProvider);
+            var enabled = RealRootSet(EnabledRealRootsProvider);
             foreach (var dir in ClaudeConfigSet.Instance.All)
             {
-                if (!dir.IsWritable) continue;
-                try { ClaudeUserSettings.ReconcileHooks(dir.UserSettingsFile, HookBinaryPath, AppInfo.Version, AppProfile.IsDev); }
+                try
+                {
+                    if (HookPolicy.IsEnabled(dir.Provenance, dir.RealRoot, disabled, enabled))
+                        ClaudeUserSettings.ReconcileHooks(dir.UserSettingsFile, HookBinaryPath, AppInfo.Version, AppProfile.IsDev);
+                    else
+                        ClaudeUserSettings.RemoveManagedHooks(dir.UserSettingsFile, AppProfile.IsDev, HookBinaryPath);
+                }
                 catch { /* one bad dir must not stop the rest */ }
             }
+        }
+    }
+
+    // A provider's real-path list as a set (OS-appropriate comparer), best-effort — a missing or throwing
+    // provider yields the empty set.
+    private static HashSet<string> RealRootSet(Func<IReadOnlyList<string>>? provider)
+    {
+        var set = new HashSet<string>(ClaudeConfigDir.PathComparer);
+        try
+        {
+            foreach (var p in provider?.Invoke() ?? [])
+                if (!string.IsNullOrWhiteSpace(p))
+                    set.Add(Path.TrimEndingDirectorySeparator(p));
+        }
+        catch { /* best-effort: treat as empty */ }
+        return set;
+    }
+
+    /// <summary>Strips Perch's managed hook block from one config dir — used when a dir is being removed from
+    /// the set, so its hooks don't orphan (once it's out of the set, <see cref="ReconcileAll"/> can no longer
+    /// reach it). A no-op when the dir has none of our hooks. Serialised with the other reconcile writes.</summary>
+    public static void RemoveFromDir(ClaudeConfigDir dir)
+    {
+        lock (ReconcileGate)
+        {
+            try { ClaudeUserSettings.RemoveManagedHooks(dir.UserSettingsFile, AppProfile.IsDev, HookBinaryPath); }
+            catch { /* best-effort */ }
         }
     }
 

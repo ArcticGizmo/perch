@@ -483,6 +483,20 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? HiddenConfigDirs { get; set; }
 
+    // Config-dir discovery (Layer 1). Config dirs the user turned Perch's hook install OFF for, keyed by
+    // resolved real path — an opt-OUT for directories that default ON (declared / self-reported).
+    // HookInstaller.ReconcileAll strips (and stops re-adding) Perch's managed hook block in a listed dir. The
+    // primary is always hooked and can never appear here. See HookPolicy.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? HooksDisabledDirs { get; set; }
+
+    // Config-dir discovery (Layer 1). Config dirs the user turned Perch's hook install ON for, keyed by
+    // resolved real path — an opt-IN for directories that default OFF (auto-discovered / convention-only, the
+    // ones Perch won't hook silently). HookInstaller.ReconcileAll installs the managed hook block into a
+    // listed dir. Empty/null means "no opt-ins". See HookPolicy.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? HooksEnabledDirs { get; set; }
+
     // Config-dir discovery (Layer 1). Whether the per-session config-directory label (the small chip on a
     // session row, shown only when more than one config directory is in play) is drawn at all. On by default;
     // turning it off hides every dir chip regardless of the per-dir labels. Toggle "Config labels".

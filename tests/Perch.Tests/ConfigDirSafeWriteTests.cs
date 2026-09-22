@@ -4,11 +4,11 @@ using Xunit;
 namespace Perch.Tests;
 
 /// <summary>
-/// Covers the M4 safe-write policy and self-report persistence. The policy (encoded as
-/// <see cref="ClaudeConfigDir.IsWritable"/> / <see cref="ConfigDirProvenance"/>) is that Perch reads from
-/// every discovered dir but only ever writes a hook into the primary, a declared dir, or a self-reported
-/// dir — never a dir found by the convention scan alone. Discovery is tested directly (hermetic); the
-/// sticky self-report persistence is exercised through the pinned-opt-in test seam with a redirected file.
+/// Covers config-dir <see cref="ConfigDirProvenance"/> assignment and self-report persistence. Provenance
+/// is a labelling signal and the input to the automatic-hook-install policy (<c>HookInstaller</c> skips a
+/// convention-scan-only dir) — it is <b>not</b> a read-only flag; any dir can be a deliberate write target.
+/// Discovery is tested directly (hermetic); the sticky self-report persistence is exercised through the
+/// pinned-opt-in test seam with a redirected file.
 /// </summary>
 public sealed class ConfigDirSafeWriteTests : IDisposable
 {
@@ -28,7 +28,7 @@ public sealed class ConfigDirSafeWriteTests : IDisposable
     }
 
     [Fact]
-    public void SafeWrite_OnlyPrimaryDeclaredAndSelfReported_AreWritable()
+    public void Discovery_assigns_provenance_by_tier()
     {
         var primary = new ClaudeConfigDir(MakeConfigDir(".claude"));
         var declared = MakeConfigDir("work/.claude");
@@ -41,22 +41,18 @@ public sealed class ConfigDirSafeWriteTests : IDisposable
         ClaudeConfigDir Find(string root) =>
             set.Single(d => ClaudeConfigDir.PathComparer.Equals(d.RealRoot, ClaudeConfigSet.ResolveReal(root)));
 
-        Assert.True(Find(primary.Root).IsWritable);
+        Assert.Equal(ConfigDirProvenance.Primary, Find(primary.Root).Provenance);
         Assert.Equal(ConfigDirProvenance.Declared, Find(declared).Provenance);
-        Assert.True(Find(declared).IsWritable);
         Assert.Equal(ConfigDirProvenance.SelfReported, Find(selfReported).Provenance);
-        Assert.True(Find(selfReported).IsWritable);
-
-        var conv = Find(convention);
-        Assert.Equal(ConfigDirProvenance.Convention, conv.Provenance);
-        Assert.False(conv.IsWritable); // the safety property: never written to
+        // A scan-only sibling is Convention — the auto-hook policy skips it, but it's not read-only.
+        Assert.Equal(ConfigDirProvenance.Convention, Find(convention).Provenance);
     }
 
     [Fact]
-    public void SelfReport_PromotesAConventionSiblingToWritable()
+    public void SelfReport_promotes_a_convention_sibling_above_the_scan()
     {
-        // A sibling ~/.claude-x that the convention scan would find, but which is ALSO self-reported: the
-        // self-reported tier ranks above the convention scan, so it lands writable, not convention-only.
+        // A sibling ~/.claude-x the convention scan would find, but which is ALSO self-reported: the
+        // self-reported tier ranks above the convention scan, so it lands SelfReported, not Convention.
         var primary = new ClaudeConfigDir(MakeConfigDir(".claude"));
         var sibling = MakeConfigDir(".claude-x");
 
@@ -68,7 +64,6 @@ public sealed class ConfigDirSafeWriteTests : IDisposable
             _sandbox, primary, declaredRoots: null, selfReportedRoots: new[] { sibling });
         var promoted = withReport.Single(d => Path.GetFileName(d.Root) == ".claude-x");
         Assert.Equal(ConfigDirProvenance.SelfReported, promoted.Provenance);
-        Assert.True(promoted.IsWritable);
     }
 
     [Fact]

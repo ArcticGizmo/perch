@@ -48,6 +48,7 @@ public partial class App : Application
     private SettingsWindow? _settings;
     private OnboardingWindow? _onboardingWindow;
     private StatsWindow? _statsWindow;
+    private StatuslineDesignerWindow? _statuslineWindow;
     private AchievementsWindow? _achievementsWindow;
     private FlightPathWindow? _flightWindow;
     // Perch-controlled sessions over stream-json (docs/session-ui-plan.md). The app owns every live
@@ -562,6 +563,12 @@ public partial class App : Application
                         () => settings.ConfigDirLabels ?? (IReadOnlyList<ConfigDirLabel>)Array.Empty<ConfigDirLabel>(),
                         () => settings.HiddenConfigDirs ?? (IReadOnlyList<string>)Array.Empty<string>());
 
+                    // Which dirs the user turned hooks off / on for (read live on every reconcile).
+                    HookInstaller.DisabledRealRootsProvider =
+                        () => settings.HooksDisabledDirs ?? (IReadOnlyList<string>)Array.Empty<string>();
+                    HookInstaller.EnabledRealRootsProvider =
+                        () => settings.HooksEnabledDirs ?? (IReadOnlyList<string>)Array.Empty<string>();
+
                     HookInstaller.Install();
                     await MigrateOffPlugin();
                 });
@@ -628,6 +635,7 @@ public partial class App : Application
         _friendsWindow?.Close();
         _debugSocialWindow?.Close();
         _statsWindow?.Close();
+        _statuslineWindow?.Close();
         _daemonListWindow?.Close();
         _achievementsWindow?.Close();
         _achievementCard?.Close();
@@ -1482,6 +1490,13 @@ public partial class App : Application
         _statsWindow = WindowHost.ShowOrFocus(_statsWindow,
             () => new StatsWindow(_appSettings ?? AppSettings.Load()), () => _statsWindow = null);
 
+    // "Statusline designer…" (tray) — opens/focuses the one designer. It reads/writes its own profile
+    // library (statusline.json) and, on "Set active", generates the standalone Node script + points
+    // ~/.claude/settings.json at it; Perch is never in the status line's refresh loop.
+    private void OpenStatuslineDesigner() =>
+        _statuslineWindow = WindowHost.ShowOrFocus(_statuslineWindow,
+            () => new StatuslineDesignerWindow(), () => _statuslineWindow = null);
+
     // "Set initial placements…" (overlay header) — opens/focuses the placement editor on the overlay's
     // current monitor, seeded with the saved placements and the real preview sizes so what's dragged
     // matches what will appear. Commit persists via ApplyPlacements.
@@ -1503,6 +1518,14 @@ public partial class App : Application
 
         _placementEditor = WindowHost.ShowOrFocus(_placementEditor,
             () => new PlacementEditorWindow(ctx), () => _placementEditor = null);
+    }
+
+    // The per-config-directory Agent Teams modal (the multi-dir form of the single toggle). Opened only from
+    // the settings catalogue, so the settings window owns it.
+    private void OpenAgentTeamsEditor()
+    {
+        if (_settings is not { } owner) return;
+        _ = new AgentTeamsDialog(ClaudeConfigSet.Instance.All).ShowDialog<bool>(owner);
     }
 
     // Persists the chosen placements (null = "use the default") and applies them: the floating one lands
@@ -2545,6 +2568,9 @@ public partial class App : Application
         var statsItem = new NativeMenuItem("Session stats…");
         statsItem.Click += (_, _) => OpenStats();
 
+        var statuslineItem = new NativeMenuItem("Statusline designer…");
+        statuslineItem.Click += (_, _) => OpenStatuslineDesigner();
+
         var flightItem = new NativeMenuItem("Flight path…");
         flightItem.Click += (_, _) => OpenFlightPath();
 
@@ -2584,6 +2610,7 @@ public partial class App : Application
                 settingsItem,
                 historyItem,
                 statsItem,
+                statuslineItem,
                 flightItem,
                 achievementsItem,
                 todosItem,
@@ -2830,6 +2857,8 @@ public partial class App : Application
             OpenAchievements = OpenAchievements,
             OpenQuickStart = ShowOnboarding,
             OpenPlacements = OpenPlacementEditor,
+            OpenAgentTeams = OpenAgentTeamsEditor,
+            OpenStatuslineDesigner = OpenStatuslineDesigner,
             OpenSocialCompose = OpenCompose,
             OpenSocialFriends = OpenFriends,
             OpenSocialDebug = OpenSocialDebug,

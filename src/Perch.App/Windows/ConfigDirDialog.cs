@@ -22,22 +22,32 @@ internal sealed class ConfigDirDialog : Window
     private readonly TextBox _pathBox;
     private readonly TextBox _labelBox;
     private readonly TextBlock _statusLabel;
+    private readonly PerchToggle _hooksToggle;
     private readonly Button _ok;
     private readonly bool _editing;
 
     public string DirPath => _pathBox.Text?.Trim() ?? "";
     public string DirLabel => _labelBox.Text?.Trim() ?? "";
 
+    /// <summary>Whether the user wants Perch's hooks installed into this directory. Only meaningful when the
+    /// toggle was editable (see the ctor); the caller ignores it otherwise.</summary>
+    public bool HooksEnabled => _hooksToggle.IsChecked;
+
     /// <param name="existing">The dir being edited, or null to add a new one.</param>
     /// <param name="existingLabel">The dir's current custom label (edit mode), or null.</param>
-    public ConfigDirDialog(ClaudeConfigDir? existing, string? existingLabel)
+    /// <param name="hooksEnabled">Initial state of the "Install Perch hooks" toggle.</param>
+    /// <param name="hooksEditable">Whether that toggle can be changed (false for the always-on primary and for
+    /// a not-yet-added auto-discovered dir).</param>
+    /// <param name="hooksNote">One-line explanation shown under the hooks toggle.</param>
+    public ConfigDirDialog(ClaudeConfigDir? existing, string? existingLabel,
+        bool hooksEnabled, bool hooksEditable, string hooksNote)
     {
         _editing = existing is not null;
         bool isPrimary = existing?.Provenance == ConfigDirProvenance.Primary;
 
         Title = _editing ? "Edit config directory" : "Add config directory";
         Width = 480;
-        Height = 300;
+        Height = 380;
         CanResize = false;
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -81,6 +91,20 @@ internal sealed class ConfigDirDialog : Window
             ? "No label (default directory — no chip)"
             : $"Default: {existing?.Label ?? "the folder name"}";
 
+        _hooksToggle = new PerchToggle { VerticalAlignment = VerticalAlignment.Center };
+        _hooksToggle.SetCheckedSilent(hooksEnabled);
+        _hooksToggle.IsEnabled = hooksEditable;
+        var hooksRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var hooksLabel = new TextBlock
+        {
+            Text = "Install Perch hooks", FontSize = 13, Foreground = Palette.FgBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(hooksLabel, 0);
+        Grid.SetColumn(_hooksToggle, 1);
+        hooksRow.Children.Add(hooksLabel);
+        hooksRow.Children.Add(_hooksToggle);
+
         _ok = SettingsUi.FlatButton("Save");
         _ok.Width = 92;
         _ok.Click += (_, _) => Close(true);
@@ -102,6 +126,9 @@ internal sealed class ConfigDirDialog : Window
         layout.Children.Add(_statusLabel);
         layout.Children.Add(SettingsUi.FieldCaption("Label (optional)"));
         layout.Children.Add(_labelBox);
+        layout.Children.Add(new Border { Height = 10 });
+        layout.Children.Add(hooksRow);
+        layout.Children.Add(SettingsUi.BodyText(hooksNote));
         Content = new ScrollViewer { Content = layout };
 
         _pathBox.TextChanged += (_, _) => RefreshStatus();

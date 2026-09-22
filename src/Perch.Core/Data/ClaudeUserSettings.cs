@@ -123,7 +123,10 @@ internal static class ClaudeUserSettings
                 || root["hooks"] is not JsonObject hooks)
                 return false;
 
-            StripManaged(hooks, OwnedBy(isDev, devBinaryPath));
+            // Only rewrite when we actually removed one of our own entries — so calling this on a directory
+            // that has no Perch hooks (e.g. an auto-discovered dir the user left hooks off for) never touches
+            // its file, and ReconcileAll can safely strip every not-hooked dir without gratuitous writes.
+            if (!StripManaged(hooks, OwnedBy(isDev, devBinaryPath))) return false;
             if (hooks.Count == 0) root.Remove("hooks");
 
             File.WriteAllText(path, root.ToJsonString(WriteOptions));
@@ -158,9 +161,10 @@ internal static class ClaudeUserSettings
 
     // Removes every command object the caller owns (per <paramref name="owned"/>) from the hooks map,
     // dropping any entry (and any event key) left empty. Snapshots the keys/indices first since we mutate
-    // as we go.
-    private static void StripManaged(JsonObject hooks, Func<JsonNode?, bool> owned)
+    // as we go. Returns true if it removed anything (so a caller can skip an otherwise no-op rewrite).
+    private static bool StripManaged(JsonObject hooks, Func<JsonNode?, bool> owned)
     {
+        bool removed = false;
         foreach (var evt in hooks.Select(kv => kv.Key).ToList())
         {
             if (hooks[evt] is not JsonArray entries) continue;
@@ -172,7 +176,10 @@ internal static class ClaudeUserSettings
 
                 for (int j = hookList.Count - 1; j >= 0; j--)
                     if (owned(hookList[j]))
+                    {
                         hookList.RemoveAt(j);
+                        removed = true;
+                    }
 
                 if (hookList.Count == 0)
                     entries.RemoveAt(i);
@@ -181,6 +188,7 @@ internal static class ClaudeUserSettings
             if (entries.Count == 0)
                 hooks.Remove(evt);
         }
+        return removed;
     }
 
     // The ownership predicate for a strip pass. Release (isDev == false) is authoritative and owns every
@@ -275,16 +283,20 @@ internal static class ClaudeUserSettings
         }
     }
 
-    /// <summary>True when <c>env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</c> is set to "1".</summary>
-    public static bool IsAgentTeamsEnabled()
+    /// <summary>True when <c>env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</c> is "1" in the <b>primary</b>
+    /// config dir's settings.json.</summary>
+    public static bool IsAgentTeamsEnabled() => IsAgentTeamsEnabled(ClaudePaths.UserSettingsFile);
+
+    /// <summary>As <see cref="IsAgentTeamsEnabled()"/>, against a specific config dir's settings file — so a
+    /// multi-config-dir setup can read the flag per directory (each dir is a separate settings.json).</summary>
+    public static bool IsAgentTeamsEnabled(string settingsPath)
     {
         try
         {
-            var path = ClaudePaths.UserSettingsFile;
-            if (!File.Exists(path))
+            if (!File.Exists(settingsPath))
                 return false;
 
-            var root = JsonNode.Parse(File.ReadAllText(path), documentOptions: ReadOptions) as JsonObject;
+            var root = JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: ReadOptions) as JsonObject;
             // ToString() rather than GetValue<string>() so a numeric 1 doesn't throw — either reads "1".
             return (root?["env"] as JsonObject)?[AgentTeamsEnvKey]?.ToString() == "1";
         }
@@ -295,15 +307,20 @@ internal static class ClaudeUserSettings
     }
 
     /// <summary>
-    /// Sets or clears <c>env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</c> in <c>~/.claude/settings.json</c>,
-    /// preserving every other setting. Enabling writes "1"; disabling removes the key (and the env
-    /// object if that empties it). Returns true on a successful write.
+    /// Sets or clears <c>env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS</c> in the <b>primary</b> config dir's
+    /// settings.json, preserving every other setting. Enabling writes "1"; disabling removes the key (and the
+    /// env object if that empties it). Returns true on a successful write.
     /// </summary>
-    public static bool SetAgentTeamsEnabled(bool enabled)
+    public static bool SetAgentTeamsEnabled(bool enabled) =>
+        SetAgentTeamsEnabled(ClaudePaths.UserSettingsFile, enabled);
+
+    /// <summary>As <see cref="SetAgentTeamsEnabled(bool)"/>, against a specific config dir's settings file —
+    /// so a multi-config-dir setup can flip the flag per directory (each dir is a separate settings.json).</summary>
+    public static bool SetAgentTeamsEnabled(string settingsPath, bool enabled)
     {
         try
         {
-            var path = ClaudePaths.UserSettingsFile;
+            var path = settingsPath;
             var root = File.Exists(path)
                 ? JsonNode.Parse(File.ReadAllText(path), documentOptions: ReadOptions) as JsonObject ?? new JsonObject()
                 : new JsonObject();
@@ -327,6 +344,86 @@ internal static class ClaudeUserSettings
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    // ── statusLine (Perch's statusline designer) ─────────────────────────────────────
+    // The root-level "statusLine" block Claude Code invokes on each refresh. Perch owns the profile
+    // library elsewhere (Perch.Statusline.StatuslineStore); applying a profile is what writes this block.
+    // Read/write preserve every other key, mirroring the env/hook helpers above.
+
+    /// <summary>The current <c>statusLine.command</c> string in <c>~/.claude/settings.json</c>, or null
+    /// when there is no status line configured. Used to back up whatever's already there (Perch's or an
+    /// external tool's) before switching profiles.</summary>
+    public static string? ReadStatusLineCommand() => ReadStatusLineCommand(ClaudePaths.UserSettingsFile);
+
+    /// <summary>As <see cref="ReadStatusLineCommand()"/>, against an explicit settings file (test seam).</summary>
+    public static string? ReadStatusLineCommand(string settingsPath)
+    {
+        try
+        {
+            if (!File.Exists(settingsPath)) return null;
+            var root = JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: ReadOptions) as JsonObject;
+            return TranscriptJson.AsString((root?["statusLine"] as JsonObject)?["command"]);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Writes the <c>statusLine</c> block (<c>type: "command"</c>, the given command and
+    /// padding), preserving every other setting. Returns true on a successful write.</summary>
+    public static bool SetStatusLine(string command, int padding = 0) =>
+        SetStatusLine(ClaudePaths.UserSettingsFile, command, padding);
+
+    /// <summary>As <see cref="SetStatusLine(string,int)"/>, against an explicit settings file (test seam).</summary>
+    public static bool SetStatusLine(string settingsPath, string command, int padding = 0)
+    {
+        try
+        {
+            var root = File.Exists(settingsPath)
+                ? JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: ReadOptions) as JsonObject ?? new JsonObject()
+                : new JsonObject();
+
+            root["statusLine"] = new JsonObject
+            {
+                ["type"]    = "command",
+                ["command"] = command,
+                ["padding"] = padding,
+            };
+
+            Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+            File.WriteAllText(settingsPath, root.ToJsonString(WriteOptions));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Removes the <c>statusLine</c> block entirely (revert to no status line), preserving every
+    /// other setting. Returns true if the file was rewritten.</summary>
+    public static bool ClearStatusLine() => ClearStatusLine(ClaudePaths.UserSettingsFile);
+
+    /// <summary>As <see cref="ClearStatusLine()"/>, against an explicit settings file (test seam).</summary>
+    public static bool ClearStatusLine(string settingsPath)
+    {
+        try
+        {
+            if (!File.Exists(settingsPath)) return false;
+            if (JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: ReadOptions) is not JsonObject root
+                || !root.ContainsKey("statusLine"))
+                return false;
+
+            root.Remove("statusLine");
+            File.WriteAllText(settingsPath, root.ToJsonString(WriteOptions));
             return true;
         }
         catch

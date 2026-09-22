@@ -46,6 +46,16 @@ internal static class Program
         if (args.Length > 0 && string.Equals(args[0], "configdirs", StringComparison.OrdinalIgnoreCase))
             return DumpConfigDirs();
 
+        // `perch statusline …` is the statusline designer's CLI half: the default (no verb / `render`)
+        // reads Claude Code's JSON payload on stdin and prints the active profile's line to stdout — so
+        // it must never boot Avalonia and must stay silent otherwise. The management verbs (list/use/
+        // backup/import/install) print to the launching terminal, so attach a console for those only.
+        if (args.Length > 0 && string.Equals(args[0], "statusline", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Services.StatuslineCli.IsRender(args)) AttachParentConsole();
+            return Services.StatuslineCli.Run(args);
+        }
+
         // A stale older plugin might still invoke `perch handle <event>` — short-circuit to a no-op
         // so it never launches a second tray. (Matches the WinForms entry point.)
         if (args.Length > 0 && string.Equals(args[0], "handle", StringComparison.OrdinalIgnoreCase))

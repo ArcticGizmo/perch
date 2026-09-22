@@ -247,8 +247,9 @@ internal sealed class ClaudeConfigSet
         {
             EnsureSelfReportedLoaded();
             if (_selfReported.Contains(full)) return;
-            // Already writable through a higher tier (primary or an explicit declaration)? Nothing to add.
-            if (Instance.ForRoot(full) is { IsWritable: true }) return;
+            // Already accounted for by a higher tier (primary or an explicit declaration)? Nothing to add —
+            // only a convention-scan-only dir is worth recording as a sticky self-report.
+            if (Instance.ForRoot(full) is { Provenance: not ConfigDirProvenance.Convention }) return;
             learned = _selfReported.Add(full);
         }
         if (!learned) return;
@@ -299,8 +300,8 @@ internal sealed class ClaudeConfigSet
     }
 
     // Membership is "same" only when each entry matches on identity (RealRoot), how it earned its place
-    // (Provenance — a promotion changes IsWritable) AND its custom label — so a relabel or a hide/promote
-    // swaps the set and fires Changed, repainting the overlay. Order matters (primary first, stable).
+    // (Provenance — which the hook policy and labels read) AND its custom label — so a relabel or a
+    // hide/promote swaps the set and fires Changed, repainting the overlay. Order matters (primary first).
     private static bool SameMembership(
         IReadOnlyList<ClaudeConfigDir> a, IReadOnlyList<ClaudeConfigDir> b)
     {

@@ -301,6 +301,26 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
         Assert.False(Read().ContainsKey("hooks"));
     }
 
+    [Fact]
+    public void RemoveManagedHooks_IsNoOpWhenNoneOfOursPresent()
+    {
+        // A directory with only the user's own hooks (no Perch block) must not be rewritten — so ReconcileAll
+        // can strip every not-hooked dir, including one Perch merely pattern-matched, without touching its file.
+        const string original = """
+        {
+          "hooks": {
+            "PreToolUse": [
+              { "matcher": "Bash", "hooks": [ { "type": "command", "command": "user-script.sh" } ] }
+            ]
+          }
+        }
+        """;
+        File.WriteAllText(_settings, original);
+
+        Assert.False(ClaudeUserSettings.RemoveManagedHooks(_settings));
+        Assert.Equal(original, File.ReadAllText(_settings));   // byte-for-byte untouched
+    }
+
     // ── migration ──────────────────────────────────────────────────────────────────────
     [Fact]
     public void RemoveRegistration_StripsMarketplaceAndPlugin_PreservingOtherKeys()

@@ -373,9 +373,10 @@ internal static class SettingsRegistry
             SettingSurface.Integrations, SettingKind.List,
             ["config", "dir", "directory", "directories", "claude", "org", "multi", "env", "environment",
              "workspace", "CLAUDE_CONFIG_DIR", "declared", "label", "labels", "rename", "name", "display",
-             "chip", "hide", "remove", "suppress"], PreviewTarget.None,
+             "chip", "hide", "remove", "suppress", "hook", "hooks"], PreviewTarget.None,
             nameof(AppSettings.DeclaredConfigDirs), nameof(AppSettings.ConfigDirLabels),
-            nameof(AppSettings.HiddenConfigDirs)),
+            nameof(AppSettings.HiddenConfigDirs), nameof(AppSettings.HooksDisabledDirs),
+            nameof(AppSettings.HooksEnabledDirs)),
 
         Info("account-rules", "Account guardrails",
             "Warn when a session runs on the wrong Claude account. Declare that everything under a directory " +

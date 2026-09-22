@@ -9,6 +9,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.22] - 2026-09-22
+
+- New status line designer — build Claude Code's status line visually, with a live coloured preview
+- Syntax highlighting, autocomplete, and a token explorer while you edit
+- Start from a built-in example, or import an existing command (ccstatusline and friends)
+- Rate-limit windows colour by pace, matching the usage bars
+- Status lines apply as a standalone script — no Perch running at refresh, survives an uninstall
+- Apply a different status line to each config directory
+- Turn Perch's hooks and Agent Teams on or off per config directory (the primary stays hooked)
+- Open the designer straight from the Config directories page
+- Dropped the "read-only" label on config directories (it never actually did anything)
+
+---
+
 ## [v0.4.21] - 2026-09-21
 
 - Retuned the usage bar's pace colours: green stays longer early on, red arrives the moment you're over pace

@@ -36,6 +36,9 @@ internal static class HeadlessRenderer
         // initial TextChanged) once saved throwaway defaults over the real settings file, which wiped the
         // developer's settings and re-ran the first-run Quick Start.
         AppSettings.DisablePersistence();
+        // The statusline designer window Saves its profile library on close; posing it here must not write
+        // over a real statusline.json (same hazard AppSettings.DisablePersistence guards against).
+        Perch.Statusline.StatuslineStore.DisablePersistence();
 
         // Config-dir discovery (Layer 1): pose a two-dir set so the multi-config-dir directory chip renders
         // on the sample rows tagged with SampleData.WorkDir. The real primary stays first, so ClaudePaths
@@ -811,6 +814,124 @@ internal static class HeadlessRenderer
                 frame.Save(fs);
             }
             wm.Close();
+        }
+
+        // Statusline designer (M2): the profile rail, the mustache editor with its insert chips, the live
+        // ANSI-coloured preview, and the data explorer beside it. Templated controls (TextBox/Button/
+        // ScrollViewer) only pick up their styles inside a shown window, so it's captured via
+        // CaptureRenderedFrame like the onboarding window rather than a detached one-shot bitmap.
+        foreach (var (profile, height, file) in new[]
+                 {
+                     ((string?)null, 640, "statusline_designer_1x.png"),                    // default (Perch Default)
+                     ("Rate-aware verbose", 1180, "statusline_designer_rateaware_1x.png"),  // pace-coloured rate windows
+                 })
+        {
+            var w = new Windows.StatuslineDesignerWindow(Perch.Statusline.StatuslineStore.Seeded())
+            {
+                Width = 1000, Height = height,
+            };
+            if (profile is not null) w.SelectForRender(profile);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
+        // Caret-driven preview highlight + a soft break: the caret sits inside the context bar token, which
+        // lights up in the live preview; the "\" wraps the editor line without splitting the rendered line.
+        {
+            var w = new Windows.StatuslineDesignerWindow(Perch.Statusline.StatuslineStore.Seeded())
+            {
+                Width = 1000, Height = 640,
+            };
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            var tpl = "{{model.display_name|color:#e0a84e}}{{sep}}\\\n"
+                    + "ctx {{context_window.used_percentage|bar:10|color:teal}}{{sep}}\\\n"
+                    + "{{#if pr.number}}PR#{{pr.number}}{{/if}}{{sep}}\\\n"
+                    + "${{cost.total_cost_usd|money}}";
+            w.PoseTemplateForRender(tpl, tpl.IndexOf("bar:10", StringComparison.Ordinal));
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "statusline_designer_carethl_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
+        // Autocomplete posed open (editor mid-token) so the completion rows render: a field path, a filter
+        // name, and a colour arg (drawn as swatches). Syntax highlighting shows in the editor text too.
+        foreach (var (partial, file) in new[]
+                 {
+                     ("{{context_win", "statusline_designer_autocomplete_1x.png"),
+                     ("{{model.display_name|co", "statusline_designer_autocomplete_filter_1x.png"),
+                     ("{{context_window.used_percentage|color:te", "statusline_designer_autocomplete_color_1x.png"),
+                 })
+        {
+            var w = new Windows.StatuslineDesignerWindow(Perch.Statusline.StatuslineStore.Seeded())
+            {
+                Width = 1000, Height = 640,
+            };
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            w.ShowCompletionsForRender(partial);
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
+        // Config-dir per-dir apply list (a multi-org setup). One detected dir has the selected profile
+        // pre-applied so its button shows the dimmed "✓ Active" state; the other doesn't, so it shows the
+        // solid "Set active" — the at-a-glance applied/not-applied contrast. Uses a real temp dir so the
+        // status read (settings.json + script header) resolves; cleaned up and the set reset afterwards.
+        {
+            var primary = ClaudeConfigSet.Instance.Primary;
+            var appliedDir = Path.Combine(Path.GetTempPath(), "perch-render-cfgdir-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(appliedDir);
+            try
+            {
+                var seeded = Perch.Statusline.StatuslineStore.Seeded();
+                var applied = new ClaudeConfigDir(appliedDir, slug: "work") { Provenance = ConfigDirProvenance.Convention };
+                var notApplied = new ClaudeConfigDir(Path.Combine(ClaudeConfigSet.Home, ".claude-play"), slug: "play")
+                {
+                    Provenance = ConfigDirProvenance.Convention,
+                };
+                Perch.Statusline.StatuslineInstaller.Apply(seeded.Find("Minimal")!, applied, out _);
+                ClaudeConfigSet.SetForTesting(new[] { primary, applied, notApplied });
+
+                var w = new Windows.StatuslineDesignerWindow(seeded) { Width = 1000, Height = 640 };
+                w.SelectForRender("Minimal");
+                w.Show();
+                Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                var frame = w.CaptureRenderedFrame();
+                if (frame != null)
+                {
+                    using var fs = File.Create(Path.Combine(outDir, "statusline_designer_configdir_1x.png"));
+                    frame.Save(fs);
+                }
+                w.Close();
+            }
+            finally
+            {
+                ClaudeConfigSet.ResetForTesting();
+                try { Directory.Delete(appliedDir, recursive: true); } catch { }
+            }
         }
 
         Console.WriteLine($"Rendered PNGs to {Path.GetFullPath(outDir)}");
