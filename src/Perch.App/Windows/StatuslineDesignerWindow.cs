@@ -53,6 +53,18 @@ internal sealed class StatuslineDesignerWindow : Window
     private StackPanel _railPerch = null!;
     private StackPanel _railExt = null!;
     private TextBox _nameBox = null!;
+    private Button _saveBtn = null!;
+    private Button _revertBtn = null!;
+    private TextBlock _saveHint = null!;
+    private Border _saveRow = null!;
+    private bool _dirty;
+    // Per-profile snapshot of the last-SAVED content, keyed by the profile instance. "Dirty" = the live
+    // profile differs from its snapshot. It MUST be per profile (not one slot re-captured on select): edits
+    // are applied straight to the profile object, so re-snapshotting on reselect would read the edited value
+    // as the baseline and wrongly report "saved". Captured on a profile's first select and after save/apply;
+    // it's also the state a Revert restores. (A snapshot, not a load-time flag, also survives Avalonia raising
+    // TextChanged AFTER SelectProfile returns.)
+    private readonly Dictionary<StatuslineProfile, (string Name, string Template, string Command)> _saved = new();
     private HighlightTextBox _templateBox = null!;
     private TextBox _commandBox = null!;
     private Panel _perchEditor = null!;
@@ -298,6 +310,7 @@ internal sealed class StatuslineDesignerWindow : Window
         if (p.Builtin) return;
         int idx = _config.Profiles.IndexOf(p);
         _config.Profiles.Remove(p);
+        _saved.Remove(p);
         if (ReferenceEquals(p, _config.Active)) _config.ActiveName = null;   // Active falls back to first
         if (ReferenceEquals(p, _selected))
         {
@@ -320,6 +333,39 @@ internal sealed class StatuslineDesignerWindow : Window
             Padding = new Thickness(0, 2), Margin = new Thickness(0, 2, 0, 8),
         };
         _nameBox.LostFocus += (_, _) => CommitName();
+
+        // Explicit Save lives UNDER the editor (assembled into the layout below) so it stays in view while you
+        // edit rather than scrolling off the top. It is DIRTY-AWARE: the moment the profile differs from what's
+        // saved it lights up ("Save changes" + an amber "unsaved changes" note); once persisted it settles to a
+        // calm "Saved". SaveProfile writes the library now (not just on close) AND fans the edits out to every
+        // config dir currently running this profile. The whole row is hidden for read-only built-ins.
+        _saveBtn = new Button
+        {
+            Content = "Saved", BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(16, 7), FontWeight = FontWeight.SemiBold,
+            Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
+        };
+        _saveBtn.Click += (_, _) => SaveProfile();
+        // Revert (secondary, shown only while dirty): discard unsaved edits back to the last-saved snapshot —
+        // the "in case you broke everything" escape hatch. Sits just left of Save.
+        _revertBtn = new Button
+        {
+            Content = "Revert", Background = Brushes.Transparent, Foreground = Muted,
+            BorderBrush = Stroke, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(12, 7), FontWeight = FontWeight.SemiBold,
+            Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0), IsVisible = false,
+        };
+        _revertBtn.Click += (_, _) => RevertProfile();
+        _saveHint = new TextBlock { Foreground = Muted, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center };
+        var saveDock = new DockPanel { LastChildFill = false };
+        DockPanel.SetDock(_saveBtn, Dock.Right);
+        DockPanel.SetDock(_revertBtn, Dock.Right);
+        DockPanel.SetDock(_saveHint, Dock.Left);
+        saveDock.Children.Add(_saveBtn);
+        saveDock.Children.Add(_revertBtn);
+        saveDock.Children.Add(_saveHint);
+        _saveRow = new Border { Margin = new Thickness(0, 4, 0, 2), Child = saveDock };
 
         // toolbar chips (Perch only)
         _chips = new WrapPanel { Orientation = Orientation.Horizontal };
@@ -365,7 +411,7 @@ internal sealed class StatuslineDesignerWindow : Window
         _templateBox.SetHighlighter(t => StatuslineSourceHighlighter.Highlight(t, hlFace, 13));
         _templateBox.TextChanged += (_, _) =>
         {
-            if (_selected.IsPerch && !_selected.Builtin) { _selected.Template = _templateBox.Text ?? ""; }
+            if (_selected.IsPerch && !_selected.Builtin) { _selected.Template = _templateBox.Text ?? ""; RecomputeDirty(); }
             if (_selected.IsPerch) UpdatePreview();
             RebuildGutter();
             if (!_suppress && !_selected.Builtin) UpdateCompletions();
@@ -418,7 +464,7 @@ internal sealed class StatuslineDesignerWindow : Window
             Background = TermBg, BorderBrush = Stroke, BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8), Padding = new Thickness(12),
         };
-        _commandBox.TextChanged += (_, _) => { if (!_selected.IsPerch && !_selected.Builtin) { _selected.Command = _commandBox.Text ?? ""; RebuildApplyArea(); } };
+        _commandBox.TextChanged += (_, _) => { if (!_selected.IsPerch && !_selected.Builtin) { _selected.Command = _commandBox.Text ?? ""; RebuildApplyArea(); RecomputeDirty(); } };
         _extEditor = new StackPanel
         {
             Spacing = 8, IsVisible = false,
@@ -486,6 +532,7 @@ internal sealed class StatuslineDesignerWindow : Window
                 _lockBanner,
                 _perchEditor,
                 _extEditor,
+                _saveRow,
                 Eyebrow("Live preview"),
                 previewBox,
                 new Border { Height = 4 },
@@ -625,6 +672,15 @@ internal sealed class StatuslineDesignerWindow : Window
         if (_config.Find(name) is { } p) SelectProfile(p);
     }
 
+    /// <summary>Test/preview hook: make a genuine edit (so the content diverges from the saved baseline) to
+    /// pose the dirty state for a render capture — the lit "Save changes" button + the amber note.</summary>
+    internal void MarkDirtyForRender()
+    {
+        if (!_selected.IsPerch || _selected.Builtin) return;
+        _templateBox.Text = (_templateBox.Text ?? "") + " ";   // a real edit → genuinely dirty vs baseline
+        RecomputeDirty();
+    }
+
     /// <summary>Test/preview hook: pose the editor mid-token so the autocomplete list is on screen for a
     /// render capture.</summary>
     internal void ShowCompletionsForRender(string partial)
@@ -672,12 +728,18 @@ internal sealed class StatuslineDesignerWindow : Window
         // Built-in profiles are locked: editing is disabled and the user is steered to duplicate-to-edit.
         bool locked = p.Builtin;
         _lockBanner.IsVisible = locked;
+        _saveRow.IsVisible = !locked;
         _nameBox.IsReadOnly = locked;
         _templateBox.IsReadOnly = locked;
         _commandBox.IsReadOnly = locked;
         _chips.IsVisible = !locked;
         _softBreakHint.IsVisible = !locked;
         if (locked) CloseCompletion();
+
+        if (!_saved.ContainsKey(_selected)) Snapshot(_selected);   // first sight of a profile = its saved baseline
+        _dirty = false;
+        UpdateSaveButton();   // reset to the calm slate (clears any leftover confirmation hint) …
+        RecomputeDirty();     // … then light up if this profile still carries unsaved edits (e.g. reselected)
 
         RefreshRail();
         UpdatePreview();
@@ -911,8 +973,112 @@ internal sealed class StatuslineDesignerWindow : Window
         bool ok = true;
         foreach (var dir in targets)
             ok &= StatuslineInstaller.Apply(_selected, dir, out _);
-        if (ok) RefreshRail();
+        if (ok) { RefreshRail(); SnapshotAll(); RecomputeDirty(); }   // applying persists the library → all clean
         return ok;
+    }
+
+    // Explicit save: persist the profile to the library now, and re-generate the script (or re-write the
+    // verbatim command) in every config dir that is CURRENTLY running this profile — the "fan out". Unlike
+    // "Set active" it never newly activates a dir; it only refreshes the ones already using this profile, so
+    // a live status line picks up edits without a manual re-apply. A no-op fan-out (the profile isn't active
+    // anywhere) still saves the library. External profiles carry no on-disk identity, so their fan-out is a
+    // no-op — an edited imported command is pushed via "Set active".
+    private void SaveProfile()
+    {
+        if (_selected.Builtin) return;   // built-ins are read-only — nothing to save
+
+        // Resolve the fan-out targets against the profile's CURRENT name, before CommitName may rename it —
+        // DirStatus matches on the name baked into the script, which is still the old one until we re-apply.
+        var targets = ClaudeConfigSet.Instance.All.Where(d => DirStatus(d).IsThisProfile).ToList();
+
+        CommitName();
+        StatuslineStore.Save(_config);
+
+        bool ok = true;
+        int updated = 0;
+        foreach (var dir in targets)
+        {
+            if (StatuslineInstaller.Apply(_selected, dir, out _)) updated++;
+            else ok = false;
+        }
+
+        SnapshotAll();             // the whole library is now persisted → new saved baselines
+        RecomputeDirty();          // selected profile → calm "Saved", the amber hint is cleared
+        RebuildApplyArea();
+
+        // Report the fan-out in the hint — it persists (until the next edit or a reselect) and carries the
+        // per-dir detail the button can't. A failed write stays loud in red.
+        _saveHint.Foreground = ok ? Accent : SaveFailBrush;
+        _saveHint.Text = !ok ? "Save failed"
+            : updated == 0 ? "Saved"
+            : updated == 1 ? "Saved · script updated"
+            : $"Saved · {updated} scripts updated";
+    }
+
+    // Dirty-awareness: any edit to an editable profile flips the Save affordance to a lit "Save changes" plus
+    // an amber "unsaved changes" note; saving (or applying) settles it back to a calm outlined "Saved".
+    private static readonly IBrush DirtyAmber   = new SolidColorBrush(Color.FromRgb(0xe3, 0xa8, 0x4e));
+    private static readonly IBrush SaveFailBrush = new SolidColorBrush(Color.FromRgb(0xe0, 0x6c, 0x6c));
+    private void Snapshot(StatuslineProfile p) => _saved[p] = (p.Name, p.Template ?? "", p.Command ?? "");
+    private void SnapshotAll() { foreach (var p in _config.Profiles) Snapshot(p); }
+
+    // Recompute dirty from the live profile vs its saved snapshot. Only touches the Save affordance on an
+    // actual clean⇄dirty transition, so a no-op TextChanged can't wipe the "Saved · …" confirmation, and
+    // reverting an edit back to the snapshot correctly clears the unsaved state.
+    private void RecomputeDirty()
+    {
+        bool dirty = !_selected.Builtin && _saved.TryGetValue(_selected, out var s) && (
+            !string.Equals(_selected.Name, s.Name, StringComparison.Ordinal)
+            || (_selected.IsPerch
+                ? (_selected.Template ?? "") != s.Template
+                : (_selected.Command ?? "") != s.Command));
+        if (dirty == _dirty) return;
+        _dirty = dirty;
+        UpdateSaveButton();
+    }
+
+    // Discard this profile's unsaved edits, restoring it to the last-saved snapshot. Only reachable while
+    // dirty (the button is hidden otherwise); no confirm — it's the quick "undo everything since last save".
+    private void RevertProfile()
+    {
+        if (_selected.Builtin || !_saved.TryGetValue(_selected, out var s)) return;
+        _selected.Name = s.Name;
+        _selected.Template = s.Template;
+        _selected.Command = s.Command;
+        _nameBox.Text = s.Name;
+        if (_selected.IsPerch) _templateBox.Text = s.Template;
+        else _commandBox.Text = s.Command;
+        RecomputeDirty();       // now matches the snapshot → clean (also clears the amber hint)
+        RefreshRail();          // the name may have reverted
+        RebuildApplyArea();
+        UpdatePreview();
+        _saveHint.Foreground = Muted;
+        _saveHint.Text = "Reverted to last saved";
+    }
+
+    private void UpdateSaveButton()
+    {
+        if (_saveBtn is null) return;
+        _revertBtn.IsVisible = _dirty;   // the escape hatch appears only when there's something to discard
+        if (_dirty)
+        {
+            _saveBtn.Content = "Save changes";
+            _saveBtn.Background = Accent;
+            _saveBtn.Foreground = ApplyBtnFg;   // dark ink on the accent fill
+            _saveBtn.BorderBrush = Brushes.Transparent;
+            _saveBtn.BorderThickness = new Thickness(0);
+            _saveHint.Text = "●  Unsaved changes";
+            _saveHint.Foreground = DirtyAmber;
+        }
+        else
+        {
+            _saveBtn.Content = "Saved";
+            _saveBtn.Background = Tint(Accent);
+            _saveBtn.Foreground = Accent;
+            _saveBtn.BorderBrush = Accent;
+            _saveBtn.BorderThickness = new Thickness(1);
+            _saveHint.Text = "";
+        }
     }
 
     private static string DirComboLabel(ClaudeConfigDir d) =>
@@ -942,6 +1108,7 @@ internal sealed class StatuslineDesignerWindow : Window
         var wasActive = ReferenceEquals(_selected, _config.Active);
         _selected.Name = name;
         if (wasActive) _config.ActiveName = name;
+        RecomputeDirty();
         RefreshRail();
         RebuildApplyArea();
     }

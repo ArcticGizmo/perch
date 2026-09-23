@@ -869,6 +869,28 @@ internal static class HeadlessRenderer
             w.Close();
         }
 
+        // Dirty-aware Save row under the editor: an edited profile lights the "Save changes" button + shows
+        // the amber "unsaved changes" note, so it's obvious the on-disk script is stale until you save.
+        {
+            var w = new Windows.StatuslineDesignerWindow(Perch.Statusline.StatuslineStore.Seeded())
+            {
+                Width = 1000, Height = 640,
+            };
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            w.PoseTemplateForRender("{{model.display_name}}{{sep}}ctx {{context_window.used_percentage|bar:10|ctxcolor}}", 0);
+            w.MarkDirtyForRender();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, "statusline_designer_dirty_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
         // Autocomplete posed open (editor mid-token) so the completion rows render: a field path, a filter
         // name, and a colour arg (drawn as swatches). Syntax highlighting shows in the editor text too.
         foreach (var (partial, file) in new[]

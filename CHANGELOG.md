@@ -9,6 +9,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.25] - 2026-09-23
+
+- Explicit Save button in the status line designer, with an unsaved-changes indicator
+- Saving a profile also updates any live status line already using it
+- Revert a status line profile to its last saved state (in case you broke everything)
+
+---
+
 ## [v0.4.24] - 2026-09-23
 
 - Status line bars auto-colour to your context-pressure thresholds (`ctxcolor`)
