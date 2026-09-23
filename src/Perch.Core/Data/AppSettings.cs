@@ -68,6 +68,12 @@ internal sealed class AppSettings
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         AppProfile.DataFolderName, "settings.json");
 
+    /// <summary>The absolute path to this profile's <c>settings.json</c>. Exposed so the generated
+    /// statusline script can <em>try</em> to read Perch's own config (context-pressure thresholds, account
+    /// guardrails) and degrade to sensible defaults when it isn't there — the file need not exist. Resolved
+    /// on the generating machine, so it honours the dev/release profile and each OS's app-data location.</summary>
+    public static string SettingsFilePath => FilePath;
+
     // Appearance. The active colour theme, by its stable id (see Perch.Theming.Themes). Defaults to
     // "midnight" — Perch's original palette — and an unknown/missing id falls back to it, so an older
     // settings file (or a custom theme that's since been deleted) never leaves the app uncoloured.

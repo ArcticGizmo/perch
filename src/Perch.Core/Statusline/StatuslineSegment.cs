@@ -29,8 +29,13 @@ internal enum StatusColor
 ///
 /// <para><see cref="Rgb"/> carries a <em>custom</em> truecolor (packed <c>0xRRGGBB</c>) from a
 /// <c>color:#rrggbb</c> filter; it is <c>-1</c> when no custom colour was given, in which case
-/// <see cref="Color"/> (a named/semantic role) applies. A custom RGB always wins over the role.</para></summary>
-internal readonly record struct StatuslineSegment(string Text, StatusColor Color, int Rgb = -1);
+/// <see cref="Color"/> (a named/semantic role) applies. A custom RGB always wins over the role.</para>
+///
+/// <para><see cref="Bg"/> / <see cref="BgRgb"/> are the same idea for the <em>background</em>, set by a
+/// <c>{{#bg:…}}</c> region. <see cref="StatusColor.Default"/> + <c>-1</c> mean no background (transparent).
+/// The terminal renderer emits an SGR <c>48;2;…</c> pair when a background is set.</para></summary>
+internal readonly record struct StatuslineSegment(
+    string Text, StatusColor Color, int Rgb = -1, StatusColor Bg = StatusColor.Default, int BgRgb = -1);
 
 /// <summary>A rendered <see cref="StatuslineSegment"/> plus the span of template source that produced it
 /// (character offsets into the original template). <see cref="IsTag"/> is true when it came from a
@@ -107,15 +112,25 @@ internal static class StatuslineRenderer
         var sb = new StringBuilder();
         foreach (var seg in segments)
         {
-            bool coloured = seg.Rgb >= 0 || seg.Color != StatusColor.Default;
-            if (color && coloured && seg.Text.Length > 0)
+            bool hasFg = seg.Rgb >= 0 || seg.Color != StatusColor.Default;
+            bool hasBg = seg.BgRgb >= 0 || seg.Bg != StatusColor.Default;
+            if (color && (hasFg || hasBg) && seg.Text.Length > 0)
             {
-                var (r, g, b) = seg.Rgb >= 0
-                    ? ((byte)((seg.Rgb >> 16) & 0xFF), (byte)((seg.Rgb >> 8) & 0xFF), (byte)(seg.Rgb & 0xFF))
-                    : StatusColors.Rgb(seg.Color);
-                sb.Append("\x1b[38;2;").Append(r).Append(';').Append(g).Append(';').Append(b).Append('m');
-                sb.Append(seg.Text);
-                sb.Append(Reset);
+                sb.Append("\x1b[");
+                bool first = true;
+                if (hasFg)
+                {
+                    var (r, g, b) = Resolve(seg.Rgb, seg.Color);
+                    sb.Append("38;2;").Append(r).Append(';').Append(g).Append(';').Append(b);
+                    first = false;
+                }
+                if (hasBg)
+                {
+                    var (r, g, b) = Resolve(seg.BgRgb, seg.Bg);
+                    if (!first) sb.Append(';');
+                    sb.Append("48;2;").Append(r).Append(';').Append(g).Append(';').Append(b);
+                }
+                sb.Append('m').Append(seg.Text).Append(Reset);
             }
             else
             {
@@ -124,6 +139,12 @@ internal static class StatuslineRenderer
         }
         return sb.ToString();
     }
+
+    // A packed custom RGB (>=0) wins over the named role — same rule for foreground and background.
+    private static (byte R, byte G, byte B) Resolve(int rgb, StatusColor role) =>
+        rgb >= 0
+            ? ((byte)((rgb >> 16) & 0xFF), (byte)((rgb >> 8) & 0xFF), (byte)(rgb & 0xFF))
+            : StatusColors.Rgb(role);
 
     /// <summary>The visible text with all colour stripped.</summary>
     public static string ToPlain(IReadOnlyList<StatuslineSegment> segments) =>

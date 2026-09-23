@@ -48,7 +48,8 @@ internal static class StatuslineSample
       "effort": { "level": "high" },
       "vim": { "mode": "NORMAL" },
       "git": { "branch": "feat-0001", "staged": 2, "unstaged": 3, "changes": 5, "dirty": true },
-      "account": { "email": "you@example.com", "org": "Example Org", "org_uuid": "0a1b2c3d-0000-0000-0000-000000000000", "signed_in": true, "personal": false }
+      "account": { "email": "you@example.com", "org": "Example Org", "org_uuid": "0a1b2c3d-0000-0000-0000-000000000000", "signed_in": true, "personal": false },
+      "perch": { "context": { "yellow": 50, "orange": 65, "red": 80 }, "guardrail": { "mismatch": true, "expected": "Acme Corp", "on": "Contoso" } }
     }
     """;
 

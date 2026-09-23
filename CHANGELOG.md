@@ -9,6 +9,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.24] - 2026-09-23
+
+- Status line bars auto-colour to your context-pressure thresholds (`ctxcolor`)
+- Status line can flag a session on the wrong Claude account for its folder
+- `{{else}}` / `{{elseif}}` branches in status line templates
+- `{{#bg:…}}` background regions, for warnings you can't scroll past
+- New "Account-aware" built-in status line wiring all of that together
+- Empty status line rows are dropped (put a character on one you actually meant)
+- Perch's status line config is read best-effort — it still works with Perch uninstalled
+- Dev builds stamp a "dev" marker on their status lines (stop debugging the wrong instance)
+- Fixed the designer gutter miscounting lines wrapped with a Windows soft break
+
+---
+
 ## [v0.4.23] - 2026-09-23
 
 - Status line tokens for the signed-in account and org, read live per config directory

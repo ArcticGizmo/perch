@@ -70,6 +70,37 @@ library saved on close. Render-verified via `HeadlessRenderer` (`statusline_desi
 ### Done since
 - **Pace-coloured rate windows** + a `Rate-aware verbose` built-in that ports a classic bash statusline
   (`human`/`dur`/`until`/`pace` filters; `pace:<resetsPath>:<windowSeconds>` uses `Palette.PaceColor`).
+- **Account/org tokens** — `{{account.*}}` (email/org/org_uuid/signed_in/personal), read per config dir off
+  `.claude.json`'s `oauthAccount`; the `round` filter grew a decimal-places arg (`round:2`).
+- **Reads Perch's OWN config, agnostically.** A `perch.*` namespace injected by reading Perch's
+  `settings.json` (path baked into the generated script via `AppSettings.SettingsFilePath`): the
+  context-pressure thresholds (`perch.context.{yellow,orange,red}`) and the account-guardrail verdict for
+  the session's folder (`perch.guardrail.{mismatch,expected,on}`, mirroring `AccountGuard`). A new
+  `|ctxcolor` filter auto-colours a 0–100 fill by those thresholds (green→amber→red). **Everything defaults
+  sensibly when Perch's config can't be found** — thresholds to the shipped 50/65/80, the guardrail to "no
+  mismatch" — so a line never errors on a machine without (or after uninstalling) Perch. Injection is gated
+  (`perch.` / `ctxcolor` in the template) and skipped when the payload already carries `perch`, so the
+  parity path stays deterministic. A new "Account-aware" built-in showcases both. Render-verified
+  (`statusline_designer_accountaware_1x.png`).
+- **`{{else}}` / `{{elseif EXPR}}`** on any section (if/unless/truthy/inverted): the parser now builds an
+  ordered list of conditional branches + an optional else; the first passing branch renders. `elseif` is the
+  single spelling (no spaced `else if`), by design. Mirrored in the Node script (parity-tested).
+- **`{{#bg:NAME}}…{{/bg}}` background regions** — paint a colour role or `#rrggbb` behind every piece inside
+  (nested regions override). `StatuslineSegment` gained `Bg`/`BgRgb`; the ANSI renderer emits a `48;2;…`
+  pair; the designer preview paints the run background. Parity-tested.
+- **Dev-instance marker.** `StatuslineScript.Generate(profile, devMarker?)` bakes a `DEV` flag (default
+  `AppProfile.IsDev`); a dev-generated script prepends a loud amber " dev " tag to its output (and the CLI
+  preview / `list`/`use`/`install` say so, and the header comment notes it) — because dev and release share
+  `~/.claude/perch-statusline.mjs`, so you can now tell which instance wrote the active line. Tests pass
+  `devMarker:false` to keep the parity target the pure engine.
+- **Blank output lines are dropped.** `RenderToString` (and the Node script's `render`, and the designer
+  preview) removes any output line that is empty or whitespace-only once ANSI escapes are ignored
+  (`StatuslineTemplate.DropBlankLines`) — so a conditional that resolves to nothing never leaves a blank row;
+  a wanted blank line is expressed by putting a character on it. Parity-tested.
+- **Gutter CRLF fix.** The designer's line-number gutter counted a `\`+CRLF soft break as a new line (a stray
+  trailing `\r` after `Split('\n')` defeated the `EndsWith("\\")` check) while the renderer joined it — the
+  "phantom line number" bug. Numbering now comes from the shared, tested
+  `StatuslineTemplate.LogicalLineNumbers` (CRLF-normalised), so gutter and render agree.
 - **Built-ins are code, not the file** — the store merges `StatuslineDefaults` with the saved deltas, so a
   new example appears with no migration; only user edits/imports/active persist.
 - **git counts** — the generated Node script injects `git.staged/unstaged/changes/dirty` (gated on use).

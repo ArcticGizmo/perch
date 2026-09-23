@@ -84,7 +84,7 @@ internal sealed class StatuslineDesignerWindow : Window
         ("bar", "N-cell bar"), ("money", "0.00"), ("pct", "rounded %"), ("round", "0 dp · round:N"),
         ("k", "1.2k"), ("human", "68k / 2M"), ("dur", "1h 15m"), ("until", "countdown"),
         ("upper", "UPPERCASE"), ("lower", "lowercase"), ("trunc", "trunc:N"), ("default", "default:X"),
-        ("color", "color:name"), ("pace", "pace:resets:secs"),
+        ("color", "color:name"), ("pace", "pace:resets:secs"), ("ctxcolor", "auto ctx colour"),
     };
 
     public StatuslineDesignerWindow() : this(StatuslineStore.Load()) { }
@@ -535,6 +535,7 @@ internal sealed class StatuslineDesignerWindow : Window
                      ("| color:teal", "named colour (teal/amber/green/red/…)", "| color:teal"),
                      ("| color:#46c6b8", "custom hex colour — any 24-bit truecolor", "| color:#46c6b8"),
                      ("| pace:resets_at:18000", "colour by burn vs. how far through the window", "| pace:resets_at:18000"),
+                     ("| ctxcolor", "auto-colour a 0–100 fill by Perch's context thresholds  ·  green→red", "| ctxcolor"),
                  })
             stack.Children.Add(RefRow(syntax, desc, insert));
 
@@ -546,6 +547,9 @@ internal sealed class StatuslineDesignerWindow : Window
                      ("{{#if x}}…{{/if}}", "show when x is truthy — also x > 80, s == 'ok'", "{{#if EXPR}}{{/if}}"),
                      ("{{#unless x}}…{{/unless}}", "show when x is falsy", "{{#unless EXPR}}{{/unless}}"),
                      ("{{^x}}…{{/x}}", "inverted — show when x is empty/false", "{{^PATH}}{{/PATH}}"),
+                     ("{{else}}", "the fallback branch of the enclosing if/unless/section", "{{else}}"),
+                     ("{{elseif x}}", "another branch — first passing branch wins", "{{elseif EXPR}}"),
+                     ("{{#bg:teal}}…{{/bg}}", "paint a background behind everything inside — name or #rrggbb", "{{#bg:teal}}{{/bg}}"),
                  })
             stack.Children.Add(RefRow(syntax, desc, insert));
 
@@ -696,30 +700,44 @@ internal sealed class StatuslineDesignerWindow : Window
 
         var placed = StatuslineTemplate.RenderPlaced(_selected.Template ?? "", _sample);
 
-        // split into lines on embedded newlines so a multi-line template previews as multiple rows
+        // split into lines on embedded newlines so a multi-line template previews as multiple rows. A line
+        // that renders to nothing visible (empty/whitespace) is DROPPED, matching the terminal
+        // (StatuslineTemplate.DropBlankLines) — and its tracked caret-highlight runs are discarded with it.
         var line = new List<Run>();
+        int lineRunStart = _previewRuns.Count;
         void FlushLine()
         {
-            var inlines = new InlineCollection();
-            if (line.Count == 0) inlines.Add(new Run(" "));
-            else foreach (var r in line) inlines.Add(r);
-            _preview.Children.Add(new TextBlock { FontFamily = Mono, FontSize = 13, Foreground = TermFg, Inlines = inlines });
+            bool blank = true;
+            foreach (var r in line) if (!string.IsNullOrWhiteSpace(r.Text)) { blank = false; break; }
+            if (blank)
+            {
+                if (_previewRuns.Count > lineRunStart)
+                    _previewRuns.RemoveRange(lineRunStart, _previewRuns.Count - lineRunStart);
+            }
+            else
+            {
+                var inlines = new InlineCollection();
+                foreach (var r in line) inlines.Add(r);
+                _preview.Children.Add(new TextBlock { FontFamily = Mono, FontSize = 13, Foreground = TermFg, Inlines = inlines });
+            }
             line = new List<Run>();
+            lineRunStart = _previewRuns.Count;
         }
         foreach (var ps in placed)
         {
             var baseFg = BrushForSeg(ps.Segment);
+            var baseBg = BgBrushForSeg(ps.Segment);
             var parts = ps.Segment.Text.Split('\n');
             for (int i = 0; i < parts.Length; i++)
             {
                 if (i > 0) FlushLine();
                 if (parts[i].Length == 0) continue;
-                var run = new Run(parts[i]) { Foreground = baseFg };
+                var run = new Run(parts[i]) { Foreground = baseFg, Background = baseBg };
                 line.Add(run);
-                // Track EVERY run (with its base colour) so the caret can light one up and dim the rest.
+                // Track EVERY run (with its base colours) so the caret can light one up and dim the rest.
                 // Only single-line {{…}} segments are caret targets (IsTag + real source span).
                 bool isTag = ps.IsTag && parts.Length == 1;
-                _previewRuns.Add(new PreviewRun(run, baseFg,
+                _previewRuns.Add(new PreviewRun(run, baseFg, baseBg,
                     isTag ? ps.SourceStart : -1, isTag ? ps.SourceStart + ps.SourceLength : -1, isTag));
             }
         }
@@ -730,7 +748,7 @@ internal sealed class StatuslineDesignerWindow : Window
     // Light up, in the live preview, the element the editor caret currently sits inside (the rendered
     // output of the {{…}} token spanning the caret) and DIM every other element so it stands out. When the
     // caret isn't in a token (or the editor isn't focused), everything shows at full strength.
-    private readonly record struct PreviewRun(Run Run, IBrush BaseFg, int Start, int End, bool IsTag);
+    private readonly record struct PreviewRun(Run Run, IBrush BaseFg, IBrush? BaseBg, int Start, int End, bool IsTag);
     private readonly List<PreviewRun> _previewRuns = new();
     private readonly Dictionary<IBrush, IBrush> _dimCache = new();
     private IBrush? _previewHiBrush;
@@ -748,17 +766,17 @@ internal sealed class StatuslineDesignerWindow : Window
             var r = _previewRuns[i];
             if (match < 0)                       // nothing selected → all elements at full strength
             {
-                r.Run.Background = null;
+                r.Run.Background = r.BaseBg;      // restore any {{#bg:…}} background
                 r.Run.Foreground = r.BaseFg;
             }
-            else if (i == match)                 // the caret's element: highlighted, full colour
+            else if (i == match)                 // the caret's element: highlighted (highlight wash wins over bg)
             {
                 r.Run.Background = _previewHiBrush;
                 r.Run.Foreground = r.BaseFg;
             }
             else                                  // every other element: dimmed
             {
-                r.Run.Background = null;
+                r.Run.Background = r.BaseBg;
                 r.Run.Foreground = Dim(r.BaseFg);
             }
         }
@@ -947,15 +965,20 @@ internal sealed class StatuslineDesignerWindow : Window
     {
         if (_gutter is null) return;
 
-        var text = _templateBox.Text ?? "";
+        // Normalise CRLF -> LF so a soft break stored as "\"+CRLF (e.g. a plain Enter typed after a "\") reads
+        // the same as "\"+LF, exactly as the renderer joins both. Split raw on '\n' and a CRLF line keeps a
+        // trailing '\r', so "…\\\r".EndsWith("\\") is false and the continuation is mis-numbered as a new
+        // status line (the "phantom line number" bug). The line NUMBERS come from the shared, tested
+        // StatuslineTemplate.LogicalLineNumbers so the gutter can't drift from what actually renders.
+        var text = (_templateBox.Text ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
         var lines = text.Split('\n');
+        var numbers = StatuslineTemplate.LogicalLineNumbers(text);
         double width = _templateBox.Bounds.Width - 16;   // minus the 8+8 horizontal padding
         if (width <= 10) return;   // not arranged yet; a later Bounds change re-runs this with a real width
 
         var typeface = new Typeface(Mono);
         _gutter.Children.Clear();
         double total = 0;
-        int lineNo = 0;
         for (int i = 0; i < lines.Length; i++)
         {
             var layout = new TextLayout(lines[i].Length == 0 ? " " : lines[i], typeface, 13, Muted,
@@ -963,13 +986,12 @@ internal sealed class StatuslineDesignerWindow : Window
             double h = layout.Height;
             total += h;
 
-            // A physical line whose predecessor ended with a soft break ("\") is a continuation of the same
-            // status line, not a new one — mark it with a dim glyph and don't advance the line number.
-            bool continuation = i > 0 && lines[i - 1].EndsWith("\\", StringComparison.Ordinal);
-            if (!continuation) lineNo++;
+            // 0 = a soft-break continuation of the line above (dim glyph, no number); otherwise the logical
+            // status-line number. Both follow StatuslineTemplate.LogicalLineNumbers / StripSoftBreaks.
+            bool continuation = numbers[i] == 0;
             _gutter.Children.Add(new TextBlock
             {
-                Text = continuation ? "·" : lineNo.ToString(), Height = h, FontFamily = Mono, FontSize = 13,
+                Text = continuation ? "·" : numbers[i].ToString(), Height = h, FontFamily = Mono, FontSize = 13,
                 Foreground = Muted, Opacity = continuation ? 0.5 : 1, TextAlignment = TextAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Top,
             });
@@ -1239,6 +1261,18 @@ internal sealed class StatuslineDesignerWindow : Window
         if (_rgbBrushes.TryGetValue(seg.Rgb, out var b)) return b;
         var c = Color.FromRgb((byte)((seg.Rgb >> 16) & 0xFF), (byte)((seg.Rgb >> 8) & 0xFF), (byte)(seg.Rgb & 0xFF));
         return _rgbBrushes[seg.Rgb] = new SolidColorBrush(c);
+    }
+
+    // The background brush a {{#bg:…}} region gives a segment, or null for no background (transparent).
+    private IBrush? BgBrushForSeg(StatuslineSegment seg)
+    {
+        if (seg.BgRgb >= 0)
+        {
+            if (_rgbBrushes.TryGetValue(seg.BgRgb, out var hb)) return hb;
+            var hc = Color.FromRgb((byte)((seg.BgRgb >> 16) & 0xFF), (byte)((seg.BgRgb >> 8) & 0xFF), (byte)(seg.BgRgb & 0xFF));
+            return _rgbBrushes[seg.BgRgb] = new SolidColorBrush(hc);
+        }
+        return seg.Bg == StatusColor.Default ? null : BrushFor(seg.Bg);
     }
 
     private static IBrush Tint(IBrush accent) =>

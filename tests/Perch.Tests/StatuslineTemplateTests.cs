@@ -344,6 +344,182 @@ public sealed class StatuslineTemplateTests
         Assert.Equal(StatusColor.Red,    ColorOf(70));   // over pace
     }
 
+    // ── blank output lines are dropped ─────────────────────────────────────────────────
+    [Fact]
+    public void A_conditional_that_renders_nothing_leaves_no_blank_line()
+    {
+        // The "With Org" case: a leading if-block on its own output line, false → its whole line vanishes
+        // rather than leaving a blank row above the next line.
+        var off = TemplateData.Parse("""{"model":{"display_name":"Opus"}}""");
+        Assert.Equal("Opus", Render("{{#if warn}}⚠ wrong{{/if}}\n{{model.display_name}}", off));
+
+        var on = TemplateData.Parse("""{"model":{"display_name":"Opus"},"warn":true}""");
+        Assert.Equal("⚠ wrong\nOpus", Render("{{#if warn}}⚠ wrong{{/if}}\n{{model.display_name}}", on));
+    }
+
+    [Fact]
+    public void Whitespace_only_lines_are_dropped_but_content_lines_keep_their_spaces()
+    {
+        var d = TemplateData.Parse("""{"a":"A","b":"B"}""");
+        // middle line renders to just spaces → dropped; the kept lines keep their own leading/trailing spaces
+        Assert.Equal("  A\n  B", Render("  {{a}}\n {{gone}} \n  {{b}}", d));
+    }
+
+    [Fact]
+    public void A_line_you_actually_want_blank_survives_with_any_character()
+    {
+        var d = TemplateData.Parse("""{"a":"A","b":"B"}""");
+        Assert.Equal("A\n·\nB", Render("{{a}}\n·\n{{b}}", d));   // a dot (or any glyph) keeps the row
+    }
+
+    // ── logical line numbers (designer gutter) ─────────────────────────────────────────
+    [Fact]
+    public void LogicalLineNumbers_treats_soft_breaks_as_continuations_crlf_or_lf()
+    {
+        // Mixed endings, like a hand-authored template: "\"+CRLF and "\"+LF are both soft breaks (0), a bare
+        // newline is a real line break (a new number). This is the "With Org" gutter bug: a "\"+CRLF must NOT
+        // read as a new line just because Split('\n') leaves a trailing '\r'.
+        var text = "{{#if m}}\\\r\nA\\\n{{/if}}\nB\\\nC";
+        //          line1 ── soft(CRLF) ─ soft(LF) ─ hard ── line2 ─ soft(LF) ─ (cont)
+        Assert.Equal(new[] { 1, 0, 0, 2, 0 }, StatuslineTemplate.LogicalLineNumbers(text));
+    }
+
+    [Fact]
+    public void LogicalLineNumbers_counts_hard_breaks_as_new_lines()
+    {
+        Assert.Equal(new[] { 1, 2, 3 }, StatuslineTemplate.LogicalLineNumbers("a\nb\nc"));
+        Assert.Equal(new[] { 1, 0 }, StatuslineTemplate.LogicalLineNumbers("a\\\nb"));   // one soft break
+    }
+
+    // ── ctxcolor (Perch context-pressure thresholds) ──────────────────────────────────
+    [Fact]
+    public void ContextColor_warms_by_the_configured_bands()
+    {
+        // Thresholds come off the injected perch.context block; below yellow is calm green, warming up.
+        var d = TemplateData.Parse("""{"perch":{"context":{"yellow":50,"orange":65,"red":80}}}""");
+        Assert.Equal(StatusColor.Green,  StatuslineTemplate.ContextColor(34, d));   // below yellow
+        Assert.Equal(StatusColor.Yellow, StatuslineTemplate.ContextColor(55, d));   // yellow band
+        Assert.Equal(StatusColor.Amber,  StatuslineTemplate.ContextColor(70, d));   // orange band
+        Assert.Equal(StatusColor.Red,    StatuslineTemplate.ContextColor(80, d));   // at red (inclusive)
+    }
+
+    [Fact]
+    public void ContextColor_defaults_to_50_65_80_when_no_perch_config()
+    {
+        // Perch-agnostic: no injected perch.* at all → the shipped 50/65/80 bands, never an error.
+        var d = TemplateData.Parse("""{"model":{"display_name":"Opus"}}""");
+        Assert.Equal(StatusColor.Green,  StatuslineTemplate.ContextColor(49, d));
+        Assert.Equal(StatusColor.Yellow, StatuslineTemplate.ContextColor(50, d));
+        Assert.Equal(StatusColor.Amber,  StatuslineTemplate.ContextColor(65, d));
+        Assert.Equal(StatusColor.Red,    StatuslineTemplate.ContextColor(80, d));
+    }
+
+    [Fact]
+    public void Ctxcolor_filter_reads_the_value_and_paints_the_run()
+    {
+        // used_percentage is 34 in the sample, thresholds 50/65/80 → below yellow → green. The bar text is
+        // produced by |bar and the colour by |ctxcolor on the same numeric value.
+        var seg = StatuslineTemplate.Render("{{context_window.used_percentage|bar:8|ctxcolor}}", StatuslineSample.Data());
+        Assert.Equal(StatusColor.Green, seg[0].Color);
+
+        // A hotter value uses the red band.
+        var hot = TemplateData.Parse("""{"perch":{"context":{"yellow":50,"orange":65,"red":80}},"context_window":{"used_percentage":92}}""");
+        Assert.Equal(StatusColor.Red, StatuslineTemplate.Render("{{context_window.used_percentage|ctxcolor}}", hot)[0].Color);
+    }
+
+    // ── guardrail tokens ───────────────────────────────────────────────────────────────
+    [Fact]
+    public void Guardrail_mismatch_renders_the_wrong_account_warning()
+    {
+        // The sample payload carries a mismatch (expected "Acme Corp", on "Contoso").
+        var outp = Render("{{#perch.guardrail.mismatch}}⚠ {{perch.guardrail.expected}} ≠ {{perch.guardrail.on}}{{/perch.guardrail.mismatch}}");
+        Assert.Equal("⚠ Acme Corp ≠ Contoso", outp);
+    }
+
+    [Fact]
+    public void Guardrail_section_is_silent_when_not_a_mismatch()
+    {
+        var d = TemplateData.Parse("""{"perch":{"guardrail":{"mismatch":false,"expected":"","on":""}}}""");
+        Assert.Equal("ok", Render("{{#perch.guardrail.mismatch}}WRONG{{/perch.guardrail.mismatch}}{{^perch.guardrail.mismatch}}ok{{/perch.guardrail.mismatch}}", d));
+    }
+
+    // ── else / else-if ─────────────────────────────────────────────────────────────────
+    [Theory]
+    [InlineData(87, "HI")]    // if branch
+    [InlineData(60, "MID")]   // else-if branch
+    [InlineData(20, "LO")]    // else branch
+    public void If_elseif_else_picks_the_first_matching_branch(int x, string expected)
+    {
+        var d = TemplateData.Parse($$"""{"x":{{x}}}""");
+        Assert.Equal(expected, Render("{{#if x > 80}}HI{{elseif x > 50}}MID{{else}}LO{{/if}}", d));
+    }
+
+    [Fact]
+    public void Else_works_on_a_truthy_section()
+    {
+        Assert.Equal("PR 30", Render("{{#pr.number}}PR {{pr.number}}{{else}}no pr{{/pr.number}}"));   // sample has pr.number
+        var noPr = TemplateData.Parse("""{"model":{"display_name":"Opus"}}""");
+        Assert.Equal("no pr", Render("{{#pr.number}}PR {{pr.number}}{{else}}no pr{{/pr.number}}", noPr));
+    }
+
+    [Fact]
+    public void Else_works_on_an_inverted_section()
+    {
+        var d = TemplateData.Parse("""{"err":true}""");
+        Assert.Equal("ERR", Render("{{^err}}ok{{else}}ERR{{/err}}", d));
+    }
+
+    [Fact]
+    public void Elseif_without_a_final_else_is_fine() =>
+        Assert.Equal("mid", Render("{{#if x > 80}}hi{{elseif x > 50}}mid{{/if}}",
+            TemplateData.Parse("""{"x":60}""")));
+
+    [Fact]
+    public void Spaced_else_if_is_not_a_branch_keyword()
+    {
+        // Only "elseif" is a keyword — a spaced "{{else if …}}" is just an (unknown, empty) interpolation
+        // inside the current branch, NOT a new branch. This pins the "one way to do it" decision: with the
+        // if-branch taken, its body still renders and the bogus tag vanishes → "HI" + "" + "MID".
+        var d = TemplateData.Parse("""{"x":90}""");
+        Assert.Equal("HIMID", Render("{{#if x > 80}}HI{{else if x > 50}}MID{{/if}}", d));
+    }
+
+    // ── background regions ──────────────────────────────────────────────────────────────
+    [Fact]
+    public void Bg_region_paints_the_background_of_every_piece_inside()
+    {
+        var segs = StatuslineTemplate.Render("{{#bg:red}}A {{model.display_name}}{{/bg}}", StatuslineSample.Data());
+        Assert.All(segs, s => Assert.Equal(StatusColor.Red, s.Bg));   // both the literal "A " and the token
+    }
+
+    [Fact]
+    public void Bg_region_emits_a_background_ansi_pair()
+    {
+        var ansi = Render_Ansi("{{#bg:red}}X{{/bg}}");
+        Assert.Contains("48;2;229;104;106", ansi);   // red background (matches StatusColors.Rgb(Red))
+    }
+
+    [Fact]
+    public void Bg_accepts_a_custom_hex_and_nested_regions_override()
+    {
+        var segs = StatuslineTemplate.Render("{{#bg:#112233}}A{{#bg:teal}}B{{/bg}}C{{/bg}}", StatuslineSample.Data());
+        Assert.Equal(0x112233, segs[0].BgRgb);          // "A" — outer hex bg
+        Assert.Equal(StatusColor.Teal, segs[1].Bg);     // "B" — inner named bg overrides
+        Assert.Equal(0x112233, segs[2].BgRgb);          // "C" — back to the outer bg
+    }
+
+    [Fact]
+    public void Bg_and_foreground_combine_in_one_run()
+    {
+        // A coloured token inside a bg region carries both a 38;2 (fg) and a 48;2 (bg) SGR.
+        var ansi = Render_Ansi("{{#bg:red}}{{model.display_name|color:teal}}{{/bg}}");
+        Assert.Contains("38;2;70;198;184", ansi);   // teal fg
+        Assert.Contains("48;2;229;104;106", ansi);  // red bg
+    }
+
+    private static string Render_Ansi(string tpl) =>
+        StatuslineTemplate.RenderToString(tpl, StatuslineSample.Data(), color: true);
+
     // ── round:N ──────────────────────────────────────────────────────────────────────
     [Theory]
     [InlineData(23.5, 0, "24")]      // default (bare {{x|round}}) → whole number, half up
@@ -378,13 +554,13 @@ public sealed class StatuslineTemplateTests
     [Fact]
     public void My_status_line_example_renders()
     {
-        var tpl = StatuslineDefaults.All.First(p => p.Name == "My Status Line").Template!;
+        var tpl = StatuslineDefaults.All.First(p => p.Name == "Rate-aware verbose").Template!;
         var outp = Render(tpl);
         Assert.Contains("Context", outp);
         Assert.Contains("5h", outp);
         Assert.Contains("7d", outp);
         Assert.Contains("Opus", outp);
-        // Its distinguishing touch vs "Rate-aware verbose": a "·" between model and effort level.
+        // Its distinguishing touch: a "·" between model and effort level.
         Assert.Contains("· high", outp);
     }
 
@@ -393,7 +569,7 @@ public sealed class StatuslineTemplateTests
     {
         // The model/tokens/duration row is a single segment (no soft breaks inside it), matching the authored
         // profile — the earlier version split it across soft breaks and drifted from the original.
-        var tpl = StatuslineDefaults.All.First(p => p.Name == "My Status Line").Template!;
+        var tpl = StatuslineDefaults.All.First(p => p.Name == "Rate-aware verbose").Template!;
         Assert.Contains(
             "{{/if}}]  🔽 {{context_window.total_input_tokens|human}}  🔼 {{context_window.total_output_tokens|human}}  ⏱ {{cost.total_duration_ms|dur}}",
             tpl);

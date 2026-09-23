@@ -74,5 +74,25 @@ internal static class StatuslineDefaults
                 "{{#if rate_limits.seven_day}} | 7d {{rate_limits.seven_day.used_percentage|bar:10|pace:rate_limits.seven_day.resets_at:604800}} {{rate_limits.seven_day.used_percentage|round|pace:rate_limits.seven_day.resets_at:604800}}% {{rate_limits.seven_day.resets_at|until|color:muted}}\\\n" +
                 "{{/if}}",
         },
+        new StatuslineProfile
+        {
+            // Leans on Perch's OWN config: the context bar auto-colours to your configured context-pressure
+            // bands via |ctxcolor (green → yellow → amber → red), with an {{else}} for a fresh session where
+            // context is still null; the signed-in org is shown; and — the headline — an account guardrail
+            // mismatch (you're on the wrong Claude account for this folder) shouts on a red {{#bg:red}}
+            // background. All of it degrades gracefully: with no Perch config the bar still colours off the
+            // shipped 50/65/80 defaults and the guardrail simply never fires.
+            Name = "Account-aware",
+            Kind = ProfileKind.Perch,
+            Template =
+                "{{model.display_name}}  \\\n" +
+                "ctx {{#if context_window.used_percentage}}\\\n" +
+                "{{context_window.used_percentage|bar:8|ctxcolor}} {{context_window.used_percentage|pct|ctxcolor}}\\\n" +
+                "{{else}}(fresh){{/if}}  \\\n" +
+                "{{#if account.org}}⌾ {{account.org|trunc:18|color:muted}}\\\n" +
+                "{{/if}}\\\n" +
+                "{{#if perch.guardrail.mismatch}}{{#bg:red}} ⚠ {{perch.guardrail.expected}} ≠ {{perch.guardrail.on}} {{/bg}}\\\n" +
+                "{{/if}}",
+        },
     };
 }

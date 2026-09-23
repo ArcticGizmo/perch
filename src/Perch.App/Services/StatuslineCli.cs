@@ -70,9 +70,16 @@ internal static class StatuslineCli
 
         InjectGitBranch(data);
         if (template.Contains("account.")) InjectAccount(data);
+        if (template.Contains("perch.") || template.Contains("ctxcolor")) InjectPerch(data);
+        // Prefix the dev marker so a dev-build preview matches the dev-generated Node script's output.
+        if (AppProfile.IsDev) w.Write(DevMarker);
         w.Write(StatuslineTemplate.RenderToString(template, data, color: true));
         return 0;
     }
+
+    // A loud amber-on-dark " dev " tag. Kept byte-identical to DEV_MARKER in StatuslineScript's Node body so
+    // the C# preview and the generated dev script agree.
+    private const string DevMarker = "\x1b[48;2;227;168;78m\x1b[38;2;20;20;20m dev \x1b[0m ";
 
     // Merge a live git.branch into the payload so {{git.branch}} works even though the raw payload
     // doesn't carry it. Cheap (reads .git/HEAD, no subprocess); best-effort.
@@ -111,9 +118,72 @@ internal static class StatuslineCli
         };
     }
 
+    // Merge Perch's OWN config onto the payload as {{perch.*}} — the context-pressure thresholds (so
+    // {{…|ctxcolor}} auto-colours a context bar to the user's bands) and the account-guardrail verdict for
+    // this folder (so {{#perch.guardrail.mismatch}} flags a wrong-account session). Byte-for-byte the shape
+    // the generated Node script injects (readPerch/guardrailFor there mirror this). Perch-agnostic: any read
+    // failure yields the shipped defaults / no mismatch rather than throwing. Never clobbers a supplied perch.
+    private static void InjectPerch(TemplateData data)
+    {
+        if (data.Root["perch"] is not null) return;
+
+        var settings = AppSettings.Load();
+        var context = new JsonObject
+        {
+            ["yellow"] = settings.ContextPressureYellowPercent,
+            ["orange"] = settings.ContextPressureOrangePercent,
+            ["red"]    = settings.ContextPressureRedPercent,
+        };
+
+        var guardrail = new JsonObject { ["mismatch"] = false, ["expected"] = "", ["on"] = "" };
+        try
+        {
+            var cwd = data.TryGet("cwd", out var c) ? TemplateData.Str(c) : "";
+            if (string.IsNullOrEmpty(cwd))
+                cwd = data.TryGet("workspace.current_dir", out var wd) ? TemplateData.Str(wd) : "";
+
+            var rule = AccountGuard.RuleFor(cwd, settings.AccountRules);
+            if (rule is { Allowed.Count: > 0 })
+            {
+                var signin = ClaudeJsonReader.ReadSignIn(ClaudeConfigSet.Instance.Primary);
+                if (AccountGuard.Evaluate(rule, signin.Org?.Uuid) == AccountVerdict.Mismatch)
+                {
+                    guardrail["mismatch"] = true;
+                    guardrail["expected"] = ExpectedAccountLabel(rule);
+                    guardrail["on"] = !string.IsNullOrEmpty(signin.Org?.Name) ? signin.Org!.Name
+                        : !string.IsNullOrEmpty(signin.Email) ? signin.Email
+                        : "another account";
+                }
+            }
+        }
+        catch { /* alerting-only + best-effort: leave "no mismatch" */ }
+
+        data.Root["perch"] = new JsonObject { ["context"] = context, ["guardrail"] = guardrail };
+    }
+
+    // The allowed account(s) a rule expects, condensed: one name, or "Acme +2" for several. Mirrors
+    // OverlayCanvas.MismatchExpectedLabel and the Node script's allowedLabel.
+    private static string ExpectedAccountLabel(AccountRule rule)
+    {
+        var names = rule.Allowed
+            .Select(a => string.IsNullOrWhiteSpace(a.Name) ? a.Email : a.Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToList();
+        if (names.Count == 0) return "the allowed account";
+        return names.Count == 1 ? names[0]! : $"{names[0]} +{names.Count - 1}";
+    }
+
     // ── management verbs ──────────────────────────────────────────────────────────────
+    // A one-line reminder that this is the dev build — so `perch statusline …` run from a dev checkout can't
+    // be mistaken for the installed Perch (both share ~/.claude). No-op on a release build.
+    private static void DevNote(StreamWriter w)
+    {
+        if (AppProfile.IsDev) w.WriteLine("[Perch DEV instance — writes the same ~/.claude as the installed Perch]");
+    }
+
     private static int List(StreamWriter w)
     {
+        DevNote(w);
         var cfg = StatuslineStore.Load();
         w.WriteLine("Statusline profiles:");
         foreach (var p in cfg.Profiles)
@@ -139,6 +209,7 @@ internal static class StatuslineCli
         StatuslineStore.Save(cfg);
         if (!Apply(p)) { w.WriteLine("Couldn't write the script or ~/.claude/settings.json."); return 1; }
 
+        DevNote(w);
         w.WriteLine($"Active profile: {p.Name}");
         if (p.IsPerch)
         {
@@ -187,6 +258,7 @@ internal static class StatuslineCli
         var active = cfg.Active;
         if (active is null) { w.WriteLine("No profiles to install."); return 1; }
         if (!Apply(active)) { w.WriteLine("Couldn't write the script or ~/.claude/settings.json."); return 1; }
+        DevNote(w);
         w.WriteLine($"Installed {cfg.Profiles.Count} profiles; active: {active.Name}.");
         if (active.IsPerch) w.WriteLine($"Standalone script: {StatuslineScript.DefaultScriptPath}");
         w.WriteLine("Open a new Claude Code session to see it.");

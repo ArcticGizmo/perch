@@ -16,16 +16,21 @@ using System.Text.RegularExpressions;
 /// <item><c>{{value | filter | filter:arg}}</c> — pipe through formatters, left to right.</item>
 /// <item><c>{{#if EXPR}}…{{/if}}</c> / <c>{{#unless EXPR}}…{{/unless}}</c> — conditionals, where EXPR
 ///   is a truthy path or a comparison (<c>a &gt; 80</c>, <c>pr.review_state == 'approved'</c>).</item>
+/// <item><c>{{else}}</c> / <c>{{elseif EXPR}}</c> — inside any section, an alternative branch: the first
+///   branch whose test passes renders, else the final <c>{{else}}</c> body.</item>
 /// <item><c>{{#path}}…{{/path}}</c> — render the body when the path is truthy; <c>{{^path}}…{{/path}}</c>
-///   renders it when falsy (inverted).</item>
+///   renders it when falsy (inverted). Both accept an <c>{{else}}</c> branch.</item>
+/// <item><c>{{#bg:NAME}}…{{/bg}}</c> — paint NAME (a colour role or <c>#rrggbb</c>) as the background of
+///   every piece inside the region (nested regions override).</item>
 /// <item><c>{{! comment }}</c> — dropped.</item>
 /// </list>
 ///
 /// <para>Filters: <c>money</c> (2dp), <c>round</c> (<c>round:N</c> for N decimals, default 0),
 ///   <c>pct</c> (rounded + "%"), <c>k</c> (1.2k),
 /// <c>upper</c>/<c>lower</c>, <c>bar:N</c> (an N-cell block bar from a 0–100 percentage),
-/// <c>trunc:N</c> (ellipsised), <c>default:X</c> (fallback when empty) and <c>color:NAME</c> (paints
-/// the run — see <see cref="StatusColor"/>). Colour applies to just the token it decorates.</para>
+/// <c>trunc:N</c> (ellipsised), <c>default:X</c> (fallback when empty), <c>color:NAME</c> (paints
+/// the run — see <see cref="StatusColor"/>) and <c>ctxcolor</c> (paints a 0–100 fill by Perch's own
+/// context-pressure thresholds). Colour applies to just the token it decorates.</para>
 /// </summary>
 internal static class StatuslineTemplate
 {
@@ -40,7 +45,7 @@ internal static class StatuslineTemplate
         var (stripped, _) = StripSoftBreaks(template);
         var pieces = RenderPieces(Parse(Tokenize(stripped)), data);
         var segments = new List<StatuslineSegment>(pieces.Count);
-        foreach (var p in pieces) segments.Add(new StatuslineSegment(p.Text, p.Color, p.Rgb));
+        foreach (var p in pieces) segments.Add(new StatuslineSegment(p.Text, p.Color, p.Rgb, p.Bg, p.BgRgb));
         return segments;
     }
 
@@ -57,14 +62,30 @@ internal static class StatuslineTemplate
         {
             int a = p.SrcStart < 0 ? 0 : MapIndex(map, p.SrcStart);
             int b = p.SrcStart < 0 ? 0 : MapIndex(map, p.SrcStart + p.SrcLen);
-            placed.Add(new PlacedSegment(new StatuslineSegment(p.Text, p.Color, p.Rgb), a, System.Math.Max(0, b - a), p.IsTag));
+            placed.Add(new PlacedSegment(new StatuslineSegment(p.Text, p.Color, p.Rgb, p.Bg, p.BgRgb), a, System.Math.Max(0, b - a), p.IsTag));
         }
         return placed;
     }
 
-    /// <summary>Convenience: render straight to an ANSI (or plain) string.</summary>
+    /// <summary>Convenience: render straight to an ANSI (or plain) string, with fully blank output lines
+    /// dropped (see <see cref="DropBlankLines"/>).</summary>
     public static string RenderToString(string template, TemplateData data, bool color = true) =>
-        StatuslineRenderer.ToAnsi(Render(template, data), color);
+        DropBlankLines(StatuslineRenderer.ToAnsi(Render(template, data), color));
+
+    private static readonly Regex AnsiSgr = new(@"\x1b\[[0-9;]*m", RegexOptions.Compiled);
+
+    /// <summary>Removes output lines that render to nothing visible — empty or whitespace-only once the ANSI
+    /// colour escapes are ignored. A conditional/interpolation that resolves to nothing shouldn't leave a
+    /// blank row behind; a genuinely wanted blank line is expressed by putting a character on it. Mirrored by
+    /// the Node script's dropBlankLines().</summary>
+    internal static string DropBlankLines(string rendered)
+    {
+        if (rendered.IndexOf('\n') < 0) return rendered;   // single line — nothing to collapse
+        var kept = new List<string>();
+        foreach (var line in rendered.Split('\n'))
+            if (!string.IsNullOrWhiteSpace(AnsiSgr.Replace(line, ""))) kept.Add(line);
+        return string.Join("\n", kept);
+    }
 
     // ── soft breaks ─────────────────────────────────────────────────────────────────────
     // A backslash immediately before a newline is a *soft break*: a readability wrap the editor inserts
@@ -89,6 +110,26 @@ internal static class StatuslineTemplate
         return (sb.ToString(), map.ToArray());
     }
 
+    /// <summary>For each physical line of <paramref name="text"/> (split on LF or CRLF), its 1-based logical
+    /// status-line number — or <c>0</c> when the line is a soft-break <em>continuation</em> of the one above
+    /// (its predecessor ended with a <c>\</c>). Applies the same soft-break rule as <see cref="StripSoftBreaks"/>
+    /// (a <c>\</c> immediately before the newline, CRLF or LF), so the designer's line-number gutter counts the
+    /// same logical lines the renderer actually joins. Normalising CRLF first is what keeps a <c>\</c>+CRLF
+    /// soft break from reading as a new line (a stray trailing <c>\r</c> would defeat the EndsWith check).</summary>
+    internal static IReadOnlyList<int> LogicalLineNumbers(string text)
+    {
+        var lines = (text ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
+        var result = new int[lines.Length];
+        int lineNo = 0;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            bool continuation = i > 0 && lines[i - 1].EndsWith("\\", System.StringComparison.Ordinal);
+            if (!continuation) lineNo++;
+            result[i] = continuation ? 0 : lineNo;
+        }
+        return result;
+    }
+
     private static int MapIndex(int[] map, int strippedIndex) =>
         strippedIndex < 0 ? 0 : strippedIndex >= map.Length ? map[^1] : map[strippedIndex];
 
@@ -109,8 +150,18 @@ internal static class StatuslineTemplate
         return null;
     }
 
+    // Recognises an else clause: {{else}} (plain) or {{elseif EXPR}} (a further branch). The out expr is the
+    // elseif condition, or "" for a plain else. Mirrored by elseClause() in the Node body.
+    private static bool IsElse(string body, out string expr)
+    {
+        expr = "";
+        if (body == "else") return true;
+        if (body.StartsWith("elseif ", System.StringComparison.Ordinal)) { expr = body[7..].Trim(); return true; }
+        return false;
+    }
+
     // ── tokenising ─────────────────────────────────────────────────────────────────────
-    private enum Kind { Text, Var, Open, Inverted, Close, Separator }
+    private enum Kind { Text, Var, Open, Inverted, Close, Separator, Else }
     // Start/Len are the token's span in the (soft-break-stripped) template — carried so RenderPlaced can
     // report which source characters produced each rendered segment.
     private readonly record struct Token(Kind Kind, string Value, int Start, int Len);
@@ -134,8 +185,10 @@ internal static class StatuslineTemplate
                 case "/": toks.Add(new Token(Kind.Close, body, m.Index, m.Length)); break;
                 default:
                     // {{sep}} / {{sep:glyph}} is a smart separator (parsed before the var/filter split so a
-                    // pipe glyph doesn't read as a filter); everything else is a value interpolation.
+                    // pipe glyph doesn't read as a filter); {{else}} / {{elseif X}} splits an enclosing
+                    // conditional into branches; everything else is a value interpolation.
                     if (SepText(body) is { } sep) toks.Add(new Token(Kind.Separator, sep, m.Index, m.Length));
+                    else if (IsElse(body, out var elseExpr)) toks.Add(new Token(Kind.Else, elseExpr, m.Index, m.Length));
                     else toks.Add(new Token(Kind.Var, body, m.Index, m.Length));
                     break;
             }
@@ -153,57 +206,117 @@ internal static class StatuslineTemplate
     private sealed class TextNode : Node { public string Text = ""; }
     private sealed class VarNode : Node { public string Spec = ""; }
     private sealed class SepNode : Node { public string Text = ""; }   // a {{sep}} smart divider
+    // One conditional branch (the opening if/unless/truthy/inverted, or an else-if): its test + its body.
+    private sealed class Branch { public Mode Mode; public string Expr = ""; public List<Node> Children = new(); }
+    // A conditional: the ordered branches (if + any else-if) plus an optional final else. The first branch
+    // whose test passes renders; if none do, ElseChildren renders (when present).
     private sealed class SectionNode : Node
     {
-        public Mode Mode;
-        public string Expr = "";
+        public List<Branch> Branches = new();
+        public List<Node>? ElseChildren;
+    }
+    // A {{#bg:COLOR}}…{{/bg}} region: paints COLOR as the background of every piece it contains.
+    private sealed class BgNode : Node
+    {
+        public StatusColor Color;
+        public int Rgb = -1;      // a custom truecolor from bg:#rrggbb; -1 = use the named Color
         public List<Node> Children = new();
     }
 
     private static List<Node> Parse(List<Token> toks)
     {
         int i = 0;
-        List<Node> Walk()
+
+        // A run of nodes up to (but not consuming) the next Close or Else at this level.
+        List<Node> ParseBlock()
         {
             var nodes = new List<Node>();
             while (i < toks.Count)
             {
                 var tk = toks[i];
-                if (tk.Kind == Kind.Close) { i++; return nodes; }   // loose close (name not verified)
-                if (tk.Kind == Kind.Open || tk.Kind == Kind.Inverted)
+                if (tk.Kind is Kind.Close or Kind.Else) return nodes;
+                switch (tk.Kind)
                 {
-                    i++;
-                    var section = new SectionNode { Children = Walk(), SrcStart = tk.Start, SrcLen = tk.Len };
-                    if (tk.Kind == Kind.Inverted) { section.Mode = Mode.InvertedTruthy; section.Expr = tk.Value; }
-                    else if (tk.Value.StartsWith("if ", System.StringComparison.Ordinal))
-                        { section.Mode = Mode.If; section.Expr = tk.Value[3..].Trim(); }
-                    else if (tk.Value.StartsWith("unless ", System.StringComparison.Ordinal))
-                        { section.Mode = Mode.Unless; section.Expr = tk.Value[7..].Trim(); }
-                    else { section.Mode = Mode.Truthy; section.Expr = tk.Value; }
-                    nodes.Add(section);
+                    case Kind.Open:
+                    case Kind.Inverted: nodes.Add(ParseSection()); break;
+                    case Kind.Var: nodes.Add(new VarNode { Spec = tk.Value, SrcStart = tk.Start, SrcLen = tk.Len }); i++; break;
+                    case Kind.Separator: nodes.Add(new SepNode { Text = tk.Value, SrcStart = tk.Start, SrcLen = tk.Len }); i++; break;
+                    default: nodes.Add(new TextNode { Text = tk.Value, SrcStart = tk.Start, SrcLen = tk.Len }); i++; break;
                 }
-                else if (tk.Kind == Kind.Var) { nodes.Add(new VarNode { Spec = tk.Value, SrcStart = tk.Start, SrcLen = tk.Len }); i++; }
-                else if (tk.Kind == Kind.Separator) { nodes.Add(new SepNode { Text = tk.Value, SrcStart = tk.Start, SrcLen = tk.Len }); i++; }
-                else { nodes.Add(new TextNode { Text = tk.Value, SrcStart = tk.Start, SrcLen = tk.Len }); i++; }
             }
             return nodes;
         }
-        return Walk();
+
+        Node ParseSection()
+        {
+            var open = toks[i]; i++;   // consume the opening tag
+
+            // {{#bg:COLOR}} … {{/bg}} — a background region (never has else branches).
+            if (open.Kind == Kind.Open && TryParseBg(open.Value, out var bgColor, out var bgRgb))
+            {
+                var bg = new BgNode { Color = bgColor, Rgb = bgRgb, SrcStart = open.Start, SrcLen = open.Len, Children = ParseBlock() };
+                if (i < toks.Count && toks[i].Kind == Kind.Close) i++;   // consume the loose close
+                return bg;
+            }
+
+            var section = new SectionNode { SrcStart = open.Start, SrcLen = open.Len };
+            var (mode, expr) = ClassifyOpen(open);
+            section.Branches.Add(new Branch { Mode = mode, Expr = expr, Children = ParseBlock() });
+            while (i < toks.Count && toks[i].Kind == Kind.Else)
+            {
+                var e = toks[i]; i++;                       // consume the else / else-if
+                if (e.Value.Length > 0)                     // {{elseif EXPR}} → a further conditional branch
+                    section.Branches.Add(new Branch { Mode = Mode.If, Expr = e.Value, Children = ParseBlock() });
+                else                                        // {{else}} → the terminal fallback branch
+                {
+                    section.ElseChildren = ParseBlock();
+                    break;
+                }
+            }
+            if (i < toks.Count && toks[i].Kind == Kind.Close) i++;   // consume the loose close
+            return section;
+        }
+
+        return ParseBlock();
+    }
+
+    // The opening tag's test: an inverted {{^path}}, an {{#if EXPR}} / {{#unless EXPR}}, or a bare truthy path.
+    private static (Mode, string) ClassifyOpen(Token open)
+    {
+        if (open.Kind == Kind.Inverted) return (Mode.InvertedTruthy, open.Value);
+        var v = open.Value;
+        if (v.StartsWith("if ", System.StringComparison.Ordinal)) return (Mode.If, v[3..].Trim());
+        if (v.StartsWith("unless ", System.StringComparison.Ordinal)) return (Mode.Unless, v[7..].Trim());
+        return (Mode.Truthy, v);
+    }
+
+    // A {{#bg:NAME}} / {{#bg:#rrggbb}} region. An unknown/blank colour still forms a (transparent) region so
+    // the tags stay balanced. Mirrored by parseBg() in the Node body.
+    private static bool TryParseBg(string body, out StatusColor color, out int rgb)
+    {
+        color = StatusColor.Default; rgb = -1;
+        if (!body.StartsWith("bg:", System.StringComparison.Ordinal)) return false;
+        var arg = body[3..].Trim();
+        var hex = StatusColors.ParseHex(arg);
+        if (hex >= 0) rgb = hex; else color = StatusColors.Parse(arg);
+        return true;
     }
 
     // ── rendering ─────────────────────────────────────────────────────────────────────
     // One rendered atom before it becomes a StatuslineSegment/PlacedSegment. Carrying the sep flag + source
     // span here lets Render and RenderPlaced share the same walk (and the same {{sep}} collapse), so the
     // preview, the ANSI string and the parity path can never diverge. IsTag = came from a {{…}} token.
-    private readonly record struct Piece(string Text, StatusColor Color, int Rgb, bool IsSep, bool IsTag, int SrcStart, int SrcLen);
+    private readonly record struct Piece(string Text, StatusColor Color, int Rgb, StatusColor Bg, int BgRgb, bool IsSep, bool IsTag, int SrcStart, int SrcLen);
 
     private static List<Piece> RenderPieces(List<Node> nodes, TemplateData data)
     {
         var pieces = new List<Piece>();
-        Walk(nodes);
+        Walk(nodes, StatusColor.Default, -1);
         return CollapseSeps(pieces);
 
-        void Walk(List<Node> ns)
+        // bg / bgRgb = the background in force at this depth (from an enclosing {{#bg:…}}); an inner region
+        // overrides it for its own children.
+        void Walk(List<Node> ns, StatusColor bg, int bgRgb)
         {
             foreach (var n in ns)
             {
@@ -211,23 +324,44 @@ internal static class StatuslineTemplate
                 {
                     case TextNode t:
                         if (t.Text.Length > 0)
-                            pieces.Add(new Piece(t.Text, StatusColor.Default, -1, false, false, t.SrcStart, t.SrcLen));
+                            pieces.Add(new Piece(t.Text, StatusColor.Default, -1, bg, bgRgb, false, false, t.SrcStart, t.SrcLen));
                         break;
                     case VarNode v:
                         var (text, color, rgb) = ApplyVar(v.Spec, data);
                         if (text.Length > 0)
-                            pieces.Add(new Piece(text, color, rgb, false, true, v.SrcStart, v.SrcLen));
+                            pieces.Add(new Piece(text, color, rgb, bg, bgRgb, false, true, v.SrcStart, v.SrcLen));
                         break;
                     case SepNode sp:
-                        pieces.Add(new Piece(sp.Text, StatusColor.Default, -1, true, true, sp.SrcStart, sp.SrcLen));
+                        pieces.Add(new Piece(sp.Text, StatusColor.Default, -1, bg, bgRgb, true, true, sp.SrcStart, sp.SrcLen));
+                        break;
+                    case BgNode b:
+                        Walk(b.Children, b.Color, b.Rgb);   // inner region wins over any outer background
                         break;
                     case SectionNode s:
-                        if (SectionActive(s, data)) Walk(s.Children);
+                        if (ChooseBranch(s, data) is { } chosen) Walk(chosen, bg, bgRgb);
                         break;
                 }
             }
         }
     }
+
+    // The children to render for a conditional: the first branch whose test passes, else the {{else}} body
+    // (or null when nothing matches and there's no else). Mirrored by chooseBranch() in the Node body.
+    private static List<Node>? ChooseBranch(SectionNode s, TemplateData data)
+    {
+        foreach (var b in s.Branches)
+            if (BranchActive(b, data)) return b.Children;
+        return s.ElseChildren;
+    }
+
+    private static bool BranchActive(Branch b, TemplateData data) => b.Mode switch
+    {
+        Mode.If             => EvalExpr(b.Expr, data),
+        Mode.Unless         => !EvalExpr(b.Expr, data),
+        Mode.Truthy         => TruthyPath(b.Expr, data),
+        Mode.InvertedTruthy => !TruthyPath(b.Expr, data),
+        _                   => false,
+    };
 
     // Smart-separator collapse: split the rendered pieces into cells at each {{sep}}, drop cells whose text
     // is empty/whitespace, and rejoin the surviving cells with a single separator between them. This makes a
@@ -264,15 +398,6 @@ internal static class StatuslineTemplate
         }
         return outp;
     }
-
-    private static bool SectionActive(SectionNode s, TemplateData data) => s.Mode switch
-    {
-        Mode.If             => EvalExpr(s.Expr, data),
-        Mode.Unless         => !EvalExpr(s.Expr, data),
-        Mode.Truthy         => TruthyPath(s.Expr, data),
-        Mode.InvertedTruthy => !TruthyPath(s.Expr, data),
-        _                   => false,
-    };
 
     private static bool TruthyPath(string path, TemplateData data) =>
         data.TryGet(path.Trim(), out var node) && TemplateData.Truthy(node);
@@ -351,6 +476,7 @@ internal static class StatuslineTemplate
                     else { color = StatusColors.Parse(arg); rgb = -1; }
                     break;
                 case "pace":  color = Pace(num ?? 0, arg, data); rgb = -1; break;
+                case "ctxcolor": color = ContextColor(num ?? 0, data); rgb = -1; break;
             }
         }
         return (text, color, rgb);
@@ -464,6 +590,29 @@ internal static class StatuslineTemplate
         if (d <= 1) return StatusColor.Yellow;         // from 10 under up to 1 over
         return StatusColor.Red;                        // more than 1 point over
     }
+
+    // Colour a 0–100 context-window fill by Perch's OWN context-pressure thresholds, read from the injected
+    // perch.context.{yellow,orange,red} (Perch's settings.json; see StatuslineScript.readPerch). Below yellow
+    // is calm green, then warms yellow → amber → red as the fill climbs — the same warming the overlay's
+    // context thermometer uses — so {{x|bar:N|ctxcolor}} auto-colours to the user's configured bands. When
+    // Perch's config can't be found the thresholds default to its shipped 50/65/80 rather than erroring, so
+    // the filter is agnostic: it still colours sensibly with no Perch present. Mirrored by ctxColor() in
+    // StatuslineScript's Node body.
+    internal static StatusColor ContextColor(double value, TemplateData data)
+    {
+        double y = Threshold(data, "perch.context.yellow", 50);
+        double o = Threshold(data, "perch.context.orange", 65);
+        double r = Threshold(data, "perch.context.red", 80);
+        if (value >= r) return StatusColor.Red;
+        if (value >= o) return StatusColor.Amber;
+        if (value >= y) return StatusColor.Yellow;
+        return StatusColor.Green;
+    }
+
+    // A configured threshold from the payload's injected perch.* block, or the fallback when it's absent —
+    // never throws, so a missing Perch config just yields the default band.
+    private static double Threshold(TemplateData data, string path, double fallback) =>
+        data.TryGet(path, out var n) && TemplateData.Num(n) is { } v ? v : fallback;
 
     private static double UnixNow() => System.DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 }

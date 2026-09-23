@@ -103,5 +103,18 @@ internal static class StatuslineTokens
             new TokenDescriptor("account.personal", TokenBadge.PerchExtra),
             new TokenDescriptor("account.org_uuid", TokenBadge.PerchExtra, TokenBadge.WhenPresent),
         }),
+        new Group("perch config · context & guardrails", new[]
+        {
+            // Not in Claude Code's payload — Perch injects these by reading its OWN settings.json (the
+            // context-pressure thresholds + account guardrails). All degrade to sensible defaults when
+            // Perch's config can't be found, so a line stays portable. Pair the thresholds with the
+            // |ctxcolor filter to auto-colour a context bar; guardrail.mismatch flags a wrong-account session.
+            new TokenDescriptor("perch.context.yellow", TokenBadge.PerchExtra),
+            new TokenDescriptor("perch.context.orange", TokenBadge.PerchExtra),
+            new TokenDescriptor("perch.context.red", TokenBadge.PerchExtra),
+            new TokenDescriptor("perch.guardrail.mismatch", TokenBadge.PerchExtra),
+            new TokenDescriptor("perch.guardrail.expected", TokenBadge.PerchExtra, TokenBadge.WhenPresent),
+            new TokenDescriptor("perch.guardrail.on", TokenBadge.PerchExtra, TokenBadge.WhenPresent),
+        }),
     };
 }

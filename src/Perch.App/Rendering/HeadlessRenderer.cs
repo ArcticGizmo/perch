@@ -824,6 +824,7 @@ internal static class HeadlessRenderer
                  {
                      ((string?)null, 640, "statusline_designer_1x.png"),                    // default (Perch Default)
                      ("Rate-aware verbose", 1180, "statusline_designer_rateaware_1x.png"),  // pace-coloured rate windows
+                     ("Account-aware", 700, "statusline_designer_accountaware_1x.png"),     // ctxcolor bar + guardrail warning
                  })
         {
             var w = new Windows.StatuslineDesignerWindow(Perch.Statusline.StatuslineStore.Seeded())
