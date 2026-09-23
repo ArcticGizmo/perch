@@ -93,5 +93,15 @@ internal static class StatuslineTokens
             new TokenDescriptor("git.changes", TokenBadge.PerchExtra),
             new TokenDescriptor("git.dirty", TokenBadge.PerchExtra),
         }),
+        new Group("account · Perch extras", new[]
+        {
+            // Not in Claude Code's payload — Perch injects these from the session's config-dir
+            // .claude.json (oauthAccount). WhenPresent: absent/blank when that dir is signed out.
+            new TokenDescriptor("account.org", TokenBadge.PerchExtra, TokenBadge.WhenPresent),
+            new TokenDescriptor("account.email", TokenBadge.PerchExtra, TokenBadge.WhenPresent),
+            new TokenDescriptor("account.signed_in", TokenBadge.PerchExtra),
+            new TokenDescriptor("account.personal", TokenBadge.PerchExtra),
+            new TokenDescriptor("account.org_uuid", TokenBadge.PerchExtra, TokenBadge.WhenPresent),
+        }),
     };
 }

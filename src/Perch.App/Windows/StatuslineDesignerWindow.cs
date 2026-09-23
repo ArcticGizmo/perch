@@ -81,7 +81,7 @@ internal sealed class StatuslineDesignerWindow : Window
 
     private static readonly (string Name, string Sig)[] FilterCatalog =
     {
-        ("bar", "N-cell bar"), ("money", "0.00"), ("pct", "rounded %"), ("round", "whole number"),
+        ("bar", "N-cell bar"), ("money", "0.00"), ("pct", "rounded %"), ("round", "0 dp · round:N"),
         ("k", "1.2k"), ("human", "68k / 2M"), ("dur", "1h 15m"), ("until", "countdown"),
         ("upper", "UPPERCASE"), ("lower", "lowercase"), ("trunc", "trunc:N"), ("default", "default:X"),
         ("color", "color:name"), ("pace", "pace:resets:secs"),
@@ -522,7 +522,8 @@ internal sealed class StatuslineDesignerWindow : Window
                  {
                      ("| bar:10", "block progress bar from a 0–100 value", "| bar:10"),
                      ("| pct", "round and add %  ·  34.2 → 34%", "| pct"),
-                     ("| round", "nearest whole number  ·  23.5 → 24", "| round"),
+                     ("| round", "round to N decimals, default 0  ·  23.5 → 24", "| round"),
+                     ("| round:2", "keep up to N decimals  ·  0.4213 → 0.42", "| round:2"),
                      ("| money", "two decimals  ·  0.4213 → 0.42", "| money"),
                      ("| k", "thousands  ·  68000 → 68k", "| k"),
                      ("| human", "compact count  ·  2500000 → 2M", "| human"),

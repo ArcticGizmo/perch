@@ -344,6 +344,26 @@ public sealed class StatuslineTemplateTests
         Assert.Equal(StatusColor.Red,    ColorOf(70));   // over pace
     }
 
+    // ── round:N ──────────────────────────────────────────────────────────────────────
+    [Theory]
+    [InlineData(23.5, 0, "24")]      // default (bare {{x|round}}) → whole number, half up
+    [InlineData(0.4213, 2, "0.42")]
+    [InlineData(3.1, 2, "3.1")]      // trailing zeros trimmed
+    [InlineData(2.5, 1, "2.5")]
+    [InlineData(1, 3, "1")]          // an integer stays whole even at round:3
+    [InlineData(0, 2, "0")]
+    [InlineData(-1.25, 1, "-1.3")]   // negative rounds away from zero (1.25 is exact in binary)
+    public void RoundFixed_rounds_to_places_and_trims(double v, int places, string expected) =>
+        Assert.Equal(expected, StatuslineTemplate.RoundFixed(v, places));
+
+    [Fact]
+    public void Round_filter_reads_the_decimal_places_arg()
+    {
+        // prompt_cache.hit_ratio is 0.91 in the sample payload.
+        Assert.Equal("0.91", Render("{{prompt_cache.hit_ratio|round:2}}"));
+        Assert.Equal("1", Render("{{prompt_cache.hit_ratio|round}}"));   // bare round → 0 dp
+    }
+
     [Fact]
     public void Rate_aware_example_renders()
     {

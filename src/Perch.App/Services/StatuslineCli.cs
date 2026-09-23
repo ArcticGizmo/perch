@@ -69,6 +69,7 @@ internal static class StatuslineCli
             return 0;   // an external profile drives settings.json directly; Perch isn't in that loop
 
         InjectGitBranch(data);
+        if (template.Contains("account.")) InjectAccount(data);
         w.Write(StatuslineTemplate.RenderToString(template, data, color: true));
         return 0;
     }
@@ -89,6 +90,25 @@ internal static class StatuslineCli
             data.Root["git"] = git;
         }
         git["branch"] = branch;
+    }
+
+    // Merge the session's account/org (from its config-dir .claude.json oauthAccount) onto the payload,
+    // so {{account.org}} / {{account.email}} work — the raw payload never carries them. Byte-for-byte the
+    // same shape the generated Node script injects (readAccount there mirrors ClaudeJsonReader). Never
+    // clobbers an account the payload already carries.
+    private static void InjectAccount(TemplateData data)
+    {
+        if (data.Root["account"] is not null) return;
+
+        var signin = ClaudeJsonReader.ReadSignIn(ClaudeConfigSet.Instance.Primary);
+        data.Root["account"] = new JsonObject
+        {
+            ["email"]     = signin.Email ?? "",
+            ["org"]       = signin.Org?.Name ?? "",
+            ["org_uuid"]  = signin.Org?.Uuid ?? "",
+            ["signed_in"] = signin.State != SignInState.NotSignedIn,
+            ["personal"]  = signin.State == SignInState.Personal,
+        };
     }
 
     // ── management verbs ──────────────────────────────────────────────────────────────

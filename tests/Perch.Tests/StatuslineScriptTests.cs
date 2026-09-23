@@ -50,6 +50,23 @@ public sealed class StatuslineScriptTests
     }
 
     [Fact]
+    public void Generate_gates_account_read_on_template_use()
+    {
+        var withAccount = StatuslineScript.Generate(new StatuslineProfile
+        {
+            Name = "a", Template = "{{account.org|default:{{account.email}}}}",
+        });
+        Assert.Contains("const NEED_ACCOUNT = true;", withAccount);
+        Assert.Contains("oauthAccount", withAccount);   // the .claude.json read is present
+
+        var withoutAccount = StatuslineScript.Generate(new StatuslineProfile
+        {
+            Name = "b", Template = "{{model.display_name}} {{git.branch}}",
+        });
+        Assert.Contains("const NEED_ACCOUNT = false;", withoutAccount);
+    }
+
+    [Fact]
     public void Generate_requires_a_template() =>
         Assert.Throws<InvalidOperationException>(() =>
             StatuslineScript.Generate(new StatuslineProfile { Name = "x", Template = null }));
@@ -62,6 +79,9 @@ public sealed class StatuslineScriptTests
           """{"model":{"display_name":"Opus"},"context_window":{"used_percentage":34},"cost":{"total_cost_usd":0.4213}}""" },
         // half-up rounding parity (2.5 -> 3, 0.5 -> 1, 23.5 -> 24)
         { "{{a|round}} {{b|round}} {{c|pct}}", """{"a":2.5,"b":0.5,"c":23.5}""" },
+        // round:N decimal places — trailing zeros trimmed; both engines format from integer/string ops
+        { "{{a|round:2}} {{b|round:1}} {{c|round:2}} {{d|round}} {{e|round:3}}",
+          """{"a":0.4213,"b":2.5,"c":3.1,"d":23.5,"e":1}""" },
         // conditionals: comparison, inverted, string equality
         { "{{#if x > 80}}HI{{/if}}[{{^y}}NOy{{/y}}]{{#if s == 'pending'}}P{{/if}}",
           """{"x":87,"y":false,"s":"pending"}""" },
@@ -89,6 +109,10 @@ public sealed class StatuslineScriptTests
         // custom hex colours (named + hex, 3- and 6-digit) render the same truecolor escapes
         { "{{a|color:#ff8800}} {{b|color:1a2b3c}} {{c|color:#f80}} {{d|color:teal}}",
           """{"a":"A","b":"B","c":"C","d":"D"}""" },
+        // account extras: supplied in the payload so the Node injector's "skip if present" leaves it alone
+        // and both engines read the same object — the host's real login can't perturb parity.
+        { "{{#account.signed_in}}{{account.org|default:personal}} <{{account.email}}>{{/account.signed_in}}",
+          """{"account":{"email":"you@example.com","org":"Example Org","org_uuid":"u","signed_in":true,"personal":false}}""" },
     };
 
     [Theory]

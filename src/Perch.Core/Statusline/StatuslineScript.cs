@@ -71,10 +71,15 @@ internal static class StatuslineScript
         var needsCounts = template.Contains("git.staged") || template.Contains("git.unstaged")
                        || template.Contains("git.changes") || template.Contains("git.dirty");
 
+        // Likewise, only read the config dir's .claude.json for account/org fields when the template
+        // asks for them — a cheap file read, but pointless (and a privacy surface) for lines that don't.
+        var needsAccount = template.Contains("account.");
+
         return Body
             .Replace("@@TEMPLATE@@", templateLiteral)
             .Replace("@@NAME@@", nameLiteral)
-            .Replace("@@GITCOUNTS@@", needsCounts ? "true" : "false");
+            .Replace("@@GITCOUNTS@@", needsCounts ? "true" : "false")
+            .Replace("@@ACCOUNT@@", needsAccount ? "true" : "false");
     }
 
     // The script body. @@TEMPLATE@@ / @@NAME@@ are replaced with JSON string literals. Kept as a raw
@@ -86,10 +91,12 @@ internal static class StatuslineScript
         // Self-contained: edit freely; no Perch process is involved at runtime.
         import { readFileSync, existsSync, statSync } from 'node:fs';
         import { join, dirname, isAbsolute, resolve } from 'node:path';
+        import { homedir } from 'node:os';
         import { execFileSync } from 'node:child_process';
 
         const TEMPLATE = @@TEMPLATE@@;
         const NEED_GIT_COUNTS = @@GITCOUNTS@@;
+        const NEED_ACCOUNT = @@ACCOUNT@@;
 
         const COL = {
           teal:[70,198,184], amber:[227,168,78], green:[95,191,127], red:[229,104,106],
@@ -133,6 +140,24 @@ internal static class StatuslineScript
         const fmtK = n => Math.abs(n) >= 1000
           ? (n / 1000).toFixed(Math.abs(n) >= 10000 ? 0 : 1) + 'k'
           : String(Math.trunc(n));
+        // Round to `places` decimals (half up), trailing zeros trimmed — built from integer/string ops so it
+        // matches StatuslineTemplate.RoundFixed byte-for-byte regardless of Number.toFixed's rounding.
+        function roundFixed(value, places) {
+          if (!(places >= 0)) places = 0;
+          if (places > 15) places = 15;
+          const neg = value < 0;
+          const scale = Math.pow(10, places);
+          let digits = String(Math.floor(Math.abs(value) * scale + 0.5));
+          let text;
+          if (places === 0) text = digits;
+          else {
+            if (digits.length <= places) digits = '0'.repeat(places - digits.length + 1) + digits;
+            const dot = digits.length - places;
+            const frac = digits.slice(dot).replace(/0+$/, '');
+            text = frac.length === 0 ? digits.slice(0, dot) : digits.slice(0, dot) + '.' + frac;
+          }
+          return (neg && text !== '0') ? '-' + text : text;
+        }
         function bar(p, cells) {
           let f = Math.round(Math.min(Math.max(p, 0), 100) / 100 * cells);
           f = Math.min(Math.max(f, 0), cells);
@@ -163,7 +188,7 @@ internal static class StatuslineScript
             const arg = ci < 0 ? null : f.slice(ci + 1).trim();
             switch (name) {
               case 'money': text = (n || 0).toFixed(2); break;
-              case 'round': text = String(Math.round(n || 0)); break;
+              case 'round': text = roundFixed(n || 0, pint(arg, 0)); break;
               case 'pct':   text = String(Math.round(n || 0)) + '%'; break;
               case 'k':     text = fmtK(n || 0); break;
               case 'upper': text = text.toUpperCase(); break;
@@ -323,9 +348,49 @@ internal static class StatuslineScript
           }
         }
 
+        // account/org for the session's config dir, straight off its .claude.json oauthAccount — a file
+        // read, no subprocess, no Perch. Mirrors Perch.Data.ClaudeJsonReader: honour CLAUDE_CONFIG_DIR
+        // (else ~/.claude), preferring the file INSIDE the dir but falling back to the parent's
+        // ~/.claude.json — the default dir keeps its real login one level up. Signed out / unreadable
+        // yields an all-empty, signed_in:false object so {{^account.signed_in}} and |default still work.
+        function readSignIn(claudeJsonPath) {
+          try {
+            if (!existsSync(claudeJsonPath)) return null;
+            const a = JSON.parse(readFileSync(claudeJsonPath, 'utf8') || '{}').oauthAccount;
+            if (!a) return null;
+            const uuid = a.organizationUuid || '';
+            return {
+              email: a.emailAddress || a.email || '',
+              org: uuid ? (a.organizationName || '') : '',
+              org_uuid: uuid,
+              signed_in: true,
+              personal: !uuid,
+            };
+          } catch { return null; }
+        }
+        function readAccount() {
+          const env = (process.env.CLAUDE_CONFIG_DIR || '').trim();
+          const dir = env || join(homedir(), '.claude');
+          const inside = readSignIn(join(dir, '.claude.json'));
+          if (inside) return inside;
+          const parent = dirname(dir);
+          if (parent && parent !== dir) {
+            const up = readSignIn(join(parent, '.claude.json'));
+            if (up) return up;
+          }
+          return { email: '', org: '', org_uuid: '', signed_in: false, personal: false };
+        }
+        // Never clobber an account the payload already carries (future-proofs a native field, and keeps
+        // rendering deterministic when a caller supplies one).
+        function injectAccount(p) {
+          if (!NEED_ACCOUNT || (p.account !== undefined && p.account !== null)) return;
+          p.account = readAccount();
+        }
+
         let payload = {};
         try { payload = JSON.parse(readFileSync(0, 'utf8') || '{}'); } catch { }
         try { injectGit(payload); } catch { }
+        try { injectAccount(payload); } catch { }
         try { process.stdout.write(render(TEMPLATE, payload)); } catch { }
         """;
 }

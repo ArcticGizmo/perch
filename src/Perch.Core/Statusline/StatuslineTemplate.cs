@@ -21,7 +21,8 @@ using System.Text.RegularExpressions;
 /// <item><c>{{! comment }}</c> — dropped.</item>
 /// </list>
 ///
-/// <para>Filters: <c>money</c> (2dp), <c>round</c>, <c>pct</c> (rounded + "%"), <c>k</c> (1.2k),
+/// <para>Filters: <c>money</c> (2dp), <c>round</c> (<c>round:N</c> for N decimals, default 0),
+///   <c>pct</c> (rounded + "%"), <c>k</c> (1.2k),
 /// <c>upper</c>/<c>lower</c>, <c>bar:N</c> (an N-cell block bar from a 0–100 percentage),
 /// <c>trunc:N</c> (ellipsised), <c>default:X</c> (fallback when empty) and <c>color:NAME</c> (paints
 /// the run — see <see cref="StatusColor"/>). Colour applies to just the token it decorates.</para>
@@ -331,7 +332,7 @@ internal static class StatuslineTemplate
             switch (name)
             {
                 case "money": text = (num ?? 0).ToString("0.00", CultureInfo.InvariantCulture); break;
-                case "round": text = Round(num ?? 0).ToString("0", CultureInfo.InvariantCulture); break;
+                case "round": text = RoundFixed(num ?? 0, ParseInt(arg, 0)); break;
                 case "pct":   text = Round(num ?? 0).ToString("0", CultureInfo.InvariantCulture) + "%"; break;
                 case "k":     text = FmtK(num ?? 0); break;
                 case "upper": text = text.ToUpperInvariant(); break;
@@ -366,6 +367,32 @@ internal static class StatuslineTemplate
     // Round half away from zero, matching JavaScript's Math.round for the (non-negative) values a
     // status line deals in — so the C# preview and the generated Node script agree.
     private static double Round(double v) => System.Math.Round(v, System.MidpointRounding.AwayFromZero);
+
+    // Round to `places` decimals (half up, like Round above), trimming trailing zeros — so {{x|round}} is a
+    // whole number (places 0, the default) and {{x|round:2}} keeps up to two decimals. Formatted from
+    // integer/string ops, NOT double.ToString, so the C# preview and the generated Node script emit
+    // identical bytes regardless of each platform's float-to-string rounding. Mirrored by roundFixed() in
+    // StatuslineScript's Node body.
+    internal static string RoundFixed(double value, int places)
+    {
+        if (places < 0) places = 0;
+        if (places > 15) places = 15;   // past double's precision; clamp so the scale stays sane
+        bool neg = value < 0;
+        double scale = System.Math.Pow(10, places);
+        long r = (long)System.Math.Floor(System.Math.Abs(value) * scale + 0.5);   // half up
+        var digits = r.ToString(CultureInfo.InvariantCulture);
+        string text;
+        if (places == 0)
+            text = digits;
+        else
+        {
+            if (digits.Length <= places) digits = new string('0', places - digits.Length + 1) + digits;
+            int dot = digits.Length - places;
+            var frac = digits[dot..].TrimEnd('0');
+            text = frac.Length == 0 ? digits[..dot] : digits[..dot] + "." + frac;
+        }
+        return neg && text != "0" ? "-" + text : text;
+    }
 
     private static string Bar(double pct, int cells)
     {

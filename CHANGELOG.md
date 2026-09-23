@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.23] - 2026-09-23
+
+- Status line tokens for the signed-in account and org, read live per config directory
+- The `round` filter takes decimal places now (`round:2`), not just whole numbers
+
+---
+
 ## [v0.4.22] - 2026-09-22
 
 - New status line designer — build Claude Code's status line visually, with a live coloured preview
