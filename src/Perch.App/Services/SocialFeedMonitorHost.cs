@@ -23,12 +23,16 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     private readonly Action<string> _onReactionToMyPost;
     private readonly Action<IReadOnlyList<GameSummary>, IReadOnlyList<GameRequest>>? _onGames;
     private readonly Action<GameRequest>? _onNewGameInvite;
+    private readonly Action<IReadOnlyList<DrawGameSummary>, IReadOnlyList<DrawRequest>>? _onDrawGames;
+    private readonly Action<DrawRequest>? _onNewDrawInvite;
     private readonly DispatcherTimer _timer;
 
     // Incoming game invites already surfaced, so a re-poll only notifies for genuinely-new ones. Primed on the
     // first poll after activation (the backlog isn't news), then diffed thereafter — mirrors the post-seen set.
     private readonly HashSet<Guid> _seenInvites = new();
     private bool _invitesPrimed;
+    private readonly HashSet<Guid> _seenDrawInvites = new();
+    private bool _drawInvitesPrimed;
 
     // Post ids already surfaced, so a re-poll only notifies for genuinely new posts. Primed on the first poll
     // after activation (the backlog is baseline, not news), then diffed on every poll thereafter.
@@ -59,7 +63,9 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     public SocialFeedMonitorHost(ISocialClient social, Action<RosterSnapshot?> onRoster,
         Action<FeedItem> onNewFriendPost, Action<string> onReactionToMyPost,
         Action<IReadOnlyList<GameSummary>, IReadOnlyList<GameRequest>>? onGames = null,
-        Action<GameRequest>? onNewGameInvite = null)
+        Action<GameRequest>? onNewGameInvite = null,
+        Action<IReadOnlyList<DrawGameSummary>, IReadOnlyList<DrawRequest>>? onDrawGames = null,
+        Action<DrawRequest>? onNewDrawInvite = null)
     {
         _social = social;
         _onRoster = onRoster;
@@ -67,6 +73,8 @@ internal sealed class SocialFeedMonitorHost : IDisposable
         _onReactionToMyPost = onReactionToMyPost;
         _onGames = onGames;
         _onNewGameInvite = onNewGameInvite;
+        _onDrawGames = onDrawGames;
+        _onNewDrawInvite = onNewDrawInvite;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         _timer.Tick += (_, _) => _ = Poll();
     }
@@ -94,10 +102,13 @@ internal sealed class SocialFeedMonitorHost : IDisposable
             _primed = false;
             _seenInvites.Clear();
             _invitesPrimed = false;
+            _seenDrawInvites.Clear();
+            _drawInvitesPrimed = false;
             _myReactionPostId = null;
             _myReactionCounts.Clear();
             _onRoster(null);
             _onGames?.Invoke([], []);
+            _onDrawGames?.Invoke([], []);
         }
     }
 
@@ -131,6 +142,34 @@ internal sealed class SocialFeedMonitorHost : IDisposable
             }
             catch { /* games unavailable this tick — leave the strip as-is */ }
         }
+
+        // Draw with Perch games/challenges — same best-effort treatment, fetched separately.
+        if (_onDrawGames is not null || _onNewDrawInvite is not null)
+        {
+            try
+            {
+                var games = await _social.GetDrawGamesAsync();
+                var requests = await _social.GetDrawRequestsAsync();
+                _onDrawGames?.Invoke(games, requests);
+                NotifyNewDrawInvites(requests);
+            }
+            catch { /* draw games unavailable this tick — leave the strip as-is */ }
+        }
+    }
+
+    // Fires once per genuinely-new Draw challenge waiting on you (mirrors NotifyNewGameInvites).
+    private void NotifyNewDrawInvites(IReadOnlyList<DrawRequest> requests)
+    {
+        if (_onNewDrawInvite is null) return;
+        var meId = _social.Current.Me?.Id ?? Guid.Empty;
+        var wasPrimed = _drawInvitesPrimed;
+        foreach (var r in requests)
+        {
+            if (!r.IsIncoming(meId)) continue;
+            if (!_seenDrawInvites.Add(r.Id)) continue;
+            if (wasPrimed) _onNewDrawInvite(r);
+        }
+        _drawInvitesPrimed = true;
     }
 
     // Fires once per genuinely-new invite waiting on you. The first poll after activation primes the seen-set

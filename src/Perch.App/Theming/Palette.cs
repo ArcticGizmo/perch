@@ -205,4 +205,16 @@ public static class Palette
     public static readonly SolidColorBrush BrandHoverBrush = new(FixedColors.Default.BrandHover.ToColor());
     public static readonly SolidColorBrush JiraBrush      = new(FixedColors.Default.Jira.ToColor());
     public static readonly SolidColorBrush BasketballBrush = new(FixedColors.Default.Basketball.ToColor());
+
+    // ── Draw with Perch swatches ──
+    // The fixed drawing palette (see Perch.Games.DrawPalette). Theme-independent on purpose: a drawing must look
+    // the same for the drawer and the guesser regardless of either's theme, and the "paper" is always white. Built
+    // once from the Core palette; never re-coloured by Apply().
+    private static readonly SolidColorBrush[] DrawSwatchBrushes =
+        Perch.Games.DrawPalette.Colors.Select(c => new SolidColorBrush(c.ToColor())).ToArray();
+
+    /// <summary>The brush for a draw-palette colour index (see <see cref="Perch.Games.DrawPalette"/>). Out-of-range
+    /// indices clamp to the first colour, matching the codec.</summary>
+    public static SolidColorBrush DrawSwatch(int index) =>
+        DrawSwatchBrushes[Math.Clamp(index, 0, DrawSwatchBrushes.Length - 1)];
 }

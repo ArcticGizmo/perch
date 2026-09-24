@@ -6,6 +6,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Perch.Avalonia.Theming;
+using Perch.Games;
 using Perch.Platform;
 using Perch.Social;
 
@@ -38,6 +39,7 @@ internal sealed class DebugSocialWindow : Window
     private readonly Func<string>? _gateStatus;
     private readonly SocialDebugConfig _dbg;
     private readonly List<Window> _c4Windows = new();   // the current pair of Connect 4 boards (yours + puppet's)
+    private readonly List<Window> _drawWindows = new();  // the current pair of Draw with Perch boards (yours + puppet's)
 
     private readonly TextBox _email, _password, _handle, _target, _status, _emoji;
     private readonly SelectableTextBlock _log;
@@ -161,6 +163,18 @@ internal sealed class DebugSocialWindow : Window
         panel.Children.Add(ButtonRow(
             ("Start Connect 4 vs puppet (both boards)", StartConnect4),
             ("Invite me (from puppet)", InviteFromPuppet)));
+
+        // Draw with Perch: same idea, but the game is born from a challenge (no direct create), so the puppet
+        // challenges you with a seeded doodle and — for "both boards" — you accept it straight away.
+        panel.Children.Add(SettingsUi.Separator());
+        panel.Children.Add(SettingsUi.FieldCaption("Draw with Perch"));
+        panel.Children.Add(SettingsUi.BodyText(
+            "Opens two boards — yours and the puppet's — for one Draw game. The puppet challenges you with a " +
+            "quick doodle, then you accept, so it's your turn to guess on your board. Befriends the puppet first " +
+            "if needed. (Needs the draw-with-perch migration applied to the database.)"));
+        panel.Children.Add(ButtonRow(
+            ("Start Draw vs puppet (both boards)", StartDraw),
+            ("Challenge me (from puppet)", ChallengeFromPuppet)));
 
         panel.Children.Add(SettingsUi.Separator());
         panel.Children.Add(SettingsUi.FieldCaption("Reaction diagnostics (live)"));
@@ -369,6 +383,90 @@ internal sealed class DebugSocialWindow : Window
         _refreshReal();
         Log($"@{pup.Handle} invited you to Connect 4 (opening move played) — accept it from the overlay's GAMES strip or the lobby.");
     }
+
+    // Starts a real-vs-puppet Draw game and opens both boards. Draw has no direct-create, so the puppet challenges
+    // you (carrying a seeded doodle) and you accept straight away — leaving your board on the guess screen and the
+    // puppet's board waiting. Befriends first if needed.
+    private async Task StartDraw()
+    {
+        var p = RequirePuppet();
+        if (_real.Current.Me is not { } me) throw new SocialException("Your real account needs a claimed handle first.");
+        if (p.Current.Me is not { } pup) throw new SocialException("Claim a puppet handle first.");
+
+        DrawRequest req;
+        try
+        {
+            req = await p.RequestDrawGameAsync(me.Id, DrawDifficulty.Easy, "cat", DrawGuessing.LetterHint("cat"), PuppetDoodle());
+        }
+        catch (SocialException)
+        {
+            Log("Not friends yet — befriending the puppet, then starting the game…");
+            try { await p.SendRequestAsync(me.Id); } catch { }
+            try { await _real.RespondAsync(pup.Id, accept: true); } catch { }
+            req = await p.RequestDrawGameAsync(me.Id, DrawDifficulty.Easy, "cat", DrawGuessing.LetterHint("cat"), PuppetDoodle());
+        }
+        var state = await _real.AcceptDrawRequestAsync(req.Id);
+        _refreshReal();
+        OpenDrawBoards(state.Summary);
+        Log($"Opened both boards. The puppet (@{pup.Handle}) drew a {req.Difficulty} word; it's your turn to guess. " +
+            "Solve it and you draw next — the puppet's board becomes the guesser.");
+    }
+
+    // Opens both sides of one Draw game (yours + the puppet's), side by side. Closes any previous pair first.
+    private void OpenDrawBoards(DrawGameSummary game)
+    {
+        if (_real.Current.Me is not { } me || _puppet?.Current.Me is not { } pup) return;
+
+        foreach (var w in _drawWindows) { try { w.Close(); } catch { } }
+        _drawWindows.Clear();
+
+        var mine = new DrawWithPerchWindow(_real, me.Id, game) { WindowStartupLocation = WindowStartupLocation.Manual };
+        mine.Position = new PixelPoint(60, 90);
+        mine.Title = $"Draw — YOU (@{me.Handle})";
+        mine.Show();
+
+        var theirs = new DrawWithPerchWindow(_puppet, pup.Id, game) { WindowStartupLocation = WindowStartupLocation.Manual };
+        theirs.Position = new PixelPoint(660, 90);
+        theirs.Title = $"Draw — PUPPET (@{pup.Handle})";
+        theirs.Show();
+
+        _drawWindows.Add(mine);
+        _drawWindows.Add(theirs);
+    }
+
+    // Has the puppet challenge you to Draw (with a seeded doodle), so the accept/decline flow can be exercised
+    // from the overlay's GAMES strip (or the lobby). Befriends first if needed.
+    private async Task ChallengeFromPuppet()
+    {
+        var p = RequirePuppet();
+        if (_real.Current.Me is not { } me) throw new SocialException("Your real account needs a claimed handle first.");
+        if (p.Current.Me is not { } pup) throw new SocialException("Claim a puppet handle first.");
+
+        try
+        {
+            await p.RequestDrawGameAsync(me.Id, DrawDifficulty.Easy, "cat", DrawGuessing.LetterHint("cat"), PuppetDoodle());
+        }
+        catch (SocialException)
+        {
+            Log("Not friends yet — befriending the puppet, then challenging…");
+            try { await p.SendRequestAsync(me.Id); } catch { }
+            try { await _real.RespondAsync(pup.Id, accept: true); } catch { }
+            await p.RequestDrawGameAsync(me.Id, DrawDifficulty.Easy, "cat", DrawGuessing.LetterHint("cat"), PuppetDoodle());
+        }
+        _refreshReal();
+        Log($"@{pup.Handle} challenged you to Draw — accept it from the overlay's GAMES strip or the lobby, then guess.");
+    }
+
+    // A quick throwaway doodle for the puppet's challenge (a rough cat-ish shape on the 0..1000 canvas).
+    private static IReadOnlyList<DrawStroke> PuppetDoodle() => new[]
+    {
+        new DrawStroke(0, 1, new List<DrawPoint>
+            { new(300, 620), new(300, 360), new(230, 240), new(360, 320), new(500, 300),
+              new(640, 320), new(770, 240), new(700, 360), new(700, 620), new(300, 620) }),
+        new DrawStroke(0, 0, new List<DrawPoint> { new(400, 440), new(420, 440) }),   // eye
+        new DrawStroke(0, 0, new List<DrawPoint> { new(580, 440), new(600, 440) }),   // eye
+        new DrawStroke(3, 0, new List<DrawPoint> { new(480, 500), new(500, 520), new(520, 500) }),   // nose
+    };
 
     private async Task<Profile> FindTarget(SupabaseSocialClient p)
     {

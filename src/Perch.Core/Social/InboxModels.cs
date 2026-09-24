@@ -14,6 +14,15 @@ public enum InboxKind
     GameInviteDeclined,
     /// <summary>Your opponent nudged you because it's your turn — surface a "your turn" bubble.</summary>
     Nudge,
+
+    /// <summary>Someone challenged you to Draw with Perch — a <c>draw_requests</c> row was just written for you.</summary>
+    DrawInvite,
+    /// <summary>A Draw invite you sent was accepted — the game now exists, carrying your first drawing.</summary>
+    DrawInviteAccepted,
+    /// <summary>A Draw invite you sent was declined (or cancelled) — the request is gone.</summary>
+    DrawInviteDeclined,
+    /// <summary>Your Draw opponent nudged you because it's your turn to draw or guess.</summary>
+    DrawNudge,
 }
 
 /// <summary>

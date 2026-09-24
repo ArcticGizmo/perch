@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Perch.Games;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
 
@@ -19,7 +20,7 @@ public sealed class ArcadeMenuWindow : Window
     private readonly ArcadeMenu _menu = new();
 
     public ArcadeMenuWindow(Action launchInvaders, Action launchFrogger, Action launchWordle, Action launchConnect4,
-        Func<bool> basketballOn, Action toggleBasketball)
+        Action launchDraw, Func<bool> basketballOn, Action toggleBasketball)
     {
         Title = "Perch Arcade";
         CanResize = false;
@@ -40,7 +41,7 @@ public sealed class ArcadeMenuWindow : Window
                 return;
             }
             Close();
-            (index switch { 0 => launchInvaders, 1 => launchFrogger, 2 => launchWordle, _ => launchConnect4 })();
+            (index switch { 0 => launchInvaders, 1 => launchFrogger, 2 => launchWordle, 3 => launchConnect4, _ => launchDraw })();
         };
     }
 
@@ -65,12 +66,12 @@ public sealed class ArcadeMenuWindow : Window
     }
 }
 
-/// <summary>The chooser's owner-drawn control: a title, five selectable cards each with a tiny live
+/// <summary>The chooser's owner-drawn control: a title, six selectable cards each with a tiny live
 /// sprite, and a shimmering prompt. Raises <see cref="Chosen"/> with the selected index (0 = Invaders,
-/// 1 = Crossing, 2 = Wordle, 3 = Connect 4, 4 = the desktop-basketball toggle).</summary>
+/// 1 = Crossing, 2 = Wordle, 3 = Connect 4, 4 = the desktop-basketball toggle, 5 = Draw with Perch).</summary>
 internal sealed class ArcadeMenu : Control
 {
-    private const double MenuW = 460, MenuH = 752;
+    private const double MenuW = 460, MenuH = 864;
     private const double CardX = 40, CardW = MenuW - 2 * CardX, CardH = 92, CardGap = 20;
     private const double FirstCardY = 130;
     private const int TickMs = 16;
@@ -88,6 +89,7 @@ internal sealed class ArcadeMenu : Control
         ("PERCH WORDLE", "Crack today's five-letter word"),
         ("PERCH CONNECT 4", "Line up four — solo or a friend"),
         ("PERCH BASKETBALL", "A hoop on your desktop, all day long"),
+        ("PERCH DRAW", "Doodle it — a friend guesses"),
     };
 
     private bool _basketballOn;
@@ -241,7 +243,8 @@ internal sealed class ArcadeMenu : Control
             case 1: DrawBitSprite(ctx, Bird, icon, Palette.AccentBrush); break;
             case 2: DrawWordleGlyph(ctx, icon); break;
             case 3: DrawConnect4Glyph(ctx, icon); break;
-            default: DrawBasketballGlyph(ctx, icon); break;
+            case BasketballIndex: DrawBasketballGlyph(ctx, icon); break;
+            default: DrawDrawGlyph(ctx, icon); break;
         }
 
         double tx = CardX + 88;
@@ -330,6 +333,20 @@ internal sealed class ArcadeMenu : Control
                 ctx.DrawEllipse(Palette.OverlaySurfaceBrush, null, center, rad, rad);   // the hole
                 if (fills[r, c] is { } f) ctx.DrawEllipse(f, null, center, rad - 1, rad - 1);
             }
+    }
+
+    // Draw with Perch's card icon: a little sheet of paper with two coloured scribbles and a pencil laid across
+    // it, in the game's own fixed palette hues so it reads as "doodle" at a glance.
+    private static void DrawDrawGlyph(DrawingContext ctx, Rect box)
+    {
+        OverlayDraw.Panel(ctx, box, Palette.DrawSwatch(DrawPalette.PaperIndex), new Pen(Palette.BorderBrush, 1), 6);
+        var red = new Pen(Palette.ErrorBrush, 2) { LineCap = PenLineCap.Round };
+        ctx.DrawLine(red, new Point(box.X + 9, box.Y + 15), new Point(box.X + 19, box.Y + 25));
+        var blue = new Pen(Palette.AccentBrush, 2) { LineCap = PenLineCap.Round };
+        ctx.DrawLine(blue, new Point(box.X + 10, box.Bottom - 12), new Point(box.X + 28, box.Bottom - 12));
+        // The pencil, laid corner-to-corner.
+        var pencil = new Pen(Palette.AwaitingBrush, 3) { LineCap = PenLineCap.Round };
+        ctx.DrawLine(pencil, new Point(box.Right - 7, box.Y + 7), new Point(box.X + 20, box.Bottom - 9));
     }
 
     private static void DrawBitSprite(DrawingContext ctx, string[] rows, Rect box, IBrush brush)
