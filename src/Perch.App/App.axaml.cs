@@ -2204,6 +2204,7 @@ public partial class App : Application
         var existing = _drawGameWindows.GetValueOrDefault(game.Id) ?? FindDrawGameWindow(game.Id, currentDesktopOnly: false);
         if (existing is not null) { BringToCurrentDesktop(existing); existing.Activate(); return; }
         var w = new DrawWithPerchWindow(_social, me.Id, game);
+        w.GameChanged += () => _feedHost?.RefreshSoon();   // e.g. a resign drops the ✎ from the strip right away
         _drawGameWindows[game.Id] = w;
         w.Closed += (_, _) => _drawGameWindows.Remove(game.Id);
         w.Show();
@@ -2213,7 +2214,9 @@ public partial class App : Application
     private void StartDrawChallenge(Perch.Social.Profile opponent)
     {
         if (_social?.Current.Me is not { } me) return;
-        new DrawWithPerchWindow(_social, me.Id, opponent).Show();
+        var w = new DrawWithPerchWindow(_social, me.Id, opponent);
+        w.GameChanged += () => _feedHost?.RefreshSoon();
+        w.Show();
     }
 
     // A game icon in the overlay's friends region was clicked — open (or focus, if already open) that game's

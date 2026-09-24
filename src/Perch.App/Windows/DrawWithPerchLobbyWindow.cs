@@ -70,7 +70,9 @@ internal sealed class DrawWithPerchLobbyWindow : Window
     {
         try
         {
-            var games = await _social.GetDrawGamesAsync();
+            // A resigned/abandoned game is over for both players — list only the ones still being played (the
+            // overlay's games strip applies the same filter).
+            var games = (await _social.GetDrawGamesAsync()).Where(g => g.Status == DrawGameStatus.InProgress).ToList();
             var requests = await _social.GetDrawRequestsAsync();
             var friends = await _social.GetFriendsAsync();
             var accepted = friends.Where(f => f.State == FriendshipState.Accepted).ToList();
@@ -101,7 +103,7 @@ internal sealed class DrawWithPerchLobbyWindow : Window
             Text = $"@{opp?.Handle ?? "?"}  ·  {Describe(g, meId)}  ·  {g.MyScore(meId)}–{g.TheirScore(meId)}",
             Foreground = Palette.FgBrush, VerticalAlignment = VerticalAlignment.Center,
         };
-        var open = SettingsUi.FlatButton(g.Status == DrawGameStatus.InProgress ? "Open" : "View");
+        var open = SettingsUi.FlatButton("Open");
         open.Click += (_, _) => { _onPlay(g); Close(); };
         var remove = SettingsUi.FlatButton("Remove");
         remove.Click += async (_, _) => await RemoveGame(g);

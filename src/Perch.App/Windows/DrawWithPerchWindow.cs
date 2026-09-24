@@ -42,6 +42,10 @@ internal sealed class DrawWithPerchWindow : Window
     /// find the right board to float a nudge bubble beside.</summary>
     public Guid CurrentGameId => _wentLive || !_composing ? _gameId : Guid.Empty;
 
+    /// <summary>Raised after one of this player's actions changed the game (a drawing, guess, give-up or
+    /// resignation landed) — the App re-polls so the overlay's games strip reflects it now, not a minute later.</summary>
+    public event Action? GameChanged;
+
     /// <summary>Online play: an existing game against a friend.</summary>
     public DrawWithPerchWindow(ISocialClient social, Guid meId, DrawGameSummary game)
     {
@@ -74,13 +78,24 @@ internal sealed class DrawWithPerchWindow : Window
     private void WireLiveBoard()
     {
         if (_online is null) return;
-        _online.Updated += _board.ApplyState;
+        _online.Updated += (state, fromAction) =>
+        {
+            _board.ApplyState(state, fromAction);
+            if (fromAction) GameChanged?.Invoke();
+        };
         _online.Failed += _board.SetError;
         _board.RoundSubmitRequested += (d, w, h, s) => _ = _online!.SubmitRoundAsync(d, w, h, s);
         _board.GuessSubmitRequested += (rid, g) => _ = _online!.SubmitGuessAsync(rid, g);
         _board.GiveUpRequested += rid => _ = _online!.GiveUpAsync(rid);
-        _board.ResignRequested += () => _ = _online!.ResignAsync();
+        _board.ResignRequested += Resign;
         _board.NudgeRequested += Nudge;
+    }
+
+    // A resigned game is finished for you — close the board rather than parking on "Game abandoned".
+    private async void Resign()
+    {
+        if (_online is null) return;
+        if (await _online.ResignAsync()) Close();
     }
 
     // The first drawing is in: persist + broadcast the invite carrying it, then wait for acceptance.
@@ -95,6 +110,7 @@ internal sealed class DrawWithPerchWindow : Window
             var req = await _social.RequestDrawGameAsync(_opponent.Id, diff, word, hint, strokes);
             _composeRequestId = req.Id;
             _board.MarkComposeSent();
+            GameChanged?.Invoke();
 
             _inboxSub = _social.SubscribeInbox(OnInbox);
             _composePoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -143,8 +159,14 @@ internal sealed class DrawWithPerchWindow : Window
     private void CancelCompose()
     {
         if (_composeRequestId != Guid.Empty)
-            _ = _social.DeclineDrawRequestAsync(_composeRequestId);
+            _ = CancelAndNotify(_composeRequestId);
         Close();
+    }
+
+    private async Task CancelAndNotify(Guid requestId)
+    {
+        try { await _social.DeclineDrawRequestAsync(requestId); GameChanged?.Invoke(); }
+        catch { /* best-effort — the challenge can still be cancelled from the lobby */ }
     }
 
     private void Nudge()
@@ -222,11 +244,13 @@ internal sealed class DrawBoard : Control
     private bool _composeMode;
     private bool _composeSent;
     private DrawGameState? _state;
+    private string? _stateKey;                // fingerprint of _state, so a re-delivered identical poll is a no-op
     private string? _toast;
     private int _toastTicks;
     private double _pulse;
     private bool _busy;                       // an action is in flight; input disabled until the next state
     private int _nudgeCooldownTicks;
+    private int _resignArmTicks;              // >0 = Resign was clicked once; a second click within the window confirms
 
     // Word pick.
     private DrawWords.Offer _offer;
@@ -243,6 +267,7 @@ internal sealed class DrawBoard : Control
     // Guessing.
     private Guid _guessRoundId;
     private string _guessInput = "";
+    private string? _pendingGuess;            // the guess in flight, so a "still guessing" answer can say it missed
 
     // Review: the round id already dismissed via "Draw next", so we don't loop back to Review.
     private Guid _dismissedReviewRound;
@@ -253,7 +278,7 @@ internal sealed class DrawBoard : Control
     private readonly Rect[] _wordChips = new Rect[3];
     private readonly Rect[] _swatches = new Rect[12];
     private readonly Rect[] _sizes = new Rect[3];
-    private Rect _eraserBtn, _undoBtn, _clearBtn, _submitBtn, _guessBtn, _giveUpBtn, _nextBtn, _topRightBtn, _nudgeBtn;
+    private Rect _eraserBtn, _undoBtn, _clearBtn, _submitBtn, _guessBtn, _giveUpBtn, _guessField, _nextBtn, _topRightBtn, _nudgeBtn;
 
     public DrawBoard()
     {
@@ -305,15 +330,33 @@ internal sealed class DrawBoard : Control
     }
 
     /// <summary>Applies an authoritative game state and reconciles the screen: my turn to draw → review the last
-    /// round then pick a word; my turn to guess → the guess screen; otherwise → waiting.</summary>
-    public void ApplyState(DrawGameState state)
+    /// round then pick a word; my turn to guess → the guess screen; otherwise → waiting.
+    ///
+    /// The fallback poll re-delivers the same state every few seconds, so this must be idempotent: an unchanged
+    /// state (and a changed one that doesn't move me off the screen I'm on) keeps the local work in progress —
+    /// the half-typed guess, the drawing on the canvas, the word offer — instead of resetting it. Only the answer
+    /// to my own action (<paramref name="fromAction"/>) or a genuine change clears the in-flight/toast state.</summary>
+    public void ApplyState(DrawGameState state, bool fromAction = false)
     {
+        string key = StateKey(state);
+        bool changed = key != _stateKey;
         _state = state;
+        _stateKey = key;
         _opponent = state.Summary.Opponent(_meId);
+        bool wasCompose = _composeMode;
         _composeMode = false;
         _composeSent = false;
+
+        if (!changed && !fromAction && !wasCompose)
+        {
+            LayoutScreen();   // header chrome (scores, Resign) may still depend on the state
+            return;
+        }
+
         _busy = false;
         _toast = null;
+        string? pending = _pendingGuess;
+        _pendingGuess = null;
 
         var s = state.Summary;
         if (s.Status == DrawGameStatus.Abandoned) { _screen = Screen.Over; }
@@ -321,17 +364,31 @@ internal sealed class DrawBoard : Control
         {
             if (s.Phase == DrawPhase.Guess && state.Current is { } gr)
             {
-                _guessRoundId = gr.Id;
-                _guessInput = "";
-                _screen = Screen.Guess;
+                if (_screen == Screen.Guess && _guessRoundId == gr.Id)
+                {
+                    // Same round, still guessing: my guess (if one was in flight) missed. Clear it for the next
+                    // try and say so — otherwise the field just empties with no explanation.
+                    if (pending is not null)
+                    {
+                        _guessInput = "";
+                        ShowToast($"“{pending}” isn't it — keep guessing", 220);
+                    }
+                }
+                else
+                {
+                    _guessRoundId = gr.Id;
+                    _guessInput = "";
+                    _screen = Screen.Guess;
+                }
             }
             else // my turn to draw the next round
             {
                 var cur = state.Current;
                 bool reviewable = cur is { Status: DrawRoundStatus.Solved or DrawRoundStatus.GaveUp }
                                   && cur.Guesser.Id == _meId && cur.Id != _dismissedReviewRound;
-                if (reviewable) _screen = Screen.Review;
-                else { NewOffer(); _screen = Screen.WordPick; }
+                if (_screen is Screen.WordPick or Screen.Draw) { /* already picking/drawing — keep the work */ }
+                else if (reviewable) _screen = Screen.Review;
+                else if (_screen != Screen.Review) { NewOffer(); _screen = Screen.WordPick; }
             }
         }
         else _screen = Screen.Waiting;
@@ -340,9 +397,24 @@ internal sealed class DrawBoard : Control
         InvalidateVisual();
     }
 
+    // Everything that can move the board between screens; score/updated_at churn alone doesn't count.
+    private static string StateKey(DrawGameState st)
+    {
+        var s = st.Summary;
+        var c = st.Current;
+        return $"{s.Status}|{s.Phase}|{s.WhoseTurn}|{s.RoundNo}|{c?.Id}|{c?.Status}|{c?.Guesses.Count}";
+    }
+
+    private void ShowToast(string message, int ticks)
+    {
+        _toast = message;
+        _toastTicks = ticks;
+    }
+
     public void SetError(string message)
     {
         _busy = false;
+        _pendingGuess = null;
         _toast = message;
         _toastTicks = 220;
         InvalidateVisual();
@@ -375,6 +447,7 @@ internal sealed class DrawBoard : Control
         _pulse += 0.12;
         if (_toastTicks > 0 && --_toastTicks == 0) _toast = null;
         if (_nudgeCooldownTicks > 0) _nudgeCooldownTicks--;
+        if (_resignArmTicks > 0) _resignArmTicks--;
     }
 
     private void NewOffer()
@@ -425,12 +498,20 @@ internal sealed class DrawBoard : Control
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         var p = e.GetPosition(this);
+        // Keep keyboard focus on the board whatever was clicked, so typed guesses and Enter/Z always land here.
+        Focus();
 
-        // Screen-agnostic top-right button (Resign / Cancel).
+        // Screen-agnostic top-right button (Resign / Cancel). Resigning ends the game for both players, so it
+        // takes a second click to confirm.
         if (_topRightBtn.Contains(p))
         {
             if (_composeMode) CancelComposeRequested?.Invoke();
-            else if (_state is { Summary.Status: DrawGameStatus.InProgress }) ResignRequested?.Invoke();
+            else if (_state is { Summary.Status: DrawGameStatus.InProgress } && !_busy)
+            {
+                if (_resignArmTicks > 0) { _resignArmTicks = 0; _busy = true; ResignRequested?.Invoke(); }
+                else { _resignArmTicks = 190; ShowToast("Click Resign again to end this game", 190); }   // ~3s
+                InvalidateVisual();
+            }
             e.Handled = true; return;
         }
 
@@ -455,6 +536,7 @@ internal sealed class DrawBoard : Control
             case Screen.Guess:
                 if (_guessBtn.Contains(p)) { SubmitGuess(); e.Handled = true; return; }
                 if (_giveUpBtn.Contains(p)) { GiveUp(); e.Handled = true; return; }
+                if (_guessField.Contains(p)) { InvalidateVisual(); e.Handled = true; return; }   // focused above
                 break;
 
             case Screen.Review:
@@ -523,14 +605,14 @@ internal sealed class DrawBoard : Control
 
     private void SubmitDrawing()
     {
-        if (_strokes.Count == 0 || string.IsNullOrEmpty(_chosenWord)) return;
+        if (_strokes.Count == 0 || string.IsNullOrEmpty(_chosenWord) || _busy) return;
         _busy = true;
         string hint = DrawGuessing.LetterHint(_chosenWord);
         var strokes = _strokes.ToList();
+        // Stay on the canvas (busy) until the server answers: success moves to Waiting via ApplyState /
+        // MarkComposeSent, and a failure leaves the drawing intact to retry rather than stranding it.
         if (_composeMode) ComposeSubmitRequested?.Invoke(_chosenDiff, _chosenWord, hint, strokes);
         else { _dismissedReviewRound = Guid.Empty; RoundSubmitRequested?.Invoke(_chosenDiff, _chosenWord, hint, strokes); }
-        _screen = Screen.Waiting;
-        LayoutScreen();
         InvalidateVisual();
     }
 
@@ -539,6 +621,7 @@ internal sealed class DrawBoard : Control
         var g = _guessInput.Trim();
         if (g.Length == 0 || _busy) return;
         _busy = true;
+        _pendingGuess = g;
         GuessSubmitRequested?.Invoke(_guessRoundId, g);
         InvalidateVisual();
     }
@@ -592,7 +675,7 @@ internal sealed class DrawBoard : Control
         _wordChips.AsSpan().Clear();
         _swatches.AsSpan().Clear();
         _sizes.AsSpan().Clear();
-        _eraserBtn = _undoBtn = _clearBtn = _submitBtn = _guessBtn = _giveUpBtn = _nextBtn = _topRightBtn = _nudgeBtn = default;
+        _eraserBtn = _undoBtn = _clearBtn = _submitBtn = _guessBtn = _giveUpBtn = _guessField = _nextBtn = _topRightBtn = _nudgeBtn = default;
 
         // The top-right Resign/Cancel button shows on every in-game screen.
         if (_composeMode || _state is { Summary.Status: DrawGameStatus.InProgress })
@@ -629,6 +712,8 @@ internal sealed class DrawBoard : Control
                 double y = CanvasBottom + 64;
                 _giveUpBtn = new Rect(CanvasX, y, 96, 34);
                 _guessBtn = new Rect(CanvasX + CanvasPx - 110, y, 110, 34);
+                // The typed-guess field spans between the Give up and Guess buttons.
+                _guessField = new Rect(_giveUpBtn.Right + 8, y, _guessBtn.Left - _giveUpBtn.Right - 16, 34);
                 break;
             }
             case Screen.Review:
@@ -678,7 +763,8 @@ internal sealed class DrawBoard : Control
         }
 
         if (_topRightBtn != default)
-            DrawButton(ctx, _topRightBtn, _composeMode ? "Cancel" : "Resign", accent: false);
+            DrawButton(ctx, _topRightBtn, _composeMode ? "Cancel" : _resignArmTicks > 0 ? "Sure?" : "Resign",
+                accent: _resignArmTicks > 0);
     }
 
     private string StatusLine()
@@ -789,7 +875,8 @@ internal sealed class DrawBoard : Control
         DrawButton(ctx, _eraserBtn, "Eraser", accent: _eraser);
         DrawButton(ctx, _undoBtn, "Undo", accent: false);
         DrawButton(ctx, _clearBtn, "Clear", accent: false);
-        DrawButton(ctx, _submitBtn, _composeMode ? "Send" : "Submit", accent: _strokes.Count > 0, enabled: _strokes.Count > 0 && !_busy);
+        DrawButton(ctx, _submitBtn, _busy ? "Sending…" : _composeMode ? "Send" : "Submit",
+            accent: _strokes.Count > 0, enabled: _strokes.Count > 0 && !_busy);
     }
 
     private void DrawGuess(DrawingContext ctx)
@@ -800,20 +887,24 @@ internal sealed class DrawBoard : Control
         // Letter blanks from the hint.
         DrawBlanks(ctx, round?.LetterHint ?? "", CanvasBottom + 26);
 
-        // The typed-guess field (owner-drawn), spanning between the Give up and Guess buttons.
-        var field = new Rect(_giveUpBtn.Right + 8, _giveUpBtn.Y, _guessBtn.Left - _giveUpBtn.Right - 16, 34);
-        OverlayDraw.Panel(ctx, field, Palette.SurfaceSunkenBrush, new Pen(Palette.BorderBrush, 1), 8);
+        // The typed-guess field (owner-drawn). It reads as focused — focus-ring border + a blinking caret, even
+        // while empty — whenever the board has keyboard focus, which is where typed letters go.
+        var field = _guessField;
+        bool focused = IsFocused;
+        OverlayDraw.Panel(ctx, field, Palette.SurfaceSunkenBrush,
+            focused ? new Pen(Palette.FocusRingBrush, 2) : new Pen(Palette.BorderBrush, 1), 8);
         bool empty = _guessInput.Length == 0;
         var ft = OverlayDraw.Text(empty ? "type your guess" : _guessInput, 15,
             empty ? Palette.MutedBrush : Palette.FgBrush);
         OverlayDraw.TextLeftMid(ctx, ft, field.X + 12, field.Center.Y);
-        if (!empty && Math.Abs(Math.Sin(_pulse)) > 0.5)   // blinking caret
+        if (focused && !_busy && Math.Abs(Math.Sin(_pulse)) > 0.5)   // blinking caret
         {
-            double cx = field.X + 12 + ft.Width + 2;
+            double cx = field.X + 12 + (empty ? 0 : ft.Width + 2);
             ctx.DrawLine(new Pen(Palette.FgBrush, 1.5), new Point(cx, field.Y + 8), new Point(cx, field.Bottom - 8));
         }
 
-        DrawButton(ctx, _guessBtn, "Guess", accent: true, enabled: _guessInput.Trim().Length > 0 && !_busy);
+        DrawButton(ctx, _guessBtn, _busy && _pendingGuess is not null ? "Checking…" : "Guess",
+            accent: true, enabled: _guessInput.Trim().Length > 0 && !_busy);
         DrawButton(ctx, _giveUpBtn, "Give up", accent: false);
 
         // Prior wrong guesses.

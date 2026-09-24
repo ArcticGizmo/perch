@@ -21,8 +21,10 @@ internal sealed class DrawOnlineController : IDisposable
     private DispatcherTimer? _poll;
     private bool _disposed;
 
-    /// <summary>Fired on the UI thread with fresh authoritative state.</summary>
-    public event Action<DrawGameState>? Updated;
+    /// <summary>Fired on the UI thread with fresh authoritative state. The flag is true when the state is the
+    /// answer to one of the local player's own actions (submit/guess/give up/resign), false for a poll/live
+    /// refresh — the board only lets the latter update the screen when something actually changed.</summary>
+    public event Action<DrawGameState, bool>? Updated;
 
     /// <summary>Fired on the UI thread when a call is rejected; transient network blips are left to the next poll.</summary>
     public event Action<string>? Failed;
@@ -47,7 +49,7 @@ internal sealed class DrawOnlineController : IDisposable
         try
         {
             var state = await _social.GetDrawGameAsync(_gameId);
-            Post(() => Updated?.Invoke(state));
+            Post(() => Updated?.Invoke(state, false));
         }
         catch (SocialException ex) { Post(() => Failed?.Invoke(ex.Message)); }
         catch { /* transient — the poll / subscription will retry */ }
@@ -58,7 +60,7 @@ internal sealed class DrawOnlineController : IDisposable
         try
         {
             var state = await _social.SubmitDrawRoundAsync(_gameId, diff, word, hint, strokes);
-            Post(() => Updated?.Invoke(state));
+            Post(() => Updated?.Invoke(state, true));
         }
         catch (SocialException ex) { Post(() => Failed?.Invoke(ex.Message)); }
         catch { Post(() => Failed?.Invoke("Couldn't reach the server — try again.")); }
@@ -69,7 +71,7 @@ internal sealed class DrawOnlineController : IDisposable
         try
         {
             var state = await _social.SubmitDrawGuessAsync(roundId, guess);
-            Post(() => Updated?.Invoke(state));
+            Post(() => Updated?.Invoke(state, true));
         }
         catch (SocialException ex) { Post(() => Failed?.Invoke(ex.Message)); }
         catch { Post(() => Failed?.Invoke("Couldn't reach the server — try again.")); }
@@ -80,21 +82,24 @@ internal sealed class DrawOnlineController : IDisposable
         try
         {
             var state = await _social.GiveUpDrawRoundAsync(roundId);
-            Post(() => Updated?.Invoke(state));
+            Post(() => Updated?.Invoke(state, true));
         }
         catch (SocialException ex) { Post(() => Failed?.Invoke(ex.Message)); }
         catch { Post(() => Failed?.Invoke("Couldn't reach the server — try again.")); }
     }
 
-    public async Task ResignAsync()
+    /// <summary>Resigns; true once the server has recorded it (the caller closes the board).</summary>
+    public async Task<bool> ResignAsync()
     {
         try
         {
             var state = await _social.ResignDrawGameAsync(_gameId);
-            Post(() => Updated?.Invoke(state));
+            Post(() => Updated?.Invoke(state, true));
+            return true;
         }
         catch (SocialException ex) { Post(() => Failed?.Invoke(ex.Message)); }
         catch { Post(() => Failed?.Invoke("Couldn't reach the server — try again.")); }
+        return false;
     }
 
     private void Post(Action action)
