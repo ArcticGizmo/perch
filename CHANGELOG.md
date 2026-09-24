@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.26] - 2026-09-24
+
+- Check the arcade again (bring a friend, and something to draw with)
+
+---
+
 ## [v0.4.25] - 2026-09-23
 
 - Explicit Save button in the status line designer, with an unsaved-changes indicator

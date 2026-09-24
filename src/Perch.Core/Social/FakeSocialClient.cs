@@ -62,6 +62,9 @@ public sealed partial class FakeSocialClient : ISocialClient
             _games.Clear();
             _gameSubs.Clear();
             _gameRequests.Clear();
+            _drawGames.Clear();
+            _drawSubs.Clear();
+            _drawRequests.Clear();
             _me = null;
             _signedIn = false;
         }

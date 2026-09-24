@@ -614,6 +614,37 @@ internal static class HeadlessRenderer
         connect4Over.SnapshotOnline(wonState, meP.Id);
         RenderControl(connect4Over, Path.Combine(outDir, "connect4_online_over_1x.png"), 96);
 
+        // The sixth toy: Draw with Perch. Compose screens first (no server needed) — the word picker and the
+        // drawing canvas with a doodle in progress + the tool palette.
+        var drawWordPick = new Windows.DrawBoard();
+        drawWordPick.SnapshotWordPick(meP.Id, oppP);
+        RenderControl(drawWordPick, Path.Combine(outDir, "drawwithperch_wordpick_1x.png"), 96);
+
+        var drawDraw = new Windows.DrawBoard();
+        drawDraw.SnapshotDraw(meP.Id, oppP);
+        RenderControl(drawDraw, Path.Combine(outDir, "drawwithperch_draw_1x.png"), 96);
+
+        // Online: @rival challenged you (seeded as round 1), so it's your turn to guess their drawing — blanks
+        // from the letter hint, the typed-guess field and the drawing all render (the word stays hidden).
+        var iceStrokes = new[]
+        {
+            new Perch.Games.DrawStroke(0, 1, new List<Perch.Games.DrawPoint>
+                { new(280, 520), new(360, 300), new(500, 240), new(640, 300), new(720, 520) }),   // cone/scoop outline
+            new Perch.Games.DrawStroke(3, 0, new List<Perch.Games.DrawPoint> { new(360, 300), new(500, 360), new(640, 300) }),
+            new Perch.Games.DrawStroke(0, 1, new List<Perch.Games.DrawPoint> { new(360, 300), new(500, 700), new(640, 300) }),
+        };
+        var drawReq = fakeSocial.SimulateIncomingDrawRequest(oppP.Id, Perch.Games.DrawDifficulty.Medium, "ice cream", iceStrokes);
+        var drawState = fakeSocial.AcceptDrawRequestAsync(drawReq.Id).GetAwaiter().GetResult();
+        var drawGuess = new Windows.DrawBoard();
+        drawGuess.SnapshotGuess(drawState, meP.Id);
+        RenderControl(drawGuess, Path.Combine(outDir, "drawwithperch_guess_1x.png"), 96);
+
+        // Review: you solved it — the word is revealed, the points land, and "Draw next" shows.
+        var drawSolved = fakeSocial.SubmitDrawGuessAsync(drawState.Current!.Id, "ice cream").GetAwaiter().GetResult();
+        var drawReview = new Windows.DrawBoard();
+        drawReview.SnapshotReview(drawSolved, meP.Id);
+        RenderControl(drawReview, Path.Combine(outDir, "drawwithperch_review_1x.png"), 96);
+
         // Perch Wrapped poster: a shareable Spotify-Wrapped-style card built from the sample report.
         // Rendered with the bundled bird icon so the header/footer icon paths are exercised too.
         IImage? brandIcon = null;

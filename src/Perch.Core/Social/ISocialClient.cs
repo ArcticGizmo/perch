@@ -1,3 +1,5 @@
+using Perch.Games;
+
 namespace Perch.Social;
 
 /// <summary>
@@ -196,6 +198,68 @@ public interface ISocialClient
     /// delivered to their inbox as a transient "your turn" broadcast (no DB write). Best-effort and idempotent to
     /// spam from the caller's point of view; a failure is swallowed. Only meaningful while it's their turn.</summary>
     Task SendNudgeAsync(Guid gameId, Guid opponentUserId, CancellationToken ct = default);
+
+    // ── Draw with Perch ("doodle & guess") ───────────────────────────────────────────────────────────
+    // A slower, async draw-and-guess game between two accepted friends. Like Connect 4 the server is
+    // authoritative (turn/phase transitions and scoring go through RPCs); unlike it, the "move" carries a
+    // freehand drawing, the roles swap every round, and the game runs indefinitely until abandoned. The word
+    // rides on the round for simplicity (secrecy is by convention only — it's for fun).
+
+    /// <summary>Challenges <paramref name="opponentUserId"/> (an accepted friend) to a Draw game. You draw your
+    /// first round <em>before</em> sending, so <paramref name="difficulty"/>/<paramref name="word"/>/
+    /// <paramref name="letterHint"/>/<paramref name="strokes"/> are carried on the invite and become round 1 the
+    /// instant they accept. No game exists yet: a request is created (and broadcast) and the game is only born on
+    /// accept. Throws <see cref="SocialException"/> if they aren't a friend or an invite to them is already
+    /// outstanding.</summary>
+    Task<DrawRequest> RequestDrawGameAsync(Guid opponentUserId, DrawDifficulty difficulty, string word,
+        string letterHint, IReadOnlyList<DrawStroke> strokes, CancellationToken ct = default);
+
+    /// <summary>Your outstanding Draw invites — both the ones you've sent and the ones waiting on you.</summary>
+    Task<IReadOnlyList<DrawRequest>> GetDrawRequestsAsync(CancellationToken ct = default);
+
+    /// <summary>Accepts a Draw invite you received, which creates the game (seeded with the challenger's first
+    /// drawing as round 1, so it's immediately your turn to guess) and removes the request. The challenger is
+    /// notified instantly. Throws <see cref="SocialException"/> if you're not the invitee or it's gone.</summary>
+    Task<DrawGameState> AcceptDrawRequestAsync(Guid requestId, CancellationToken ct = default);
+
+    /// <summary>Declines a Draw invite you received, or cancels one you sent — either way the request is removed.
+    /// Idempotent (a request that's already gone is a no-op).</summary>
+    Task DeclineDrawRequestAsync(Guid requestId, CancellationToken ct = default);
+
+    /// <summary>Your Draw games, most-recently-active first — the "your turn / their turn" list.</summary>
+    Task<IReadOnlyList<DrawGameSummary>> GetDrawGamesAsync(CancellationToken ct = default);
+
+    /// <summary>The full state of one Draw game — its summary plus the current round (to draw for, or to guess).
+    /// Throws <see cref="SocialException"/> if the game doesn't exist or isn't yours.</summary>
+    Task<DrawGameState> GetDrawGameAsync(Guid gameId, CancellationToken ct = default);
+
+    /// <summary>As the current drawer, submits a new round's drawing (word/hint/strokes) into a live game. The
+    /// move is validated server-side (it must be your turn and the draw phase); returns the updated state, now
+    /// waiting on the opponent to guess. Throws <see cref="SocialException"/> if it isn't your turn to draw.</summary>
+    Task<DrawGameState> SubmitDrawRoundAsync(Guid gameId, DrawDifficulty difficulty, string word,
+        string letterHint, IReadOnlyList<DrawStroke> strokes, CancellationToken ct = default);
+
+    /// <summary>As the guesser, submits a guess for <paramref name="roundId"/>. Checked server-side; on a correct
+    /// guess the round is solved, points are awarded and it becomes your turn to draw. Returns the updated state —
+    /// inspect <see cref="DrawGameState.Current"/>'s status/guesses to tell right from wrong. Throws
+    /// <see cref="SocialException"/> if it isn't your round to guess.</summary>
+    Task<DrawGameState> SubmitDrawGuessAsync(Guid roundId, string guess, CancellationToken ct = default);
+
+    /// <summary>As the guesser, gives up on <paramref name="roundId"/>: the word is revealed, no points are
+    /// awarded, and it becomes your turn to draw the next round. Returns the updated state.</summary>
+    Task<DrawGameState> GiveUpDrawRoundAsync(Guid roundId, CancellationToken ct = default);
+
+    /// <summary>Resigns <paramref name="gameId"/>, abandoning it. Idempotent on an already-abandoned game.</summary>
+    Task<DrawGameState> ResignDrawGameAsync(Guid gameId, CancellationToken ct = default);
+
+    /// <summary>Permanently removes <paramref name="gameId"/> and its rounds. Either player may remove a shared
+    /// game; idempotent. Old abandoned games are also pruned server-side on a retention schedule.</summary>
+    Task DeleteDrawGameAsync(Guid gameId, CancellationToken ct = default);
+
+    /// <summary>Subscribes to live changes for one Draw game, invoking <paramref name="onChanged"/> (off the UI
+    /// thread) whenever the opponent draws or guesses so the caller re-fetches. Disposal unsubscribes. A client
+    /// may implement this as a no-op and rely on polling.</summary>
+    IDisposable SubscribeDrawGame(Guid gameId, Action onChanged);
 }
 
 /// <summary>A Social operation failed in a way the UI should surface (handle taken, body too long, not

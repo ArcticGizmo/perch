@@ -74,6 +74,8 @@ public partial class App : Application
     private WordleWindow? _wordleWindow;            // shhh
     private Connect4Window? _connect4Window;        // shhh
     private readonly Dictionary<Guid, Connect4Window> _onlineGameWindows = new();   // overlay-opened games, by id
+    private DrawWithPerchLobbyWindow? _drawLobbyWindow;   // shhh (Draw with Perch is online-only, so it opens the lobby)
+    private readonly Dictionary<Guid, DrawWithPerchWindow> _drawGameWindows = new();   // overlay-/lobby-opened draw games, by id
     private IDisposable? _inboxSub;                  // transient inbox (Connect 4 invites / nudges / rematches)
     private NudgeBubbleWindow? _nudgeBubble;         // at most one on screen at a time
     private HistoryWindow? _historyWindow;
@@ -248,8 +250,9 @@ public partial class App : Application
                 OnFriendPosted,
                 OnReactionToMyPost,
                 (games, requests) => _overlay?.Canvas.SetGames(games, requests, _social?.Current.Me?.Id ?? Guid.Empty),
-                OnGameInvited);
-            _feedHost.Diagnostic += m => _reactionDiag?.Invoke(m);   // stream to the debug tool when it's open
+                OnGameInvited,
+                (games, requests) => _overlay?.Canvas.SetDrawGames(games, requests, _social?.Current.Me?.Id ?? Guid.Empty),
+                OnDrawInvited);
             _overlay.Canvas.SetSocialRegionExpanded(settings.SocialRegionExpanded);
             _social.AuthChanged += st => Dispatcher.UIThread.Post(() =>
             {
@@ -359,6 +362,8 @@ public partial class App : Application
             };
             _overlay.Canvas.GameOpenRequested += OpenOnlineGameFromOverlay;   // a game icon in the friends region
             _overlay.Canvas.GameRequestResponded += OnGameRequestResponded;   // accept / decline / cancel an invite
+            _overlay.Canvas.DrawGameOpenRequested += OpenDrawGame;            // a Draw game icon in the friends region
+            _overlay.Canvas.DrawGameRequestResponded += OnDrawRequestResponded;
             _overlay.Canvas.SocialRegionExpandChanged += expanded =>
             {
                 if (_appSettings is { } s) { s.SocialRegionExpanded = expanded; s.Save(); }
@@ -651,6 +656,8 @@ public partial class App : Application
         _wordleWindow?.Close();
         _connect4Window?.Close();
         foreach (var w in _onlineGameWindows.Values.ToList()) w.Close();
+        _drawLobbyWindow?.Close();
+        foreach (var w in _drawGameWindows.Values.ToList()) w.Close();
         _nudgeBubble?.Close();
         _qrWindow?.Close();
         _changelogWindow?.Close();
@@ -1026,16 +1033,11 @@ public partial class App : Application
         if (_social is null) return;
         _debugSocialWindow = WindowHost.ShowOrFocus(
             _debugSocialWindow,
-            () =>
-            {
-                var w = new DebugSocialWindow(_social, () => _feedHost?.RefreshSoon(), ShowReactionBubble,
-                    () => $"ShowLargeReactions={_appSettings?.ShowLargeReactions}, DND active={_dndActive}, " +
-                          $"DND suppressing={DndSuppressing}, SocialEnabled={_appSettings?.SocialEnabled}, " +
-                          $"feed polling={_feedHost is not null}");
-                _reactionDiag = m => Dispatcher.UIThread.Post(() => w.Diag(m));   // stream host + gate diagnostics
-                return w;
-            },
-            () => { _reactionDiag = null; _debugSocialWindow = null; });
+            () => new DebugSocialWindow(_social, () => _feedHost?.RefreshSoon(), ShowReactionBubble,
+                () => $"ShowLargeReactions={_appSettings?.ShowLargeReactions}, DND active={_dndActive}, " +
+                      $"DND suppressing={DndSuppressing}, SocialEnabled={_appSettings?.SocialEnabled}, " +
+                      $"feed polling={_feedHost is not null}"),
+            () => _debugSocialWindow = null);
     }
 
     // A reaction chip / "+" picker in the overlay social region was used: toggle the reaction on the backend,
@@ -1102,6 +1104,37 @@ public partial class App : Application
         if (DndSuppressing) return;   // Do Not Disturb: stay quiet
         _notifier?.Show($"@{request.Requester.Handle} challenged you to Connect 4",
             "Open Perch to accept or decline.", ToastLevel.Info, null, null);
+    }
+
+    // A newly-seen Draw with Perch challenge waiting on you — same gating as OnGameInvited (reuses
+    // NotifyOnGameInvite, which is playful:true so Quiet mode masks it).
+    private void OnDrawInvited(Perch.Social.DrawRequest request)
+    {
+        if (Effective is not { NotificationsEnabled: true, NotifyOnGameInvite: true }) return;
+        if (DndSuppressing) return;
+        _notifier?.Show($"@{request.Requester.Handle} challenged you to Draw with Perch",
+            "Open Perch to accept and guess.", ToastLevel.Info, null, null);
+    }
+
+    // A Draw game icon's invite in the overlay was accepted (opens the new game) or declined/cancelled.
+    private async void OnDrawRequestResponded(Perch.Social.DrawRequest request, bool accept)
+    {
+        if (_social is null) return;
+        try
+        {
+            if (accept)
+            {
+                var state = await _social.AcceptDrawRequestAsync(request.Id);
+                _feedHost?.RefreshSoon();
+                OpenDrawGame(state.Summary);
+            }
+            else
+            {
+                await _social.DeclineDrawRequestAsync(request.Id);
+                _feedHost?.RefreshSoon();
+            }
+        }
+        catch { /* best-effort — a failed accept/decline just leaves the challenge where it was */ }
     }
 
     // A session finished (NeedsAttention): flash the overlay and fire the notification (toast/chime/external,
@@ -1254,13 +1287,10 @@ public partial class App : Application
     // gated on the setting (and quiet in Do Not Disturb, like the friend-post toasts). Arrives on the UI
     // thread from SocialFeedMonitorHost. Best-effort — a missing overlay/screen just skips the flourish.
     private ReactionBubbleWindow? _reactionBubbles;
-    private Action<string>? _reactionDiag;   // set by the debug tool while it's open; streams gate + poll diagnostics
     private void OnReactionToMyPost(string emoji)
     {
         bool showByGate = Effective is { ShowLargeReactions: true };   // masked off in Quiet mode
         bool suppressed = _dndActive && (_appSettings?.CloseFeedInDoNotDisturb ?? false);
-        _reactionDiag?.Invoke($"handler: {emoji} — ShowLargeReactions={_appSettings?.ShowLargeReactions}, " +
-            $"DND suppressing={suppressed} -> {(showByGate && !suppressed ? "SHOWING bubble" : "BLOCKED by a gate")}");
         if (!showByGate || suppressed) return;
         ShowReactionBubble(emoji);
     }
@@ -2123,7 +2153,7 @@ public partial class App : Application
     // below and closes as it does. All are reused like every other aux window.
     private void OpenArcade() =>
         _arcadeWindow = WindowHost.ShowOrFocus(_arcadeWindow,
-            () => new ArcadeMenuWindow(OpenInvaders, OpenFrogger, OpenWordle, OpenConnect4,
+            () => new ArcadeMenuWindow(OpenInvaders, OpenFrogger, OpenWordle, OpenConnect4, OpenDrawWithPerch,
                 basketballOn: () => _appSettings?.BasketballEnabled ?? false,
                 toggleBasketball: ToggleBasketball),
             () => _arcadeWindow = null);
@@ -2154,6 +2184,40 @@ public partial class App : Application
     // the "Play a friend" pill; local play works with or without it.
     private void OpenConnect4() =>
         _connect4Window = WindowHost.ShowOrFocus(_connect4Window, () => new Connect4Window(_social), () => _connect4Window = null);
+
+    // Draw with Perch is online-only (a bot can't draw or guess), so the arcade card opens the lobby when Social
+    // is signed in; otherwise it points the user at the Friends/sign-in window (see docs/draw-with-perch-plan.md).
+    private void OpenDrawWithPerch()
+    {
+        if (_social is { Current: { SignedIn: true, Me: not null } })
+            _drawLobbyWindow = WindowHost.ShowOrFocus(_drawLobbyWindow,
+                () => new DrawWithPerchLobbyWindow(_social, OpenDrawGame, StartDrawChallenge),
+                () => _drawLobbyWindow = null);
+        else
+            OpenFriends();   // sign in to Social first, then re-open the arcade
+    }
+
+    // Opens (or focuses) a draw game's board, reused per game id and pulled onto the current virtual desktop.
+    private void OpenDrawGame(Perch.Social.DrawGameSummary game)
+    {
+        if (_social?.Current.Me is not { } me) return;
+        var existing = _drawGameWindows.GetValueOrDefault(game.Id) ?? FindDrawGameWindow(game.Id, currentDesktopOnly: false);
+        if (existing is not null) { BringToCurrentDesktop(existing); existing.Activate(); return; }
+        var w = new DrawWithPerchWindow(_social, me.Id, game);
+        w.GameChanged += () => _feedHost?.RefreshSoon();   // e.g. a resign drops the ✎ from the strip right away
+        _drawGameWindows[game.Id] = w;
+        w.Closed += (_, _) => _drawGameWindows.Remove(game.Id);
+        w.Show();
+    }
+
+    // Opens the compose board to challenge a friend (you draw first, then the invite is sent).
+    private void StartDrawChallenge(Perch.Social.Profile opponent)
+    {
+        if (_social?.Current.Me is not { } me) return;
+        var w = new DrawWithPerchWindow(_social, me.Id, opponent);
+        w.GameChanged += () => _feedHost?.RefreshSoon();
+        w.Show();
+    }
 
     // A game icon in the overlay's friends region was clicked — open (or focus, if already open) that game's
     // online board. Reused per game id so clicking twice doesn't stack duplicate windows.
@@ -2215,6 +2279,7 @@ public partial class App : Application
         switch (m.Kind)
         {
             case Perch.Social.InboxKind.Nudge:
+            case Perch.Social.InboxKind.DrawNudge:
                 ShowNudge(m);
                 break;
             default:
@@ -2232,7 +2297,8 @@ public partial class App : Application
         string label = $"{handle} nudged you — your turn!";
         // Only anchor to a board that's on the virtual desktop you're actually looking at — otherwise the bubble
         // would float over empty space beside a board that lives on another desktop. Fall back to the overlay.
-        Window? anchor = (Window?)FindGameWindow(m.GameId, currentDesktopOnly: true) ?? _overlay;
+        Window? anchor = (Window?)FindGameWindow(m.GameId, currentDesktopOnly: true)
+                         ?? (Window?)FindDrawGameWindow(m.GameId, currentDesktopOnly: true) ?? _overlay;
         if (anchor is null || !anchor.IsVisible) return;
 
         _nudgeBubble?.Close();
@@ -2275,6 +2341,21 @@ public partial class App : Application
                 if (currentDesktopOnly && c.TryGetPlatformHandle() is { } h
                     && !PlatformServices.WindowChrome.IsWindowOnCurrentDesktop(h.Handle)) continue;
                 return c;
+            }
+        return null;
+    }
+
+    // The Draw-with-Perch twin of FindGameWindow: any open Draw board showing the given game.
+    private DrawWithPerchWindow? FindDrawGameWindow(Guid? gameId, bool currentDesktopOnly)
+    {
+        if (gameId is not { } id || id == Guid.Empty) return null;
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            foreach (var w in desktop.Windows)
+            {
+                if (w is not DrawWithPerchWindow d || !d.IsVisible || d.CurrentGameId != id) continue;
+                if (currentDesktopOnly && d.TryGetPlatformHandle() is { } h
+                    && !PlatformServices.WindowChrome.IsWindowOnCurrentDesktop(h.Handle)) continue;
+                return d;
             }
         return null;
     }

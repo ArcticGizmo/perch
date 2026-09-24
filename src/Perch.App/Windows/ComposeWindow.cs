@@ -33,14 +33,16 @@ internal sealed class ComposeWindow : Window
     /// <param name="recents">Supplies the most-recently-used emoji for the mood picker's default grid, and
     /// <paramref name="onEmojiUsed"/> records a pick — the same wiring the overlay's reaction picker uses, so
     /// moods and reactions share one recents history and the same extended emoji search.</param>
+    /// <param name="title">Overrides the window/heading title (the social testing tool uses "Post as @puppet").</param>
     public ComposeWindow(Func<string, string?, Task> post, string? initialMood = null,
-        Func<IReadOnlyList<string>>? recents = null, Action<string>? onEmojiUsed = null)
+        Func<IReadOnlyList<string>>? recents = null, Action<string>? onEmojiUsed = null, string? title = null)
     {
         _post = post;
         _recents = recents;
         _onEmojiUsed = onEmojiUsed;
         _mood = string.IsNullOrWhiteSpace(initialMood) ? null : initialMood;
-        Title = "Post a status";
+        title ??= "Post a status";
+        Title = title;
         Width = 420;
         Height = 250;
         CanResize = false;
@@ -86,7 +88,7 @@ internal sealed class ComposeWindow : Window
         buttons.Children.Add(_postBtn);
 
         var panel = new StackPanel { Margin = new Thickness(16), Spacing = 10 };
-        panel.Children.Add(SettingsUi.SectionTitle("Post a status"));
+        panel.Children.Add(SettingsUi.SectionTitle(title));
         panel.Children.Add(topRow);
         panel.Children.Add(_status);
         panel.Children.Add(buttons);

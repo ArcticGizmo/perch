@@ -181,6 +181,12 @@ internal sealed record RealtimeChannel(
     public static RealtimeChannel Moves(Guid gameId) =>
         new($"realtime:public:moves:{gameId}", RealtimeKind.PostgresChanges, "public", "moves", "INSERT", $"game_id=eq.{gameId}");
 
+    /// <summary>A single Draw-with-Perch game's <c>public.draw_rounds</c> change channel, filtered to that game.
+    /// Listens to every change (a round is inserted when a drawing is submitted and updated on each guess), so
+    /// the subscriber re-fetches whenever the opponent draws or guesses.</summary>
+    public static RealtimeChannel DrawRounds(Guid gameId) =>
+        new($"realtime:public:draw_rounds:{gameId}", RealtimeKind.PostgresChanges, "public", "draw_rounds", "*", $"game_id=eq.{gameId}");
+
     /// <summary>A user's transient broadcast inbox — where invites, invite responses, nudges and rematches are
     /// delivered instantly (the persistent DB rows are still the source of truth; this only beats the poll).</summary>
     public static RealtimeChannel Inbox(Guid userId) =>
