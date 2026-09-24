@@ -19,16 +19,22 @@ namespace Perch.Avalonia.Windows;
 /// "Auto Confirm") — via the email/password grant, so from a single machine you can have the puppet befriend
 /// you, post, and react, and watch it all land in your real overlay.
 ///
-/// <para>Gated behind <see cref="SocialDebug.Enabled"/> (the <c>PERCH_SOCIAL_DEBUG</c> flag), so it never
-/// appears in a normal install. The puppet keeps its session in an in-memory secret store, so it never touches
-/// your real signed-in session.</para>
+/// <para>Laid out as a staged flow: <b>Account</b> (sign in) → <b>Handle</b> (claim one, or show the one the
+/// login already has) → <b>Actions</b> + <b>Games</b>. Each later stage stays hidden until the one before it is
+/// done, and every action reports its progress / error on a status line directly beneath its own button.</para>
+///
+/// <para>Gated behind <see cref="SocialDebug.Enabled"/> (Debug builds only), so it never appears in a normal
+/// install. The puppet keeps its session in an in-memory secret store, so it never touches your real signed-in
+/// session.</para>
 /// </summary>
 internal sealed class DebugSocialWindow : Window
 {
     private readonly SupabaseSocialClient _real;
     private readonly Action _refreshReal;
     private readonly Action<string>? _testReaction;
-    private SupabaseSocialClient? _puppet;
+    private readonly Func<string>? _gateStatus;
+    private readonly SocialDebugConfig _dbg;
+    private SupabaseSocialClient? _puppet;   // non-null only once signed in
 
     // A ring of reactions so each "React" click uses a different emoji — reactions are one-per-user, so
     // re-clicking the same emoji is a delete-then-insert that leaves the count unchanged and so wouldn't
@@ -36,15 +42,33 @@ internal sealed class DebugSocialWindow : Window
     private static readonly string[] ReactCycle = ["🔥", "🎉", "😂", "❤️", "👍", "🙌", "😮", "😢"];
     private int _reactIx;
 
-    private readonly Func<string>? _gateStatus;
-    private readonly SocialDebugConfig _dbg;
-    private readonly List<Window> _c4Windows = new();   // the current pair of Connect 4 boards (yours + puppet's)
+    private readonly List<Window> _c4Windows = new();    // the current pair of Connect 4 boards (yours + puppet's)
     private readonly List<Window> _drawWindows = new();  // the current pair of Draw with Perch boards (yours + puppet's)
+    private ComposeWindow? _compose;
 
-    private readonly TextBox _email, _password, _handle, _target, _status, _emoji;
-    private readonly SelectableTextBlock _log;
-    private readonly SelectableTextBlock _diagLog;
-    private readonly List<string> _diagLines = new();
+    // ── Account stage ──
+    private readonly TextBox _email, _password;
+    private readonly Control _signedOutForm, _signedInRow;
+    private readonly TextBlock _signedInAs;
+    private readonly InlineStatus _signInStatus = new();
+
+    // ── Handle stage ──
+    private readonly Control _handleSection, _claimForm;
+    private readonly TextBox _handle;
+    private readonly TextBlock _handleShown;
+    private readonly InlineStatus _claimStatus = new();
+
+    // ── Actions + games stages ──
+    private readonly Control _actionsSection, _gamesSection;
+    private readonly TextBox _requestTarget;
+    private readonly InlineStatus _postStatus = new(), _requestStatus = new(), _friendsStatus = new(),
+        _reactStatus = new(), _gameStatus = new();
+    private readonly StackPanel _friendsList = new() { Spacing = 6 };
+    private readonly TextBlock _gateLine;
+
+    private int _game;   // 0 = Connect 4, 1 = Draw with Perch
+    private readonly TextBlock _gameBlurb;
+    private readonly Button _gameInviteBtn;
 
     /// <param name="testReaction">Spawns a big-reaction bubble directly (bypassing the network and the
     /// ShowLargeReactions / Do Not Disturb gates), so the animation can be verified in isolation.</param>
@@ -58,280 +82,359 @@ internal sealed class DebugSocialWindow : Window
         _testReaction = testReaction;
         _gateStatus = gateStatus;
         Title = "Social testing (puppet)";
-        Width = 460;
-        Height = 620;
+        Width = 500;
+        Height = 760;
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Palette.FormBgBrush;
 
-        _email = Field("test user email");
-        _password = Field("password");
-        _password.PasswordChar = '•';
-        _handle = Field("puppet handle (e.g. testbot)");
-        _target = Field("your handle");
-        if (_real.Current.Me is { } me) _target.Text = me.Handle;
-        _status = Field("a status to post as the puppet");
-        _emoji = Field("🔥");
-        _emoji.Text = "🔥";   // a default mood/reaction so puppet posts show a mood in the roster
-        _emoji.Width = 60;
-
-        // Prefill the puppet credentials from the environment / .env.local so they don't have to be retyped each
-        // run (PERCH_SOCIAL_DEBUG_EMAIL / _PASSWORD / _HANDLE). If both email and password are present the puppet
-        // is also signed in automatically on open (see OnOpened).
+        // Prefill the puppet credentials from the environment / .env.local (PERCH_SOCIAL_DEBUG_EMAIL / _PASSWORD
+        // / _HANDLE) so they don't have to be retyped each run.
         _dbg = SocialDebugConfig.Resolve();
-        if (_dbg.Email is { } de) _email.Text = de;
-        if (_dbg.Password is { } dp) _password.Text = dp;
-        if (_dbg.Handle is { } dh) _handle.Text = dh;
 
-        _log = new SelectableTextBlock
-        {
-            Foreground = Palette.MutedBrush, FontSize = 12, TextWrapping = TextWrapping.Wrap,
-            Text = "Ready. Create a user in Supabase (Auth → Users → Add user, Auto Confirm), then sign in below.",
-        };
-
-        var panel = new StackPanel { Margin = new Thickness(16), Spacing = 8 };
+        var panel = new StackPanel { Margin = new Thickness(16), Spacing = 12 };
         panel.Children.Add(SettingsUi.SectionTitle("Social testing tool"));
         panel.Children.Add(SettingsUi.BodyText(
-            "Drive a second (puppet) account created in the Supabase dashboard, so you can test the whole loop " +
-            "from one machine. Steps: sign in → claim a handle → send yourself a request → accept it in your " +
-            "real Friends window → post / react."));
+            "Drive a second (puppet) account created in the Supabase dashboard (Auth → Users → Add user, Auto " +
+            "Confirm) so you can test the whole social loop from one machine."));
 
-        panel.Children.Add(Row("Email", _email));
-        panel.Children.Add(Row("Password", _password));
-        panel.Children.Add(ButtonRow(("Sign in as puppet", SignIn)));
+        // ── 1. Account ──────────────────────────────────────────────────────────────
+        _email = Field("puppet email", _dbg.Email);
+        _password = Field("password", _dbg.Password);
+        _password.PasswordChar = '•';
+        var signIn = SettingsUi.FlatButton("Sign in as puppet");
+        Wire(signIn, _signInStatus, SignIn);
+        _password.KeyDown += (_, e) => { if (e.Key == Key.Enter) { e.Handled = true; _ = Run(signIn, _signInStatus, SignIn); } };
+        _signedOutForm = Stack(
+            Row("Email", _email),
+            Row("Password", _password),
+            Buttons(signIn));
 
-        panel.Children.Add(SettingsUi.Separator());
-        panel.Children.Add(Row("Puppet handle", _handle));
-        panel.Children.Add(ButtonRow(("Claim handle", ClaimHandle)));
+        _signedInAs = new TextBlock { Foreground = Palette.FgBrush, FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
+        var signOut = SettingsUi.FlatButton("Sign out");
+        Wire(signOut, _signInStatus, SignOut);
+        var signedIn = new DockPanel();
+        DockPanel.SetDock(signOut, Dock.Right);
+        signedIn.Children.Add(signOut);
+        signedIn.Children.Add(_signedInAs);
+        _signedInRow = signedIn;
 
-        panel.Children.Add(SettingsUi.Separator());
-        panel.Children.Add(Row("Your handle", _target));
-        panel.Children.Add(ButtonRow(
-            ("Send me a friend request", SendRequest),
-            ("Accept my requests", AcceptRequests)));
+        panel.Children.Add(Section("1 · Account", _signedOutForm, _signedInRow, _signInStatus.View));
 
-        panel.Children.Add(SettingsUi.Separator());
-        panel.Children.Add(Row("Status", _status));
-        panel.Children.Add(ButtonRow(("Post as puppet", Post)));
-        var reactRow = SettingsUi.ButtonRow();
-        reactRow.Children.Add(new TextBlock { Text = "Emoji", Foreground = Palette.MutedBrush, VerticalAlignment = VerticalAlignment.Center, Width = 90 });
-        reactRow.Children.Add(_emoji);
-        var reactBtn = SettingsUi.FlatButton("React to my latest post");
-        reactBtn.Click += (_, _) => Run(React);
-        reactRow.Children.Add(reactBtn);
-        var unreactBtn = SettingsUi.FlatButton("Remove reaction");
-        unreactBtn.Click += (_, _) => Run(Unreact);
-        reactRow.Children.Add(unreactBtn);
-        panel.Children.Add(reactRow);
+        // ── 2. Handle ───────────────────────────────────────────────────────────────
+        _handle = Field("puppet handle (e.g. testbot)", _dbg.Handle);
+        var claim = SettingsUi.FlatButton("Claim handle");
+        Wire(claim, _claimStatus, ClaimHandle);
+        _claimForm = Stack(
+            SettingsUi.BodyText("This login has no handle yet — claim one to unlock the actions below."),
+            Row("Handle", _handle),
+            Buttons(claim));
+        _handleShown = new TextBlock { Foreground = Palette.FgBrush, FontSize = 13 };
+        _handleSection = Section("2 · Handle", _claimForm, _handleShown, _claimStatus.View);
+        panel.Children.Add(_handleSection);
 
-        // Fire the big-reaction bubble directly — no network, no ShowLargeReactions / DND gate — so you can
-        // confirm the animation itself works independently of the detection path.
-        var testBubble = SettingsUi.FlatButton("Test big reaction (local)");
-        testBubble.Click += (_, _) =>
+        // ── 3. Actions ──────────────────────────────────────────────────────────────
+        // Post a status — through the same composer the real "Post a status" uses (its own errors show in it).
+        var post = SettingsUi.FlatButton("Post a status as puppet…");
+        post.Click += (_, _) => OpenCompose();
+
+        // Friend request — defaults to your real handle, the usual target.
+        _requestTarget = Field("handle to befriend", _real.Current.Me?.Handle);
+        var send = SettingsUi.FlatButton("Send friend request");
+        Wire(send, _requestStatus, SendRequest);
+
+        // Friends — the puppet's friend graph + block list, each row with its own actions.
+        var refreshFriends = SettingsUi.FlatButton("Refresh");
+        Wire(refreshFriends, _friendsStatus, async () => { await RefreshFriends(); return null; });
+
+        // Large emojis — reactions on your latest post, which fire the big-reaction bubble in your overlay.
+        _gateLine = new TextBlock { Foreground = Palette.MutedBrush, FontSize = 11, TextWrapping = TextWrapping.Wrap };
+        var react = SettingsUi.FlatButton("React to my latest post");
+        Wire(react, _reactStatus, React);
+        var unreact = SettingsUi.FlatButton("Remove reaction");
+        Wire(unreact, _reactStatus, Unreact);
+        var local = SettingsUi.FlatButton("Local bubble (no network)");
+        local.Click += (_, _) =>
         {
             var emoji = ReactCycle[_reactIx++ % ReactCycle.Length];
             _testReaction?.Invoke(emoji);
-            Log(_testReaction is null ? "Test hook not wired." : $"Spawned a local {emoji} bubble (bypasses settings/DND).");
+            if (_testReaction is null) _reactStatus.Error("Test hook not wired.");
+            else _reactStatus.Ok($"Spawned a local {emoji} bubble (bypasses settings / DND).");
+            UpdateGateLine();
         };
-        var diagnose = SettingsUi.FlatButton("Diagnose big reactions");
-        diagnose.Click += (_, _) => Run(Diagnose);
-        var testRow = SettingsUi.ButtonRow();
-        testRow.Children.Add(testBubble);
-        testRow.Children.Add(diagnose);
-        panel.Children.Add(testRow);
 
-        panel.Children.Add(SettingsUi.Separator());
-        var refresh = SettingsUi.FlatButton("Refresh my overlay now");
-        refresh.Click += (_, _) => { _refreshReal(); Log("Asked your overlay to re-poll."); };
-        var dnd = SettingsUi.FlatButton("Check DND state");
-        dnd.Click += (_, _) => Log($"Windows Do Not Disturb detected as: {(PlatformServices.DoNotDisturb.IsActive ? "ON" : "off")}. " +
-            "Toggle it in the Action Center and click again — if this stays 'off' when DND is on, the detection needs another tweak.");
-        var actionsRow = SettingsUi.ButtonRow();
-        actionsRow.Children.Add(refresh);
-        actionsRow.Children.Add(dnd);
-        panel.Children.Add(actionsRow);
-        panel.Children.Add(_log);
+        _actionsSection = Section("3 · Actions",
+            Sub("Post a status"), Buttons(post), _postStatus.View,
+            Sub("Send a friend request"), Row("To", _requestTarget), Buttons(send), _requestStatus.View,
+            SubWith("Friends", refreshFriends), _friendsList, _friendsStatus.View,
+            Sub("Large emojis"),
+            SettingsUi.BodyText("Reacts to your latest post as the puppet (cycling emoji so each is new) — a new " +
+                "reaction should float a big bubble up your screen."),
+            Buttons(react, unreact, local), _gateLine, _reactStatus.View);
+        panel.Children.Add(_actionsSection);
 
-        // Connect 4: open both sides of one online game (yours + the puppet's) so the whole networked loop can
-        // be played from this machine, through the real backend.
-        panel.Children.Add(SettingsUi.Separator());
-        panel.Children.Add(SettingsUi.FieldCaption("Connect 4"));
-        panel.Children.Add(SettingsUi.BodyText(
-            "Opens two boards — yours and the puppet's — for one game, so you can play both sides here and watch " +
-            "moves sync through the real backend. Befriends the puppet first if needed. (Needs the connect4 " +
-            "migration applied to the database.)"));
-        panel.Children.Add(ButtonRow(
-            ("Start Connect 4 vs puppet (both boards)", StartConnect4),
-            ("Invite me (from puppet)", InviteFromPuppet)));
-
-        // Draw with Perch: same idea, but the game is born from a challenge (no direct create), so the puppet
-        // challenges you with a seeded doodle and — for "both boards" — you accept it straight away.
-        panel.Children.Add(SettingsUi.Separator());
-        panel.Children.Add(SettingsUi.FieldCaption("Draw with Perch"));
-        panel.Children.Add(SettingsUi.BodyText(
-            "Opens two boards — yours and the puppet's — for one Draw game. The puppet challenges you with a " +
-            "quick doodle, then you accept, so it's your turn to guess on your board. Befriends the puppet first " +
-            "if needed. (Needs the draw-with-perch migration applied to the database.)"));
-        panel.Children.Add(ButtonRow(
-            ("Start Draw vs puppet (both boards)", StartDraw),
-            ("Challenge me (from puppet)", ChallengeFromPuppet)));
-
-        panel.Children.Add(SettingsUi.Separator());
-        panel.Children.Add(SettingsUi.FieldCaption("Reaction diagnostics (live)"));
-        _diagLog = new SelectableTextBlock
-        {
-            Foreground = Palette.MutedBrush, FontSize = 11, TextWrapping = TextWrapping.Wrap,
-            FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
-            Text = "(each poll's reaction state on your post appears here — newest first)",
-        };
-        panel.Children.Add(_diagLog);
+        // ── 4. Games ────────────────────────────────────────────────────────────────
+        _gameBlurb = SettingsUi.BodyText("");
+        var openBoards = SettingsUi.FlatButton("Open both boards");
+        Wire(openBoards, _gameStatus, () => _game == 0 ? StartConnect4() : StartDraw());
+        _gameInviteBtn = SettingsUi.FlatButton("");
+        Wire(_gameInviteBtn, _gameStatus, () => _game == 0 ? InviteFromPuppet() : ChallengeFromPuppet());
+        var picker = SettingsUi.Segmented(["Connect 4", "Draw with Perch"], 0, i => { _game = i; UpdateGameCopy(); _gameStatus.Clear(); });
+        _gamesSection = Section("4 · Games", picker, _gameBlurb, Buttons(openBoards, _gameInviteBtn), _gameStatus.View);
+        panel.Children.Add(_gamesSection);
+        UpdateGameCopy();
 
         Content = new ScrollViewer { Content = panel };
         AddHandler(KeyDownEvent, (_, e) => { if (e.Key == Key.Escape) { Close(); e.Handled = true; } }, RoutingStrategies.Tunnel);
+        UpdateStages();
     }
 
     protected override void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
-        // With credentials configured, get the puppet signed in (and handle claimed) on open, so the tester can
-        // jump straight to posting / "Start Connect 4 vs puppet".
-        if (_dbg.HasCredentials && _puppet is null) Run(AutoSetup);
+        // With credentials configured, sign the puppet in on open (the result shows under the Sign in button).
+        if (_dbg.HasCredentials && _puppet is null) _ = Run(null, _signInStatus, SignIn);
     }
 
-    // ── actions ─────────────────────────────────────────────────────────────────
-
-    // Signs the puppet in from the configured credentials and, if a handle is configured and not yet claimed,
-    // claims it — so opening this window leaves a ready-to-play puppet.
-    private async Task AutoSetup()
+    protected override void OnClosed(EventArgs e)
     {
-        await SignIn();
-        if (_dbg.Handle is { } handle && _puppet?.Current.Me is null)
+        _compose?.Close();
+        base.OnClosed(e);
+    }
+
+    // ── stage gating ────────────────────────────────────────────────────────────────
+
+    // Shows each stage only once the one before it is done: sign in → handle → actions/games.
+    private void UpdateStages()
+    {
+        bool signedIn = _puppet is not null;
+        var me = _puppet?.Current.Me;
+
+        _signedOutForm.IsVisible = !signedIn;
+        _signedInRow.IsVisible = signedIn;
+        _signedInAs.Text = signedIn ? $"Signed in as {_email.Text?.Trim()}" : "";
+
+        _handleSection.IsVisible = signedIn;
+        _claimForm.IsVisible = signedIn && me is null;
+        _handleShown.IsVisible = me is not null;
+        _handleShown.Text = me is null ? "" : $"@{me.Handle}";
+
+        _actionsSection.IsVisible = me is not null;
+        _gamesSection.IsVisible = me is not null;
+        if (me is not null) UpdateGateLine();
+    }
+
+    private void UpdateGameCopy()
+    {
+        if (_game == 0)
         {
-            _handle.Text = handle;
-            await ClaimHandle();
+            _gameBlurb.Text = "Opens two boards — yours and the puppet's — for one game, so you can play both sides " +
+                "and watch moves sync through the real backend. Befriends the puppet first if needed.";
+            _gameInviteBtn.Content = "Invite me (from puppet)";
+        }
+        else
+        {
+            _gameBlurb.Text = "The puppet challenges you with a quick doodle; \"Open both boards\" also accepts it so " +
+                "your board lands on the guess screen. Befriends the puppet first if needed.";
+            _gameInviteBtn.Content = "Challenge me (from puppet)";
         }
     }
 
-    private async Task SignIn()
+    private void UpdateGateLine() => _gateLine.Text = _gateStatus is null ? "" : "Gates: " + _gateStatus();
+
+    // ── account / handle ────────────────────────────────────────────────────────────
+
+    private async Task<string?> SignIn()
     {
-        _puppet = new SupabaseSocialClient(SupabaseConfig.Resolve(), new InMemorySecretStore(), new NoopUrlOpener());
-        var state = await _puppet.SignInWithPasswordAsync(_email.Text?.Trim() ?? "", _password.Text ?? "");
-        Log(state.Me is { } me ? $"Signed in as @{me.Handle}." : "Signed in — no handle yet; claim one below.");
+        var client = new SupabaseSocialClient(SupabaseConfig.Resolve(), new InMemorySecretStore(), new NoopUrlOpener());
+        var state = await client.SignInWithPasswordAsync(_email.Text?.Trim() ?? "", _password.Text ?? "");
+        _puppet = client;   // only once the sign-in actually succeeded
+        UpdateStages();
+        if (state.Me is not null) await RefreshFriends();
+        return state.Me is { } me ? $"Signed in — handle @{me.Handle}." : "Signed in — claim a handle below.";
     }
 
-    private async Task ClaimHandle()
+    private async Task<string?> SignOut()
     {
-        var p = RequirePuppet();
-        var me = await p.ClaimHandleAsync(_handle.Text?.Trim() ?? "");
-        Log($"Puppet handle is now @{me.Handle}.");
+        var p = _puppet;
+        _puppet = null;
+        _compose?.Close();
+        _friendsList.Children.Clear();
+        foreach (var s in new[] { _claimStatus, _postStatus, _requestStatus, _friendsStatus, _reactStatus, _gameStatus }) s.Clear();
+        UpdateStages();
+        if (p is not null) await p.SignOutAsync();
+        return "Signed out.";
     }
 
-    private async Task SendRequest()
+    private async Task<string?> ClaimHandle()
     {
-        var p = RequirePuppet();
-        var target = await FindTarget(p);
+        var me = await Puppet().ClaimHandleAsync(_handle.Text?.Trim() ?? "");
+        UpdateStages();
+        await RefreshFriends();
+        return $"Claimed @{me.Handle}.";
+    }
+
+    // ── actions ─────────────────────────────────────────────────────────────────────
+
+    private void OpenCompose()
+    {
+        if (_puppet is not { } p) return;
+        if (_compose is { } open) { open.Activate(); return; }
+        _postStatus.Clear();
+        _compose = new ComposeWindow(async (body, mood) =>
+        {
+            await p.PostAsync(body, mood);
+            _postStatus.Ok($"Posted \"{body}\" — it should appear in your overlay shortly.");
+            _refreshReal();
+        }, p.Current.Me?.MoodEmoji, title: $"Post as @{p.Current.Me?.Handle}");
+        _compose.Closed += (_, _) => _compose = null;
+        _compose.Show(this);
+    }
+
+    private async Task<string?> SendRequest()
+    {
+        var p = Puppet();
+        var handle = _requestTarget.Text?.Trim().TrimStart('@') ?? "";
+        if (handle.Length == 0) throw new SocialException("Enter a handle to send the request to.");
+        var target = await p.FindByHandleAsync(handle) ?? throw new SocialException($"No user @{handle}.");
         await p.SendRequestAsync(target.Id);
-        Log($"Sent a friend request to @{target.Handle}. Accept it in your Friends window (the + in the region).");
         _refreshReal();
+        await RefreshFriends();
+        return $"Sent a request to @{target.Handle}. Accept it in your Friends window (the + in the region).";
     }
 
-    private async Task AcceptRequests()
+    // Rebuilds the friends list: every edge in the puppet's graph plus its block list, each row carrying the
+    // actions that make sense for its state and its own status line for errors.
+    private async Task RefreshFriends()
     {
-        var p = RequirePuppet();
-        var incoming = (await p.GetFriendsAsync()).Where(f => f.State == FriendshipState.Incoming).ToList();
-        foreach (var f in incoming) await p.RespondAsync(f.Profile.Id, accept: true);
-        Log(incoming.Count == 0 ? "No incoming requests for the puppet." : $"Accepted {incoming.Count} request(s).");
-        _refreshReal();
+        var p = Puppet();
+        var friends = await p.GetFriendsAsync();
+        var blocked = await p.GetBlockedAsync();
+        var blockedIds = blocked.Select(b => b.Id).ToHashSet();
+
+        _friendsList.Children.Clear();
+        foreach (var f in friends.Where(f => !blockedIds.Contains(f.Profile.Id)).OrderBy(f => f.State))
+            _friendsList.Children.Add(FriendRow(f.Profile, f.State));
+        foreach (var b in blocked)
+            _friendsList.Children.Add(FriendRow(b, FriendshipState.Blocked));
+        if (_friendsList.Children.Count == 0)
+            _friendsList.Children.Add(SettingsUi.FieldCaption("No friends, requests or blocks yet."));
     }
 
-    private async Task Post()
+    private Control FriendRow(Profile who, FriendshipState state)
     {
-        var p = RequirePuppet();
-        var body = _status.Text?.Trim() ?? "";
-        if (body.Length == 0) { Log("Enter a status to post."); return; }
-        await p.PostAsync(body, string.IsNullOrWhiteSpace(_emoji.Text) ? null : _emoji.Text.Trim());
-        Log($"Posted as the puppet: \"{body}\". It should appear in your overlay shortly.");
-        _refreshReal();
+        var rowStatus = new InlineStatus();
+        var buttons = new WrapPanel { Orientation = Orientation.Horizontal };
+
+        void Act(string label, Func<SupabaseSocialClient, Task> act, string done)
+        {
+            var b = SettingsUi.FlatButton(label);
+            b.Padding = new Thickness(8, 3);
+            b.FontSize = 12;
+            b.Margin = new Thickness(0, 0, 6, 0);
+            // Errors land on this row's own status line; a success refreshes the list (replacing the row), so its
+            // confirmation goes on the section's status instead.
+            b.Click += async (_, _) =>
+            {
+                if (await Run(b, rowStatus, async () => { await act(Puppet()); return null; }))
+                {
+                    _refreshReal();
+                    await Run(null, _friendsStatus, async () => { await RefreshFriends(); return done; });
+                }
+            };
+            buttons.Children.Add(b);
+        }
+
+        var h = $"@{who.Handle}";
+        switch (state)
+        {
+            case FriendshipState.Incoming:
+                Act("Accept", p => p.RespondAsync(who.Id, accept: true), $"Accepted {h}.");
+                Act("Reject", p => p.RespondAsync(who.Id, accept: false), $"Rejected {h}.");
+                Act("Block", p => p.BlockAsync(who.Id), $"Blocked {h}.");
+                break;
+            case FriendshipState.Pending:
+                Act("Cancel", p => p.RemoveFriendAsync(who.Id), $"Cancelled the request to {h}.");
+                Act("Block", p => p.BlockAsync(who.Id), $"Blocked {h}.");
+                break;
+            case FriendshipState.Accepted:
+                Act("Remove", p => p.RemoveFriendAsync(who.Id), $"Removed {h}.");
+                Act("Block", p => p.BlockAsync(who.Id), $"Blocked {h}.");
+                break;
+            case FriendshipState.Blocked:
+                Act("Unblock", p => p.UnblockAsync(who.Id), $"Unblocked {h}.");
+                break;
+        }
+
+        var name = new TextBlock
+        {
+            Text = h, Foreground = Palette.FgBrush, FontSize = 13, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var stateText = new TextBlock
+        {
+            Text = state switch
+            {
+                FriendshipState.Incoming => "wants to be friends",
+                FriendshipState.Pending => "request sent",
+                FriendshipState.Accepted => "friends",
+                _ => "blocked",
+            },
+            Foreground = Palette.MutedBrush, FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+        };
+        var line = new DockPanel();
+        DockPanel.SetDock(buttons, Dock.Right);
+        line.Children.Add(buttons);
+        line.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Children = { name, stateText } });
+
+        return new Border
+        {
+            Background = Palette.ButtonBgBrush, CornerRadius = new CornerRadius(4), Padding = new Thickness(8, 5),
+            Child = new StackPanel { Spacing = 2, Children = { line, rowStatus.View } },
+        };
     }
 
-    private async Task React()
+    private async Task<string?> React()
     {
-        var p = RequirePuppet();
-        var target = await FindTarget(p);
-        var feed = await p.GetFeedAsync(50);
-        var latest = feed.FirstOrDefault(x => x.Author.Id == target.Id);
-        if (latest is null) { Log($"No visible post by @{target.Handle} — are you accepted friends, and have you posted?"); return; }
+        var (p, me, _) = Players();
+        var latest = (await p.GetFeedAsync(50)).FirstOrDefault(x => x.Author.Id == me.Id)
+            ?? throw new SocialException($"No visible post by @{me.Handle} — are you accepted friends, and have you posted?");
         // Cycle the emoji so each click is a genuinely new reaction (see ReactCycle) — otherwise a repeat with
         // the same emoji leaves the count unchanged and no big-reaction bubble fires.
         var emoji = ReactCycle[_reactIx++ % ReactCycle.Length];
-        _emoji.Text = emoji;   // reflect what was actually used
         await p.ReactAsync(latest.Id, emoji, on: true);
-        Log($"Reacted {emoji} to @{target.Handle}'s latest post.");
         _refreshReal();
+        UpdateGateLine();
+        return $"Reacted {emoji} to your latest post.";
     }
 
     // Clears the puppet's reaction from your latest post (reactions are one-per-user, so this removes whichever
     // emoji it currently holds). Lets you react → remove → react again to re-trigger the big-reaction bubble.
-    private async Task Unreact()
+    private async Task<string?> Unreact()
     {
-        var p = RequirePuppet();
-        var target = await FindTarget(p);
-        var feed = await p.GetFeedAsync(50);
-        var latest = feed.FirstOrDefault(x => x.Author.Id == target.Id);
-        if (latest is null) { Log($"No visible post by @{target.Handle} — nothing to un-react."); return; }
+        var (p, me, _) = Players();
+        var latest = (await p.GetFeedAsync(50)).FirstOrDefault(x => x.Author.Id == me.Id)
+            ?? throw new SocialException($"No visible post by @{me.Handle} — nothing to un-react.");
         await p.ReactAsync(latest.Id, "", on: false);   // on:false removes the puppet's own reaction, if any
-        Log($"Removed the puppet's reaction from @{target.Handle}'s latest post.");
         _refreshReal();
+        return "Removed the puppet's reaction from your latest post.";
     }
 
-    // Why isn't the big reaction firing? Reports the gates (ShowLargeReactions / DND) and whether the real
-    // client actually sees a reaction on your latest post. Big reactions only fire for reactions that arrive
-    // *after* the feed starts (the backlog is baseline), so a reaction already present won't re-fire — react
-    // again (a new emoji) to see it.
-    private async Task Diagnose()
-    {
-        var gate = _gateStatus is null ? "Gate status hook not wired." : _gateStatus();
-        var roster = await _real.GetRosterAsync();
-        if (roster.MyLatest is null)
-        {
-            Log(gate + "\n\nYour roster has no latest status — you haven't posted, so there's nothing for a friend to react to. Post a status first.");
-            return;
-        }
-        var rx = roster.MyReactions.Count == 0
-            ? "(none)"
-            : string.Join(", ", roster.MyReactions.Select(g => $"{g.Emoji}x{g.Count}"));
-        var body = roster.MyLatest.Body;
-        Log($"{gate}\n\nYour latest status: \"{(body.Length > 40 ? body[..40] + "…" : body)}\" — reactions the real client sees on it: {rx}.\n\n" +
-            "If a reaction shows here but no bubble fired: ShowLargeReactions must be True and DND suppressing must be False above; and the " +
-            "reaction must be NEW since the feed started (a reaction already present is baseline). Click React (it cycles emojis) to add a fresh one.");
-    }
+    // ── games ───────────────────────────────────────────────────────────────────────
 
     // Creates a real-vs-puppet game (befriending first if the two aren't already accepted friends) and opens
     // two online boards side by side — one signed in as you, one as the puppet. Since both clients run in this
     // process against the real backend, you can play both sides and watch each move propagate via the other
     // board's realtime nudge / poll.
-    private async Task StartConnect4()
+    private async Task<string?> StartConnect4()
     {
-        var p = RequirePuppet();
-        if (_real.Current.Me is not { } me) throw new SocialException("Your real account needs a claimed handle first.");
-        if (p.Current.Me is not { } pup) throw new SocialException("Claim a puppet handle first.");
-
-        GameSummary game;
-        try
-        {
-            game = await _real.CreateGameAsync(pup.Id);
-        }
-        catch (SocialException)
-        {
-            // Most likely not accepted friends yet — do the handshake (puppet requests, you accept) and retry.
-            Log("Not friends yet — befriending the puppet, then starting the game…");
-            try { await p.SendRequestAsync(me.Id); } catch { }
-            try { await _real.RespondAsync(pup.Id, accept: true); } catch { }
-            game = await _real.CreateGameAsync(pup.Id);   // a second failure surfaces to the caller's Run()
-        }
+        var (_, me, pup) = Players();
+        GameSummary? game = null;
+        await Befriending(me, pup, async () => game = await _real.CreateGameAsync(pup.Id));
         _refreshReal();
-        OpenBoards(game);
-        Log($"Opened both boards. You (@{me.Handle}) are red and move first; the puppet (@{pup.Handle}) plays in the other window.");
+        OpenBoards(game!);
+        return $"Opened both boards. You (@{me.Handle}) are red and move first; the puppet (@{pup.Handle}) plays in the other window.";
     }
 
     // Opens both sides of one game (yours + the puppet's), side by side. Closes any previous pair first so a
@@ -359,57 +462,31 @@ internal sealed class DebugSocialWindow : Window
     }
 
     // Has the puppet send you a Connect 4 invite, so the accept/decline flow can be exercised from the overlay's
-    // GAMES strip (or the lobby). Befriends first if needed.
-    private async Task InviteFromPuppet()
+    // GAMES strip (or the lobby). The puppet drops its opening disc in the centre column as part of the invite
+    // (so when you accept, it's already your move) — mirrors the real compose flow.
+    private async Task<string?> InviteFromPuppet()
     {
-        var p = RequirePuppet();
-        if (_real.Current.Me is not { } me) throw new SocialException("Your real account needs a claimed handle first.");
-        if (p.Current.Me is not { } pup) throw new SocialException("Claim a puppet handle first.");
-
-        // The puppet drops its opening disc in the centre column as part of the invite (so when you accept, it's
-        // already your move) — mirrors the real compose flow.
+        var (p, me, pup) = Players();
         const int puppetFirstCol = 3;
-        try
-        {
-            await p.RequestGameAsync(me.Id, puppetFirstCol);
-        }
-        catch (SocialException)
-        {
-            Log("Not friends yet — befriending the puppet, then inviting…");
-            try { await p.SendRequestAsync(me.Id); } catch { }
-            try { await _real.RespondAsync(pup.Id, accept: true); } catch { }
-            await p.RequestGameAsync(me.Id, puppetFirstCol);
-        }
+        await Befriending(me, pup, () => p.RequestGameAsync(me.Id, puppetFirstCol));
         _refreshReal();
-        Log($"@{pup.Handle} invited you to Connect 4 (opening move played) — accept it from the overlay's GAMES strip or the lobby.");
+        return $"@{pup.Handle} invited you to Connect 4 (opening move played) — accept it from the overlay's GAMES strip or the lobby.";
     }
 
     // Starts a real-vs-puppet Draw game and opens both boards. Draw has no direct-create, so the puppet challenges
     // you (carrying a seeded doodle) and you accept straight away — leaving your board on the guess screen and the
-    // puppet's board waiting. Befriends first if needed.
-    private async Task StartDraw()
+    // puppet's board waiting.
+    private async Task<string?> StartDraw()
     {
-        var p = RequirePuppet();
-        if (_real.Current.Me is not { } me) throw new SocialException("Your real account needs a claimed handle first.");
-        if (p.Current.Me is not { } pup) throw new SocialException("Claim a puppet handle first.");
-
-        DrawRequest req;
-        try
-        {
-            req = await p.RequestDrawGameAsync(me.Id, DrawDifficulty.Easy, "cat", DrawGuessing.LetterHint("cat"), PuppetDoodle());
-        }
-        catch (SocialException)
-        {
-            Log("Not friends yet — befriending the puppet, then starting the game…");
-            try { await p.SendRequestAsync(me.Id); } catch { }
-            try { await _real.RespondAsync(pup.Id, accept: true); } catch { }
-            req = await p.RequestDrawGameAsync(me.Id, DrawDifficulty.Easy, "cat", DrawGuessing.LetterHint("cat"), PuppetDoodle());
-        }
-        var state = await _real.AcceptDrawRequestAsync(req.Id);
+        var (p, me, pup) = Players();
+        DrawRequest? req = null;
+        await Befriending(me, pup, async () => req = await p.RequestDrawGameAsync(
+            me.Id, DrawDifficulty.Easy, "cat", DrawGuessing.LetterHint("cat"), PuppetDoodle()));
+        var state = await _real.AcceptDrawRequestAsync(req!.Id);
         _refreshReal();
         OpenDrawBoards(state.Summary);
-        Log($"Opened both boards. The puppet (@{pup.Handle}) drew a {req.Difficulty} word; it's your turn to guess. " +
-            "Solve it and you draw next — the puppet's board becomes the guesser.");
+        return $"Opened both boards. The puppet (@{pup.Handle}) drew a {req.Difficulty} word; it's your turn to guess. " +
+            "Solve it and you draw next — the puppet's board becomes the guesser.";
     }
 
     // Opens both sides of one Draw game (yours + the puppet's), side by side. Closes any previous pair first.
@@ -435,26 +512,28 @@ internal sealed class DebugSocialWindow : Window
     }
 
     // Has the puppet challenge you to Draw (with a seeded doodle), so the accept/decline flow can be exercised
-    // from the overlay's GAMES strip (or the lobby). Befriends first if needed.
-    private async Task ChallengeFromPuppet()
+    // from the overlay's GAMES strip (or the lobby).
+    private async Task<string?> ChallengeFromPuppet()
     {
-        var p = RequirePuppet();
-        if (_real.Current.Me is not { } me) throw new SocialException("Your real account needs a claimed handle first.");
-        if (p.Current.Me is not { } pup) throw new SocialException("Claim a puppet handle first.");
+        var (p, me, pup) = Players();
+        await Befriending(me, pup, () => p.RequestDrawGameAsync(
+            me.Id, DrawDifficulty.Easy, "cat", DrawGuessing.LetterHint("cat"), PuppetDoodle()));
+        _refreshReal();
+        return $"@{pup.Handle} challenged you to Draw — accept it from the overlay's GAMES strip or the lobby, then guess.";
+    }
 
-        try
-        {
-            await p.RequestDrawGameAsync(me.Id, DrawDifficulty.Easy, "cat", DrawGuessing.LetterHint("cat"), PuppetDoodle());
-        }
+    // Runs a game action; if it fails (most likely because you and the puppet aren't accepted friends yet), does
+    // the handshake — puppet requests, you accept — and retries once. A second failure surfaces to Run().
+    private async Task Befriending(Profile me, Profile pup, Func<Task> attempt)
+    {
+        try { await attempt(); }
         catch (SocialException)
         {
-            Log("Not friends yet — befriending the puppet, then challenging…");
-            try { await p.SendRequestAsync(me.Id); } catch { }
+            _gameStatus.Busy("Not friends yet — befriending the puppet, then retrying…");
+            try { await Puppet().SendRequestAsync(me.Id); } catch { }
             try { await _real.RespondAsync(pup.Id, accept: true); } catch { }
-            await p.RequestDrawGameAsync(me.Id, DrawDifficulty.Easy, "cat", DrawGuessing.LetterHint("cat"), PuppetDoodle());
+            await attempt();
         }
-        _refreshReal();
-        Log($"@{pup.Handle} challenged you to Draw — accept it from the overlay's GAMES strip or the lobby, then guess.");
     }
 
     // A quick throwaway doodle for the puppet's challenge (a rough cat-ish shape on the 0..1000 canvas).
@@ -468,67 +547,124 @@ internal sealed class DebugSocialWindow : Window
         new DrawStroke(3, 0, new List<DrawPoint> { new(480, 500), new(500, 520), new(520, 500) }),   // nose
     };
 
-    private async Task<Profile> FindTarget(SupabaseSocialClient p)
-    {
-        var handle = _target.Text?.Trim() ?? "";
-        if (handle.Length == 0) throw new SocialException("Enter your handle in \"Your handle\".");
-        return await p.FindByHandleAsync(handle) ?? throw new SocialException($"No user @{handle}.");
-    }
-
-    private SupabaseSocialClient RequirePuppet() =>
+    private SupabaseSocialClient Puppet() =>
         _puppet ?? throw new SocialException("Sign in as the puppet first.");
 
-    // ── plumbing ────────────────────────────────────────────────────────────────
-
-    // Runs an async action, reporting success/failure to the log and never letting it throw out of a handler.
-    private async void Run(Func<Task> action)
+    // The puppet client plus both claimed profiles — what every "puppet ↔ you" action needs.
+    private (SupabaseSocialClient Puppet, Profile Me, Profile Pup) Players()
     {
-        try { await action(); }
-        catch (SocialException ex) { Log("⚠ " + ex.Message); }
-        catch (Exception ex) { Log("⚠ " + ex.Message); }
+        var p = Puppet();
+        if (_real.Current.Me is not { } me) throw new SocialException("Your real account needs to be signed in with a claimed handle first.");
+        if (p.Current.Me is not { } pup) throw new SocialException("Claim a puppet handle first.");
+        return (p, me, pup);
     }
 
-    private void Log(string message) => _log.Text = message;
+    // ── plumbing ────────────────────────────────────────────────────────────────────
 
-    /// <summary>Appends a live diagnostic line (newest first), capped so the panel stays readable. Fed by the
-    /// feed monitor host (per-poll reaction state) and the big-reaction gate decision.</summary>
-    public void Diag(string message)
+    private void Wire(Button button, InlineStatus status, Func<Task<string?>> action) =>
+        button.Click += async (_, _) => await Run(button, status, action);
+
+    // Runs an async action with its result reported on the status line beside the button that triggered it:
+    // "Working…" while in flight (trigger disabled), then the returned message (or cleared when null), or the
+    // error. Never throws; returns whether the action succeeded.
+    private static async Task<bool> Run(Button? trigger, InlineStatus status, Func<Task<string?>> action)
     {
-        _diagLines.Insert(0, message);
-        if (_diagLines.Count > 40) _diagLines.RemoveRange(40, _diagLines.Count - 40);
-        _diagLog.Text = string.Join("\n", _diagLines);
+        if (trigger is not null) trigger.IsEnabled = false;
+        status.Busy("Working…");
+        try
+        {
+            var message = await action();
+            if (message is null) status.Clear(); else status.Ok(message);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            status.Error(ex.Message);
+            return false;
+        }
+        finally
+        {
+            if (trigger is not null) trigger.IsEnabled = true;
+        }
     }
 
-    private static TextBox Field(string watermark)
+    /// <summary>A one-line (wrapping) status shown directly beneath an action: muted while working / on success,
+    /// the error colour on failure, hidden when empty.</summary>
+    private sealed class InlineStatus
     {
-        var t = SettingsUi.ThemedTextBox("");
-        t.PlaceholderText = watermark;
-        t.Width = 240;
+        public readonly TextBlock View = new() { FontSize = 12, TextWrapping = TextWrapping.Wrap, IsVisible = false };
+        public void Busy(string text) => Set(text, Palette.MutedBrush);
+        public void Ok(string text) => Set("✓ " + text, Palette.MutedBrush);
+        public void Error(string text) => Set("⚠ " + text, Palette.ErrorBrush);
+        public void Clear() { View.Text = ""; View.IsVisible = false; }
+        private void Set(string text, IBrush brush) { View.Text = text; View.Foreground = brush; View.IsVisible = true; }
+    }
+
+    private static TextBox Field(string placeholder, string? value)
+    {
+        var t = SettingsUi.ThemedTextBox(value ?? "");
+        t.PlaceholderText = placeholder;
+        t.Width = 260;
         return t;
     }
 
-    private Control Row(string label, Control field)
+    private static Control Row(string label, Control field)
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
-        row.Children.Add(new TextBlock { Text = label, Foreground = Palette.MutedBrush, VerticalAlignment = VerticalAlignment.Center, Width = 90 });
+        row.Children.Add(new TextBlock { Text = label, Foreground = Palette.MutedBrush, VerticalAlignment = VerticalAlignment.Center, Width = 80 });
         row.Children.Add(field);
         return row;
     }
 
-    private Control ButtonRow(params (string Label, Func<Task> Action)[] buttons)
+    // A wrapping row of buttons, so long labels flow onto a second line rather than off the window.
+    private static Control Buttons(params Button[] buttons)
     {
-        var row = SettingsUi.ButtonRow();
-        foreach (var (label, action) in buttons)
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        foreach (var b in buttons)
         {
-            var b = SettingsUi.FlatButton(label);
-            b.Click += (_, _) => Run(action);
+            b.Margin = new Thickness(0, 0, 8, 4);
             row.Children.Add(b);
         }
         return row;
     }
 
-    private static Control Left(Control c) =>
-        new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, Children = { c } };
+    private static StackPanel Stack(params Control[] children)
+    {
+        var s = new StackPanel { Spacing = 8 };
+        foreach (var c in children) s.Children.Add(c);
+        return s;
+    }
+
+    // A titled card grouping one stage of the flow.
+    private static Control Section(string title, params Control[] children)
+    {
+        var body = Stack(children);
+        body.Children.Insert(0, new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeight.SemiBold, Foreground = Palette.TitleBrush });
+        return new Border
+        {
+            Background = Palette.SurfaceSunkenBrush, BorderBrush = Palette.BorderBrush, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6), Padding = new Thickness(12), Child = body,
+        };
+    }
+
+    // A subsection caption inside a card (with a little breathing room above it).
+    private static Control Sub(string text) => new TextBlock
+    {
+        Text = text, FontSize = 12, FontWeight = FontWeight.SemiBold, Foreground = Palette.FgBrush,
+        Margin = new Thickness(0, 6, 0, 0),
+    };
+
+    // A subsection caption with a small control pinned to its right (e.g. the friends list's Refresh).
+    private static Control SubWith(string text, Button right)
+    {
+        right.Padding = new Thickness(8, 2);
+        right.FontSize = 11;
+        var d = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
+        DockPanel.SetDock(right, Dock.Right);
+        d.Children.Add(right);
+        d.Children.Add(new TextBlock { Text = text, FontSize = 12, FontWeight = FontWeight.SemiBold, Foreground = Palette.FgBrush, VerticalAlignment = VerticalAlignment.Center });
+        return d;
+    }
 }
 
 /// <summary>Whether the Social developer testing tool is shown. Only in Debug builds, so it never surfaces in a

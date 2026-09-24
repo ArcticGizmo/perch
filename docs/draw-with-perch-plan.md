@@ -100,8 +100,8 @@ is a `Connect4Disc`), so Draw is a **parallel stack** mirroring the Connect 4 bl
   delivers** (no migration creates the publication).
 - Run `draw_test.sql` against the live DB.
 - A two-account draw→guess playtest. **A DEBUG puppet tester is wired** — `DebugSocialWindow` (Settings →
-  Social → "Testing tool", gated by `PERCH_SOCIAL_DEBUG`) has "Start Draw vs puppet (both boards)" and
-  "Challenge me (from puppet)", so once the migration is applied the whole loop is playable from one machine
+  Social → "Testing tool", gated by `PERCH_SOCIAL_DEBUG`) has a Games section — pick "Draw with Perch",
+  then "Open both boards" or "Challenge me (from puppet)" — so once the migration is applied the whole loop is playable from one machine
   against the real backend. (Draw has no direct-create, so "both boards" = puppet challenges with a seeded
   doodle → you auto-accept.)
 
