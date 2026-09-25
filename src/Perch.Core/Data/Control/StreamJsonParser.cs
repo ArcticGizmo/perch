@@ -21,23 +21,28 @@ internal static class StreamJsonParser
 
         try
         {
-            return TranscriptJson.AsString(root["type"]) switch
-            {
-                "system"           => ParseSystem(root),
-                "assistant"        => ParseAssistant(root),
-                "user"             => ParseToolResults(root),
-                "stream_event"     => ParseStreamEvent(root),
-                "control_request"  => ParseControlRequest(root),
-                "control_response" => ParseControlResponse(root),
-                "result"           => ParseResult(root),
-                _                  => [],
-            };
+            var events = ParseRecord(root);
+            if (events.Count == 0 || TranscriptJson.AsString(root["parent_tool_use_id"]) is not { Length: > 0 }) return events;
+            return events.Select(e => e with { FromSubagent = true }).ToList();
         }
         catch
         {
             return [];
         }
     }
+
+    private static IReadOnlyList<SessionEvent> ParseRecord(JsonNode root) =>
+        TranscriptJson.AsString(root["type"]) switch
+        {
+            "system"           => ParseSystem(root),
+            "assistant"        => ParseAssistant(root),
+            "user"             => ParseToolResults(root),
+            "stream_event"     => ParseStreamEvent(root),
+            "control_request"  => ParseControlRequest(root),
+            "control_response" => ParseControlResponse(root),
+            "result"           => ParseResult(root),
+            _                  => [],
+        };
 
     private static IReadOnlyList<SessionEvent> ParseSystem(JsonNode root)
     {
