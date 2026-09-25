@@ -87,6 +87,12 @@ public sealed class RoostRoster
 
     public RoostCounts Counts { get; private set; }
 
+    /// <summary>Panes that entered <see cref="RoostGroup.NeedsYou"/> in the latest <see cref="Update"/> (weren't
+    /// in it after the previous one) — a new "needs you" arrival, which flashes an inactive Roost's taskbar.</summary>
+    public IReadOnlyList<string> NeedsYouArrivals { get; private set; } = [];
+
+    private HashSet<string> _needsYouBefore = new(StringComparer.Ordinal);
+
     /// <summary>The closed pane keys, for persisting. Pruned to keys the roster still holds.</summary>
     public IReadOnlyCollection<string> ClosedKeys => _closed;
 
@@ -130,6 +136,10 @@ public sealed class RoostRoster
 
         _closed.IntersectWith(_entries.Keys);
         Rebuild();
+
+        var needsYou = _rail[(int)RoostGroup.NeedsYou].Panes.Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
+        NeedsYouArrivals = needsYou.Where(k => !_needsYouBefore.Contains(k)).ToList();
+        _needsYouBefore = needsYou;
     }
 
     // The same conversation continuing under a new process — "Take over in Perch" (the terminal process stops,

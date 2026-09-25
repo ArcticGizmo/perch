@@ -284,8 +284,14 @@ internal sealed class RoostWindow : Window
     public bool IsOnScreen(string sessionId) =>
         _roster.Panes.FirstOrDefault(p => p.Session.SessionId == sessionId) is { } pane && _placed.ContainsKey(pane.Key);
 
-    /// <summary>The roster changed (a monitor scan landed) — re-sync feeds, panes and layout.</summary>
-    public void RosterChanged() => Refresh();
+    /// <summary>The roster changed (a monitor scan landed) — re-sync feeds, panes and layout, and flash the
+    /// taskbar when a session newly needs the user while the Roost isn't the active window.</summary>
+    public void RosterChanged()
+    {
+        Refresh();
+        if (_roster.NeedsYouArrivals.Count > 0 && !IsActive && TryGetPlatformHandle() is { } handle)
+            PlatformServices.WindowChrome.FlashTaskbar(handle.Handle);
+    }
 
     /// <summary>Focuses a pane: brings it into view (Tiled scrolls to it, Zoom shows it, Main + stack makes it
     /// main), keeps it expanded by the resolver's focus rule, and acknowledges a done-review session.</summary>

@@ -421,6 +421,13 @@ There's no mandatory pause between checkpoints.
 - Scope: a new `IWindowChrome.FlashTaskbar` (Windows `FlashWindowEx`; Mac stub, later a dock bounce); fires on a
   new *Needs you* arrival while Roost is inactive.
 - Done when: both heads build and the flash has been checked live.
+- As built:
+  - `IWindowChrome.FlashTaskbar`. Windows uses `FlashWindowEx(FLASHW_TRAY | FLASHW_TIMERNOFG)`: the taskbar
+    button flashes until the Roost is activated, and nothing happens if it's already foreground. The Mac stub
+    now does a real `requestUserAttention:` informational Dock bounce, unverified on a Mac.
+  - The trigger is `RoostRoster.NeedsYouArrivals` (tested): panes that entered Needs you in the latest scan. A
+    session that stays blocked doesn't re-flash; one that blocks again does.
+  - Only fires from `RosterChanged` (a scan) while the Roost isn't the active window.
 
 **CP15 · Shared `SessionComposer`**
 - Scope: extract the full composer out of `SessionWindow` (slash palette, `@`-mentions, input history, the
@@ -459,6 +466,8 @@ the highlight layer. Extracting it isn't needed to meet the ask, so it waits unt
 - [ ] CP12: with the Roost active and the pane on screen, a Perch permission and a terminal session's
       done/waiting raise no toast; tab away from the Roost → the pending Perch prompt then toasts once.
 - [ ] P3: takeover keeps the session id and rebinds in place.
+- [ ] CP14: with the Roost open but not focused, a session blocking on you flashes its taskbar button; activating
+      the Roost stops it.
 
 ## Open questions
 - None blocking. Revisit **mini-card capacity** (3 vs 4 per cell) and the **~2s typing-hold pause** after the

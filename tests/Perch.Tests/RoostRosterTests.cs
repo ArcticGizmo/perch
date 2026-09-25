@@ -275,6 +275,25 @@ public class RoostRosterTests
     }
 
     [Fact]
+    public void NeedsYouArrivalsAreOnlyTheNewcomers()
+    {
+        var r = new RoostRoster();
+        r.Update([S("1"), S("2", SessionStatus.AwaitingInput, awaitingSince: T0)], T0);
+        Assert.Equal(["2"], r.NeedsYouArrivals);
+
+        r.Update([S("1"), S("2", SessionStatus.AwaitingInput, awaitingSince: T0)], T0);
+        Assert.Empty(r.NeedsYouArrivals);                        // still waiting — not a new arrival
+
+        r.Update([S("1", SessionStatus.ApiError), S("2", SessionStatus.AwaitingInput, awaitingSince: T0)], T0);
+        Assert.Equal(["1"], r.NeedsYouArrivals);
+
+        r.Update([S("1"), S("2")], T0);                            // both resolved
+        Assert.Empty(r.NeedsYouArrivals);
+        r.Update([S("1"), S("2", SessionStatus.AwaitingInput, awaitingSince: T0)], T0);
+        Assert.Equal(["2"], r.NeedsYouArrivals);                  // blocked again = a fresh arrival
+    }
+
+    [Fact]
     public void DuplicatePidInOneScanYieldsOnePane()
     {
         var r = new RoostRoster();
