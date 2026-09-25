@@ -1,6 +1,8 @@
 # Roost — design & checkpoint plan
 
-**Status (2026-09-25):** design signed off, checkpoint plan below; nothing built yet. Branch `roost`.
+**Status (2026-09-25):** CP1–CP14 and CP16 are built and committed on branch `roost`, each through the green gate
+and render-verified. **CP15 (shared composer) is paused** pending dogfooding. Nothing has been live-tested yet: the
+next step is the *Owed live checks* list at the bottom.
 Mockup: `docs/roost-mockup.html` (published: https://claude.ai/artifact/9JRcPWR2J7ZvtYr3Fgsrk8). The mockup
 was signed off as-is, but it predates two decisions: the **collapse model** and the **"Roost"** name
 (it still says "Command center"). Where the two disagree, this doc wins.
@@ -429,7 +431,9 @@ There's no mandatory pause between checkpoints.
     session that stays blocked doesn't re-flash; one that blocks again does.
   - Only fires from `RosterChanged` (a scan) while the Roost isn't the active window.
 
-**CP15 · Shared `SessionComposer`**
+**CP15 · Shared `SessionComposer`**: **PAUSED (2026-09-25).** At the user's call, this waits until P1–P3
+have been dogfooded (the owed live checks below) and it's clear which full-composer features the panes actually
+miss. It may shrink to cherry-picking those features into the lite composer rather than a full extraction.
 - Scope: extract the full composer out of `SessionWindow` (slash palette, `@`-mentions, input history, the
   highlight overlay) into a shared control, and swap the pane's lite composer for it.
 - Risk: this is the riskiest checkpoint. `SessionWindow.cs` is ~3.7k lines, and the composer highlight overlay
