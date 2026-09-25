@@ -251,6 +251,9 @@ internal sealed class RoostWindow : Window
     /// <summary>A permission card in a Perch pane was answered: (session id, item, allow, switch mode).</summary>
     public event Action<string, PermissionItem, bool, bool>? PermissionAnswered;
 
+    /// <summary>Esc on a focused Perch pane with a turn running: interrupt it (session id).</summary>
+    public event Action<string>? InterruptRequested;
+
     /// <summary>A question card in a Perch pane was answered: (session id, item, answers).</summary>
     public event Action<string, PermissionItem, IReadOnlyDictionary<string, IReadOnlyList<string>>>? QuestionAnswered;
 
@@ -520,6 +523,7 @@ internal sealed class RoostWindow : Window
         }
     }
 
+    // Bubbling keys — anything a focused control (a thread, a composer) didn't already take.
     private void OnPageKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Handled || e.KeyModifiers != KeyModifiers.None) return;
@@ -527,7 +531,28 @@ internal sealed class RoostWindow : Window
         {
             case Key.PageDown: Page(+1); e.Handled = true; break;
             case Key.PageUp: Page(-1); e.Handled = true; break;
+            case Key.Enter or Key.Escape: e.Handled = FocusedPerchKey(e.Key); break;
         }
+    }
+
+    // The focused Perch pane's permission keys, as in SessionWindow (and the TUI): Enter allows a pending
+    // permission (a question card is answered by picking, never a bare Enter); Esc denies it, or with nothing
+    // pending interrupts a running turn. Terminal/IDE panes have no control channel, so these do nothing there.
+    private bool FocusedPerchKey(Key key)
+    {
+        if (_focused is not { } k || _roster.Find(k) is not { Ended: false } pane) return false;
+        if (!_feeds.TryGetValue(k, out var feed) || feed is not { IsControlled: true }) return false;
+        var conv = feed.Conversation;
+        var sid = pane.Session.SessionId;
+        if (key == Key.Enter)
+        {
+            if (conv.PendingPermission is not { IsQuestion: false } allow) return false;
+            PermissionAnswered?.Invoke(sid, allow, true, false);
+            return true;
+        }
+        if (conv.PendingPermission is { } deny) { PermissionAnswered?.Invoke(sid, deny, false, false); return true; }
+        if (conv.TurnActive) { InterruptRequested?.Invoke(sid); return true; }
+        return false;
     }
 
     private List<RoostPane> ShownPanes() =>

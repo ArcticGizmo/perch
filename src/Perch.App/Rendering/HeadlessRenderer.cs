@@ -1481,8 +1481,10 @@ internal static class HeadlessRenderer
             var sessions = RoostSampleSessions();
             roster.Update(sessions, Clock.Now.AddMinutes(-3));
             roster.Update(sessions.Where(s => s.ProjectName != "scratch").ToList(), Clock.Now);
+            var convs = new Dictionary<string, Perch.Data.Control.SessionConversation>();
             var w = new Windows.RoostWindow(roster,
-                pane => RoostFeed.ForFixed(RoostSampleConversation(pane.Session), pane.Session.SessionId),
+                pane => RoostFeed.ForFixed(convs[pane.Session.SessionId] = RoostSampleConversation(pane.Session),
+                    pane.Session.SessionId, controlled: pane.Session.IsPerchControlled),
                 SessionPalette.For(dark))
             { Width = 1280, Height = 800 };
             w.Show();
@@ -1512,6 +1514,14 @@ internal static class HeadlessRenderer
                 Capture("roost_mainstack_1x.png");
                 w.SetMode(Perch.Data.Roost.RoostLayoutMode.Zoom);
                 Capture("roost_zoom_1x.png");
+
+                // CP10: the permission answered (as PerchSession.AnswerPermission resolves it) — the card turns
+                // into a receipt in place, through conversation state.
+                if (convs.TryGetValue("s2", out var api) && api.PendingPermission is { } pending)
+                {
+                    api.ResolvePermission(pending, allowed: true);
+                    Capture("roost_zoom_answered_1x.png");
+                }
             }
             w.Close();
         }

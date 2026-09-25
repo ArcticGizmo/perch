@@ -348,6 +348,13 @@ There's no mandatory pause between checkpoints.
   pane's Enter/Esc keys for a pending permission; the other view (the open `SessionWindow`) turns into a receipt.
 - Done when: an answer from either view resolves the item in both (live check), and render shows pending and
   receipt states.
+- As built:
+  - The card answer routing landed in CP7. CP10 added the focused Perch pane's keys, mirroring `SessionWindow`
+    and the TUI: Enter allows a pending permission (never a question, which is answered by picking); Esc denies
+    it, or with nothing pending interrupts a running turn (`InterruptRequested` → `PerchSession.Interrupt`).
+  - The keys bubble, so a future composer or a focused control gets first refusal.
+  - Terminal/IDE panes ignore them, since they have no control channel.
+  - Captures: `roost_zoom_1x` (pending) → `roost_zoom_answered_1x` (receipt, working again).
 
 **CP11 · Lite composer**
 - Scope: a compact composer in Perch pane footers (Enter send, Shift+Enter newline, Esc interrupt, queue while

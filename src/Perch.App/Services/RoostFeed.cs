@@ -54,8 +54,8 @@ internal sealed class RoostFeed : IDisposable
     public static RoostFeed ForControlled(PerchSession session) =>
         new(session.Conversation, controlled: true, session.SessionId ?? "");
 
-    public static RoostFeed ForFixed(SessionConversation conversation, string sessionId) =>
-        new(conversation, controlled: false, sessionId);
+    public static RoostFeed ForFixed(SessionConversation conversation, string sessionId, bool controlled = false) =>
+        new(conversation, controlled, sessionId);
 
     public static RoostFeed ForTranscript(string sessionId, string cwd)
     {
