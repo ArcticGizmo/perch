@@ -7,6 +7,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
 using Perch.Avalonia.Views;
 using Perch.Data;
@@ -19,8 +20,8 @@ namespace Perch.Avalonia.Windows;
 /// (<see cref="SessionThreadView"/>) — the same bubbles, tool cards, diffs and Markdown a live session shows,
 /// with no composer or controls. The transcript on disk is decoded into a <see cref="SessionConversation"/>
 /// (<see cref="SessionConversation.AppendTranscriptLine"/>) and bound to the thread. Active sessions are
-/// tailed live (<see cref="FileSystemWatcher"/>): the newly-appended transcript lines are folded in
-/// incrementally, so the view grows without a rebuild and keeps its scroll position and expanded tool cards.
+/// tailed live (<see cref="TranscriptTailHost"/>): only the newly-appended transcript lines are read and folded
+/// in, so the view grows without a rebuild and keeps its scroll position and expanded tool cards.
 /// Large transcripts are gated behind an explicit confirmation. File references in the render (tool-card
 /// paths, inline-code paths) route out to the app-owned Markdown viewer / diff tree.
 ///
@@ -59,12 +60,8 @@ internal sealed class HistoryWindow : Window
 
     private HistoryEntry? _loaded;
     private SessionConversation? _conv;
-    private int _consumedLines;      // transcript lines already folded into _conv (for incremental tailing)
-    private bool _tailBusy;          // a tail re-read is in flight — coalesce further ticks
+    private TranscriptTailHost? _tail;   // follows the loaded transcript; replaced on every load
     private bool _renderSample;
-
-    private readonly FileSystemWatcher _watcher = new();
-    private DispatcherTimer? _tailDebounce;
 
     /// <summary>A file reference in the render was opened (a tool-card path or an inline-code path):
     /// (cwd, sessionId, isActive, absolute path). Routed out because the app owns the Markdown viewer.</summary>
@@ -189,11 +186,7 @@ internal sealed class HistoryWindow : Window
 
         Content = new Panel { Children = { mainDock, jumpStack } };
 
-        _watcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size;
-        _watcher.Changed += OnTranscriptChanged;
-        _watcher.Created += OnTranscriptChanged;
-
-        Closed += (_, _) => { try { _watcher.EnableRaisingEvents = false; } catch { } _watcher.Dispose(); };
+        Closed += (_, _) => StopTailing();
 
         SetPlaceholderBody("Select a session to read its transcript.");
     }
@@ -327,9 +320,8 @@ internal sealed class HistoryWindow : Window
     // ── Transcript loading ────────────────────────────────────────────────────────
     private void LoadTranscript(HistoryEntry entry)
     {
-        StopWatching();
+        StopTailing();
         _conv = null;
-        _consumedLines = 0;
         _loaded = entry;
 
         // Large transcripts can lag or exhaust memory — gate behind an explicit confirmation.
@@ -353,24 +345,33 @@ internal sealed class HistoryWindow : Window
         ParseAndRender(entry);
     }
 
+    // Reads the whole transcript off-thread (TranscriptTailHost) and, for an active session, keeps following it:
+    // the first read builds the conversation, later ones fold in only the appended lines, and a reset (the
+    // file was truncated or replaced) rebuilds from the top.
     private void ParseAndRender(HistoryEntry entry)
     {
         SetPlaceholderBody("Loading…");
-        var path = entry.Path;
-        System.Threading.Tasks.Task.Run(() => ReadCompleteLines(path)).ContinueWith(t =>
+        StopTailing();
+        TranscriptTailHost? host = null;
+        host = new TranscriptTailHost(entry.Path, initialLines: 0, read =>
         {
-            if (!t.IsCompletedSuccessfully) return;
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (!IsVisible || _loaded?.SessionId != entry.SessionId) return;
-                BuildConversation(entry, t.Result);
-            });
+            if (!ReferenceEquals(host, _tail) || !IsVisible || _loaded?.SessionId != entry.SessionId) return;
+            if (_conv is null || read.Reset) { BuildConversation(entry, read.Lines); return; }
+            AppendTail(entry, read.Lines);
         });
+        _tail = host;
+        host.Start(watch: entry.IsActive);
+    }
+
+    private void StopTailing()
+    {
+        _tail?.Dispose();
+        _tail = null;
     }
 
     // Decodes the transcript lines into a read-only conversation and binds the rich thread to it. A completed
     // (inactive) session is finalised so nothing reads as mid-turn; an active one is left open for tailing.
-    private void BuildConversation(HistoryEntry entry, List<string> lines)
+    private void BuildConversation(HistoryEntry entry, IReadOnlyList<string> lines)
     {
         var conv = new SessionConversation();
         conv.UseHistorySession(entry.SessionId);
@@ -378,12 +379,11 @@ internal sealed class HistoryWindow : Window
         if (!entry.IsActive) conv.FinalizeHistory();
 
         _conv = conv;
-        _consumedLines = lines.Count;
 
         if (conv.Items.Count == 0)
         {
+            // An active session may fill in as it runs — the tail host keeps following it.
             SetPlaceholderBody("This transcript has no readable events yet.");
-            if (entry.IsActive) StartWatching(entry.Path);   // it may fill in as the session runs
             return;
         }
 
@@ -397,74 +397,23 @@ internal sealed class HistoryWindow : Window
             Dispatcher.UIThread.Post(
                 () => { try { _thread.Offset = new Vector(_thread.Offset.X, 0); } catch { } },
                 DispatcherPriority.Background);
-
-        if (entry.IsActive) StartWatching(entry.Path);
     }
 
     // ── Live tail ────────────────────────────────────────────────────────────────
-    private void StartWatching(string path)
+    // Folds newly-appended transcript lines into the bound conversation — the thread appends them incrementally
+    // (no rebuild), keeping its scroll position and expanded tool cards.
+    private void AppendTail(HistoryEntry entry, IReadOnlyList<string> lines)
     {
-        try
+        if (_conv is null || lines.Count == 0) return;
+        foreach (var line in lines) _conv.AppendTranscriptLine(line);
+
+        // A conversation that started empty has no bound thread yet — swap the placeholder for it now.
+        if (_conv.Items.Count > 0 && !ReferenceEquals(_bodyHost.Child, _thread))
         {
-            var dir = Path.GetDirectoryName(path);
-            if (string.IsNullOrEmpty(dir)) return;
-            _watcher.EnableRaisingEvents = false;
-            _watcher.Path = dir;
-            _watcher.Filter = Path.GetFileName(path);
-            _watcher.EnableRaisingEvents = true;
+            _thread.Cwd = entry.Cwd;
+            ShowThread();
+            _thread.Bind(_conv);
         }
-        catch { /* best-effort tailing */ }
-    }
-
-    private void StopWatching()
-    {
-        try { _watcher.EnableRaisingEvents = false; } catch { }
-    }
-
-    // FileSystemWatcher fires on a background thread and can burst; debounce onto the UI thread.
-    private void OnTranscriptChanged(object? sender, FileSystemEventArgs e) =>
-        Dispatcher.UIThread.Post(() =>
-        {
-            _tailDebounce ??= CreateTailDebounce();
-            _tailDebounce.Stop();
-            _tailDebounce.Start();
-        });
-
-    private DispatcherTimer CreateTailDebounce()
-    {
-        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
-        t.Tick += (_, _) => { t.Stop(); TailNow(); };
-        return t;
-    }
-
-    // Re-reads the transcript off-thread and folds in only the newly-appended lines — the bound thread appends
-    // them incrementally (no rebuild). A shrunk file (replaced/truncated) rebuilds from the top.
-    private void TailNow()
-    {
-        if (_conv is null || _loaded is not { } entry || _tailBusy) return;
-        _tailBusy = true;
-        var path = entry.Path;
-        System.Threading.Tasks.Task.Run(() => ReadCompleteLines(path)).ContinueWith(t =>
-        {
-            Dispatcher.UIThread.Post(() =>
-            {
-                _tailBusy = false;
-                if (!t.IsCompletedSuccessfully || !IsVisible || _conv is null || _loaded?.SessionId != entry.SessionId) return;
-                var lines = t.Result;
-                if (lines.Count < _consumedLines) { BuildConversation(entry, lines); return; }
-                if (lines.Count == _consumedLines) return;
-
-                // A conversation that started empty has no bound thread yet — swap the placeholder for it now.
-                if (!ReferenceEquals(_bodyHost.Child, _thread))
-                {
-                    _thread.Cwd = entry.Cwd;
-                    ShowThread();
-                    _thread.Bind(_conv);
-                }
-                for (int i = _consumedLines; i < lines.Count; i++) _conv.AppendTranscriptLine(lines[i]);
-                _consumedLines = lines.Count;
-            });
-        });
     }
 
     // ── Rendering surface ─────────────────────────────────────────────────────────
@@ -540,24 +489,5 @@ internal sealed class HistoryWindow : Window
         UpdateCrumb();
         ShowThread();
         _thread.Bind(conv);
-    }
-
-    // ── Helpers ────────────────────────────────────────────────────────────────
-    // Reads the transcript's complete (newline-terminated) lines with a shared handle — the file is written
-    // live. A trailing partial line (a half-written record) is left out and picked up on the next read.
-    private static List<string> ReadCompleteLines(string path)
-    {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var sr = new StreamReader(fs);
-        var text = sr.ReadToEnd();
-        var lines = new List<string>();
-        int start = 0;
-        for (int i = 0; i < text.Length; i++)
-            if (text[i] == '\n')
-            {
-                lines.Add(text[start..i].TrimEnd('\r'));
-                start = i + 1;
-            }
-        return lines;
     }
 }

@@ -356,6 +356,9 @@ There's no mandatory pause between checkpoints.
 the highlight layer. Extracting it isn't needed to meet the ask, so it waits until everything else is proven.
 
 ## Owed live checks (log results here as they're done)
+- [ ] CP4: the history viewer still live-tails an **active** session (now through `TranscriptTailHost`). Render is
+      unchanged and a fixture round-trip test (tail in pieces = read whole) is green, but the watcher path needs
+      a real session.
 - [ ] P1: a real terminal session tails into a pane, and the mini card updates while collapsed.
 - [ ] P1: a Perch session streams live into a pane (in-memory bind) while also open in its `SessionWindow`.
 - [ ] P1: a status flip to AwaitingInput auto-expands a collapsed pane, and the badge shows on the overlay glyph.

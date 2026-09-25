@@ -178,6 +178,37 @@ public sealed class TranscriptTailReaderTests : IDisposable
         Assert.True(r.SkippedEarlier);
     }
 
+    [Theory]
+    [InlineData("sessParser.jsonl")]
+    [InlineData("sessTasksRealSchema.jsonl")]
+    [InlineData("sessFlight.jsonl")]
+    public void TailingARealTranscriptInPiecesBuildsTheSameConversation(string fixture)
+    {
+        // The history viewer / Roost path: tail a live transcript written in arbitrary chunks (cut mid-record)
+        // and fold each read into a SessionConversation. It must match reading the finished file in one go.
+        var bytes = File.ReadAllBytes(Path.Combine(TestEnvironment.FixtureConfigDir, "projects", "C--fixtures-proj", fixture));
+
+        var whole = new Perch.Data.Control.SessionConversation();
+        foreach (var line in Encoding.UTF8.GetString(bytes).Split('\n'))
+            if (!string.IsNullOrWhiteSpace(line)) whole.AppendTranscriptLine(line.TrimEnd('\r'));
+
+        var tailed = new Perch.Data.Control.SessionConversation();
+        var tail = new TranscriptTailReader(_path);
+        int[] cuts = [bytes.Length / 5, bytes.Length / 3 + 7, bytes.Length / 2 + 1, bytes.Length * 4 / 5, bytes.Length];
+        int written = 0;
+        foreach (var cut in cuts)
+        {
+            AppendBytes(bytes[written..cut]);
+            written = cut;
+            var r = tail.Read();
+            Assert.False(r.Reset);
+            foreach (var line in r.Lines) tailed.AppendTranscriptLine(line);
+        }
+
+        Assert.NotEmpty(whole.Items);
+        Assert.Equal(whole.Items.Select(i => i.GetType().Name), tailed.Items.Select(i => i.GetType().Name));
+    }
+
     [Fact]
     public void ResetReappliesTheInitialSeek()
     {
