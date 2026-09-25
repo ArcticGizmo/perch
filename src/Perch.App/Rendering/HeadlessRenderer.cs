@@ -159,8 +159,13 @@ internal static class HeadlessRenderer
                 Allowed = new() { new AccountRef { Uuid = "acme-uuid", Name = "Acme Corp", Email = "jon@acme.com" } },
             },
         });
+        Pulse.Override = false;
         RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_1x.png"), 96);
         RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_1.5x.png"), 144);
+        // …and under the OS reduce-motion preference: a steady, full-strength, slightly thicker outline.
+        Pulse.Override = true;
+        RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_still_1x.png"), 96);
+        Pulse.Override = null;
 
         var probe = new OverlayCanvas();
         probe.Update(SampleData.Sessions());

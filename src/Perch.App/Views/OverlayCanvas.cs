@@ -3136,12 +3136,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             DrawPrBanner(ctx, top, rowH, width, prOp);
 
         // The wrong-account alarm: a thick, pulsing red outline framing the whole row, drawn after everything
-        // (even the PR banner) so nothing can hide it. The wash went down under the content up top.
+        // (even the PR banner) so nothing can hide it. The wash went down under the content up top. Under the
+        // OS reduce-motion preference it holds steady at full strength and a touch thicker instead.
         if (mismatch)
         {
             var d = MismatchColor;
-            byte a = (byte)(140 + 115 * PulseIntensity());   // alpha breathes 140..255
-            var pen = new Pen(new SolidColorBrush(Color.FromArgb(a, d.R, d.G, d.B)), 2.5);
+            bool still = Pulse.ReduceMotion;
+            byte a = (byte)(140 + 115 * Pulse.Intensity());   // alpha breathes 140..255 (255 when still)
+            var pen = new Pen(new SolidColorBrush(Color.FromArgb(a, d.R, d.G, d.B)), still ? 3.5 : 2.5);
             ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(2.5, top + 2.5, width - 5, rowH - 4), 5));
         }
     }
@@ -3175,22 +3177,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         return names.Count == 1 ? names[0]! : $"{names[0]} +{names.Count - 1}";
     }
 
-    // A smooth 0→1→0 breathing curve (~1.1s period) off the wall clock, driving the outline's pulsing alpha.
-    private static double PulseIntensity()
-    {
-        const double periodMs = 1100;
-        double phase = (DateTime.Now.TimeOfDay.TotalMilliseconds % periodMs) / periodMs;
-        return 0.5 - 0.5 * Math.Cos(phase * 2 * Math.PI);
-    }
-
-    // Runs a ~17fps repaint only while a mismatch outline is on screen (see _anyMismatchThisFrame), so the
-    // pulse animates without spinning a timer when nothing is wrong. Mirrors UpdateTickTimer.
+    // Runs a ~17fps repaint only while a mismatch outline is on screen (see _anyMismatchThisFrame) and motion is
+    // allowed, so the pulse animates without spinning a timer when nothing is wrong (or when the outline is
+    // steady under reduced motion). Mirrors UpdateTickTimer.
     private DispatcherTimer? _pulseTimer;
     private void UpdatePulseTimer()
     {
         _pulseTimer ??= CreatePulseTimer();
-        if (_anyMismatchThisFrame && !_pulseTimer.IsEnabled) _pulseTimer.Start();
-        else if (!_anyMismatchThisFrame && _pulseTimer.IsEnabled) _pulseTimer.Stop();
+        bool animate = _anyMismatchThisFrame && !Pulse.ReduceMotion;
+        if (animate && !_pulseTimer.IsEnabled) _pulseTimer.Start();
+        else if (!animate && _pulseTimer.IsEnabled) _pulseTimer.Stop();
     }
 
     private DispatcherTimer CreatePulseTimer()
