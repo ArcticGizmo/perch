@@ -54,7 +54,10 @@ internal static class ActivitySummary
     /// <param name="sessionRunning">The session is mid-turn per the monitor. A tailed transcript never marks its
     /// assistant items complete, so closing prose only reads as "Done" when the session isn't running.</param>
     /// <param name="max">Lines to return at most.</param>
-    public static IReadOnlyList<ActivityLine> Build(SessionConversation conv, bool sessionRunning, int max = DefaultMax)
+    /// <param name="sessionErrored">The session stopped on an API error: its closing text is the failure, so it
+    /// reads as an <see cref="ActivityKind.Error"/> line, never "Done".</param>
+    public static IReadOnlyList<ActivityLine> Build(SessionConversation conv, bool sessionRunning, int max = DefaultMax,
+        bool sessionErrored = false)
     {
         var newestFirst = new List<ActivityLine>(max);
         bool turnOver = !sessionRunning && !conv.TurnActive;
@@ -72,7 +75,10 @@ internal static class ActivitySummary
                     for (int j = a.Parts.Count - 1; j >= 0 && newestFirst.Count < max; j--)
                     {
                         bool closing = newestItem && j == a.Parts.Count - 1;
-                        if (Line(a.Parts[j], closing && (a.IsComplete || turnOver)) is { } line) newestFirst.Add(line);
+                        if (Line(a.Parts[j], closing && (a.IsComplete || turnOver)) is { } line)
+                            newestFirst.Add(sessionErrored && line.Kind == ActivityKind.Done
+                                ? new ActivityLine(ActivityKind.Error, Snippet(((TextPart)a.Parts[j]).Text))
+                                : line);
                     }
                     break;
 

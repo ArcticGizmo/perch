@@ -1490,6 +1490,18 @@ internal static class HeadlessRenderer
                 // Paged to the bottom: the error ring, the rest of the mini cards, and the "↑ N more" pill.
                 w.PageForRender(+5);
                 Capture("roost_tiled_paged_1x.png");
+
+                // The "needs you" chip as a filter: only the blocked sessions, back on the first page.
+                w.FilterForRender(Perch.Data.Roost.RoostGroup.NeedsYou);
+                Capture("roost_tiled_filtered_1x.png");
+                w.FilterForRender(null);
+
+                // Main + stack with the Perch "api" pane focused (main), then Zoom on it.
+                w.FocusPane("5678");
+                w.SetMode(Perch.Data.Roost.RoostLayoutMode.MainStack);
+                Capture("roost_mainstack_1x.png");
+                w.SetMode(Perch.Data.Roost.RoostLayoutMode.Zoom);
+                Capture("roost_zoom_1x.png");
             }
             w.Close();
         }

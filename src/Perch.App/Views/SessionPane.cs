@@ -467,7 +467,8 @@ internal sealed class SessionPane : Border
             return;
         }
         bool running = _pane is { Ended: false, Session.Status: SessionStatus.Running };
-        var lines = ActivitySummary.Build(_feed.Conversation, running);
+        bool errored = _pane is { Ended: false, Session.Status: SessionStatus.ApiError };
+        var lines = ActivitySummary.Build(_feed.Conversation, running, sessionErrored: errored);
         if (lines.Count == 0) { _miniLines.Children.Add(MiniLine("", "No activity yet", _p.Faint, _p.Faint)); return; }
         foreach (var l in lines)
         {

@@ -28,6 +28,8 @@ public class SettingsRegistryTests
         // chevron on the overlay, not Settings-window controls.
         nameof(AppSettings.TodosExpanded),
         nameof(AppSettings.HypertreeExpanded),
+        // The Roost's layout is picked by the Roost window's own title-bar toggle.
+        nameof(AppSettings.RoostLayout),
         // The usage strip's per-account collapse overrides, toggled by clicking an account on the overlay —
         // not a Settings-window control.
         nameof(AppSettings.UsageAccountCollapsed),

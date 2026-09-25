@@ -159,6 +159,10 @@ internal sealed class AppSettings
     // its header. Toggled by the section's own chevron. Defaults to expanded.
     public bool HypertreeExpanded { get; set; } = true;
 
+    // The Roost window's layout (Tiled / Main + stack / Zoom), picked by its title-bar toggle. UI state, not a
+    // Settings-window control. See docs/roost-plan.md.
+    public Roost.RoostLayoutMode RoostLayout { get; set; } = Roost.RoostLayoutMode.Tiled;
+
     // Per-account collapse state for the usage strip: an account renders as full stacked bars or a compact
     // chip. The default follows activity (active account → bars, known-but-idle account → chip); this map
     // holds only the accounts the user has explicitly toggled, keyed by org UUID (or the config-dir path

@@ -131,6 +131,14 @@ public class ActivitySummaryTests
     }
 
     [Fact]
+    public void AnErroredSessionsClosingTextIsAnErrorNotDone()
+    {
+        var conv = Conv(new AssistantTextEvent("API Error: 529 Overloaded."), Result);
+        Assert.Equal(new ActivityLine(ActivityKind.Error, "API Error: 529 Overloaded."),
+            ActivitySummary.Build(conv, sessionRunning: false, sessionErrored: true)[^1]);
+    }
+
+    [Fact]
     public void ErrorNotesShow()
     {
         var conv = Conv();

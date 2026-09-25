@@ -1535,9 +1535,12 @@ public partial class App : Application
         _roostWindow = WindowHost.ShowOrFocus(_roostWindow,
             () =>
             {
-                var w = new RoostWindow(_roostRoster, CreateRoostFeed);
+                var w = new RoostWindow(_roostRoster, CreateRoostFeed,
+                    layout: _appSettings?.RoostLayout ?? Perch.Data.Roost.RoostLayoutMode.Tiled);
                 w.NewSessionRequested += OpenSessionWindow;
                 w.OpenSessionRequested += FocusSession;
+                w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
+                w.LayoutChanged += mode => { if (_appSettings is { } s) { s.RoostLayout = mode; s.Save(); } };
                 w.PermissionAnswered += (sid, item, allow, mode) =>
                     PerchSessionFor(sid)?.AnswerPermission(item, allow, mode);
                 w.QuestionAnswered += (sid, item, answers) => PerchSessionFor(sid)?.AnswerQuestion(item, answers);

@@ -305,6 +305,17 @@ There's no mandatory pause between checkpoints.
 - Scope: the other two layouts (layout persisted), summary-chip filters, the keyboard table (except the P2
   keys), acknowledge-on-focus (`SessionMonitorHost.Acknowledge`), Focus terminal ↗, ended greying.
 - Done when: a render surface exists per layout and the keyboard paths have been walked by hand.
+- As built:
+  - Layout persists in `AppSettings.RoostLayout` (a `NotSettings` entry).
+  - A chip filters the stage to its group; click it again to clear. Focusing a filtered-out pane (rail, keys)
+    lifts the filter, and a filter whose group empties clears itself.
+  - The mouse wheel over an expanded thread scrolls that thread; only the gaps between panes page.
+  - Window chords tunnel so a focused thread can't swallow them, while PgUp/PgDn bubble so a thread's own paging
+    still works.
+  - Ctrl+Shift+E outside Tiled switches to Tiled first, since pins are a Tiled concept.
+  - An errored session's closing text reads as an error line, never "Done".
+  - Captures: `roost_mainstack_1x`, `roost_zoom_1x`, `roost_tiled_filtered_1x`. The keyboard can't be driven
+    headlessly, so walking the keys is an owed live check.
 
 **CP9 · Entry points**
 - Scope:
@@ -373,6 +384,9 @@ the highlight layer. Extracting it isn't needed to meet the ask, so it waits unt
       unchanged and a fixture round-trip test (tail in pieces = read whole) is green, but the watcher path needs
       a real session.
 - [ ] P1: a real terminal session tails into a pane, and the mini card updates while collapsed.
+- [ ] CP8: walk the keyboard — Ctrl+1–9, Ctrl+. (cycles Needs you → Done), Ctrl+Shift+E, Ctrl+Shift+Z (and
+      back), PgUp/PgDn (and a focused thread's own PgUp still scrolls it); focusing a done-review pane clears its
+      overlay badge.
 - [ ] CP7: answering a permission in a Perch pane resolves it, and the open `SessionWindow`'s card turns into a
       receipt. The Roost can't be opened until CP9 adds the entry points, so this is owed from then.
 - [ ] P1: a Perch session streams live into a pane (in-memory bind) while also open in its `SessionWindow`.
