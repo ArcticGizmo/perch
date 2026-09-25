@@ -68,6 +68,13 @@ internal sealed class RoostWindow : Window
 
     private readonly DispatcherTimer _pulseTimer;
     private readonly DispatcherTimer _clockTimer;
+    private readonly DispatcherTimer _holdTimer;   // re-runs layout when a typing hold lapses
+    private readonly TypingHold _typing = new();
+
+    // What the stage containers currently hold, so a layout pass only touches what changed — re-parenting a
+    // pane drops keyboard focus, which must never happen to the composer being typed in.
+    private RoostLayoutMode? _builtMode;
+    private readonly string?[] _cellSigs = new string?[4];
 
     private RoostLayoutMode _mode;
     private RoostLayoutMode _preZoomMode = RoostLayoutMode.Tiled;
@@ -75,7 +82,6 @@ internal sealed class RoostWindow : Window
     private string? _focused;
     private int _firstRow;
     private int _cellCount;
-    private string _layoutSig = "";
     private double _miniHeight;
 
     public RoostWindow(RoostRoster roster, Func<RoostPane, RoostFeed?> feedFactory, SessionPalette? palette = null,
@@ -222,11 +228,14 @@ internal sealed class RoostWindow : Window
         _clockTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _clockTimer.Tick += (_, _) => { foreach (var k in _placed.Keys) _views[k].Tick(); RefreshRail(); };
         _clockTimer.Start();
+        _holdTimer = new DispatcherTimer();
+        _holdTimer.Tick += (_, _) => { _holdTimer.Stop(); Refresh(); };
 
         Closed += (_, _) =>
         {
             _pulseTimer.Stop();
             _clockTimer.Stop();
+            _holdTimer.Stop();
             foreach (var v in _views.Values) v.Park();
             foreach (var f in _feeds.Values) f?.Dispose();
             _feeds.Clear();
@@ -253,6 +262,9 @@ internal sealed class RoostWindow : Window
 
     /// <summary>Esc on a focused Perch pane with a turn running: interrupt it (session id).</summary>
     public event Action<string>? InterruptRequested;
+
+    /// <summary>A Perch pane's composer sent a reply: (session id, text).</summary>
+    public event Action<string, string>? PromptSubmitted;
 
     /// <summary>A question card in a Perch pane was answered: (session id, item, answers).</summary>
     public event Action<string, PermissionItem, IReadOnlyDictionary<string, IReadOnlyList<string>>>? QuestionAnswered;
@@ -287,6 +299,9 @@ internal sealed class RoostWindow : Window
 
     /// <summary>HeadlessRenderer hook: page the Tiled viewport (there's no wheel in a headless capture).</summary>
     internal void PageForRender(int rows) => Page(rows);
+
+    /// <summary>HeadlessRenderer hook: pretend the user is mid-reply in pane <paramref name="key"/> (the typing hold).</summary>
+    internal void TypeForRender(string key) => _typing.Keystroke(key, Clock.Now);
 
     /// <summary>HeadlessRenderer hook: apply a chip filter (null clears).</summary>
     internal void FilterForRender(RoostGroup? group) { _filter = group; _firstRow = 0; Refresh(); }
@@ -327,6 +342,38 @@ internal sealed class RoostWindow : Window
         RefreshChips();
         RefreshRail();
         UpdatePulse();
+        ArmHoldTimer();
+    }
+
+    // While a pane is held back by the typing hold, wake when the hold lapses so it then expands.
+    private void ArmHoldTimer()
+    {
+        _holdTimer.Stop();
+        if (_held.Count == 0 || _typing.ReleasesAt(Clock.Now) is not { } at) return;
+        var wait = at - Clock.Now;
+        _holdTimer.Interval = wait > TimeSpan.Zero ? wait + TimeSpan.FromMilliseconds(50) : TimeSpan.FromMilliseconds(50);
+        _holdTimer.Start();
+    }
+
+    private void OnComposerTyping(string key)
+    {
+        _typing.Keystroke(key, Clock.Now);
+        if (_held.Count > 0) ArmHoldTimer();   // keep pushing the release out while the typing continues
+    }
+
+    private void OnComposerFocusChanged(string key, bool focused)
+    {
+        if (focused) { _typing.Focused(key); return; }
+        _typing.Blurred(key);
+        if (_held.Count > 0) Refresh();   // leaving the composer releases any held pane at once
+    }
+
+    private void OnPromptSubmitted(string key, string text)
+    {
+        if (_roster.Find(key) is not { Ended: false } pane) return;
+        PromptSubmitted?.Invoke(pane.Session.SessionId, text);
+        _typing.Sent(key);
+        if (_held.Count > 0) Refresh();
     }
 
     // Every pane's Tiled size (kept even while another layout shows, as the resolver's "current" memory).
@@ -337,9 +384,9 @@ internal sealed class RoostWindow : Window
         foreach (var pane in panes)
         {
             RoostPaneSize? current = _sizes.TryGetValue(pane.Key, out var c) ? c : null;
-            // P1 has no composer, so nobody is ever "typing elsewhere".
             var d = RoostLayout.ResolveSize(new RoostSizeInputs(
-                pane.Pin, pane.Group, pane.Ended, pane.Key == _focused, TypingElsewhere: false, current));
+                pane.Pin, pane.Group, pane.Ended, pane.Key == _focused,
+                TypingElsewhere: _typing.TypingElsewhere(pane.Key, Clock.Now), current));
             _sizes[pane.Key] = d.Size;
             if (d.Held) _held.Add(pane.Key);
         }
@@ -356,21 +403,30 @@ internal sealed class RoostWindow : Window
 
         int first = _firstRow * RoostLayout.Columns;
         var visibleCells = cells.Skip(first).Take(RoostLayout.Columns * RoostLayout.VisibleRows).ToList();
-        var sig = "T:" + string.Join("|", visibleCells.Select(c => (c.Expanded ? "E:" : "m:") + string.Join(",", c.Keys)));
-        if (sig != _layoutSig)
+        EnsureBuiltFor(RoostLayoutMode.Tiled);
+
+        // Only the cells whose contents changed are touched: detach them all first (a pane may be moving from
+        // one changed cell to another), then fill them. An unchanged cell — say, the one holding the composer
+        // being typed in — is never re-parented, so it keeps its focus and scroll.
+        var sigs = new string[_cellHosts.Length];
+        for (int i = 0; i < sigs.Length; i++)
+            sigs[i] = i < visibleCells.Count
+                ? (visibleCells[i].Expanded ? "E:" : "m:") + string.Join(",", visibleCells[i].Keys)
+                : "";
+        for (int i = 0; i < sigs.Length; i++)
+            if (sigs[i] != _cellSigs[i]) DetachHost(_cellHosts[i]);
+        for (int i = 0; i < sigs.Length; i++)
         {
-            _layoutSig = sig;
-            ClearContainers();
-            for (int i = 0; i < visibleCells.Count; i++)
+            if (sigs[i] == _cellSigs[i]) continue;
+            _cellSigs[i] = sigs[i];
+            if (i >= visibleCells.Count) continue;
+            var cell = visibleCells[i];
+            if (cell.Expanded) _cellHosts[i].Child = _views[cell.Keys[0]];
+            else
             {
-                var cell = visibleCells[i];
-                if (cell.Expanded) _cellHosts[i].Child = _views[cell.Keys[0]];
-                else
-                {
-                    var stack = new StackPanel { Spacing = CellGap, VerticalAlignment = VerticalAlignment.Top };
-                    foreach (var k in cell.Keys) stack.Children.Add(_views[k]);
-                    _cellHosts[i].Child = stack;
-                }
+                var stack = new StackPanel { Spacing = CellGap, VerticalAlignment = VerticalAlignment.Top };
+                foreach (var k in cell.Keys) stack.Children.Add(_views[k]);
+                _cellHosts[i].Child = stack;
             }
         }
         foreach (var cell in visibleCells)
@@ -382,14 +438,13 @@ internal sealed class RoostWindow : Window
     private void LayoutMainStack(IReadOnlyList<RoostPane> shown)
     {
         var (main, stack) = RoostLayout.MainStack(shown.Select(p => p.Key).ToList(), _focused);
-        var sig = $"M:{main}|{string.Join(",", stack)}";
-        if (sig != _layoutSig)
-        {
-            _layoutSig = sig;
-            ClearContainers();
-            if (main is not null) _mainHost.Child = _views[main];
-            foreach (var k in stack) _stack.Children.Add(_views[k]);
-        }
+        EnsureBuiltFor(RoostLayoutMode.MainStack);
+        var mainView = main is null ? null : _views[main];
+        bool stackChanged = !_stack.Children.Cast<SessionPane>().Select(v => v.Key).SequenceEqual(stack);
+        if (stackChanged) _stack.Children.Clear();                       // first, in case main came out of it
+        if (!ReferenceEquals(_mainHost.Child, mainView)) _mainHost.Child = null;
+        if (stackChanged) foreach (var k in stack) _stack.Children.Add(_views[k]);
+        if (_mainHost.Child is null && mainView is not null) _mainHost.Child = mainView;
         if (main is not null) _placed[main] = (RoostPaneSize.Expanded, false);
         foreach (var k in stack) _placed[k] = (RoostPaneSize.Collapsed, false);
         HideOverflow();
@@ -398,28 +453,29 @@ internal sealed class RoostWindow : Window
     private void LayoutZoom(IReadOnlyList<RoostPane> shown)
     {
         var target = RoostLayout.ZoomTarget(shown.Select(p => p.Key).ToList(), _focused);
-        var sig = $"Z:{target}";
-        if (sig != _layoutSig)
-        {
-            _layoutSig = sig;
-            ClearContainers();
-            if (target is not null) _zoomHost.Child = _views[target];
-        }
+        EnsureBuiltFor(RoostLayoutMode.Zoom);
+        var view = target is null ? null : _views[target];
+        if (!ReferenceEquals(_zoomHost.Child, view)) _zoomHost.Child = view;
         if (target is not null) _placed[target] = (RoostPaneSize.Expanded, false);
         HideOverflow();
     }
 
-    // Detaches every pane view from whichever container held it, so the next layout can re-parent them.
-    private void ClearContainers()
+    // A layout switch empties every container, so the new layout can re-parent the panes it places.
+    private void EnsureBuiltFor(RoostLayoutMode mode)
     {
-        foreach (var host in _cellHosts)
-        {
-            if (host.Child is Panel stack) stack.Children.Clear();
-            host.Child = null;
-        }
+        if (_builtMode == mode) return;
+        _builtMode = mode;
+        foreach (var host in _cellHosts) DetachHost(host);
+        Array.Clear(_cellSigs);
         _mainHost.Child = null;
         _stack.Children.Clear();
         _zoomHost.Child = null;
+    }
+
+    private static void DetachHost(Border host)
+    {
+        if (host.Child is Panel stack) stack.Children.Clear();
+        host.Child = null;
     }
 
     // Creates a feed + view for each new pane, recreates a tailed feed whose session id moved (/clear), and
@@ -429,12 +485,16 @@ internal sealed class RoostWindow : Window
         var live = new HashSet<string>(panes.Select(p => p.Key), StringComparer.Ordinal);
         foreach (var gone in _views.Keys.Where(k => !live.Contains(k)).ToList())
         {
-            _views[gone].Park();
+            var dropped = _views[gone];
+            dropped.Park();
             _views.Remove(gone);
             _sizes.Remove(gone);
             if (_feeds.Remove(gone, out var f)) f?.Dispose();
             if (_focused == gone) _focused = null;
-            _layoutSig = "";   // its container slot must be rebuilt
+            // A dropped pane still sitting in Zoom / Main (Tiled's per-cell diff and the stack diff drop it on
+            // their own, since its key leaves their signatures).
+            if (ReferenceEquals(_zoomHost.Child, dropped)) _zoomHost.Child = null;
+            if (ReferenceEquals(_mainHost.Child, dropped)) _mainHost.Child = null;
         }
 
         foreach (var pane in panes)
@@ -450,11 +510,17 @@ internal sealed class RoostWindow : Window
             if (!_views.ContainsKey(pane.Key))
             {
                 var view = new SessionPane(_p, pane.Key);
+                var key = pane.Key;
+                // The session id is looked up at event time — a /clear swaps it under the same pane.
+                string? Sid() => _roster.Find(key)?.Session.SessionId;
                 view.Activated += FocusPane;
                 view.ActionRequested += OnPaneAction;
-                var sid = pane.Session.SessionId;
-                view.PermissionAnswered += (item, allow, mode) => PermissionAnswered?.Invoke(sid, item, allow, mode);
-                view.QuestionAnswered += (item, answers) => QuestionAnswered?.Invoke(sid, item, answers);
+                view.PermissionAnswered += (item, allow, mode) => { if (Sid() is { } s) PermissionAnswered?.Invoke(s, item, allow, mode); };
+                view.QuestionAnswered += (item, answers) => { if (Sid() is { } s) QuestionAnswered?.Invoke(s, item, answers); };
+                view.InterruptRequested += _ => { if (Sid() is { } s) InterruptRequested?.Invoke(s); };
+                view.PromptSubmitted += OnPromptSubmitted;
+                view.ComposerTyping += OnComposerTyping;
+                view.ComposerFocusChanged += OnComposerFocusChanged;
                 _views[pane.Key] = view;
             }
         }

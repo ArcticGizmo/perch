@@ -1522,6 +1522,18 @@ internal static class HeadlessRenderer
                     api.ResolvePermission(pending, allowed: true);
                     Capture("roost_zoom_answered_1x.png");
                 }
+
+                // CP11 typing hold: the user is mid-reply in "api" when "perch" starts needing input — perch
+                // stays a (pulsing) mini card instead of expanding and shifting the grid under the cursor.
+                w.SetMode(Perch.Data.Roost.RoostLayoutMode.Tiled);
+                w.PageForRender(-5);
+                w.TypeForRender("5678");
+                roster.Update(sessions.Where(s => s.ProjectName != "scratch")
+                    .Select(s => s.ProjectName == "perch"
+                        ? s with { Status = SessionStatus.AwaitingInput, AwaitingSince = Clock.Now.AddSeconds(-3) }
+                        : s).ToList(), Clock.Now);
+                w.RosterChanged();
+                Capture("roost_tiled_held_1x.png");
             }
             w.Close();
         }

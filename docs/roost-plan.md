@@ -361,6 +361,25 @@ There's no mandatory pause between checkpoints.
   running) + ⤢ open full window; feeds the **typing hold** into `RoostLayout`.
 - Done when: a pane going to needs-you while you type in another pane's composer stays collapsed and pulsing,
   then expands after the pause or send (live check), and the resolver tests cover it.
+- As built:
+  - **`TypingHold`** (Core, tested): typing = a composer is focused and a keystroke landed within 2s. It
+    releases on send, on blur, or after the pause. `ReleasesAt` drives a one-shot timer that re-runs layout, so
+    a held pane expands the moment the hold lapses. It feeds `RoostSizeInputs.TypingElsewhere`.
+  - **Composer:** a wrapping `TextBox` in Perch pane footers.
+    - Enter sends; with nothing typed it allows a pending permission. Shift+Enter is a newline. Esc denies, or
+      interrupts. These are tunnel-handled so they beat the TextBox's own Enter.
+    - The placeholder follows state: "Reply — or Enter to allow, Esc to deny" / "Queue a message… (Esc
+      interrupts)" / "Reply…".
+    - Sending goes through `PerchSession.SendPrompt`, which records the user message itself. The CLI queues a
+      prompt sent mid-turn.
+  - **The footer is built once and only re-labelled**, so a half-typed draft survives every scan.
+  - **Layout passes now diff per cell** (and Main + stack / Zoom per container) instead of rebuilding the
+    visible stage on any change. Re-parenting a pane drops keyboard focus, so the composer being typed in is
+    never moved unless its own cell changes. A layout switch still empties everything.
+  - The pane's answer, interrupt and send handlers look up the session id at event time, since a `/clear`
+    swaps it under the same pane.
+  - Captures: `roost_tiled_held_1x` ("perch" needs you while "api" is being typed in: it stays a pulsing mini
+    card), plus the composer in `roost_tiled_1x` / `roost_zoom_answered_1x`.
 
 **CP12 · Attention de-dup**
 - Scope: `SessionAttention`'s `windowActive` input becomes "seen" = its `SessionWindow` is active, **or** Roost

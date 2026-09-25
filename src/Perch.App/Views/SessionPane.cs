@@ -54,6 +54,10 @@ internal sealed class SessionPane : Border
     private readonly Border _header;
     private readonly Border _body;
     private readonly Border _footer;
+    private readonly TextBlock _footerNote;
+    private readonly TextBox _composer;
+    private readonly Border _footerButton;
+    private readonly TextBlock _footerButtonText;
     private readonly StackPanel _miniLines;
     private readonly Border _menuButton;
 
@@ -162,11 +166,39 @@ internal sealed class SessionPane : Border
             Margin = new Thickness(12, 6, 10, 8),
             MinHeight = MiniLineHeight * ActivitySummary.DefaultMax,
         };
+        // Footer: built once and only re-labelled, so a half-typed reply survives every refresh. A Perch pane
+        // gets the lite composer; a terminal/IDE pane (or an ended one) a note instead.
+        _footerNote = new TextBlock
+        {
+            FontFamily = _p.Body, FontSize = 11.5, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        _composer = new TextBox
+        {
+            AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, FontFamily = _p.Body, FontSize = 12.5,
+            Foreground = _p.Text, CaretBrush = _p.Brand, Background = _p.Raised, BorderBrush = _p.Border,
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(9), Padding = new Thickness(9, 5),
+            MinHeight = 30, MaxHeight = 88, VerticalContentAlignment = VerticalAlignment.Center, IsVisible = false,
+        };
+        _composer.AddHandler(KeyDownEvent, OnComposerKeyDown, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        _composer.TextChanged += (_, _) => { if (_composer.IsFocused) ComposerTyping?.Invoke(Key); };
+        _composer.GotFocus += (_, _) => ComposerFocusChanged?.Invoke(Key, true);
+        _composer.LostFocus += (_, _) => ComposerFocusChanged?.Invoke(Key, false);
+        _footerButtonText = new TextBlock { FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 11.5, Foreground = _p.Text };
+        _footerButton = FooterButton(_footerButtonText, () => ActionRequested?.Invoke(Key, RoostPaneAction.OpenSession));
+        _footerButton[DockPanel.DockProperty] = Dock.Right;
+        _footerButton.Margin = new Thickness(8, 0, 0, 0);
+        _footerButton.VerticalAlignment = VerticalAlignment.Bottom;
         _footer = new Border
         {
-            BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(10, 6),
+            BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(8, 6),
             Background = _p.Surface, CornerRadius = new CornerRadius(0, 0, 11, 11),
             [DockPanel.DockProperty] = Dock.Bottom, IsVisible = false,
+            Child = new DockPanel
+            {
+                LastChildFill = true,
+                Children = { _footerButton, new Panel { Children = { _footerNote, _composer } } },
+            },
         };
         _body = new Border { ClipToBounds = true, CornerRadius = new CornerRadius(0, 0, 11, 11) };
 
@@ -190,6 +222,18 @@ internal sealed class SessionPane : Border
 
     /// <summary>A question card in this (controlled) pane's thread was answered.</summary>
     public event Action<PermissionItem, IReadOnlyDictionary<string, IReadOnlyList<string>>>? QuestionAnswered;
+
+    /// <summary>The composer sent a reply: (pane key, text).</summary>
+    public event Action<string, string>? PromptSubmitted;
+
+    /// <summary>Esc in the composer with a turn running (pane key).</summary>
+    public event Action<string>? InterruptRequested;
+
+    /// <summary>A keystroke changed the composer's draft (pane key) — the typing hold.</summary>
+    public event Action<string>? ComposerTyping;
+
+    /// <summary>The composer gained / lost keyboard focus (pane key, focused).</summary>
+    public event Action<string, bool>? ComposerFocusChanged;
 
     /// <summary>Points the pane at its latest roster snapshot and feed; refreshes header, chrome and body.</summary>
     public void Update(RoostPane pane, RoostFeed? feed)
@@ -413,6 +457,7 @@ internal sealed class SessionPane : Border
             _boundConversation = f.Conversation;
         }
         if (_size == RoostPaneSize.Collapsed || _thread is null) RefreshBody();
+        else RefreshFooter();   // the composer's hint follows pending / running / idle
     }
 
     private void RefreshBody()
@@ -513,30 +558,61 @@ internal sealed class SessionPane : Border
     private void RefreshFooter()
     {
         if (_pane is not { } pane) return;
-        bool controlled = pane.Session.IsPerchControlled;   // by origin: a Perch session opens its window
-        var note = new TextBlock
+        bool perch = pane.Session.IsPerchControlled;                        // by origin: opens its window
+        bool canReply = perch && !pane.Ended && _feed is { IsControlled: true };
+        _composer.IsVisible = canReply;
+        _footerNote.IsVisible = !canReply;
+        _footerNote.Text = pane.Ended ? "Session ended" : perch ? "Perch session" : "Tailing · read-only";
+        if (canReply && _feed is { } feed)
         {
-            FontFamily = _p.Body, FontSize = 11.5, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            Text = controlled
-                ? (pane.Session.Status == SessionStatus.AwaitingInput ? "Answer here, or reply in the full window" : "Perch session")
-                : pane.Ended ? "Session ended" : "Tailing · read-only",
-        };
-        var button = FooterButton(controlled ? "⤢ Open window" : "Focus terminal ↗",
-            () => ActionRequested?.Invoke(Key, RoostPaneAction.OpenSession));
-        button[DockPanel.DockProperty] = Dock.Right;
-        button.IsVisible = !pane.Ended;
-        _footer.Child = new DockPanel { LastChildFill = true, Children = { button, note } };
+            var conv = feed.Conversation;
+            _composer.PlaceholderText = conv.PendingPermission is { IsQuestion: false }
+                ? "Reply — or Enter to allow, Esc to deny"
+                : conv.TurnActive ? "Queue a message… (Esc interrupts)" : "Reply…";
+        }
+        _footerButtonText.Text = perch ? "⤢ Open window" : "Focus terminal ↗";
+        _footerButton.IsVisible = !pane.Ended;
         _footer.IsVisible = true;
     }
 
-    private Border FooterButton(string label, Action onClick)
+    // Enter sends (or, with nothing typed, allows a pending permission — never a question, which is answered by
+    // picking); Shift+Enter is a newline; Esc denies a pending permission, else interrupts a running turn. Tunnel
+    // so these beat the TextBox's own Enter-inserts-a-newline.
+    private void OnComposerKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (_feed is not { IsControlled: true } feed) return;
+        var conv = feed.Conversation;
+        if (e.Key == global::Avalonia.Input.Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            var text = _composer.Text ?? "";
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                if (conv.PendingPermission is { IsQuestion: false } pending) PermissionAnswered?.Invoke(pending, true, false);
+            }
+            else
+            {
+                PromptSubmitted?.Invoke(Key, text.TrimEnd());
+                _composer.Text = "";
+            }
+            e.Handled = true;
+        }
+        else if (e.Key == global::Avalonia.Input.Key.Escape && e.KeyModifiers == KeyModifiers.None)
+        {
+            if (conv.PendingPermission is { } pending) { PermissionAnswered?.Invoke(pending, false, false); e.Handled = true; }
+            else if (conv.TurnActive) { InterruptRequested?.Invoke(Key); e.Handled = true; }
+        }
+    }
+
+    /// <summary>True while this pane's composer has keyboard focus.</summary>
+    public bool ComposerFocused => _composer.IsFocused;
+
+    private Border FooterButton(TextBlock label, Action onClick)
     {
         var b = new Border
         {
             CornerRadius = new CornerRadius(8), Padding = new Thickness(9, 3), BorderThickness = new Thickness(1),
             BorderBrush = _p.Border, Background = _p.Raised, Cursor = new Cursor(StandardCursorType.Hand),
-            Child = new TextBlock { Text = label, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 11.5, Foreground = _p.Text },
+            MinHeight = 30, Child = new Border { VerticalAlignment = VerticalAlignment.Center, Child = label },
         };
         b.PointerEntered += (_, _) => b.BorderBrush = _p.BrandLine;
         b.PointerExited += (_, _) => b.BorderBrush = _p.Border;

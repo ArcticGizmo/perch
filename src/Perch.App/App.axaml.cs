@@ -1546,6 +1546,7 @@ public partial class App : Application
                     PerchSessionFor(sid)?.AnswerPermission(item, allow, mode);
                 w.QuestionAnswered += (sid, item, answers) => PerchSessionFor(sid)?.AnswerQuestion(item, answers);
                 w.InterruptRequested += sid => PerchSessionFor(sid)?.Interrupt();
+                w.PromptSubmitted += (sid, text) => PerchSessionFor(sid)?.SendPrompt(text);
                 return w;
             },
             () => _roostWindow = null);
