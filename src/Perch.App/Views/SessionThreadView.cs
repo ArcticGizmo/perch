@@ -133,18 +133,27 @@ internal sealed class SessionThreadView : ScrollViewer
         public readonly Dictionary<ToolCallPart, ToolGroup> Groups = new();
     }
 
-    public SessionThreadView(SessionPalette palette)
+    /// <summary>The Roost pane density: a tighter column that fills the pane (no reading-width cap), and every
+    /// tool card starts collapsed. Type isn't resized here — the pane scales the whole thread through one
+    /// <see cref="CompactScale"/> layout transform, so text and spacing shrink together.</summary>
+    public bool Compact { get; }
+
+    /// <summary>The layout scale a <see cref="Compact"/> thread is shown at (see <c>SessionPane</c>).</summary>
+    public const double CompactScale = 0.86;
+
+    public SessionThreadView(SessionPalette palette, bool compact = false)
     {
         _p = palette;
+        Compact = compact;
         _initials = Initials(Environment.UserName);
         HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
         Background = _p.Surface;
 
         _stack = new StackPanel
         {
-            Spacing = 22,
-            MaxWidth = SessionPalette.ThreadMaxWidth + 44,
-            Margin = new Thickness(22, 26, 22, 20),
+            Spacing = compact ? 12 : 22,
+            MaxWidth = compact ? double.PositiveInfinity : SessionPalette.ThreadMaxWidth + 44,
+            Margin = compact ? new Thickness(12, 12, 12, 10) : new Thickness(22, 26, 22, 20),
             HorizontalAlignment = HorizontalAlignment.Stretch,   // + MaxWidth → centred column
         };
         // The find-match overlay sits above the thread in the same scrolled coordinate space, so its
@@ -193,12 +202,7 @@ internal sealed class SessionThreadView : ScrollViewer
     /// <summary>Points the view at a conversation (materialising what it already holds) and follows it.</summary>
     public void Bind(SessionConversation conversation)
     {
-        if (_conv is not null)
-        {
-            _conv.Changed -= OnChanged;
-            _conv.Reset -= OnReset;
-            _conv.StateChanged -= OnStateChanged;
-        }
+        Detach();
         _conv = conversation;
         _activityShown = false;   // the row was cleared with the column; re-add it below if the turn is live
         _userRows.Clear();
@@ -216,6 +220,20 @@ internal sealed class SessionThreadView : ScrollViewer
         UpdateActivity();
         _stickToBottom = true;
         ScrollToEndSoon();
+    }
+
+    /// <summary>Stops following the bound conversation (the view keeps what it shows). A view that's being
+    /// thrown away while its conversation lives on — a Roost pane collapsing — must call this, or the
+    /// conversation's events keep the dropped view alive.</summary>
+    public void Unbind() => Detach();
+
+    private void Detach()
+    {
+        if (_conv is null) return;
+        _conv.Changed -= OnChanged;
+        _conv.Reset -= OnReset;
+        _conv.StateChanged -= OnStateChanged;
+        _conv = null;
     }
 
     // History landed in front of the live items: rebuild the whole column (cheap — a few hundred controls).
@@ -736,7 +754,7 @@ internal sealed class SessionThreadView : ScrollViewer
             if (part is ToolCallPart tp && IsFoldable(tp.ToolName))
             {
                 var card = new ToolCard(_p, tp, Cwd,
-                    path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path));
+                    path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path), Compact);
                 view.Tools[tp] = card;
                 var group = view.OpenGroup;
                 if (group is null)
@@ -763,7 +781,7 @@ internal sealed class SessionThreadView : ScrollViewer
                     break;
                 case ToolCallPart tool:
                     var card = new ToolCard(_p, tool, Cwd,
-                        path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path));
+                        path => OpenFileRequested?.Invoke(path), path => ViewDiffRequested?.Invoke(path), Compact);
                     view.Tools[tool] = card;
                     c = card.Root;
                     break;
@@ -1001,13 +1019,15 @@ internal sealed class SessionThreadView : ScrollViewer
         public Border Root { get; }
 
         public ToolCard(SessionPalette p, ToolCallPart part, string cwd,
-            Action<string> openFile, Action<string> viewDiff)
+            Action<string> openFile, Action<string> viewDiff, bool compact = false)
         {
             _p = p;
             _part = part;
 
             _diffLines = EditDiff.Build(part.ToolName, ParseOrNull(part.InputJson));
-            _expanded = _diffLines is { Count: > 0 };   // an edit's diff shows by default; other detail stays closed
+            // An edit's diff shows by default; other detail stays closed. Compact density (a Roost pane) keeps
+            // every card collapsed — the pane is a glance, the full window is for reading diffs.
+            _expanded = !compact && _diffLines is { Count: > 0 };
 
             var icon = new Border
             {

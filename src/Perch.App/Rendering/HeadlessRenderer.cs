@@ -500,6 +500,10 @@ internal static class HeadlessRenderer
         // dimmed thinking, and tool expanders (one collapsed, one expanded with a stitched result).
         RenderHistoryReadable(outDir);
 
+        // The Roost pane's compact thread density (docs/roost-plan.md CP5): a tighter, full-width column at the
+        // pane's layout scale, every tool card (even an edit's diff) collapsed, in dark and light.
+        RenderRoostThreadCompact(outDir);
+
         // The rich Perch-controlled session window (docs/session-ui-plan.md): composed turns — user bubble,
         // Claude prose under the bird mark, collapsed thinking, tool cards, a pending permission card — in
         // the window's own warm dark and light palettes, plus the launcher with its recents list.
@@ -1307,24 +1311,13 @@ internal static class HeadlessRenderer
     // The history viewer's readable transcript body over synthetic events — the "rich mirror" reading
     // surface for live sessions (session-control M1). Markdown-heavy assistant prose so the block-level
     // MarkdownView styling (heading, fenced code, table) can be eyeballed alongside thinking + tools.
+    private const string HistorySamplePrompt =
+        "Why is the `PlacementMath` test flaky? Show me the fix as a diff and summarise the causes in a table.";
+
     private static void RenderHistoryReadable(string outDir)
     {
-        const string prompt = "Why is the `PlacementMath` test flaky? Show me the fix as a diff and summarise the causes in a table.";
-        var events = new List<Perch.Data.Control.SessionEvent>
-        {
-            new Perch.Data.Control.SessionInitEvent("f1a2b3c4-0000-4000-8000-000000000000", "claude-opus-5", "default", 18),
-            new Perch.Data.Control.AssistantThinkingEvent(
-                "The failure only reproduces at 1.5× DPI — the offset rounds twice, once in Snap and once in ToDip. Reading the test first."),
-            new Perch.Data.Control.ToolUseEvent("t1", "Read", "Reading PlacementMath.cs",
-                "{\"file_path\":\"src/Perch.Core/Data/PlacementMath.cs\"}"),
-            new Perch.Data.Control.ToolResultEvent("t1",
-                "public static PixelPoint Snap(PixelPoint p, double scale)\n{\n    …\n}", false),
-            new Perch.Data.Control.ToolUseEvent("t2", "Bash", "Running: dotnet test --filter PlacementMathTests",
-                "{\"command\":\"dotnet test --filter PlacementMathTests\"}"),
-            new Perch.Data.Control.ToolResultEvent("t2", "Passed!  - Failed: 0, Passed: 41", false),
-            new Perch.Data.Control.AssistantTextEvent(
-                "Found it — a **double-rounding** bug.\n\n### The fix\n\n```csharp\n// round once, at the edge\nvar dip = Math.Round(px / scale, MidpointRounding.AwayFromZero);\nreturn new PixelPoint((int)(dip * scale), p.Y);\n```\n\n### Causes\n\n| Cause | Effect |\n|-------|--------|\n| `Snap` rounds pixels | off-by-one at 1.5× |\n| `ToDip` rounds again | drift accumulates |\n\n> Only one of the two conversions may round; the other must stay exact."),
-        };
+        const string prompt = HistorySamplePrompt;
+        var events = HistorySampleEvents();
 
         // The read-only thread realises its templated controls only inside a shown window, so this is captured
         // via CaptureRenderedFrame like the markdown viewer, not a detached one-shot bitmap.
@@ -1341,6 +1334,68 @@ internal static class HeadlessRenderer
         }
         w.Close();
 
+        RenderHistorySearch(outDir);
+    }
+
+    // A compact SessionThreadView as a Roost pane body shows it: the history sample plus an Edit (its diff
+    // collapsed under compact) and a pending permission, scaled by CompactScale in a pane-sized window.
+    private static void RenderRoostThreadCompact(string outDir)
+    {
+        foreach (var dark in new[] { true, false })
+        {
+            var p = SessionPalette.For(dark);
+            var conv = new Perch.Data.Control.SessionConversation();
+            conv.AddUserPrompt(HistorySamplePrompt);
+            foreach (var ev in HistorySampleEvents()) conv.Apply(ev);
+            conv.Apply(new Perch.Data.Control.ToolUseEvent("t3", "Edit", "Editing PlacementMath.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/PlacementMath.cs\",\"old_string\":\"var dip = px / scale;\",\"new_string\":\"var dip = Math.Round(px / scale);\"}"));
+            conv.Apply(new Perch.Data.Control.ToolResultEvent("t3", "The file has been updated.", false));
+            conv.Apply(new Perch.Data.Control.PermissionRequestEvent("r1", "Bash", "dotnet test --filter PlacementMathTests",
+                "{\"command\":\"dotnet test --filter PlacementMathTests\"}", null));
+
+            var thread = new SessionThreadView(p, compact: true) { Cwd = @"C:\src\perch" };
+            var w = new Window
+            {
+                Width = 460, Height = 620, Background = p.Surface,
+                Content = new LayoutTransformControl
+                {
+                    LayoutTransform = new ScaleTransform(SessionThreadView.CompactScale, SessionThreadView.CompactScale),
+                    Child = thread,
+                },
+            };
+            thread.Bind(conv);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, dark ? "roost_thread_compact_1x.png" : "roost_thread_compact_light_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    private static List<Perch.Data.Control.SessionEvent> HistorySampleEvents() =>
+        new()
+        {
+            new Perch.Data.Control.SessionInitEvent("f1a2b3c4-0000-4000-8000-000000000000", "claude-opus-5", "default", 18),
+            new Perch.Data.Control.AssistantThinkingEvent(
+                "The failure only reproduces at 1.5× DPI — the offset rounds twice, once in Snap and once in ToDip. Reading the test first."),
+            new Perch.Data.Control.ToolUseEvent("t1", "Read", "Reading PlacementMath.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/PlacementMath.cs\"}"),
+            new Perch.Data.Control.ToolResultEvent("t1",
+                "public static PixelPoint Snap(PixelPoint p, double scale)\n{\n    …\n}", false),
+            new Perch.Data.Control.ToolUseEvent("t2", "Bash", "Running: dotnet test --filter PlacementMathTests",
+                "{\"command\":\"dotnet test --filter PlacementMathTests\"}"),
+            new Perch.Data.Control.ToolResultEvent("t2", "Passed!  - Failed: 0, Passed: 41", false),
+            new Perch.Data.Control.AssistantTextEvent(
+                "Found it — a **double-rounding** bug.\n\n### The fix\n\n```csharp\n// round once, at the edge\nvar dip = Math.Round(px / scale, MidpointRounding.AwayFromZero);\nreturn new PixelPoint((int)(dip * scale), p.Y);\n```\n\n### Causes\n\n| Cause | Effect |\n|-------|--------|\n| `Snap` rounds pixels | off-by-one at 1.5× |\n| `ToDip` rounds again | drift accumulates |\n\n> Only one of the two conversions may round; the other must stay exact."),
+        };
+
+    private static void RenderHistorySearch(string outDir)
+    {
         // The session search palette: a command-palette modal over a list of rich session rows
         // (project/title, cwd, when · size, a live dot).
         var now = DateTime.Now;
