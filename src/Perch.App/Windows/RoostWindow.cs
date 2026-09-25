@@ -271,6 +271,12 @@ internal sealed class RoostWindow : Window
 
     public RoostLayoutMode Mode => _mode;
 
+    /// <summary>Whether the session's pane is on screen right now — placed by the current layout, expanded or as
+    /// a mini card (not paged, filtered or zoomed away). With <see cref="Window.IsActive"/> it's the Roost half of
+    /// <see cref="AttentionSeen"/>.</summary>
+    public bool IsOnScreen(string sessionId) =>
+        _roster.Panes.FirstOrDefault(p => p.Session.SessionId == sessionId) is { } pane && _placed.ContainsKey(pane.Key);
+
     /// <summary>The roster changed (a monitor scan landed) — re-sync feeds, panes and layout.</summary>
     public void RosterChanged() => Refresh();
 

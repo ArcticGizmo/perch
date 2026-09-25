@@ -386,6 +386,17 @@ There's no mandatory pause between checkpoints.
   is active and the pane is expanded and on-screen. This is a pure predicate with tests.
 - Done when: no toast fires for a permission already visible in an active Roost pane, and toasts still fire when
   Roost is open but inactive, or the pane is collapsed or off-screen.
+- As built:
+  - **`AttentionSeen.Seen(ownWindowActive, roostActive, paneOnScreen)`** (Core, tested alongside
+    `SessionAttention`) feeds `SessionWindow.MaybeAlert`'s "active" input through an app-supplied `RoostView`.
+  - **Changed from the plan: a collapsed pane counts as seen.** "On screen" means placed by the current layout,
+    expanded or as a mini card, because the mini card shows the "⚠ Allow …" line too. Also, a Perch permission
+    usually arrives before the next scan has expanded its pane, so "expanded only" would still toast for a prompt
+    the user is looking at. Paged, filtered or zoomed away is not seen.
+  - When the Roost is deactivated, open session windows re-evaluate, so a prompt that was only seen in the Roost
+    still gets its toast once the user looks away (the existing once-per-item latch).
+  - **Wider than planned:** the monitor's Done / Waiting-for-input / API-error toasts (toast, chime, push) also
+    skip a session the active Roost shows. The overlay's attention flash still fires.
 
 ### P3 — Polish
 
@@ -433,6 +444,10 @@ the highlight layer. Extracting it isn't needed to meet the ask, so it waits unt
 - [ ] P2: one conversation in two views: an answer in the pane turns the window's card into a receipt, and the
       other way round.
 - [ ] P2: the typing hold works under a real burst of activity.
+- [ ] CP11: send from a pane composer (idle and mid-turn/queued); Enter-to-allow / Esc-to-deny / Esc-interrupts
+      from the composer; a draft survives a scan and a layout change elsewhere on the grid.
+- [ ] CP12: with the Roost active and the pane on screen, a Perch permission and a terminal session's
+      done/waiting raise no toast; tab away from the Roost → the pending Perch prompt then toasts once.
 - [ ] P3: takeover keeps the session id and rebinds in place.
 
 ## Open questions

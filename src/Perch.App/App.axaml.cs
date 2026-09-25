@@ -1159,7 +1159,7 @@ public partial class App : Application
         // Controlled (Perch-window) sessions still alert: you might not be watching the window, so a finished
         // turn should flash + toast like any other. Clicking through focuses the Perch window (FocusSession).
         _overlay!.Canvas.TriggerAttention(SessionStatus.NeedsAttention);
-        _notifications?.Notify(NotificationKind.Done, session);
+        if (!SeenInRoost(session)) _notifications?.Notify(NotificationKind.Done, session);
         CheckAchievements(force: false); // a finish is a natural moment to have crossed a threshold
     }
 
@@ -1228,7 +1228,7 @@ public partial class App : Application
     {
         if (IsDaemonSession(session)) return;
         _overlay!.Canvas.TriggerAttention(SessionStatus.AwaitingInput);
-        _notifications?.Notify(NotificationKind.WaitingForInput, session);
+        if (!SeenInRoost(session)) _notifications?.Notify(NotificationKind.WaitingForInput, session);
     }
 
     // A session's last API request failed (e.g. 529 Overloaded): flash the overlay and fire the API-error
@@ -1237,7 +1237,7 @@ public partial class App : Application
     {
         if (IsDaemonSession(session)) return;
         _overlay!.Canvas.TriggerAttention(SessionStatus.ApiError);
-        _notifications?.Notify(NotificationKind.ApiFailed, session);
+        if (!SeenInRoost(session)) _notifications?.Notify(NotificationKind.ApiFailed, session);
     }
 
     // A tracked PR changed state (merged/closed, reviewed, approved): fire the matching desktop alert (toast/
@@ -1532,12 +1532,25 @@ public partial class App : Application
         _roostWindow?.RosterChanged();
     }
 
+    // The Roost half of AttentionSeen for a session: is the Roost the active window, and is the pane on screen?
+    private (bool RoostActive, bool OnScreen) RoostView(string sessionId) =>
+        _roostWindow is { } r ? (r.IsActive, r.IsOnScreen(sessionId)) : (false, false);
+
+    // The monitor's done / waiting / API-error toasts skip a session the Roost already has in front of the user.
+    private bool SeenInRoost(ClaudeSession session)
+    {
+        var (active, onScreen) = RoostView(session.SessionId);
+        return Perch.Data.Roost.AttentionSeen.Seen(ownWindowActive: false, active, onScreen);
+    }
+
     private void OpenRoost() =>
         _roostWindow = WindowHost.ShowOrFocus(_roostWindow,
             () =>
             {
                 var w = new RoostWindow(_roostRoster, CreateRoostFeed,
                     layout: _appSettings?.RoostLayout ?? Perch.Data.Roost.RoostLayoutMode.Tiled);
+                // A prompt that was only "seen" in the Roost gets its toast once the user looks away from it.
+                w.Deactivated += (_, _) => { foreach (var sw in _sessionWindows) sw.ReevaluateAttention(); };
                 w.NewSessionRequested += OpenSessionWindow;
                 w.OpenSessionRequested += FocusSession;
                 w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
@@ -1867,6 +1880,7 @@ public partial class App : Application
         w.ComposerOverflowRequested += anchor => ShowComposerOverflowMenu(anchor, w);   // "…" activate menu
         // A background session needing a decision (permission / question / plan) raises a desktop toast.
         w.AttentionRequested += (title, body) => _notifier?.Show(title, body, ToastLevel.Warning, null, null);
+        w.RoostView = RoostView;   // …unless the Roost already has it on screen
         _sessionWindows.Add(w);
         w.Closed += (_, _) => _sessionWindows.Remove(w);
         return w;

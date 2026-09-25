@@ -152,6 +152,14 @@ internal sealed partial class SessionWindow : Window
     /// <summary>Raised (title, body) when a background session needs the user's attention.</summary>
     public event Action<string, string>? AttentionRequested;
 
+    /// <summary>The Roost half of <see cref="Perch.Data.Roost.AttentionSeen"/> for a session id: (the Roost is the
+    /// active window, this session's pane is on screen). Supplied by the app; null = no Roost to consider.</summary>
+    internal Func<string, (bool RoostActive, bool OnScreen)>? RoostView { get; set; }
+
+    /// <summary>Re-run the pending-prompt cue — the Roost just lost focus, so a prompt that was only "seen" there
+    /// may now need its toast.</summary>
+    internal void ReevaluateAttention() => MaybeAlert();
+
     // Launcher
     private readonly AutoCompleteBox _folderBox;   // free-text project folder, searchable over past projects
     private IReadOnlyList<string> _folderSuggestions = [];  // recency-ordered projects, for Tab-completion
@@ -2894,13 +2902,15 @@ internal sealed partial class SessionWindow : Window
 
     private void OnStateForAlert() => MaybeAlert();
 
-    // Raise a desktop cue when a paused-turn prompt is pending while this window isn't the active one. The
-    // decider fires at most once per pending item; passing the activation explicitly avoids racing IsActive
-    // during the Activated/Deactivated events themselves.
+    // Raise a desktop cue when a paused-turn prompt is pending while nobody's looking at it — this window isn't
+    // the active one and the Roost isn't showing it either (AttentionSeen). The decider fires at most once per
+    // pending item; passing the activation explicitly avoids racing IsActive during Activated/Deactivated.
     private void MaybeAlert(bool? active = null)
     {
         if (_session is null) return;
-        if (!_attention.Evaluate(Conv.PendingPermission, active ?? IsActive)) return;
+        var (roostActive, onScreen) = SessionId is { } id && RoostView is { } view ? view(id) : (false, false);
+        bool seen = Perch.Data.Roost.AttentionSeen.Seen(active ?? IsActive, roostActive, onScreen);
+        if (!_attention.Evaluate(Conv.PendingPermission, seen)) return;
         var p = Conv.PendingPermission!;
         string what = p.IsQuestion ? "has a question for you"
             : p.IsPlan ? "has a plan to review"
