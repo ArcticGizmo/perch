@@ -287,6 +287,19 @@ There's no mandatory pause between checkpoints.
   - `roost_tiled` render surfaces
 - Done when: render shows every status, both origins, mixed collapse and the overflow pill; expanding and
   collapsing creates and drops the thread view (no leaked `SessionThreadView` for collapsed panes).
+- As built:
+  - **Tiled pages by whole rows** (wheel / PgUp·PgDn / the pills) instead of free scrolling. The row snap comes
+    for free, and only the visible 2×2 cells hold controls, so an off-screen pane is parked with no thread.
+  - The visible cells are rebuilt only when the layout's shape changes, so a scan that only changes text
+    refreshes the panes in place and an expanded thread keeps its scroll.
+  - The ↑/↓ pills live in a bottom bar alongside the key hints, so they never cover a pane.
+  - **Answering permissions and questions in a Perch pane landed here**, pulled forward from CP10: a live card
+    with dead Allow/Deny buttons was worse than routing the answer (the same `PerchSession.AnswerPermission`/
+    `AnswerQuestion` path `SessionWindow` uses). CP10 keeps the keyboard shortcuts and the two-view
+    receipt check.
+  - The Roost lists interactive sessions only; autonomous SDK runs stay out, as they do from the overlay's main
+    list.
+  - Status hues are `SessionPalette` roles (theme-derived), which gained `Attn`/`AttnWash`/`ErrWash`/`Idle`.
 
 **CP8 · Main + stack, Zoom, filters, keyboard**
 - Scope: the other two layouts (layout persisted), summary-chip filters, the keyboard table (except the P2
@@ -360,6 +373,8 @@ the highlight layer. Extracting it isn't needed to meet the ask, so it waits unt
       unchanged and a fixture round-trip test (tail in pieces = read whole) is green, but the watcher path needs
       a real session.
 - [ ] P1: a real terminal session tails into a pane, and the mini card updates while collapsed.
+- [ ] CP7: answering a permission in a Perch pane resolves it, and the open `SessionWindow`'s card turns into a
+      receipt. The Roost can't be opened until CP9 adds the entry points, so this is owed from then.
 - [ ] P1: a Perch session streams live into a pane (in-memory bind) while also open in its `SessionWindow`.
 - [ ] P1: a status flip to AwaitingInput auto-expands a collapsed pane, and the badge shows on the overlay glyph.
 - [ ] P1: the Alt+Shift+R hotkey opens Roost from dense mode.

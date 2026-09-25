@@ -509,6 +509,10 @@ internal static class HeadlessRenderer
         // pane's layout scale, every tool card (even an edit's diff) collapsed, in dark and light.
         RenderRoostThreadCompact(outDir);
 
+        // The Roost window (CP7): rail + Tiled 2×2 stage over the sample roster — every status, Perch and
+        // terminal/IDE origins, expanded panes beside stacked mini cards, and the "↓ N more · needs you" pill.
+        RenderRoost(outDir);
+
         // The rich Perch-controlled session window (docs/session-ui-plan.md): composed turns — user bubble,
         // Claude prose under the bird mark, collapsed thinking, tool cards, a pending permission card — in
         // the window's own warm dark and light palettes, plus the launcher with its recents list.
@@ -1377,6 +1381,115 @@ internal static class HeadlessRenderer
             {
                 using var fs = File.Create(Path.Combine(outDir, dark ? "roost_thread_compact_1x.png" : "roost_thread_compact_light_1x.png"));
                 frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    // The sample roster as the Roost sees it (autonomous runs excluded), with "api" made a Perch-driven session
+    // blocked on a permission, and live timers so the pills read like the real thing.
+    internal static IReadOnlyList<ClaudeSession> RoostSampleSessions()
+    {
+        var now = Clock.Now;
+        return SampleData.Sessions()
+            .Where(s => !s.IsBackground)
+            .Select(s => s.ProjectName switch
+            {
+                "api" => s with { PerchControlled = true, AwaitingSince = now.AddMinutes(-2), Model = "claude-opus-5" },
+                "service" => s with { AwaitingSince = now.AddMinutes(-5) },
+                "perch" => s with { RunningSince = now.AddSeconds(-41), Model = "claude-sonnet-5" },
+                "docs-site" => s with { LastUpdated = now.AddMinutes(-4) },
+                "extension" => s with { RunningSince = now.AddSeconds(-12) },
+                _ => s,
+            })
+            .ToList();
+    }
+
+    // A small, per-session sample conversation so each pane (expanded thread or mini card) has something real.
+    internal static Perch.Data.Control.SessionConversation RoostSampleConversation(ClaudeSession s)
+    {
+        var c = new Perch.Data.Control.SessionConversation();
+        void Tool(string id, string name, string summary, string input, string? result, bool error = false)
+        {
+            c.Apply(new Perch.Data.Control.ToolUseEvent(id, name, summary, input));
+            if (result is not null) c.Apply(new Perch.Data.Control.ToolResultEvent(id, result, error));
+        }
+        var done = new Perch.Data.Control.TurnResultEvent(false, "success", 0.12, 1200, 800, 42_000);
+        switch (s.ProjectName)
+        {
+            case "api":
+                c.AddUserPrompt("Run the integration tests and fix whatever breaks.");
+                Tool("a1", "Read", "Reading Routes.cs", "{\"file_path\":\"src/Api/Routes.cs\"}", "line\nline\nline\nline");
+                Tool("a2", "Edit", "Editing Routes.cs", "{\"file_path\":\"src/Api/Routes.cs\",\"old_string\":\"MapGet(\\\"/v1\\\")\",\"new_string\":\"MapGet(\\\"/v2\\\")\"}", "The file has been updated.");
+                c.Apply(new Perch.Data.Control.AssistantTextEvent("Routes updated. Running the suite next."));
+                c.Apply(new Perch.Data.Control.PermissionRequestEvent("r1", "Bash", "dotnet test tests/Api.Tests",
+                    "{\"command\":\"dotnet test tests/Api.Tests\"}", null));
+                break;
+            case "perch":
+                c.AddUserPrompt("Port the overlay's section order to the Roost rail.");
+                Tool("p1", "Grep", "Searching for SectionOrder", "{\"pattern\":\"SectionOrder\"}", "a.cs\nb.cs\nc.cs");
+                Tool("p2", "Edit", "Editing OverlayForm.cs", "{\"file_path\":\"OverlayForm.cs\",\"old_string\":\"a\",\"new_string\":\"b\"}", "ok");
+                Tool("p3", "Bash", "Running dotnet build", "{\"command\":\"dotnet build\"}", null);
+                break;
+            case "docs-site":
+                c.AddUserPrompt("Restructure the docs nav.");
+                Tool("d1", "Glob", "Finding docs/**/*.md", "{\"pattern\":\"docs/**/*.md\"}", "a.md\nb.md\nc.md\nd.md\ne.md");
+                c.Apply(new Perch.Data.Control.AssistantTextEvent("Moved the guides under **/guides** and fixed every broken link.\n\nThe nav now has three sections."));
+                c.Apply(done);
+                break;
+            case "web":
+                c.AddUserPrompt("Why does the landing page flash on load?");
+                Tool("w1", "Read", "Reading index.html", "{\"file_path\":\"index.html\"}", "l\nl");
+                c.Apply(new Perch.Data.Control.AssistantTextEvent("API Error: 529 Overloaded."));
+                c.Apply(done);
+                break;
+            case "service":
+                c.AddUserPrompt("Bump the worker pool size.");
+                Tool("s1", "Edit", "Editing config.yaml", "{\"file_path\":\"config.yaml\",\"old_string\":\"4\",\"new_string\":\"8\"}", "ok");
+                Tool("s2", "Bash", "Running kubectl apply -f deploy/", "{\"command\":\"kubectl apply -f deploy/\"}", null);
+                break;
+            case "extension":
+                c.AddUserPrompt("Add the status bar item.");
+                Tool("e1", "Read", "Reading extension.ts", "{\"file_path\":\"src/extension.ts\"}", "l\nl\nl");
+                Tool("e2", "Bash", "Running npm run compile", "{\"command\":\"npm run compile\"}", null);
+                break;
+            default:
+                c.AddUserPrompt("Tidy up the scratch notes.");
+                c.Apply(new Perch.Data.Control.AssistantTextEvent("Done — merged the duplicates."));
+                c.Apply(done);
+                break;
+        }
+        return c;
+    }
+
+    private static void RenderRoost(string outDir)
+    {
+        foreach (var dark in new[] { true, false })
+        {
+            // Seed the roster, then rescan without "scratch" so it lingers as an ended (greyed) pane.
+            var roster = new Perch.Data.Roost.RoostRoster();
+            var sessions = RoostSampleSessions();
+            roster.Update(sessions, Clock.Now.AddMinutes(-3));
+            roster.Update(sessions.Where(s => s.ProjectName != "scratch").ToList(), Clock.Now);
+            var w = new Windows.RoostWindow(roster,
+                pane => RoostFeed.ForFixed(RoostSampleConversation(pane.Session), pane.Session.SessionId),
+                SessionPalette.For(dark))
+            { Width = 1280, Height = 800 };
+            w.Show();
+            void Capture(string name)
+            {
+                for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
+                var frame = w.CaptureRenderedFrame();
+                if (frame == null) return;
+                using var fs = File.Create(Path.Combine(outDir, name));
+                frame.Save(fs);
+            }
+            Capture(dark ? "roost_tiled_1x.png" : "roost_tiled_light_1x.png");
+            if (dark)
+            {
+                // Paged to the bottom: the error ring, the rest of the mini cards, and the "↑ N more" pill.
+                w.PageForRender(+5);
+                Capture("roost_tiled_paged_1x.png");
             }
             w.Close();
         }

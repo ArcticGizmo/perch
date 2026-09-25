@@ -99,7 +99,7 @@ internal static class ActivitySummary
     {
         ToolCallPart t => Tool(t),
         TextPart { Text: var text } when Snippet(text) is { Length: > 0 } s =>
-            closingProse ? new ActivityLine(ActivityKind.Done, "Done: " + s) : new ActivityLine(ActivityKind.Prose, s),
+            closingProse ? new ActivityLine(ActivityKind.Done, SaysDone(s) ? s : "Done: " + s) : new ActivityLine(ActivityKind.Prose, s),
         _ => null,
     };
 
@@ -148,6 +148,10 @@ internal static class ActivitySummary
         }
         return "";
     }
+
+    // Closing prose that already opens with "Done" ("Done — merged the duplicates.") needs no "Done: " prefix.
+    private static bool SaysDone(string s) =>
+        s.StartsWith("Done", StringComparison.OrdinalIgnoreCase) && (s.Length == 4 || !char.IsLetter(s[4]));
 
     private static string Clip(string s) => s.Length <= MaxChars ? s : s[..(MaxChars - 1)].TrimEnd() + "…";
 }

@@ -79,6 +79,10 @@ public partial class App : Application
     private IDisposable? _inboxSub;                  // transient inbox (Connect 4 invites / nudges / rematches)
     private NudgeBubbleWindow? _nudgeBubble;         // at most one on screen at a time
     private HistoryWindow? _historyWindow;
+    // The Roost (docs/roost-plan.md): its roster is app-owned and fed every scan, so pane order and pins
+    // survive closing the window; the window (and its per-pane feeds) exists only while it's open.
+    private readonly Perch.Data.Roost.RoostRoster _roostRoster = new();
+    private RoostWindow? _roostWindow;
     private GitTreeWindow? _treeWindow;
     private MarkdownWindow? _markdownWindow;
     private PlacementEditorWindow? _placementEditor;
@@ -289,6 +293,7 @@ public partial class App : Application
                 RefreshSessionActivity(sessions);   // mirror each session's live sub-agents into its own window
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
+                UpdateRoost(sessions);
                 RefreshOriginIcons(sessions);
                 RefreshComposerActions();   // grow/drop each session window's artifact + markdown glyphs
                 UpdateUsageDirs(sessions);  // one usage bar-set per org currently in use (+ the default)
@@ -633,6 +638,7 @@ public partial class App : Application
         _settings?.Close();
         _onboardingWindow?.Close();
         _historyWindow?.Close();
+        _roostWindow?.Close();
         _treeWindow?.Close();
         _markdownWindow?.CloseWithoutPrompt();
         _placementEditor?.Close();
@@ -1515,6 +1521,39 @@ public partial class App : Application
                 w.ShowSession(sessionId);
             });
     }
+
+    // ── Roost ─────────────────────────────────────────────────────────────────
+    // Every scan folds into the roster (cheap — no IO), and an open Roost re-syncs. Autonomous SDK runs stay
+    // out, as they do from the overlay's main list: nobody is at the keyboard for them.
+    private void UpdateRoost(IReadOnlyList<ClaudeSession> sessions)
+    {
+        _roostRoster.Update(sessions.Where(s => !s.IsBackground).ToList(), Clock.Now);
+        _roostWindow?.RosterChanged();
+    }
+
+    private void OpenRoost() =>
+        _roostWindow = WindowHost.ShowOrFocus(_roostWindow,
+            () =>
+            {
+                var w = new RoostWindow(_roostRoster, CreateRoostFeed);
+                w.NewSessionRequested += OpenSessionWindow;
+                w.OpenSessionRequested += FocusSession;
+                w.PermissionAnswered += (sid, item, allow, mode) =>
+                    PerchSessionFor(sid)?.AnswerPermission(item, allow, mode);
+                w.QuestionAnswered += (sid, item, answers) => PerchSessionFor(sid)?.AnswerQuestion(item, answers);
+                return w;
+            },
+            () => _roostWindow = null);
+
+    // A Perch-driven session reads its live in-memory conversation; anything else (or a Perch session this
+    // app doesn't own) tails its transcript from disk.
+    private RoostFeed? CreateRoostFeed(Perch.Data.Roost.RoostPane pane) =>
+        PerchSessionFor(pane.Session.SessionId) is { } owned
+            ? RoostFeed.ForControlled(owned)
+            : RoostFeed.ForTranscript(pane.Session.SessionId, pane.Session.Cwd);
+
+    private Services.PerchSession? PerchSessionFor(string? sessionId) =>
+        sessionId is null ? null : _perchSessions.FirstOrDefault(s => s.SessionId == sessionId);
 
     private void OpenStats() =>
         _statsWindow = WindowHost.ShowOrFocus(_statsWindow,

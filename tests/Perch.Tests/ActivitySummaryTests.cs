@@ -61,6 +61,16 @@ public class ActivitySummaryTests
         Assert.Equal(new ActivityLine(ActivityKind.Done, "Done: Summary"), last);
     }
 
+    [Theory]
+    [InlineData("Done — merged the duplicates.", "Done — merged the duplicates.")]
+    [InlineData("done. Tests pass.", "done. Tests pass.")]
+    [InlineData("Doneness checks added.", "Done: Doneness checks added.")]
+    public void ClosingProseThatAlreadySaysDoneIsNotPrefixedAgain(string prose, string expected)
+    {
+        var conv = Conv(new AssistantTextEvent(prose), Result);
+        Assert.Equal(new ActivityLine(ActivityKind.Done, expected), ActivitySummary.Build(conv, sessionRunning: false)[^1]);
+    }
+
     [Fact]
     public void TailedTranscriptProseIsOnlyDoneWhenTheSessionIsNotRunning()
     {
