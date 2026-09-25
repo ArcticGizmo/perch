@@ -24,6 +24,8 @@ internal enum RoostPaneAction
     OpenSession,
     /// <summary>Copy <c>claude --resume {id}</c>.</summary>
     CopyResume,
+    /// <summary>Take a terminal session over in Perch (the app confirms first — see <c>App.OnElevateToPerch</c>).</summary>
+    TakeOver,
 }
 
 /// <summary>
@@ -58,6 +60,11 @@ internal sealed class SessionPane : Border
     private readonly TextBox _composer;
     private readonly Border _footerButton;
     private readonly TextBlock _footerButtonText;
+    private readonly Border _takeOverButton;
+
+    /// <summary>Whether this pane's session can be taken over in Perch (an interactive terminal session Perch
+    /// doesn't already own, still running). Set by the window — the eligibility rule is the overlay's.</summary>
+    public bool CanTakeOver { get; set; }
     private readonly StackPanel _miniLines;
     private readonly Border _menuButton;
 
@@ -189,6 +196,14 @@ internal sealed class SessionPane : Border
         _footerButton[DockPanel.DockProperty] = Dock.Right;
         _footerButton.Margin = new Thickness(8, 0, 0, 0);
         _footerButton.VerticalAlignment = VerticalAlignment.Bottom;
+        _takeOverButton = FooterButton(
+            new TextBlock { Text = "Take over in Perch", FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 11.5, Foreground = _p.Brand },
+            () => ActionRequested?.Invoke(Key, RoostPaneAction.TakeOver));
+        _takeOverButton[DockPanel.DockProperty] = Dock.Right;
+        _takeOverButton.Margin = new Thickness(8, 0, 0, 0);
+        _takeOverButton.VerticalAlignment = VerticalAlignment.Bottom;
+        _takeOverButton.IsVisible = false;
+        _takeOverButton[ToolTip.TipProperty] = "Stop it in its terminal and continue the same conversation in Perch (asks first)";
         _footer = new Border
         {
             BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(8, 6),
@@ -197,7 +212,7 @@ internal sealed class SessionPane : Border
             Child = new DockPanel
             {
                 LastChildFill = true,
-                Children = { _footerButton, new Panel { Children = { _footerNote, _composer } } },
+                Children = { _footerButton, _takeOverButton, new Panel { Children = { _footerNote, _composer } } },
             },
         };
         _body = new Border { ClipToBounds = true, CornerRadius = new CornerRadius(0, 0, 11, 11) };
@@ -572,6 +587,7 @@ internal sealed class SessionPane : Border
         }
         _footerButtonText.Text = perch ? "⤢ Open window" : "Focus terminal ↗";
         _footerButton.IsVisible = !pane.Ended;
+        _takeOverButton.IsVisible = CanTakeOver && !perch && !pane.Ended;
         _footer.IsVisible = true;
     }
 
@@ -642,6 +658,12 @@ internal sealed class SessionPane : Border
         flyout.Items.Add(auto);
         flyout.Items.Add(new Separator());
         flyout.Items.Add(open);
+        if (CanTakeOver && !pane.Session.IsPerchControlled && !pane.Ended)
+        {
+            var take = new MenuItem { Header = "Take over in Perch…" };
+            take.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.TakeOver);
+            flyout.Items.Add(take);
+        }
         flyout.Items.Add(copy);
         flyout.ShowAt(_menuButton);
     }

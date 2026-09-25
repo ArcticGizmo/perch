@@ -228,6 +228,53 @@ public class RoostRosterTests
     }
 
     [Fact]
+    public void TakeOverResumesIntoTheEndedPanesSlot()
+    {
+        // "Take over in Perch": the terminal process (pid 2) stops and Perch resumes the same session under pid 9.
+        var r = new RoostRoster();
+        r.Update([S("1"), S("2", sessionId: "conv"), S("3")], T0);
+        r.SetPin("2", RoostPin.Expanded);
+
+        r.Update([S("1"), S("3"), S("9", sessionId: "conv")], T0.AddSeconds(5));
+        Assert.Equal(["1", "9", "3"], Keys(r.Panes));          // in place, not appended
+        Assert.False(r.Find("9")!.Ended);
+        Assert.Equal(RoostPin.Expanded, r.Find("9")!.Pin);    // the pin carries over
+        Assert.Null(r.Find("2"));
+    }
+
+    [Fact]
+    public void BothProcessesBrieflyLiveThenMergeWhenTheOldOneEnds()
+    {
+        var r = new RoostRoster();
+        r.Update([S("2", sessionId: "conv"), S("3")], T0);
+        r.Update([S("2", sessionId: "conv"), S("3"), S("9", sessionId: "conv")], T0);   // overlap scan
+        Assert.Equal(["2", "3", "9"], Keys(r.Panes));
+        r.Update([S("3"), S("9", sessionId: "conv")], T0.AddSeconds(2));
+        Assert.Equal(["9", "3"], Keys(r.Panes));
+    }
+
+    [Fact]
+    public void AContinuationKeepsItsOwnPin()
+    {
+        var r = new RoostRoster();
+        r.Update([S("2", sessionId: "conv"), S("9", sessionId: "conv")], T0);
+        r.SetPin("2", RoostPin.Expanded);
+        r.SetPin("9", RoostPin.Collapsed);
+        r.Update([S("9", sessionId: "conv")], T0.AddSeconds(1));
+        Assert.Equal(RoostPin.Collapsed, r.Find("9")!.Pin);
+    }
+
+    [Fact]
+    public void UnrelatedNewSessionsStillAppend()
+    {
+        var r = new RoostRoster();
+        r.Update([S("1"), S("2")], T0);
+        r.Update([S("1"), S("9")], T0.AddSeconds(1));   // pid 2 ended, pid 9 is a different conversation
+        Assert.Equal(["1", "2", "9"], Keys(r.Panes));
+        Assert.True(r.Find("2")!.Ended);
+    }
+
+    [Fact]
     public void DuplicatePidInOneScanYieldsOnePane()
     {
         var r = new RoostRoster();

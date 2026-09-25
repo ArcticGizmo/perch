@@ -805,9 +805,18 @@ public partial class App : Application
     // external terminal's process, then resume the same session id in Perch's own embedded ConPTY
     // terminal. The conversation continues under the same id/transcript in a real terminal that lives
     // inside Perch's rich session window — no orphaned external window.
-    private async void OnElevateToPerch(ClaudeSession session)
+    // Only a real interactive CLI session can be elevated (not desktop / SDK, or one Perch already owns) — the
+    // overlay row menu's rule, shared with the Roost's "Take over in Perch".
+    internal static bool CanElevate(ClaudeSession s) =>
+        s.Entrypoint == "cli" && !Perch.Data.Control.ControlledSessions.Owns(s.SessionId);
+
+    private void OnElevateToPerch(ClaudeSession session) => OnElevateToPerch(session, null);
+
+    // The confirm is modal over whichever window asked (the Roost, else the overlay); nothing stops until Elevate.
+    private async void OnElevateToPerch(ClaudeSession session, Window? requester)
     {
-        if (_overlay is not { } owner) return;
+        Window? owner = requester ?? _overlay;
+        if (owner is null) return;
 
         bool confirmed = await ConfirmDialog.ShowAsync(
             owner,
@@ -1560,6 +1569,9 @@ public partial class App : Application
                 w.QuestionAnswered += (sid, item, answers) => PerchSessionFor(sid)?.AnswerQuestion(item, answers);
                 w.InterruptRequested += sid => PerchSessionFor(sid)?.Interrupt();
                 w.PromptSubmitted += (sid, text) => PerchSessionFor(sid)?.SendPrompt(text);
+                // Take over = the overlay's Elevate: same eligibility, same confirm (modal over the Roost).
+                w.CanTakeOver = CanElevate;
+                w.TakeOverRequested += s => OnElevateToPerch(s, _roostWindow);
                 return w;
             },
             () => _roostWindow = null);

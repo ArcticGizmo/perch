@@ -1487,6 +1487,9 @@ internal static class HeadlessRenderer
                     pane.Session.SessionId, controlled: pane.Session.IsPerchControlled),
                 SessionPalette.For(dark))
             { Width = 1280, Height = 800 };
+            // CP13: plain terminal panes offer "Take over in Perch" (the sample has no entrypoints, so stand in
+            // for App.CanElevate's "cli" check).
+            w.CanTakeOver = s => !s.IsPerchControlled && !s.IsDesktop && s.IdeHost is null;
             w.Show();
             void Capture(string name)
             {

@@ -406,6 +406,16 @@ There's no mandatory pause between checkpoints.
   tailed to controlled.
 - Done when: Cancel leaves the terminal session untouched, and a confirmed takeover rebinds the same pane
   without it moving (live check; also verify the session id is kept across `--resume`).
+- As built:
+  - A footer button and a pane-menu item on eligible terminal panes. Eligibility is the overlay's Elevate rule,
+    now shared as `App.CanElevate`: `entrypoint == "cli"` and not already Perch-owned.
+  - Both go through `App.OnElevateToPerch`, which now takes the requesting window, so the "Elevate to Perch?"
+    **confirm is modal over the Roost**. Nothing is stopped before Elevate is clicked.
+  - **Rebinds in place:** `RoostRoster.AdoptContinuations` (tested). A live process whose session id matches a
+    lingering ended pane takes that pane's slot and inherits its pin, and the ended pane goes. That covers both
+    orders: the old process ending first, or a scan briefly showing both. It also makes any `claude --resume`
+    of a still-lingering pane come back in place.
+  - Capture: `roost_tiled_1x` shows the button on the terminal pane.
 
 **CP14 · Taskbar flash**
 - Scope: a new `IWindowChrome.FlashTaskbar` (Windows `FlashWindowEx`; Mac stub, later a dock bounce); fires on a

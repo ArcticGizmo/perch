@@ -109,14 +109,19 @@ public sealed class RoostRoster
             }
         }
 
-        // Anything that left the scan starts (or keeps) lingering; expired or closed ones drop.
+        // Anything that left the scan starts (or keeps) lingering.
+        foreach (var key in _order)
+            if (!seen.Contains(key)) _entries[key].EndedAt ??= now;
+
+        AdoptContinuations();
+
+        // Expired or closed lingering panes drop.
         for (int i = _order.Count - 1; i >= 0; i--)
         {
             var key = _order[i];
             if (seen.Contains(key)) continue;
             var e = _entries[key];
-            e.EndedAt ??= now;
-            if (_closed.Contains(key) || now - e.EndedAt.Value >= EndedLinger)
+            if (_closed.Contains(key) || now - e.EndedAt!.Value >= EndedLinger)
             {
                 _entries.Remove(key);
                 _order.RemoveAt(i);
@@ -125,6 +130,31 @@ public sealed class RoostRoster
 
         _closed.IntersectWith(_entries.Keys);
         Rebuild();
+    }
+
+    // The same conversation continuing under a new process — "Take over in Perch" (the terminal process stops,
+    // Perch resumes the session id), or any `claude --resume` of a session whose pane is still lingering — takes
+    // over the ended pane's slot rather than appending a second pane at the end: the live process moves into the
+    // ended one's position (inheriting its pin unless it has its own) and the ended pane goes.
+    private void AdoptContinuations()
+    {
+        for (int i = 0; i < _order.Count; i++)
+        {
+            var endedKey = _order[i];
+            var ended = _entries[endedKey];
+            if (ended.EndedAt is null || string.IsNullOrEmpty(ended.Session.SessionId)) continue;
+            int j = _order.FindIndex(k => k != endedKey && _entries[k] is { EndedAt: null } live
+                                          && live.Session.SessionId == ended.Session.SessionId);
+            if (j < 0) continue;
+            var liveKey = _order[j];
+            var live = _entries[liveKey];
+            if (live.Pin == RoostPin.Auto) live.Pin = ended.Pin;
+            _order[i] = liveKey;
+            _order.RemoveAt(j);
+            _entries.Remove(endedKey);
+            _closed.Remove(endedKey);
+            if (j < i) i--;   // the slot we filled shifted left
+        }
     }
 
     /// <summary>Hides a pane. Returns true when the closed set changed (so the caller persists it).</summary>

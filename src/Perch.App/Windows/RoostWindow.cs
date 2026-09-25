@@ -266,6 +266,13 @@ internal sealed class RoostWindow : Window
     /// <summary>A Perch pane's composer sent a reply: (session id, text).</summary>
     public event Action<string, string>? PromptSubmitted;
 
+    /// <summary>"Take over in Perch" on a terminal pane (the app confirms before stopping anything).</summary>
+    public event Action<ClaudeSession>? TakeOverRequested;
+
+    /// <summary>Which sessions offer "Take over in Perch" — the app supplies the overlay's Elevate rule. Null =
+    /// none.</summary>
+    public Func<ClaudeSession, bool>? CanTakeOver { get; set; }
+
     /// <summary>A question card in a Perch pane was answered: (session id, item, answers).</summary>
     public event Action<string, PermissionItem, IReadOnlyDictionary<string, IReadOnlyList<string>>>? QuestionAnswered;
 
@@ -336,6 +343,7 @@ internal sealed class RoostWindow : Window
         foreach (var pane in all)
         {
             var view = _views[pane.Key];
+            view.CanTakeOver = !pane.Ended && CanTakeOver?.Invoke(pane.Session) == true;
             view.Update(pane, _feeds[pane.Key]);
             view.SetFocused(pane.Key == _focused);
             if (_placed.TryGetValue(pane.Key, out var place)) view.SetSize(place.Size, place.Held);
@@ -651,6 +659,9 @@ internal sealed class RoostWindow : Window
                 break;
             case RoostPaneAction.CopyResume:
                 _ = CopyAsync($"claude --resume {pane.Session.SessionId}");
+                break;
+            case RoostPaneAction.TakeOver:
+                if (!pane.Ended && CanTakeOver?.Invoke(pane.Session) == true) TakeOverRequested?.Invoke(pane.Session);
                 break;
         }
     }
