@@ -91,8 +91,9 @@ Each pane is **Expanded** or **Collapsed** (a mini card). One pure resolver deci
 **Packing (Tiled):** panes flow through the cells in first-seen order.
 - An Expanded pane takes a whole cell. If the current cell already holds mini cards, the expanded pane starts
   the next cell.
-- Mini cards stack in a cell up to its capacity, which is at least 3 and derived from the cell height and the
-  measured mini-card height.
+- Mini cards stack in a cell up to its capacity, derived from the cell height and the measured mini-card
+  height (`RoostLayout.CellCapacity`: as many whole cards as fit, never fewer than 1; 3–4 at normal window
+  sizes).
 - A pure `RoostLayout.Pack(panes, capacity)` returns the cells. The "N more / needs you" pill reads the
   off-screen cells from the same result.
 
