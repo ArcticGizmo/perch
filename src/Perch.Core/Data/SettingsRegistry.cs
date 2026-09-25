@@ -79,6 +79,12 @@ internal static class SettingsRegistry
             PreviewTarget.Artifacts, nameof(AppSettings.ShowArtifacts),
             s => s.ShowArtifacts, (s, v) => s.ShowArtifacts = v),
 
+        Toggle("roost-button", "Roost button",
+            "Split-panes button on the + New session row that opens the Roost - every session side by side, with the ones that need you drawn to the eye. A dot on it means a session is waiting. The Roost is also on the tray menu and its shortcut (Alt+Shift+R).",
+            SettingSurface.SessionRow, ["roost", "command center", "tmux", "panes", "grid", "dashboard", "all sessions", "side by side"],
+            PreviewTarget.RoostButton, nameof(AppSettings.ShowRoostButton),
+            s => s.ShowRoostButton, (s, v) => s.ShowRoostButton = v),
+
         Toggle("markdown", "Markdown glyph",
             "Glyph on a session that produced a .md file. The \"Markdown files...\" right-click item (a viewer/editor for the project's Markdown) is always available regardless.",
             SettingSurface.SessionRow, ["markdown", "md", "docs", "readme", "notes", "editor", "viewer", "glyph"],

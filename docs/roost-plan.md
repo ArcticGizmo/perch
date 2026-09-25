@@ -326,6 +326,18 @@ There's no mandatory pause between checkpoints.
   - `HotkeyOpenRoost` (default Alt+Shift+R) + descriptor + registration
 - Done when: registry coverage passes, the overlay render shows the glyph (plain, hover, badged, gated off), and
   the Settings preview reflects the gate.
+- As built:
+  - **Hotkeys aren't catalogue descriptors here.** They live on the Settings → Shortcuts page (`AddHotkeyRow`)
+    and in `NotSettings`, like the other four. So `HotkeyOpenRoost` is a Shortcuts row, registered in
+    `RegisterHotkeys`, and forced to the front, because a background tray can't take focus.
+  - `ShowRoostButton` is a SessionRow toggle with a new `PreviewTarget.RoostButton` catalogue chip.
+  - Badge: an API error (red) outranks awaiting input (yellow). A cut-out ring behind it keeps it legible on the
+    glyph's stroke.
+  - The dwell tooltip says "Roost · Every session, side by side · N need you".
+  - The tray gains "Roost…" after "New session…".
+  - The button isn't drawn in the Settings Rearrange preview.
+  - Captures: `overlay_roost_hover_1.5x`, `overlay_roost_off_1x`; the plain and badged states are in every
+    overlay capture.
 
 **P1 exit:** everything in *Owed live checks* for P1 has been tried once against real sessions.
 

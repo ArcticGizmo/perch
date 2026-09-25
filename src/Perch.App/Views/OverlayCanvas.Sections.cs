@@ -157,19 +157,65 @@ public sealed partial class OverlayCanvas
 
     // The "+ New session" launcher at the top of the session list: a hover wash over the band, a "+"
     // glyph and an accent caption. Clicking it opens a Perch-controlled session (see NewSessionRequested).
-    // The whole band is the hit target (_newSessionRect), captured for the pointer handlers.
+    // The band is the hit target (_newSessionRect), captured for the pointer handlers. When the Roost button is
+    // on, the band stops short of an ~18px box at the far right (the collapsible headers' "+" idiom) holding the
+    // split-panes glyph, with its own hover and hit rect (_roostRect).
     private void DrawNewSessionRow(DrawingContext ctx, double width, double top)
     {
-        var band = new Rect(1, top, width - 2, NewSessionRowHeight);
+        double midY = top + NewSessionRowHeight / 2;
+        const double box = 18;
+        double boxCx = width - HorizPad - box / 2 + 2;
+        var roost = _showRoostButton && !RearrangeMode ? new Rect(boxCx - box / 2, midY - box / 2, box, box) : default;
+        _roostRect = roost;
+
+        var band = new Rect(1, top, (roost.Width > 0 ? roost.Left - 3 : width - 1) - 1, NewSessionRowHeight);
         _newSessionRect = band;
 
         if (_hoveredNewSession)
             ctx.FillRectangle(RowHoverBrush, band);
 
-        double midY = top + NewSessionRowHeight / 2;
         double plusCx = HorizPad + 4;
         var brush = _hoveredNewSession ? Palette.AccentBrush : MutedBrush;
         DrawPlusGlyph(ctx, brush, plusCx, midY);
         OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("New session", 11, brush), plusCx + 12, midY);
+
+        if (roost.Width > 0)
+        {
+            if (_hoveredRoost) OverlayDraw.Panel(ctx, roost, FeedHoverBrush, null, 5);
+            DrawRoostGlyph(ctx, _hoveredRoost ? Palette.AccentBrush : MutedBrush, boxCx, midY);
+            // A session is blocked on the user: a small dot at the glyph's top-right, so the button draws the eye
+            // even when the rows that need you are scrolled away or collapsed.
+            if (RoostBadge() is { } badge)
+            {
+                var dot = new Point(boxCx + 5.5, midY - 4.5);
+                ctx.DrawEllipse(Palette.FormBgBrush, null, dot, 3.4, 3.4);   // a cut-out ring so it reads on the stroke
+                ctx.DrawEllipse(new SolidColorBrush(badge), null, dot, 2.2, 2.2);
+            }
+        }
+    }
+
+    // The badge colour: an API error outranks awaiting input (both are "needs you"); null when nothing waits.
+    private Color? RoostBadge()
+    {
+        bool awaiting = false;
+        foreach (var s in _sessions)
+        {
+            if (s.IsBackground) continue;
+            if (s.Status == SessionStatus.ApiError) return Palette.Red;
+            if (s.Status == SessionStatus.AwaitingInput) awaiting = true;
+        }
+        return awaiting ? Palette.Yellow : null;
+    }
+
+    // "Split panes": a rounded rect split into a tall left pane and two stacked right panes (tmux
+    // main-vertical) — reads as "many sessions, tiled". Stroked at 1.2px; ~12×10 around (cx, cy).
+    private static void DrawRoostGlyph(DrawingContext ctx, IBrush brush, double cx, double cy)
+    {
+        var pen = new Pen(brush, 1.2);
+        var r = new Rect(cx - 6, cy - 5, 12, 10);
+        ctx.DrawRectangle(null, pen, new RoundedRect(r, 2));
+        double split = r.Left + 5;
+        ctx.DrawLine(pen, new Point(split, r.Top), new Point(split, r.Bottom));
+        ctx.DrawLine(pen, new Point(split, cy), new Point(r.Right, cy));
     }
 }

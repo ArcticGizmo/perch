@@ -231,6 +231,11 @@ internal sealed class AppSettings
     // reclaim its width; the artifacts are still tracked. Defaults to true; a missing key keeps it on.
     public bool ShowArtifacts { get; set; } = true;
 
+    // Whether the overlay's "+ New session" row carries the right-aligned split-panes button that opens the
+    // Roost (every session side by side — docs/roost-plan.md). The Roost stays reachable from the tray menu and
+    // its hotkey either way. Defaults to true.
+    public bool ShowRoostButton { get; set; } = true;
+
     // Whether to draw the Markdown glyph next to a session that has produced (written/edited) one or more
     // .md files. Purely the glyph: the "Markdown files..." right-click item is always available regardless.
     // Defaults to false (off); a missing key keeps it off.
@@ -583,6 +588,9 @@ internal sealed class AppSettings
     public HotkeyBinding HotkeyOpenSwitcher { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, ' ');
     //  • Docked — collapse/expand the docked column (Ctrl+Shift+W). Only fires anything in Docked mode.
     public HotkeyBinding HotkeyToggleDocked { get; set; } = new(HotkeyModifiers.Control | HotkeyModifiers.Shift, 'W');
+    //  • Roost — open/focus the Roost, every session side by side (Alt+Shift+R). The dense strip has no
+    //    "+ New session" row, so this (and the tray menu) is how it's reached there.
+    public HotkeyBinding HotkeyOpenRoost { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 'R');
 
     // Which terminal the session switcher launches when reopening a closed session (`claude --resume <id>`
     // in its working directory). Auto picks the best available (Windows Terminal, else Command Prompt); an

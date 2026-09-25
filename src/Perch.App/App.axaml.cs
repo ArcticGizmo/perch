@@ -338,6 +338,7 @@ public partial class App : Application
             // the chosen artifact is opened here.
             _overlay.Canvas.SessionActivated += FocusSession;
             _overlay.Canvas.NewSessionRequested += OpenSessionWindow;   // "+ New session" row → rich session window
+            _overlay.Canvas.RoostRequested += OpenRoost;                // …its split-panes button → the Roost
             _overlay.Canvas.ArtifactChosen += OpenArtifact;
             _overlay.Canvas.DaemonListRequested += OpenDaemonList;
 
@@ -2706,6 +2707,9 @@ public partial class App : Application
         var newSessionItem = new NativeMenuItem("New session…");
         newSessionItem.Click += (_, _) => OpenSessionWindow();
 
+        var roostItem = new NativeMenuItem("Roost…");
+        roostItem.Click += (_, _) => OpenRoost();
+
         // Note: the permission valet (session-control M2) is parked in favour of the embedded terminal —
         // its server/hook stay wired but there's no tray toggle to arm it, so it stays dormant (always
         // "pass"). See docs/session-control-plan.md.
@@ -2738,6 +2742,7 @@ public partial class App : Application
                 achievementsItem,
                 todosItem,
                 newSessionItem,
+                roostItem,
                 _updateItem,
                 new NativeMenuItemSeparator(),
                 exitItem,
@@ -2796,6 +2801,8 @@ public partial class App : Application
         TryRegister(s.HotkeyToggleDense,   () => Dispatcher.UIThread.Post(ToggleDense));
         TryRegister(s.HotkeyCycleSessions, () => Dispatcher.UIThread.Post(CycleSessions));
         TryRegister(s.HotkeyOpenSwitcher,  () => Dispatcher.UIThread.Post(OpenSwitcher));
+        // A background tray can't take focus by itself, so the hotkey path forces the Roost to the front.
+        TryRegister(s.HotkeyOpenRoost,     () => Dispatcher.UIThread.Post(() => { OpenRoost(); if (_roostWindow is { } r) ForceFront(r); }));
         if (DockedModeAvailable) TryRegister(s.HotkeyToggleDocked, () => Dispatcher.UIThread.Post(ToggleDocked));
     }
 

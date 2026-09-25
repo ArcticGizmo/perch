@@ -167,6 +167,16 @@ internal static class HeadlessRenderer
         RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_still_1x.png"), 96);
         Pulse.Override = null;
 
+        // The Roost entry point on the "+ New session" row (docs/roost-plan.md CP9): hovered (the sample has
+        // sessions awaiting input, so it's badged), and gated off by its setting.
+        var roostProbe = new OverlayCanvas();
+        roostProbe.Update(SampleData.Sessions());
+        roostProbe.HoverRoostForRender(true);
+        RenderControl(roostProbe, Path.Combine(outDir, "overlay_roost_hover_1.5x.png"), 144);
+        roostProbe.HoverRoostForRender(false);
+        roostProbe.SetShowRoostButton(false);
+        RenderControl(roostProbe, Path.Combine(outDir, "overlay_roost_off_1x.png"), 96);
+
         var probe = new OverlayCanvas();
         probe.Update(SampleData.Sessions());
         probe.StartAutoCloseCountdown(20_000);
