@@ -9,6 +9,17 @@ namespace Perch.Tests;
 /// </summary>
 public class StreamJsonParserTests
 {
+    // A sub-agent's messages carry parent_tool_use_id (captured from 2.1.282); the main thread's carry null.
+    [Fact]
+    public void SubagentMessage_IsFlagged()
+    {
+        var sub = """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Bash","input":{"command":"sleep 15"}}]},"parent_tool_use_id":"toolu_1","session_id":"s"}""";
+        var main = """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"LAUNCHED"}]},"parent_tool_use_id":null,"session_id":"s"}""";
+
+        Assert.True(Assert.IsType<ToolUseEvent>(Assert.Single(StreamJsonParser.Parse(sub))).FromSubagent);
+        Assert.False(Assert.IsType<AssistantTextEvent>(Assert.Single(StreamJsonParser.Parse(main))).FromSubagent);
+    }
+
     [Fact]
     public void Init_YieldsSessionInit()
     {

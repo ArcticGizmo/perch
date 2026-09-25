@@ -322,8 +322,213 @@ public class SessionConversationTests
         Assert.True(second.IsComplete);
     }
 
+    // Claude Code absorbs a prompt sent mid-turn into the running turn (transcript: queue-operation "remove",
+    // reason "absorbed_mid_turn") and emits a single result for both. Captured live from 2.1.282: prompt one
+    // runs `sleep 20`, prompt two arrives during it, and one assistant message answers both.
     [Fact]
-    public void QueuedPrompts_DrainOnePerTurnResult()
+    public void MidTurnPrompt_AbsorbedIntoRunningTurn_OneResultSettles()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("Run `sleep 20`, then reply DONE.");
+        conv.Apply(new ToolUseEvent("t1", "Bash", "Running: sleep 20"));
+        conv.AddUserPrompt("Also, reply BANANA.");
+        conv.Apply(new ToolResultEvent("t1", "", false));
+        conv.Apply(new AssistantTextEvent("DONE\nBANANA"));
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 5, 0));
+
+        Assert.False(conv.TurnActive);
+        Assert.Equal(0, conv.QueuedPrompts);
+    }
+
+    [Fact]
+    public void AfterAbsorbedPrompt_NextTurnStillSettlesOnItsResult()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("one");
+        conv.AddUserPrompt("two");                                   // absorbed by the CLI
+        conv.Apply(new AssistantTextEvent("both answered"));
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 5, 0));
+
+        conv.AddUserPrompt("three");
+        Assert.True(conv.TurnActive);
+        Assert.Equal(0, conv.QueuedPrompts);
+        conv.Apply(new AssistantTextEvent("answered"));
+        conv.Apply(new TurnResultEvent(false, "success", 0.02, 0, 162, 0));
+        Assert.False(conv.TurnActive);
+    }
+
+    // When the CLI does run a queued prompt as its own turn, that turn's output re-opens the turn after the
+    // previous result settled it, and its own result settles it again.
+    [Fact]
+    public void QueuedPrompt_RunAsOwnTurn_ReopensOnActivity()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("one");
+        conv.AddUserPrompt("two");
+        Assert.Equal(1, conv.QueuedPrompts);
+        conv.Apply(new AssistantTextEvent("first"));
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+        Assert.False(conv.TurnActive);
+
+        conv.Apply(new TextDeltaEvent("sec"));
+        Assert.True(conv.TurnActive);
+        conv.Apply(new AssistantTextEvent("second"));
+        conv.Apply(new TurnResultEvent(false, "success", 0.02, 0, 0, 0));
+        Assert.False(conv.TurnActive);
+        Assert.Equal(0.02, conv.TotalCostUsd);
+    }
+
+    // The CLI emits `system init` at the start of every turn (captured live from 2.1.282, ~20ms after the
+    // previous result), so a queued turn reads as running before its first model output.
+    [Fact]
+    public void InitAfterResult_ReopensTurn()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new SessionInitEvent("sid-1", "claude-opus-5", "default", 16));
+        conv.AddUserPrompt("one");
+        conv.AddUserPrompt("two");
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+        Assert.False(conv.TurnActive);
+
+        conv.Apply(new SessionInitEvent("sid-1", "claude-opus-5", "default", 16));
+        Assert.True(conv.TurnActive);
+        Assert.False(conv.MayHaveQueuedTurn);
+    }
+
+    [Fact]
+    public void FirstInit_DoesNotOpenATurn()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new SessionInitEvent("sid-1", "claude-opus-5", "default", 16));
+        Assert.False(conv.TurnActive);
+    }
+
+    [Fact]
+    public void CleanTurn_IsSettled()
+    {
+        var (conv, _) = Make();
+        Assert.False(conv.IsSettled);                                // no completed turn yet
+        conv.AddUserPrompt("one");
+        Assert.False(conv.IsSettled);
+        conv.Apply(new AssistantTextEvent("answer"));
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+        Assert.False(conv.MayHaveQueuedTurn);
+        Assert.True(conv.IsSettled);
+    }
+
+    // After a result that closed a turn with prompts sent mid-turn, the CLI may be about to run them, so the
+    // session must not count as settled (auto-compaction would send /compact into that gap).
+    [Fact]
+    public void ResultAfterMidTurnPrompt_IsNotSettled()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("one");
+        conv.AddUserPrompt("two");
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+
+        Assert.False(conv.TurnActive);
+        Assert.True(conv.MayHaveQueuedTurn);
+        Assert.False(conv.IsSettled);
+    }
+
+    [Fact]
+    public void PossiblyQueuedTurn_SettlesAfterItRuns()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("one");
+        conv.AddUserPrompt("two");
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+        conv.Apply(new AssistantTextEvent("two"));
+        Assert.False(conv.IsSettled);
+        conv.Apply(new TurnResultEvent(false, "success", 0.02, 0, 0, 0));
+        Assert.True(conv.IsSettled);
+    }
+
+    // Absorbed: no queued turn ever runs, so the flag holds until the next turn settles with nothing sent mid-turn.
+    [Fact]
+    public void AbsorbedPrompt_SettlesAfterNextCleanTurn()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("one");
+        conv.AddUserPrompt("two");
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+        Assert.False(conv.IsSettled);
+
+        conv.AddUserPrompt("three");
+        conv.Apply(new TurnResultEvent(false, "success", 0.02, 0, 0, 0));
+        Assert.True(conv.IsSettled);
+    }
+
+    [Fact]
+    public void Clear_ResetsPossiblyQueuedTurn()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new SessionInitEvent("sid-1", "claude-opus-5", "default", 16));
+        conv.AddUserPrompt("one");
+        conv.AddUserPrompt("two");
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+        conv.Apply(new SessionInitEvent("sid-2", "claude-opus-5", "default", 16));
+        Assert.False(conv.MayHaveQueuedTurn);
+        Assert.False(conv.TurnActive);
+    }
+
+    // A background agent keeps streaming after the main turn's result; its messages must not reopen the turn.
+    [Fact]
+    public void SubagentOutputAfterResult_DoesNotReopenTurn()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("launch a background agent");
+        conv.Apply(new AssistantTextEvent("LAUNCHED"));
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+
+        conv.Apply(new ToolUseEvent("t2", "Bash", "Running: sleep 15") { FromSubagent = true });
+        conv.Apply(new AssistantTextEvent("OK") { FromSubagent = true });
+        Assert.False(conv.TurnActive);
+        Assert.True(conv.IsSettled);
+    }
+
+    [Fact]
+    public void InitReopeningTurn_RaisesStateChangedOnce()
+    {
+        var (conv, _) = Make();
+        conv.Apply(new SessionInitEvent("sid-1", "claude-opus-5", "default", 16));
+        conv.AddUserPrompt("one");
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+        int raised = 0;
+        conv.StateChanged += () => raised++;
+
+        conv.Apply(new SessionInitEvent("sid-1", "claude-opus-5", "default", 16));
+        Assert.True(conv.TurnActive);
+        Assert.Equal(1, raised);
+    }
+
+    [Fact]
+    public void SessionEnded_ClearsPossiblyQueuedTurn()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("one");
+        conv.AddUserPrompt("two");
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+        Assert.True(conv.MayHaveQueuedTurn);
+
+        conv.SessionEnded(0, "");
+        Assert.False(conv.MayHaveQueuedTurn);
+    }
+
+    [Fact]
+    public void FinalizeHistory_ClearsPossiblyQueuedTurn()
+    {
+        var (conv, _) = Make();
+        conv.AddUserPrompt("one");
+        conv.AddUserPrompt("two");
+        conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+
+        conv.FinalizeHistory();
+        Assert.False(conv.MayHaveQueuedTurn);
+    }
+
+    [Fact]
+    public void QueuedPrompts_RunAsSeparateTurns_EachResultSettles()
     {
         var (conv, _) = Make();
         conv.AddUserPrompt("one");
@@ -333,9 +538,12 @@ public class SessionConversationTests
         Assert.Equal(2, conv.QueuedPrompts);
 
         conv.Apply(new TurnResultEvent(false, "success", 0.01, 0, 0, 0));
+        Assert.False(conv.TurnActive);
+        Assert.Equal(0, conv.QueuedPrompts);
+        conv.Apply(new AssistantTextEvent("two"));
         Assert.True(conv.TurnActive);
-        Assert.Equal(1, conv.QueuedPrompts);
         conv.Apply(new TurnResultEvent(false, "success", 0.02, 0, 0, 0));
+        conv.Apply(new AssistantTextEvent("three"));
         conv.Apply(new TurnResultEvent(false, "success", 0.03, 0, 0, 0));
         Assert.False(conv.TurnActive);
         Assert.Equal(0, conv.QueuedPrompts);
