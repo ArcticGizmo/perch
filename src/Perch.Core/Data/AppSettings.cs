@@ -163,6 +163,11 @@ internal sealed class AppSettings
     // Settings-window control. See docs/roost-plan.md.
     public Roost.RoostLayoutMode RoostLayout { get; set; } = Roost.RoostLayoutMode.Tiled;
 
+    // The Roost panes the user closed (by session process id), so they stay hidden across restarts while their
+    // session lives; pruned to live sessions as the roster runs. UI state, not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? RoostClosedPanes { get; set; }
+
     // Per-account collapse state for the usage strip: an account renders as full stacked bars or a compact
     // chip. The default follows activity (active account → bars, known-but-idle account → chip); this map
     // holds only the accounts the user has explicitly toggled, keyed by org UUID (or the config-dir path

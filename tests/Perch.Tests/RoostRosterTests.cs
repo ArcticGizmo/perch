@@ -179,6 +179,28 @@ public class RoostRosterTests
     }
 
     [Fact]
+    public void ClosedPanesListsTheHiddenLiveSessions()
+    {
+        var r = new RoostRoster();
+        r.Update([S("1"), S("2"), S("3")], T0);
+        r.Close("3");
+        r.Close("1");
+        Assert.Equal(["1", "3"], Keys(r.ClosedPanes));   // first-seen order
+        r.Reopen("1");
+        Assert.Equal(["3"], Keys(r.ClosedPanes));
+    }
+
+    [Fact]
+    public void SeededClosedKeysApplyBeforeAndAfterTheFirstScan()
+    {
+        var r = new RoostRoster();
+        r.SeedClosed(["2", "gone"]);                  // settings load after the roster exists
+        r.Update([S("1"), S("2")], T0);
+        Assert.Equal(["1"], Keys(r.Panes));
+        Assert.Equal(["2"], r.ClosedKeys);            // "gone" pruned
+    }
+
+    [Fact]
     public void CloseOfUnknownKeyIsANoOp()
     {
         var r = new RoostRoster();

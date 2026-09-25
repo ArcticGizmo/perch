@@ -266,6 +266,9 @@ internal sealed class RoostWindow : Window
     /// <summary>A Perch pane's composer sent a reply: (session id, text).</summary>
     public event Action<string, string>? PromptSubmitted;
 
+    /// <summary>A pane was closed or reopened — persist <see cref="RoostRoster.ClosedKeys"/>.</summary>
+    public event Action? ClosedPanesChanged;
+
     /// <summary>"Take over in Perch" on a terminal pane (the app confirms before stopping anything).</summary>
     public event Action<ClaudeSession>? TakeOverRequested;
 
@@ -321,6 +324,9 @@ internal sealed class RoostWindow : Window
 
     /// <summary>HeadlessRenderer hook: pretend the user is mid-reply in pane <paramref name="key"/> (the typing hold).</summary>
     internal void TypeForRender(string key) => _typing.Keystroke(key, Clock.Now);
+
+    /// <summary>HeadlessRenderer hook: close a pane as its menu would.</summary>
+    internal void ClosePaneForRender(string key) => OnPaneAction(key, RoostPaneAction.Close);
 
     /// <summary>HeadlessRenderer hook: apply a chip filter (null clears).</summary>
     internal void FilterForRender(RoostGroup? group) { _filter = group; _firstRow = 0; Refresh(); }
@@ -669,6 +675,9 @@ internal sealed class RoostWindow : Window
             case RoostPaneAction.TakeOver:
                 if (!pane.Ended && CanTakeOver?.Invoke(pane.Session) == true) TakeOverRequested?.Invoke(pane.Session);
                 break;
+            case RoostPaneAction.Close:
+                if (_roster.Close(key)) { ClosedPanesChanged?.Invoke(); Refresh(); }
+                break;
         }
     }
 
@@ -771,6 +780,51 @@ internal sealed class RoostWindow : Window
         if (c.Working > 0) _chips.Children.Add(Chip($"{c.Working} working", _p.Ok, RoostGroup.Working, strong: false));
         if (c.DoneReview > 0) _chips.Children.Add(Chip($"{c.DoneReview} done", _p.Attn, RoostGroup.DoneReview, strong: false));
         if (c.Quiet > 0) _chips.Children.Add(Chip($"{c.Quiet} quiet", _p.Idle, RoostGroup.Quiet, strong: false));
+        if (_roster.ClosedPanes.Count > 0) _chips.Children.Add(HiddenChip());
+    }
+
+    // "N hidden": closed panes whose sessions still run. A click lists them to reopen (one, or all).
+    private Border HiddenChip()
+    {
+        var hidden = _roster.ClosedPanes;
+        var chip = new Border
+        {
+            CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(10, 3), BorderThickness = new Thickness(1),
+            BorderBrush = _p.Border, Background = Brushes.Transparent, VerticalAlignment = VerticalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Hand), [ToolTip.TipProperty] = "Closed panes — click to reopen",
+            Child = new TextBlock { Text = $"{hidden.Count} hidden", FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = _p.Faint },
+        };
+        chip.PointerReleased += (_, e) =>
+        {
+            if (e.InitialPressMouseButton != MouseButton.Left) return;
+            var flyout = new MenuFlyout { Placement = global::Avalonia.Controls.PlacementMode.BottomEdgeAlignedLeft };
+            foreach (var pane in _roster.ClosedPanes)
+            {
+                var item = new MenuItem { Header = $"Reopen {pane.Session.DisplayName}" };
+                var key = pane.Key;
+                item.Click += (_, _) => Reopen([key]);
+                flyout.Items.Add(item);
+            }
+            if (_roster.ClosedPanes.Count > 1)
+            {
+                flyout.Items.Add(new Separator());
+                var all = new MenuItem { Header = "Reopen all" };
+                all.Click += (_, _) => Reopen(_roster.ClosedPanes.Select(p => p.Key).ToList());
+                flyout.Items.Add(all);
+            }
+            flyout.ShowAt(chip);
+        };
+        return chip;
+    }
+
+    private void Reopen(IReadOnlyList<string> keys)
+    {
+        bool changed = false;
+        foreach (var k in keys) changed |= _roster.Reopen(k);
+        if (!changed) return;
+        ClosedPanesChanged?.Invoke();
+        if (keys.Count == 1) FocusPane(keys[0]);
+        else Refresh();
     }
 
     // A summary chip that filters the stage to its group (click again to clear).

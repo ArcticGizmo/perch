@@ -197,6 +197,7 @@ public partial class App : Application
             _overlay.Canvas.ReplayMode = Services.Replay.ReplaySession.IsActive;
             var settings = AppSettings.Load();
             _appSettings = settings;
+            if (settings.RoostClosedPanes is { Count: > 0 } closedPanes) _roostRoster.SeedClosed(closedPanes);
 
             // Seed the user-defined initial placements before the window is shown (OnOpened applies the
             // floating one; the dense one is used on first dense entry). Null on either keeps the default.
@@ -1564,6 +1565,12 @@ public partial class App : Application
                 w.OpenSessionRequested += FocusSession;
                 w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
                 w.LayoutChanged += mode => { if (_appSettings is { } s) { s.RoostLayout = mode; s.Save(); } };
+                w.ClosedPanesChanged += () =>
+                {
+                    if (_appSettings is not { } s) return;
+                    s.RoostClosedPanes = _roostRoster.ClosedKeys.Count > 0 ? _roostRoster.ClosedKeys.ToList() : null;
+                    s.Save();
+                };
                 w.PermissionAnswered += (sid, item, allow, mode) =>
                     PerchSessionFor(sid)?.AnswerPermission(item, allow, mode);
                 w.QuestionAnswered += (sid, item, answers) => PerchSessionFor(sid)?.AnswerQuestion(item, answers);

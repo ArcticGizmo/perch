@@ -96,6 +96,18 @@ public sealed class RoostRoster
     /// <summary>The closed pane keys, for persisting. Pruned to keys the roster still holds.</summary>
     public IReadOnlyCollection<string> ClosedKeys => _closed;
 
+    /// <summary>The hidden (closed) panes whose sessions are still live, in first-seen order — what a "N hidden"
+    /// menu offers to reopen.</summary>
+    public IReadOnlyList<RoostPane> ClosedPanes { get; private set; } = [];
+
+    /// <summary>Restores a persisted closed set (the roster can exist before settings load). Keys that don't
+    /// match a live session are pruned by the next <see cref="Update"/>.</summary>
+    public void SeedClosed(IEnumerable<string> keys)
+    {
+        foreach (var k in keys) _closed.Add(k);
+        Rebuild();
+    }
+
     /// <summary>Folds a scan into the roster. <paramref name="now"/> ages lingering ended panes.</summary>
     public void Update(IReadOnlyList<ClaudeSession> live, DateTime now)
     {
@@ -224,13 +236,15 @@ public sealed class RoostRoster
     private void Rebuild()
     {
         var panes = new List<RoostPane>(_order.Count);
+        var closed = new List<RoostPane>();
         foreach (var key in _order)
         {
-            if (_closed.Contains(key)) continue;
             var e = _entries[key];
-            panes.Add(new RoostPane(key, e.Session, GroupFor(e.Session.Status, e.EndedAt is not null), e.Pin, e.EndedAt));
+            var pane = new RoostPane(key, e.Session, GroupFor(e.Session.Status, e.EndedAt is not null), e.Pin, e.EndedAt);
+            (_closed.Contains(key) ? closed : panes).Add(pane);
         }
         _panes = panes;
+        ClosedPanes = closed;
 
         var rail = new List<RoostRailGroup>(4);
         foreach (var g in Enum.GetValues<RoostGroup>())

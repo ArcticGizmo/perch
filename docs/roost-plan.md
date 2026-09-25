@@ -441,6 +441,20 @@ There's no mandatory pause between checkpoints.
 - Scope: pane close / reopen through the menu (backed by the CP1 closed ids) + a "load earlier" affordance for
   tailed panes past the initial ~600 lines.
 - Done when: a closed pane stays closed across rescans and reappears if the session starts again.
+- As built:
+  - "Close pane" in the pane menu. Closed panes leave both the grid and the rail.
+  - A faint **"N hidden"** chip in the title bar opens a menu: "Reopen {name}" (which focuses it) or "Reopen
+    all".
+  - Persisted as `AppSettings.RoostClosedPanes` (`NotSettings`) and seeded with `RoostRoster.SeedClosed`, since
+    the roster exists before settings load. Pruned to live sessions as the roster runs, so a new process is never
+    pre-closed.
+  - **Load earlier:** a tailed pane that started from the last 600 lines shows a "Showing the last 600 lines ·
+    Load earlier" strip atop its thread. It re-tails the whole transcript into a fresh conversation
+    (`RoostFeed.LoadEarlier`), and the strip hides once everything is loaded.
+  - Fixed along the way: `EnsureThread` could try to re-parent an already-parented thread when a refresh landed
+    between a tail reset and its change notice. It now only rebinds a materialised thread.
+  - Capture: `roost_tiled_hidden_1x`. The load-earlier strip needs a real >600-line transcript (the renderer
+    never reads `~/.claude`), so it's an owed live check.
 
 **Why a lite composer before CP15:** `SessionWindow`'s composer is tangled up with the launcher, the pills and
 the highlight layer. Extracting it isn't needed to meet the ask, so it waits until everything else is proven.
@@ -466,6 +480,8 @@ the highlight layer. Extracting it isn't needed to meet the ask, so it waits unt
 - [ ] CP12: with the Roost active and the pane on screen, a Perch permission and a terminal session's
       done/waiting raise no toast; tab away from the Roost → the pending Perch prompt then toasts once.
 - [ ] P3: takeover keeps the session id and rebinds in place.
+- [ ] CP16: a long terminal session's expanded pane shows "Load earlier"; clicking it loads the whole
+      transcript and the strip goes; a closed pane stays hidden across a Perch restart.
 - [ ] CP14: with the Roost open but not focused, a session blocking on you flashes its taskbar button; activating
       the Roost stops it.
 

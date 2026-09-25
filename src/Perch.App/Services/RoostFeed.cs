@@ -24,7 +24,8 @@ internal sealed class RoostFeed : IDisposable
     public const int TailLines = 600;
 
     private TranscriptTailHost? _tail;
-    private bool _notifyQueued, _disposed;
+    private string? _path;
+    private bool _notifyQueued, _disposed, _replaceNext;
 
     private RoostFeed(SessionConversation conversation, bool controlled, string sessionId)
     {
@@ -76,20 +77,38 @@ internal sealed class RoostFeed : IDisposable
     {
         if (_disposed) return;
         if (path is null) { IsLoading = false; Notify(); return; }   // no transcript (yet) — the pane says so
+        _path = path;
         _tail = new TranscriptTailHost(path, TailLines, OnTail);
+        _tail.Start(watch: true);
+    }
+
+    /// <summary>A tailed feed that started from the last <see cref="TailLines"/> lines can load the rest.</summary>
+    public bool CanLoadEarlier => !IsControlled && SkippedEarlier && _path is not null && !_disposed;
+
+    /// <summary>Re-tails the whole transcript into a fresh conversation (the pane rebinds via <see cref="Changed"/>).</summary>
+    public void LoadEarlier()
+    {
+        if (!CanLoadEarlier) return;
+        _tail?.Dispose();
+        _replaceNext = true;
+        _tail = new TranscriptTailHost(_path!, initialLines: 0, OnTail);
         _tail.Start(watch: true);
     }
 
     private void OnTail(TailRead read)
     {
         if (_disposed) return;
-        if (read.Reset)
+        // A fresh start — the first read, a reset (truncated/replaced file), or "load earlier" — records whether
+        // older lines were left out; a plain append leaves that as it was.
+        bool fresh = IsLoading || read.Reset || _replaceNext;
+        if (read.Reset || _replaceNext)
         {
+            _replaceNext = false;
             Detach(Conversation);
             Conversation = NewHistoryConversation(SessionId);
             Attach(Conversation);
         }
-        if (IsLoading || read.Reset) SkippedEarlier = read.SkippedEarlier;
+        if (fresh) SkippedEarlier = read.SkippedEarlier;
         IsLoading = false;
         foreach (var line in read.Lines) Conversation.AppendTranscriptLine(line);
         Notify();

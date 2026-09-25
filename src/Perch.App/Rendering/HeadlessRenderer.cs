@@ -1537,6 +1537,12 @@ internal static class HeadlessRenderer
                         : s).ToList(), Clock.Now);
                 w.RosterChanged();
                 Capture("roost_tiled_held_1x.png");
+
+                // CP16: close two panes from their menus — they leave the grid and the rail, and the title bar
+                // grows a "2 hidden" chip that reopens them.
+                w.ClosePaneForRender("9012");   // docs-site
+                w.ClosePaneForRender("1234");   // perch
+                Capture("roost_tiled_hidden_1x.png");
             }
             w.Close();
         }

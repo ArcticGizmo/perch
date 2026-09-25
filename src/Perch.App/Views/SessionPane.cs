@@ -26,6 +26,8 @@ internal enum RoostPaneAction
     CopyResume,
     /// <summary>Take a terminal session over in Perch (the app confirms first — see <c>App.OnElevateToPerch</c>).</summary>
     TakeOver,
+    /// <summary>Hide the pane (the session keeps running; reopen it from the title bar's "N hidden" chip).</summary>
+    Close,
 }
 
 /// <summary>
@@ -61,6 +63,7 @@ internal sealed class SessionPane : Border
     private readonly Border _footerButton;
     private readonly TextBlock _footerButtonText;
     private readonly Border _takeOverButton;
+    private readonly Border _earlierBar;
 
     /// <summary>Whether this pane's session can be taken over in Perch (an interactive terminal session Perch
     /// doesn't already own, still running). Set by the window — the eligibility rule is the overlay's.</summary>
@@ -216,6 +219,23 @@ internal sealed class SessionPane : Border
             },
         };
         _body = new Border { ClipToBounds = true, CornerRadius = new CornerRadius(0, 0, 11, 11) };
+
+        // A tailed pane starts from the transcript's last RoostFeed.TailLines lines; this strip atop its thread
+        // loads the rest.
+        var earlierText = new TextBlock
+        {
+            Text = $"Showing the last {RoostFeed.TailLines} lines  ·  Load earlier",
+            FontFamily = _p.Body, FontSize = 11.5, Foreground = _p.Muted, HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        _earlierBar = new Border
+        {
+            Padding = new Thickness(10, 4), Background = _p.Raised, BorderBrush = _p.BorderSoft,
+            BorderThickness = new Thickness(0, 0, 0, 1), Cursor = new Cursor(StandardCursorType.Hand),
+            IsVisible = false, Child = earlierText, [DockPanel.DockProperty] = Dock.Top,
+        };
+        _earlierBar.PointerEntered += (_, _) => earlierText.Foreground = _p.Brand;
+        _earlierBar.PointerExited += (_, _) => earlierText.Foreground = _p.Muted;
+        _earlierBar.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) _feed?.LoadEarlier(); };
 
         Child = new DockPanel { LastChildFill = true, Children = { _header, _footer, _body } };
 
@@ -465,12 +485,8 @@ internal sealed class SessionPane : Border
 
     private void OnFeedChanged()
     {
-        if (_size == RoostPaneSize.Expanded && _thread is not null && _feed is { } f
-            && !ReferenceEquals(f.Conversation, _boundConversation))
-        {
-            _thread.Bind(f.Conversation);   // the tail reset: a fresh conversation
-            _boundConversation = f.Conversation;
-        }
+        if (_size == RoostPaneSize.Expanded && _thread is not null && _feed is { } f)
+            EnsureThread(f);   // rebinds after a tail reset / "load earlier"; re-shows or hides that strip
         if (_size == RoostPaneSize.Collapsed || _thread is null) RefreshBody();
         else RefreshFooter();   // the composer's hint follows pending / running / idle
     }
@@ -493,19 +509,34 @@ internal sealed class SessionPane : Border
 
     private void EnsureThread(RoostFeed feed)
     {
-        if (_thread is not null && ReferenceEquals(_boundConversation, feed.Conversation)) return;
-        if (_thread is null)
+        _earlierBar.IsVisible = feed.CanLoadEarlier;
+        if (_thread is not null)
         {
-            _thread = new SessionThreadView(_p, compact: true) { Cwd = _pane?.Session.Cwd ?? "" };
-            _thread.PermissionAnswered += (item, allow, mode) => PermissionAnswered?.Invoke(item, allow, mode);
-            _thread.QuestionAnswered += (item, answers) => QuestionAnswered?.Invoke(item, answers);
+            // Already materialised: at most a rebind (a tail reset / "load earlier" swapped the conversation).
+            if (!ReferenceEquals(_boundConversation, feed.Conversation))
+            {
+                _thread.Bind(feed.Conversation);
+                _boundConversation = feed.Conversation;
+            }
+            return;
         }
+        _thread = new SessionThreadView(_p, compact: true) { Cwd = _pane?.Session.Cwd ?? "" };
+        _thread.PermissionAnswered += (item, allow, mode) => PermissionAnswered?.Invoke(item, allow, mode);
+        _thread.QuestionAnswered += (item, answers) => QuestionAnswered?.Invoke(item, answers);
         _thread.Bind(feed.Conversation);
         _boundConversation = feed.Conversation;
-        _body.Child = new LayoutTransformControl
+        _body.Child = new DockPanel
         {
-            LayoutTransform = new ScaleTransform(SessionThreadView.CompactScale, SessionThreadView.CompactScale),
-            Child = _thread,
+            LastChildFill = true,
+            Children =
+            {
+                _earlierBar,
+                new LayoutTransformControl
+                {
+                    LayoutTransform = new ScaleTransform(SessionThreadView.CompactScale, SessionThreadView.CompactScale),
+                    Child = _thread,
+                },
+            },
         };
     }
 
@@ -515,6 +546,7 @@ internal sealed class SessionPane : Border
         _thread.Unbind();
         _thread = null;
         _boundConversation = null;
+        if (_earlierBar.Parent is Panel holder) holder.Children.Remove(_earlierBar);   // reused by the next build
         _body.Child = null;
     }
 
@@ -665,6 +697,10 @@ internal sealed class SessionPane : Border
             flyout.Items.Add(take);
         }
         flyout.Items.Add(copy);
+        flyout.Items.Add(new Separator());
+        var close = new MenuItem { Header = "Close pane" };
+        close.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.Close);
+        flyout.Items.Add(close);
         flyout.ShowAt(_menuButton);
     }
 }
