@@ -204,10 +204,10 @@ existing Alt+Shift+W/S/Space or Ctrl+Shift+W bindings). Both are in P1.
   (`App.axaml.cs:801`). The pane then rebinds in place, from tailed to controlled, on the same session id.
 
 ### Settings (registry-driven, per CLAUDE.md)
-- `ShowRoostButton` (bool, default on) + `SettingDescriptor` (surface: overlay, `PreviewTarget` = sessions
-  section) + a canvas gate `SetRoostButton` in `OverlaySettingsGates`.
-- `HotkeyOpenRoost` (`HotkeyBinding`, Alt+Shift+R) + `SettingDescriptor` (kind Hotkey), registered with the
-  other hotkeys in `App`.
+- `ShowRoostButton` (bool, default on) + `SettingDescriptor` (surface: SessionRow, `PreviewTarget.RoostButton`)
+  + a canvas gate `SetShowRoostButton` in `OverlaySettingsGates`.
+- `HotkeyOpenRoost` (`HotkeyBinding`, Alt+Shift+R): a row on the Settings → Shortcuts page plus a `NotSettings`
+  entry (the existing hotkeys' pattern), registered with the other hotkeys in `App`.
 - Non-settings (in `SettingsRegistryTests.NotSettings`): `RoostLayout`, `RoostRailCollapsed`, `RoostClosedPanes`.
 
 ### Keyboard (inside the window)
