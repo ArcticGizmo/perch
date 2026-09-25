@@ -1917,8 +1917,8 @@ internal sealed partial class SessionWindow : Window
     }
 
     // Fires /compact once the context fill crosses the threshold (armed → disarmed until it drops back below),
-    // but only on a settled, live session with a real completed turn — never on attach, a queued/running turn,
-    // a pending permission, or while a compaction is already in flight (TurnActive covers that).
+    // but only on a settled, live session (SessionConversation.IsSettled) — never on attach, a running, queued
+    // or possibly queued turn, a pending permission, or while a compaction is already in flight.
     private void MaybeAutoCompact(double pct)
     {
         if (!_autoCompactEnabled) return;
@@ -1926,15 +1926,18 @@ internal sealed partial class SessionWindow : Window
         if (!_autoCompactArmed) return;
         if (_session is not { IsRunning: true, HasEnded: false } live) return;
         var conv = Conv;
-        if (conv.LastTurn is null || conv.TurnActive || conv.QueuedPrompts > 0 || conv.PendingPermission is not null) return;
+        if (!conv.IsSettled) return;
 
         _autoCompactArmed = false;   // one fire per crossing
         // Defer the send so it runs after this state-change unwinds (RefreshBar is called from StateChanged).
         Dispatcher.UIThread.Post(() =>
         {
-            if (_session is not { IsRunning: true, HasEnded: false } s) return;
+            // Only the session this was armed for, still enabled; a turn that started meanwhile retries later.
+            if (!_autoCompactEnabled || !ReferenceEquals(_session, live)) return;
+            if (live is not { IsRunning: true, HasEnded: false }) return;
+            if (!conv.IsSettled) { _autoCompactArmed = true; return; }
             conv.AddNote($"auto-compacting · context reached {(int)pct}%");
-            s.SendPrompt("/compact");
+            live.SendPrompt("/compact");
         });
     }
 

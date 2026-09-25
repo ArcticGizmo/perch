@@ -161,9 +161,18 @@ internal sealed class SessionConversation
     public long TotalFreshInputTokens { get; private set; }
     /// <summary>A turn is running (prompt sent, no result yet).</summary>
     public bool TurnActive { get; private set; }
-    /// <summary>Prompts sent while a turn was running; the CLI drains them in order.</summary>
+    /// <summary>Prompts sent while a turn was running. The CLI may absorb them into that turn or run them as a
+    /// turn of their own; a result clears the count either way.</summary>
     public int QueuedPrompts { get; private set; }
     public PermissionItem? PendingPermission { get; private set; }
+    /// <summary>The last result closed a turn during which prompts were sent. The CLI either absorbed them into
+    /// that turn or runs them as a turn of its own next, and stdout doesn't say which; cleared when that turn
+    /// starts or a later turn settles with nothing sent mid-turn.</summary>
+    public bool MayHaveQueuedTurn { get; private set; }
+    /// <summary>A turn has completed and nothing is running, queued, possibly queued or awaiting a permission
+    /// answer — the only state in which Perch may send a prompt of its own (auto-compaction).</summary>
+    public bool IsSettled =>
+        LastTurn is not null && !TurnActive && QueuedPrompts == 0 && !MayHaveQueuedTurn && PendingPermission is null;
 
     /// <summary>Seeds the context occupancy from a resumed session's transcript, so the context gauge reads
     /// true before the first new turn lands (the CLI replays no usage on <c>--resume</c>). A live turn's own
@@ -184,6 +193,10 @@ internal sealed class SessionConversation
 
     public void Apply(SessionEvent ev)
     {
+        // Main-thread output after a result means the CLI started a queued prompt as its own turn.
+        if (ev is TextDeltaEvent or AssistantTextEvent or AssistantThinkingEvent or ToolUseEvent && ReopenTurn(ev))
+            StateChanged?.Invoke();
+
         switch (ev)
         {
             case SessionInitEvent init:
@@ -200,6 +213,7 @@ internal sealed class SessionConversation
                 SlashCommands = init.SlashCommands ?? [];
                 if (init.McpServers is { Count: > 0 }) McpServers = init.McpServers;
                 if (cleared) ClearForNewConversation();
+                else ReopenTurn(ev);   // the CLI emits init at the start of every turn, queued ones included
                 StateChanged?.Invoke();
                 break;
             }
@@ -292,10 +306,10 @@ internal sealed class SessionConversation
                     _activeCompaction = null;
                     _compactionInterrupted = false;
                     // The boundary IS the compaction turn's completion — a manual /compact that then idles may
-                    // emit no `result`, so settle the turn here (unless prompts were queued behind it, which the
-                    // result drains). Otherwise TurnActive stays stuck "working…" and the next prompt queues
+                    // emit no `result`, so settle the turn here (unless prompts were sent behind it; the result
+                    // settles those). Otherwise TurnActive stays stuck "working…" and the next prompt queues
                     // behind a phantom turn, leaving the composer's context/token pills stale. A later result
-                    // for this turn is idempotent (it sets TurnActive false again when the queue is empty).
+                    // for this turn is idempotent (it sets TurnActive false again).
                     if (QueuedPrompts == 0) TurnActive = false;
                 }
                 else
@@ -359,7 +373,11 @@ internal sealed class SessionConversation
                 // The result still supplies the cumulative session totals (per-turn amounts, correct to sum).
                 TotalOutputTokens += turn.OutputTokens;
                 TotalFreshInputTokens += turn.FreshInputTokens;
-                if (QueuedPrompts > 0) QueuedPrompts--; else TurnActive = false;
+                // One result can close several prompts: the CLI absorbs a prompt sent mid-turn into the running
+                // turn. If it instead runs a queued prompt as its own turn, that turn's output reopens it.
+                MayHaveQueuedTurn = QueuedPrompts > 0;
+                QueuedPrompts = 0;
+                TurnActive = false;
                 // A compaction still active at the result normally means its `compact_boundary` (the success
                 // signal, handled above) hasn't been seen — so judge it only by hard signals: the user
                 // interrupted, or the turn errored. A clean result settles it as done either way. NEVER infer
@@ -449,6 +467,7 @@ internal sealed class SessionConversation
         // A closed transcript has no live turn — settle the bookkeeping so the view shows no "working" row.
         TurnActive = false;
         QueuedPrompts = 0;
+        MayHaveQueuedTurn = false;
         StateChanged?.Invoke();
     }
 
@@ -559,6 +578,7 @@ internal sealed class SessionConversation
         PendingPermission = null;
         TurnActive = false;
         QueuedPrompts = 0;
+        MayHaveQueuedTurn = false;
         LastTurn = null;
         ContextTokens = 0;
         _activeCompaction = null;
@@ -611,10 +631,22 @@ internal sealed class SessionConversation
         }
         TurnActive = false;
         QueuedPrompts = 0;
+        MayHaveQueuedTurn = false;
         Append(new NoteItem(
             exitCode == 0 ? "session ended" : $"claude exited ({exitCode}) {stderrTail}".TrimEnd(),
             exitCode == 0 ? NoteKind.Info : NoteKind.Error));
         StateChanged?.Invoke();
+    }
+
+    // A turn starting (init) or main-thread output after a result settled the turn means the CLI started a queued
+    // prompt as its own turn. A sub-agent's messages don't count: a background agent keeps streaming after the
+    // result. Only a live stream has results, so a tailed transcript never reopens. The caller raises StateChanged.
+    private bool ReopenTurn(SessionEvent ev)
+    {
+        if (TurnActive || LastTurn is null || ev.FromSubagent) return false;
+        TurnActive = true;
+        MayHaveQueuedTurn = false;
+        return true;
     }
 
     // The assistant item events accumulate into: the trailing open one, else a fresh one. A user message or a
