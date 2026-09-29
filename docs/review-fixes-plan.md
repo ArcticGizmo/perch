@@ -45,7 +45,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP18](#cp18) | 🟡 P2 | Supply chain | Code signing + signature verification in `install.ps1` | L | ⬜ |
 | [CP19](#cp19) | ⚪ P3 | Build | Build/installer hygiene (em dashes, PATH type, versioning) | S | ⬜ |
 | [CP20](#cp20) | 🟠 P1 | Performance | Session scan off the UI thread + incremental transcripts | L | 🟦 code + tests done, dogfood owed |
-| [CP21](#cp21) | 🟠 P1 | Performance | All-time stats: cache history, don't re-parse it | M | ⬜ |
+| [CP21](#cp21) | 🟠 P1 | Performance | All-time stats: cache history, don't re-parse it | M | 🟦 code + tests done, dogfood owed |
 | [CP22](#cp22) | 🟠 P1 | Performance | Streaming chat O(n²) + SessionThreadView leak | M | 🟦 code + headless checks done, dogfood owed |
 | [CP23](#cp23) | 🟡 P2 | Performance | Overlay paint path: no IO, no per-frame allocations | M | ⬜ |
 | [CP24](#cp24) | 🟡 P2 | Performance | Misc perf batch (metrics, history tail, diff, arcade, images, watcher) | M | ⬜ |
@@ -627,14 +627,53 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 **Landed:** commits `ceecfc9` (the fold, readers, locator and sub-agent skip) and `e6fdbe8` (the background scan worker, trigger debounce and locks).
 
 <a id="cp21"></a>
-### CP21 — All-time stats: cache history, don't re-parse it · 🟠 P1 · M · ⬜
+### CP21 — All-time stats: cache history, don't re-parse it · 🟠 P1 · M · 🟦
 
 **Problem.** `App.axaml.cs:1166-1188` → `SessionStatsService.ReportAllTime` (`:252-395`) and `TeamReader.cs:86` JSON-parse every line of every transcript whenever a session finishes, throttled to once per 3 minutes. With GBs of history, that is tens of seconds of a pegged core and heavy LOH churn in an all-day process. The Stats and Achievements windows pay the same cost.
 
 **Tasks**
-- [ ] Cache per-file, per-day `SessionDayData` keyed by (path, length, mtime), plus the read offset, so growing files are read incrementally. Persist the cache to disk under the profile dir.
-- [ ] Achievements: update incrementally from the cache rather than recomputing all-time.
-- [ ] xUnit: a cached result equals a fresh result, and an appended file only reads the delta.
+- [x] **Cache per file, per day, read incrementally — using CP20's `TranscriptFold`.** The fold already does "offset + (length, mtime) + head check, read only what was appended", so a new `SessionStatsCache` holds two folds:
+  - one over session transcripts: per-day `SessionDayData`, plus the file's project and branch;
+  - one over teammate transcripts: per-day tokens, plus the file position of each day's first record, which is what lets a day-filtered report find a teammate's first in-range day without re-reading.
+  
+  The parsing moved into fold steps (`StepSession`, `StepTeam`), which the one-shot `ParseSession` / `ParseContributions` now share, so the cache and the golden parsers can't disagree.
+  - **Kept exact rather than approximate.** Records carry raw timestamps (sorted lazily, via a flag set only by an out-of-order append), so active time and the hourly histogram still follow the user's idle-threshold setting. Whoops is derived from `PromptsByParent`, so an append that adds a sibling to an earlier prompt still counts.
+  - **All three reports share the cache.** Every caller's bounds are day-aligned, so day, range and all-time reports filter by local day. The range reports keep their mtime prefilter.
+  - **Teammate meta files are memoised** by (length, mtime).
+  - **The all-time report prunes** state for transcripts that no longer exist.
+  - **Serialised.** Every report runs inside `SessionStatsCache.Use` under one lock, so the Stats window, the Achievements window and the tray check can overlap safely.
+  - **Behaviour change (an improvement):** a line with an unexpected shape used to abort the rest of that transcript's parse. Now only that line is skipped, in both the fold and the one-shot parsers.
+- [x] **Persisted** to `stats-cache.bin` beside `settings.json`, through a new streaming `AtomicFile.Write(path, Action<Stream>)`.
+  - `TranscriptFold` gained `Checkpoint` `Export`/`Import`/`Forget` and a `Generation` counter.
+  - The format is versioned binary, with timestamps as 7-bit tick deltas.
+  - The snapshot is discarded, never trusted, on a mismatch in its header (format version, `SessionFoldVersion`, `TeamFoldVersion`, local time zone), on trailing bytes, or on any read error. The next report then rebuilds from the transcripts.
+  - Saves happen at once after a first build, then at most every 10 minutes when something changed.
+  - It honours `AppSettings.PersistenceDisabled` (newly exposed), so tests and `perch render` never touch the real file.
+  - **Bump `SessionFoldVersion`/`TeamFoldVersion` whenever the step rules change** (including `SwearFilter`'s list).
+- [x] **Achievements — changed from the plan.** There is no separate incremental achievements path: `AchievementCatalog.Evaluate`/`Sync` is a cheap pass over a `RangeReport`. The cost was always the report, and the report now comes from the cache.
+- [x] xUnit (12 new, in `SessionStatsCacheTests`):
+  - the cache agrees with the one-shot parsers on the fixtures;
+  - a history grown from empty in random chunks (mid-line and mid-character splits, sessions and teammates together, 2 seeds) gives a cached report equal to a fresh one after **every** step;
+  - changing the idle threshold is honoured from the cache;
+  - out-of-order appends;
+  - an unchanged report reads 0 bytes, and an append to a 2 MB transcript reads only the append plus the 256-byte head check;
+  - the snapshot round-trips, and a restarted cache reads 0 transcript bytes, then only an append;
+  - a file replaced while Perch was closed resets;
+  - a damaged snapshot (garbage, truncated, empty) is discarded and rebuilt;
+  - a deleted session and its teammates are pruned.
+- [x] **Measured** (opt-in `SessionStatsCacheBenchmark`, `PERCH_BENCH=1`) on a real history of 553 session transcripts and 1.19 GB of `.jsonl`:
+  - **cold**, the full parse every report used to cost: **5.6 s**;
+  - **warm**, nothing changed: **79 ms**;
+  - **restart**, load the snapshot and report: **110 ms**, reading 0 transcript bytes;
+  - snapshot size: **1.3 MB**.
+- [ ] Dogfood:
+  - the Stats window (Today, 7 days, 30 days, All time) and the Achievements window show the same figures as before;
+  - `stats-cache.bin` appears in the profile dir after the first report;
+  - a later launch's first all-time report is quick.
+
+**Verify.** Done 2026-09-29. `dotnet build perch.slnx` is clean, and the .NET suite passes 1623 with 1 skipped.
+
+**Landed:** commit `cc9a436`.
 
 <a id="cp22"></a>
 ### CP22 — Streaming chat O(n²) + SessionThreadView leak · 🟠 P1 · M · 🟦
