@@ -1,14 +1,20 @@
-﻿using Avalonia.Threading;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using Avalonia.Threading;
 using Perch.Data;
 
 namespace Perch.Avalonia.Services;
 
 /// <summary>
 /// Owns the Perch.Core <see cref="SessionMonitor"/> for the Avalonia app and pumps its results to a
-/// callback (the overlay canvas's <c>Update</c>). Mirrors the WinForms context's contract: every
-/// file-change trigger is marshalled onto the UI thread before <see cref="SessionMonitor.Scan"/> runs,
-/// so <see cref="SessionMonitor.SessionsChanged"/> — and the UI update it drives — always fire on the UI
-/// thread. This is the pipeline the whole Avalonia UI hangs off.
+/// callback (the overlay canvas's <c>Update</c>). This is the pipeline the whole Avalonia UI hangs off.
+///
+/// <para><see cref="SessionMonitor.Scan"/> reads every session file and its transcript, so it runs on a
+/// single-flight background worker (review fixes CP20), never the UI thread: one scan at a time, and any number of
+/// requests during a scan collapse into one trailing scan. The results and every event the scan raises are posted
+/// back to the UI thread in the order they were raised, so every consumer still runs on the UI thread. Anything the
+/// UI asks of the monitor itself (acknowledge, notify toggle, project note) is queued and run on the worker just
+/// before its next scan, so the monitor's state is only ever touched by one thread.</para>
 /// </summary>
 internal sealed class SessionMonitorHost : IDisposable
 {
@@ -23,13 +29,19 @@ internal sealed class SessionMonitorHost : IDisposable
     // sub-agent's working window. Off whenever no controlled session is working, so it costs nothing at rest.
     private static readonly TimeSpan ControlledPollInterval = TimeSpan.FromSeconds(2);
 
+    // A scan slower than this is written to logs/scan.log, with the session count, to diagnose a slow machine.
+    private const int SlowScanMs = 250;
+
     private readonly SessionMonitor _monitor;
     private readonly Action<IReadOnlyList<ClaudeSession>> _onSessions;
+    private readonly CoalescingTrigger _scan;
+    private readonly ConcurrentQueue<Action> _pending = new();
+    private volatile bool _disposed;
 
     // One-shot timer armed to the monitor's next deferred-completion deadline (a busy->idle settle or a
     // sub-agent grace). Without this the "done" badge only appears on the next incidental file event, so
     // a finished session lingers as Running/Idle far too long — the Avalonia port of the WinForms
-    // _deadlineTimer + ArmDeadlineTimer. Ticks on the UI thread, so the Scan it drives is UI-thread-safe.
+    // _deadlineTimer + ArmDeadlineTimer.
     private readonly DispatcherTimer _deadlineTimer;
     private readonly DispatcherTimer _reconcileTimer;
     private readonly DispatcherTimer _controlledPollTimer;
@@ -66,26 +78,27 @@ internal sealed class SessionMonitorHost : IDisposable
     {
         _monitor = new SessionMonitor(processProbe, ideDetector);
         _onSessions = onSessions;
+        _scan = new CoalescingTrigger(() => Task.Run(ScanOnce), TimeSpan.Zero);
+
+        // Scan raises these on the worker; each is posted to the UI thread, in order, so consumers keep
+        // running there (and a scan's alerts still land before the overlay update that follows them).
         _monitor.SessionsChanged += OnSessionsChanged;
-        // These fire from within Scan, which only runs on the UI thread (see ChangeDetected below and
-        // Start), so forwarding them straight through keeps every consumer on the UI thread.
-        _monitor.NeedsAttention += s => NeedsAttention?.Invoke(s);
-        _monitor.AwaitingInput += s => AwaitingInput?.Invoke(s);
-        _monitor.ApiError += s => ApiError?.Invoke(s);
-        _monitor.PrFinished += s => PrFinished?.Invoke(s);
-        _monitor.PrReviewed += s => PrReviewed?.Invoke(s);
-        _monitor.PrApproved += s => PrApproved?.Invoke(s);
-        _monitor.OpenHistoryRequested += id => OpenHistoryRequested?.Invoke(id);
-        // FileSystemWatcher/debounce fire on background threads; hop to the UI thread and re-scan there
-        // (matches the WinForms BeginInvoke(Scan) pattern) so the callback only runs on the UI thread.
-        _monitor.ChangeDetected += () => Dispatcher.UIThread.Post(() => _monitor.Scan());
+        _monitor.NeedsAttention += s => Post(() => NeedsAttention?.Invoke(s));
+        _monitor.AwaitingInput += s => Post(() => AwaitingInput?.Invoke(s));
+        _monitor.ApiError += s => Post(() => ApiError?.Invoke(s));
+        _monitor.PrFinished += s => Post(() => PrFinished?.Invoke(s));
+        _monitor.PrReviewed += s => Post(() => PrReviewed?.Invoke(s));
+        _monitor.PrApproved += s => Post(() => PrApproved?.Invoke(s));
+        _monitor.OpenHistoryRequested += id => Post(() => OpenHistoryRequested?.Invoke(id));
+        // File events, process exits and background refreshes arrive (debounced) on pool threads.
+        _monitor.ChangeDetected += RequestScan;
 
         _deadlineTimer = new DispatcherTimer();
-        _deadlineTimer.Tick += (_, _) => { _deadlineTimer.Stop(); _monitor.Scan(); };
+        _deadlineTimer.Tick += (_, _) => { _deadlineTimer.Stop(); RequestScan(); };
         _reconcileTimer = new DispatcherTimer { Interval = ReconcileInterval };
-        _reconcileTimer.Tick += (_, _) => _monitor.Scan();
+        _reconcileTimer.Tick += (_, _) => RequestScan();
         _controlledPollTimer = new DispatcherTimer { Interval = ControlledPollInterval };
-        _controlledPollTimer.Tick += (_, _) => _monitor.Scan();
+        _controlledPollTimer.Tick += (_, _) => RequestScan();
     }
 
     /// <summary>Whether the monitor flags stuck sessions (feeds the overlay's warning glyph). Off by
@@ -111,70 +124,92 @@ internal sealed class SessionMonitorHost : IDisposable
     /// <summary>Optional comma-separated Jira project keys a branch key must match; blank matches any.</summary>
     public string? JiraProjectFilter { set => _monitor.JiraProjectFilter = value; }
 
-    /// <summary>Reads the initial session state and starts the safety-net reconcile timer. Call on the
-    /// UI thread (Scan raises SessionsChanged).</summary>
+    /// <summary>Starts the initial scan (on the worker — the overlay fills when it lands) and the safety-net
+    /// reconcile timer. Call on the UI thread.</summary>
     public void Start()
     {
-        _monitor.Scan();
+        RequestScan();
         _reconcileTimer.Start();
     }
 
-    /// <summary>Forces an immediate rescan on the UI thread. Replay calls this right after each
-    /// projection so scrubbing reflects the new state without waiting out the watcher debounce /
-    /// reconcile cadence.</summary>
-    public void Reconcile() => _monitor.Scan();
+    /// <summary>Requests an immediate rescan. Replay calls this right after each projection so scrubbing
+    /// reflects the new state without waiting out the watcher debounce / reconcile cadence.</summary>
+    public void Reconcile() => RequestScan();
 
     /// <summary>Flips a session's external-notify opt-in (writes/deletes its marker file) and rescans so
-    /// the overlay's mail glyph + menu wording refresh. Call on the UI thread.</summary>
-    public void ToggleExternalNotify(string sessionId)
-    {
-        _monitor.ToggleExternalNotify(sessionId);
-        _monitor.Scan();
-    }
+    /// the overlay's mail glyph + menu wording refresh.</summary>
+    public void ToggleExternalNotify(string sessionId) => OnWorker(() => _monitor.ToggleExternalNotify(sessionId));
 
     /// <summary>Sets or clears the project note shared by every session under <paramref name="cwd"/>
     /// (writes/deletes the project's <c>project.note</c> sidecar) and rescans so the overlay's note glyph
-    /// refreshes. A null/blank text clears it. Call on the UI thread.</summary>
-    public void SetProjectNote(string cwd, string? text)
-    {
-        _monitor.SetProjectNote(cwd, text);
-        _monitor.Scan();
-    }
+    /// refreshes. A null/blank text clears it.</summary>
+    public void SetProjectNote(string cwd, string? text) => OnWorker(() => _monitor.SetProjectNote(cwd, text));
 
     /// <summary>Reads the project note shared by sessions under <paramref name="cwd"/>, or null when
     /// unset.</summary>
     public string? ReadProjectNote(string cwd) => SessionMonitor.ReadProjectNote(cwd);
 
-    /// <summary>Forces an immediate rescan. For actions that change the live session set from *outside* the
+    /// <summary>Requests an immediate rescan. For actions that change the live session set from *outside* the
     /// sessions directory — terminating a session kills the process but leaves its <c>{pid}.json</c> behind,
-    /// so no file event fires and the row would linger until the reconcile poll. Call on the UI thread.
-    /// </summary>
-    public void Rescan() => _monitor.Scan();
+    /// so no file event fires and the row would linger until the reconcile poll.</summary>
+    public void Rescan() => RequestScan();
 
     /// <summary>Clears a completed session's "done" badge — the user focused/clicked it — and rescans so
-    /// the overlay drops the NeedsAttention state back to Idle. Harmless for a session that isn't done.
-    /// Call on the UI thread.</summary>
-    public void Acknowledge(string pid)
+    /// the overlay drops the NeedsAttention state back to Idle. Harmless for a session that isn't done.</summary>
+    public void Acknowledge(string pid) => OnWorker(() => _monitor.Acknowledge(pid));
+
+    private void RequestScan()
     {
-        _monitor.Acknowledge(pid);
-        _monitor.Scan();
+        if (!_disposed) _scan.Request();
     }
 
-    // Runs after every scan (SessionsChanged fires from within Scan): pump the result to the UI, then
-    // (re)arm the one-shot deadline timer so the next deferred completion fires on time.
+    // Queues a change to the monitor's state for the worker (so it never races a scan), then scans.
+    private void OnWorker(Action action)
+    {
+        _pending.Enqueue(action);
+        RequestScan();
+    }
+
+    // The worker body: apply queued UI requests, then scan. Never runs concurrently with itself.
+    private void ScanOnce()
+    {
+        if (_disposed) return;
+        while (_pending.TryDequeue(out var action))
+        {
+            try { action(); } catch { /* best-effort, like the direct calls it replaces */ }
+        }
+
+        var sw = Stopwatch.StartNew();
+        var sessions = _monitor.Scan();
+        if (sw.ElapsedMilliseconds >= SlowScanMs)
+            DiagnosticLog.Append("scan.log", $"Slow scan: {sw.ElapsedMilliseconds} ms for {sessions.Count} session(s)");
+    }
+
+    private void Post(Action onUi) => Dispatcher.UIThread.Post(() =>
+    {
+        if (!_disposed) onUi();
+    });
+
+    // Raised on the worker at the end of each scan: capture what the UI needs from the monitor now (the
+    // worker owns it), then pump the result to the UI and (re)arm the deadline timer and controlled poll there.
     private void OnSessionsChanged(IReadOnlyList<ClaudeSession> sessions)
     {
-        _onSessions(sessions);
-        ArmDeadlineTimer();
-        UpdateControlledPoll();
+        var deadline = _monitor.NextNeedsAttentionDeadline;
+        var controlledWorking = _monitor.HasWorkingControlledSession;
+        Post(() =>
+        {
+            _onSessions(sessions);
+            ArmDeadlineTimer(deadline);
+            UpdateControlledPoll(controlledWorking);
+        });
     }
 
     // Runs the short-cadence poll only while a controlled session is working, so its background sub-agents
     // are sampled during their run; stops it the moment none is, keeping the overlay quiet at rest. See
     // ControlledPollInterval / SessionMonitor.HasWorkingControlledSession.
-    private void UpdateControlledPoll()
+    private void UpdateControlledPoll(bool controlledWorking)
     {
-        if (_monitor.HasWorkingControlledSession)
+        if (controlledWorking)
         {
             if (!_controlledPollTimer.IsEnabled) _controlledPollTimer.Start();
         }
@@ -186,21 +221,23 @@ internal sealed class SessionMonitorHost : IDisposable
 
     // Arms the one-shot timer for the monitor's next needs-attention deadline (or leaves it stopped when
     // none is pending). Mirrors the WinForms ArmDeadlineTimer; fires on the next tick if already due.
-    private void ArmDeadlineTimer()
+    private void ArmDeadlineTimer(DateTime? deadline)
     {
         _deadlineTimer.Stop();
-        if (_monitor.NextNeedsAttentionDeadline is not { } deadline) return;
-        var ms = (deadline - DateTime.Now).TotalMilliseconds;
+        if (deadline is not { } due) return;
+        var ms = (due - DateTime.Now).TotalMilliseconds;
         _deadlineTimer.Interval = TimeSpan.FromMilliseconds(Math.Clamp(ms, 1, int.MaxValue));
         _deadlineTimer.Start();
     }
 
     public void Dispose()
     {
+        _disposed = true;
         _deadlineTimer.Stop();
         _reconcileTimer.Stop();
         _controlledPollTimer.Stop();
         _monitor.SessionsChanged -= OnSessionsChanged;
+        _monitor.ChangeDetected -= RequestScan;
         _monitor.Dispose();
     }
 }

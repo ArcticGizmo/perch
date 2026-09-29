@@ -82,4 +82,50 @@ public sealed class CoalescingTriggerTests
         await Task.Delay(50);
         Assert.Equal(2, runs);
     }
+
+    // CP20: the session monitor's scan worker is this trigger with a zero gap, requested from pool threads (file
+    // events), the UI thread (timers, user actions) and the scan itself. Runs must never overlap, a burst must
+    // collapse, and a request made while a run is in flight must still get a run after it.
+    [Fact]
+    public async Task Zero_gap_from_many_threads_is_a_single_flight_that_serves_the_last_request()
+    {
+        int active = 0, maxActive = 0, runs = 0;
+        long lastRequest = 0, lastRunStart = 0;
+        var trigger = new CoalescingTrigger(() => Task.Run(() =>
+        {
+            int now = Interlocked.Increment(ref active);
+            InterlockedMax(ref maxActive, now);
+            Interlocked.Increment(ref runs);
+            // A shared sequence stamps requests and run starts, so "a run started after the last request" is exact.
+            Volatile.Write(ref lastRunStart, Interlocked.Increment(ref _seq));
+            Thread.Sleep(5);   // a scan takes a moment
+            Interlocked.Decrement(ref active);
+        }), TimeSpan.Zero);
+
+        const int requests = 400;
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+        {
+            for (int i = 0; i < requests / 8; i++)
+            {
+                Volatile.Write(ref lastRequest, Interlocked.Increment(ref _seq));
+                trigger.Request();
+            }
+        })));
+
+        // Let the trailing run land.
+        for (int i = 0; i < 200 && Volatile.Read(ref active) + (Volatile.Read(ref lastRunStart) < Volatile.Read(ref lastRequest) ? 1 : 0) > 0; i++)
+            await Task.Delay(10);
+
+        Assert.Equal(1, maxActive);                                           // never two at once
+        Assert.InRange(runs, 1, requests - 1);                                // a burst collapses
+        Assert.True(Volatile.Read(ref lastRunStart) > Volatile.Read(ref lastRequest)); // the last request was served
+    }
+
+    private static long _seq;
+
+    private static void InterlockedMax(ref int target, int value)
+    {
+        int seen;
+        while ((seen = Volatile.Read(ref target)) < value && Interlocked.CompareExchange(ref target, value, seen) != seen) { }
+    }
 }

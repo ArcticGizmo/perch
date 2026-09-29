@@ -44,7 +44,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP17](#cp17) | 🟡 P2 | Supply chain | CI permissions, pinning, deploy-secret scoping | S | ⬜ |
 | [CP18](#cp18) | 🟡 P2 | Supply chain | Code signing + signature verification in `install.ps1` | L | ⬜ |
 | [CP19](#cp19) | ⚪ P3 | Build | Build/installer hygiene (em dashes, PATH type, versioning) | S | ⬜ |
-| [CP20](#cp20) | 🟠 P1 | Performance | Session scan off the UI thread + incremental transcripts | L | ⬜ |
+| [CP20](#cp20) | 🟠 P1 | Performance | Session scan off the UI thread + incremental transcripts | L | 🟦 code + tests done, dogfood owed |
 | [CP21](#cp21) | 🟠 P1 | Performance | All-time stats: cache history, don't re-parse it | M | ⬜ |
 | [CP22](#cp22) | 🟠 P1 | Performance | Streaming chat O(n²) + SessionThreadView leak | M | ⬜ |
 | [CP23](#cp23) | 🟡 P2 | Performance | Overlay paint path: no IO, no per-frame allocations | M | ⬜ |
@@ -577,7 +577,7 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 ## Performance
 
 <a id="cp20"></a>
-### CP20 — Session scan off the UI thread + incremental transcripts · 🟠 P1 · L · ⬜
+### CP20 — Session scan off the UI thread + incremental transcripts · 🟠 P1 · L · 🟦
 
 **Problem.**
 - **Scan runs on the UI thread.** Every trigger (watcher, the 2s controlled poll, reconcile) calls `SessionMonitor.Scan()` on the dispatcher (`SessionMonitorHost.cs:81-88`).
@@ -588,14 +588,41 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 - **Sub-agent work repeats.** `SubAgentReader` re-classifies whole agent transcripts, and stats every agent file on every scan.
 
 **Tasks**
-- [ ] Run Scan on a single-flight background worker (a pending flag plus one trailing re-run), then post the result list to the UI. The events currently fired "from within Scan" must still reach consumers on the UI thread.
-- [ ] Add an incremental transcript fold: `(path → offset, accumulated state)`. Read `[offset, EOF)` on growth, reset on shrink or fingerprint change, and do one pass that feeds every reader. The roost branch's `TranscriptTailReader` can be the primitive.
-- [ ] `ParseTitle`: use a real 32KB head window.
-- [ ] Resolve the transcript path once per session per scan, and negative-cache misses until the `projects/` mtime changes.
-- [ ] `SubAgentReader`: classify from the tail; skip non-teammate agent files older than the stale window.
-- [ ] Route every trigger through `RequestScanDebounced`.
-- [ ] Measure before and after: log scan duration with 20 sessions and a 50MB transcript.
-- [ ] xUnit: an incremental fold gives the same result as a full scan across appends, truncation and rotation.
+- [x] **Scan off the UI thread.** `SessionMonitorHost` runs `SessionMonitor.Scan` on a single-flight worker, reusing CP4's `CoalescingTrigger` with a zero gap: one scan at a time, and a burst collapses into one trailing scan.
+  - `SessionsChanged` and every alert event `Scan` raises are posted to the UI thread in the order they were raised, so a scan's alerts still land before the overlay update that follows them.
+  - The deadline and controlled-poll values are captured on the worker and passed along with the post.
+  - UI requests that mutate monitor state (`Acknowledge`, `ToggleExternalNotify`, `SetProjectNote`) are queued and run on the worker just before its next scan, so the monitor's dictionaries only ever see one thread.
+  - Timers, file events and user actions all just request a scan.
+  - A scan over 250 ms is logged to `logs/scan.log` with the session count.
+  
+  The services the scan calls were already safe off-thread: git stats and PR status use concurrent caches, the IDE detector locks its snapshot, and the replay projector's probe uses `Interlocked`.
+- [x] **Incremental fold.** New `TranscriptFold`: per path, the consumed offset plus one state per registered `LineFolder`. On growth it reads `[offset, EOF)` once and feeds every folder.
+  - Only whole lines are consumed. A trailing fragment that is already a complete JSON object is taken early, since a strict prefix of an object can never parse as one.
+  - It resets on truncation, or when the first 256 bytes change (replacement or rotation).
+  - An unchanged length and mtime costs a stat.
+  - A leading BOM is stripped, as `StreamReader` does.
+  - A throwing folder can't starve the others.
+  
+  `TranscriptReader`'s five whole-file readers (async agents, tasks, artifacts, context, title) share one fold. `MarkdownFilesReader` and `SubAgentReader` (`Classify` and the legacy parse) fold too. The static one-shot readers (`ReadContextUsage`, `ReadTitle`) reuse the same step functions through `LineFolder.FoldAll`, so the two paths can't disagree. The tail readers (activity, bare command, interrupted, awaiting assistant, burn rate, API error, stuck) stay on their 32KB tail window. Written fresh rather than porting roost's `TranscriptTailReader`, which lives on an unmerged branch.
+- [x] **Title — changed from the plan.** The live scan path now folds "the latest `custom-title` anywhere in the file", with no head or tail heuristic, which is also correct for a mid-session rename that a 32KB head window would miss. The one-shot static `ReadTitle`, read once when a session window opens, keeps its tail-then-whole-file fallback for the same correctness reason. Its doc, which wrongly claimed a 32KB head, was corrected instead.
+- [x] **Locator — changed from the plan.** The path isn't cached per scan; the direct `<projects>/<enc-cwd>/<id>.jsonl` check is one stat and must stay live so a new session's transcript is found at once. What was expensive is the fallback scan of every project folder, which a session with no transcript yet triggered from every reader on every scan. A fallback **miss** is now remembered for 30s, and forgotten early when any `projects/` root's mtime changes. Watching only the root, not every project folder, keeps the check cheap.
+- [x] **`SubAgentReader` — changed from the plan.** Classifying from the tail became unnecessary once `Classify` folds incrementally. It still skips ordinary (non-teammate) agent files that have been quiet past the stale window, before parsing them: such an agent can never be surfaced, so this is exactly equivalent, and it spares a long session's dozens of finished agent files a first-time parse.
+- [x] Every trigger goes through `RequestScanDebounced`: git-stats and PR refreshes, process exits, watcher errors, and the PR/Jira toggles, which used to fire `ChangeDetected` directly.
+- [x] **Measured** (opt-in `TranscriptFoldBenchmark`, `PERCH_BENCH=1`): one append to a **50 MB** transcript cost the whole-file readers **715 ms** per session before (a fresh read, which is what the old length+mtime cache did on every append), and costs **2.8 ms** after. The "before" is conservative: a fresh fold still shares one read across `TranscriptReader`'s five values, whereas the old code did seven separate full reads. The first read of a 50 MB transcript is about 1.6 s, once, now on the worker. The 20-session live measurement is replaced by `logs/scan.log`, which records any scan over 250 ms.
+- [x] Tests (26 new):
+  - `TranscriptFoldTests` (11): arbitrary chunk splits, mid-line and mid-UTF-8-character; an unchanged file reads nothing; an append to about 1 MB reads only the append plus the head check; a record without its newline is taken once; a partial record waits; truncation; replacement by a no-shorter file; BOM; a missing then created file; a throwing folder.
+  - `TranscriptFoldEquivalenceTests` (7): a combined real transcript grown in random chunks with 3 seeds; after **every** chunk, the readers that watched it grow equal fresh readers for every folded value. Also the task fixtures grown alone, the async launch-then-notify transition, truncation and replacement, and an append to a 5 MB transcript that reads only the append.
+  - `TranscriptLocatorMissCacheTests` (3), a `SubAgentReader` skip test (a quiet ordinary agent is never parsed, a quiet teammate still is), and a `CoalescingTrigger` test: 400 requests from 8 threads never overlap, the burst collapses, and the last request is served.
+- [ ] Dogfood:
+  - the overlay still fills at launch and tracks sessions;
+  - a finished session's "done" badge and toast still arrive on time;
+  - acknowledging (focus or click) clears it;
+  - the notify toggle and project note still refresh the row;
+  - a busy session with a large transcript no longer makes the overlay or other windows stutter.
+
+**Also closes CP25's first item:** the watcher map is now guarded by a lock in `EnsureWatchers`, `OnWatcherError` and `Dispose`, and the tracked-process map by another in `SyncProcessSubscriptions` and `Dispose`.
+
+**Verify.** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1582 with 1 skipped. The new `CoalescingTrigger` test was repeated 10 times, all clean.
 
 <a id="cp21"></a>
 ### CP21 — All-time stats: cache history, don't re-parse it · 🟠 P1 · M · ⬜
@@ -661,7 +688,7 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 <a id="cp25"></a>
 ### CP25 — Watcher race, PID reuse, Process disposal · ⚪ P3 · S · ⬜
 
-- [ ] `SessionMonitor.cs:1264-1277`: `OnWatcherError` mutates `_watchers` on a thread-pool thread while the UI thread uses it. Post the teardown to the owning thread, or lock. After CP20 this becomes "the scan worker's thread".
+- [x] `SessionMonitor.cs:1264-1277`: `OnWatcherError` mutates `_watchers` on a thread-pool thread while the UI thread uses it. Post the teardown to the owning thread, or lock. After CP20 this becomes "the scan worker's thread". *(Done in CP20: `_watchGate` guards every access.)*
 - [ ] `IProcessProbe.cs:23-33`: liveness should compare the process start time against the session file's `startedAt`, as `SessionTerminator` already does, so a reused PID doesn't keep a dead session alive. Dispose `Process` objects.
 - [ ] `DaemonRosterReader`: one worker with a mistyped field shouldn't drop the whole roster.
 

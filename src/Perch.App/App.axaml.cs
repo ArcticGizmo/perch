@@ -482,7 +482,7 @@ public partial class App : Application
                 Dispatcher.UIThread.Post(ShowOnboarding, DispatcherPriority.Background);
 
             _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: settings.IncludeSubprocessMetrics);
-            _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
+            _monitorHost.Start(); // initial scan, on the monitor's worker — its result (which also sets the pids) is posted back
 
             // Replay: hand the monitor over to the transport, which advances the scrub position, projects
             // the sandbox, and forces a rescan. The controller window binds play/pause/scrub/markers to

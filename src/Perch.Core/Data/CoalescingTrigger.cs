@@ -6,9 +6,11 @@ namespace Perch.Data;
 /// <c>minGap</c> apart. An isolated request (nothing running, gap elapsed) runs immediately, so a user's own
 /// action still feels instant, while a flood of triggers (e.g. inbox broadcasts) costs one run per gap at most.
 ///
-/// <para>Call <see cref="Request"/> from one context (the UI thread, for the feed poll): the work's awaits resume
-/// on the caller's synchronization context, exactly as a direct <c>_ = Poll()</c> would. A throwing run is
-/// swallowed, like the fire-and-forget calls it replaces.</para>
+/// <para><see cref="Request"/> is thread-safe. The work's awaits resume on the synchronization context of whichever
+/// call started the run — for the feed poll that's always the UI thread, exactly as a direct <c>_ = Poll()</c>
+/// would; the session monitor passes work that is itself a <c>Task.Run</c>, so it doesn't matter there. With a zero
+/// gap it is a plain single-flight: one run at a time plus at most one trailing run. A throwing run is swallowed,
+/// like the fire-and-forget calls it replaces.</para>
 /// </summary>
 public sealed class CoalescingTrigger
 {
