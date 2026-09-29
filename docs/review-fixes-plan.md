@@ -31,10 +31,10 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP4](#cp4) | 🟠 P1 | Supabase | Realtime inbox authorisation + sender validation | M | 🟦 code + tests done, prod deploy + dogfood owed |
 | [CP5](#cp5) | 🟡 P2 | Supabase | Draw with Perch: RPC state checks + size limits | S | ⬜ |
 | [CP6](#cp6) | 🟡 P2 | Supabase | Block/suspension coverage, `find_profile` throttle, feed query | M | ⬜ |
-| [CP7](#cp7) | 🔴 P0 | Client | Executable hijack via untrusted working directory | M | 🟦 code + tests done, dogfood owed |
-| [CP8](#cp8) | 🟠 P1 | Client | Link opening: scheme allowlist + browser argument injection | S | 🟦 code + tests done, dogfood owed |
-| [CP9](#cp9) | 🟠 P1 | Client | No UNC/remote path probing (NTLM leak + UI hang) | S | 🟦 code + tests done, dogfood owed |
-| [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | 🟦 code + tests done, dogfood owed |
+| [CP7](#cp7) | 🔴 P0 | Client | Executable hijack via untrusted working directory | M | ✅ |
+| [CP8](#cp8) | 🟠 P1 | Client | Link opening: scheme allowlist + browser argument injection | S | ✅ |
+| [CP9](#cp9) | 🟠 P1 | Client | No UNC/remote path probing (NTLM leak + UI hang) | S | ✅ |
+| [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | ✅ (cross-user squat check untested) |
 | [CP11](#cp11) | 🟡 P2 | Client | Hardened shared `GitRunner` | M | ⬜ |
 | [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | ⬜ |
 | [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | ⬜ |
@@ -229,7 +229,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 ## Client security
 
 <a id="cp7"></a>
-### CP7 — Executable hijack via untrusted working directory · 🔴 P0 · M · 🟦
+### CP7 — Executable hijack via untrusted working directory · 🔴 P0 · M · ✅
 
 **Problem.** Bare executable names get resolved inside untrusted repos in four places:
 - **`ClaudeSessionController.cs:67`** runs `cmd.exe /c "claude …"` with `WorkingDirectory = cwd`. cmd searches the current directory before PATH, so a committed `claude.cmd`, `.bat` or `.exe` runs instead of Claude, with no permission layer. The same shape is in `PluginManager.cs:133` and `SessionLauncher.cs:41-48`.
@@ -270,7 +270,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
   - A statusline end-to-end test: an **empty** `git.exe` planted in a real repo. The resolver still returns the PATH git, and the generated script (run under node with `NoDefaultCurrentDirectoryInExePath` stripped) produces the real counts `S1U0`.
   
   Test fixtures only ever create empty files; no executable is copied or modified. An earlier draft that planted a copied system binary was replaced on request.
-- [ ] Dogfood owed: interactively check that a controlled session starts, "Reopen in terminal" works for each terminal choice, the hook autostarts the tray, and "Open in VS Code" and GitKraken still work. *(Switcher reopen user-confirmed on 2026-09-29.)*
+- [x] Dogfood: interactively check that a controlled session starts, "Reopen in terminal" works for each terminal choice, the hook autostarts the tray, and "Open in VS Code" and GitKraken still work. *(User-confirmed on 2026-09-29.)*
 - [x] **Follow-up bug found while dogfooding: resume under the owning config dir.** Reopening a session from a non-primary config dir resumed it under the primary account, where the transcript doesn't exist. The same happened for resuming inside a Perch window and for "Hand back to a terminal". The fix:
   - `TranscriptLocator.ResumeConfigRoot` picks the transcript's owning dir, or null for the primary, meaning inherit.
   - `ISessionLauncher` takes that dir; so do SessionWindow resume, hand-back and `/login`/`/logout`.
@@ -284,7 +284,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - **The statusline test catches the bug.** Against the old bare-`'git'` script it produced `SU`, not `S1U0`.
 
 <a id="cp8"></a>
-### CP8 — Link opening: scheme allowlist + browser argument injection · 🟠 P1 · S · 🟦
+### CP8 — Link opening: scheme allowlist + browser argument injection · 🟠 P1 · S · ✅
 
 **Problem.**
 - Markdown link and autolink targets (`MarkdownView.cs:612-627`, `LinkText.cs:84-86`) reach `UrlOpener.Open`, which calls `ShellExecute` (`UrlOpener.cs:19`) with no scheme check. So `file:`, UNC, `search-ms:` and `ms-*:` links execute on click.
@@ -302,7 +302,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - [x] `OpenInEditor`'s "no VS Code" fallback now goes through `OpenWithDefault` too, which closes CP12's third task (a `.bat` file ref was shell-executed). The Mac `OpenWith`, which was a bare `open` of any file, also goes through it.
 - [x] `MarkLink`: only `WebUrl` targets become browser links (the span stores the normalised URL, so the hover tip shows the real destination). A `LinkFilePath` target joins the inline-code file-ref candidates, so it opens in the viewer only if `ResolveFile` finds a real file. `javascript:`, `search-ms:` and the like are inert text. Email autolinks now get their `mailto:`.
 - [x] xUnit `OpenTargetsTests` (72 cases): `file:///x.exe`, `file://host/…`, `\\h\s\x`, `//h/s`, a drive path, `search-ms:`, `ms-settings:`, `ms-msdt:`, `--flag`, `-new-window`, `javascript:`, `vbscript:`, `data:`, `vscode:`, a host-less `https://` and a relative path are rejected; http(s) (case-normalised, trimmed, with query/fragment) and `mailto:` are accepted; the result is always scheme-led; the link-path and viewer-safe cases above.
-- [ ] Dogfood owed:
+- [x] Dogfood (user-confirmed on 2026-09-29):
   - middle-click a link (new window) and sign in (private window) with Chrome or Edge as the default browser, to confirm `--` is accepted in both launches;
   - Ctrl+click a relative `[plan](docs/x.md)` link in a session reply (it should open the viewer);
   - "Open" on a dropped non-image attachment.
@@ -314,7 +314,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 **Landed:** commit `bcf8714`: `OpenTargets`, both `UrlOpener`s and `FileRevealer`s, `IFileRevealer.OpenWithDefault`, `MarkdownView.MarkLink`, `AttachmentChip` and `ImageViewerWindow`.
 
 <a id="cp9"></a>
-### CP9 — No UNC/remote path probing · 🟠 P1 · S · 🟦
+### CP9 — No UNC/remote path probing · 🟠 P1 · S · ✅
 
 **Problem.** `MarkdownView.ResolveFile` (`MarkdownView.cs:570-583`) calls `File.Exists` on any rooted inline-code span, including `\\attacker\s\a.md`. It runs on the UI thread, and streaming repeats it about 25 times a second. The effect is that SMB/WebDAV authentication sends the user's NTLM hash to the attacker, and the UI hangs for the SMB timeout. The same pattern exists in `gitdir:` resolution (`PrStatusService.cs:464-468`, `GitHead.cs:55`, and `findGitDir` in the statusline `.mjs`).
 
@@ -332,7 +332,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
   - `GitHeadTests`, plus 3 new `PrStatusServiceBranchTests` and a statusline end-to-end run under node.
   
   The UNC hosts are all `.invalid`, so nothing is ever contacted. The **discriminating** cases point `gitdir:` at the `\\?\` device spelling of a real *local* git dir, which proves refusal without any network. Against the pre-fix resolvers, 5 of these fail: the old code read the branch through the device path, and `FindGitDir` returned the UNC target.
-- [ ] Dogfood owed:
+- [x] Dogfood (user-confirmed on 2026-09-29):
   - a session reply with a `` `\\host\share\x.md` `` inline span stays plain text and doesn't stall;
   - relative and absolute local file refs are still clickable;
   - PR status and the statusline branch still work in a linked worktree.
@@ -342,7 +342,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 **Landed:** commit `4932686`: `LocalPath`, `FileRefResolver`, the three `gitdir:` resolvers and `MarkdownView`.
 
 <a id="cp10"></a>
-### CP10 — Named pipes: current-user only, park the valet hook · 🟠 P1 · S · 🟦
+### CP10 — Named pipes: current-user only, park the valet hook · 🟠 P1 · S · ✅
 
 **Problem.**
 - `perch-valet` and `perch-control` are fixed, machine-global names, with no `CurrentUserOnly` or `PipeSecurity` (`ValetServer.cs:35`, `ControlServer.cs:30`). Clients never check who owns the server (`Perch.Hook/Program.cs:270`, `Program.cs:222`).
@@ -383,7 +383,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
   
   These couldn't be run against the old server, which lacks the seams, but each one targets something the old code did: the silent client hung forever, the oversized line got "didn't understand", and the held name was never retried.
 - [ ] **Not unit-testable:** the cross-user squat itself needs a second Windows account. Manual check: as user B, create a pipe with user A's name, then run `perch --resume …` as user A. Expected: "owned by another user", and B receives nothing.
-- [ ] Dogfood: with the tray running, `perch`, `perch -c` and `perch --resume <id>` from a terminal still open windows in the tray (the name changed, so the CLI and the tray must come from the same build).
+- [x] Dogfood: with the tray running, `perch`, `perch -c` and `perch --resume <id>` from a terminal still open windows in the tray (the name changed, so the CLI and the tray must come from the same build). *(User-confirmed on 2026-09-29 against the dev tray via `run.bat`, which now works from any folder and forwards Perch's arguments after `--`; commit `296de4a`.)*
 - **Known edge:** .NET makes the pipe owner the token's *owner*, which is the Administrators group for an elevated admin token. An **elevated** tray plus a non-elevated `perch` CLI therefore fail the owner check and the CLI reports "owned by another user". Acceptable, since the tray isn't meant to run elevated, but it's recorded here in case someone hits it.
 
 **Verify (valet removal).** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1522 with 1 skipped (six valet tests deleted, one migration test added). The built hook run as `perch-hook valet perch-valet` exits 0 with empty stdout.
