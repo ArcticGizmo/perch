@@ -6,8 +6,8 @@ namespace Perch.Data.Control;
 /// <summary>
 /// The tray side of <see cref="ControlProtocol"/>: accepts one <see cref="SessionOpenIntent"/> line per
 /// connection from a <c>perch</c> CLI launch, asks <see cref="Handle"/> to act on it (the app marshals to
-/// the UI thread and opens a session window), and writes the <see cref="ControlReply"/>. Same shape as
-/// <see cref="ValetServer"/>: any failure answers a not-ok reply and never throws out of the accept loop.
+/// the UI thread and opens a session window), and writes the <see cref="ControlReply"/>. Any failure answers a
+/// not-ok reply and never throws out of the accept loop.
 /// </summary>
 internal sealed class ControlServer : IDisposable
 {

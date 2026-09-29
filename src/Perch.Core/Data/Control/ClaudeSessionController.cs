@@ -141,7 +141,7 @@ internal sealed class ClaudeSessionController : IDisposable
                         ControlledSessions.Unregister(SessionId);
                         SessionLock.Release(SessionId);
                         SessionId = init.SessionId;
-                        ControlledSessions.Register(init.SessionId);   // the valet + focus routing skip owned sessions
+                        ControlledSessions.Register(init.SessionId);   // focus routing skips owned sessions
                         SessionLock.Acquire(init.SessionId, Cwd);
                     }
                     EventReceived?.Invoke(ev);

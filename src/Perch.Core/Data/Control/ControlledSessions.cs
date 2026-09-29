@@ -10,9 +10,8 @@ internal enum ControlledActivity { Idle, Busy, Waiting }
 /// <summary>
 /// The session ids this Perch instance currently owns over stream-json (<see cref="ClaudeSessionController"/>
 /// registers on init, unregisters on exit), each with its live <see cref="ControlledActivity"/>. Consulted so
-/// the other control surfaces don't double-handle an owned session — the permission valet must pass (the
-/// console already answers <c>can_use_tool</c> over stdin), and focus routing should target the console window
-/// rather than hunt for a terminal — and so <see cref="SessionMonitor"/> can read an owned session's real
+/// the other control surfaces don't double-handle an owned session — focus routing should target the console
+/// window rather than hunt for a terminal — and so <see cref="SessionMonitor"/> can read an owned session's real
 /// status directly (the CLI doesn't heartbeat the session-file <c>status</c> over stream-json, so it would
 /// otherwise read as idle however hard the session works). In-process only by design: a session another Perch
 /// instance drives isn't here, and the overlay simply falls back to the CLI status for it.

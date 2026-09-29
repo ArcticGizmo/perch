@@ -21,13 +21,12 @@ internal static class ClaudeUserSettings
     // The set mirrors plugins/perch/hooks/hooks.json (minus the dropped UserPromptSubmit): each event
     // fires perch-hook with the args the binary switches on. We use the exec form (command + args)
     // rather than a single command string so a bin path containing spaces (e.g. the "Perch (Dev)"
-    // profile) needs no shell quoting. The valet entry (session-control M2) bakes this profile's pipe
-    // name in as a second arg, so a dev tray and an installed release tray never intercept each other's
-    // sessions (the hook process itself can't tell which profile registered it).
+    // profile) needs no shell quoting. A retired entry (the parked permission valet's `valet`, removed in
+    // review fixes CP10) needs no migration: reconcile strips every Perch-managed entry before re-adding
+    // this set, so an old install's leftover disappears on the next launch.
     private static readonly (string Event, string[] Args)[] ManagedHooks =
     {
         ("PreToolUse",   ["mode"]),
-        ("PreToolUse",   ["valet", Control.ValetProtocol.PipeName]),
         ("PostToolUse",  ["mode"]),
         ("Stop",         ["mode"]),
         ("SubagentStop", ["agentstop"]),

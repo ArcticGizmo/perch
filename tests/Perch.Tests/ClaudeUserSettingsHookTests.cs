@@ -15,17 +15,15 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
     private readonly string _dir;
     private readonly string _settings;
 
-    // The (event, first-arg) pairs Perch manages — mirror of ClaudeUserSettings.ManagedHooks. (The
-    // valet entry carries a second arg, its pipe name, which these tests don't pin — it varies by the
-    // profile the suite runs under.)
+    // The (event, first-arg) pairs Perch manages — mirror of ClaudeUserSettings.ManagedHooks.
     private static readonly (string Event, string Arg)[] Expected =
     {
-        ("PreToolUse", "mode"), ("PreToolUse", "valet"), ("PostToolUse", "mode"), ("Stop", "mode"),
+        ("PreToolUse", "mode"), ("PostToolUse", "mode"), ("Stop", "mode"),
         ("SubagentStop", "agentstop"), ("TeammateIdle", "teammateidle"),
         ("SessionStart", "start"), ("SessionEnd", "cleanup"),
     };
 
-    // How many managed entries a given event carries (PreToolUse has two: mode + valet).
+    // How many managed entries a given event carries.
     private static int ExpectedCount(string evt) => Expected.Count(e => e.Event == evt);
 
     public ClaudeUserSettingsHookTests()
@@ -174,6 +172,34 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
 
         ClaudeUserSettings.ReconcileHooks(_settings, "/opt/perch/bin/perch-hook", "0.2.0");
 
+        Assert.Equal(Expected.Length, ManagedHooks(Read()).Count);
+        Assert.Equal(ExpectedCount("PreToolUse"), ((JsonArray)((JsonObject)Read()["hooks"]!)["PreToolUse"]!).Count);
+    }
+
+    [Fact]
+    public void Reconcile_StripsTheRetiredValetHook_FromAnOldInstall()
+    {
+        // Review fixes CP10: the parked permission valet's PreToolUse entry ("valet" + its pipe name) was
+        // registered by every earlier build. Reconcile must drop it, marked or (after a Claude Code rewrite)
+        // marker-less, and never re-add it — so an upgrade stops paying the per-tool-call pipe connect.
+        File.WriteAllText(_settings, """
+        {
+          "hooks": {
+            "PreToolUse": [
+              { "matcher": "", "hooks": [ { "type": "command", "command": "/bin/perch-hook", "args": ["mode"],
+                "_perch": { "managed": true, "dev": false, "version": "0.9.0" } } ] },
+              { "matcher": "", "hooks": [ { "type": "command", "command": "/bin/perch-hook", "args": ["valet", "perch-valet"],
+                "_perch": { "managed": true, "dev": false, "version": "0.9.0" } } ] },
+              { "matcher": "", "hooks": [ { "type": "command",
+                "command": "C:\\Users\\me\\AppData\\Roaming\\Perch\\bin\\perch-hook.exe", "args": ["valet", "perch-valet"] } ] }
+            ]
+          }
+        }
+        """);
+
+        ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "1.0.0");
+
+        Assert.DoesNotContain("valet", File.ReadAllText(_settings));
         Assert.Equal(Expected.Length, ManagedHooks(Read()).Count);
         Assert.Equal(ExpectedCount("PreToolUse"), ((JsonArray)((JsonObject)Read()["hooks"]!)["PreToolUse"]!).Count);
     }

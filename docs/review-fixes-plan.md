@@ -34,7 +34,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP7](#cp7) | 🔴 P0 | Client | Executable hijack via untrusted working directory | M | 🟦 code + tests done, dogfood owed |
 | [CP8](#cp8) | 🟠 P1 | Client | Link opening: scheme allowlist + browser argument injection | S | 🟦 code + tests done, dogfood owed |
 | [CP9](#cp9) | 🟠 P1 | Client | No UNC/remote path probing (NTLM leak + UI hang) | S | 🟦 code + tests done, dogfood owed |
-| [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | ⬜ |
+| [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | 🟦 valet removed; control-pipe hardening open |
 | [CP11](#cp11) | 🟡 P2 | Client | Hardened shared `GitRunner` | M | ⬜ |
 | [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | ⬜ |
 | [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | ⬜ |
@@ -351,12 +351,23 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - Neither server has a read timeout or line cap, and pipe creation failing once disables the pipe permanently.
 
 **Tasks**
-- [ ] Stop registering the `valet` hook until the feature ships. `ReconcileHooks` should strip it from existing installs.
-- [ ] Use `PipeOptions.CurrentUserOnly` on both servers and all clients, and append the user SID to the pipe names. Hook and tray must agree on the name.
-- [ ] Clients: pass `TokenImpersonationLevel.Identification`.
-- [ ] Servers: add a read timeout of about 5s and a line cap of about 64KB, and retry pipe creation with backoff instead of `return`.
-- [ ] Hook: check the pipe exists (`File.Exists(@"\\.\pipe\…")`) before `Connect`, so a missing tray costs nothing.
-- [ ] Test: ControlServer and ValetServer round-trips still pass (`ValetServerTests`). Add a test for the oversized line.
+- [x] **Changed from the plan, on request: the permission valet is removed outright, not just unregistered.** It was never armed: no tray toggle ever set `_valetArmed`, so every relay answered "pass". Removed:
+  - `ValetServer`, `ValetProtocol` and `ValetPromptWindow`;
+  - the tray's server start and `DecideValet`;
+  - the hook's `valet` event and its pipe client;
+  - the `PreToolUse` registration.
+  
+  That takes the `perch-valet` pipe, its squatting exposure and the per-tool-call connect cost away entirely.
+- [x] Existing installs need no migration step. `ReconcileHooks` strips every Perch-managed entry before re-adding the set, so the old valet entry goes at the next tray launch, including marker-less ones. Until then, the new hook treats `valet` as an unknown event: it exits 0 with empty stdout, after about 115ms of Debug-build startup, and never touches a pipe.
+- [x] Tests:
+  - `ValetServerTests` deleted. Its one non-valet assertion, `ControlledSessions.Owns(null)`, moved into the existing `ControlledSessionsTests`.
+  - `ClaudeUserSettingsHookTests` drops `valet` from the expected set, and gains `Reconcile_StripsTheRetiredValetHook_FromAnOldInstall`: marked and marker-less valet entries go, and nothing re-adds them.
+- [ ] `perch-control`: use `PipeOptions.CurrentUserOnly` on the server and the `perch` CLI client, and append the user SID to the pipe name.
+- [ ] Client (`Program.cs`): pass `TokenImpersonationLevel.Identification`.
+- [ ] `ControlServer`: add a read timeout of about 5s and a line cap of about 64KB, and retry pipe creation with backoff instead of `return`.
+- [ ] Test: the ControlServer round-trip still passes, plus a new test for the oversized line.
+
+**Verify (valet removal).** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1522 with 1 skipped (six valet tests deleted, one migration test added). The built hook run as `perch-hook valet perch-valet` exits 0 with empty stdout.
 
 <a id="cp11"></a>
 ### CP11 — Hardened shared `GitRunner` · 🟡 P2 · M · ⬜

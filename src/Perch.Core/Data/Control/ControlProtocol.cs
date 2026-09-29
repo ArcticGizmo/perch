@@ -6,8 +6,8 @@ namespace Perch.Data.Control;
 /// The wire contract between a second <c>perch</c> launch acting as a CLI (<c>perch --resume &lt;id&gt;</c>,
 /// <c>perch -c</c>, <c>perch [dir]</c> — the <c>claude</c>-shaped arguments, docs/session-ui-plan.md Phase 3)
 /// and the running tray: a local named pipe (<see cref="PipeName"/>), one newline-delimited JSON
-/// <see cref="SessionOpenIntent"/> per connection, one <see cref="ControlReply"/> line back. Modelled on
-/// <see cref="ValetProtocol"/>; per-profile pipe names keep a dev tray and an installed one apart.
+/// <see cref="SessionOpenIntent"/> per connection, one <see cref="ControlReply"/> line back. Per-profile pipe
+/// names keep a dev tray and an installed one apart.
 /// </summary>
 internal static class ControlProtocol
 {
