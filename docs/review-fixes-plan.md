@@ -624,6 +624,8 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 
 **Verify.** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1582 with 1 skipped. The new `CoalescingTrigger` test was repeated 10 times, all clean.
 
+**Landed:** commits `ceecfc9` (the fold, readers, locator and sub-agent skip) and `e6fdbe8` (the background scan worker, trigger debounce and locks).
+
 <a id="cp21"></a>
 ### CP21 — All-time stats: cache history, don't re-parse it · 🟠 P1 · M · ⬜
 
