@@ -30,14 +30,14 @@ public sealed record MarkdownFileSets(
 /// failed edit never counts as a produced file. A file both produced and read surfaces only as produced.
 ///
 /// Like the other transcript readers this is best-effort and must never throw: any failure yields
-/// <see cref="MarkdownFileSets.Empty"/>. The result is memoised per transcript by (length, last-write) via
-/// <see cref="MtimeCache{T}"/>, so a scan over an unchanged transcript costs a stat, not a parse. The
-/// glyph's cheap <see cref="ProducedAnyMarkdown"/> reads the same cached sets — the whole-file walk only
-/// re-runs when the transcript actually changed.
+/// <see cref="MarkdownFileSets.Empty"/>. The walk is folded incrementally (<see cref="TranscriptFold"/>): an
+/// unchanged transcript costs a stat, and a growing one only its new bytes (review fixes CP20). The glyph's
+/// cheap <see cref="ProducedAnyMarkdown"/> reads the same sets.
 /// </summary>
 internal sealed class MarkdownFilesReader
 {
-    private readonly MtimeCache<MarkdownFileSets> _sets = new();
+    private static readonly LineFolder<SetsState> SetsFolder = new(() => new(), StepSets);
+    private readonly TranscriptFold _fold = new(SetsFolder);
 
     /// <summary>
     /// The session's produced/referenced Markdown file sets, or <see cref="MarkdownFileSets.Empty"/> when
@@ -48,8 +48,11 @@ internal sealed class MarkdownFilesReader
         if (string.IsNullOrEmpty(sessionId))
             return MarkdownFileSets.Empty;
         var path = TranscriptLocator.Resolve(sessionId, cwd);
-        return path == null ? MarkdownFileSets.Empty : _sets.GetOrCompute(path, ParseSets, MarkdownFileSets.Empty);
+        return path == null ? MarkdownFileSets.Empty : FileSetsAt(path);
     }
+
+    // The path-based form: what GetFileSets calls once it has the transcript, and the seam tests drive.
+    internal MarkdownFileSets FileSetsAt(string path) => _fold.Get(path, SetsFolder, FinishSets, MarkdownFileSets.Empty);
 
     /// <summary>
     /// True when the session produced (wrote/edited) at least one Markdown file — the signal behind the
@@ -59,62 +62,66 @@ internal sealed class MarkdownFilesReader
     public bool ProducedAnyMarkdown(string sessionId, string cwd) =>
         GetFileSets(sessionId, cwd).Produced.Count > 0;
 
-    private static MarkdownFileSets ParseSets(string path)
+    // tool_use blocks live in assistant records; the paired tool_result (with its pass/fail flag) lives in the
+    // following user record, keyed by tool_use_id. The fold walks the whole file chronologically — a file can
+    // be touched anywhere in the session — collecting every qualifying .md tool call by id and every errored
+    // result id; FinishSets reconciles them. The substring pre-filter skips almost every line.
+    private sealed class SetsState
     {
-        // tool_use blocks live in assistant records; the paired tool_result (with its pass/fail flag)
-        // lives in the following user record, keyed by tool_use_id. Walk the whole file chronologically —
-        // a file can be touched anywhere in the session — collecting every qualifying .md tool call by id
-        // and every errored result id, then reconcile at the end. It's cheap: the substring pre-filter
-        // skips almost every line, and the result is cached by length+mtime.
-        var touches = new List<(string Id, string Path, bool Produced)>();
-        var errored = new HashSet<string>();
+        public readonly List<(string Id, string Path, bool Produced)> Touches = new();
+        public readonly HashSet<string> Errored = new();
+    }
 
-        foreach (var line in TranscriptScan.ReadLines(path))
+    private static void StepSets(SetsState s, string line)
+    {
+        // Cheap pre-filter: a produce/read call carries the ".md" path text; an errored result carries
+        // the "is_error" flag we need to discard a failed write. (A successful result usually omits
+        // is_error entirely, so it's simply absent from the errored set — which is correct.)
+        bool maybeTouch = line.Contains("tool_use") && line.Contains(".md");
+        bool maybeError = line.Contains("is_error");
+        if (!maybeTouch && !maybeError)
+            return;
+
+        try
         {
-            // Cheap pre-filter: a produce/read call carries the ".md" path text; an errored result carries
-            // the "is_error" flag we need to discard a failed write. (A successful result usually omits
-            // is_error entirely, so it's simply absent from the errored set — which is correct.)
-            bool maybeTouch = line.Contains("tool_use") && line.Contains(".md");
-            bool maybeError = line.Contains("is_error");
-            if (!maybeTouch && !maybeError)
-                continue;
+            if (TranscriptJson.ContentArray(JsonNode.Parse(line)) is not { } content)
+                return;
 
-            try
+            foreach (var block in content)
             {
-                if (TranscriptJson.ContentArray(JsonNode.Parse(line)) is not { } content)
-                    continue;
-
-                foreach (var block in content)
+                var type = TranscriptJson.BlockType(block);
+                if (type == "tool_use")
                 {
-                    var type = TranscriptJson.BlockType(block);
-                    if (type == "tool_use")
-                    {
-                        var name = block!["name"]?.GetValue<string>();
-                        var id = block["id"]?.GetValue<string>();
-                        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(id))
-                            continue;
-                        if (MarkdownTool(name) is not { } kind)
-                            continue;
-                        var (pathKey, produced) = kind;
-                        var file = block["input"]?[pathKey]?.GetValue<string>();
-                        if (!IsMarkdown(file))
-                            continue;
-                        touches.Add((id, file!, produced));
-                    }
-                    else if (type == "tool_result")
-                    {
-                        if (block!["is_error"]?.GetValue<bool>() == true
-                            && block["tool_use_id"]?.GetValue<string>() is { } rid)
-                            errored.Add(rid);
-                    }
+                    var name = block!["name"]?.GetValue<string>();
+                    var id = block["id"]?.GetValue<string>();
+                    if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(id))
+                        continue;
+                    if (MarkdownTool(name) is not { } kind)
+                        continue;
+                    var (pathKey, produced) = kind;
+                    var file = block["input"]?[pathKey]?.GetValue<string>();
+                    if (!IsMarkdown(file))
+                        continue;
+                    s.Touches.Add((id, file!, produced));
+                }
+                else if (type == "tool_result")
+                {
+                    if (block!["is_error"]?.GetValue<bool>() == true
+                        && block["tool_use_id"]?.GetValue<string>() is { } rid)
+                        s.Errored.Add(rid);
                 }
             }
-            catch
-            {
-                // Malformed/partial line (transcripts are appended live) — skip it.
-            }
         }
+        catch
+        {
+            // Malformed/partial line (transcripts are appended live) — skip it.
+        }
+    }
 
+    private static MarkdownFileSets FinishSets(SetsState s)
+    {
+        var touches = s.Touches;
+        var errored = s.Errored;
         if (touches.Count == 0)
             return MarkdownFileSets.Empty;
 

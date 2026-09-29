@@ -31,7 +31,25 @@ internal static class TranscriptLocator
     /// directory for <c>{sessionId}.jsonl</c> (the sessionId is a UUID, so the match is unambiguous
     /// and this covers any cwd-encoding edge case the direct rule misses).
     /// </summary>
-    public static string? Resolve(string sessionId, string cwd)
+    public static string? Resolve(string sessionId, string cwd) => Resolve(ProjectsDirs(), sessionId, cwd, MissTtl);
+
+    // A fallback scan that found nothing isn't repeated for this long (unless a projects/ root changes).
+    private static readonly TimeSpan MissTtl = TimeSpan.FromSeconds(30);
+    private const int MaxMisses = 4096;
+
+    // sessionId -> when its fallback scan last missed, and the projects roots' mtimes at the time.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long AtMs, string Roots)> Misses = new();
+
+    /// <summary>
+    /// <see cref="Resolve(string,string)"/> over explicit <paramref name="projectsDirs"/> (the test seam). The
+    /// direct <c>&lt;projects&gt;/&lt;enc-cwd&gt;/&lt;id&gt;.jsonl</c> check always runs — one stat, and how a
+    /// brand-new session's transcript is found the moment it appears. The fallback, a scan of every project
+    /// folder, is what's expensive: a session with no transcript yet used to trigger it from every reader on
+    /// every scan (about ten times per session per scan). So a miss is remembered for <paramref name="missTtl"/>,
+    /// and forgotten early when any projects root's mtime changes (a new project folder appeared). Review fixes
+    /// CP20.
+    /// </summary>
+    internal static string? Resolve(IReadOnlyList<string> projectsDirs, string sessionId, string cwd, TimeSpan missTtl)
     {
         if (string.IsNullOrEmpty(sessionId))
             return null;
@@ -40,7 +58,7 @@ internal static class TranscriptLocator
         if (!string.IsNullOrEmpty(cwd))
         {
             var enc = EncodeProjectDir(cwd);
-            foreach (var projects in ProjectsDirs())
+            foreach (var projects in projectsDirs)
             {
                 var direct = Path.Combine(projects, enc, sessionId + ".jsonl");
                 if (File.Exists(direct))
@@ -48,16 +66,43 @@ internal static class TranscriptLocator
             }
         }
 
+        var roots = RootsSignature(projectsDirs);
+        long now = Environment.TickCount64;
+        if (Misses.TryGetValue(sessionId, out var miss) && miss.Roots == roots && now - miss.AtMs < missTtl.TotalMilliseconds)
+            return null;
+
         // Failing that, scan every project directory across every tree for {sessionId}.jsonl (the
         // sessionId is a UUID, so the match is unambiguous).
-        foreach (var dir in EnumerateProjectDirectories())
+        foreach (var dir in EnumerateProjectDirectories(projectsDirs))
         {
             var candidate = Path.Combine(dir, sessionId + ".jsonl");
-            try { if (File.Exists(candidate)) return candidate; }
+            try
+            {
+                if (File.Exists(candidate))
+                {
+                    Misses.TryRemove(sessionId, out _);
+                    return candidate;
+                }
+            }
             catch { /* skip an unreadable entry */ }
         }
 
+        if (Misses.Count >= MaxMisses) Misses.Clear();   // crude bound; a miss is cheap to rediscover
+        Misses[sessionId] = (now, roots);
         return null;
+    }
+
+    // The projects roots and their last-write times: creating a project folder bumps its root's mtime.
+    private static string RootsSignature(IReadOnlyList<string> projectsDirs)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var d in projectsDirs)
+        {
+            long ticks;
+            try { ticks = Directory.GetLastWriteTimeUtc(d).Ticks; } catch { ticks = 0; }
+            sb.Append(d).Append('|').Append(ticks).Append(';');
+        }
+        return sb.ToString();
     }
 
     /// <summary>The config dir whose <c>projects/</c> tree holds <paramref name="transcriptPath"/>
@@ -107,9 +152,11 @@ internal static class TranscriptLocator
 
     /// <summary>Every project directory under every config dir's <c>projects/</c> tree; empty when none
     /// exist or a directory can't be read. Deduped implicitly by the distinct-projects-dirs set.</summary>
-    public static IEnumerable<string> EnumerateProjectDirectories()
+    public static IEnumerable<string> EnumerateProjectDirectories() => EnumerateProjectDirectories(ProjectsDirs());
+
+    private static IEnumerable<string> EnumerateProjectDirectories(IReadOnlyList<string> projectsDirs)
     {
-        foreach (var projects in ProjectsDirs())
+        foreach (var projects in projectsDirs)
         {
             if (!Directory.Exists(projects)) continue;
             string[] dirs;

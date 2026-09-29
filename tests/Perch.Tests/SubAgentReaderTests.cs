@@ -303,4 +303,42 @@ public class SubAgentReaderTests
             DeleteMarker("sessTeam", "agent-plainwork3333.jsonl", ".stopped");
         }
     }
+
+    // CP20: an ordinary sub-agent whose file has gone quiet past the stale window can never be surfaced, so it's
+    // skipped before its transcript is parsed at all; a teammate is always classified (it stays on the roster).
+    [Fact]
+    public void ScanBackground_SkipsQuietOrdinaryAgentsUnparsed_ButStillClassifiesTeammates()
+    {
+        var src = Path.Combine(TestEnvironment.FixtureConfigDir, "projects", "C--fixtures-proj", "sessTeam", "subagents");
+        var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "perch-subskip-" + Guid.NewGuid().ToString("N"))).FullName;
+        try
+        {
+            void Copy(string name)
+            {
+                File.Copy(Path.Combine(src, name + ".jsonl"), Path.Combine(dir, name + ".jsonl"));
+                File.Copy(Path.Combine(src, name + ".meta.json"), Path.Combine(dir, name + ".meta.json"));
+            }
+            void Age(string name, TimeSpan age) => File.SetLastWriteTimeUtc(Path.Combine(dir, name + ".jsonl"), DateTime.UtcNow - age);
+
+            Copy("agent-plainwork3333");   // an ordinary agent whose tail reads "working"
+            Age("agent-plainwork3333", TimeSpan.FromMinutes(10));
+            var reader = new SubAgentReader();
+            Assert.Empty(reader.ScanBackground(dir));
+            Assert.Equal(0, reader.AgentBytesRead);   // never parsed
+
+            Age("agent-plainwork3333", TimeSpan.Zero);   // it wakes up: now it's classified and surfaced
+            Assert.Single(reader.ScanBackground(dir));
+            Assert.True(reader.AgentBytesRead > 0);
+
+            Copy("agent-aux-explorer-1111");   // a teammate, equally quiet: still classified, kept as idle/stale
+            Age("agent-aux-explorer-1111", TimeSpan.FromMinutes(10));
+            long before = reader.AgentBytesRead;
+            Assert.Contains(reader.ScanBackground(dir), s => s.IsTeammate);
+            Assert.True(reader.AgentBytesRead > before);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
 }
