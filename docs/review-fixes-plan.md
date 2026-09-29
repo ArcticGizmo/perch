@@ -34,7 +34,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP7](#cp7) | 🔴 P0 | Client | Executable hijack via untrusted working directory | M | 🟦 code + tests done, dogfood owed |
 | [CP8](#cp8) | 🟠 P1 | Client | Link opening: scheme allowlist + browser argument injection | S | 🟦 code + tests done, dogfood owed |
 | [CP9](#cp9) | 🟠 P1 | Client | No UNC/remote path probing (NTLM leak + UI hang) | S | 🟦 code + tests done, dogfood owed |
-| [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | 🟦 valet removed; control-pipe hardening open |
+| [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | 🟦 code + tests done, dogfood owed |
 | [CP11](#cp11) | 🟡 P2 | Client | Hardened shared `GitRunner` | M | ⬜ |
 | [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | ⬜ |
 | [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | ⬜ |
@@ -342,7 +342,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 **Landed:** commit `4932686`: `LocalPath`, `FileRefResolver`, the three `gitdir:` resolvers and `MarkdownView`.
 
 <a id="cp10"></a>
-### CP10 — Named pipes: current-user only, park the valet hook · 🟠 P1 · S · ⬜
+### CP10 — Named pipes: current-user only, park the valet hook · 🟠 P1 · S · 🟦
 
 **Problem.**
 - `perch-valet` and `perch-control` are fixed, machine-global names, with no `CurrentUserOnly` or `PipeSecurity` (`ValetServer.cs:35`, `ControlServer.cs:30`). Clients never check who owns the server (`Perch.Hook/Program.cs:270`, `Program.cs:222`).
@@ -362,14 +362,35 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - [x] Tests:
   - `ValetServerTests` deleted. Its one non-valet assertion, `ControlledSessions.Owns(null)`, moved into the existing `ControlledSessionsTests`.
   - `ClaudeUserSettingsHookTests` drops `valet` from the expected set, and gains `Reconcile_StripsTheRetiredValetHook_FromAnOldInstall`: marked and marker-less valet entries go, and nothing re-adds them.
-- [ ] `perch-control`: use `PipeOptions.CurrentUserOnly` on the server and the `perch` CLI client, and append the user SID to the pipe name.
-- [ ] Client (`Program.cs`): pass `TokenImpersonationLevel.Identification`.
-- [ ] `ControlServer`: add a read timeout of about 5s and a line cap of about 64KB, and retry pipe creation with backoff instead of `return`.
-- [ ] Test: the ControlServer round-trip still passes, plus a new test for the oversized line.
+- [x] `perch-control` is now `perch-control[-dev]-<user>`. The user part is the Windows SID (stable across renames), or the account name on macOS/Linux, where .NET backs the pipe with a Unix socket in the per-user temp dir. Only `ControlProtocol.PipeName` builds the name, and the server and the `perch` CLI both use it. The hook never used this pipe.
+- [x] Both ends open the pipe with `ControlProtocol.Options` (`Asynchronous | CurrentUserOnly`):
+  - the server's ACL admits only this user (owner-only socket permissions on Unix);
+  - the client's `Connect` checks that the server is owned by this user. **This check is what defeats a squat.** A SID isn't secret, so another user can pre-create the name, but the CLI then refuses with "owned by another user" before writing the intent.
+- [x] Client: `TokenImpersonationLevel.Identification` (`ControlProtocol.ClientImpersonation`), so the tray can learn who is calling but never act as them.
+- [x] `ControlServer`:
+  - Each request goes through a new pure `ControlProtocol.ReadLineAsync`, which never buffers more than `MaxLineBytes` (64KB). An oversized line gets a "too large" reply and never reaches the handler.
+  - A 5s read timeout drops a silent client.
+  - A failed pipe creation retries with backoff (500ms doubling, capped at 30s) instead of returning. Before, one failure left the tray deaf for its whole lifetime.
+  - The timeout and the first backoff are constructor test seams.
+- [x] Tests (13 new, 23 in the file):
+  - the existing round-trips, now using the hardened client;
+  - an oversized line is refused and the handler never called;
+  - a silent client is dropped after the (200ms test) timeout;
+  - a pipe name held by a one-instance blocker is retried and answered once the blocker goes;
+  - the pipe name is per profile and per user (it ends in the SID on Windows);
+  - the options are current-user-only with identification;
+  - 8 cases for the bounded reader: CRLF, trailing bytes, partial, empty, exactly at the cap, one byte over, over with no newline.
+  
+  These couldn't be run against the old server, which lacks the seams, but each one targets something the old code did: the silent client hung forever, the oversized line got "didn't understand", and the held name was never retried.
+- [ ] **Not unit-testable:** the cross-user squat itself needs a second Windows account. Manual check: as user B, create a pipe with user A's name, then run `perch --resume …` as user A. Expected: "owned by another user", and B receives nothing.
+- [ ] Dogfood: with the tray running, `perch`, `perch -c` and `perch --resume <id>` from a terminal still open windows in the tray (the name changed, so the CLI and the tray must come from the same build).
+- **Known edge:** .NET makes the pipe owner the token's *owner*, which is the Administrators group for an elevated admin token. An **elevated** tray plus a non-elevated `perch` CLI therefore fail the owner check and the CLI reports "owned by another user". Acceptable, since the tray isn't meant to run elevated, but it's recorded here in case someone hits it.
 
 **Verify (valet removal).** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1522 with 1 skipped (six valet tests deleted, one migration test added). The built hook run as `perch-hook valet perch-valet` exits 0 with empty stdout.
 
 **Landed (valet removal):** commit `6165cbe`.
+
+**Verify (control pipe).** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1535 with 1 skipped.
 
 <a id="cp11"></a>
 ### CP11 — Hardened shared `GitRunner` · 🟡 P2 · M · ⬜

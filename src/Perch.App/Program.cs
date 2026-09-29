@@ -222,6 +222,9 @@ internal static class Program
     // The CLI half of the control pipe: send the intent to the running tray as one JSON line, print its
     // one-line answer to the launching terminal, and exit with 0 on success. Bounded waits so a wedged tray
     // can't hang the shell; every failure is reported rather than swallowed, since the user is watching.
+    // Current-user-only: Connect verifies the pipe's server is owned by this user, so a pipe another user
+    // squatted under the name is refused before the intent is written; Identification lets the tray see who is
+    // calling but never act as them (review fixes CP10).
     private static int ForwardSessionIntent(Perch.Data.Control.SessionOpenIntent intent)
     {
         AttachParentConsole();
@@ -229,8 +232,13 @@ internal static class Program
         {
             using var pipe = new System.IO.Pipes.NamedPipeClientStream(
                 ".", Perch.Data.Control.ControlProtocol.PipeName, System.IO.Pipes.PipeDirection.InOut,
-                System.IO.Pipes.PipeOptions.Asynchronous);
-            pipe.Connect(3000);
+                Perch.Data.Control.ControlProtocol.Options, Perch.Data.Control.ControlProtocol.ClientImpersonation);
+            try { pipe.Connect(3000); }
+            catch (UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine("Perch's control pipe is owned by another user; not sending the request.");
+                return 1;
+            }
             var payload = System.Text.Encoding.UTF8.GetBytes(intent.ToJson() + "\n");
             pipe.Write(payload, 0, payload.Length);
             pipe.Flush();

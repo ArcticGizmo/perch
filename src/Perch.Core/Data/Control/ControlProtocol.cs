@@ -1,3 +1,6 @@
+using System.IO.Pipes;
+using System.Security.Principal;
+using System.Text;
 using System.Text.Json.Nodes;
 
 namespace Perch.Data.Control;
@@ -8,11 +11,76 @@ namespace Perch.Data.Control;
 /// and the running tray: a local named pipe (<see cref="PipeName"/>), one newline-delimited JSON
 /// <see cref="SessionOpenIntent"/> per connection, one <see cref="ControlReply"/> line back. Per-profile pipe
 /// names keep a dev tray and an installed one apart.
+///
+/// <para>Hardened in review fixes CP10: the name carries the user (so two users on a shared/RDS host never
+/// share a pipe), both ends open it <see cref="PipeOptions.CurrentUserOnly"/> (the server's ACL admits only
+/// this user; the client verifies the server is owned by this user, so a pipe another user squatted under the
+/// name is refused rather than handed the request), the client allows identification but never impersonation,
+/// and the server bounds each request line in size (<see cref="MaxLineBytes"/>) and time
+/// (<see cref="ReadTimeout"/>).</para>
 /// </summary>
 internal static class ControlProtocol
 {
-    /// <summary>This profile's pipe name — <c>perch-control</c> or <c>perch-control-dev</c>.</summary>
-    public static string PipeName => AppProfile.IsDev ? "perch-control-dev" : "perch-control";
+    /// <summary>This profile's pipe name for the current user — <c>perch-control-&lt;user&gt;</c> or
+    /// <c>perch-control-dev-&lt;user&gt;</c>, where the user is the Windows SID (the account name elsewhere).</summary>
+    public static string PipeName => PipeNameFor(AppProfile.IsDev, UserSuffix.Value);
+
+    /// <summary>The options every end of the pipe opens it with.</summary>
+    public const PipeOptions Options = PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly;
+
+    /// <summary>The client's impersonation level: the tray may learn who is calling, never act as them.</summary>
+    public const TokenImpersonationLevel ClientImpersonation = TokenImpersonationLevel.Identification;
+
+    /// <summary>The largest request line the server reads. A real intent is well under 1KB.</summary>
+    public const int MaxLineBytes = 64 * 1024;
+
+    /// <summary>How long the server waits for a connected client to send its line.</summary>
+    public static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(5);
+
+    internal static string PipeNameFor(bool dev, string user) => (dev ? "perch-control-dev-" : "perch-control-") + user;
+
+    private static readonly Lazy<string> UserSuffix = new(ComputeUserSuffix);
+
+    // The SID on Windows (stable across renames); the account name elsewhere, where .NET backs the pipe with a
+    // Unix socket in the per-user temp dir anyway. Sanitised to a safe name charset either way.
+    private static string ComputeUserSuffix()
+    {
+        string raw;
+        try
+        {
+            raw = OperatingSystem.IsWindows()
+                ? System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName
+                : Environment.UserName;
+        }
+        catch { raw = Environment.UserName; }
+        var clean = new string(raw.Where(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_').Take(64).ToArray());
+        return clean.Length > 0 ? clean : "user";
+    }
+
+    /// <summary>
+    /// Reads one newline-terminated UTF-8 line, never buffering more than <paramref name="maxBytes"/>: returns the
+    /// line (without <c>\r\n</c>), whatever arrived if the stream ends first (null if nothing did), and throws
+    /// <see cref="InvalidDataException"/> once the line outgrows the cap. Cancellation (the read timeout) surfaces as
+    /// <see cref="OperationCanceledException"/>. One request line per connection, so bytes after the newline are
+    /// ignored.
+    /// </summary>
+    public static async Task<string?> ReadLineAsync(Stream stream, int maxBytes, CancellationToken ct)
+    {
+        var buffer = new byte[Math.Min(4096, maxBytes + 1)];
+        using var line = new MemoryStream();
+        while (true)
+        {
+            int n = await stream.ReadAsync(buffer, ct).ConfigureAwait(false);
+            if (n <= 0) return line.Length == 0 ? null : Decode(line);
+            int nl = Array.IndexOf(buffer, (byte)'\n', 0, n);
+            int take = nl >= 0 ? nl : n;
+            if (line.Length + take > maxBytes) throw new InvalidDataException("Request line too long.");
+            line.Write(buffer, 0, take);
+            if (nl >= 0) return Decode(line);
+        }
+    }
+
+    private static string Decode(MemoryStream line) => Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length).TrimEnd('\r');
 }
 
 /// <summary>
