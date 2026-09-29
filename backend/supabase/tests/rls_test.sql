@@ -131,7 +131,8 @@ select throws_ok(
 reset role;
 
 -- ── post model: min-interval flood guard + one current status per author ──────────
--- carol posted 'carol here' in the fixtures, so the keep-latest trigger stamped her last_posted_at = now().
+-- carol posted 'carol here' in the fixtures, so the keep-latest trigger stamped her private.post_throttle
+-- last_posted_at = now().
 -- now() is frozen for this transaction, so a second post lands 0s later — inside the 5s interval.
 -- 11) a post within the interval of the author's previous one is rejected by the flood guard.
 select throws_ok(
@@ -142,8 +143,8 @@ select throws_ok(
 
 -- Push carol's last_posted_at into the past so a fresh post is allowed, then post again. The AFTER INSERT
 -- keep-latest trigger must drop her previous status, leaving exactly one row — her newest.
-update public.profiles set last_posted_at = now() - interval '1 minute'
-  where id = '33333333-3333-3333-3333-333333333333';
+update private.post_throttle set last_posted_at = now() - interval '1 minute'
+  where profile = '33333333-3333-3333-3333-333333333333';
 insert into public.posts (author, body)
   values ('33333333-3333-3333-3333-333333333333', 'carol newest');
 

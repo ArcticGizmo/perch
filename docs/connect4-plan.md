@@ -219,7 +219,8 @@ missed broadcast just means "a little slower" — the same philosophy as the fee
    board window if open, else the overlay.
 4. **Rematch is realtime.** A finished game's "Rematch" now opens the same compose flow (you make the first move,
    the invite broadcasts) instead of a direct `CreateGameAsync` — so the opponent gets it instantly. (The debug
-   tester keeps its direct both-boards rematch via the `onRematch` hook + `CreateGameAsync`.)
+   tester keeps its both-boards rematch via the `onRematch` hook, which invites and has the puppet accept. Since
+   review fixes CP3 the server refuses direct game inserts, and `CreateGameAsync` exists only on the fake client.)
 
 **Virtual-desktop awareness (Windows).** Two follow-ups behind `IWindowChrome` (shell `IVirtualDesktopManager`
 COM; Mac stub returns "on current" / no-op): (a) opening a game that's already open elsewhere pulls that window

@@ -110,7 +110,7 @@ public sealed partial class SupabaseSocialClient
         var token = await ValidAccessTokenAsync(ct);
         using var req = Rest(HttpMethod.Get,
             $"/rest/v1/draw_games?or=(player_a.eq.{uid},player_b.eq.{uid})" +
-            $"&select={DrawGameSelect}&order=updated_at.desc", token);
+            $"&select={DrawGameSelect}&order=updated_at.desc&limit={GameListLimit}", token);
         using var resp = await _http.SendAsync(req, ct);
         await EnsureOkAsync(resp, "load your games", ct);
         var rows = await resp.Content.ReadFromJsonAsync<DrawGameRow[]>(Json, ct) ?? [];

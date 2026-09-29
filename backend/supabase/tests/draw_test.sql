@@ -33,15 +33,18 @@ begin
 end $$;
 
 -- 1) An accepted friend can send a challenge.
+-- The id is server-generated (clients can't choose it, CP3), so pin it as the owner afterwards.
 select pg_temp.act_as('11111111-1111-1111-1111-111111111111');   -- alice challenges bob
-insert into public.draw_requests (id, requester, addressee, difficulty, word, letter_hint, strokes)
-  values ('c0000000-0000-0000-0000-000000000001',
-          '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222',
+insert into public.draw_requests (requester, addressee, difficulty, word, letter_hint, strokes)
+  values ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222',
           'hard', 'gravity', '7', 'x');
 select is(
-  (select count(*)::int from public.draw_requests where id = 'c0000000-0000-0000-0000-000000000001'),
+  (select count(*)::int from public.draw_requests
+    where requester = '11111111-1111-1111-1111-111111111111' and addressee = '22222222-2222-2222-2222-222222222222'),
   1, 'draw_requests_create: an accepted friend can challenge');
 reset role;
+update public.draw_requests set id = 'c0000000-0000-0000-0000-000000000001'
+  where requester = '11111111-1111-1111-1111-111111111111' and addressee = '22222222-2222-2222-2222-222222222222';
 
 -- 2) A stranger cannot challenge (RLS WITH CHECK).
 select pg_temp.act_as('33333333-3333-3333-3333-333333333333');

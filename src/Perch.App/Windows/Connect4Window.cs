@@ -26,7 +26,7 @@ internal sealed class Connect4Window : Window
     private readonly Connect4Board _board = new();
     private readonly ISocialClient? _social;
     private Connect4OnlineController? _online;
-    private readonly Action<GameSummary>? _onRematch;
+    private readonly Func<Task>? _onRematch;
     private Guid _meId;
     private Guid _gameId;
     private Profile? _opponent;
@@ -60,9 +60,9 @@ internal sealed class Connect4Window : Window
 
     /// <summary>Online play: an existing game against a friend. The board starts in Online mode and reconciles
     /// against the authoritative server state via the controller. <paramref name="onRematch"/>, when supplied,
-    /// takes over what "Rematch" does with the freshly created game (the debug tester uses it to reopen both
-    /// boards); when null, a rematch opens a fresh challenge (you make the first move again).</summary>
-    public Connect4Window(ISocialClient social, Guid meId, GameSummary game, Action<GameSummary>? onRematch = null)
+    /// takes over "Rematch" entirely (the debug tester uses it to start a new game and reopen both boards);
+    /// when null, a rematch opens a fresh challenge (you make the first move again).</summary>
+    public Connect4Window(ISocialClient social, Guid meId, GameSummary game, Func<Task>? onRematch = null)
     {
         _social = social;
         _meId = meId;
@@ -179,7 +179,7 @@ internal sealed class Connect4Window : Window
         _ = _social.SendNudgeAsync(_gameId, _opponent.Id);
     }
 
-    // A finished online game's "Rematch". The debug tester's onRematch hook keeps the direct both-boards path;
+    // A finished online game's "Rematch". The debug tester's onRematch hook reopens both boards on a new game;
     // real play opens a fresh challenge so you make the opening move again (same snappy invite/accept flow).
     private async void Rematch()
     {
@@ -187,7 +187,7 @@ internal sealed class Connect4Window : Window
         _rematchInFlight = true;
         if (_onRematch is not null)
         {
-            try { var next = await _social.CreateGameAsync(_opponent.Id); _onRematch(next); Close(); }
+            try { await _onRematch(); Close(); }
             catch { _rematchInFlight = false; }
             return;
         }

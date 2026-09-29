@@ -14,25 +14,12 @@ namespace Perch.Social;
 /// </summary>
 public sealed partial class SupabaseSocialClient
 {
-    public async Task<GameSummary> CreateGameAsync(Guid opponentUserId, CancellationToken ct = default)
-    {
-        var uid = RequireUser();
-        if (opponentUserId == uid) throw new SocialException("You can't play yourself.");
-        var token = await ValidAccessTokenAsync(ct);
+    // Cap on the Connect 4 and Draw game lists (most-recently-active first). Finished games are swept after two
+    // days, so this only bites when someone is flooded with games -- it bounds what every lobby poll fetches.
+    private const int GameListLimit = 50;
 
-        using var req = Rest(HttpMethod.Post, "/rest/v1/games", token);
-        req.Headers.Add("Prefer", "return=representation");
-        req.Content = JsonContent.Create(new { player_red = uid, player_yellow = opponentUserId });
-        using var resp = await _http.SendAsync(req, ct);
-        // The games_create RLS policy requires an accepted friendship, so a stranger is rejected here.
-        await EnsureOkAsync(resp, "start the game", ct);
-        var rows = await resp.Content.ReadFromJsonAsync<GameRow[]>(Json, ct) ?? [];
-        if (rows.Length == 0) throw new SocialException("The game wasn't created.");
-
-        var profiles = await FetchProfilesAsync([uid, opponentUserId], token, ct);
-        return ToSummary(rows[0], profiles);
-    }
-
+    // Games are born only from an accepted invite (accept_game_request); the server refuses a direct insert into
+    // games, so there is deliberately no create call here (review fixes CP3).
     public async Task<GameRequest> RequestGameAsync(Guid opponentUserId, int firstColumn, CancellationToken ct = default)
     {
         var uid = RequireUser();
@@ -124,7 +111,8 @@ public sealed partial class SupabaseSocialClient
         var token = await ValidAccessTokenAsync(ct);
         using var req = Rest(HttpMethod.Get,
             $"/rest/v1/games?or=(player_red.eq.{uid},player_yellow.eq.{uid})" +
-            "&select=id,player_red,player_yellow,status,turn,move_count,updated_at&order=updated_at.desc", token);
+            "&select=id,player_red,player_yellow,status,turn,move_count,updated_at&order=updated_at.desc" +
+            $"&limit={GameListLimit}", token);
         using var resp = await _http.SendAsync(req, ct);
         await EnsureOkAsync(resp, "load your games", ct);
         var rows = await resp.Content.ReadFromJsonAsync<GameRow[]>(Json, ct) ?? [];

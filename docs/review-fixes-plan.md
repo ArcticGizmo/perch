@@ -27,7 +27,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 |---|---|---|---|---|---|
 | [CP1](#cp1) | 🔴 P0 | Supabase | Revoke EXECUTE on internal SECURITY DEFINER functions | S | 🟦 code + tests done, prod deploy owed |
 | [CP2](#cp2) | 🔴 P0 | Supabase | Friendship consent: no self-accepting | S | 🟦 code + tests done, prod deploy owed |
-| [CP3](#cp3) | 🟠 P1 | Supabase | Server-owned fields: no forged games, no backdated rows | M | ⬜ |
+| [CP3](#cp3) | 🟠 P1 | Supabase | Server-owned fields: no forged games, no backdated rows (+ least-privilege grants on every table) | M | 🟦 code + tests done, prod deploy owed |
 | [CP4](#cp4) | 🟠 P1 | Supabase | Realtime inbox authorisation + sender validation | M | ⬜ |
 | [CP5](#cp5) | 🟡 P2 | Supabase | Draw with Perch: RPC state checks + size limits | S | ⬜ |
 | [CP6](#cp6) | 🟡 P2 | Supabase | Block/suspension coverage, `find_profile` throttle, feed query | M | ⬜ |
@@ -118,18 +118,45 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 **Landed:** same migration as CP1, plus `SupabaseSocialClient.SendRequestAsync` (commit `ab0c93f`).
 
 <a id="cp3"></a>
-### CP3 — Server-owned fields: no forged games, no backdated rows · 🟠 P1 · M · ⬜
+### CP3 — Server-owned fields: no forged games, no backdated rows · 🟠 P1 · M · 🟦
 
 **Problem.**
 - **Forged games.** `20260821120000_connect4.sql:60-66` still allows a direct `INSERT` into `games`, where the client chooses `status`, `winner`, `turn`, `move_count` and `updated_at`. That lets someone create forged losses that sort first forever, escape cleanup, and get fetched with no limit on every 60s poll.
 - **Rate-limit bypass.** `20260918120000_posts_current_only.sql:48-69` trusts a client-supplied `posts.created_at` in the flood guard, so setting `created_at: "1970-01-01"` bypasses the limit entirely.
+- **Scope widened on request: least privilege on every table.** A dump of the live ACLs showed that `anon`, `authenticated` and `service_role` all held `arwdDxtm` on all 13 tables. That covers every privilege, including TRUNCATE, REFERENCES, TRIGGER and MAINTAIN, which RLS doesn't cover. The source is Supabase's default privileges, and the existing `grant` migrations only ever added to it. So comments such as "select only on moves" and "no grants to authenticated" (moderation) were false; RLS was the only barrier. Every policy was also `TO PUBLIC`, and `anon` had USAGE on `public`.
 
 **Tasks**
-- [ ] `drop policy games_create` and `revoke insert on games from authenticated`, so games are only created in `accept_game_request`.
-- [ ] Add BEFORE INSERT triggers forcing `new.created_at := now()` on `posts`, `reactions` and `draw_requests`, and `updated_at := now()` on `games`. Alternatively, use column-level insert grants that exclude timestamps.
-- [ ] Stamp `last_posted_at = now()` instead of `new.created_at`.
-- [ ] Client: add a `limit` to `GetGamesAsync` and `GetDrawGamesAsync`.
-- [ ] pgTAP: a direct games insert fails; a backdated post gets `created_at ≈ now()`; two posts inside 5s trip the limit.
+- [x] `drop policy games_create`, with no INSERT on `games`, so games are only created in `accept_game_request`.
+- [x] **Deny by default.** `REVOKE ALL` on every table and sequence from PUBLIC, `anon`, `authenticated` and `service_role`, then grant back per table only what the client does. SELECT is table-level; INSERT and UPDATE are **column lists** of exactly what the client sends. No generated ids, timestamps or game state are writable.
+- [x] `anon` gets nothing: no table privileges, and no USAGE on `public`. `service_role` gets only `moderation` (rawd) and `reports` (rd). It has no other code path: account deletion goes through the auth admin API and cascades as the table owner (checked end-to-end), and the sweeps are SECURITY DEFINER.
+- [x] Every policy re-scoped with `ALTER POLICY … TO authenticated`. `posts_delete` was dropped, since no client deletes a post and the grant is gone.
+- [x] Every non-extension function in `public`/`private` revoked, then an explicit EXECUTE allowlist: the 10 client RPCs and 5 RLS helpers go to `authenticated`, and the sweeps plus `connect4_has_win` go to `service_role`. Trigger functions keep no grants, and they still fire.
+- [x] **Default privileges closed.** `alter default privileges for role postgres in schema public revoke all …` on tables, sequences and functions, so a new table starts closed. The `supabase_admin` entry can't be altered from a migration; it only creates platform objects.
+- [x] BEFORE triggers stamp `created_at := now()` on all 12 tables that have it, and `updated_at := now()` on insert and update of `games`, `draw_games`, `draw_rounds` and `moderation`. Doing both belt-and-braces: the column grants reject a client-supplied timestamp (42501), and the triggers override one on SECURITY DEFINER or future paths.
+- [x] The flood guard stamps `now()`. **Changed from the plan:** the stamp moved out of `profiles.last_posted_at` into `private.post_throttle`, which has no grants. Before, any friend could read when you last posted, and hiding the column with a column grant breaks the client (see below).
+- [x] **Found while verifying: claim-handle was broken.** PostgREST compiles the client's `merge-duplicates` upsert to `ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id, …`, and `return=representation` to `RETURNING *`. `20260918`'s `grant update (handle, display_name, mood_emoji)` left out `id`, so **every claim-handle or profile edit has returned 403 since `20260918` reached prod**; locally, exact prod grants reproduce the 403. The fix is to grant UPDATE(`id`). That's safe because `profiles_self_update` pins `id = auth.uid()` in both USING and WITH CHECK (pgTAP 38), and with the stamp moved to `private`, table-level SELECT exposes nothing server-owned.
+- [x] Client:
+  - `limit=50` on `GetGamesAsync` and `GetDrawGamesAsync`.
+  - `CreateGameAsync` removed from `ISocialClient` and `SupabaseSocialClient`; it stays on `FakeSocialClient` as a fixture helper.
+  - The debug tester's Connect 4 start and rematch now invite and have the puppet accept (`NewConnect4Game`); the `Connect4Window` rematch hook is a `Func<Task>`.
+- [x] pgTAP (`security_test.sql`, tests 19–42, 44 in the file):
+  - **Tripwire:** pins the exact privilege matrix: table grants for `authenticated` and `service_role`, every client-writable column, the executable-function allowlist, RLS on everywhere, all policies `TO authenticated`, nothing for `anon`, nothing on `private` tables, no TRUNCATE/REFERENCES/TRIGGER/MAINTAIN, and a probe table and function created in the test start closed.
+  - **Attacks:** anon can't read; forged game insert, game UPDATE and moves insert → 42501; backdated post → 42501; the owner's backdated insert is re-stamped to `now()`; the flood-guard stamp is unreachable and is the server clock; two posts in the interval → 23514; the claim-handle upsert works in PostgREST's exact SQL shape; `id` can't be re-pointed.
+  - `connect4_test` and `draw_test` fixtures now create games as the owner, and let the server generate request ids.
+- [ ] **Deploy to prod** (`db-migrate.yml`), then run the probes below.
+
+**Verify.** Done locally on 2026-09-29:
+- `supabase test db` 110/110 across all four files.
+- .NET suite 1406 passed, 1 skipped; both heads build.
+- An end-to-end run over local PostgREST with real signed-in users replayed every REST call `SupabaseSocialClient` makes, and all passed: claim handle (insert and update paths), friends (old-client merge-duplicates, ignore-duplicates, re-send, accept), posts, reactions, invite → accept → move → resign → delete for Connect 4 and Draw, block/unblock, report, and account deletion through the auth admin API cascading. The same run confirmed that direct game insert, game PATCH, backdated post, post DELETE, reading `reports` or `moderation`, every anon read, and `service_role` reads outside moderation are all refused.
+
+**Still owed after deploy:**
+- Against prod, with a puppet account: claim or edit a handle (this confirms the 20260918 break is fixed), post twice inside 5s (the second is refused), and send a POST `/rest/v1/games` (403).
+- With the bare publishable key: `GET /rest/v1/posts` and `/profiles` (401).
+- Confirm Realtime postgres_changes still delivers (moves, draw_rounds, posts). Realtime runs as `supabase_admin` and the published tables keep table-level SELECT, so it should be unaffected, but it hasn't been checked live.
+- In the dashboard, check Storage has no buckets. Locally there are none, and the app doesn't use Storage.
+
+**Landed:** migration `20260929130000_least_privilege.sql`, plus client changes in `SupabaseSocialClient.Games.cs`/`.Draw.cs`, `ISocialClient`, `FakeSocialClient.Games.cs`, `Connect4Window` and `DebugSocialWindow`.
 
 <a id="cp4"></a>
 ### CP4 — Realtime inbox authorisation + sender validation · 🟠 P1 · M · ⬜

@@ -154,13 +154,6 @@ public interface ISocialClient
     /// Idempotent (a request that's already gone is a no-op).</summary>
     Task DeclineGameRequestAsync(Guid requestId, CancellationToken ct = default);
 
-    /// <summary>Creates a live game with <paramref name="opponentUserId"/> directly, bypassing the invite
-    /// handshake — used by the developer testing tool (which opens both boards at once). Real invites and
-    /// rematches go through the compose → <see cref="RequestGameAsync"/> flow instead, so the opener plays their
-    /// first move before it's sent. You are red and move first. Throws <see cref="SocialException"/> if they
-    /// aren't an accepted friend.</summary>
-    Task<GameSummary> CreateGameAsync(Guid opponentUserId, CancellationToken ct = default);
-
     /// <summary>Your Connect 4 games (both players are you-or-a-friend, so RLS returns only your own),
     /// most-recently-active first — the "your turn / their turn / finished" list.</summary>
     Task<IReadOnlyList<GameSummary>> GetGamesAsync(CancellationToken ct = default);
