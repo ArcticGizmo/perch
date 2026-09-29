@@ -53,9 +53,12 @@ internal sealed class RoostWindow : Window
     private readonly Panel _stage;
     // Tiled
     private readonly RoostStage _onStage = new();
-    private readonly Grid _grid;
+    private readonly RoostTilePanel _grid;
+    // Empty per-cell borders at each slot's position: what a drag hit-tests against. The panes themselves sit in
+    // _paneHosts, one per pane on stage, moved between cells by their grid position only — taking a pane out of
+    // the tree and back in would restyle and re-measure its whole thread.
     private readonly Border[] _cellHosts = new Border[RoostTemplates.AutoMaxCells];
-    private string? _gridSig;
+    private readonly Dictionary<string, Border> _paneHosts = new(StringComparer.Ordinal);
     private IReadOnlyList<string> _cellKeys = [];
     // Main + stack
     private readonly Grid _mainGrid;
@@ -83,7 +86,6 @@ internal sealed class RoostWindow : Window
     // What the stage containers currently hold, so a layout pass only touches what changed — re-parenting a
     // pane drops keyboard focus, which must never happen to the composer being typed in.
     private RoostLayoutMode? _builtMode;
-    private readonly string?[] _cellSigs = new string?[RoostTemplates.AutoMaxCells];
 
     private RoostLayoutMode _mode;
     private RoostLayoutMode _preZoomMode = RoostLayoutMode.Tiled;
@@ -155,7 +157,7 @@ internal sealed class RoostWindow : Window
 
         // ── Stage: one container per layout, only the active one visible ──
         // Each cell host carries half a gap on every side, so the grid's own margin is the pad less that half.
-        _grid = new Grid { Margin = new Thickness(StagePad - CellGap / 2) };
+        _grid = new RoostTilePanel { Margin = new Thickness(StagePad - CellGap / 2) };
         for (int i = 0; i < _cellHosts.Length; i++)
         {
             _cellHosts[i] = new Border { Margin = new Thickness(CellGap / 2) };
@@ -502,20 +504,22 @@ internal sealed class RoostWindow : Window
         _drawnCount = count;
         _drawnTemplate = template;
         EnsureBuiltFor(RoostLayoutMode.Tiled);
-        ApplyGridShape(RoostTemplates.Shape(template));
+        var shape = RoostTemplates.Shape(template);
+        ApplyGridShape(shape);
 
-        // Only the cells whose pane changed are touched: detach them all first (a pane may be moving from one
-        // changed cell to another), then fill them. An unchanged cell — say, the one holding the composer being
-        // typed in — is never re-parented, so it keeps its focus and scroll.
-        var sigs = new string[_cellHosts.Length];
-        for (int i = 0; i < sigs.Length; i++) sigs[i] = i < keys.Count ? keys[i] : "";
-        for (int i = 0; i < sigs.Length; i++)
-            if (sigs[i] != _cellSigs[i]) DetachHost(_cellHosts[i]);
-        for (int i = 0; i < sigs.Length; i++)
+        // Panes leaving the stage leave the tree; a pane that stays keeps its host and only moves (so a swap,
+        // or the layout changing shape, never re-parents it — it keeps its focus, scroll and measured thread).
+        var onStage = keys.ToHashSet(StringComparer.Ordinal);
+        foreach (var gone in _paneHosts.Keys.Where(k => !onStage.Contains(k)).ToList()) RemovePaneHost(gone);
+        for (int i = 0; i < keys.Count; i++)
         {
-            if (sigs[i] == _cellSigs[i]) continue;
-            _cellSigs[i] = sigs[i];
-            if (i < keys.Count) _cellHosts[i].Child = _views[keys[i]];
+            if (!_paneHosts.TryGetValue(keys[i], out var host))
+            {
+                host = new Border { Margin = new Thickness(CellGap / 2), Child = _views[keys[i]] };
+                _paneHosts[keys[i]] = host;
+                _grid.Children.Add(host);
+            }
+            if (RoostTilePanel.GetSlot(host) != i) RoostTilePanel.SetSlot(host, i);
         }
         _cellKeys = keys.ToList();
         foreach (var k in keys) _placed[k] = RoostPaneSize.Expanded;
@@ -562,17 +566,17 @@ internal sealed class RoostWindow : Window
     {
         if (_builtMode == mode) return;
         _builtMode = mode;
-        foreach (var host in _cellHosts) DetachHost(host);
-        Array.Clear(_cellSigs);
+        foreach (var key in _paneHosts.Keys.ToList()) RemovePaneHost(key);
         _mainHost.Child = null;
         _stack.Children.Clear();
         _zoomHost.Child = null;
     }
 
-    private static void DetachHost(Border host)
+    private void RemovePaneHost(string key)
     {
-        if (host.Child is Panel stack) stack.Children.Clear();
+        if (!_paneHosts.Remove(key, out var host)) return;
         host.Child = null;
+        _grid.Children.Remove(host);
     }
 
     // Creates a feed + view for each new pane, recreates a tailed feed whose session id moved (/clear), and
@@ -587,8 +591,9 @@ internal sealed class RoostWindow : Window
             _views.Remove(gone);
             if (_feeds.Remove(gone, out var f)) f?.Dispose();
             if (_focused == gone) _focused = null;
-            // A dropped pane still sitting in Zoom / Main (Tiled's per-cell diff and the stack diff drop it on
-            // their own, since its key leaves their signatures).
+            // A dropped pane still sitting in a Tiled host, Zoom or Main (the stack diff drops it on its own,
+            // since its key leaves the stack's signature).
+            RemovePaneHost(gone);
             if (ReferenceEquals(_zoomHost.Child, dropped)) _zoomHost.Child = null;
             if (ReferenceEquals(_mainHost.Child, dropped)) _mainHost.Child = null;
         }
@@ -629,28 +634,14 @@ internal sealed class RoostWindow : Window
         return b.Width > 0 && b.Height > 0 ? b.Width / b.Height : 1.6;
     }
 
-    // Lays the grid out for a template: its rows and columns, and each host at its slot (spare hosts hidden). A
-    // geometry change detaches every cell, so the fill that follows re-parents them into their new slots.
+    // Lays the stage out for a template, with each cell border at its slot (spare ones hidden).
     private void ApplyGridShape(RoostTemplateShape shape)
     {
-        if (shape.Signature == _gridSig) return;
-        _gridSig = shape.Signature;
-        _grid.ColumnDefinitions.Clear();
-        foreach (var w in shape.Columns) _grid.ColumnDefinitions.Add(new ColumnDefinition(w, GridUnitType.Star));
-        _grid.RowDefinitions.Clear();
-        foreach (var w in shape.Rows) _grid.RowDefinitions.Add(new RowDefinition(w, GridUnitType.Star));
+        _grid.Shape = shape;
         for (int i = 0; i < _cellHosts.Length; i++)
         {
-            var host = _cellHosts[i];
-            DetachHost(host);
-            _cellSigs[i] = null;
-            host.IsVisible = i < shape.Slots.Count;
-            if (!host.IsVisible) continue;
-            var slot = shape.Slots[i];
-            Grid.SetRow(host, slot.Row);
-            Grid.SetColumn(host, slot.Column);
-            Grid.SetRowSpan(host, slot.RowSpan);
-            Grid.SetColumnSpan(host, slot.ColumnSpan);
+            _cellHosts[i].IsVisible = i < shape.Slots.Count;
+            RoostTilePanel.SetSlot(_cellHosts[i], i);
         }
     }
 

@@ -41,6 +41,13 @@ internal static class Program
         if (args.Length > 0 && args[0] == "render")
             return HeadlessRenderer.RenderAll(args.Length > 1 ? args[1] : ".", args.Length > 2 ? args[2] : null);
 
+        // `perch bench-roost [turns]` times the Roost's drag / drop / refresh passes headlessly.
+        if (args.Length > 0 && args[0] == "bench-roost")
+        {
+            AttachParentConsole();
+            return Rendering.RoostBench.Run(args.Length > 1 && int.TryParse(args[1], out var t) ? t : 60);
+        }
+
         // `perch configdirs` prints the discovered config-dir set (primary + declared + convention),
         // deduped by real path — an internal diagnostic for config-dir discovery (Layer 1). Read-only.
         if (args.Length > 0 && string.Equals(args[0], "configdirs", StringComparison.OrdinalIgnoreCase))
