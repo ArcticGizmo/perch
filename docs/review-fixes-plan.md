@@ -191,6 +191,8 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 
 **Verify.** Done locally on 2026-09-29: `supabase test db` 117/117; .NET 1416 passed, 1 skipped; both heads build; the realtime probe above passed.
 
+**Landed:** commit `b84159e`: migration `20260929140000_realtime_inbox_authz.sql`, plus `InboxGate`, `CoalescingTrigger`, the private inbox channel and `SocialFeedMonitorHost`.
+
 <a id="cp5"></a>
 ### CP5 — Draw with Perch: RPC state checks + size limits · 🟡 P2 · S · ⬜
 
