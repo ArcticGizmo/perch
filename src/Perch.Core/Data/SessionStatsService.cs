@@ -95,12 +95,20 @@ internal static class StatsFormat
         return "<1m";
     }
 
-    /// <summary>Compact token count: 12.3M / 45.6k / 789.</summary>
+    private static readonly (long Scale, string Suffix)[] TokenUnits =
+    [
+        (1_000, "k"), (1_000_000, "M"), (1_000_000_000, "B"), (1_000_000_000_000, "T"),
+    ];
+
+    /// <summary>Compact token count: 789 / 45.6k / 12.3M / 1.5B / 4.2T. Steps up a unit whenever the one-decimal
+    /// figure would reach 1000, so 999,960 reads "1.0M" rather than "1000.0k" (trillions are the ceiling).</summary>
     public static string Tokens(long n)
     {
-        if (n >= 1_000_000) return $"{n / 1_000_000.0:0.0}M";
-        if (n >= 1_000) return $"{n / 1_000.0:0.0}k";
-        return n.ToString();
+        if (n < 1_000) return n.ToString();
+        int i = 0;
+        while (i < TokenUnits.Length - 1 && Math.Round(n / (double)TokenUnits[i].Scale, 1) >= 1000) i++;
+        var (scale, suffix) = TokenUnits[i];
+        return $"{n / (double)scale:0.0}{suffix}";
     }
 
     public static string Cost(decimal usd) => usd >= 100m ? $"${usd:0}" : $"${usd:0.00}";
