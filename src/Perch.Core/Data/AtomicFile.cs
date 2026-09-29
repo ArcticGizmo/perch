@@ -24,6 +24,14 @@ public static class AtomicFile
     /// the temp file is never left behind.</summary>
     public static void Write(string path, string text)
     {
+        var bytes = Utf8NoBom.GetBytes(text);
+        Write(path, fs => fs.Write(bytes, 0, bytes.Length));
+    }
+
+    /// <summary>As <see cref="Write(string, string)"/>, for content streamed out by <paramref name="write"/> (a
+    /// binary snapshot, say) rather than held as one string.</summary>
+    public static void Write(string path, Action<Stream> write)
+    {
         var dir = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         var tmp = $"{path}.{Guid.NewGuid():N}.tmp";
@@ -31,8 +39,9 @@ public static class AtomicFile
         {
             using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                var bytes = Utf8NoBom.GetBytes(text);
-                fs.Write(bytes, 0, bytes.Length);
+                var buffered = new BufferedStream(fs, 64 * 1024);   // not disposed: that would close fs early
+                write(buffered);
+                buffered.Flush();
                 fs.Flush(flushToDisk: true);
             }
             for (int attempt = 0; ; attempt++)

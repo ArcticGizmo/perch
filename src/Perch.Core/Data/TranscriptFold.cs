@@ -58,7 +58,44 @@ internal sealed class TranscriptFold
     /// the appended bytes.</summary>
     internal long BytesRead { get; private set; }
 
+    /// <summary>Bumps whenever any entry's state changes (a line folded in, a reset, an import or a forget), so
+    /// an owner that persists the fold can tell whether there's anything new to save.</summary>
+    internal long Generation { get; private set; }
+
     public TranscriptFold(params LineFolder[] folders) => _folders = folders;
+
+    /// <summary>A persistable snapshot of one file's progress: where it's consumed up to, how it looked then, and
+    /// the folder states (live references, in registration order — the owner serialises them).</summary>
+    internal sealed record Checkpoint(long Offset, long SeenLength, DateTime SeenWriteUtc, byte[] Head, object[] States);
+
+    /// <summary>Every path the fold holds state for.</summary>
+    internal IReadOnlyCollection<string> Paths => _entries.Keys;
+
+    /// <summary>The snapshot for <paramref name="path"/>, or null when it has never been read.</summary>
+    internal Checkpoint? Export(string path) =>
+        _entries.TryGetValue(path, out var e) && e.SeenLength >= 0
+            ? new Checkpoint(e.Offset, e.SeenLength, e.SeenWriteUtc, e.Head, e.States)
+            : null;
+
+    /// <summary>Seeds <paramref name="path"/> from a snapshot (e.g. one loaded from disk), so the next read resumes
+    /// at its offset: an unchanged file costs a stat, and a grown one reads only the new bytes. The usual rules
+    /// still apply on that read — a shrunk or replaced file resets and re-reads from the start.</summary>
+    internal void Import(string path, Checkpoint cp)
+    {
+        if (cp.States.Length != _folders.Length) throw new ArgumentException("Checkpoint doesn't match this fold's folders.", nameof(cp));
+        _entries[path] = new Entry
+        {
+            Offset = cp.Offset, SeenLength = cp.SeenLength, SeenWriteUtc = cp.SeenWriteUtc,
+            Head = cp.Head, States = cp.States,
+        };
+        Generation++;
+    }
+
+    /// <summary>Drops the state for <paramref name="path"/> (a transcript that no longer exists).</summary>
+    internal void Forget(string path)
+    {
+        if (_entries.Remove(path)) Generation++;
+    }
 
     private sealed class Entry
     {
@@ -131,6 +168,7 @@ internal sealed class TranscriptFold
         entry.Head = [];
         entry.States = _folders.Select(f => f.NewState()).ToArray();
         entry.Version++;
+        Generation++;
     }
 
     // True when the file still starts with the bytes we consumed from it — else it was replaced, not appended to.
@@ -191,6 +229,7 @@ internal sealed class TranscriptFold
         }
         entry.Offset += bytes;
         entry.Version++;
+        Generation++;
     }
 
     // Records the file's leading bytes (from this chunk, which starts at file offset `at`) for replacement checks.
