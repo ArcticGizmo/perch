@@ -80,6 +80,9 @@ internal sealed class ClaudeSessionController : IDisposable
         // Set on the child env — never the command line — so an odd path can't break arg parsing or inject.
         if (!string.IsNullOrWhiteSpace(configDir))
             psi.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+        LaunchLog.Write($"controlled session start: file={LaunchLog.Show(psi.FileName)} cwd={LaunchLog.Show(cwd)} " +
+                        $"resume={resume} id={id} CLAUDE_CONFIG_DIR={LaunchLog.Show(configDir)} " +
+                        $"(inherited: {LaunchLog.Show(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"))})");
 
         // Ownership is claimed before the process exists so nothing can race the pre-init window; a
         // failed launch releases it again below.

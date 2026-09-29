@@ -16,18 +16,21 @@ public interface ISessionLauncher
     /// the user's preferred <paramref name="terminal"/> (falling back to a plain console if that specific
     /// one can't be launched). Returns true if a terminal was launched; false when none could be found (or
     /// the platform doesn't implement this yet), so the caller can degrade to copying the command instead.
-    /// Best-effort; never throws.
+    /// Best-effort; never throws. <paramref name="configDir"/>, when set, is the <c>CLAUDE_CONFIG_DIR</c> the
+    /// resumed CLI runs under — the account that owns the transcript (see
+    /// <see cref="Perch.Data.TranscriptLocator.ResumeConfigRoot"/>); null inherits Perch's environment (the primary).
     /// </summary>
-    bool Reopen(string cwd, string sessionId, TerminalApp terminal);
+    bool Reopen(string cwd, string sessionId, TerminalApp terminal, string? configDir = null);
 
     /// <summary>
     /// Opens a new terminal in <paramref name="cwd"/> running <c>claude &lt;claudeArgs&gt;</c> with the user's
     /// preferred <paramref name="terminal"/> — the general shell-out used for interactive subcommands Perch
     /// can't drive over stream-json (e.g. <c>auth login</c> / <c>auth logout</c>, whose browser flow needs a
     /// real terminal). Returns true if a terminal was launched; false when none could be found (or the platform
-    /// doesn't implement this yet). Best-effort; never throws.
+    /// doesn't implement this yet). Best-effort; never throws. <paramref name="configDir"/> as for
+    /// <see cref="Reopen"/> (so <c>auth login</c> signs in the right config dir).
     /// </summary>
-    bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal);
+    bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal, string? configDir = null);
 
     /// <summary>
     /// Launches (or re-activates) the Claude Desktop app — the host of a <c>claude-desktop</c> session that

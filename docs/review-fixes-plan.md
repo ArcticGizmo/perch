@@ -222,7 +222,14 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
   - A statusline end-to-end test: an **empty** `git.exe` planted in a real repo. The resolver still returns the PATH git, and the generated script (run under node with `NoDefaultCurrentDirectoryInExePath` stripped) produces the real counts `S1U0`.
   
   Test fixtures only ever create empty files; no executable is copied or modified. An earlier draft that planted a copied system binary was replaced on request.
-- [ ] Dogfood owed: interactively check that a controlled session starts, "Reopen in terminal" works for each terminal choice, the hook autostarts the tray, and "Open in VS Code" and GitKraken still work.
+- [ ] Dogfood owed: interactively check that a controlled session starts, "Reopen in terminal" works for each terminal choice, the hook autostarts the tray, and "Open in VS Code" and GitKraken still work. *(Switcher reopen user-confirmed on 2026-09-29.)*
+- [x] **Follow-up bug found while dogfooding: resume under the owning config dir.** Reopening a session from a non-primary config dir resumed it under the primary account, where the transcript doesn't exist. The same happened for resuming inside a Perch window and for "Hand back to a terminal". The fix:
+  - `TranscriptLocator.ResumeConfigRoot` picks the transcript's owning dir, or null for the primary, meaning inherit.
+  - `ISessionLauncher` takes that dir; so do SessionWindow resume, hand-back and `/login`/`/logout`.
+  - A shell-opened terminal can't be given an environment block, so the dir travels on the command line: `set CLAUDE_CONFIG_DIR=<dir>&& …` for cmd/wt, `$env:…;` for PowerShell.
+  - The first attempt used `set "…" && …`. Windows Terminal re-tokenises its command line and drops those quotes, so cmd stored the value with a trailing space and Claude started first-run setup. The unquoted `…&&` form survives that; a test replays wt's split-and-rejoin.
+  - Dirs containing cmd metacharacters (`% " ; & | < > ^`) fall back to copying the command.
+  - `LaunchLog` (`<settings dir>/logs/launch.log`) records every terminal/controlled launch: the resolved transcript, owner, the injected `CLAUDE_CONFIG_DIR` and the exact command line.
 
 **Verify.** Done 2026-09-29: both heads build, and the .NET suite passes 1392/1392. Found along the way:
 - **The environment masks the attack.** When a process inherits `NoDefaultCurrentDirectoryInExePath=1`, which Claude Code sets for the tools it spawns, Node skips the cwd search. With it unset (a normal Windows environment), Node 24's `execFileSync('git', …, {cwd})` **does** resolve a `git.exe` in the cwd. The statusline test strips the variable so it exercises the unprotected case.

@@ -2824,10 +2824,14 @@ public partial class App : Application
     // Reopen a closed session: spawn a fresh terminal running `claude --resume <id>` in its working
     // directory. If no terminal can be launched (or the platform doesn't implement it yet), fall back to
     // copying the command so the user can paste it wherever they like.
+    // The terminal runs under the config dir that owns the transcript: a session from a non-primary account resumed
+    // under the primary's CLAUDE_CONFIG_DIR finds no such session.
     private void ReopenSession(string cwd, string sessionId)
     {
         var terminal = _appSettings?.ReopenTerminal ?? TerminalApp.Auto;
-        if (!PlatformServices.SessionLauncher.Reopen(cwd, sessionId, terminal))
+        var configDir = TranscriptLocator.ResumeConfigRoot(sessionId, cwd);
+        LaunchLog.Write($"switcher reopen: {TranscriptLocator.DescribeResume(sessionId, cwd)}");
+        if (!PlatformServices.SessionLauncher.Reopen(cwd, sessionId, terminal, configDir))
             CopyResumeCommand(sessionId);
     }
 

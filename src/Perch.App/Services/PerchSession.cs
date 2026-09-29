@@ -335,7 +335,9 @@ internal sealed class PerchSession : IDisposable
         if (string.IsNullOrEmpty(id)) return;
         Conversation.AddNote($"handing session {Shorten(id)} to a terminal…");
         _controller?.Stop();
-        try { PlatformServices.SessionLauncher.Reopen(Cwd, id, TerminalApp.Auto); }
+        // Same account the session ran under here, or the terminal's `claude --resume` can't find it.
+        LaunchLog.Write($"hand back: session={id} cwd={LaunchLog.Show(Cwd)} CLAUDE_CONFIG_DIR={LaunchLog.Show(ConfigDir)}");
+        try { PlatformServices.SessionLauncher.Reopen(Cwd, id, TerminalApp.Auto, ConfigDir); }
         catch (Exception ex) { Conversation.AddNote($"couldn't open a terminal: {ex.Message}", NoteKind.Error); }
     }
 

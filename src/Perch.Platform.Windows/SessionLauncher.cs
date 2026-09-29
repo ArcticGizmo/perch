@@ -15,23 +15,28 @@ namespace Perch.Platform.Windows;
 /// </summary>
 public sealed class SessionLauncher : ISessionLauncher
 {
-    public bool Reopen(string cwd, string sessionId, TerminalApp terminal) =>
-        RunClaudeCommand(cwd, $"--resume {sessionId}", terminal);
+    public bool Reopen(string cwd, string sessionId, TerminalApp terminal, string? configDir = null) =>
+        RunClaudeCommand(cwd, $"--resume {sessionId}", terminal, configDir);
 
-    public bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal)
+    public bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal, string? configDir = null)
     {
         // claude is resolved to an absolute path up front: the terminal opens *in* `cwd` — a repo Perch didn't
         // write — and cmd (like ShellExecute) looks in the current directory before PATH, so a bare `claude` would
         // prefer a claude.cmd committed there (review fixes CP7). Not on PATH → false, and the app falls back to
         // copying the command for the user to run themselves.
         if (ClaudeCli.Find() is not { } claude) return false;
+        // configDir pins the account (CLAUDE_CONFIG_DIR): without it a session from another config dir resumes
+        // under the primary, where its transcript doesn't exist. An unusable dir → false (copy fallback), never
+        // a silent launch under the wrong account.
+        if (ClaudeCli.WindowsCmdLine(claude, claudeArgs, configDir) is not { } cmdLine) return false;
 
         // Try the preferred terminal first.
-        if (TryStart(StartInfo(terminal, cwd, claude, claudeArgs))) return true;
+        if (TryStart(StartInfo(terminal, cwd, claude, claudeArgs, cmdLine, configDir))) return true;
 
         // If an explicit choice failed (wt alias disabled, pwsh missing, …), fall back to a plain console so
         // the command still runs. CommandPrompt is already that fallback, so don't try it twice.
-        if (terminal != TerminalApp.CommandPrompt && TryStart(StartInfo(TerminalApp.CommandPrompt, cwd, claude, claudeArgs)))
+        if (terminal != TerminalApp.CommandPrompt
+            && TryStart(StartInfo(TerminalApp.CommandPrompt, cwd, claude, claudeArgs, cmdLine, configDir)))
             return true;
 
         return false;
@@ -40,17 +45,16 @@ public sealed class SessionLauncher : ISessionLauncher
     // -d sets Windows Terminal's tab start directory (wt ignores the parent's cwd); everything else takes
     // WorkingDirectory. Every host is an absolute path too: ShellExecute searches WorkingDirectory — the repo —
     // for a bare name. wt.exe is an execution alias on PATH, so it goes through the resolver.
-    private static ProcessStartInfo StartInfo(TerminalApp terminal, string cwd, string claude, string claudeArgs)
+    private static ProcessStartInfo StartInfo(
+        TerminalApp terminal, string cwd, string claude, string claudeArgs, string cmdLine, string? configDir)
     {
-        // cmd keeps a quoted first token only when it's the sole quoted pair — true here (the args are safe tokens).
-        string cmdLine = $"{QuoteIfSpaced(claude)} {claudeArgs}";
         string cmd = ExecutableResolver.SystemTool("cmd.exe");
         return terminal switch
         {
             TerminalApp.PowerShell =>
                 new ProcessStartInfo(
                     Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"),
-                    $"-NoExit -Command \"& '{claude.Replace("'", "''")}' {claudeArgs}\"")
+                    $"-NoExit -Command \"{ClaudeCli.WindowsPowerShellScript(claude, claudeArgs, configDir)}\"")
                     { UseShellExecute = true, WorkingDirectory = cwd },
             TerminalApp.CommandPrompt =>
                 new ProcessStartInfo(cmd, $"/k {cmdLine}") { UseShellExecute = true, WorkingDirectory = cwd },
@@ -77,7 +81,14 @@ public sealed class SessionLauncher : ISessionLauncher
 
     private static bool TryStart(ProcessStartInfo psi)
     {
+        // Logged (LaunchLog): the exact command handed to the shell, bracketed so quoting/whitespace is visible.
+        LaunchLog.Write($"terminal launch: file={LaunchLog.Show(psi.FileName)} args={LaunchLog.Show(psi.Arguments)} " +
+                        $"workdir={LaunchLog.Show(psi.WorkingDirectory)}");
         try { return Process.Start(psi) is not null; }
-        catch { return false; } // terminal missing / alias disabled — let the caller fall back
+        catch (Exception ex)
+        {
+            LaunchLog.Write($"terminal launch failed: {ex.Message}");
+            return false; // terminal missing / alias disabled — let the caller fall back
+        }
     }
 }

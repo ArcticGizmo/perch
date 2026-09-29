@@ -33,6 +33,40 @@ public static class ClaudeCli
         return CreateWindowsStartInfo(claude, args, ExecutableResolver.SystemTool("cmd.exe"));
     }
 
+    /// <summary>The <c>cmd.exe /k</c> command line that runs <c>claude &lt;args&gt;</c> in a new terminal, optionally under
+    /// <paramref name="configDir"/> as <c>CLAUDE_CONFIG_DIR</c>. The variable travels on the command line (<c>set "…" &amp;&amp;</c>)
+    /// because a terminal opened through the shell — and a Windows Terminal tab, which takes the running WT's
+    /// environment, not ours — can't be handed an environment block. Null when <paramref name="configDir"/> holds a
+    /// character cmd would interpret (<c>% " &amp; | &lt; &gt; ^</c> — the value is passed unquoted, see below) or that
+    /// Windows Terminal splits on (<c>;</c>), so the caller falls back to copying the command rather than resuming
+    /// under the wrong account.</summary>
+    public static string? WindowsCmdLine(string claudePath, string args, string? configDir)
+    {
+        // cmd keeps a quoted first token when it's the only quoted pair; with a `set "…"` prefix the line no longer
+        // starts with a quote, so cmd strips nothing either way. The args are safe tokens.
+        var run = $"{QuoteIfSpaced(claudePath)} {args}";
+        if (string.IsNullOrEmpty(configDir)) return run;
+        if (configDir.IndexOfAny(['%', '"', ';', '&', '|', '<', '>', '^']) >= 0) return null;
+        // `set VAR=value&&` — unquoted, with no space before `&&` — because Windows Terminal re-tokenises its command
+        // line and drops the quotes of `set "VAR=value" && …`, which leaves cmd storing `value ` WITH the trailing
+        // space before the `&&` (a config dir that doesn't exist, so claude starts first-run setup). Unquoted, cmd
+        // takes everything up to the `&&`, spaces inside the path included, and wt re-joining the pieces with single
+        // spaces reproduces the same line. That's also why every character cmd would interpret is refused above.
+        return $"set CLAUDE_CONFIG_DIR={configDir}&& {run}";
+    }
+
+    /// <summary>The PowerShell <c>-Command</c> script for the same launch; single-quoted literals, so nothing in the
+    /// paths is interpreted (<c>'</c> is doubled).</summary>
+    public static string WindowsPowerShellScript(string claudePath, string args, string? configDir)
+    {
+        static string Lit(string s) => "'" + s.Replace("'", "''") + "'";
+        var run = $"& {Lit(claudePath)} {args}";
+        // Single quotes only — the whole script rides inside the -Command "…" argument.
+        return string.IsNullOrEmpty(configDir) ? run : $"$env:CLAUDE_CONFIG_DIR = {Lit(configDir)}; {run}";
+    }
+
+    private static string QuoteIfSpaced(string path) => path.Contains(' ') ? $"\"{path}\"" : path;
+
     /// <summary>The Windows half of <see cref="CreateStartInfo"/>, over an already-resolved path (split out for tests).</summary>
     internal static ProcessStartInfo CreateWindowsStartInfo(string claudePath, string args, string cmdPath)
     {

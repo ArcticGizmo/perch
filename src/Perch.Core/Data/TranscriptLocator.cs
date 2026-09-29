@@ -60,6 +60,51 @@ internal static class TranscriptLocator
         return null;
     }
 
+    /// <summary>The config dir whose <c>projects/</c> tree holds <paramref name="transcriptPath"/>
+    /// (<c>&lt;root&gt;/projects/&lt;enc-cwd&gt;/&lt;id&gt;.jsonl</c>), or null when no dir in the set owns it.</summary>
+    public static ClaudeConfigDir? OwningConfigDir(string? transcriptPath)
+    {
+        if (string.IsNullOrEmpty(transcriptPath)) return null;
+        try
+        {
+            var projectDir = Path.GetDirectoryName(transcriptPath);        // …/projects/<enc-cwd>
+            var projects = Path.GetDirectoryName(projectDir);               // …/projects
+            return ClaudeConfigSet.Instance.ForRoot(Path.GetDirectoryName(projects));
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// The <c>CLAUDE_CONFIG_DIR</c> a <c>claude --resume &lt;sessionId&gt;</c> must run under so the CLI finds
+    /// the transcript: the root of the config dir that owns it, or <c>null</c> to inherit Perch's own environment
+    /// — when the owner is the primary (inheriting <em>is</em> the primary, and pinning it explicitly would move
+    /// Claude's <c>.claude.json</c> lookup), or when the transcript can't be found or attributed. A <c>projects/</c>
+    /// tree junctioned across several dirs resolves to its first owner, so there it can't tell accounts apart.
+    /// </summary>
+    public static string? ResumeConfigRoot(string sessionId, string cwd)
+    {
+        if (OwningConfigDir(Resolve(sessionId, cwd)) is not { } owner) return null;
+        var primary = ClaudeConfigSet.Instance.Primary;
+        return ClaudeConfigDir.PathComparer.Equals(owner.RealRoot, primary.RealRoot) ? null : owner.Root;
+    }
+
+    /// <summary>For <see cref="LaunchLog"/>: how <see cref="ResumeConfigRoot"/> decided, as one log line — the transcript it found, the
+    /// owner it attributed it to, the primary, and the whole config-dir set.</summary>
+    public static string DescribeResume(string sessionId, string cwd)
+    {
+        try
+        {
+            var set = ClaudeConfigSet.Instance;
+            var path = Resolve(sessionId, cwd);
+            var owner = OwningConfigDir(path);
+            var dirs = string.Join(", ", set.All.Select(d => $"{d.Root} (real {d.RealRoot})"));
+            return $"session={sessionId} cwd={LaunchLog.Show(cwd)} transcript={LaunchLog.Show(path)} " +
+                   $"owner={LaunchLog.Show(owner?.Root)} primary={LaunchLog.Show(set.Primary.Root)} " +
+                   $"-> CLAUDE_CONFIG_DIR={LaunchLog.Show(ResumeConfigRoot(sessionId, cwd))} | set: {dirs}";
+        }
+        catch (Exception ex) { return $"session={sessionId} describe failed: {ex.Message}"; }
+    }
+
     /// <summary>Every project directory under every config dir's <c>projects/</c> tree; empty when none
     /// exist or a directory can't be read. Deduped implicitly by the distinct-projects-dirs set.</summary>
     public static IEnumerable<string> EnumerateProjectDirectories()

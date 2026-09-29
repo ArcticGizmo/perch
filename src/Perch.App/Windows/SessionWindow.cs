@@ -1471,9 +1471,10 @@ internal sealed partial class SessionWindow : Window
         PerchSession session;
         try
         {
-            // Account selection applies to fresh sessions only; a resume must run under the dir that owns the
-            // transcript, so it keeps inheriting Perch's environment (docs/session-account-selector-plan.md).
-            var configDir = _resumeId is null ? EffectiveConfigDir(_cwd) : null;
+            var configDir = LaunchConfigDir(_cwd);
+            LaunchLog.Write(_resumeId is { } logRid
+                ? $"perch window resume: {TranscriptLocator.DescribeResume(logRid, _cwd)}"
+                : $"perch window new session: cwd={LaunchLog.Show(_cwd)} CLAUDE_CONFIG_DIR={LaunchLog.Show(configDir)}");
             session = start(new SessionLaunchOptions(_cwd, _model, StartingMode, _effort, _resumeId, configDir));
         }
         catch (Exception ex)
@@ -1494,12 +1495,21 @@ internal sealed partial class SessionWindow : Window
     private async System.Threading.Tasks.Task EnsureTrustedThenStartAsync(bool replace)
     {
         var cwd = _cwd;
-        // Same config dir the spawn will pin (fresh sessions honour the account selector; a resume inherits
-        // Perch's environment), so trust is read/written in the file that launch will actually use.
-        var configDir = _resumeId is null ? EffectiveConfigDir(cwd) : null;
-
+        // Same config dir the spawn will pin (see LaunchConfigDir), so trust is read/written in the file that launch
+        // will actually use. A fresh session's dir comes from the account picker (UI state, so read here); a resume's
+        // is the transcript's owner, found off the UI thread since that may mean searching for the transcript.
+        var resumeId = _resumeId;
+        var freshDir = resumeId is null ? EffectiveConfigDir(cwd) : null;
+        string? configDir = freshDir;
         bool trusted;
-        try { trusted = await System.Threading.Tasks.Task.Run(() => DirectoryTrust.Evaluate(configDir, cwd)); }
+        try
+        {
+            (configDir, trusted) = await System.Threading.Tasks.Task.Run(() =>
+            {
+                var dir = resumeId is null ? freshDir : TranscriptLocator.ResumeConfigRoot(resumeId, cwd);
+                return (dir, DirectoryTrust.Evaluate(dir, cwd));
+            });
+        }
         catch { trusted = false; }
 
         if (!trusted)
@@ -1815,9 +1825,12 @@ internal sealed partial class SessionWindow : Window
 
     // /login, /logout → shell out to `claude auth …` in a terminal: the OAuth flow opens a browser and prompts
     // in the terminal, which the stream-json channel can't host. Perch picks up the new auth on its next poll.
+    // Runs under this window's account — the running session's, else the one a launch here would use — so a login
+    // signs in (and a logout signs out of) that config dir rather than always the primary.
     private void RunClaudeAuth(string args)
     {
-        if (PlatformServices.SessionLauncher.RunClaudeCommand(_cwd, args, TerminalApp.Auto))
+        var configDir = _session is { } s ? s.ConfigDir : LaunchConfigDir(_cwd);
+        if (PlatformServices.SessionLauncher.RunClaudeCommand(_cwd, args, TerminalApp.Auto, configDir))
             Conv.AddNote($"opened a terminal — finish in it: claude {args}");
         else
             Conv.AddNote("couldn't open a terminal for authentication", NoteKind.Error);
@@ -3241,6 +3254,12 @@ internal sealed partial class SessionWindow : Window
         bool isDefault = !_accountLocked && set.Primary is { } d && d.Key == choice.Key;
         _accountPillText.Text = isDefault ? $"{choice.Label} (default)" : choice.Label;
     }
+
+    /// <summary>The config dir this window's launch runs under. A fresh session honours the account selector
+    /// (<see cref="EffectiveConfigDir"/>); a resume must run under the dir that <em>owns the transcript</em> — inheriting
+    /// Perch's environment would mean the primary account, where a session from another config dir doesn't exist.</summary>
+    private string? LaunchConfigDir(string cwd) =>
+        _resumeId is { } rid ? TranscriptLocator.ResumeConfigRoot(rid, cwd) : EffectiveConfigDir(cwd);
 
     /// <summary>The config dir to launch under (injected as <c>CLAUDE_CONFIG_DIR</c>), or <c>null</c> to inherit
     /// Perch's own environment. Resolves synchronously from <paramref name="cwd"/> so a single-allowed guardrail
