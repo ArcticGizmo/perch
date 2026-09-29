@@ -67,8 +67,12 @@ public sealed class RoostRoster
         public RoostPin Pin;
     }
 
-    // Insertion-ordered: _order is first-seen (reordered only by Swap / MoveToEnd), _entries the state by key.
+    // Insertion-ordered: _order is first-seen (reordered only by Swap / MoveToEnd, or placed by a seeded order),
+    // _entries the state by key.
     private readonly List<string> _order = [];
+    // A persisted order's rank per key not yet seen, and the ranks of the keys placed by it.
+    private readonly Dictionary<string, int> _seedRank = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _placedRank = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly HashSet<string> _closed;
 
@@ -108,6 +112,37 @@ public sealed class RoostRoster
         Rebuild();
     }
 
+    /// <summary>Every pane's key in order, closed ones included — what to persist so the order survives a
+    /// restart.</summary>
+    public IReadOnlyList<string> Order => _order;
+
+    /// <summary>Restores a persisted <see cref="Order"/>. A key arriving later takes its place among the keys
+    /// placed by it; keys the order doesn't know are appended as usual.</summary>
+    public void SeedOrder(IEnumerable<string> keys)
+    {
+        int rank = 0;
+        foreach (var k in keys) _seedRank.TryAdd(k, rank++);
+        if (_order.Count == 0) return;
+        // Panes already here: the saved ones first, in the saved order, then the rest as they were.
+        var sorted = _order.OrderBy(k => _seedRank.TryGetValue(k, out var r) ? r : int.MaxValue).ToList();
+        _order.Clear();
+        foreach (var k in sorted)
+        {
+            if (_seedRank.Remove(k, out var r)) _placedRank[k] = r;
+            _order.Add(k);
+        }
+        Rebuild();
+    }
+
+    // Appends a key, or with a seeded rank inserts it before the first key placed with a later rank.
+    private void Place(string key)
+    {
+        if (!_seedRank.Remove(key, out var rank)) { _order.Add(key); return; }
+        _placedRank[key] = rank;
+        int at = _order.FindIndex(k => _placedRank.TryGetValue(k, out var r) && r > rank);
+        _order.Insert(at < 0 ? _order.Count : at, key);
+    }
+
     /// <summary>Folds a scan into the roster. <paramref name="now"/> ages lingering ended panes.</summary>
     public void Update(IReadOnlyList<ClaudeSession> live, DateTime now)
     {
@@ -123,7 +158,7 @@ public sealed class RoostRoster
             else
             {
                 _entries[s.Pid] = new Entry { Session = s };
-                _order.Add(s.Pid);
+                Place(s.Pid);
             }
         }
 
@@ -143,6 +178,7 @@ public sealed class RoostRoster
             {
                 _entries.Remove(key);
                 _order.RemoveAt(i);
+                _placedRank.Remove(key);
             }
         }
 

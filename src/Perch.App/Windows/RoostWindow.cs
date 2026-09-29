@@ -21,17 +21,17 @@ namespace Perch.Avalonia.Windows;
 /// <summary>
 /// The Roost (docs/roost-plan.md): a tmux-style view of every live session — an urgency-ranked rail on the left
 /// (Needs you → Done · review → Working → Quiet) and a stage of <see cref="SessionPane"/>s on the right, laid out
-/// by the pure <see cref="RoostLayout"/> rules (first-seen order that never reorders on a status flip; panes
-/// expanded or collapsed to mini cards by status, pin, and focus). The session list itself is the app-owned
-/// <see cref="RoostRoster"/>, so pins and order survive closing the window; this window owns only the per-pane
-/// feeds (<see cref="RoostFeed"/>: a Perch session's in-memory conversation, or a tailed transcript), which
-/// live only while it's open.
+/// by the pure <see cref="RoostStage"/> / <see cref="RoostTemplates"/> / <see cref="RoostLayout"/> rules. Pane order
+/// is the user's (first-seen, rearranged by dragging headers; never reordered by a status flip). The session list
+/// itself is the app-owned <see cref="RoostRoster"/>, so pins and order survive closing the window; this window
+/// owns only the per-pane feeds (<see cref="RoostFeed"/>: a Perch session's in-memory conversation, or a tailed
+/// transcript), which live only while it's open.
 ///
-/// <para>Three layouts (a persisted title-bar toggle): <b>Tiled</b> — a grid shaped by a snap template (the title
-/// bar's layout flyout: Auto fits the grid to the pane count, or a fixed shape), paged a screen at a time (wheel /
-/// PageUp·PageDown / the ↑↓ pills), with every pane expanded while each fits a cell of its own; <b>Main + stack</b>
-/// — the focused pane large and expanded, every other pane a mini card in the stack; <b>Zoom</b> — the focused
-/// pane alone. Only placed panes hold controls: anything off-screen is parked (no materialised thread). The
+/// <para>Three layouts (a persisted title-bar toggle): <b>Tiled</b> — up to six panes on stage, each a full thread,
+/// in a grid shaped for how many there are (the title bar's snap flyout picks the shape per count); the rest wait
+/// in the rail; <b>Main + stack</b> — the focused pane large and expanded, every other pane a mini card in the
+/// stack; <b>Zoom</b> — the focused pane alone. Only placed panes hold controls: anything off-screen is parked (no
+/// materialised thread). The
 /// visible layout is rebuilt only when its shape changes; a scan that only moves text refreshes the panes in
 /// place, so an expanded thread keeps its scroll. The title-bar chips double as group filters.</para>
 /// </summary>
@@ -45,19 +45,18 @@ internal sealed class RoostWindow : Window
 
     private readonly Dictionary<string, RoostFeed?> _feeds = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SessionPane> _views = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, RoostPaneSize> _sizes = new(StringComparer.Ordinal);   // Tiled's resolved sizes
-    private readonly Dictionary<string, (RoostPaneSize Size, bool Held)> _placed = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RoostPaneSize> _placed = new(StringComparer.Ordinal);
 
     private readonly StackPanel _chips;
     private readonly Dictionary<RoostLayoutMode, Border> _segments = new();
     private readonly StackPanel _rail;
     private readonly Panel _stage;
     // Tiled
+    private readonly RoostStage _onStage = new();
     private readonly Grid _grid;
     private readonly Border[] _cellHosts = new Border[RoostTemplates.AutoMaxCells];
     private string? _gridSig;
-    private IReadOnlyList<RoostCell> _cells = [];
-    private int _perPage = 1;
+    private IReadOnlyList<string> _cellKeys = [];
     // Main + stack
     private readonly Grid _mainGrid;
     private readonly Border _mainHost;
@@ -66,9 +65,15 @@ internal sealed class RoostWindow : Window
     private readonly Border _zoomHost;
     private readonly Border _emptyNote;
     private readonly TextBlock _emptyTitle, _emptyBody;
-    private readonly Border _pillUp, _pillDown;
-    private readonly TextBlock _pillUpText, _pillDownText;
-    private readonly Ellipse _pillDownDot;
+    private readonly Border _offPill;
+    private readonly TextBlock _offPillText;
+    private readonly Ellipse _offPillDot;
+    // Drag a pane by its header (or a rail row) onto a cell: the ghost chip and the drop-cell mark ride an overlay.
+    private readonly Canvas _overlay;
+    private readonly Border _dropMark;
+    private (string Key, Point Start, Control Source)? _press;
+    private Border? _ghost;
+    private int _dropSlot = -1;
 
     private readonly DispatcherTimer _pulseTimer;
     private readonly DispatcherTimer _clockTimer;
@@ -82,23 +87,25 @@ internal sealed class RoostWindow : Window
 
     private RoostLayoutMode _mode;
     private RoostLayoutMode _preZoomMode = RoostLayoutMode.Tiled;
-    private RoostSnapTemplate _template;
+    private readonly Dictionary<int, RoostSnapTemplate> _layoutByCount;
     private RoostSnapTemplate _drawnTemplate = RoostSnapTemplate.Full;
+    private int _drawnCount = -1;
     private Border? _snapButton;
+    private readonly DispatcherTimer _snapHintTimer;
     private RoostGroup? _filter;
     private string? _focused;
-    private int _page;
-    private int _cellCount;
-    private double _miniHeight;
+    // "+ New session" was clicked: the first new Perch pane to appear before the deadline goes on stage.
+    private HashSet<string>? _keysAtNewSession;
+    private DateTime _newSessionUntil;
 
     public RoostWindow(RoostRoster roster, Func<RoostPane, RoostFeed?> feedFactory, SessionPalette? palette = null,
-        RoostLayoutMode layout = RoostLayoutMode.Tiled, RoostSnapTemplate template = RoostSnapTemplate.Auto)
+        RoostLayoutMode layout = RoostLayoutMode.Tiled, IReadOnlyDictionary<int, RoostSnapTemplate>? layoutByCount = null)
     {
         _roster = roster;
         _feedFactory = feedFactory;
         _p = palette ?? SessionPalette.Current;
         _mode = layout;
-        _template = template;
+        _layoutByCount = layoutByCount is null ? new() : new(layoutByCount);
 
         Title = "Roost";
         Width = 1280;
@@ -119,7 +126,7 @@ internal sealed class RoostWindow : Window
             },
         };
         _chips = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(14, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-        var newSession = BarButton("+ New session", () => NewSessionRequested?.Invoke());
+        var newSession = BarButton("+ New session", StartNewSession);
         newSession.Margin = new Thickness(10, 0, 0, 0);
         var right = new StackPanel
         {
@@ -181,31 +188,28 @@ internal sealed class RoostWindow : Window
             Child = new StackPanel { Spacing = 6, Children = { _emptyTitle, _emptyBody } },
         };
         _stage = new Panel { Background = _p.Ground, Children = { _grid, _mainGrid, _zoomHost, _emptyNote } };
-        _stage.PointerWheelChanged += (_, e) =>
-        {
-            if (_mode != RoostLayoutMode.Tiled || e.Delta.Y == 0) return;
-            // A wheel over an expanded thread scrolls that thread; only the gaps between panes page.
-            if (e.Source is Visual v && v.FindAncestorOfType<SessionThreadView>(includeSelf: true) is not null) return;
-            Page(e.Delta.Y < 0 ? +1 : -1);
-            e.Handled = true;
-        };
-        _stage.SizeChanged += (_, _) => { _miniHeight = 0; Refresh(); };
+        _stage.SizeChanged += (_, _) => Refresh();   // the stage's shape can change the default layout
 
-        // ── Bottom bar: key hints · the ↑/↓ overflow pills (their own band, so they never cover a pane) ──
-        (_pillUp, _pillUpText, _) = OverflowPill();
-        (_pillDown, _pillDownText, _pillDownDot) = OverflowPill();
-        _pillUp.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) Page(-1); };
-        _pillDown.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) Page(+1); };
+        // ── Bottom bar: key hints · the "N off stage" pill (its own band, so it never covers a pane) ──
+        (_offPill, _offPillText, _offPillDot) = OverflowPill();
+        _offPill[ToolTip.TipProperty] = "Waiting in the rail — click to bring the most urgent on stage";
+        _offPill.PointerReleased += (_, e) =>
+        {
+            if (e.InitialPressMouseButton != MouseButton.Left) return;
+            var visible = _cellKeys.ToHashSet(StringComparer.Ordinal);
+            var next = ShownPanes().Where(p => !visible.Contains(p.Key)).OrderBy(RoostStage.Urgency).FirstOrDefault();
+            if (next is not null) FocusPane(next.Key);
+        };
         var hints = new TextBlock
         {
-            Text = "Ctrl+1–9 pane  ·  Ctrl+. next needing you  ·  Ctrl+Shift+E expand/collapse  ·  Ctrl+Shift+Z zoom  ·  PgUp/PgDn page",
+            Text = "Ctrl+1–9 pane  ·  Ctrl+. next needing you  ·  drag a header to move  ·  double-click a header to zoom  ·  Ctrl+Shift+E keep on stage",
             FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
         var pills = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center, Children = { _pillUp, _pillDown },
+            VerticalAlignment = VerticalAlignment.Center, Children = { _offPill },
             [DockPanel.DockProperty] = Dock.Right,
         };
         var bottomBar = new Border
@@ -216,10 +220,19 @@ internal sealed class RoostWindow : Window
         };
         var stageColumn = new DockPanel { LastChildFill = true, Children = { bottomBar, _stage } };
 
-        Content = new DockPanel { LastChildFill = true, Children = { bar, railHost, stageColumn } };
+        _dropMark = new Border
+        {
+            BorderBrush = _p.Brand, BorderThickness = new Thickness(2), CornerRadius = new CornerRadius(12),
+            Background = _p.BrandWash, Opacity = 0.7, IsVisible = false,
+        };
+        _overlay = new Canvas { IsHitTestVisible = false, Children = { _dropMark } };
+        Content = new Panel
+        {
+            Children = { new DockPanel { LastChildFill = true, Children = { bar, railHost, stageColumn } }, _overlay },
+        };
 
-        // Window chords tunnel (so a focused thread can't swallow them); paging bubbles, so a focused thread's
-        // own PageUp/PageDown still scroll it.
+        // Window chords tunnel (so a focused thread can't swallow them); Enter / Esc bubble, so a focused control
+        // takes them first.
         AddHandler(KeyDownEvent, OnChordKeyDown, RoutingStrategies.Tunnel);
         KeyDown += OnPageKeyDown;
 
@@ -230,12 +243,15 @@ internal sealed class RoostWindow : Window
         _clockTimer.Start();
         _holdTimer = new DispatcherTimer();
         _holdTimer.Tick += (_, _) => { _holdTimer.Stop(); Refresh(); };
+        _snapHintTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+        _snapHintTimer.Tick += (_, _) => { _snapHintTimer.Stop(); RefreshSnapButton(); };
 
         Closed += (_, _) =>
         {
             _pulseTimer.Stop();
             _clockTimer.Stop();
             _holdTimer.Stop();
+            _snapHintTimer.Stop();
             foreach (var v in _views.Values) v.Park();
             foreach (var f in _feeds.Values) f?.Dispose();
             _feeds.Clear();
@@ -257,8 +273,11 @@ internal sealed class RoostWindow : Window
     /// <summary>The layout toggle moved (persist it).</summary>
     public event Action<RoostLayoutMode>? LayoutChanged;
 
-    /// <summary>A snap template was picked (persist it).</summary>
-    public event Action<RoostSnapTemplate>? TemplateChanged;
+    /// <summary>A layout was picked for a stage count (persist the whole map).</summary>
+    public event Action<IReadOnlyDictionary<int, RoostSnapTemplate>>? LayoutByCountChanged;
+
+    /// <summary>A drag rearranged the panes — persist <see cref="RoostRoster.Order"/>.</summary>
+    public event Action? OrderChanged;
 
     /// <summary>A permission card in a Perch pane was answered: (session id, item, allow, switch mode).</summary>
     public event Action<string, PermissionItem, bool, bool>? PermissionAnswered;
@@ -284,8 +303,6 @@ internal sealed class RoostWindow : Window
 
     public RoostLayoutMode Mode => _mode;
 
-    public RoostSnapTemplate SnapTemplate => _template;
-
     /// <summary>Whether the session's pane is on screen right now — placed by the current layout, expanded or as
     /// a mini card (not paged, filtered or zoomed away). With <see cref="Window.IsActive"/> it's the Roost half of
     /// <see cref="AttentionSeen"/>.</summary>
@@ -301,16 +318,17 @@ internal sealed class RoostWindow : Window
             PlatformServices.WindowChrome.FlashTaskbar(handle.Handle);
     }
 
-    /// <summary>Focuses a pane: brings it into view (Tiled scrolls to it, Zoom shows it, Main + stack makes it
-    /// main), keeps it expanded by the resolver's focus rule, and acknowledges a done-review session.</summary>
+    /// <summary>Focuses a pane: brings it into view (Tiled puts it on stage in the weakest pane's cell if it's
+    /// waiting in the rail, Zoom shows it, Main + stack makes it main), and acknowledges a done-review session.</summary>
     public void FocusPane(string key)
     {
         if (_roster.Find(key) is not { } pane) return;
         if (_filter is { } f && pane.Group != f) _filter = null;   // focusing something filtered out lifts the filter
+        if (_filter is null) _onStage.Bring(key, _roster.Panes, Guard());   // the old focus is spared
         _focused = key;
         if (pane is { Ended: false, Session.Status: SessionStatus.NeedsAttention })
             AcknowledgeRequested?.Invoke(pane.Session.Pid);
-        Refresh(reveal: key);
+        Refresh();
     }
 
     /// <summary>Switches layout (the toggle, Ctrl+Shift+Z).</summary>
@@ -321,38 +339,65 @@ internal sealed class RoostWindow : Window
         _mode = mode;
         RefreshSegments();
         LayoutChanged?.Invoke(mode);
-        Refresh(reveal: _focused);
+        Refresh();
     }
 
-    /// <summary>Picks a snap template (the flyout). Switches to Tiled, since the template is Tiled's shape.</summary>
-    public void SetTemplate(RoostSnapTemplate template)
+    /// <summary>Picks the layout for <paramref name="count"/> panes on stage (Auto clears the pick). Switches to
+    /// Tiled, since the layouts are Tiled's.</summary>
+    public void SetLayoutFor(int count, RoostSnapTemplate template)
     {
-        bool changed = template != _template;
-        _template = template;
-        if (changed) TemplateChanged?.Invoke(template);
+        bool changed = template == RoostSnapTemplate.Auto
+            ? _layoutByCount.Remove(count)
+            : !_layoutByCount.TryGetValue(count, out var had) || had != template;
+        if (template != RoostSnapTemplate.Auto) _layoutByCount[count] = template;
+        if (changed) LayoutByCountChanged?.Invoke(new Dictionary<int, RoostSnapTemplate>(_layoutByCount));
         if (_mode != RoostLayoutMode.Tiled) { SetMode(RoostLayoutMode.Tiled); return; }
-        if (changed) Refresh(reveal: _focused);
+        if (changed) Refresh();
     }
 
-    /// <summary>Picks a template and puts the focused pane in its cell <paramref name="slot"/> (on the page showing
-    /// after the switch), swapping it with the pane that sat there.</summary>
-    public void SnapFocused(RoostSnapTemplate template, int slot)
+    /// <summary>Puts pane <paramref name="key"/> in cell <paramref name="slot"/> (a drag, or a flyout cell): a pane on
+    /// stage swaps cells with the one there, a pane from the rail takes the cell and sends its occupant to the
+    /// rail. The two also swap places in the saved order.</summary>
+    public void PlacePane(string key, int slot)
     {
-        SetTemplate(template);
-        if (_focused is not { } key || _roster.Find(key) is null) return;
-        int target = _page * _perPage + slot;
-        if (target < _cells.Count)
-        {
-            var there = _cells[target].Keys[0];
-            if (there == key) return;
-            _roster.Swap(key, there);
-        }
+        if (_roster.Find(key) is null) return;
+        _filter = null;
+        if (_mode != RoostLayoutMode.Tiled) SetMode(RoostLayoutMode.Tiled);
+        if (slot < _onStage.Slots.Count && _onStage.Slots[slot] == key) { FocusPane(key); return; }   // its own cell
+        var displaced = _onStage.Place(key, slot, _roster.Panes);
+        if (displaced is not null) _roster.Swap(key, displaced);
         else _roster.MoveToEnd(key);
-        Refresh(reveal: key);
+        OrderChanged?.Invoke();
+        _focused = key;
+        Refresh();
     }
 
-    /// <summary>HeadlessRenderer hook: page the Tiled viewport (there's no wheel in a headless capture).</summary>
-    internal void PageForRender(int pages) => Page(pages);
+    // "+ New session": remember what's here, so the Perch session it starts can be put on stage when it appears.
+    private void StartNewSession()
+    {
+        _keysAtNewSession = _roster.Panes.Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
+        _newSessionUntil = Clock.Now.AddMinutes(1);
+        NewSessionRequested?.Invoke();
+    }
+
+    /// <summary>HeadlessRenderer hook: "+ New session" clicked.</summary>
+    internal void StartNewSessionForRender() => StartNewSession();
+
+    /// <summary>HeadlessRenderer hook: whether pane <paramref name="key"/> is placed right now.</summary>
+    internal bool IsOnScreenKey(string key) => _placed.ContainsKey(key);
+
+    /// <summary>HeadlessRenderer hook: a drag of pane <paramref name="key"/> hovering cell <paramref name="slot"/>
+    /// (the ghost at that cell's centre). <see cref="DropForRender"/> lets go.</summary>
+    internal void DragForRender(string key, int slot)
+    {
+        _press = (key, default, this);
+        StartGhost(key);
+        if (slot < 0 || slot >= _cellHosts.Length || !_cellHosts[slot].IsVisible) return;
+        var host = _cellHosts[slot];
+        if (host.TranslatePoint(new Point(host.Bounds.Width / 2, host.Bounds.Height / 2), _overlay) is { } at) MoveGhost(at);
+    }
+
+    internal void DropForRender() => EndDrag(drop: true);
 
     /// <summary>HeadlessRenderer hook: open the snap-layout flyout.</summary>
     internal void OpenSnapFlyoutForRender() { if (_snapButton is { } b) ShowSnapFlyout(b); }
@@ -364,24 +409,23 @@ internal sealed class RoostWindow : Window
     internal void ClosePaneForRender(string key) => OnPaneAction(key, RoostPaneAction.Close);
 
     /// <summary>HeadlessRenderer hook: apply a chip filter (null clears).</summary>
-    internal void FilterForRender(RoostGroup? group) { _filter = group; _page = 0; Refresh(); }
+    internal void FilterForRender(RoostGroup? group) { _filter = group; Refresh(); }
 
     // ── Layout pass ───────────────────────────────────────────────────────────
 
-    private void Refresh(string? reveal = null)
+    private void Refresh()
     {
         var all = _roster.Panes;
         SyncFeedsAndViews(all);
         var shown = _filter is { } g ? all.Where(p => p.Group == g).ToList() : all;
         if (_filter is not null && shown.Count == 0) { _filter = null; shown = all; }   // the group emptied
 
-        ResolveTiledSizes(all, roomy: shown.Count <= RoostTemplates.Capacity(_template));
         _placed.Clear();
         switch (_mode)
         {
             case RoostLayoutMode.MainStack: LayoutMainStack(shown); break;
             case RoostLayoutMode.Zoom: LayoutZoom(shown); break;
-            default: LayoutTiled(shown, reveal); break;
+            default: LayoutTiled(all, shown); break;
         }
         _grid.IsVisible = _mode == RoostLayoutMode.Tiled;
         _mainGrid.IsVisible = _mode == RoostLayoutMode.MainStack;
@@ -393,7 +437,7 @@ internal sealed class RoostWindow : Window
             view.CanTakeOver = !pane.Ended && CanTakeOver?.Invoke(pane.Session) == true;
             view.Update(pane, _feeds[pane.Key]);
             view.SetFocused(pane.Key == _focused);
-            if (_placed.TryGetValue(pane.Key, out var place)) view.SetSize(place.Size, place.Held);
+            if (_placed.TryGetValue(pane.Key, out var size)) view.SetSize(size, held: false);
             else view.Park();
         }
 
@@ -407,11 +451,11 @@ internal sealed class RoostWindow : Window
         ArmHoldTimer();
     }
 
-    // While a pane is held back by the typing hold, wake when the hold lapses so it then expands.
+    // While typing holds the stage, wake when the hold lapses so a waiting pane then goes on stage.
     private void ArmHoldTimer()
     {
         _holdTimer.Stop();
-        if (_held.Count == 0 || _typing.ReleasesAt(Clock.Now) is not { } at) return;
+        if (_mode != RoostLayoutMode.Tiled || _typing.ReleasesAt(Clock.Now) is not { } at) return;
         var wait = at - Clock.Now;
         _holdTimer.Interval = wait > TimeSpan.Zero ? wait + TimeSpan.FromMilliseconds(50) : TimeSpan.FromMilliseconds(50);
         _holdTimer.Start();
@@ -420,14 +464,14 @@ internal sealed class RoostWindow : Window
     private void OnComposerTyping(string key)
     {
         _typing.Keystroke(key, Clock.Now);
-        if (_held.Count > 0) ArmHoldTimer();   // keep pushing the release out while the typing continues
+        ArmHoldTimer();   // keep pushing the release out while the typing continues
     }
 
     private void OnComposerFocusChanged(string key, bool focused)
     {
         if (focused) { _typing.Focused(key); return; }
         _typing.Blurred(key);
-        if (_held.Count > 0) Refresh();   // leaving the composer releases any held pane at once
+        Refresh();   // leaving the composer releases the hold at once
     }
 
     private void OnPromptSubmitted(string key, string text)
@@ -435,79 +479,57 @@ internal sealed class RoostWindow : Window
         if (_roster.Find(key) is not { Ended: false } pane) return;
         PromptSubmitted?.Invoke(pane.Session.SessionId, text);
         _typing.Sent(key);
-        if (_held.Count > 0) Refresh();
+        Refresh();
     }
 
-    // Every pane's Tiled size (kept even while another layout shows, as the resolver's "current" memory).
-    private readonly HashSet<string> _held = new(StringComparer.Ordinal);
-    private void ResolveTiledSizes(IReadOnlyList<RoostPane> panes, bool roomy)
-    {
-        _held.Clear();
-        foreach (var pane in panes)
-        {
-            RoostPaneSize? current = _sizes.TryGetValue(pane.Key, out var c) ? c : null;
-            var d = RoostLayout.ResolveSize(new RoostSizeInputs(
-                pane.Pin, pane.Group, pane.Ended, pane.Key == _focused,
-                TypingElsewhere: _typing.TypingElsewhere(pane.Key, Clock.Now), current, roomy));
-            _sizes[pane.Key] = d.Size;
-            if (d.Held) _held.Add(pane.Key);
-        }
-    }
+    private RoostStageGuard Guard() => new(_focused, _typing.TypingIn(Clock.Now));
 
-    private void LayoutTiled(IReadOnlyList<RoostPane> shown, string? reveal)
+    private void LayoutTiled(IReadOnlyList<RoostPane> all, IReadOnlyList<RoostPane> shown)
     {
-        var sized = shown.Select(p => (p.Key, _sizes[p.Key])).ToList();
-        // Auto's shape follows the cell count, and how many mini cards a cell stacks follows the shape: pack for
-        // the shape the pane count suggests, then once more if the packed count lands on a different one.
-        double aspect = StageAspect();
-        var template = RoostTemplates.Resolve(_template, Math.Min(shown.Count, RoostTemplates.AutoMaxCells), aspect);
-        var cells = RoostLayout.Pack(sized, RoostLayout.CellCapacity(CellHeight(template), MiniHeight(), CellGap));
-        var packed = RoostTemplates.Resolve(_template, cells.Count, aspect);
-        if (packed != template)
+        IReadOnlyList<string> keys;
+        if (_filter is null)
         {
-            template = packed;
-            cells = RoostLayout.Pack(sized, RoostLayout.CellCapacity(CellHeight(template), MiniHeight(), CellGap));
+            var guard = Guard();
+            _onStage.Sync(all, guard, hold: guard.TypingIn is not null);
+            AdmitStartedSession(all, guard);
+            keys = _onStage.Slots;
         }
+        else keys = RoostStage.Strict(shown);   // a filter shows its group without touching the sticky places
+
+        int count = Math.Max(1, keys.Count);
+        var template = RoostTemplates.For(count, _layoutByCount, StageAspect());
+        if (_drawnCount >= 0 && count != _drawnCount) FlashSnapHint();
+        _drawnCount = count;
         _drawnTemplate = template;
-        var shape = RoostTemplates.Shape(template);
-        _cells = cells;
-        _cellCount = cells.Count;
-        _perPage = shape.Slots.Count;
-        if (reveal is not null) _page = RoostLayout.PageToReveal(RoostLayout.CellOf(cells, reveal), _page, cells.Count, _perPage);
-        _page = RoostLayout.ClampPage(_page, cells.Count, _perPage);
-
-        var visibleCells = cells.Skip(_page * _perPage).Take(_perPage).ToList();
         EnsureBuiltFor(RoostLayoutMode.Tiled);
-        ApplyGridShape(shape);
+        ApplyGridShape(RoostTemplates.Shape(template));
 
-        // Only the cells whose contents changed are touched: detach them all first (a pane may be moving from
-        // one changed cell to another), then fill them. An unchanged cell — say, the one holding the composer
-        // being typed in — is never re-parented, so it keeps its focus and scroll.
+        // Only the cells whose pane changed are touched: detach them all first (a pane may be moving from one
+        // changed cell to another), then fill them. An unchanged cell — say, the one holding the composer being
+        // typed in — is never re-parented, so it keeps its focus and scroll.
         var sigs = new string[_cellHosts.Length];
-        for (int i = 0; i < sigs.Length; i++)
-            sigs[i] = i < visibleCells.Count
-                ? (visibleCells[i].Expanded ? "E:" : "m:") + string.Join(",", visibleCells[i].Keys)
-                : "";
+        for (int i = 0; i < sigs.Length; i++) sigs[i] = i < keys.Count ? keys[i] : "";
         for (int i = 0; i < sigs.Length; i++)
             if (sigs[i] != _cellSigs[i]) DetachHost(_cellHosts[i]);
         for (int i = 0; i < sigs.Length; i++)
         {
             if (sigs[i] == _cellSigs[i]) continue;
             _cellSigs[i] = sigs[i];
-            if (i >= visibleCells.Count) continue;
-            var cell = visibleCells[i];
-            if (cell.Expanded) _cellHosts[i].Child = _views[cell.Keys[0]];
-            else
-            {
-                var stack = new StackPanel { Spacing = CellGap, VerticalAlignment = VerticalAlignment.Top };
-                foreach (var k in cell.Keys) stack.Children.Add(_views[k]);
-                _cellHosts[i].Child = stack;
-            }
+            if (i < keys.Count) _cellHosts[i].Child = _views[keys[i]];
         }
-        foreach (var cell in visibleCells)
-            foreach (var k in cell.Keys)
-                _placed[k] = (_sizes[k], _held.Contains(k));
-        RefreshOverflow(cells);
+        _cellKeys = keys.ToList();
+        foreach (var k in keys) _placed[k] = RoostPaneSize.Expanded;
+        RefreshOffStage(shown);
+    }
+
+    // A session the user started with "+ New session" goes on stage when it first appears, even over a full one.
+    private void AdmitStartedSession(IReadOnlyList<RoostPane> all, RoostStageGuard guard)
+    {
+        if (_keysAtNewSession is not { } before) return;
+        if (Clock.Now > _newSessionUntil) { _keysAtNewSession = null; return; }
+        if (all.FirstOrDefault(p => p.Session.IsPerchControlled && !p.Ended && !before.Contains(p.Key)) is not { } started) return;
+        _keysAtNewSession = null;
+        _onStage.Bring(started.Key, all, guard);
     }
 
     private void LayoutMainStack(IReadOnlyList<RoostPane> shown)
@@ -520,8 +542,8 @@ internal sealed class RoostWindow : Window
         if (!ReferenceEquals(_mainHost.Child, mainView)) _mainHost.Child = null;
         if (stackChanged) foreach (var k in stack) _stack.Children.Add(_views[k]);
         if (_mainHost.Child is null && mainView is not null) _mainHost.Child = mainView;
-        if (main is not null) _placed[main] = (RoostPaneSize.Expanded, false);
-        foreach (var k in stack) _placed[k] = (RoostPaneSize.Collapsed, false);
+        if (main is not null) _placed[main] = RoostPaneSize.Expanded;
+        foreach (var k in stack) _placed[k] = RoostPaneSize.Collapsed;
         HideOverflow();
     }
 
@@ -531,7 +553,7 @@ internal sealed class RoostWindow : Window
         EnsureBuiltFor(RoostLayoutMode.Zoom);
         var view = target is null ? null : _views[target];
         if (!ReferenceEquals(_zoomHost.Child, view)) _zoomHost.Child = view;
-        if (target is not null) _placed[target] = (RoostPaneSize.Expanded, false);
+        if (target is not null) _placed[target] = RoostPaneSize.Expanded;
         HideOverflow();
     }
 
@@ -563,7 +585,6 @@ internal sealed class RoostWindow : Window
             var dropped = _views[gone];
             dropped.Park();
             _views.Remove(gone);
-            _sizes.Remove(gone);
             if (_feeds.Remove(gone, out var f)) f?.Dispose();
             if (_focused == gone) _focused = null;
             // A dropped pane still sitting in Zoom / Main (Tiled's per-cell diff and the stack diff drop it on
@@ -596,6 +617,7 @@ internal sealed class RoostWindow : Window
                 view.PromptSubmitted += OnPromptSubmitted;
                 view.ComposerTyping += OnComposerTyping;
                 view.ComposerFocusChanged += OnComposerFocusChanged;
+                AttachDragSource(view.Header, key);
                 _views[pane.Key] = view;
             }
         }
@@ -605,16 +627,6 @@ internal sealed class RoostWindow : Window
     {
         var b = _stage.Bounds;
         return b.Width > 0 && b.Height > 0 ? b.Width / b.Height : 1.6;
-    }
-
-    // The template's shortest row — the cell height that decides how many mini cards a cell stacks.
-    private double CellHeight(RoostSnapTemplate template)
-    {
-        double h = _stage.Bounds.Height;
-        if (h <= 0) h = 700;
-        var shape = RoostTemplates.Shape(template);
-        double usable = h - 2 * StagePad - (shape.Rows.Count - 1) * CellGap;
-        return Math.Max(120, shape.Rows.Min() / shape.Rows.Sum() * usable);
     }
 
     // Lays the grid out for a template: its rows and columns, and each host at its slot (spare hosts hidden). A
@@ -642,31 +654,6 @@ internal sealed class RoostWindow : Window
         }
     }
 
-    // A mini card's height, measured once per stage size from a probe pane (fonts decide it, never a guess).
-    private double MiniHeight()
-    {
-        if (_miniHeight > 0) return _miniHeight;
-        var probePane = _roster.Panes.FirstOrDefault();
-        if (probePane is null) return 110;
-        var probe = new SessionPane(_p, "probe");
-        probe.Update(probePane, null);
-        probe.SetSize(RoostPaneSize.Collapsed, false);
-        double w = _stage.Bounds.Width > 0 ? (_stage.Bounds.Width - 2 * StagePad - CellGap) / 2 : 500;
-        probe.Measure(new Size(w, double.PositiveInfinity));
-        _miniHeight = probe.DesiredSize.Height > 0 ? probe.DesiredSize.Height : 110;
-        probe.Park();
-        return _miniHeight;
-    }
-
-    private void Page(int pages)
-    {
-        if (_mode != RoostLayoutMode.Tiled) return;
-        int next = RoostLayout.ClampPage(_page + pages, _cellCount, _perPage);
-        if (next == _page) return;
-        _page = next;
-        Refresh();
-    }
-
     // ── Keyboard ──────────────────────────────────────────────────────────────
 
     private void OnChordKeyDown(object? sender, KeyEventArgs e)
@@ -689,7 +676,7 @@ internal sealed class RoostWindow : Window
         }
         else if (shift && e.Key == Key.E)
         {
-            if (_focused is { } key) OnPaneAction(key, RoostPaneAction.ToggleSize);
+            if (_focused is { } key) OnPaneAction(key, RoostPaneAction.KeepOnStage);
             e.Handled = true;
         }
         else if (shift && e.Key == Key.Z)
@@ -703,12 +690,8 @@ internal sealed class RoostWindow : Window
     private void OnPageKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Handled || e.KeyModifiers != KeyModifiers.None) return;
-        switch (e.Key)
-        {
-            case Key.PageDown: Page(+1); e.Handled = true; break;
-            case Key.PageUp: Page(-1); e.Handled = true; break;
-            case Key.Enter or Key.Escape: e.Handled = FocusedPerchKey(e.Key); break;
-        }
+        if (e.Key == Key.Escape && _ghost is not null) { EndDrag(drop: false); e.Handled = true; return; }
+        if (e.Key is Key.Enter or Key.Escape) e.Handled = FocusedPerchKey(e.Key);
     }
 
     // The focused Perch pane's permission keys, as in SessionWindow (and the TUI): Enter allows a pending
@@ -739,16 +722,16 @@ internal sealed class RoostWindow : Window
         if (_roster.Find(key) is not { } pane) return;
         switch (action)
         {
-            case RoostPaneAction.ToggleSize:
-                if (_mode != RoostLayoutMode.Tiled) { SetMode(RoostLayoutMode.Tiled); }
-                var current = _sizes.TryGetValue(key, out var s) ? s : RoostPaneSize.Collapsed;
-                _roster.SetPin(key, current == RoostPaneSize.Expanded ? RoostPin.Collapsed : RoostPin.Expanded);
-                _focused = key;
-                Refresh(reveal: key);
+            case RoostPaneAction.KeepOnStage:
+                bool keep = pane.Pin != RoostPin.Expanded;
+                _roster.SetPin(key, keep ? RoostPin.Expanded : RoostPin.Auto);
+                if (keep) FocusPane(key);   // pinning a pane from the rail brings it on stage
+                else Refresh();
                 break;
-            case RoostPaneAction.AutoSize:
-                _roster.SetPin(key, RoostPin.Auto);
-                Refresh(reveal: key);
+            case RoostPaneAction.Zoom:
+                _focused = key;
+                if (_mode == RoostLayoutMode.Zoom) SetMode(_preZoomMode);
+                else SetMode(RoostLayoutMode.Zoom);
                 break;
             case RoostPaneAction.OpenSession:
                 OpenSessionRequested?.Invoke(pane.Session);
@@ -831,73 +814,101 @@ internal sealed class RoostWindow : Window
         return b;
     }
 
+    // How many panes the stage holds — the count the flyout picks a layout for.
+    private int StageCount() => _mode == RoostLayoutMode.Tiled && _drawnCount > 0
+        ? _drawnCount
+        : Math.Clamp(ShownPanes().Count, 1, RoostStage.Capacity);
+
     private void RefreshSnapButton()
     {
         if (_snapButton is null) return;
-        var shown = _mode == RoostLayoutMode.Tiled ? _drawnTemplate : RoostSnapTemplate.Full;
+        bool tiled = _mode == RoostLayoutMode.Tiled;
+        bool hint = _snapHintTimer.IsEnabled;
+        var shown = tiled ? _drawnTemplate : RoostSnapTemplate.Full;
+        _snapButton.BorderBrush = hint ? _p.Brand : _p.Border;
+        _snapButton.Background = hint ? _p.BrandWash : _p.Surface;
         _snapButton.Child = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 6,
             Children =
             {
-                TemplateThumb(RoostTemplates.Shape(shown), 26, 16, _mode == RoostLayoutMode.Tiled ? _p.Brand : _p.Muted, onSlot: null),
+                TemplateThumb(RoostTemplates.Shape(shown), 26, 16, tiled ? _p.Brand : _p.Muted, onSlot: null),
                 new TextBlock
                 {
-                    Text = _template == RoostSnapTemplate.Auto ? "Auto" : RoostTemplates.Name(_template),
+                    Text = tiled ? $"{StageCount()} · {RoostTemplates.Name(shown)}" : "Layout",
                     FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
-                    Foreground = _mode == RoostLayoutMode.Tiled ? _p.Text : _p.Muted,
+                    Foreground = tiled ? _p.Text : _p.Muted,
                 },
             },
         };
     }
 
-    // Windows-style snap flyout: a thumbnail per template. A click on a thumbnail's cell picks the template and
-    // puts the focused pane in that cell; a click on the thumbnail's caption just picks the template.
+    // The stage count changed and the layout with it: light the snap button up for a moment, so the switch is
+    // noticed and the flyout (which picks for the new count) is one click away.
+    private void FlashSnapHint()
+    {
+        _snapHintTimer.Stop();
+        _snapHintTimer.Start();
+    }
+
+    // Windows-style snap flyout for the current stage count: a thumbnail per layout, those with too few cells
+    // dimmed. A click on a thumbnail picks it for this count; a click on one of its cells also puts the focused
+    // pane in that cell.
     private void ShowSnapFlyout(Control anchor)
     {
         var flyout = new Flyout { Placement = global::Avalonia.Controls.PlacementMode.BottomEdgeAlignedRight };
-        var wrap = new global::Avalonia.Controls.Primitives.UniformGrid { Columns = 3 };
-        double aspect = StageAspect();
+        var grid = new global::Avalonia.Controls.Primitives.UniformGrid { Columns = 4 };
+        int count = StageCount();
+        var picked = _layoutByCount.TryGetValue(count, out var pick) && RoostTemplates.Fits(pick, count) ? pick : RoostSnapTemplate.Auto;
+        var fallback = RoostTemplates.ForCount(count, StageAspect());
         foreach (var template in RoostTemplates.Picker)
         {
             var t = template;
-            bool on = t == _template;
-            // Auto previews the shape it would draw right now.
-            var shape = RoostTemplates.Shape(t == RoostSnapTemplate.Auto
-                ? RoostTemplates.Resolve(t, Math.Min(Math.Max(1, _cellCount), RoostTemplates.AutoMaxCells), aspect)
-                : t);
+            bool on = t == picked, fits = RoostTemplates.Fits(t, count);
+            var shape = RoostTemplates.Shape(t == RoostSnapTemplate.Auto ? fallback : t);
             var caption = new TextBlock
             {
-                Text = RoostTemplates.Name(t), FontFamily = _p.Body, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center,
+                Text = t == RoostSnapTemplate.Auto ? "Default" : RoostTemplates.Name(t),
+                FontFamily = _p.Body, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center,
                 Foreground = on ? _p.Text : _p.Muted, FontWeight = on ? FontWeight.SemiBold : FontWeight.Normal,
             };
             var tile = new Border
             {
                 Width = 84, Margin = new Thickness(4), Padding = new Thickness(6), CornerRadius = new CornerRadius(8),
                 BorderThickness = new Thickness(1), BorderBrush = on ? _p.BrandLine : Brushes.Transparent,
-                Background = on ? _p.BrandWash : Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand),
+                Background = on ? _p.BrandWash : Brushes.Transparent, Opacity = fits ? 1 : 0.35,
+                Cursor = fits ? new Cursor(StandardCursorType.Hand) : Cursor.Default,
+                [ToolTip.TipProperty] = fits ? null : $"Fewer than {count} cells",
                 Child = new StackPanel
                 {
                     Spacing = 5,
                     Children =
                     {
-                        TemplateThumb(shape, 70, 44, _p.Muted, onSlot: slot => { flyout.Hide(); SnapFocused(t, slot); }),
+                        TemplateThumb(shape, 70, 44, _p.Muted, onSlot: fits ? slot =>
+                        {
+                            flyout.Hide();
+                            SetLayoutFor(count, t);
+                            if (_focused is { } key) PlacePane(key, slot);
+                        } : null),
                         caption,
                     },
                 },
             };
-            if (!on)
+            if (fits)
             {
-                tile.PointerEntered += (_, _) => tile.Background = _p.Raised2;
-                tile.PointerExited += (_, _) => tile.Background = Brushes.Transparent;
+                if (!on)
+                {
+                    tile.PointerEntered += (_, _) => tile.Background = _p.Raised2;
+                    tile.PointerExited += (_, _) => tile.Background = Brushes.Transparent;
+                }
+                tile.PointerReleased += (_, e) =>
+                {
+                    if (e.InitialPressMouseButton != MouseButton.Left || e.Handled) return;
+                    flyout.Hide();
+                    SetLayoutFor(count, t);
+                };
             }
-            tile.PointerReleased += (_, e) =>
-            {
-                if (e.InitialPressMouseButton != MouseButton.Left || e.Handled) return;
-                flyout.Hide();
-                SetTemplate(t);
-            };
-            wrap.Children.Add(tile);
+            grid.Children.Add(tile);
         }
         flyout.Content = new StackPanel
         {
@@ -906,10 +917,11 @@ internal sealed class RoostWindow : Window
             {
                 new TextBlock
                 {
-                    Text = _focused is null ? "Pick a layout" : "Pick a layout · click a cell to put the focused pane there",
+                    Text = $"Layout for {count} session{(count == 1 ? "" : "s")}"
+                           + (_focused is null ? "" : " · click a cell to put the focused pane there"),
                     FontFamily = _p.Body, FontSize = 11.5, Foreground = _p.Faint, Margin = new Thickness(4, 0),
                 },
-                wrap,
+                grid,
             },
         };
         flyout.ShowAt(anchor);
@@ -974,22 +986,19 @@ internal sealed class RoostWindow : Window
         return (pill, text, dot);
     }
 
-    private void HideOverflow() => _pillUp.IsVisible = _pillDown.IsVisible = false;
+    private void HideOverflow() => _offPill.IsVisible = false;
 
-    private void RefreshOverflow(IReadOnlyList<RoostCell> cells)
+    // "N off stage · 1 needs you": the shown panes waiting in the rail.
+    private void RefreshOffStage(IReadOnlyList<RoostPane> shown)
     {
-        var o = RoostLayout.Overflow(cells, _page, _perPage,
-            k => _roster.Find(k) is { Group: RoostGroup.NeedsYou });
-        _pillUp.IsVisible = o.Above > 0;
-        _pillUpText.Text = o.AboveNeedsYou > 0 ? $"↑ {o.Above} more · {o.AboveNeedsYou} need{(o.AboveNeedsYou == 1 ? "s" : "")} you" : $"↑ {o.Above} more";
-        _pillDown.IsVisible = o.Below > 0;
-        bool downNeeds = o.BelowNeedsYou > 0;
-        _pillDownText.Text = downNeeds ? $"↓ {o.Below} more · {o.BelowNeedsYou} need{(o.BelowNeedsYou == 1 ? "s" : "")} you" : $"↓ {o.Below} more";
-        _pillDownDot.IsVisible = downNeeds;
-        _pillDown.BorderBrush = downNeeds ? _p.Await : _p.Border;
-        _pillDownText.Foreground = downNeeds ? _p.Await : _p.Muted;
-        _pillUp.BorderBrush = o.AboveNeedsYou > 0 ? _p.Await : _p.Border;
-        _pillUpText.Foreground = o.AboveNeedsYou > 0 ? _p.Await : _p.Muted;
+        var visible = _cellKeys.ToHashSet(StringComparer.Ordinal);
+        var off = shown.Where(p => !visible.Contains(p.Key)).ToList();
+        int needs = off.Count(p => p.Group == RoostGroup.NeedsYou);
+        _offPill.IsVisible = off.Count > 0;
+        _offPillText.Text = needs > 0 ? $"{off.Count} off stage · {needs} need{(needs == 1 ? "s" : "")} you" : $"{off.Count} off stage";
+        _offPillDot.IsVisible = needs > 0;
+        _offPill.BorderBrush = needs > 0 ? _p.Await : _p.Border;
+        _offPillText.Foreground = needs > 0 ? _p.Await : _p.Muted;
     }
 
     private void RefreshChips()
@@ -1071,7 +1080,6 @@ internal sealed class RoostWindow : Window
         {
             if (e.InitialPressMouseButton != MouseButton.Left) return;
             _filter = _filter == group ? null : group;
-            _page = 0;
             Refresh();
         };
         return chip;
@@ -1079,6 +1087,7 @@ internal sealed class RoostWindow : Window
 
     private void RefreshRail()
     {
+        if (_press is not null) return;   // rebuilding would drop the row being pressed / dragged
         _rail.Children.Clear();
         if (_roster.Panes.Count == 0)
         {
@@ -1131,11 +1140,22 @@ internal sealed class RoostWindow : Window
             : s.Status == SessionStatus.AwaitingInput ? s.AwaitingElapsedLabel() ?? ""
             : s.Status == SessionStatus.Running ? s.RunningElapsedLabel() ?? ""
             : "";
+        // Tiled: a pane waiting off stage reads dimmer; one that hasn't been on stage yet is marked "new".
+        bool offStage = _mode == RoostLayoutMode.Tiled && !_cellKeys.Contains(pane.Key);
+        bool fresh = offStage && _filter is null && !pane.Ended && !_onStage.WasEverOn(pane.Key);
+        var newTag = new Border
+        {
+            CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(6, 0), Margin = new Thickness(6, 0, 0, 0),
+            BorderThickness = new Thickness(1), BorderBrush = _p.BrandLine, IsVisible = fresh,
+            VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right,
+            Child = new TextBlock { Text = "new", FontFamily = _p.Body, FontSize = 10, Foreground = _p.Brand },
+        };
         var row = new Border
         {
             CornerRadius = new CornerRadius(8), Padding = new Thickness(8, 6), BorderThickness = new Thickness(1),
             BorderBrush = on ? _p.BrandLine : Brushes.Transparent, Background = on ? _p.BrandWash : Brushes.Transparent,
             Cursor = new Cursor(StandardCursorType.Hand), Opacity = pane.Ended ? 0.6 : 1,
+            [ToolTip.TipProperty] = offStage ? "Off stage — click to bring it on, or drag it onto a cell" : null,
             Child = new DockPanel
             {
                 LastChildFill = true,
@@ -1143,6 +1163,7 @@ internal sealed class RoostWindow : Window
                 {
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, [DockPanel.DockProperty] = Dock.Left, Children = { dot } },
                     new TextBlock { Text = elapsed, FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right },
+                    newTag,
                     new TextBlock
                     {
                         Text = s.IsPerchControlled ? "◆" : "", FontSize = 9, Foreground = _p.Brand, VerticalAlignment = VerticalAlignment.Center,
@@ -1150,7 +1171,7 @@ internal sealed class RoostWindow : Window
                     },
                     new TextBlock
                     {
-                        Text = s.DisplayName, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 13, Foreground = _p.Text,
+                        Text = s.DisplayName, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 13, Foreground = offStage ? _p.Faint : _p.Text,
                         TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0),
                     },
                 },
@@ -1161,8 +1182,95 @@ internal sealed class RoostWindow : Window
             row.PointerEntered += (_, _) => row.Background = _p.Raised2;
             row.PointerExited += (_, _) => row.Background = Brushes.Transparent;
         }
-        row.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) FocusPane(pane.Key); };
+        AttachDragSource(row, pane.Key);   // first, so a drop marks the release handled before the click sees it
+        row.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left && !e.Handled) FocusPane(pane.Key); };
         return row;
+    }
+
+    // ── Drag to rearrange ─────────────────────────────────────────────────────
+
+    // Pressing a pane header (or a rail row) and moving a few pixels starts a drag in Tiled: a ghost chip follows
+    // the pointer and the cell under it is marked; letting go there puts the pane in that cell (PlacePane).
+    private void AttachDragSource(Control source, string key)
+    {
+        source.PointerPressed += (_, e) =>
+        {
+            if (_mode != RoostLayoutMode.Tiled || !e.GetCurrentPoint(source).Properties.IsLeftButtonPressed) return;
+            _press = (key, e.GetPosition(_overlay), source);
+            e.Pointer.Capture(source);
+        };
+        source.PointerMoved += (_, e) =>
+        {
+            if (_press is not { } press || !ReferenceEquals(press.Source, source)) return;
+            var at = e.GetPosition(_overlay);
+            if (_ghost is null)
+            {
+                if (Math.Abs(at.X - press.Start.X) + Math.Abs(at.Y - press.Start.Y) < 6) return;
+                StartGhost(press.Key);
+            }
+            MoveGhost(at);
+        };
+        source.PointerReleased += (_, e) =>
+        {
+            if (_press is not { } press || !ReferenceEquals(press.Source, source)) return;
+            if (_ghost is not null) e.Handled = true;
+            EndDrag(drop: true);
+            e.Pointer.Capture(null);
+        };
+        source.PointerCaptureLost += (_, _) =>
+        {
+            if (_press is { } press && ReferenceEquals(press.Source, source)) EndDrag(drop: false);
+        };
+    }
+
+    private void StartGhost(string key)
+    {
+        var name = _roster.Find(key)?.Session.DisplayName ?? key;
+        _ghost = new Border
+        {
+            CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(12, 5), BorderThickness = new Thickness(1),
+            BorderBrush = _p.Brand, Background = _p.Raised2, Opacity = 0.95,
+            Child = new TextBlock { Text = name, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12.5, Foreground = _p.Text },
+        };
+        _overlay.Children.Add(_ghost);
+    }
+
+    // Moves the ghost to the pointer and marks the Tiled cell under it (an empty cell counts: dropping there
+    // moves the pane to the end).
+    private void MoveGhost(Point at)
+    {
+        if (_ghost is null) return;
+        Canvas.SetLeft(_ghost, at.X + 12);
+        Canvas.SetTop(_ghost, at.Y + 8);
+        _dropSlot = -1;
+        for (int i = 0; i < _cellHosts.Length; i++)
+        {
+            var host = _cellHosts[i];
+            if (!host.IsVisible || host.TranslatePoint(default, _overlay) is not { } origin) continue;
+            var rect = new Rect(origin, host.Bounds.Size);
+            if (!rect.Contains(at)) continue;
+            _dropSlot = i;
+            Canvas.SetLeft(_dropMark, rect.X);
+            Canvas.SetTop(_dropMark, rect.Y);
+            _dropMark.Width = rect.Width;
+            _dropMark.Height = rect.Height;
+            break;
+        }
+        _dropMark.IsVisible = _dropSlot >= 0;
+    }
+
+    private void EndDrag(bool drop)
+    {
+        var key = _press?.Key;
+        int slot = _dropSlot;
+        bool dragged = _ghost is not null;
+        _press = null;
+        if (_ghost is not null) _overlay.Children.Remove(_ghost);
+        _ghost = null;
+        _dropMark.IsVisible = false;
+        _dropSlot = -1;
+        if (drop && dragged && key is not null && slot >= 0) PlacePane(key, slot);
+        else RefreshRail();
     }
 
     private Border BarButton(string label, Action onClick)

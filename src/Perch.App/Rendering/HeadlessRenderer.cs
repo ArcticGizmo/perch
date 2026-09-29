@@ -1473,20 +1473,20 @@ internal static class HeadlessRenderer
         return c;
     }
 
-    // Snap layouts: two running sessions under Auto (side by side, both expanded because both fit), three under
-    // Auto (one + two), a fixed Two rows, and the snap flyout open.
+    // Snap layouts: two sessions under the default (side by side), three (one + two), five (two + three), a
+    // "Two rows" pick for two, and the snap flyout open.
     private static void RenderRoostSnap(string outDir)
     {
         var all = RoostSampleSessions();
-        void Shot(string name, int count, Perch.Data.Roost.RoostSnapTemplate template, bool flyout = false)
+        void Shot(string name, int count, Dictionary<int, Perch.Data.Roost.RoostSnapTemplate>? picks = null, bool flyout = false)
         {
             var roster = new Perch.Data.Roost.RoostRoster();
-            var picked = all.Where(s => s.ProjectName is "perch" or "extension" or "api").Take(count).ToList();
+            var picked = all.Where(s => s.ProjectName is "perch" or "api" or "extension" or "docs-site" or "service").Take(count).ToList();
             roster.Update(picked, Clock.Now);
             var w = new Windows.RoostWindow(roster,
                 pane => RoostFeed.ForFixed(RoostSampleConversation(pane.Session), pane.Session.SessionId,
                     controlled: pane.Session.IsPerchControlled),
-                SessionPalette.For(true), template: template)
+                SessionPalette.For(true), layoutByCount: picks)
             { Width = 1280, Height = 800 };
             w.Show();
             for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
@@ -1504,10 +1504,11 @@ internal static class HeadlessRenderer
             }
             w.Close();
         }
-        Shot("roost_snap_auto2_1x.png", 2, Perch.Data.Roost.RoostSnapTemplate.Auto);
-        Shot("roost_snap_auto3_1x.png", 3, Perch.Data.Roost.RoostSnapTemplate.Auto);
-        Shot("roost_snap_rows2_1x.png", 2, Perch.Data.Roost.RoostSnapTemplate.Rows2);
-        Shot("roost_snap_flyout_1x.png", 2, Perch.Data.Roost.RoostSnapTemplate.Auto, flyout: true);
+        Shot("roost_snap_auto2_1x.png", 2);
+        Shot("roost_snap_auto3_1x.png", 3);
+        Shot("roost_snap_auto5_1x.png", 5);
+        Shot("roost_snap_rows2_1x.png", 2, new() { [2] = Perch.Data.Roost.RoostSnapTemplate.Rows2 });
+        Shot("roost_snap_flyout_1x.png", 2, flyout: true);
     }
 
     private static void RenderRoost(string outDir)
@@ -1537,17 +1538,38 @@ internal static class HeadlessRenderer
                 using var fs = File.Create(Path.Combine(outDir, name));
                 frame.Save(fs);
             }
+            // Nine panes: the six most urgent on stage (3×2); ext, agent and the ended scratch wait in the rail,
+            // dimmed (the two live ones marked "new"), and the bottom bar reads "3 off stage".
             Capture(dark ? "roost_tiled_1x.png" : "roost_tiled_light_1x.png");
             if (dark)
             {
-                // Paged to the bottom: the error ring, the rest of the mini cards, and the "↑ N more" pill.
-                w.PageForRender(+5);
-                Capture("roost_tiled_paged_1x.png");
-
-                // The "needs you" chip as a filter: only the blocked sessions, back on the first page.
+                // The "needs you" chip as a filter: only the blocked sessions.
                 w.FilterForRender(Perch.Data.Roost.RoostGroup.NeedsYou);
                 Capture("roost_tiled_filtered_1x.png");
                 w.FilterForRender(null);
+
+                // Selecting "extension" in the rail: it takes the weakest pane's cell (the least recently viewed
+                // working pane, perch); nothing else moves and perch goes to the rail.
+                w.FocusPane("8801");
+                Capture("roost_tiled_brought_1x.png");
+
+                // Dragging "agent" from the rail over the first cell (ghost + drop mark), then letting go: agent
+                // takes that cell and its pane returns to the rail.
+                w.DragForRender("8802", 0);
+                Capture("roost_tiled_drag_1x.png");
+                w.DropForRender();
+                Capture("roost_tiled_dropped_1x.png");
+
+                // "+ New session": the Perch session it starts goes on stage when it appears, over a full stage.
+                w.StartNewSessionForRender();
+                sessions = [.. sessions, sessions.First(s => s.ProjectName == "api") with
+                {
+                    Pid = "7777", SessionId = "s-new", ProjectName = "new-session", Status = SessionStatus.Running,
+                    AwaitingSince = null, RunningSince = Clock.Now.AddSeconds(-2),
+                }];
+                roster.Update(sessions.Where(s => s.ProjectName != "scratch").ToList(), Clock.Now);
+                w.RosterChanged();
+                Capture("roost_tiled_started_1x.png");
 
                 // Main + stack with the Perch "api" pane focused (main), then Zoom on it.
                 w.FocusPane("5678");
@@ -1564,13 +1586,13 @@ internal static class HeadlessRenderer
                     Capture("roost_zoom_answered_1x.png");
                 }
 
-                // CP11 typing hold: the user is mid-reply in "api" when "perch" starts needing input — perch
-                // stays a (pulsing) mini card instead of expanding and shifting the grid under the cursor.
+                // Typing hold: the user is mid-reply in "api" when an off-stage session starts needing input — it
+                // waits in the rail ("off stage · 1 needs you") instead of bumping a pane under the cursor.
                 w.SetMode(Perch.Data.Roost.RoostLayoutMode.Tiled);
-                w.PageForRender(-5);
                 w.TypeForRender("5678");
+                var offStage = roster.Panes.First(p => !p.Ended && !w.IsOnScreenKey(p.Key)).Key;
                 roster.Update(sessions.Where(s => s.ProjectName != "scratch")
-                    .Select(s => s.ProjectName == "perch"
+                    .Select(s => s.Pid == offStage
                         ? s with { Status = SessionStatus.AwaitingInput, AwaitingSince = Clock.Now.AddSeconds(-3) }
                         : s).ToList(), Clock.Now);
                 w.RosterChanged();

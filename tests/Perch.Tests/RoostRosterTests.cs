@@ -52,6 +52,28 @@ public class RoostRosterTests
     }
 
     [Fact]
+    public void ASeededOrderPlacesPanesAsTheyArrive()
+    {
+        var r = new RoostRoster();
+        r.SeedOrder(["3", "1", "2"]);
+        r.Update([S("1"), S("2"), S("4")], T0);
+        Assert.Equal(["1", "2", "4"], Keys(r.Panes));
+        r.Update([S("1"), S("2"), S("3"), S("4")], T0);   // 3 was first in the saved order
+        Assert.Equal(["3", "1", "2", "4"], Keys(r.Panes));
+        r.Update([S("1"), S("2"), S("3"), S("4"), S("5")], T0);
+        Assert.Equal(["3", "1", "2", "4", "5"], Keys(r.Panes));
+    }
+
+    [Fact]
+    public void SeedingAfterPanesExistReordersThem()
+    {
+        var r = new RoostRoster();
+        r.Update([S("1"), S("2"), S("3")], T0);
+        r.SeedOrder(["2", "3"]);
+        Assert.Equal(["2", "3", "1"], Keys(r.Panes));
+    }
+
+    [Fact]
     public void ScanOrderDoesNotReorderExistingPanes()
     {
         var r = new RoostRoster();

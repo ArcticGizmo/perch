@@ -1,9 +1,9 @@
 namespace Perch.Data.Roost;
 
-/// <summary>The shape of the Tiled grid, picked from the Roost's snap-layout flyout (persisted).</summary>
+/// <summary>The shape of the Tiled grid. The snap-layout flyout picks one per stage count (persisted).</summary>
 public enum RoostSnapTemplate
 {
-    /// <summary>Follows the pane count and the stage's shape (<see cref="RoostTemplates.ForCount"/>).</summary>
+    /// <summary>The default for the count and the stage's shape (<see cref="RoostTemplates.ForCount"/>).</summary>
     Auto = 0,
     Full = 1,
     Columns2 = 2,
@@ -15,6 +15,8 @@ public enum RoostSnapTemplate
     Columns3 = 6,
     Grid2x2 = 7,
     Grid3x2 = 8,
+    /// <summary>Two on top, three below.</summary>
+    TwoPlusThree = 9,
 }
 
 /// <summary>One cell of a template, in grid rows/columns.</summary>
@@ -32,7 +34,7 @@ public sealed record RoostTemplateShape(IReadOnlyList<double> Columns, IReadOnly
 /// <summary>The snap-layout templates (UI-free, unit-tested).</summary>
 public static class RoostTemplates
 {
-    /// <summary>The most cells Auto lays out on one page; past this it pages a 3×2 grid.</summary>
+    /// <summary>The most cells any template has — the stage's capacity.</summary>
     public const int AutoMaxCells = 6;
 
     /// <summary>The flyout's order.</summary>
@@ -40,7 +42,7 @@ public static class RoostTemplates
     [
         RoostSnapTemplate.Auto, RoostSnapTemplate.Full, RoostSnapTemplate.Columns2, RoostSnapTemplate.Rows2,
         RoostSnapTemplate.Wide60, RoostSnapTemplate.MainPlusTwo, RoostSnapTemplate.Columns3,
-        RoostSnapTemplate.Grid2x2, RoostSnapTemplate.Grid3x2,
+        RoostSnapTemplate.Grid2x2, RoostSnapTemplate.TwoPlusThree, RoostSnapTemplate.Grid3x2,
     ];
 
     public static string Name(RoostSnapTemplate t) => t switch
@@ -54,6 +56,7 @@ public static class RoostTemplates
         RoostSnapTemplate.Columns3 => "Three columns",
         RoostSnapTemplate.Grid2x2 => "2 × 2",
         RoostSnapTemplate.Grid3x2 => "3 × 2",
+        RoostSnapTemplate.TwoPlusThree => "Two + three",
         _ => t.ToString(),
     };
 
@@ -67,16 +70,22 @@ public static class RoostTemplates
         RoostSnapTemplate.Columns3 => Uniform(3, 1),
         RoostSnapTemplate.Grid2x2 => Uniform(2, 2),
         RoostSnapTemplate.Grid3x2 => Uniform(3, 2),
+        // Six columns: the top two cells span three each, the bottom three span two.
+        RoostSnapTemplate.TwoPlusThree => new([1, 1, 1, 1, 1, 1], [1, 1],
+            [new(0, 0, ColumnSpan: 3), new(0, 3, ColumnSpan: 3), new(1, 0, ColumnSpan: 2), new(1, 2, ColumnSpan: 2), new(1, 4, ColumnSpan: 2)]),
         _ => Uniform(1, 1),
     };
 
-    /// <summary>How many cells a page of <paramref name="t"/> holds (Auto: up to <see cref="AutoMaxCells"/>).</summary>
+    /// <summary>How many cells <paramref name="t"/> has (Auto: up to <see cref="AutoMaxCells"/>).</summary>
     public static int Capacity(RoostSnapTemplate t) => t == RoostSnapTemplate.Auto ? AutoMaxCells : Shape(t).Slots.Count;
+
+    /// <summary>Whether <paramref name="t"/> has a cell for each of <paramref name="count"/> panes.</summary>
+    public static bool Fits(RoostSnapTemplate t, int count) => Capacity(t) >= count;
 
     /// <summary>
     /// Auto's pick for <paramref name="cells"/> cells on a stage <paramref name="aspect"/> (width / height) wide:
     /// one fills the stage; two sit side by side (stacked on a stage taller than wide); three go one + two
-    /// (three columns on a stage over twice as wide as tall); four 2×2; more 3×2, paged.
+    /// (three columns on a stage over twice as wide as tall); four 2×2; five two + three; six 3×2.
     /// </summary>
     public static RoostSnapTemplate ForCount(int cells, double aspect) => cells switch
     {
@@ -84,12 +93,16 @@ public static class RoostTemplates
         2 => aspect >= 1 ? RoostSnapTemplate.Columns2 : RoostSnapTemplate.Rows2,
         3 => aspect >= 2.2 ? RoostSnapTemplate.Columns3 : RoostSnapTemplate.MainPlusTwo,
         4 => RoostSnapTemplate.Grid2x2,
+        5 => RoostSnapTemplate.TwoPlusThree,
         _ => RoostSnapTemplate.Grid3x2,
     };
 
-    /// <summary>The fixed template to draw: <paramref name="t"/> itself, or Auto's pick.</summary>
-    public static RoostSnapTemplate Resolve(RoostSnapTemplate t, int cells, double aspect) =>
-        t == RoostSnapTemplate.Auto ? ForCount(cells, aspect) : t;
+    /// <summary>The template to draw for <paramref name="count"/> panes: the user's pick for that count when it
+    /// still fits them, else the default.</summary>
+    public static RoostSnapTemplate For(int count, IReadOnlyDictionary<int, RoostSnapTemplate>? picks, double aspect) =>
+        picks is not null && picks.TryGetValue(count, out var t) && t != RoostSnapTemplate.Auto && Fits(t, count)
+            ? t
+            : ForCount(count, aspect);
 
     private static RoostTemplateShape Uniform(int columns, int rows)
     {

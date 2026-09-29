@@ -16,10 +16,10 @@ namespace Perch.Avalonia.Views;
 /// <summary>What a pane's menu / footer asked for.</summary>
 internal enum RoostPaneAction
 {
-    /// <summary>Flip expanded ↔ collapsed and pin it (header double-click, Ctrl+Shift+E, the menu).</summary>
-    ToggleSize,
-    /// <summary>Clear the pin — back to size-by-status.</summary>
-    AutoSize,
+    /// <summary>Pin / unpin the pane on the Tiled stage, so it's never bumped (Ctrl+Shift+E, the menu).</summary>
+    KeepOnStage,
+    /// <summary>Zoom the pane, or back out of Zoom (header double-click).</summary>
+    Zoom,
     /// <summary>Open the Perch session window / focus the terminal hosting the session.</summary>
     OpenSession,
     /// <summary>Copy <c>claude --resume {id}</c>.</summary>
@@ -169,7 +169,7 @@ internal sealed class SessionPane : Border
             CornerRadius = new CornerRadius(11, 11, 0, 0), Cursor = new Cursor(StandardCursorType.Hand),
             Child = new StackPanel { Children = { line1, line2 } }, [DockPanel.DockProperty] = Dock.Top,
         };
-        _header.DoubleTapped += (_, e) => { e.Handled = true; ActionRequested?.Invoke(Key, RoostPaneAction.ToggleSize); };
+        _header.DoubleTapped += (_, e) => { e.Handled = true; ActionRequested?.Invoke(Key, RoostPaneAction.Zoom); };
 
         _miniLines = new StackPanel
         {
@@ -245,6 +245,9 @@ internal sealed class SessionPane : Border
 
     public string Key { get; }
     public RoostPaneSize Size => _size;
+
+    /// <summary>The header band — the handle the Roost drags a pane by.</summary>
+    public Control Header => _header;
 
     /// <summary>The pane was clicked (focus it).</summary>
     public event Action<string>? Activated;
@@ -674,10 +677,11 @@ internal sealed class SessionPane : Border
     {
         if (_pane is not { } pane) return;
         var flyout = new MenuFlyout { Placement = PlacementMode.BottomEdgeAlignedRight };
-        var toggle = new MenuItem { Header = _size == RoostPaneSize.Expanded ? "Collapse" : "Expand" };
-        toggle.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.ToggleSize);
-        var auto = new MenuItem { Header = "Auto size (by status)", IsEnabled = pane.Pin != RoostPin.Auto };
-        auto.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.AutoSize);
+        var keep = new MenuItem
+        {
+            Header = "Keep on stage", ToggleType = MenuItemToggleType.CheckBox, IsChecked = pane.Pin == RoostPin.Expanded,
+        };
+        keep.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.KeepOnStage);
         var open = new MenuItem
         {
             Header = pane.Session.IsPerchControlled ? "Open full window" : "Focus terminal",
@@ -686,8 +690,7 @@ internal sealed class SessionPane : Border
         open.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.OpenSession);
         var copy = new MenuItem { Header = "Copy resume command" };
         copy.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.CopyResume);
-        flyout.Items.Add(toggle);
-        flyout.Items.Add(auto);
+        flyout.Items.Add(keep);
         flyout.Items.Add(new Separator());
         flyout.Items.Add(open);
         if (CanTakeOver && !pane.Session.IsPerchControlled && !pane.Ended)

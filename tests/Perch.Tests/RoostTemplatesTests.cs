@@ -15,14 +15,25 @@ public class RoostTemplatesTests
     [InlineData(3, 1.6, RoostSnapTemplate.MainPlusTwo)]
     [InlineData(3, 2.5, RoostSnapTemplate.Columns3)]    // ultrawide
     [InlineData(4, 1.6, RoostSnapTemplate.Grid2x2)]
-    [InlineData(5, 1.6, RoostSnapTemplate.Grid3x2)]
-    [InlineData(12, 1.6, RoostSnapTemplate.Grid3x2)]
+    [InlineData(5, 1.6, RoostSnapTemplate.TwoPlusThree)]
+    [InlineData(6, 1.6, RoostSnapTemplate.Grid3x2)]
     public void AutoFitsThePaneCount(int cells, double aspect, RoostSnapTemplate expected) =>
         Assert.Equal(expected, RoostTemplates.ForCount(cells, aspect));
 
     [Fact]
-    public void AFixedTemplateResolvesToItself() =>
-        Assert.Equal(RoostSnapTemplate.Rows2, RoostTemplates.Resolve(RoostSnapTemplate.Rows2, 5, 1.6));
+    public void APickForTheCountWinsWhileItFits()
+    {
+        var picks = new Dictionary<int, RoostSnapTemplate>
+        {
+            [2] = RoostSnapTemplate.Rows2,
+            [3] = RoostSnapTemplate.Columns2,     // too few cells for 3 — ignored
+            [4] = RoostSnapTemplate.Auto,         // Auto = the default
+        };
+        Assert.Equal(RoostSnapTemplate.Rows2, RoostTemplates.For(2, picks, 1.6));
+        Assert.Equal(RoostSnapTemplate.MainPlusTwo, RoostTemplates.For(3, picks, 1.6));
+        Assert.Equal(RoostSnapTemplate.Grid2x2, RoostTemplates.For(4, picks, 1.6));
+        Assert.Equal(RoostSnapTemplate.Columns2, RoostTemplates.For(2, null, 1.6));
+    }
 
     [Fact]
     public void EveryTemplateTilesItsGridOnce()

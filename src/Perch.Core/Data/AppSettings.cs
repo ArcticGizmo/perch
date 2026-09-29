@@ -163,8 +163,13 @@ internal sealed class AppSettings
     // Settings-window control. See docs/roost-plan.md.
     public Roost.RoostLayoutMode RoostLayout { get; set; } = Roost.RoostLayoutMode.Tiled;
 
-    // The Tiled grid's shape, picked from the Roost's snap-layout flyout. UI state, like RoostLayout.
-    public Roost.RoostSnapTemplate RoostTemplate { get; set; } = Roost.RoostSnapTemplate.Auto;
+    // The Tiled grid's shape per number of panes on stage, picked from the Roost's snap-layout flyout (a count
+    // missing = the default for it). UI state, like RoostLayout.
+    public Dictionary<int, Roost.RoostSnapTemplate>? RoostLayoutByCount { get; set; }
+
+    // The Roost's pane order (by session process id), rearranged by dragging pane headers, so it survives a
+    // restart while the sessions run.
+    public List<string>? RoostOrder { get; set; }
 
     // The Roost panes the user closed (by session process id), so they stay hidden across restarts while their
     // session lives; pruned to live sessions as the roster runs. UI state, not a Settings-window control.
