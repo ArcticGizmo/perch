@@ -486,6 +486,8 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 
 **Verify.** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1557 with 1 skipped. One full run hit a single unnamed intermittent failure. The two timing-sensitive new tests were hardened (the concurrent-writers race also tolerates access denied, and the retry test releases its lock from a dedicated thread rather than the pool), and 15 repeated runs of the affected classes were clean. The machine was slow throughout: a baseline run without CP14 also took about 2 minutes, against about 40s earlier in the day. The classes on the new write path took 3.2s in total, so fsync isn't the cost.
 
+**Landed:** commit `3d1dd96`.
+
 <a id="cp15"></a>
 ### CP15 — Recording-export redaction gaps · 🟡 P2 · S · ⬜
 
