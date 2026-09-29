@@ -32,7 +32,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP5](#cp5) | 🟡 P2 | Supabase | Draw with Perch: RPC state checks + size limits | S | ⬜ |
 | [CP6](#cp6) | 🟡 P2 | Supabase | Block/suspension coverage, `find_profile` throttle, feed query | M | ⬜ |
 | [CP7](#cp7) | 🔴 P0 | Client | Executable hijack via untrusted working directory | M | 🟦 code + tests done, dogfood owed |
-| [CP8](#cp8) | 🟠 P1 | Client | Link opening: scheme allowlist + browser argument injection | S | ⬜ |
+| [CP8](#cp8) | 🟠 P1 | Client | Link opening: scheme allowlist + browser argument injection | S | 🟦 code + tests done, dogfood owed |
 | [CP9](#cp9) | 🟠 P1 | Client | No UNC/remote path probing (NTLM leak + UI hang) | S | ⬜ |
 | [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | ⬜ |
 | [CP11](#cp11) | 🟡 P2 | Client | Hardened shared `GitRunner` | M | ⬜ |
@@ -284,7 +284,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - **The statusline test catches the bug.** Against the old bare-`'git'` script it produced `SU`, not `S1U0`.
 
 <a id="cp8"></a>
-### CP8 — Link opening: scheme allowlist + browser argument injection · 🟠 P1 · S · ⬜
+### CP8 — Link opening: scheme allowlist + browser argument injection · 🟠 P1 · S · 🟦
 
 **Problem.**
 - Markdown link and autolink targets (`MarkdownView.cs:612-627`, `LinkText.cs:84-86`) reach `UrlOpener.Open`, which calls `ShellExecute` (`UrlOpener.cs:19`) with no scheme check. So `file:`, UNC, `search-ms:` and `ms-*:` links execute on click.
@@ -292,10 +292,24 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - PR check `detailsUrl` values (`OverlayCanvas.cs:5187`) reach the same sink.
 
 **Tasks**
-- [ ] `IUrlOpener` (Windows and Mac): accept only an absolute `Uri` with scheme `http`, `https` or `mailto`. Reject everything else in one place.
-- [ ] `MarkLink`: apply the same filter, so relative and file targets never become links. Route them to the existence-gated FileRef viewer instead.
-- [ ] Put `--` before the URL in the new-window and private launches.
-- [ ] xUnit on the (pure) validator: `file:///x.exe`, `\\h\s\x`, `search-ms:`, `--flag`, `javascript:` are rejected; `https://…` is accepted.
+- [x] New pure `Perch.Data.OpenTargets` is the one place that decides what may be opened:
+  - `WebUrl(url)`: an absolute `http`/`https` URL with a host, or `mailto:`, returned as the normalised `AbsoluteUri` (always scheme-led, whitespace and control characters escaped); anything else → null.
+  - `LinkFilePath(target)`: a markdown link target as a local path (relative with `#`/`?` dropped and `%`-escapes decoded, a drive path, or a local `file:` URI). Any other scheme, and anything network-shaped (UNC, `//host`, `\\?\`, `\\.\`, `file://host/…`, including after decoding), → null.
+  - `IsViewerSafeFile(path)`: a fully-qualified, non-network path whose extension is on a short view-only allowlist (images, text/data, PDF, `docx`/`xlsx`/`pptx`, media). HTML, SVG, macro-capable office formats, executables, scripts, shortcuts and anything unknown are refused, as are NTFS alternate streams.
+- [x] `IUrlOpener` (Windows and Mac): all three entry points run `WebUrl` first and silently no-op otherwise. A `mailto:` given to new-window/private goes to the plain shell open, never to the browser exe. The interface doc no longer claims it opens local files.
+- [x] Chromium launches (new-window and private) put `--` before the URL, the form Chrome registers for itself. Gecko has no switch terminator, so Firefox relies on `WebUrl` guaranteeing a scheme-led argument.
+- [x] **Found while auditing callers:** `AttachmentChip` and the image viewer's "Open" shell-opened local files **through the URL opener**, and would have broken. New `IFileRevealer.OpenWithDefault(path)` (Windows and Mac): the default handler for a view-only type, otherwise reveal in the file manager, so it's never a dead end and never runs code. Both callers moved to it.
+- [x] `OpenInEditor`'s "no VS Code" fallback now goes through `OpenWithDefault` too, which closes CP12's third task (a `.bat` file ref was shell-executed). The Mac `OpenWith`, which was a bare `open` of any file, also goes through it.
+- [x] `MarkLink`: only `WebUrl` targets become browser links (the span stores the normalised URL, so the hover tip shows the real destination). A `LinkFilePath` target joins the inline-code file-ref candidates, so it opens in the viewer only if `ResolveFile` finds a real file. `javascript:`, `search-ms:` and the like are inert text. Email autolinks now get their `mailto:`.
+- [x] xUnit `OpenTargetsTests` (72 cases): `file:///x.exe`, `file://host/…`, `\\h\s\x`, `//h/s`, a drive path, `search-ms:`, `ms-settings:`, `ms-msdt:`, `--flag`, `-new-window`, `javascript:`, `vbscript:`, `data:`, `vscode:`, a host-less `https://` and a relative path are rejected; http(s) (case-normalised, trimmed, with query/fragment) and `mailto:` are accepted; the result is always scheme-led; the link-path and viewer-safe cases above.
+- [ ] Dogfood owed:
+  - middle-click a link (new window) and sign in (private window) with Chrome or Edge as the default browser, to confirm `--` is accepted in both launches;
+  - Ctrl+click a relative `[plan](docs/x.md)` link in a session reply (it should open the viewer);
+  - "Open" on a dropped non-image attachment.
+
+**Not covered here (CP9):** `ResolveFile` still calls `File.Exists` on a rooted inline-code span. Link targets now reach it too, but `LinkFilePath` already drops network-shaped targets before they get there.
+
+**Verify.** Done 2026-09-29: `dotnet build perch.slnx` is clean (both heads and the Mac platform project), and the .NET suite passes 1488 with 1 skipped.
 
 <a id="cp9"></a>
 ### CP9 — No UNC/remote path probing · 🟠 P1 · S · ⬜
@@ -353,7 +367,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 **Tasks**
 - [ ] Launch `Code.exe` and `gitkraken.exe` directly, resolved from the install location or registry, and not the `.cmd` shims.
 - [ ] If a shim is unavoidable, caret-escape the arguments and refuse `% & | ^ < >`.
-- [ ] Remove the default-handler fallback, or restrict it to viewer-safe extensions (`.md .txt .json .png …`).
+- [x] Remove the default-handler fallback, or restrict it to viewer-safe extensions (`.md .txt .json .png …`). *(Done in CP8: the fallback is `IFileRevealer.OpenWithDefault`, gated on `OpenTargets.IsViewerSafeFile`.)*
 
 <a id="cp13"></a>
 ### CP13 — Control-pipe intent validation + launcher quoting · 🟡 P2 · S · ⬜

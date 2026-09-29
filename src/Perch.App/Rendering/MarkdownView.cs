@@ -548,7 +548,14 @@ internal sealed class MarkdownView
         public readonly List<(int Start, int Length, string Text)> Codes = new();   // inline-code spans (file-ref candidates)
         public int Pos;
         public void Add(global::Avalonia.Controls.Documents.Inline run, int charLen) { Inlines.Add(run); Pos += charLen; }
-        public void MarkLink(int start, string? url) { if (!string.IsNullOrEmpty(url)) Links.Add(new UrlSpan(start, Pos - start, url)); }
+        // Only an http(s)/mailto target becomes a browser link (review fixes CP8). A relative or file: target
+        // joins the file-ref candidates instead, so it opens in the viewer only if it names a real local file;
+        // any other scheme (javascript:, search-ms:, ms-*:) is left as inert text.
+        public void MarkLink(int start, string? url)
+        {
+            if (OpenTargets.WebUrl(url) is { } web) Links.Add(new UrlSpan(start, Pos - start, web));
+            else if (OpenTargets.LinkFilePath(url) is { } path) Codes.Add((start, Pos - start, path));
+        }
     }
 
     // Arm any inline-code spans in this block that resolve to a real file (relative to the session cwd, or an
@@ -623,7 +630,7 @@ internal sealed class MarkdownView
                 case AutolinkInline auto:
                     int autoStart = sink.Pos;
                     sink.Add(Styled(auto.Url, style with { Brush = _s.Link, Link = true }), auto.Url.Length);
-                    sink.MarkLink(autoStart, auto.Url);
+                    sink.MarkLink(autoStart, auto.IsEmail ? "mailto:" + auto.Url : auto.Url);
                     break;
                 case TaskList task:
                     sink.Add(new InlineUIContainer(Checkbox(task.Checked, style.Size))

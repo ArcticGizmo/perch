@@ -45,10 +45,18 @@ public sealed class FileRevealer : IFileRevealer
         }
         catch
         {
-            // No VS Code (or launch blocked): open the file with its default handler so the action isn't a dead end.
-            try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
-            catch { /* give up quietly */ }
+            // No VS Code (or launch blocked): the default handler, so the action isn't a dead end — but never a
+            // shell open of a type that would run (a `.bat` file ref; review fixes CP8/CP12).
+            OpenWithDefault(path);
         }
+    }
+
+    public void OpenWithDefault(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+        if (!OpenTargets.IsViewerSafeFile(path)) { RevealInFileManager(path); return; }
+        try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
+        catch { /* best-effort — no handler, blocked, etc. */ }
     }
 
     public void OpenWith(string path)

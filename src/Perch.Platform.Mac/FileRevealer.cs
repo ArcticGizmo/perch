@@ -38,20 +38,15 @@ public sealed class FileRevealer : IFileRevealer
         }
         catch
         {
-            try
-            {
-                var psi = new ProcessStartInfo(Open) { UseShellExecute = false };
-                psi.ArgumentList.Add(path);
-                Process.Start(psi);
-            }
-            catch { /* give up quietly */ }
+            // Never `open` a type that would run (a .command/.app file ref; review fixes CP8/CP12).
+            OpenWithDefault(path);
         }
     }
 
-    public void OpenWith(string path)
+    public void OpenWithDefault(string path)
     {
-        // macOS has no simple CLI "Open with…" chooser; open with the default handler as the closest action.
-        if (string.IsNullOrWhiteSpace(path)) return;
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+        if (!Perch.Data.OpenTargets.IsViewerSafeFile(path)) { RevealInFileManager(path); return; }
         try
         {
             var psi = new ProcessStartInfo(Open) { UseShellExecute = false };
@@ -59,5 +54,11 @@ public sealed class FileRevealer : IFileRevealer
             Process.Start(psi);
         }
         catch { /* best-effort */ }
+    }
+
+    public void OpenWith(string path)
+    {
+        // macOS has no simple CLI "Open with…" chooser; the (viewer-gated) default handler is the closest action.
+        OpenWithDefault(path);
     }
 }

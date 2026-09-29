@@ -1,8 +1,11 @@
 namespace Perch.Platform;
 
 /// <summary>
-/// Opens a URL (or a local file/path — anything the OS shell can resolve) in the user's default handler.
-/// Two modes:
+/// Opens a web URL in the user's default handler. Only an absolute <c>http</c>/<c>https</c> URL or a <c>mailto:</c>
+/// is opened (<see cref="Perch.Data.OpenTargets.WebUrl"/>); anything else — <c>file:</c>, UNC, <c>search-ms:</c>,
+/// <c>ms-*:</c>, a bare path — silently no-ops, since those execute rather than display (review fixes CP8). A local
+/// file goes through <see cref="IFileRevealer.OpenWithDefault"/> instead.
+/// Three modes:
 /// <list type="bullet">
 ///   <item><see cref="Open"/> — the plain shell open. The OS reuses whatever browser instance is already
 ///   running, which activates its last-focused window. On Windows that can yank the user to another

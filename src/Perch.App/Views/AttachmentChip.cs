@@ -157,10 +157,11 @@ internal sealed class AttachmentChip : Border
         catch { return null; }
     }
 
-    // Images open in the in-app viewer (which offers reveal / open-with); a plain file uses the OS handler.
+    // Images open in the in-app viewer (which offers reveal / open-with); a plain file uses the OS handler when
+    // it's a view-only type, else it's revealed in the file manager.
     private void Open()
     {
         if (_a.Kind == AttachmentKind.Image) { Windows.ImageViewerWindow.ShowFor(_a.Path); return; }
-        try { PlatformServices.UrlOpener.Open(_a.Path); } catch { }
+        PlatformServices.FileRevealer.OpenWithDefault(_a.Path);
     }
 }

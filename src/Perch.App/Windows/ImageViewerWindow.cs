@@ -54,7 +54,7 @@ public sealed class ImageViewerWindow : Window
             {
                 ToolbarButton("Reveal in Explorer", () => PlatformServices.FileRevealer.RevealInFileManager(_path)),
                 ToolbarButton("Open with…", () => PlatformServices.FileRevealer.OpenWith(_path)),
-                ToolbarButton("Open", () => { try { PlatformServices.UrlOpener.Open(_path); } catch { } }),
+                ToolbarButton("Open", () => PlatformServices.FileRevealer.OpenWithDefault(_path)),
             },
         };
         var bar = new DockPanel
