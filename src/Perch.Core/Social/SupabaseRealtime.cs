@@ -43,6 +43,9 @@ internal static class RealtimeProtocol
             config["broadcast"] = new JsonObject { ["self"] = false };
         else
             config["postgres_changes"] = new JsonArray(ChangeSpec(ch));
+        // A private channel is authorised by the realtime.messages RLS policies (and lives in a separate
+        // namespace from any public channel of the same name).
+        if (ch.Private) config["private"] = true;
         return Frame(ch.Topic, "phx_join", refId, new JsonObject
         {
             ["config"] = config,
@@ -168,10 +171,11 @@ internal enum RealtimeKind { PostgresChanges, Broadcast }
 
 /// <summary>Describes one Realtime channel: its Phoenix topic, its <see cref="RealtimeKind"/>, and — for a
 /// postgres-changes channel — the change it wants (an event on a schema.table, with an optional row filter like
-/// <c>game_id=eq.…</c>). RLS still governs what the server actually pushes; the filter only narrows it further.</summary>
+/// <c>game_id=eq.…</c>). RLS still governs what the server actually pushes; the filter only narrows it further.
+/// <see cref="Private"/> channels are authorised server-side by the <c>realtime.messages</c> policies.</summary>
 internal sealed record RealtimeChannel(
     string Topic, RealtimeKind Kind = RealtimeKind.PostgresChanges,
-    string Schema = "", string Table = "", string Event = "INSERT", string? Filter = null)
+    string Schema = "", string Table = "", string Event = "INSERT", string? Filter = null, bool Private = false)
 {
     /// <summary>The feed's <c>public.posts</c> INSERT channel.</summary>
     public static readonly RealtimeChannel Posts =
@@ -188,9 +192,10 @@ internal sealed record RealtimeChannel(
         new($"realtime:public:draw_rounds:{gameId}", RealtimeKind.PostgresChanges, "public", "draw_rounds", "*", $"game_id=eq.{gameId}");
 
     /// <summary>A user's transient broadcast inbox — where invites, invite responses, nudges and rematches are
-    /// delivered instantly (the persistent DB rows are still the source of truth; this only beats the poll).</summary>
+    /// delivered instantly (the persistent DB rows are still the source of truth; this only beats the poll).
+    /// Private: only the owner may join it, and only their accepted, unblocked friends may broadcast into it.</summary>
     public static RealtimeChannel Inbox(Guid userId) =>
-        new($"realtime:perch:inbox:{userId}", RealtimeKind.Broadcast);
+        new($"realtime:perch:inbox:{userId}", RealtimeKind.Broadcast, Private: true);
 
     /// <summary>The channel name the Realtime broadcast REST endpoint expects — the topic without the
     /// <c>realtime:</c> Phoenix prefix.</summary>

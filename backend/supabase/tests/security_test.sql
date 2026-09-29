@@ -1,4 +1,4 @@
--- Perch Social -- security hardening tests (pgTAP), review fixes CP1-CP3 (docs/review-fixes-plan.md)
+-- Perch Social -- security hardening tests (pgTAP), review fixes CP1-CP4 (docs/review-fixes-plan.md)
 -- Each check replays an attack that worked before 20260929120000_security_hardening.sql /
 -- 20260929130000_least_privilege.sql, as role `authenticated` (or `anon`) with a simulated JWT sub
 -- (superuser bypasses RLS and owns every function, so it would prove nothing).
@@ -10,7 +10,7 @@
 -- Run with the Supabase CLI:  supabase test db --workdir backend   (after `supabase start`).
 
 begin;
-select plan(44);
+select plan(51);
 
 -- == fixtures ==========================================================================================
 -- alice & bob are accepted friends (bob posted); carol and dave are strangers to alice.
@@ -282,7 +282,8 @@ select is(
       and not exists (select 1 from pg_depend d
                        where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
       and has_function_privilege('authenticated', p.oid, 'EXECUTE')),
-  'private.are_friends private.can_see_post private.is_blocked private.is_suspended private.shares_edge '
+  'private.are_friends private.can_see_post private.inbox_owner private.is_blocked private.is_suspended '
+  'private.shares_edge '
   'public.accept_draw_request public.accept_game_request public.drop_disc public.find_profile '
   'public.give_up_draw_round public.list_blocked public.resign_draw_game public.resign_game '
   'public.submit_draw_guess public.submit_draw_round',
@@ -394,6 +395,79 @@ select pg_temp.act_as('44444444-4444-4444-4444-444444444444');
 select throws_ok(
   $$insert into public.posts (author, body) values ('44444444-4444-4444-4444-444444444444', 'too soon')$$,
   '23514', NULL, 'CP3: two posts inside the interval trip the flood guard');
+reset role;
+
+-- == CP4: Realtime inbox authorisation =================================================================
+-- Realtime authorises a private channel by running SELECT (join) / INSERT (broadcast) on realtime.messages as
+-- the caller's role, with realtime.topic() set to the channel topic -- replayed here the same way. By now
+-- alice's friends are bob (fixture) and carol (accepted in test 18); dave is a stranger.
+create function pg_temp.topic(t text) returns void
+language sql as $$ select set_config('realtime.topic', t, true) $$;
+
+-- 45) the topic parser only accepts a canonical inbox topic (anything else fails the policies).
+select ok(
+  private.inbox_owner('perch:inbox:11111111-1111-1111-1111-111111111111') = '11111111-1111-1111-1111-111111111111'
+    and private.inbox_owner('perch:inbox:11111111-1111-1111-1111-111111111111:x') is null
+    and private.inbox_owner('perch:inbox:not-a-uuid') is null
+    and private.inbox_owner('perch:inbox:') is null
+    and private.inbox_owner('other:11111111-1111-1111-1111-111111111111') is null
+    and private.inbox_owner(null) is null,
+  'CP4: inbox_owner parses only canonical perch:inbox:<uuid> topics');
+
+-- A message sitting in alice's inbox, written as the owner (the way Realtime stores one).
+insert into realtime.messages (id, topic, extension, private, event, payload)
+  values ('dddddddd-0000-0000-0000-000000000001',
+          'perch:inbox:11111111-1111-1111-1111-111111111111', 'broadcast', true, 'inbox', '{}');
+
+-- 46) the owner can join (read) her own inbox...
+select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+select pg_temp.topic('perch:inbox:11111111-1111-1111-1111-111111111111');
+select is(
+  (select count(*)::int from realtime.messages where id = 'dddddddd-0000-0000-0000-000000000001'),
+  1, 'CP4: the owner can read her own inbox');
+reset role;
+
+-- 47) ...but nobody else can, not even a friend.
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');   -- bob, alice's friend
+select pg_temp.topic('perch:inbox:11111111-1111-1111-1111-111111111111');
+select is(
+  (select count(*)::int from realtime.messages where id = 'dddddddd-0000-0000-0000-000000000001'),
+  0, 'CP4: nobody else can read an inbox, not even a friend');
+
+-- 48) a friend can broadcast into it.
+select lives_ok(
+  $$insert into realtime.messages (topic, extension, private, event, payload)
+      values ('perch:inbox:11111111-1111-1111-1111-111111111111', 'broadcast', true, 'inbox', '{}')$$,
+  'CP4: a friend can broadcast into an inbox');
+reset role;
+
+-- 49) a stranger can't.
+select pg_temp.act_as('44444444-4444-4444-4444-444444444444');   -- dave
+select pg_temp.topic('perch:inbox:11111111-1111-1111-1111-111111111111');
+select throws_ok(
+  $$insert into realtime.messages (topic, extension, private, event, payload)
+      values ('perch:inbox:11111111-1111-1111-1111-111111111111', 'broadcast', true, 'inbox', '{}')$$,
+  '42501', NULL, 'CP4: a stranger cannot broadcast into an inbox');
+reset role;
+
+-- 50) nor a friend alice has blocked.
+insert into public.blocks (blocker, blocked)
+  values ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222');
+select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
+select pg_temp.topic('perch:inbox:11111111-1111-1111-1111-111111111111');
+select throws_ok(
+  $$insert into realtime.messages (topic, extension, private, event, payload)
+      values ('perch:inbox:11111111-1111-1111-1111-111111111111', 'broadcast', true, 'inbox', '{}')$$,
+  '42501', NULL, 'CP4: a blocked friend cannot broadcast into an inbox');
+reset role;
+
+-- 51) and the bare anon key gets nothing (no policy is scoped to anon).
+set local role anon;
+select pg_temp.topic('perch:inbox:11111111-1111-1111-1111-111111111111');
+select throws_ok(
+  $$insert into realtime.messages (topic, extension, private, event, payload)
+      values ('perch:inbox:11111111-1111-1111-1111-111111111111', 'broadcast', true, 'inbox', '{}')$$,
+  '42501', NULL, 'CP4: anon cannot broadcast into an inbox');
 reset role;
 
 select * from finish();

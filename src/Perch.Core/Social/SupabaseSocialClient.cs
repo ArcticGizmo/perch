@@ -54,6 +54,11 @@ public sealed partial class SupabaseSocialClient : ISocialClient
     private SocialFault _fault;
     private DateTimeOffset? _driftSince;   // when the current unbroken run of drift rejections began (null = none)
 
+    // Who may post into your inbox: accepted, unblocked friends (id → handle), refreshed by every roster poll and,
+    // throttled, on an inbox message from someone not in it yet (see SupabaseSocialClient.Games).
+    private IReadOnlyDictionary<Guid, string> _inboxSenders = new Dictionary<Guid, string>();
+    private DateTimeOffset _inboxSendersRefreshedAt;
+
     // How long the drift error must persist — across the settle + retry window — before the whole feature is
     // flipped into the fault state, so a transient startup skew the retry rides out doesn't raise a false alarm.
     private static readonly TimeSpan DriftGrace = TimeSpan.FromSeconds(6);
@@ -225,6 +230,8 @@ public sealed partial class SupabaseSocialClient : ISocialClient
             _signedIn = false;
             _fault = SocialFault.None;
             _driftSince = null;
+            _inboxSenders = new Dictionary<Guid, string>();
+            _inboxSendersRefreshedAt = default;
         }
         _secrets.Delete(RefreshTokenKey);
         AuthChanged?.Invoke(AuthState.SignedOut);
@@ -469,6 +476,7 @@ public sealed partial class SupabaseSocialClient : ISocialClient
         // Accepted friends only, minus anyone blocked — the roster is who you can actually see.
         var friends = graph.Where(f => f.State == FriendshipState.Accepted && !blocked.Contains(f.Profile.Id)).ToList();
         int incoming = graph.Count(f => f.State == FriendshipState.Incoming && !blocked.Contains(f.Profile.Id));
+        SetInboxSenders(friends);
 
         // Latest post per author (the feed is newest-first, so the first hit per author is their latest).
         var feed = await GetFeedAsync(200, ct);

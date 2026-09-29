@@ -28,7 +28,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP1](#cp1) | 🔴 P0 | Supabase | Revoke EXECUTE on internal SECURITY DEFINER functions | S | 🟦 code + tests done, prod deploy owed |
 | [CP2](#cp2) | 🔴 P0 | Supabase | Friendship consent: no self-accepting | S | 🟦 code + tests done, prod deploy owed |
 | [CP3](#cp3) | 🟠 P1 | Supabase | Server-owned fields: no forged games, no backdated rows (+ least-privilege grants on every table) | M | 🟦 code + tests done, prod deploy owed |
-| [CP4](#cp4) | 🟠 P1 | Supabase | Realtime inbox authorisation + sender validation | M | ⬜ |
+| [CP4](#cp4) | 🟠 P1 | Supabase | Realtime inbox authorisation + sender validation | M | 🟦 code + tests done, prod deploy + dogfood owed |
 | [CP5](#cp5) | 🟡 P2 | Supabase | Draw with Perch: RPC state checks + size limits | S | ⬜ |
 | [CP6](#cp6) | 🟡 P2 | Supabase | Block/suspension coverage, `find_profile` throttle, feed query | M | ⬜ |
 | [CP7](#cp7) | 🔴 P0 | Client | Executable hijack via untrusted working directory | M | 🟦 code + tests done, dogfood owed |
@@ -156,10 +156,10 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - Confirm Realtime postgres_changes still delivers (moves, draw_rounds, posts). Realtime runs as `supabase_admin` and the published tables keep table-level SELECT, so it should be unaffected, but it hasn't been checked live.
 - In the dashboard, check Storage has no buckets. Locally there are none, and the app doesn't use Storage.
 
-**Landed:** migration `20260929130000_least_privilege.sql`, plus client changes in `SupabaseSocialClient.Games.cs`/`.Draw.cs`, `ISocialClient`, `FakeSocialClient.Games.cs`, `Connect4Window` and `DebugSocialWindow`.
+**Landed:** commit `c996bf1`: migration `20260929130000_least_privilege.sql`, plus client changes in `SupabaseSocialClient.Games.cs`/`.Draw.cs`, `ISocialClient`, `FakeSocialClient.Games.cs`, `Connect4Window` and `DebugSocialWindow`.
 
 <a id="cp4"></a>
-### CP4 — Realtime inbox authorisation + sender validation · 🟠 P1 · M · ⬜
+### CP4 — Realtime inbox authorisation + sender validation · 🟠 P1 · M · 🟦
 
 **Problem.** `perch:inbox:<uid>` is a **public** broadcast topic (`SupabaseRealtime.cs:192`, `SupabaseSocialClient.Games.cs:233-278`). Anyone holding the anon key can:
 - subscribe to any user's inbox and see who invites or nudges them, along with game ids;
@@ -167,10 +167,29 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - flood it, where every message triggers a roughly 14-request `RefreshSoon` poll (`App.axaml.cs:2277-2297`).
 
 **Tasks**
-- [ ] Switch to private channels. Add a `realtime.messages` RLS policy: SELECT is allowed when the topic uid equals `auth.uid()`; INSERT is allowed only when the sender is an accepted, unblocked friend of the topic owner.
-- [ ] Client: ignore the payload's `from_handle`, resolve the sender from the friend graph, and drop messages from non-friends or blocked users.
-- [ ] Coalesce `RefreshSoon`: one poll in flight plus a trailing debounce of about 2s.
-- [ ] Test: a subscription from a non-owner is refused, and a non-friend's broadcast is not delivered. The realtime part needs a manual check against a local stack.
+- [x] Switched to private channels. Migration `20260929140000_realtime_inbox_authz.sql` adds two `realtime.messages` policies, both `TO authenticated`:
+  - `perch_inbox_receive` (SELECT): only when the topic's uid is `auth.uid()`.
+  - `perch_inbox_send` (INSERT): only when the sender is an accepted, unblocked friend of the topic's owner, via `private.are_friends`, which already folds in blocks.
+  
+  The topic is parsed strictly by `private.inbox_owner()`: only `perch:inbox:<lower-case uuid>` is accepted, and it never raises. `realtime.messages` belongs to `supabase_realtime_admin`, so its `anon`/`authenticated` grants can't be revoked from a migration; RLS with no other policies denies everything else.
+- [x] Client:
+  - `RealtimeChannel.Inbox` is `Private`: the join sends `config.private = true` and the REST broadcast sends `private: true`. The broadcast no longer carries `from_handle`.
+  - The new pure `InboxGate` drops a message unless its claimed sender is in the accepted, unblocked friend list, and takes the handle from that list; the payload is ignored.
+  - `SupabaseSocialClient` refreshes the friend list on every roster poll. On an unknown sender, most likely a friendship accepted seconds ago, it re-reads the friend graph at most once per 15s.
+- [x] `RefreshSoon` is coalesced by a new `Perch.Data.CoalescingTrigger`: one poll in flight, a burst collapses into one trailing poll, and polls start at least 2s apart. An isolated request still runs immediately. The 60s tick goes through it too, and a trailing poll after `SetActive(false)` is a no-op.
+- [x] Tests:
+  - pgTAP `security_test.sql` 45–51: the topic parser; the owner reads her own inbox; nobody else can, not even a friend; a friend can broadcast; a stranger, a blocked friend and anon can't. Test 28's function allowlist now includes `private.inbox_owner`.
+  - xUnit: `InboxGateTests` (4), `CoalescingTriggerTests` (4, with injected clock and delay, so nothing sleeps), and two `RealtimeProtocolTests`: the inbox join is private while the table streams aren't, and the broadcast name matches the server's topic parser.
+- [x] Manual realtime check against the local stack, with a Node WebSocket probe and three real users (A the owner, B A's friend, C a stranger):
+  - A joins her private inbox; C is refused (`Unauthorized: You do not have permissions to read from this Channel topic`); B can't join A's inbox either.
+  - A receives B's private broadcast.
+  - A receives none of C's private broadcast, a public broadcast on the same topic name, or B's broadcast after A blocks B.
+  - A public snooper on the same name sees none of the private traffic.
+- [ ] **Deploy to prod** (`db-migrate.yml`). Then, from two real accounts, check that an invite and a nudge still arrive instantly, and that a non-friend's broadcast doesn't.
+- [ ] Dogfood: invite, accept, decline and nudge flows between two current builds (the debug puppet tool works). **Mixed versions:** a pre-CP4 client still uses the public topic, so its broadcasts don't reach a CP4 client and vice versa. Both fall back to the 60s poll, so nothing breaks, it's just slower until both update.
+- [ ] **Follow-up to decide:** old clients can still abuse *each other's* public inbox. The only way to close that server-side is to turn off Realtime's "allow public access" in the dashboard. That also requires moving the posts, moves and draw_rounds change streams to private channels, with `realtime.messages` SELECT policies for `postgres_changes`. Without that change, old clients' realtime would fail and they would drop to polling.
+
+**Verify.** Done locally on 2026-09-29: `supabase test db` 117/117; .NET 1416 passed, 1 skipped; both heads build; the realtime probe above passed.
 
 <a id="cp5"></a>
 ### CP5 — Draw with Perch: RPC state checks + size limits · 🟡 P2 · S · ⬜

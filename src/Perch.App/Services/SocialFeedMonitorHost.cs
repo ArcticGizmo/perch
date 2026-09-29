@@ -1,4 +1,5 @@
 using Avalonia.Threading;
+using Perch.Data;
 using Perch.Social;
 
 namespace Perch.Avalonia.Services;
@@ -76,8 +77,14 @@ internal sealed class SocialFeedMonitorHost : IDisposable
         _onDrawGames = onDrawGames;
         _onNewDrawInvite = onNewDrawInvite;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
-        _timer.Tick += (_, _) => _ = Poll();
+        // Every trigger (tick, realtime nudge, inbox message, the user's own action) goes through one coalescer:
+        // one poll in flight, a burst collapses into one trailing poll, and polls start >= 2s apart -- so a flood of
+        // inbox broadcasts can't turn into a flood of the ~6 REST reads each poll makes.
+        _poll = new CoalescingTrigger(Poll, TimeSpan.FromSeconds(2));
+        _timer.Tick += (_, _) => _poll.Request();
     }
+
+    private readonly CoalescingTrigger _poll;
 
     /// <summary>Start/stop the feed (call on the UI thread). Starting kicks an immediate poll and opens the
     /// realtime subscription; stopping clears the strip, closes the socket, and forgets what's been seen so a
@@ -88,7 +95,7 @@ internal sealed class SocialFeedMonitorHost : IDisposable
         if (active)
         {
             _timer.Start();
-            _ = Poll();
+            _poll.Request();
             // A live insert only nudges a re-poll — the poll (RLS-correct, profile-resolved) does the real
             // work. The callback arrives off the UI thread, so marshal back before touching the timer.
             _realtime = _social.SubscribeFeed(_ => Dispatcher.UIThread.Post(RefreshSoon));
@@ -113,13 +120,14 @@ internal sealed class SocialFeedMonitorHost : IDisposable
     }
 
     /// <summary>Refresh now if active — e.g. right after posting a status, or on a realtime nudge, so it
-    /// appears without waiting for the next tick.</summary>
-    public void RefreshSoon() { if (_timer.IsEnabled) _ = Poll(); }
+    /// appears without waiting for the next tick. Coalesced (see the constructor).</summary>
+    public void RefreshSoon() { if (_timer.IsEnabled) _poll.Request(); }
 
     // Ticks on the UI thread; GetFeedAsync runs its IO off it and the continuation resumes here, so the
     // callback (and the repaint it drives) stays on the UI thread.
     private async Task Poll()
     {
+        if (!_timer.IsEnabled) return;   // a coalesced trailing poll that outlived SetActive(false)
         try
         {
             var roster = await _social.GetRosterAsync();

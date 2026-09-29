@@ -24,6 +24,7 @@ backend/supabase/
                                 # from anon/PUBLIC; friendship consent (only the addressee accepts)
     <ts>_least_privilege.sql    # deny-by-default: every grant revoked then re-granted per column; anon gets
                                 # nothing; no direct game inserts; server-stamped timestamps; closed defaults
+    <ts>_realtime_inbox_authz.sql # private inbox channel: only the owner joins, only friends broadcast
   tests/
     rls_test.sql      # pgTAP: non-friends can't read posts, blocking, rate limit, suspension, dedupe, etc.
     security_test.sql # pgTAP: the review-fix attacks fail, and the whole privilege matrix is pinned
@@ -208,6 +209,12 @@ deliberately added.
 - **Server-owned fields** - `created_at` (every table) and `updated_at` (games, draw tables, moderation) are
   stamped with `now()` by BEFORE triggers; clients have no grant on them. Games are created only by
   `accept_game_request` (no client INSERT on `games`).
+- **Realtime inbox is a private channel** (`*_realtime_inbox_authz.sql`). Invites/nudges ride
+  `perch:inbox:<uid>` as a *private* broadcast channel, authorised by RLS on `realtime.messages`: only the
+  owner may join (SELECT), only an accepted, unblocked friend may broadcast (INSERT). Private and public
+  channels are separate namespaces, so a public subscriber/broadcaster on the same name reaches nothing. The
+  client also re-checks the claimed sender against its friend list and never shows a payload-supplied handle.
+  The table change streams (posts, moves, draw_rounds) stay public channels - table RLS already filters them.
 - **Policy helpers live in `private`** — `are_friends`, `is_blocked`, `shares_edge`, `is_suspended` and
   `can_see_post` are SECURITY DEFINER and take arbitrary uuids, so exposing them would leak the social graph
   and who blocked whom. They sit in the `private` schema, which the Data API doesn't serve; policies call

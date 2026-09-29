@@ -32,8 +32,30 @@ public enum InboxKind
 /// </summary>
 /// <param name="Kind">Which event this is.</param>
 /// <param name="FromUserId">The user who caused it (the inviter / accepter / nudger).</param>
-/// <param name="FromHandle">Their @handle if the sender included it, for an immediate label without a lookup.</param>
+/// <param name="FromHandle">Their @handle, resolved from your own friend list (never taken from the payload, which
+/// the sender controls), for an immediate label without a lookup.</param>
 /// <param name="GameId">The game this concerns, when there is one (accepted invite, nudge).</param>
 /// <param name="RequestId">The invite this concerns, when there is one (invite, decline).</param>
 public sealed record InboxMessage(
     InboxKind Kind, Guid FromUserId, string? FromHandle = null, Guid? GameId = null, Guid? RequestId = null);
+
+/// <summary>
+/// Client-side check on an inbound inbox broadcast. The server already refuses a broadcast from anyone who isn't
+/// an accepted, unblocked friend (the realtime.messages policies), but the payload itself is sender-written, so
+/// the client re-checks: the claimed sender must be one of your friends (and not you), and their handle comes from
+/// your friend list rather than the payload -- so nobody can put words in a bubble under someone else's name.
+/// </summary>
+internal static class InboxGate
+{
+    /// <summary>True if <paramref name="raw"/> claims a sender in <paramref name="friends"/> (id → handle; accepted
+    /// and unblocked only). <paramref name="accepted"/> then carries the friend-list handle.</summary>
+    public static bool TryAccept(InboxMessage raw, Guid me, IReadOnlyDictionary<Guid, string> friends,
+        out InboxMessage accepted)
+    {
+        accepted = raw;
+        if (raw.FromUserId == Guid.Empty || raw.FromUserId == me) return false;
+        if (!friends.TryGetValue(raw.FromUserId, out var handle)) return false;
+        accepted = raw with { FromHandle = handle };
+        return true;
+    }
+}
