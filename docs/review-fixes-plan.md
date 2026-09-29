@@ -38,7 +38,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP11](#cp11) | 🟡 P2 | Client | Hardened shared `GitRunner` | M | ⬜ |
 | [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | ⬜ |
 | [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | ⬜ |
-| [CP14](#cp14) | 🟠 P1 | Data safety | Never wipe `.claude.json`; atomic writes everywhere | M | 🟦 code + tests done, dogfood owed |
+| [CP14](#cp14) | 🟠 P1 | Data safety | Never wipe `.claude.json`; atomic writes everywhere | M | ✅ |
 | [CP15](#cp15) | 🟡 P2 | Privacy | Recording-export redaction gaps | S | ⬜ |
 | [CP16](#cp16) | ⚪ P3 | Client | Small security hardening batch | M | ⬜ |
 | [CP17](#cp17) | 🟡 P2 | Supply chain | CI permissions, pinning, deploy-secret scoping | S | ⬜ |
@@ -441,7 +441,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - [ ] xUnit covering `Parse` and the launcher command-line builder.
 
 <a id="cp14"></a>
-### CP14 — Never wipe `.claude.json`; atomic writes everywhere · 🟠 P1 · M · 🟦
+### CP14 — Never wipe `.claude.json`; atomic writes everywhere · 🟠 P1 · M · ✅
 
 **Problem.**
 - `DirectoryTrust.cs:136-139,176-186` treats a read failure as "no file". Accepting trust while `.claude.json` is locked or 0 bytes replaces it with `{"projects":{…}}`, which wipes the OAuth account and all project state.
@@ -482,7 +482,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
   - `DirectoryTrustTests` (+6): empty, whitespace, `[]` and `null` files are left byte-for-byte; a **locked** file keeps its `oauthAccount`; granting an already-trusted folder leaves the mtime alone.
   - `ClaudeUserSettingsHookTests` (+7): reconcile of an already-reconciled file makes no write (mtime pinned); a reformat alone makes no write; an empty, `[]`, `null` or unparseable file is left alone; a locked file is refused.
   - `TodoStoreTests` (+2): a torn file is copied aside and the next save works; a file locked at load is never overwritten that session.
-- [ ] Dogfood: accept folder trust for a new folder from a Perch session and confirm `.claude.json` keeps its `oauthAccount` and other projects. Restart the tray twice and confirm `~/.claude/settings.json`'s modified time doesn't change the second time.
+- [x] Dogfood: accept folder trust for a new folder from a Perch session and confirm `.claude.json` keeps its `oauthAccount` and other projects. Restart the tray twice and confirm `~/.claude/settings.json`'s modified time doesn't change the second time. *(User-confirmed on 2026-09-29.)*
 
 **Verify.** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1557 with 1 skipped. One full run hit a single unnamed intermittent failure. The two timing-sensitive new tests were hardened (the concurrent-writers race also tolerates access denied, and the retry test releases its lock from a dedicated thread rather than the pool), and 15 repeated runs of the affected classes were clean. The machine was slow throughout: a baseline run without CP14 also took about 2 minutes, against about 40s earlier in the day. The classes on the new write path took 3.2s in total, so fsync isn't the cost.
 
