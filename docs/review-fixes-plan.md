@@ -392,6 +392,8 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 
 **Verify (control pipe).** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1535 with 1 skipped.
 
+**Landed (control pipe):** commit `2ab614c`: `ControlProtocol`, `ControlServer`, `Program.ForwardSessionIntent` and `ControlServerTests`.
+
 <a id="cp11"></a>
 ### CP11 — Hardened shared `GitRunner` · 🟡 P2 · M · ⬜
 
