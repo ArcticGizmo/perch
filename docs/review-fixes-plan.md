@@ -38,7 +38,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP11](#cp11) | 🟡 P2 | Client | Hardened shared `GitRunner` | M | ⬜ |
 | [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | ⬜ |
 | [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | ⬜ |
-| [CP14](#cp14) | 🟠 P1 | Data safety | Never wipe `.claude.json`; atomic writes everywhere | M | ⬜ |
+| [CP14](#cp14) | 🟠 P1 | Data safety | Never wipe `.claude.json`; atomic writes everywhere | M | 🟦 code + tests done, dogfood owed |
 | [CP15](#cp15) | 🟡 P2 | Privacy | Recording-export redaction gaps | S | ⬜ |
 | [CP16](#cp16) | ⚪ P3 | Client | Small security hardening batch | M | ⬜ |
 | [CP17](#cp17) | 🟡 P2 | Supply chain | CI permissions, pinning, deploy-secret scoping | S | ⬜ |
@@ -441,7 +441,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - [ ] xUnit covering `Parse` and the launcher command-line builder.
 
 <a id="cp14"></a>
-### CP14 — Never wipe `.claude.json`; atomic writes everywhere · 🟠 P1 · M · ⬜
+### CP14 — Never wipe `.claude.json`; atomic writes everywhere · 🟠 P1 · M · 🟦
 
 **Problem.**
 - `DirectoryTrust.cs:136-139,176-186` treats a read failure as "no file". Accepting trust while `.claude.json` is locked or 0 bytes replaces it with `{"projects":{…}}`, which wipes the OAuth account and all project state.
@@ -450,12 +450,41 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - `AppSettings.Save` (`AppSettings.cs:878`) uses a fixed temp name, doesn't flush to disk, and swallows errors.
 
 **Tasks**
-- [ ] `DirectoryTrust`: create a fresh object only when `!File.Exists`. On a read error, or an existing file that's empty or unparseable, **refuse** (return false). Re-read immediately before replacing.
-- [ ] Add a shared `AtomicFile.Write(path, text)`: unique temp in the same directory, `Flush(true)`, then `File.Replace` / `File.Move(overwrite)`, retried on sharing violations. Use it for settings.json (tray and hook), todos, AppSettings and `.claude.json`.
-- [ ] `ReconcileHooks` and the other mutators: skip the write when the serialized output equals what was read.
-- [ ] `TodoStore`: on a parse failure, keep a `.bak` and don't overwrite.
-- [ ] `AppSettings.Save`: serialize saves through a lock, and log failures.
-- [ ] xUnit: `DirectoryTrust` against a locked or empty file leaves the bytes unchanged; reconcile against an already-reconciled file does no write (check the mtime).
+- [x] `DirectoryTrust.GrantAt`:
+  - Starts a fresh object **only** when the file is provably missing (`AtomicFile.TryRead` → `Missing`).
+  - Refuses (returns false, bytes untouched) on a read failure, an empty or whitespace file, unparseable JSON, or a non-object (`[]`, `null`).
+  - Re-reads just before the atomic replace and redoes the merge if Claude changed the file in between (up to 3 attempts, then gives up).
+  - An already-trusted folder returns true with **no write**.
+  
+  The old `ReadAllText` returned null for both "missing" and "locked", and null meant `new JsonObject()`: that was the wipe.
+- [x] New shared `Perch.Data.AtomicFile`:
+  - `Write` writes a unique `<path>.<guid>.tmp` beside the target, UTF-8 with no BOM, and `Flush(true)` to disk. It then does `File.Move(overwrite)`, retried 5 times over about 0.6s on `IOException` or access denied. It never leaves a temp behind, and throws once the retries run out.
+  - `WriteIfChanged` skips identical text.
+  - `TryRead` reads with shared access and returns `Missing` / `Ok` / `Failed`, so every read-modify-write can tell "no file" from "couldn't read it".
+  
+  The hook, which doesn't reference Core, has a mirrored `AtomicWrite` for its self-heal strip.
+- [x] Converted to `AtomicFile`:
+  - the planned set: `settings.json` (every `ClaudeUserSettings` writer, `PluginManager.RemoveRegistration`, and the hook's self-heal), todos, `AppSettings` and `.claude.json`;
+  - **widened to "everywhere" that holds user state:** `AchievementStore`, `FileSecretStore`, `StatuslineStore` (the user's own profiles), and `ClaudeConfigSet`'s self-reported roots, which used a fixed `.tmp` name.
+  
+  Left alone: small ephemeral sidecars (`.mode`, locks, markers) and the Markdown editor's save of the user's own document, where a rename would change the file's identity (ACLs, hard links).
+- [x] **Changed from the plan:**
+  - `ClaudeUserSettings` compares **meaning, not bytes**. `OpenForWrite` + `Commit` skip the write when the result is `JsonNode.DeepEquals` to what was read. A byte comparison would rewrite the file on every launch after Claude Code reformats it.
+  - `OpenForWrite` also refuses a non-object root; the old `as JsonObject ?? new JsonObject()` replaced one.
+  - `ReconcileHooks` still returns true when there was nothing to write.
+- [x] `TodoStore`:
+  - A file that exists but can't be read loads as an empty stand-in with `SaveSuppressed`, so it's never overwritten that session.
+  - One that won't parse is first copied to `todos.unreadable.json`, and then the list starts over.
+  - **Changed from the plan:** `todos.unreadable.json`, not `.bak`, to match the existing `settings.unreadable.json`. If the copy can't be written, saving is suppressed too.
+- [x] `AppSettings.Save`: saves run through a lock (`SaveGate`), go through `AtomicFile`, and failures are logged to `logs/settings.log`. That uses a new `DiagnosticLog` (the capped-append routine lifted out of `LaunchLog`, which now delegates to it).
+- [x] Tests (23 new):
+  - `AtomicFileTests` (7): no BOM, no temp left, creates directories; `WriteIfChanged` leaves the mtime alone; 16 concurrent writers never tear the file; a briefly held target is retried; a held target throws with the target and temps untouched; `TryRead` distinguishes missing, ok and failed.
+  - `DirectoryTrustTests` (+6): empty, whitespace, `[]` and `null` files are left byte-for-byte; a **locked** file keeps its `oauthAccount`; granting an already-trusted folder leaves the mtime alone.
+  - `ClaudeUserSettingsHookTests` (+7): reconcile of an already-reconciled file makes no write (mtime pinned); a reformat alone makes no write; an empty, `[]`, `null` or unparseable file is left alone; a locked file is refused.
+  - `TodoStoreTests` (+2): a torn file is copied aside and the next save works; a file locked at load is never overwritten that session.
+- [ ] Dogfood: accept folder trust for a new folder from a Perch session and confirm `.claude.json` keeps its `oauthAccount` and other projects. Restart the tray twice and confirm `~/.claude/settings.json`'s modified time doesn't change the second time.
+
+**Verify.** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1557 with 1 skipped. One full run hit a single unnamed intermittent failure. The two timing-sensitive new tests were hardened (the concurrent-writers race also tolerates access denied, and the retry test releases its lock from a dedicated thread rather than the pool), and 15 repeated runs of the affected classes were clean. The machine was slow throughout: a baseline run without CP14 also took about 2 minutes, against about 40s earlier in the day. The classes on the new write path took 3.2s in total, so fsync isn't the cost.
 
 <a id="cp15"></a>
 ### CP15 — Recording-export redaction gaps · 🟡 P2 · S · ⬜

@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace Perch.Data;
 
 /// <summary>
@@ -10,27 +8,12 @@ namespace Perch.Data;
 /// </summary>
 public static class LaunchLog
 {
-    private const long MaxBytes = 1024 * 1024;
-    private static readonly Lock Gate = new();
+    private const string FileName = "launch.log";
 
     /// <summary>The log file's path.</summary>
-    public static string FilePath =>
-        Path.Combine(Path.GetDirectoryName(AppSettings.SettingsFilePath) ?? Path.GetTempPath(), "logs", "launch.log");
+    public static string FilePath => Path.Combine(DiagnosticLog.Dir, FileName);
 
-    public static void Write(string message)
-    {
-        try
-        {
-            var path = FilePath;
-            lock (Gate)
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                if (File.Exists(path) && new FileInfo(path).Length > MaxBytes) File.Delete(path);
-                File.AppendAllText(path, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}  {message}{Environment.NewLine}", Encoding.UTF8);
-            }
-        }
-        catch { /* diagnostics must never break a launch */ }
-    }
+    public static void Write(string message) => DiagnosticLog.Append(FileName, message);
 
     /// <summary>A value in brackets so leading/trailing whitespace is visible; <c>(null)</c> for null.</summary>
     public static string Show(string? value) => value is null ? "(null)" : $"[{value}]";

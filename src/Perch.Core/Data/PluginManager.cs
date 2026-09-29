@@ -113,8 +113,8 @@ internal sealed class PluginManager
                 if (plugins.Count == 0) root.Remove("enabledPlugins");
             }
 
-            if (changed)
-                File.WriteAllText(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            if (changed)   // atomically: this is Claude Code's settings.json (review fixes CP14)
+                AtomicFile.Write(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
 
             return changed;
         }

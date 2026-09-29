@@ -362,7 +362,37 @@ static void StripManagedHooks(string settingsPath, bool isDev, string ownBin)
 
     if (!changed) return;
     if (hooks.Count == 0) root.Remove("hooks");
-    File.WriteAllText(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+    AtomicWrite(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+}
+
+// Crash-safe whole-file replace: write a unique temp beside the target, flush it to disk, then rename it over
+// the target (retried briefly on a sharing violation), so Claude Code never reads a truncated settings.json.
+// Mirrors Perch.Data.AtomicFile.Write (review fixes CP14); duplicated so perch-hook stays free of Perch.Core.
+static void AtomicWrite(string path, string text)
+{
+    string tmp = $"{path}.{Guid.NewGuid():N}.tmp";
+    try
+    {
+        using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            byte[] bytes = new System.Text.UTF8Encoding(false).GetBytes(text);
+            fs.Write(bytes, 0, bytes.Length);
+            fs.Flush(flushToDisk: true);
+        }
+        int[] delays = [20, 40, 80, 160, 300];
+        for (int attempt = 0; ; attempt++)
+        {
+            try { File.Move(tmp, path, overwrite: true); return; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException && attempt < delays.Length)
+            {
+                Thread.Sleep(delays[attempt]);
+            }
+        }
+    }
+    finally
+    {
+        try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+    }
 }
 
 // An entry is Perch's if it carries the _perch.managed marker, or — since Claude Code drops our unknown

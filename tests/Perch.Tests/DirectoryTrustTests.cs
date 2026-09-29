@@ -138,6 +138,52 @@ public class DirectoryTrustTests
         Assert.Equal("not json at all", File.ReadAllText(f.Path));
     }
 
+    // ── CP14: .claude.json also holds the Claude sign-in; a grant must never replace it ──────────
+
+    [Theory]
+    [InlineData("")]          // 0 bytes: Claude mid-write, or damaged
+    [InlineData("   \r\n")]
+    [InlineData("[]")]        // valid JSON, but not an object
+    [InlineData("null")]
+    public void Grant_leaves_an_empty_or_non_object_file_byte_for_byte(string content)
+    {
+        using var f = new TempFile();
+        File.WriteAllText(f.Path, content);
+
+        Assert.False(DirectoryTrust.GrantAt(f.Path, Abs("perch-trust", "x")));
+        Assert.Equal(content, File.ReadAllText(f.Path));
+    }
+
+    [Fact]
+    public void Grant_against_a_locked_file_refuses_and_leaves_it_intact()
+    {
+        // The bug: a read failure was treated as "no file", so the grant wrote {"projects":{…}} over the user's
+        // oauthAccount and every project. Now an unreadable file is refused.
+        if (!OperatingSystem.IsWindows()) return;
+        using var f = new TempFile();
+        const string original = """{ "oauthAccount": { "emailAddress": "keep@example.com" }, "projects": {} }""";
+        File.WriteAllText(f.Path, original);
+
+        using (new FileStream(f.Path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            Assert.False(DirectoryTrust.GrantAt(f.Path, Abs("perch-trust", "x")));
+
+        Assert.Equal(original, File.ReadAllText(f.Path));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(f.Path)!, Path.GetFileName(f.Path) + ".*.tmp"));
+    }
+
+    [Fact]
+    public void Grant_for_an_already_trusted_folder_does_not_rewrite_the_file()
+    {
+        using var f = new TempFile();
+        var cwd = Abs("perch-trust", "already");
+        Assert.True(DirectoryTrust.GrantAt(f.Path, cwd));
+        var old = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(f.Path, old);
+
+        Assert.True(DirectoryTrust.GrantAt(f.Path, cwd));
+        Assert.Equal(old, File.GetLastWriteTimeUtc(f.Path));
+    }
+
     [Fact]
     public void ReadTrustedKeys_returns_only_accepted_entries_and_tolerates_a_missing_file()
     {

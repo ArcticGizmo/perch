@@ -204,6 +204,59 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
         Assert.Equal(ExpectedCount("PreToolUse"), ((JsonArray)((JsonObject)Read()["hooks"]!)["PreToolUse"]!).Count);
     }
 
+    // ── CP14: never rewrite without cause, never replace what couldn't be read ─────────────
+    private static readonly DateTime Old = new(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void Reconcile_of_an_already_reconciled_file_does_not_write()
+    {
+        ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0");
+        File.SetLastWriteTimeUtc(_settings, Old);
+
+        Assert.True(ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0"));
+        Assert.Equal(Old, File.GetLastWriteTimeUtc(_settings));
+    }
+
+    [Fact]
+    public void Reconcile_after_a_reformat_alone_does_not_write()
+    {
+        // Claude Code rewrites settings.json in its own formatting; the content is unchanged, so reconcile must
+        // compare meaning, not bytes — else every launch after a Claude rewrite would rewrite the file again.
+        ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0");
+        var compact = Read().ToJsonString();   // same JSON, no indentation
+        File.WriteAllText(_settings, compact);
+        File.SetLastWriteTimeUtc(_settings, Old);
+
+        ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0");
+        Assert.Equal(Old, File.GetLastWriteTimeUtc(_settings));
+        Assert.Equal(compact, File.ReadAllText(_settings));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("{ not json")]
+    public void Reconcile_leaves_an_empty_unparseable_or_non_object_file_alone(string content)
+    {
+        File.WriteAllText(_settings, content);
+        Assert.False(ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0"));
+        Assert.Equal(content, File.ReadAllText(_settings));
+    }
+
+    [Fact]
+    public void Reconcile_against_a_locked_file_refuses_and_leaves_it_intact()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        const string original = """{ "model": "claude-opus" }""";
+        File.WriteAllText(_settings, original);
+
+        using (new FileStream(_settings, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            Assert.False(ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0"));
+
+        Assert.Equal(original, File.ReadAllText(_settings));
+    }
+
     // ── dev / release profile scope ─────────────────────────────────────────────────────
     [Fact]
     public void Reconcile_Dev_LeavesReleaseHooksIntact_AndAddsItsOwn()

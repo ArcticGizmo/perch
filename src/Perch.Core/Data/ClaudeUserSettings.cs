@@ -66,9 +66,7 @@ internal static class ClaudeUserSettings
         try
         {
             var path = settingsPath;
-            var root = File.Exists(path)
-                ? JsonNode.Parse(File.ReadAllText(path), documentOptions: ReadOptions) as JsonObject ?? new JsonObject()
-                : new JsonObject();
+            if (OpenForWrite(path) is not (JsonObject root, var original)) return false;
 
             if (root["hooks"] is not JsonObject hooks)
             {
@@ -90,14 +88,43 @@ internal static class ClaudeUserSettings
 
             if (hooks.Count == 0) root.Remove("hooks");
 
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, root.ToJsonString(WriteOptions));
+            // Runs on every launch; an already-reconciled file is left untouched (no rewrite, no mtime bump).
+            Commit(path, root, original);
             return true;
         }
         catch
         {
             return false;
         }
+    }
+
+    // ── Safe read-modify-write (review fixes CP14) ───────────────────────────────────
+    // settings.json is Claude Code's own file, written by it, by the hook and by Perch. Opening it for a rewrite
+    // must never turn "couldn't read it" into "start from {}": a missing file is the only fresh start; one that
+    // exists but is unreadable (locked mid-write), unparseable or not a JSON object is refused. Parse failures
+    // throw, and each caller's catch turns them into "no change".
+
+    // The file's JSON object to mutate, plus a deep copy of it as read (null when the file didn't exist). Null
+    // when the file exists but couldn't be read or isn't an object — the caller must leave it alone.
+    private static (JsonObject Root, JsonObject? Original)? OpenForWrite(string path)
+    {
+        switch (AtomicFile.TryRead(path, out var text))
+        {
+            case AtomicFile.ReadResult.Missing: return (new JsonObject(), null);
+            case AtomicFile.ReadResult.Failed: return null;
+        }
+        if (JsonNode.Parse(text, documentOptions: ReadOptions) is not JsonObject root) return null;
+        return (root, (JsonObject)root.DeepClone());
+    }
+
+    // Writes `root` back atomically — unless it's still deep-equal to what was read, so an idempotent pass never
+    // touches the file (and a reformat by Claude Code alone doesn't make every later pass rewrite it). Returns
+    // whether it wrote.
+    private static bool Commit(string path, JsonObject root, JsonObject? original)
+    {
+        if (original is not null && JsonNode.DeepEquals(original, root)) return false;
+        AtomicFile.Write(path, root.ToJsonString(WriteOptions));
+        return true;
     }
 
     /// <summary>
@@ -116,11 +143,9 @@ internal static class ClaudeUserSettings
         try
         {
             var path = settingsPath;
-            if (!File.Exists(path)) return false;
-
-            if (JsonNode.Parse(File.ReadAllText(path), documentOptions: ReadOptions) is not JsonObject root
+            if (OpenForWrite(path) is not (JsonObject root, var original) || original is null
                 || root["hooks"] is not JsonObject hooks)
-                return false;
+                return false;   // no file, unreadable, or no hooks block
 
             // Only rewrite when we actually removed one of our own entries — so calling this on a directory
             // that has no Perch hooks (e.g. an auto-discovered dir the user left hooks off for) never touches
@@ -128,8 +153,7 @@ internal static class ClaudeUserSettings
             if (!StripManaged(hooks, OwnedBy(isDev, devBinaryPath))) return false;
             if (hooks.Count == 0) root.Remove("hooks");
 
-            File.WriteAllText(path, root.ToJsonString(WriteOptions));
-            return true;
+            return Commit(path, root, original);
         }
         catch
         {
@@ -320,9 +344,7 @@ internal static class ClaudeUserSettings
         try
         {
             var path = settingsPath;
-            var root = File.Exists(path)
-                ? JsonNode.Parse(File.ReadAllText(path), documentOptions: ReadOptions) as JsonObject ?? new JsonObject()
-                : new JsonObject();
+            if (OpenForWrite(path) is not (JsonObject root, var original)) return false;
 
             if (root["env"] is not JsonObject env)
             {
@@ -341,8 +363,7 @@ internal static class ClaudeUserSettings
                 if (env.Count == 0) root.Remove("env");
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            Commit(path, root, original);
             return true;
         }
         catch
@@ -386,9 +407,7 @@ internal static class ClaudeUserSettings
     {
         try
         {
-            var root = File.Exists(settingsPath)
-                ? JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: ReadOptions) as JsonObject ?? new JsonObject()
-                : new JsonObject();
+            if (OpenForWrite(settingsPath) is not (JsonObject root, var original)) return false;
 
             root["statusLine"] = new JsonObject
             {
@@ -397,8 +416,7 @@ internal static class ClaudeUserSettings
                 ["padding"] = padding,
             };
 
-            Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
-            File.WriteAllText(settingsPath, root.ToJsonString(WriteOptions));
+            Commit(settingsPath, root, original);
             return true;
         }
         catch
@@ -416,14 +434,12 @@ internal static class ClaudeUserSettings
     {
         try
         {
-            if (!File.Exists(settingsPath)) return false;
-            if (JsonNode.Parse(File.ReadAllText(settingsPath), documentOptions: ReadOptions) is not JsonObject root
+            if (OpenForWrite(settingsPath) is not (JsonObject root, var original) || original is null
                 || !root.ContainsKey("statusLine"))
                 return false;
 
             root.Remove("statusLine");
-            File.WriteAllText(settingsPath, root.ToJsonString(WriteOptions));
-            return true;
+            return Commit(settingsPath, root, original);
         }
         catch
         {

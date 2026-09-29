@@ -865,6 +865,9 @@ internal sealed class AppSettings
     public AppSettings Clone() =>
         JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(this)) ?? new();
 
+    // Saves run one at a time: two threads saving at once used to share a fixed ".tmp" name and could tear it.
+    private static readonly Lock SaveGate = new();
+
     public void Save()
     {
         // No-persist guards: the render/test hosts (process-wide) and the unreadable-file stand-in
@@ -872,14 +875,14 @@ internal sealed class AppSettings
         if (_persistenceDisabled || SaveSuppressed) return;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            // Write-then-move so a process killed mid-save can never leave a truncated file for the next
-            // launch to misread as corrupt.
-            string tmp = FilePath + ".tmp";
-            File.WriteAllText(tmp,
-                JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-            File.Move(tmp, FilePath, overwrite: true);
+            // Atomic (unique temp, flushed, then renamed over the file) so a process killed mid-save can never
+            // leave a truncated file for the next launch to misread as corrupt (review fixes CP14).
+            lock (SaveGate)
+                AtomicFile.Write(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch { }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Append("settings.log", $"Save failed for {FilePath}: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 }
