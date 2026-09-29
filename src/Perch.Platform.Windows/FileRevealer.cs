@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Perch.Data;
 using Perch.Platform;
 
 namespace Perch.Platform.Windows;
@@ -12,6 +13,9 @@ namespace Perch.Platform.Windows;
 /// </summary>
 public sealed class FileRevealer : IFileRevealer
 {
+    // By absolute path, never a bare name a working directory could shadow (review fixes CP7).
+    private static string Explorer => ExecutableResolver.WindowsTool("explorer.exe");
+
     public void RevealInFileManager(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
@@ -19,9 +23,9 @@ public sealed class FileRevealer : IFileRevealer
         {
             if (File.Exists(path))
                 // Explorer wants "/select,<path>" as one command-line string; ArgumentList would split it.
-                Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = false });
+                Process.Start(new ProcessStartInfo(Explorer, $"/select,\"{path}\"") { UseShellExecute = false });
             else if (Directory.Exists(path))
-                Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = false });
+                Process.Start(new ProcessStartInfo(Explorer, $"\"{path}\"") { UseShellExecute = false });
         }
         catch { /* best-effort */ }
     }
@@ -31,8 +35,10 @@ public sealed class FileRevealer : IFileRevealer
         if (string.IsNullOrWhiteSpace(path)) return;
         try
         {
-            // `code` is a .cmd shim on PATH; UseShellExecute lets the shell resolve it (via PATH + PATHEXT).
-            var psi = new ProcessStartInfo("code") { UseShellExecute = true };
+            // `code` is a .cmd shim on PATH. Resolved to an absolute path here rather than left to ShellExecute, which
+            // would look in the current directory first (review fixes CP7). Not found → the fallback below.
+            var code = ExecutableResolver.Find("code") ?? throw new FileNotFoundException("VS Code isn't on PATH.");
+            var psi = new ProcessStartInfo(code) { UseShellExecute = true };
             if (line > 0) { psi.ArgumentList.Add("-g"); psi.ArgumentList.Add($"{path}:{line}"); }
             else psi.ArgumentList.Add(path);
             Process.Start(psi);
@@ -51,7 +57,7 @@ public sealed class FileRevealer : IFileRevealer
         try
         {
             // The shell's "Open with…" chooser dialog.
-            var psi = new ProcessStartInfo("rundll32.exe") { UseShellExecute = false };
+            var psi = new ProcessStartInfo(ExecutableResolver.SystemTool("rundll32.exe")) { UseShellExecute = false };
             psi.ArgumentList.Add("shell32.dll,OpenAs_RunDLL");
             psi.ArgumentList.Add(path);
             Process.Start(psi);

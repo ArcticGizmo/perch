@@ -136,7 +136,7 @@ internal static class MarkdownProjectScan
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "git",
+                FileName = ExecutableResolver.Resolve("git"),   // absolute: never a git.exe planted in the repo (CP7)
                 WorkingDirectory = cwd,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,

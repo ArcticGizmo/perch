@@ -102,7 +102,7 @@ public sealed class WindowsAppIconProvider : IAppIconProvider
         {
             var appId = ShellIcon.StartMenuAppId(name);
             if (appId == null) return false;
-            Process.Start(new ProcessStartInfo("explorer.exe", $"shell:AppsFolder\\{appId}"));
+            Process.Start(new ProcessStartInfo(Perch.Data.ExecutableResolver.WindowsTool("explorer.exe"), $"shell:AppsFolder\\{appId}"));
             return true;
         }
         catch { return false; }

@@ -5259,7 +5259,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         try
         {
             System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo("code", $"\"{path}\"") { UseShellExecute = true });
+                new System.Diagnostics.ProcessStartInfo(Perch.Data.ExecutableResolver.Resolve("code"), $"\"{path}\"") { UseShellExecute = true });
         }
         catch { /* best-effort — VS Code may not be on PATH */ }
     }

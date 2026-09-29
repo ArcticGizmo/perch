@@ -31,7 +31,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP4](#cp4) | 🟠 P1 | Supabase | Realtime inbox authorisation + sender validation | M | ⬜ |
 | [CP5](#cp5) | 🟡 P2 | Supabase | Draw with Perch: RPC state checks + size limits | S | ⬜ |
 | [CP6](#cp6) | 🟡 P2 | Supabase | Block/suspension coverage, `find_profile` throttle, feed query | M | ⬜ |
-| [CP7](#cp7) | 🔴 P0 | Client | Executable hijack via untrusted working directory | M | ⬜ |
+| [CP7](#cp7) | 🔴 P0 | Client | Executable hijack via untrusted working directory | M | 🟦 code + tests done, dogfood owed |
 | [CP8](#cp8) | 🟠 P1 | Client | Link opening: scheme allowlist + browser argument injection | S | ⬜ |
 | [CP9](#cp9) | 🟠 P1 | Client | No UNC/remote path probing (NTLM leak + UI hang) | S | ⬜ |
 | [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | ⬜ |
@@ -181,7 +181,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 ## Client security
 
 <a id="cp7"></a>
-### CP7 — Executable hijack via untrusted working directory · 🔴 P0 · M · ⬜
+### CP7 — Executable hijack via untrusted working directory · 🔴 P0 · M · 🟦
 
 **Problem.** Bare executable names get resolved inside untrusted repos in four places:
 - **`ClaudeSessionController.cs:67`** runs `cmd.exe /c "claude …"` with `WorkingDirectory = cwd`. cmd searches the current directory before PATH, so a committed `claude.cmd`, `.bat` or `.exe` runs instead of Claude, with no permission layer. The same shape is in `PluginManager.cs:133` and `SessionLauncher.cs:41-48`.
@@ -190,13 +190,43 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - **`StatuslineScript.cs:421`**: the generated `.mjs` calls `execFileSync('git', …, {cwd})`, and libuv searches `cwd` first.
 
 **Tasks**
-- [ ] `Main`: call `Directory.SetCurrentDirectory(AppContext.BaseDirectory)` (or the profile dir) before anything spawns, and drop `DetachTray`'s `WorkingDirectory`. The cwd already travels in the intent file.
-- [ ] Add a Core `ExecutableResolver`. It walks PATH plus PATHEXT, **never** includes the cwd, caches the result, and has a test with a fake PATH.
-- [ ] Use it for `claude`, `git`, `gh` and `code`. Use `Environment.SystemDirectory` for `cmd`, `explorer` and `rundll32`.
-- [ ] Set `NoDefaultCurrentDirectoryInExePath=1` in the child environment wherever Perch spawns `cmd`.
-- [ ] Hook: launch the absolute tray path from the `perch.path` breadcrumb, with an explicit `WorkingDirectory`.
-- [ ] Statusline `.mjs`: resolve git from PATH explicitly. That means a PATH walk in the script, or baking in the absolute path at generation time.
-- [ ] Test: a temp dir containing a `claude.cmd` that writes a marker. Start a controlled session there and assert the marker is absent.
+- [x] `Main` calls `Directory.SetCurrentDirectory(AppContext.BaseDirectory)` once the launch cwd has been captured into the session intents, and before any spawn. `DetachTray` now starts the relaunch with `WorkingDirectory = AppContext.BaseDirectory`; the session cwd still travels in the intent file.
+- [x] New `Perch.Data.ExecutableResolver`:
+  - walks PATH plus PATHEXT and never the cwd;
+  - skips relative PATH entries and unquotes quoted ones;
+  - on Windows never returns npm's extensionless sh script;
+  - caches hits (re-validated by existence) and retries misses after 30s.
+
+  `Resolve()` falls back to the bare name, which is safe now that the cwd is neutral. `SystemTool()` and `WindowsTool()` give absolute `cmd`/`rundll32` and `explorer` paths.
+- [x] Applied everywhere Perch starts a process:
+  - `git` in GitRepo, GitStats, MarkdownProjectScan and ProjectFileScan, and `gh` in PrStatus;
+  - `code` in FileRevealer (Windows and Mac), plus the Markdown, DaemonList and Overlay "open in VS Code" actions;
+  - `gitkraken`, and GitKraken's `cmd`;
+  - `explorer` and `rundll32`;
+  - the Mac `open`, now `/usr/bin/open`.
+  
+  The hand-rolled PATH walks in `GitKrakenLauncher` and `MarkdownWindow` were replaced by the resolver.
+- [x] `claude` goes through a new shared `ClaudeCli.CreateStartInfo`, used by both `ClaudeSessionController` and `PluginManager`:
+  - a native `claude.exe` is exec'd directly, with no shell;
+  - an npm `.cmd` shim runs through absolute `cmd.exe` with the path quoted, plus `NoDefaultCurrentDirectoryInExePath=1`, so the shim's own bare `node` lookup can't hit the cwd either;
+  - not on PATH → a clear "Couldn't find the claude CLI" error.
+  
+  `PluginManager` also stops running `cmd.exe` on macOS.
+- [x] `NoDefaultCurrentDirectoryInExePath` is set **only** for the cmd-shim claude launch. It isn't set tray-wide, which would change the environment of every tool a user's session runs. Everywhere else, absolute paths already remove the search.
+- [x] `SessionLauncher` (reopen in terminal) resolves `claude` up front and hands every terminal an absolute path: `wt`, absolute `cmd`, and absolute `powershell` with `& '<path>'`. If claude isn't on PATH it returns false, and the app falls back to copying the command.
+- [x] Hook: the new `TrayExecutable()` launches the tray from the `perch.path` breadcrumb, with `WorkingDirectory` set to the tray's own directory, falling back to a PATH-only lookup. It never uses the bare `perch`.
+- [x] Statusline `.mjs`: a memoised `gitExe()` PATH walk (absolute entries only, `git.exe` on win32), and `execFileSync(git, …)`. Nothing is baked in at generation time, so the script stays portable.
+- [x] Tests, 15 new:
+  - `ExecutableResolverTests` (12): PATH order, PATHEXT order, the npm sh script, relative and quoted entries, cwd never searched, absolute and relative names, POSIX mode, system tools.
+  - `ClaudeCliStartInfoTests` (2): exe direct; shim through absolute cmd, quoted, with the env var.
+  - A statusline end-to-end test: an **empty** `git.exe` planted in a real repo. The resolver still returns the PATH git, and the generated script (run under node with `NoDefaultCurrentDirectoryInExePath` stripped) produces the real counts `S1U0`.
+  
+  Test fixtures only ever create empty files; no executable is copied or modified. An earlier draft that planted a copied system binary was replaced on request.
+- [ ] Dogfood owed: interactively check that a controlled session starts, "Reopen in terminal" works for each terminal choice, the hook autostarts the tray, and "Open in VS Code" and GitKraken still work.
+
+**Verify.** Done 2026-09-29: both heads build, and the .NET suite passes 1392/1392. Found along the way:
+- **The environment masks the attack.** When a process inherits `NoDefaultCurrentDirectoryInExePath=1`, which Claude Code sets for the tools it spawns, Node skips the cwd search. With it unset (a normal Windows environment), Node 24's `execFileSync('git', …, {cwd})` **does** resolve a `git.exe` in the cwd. The statusline test strips the variable so it exercises the unprotected case.
+- **The statusline test catches the bug.** Against the old bare-`'git'` script it produced `SU`, not `S1U0`.
 
 <a id="cp8"></a>
 ### CP8 — Link opening: scheme allowlist + browser argument injection · 🟠 P1 · S · ⬜

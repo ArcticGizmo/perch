@@ -55,7 +55,7 @@ internal sealed class GitKrakenLauncher
         var psi = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true };
         if (script)
         {
-            psi.FileName = "cmd.exe";
+            psi.FileName = Perch.Data.ExecutableResolver.SystemTool("cmd.exe");
             psi.ArgumentList.Add("/c");
             psi.ArgumentList.Add(cli);
         }
@@ -101,29 +101,6 @@ internal sealed class GitKrakenLauncher
         return null;
     }
 
-    private static string? Resolve()
-    {
-        var pathVar = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrEmpty(pathVar)) return null;
-
-        // Same CLI name across platforms; on Windows it's typically the .cmd shim, but accept an .exe too.
-        string[] names = OperatingSystem.IsWindows()
-            ? ["gitkraken.exe", "gitkraken.cmd", "gitkraken.bat", "gitkraken"]
-            : ["gitkraken"];
-
-        foreach (var dir in pathVar.Split(Path.PathSeparator))
-        {
-            if (string.IsNullOrWhiteSpace(dir)) continue;
-            foreach (var name in names)
-            {
-                try
-                {
-                    var full = Path.Combine(dir, name);
-                    if (File.Exists(full)) return full;
-                }
-                catch { /* malformed PATH entry - skip */ }
-            }
-        }
-        return null;
-    }
+    // Same CLI name across platforms; on Windows it's typically the .cmd shim (PATHEXT also accepts an .exe).
+    private static string? Resolve() => Perch.Data.ExecutableResolver.Find("gitkraken");
 }

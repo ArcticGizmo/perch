@@ -408,7 +408,7 @@ internal sealed class PrStatusService : IDisposable
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "gh",
+                FileName = ExecutableResolver.Resolve("gh"),     // absolute: never a gh.exe planted in the repo (CP7)
                 Arguments = args,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,

@@ -509,11 +509,51 @@ static void LaunchPerch()
     {
         if (OperatingSystem.IsMacOS() && TryLaunchMacBundle()) return;
 
-        var psi = new ProcessStartInfo("perch") { UseShellExecute = true };
+        // Never the bare name: this hook runs with the session's project folder as its current directory, and
+        // ShellExecute looks there before PATH — so a perch.cmd/perch.exe committed to a repo would run the moment
+        // `claude` started in it (review fixes CP7). Prefer the installer's breadcrumb, else search PATH only.
+        if (TrayExecutable() is not { } tray) return;
+        var psi = new ProcessStartInfo(tray)
+        {
+            UseShellExecute = true,
+            WorkingDirectory = Path.GetDirectoryName(tray) ?? "",
+        };
         psi.ArgumentList.Add("--autostarted");
         Process.Start(psi);
     }
-    catch { /* not on PATH (e.g. dev build) → no-op */ }
+    catch { /* not installed (e.g. dev build) → no-op */ }
+}
+
+// The tray executable by absolute path: the perch.path breadcrumb HookInstaller writes on every tray launch, else
+// the first `perch` on PATH (absolute entries only — a relative one resolves against the current directory, the
+// thing being avoided). Null when neither resolves.
+static string? TrayExecutable()
+{
+    try
+    {
+        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        string marker = Path.Combine(appData, ProfileFolder(), "bin", "perch.path");
+        if (File.Exists(marker))
+        {
+            string recorded = File.ReadAllText(marker).Trim();
+            if (Path.IsPathFullyQualified(recorded) && File.Exists(recorded)) return recorded;
+        }
+    }
+    catch { /* fall through to PATH */ }
+
+    string exe = OperatingSystem.IsWindows() ? "perch.exe" : "perch";
+    foreach (var raw in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
+    {
+        var dir = raw.Trim().Trim('"');
+        if (dir.Length == 0 || !Path.IsPathFullyQualified(dir)) continue;
+        try
+        {
+            var full = Path.Combine(dir, exe);
+            if (File.Exists(full)) return full;
+        }
+        catch { /* malformed entry */ }
+    }
+    return null;
 }
 
 // macOS: `perch` is only a ~/.local/bin symlink, which the hook's PATH usually lacks, and the tray is a

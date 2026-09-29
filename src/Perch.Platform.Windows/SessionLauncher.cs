@@ -20,33 +20,47 @@ public sealed class SessionLauncher : ISessionLauncher
 
     public bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal)
     {
-        string inner = ClaudeCli.Command(claudeArgs);
+        // claude is resolved to an absolute path up front: the terminal opens *in* `cwd` — a repo Perch didn't
+        // write — and cmd (like ShellExecute) looks in the current directory before PATH, so a bare `claude` would
+        // prefer a claude.cmd committed there (review fixes CP7). Not on PATH → false, and the app falls back to
+        // copying the command for the user to run themselves.
+        if (ClaudeCli.Find() is not { } claude) return false;
 
         // Try the preferred terminal first.
-        if (TryStart(StartInfo(terminal, cwd, inner))) return true;
+        if (TryStart(StartInfo(terminal, cwd, claude, claudeArgs))) return true;
 
         // If an explicit choice failed (wt alias disabled, pwsh missing, …), fall back to a plain console so
         // the command still runs. CommandPrompt is already that fallback, so don't try it twice.
-        if (terminal != TerminalApp.CommandPrompt && TryStart(StartInfo(TerminalApp.CommandPrompt, cwd, inner)))
+        if (terminal != TerminalApp.CommandPrompt && TryStart(StartInfo(TerminalApp.CommandPrompt, cwd, claude, claudeArgs)))
             return true;
 
         return false;
     }
 
     // -d sets Windows Terminal's tab start directory (wt ignores the parent's cwd); everything else takes
-    // WorkingDirectory. UseShellExecute resolves the wt.exe execution alias and opens a new window.
-    private static ProcessStartInfo StartInfo(TerminalApp terminal, string cwd, string inner) => terminal switch
+    // WorkingDirectory. Every host is an absolute path too: ShellExecute searches WorkingDirectory — the repo —
+    // for a bare name. wt.exe is an execution alias on PATH, so it goes through the resolver.
+    private static ProcessStartInfo StartInfo(TerminalApp terminal, string cwd, string claude, string claudeArgs)
     {
-        TerminalApp.WindowsTerminal =>
-            new ProcessStartInfo("wt.exe", $"-d \"{cwd}\" cmd /k {inner}") { UseShellExecute = true },
-        TerminalApp.PowerShell =>
-            new ProcessStartInfo("powershell.exe", $"-NoExit -Command \"{inner}\"")
-                { UseShellExecute = true, WorkingDirectory = cwd },
-        TerminalApp.CommandPrompt =>
-            new ProcessStartInfo("cmd.exe", $"/k {inner}") { UseShellExecute = true, WorkingDirectory = cwd },
-        _ => // Auto → Windows Terminal (the Reopen fallback then covers Command Prompt)
-            new ProcessStartInfo("wt.exe", $"-d \"{cwd}\" cmd /k {inner}") { UseShellExecute = true },
-    };
+        // cmd keeps a quoted first token only when it's the sole quoted pair — true here (the args are safe tokens).
+        string cmdLine = $"{QuoteIfSpaced(claude)} {claudeArgs}";
+        string cmd = ExecutableResolver.SystemTool("cmd.exe");
+        return terminal switch
+        {
+            TerminalApp.PowerShell =>
+                new ProcessStartInfo(
+                    Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"),
+                    $"-NoExit -Command \"& '{claude.Replace("'", "''")}' {claudeArgs}\"")
+                    { UseShellExecute = true, WorkingDirectory = cwd },
+            TerminalApp.CommandPrompt =>
+                new ProcessStartInfo(cmd, $"/k {cmdLine}") { UseShellExecute = true, WorkingDirectory = cwd },
+            _ => // WindowsTerminal, and Auto → Windows Terminal (the Reopen fallback then covers Command Prompt)
+                new ProcessStartInfo(ExecutableResolver.Resolve("wt.exe"), $"-d \"{cwd}\" {QuoteIfSpaced(cmd)} /k {cmdLine}")
+                    { UseShellExecute = true },
+        };
+    }
+
+    private static string QuoteIfSpaced(string path) => path.Contains(' ') ? $"\"{path}\"" : path;
 
     // Claude Desktop ships as an MSIX-packaged (Store) app, so its exe lives under the ACL-protected,
     // version-stamped C:\Program Files\WindowsApps\... — you can't launch it by path. The supported way is
@@ -58,7 +72,7 @@ public sealed class SessionLauncher : ISessionLauncher
     private const string ClaudeDesktopAumid = "Claude_pzs8sxrjxfjjc!Claude";
 
     public bool OpenClaudeDesktop() =>
-        TryStart(new ProcessStartInfo("explorer.exe", $"shell:AppsFolder\\{ClaudeDesktopAumid}")
+        TryStart(new ProcessStartInfo(ExecutableResolver.WindowsTool("explorer.exe"), $"shell:AppsFolder\\{ClaudeDesktopAumid}")
             { UseShellExecute = true });
 
     private static bool TryStart(ProcessStartInfo psi)

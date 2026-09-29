@@ -61,11 +61,9 @@ internal sealed class ClaudeSessionController : IDisposable
         if (IsSafeToken(permissionMode) && permissionMode != "default") args += $" --permission-mode {permissionMode}";
         if (IsEffortLevel(effort)) args += $" --effort {effort}";
 
-        // `claude` is a .cmd shim on Windows PATH, so it needs a shell host (same reason
-        // SessionLauncher.Reopen never execs it directly). Elsewhere it's a plain executable.
-        var psi = OperatingSystem.IsWindows()
-            ? new ProcessStartInfo { FileName = "cmd.exe", Arguments = $"/d /s /c \"claude {args}\"" }
-            : new ProcessStartInfo { FileName = "/bin/sh", Arguments = $"-lc \"claude {args}\"" };
+        // Resolved to an absolute path, never against `cwd`: the session runs inside a repo Perch didn't write, and
+        // a `claude.cmd` committed there would otherwise run in place of the real CLI (review fixes CP7).
+        var psi = ClaudeCli.CreateStartInfo(args);
         psi.WorkingDirectory = cwd;
         psi.UseShellExecute = false;
         psi.CreateNoWindow = true;

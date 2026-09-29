@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using Perch.Data;
 using Perch.Statusline;
 using Xunit;
 
@@ -41,6 +42,9 @@ public sealed class StatuslineScriptTests
         });
         Assert.Contains("const NEED_GIT_COUNTS = true;", withCounts);
         Assert.Contains("execFileSync", withCounts);   // the git subprocess is present
+        // …but by the PATH-resolved absolute path, never the bare name Node would look up in the repo first (CP7).
+        Assert.DoesNotContain("execFileSync('git'", withCounts);
+        Assert.Contains("execFileSync(git, args, opt)", withCounts);
 
         var withoutCounts = StatuslineScript.Generate(new StatuslineProfile
         {
@@ -256,6 +260,66 @@ public sealed class StatuslineScriptTests
         }
     }
 
+    // CP7 end-to-end: a repo that ships its own git.exe must not have it picked up by the statusline. Node on Windows
+    // looks in the spawn's cwd before PATH, so the old `execFileSync('git', …, {cwd})` resolved to the planted file.
+    // The plant is an EMPTY file — nothing is ever executed from it; it only has to exist to win (or not) the lookup.
+    // So git must resolve to the copy on PATH: the resolver says so directly, and the script proves it by producing
+    // real counts ("S1U0" for exactly one staged file) — resolving to the empty plant would fail to start and yield
+    // no counts at all ("SU").
+    [Fact]
+    public void Generated_script_resolves_git_from_PATH_not_a_git_exe_in_the_repo()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var node = FindNode();
+        var git = ExecutableResolver.Find("git");
+        if (node is null || git is null) return;   // needs both on the host
+
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-plant-" + Guid.NewGuid().ToString("N"));
+        var repo = Directory.CreateDirectory(Path.Combine(dir, "repo")).FullName;
+        try
+        {
+            RunGit(git, repo, "init", "-q");
+            File.WriteAllText(Path.Combine(repo, "a.txt"), "hello");
+            RunGit(git, repo, "add", "a.txt");
+            var planted = Path.Combine(repo, "git.exe");
+            File.WriteAllBytes(planted, []);   // empty: a name to shadow, never something that could run
+
+            // git still resolves to the PATH copy, outside the repo.
+            Assert.Equal(git, ExecutableResolver.Find("git"));
+            Assert.False(git.StartsWith(repo, StringComparison.OrdinalIgnoreCase), $"git resolved inside the repo: {git}");
+
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, StatuslineScript.Generate(
+                new StatuslineProfile { Name = "t", Template = "S{{git.staged}}U{{git.unstaged}}" }, devMarker: false));
+            var payload = System.Text.Json.JsonSerializer.Serialize(new { cwd = repo });
+            Assert.Equal("S1U0", RunNode(node, scriptPath, payload).Trim());
+        }
+        finally
+        {
+            DeleteTree(dir);
+        }
+    }
+
+    // git marks its object files read-only, which makes a plain recursive delete fail and leave the temp repo behind.
+    private static void DeleteTree(string dir)
+    {
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+                File.SetAttributes(f, FileAttributes.Normal);
+            Directory.Delete(dir, recursive: true);
+        }
+        catch { /* best effort */ }
+    }
+
+    private static void RunGit(string git, string cwd, params string[] args)
+    {
+        var psi = new ProcessStartInfo(git) { WorkingDirectory = cwd, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        p.WaitForExit(15000);
+    }
+
     private static string? FindNode()
     {
         try
@@ -288,6 +352,10 @@ public sealed class StatuslineScriptTests
                 StandardOutputEncoding = new UTF8Encoding(false),
             },
         };
+        // A plain Windows environment: when the test host inherits NoDefaultCurrentDirectoryInExePath (Claude Code sets
+        // it for its tools), Node skips the cwd search and the planted-git test would pass even against the old
+        // bare-name code. Nothing else here depends on it.
+        p.StartInfo.Environment.Remove("NoDefaultCurrentDirectoryInExePath");
         p.Start();
         p.StandardInput.Write(stdin);
         p.StandardInput.Close();

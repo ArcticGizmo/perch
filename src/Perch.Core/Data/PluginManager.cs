@@ -128,25 +128,20 @@ internal sealed class PluginManager
     private async Task<bool> IsCliPresentAsync() =>
         (await RunClaudeAsync("--version")).exitCode == 0;
 
-    // Runs `claude <args>` via cmd.exe so PATHEXT shims (.exe/.cmd/.bat) all resolve.
-    private static Task<(int exitCode, string output)> RunClaudeAsync(string args) =>
-        RunProcessAsync("cmd.exe", $"/c claude {args}");
+    // Runs `claude <args>` with claude resolved to an absolute path (ClaudeCli), never against a working directory.
+    private static Task<(int exitCode, string output)> RunClaudeAsync(string args) => RunProcessAsync(args);
 
-    // Runs a process, capturing combined stdout+stderr, with a hard timeout so a hung CLI/network
+    // Runs claude, capturing combined stdout+stderr, with a hard timeout so a hung CLI/network
     // call can never wedge the caller. A non-zero exit code (including "command not found") is failure.
-    private static async Task<(int exitCode, string output)> RunProcessAsync(string fileName, string args)
+    private static async Task<(int exitCode, string output)> RunProcessAsync(string args)
     {
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = args,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+            var psi = ClaudeCli.CreateStartInfo(args);   // throws when claude isn't on PATH → the catch below
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
 
             using var proc = Process.Start(psi);
             if (proc == null)

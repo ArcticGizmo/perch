@@ -142,6 +142,14 @@ internal static class Program
         if (sessionIntent is not null && fromTerminal)
             sessionIntent = sessionIntent with { OriginMonitor = PlatformServices.WindowChrome.GetForegroundMonitorGeometry() };
 
+        // Every use of the launch directory is above (the intents captured it). From here on, run from our own
+        // install directory: a terminal launch (or the SessionStart hook) would otherwise leave the tray's current
+        // directory inside whatever repo it started in — for its whole lifetime — and every bare-name process start
+        // (CreateProcess, ShellExecute, and .NET on Unix all search the current directory before PATH) would then
+        // prefer a git.exe/cmd.exe committed to that repo. It also stops the tray pinning that folder against
+        // delete/rename. See ExecutableResolver and docs/review-fixes-plan.md CP7.
+        try { Directory.SetCurrentDirectory(AppContext.BaseDirectory); } catch { /* keep going from wherever we are */ }
+
         // A replay instance gets its own mutex so it runs alongside a live tray instead of no-op'ing
         // against it — you can watch a recording play while your real sessions keep running.
         var mutexName = SingleInstanceMutexName + (isReplay ? "_Replay" : "");
@@ -262,7 +270,9 @@ internal static class Program
             return 0;
         }
 
-        var psi = new ProcessStartInfo { FileName = exe, UseShellExecute = true };
+        // Started from our own install directory, never the session's: the session cwd travels inside the intent,
+        // and the tray must not run from a repo (see the SetCurrentDirectory in Main).
+        var psi = new ProcessStartInfo { FileName = exe, UseShellExecute = true, WorkingDirectory = AppContext.BaseDirectory };
         try
         {
             if (intent is not null)
@@ -271,7 +281,6 @@ internal static class Program
                 File.WriteAllText(file, intent.ToJson());
                 psi.ArgumentList.Add("--open-intent-file");
                 psi.ArgumentList.Add(file);
-                if (Directory.Exists(intent.Cwd)) psi.WorkingDirectory = intent.Cwd;
             }
             else
             {

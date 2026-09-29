@@ -10,12 +10,15 @@ namespace Perch.Platform.Mac;
 /// </summary>
 public sealed class FileRevealer : IFileRevealer
 {
+    // Absolute: .NET on Unix checks the current directory before PATH for a bare name (review fixes CP7).
+    private const string Open = "/usr/bin/open";
+
     public void RevealInFileManager(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
         try
         {
-            var psi = new ProcessStartInfo("open") { UseShellExecute = false };
+            var psi = new ProcessStartInfo(Open) { UseShellExecute = false };
             psi.ArgumentList.Add("-R");
             psi.ArgumentList.Add(path);
             Process.Start(psi);
@@ -28,7 +31,7 @@ public sealed class FileRevealer : IFileRevealer
         if (string.IsNullOrWhiteSpace(path)) return;
         try
         {
-            var psi = new ProcessStartInfo("code") { UseShellExecute = false };
+            var psi = new ProcessStartInfo(Perch.Data.ExecutableResolver.Resolve("code")) { UseShellExecute = false };
             if (line > 0) { psi.ArgumentList.Add("-g"); psi.ArgumentList.Add($"{path}:{line}"); }
             else psi.ArgumentList.Add(path);
             Process.Start(psi);
@@ -37,7 +40,7 @@ public sealed class FileRevealer : IFileRevealer
         {
             try
             {
-                var psi = new ProcessStartInfo("open") { UseShellExecute = false };
+                var psi = new ProcessStartInfo(Open) { UseShellExecute = false };
                 psi.ArgumentList.Add(path);
                 Process.Start(psi);
             }
@@ -51,7 +54,7 @@ public sealed class FileRevealer : IFileRevealer
         if (string.IsNullOrWhiteSpace(path)) return;
         try
         {
-            var psi = new ProcessStartInfo("open") { UseShellExecute = false };
+            var psi = new ProcessStartInfo(Open) { UseShellExecute = false };
             psi.ArgumentList.Add(path);
             Process.Start(psi);
         }

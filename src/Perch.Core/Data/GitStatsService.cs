@@ -117,7 +117,7 @@ internal sealed class GitStatsService : IDisposable
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "git",
+                FileName = ExecutableResolver.Resolve("git"),   // absolute: never a git.exe planted in the repo (CP7)
                 Arguments = "--no-optional-locks diff --numstat",
                 WorkingDirectory = cwd,
                 RedirectStandardOutput = true,

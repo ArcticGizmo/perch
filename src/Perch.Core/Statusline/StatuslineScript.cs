@@ -413,12 +413,32 @@ internal static class StatuslineScript
             return t.startsWith(pfx) ? (t.slice(pfx.length).trim() || null) : null;
           } catch { return null; }
         }
+        // git by absolute path, found on PATH only. A bare 'git' would let Node look in `cwd` (the session's repo)
+        // first on Windows, so a git.exe committed there would run on every refresh. Relative PATH entries are
+        // skipped for the same reason. Memoised; null when git isn't installed.
+        let gitPath;
+        function gitExe() {
+          if (gitPath !== undefined) return gitPath;
+          gitPath = null;
+          const win = process.platform === 'win32';
+          const names = win ? ['git.exe'] : ['git'];
+          for (const raw of (process.env.PATH || '').split(win ? ';' : ':')) {
+            const d = raw.trim().replace(/^"|"$/g, '');
+            if (!d || !isAbsolute(d)) continue;
+            for (const n of names) {
+              const f = join(d, n);
+              try { if (existsSync(f) && statSync(f).isFile()) { gitPath = f; return f; } } catch {}
+            }
+          }
+          return null;
+        }
         // staged/unstaged file counts — this one does shell out to git (like a classic bash statusline),
         // but only when the template needs it (NEED_GIT_COUNTS). Any failure yields nothing.
         function gitCounts(dir) {
           try {
+            const git = gitExe(); if (!git) return null;
             const opt = { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 };
-            const count = args => execFileSync('git', args, opt).split('\n').filter(l => l.trim().length > 0).length;
+            const count = args => execFileSync(git, args, opt).split('\n').filter(l => l.trim().length > 0).length;
             const staged = count(['diff', '--cached', '--numstat']);
             const unstaged = count(['diff', '--numstat']);
             const changes = staged + unstaged;
