@@ -307,7 +307,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
   - Ctrl+click a relative `[plan](docs/x.md)` link in a session reply (it should open the viewer);
   - "Open" on a dropped non-image attachment.
 
-**Not covered here (CP9):** `ResolveFile` still calls `File.Exists` on a rooted inline-code span. Link targets now reach it too, but `LinkFilePath` already drops network-shaped targets before they get there.
+**Not covered here (CP9):** `ResolveFile` still called `File.Exists` on a rooted inline-code span. Link targets reach it too, but `LinkFilePath` already dropped network-shaped targets before they got there. *(CP9 has since closed this: see `FileRefResolver`.)*
 
 **Verify.** Done 2026-09-29: `dotnet build perch.slnx` is clean (both heads and the Mac platform project), and the .NET suite passes 1488 with 1 skipped.
 
@@ -338,6 +338,8 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
   - PR status and the statusline branch still work in a linked worktree.
 
 **Verify.** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1527 with 1 skipped.
+
+**Landed:** commit `4932686`: `LocalPath`, `FileRefResolver`, the three `gitdir:` resolvers and `MarkdownView`.
 
 <a id="cp10"></a>
 ### CP10 — Named pipes: current-user only, park the valet hook · 🟠 P1 · S · ⬜
