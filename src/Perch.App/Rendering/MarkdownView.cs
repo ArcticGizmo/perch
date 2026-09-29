@@ -424,7 +424,12 @@ internal sealed class MarkdownView
             text.Inlines = inlines;
         }
 
-        return new Border
+        return CodePanel(text);
+    }
+
+    // The chrome around a code block's text: a rounded, bordered panel that scrolls sideways on long lines.
+    private Border CodePanel(Control text) =>
+        new()
         {
             Background = _s.CodeBg, CornerRadius = new CornerRadius(6),
             BorderBrush = _s.TableBorder, BorderThickness = new Thickness(1),
@@ -441,6 +446,22 @@ internal sealed class MarkdownView
                 Content = text,
             },
         };
+
+    /// <summary>A code block still streaming (its closing fence hasn't arrived): the same panel a finished block
+    /// gets, laid out as one <see cref="Build(string, MarkdownStyle)"/> block, but plain — no parse, no syntax
+    /// colours. The caller updates <paramref name="text"/>'s <c>Text</c> in place as code arrives, and swaps in a
+    /// real build once the fence closes.</summary>
+    public static Control BuildStreamingCode(MarkdownStyle style, out SelectableTextBlock text)
+    {
+        var view = new MarkdownView(style, null);
+        text = new SelectableTextBlock
+        {
+            FontFamily = Mono, FontSize = 12.5, Foreground = style.CodeFg, TextWrapping = TextWrapping.NoWrap,
+        };
+        var root = new StackPanel { Margin = style.RootMargin };
+        if (style.BodyFont is { } bodyFont) TextElement.SetFontFamily(root, bodyFont);
+        root.Children.Add(view.Wrap(view.CodePanel(text)));
+        return root;
     }
 
     private IBrush SyntaxBrush(CodeToken kind) => kind switch

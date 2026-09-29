@@ -35,6 +35,7 @@ internal sealed class SessionThreadView : ScrollViewer
     private readonly Canvas _highlightLayer;   // translucent find-match rectangles, above the thread, click-through
     private readonly Dictionary<ConversationItem, ItemView> _views = new();
     private readonly Dictionary<CompactionItem, CompactionCard> _compactions = new();
+    private readonly HashSet<ConversationItem> _pendingSync = new();   // Updated items awaiting one batched sync
     private readonly string _initials;
     private SessionConversation? _conv;
     private bool _stickToBottom = true;
@@ -193,22 +194,8 @@ internal sealed class SessionThreadView : ScrollViewer
     /// <summary>Points the view at a conversation (materialising what it already holds) and follows it.</summary>
     public void Bind(SessionConversation conversation)
     {
-        if (_conv is not null)
-        {
-            _conv.Changed -= OnChanged;
-            _conv.Reset -= OnReset;
-            _conv.StateChanged -= OnStateChanged;
-        }
+        Unbind();
         _conv = conversation;
-        _activityShown = false;   // the row was cleared with the column; re-add it below if the turn is live
-        _userRows.Clear();
-        _stack.Children.Clear();
-        _views.Clear();
-        _wraps.Clear();
-        _matches.Clear();
-        _matchCurrent = -1;
-        _highlightLayer.Children.Clear();
-        _compactions.Clear();
         foreach (var item in conversation.Items) AddItem(item);
         conversation.Changed += OnChanged;
         conversation.Reset += OnReset;
@@ -216,6 +203,30 @@ internal sealed class SessionThreadView : ScrollViewer
         UpdateActivity();
         _stickToBottom = true;
         ScrollToEndSoon();
+    }
+
+    /// <summary>Stops following the bound conversation and drops the column. The session outlives its window
+    /// by design, so a window that closes (or re-points) MUST call this — otherwise the conversation's events
+    /// keep the whole chat tree alive and processing deltas behind a window nobody can see.</summary>
+    public void Unbind()
+    {
+        if (_conv is { } c)
+        {
+            c.Changed -= OnChanged;
+            c.Reset -= OnReset;
+            c.StateChanged -= OnStateChanged;
+            _conv = null;
+        }
+        _pendingSync.Clear();
+        _activityShown = false;   // the row goes with the column; Bind re-adds it if the turn is live
+        _userRows.Clear();
+        _stack.Children.Clear();   // detaching stops any streaming block's frame timer
+        _views.Clear();
+        _wraps.Clear();
+        _matches.Clear();
+        _matchCurrent = -1;
+        _highlightLayer.Children.Clear();
+        _compactions.Clear();
     }
 
     // History landed in front of the live items: rebuild the whole column (cheap — a few hundred controls).
@@ -233,10 +244,30 @@ internal sealed class SessionThreadView : ScrollViewer
         if (_conv is { } c) Bind(c);
     }
 
+    // In-place updates are batched: a streamed reply raises one Updated per text delta, often dozens queued at
+    // once, so they're collected and applied in one pass posted behind the queued deltas (same priority, FIFO —
+    // it can't be starved). An Added flushes first, so the column is always what applying every change in order
+    // would give; SyncParts is idempotent, which is what makes coalescing safe.
     private void OnChanged(ConversationItem item, ConversationChange change)
     {
-        if (change == ConversationChange.Added) AddItem(item);
-        else UpdateItem(item);
+        if (change == ConversationChange.Updated)
+        {
+            if (_pendingSync.Add(item) && _pendingSync.Count == 1)
+                Dispatcher.UIThread.Post(FlushPending);
+            return;
+        }
+        FlushPending();
+        AddItem(item);
+        UpdateActivity();
+        if (_stickToBottom) ScrollToEndSoon();
+    }
+
+    private void FlushPending()
+    {
+        if (_pendingSync.Count == 0) return;
+        var items = _pendingSync.ToList();
+        _pendingSync.Clear();
+        foreach (var item in items) UpdateItem(item);
         UpdateActivity();   // a tool flipping status (or a new part) changes what the indicator says
         if (_stickToBottom) ScrollToEndSoon();
     }
@@ -287,6 +318,13 @@ internal sealed class SessionThreadView : ScrollViewer
                 _                                                    => "Working…",
             };
         return "Working…";
+    }
+
+    /// <summary>Render mode only: advance every live streaming prose block by one paced frame.</summary>
+    internal void PumpStreamingForRender()
+    {
+        foreach (var sp in _views.Values.SelectMany(v => v.Parts.Values).OfType<StreamingProse>().ToList())
+            sp.PumpForRender();
     }
 
     private void ScrollToEndSoon() =>
@@ -719,9 +757,10 @@ internal sealed class SessionThreadView : ScrollViewer
                 switch (part)
                 {
                     // A live prose part streams Markdown into its own control (smooth pacing + incremental
-                    // render). More deltas advance its target; the turn ending settles it with a clean build.
+                    // render). More deltas just nudge it (it reads the text itself, once per frame); the turn
+                    // ending settles it with a clean build.
                     case TextPart t when existing is StreamingProse sp:
-                        if (t.IsStreaming) sp.SetTarget(t.Text); else sp.Finalize(t.Text);
+                        if (t.IsStreaming) sp.Poke(); else sp.Finalize(t.Text);
                         break;
                     case ToolCallPart tool when view.Tools.TryGetValue(tool, out var card):
                         card.Update(tool);
@@ -756,7 +795,7 @@ internal sealed class SessionThreadView : ScrollViewer
             switch (part)
             {
                 case TextPart t:
-                    c = t.IsStreaming ? StreamingText(t.Text) : Prose(t.Text);
+                    c = t.IsStreaming ? StreamingText(t) : Prose(t.Text);
                     break;
                 case ThinkingPart th:
                     c = BuildThinking(th);
@@ -782,11 +821,15 @@ internal sealed class SessionThreadView : ScrollViewer
     // A live streaming prose part: renders Markdown *as it arrives* (like Claude Desktop) rather than plain
     // text swapped for Markdown only at the end. Reveals the accumulated text at a smooth, self-pacing cadence
     // and keeps the render cheap by only re-parsing the trailing, still-forming block. Grows the tail → asks to
-    // re-stick to the bottom (the model's per-delta scroll can't see the paced growth between deltas).
-    private StreamingProse StreamingText(string text)
+    // re-stick to the bottom (the model's per-delta scroll can't see the paced growth between deltas). The part's
+    // text is read lazily, once per paced frame, never per delta.
+    private StreamingProse StreamingText(TextPart part)
     {
-        var sp = new StreamingProse(md => Prose(md), () => { if (_stickToBottom) ScrollToEndSoon(); });
-        sp.SetTarget(text);
+        var sp = new StreamingProse(() => part.Text, Prose,
+            md => MarkdownView.Build(md, _p.Prose),   // the forming tail: no file-ref probing on every frame
+            (out SelectableTextBlock text) => MarkdownView.BuildStreamingCode(_p.Prose, out text),
+            () => { if (_stickToBottom) ScrollToEndSoon(); });
+        sp.Poke();
         return sp;
     }
 
@@ -795,28 +838,37 @@ internal sealed class SessionThreadView : ScrollViewer
     private Control Prose(string md) => MarkdownView.Build(md, _p.Prose,
         new MarkdownView.FileRefContext(Cwd, p => OpenFileRequested?.Invoke(p), p => ViewDiffRequested?.Invoke(p)));
 
+    private delegate Control CodeRenderer(out SelectableTextBlock text);
+
     /// <summary>
     /// A streaming assistant prose block that renders Markdown live and smoothly, mimicking Claude Desktop.
     /// Two things it does that a plain accumulator does not:
     /// <list type="bullet">
     /// <item><b>Live formatting.</b> Instead of showing raw text until the turn ends, it renders the revealed
     /// text as Markdown continuously. To stay cheap it splits the text at the last complete block boundary
-    /// (<see cref="MarkdownView.SettledPrefixLength"/>): the settled prefix is built once and left alone, and
-    /// only the short trailing block is re-parsed on each frame.</item>
+    /// (<see cref="MarkdownView.SettledPrefixLength"/>): settled text is <em>append-only</em> — each newly
+    /// settled slice is built once, added above the tail, and never touched again — and only the trailing,
+    /// still-forming block is re-rendered per frame. That tail is kept cheap by <see cref="StreamingTail"/>: an
+    /// open code fence shows as plain text updated in place (highlighted once it closes), and a large tail
+    /// re-renders at a slower cadence.</item>
     /// <item><b>Smooth pacing.</b> Deltas arrive in bursts; this reveals them at a steady ~25fps cadence that
     /// speeds up when it falls behind, so text flows in rather than jumping in chunks.</item>
     /// </list>
     /// When the part finalises it paces to the end and then does one clean, whole-message Markdown build, so
     /// the settled result is identical to a non-streamed render (any transient artifact — e.g. a loose list
-    /// briefly split across the settle boundary — is corrected).
+    /// briefly split across the settle boundary, or a reference link defined in a later slice — is corrected).
     /// </summary>
     private sealed class StreamingProse : StackPanel
     {
         private const double FrameMs = 40;   // ~25fps: smooth to the eye, easy on layout
         private const int MinStep = 3;       // chars revealed per frame at rest (a gentle typewriter)
         private const int CatchUpDivisor = 3; // when behind, reveal ~1/3 of the backlog per frame to catch up
+        private static readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
 
-        private readonly Func<string, Control> _render;
+        private readonly Func<string> _source;             // the part's accumulated text (cached until it grows)
+        private readonly Func<string, Control> _renderSettled;
+        private readonly Func<string, Control> _renderTail;
+        private readonly CodeRenderer _renderCode;
         private readonly Action _grew;
         private readonly DispatcherTimer _timer;
 
@@ -826,24 +878,32 @@ internal sealed class SessionThreadView : ScrollViewer
         private bool _completed;       // the clean final build is in place; ignore further updates
         private string _finalText = "";
 
-        private string _settled = "";  // the settled-prefix substring currently rendered
-        private Control? _settledView; // its (build-once) control
-        private Control? _tailView;    // the trailing in-progress block, rebuilt each frame
+        private int _settledLen;              // chars of _target committed as settled slices (children above the tail)
+        private Control? _tailView;           // the trailing in-progress block; always the last child
+        private SelectableTextBlock? _codeText; // set while the tail is the plain open-fence panel
+        private bool _tailStale;              // the reveal moved on but a throttled frame skipped the tail
+        private TimeSpan _tailAt;             // when the tail last rendered
+        private TimeSpan? _renderClock;       // render mode: a virtual clock stepped one frame per pump
 
-        public StreamingProse(Func<string, Control> render, Action grew)
+        public StreamingProse(Func<string> source, Func<string, Control> renderSettled, Func<string, Control> renderTail,
+            CodeRenderer renderCode, Action grew)
         {
-            _render = render;
+            _source = source;
+            _renderSettled = renderSettled;
+            _renderTail = renderTail;
+            _renderCode = renderCode;
             _grew = grew;
             _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(FrameMs) };
             _timer.Tick += (_, _) => Tick();
         }
 
-        /// <summary>More streamed text arrived (the accumulated total). Resume pacing toward it.</summary>
-        public void SetTarget(string text)
+        private TimeSpan Now => _renderClock ?? Clock.Elapsed;
+
+        /// <summary>More streamed text arrived. Resume pacing; the text itself is read on the next frame.</summary>
+        public void Poke()
         {
-            if (_completed) return;
-            _target = text;
-            EnsureRunning();
+            if (_completed || _finalizing) return;
+            if (!_timer.IsEnabled) _timer.Start();
         }
 
         /// <summary>The part ended: pace out whatever is left, then settle with one clean Markdown build.</summary>
@@ -858,7 +918,7 @@ internal sealed class SessionThreadView : ScrollViewer
 
         private void EnsureRunning()
         {
-            if (_shown < _target.Length)
+            if (_shown < _target.Length || _tailStale)
             {
                 if (!_timer.IsEnabled) _timer.Start();
             }
@@ -870,42 +930,89 @@ internal sealed class SessionThreadView : ScrollViewer
 
         private void Tick()
         {
+            if (!_finalizing) _target = _source();
+            // The text only ever grows while streaming; if it didn't (a replaced final text), start the split
+            // rendering over rather than index past the end.
+            if (_settledLen > _target.Length || _shown > _target.Length) ResetSplit();
             if (_shown >= _target.Length)
             {
                 if (_finalizing) { CompleteNow(); return; }
+                if (_tailStale) { RenderRevealed(); return; }   // a throttled frame still owes the tail its text
                 _timer.Stop();
                 return;
             }
             int remaining = _target.Length - _shown;
             int step = Math.Max(MinStep, remaining / CatchUpDivisor);
             _shown = Math.Min(_target.Length, _shown + step);
-            RenderRevealed(_target[.._shown]);
+            RenderRevealed();
             _grew();
             if (_shown >= _target.Length && _finalizing) CompleteNow();
         }
 
-        // Render the revealed text: (re)build the settled prefix only when a new block boundary appears, and
-        // always rebuild the short trailing block. The boundary is found by scanning only the tail (everything
-        // before _settled is already stable), so a frame's parse cost is bounded by the in-progress block, not
-        // the whole message. Two stacked build roots read as one document because Prose uses no root margin.
-        private void RenderRevealed(string revealed)
+        // Render the revealed text [0, _shown). Settled text is append-only: when a new block boundary appears in
+        // the tail, only the newly settled slice is built and inserted just above the tail — slices already on
+        // screen are never rebuilt. The boundary is found by scanning only the tail, and not at all while the
+        // tail is an open code fence (no block can start until it closes), so a frame's cost is bounded by the
+        // in-progress block, not the whole message. Stacked build roots read as one document because Prose
+        // uses no root margin.
+        private void RenderRevealed()
         {
-            string tailText = revealed[_settled.Length..];
-            int commitInTail = MarkdownView.SettledPrefixLength(tailText);
-            if (commitInTail > 0)
+            string tail = _target.Substring(_settledLen, _shown - _settledLen);
+            bool open = StreamingTail.TryOpenFence(tail, out var code);
+            bool committed = false;
+            if (!open && MarkdownView.SettledPrefixLength(tail) is > 0 and var commit)
             {
-                _settled = revealed[..(_settled.Length + commitInTail)];
-                tailText = revealed[_settled.Length..];
-                var built = _render(_settled);
-                if (_settledView is { } old && Children.IndexOf(old) is >= 0 and var i) Children[i] = built;
-                else Children.Insert(0, built);
-                _settledView = built;
+                Children.Insert(_tailView is null ? Children.Count : Children.Count - 1, _renderSettled(tail[..commit]));
+                _settledLen += commit;
+                tail = tail[commit..];
+                open = StreamingTail.TryOpenFence(tail, out code);
+                committed = true;
             }
 
-            var tail = _render(tailText);
-            if (_tailView is { } oldTail && Children.IndexOf(oldTail) is >= 0 and var j) Children[j] = tail;
+            // A large tail re-renders at a slower cadence — unless its text just moved into a settled slice (the
+            // old tail would now repeat it) or it switched between the plain-fence and rich forms.
+            // (Only a timer tick gets here, so the timer is still running and a caught-up Tick settles the debt.)
+            bool sameForm = open == (_codeText is not null);
+            if (!committed && sameForm && _tailView is not null
+                && Now - _tailAt < StreamingTail.MinInterval(tail.Length, open))
+            {
+                _tailStale = true;
+                return;
+            }
+
+            if (open)
+            {
+                if (_codeText is null)
+                {
+                    ReplaceTail(_renderCode(out var text));
+                    _codeText = text;
+                }
+                _codeText.Text = code;   // plain text, updated in place: no parse, no highlight, no new controls
+            }
+            else
+            {
+                _codeText = null;
+                ReplaceTail(_renderTail(tail));
+            }
+            _tailStale = false;
+            _tailAt = Now;
+        }
+
+        private void ReplaceTail(Control tail)
+        {
+            if (_tailView is { } old && Children.IndexOf(old) is >= 0 and var i) Children[i] = tail;
             else Children.Add(tail);
             _tailView = tail;
+        }
+
+        private void ResetSplit()
+        {
+            Children.Clear();
+            _tailView = null;
+            _codeText = null;
+            _settledLen = 0;
+            _shown = Math.Min(_shown, _target.Length);
+            _tailStale = false;
         }
 
         // Replace the paced, split rendering with one authoritative whole-message build — identical to how a
@@ -916,10 +1023,22 @@ internal sealed class SessionThreadView : ScrollViewer
             _completed = true;
             _timer.Stop();
             Children.Clear();
-            _settledView = _tailView = null;
-            _settled = "";
-            Children.Add(_render(_finalText));
+            _tailView = null;
+            _codeText = null;
+            _settledLen = 0;
+            Children.Add(_renderSettled(_finalText));
             _grew();
+        }
+
+        /// <summary>Render mode only: run one paced frame synchronously (the headless dispatcher never fires the
+        /// timer), so a scripted stream can be driven and timed frame by frame. A virtual clock advances one frame
+        /// per pump so the size-based throttle behaves as it would at the real cadence.</summary>
+        internal void PumpForRender()
+        {
+            _timer.Stop();
+            _renderClock = (_renderClock ?? TimeSpan.Zero) + TimeSpan.FromMilliseconds(FrameMs);
+            Tick();
+            _timer.Stop();
         }
 
         // Detached mid-stream (session reset / cleared): stop ticking so an orphaned control isn't updated.

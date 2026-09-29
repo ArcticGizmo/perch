@@ -58,11 +58,31 @@ internal sealed class AssistantMessageItem : ConversationItem
 internal abstract class AssistantPart;
 
 /// <summary>Prose. <see cref="IsStreaming"/> while deltas accumulate; the completed block replaces the
-/// accumulated text (so the UI can swap a plain streaming block for a Markdown render).</summary>
+/// accumulated text (so the UI can swap a plain streaming block for a Markdown render). Deltas append to a
+/// builder and <see cref="Text"/> materialises (and caches) the string only when read, so a long reply costs
+/// one copy per read rather than one whole-reply copy per delta.</summary>
 internal sealed class TextPart : AssistantPart
 {
-    public string Text { get; internal set; } = "";
+    private readonly System.Text.StringBuilder _sb = new();
+    private string? _text = "";   // cached materialisation of _sb; null when a delta has landed since
+
+    public string Text
+    {
+        get => _text ??= _sb.ToString();
+        internal set { _sb.Clear().Append(value); _text = value; }
+    }
+
+    /// <summary>Characters accumulated so far (no materialisation).</summary>
+    public int Length => _sb.Length;
+
     public bool IsStreaming { get; internal set; } = true;
+
+    internal void Append(string delta)
+    {
+        if (delta.Length == 0) return;
+        _sb.Append(delta);
+        _text = null;
+    }
 }
 
 internal sealed class ThinkingPart(string text) : AssistantPart
@@ -207,7 +227,7 @@ internal sealed class SessionConversation
             case TextDeltaEvent delta:
             {
                 var owner = OpenAssistant();
-                if (owner.Last is TextPart { IsStreaming: true } streaming) streaming.Text += delta.Text;
+                if (owner.Last is TextPart { IsStreaming: true } streaming) streaming.Append(delta.Text);
                 else owner.Add(new TextPart { Text = delta.Text });
                 Changed?.Invoke(owner, ConversationChange.Updated);
                 break;

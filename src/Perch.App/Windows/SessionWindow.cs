@@ -843,6 +843,9 @@ internal sealed partial class SessionWindow : Window
         s.Ended -= OnSessionEnded;
         s.RemoteControlChanged -= OnRemoteControlChanged;
         s.Conversation.Changed -= OnConversationChangedForChanges;
+        // The session outlives this window by design: without this its conversation keeps the whole chat tree
+        // subscribed (and rendering deltas) after the window closes.
+        _thread.Unbind();
         _session = null;
     }
 
@@ -3618,6 +3621,26 @@ internal sealed partial class SessionWindow : Window
 
     /// <summary>HeadlessRenderer: show the thread over synthetic events (no process), so the composed turns —
     /// bubble, prose, thinking, tool cards, a pending permission card — can be captured.</summary>
+    /// <summary>Render mode only: streams <paramref name="deltas"/> into the attached sample session one text
+    /// delta per paced frame, laying out after each, and returns each frame's cost in ms (the CP22 benchmark).
+    /// <paramref name="stopAfter"/> caps how many deltas are fed (so a capture can be taken mid-stream).</summary>
+    internal List<double> StreamSampleForRender(IReadOnlyList<string> deltas, int start = 0, int stopAfter = int.MaxValue)
+    {
+        var times = new List<double>();
+        if (_session is not { } s) return times;
+        var sw = new System.Diagnostics.Stopwatch();
+        for (int i = start; i < deltas.Count && i < stopAfter; i++)
+        {
+            sw.Restart();
+            s.Conversation.Apply(new TextDeltaEvent(deltas[i]));
+            Dispatcher.UIThread.RunJobs();
+            _thread.PumpStreamingForRender();
+            _thread.UpdateLayout();
+            times.Add(sw.Elapsed.TotalMilliseconds);
+        }
+        return times;
+    }
+
     internal void FeedSampleForRender(string cwd, string? userPrompt, IEnumerable<SessionEvent> events,
         IReadOnlyList<MessageAttachment>? attachments = null)
     {
