@@ -369,6 +369,8 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 
 **Verify (valet removal).** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1522 with 1 skipped (six valet tests deleted, one migration test added). The built hook run as `perch-hook valet perch-valet` exits 0 with empty stdout.
 
+**Landed (valet removal):** commit `6165cbe`.
+
 <a id="cp11"></a>
 ### CP11 — Hardened shared `GitRunner` · 🟡 P2 · M · ⬜
 
