@@ -87,7 +87,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 
 **Verify.** Done locally on 2026-09-29. `supabase test db` gave 84/84 across all four files. Local REST probes with the anon key gave `rpc/cleanup_old_games` 401, `rpc/cleanup_old_draw_games` 401, `rpc/find_profile` 401, and `rpc/are_friends` / `rpc/is_blocked` 404. **Still owed:** the same probes against prod after deploy.
 
-**Landed:** migration `20260929120000_security_hardening.sql` (commit: _pending_).
+**Landed:** migration `20260929120000_security_hardening.sql` (commit `ab0c93f`).
 
 <a id="cp2"></a>
 ### CP2 — Friendship consent: no self-accepting · 🔴 P0 · S · 🟦
@@ -115,7 +115,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 
 .NET suite 1377/1377.
 
-**Landed:** same migration as CP1, plus `SupabaseSocialClient.SendRequestAsync` (commit: _pending_).
+**Landed:** same migration as CP1, plus `SupabaseSocialClient.SendRequestAsync` (commit `ab0c93f`).
 
 <a id="cp3"></a>
 ### CP3 — Server-owned fields: no forged games, no backdated rows · 🟠 P1 · M · ⬜
