@@ -311,6 +311,8 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 
 **Verify.** Done 2026-09-29: `dotnet build perch.slnx` is clean (both heads and the Mac platform project), and the .NET suite passes 1488 with 1 skipped.
 
+**Landed:** commit `bcf8714`: `OpenTargets`, both `UrlOpener`s and `FileRevealer`s, `IFileRevealer.OpenWithDefault`, `MarkdownView.MarkLink`, `AttachmentChip` and `ImageViewerWindow`.
+
 <a id="cp9"></a>
 ### CP9 — No UNC/remote path probing · 🟠 P1 · S · ⬜
 
