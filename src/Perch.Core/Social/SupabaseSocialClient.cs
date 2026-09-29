@@ -354,7 +354,9 @@ public sealed partial class SupabaseSocialClient : ISocialClient
         }
 
         using var req = Rest(HttpMethod.Post, "/rest/v1/friendships", token);
-        req.Headers.Add("Prefer", "resolution=merge-duplicates");   // re-sending is a no-op
+        // ignore-duplicates → ON CONFLICT DO NOTHING, so re-sending is a no-op. Not merge-duplicates: an upsert
+        // would try to overwrite the existing row, and only the addressee may change an edge (friendships_respond).
+        req.Headers.Add("Prefer", "resolution=ignore-duplicates");
         req.Content = JsonContent.Create(new { requester = uid, addressee = addresseeId, status = "pending" });
         using var resp = await _http.SendAsync(req, ct);
         await EnsureOkAsync(resp, "send the friend request", ct);

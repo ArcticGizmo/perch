@@ -25,8 +25,8 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 
 | CP | Pri | Area | Title | Effort | Status |
 |---|---|---|---|---|---|
-| [CP1](#cp1) | 🔴 P0 | Supabase | Revoke EXECUTE on internal SECURITY DEFINER functions | S | ⬜ |
-| [CP2](#cp2) | 🔴 P0 | Supabase | Friendship consent: no self-accepting | S | ⬜ |
+| [CP1](#cp1) | 🔴 P0 | Supabase | Revoke EXECUTE on internal SECURITY DEFINER functions | S | 🟦 code + tests done, prod deploy owed |
+| [CP2](#cp2) | 🔴 P0 | Supabase | Friendship consent: no self-accepting | S | 🟦 code + tests done, prod deploy owed |
 | [CP3](#cp3) | 🟠 P1 | Supabase | Server-owned fields: no forged games, no backdated rows | M | ⬜ |
 | [CP4](#cp4) | 🟠 P1 | Supabase | Realtime inbox authorisation + sender validation | M | ⬜ |
 | [CP5](#cp5) | 🟡 P2 | Supabase | Draw with Perch: RPC state checks + size limits | S | ⬜ |
@@ -67,7 +67,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 > Each checkpoint below needs a pgTAP test that runs the attack as an `authenticated` (or `anon`) role and asserts that it fails. `rls_test.sql` currently does its accepts as superuser, which is why none of these were caught.
 
 <a id="cp1"></a>
-### CP1 — Revoke EXECUTE on internal SECURITY DEFINER functions · 🔴 P0 · S · ⬜
+### CP1 — Revoke EXECUTE on internal SECURITY DEFINER functions · 🔴 P0 · S · 🟦
 
 **Problem.** Postgres grants EXECUTE on every new function to `PUBLIC`, and Supabase's default privileges add `anon` and `authenticated` on top. No migration contains a `REVOKE EXECUTE`. As a result:
 - `rpc/cleanup_old_games {"older_than":"0 seconds"}` deletes **every finished game for every user**. `cleanup_old_draw_games` does the same for draw data. The comment at `20260822140000_connect4_game_cleanup.sql:15` says "deliberately NOT granted", but that is false.
@@ -76,26 +76,46 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - `is_suspended(u)` exposes moderation state.
 
 **Tasks**
-- [ ] Audit every SECURITY DEFINER function: `select proname from pg_proc where prosecdef and pronamespace = 'public'::regnamespace`. Sort each one into one of two buckets:
-  - **Sweeps and internals no policy uses** (`cleanup_old_games`, `cleanup_old_draw_games`, `connect4_has_win`, …): `revoke execute … from public, anon, authenticated`. They stay callable by `service_role` and `pg_cron`.
-  - **Helpers that RLS policies call** (`are_friends`, `is_blocked`, `is_suspended`, `shares_edge`): these **can't simply be revoked**. Policies run their functions as the querying role, so revoking would break the reads. Instead, **move them to a `private` schema** that PostgREST doesn't expose (not listed in `config.toml` `[api] schemas`). Keep `grant execute … to authenticated` so policies still work, and repoint the policies. They can then no longer be called through `/rpc`. Just making them caller-bound isn't enough for the block check, because "is there a block between me and X?" is itself the oracle.
-- [ ] Check which of the moved helpers the client calls directly (Grep `rpc/` in `SupabaseSocialClient*.cs`). Give each one a caller-bound public RPC that returns only what the UI needs.
-- [ ] Fix the misleading comment in the cleanup migration.
-- [ ] pgTAP: as `authenticated`, calling each revoked function raises `permission denied`, while `pg_cron` / `service_role` can still call the sweeps.
+- [x] Audit every SECURITY DEFINER function and sort it into one of two buckets:
+  - **Sweeps and internals no policy uses** (`cleanup_old_games`, `cleanup_old_draw_games`, `connect4_has_win`): `revoke execute … from public, anon, authenticated`. They stay callable by the owner (pg_cron, and `drop_disc` as SECURITY DEFINER) and `service_role`.
+  - **Helpers that RLS policies call** (`are_friends`, `is_blocked`, `is_suspended`, `shares_edge`, `can_see_post`): these **can't simply be revoked**, because policies run their functions as the querying role. They were moved to a `private` schema that the Data API doesn't serve, using `alter function … set schema`. Policies reference functions by OID, so none of them needed recreating. The SQL bodies that call a moved helper by name (`are_friends`, `can_see_post`, `find_profile`, `block_suspended_posts`) were re-created with the new names. `authenticated` keeps EXECUTE on them; `anon` and PUBLIC lose it.
+- [x] Check whether the client calls any moved helper directly. It doesn't: the client only calls 10 RPCs (the game/draw RPCs, `find_profile`, `list_blocked`), and none of them moved.
+- [x] **Found while testing:** every client RPC was also callable with the bare **anon** key (via PUBLIC). For example, `find_profile` let anyone enumerate handles without an account. All ten are now revoked from `public, anon`; each already had an explicit `authenticated` grant.
+- [x] Misleading comment: applied migrations aren't edited. The new migration's header documents that the "NOT granted" comments were wrong.
+- [x] pgTAP (`tests/security_test.sql`, tests 1–11): no helper left in `public`; anon has no USAGE on `private` and no EXECUTE on the helpers or client RPCs; `authenticated` keeps EXECUTE on the client RPCs; the sweeps and `connect4_has_win` throw 42501 as `authenticated`; `posts_read` and `profiles_friends_select` still resolve through the moved helpers.
+- [ ] **Deploy to prod** (`db-migrate.yml`), then re-run the curl probes below against the live project.
 
-**Verify.** Run the pgTAP suite. Then, against staging, `curl …/rest/v1/rpc/cleanup_old_games` with the anon key should return 401/403.
+**Verify.** Done locally on 2026-09-29. `supabase test db` gave 84/84 across all four files. Local REST probes with the anon key gave `rpc/cleanup_old_games` 401, `rpc/cleanup_old_draw_games` 401, `rpc/find_profile` 401, and `rpc/are_friends` / `rpc/is_blocked` 404. **Still owed:** the same probes against prod after deploy.
+
+**Landed:** migration `20260929120000_security_hardening.sql` (commit: _pending_).
 
 <a id="cp2"></a>
-### CP2 — Friendship consent: no self-accepting · 🔴 P0 · S · ⬜
+### CP2 — Friendship consent: no self-accepting · 🔴 P0 · S · 🟦
 
 **Problem.** In `20260819120100_rls.sql:33-40`, `friendships_request` only checks `requester = auth.uid()`, and `friendships_respond` has USING but no WITH CHECK. On top of that, `20260819120200_grants.sql:10` grants full-column UPDATE. So `POST /rest/v1/friendships {"requester":"<me>","addressee":"<victim>","status":"accepted"}`, or a PATCH of your own pending row, makes you the victim's friend without their consent. That gives access to their posts and profile and lets you challenge them to games.
 
 **Tasks**
-- [ ] Insert policy: `with check (requester = auth.uid() and status = 'pending' and not is_blocked(requester, addressee))`.
-- [ ] Revoke UPDATE on `friendships` from `authenticated`. Acceptance goes through a new SECURITY DEFINER `accept_friend(requester uuid)`, which requires `addressee = auth.uid()` and `status = 'pending'`.
-- [ ] Update `SupabaseSocialClient` to call the RPC instead of PATCH-ing the row.
-- [ ] Check for existing forged edges in prod, i.e. `accepted` rows the addressee never accepted. There is no audit column today, so decide whether to add `accepted_at` and whether to re-pend suspicious rows.
-- [ ] pgTAP, all as `authenticated`: inserting `status='accepted'` fails; a requester PATCH fails; the addressee's `accept_friend` succeeds.
+- [x] Insert policy: `with check (requester = auth.uid() and status = 'pending')`. The planned `not is_blocked(...)` term was **dropped**: a blocked user's request would then fail visibly, which tells them they were blocked. The block-related profile leak is handled in CP6, by making `shares_edge` ignore blocked pairs so the request succeeds but shows nothing.
+- [x] Update policy: `using (addressee = auth.uid() and status = 'pending') with check (addressee = auth.uid() and status = 'accepted')`. Only the addressee can update, and only pending → accepted.
+- [x] Trigger `private.friendships_guard` (BEFORE UPDATE) makes `requester`, `addressee` and `created_at` immutable. Without it, the addressee could accept while re-pointing the requester at a third party.
+- [x] **Approach changed from the plan:** the UPDATE grant is kept, and there's no `accept_friend` RPC. Already-shipped clients send friend requests as a PostgREST `merge-duplicates` upsert, which needs table UPDATE privilege. Revoking UPDATE would have broken friend requests for everyone until they updated. The policies plus the trigger close the hole without that.
+- [x] Client: `SendRequestAsync` now uses `resolution=ignore-duplicates` (ON CONFLICT DO NOTHING) instead of `merge-duplicates`. `RespondAsync` (a PATCH by the addressee) is unchanged and still works.
+- [ ] Existing forged edges in prod can't be detected: there's no `accepted_at` / `accepted_by` column. Decide whether to add an audit column going forward.
+- [x] pgTAP (`tests/security_test.sql`, tests 12–18): insert as `accepted` or `blocked` → 42501; pending insert and ignore-duplicates re-send succeed; the requester's PATCH matches nothing; re-pointing the requester while accepting → 42501; the addressee's accept succeeds.
+- [ ] **Deploy to prod** (`db-migrate.yml`).
+
+**Verify.** Done locally on 2026-09-29. Beyond pgTAP, an end-to-end run over local PostgREST with real signed-in test users checked each case:
+- forged accepted insert → 403;
+- new-client request (ignore-duplicates) → 201, and re-send → 201 no-op;
+- **old-client `merge-duplicates` request → 201**, so shipped apps keep working;
+- requester self-PATCH → `[]`;
+- addressee accept → 200 accepted;
+- re-point while accepting → 403;
+- profile visibility through `private.shares_edge` still works.
+
+.NET suite 1377/1377.
+
+**Landed:** same migration as CP1, plus `SupabaseSocialClient.SendRequestAsync` (commit: _pending_).
 
 <a id="cp3"></a>
 ### CP3 — Server-owned fields: no forged games, no backdated rows · 🟠 P1 · M · ⬜
@@ -149,10 +169,10 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - `GetFeedAsync` (`SupabaseSocialClient.cs:444`) has no author filter, so the RLS predicate runs for every post in the table. That is O(N²) across the platform.
 
 **Tasks**
-- [ ] Add `and not is_blocked(...)` to `shares_edge`, the friendship insert check (see CP2), and every game RPC.
+- [ ] Add `and not private.is_blocked(...)` to `private.shares_edge` and every game RPC. Leave the friendship insert alone: a visible failure there would tell a blocked user they were blocked (see CP2).
 - [ ] Mark shared games abandoned when one player blocks the other.
 - [ ] Apply `is_suspended` to reactions, game writes and profile edits.
-- [ ] Add a per-caller rate limit to `find_profile` (a counter table), and stop returning the id until a request exists.
+- [ ] Add a per-caller rate limit to `find_profile` (a counter table), and stop returning the id until a request exists. (CP1 already stopped **anonymous** calls; signed-in enumeration remains.)
 - [ ] Filter the feed with `author=in.(<accepted friend ids>)`, or add a join RPC. Reuse the friends and profiles `GetRosterAsync` already fetched.
 - [ ] pgTAP: a blocked user can't create an edge, read the profile, or move in a shared game.
 

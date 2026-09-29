@@ -74,6 +74,10 @@ create temp table gid as
     and player_b = '22222222-2222-2222-2222-222222222222';
 create temp table rid1 as
   select id from public.draw_rounds where game_id = (select id from gid) and round_no = 1;
+-- The pins are created by the superuser but read inside RPC arguments as `authenticated`; without this every
+-- such read fails "permission denied for table" (which is 42501, so a throws_ok expecting 42501 would pass
+-- for the wrong reason).
+grant select on gid, rid1 to authenticated;
 
 select is(
   (select count(*)::int from public.draw_requests where id = 'c0000000-0000-0000-0000-000000000001')
@@ -129,6 +133,7 @@ select public.submit_draw_round((select id from gid), 'medium', 'rocket', '6', '
 reset role;
 create temp table rid2 as
   select id from public.draw_rounds where game_id = (select id from gid) and round_no = 2;
+grant select on rid2 to authenticated;
 select is(
   (select drawer::text || ':' || guesser::text || ':' || whose_turn::text
      from public.draw_rounds r join public.draw_games g on g.id = r.game_id

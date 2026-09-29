@@ -20,8 +20,11 @@ backend/supabase/
     <ts>_reactions.sql          # emoji reactions on posts (friends-only via can_see_post)
     <ts>_reactions_one_per_user.sql # PK (post_id, reactor): one reaction per user per post
     <ts>_friendship_dedupe.sql  # collapse duplicate unordered pairs + unique index on least/greatest
+    <ts>_security_hardening.sql # policy helpers -> unexposed `private` schema; sweeps + client RPCs revoked
+                                # from anon/PUBLIC; friendship consent (only the addressee accepts)
   tests/
-    rls_test.sql    # pgTAP: non-friends can't read posts, blocking, rate limit, suspension, dedupe, etc.
+    rls_test.sql      # pgTAP: non-friends can't read posts, blocking, rate limit, suspension, dedupe, etc.
+    security_test.sql # pgTAP: the review-fix attacks (rpc exposure, forged/self-accepted friendships) fail
 ```
 
 ## One-time setup (needs your account)
@@ -175,16 +178,28 @@ JWT `sub`, so `auth.uid()` resolves like a real signed-in user):
 - **(M6)** the per-author **rate limit** rejects the 11th post inside a minute;
 - **(M6)** a **suspended** author's posts are hidden from a friend and the handle stops resolving.
 
+`security_test.sql` replays the 2026-09 review attacks (`docs/review-fixes-plan.md` CP1/CP2): the policy
+helpers are out of `public`, anon can't call client RPCs, the retention sweeps aren't client-callable, and a
+friendship can't be inserted as accepted, self-accepted by the requester, or re-pointed while accepting.
+
 > Status: authored in M0, extended with the M6 safety checks, **not yet run against a live project** —
 > that waits on the Supabase project above. The `auth.users` insert in the test assumes the standard
 > Supabase local stack; if a required column has no default in your version, add it to the fixture insert.
 
 ## Safety model (M6)
 
+- **Policy helpers live in `private`** — `are_friends`, `is_blocked`, `shares_edge`, `is_suspended` and
+  `can_see_post` are SECURITY DEFINER and take arbitrary uuids, so exposing them would leak the social graph
+  and who blocked whom. They sit in the `private` schema, which the Data API doesn't serve; policies call
+  them by OID. **Any new SECURITY DEFINER helper goes there too**, and a new owner-only function (a sweep)
+  needs an explicit `revoke execute … from public, anon, authenticated` — Postgres grants EXECUTE to
+  PUBLIC by default.
 - **Block** — a private, one-sided row in `blocks` (blocker → blocked). `are_friends()` consults
   `is_blocked()`, so a block kills post visibility in **both** directions regardless of friendship. It's a
-  separate table, not the `friendships` enum, precisely because `friendships_respond` lets either party
-  update an edge — a blocked user must never be able to lift their own block. `list_blocked()` (SECURITY
+  separate table, not the `friendships` enum, so a blocked user can never lift their own block.
+- **Friendship consent** — a request can only be inserted as `pending`; only the **addressee** may update
+  an edge, and only `pending → accepted`; a trigger (`private.friendships_guard`) makes the parties
+  immutable. Declining/unfriending is a delete by either party. `list_blocked()` (SECURITY
   DEFINER) returns only the caller's blocked profiles for the "unblock" UI.
 - **Report** — `reports` is insert-only for `authenticated` (no select policy), so it's a write-only queue
   only `service_role` (you, in the dashboard) can read. The app's "Report" also blocks, since a lone report
