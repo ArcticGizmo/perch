@@ -92,10 +92,7 @@ public static class OpenTargets
         ".mp3", ".wav", ".m4a", ".mp4", ".mov", ".webm",
     };
 
-    // UNC ("\\h\s"), device paths ("\\?\", "\\.\") and the forward-slash forms ("//h/s").
-    private static bool IsNetworkShaped(string s) =>
-        s.StartsWith(@"\\", StringComparison.Ordinal) || s.StartsWith("//", StringComparison.Ordinal)
-        || s.StartsWith(@"\/", StringComparison.Ordinal) || s.StartsWith(@"/\", StringComparison.Ordinal);
+    private static bool IsNetworkShaped(string s) => LocalPath.IsNetworkShaped(s);
 
     // "scheme:" per RFC 3986 (a letter, then letters/digits/+-.), longer than one char so "C:" stays a drive.
     private static bool HasScheme(string s)

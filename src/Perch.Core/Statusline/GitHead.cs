@@ -53,7 +53,10 @@ internal static class GitHead
                 if (line.StartsWith(p, System.StringComparison.Ordinal))
                 {
                     var target = line[p.Length..].Trim();
-                    var resolved = Path.IsPathRooted(target) ? target : Path.GetFullPath(Path.Combine(dir, target));
+                    var resolved = Path.IsPathRooted(target) || Perch.Data.LocalPath.IsNetworkShaped(target)
+                        ? target : Path.GetFullPath(Path.Combine(dir, target));
+                    // Repo content picks this path: never follow it onto a share the repo isn't on (review fixes CP9).
+                    if (!Perch.Data.LocalPath.IsSafeToProbe(resolved, dir)) return null;
                     return Directory.Exists(resolved) ? resolved : null;
                 }
                 return null;

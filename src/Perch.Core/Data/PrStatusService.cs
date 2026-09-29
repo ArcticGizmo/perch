@@ -465,7 +465,10 @@ internal sealed class PrStatusService : IDisposable
                     if (!line.StartsWith(prefix, StringComparison.Ordinal))
                         return null;
                     var p = line[prefix.Length..].Trim();
-                    return Path.IsPathRooted(p) ? p : Path.GetFullPath(Path.Combine(d.FullName, p));
+                    var target = Path.IsPathRooted(p) || LocalPath.IsNetworkShaped(p) ? p : Path.GetFullPath(Path.Combine(d.FullName, p));
+                    // The .git file is repo content: a "gitdir: \\attacker\s" would have the HEAD read below open
+                    // an SMB connection (NTLM leak + stall). Only follow it on the repo's own volume or a local disk.
+                    return LocalPath.IsSafeToProbe(target, d.FullName) ? target : null;
                 }
             }
         }

@@ -566,29 +566,12 @@ internal sealed class MarkdownView
             return;
         List<FileRef.FileSpan>? spans = null;
         foreach (var (start, len, text) in sink.Codes)
-            if (ResolveFile(f.Cwd, text) is { } abs)
+            // Never probes a UNC/device/network-drive path (NTLM leak + UI hang), and caches per (cwd, text) so a
+            // streaming re-render doesn't hit the disk again (review fixes CP9).
+            if (FileRefResolver.Resolve(f.Cwd, text) is { } abs)
                 (spans ??= new()).Add(new FileRef.FileSpan(start, len, abs));
         if (spans is { Count: > 0 })
             FileRef.AttachInline(tb, spans, f.OpenViewer, f.ViewDiff);
-    }
-
-    // The absolute path a code span points at, or null when it isn't a real file. A cheap pre-filter (must
-    // contain a '.', '/' or '\') skips the disk check for plainly non-path code like `true` or `SessionStart`.
-    private static string? ResolveFile(string cwd, string text)
-    {
-        text = text.Trim();
-        if (text.Length is 0 or > 260 || text.IndexOfAny(['.', '/', '\\']) < 0)
-            return null;
-        try
-        {
-            if (System.IO.Path.IsPathRooted(text))
-                return System.IO.File.Exists(text) ? text : null;
-            if (string.IsNullOrEmpty(cwd))
-                return null;
-            var abs = System.IO.Path.GetFullPath(System.IO.Path.Combine(cwd, text));
-            return System.IO.File.Exists(abs) ? abs : null;
-        }
-        catch { return null; }
     }
 
     private void AppendInlines(InlineSink sink, ContainerInline container, Run2 style)

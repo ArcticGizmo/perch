@@ -388,6 +388,16 @@ internal static class StatuslineScript
           return dropBlankLines(out);
         };
 
+        // A .git *file* is repo content, so its gitdir is attacker-choosable: never follow it onto a share the
+        // repo isn't itself on — reading HEAD there would open an SMB connection (NTLM leak + a stall on every
+        // refresh). UNC/device paths only pass when on the repo's own \\server\share. Mirrors Perch.Data.LocalPath.
+        const netShaped = (p) => /^[\\/]{2}/.test(p);
+        const uncVolume = (p) => {
+          const m = p.replace(/\//g, '\\').match(/^\\\\([^\\?.][^\\]*)\\([^\\]+)/);
+          return m ? ('\\\\' + m[1] + '\\' + m[2]).toLowerCase() : null;
+        };
+        const safeGitDir = (p, base) => !netShaped(p) || (uncVolume(p) !== null && uncVolume(p) === uncVolume(base));
+
         // git.branch straight off .git/HEAD — no subprocess, no Perch.
         function findGitDir(dir) {
           let d = dir;
@@ -396,7 +406,11 @@ internal static class StatuslineScript
             if (existsSync(g)) {
               if (statSync(g).isDirectory()) return g;
               const m = readFileSync(g, 'utf8').trim().match(/^gitdir:\s*(.+)$/);
-              if (m) { const p = m[1].trim(); return isAbsolute(p) ? p : resolve(d, p); }
+              if (m) {
+                const p = m[1].trim();
+                const t = isAbsolute(p) || netShaped(p) ? p : resolve(d, p);
+                return safeGitDir(t, d) ? t : null;
+              }
               return null;
             }
             const parent = dirname(d);

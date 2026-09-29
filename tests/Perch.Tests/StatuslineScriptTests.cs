@@ -300,6 +300,41 @@ public sealed class StatuslineScriptTests
         }
     }
 
+    // CP9 end-to-end: a worktree .git file whose gitdir is "\\"-led must not be followed by the script's HEAD read
+    // (on a real share that read is an SMB connection — NTLM leak + a stall per refresh). A device-path spelling of a
+    // real LOCAL git dir discriminates without touching the network: the old script read the branch through it, the
+    // fixed one refuses it. The plain relative pointer beside it proves ordinary worktrees still work.
+    [Fact]
+    public void Generated_script_does_not_follow_a_gitdir_onto_a_share()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var node = FindNode();
+        if (node is null) return;
+
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-gitdir-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var gitDir = Directory.CreateDirectory(Path.Combine(dir, "realgit", "worktrees", "wt")).FullName;
+            File.WriteAllText(Path.Combine(gitDir, "HEAD"), "ref: refs/heads/wt-branch\n");
+            var viaDevice = Directory.CreateDirectory(Path.Combine(dir, "wt-device")).FullName;
+            File.WriteAllText(Path.Combine(viaDevice, ".git"), $@"gitdir: \\?\{gitDir}" + "\n");
+            var viaRelative = Directory.CreateDirectory(Path.Combine(dir, "wt-relative")).FullName;
+            File.WriteAllText(Path.Combine(viaRelative, ".git"), $"gitdir: {Path.GetRelativePath(viaRelative, gitDir)}\n");
+
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, StatuslineScript.Generate(
+                new StatuslineProfile { Name = "t", Template = "B[{{git.branch}}]" }, devMarker: false));
+
+            string Run(string cwd) => RunNode(node, scriptPath, System.Text.Json.JsonSerializer.Serialize(new { cwd })).Trim();
+            Assert.Equal("B[wt-branch]", Run(viaRelative));
+            Assert.Equal("B[]", Run(viaDevice));
+        }
+        finally
+        {
+            DeleteTree(dir);
+        }
+    }
+
     // git marks its object files read-only, which makes a plain recursive delete fail and leave the temp repo behind.
     private static void DeleteTree(string dir)
     {

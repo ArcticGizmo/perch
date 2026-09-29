@@ -33,7 +33,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP6](#cp6) | 🟡 P2 | Supabase | Block/suspension coverage, `find_profile` throttle, feed query | M | ⬜ |
 | [CP7](#cp7) | 🔴 P0 | Client | Executable hijack via untrusted working directory | M | 🟦 code + tests done, dogfood owed |
 | [CP8](#cp8) | 🟠 P1 | Client | Link opening: scheme allowlist + browser argument injection | S | 🟦 code + tests done, dogfood owed |
-| [CP9](#cp9) | 🟠 P1 | Client | No UNC/remote path probing (NTLM leak + UI hang) | S | ⬜ |
+| [CP9](#cp9) | 🟠 P1 | Client | No UNC/remote path probing (NTLM leak + UI hang) | S | 🟦 code + tests done, dogfood owed |
 | [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | ⬜ |
 | [CP11](#cp11) | 🟡 P2 | Client | Hardened shared `GitRunner` | M | ⬜ |
 | [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | ⬜ |
@@ -314,15 +314,30 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 **Landed:** commit `bcf8714`: `OpenTargets`, both `UrlOpener`s and `FileRevealer`s, `IFileRevealer.OpenWithDefault`, `MarkdownView.MarkLink`, `AttachmentChip` and `ImageViewerWindow`.
 
 <a id="cp9"></a>
-### CP9 — No UNC/remote path probing · 🟠 P1 · S · ⬜
+### CP9 — No UNC/remote path probing · 🟠 P1 · S · 🟦
 
 **Problem.** `MarkdownView.ResolveFile` (`MarkdownView.cs:570-583`) calls `File.Exists` on any rooted inline-code span, including `\\attacker\s\a.md`. It runs on the UI thread, and streaming repeats it about 25 times a second. The effect is that SMB/WebDAV authentication sends the user's NTLM hash to the attacker, and the UI hangs for the SMB timeout. The same pattern exists in `gitdir:` resolution (`PrStatusService.cs:464-468`, `GitHead.cs:55`, and `findGitDir` in the statusline `.mjs`).
 
 **Tasks**
-- [ ] Add a shared `LocalPath.IsSafeToProbe(path)`. It rejects a leading `\\` or `//`, `\\?\` and `\\.\` prefixes, and non-fixed drives. Optionally, it also requires the path to be under the session cwd.
-- [ ] Apply it in `ResolveFile`, the `gitdir:` resolvers, and the `.mjs`.
-- [ ] Cache `ResolveFile` results per (cwd, text), so streaming doesn't re-probe.
-- [ ] xUnit covering UNC, device-path, relative and absolute-local cases.
+- [x] New shared `Perch.Data.LocalPath`:
+  - `IsNetworkShaped` matches every spelling Windows treats as a leading `\\`: `\\`, `//`, `\/` and `/\`, which covers UNC and the `\\?\` / `\\.\` device prefixes. `OpenTargets` (CP8) now uses it too, so the two can't drift.
+  - `IsSafeToProbe(path, trustedRoot)` refuses network-shaped paths and, on Windows, any drive that isn't Fixed, Removable or Ram. A mapped network drive reaches SMB just like UNC; an optical or unmapped drive can stall. Relative paths are safe, because they resolve under the trusted root and `..` can't climb off that volume.
+  - **Changed from the plan:** "under the session cwd" became "on the trusted root's own volume". A user whose repo lives on `\\srv\s` may still probe `\\srv\s\…`, since that contacts no host they didn't choose. Device forms never qualify for that exemption.
+- [x] `MarkdownView.ResolveFile` moved to Core as `FileRefResolver.Resolve(cwd, text)`, judged against the session cwd, so it has xUnit coverage.
+- [x] The `gitdir:` resolvers (`PrStatusService.FindGitDir`, `GitHead.FindGitDir`, and `findGitDir` in the statusline `.mjs`) only follow a target on the `.git` file's own volume, or on a local drive. The `.mjs` has a port of the rule (`netShaped` / `uncVolume` / `safeGitDir`). Node has no cheap drive-type lookup, so the script doesn't check drive type. That leaves only the user's own mapped servers reachable, never a host chosen by the attacker.
+- [x] `FileRefResolver` caches per (cwd, text) for 5s, capped at 1024 entries, so a streaming reply's roughly 25 re-renders a second probe once, while a file created later still gets linked.
+- [x] Tests (39 new):
+  - `LocalPathTests`: every UNC and device spelling; the same-share exemption versus a different share, a different host, the device form and a relative root; local absolute, relative and fixed-drive paths.
+  - `FileRefResolverTests`: the existence check is injected, and unsafe spans are asserted to be refused **without a probe**. Relative spans resolve under the cwd; a span on the cwd's own share is probed; non-path code is skipped; 25 repeat resolves make 1 probe.
+  - `GitHeadTests`, plus 3 new `PrStatusServiceBranchTests` and a statusline end-to-end run under node.
+  
+  The UNC hosts are all `.invalid`, so nothing is ever contacted. The **discriminating** cases point `gitdir:` at the `\\?\` device spelling of a real *local* git dir, which proves refusal without any network. Against the pre-fix resolvers, 5 of these fail: the old code read the branch through the device path, and `FindGitDir` returned the UNC target.
+- [ ] Dogfood owed:
+  - a session reply with a `` `\\host\share\x.md` `` inline span stays plain text and doesn't stall;
+  - relative and absolute local file refs are still clickable;
+  - PR status and the statusline branch still work in a linked worktree.
+
+**Verify.** Done 2026-09-29: `dotnet build perch.slnx` is clean, and the .NET suite passes 1527 with 1 skipped.
 
 <a id="cp10"></a>
 ### CP10 — Named pipes: current-user only, park the valet hook · 🟠 P1 · S · ⬜
