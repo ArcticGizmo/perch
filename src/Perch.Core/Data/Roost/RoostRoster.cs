@@ -67,7 +67,7 @@ public sealed class RoostRoster
         public RoostPin Pin;
     }
 
-    // Insertion-ordered: _order is first-seen, _entries the state by key.
+    // Insertion-ordered: _order is first-seen (reordered only by Swap / MoveToEnd), _entries the state by key.
     private readonly List<string> _order = [];
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly HashSet<string> _closed;
@@ -200,6 +200,23 @@ public sealed class RoostRoster
     {
         if (!_entries.TryGetValue(key, out var e) || e.Pin == pin) return;
         e.Pin = pin;
+        Rebuild();
+    }
+
+    /// <summary>Swaps two panes' places in the order (the snap flyout putting a pane in a chosen cell).</summary>
+    public void Swap(string a, string b)
+    {
+        int i = _order.IndexOf(a), j = _order.IndexOf(b);
+        if (i < 0 || j < 0 || i == j) return;
+        (_order[i], _order[j]) = (_order[j], _order[i]);
+        Rebuild();
+    }
+
+    /// <summary>Moves a pane to the end of the order.</summary>
+    public void MoveToEnd(string key)
+    {
+        if (!_order.Remove(key)) return;
+        _order.Add(key);
         Rebuild();
     }
 

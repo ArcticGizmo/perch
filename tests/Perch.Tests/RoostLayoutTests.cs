@@ -136,38 +136,64 @@ public class RoostLayoutTests
     // ── Viewport ──────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void OverflowCountsPanesOutsideTheTwoByTwoViewport()
+    public void OverflowCountsPanesOnOtherPages()
     {
-        // 6 cells = 3 rows. Row 0: [a,b] [C]  Row 1: [D] [e]  Row 2: [F] [g,h]
+        // 6 cells, 4 to a page. Page 0: [a,b] [C] [D] [e]  Page 1: [F] [g,h]
         var cells = RoostLayout.Pack(P("a b C D e F g h"), 2);
         Assert.Equal(6, cells.Count);
         var needsYou = new HashSet<string> { "C", "F" };
 
-        var top = RoostLayout.Overflow(cells, 0, needsYou.Contains);
-        Assert.Equal(new RoostOverflow(0, 0, 3, 1), top);   // F, g, h below; F needs you
-        Assert.True(top.Any);
+        var first = RoostLayout.Overflow(cells, 0, 4, needsYou.Contains);
+        Assert.Equal(new RoostOverflow(0, 0, 3, 1), first);   // F, g, h after; F needs you
+        Assert.True(first.Any);
 
-        var bottom = RoostLayout.Overflow(cells, 1, needsYou.Contains);
-        Assert.Equal(new RoostOverflow(3, 1, 0, 0), bottom); // a, b, C above; C needs you
+        var second = RoostLayout.Overflow(cells, 1, 4, needsYou.Contains);
+        Assert.Equal(new RoostOverflow(5, 1, 0, 0), second);  // a, b, C, D, e before; C needs you
     }
 
     [Fact]
-    public void OverflowClampsAnOutOfRangeScroll()
+    public void OverflowClampsAnOutOfRangePage()
     {
         var cells = RoostLayout.Pack(P("A B"), 3);
-        Assert.False(RoostLayout.Overflow(cells, 5, _ => false).Any);
+        Assert.False(RoostLayout.Overflow(cells, 5, 4, _ => false).Any);
     }
 
     [Fact]
-    public void ScrollToRevealMovesTheMinimum()
+    public void PageToRevealJumpsToTheCellsPage()
     {
-        // 8 cells = 4 rows; viewport shows 2 rows.
-        Assert.Equal(0, RoostLayout.ScrollToReveal(3, 0, 8));   // row 1 — already visible
-        Assert.Equal(1, RoostLayout.ScrollToReveal(4, 0, 8));   // row 2 → scroll down one
-        Assert.Equal(2, RoostLayout.ScrollToReveal(7, 0, 8));   // row 3 → last page
-        Assert.Equal(0, RoostLayout.ScrollToReveal(1, 2, 8));   // row 0 → scroll up to it
-        Assert.Equal(2, RoostLayout.ScrollToReveal(-1, 9, 8));  // unknown cell → just clamp
-        Assert.Equal(0, RoostLayout.ScrollToReveal(2, 1, 3));   // short grid never scrolls
+        // 8 cells, 3 to a page = 3 pages.
+        Assert.Equal(0, RoostLayout.PageToReveal(2, 0, 8, 3));
+        Assert.Equal(1, RoostLayout.PageToReveal(3, 0, 8, 3));
+        Assert.Equal(2, RoostLayout.PageToReveal(7, 0, 8, 3));
+        Assert.Equal(0, RoostLayout.PageToReveal(1, 2, 8, 3));
+        Assert.Equal(2, RoostLayout.PageToReveal(-1, 9, 8, 3));  // unknown cell → just clamp
+        Assert.Equal(0, RoostLayout.PageToReveal(1, 1, 2, 4));   // one page never pages
+    }
+
+    [Theory]
+    [InlineData(0, 4, 1)]
+    [InlineData(4, 4, 1)]
+    [InlineData(5, 4, 2)]
+    [InlineData(3, 0, 3)]   // perPage clamped to 1
+    public void PageCountRoundsUp(int cells, int perPage, int expected) =>
+        Assert.Equal(expected, RoostLayout.PageCount(cells, perPage));
+
+    [Fact]
+    public void RoomyExpandsEveryAutoPane()
+    {
+        // Working / Quiet / ended collapse by status, but expand while every pane fits a cell of its own.
+        Assert.Equal(RoostPaneSize.Collapsed, Resolve(RoostGroup.Working).Size);
+        Assert.Equal(RoostPaneSize.Expanded, RoostLayout.ResolveSize(new RoostSizeInputs(
+            RoostPin.Auto, RoostGroup.Working, false, false, false, null, Roomy: true)).Size);
+        Assert.Equal(RoostPaneSize.Expanded, RoostLayout.ResolveSize(new RoostSizeInputs(
+            RoostPin.Auto, RoostGroup.Quiet, true, false, false, null, Roomy: true)).Size);
+        // A pin still wins.
+        Assert.Equal(RoostPaneSize.Collapsed, RoostLayout.ResolveSize(new RoostSizeInputs(
+            RoostPin.Collapsed, RoostGroup.NeedsYou, false, false, false, null, Roomy: true)).Size);
+        // The typing hold still holds a collapsed pane that room would now expand.
+        var held = RoostLayout.ResolveSize(new RoostSizeInputs(
+            RoostPin.Auto, RoostGroup.Working, false, false, true, RoostPaneSize.Collapsed, Roomy: true));
+        Assert.Equal(new RoostSizeDecision(RoostPaneSize.Collapsed, true), held);
     }
 
     [Fact]

@@ -37,6 +37,21 @@ public class RoostRosterTests
     }
 
     [Fact]
+    public void SwapAndMoveToEndReorderAndSurviveAScan()
+    {
+        var r = new RoostRoster();
+        r.Update([S("1"), S("2"), S("3")], T0);
+        r.Swap("1", "3");
+        Assert.Equal(["3", "2", "1"], Keys(r.Panes));
+        r.MoveToEnd("3");
+        Assert.Equal(["2", "1", "3"], Keys(r.Panes));
+        r.Update([S("1"), S("2"), S("3")], T0);
+        Assert.Equal(["2", "1", "3"], Keys(r.Panes));
+        r.Swap("2", "missing");
+        Assert.Equal(["2", "1", "3"], Keys(r.Panes));
+    }
+
+    [Fact]
     public void ScanOrderDoesNotReorderExistingPanes()
     {
         var r = new RoostRoster();

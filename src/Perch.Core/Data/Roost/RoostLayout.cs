@@ -10,7 +10,7 @@ public enum RoostPaneSize
 /// <summary>The Roost's three layouts (a persisted segmented toggle).</summary>
 public enum RoostLayoutMode
 {
-    /// <summary>A fixed 2×2 cell viewport; more cells scroll in a row at a time.</summary>
+    /// <summary>A grid of cells shaped by a <see cref="RoostSnapTemplate"/>; more cells page in a screen at a time.</summary>
     Tiled = 0,
     /// <summary>tmux main-vertical: the focused pane large and expanded, the rest stacked as mini cards.</summary>
     MainStack = 1,
@@ -25,8 +25,10 @@ public enum RoostLayoutMode
 /// <param name="Focused">This is the focused pane.</param>
 /// <param name="TypingElsewhere">The user is typing in some other pane's composer right now.</param>
 /// <param name="Current">The size the pane is drawn at now; null for a pane appearing for the first time.</param>
+/// <param name="Roomy">Every shown pane fits in a cell of its own, so nothing needs collapsing to save space.</param>
 public readonly record struct RoostSizeInputs(
-    RoostPin Pin, RoostGroup Group, bool Ended, bool Focused, bool TypingElsewhere, RoostPaneSize? Current);
+    RoostPin Pin, RoostGroup Group, bool Ended, bool Focused, bool TypingElsewhere, RoostPaneSize? Current,
+    bool Roomy = false);
 
 /// <summary>A resolved size. <see cref="Held"/> = the pane wants to expand but is held collapsed while the user
 /// types; the UI pulses it in its status hue instead.</summary>
@@ -48,14 +50,11 @@ public readonly record struct RoostOverflow(int Above, int AboveNeedsYou, int Be
 /// </summary>
 public static class RoostLayout
 {
-    /// <summary>The Tiled viewport: two columns, two rows.</summary>
-    public const int Columns = 2;
-    public const int VisibleRows = 2;
-
     /// <summary>
     /// The size a pane should be drawn at. In order:
     /// <list type="number">
     /// <item>A manual pin wins.</item>
+    /// <item>With room for every pane (<see cref="RoostSizeInputs.Roomy"/>), everything expands.</item>
     /// <item>Otherwise status decides: Needs you / Done · review expand; Working / Quiet / ended collapse.</item>
     /// <item><b>Typing hold:</b> a collapsed pane that would auto-expand while the user types in another pane stays
     ///   collapsed (<see cref="RoostSizeDecision.Held"/>), so the layout never shifts under their cursor. A pane
@@ -68,7 +67,7 @@ public static class RoostLayout
         if (i.Pin == RoostPin.Expanded) return new(RoostPaneSize.Expanded, false);
         if (i.Pin == RoostPin.Collapsed) return new(RoostPaneSize.Collapsed, false);
 
-        var wanted = !i.Ended && i.Group is RoostGroup.NeedsYou or RoostGroup.DoneReview
+        var wanted = i.Roomy || !i.Ended && i.Group is RoostGroup.NeedsYou or RoostGroup.DoneReview
             ? RoostPaneSize.Expanded
             : RoostPaneSize.Collapsed;
 
@@ -120,9 +119,6 @@ public static class RoostLayout
         return cells;
     }
 
-    /// <summary>Total grid rows for <paramref name="cellCount"/> cells.</summary>
-    public static int RowCount(int cellCount) => (cellCount + Columns - 1) / Columns;
-
     /// <summary>The cell holding <paramref name="key"/>, or -1.</summary>
     public static int CellOf(IReadOnlyList<RoostCell> cells, string key)
     {
@@ -131,27 +127,29 @@ public static class RoostLayout
         return -1;
     }
 
-    /// <summary>Clamps a scroll position (the first visible row) to the grid.</summary>
-    public static int ClampFirstRow(int firstRow, int cellCount) =>
-        Math.Clamp(firstRow, 0, Math.Max(0, RowCount(cellCount) - VisibleRows));
-
-    /// <summary>The smallest scroll from <paramref name="firstRow"/> that brings cell <paramref name="cellIndex"/>
-    /// into view (unchanged if it already is) — focusing a pane from the rail or keys scrolls it in.</summary>
-    public static int ScrollToReveal(int cellIndex, int firstRow, int cellCount)
+    /// <summary>Pages needed for <paramref name="cellCount"/> cells, <paramref name="perPage"/> to a page.</summary>
+    public static int PageCount(int cellCount, int perPage)
     {
-        if (cellIndex < 0) return ClampFirstRow(firstRow, cellCount);
-        int row = cellIndex / Columns;
-        if (row < firstRow) firstRow = row;
-        else if (row >= firstRow + VisibleRows) firstRow = row - VisibleRows + 1;
-        return ClampFirstRow(firstRow, cellCount);
+        perPage = Math.Max(1, perPage);
+        return Math.Max(1, (cellCount + perPage - 1) / perPage);
     }
 
-    /// <summary>Counts the panes scrolled above and below the viewport starting at <paramref name="firstRow"/>,
-    /// and how many of each need the user.</summary>
-    public static RoostOverflow Overflow(IReadOnlyList<RoostCell> cells, int firstRow, Func<string, bool> needsYou)
+    /// <summary>Clamps a page index to the grid.</summary>
+    public static int ClampPage(int page, int cellCount, int perPage) =>
+        Math.Clamp(page, 0, PageCount(cellCount, perPage) - 1);
+
+    /// <summary>The page holding cell <paramref name="cellIndex"/> (unchanged, just clamped, for -1) — focusing a
+    /// pane from the rail or keys pages it in.</summary>
+    public static int PageToReveal(int cellIndex, int page, int cellCount, int perPage) =>
+        cellIndex < 0 ? ClampPage(page, cellCount, perPage) : ClampPage(cellIndex / Math.Max(1, perPage), cellCount, perPage);
+
+    /// <summary>Counts the panes on pages before and after <paramref name="page"/>, and how many of each need the
+    /// user.</summary>
+    public static RoostOverflow Overflow(IReadOnlyList<RoostCell> cells, int page, int perPage, Func<string, bool> needsYou)
     {
-        firstRow = ClampFirstRow(firstRow, cells.Count);
-        int firstVisible = firstRow * Columns, endVisible = (firstRow + VisibleRows) * Columns;
+        perPage = Math.Max(1, perPage);
+        page = ClampPage(page, cells.Count, perPage);
+        int firstVisible = page * perPage, endVisible = firstVisible + perPage;
         int above = 0, aboveNy = 0, below = 0, belowNy = 0;
         for (int i = 0; i < cells.Count; i++)
         {

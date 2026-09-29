@@ -27,8 +27,9 @@ namespace Perch.Avalonia.Windows;
 /// feeds (<see cref="RoostFeed"/>: a Perch session's in-memory conversation, or a tailed transcript), which
 /// live only while it's open.
 ///
-/// <para>Three layouts (a persisted title-bar toggle): <b>Tiled</b> — a fixed 2×2 cell viewport paged a row at a
-/// time (wheel / PageUp·PageDown / the ↑↓ pills; discrete paging gives the row snap for free); <b>Main + stack</b>
+/// <para>Three layouts (a persisted title-bar toggle): <b>Tiled</b> — a grid shaped by a snap template (the title
+/// bar's layout flyout: Auto fits the grid to the pane count, or a fixed shape), paged a screen at a time (wheel /
+/// PageUp·PageDown / the ↑↓ pills), with every pane expanded while each fits a cell of its own; <b>Main + stack</b>
 /// — the focused pane large and expanded, every other pane a mini card in the stack; <b>Zoom</b> — the focused
 /// pane alone. Only placed panes hold controls: anything off-screen is parked (no materialised thread). The
 /// visible layout is rebuilt only when its shape changes; a scan that only moves text refreshes the panes in
@@ -53,7 +54,10 @@ internal sealed class RoostWindow : Window
     private readonly Panel _stage;
     // Tiled
     private readonly Grid _grid;
-    private readonly Border[] _cellHosts = new Border[4];
+    private readonly Border[] _cellHosts = new Border[RoostTemplates.AutoMaxCells];
+    private string? _gridSig;
+    private IReadOnlyList<RoostCell> _cells = [];
+    private int _perPage = 1;
     // Main + stack
     private readonly Grid _mainGrid;
     private readonly Border _mainHost;
@@ -74,23 +78,27 @@ internal sealed class RoostWindow : Window
     // What the stage containers currently hold, so a layout pass only touches what changed — re-parenting a
     // pane drops keyboard focus, which must never happen to the composer being typed in.
     private RoostLayoutMode? _builtMode;
-    private readonly string?[] _cellSigs = new string?[4];
+    private readonly string?[] _cellSigs = new string?[RoostTemplates.AutoMaxCells];
 
     private RoostLayoutMode _mode;
     private RoostLayoutMode _preZoomMode = RoostLayoutMode.Tiled;
+    private RoostSnapTemplate _template;
+    private RoostSnapTemplate _drawnTemplate = RoostSnapTemplate.Full;
+    private Border? _snapButton;
     private RoostGroup? _filter;
     private string? _focused;
-    private int _firstRow;
+    private int _page;
     private int _cellCount;
     private double _miniHeight;
 
     public RoostWindow(RoostRoster roster, Func<RoostPane, RoostFeed?> feedFactory, SessionPalette? palette = null,
-        RoostLayoutMode layout = RoostLayoutMode.Tiled)
+        RoostLayoutMode layout = RoostLayoutMode.Tiled, RoostSnapTemplate template = RoostSnapTemplate.Auto)
     {
         _roster = roster;
         _feedFactory = feedFactory;
         _p = palette ?? SessionPalette.Current;
         _mode = layout;
+        _template = template;
 
         Title = "Roost";
         Width = 1280;
@@ -116,7 +124,7 @@ internal sealed class RoostWindow : Window
         var right = new StackPanel
         {
             Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right,
-            Children = { SegmentedToggle(), newSession },
+            Children = { SnapButton(), SegmentedToggle(), newSession },
         };
         var bar = new Border
         {
@@ -139,19 +147,11 @@ internal sealed class RoostWindow : Window
         };
 
         // ── Stage: one container per layout, only the active one visible ──
-        _grid = new Grid
+        // Each cell host carries half a gap on every side, so the grid's own margin is the pad less that half.
+        _grid = new Grid { Margin = new Thickness(StagePad - CellGap / 2) };
+        for (int i = 0; i < _cellHosts.Length; i++)
         {
-            Margin = new Thickness(StagePad),
-            ColumnDefinitions = new ColumnDefinitions("*,*"),
-            RowDefinitions = new RowDefinitions("*,*"),
-        };
-        for (int i = 0; i < 4; i++)
-        {
-            _cellHosts[i] = new Border
-            {
-                Margin = new Thickness(i % 2 == 0 ? 0 : CellGap / 2, i < 2 ? 0 : CellGap / 2, i % 2 == 0 ? CellGap / 2 : 0, i < 2 ? CellGap / 2 : 0),
-                [Grid.RowProperty] = i / 2, [Grid.ColumnProperty] = i % 2,
-            };
+            _cellHosts[i] = new Border { Margin = new Thickness(CellGap / 2) };
             _grid.Children.Add(_cellHosts[i]);
         }
 
@@ -257,6 +257,9 @@ internal sealed class RoostWindow : Window
     /// <summary>The layout toggle moved (persist it).</summary>
     public event Action<RoostLayoutMode>? LayoutChanged;
 
+    /// <summary>A snap template was picked (persist it).</summary>
+    public event Action<RoostSnapTemplate>? TemplateChanged;
+
     /// <summary>A permission card in a Perch pane was answered: (session id, item, allow, switch mode).</summary>
     public event Action<string, PermissionItem, bool, bool>? PermissionAnswered;
 
@@ -280,6 +283,8 @@ internal sealed class RoostWindow : Window
     public event Action<string, PermissionItem, IReadOnlyDictionary<string, IReadOnlyList<string>>>? QuestionAnswered;
 
     public RoostLayoutMode Mode => _mode;
+
+    public RoostSnapTemplate SnapTemplate => _template;
 
     /// <summary>Whether the session's pane is on screen right now — placed by the current layout, expanded or as
     /// a mini card (not paged, filtered or zoomed away). With <see cref="Window.IsActive"/> it's the Roost half of
@@ -319,8 +324,38 @@ internal sealed class RoostWindow : Window
         Refresh(reveal: _focused);
     }
 
+    /// <summary>Picks a snap template (the flyout). Switches to Tiled, since the template is Tiled's shape.</summary>
+    public void SetTemplate(RoostSnapTemplate template)
+    {
+        bool changed = template != _template;
+        _template = template;
+        if (changed) TemplateChanged?.Invoke(template);
+        if (_mode != RoostLayoutMode.Tiled) { SetMode(RoostLayoutMode.Tiled); return; }
+        if (changed) Refresh(reveal: _focused);
+    }
+
+    /// <summary>Picks a template and puts the focused pane in its cell <paramref name="slot"/> (on the page showing
+    /// after the switch), swapping it with the pane that sat there.</summary>
+    public void SnapFocused(RoostSnapTemplate template, int slot)
+    {
+        SetTemplate(template);
+        if (_focused is not { } key || _roster.Find(key) is null) return;
+        int target = _page * _perPage + slot;
+        if (target < _cells.Count)
+        {
+            var there = _cells[target].Keys[0];
+            if (there == key) return;
+            _roster.Swap(key, there);
+        }
+        else _roster.MoveToEnd(key);
+        Refresh(reveal: key);
+    }
+
     /// <summary>HeadlessRenderer hook: page the Tiled viewport (there's no wheel in a headless capture).</summary>
-    internal void PageForRender(int rows) => Page(rows);
+    internal void PageForRender(int pages) => Page(pages);
+
+    /// <summary>HeadlessRenderer hook: open the snap-layout flyout.</summary>
+    internal void OpenSnapFlyoutForRender() { if (_snapButton is { } b) ShowSnapFlyout(b); }
 
     /// <summary>HeadlessRenderer hook: pretend the user is mid-reply in pane <paramref name="key"/> (the typing hold).</summary>
     internal void TypeForRender(string key) => _typing.Keystroke(key, Clock.Now);
@@ -329,7 +364,7 @@ internal sealed class RoostWindow : Window
     internal void ClosePaneForRender(string key) => OnPaneAction(key, RoostPaneAction.Close);
 
     /// <summary>HeadlessRenderer hook: apply a chip filter (null clears).</summary>
-    internal void FilterForRender(RoostGroup? group) { _filter = group; _firstRow = 0; Refresh(); }
+    internal void FilterForRender(RoostGroup? group) { _filter = group; _page = 0; Refresh(); }
 
     // ── Layout pass ───────────────────────────────────────────────────────────
 
@@ -340,7 +375,7 @@ internal sealed class RoostWindow : Window
         var shown = _filter is { } g ? all.Where(p => p.Group == g).ToList() : all;
         if (_filter is not null && shown.Count == 0) { _filter = null; shown = all; }   // the group emptied
 
-        ResolveTiledSizes(all);
+        ResolveTiledSizes(all, roomy: shown.Count <= RoostTemplates.Capacity(_template));
         _placed.Clear();
         switch (_mode)
         {
@@ -367,6 +402,7 @@ internal sealed class RoostWindow : Window
         _emptyBody.Text = "Sessions appear here as soon as they start — or start one with + New session.";
         RefreshChips();
         RefreshRail();
+        RefreshSnapButton();
         UpdatePulse();
         ArmHoldTimer();
     }
@@ -404,7 +440,7 @@ internal sealed class RoostWindow : Window
 
     // Every pane's Tiled size (kept even while another layout shows, as the resolver's "current" memory).
     private readonly HashSet<string> _held = new(StringComparer.Ordinal);
-    private void ResolveTiledSizes(IReadOnlyList<RoostPane> panes)
+    private void ResolveTiledSizes(IReadOnlyList<RoostPane> panes, bool roomy)
     {
         _held.Clear();
         foreach (var pane in panes)
@@ -412,7 +448,7 @@ internal sealed class RoostWindow : Window
             RoostPaneSize? current = _sizes.TryGetValue(pane.Key, out var c) ? c : null;
             var d = RoostLayout.ResolveSize(new RoostSizeInputs(
                 pane.Pin, pane.Group, pane.Ended, pane.Key == _focused,
-                TypingElsewhere: _typing.TypingElsewhere(pane.Key, Clock.Now), current));
+                TypingElsewhere: _typing.TypingElsewhere(pane.Key, Clock.Now), current, roomy));
             _sizes[pane.Key] = d.Size;
             if (d.Held) _held.Add(pane.Key);
         }
@@ -421,15 +457,28 @@ internal sealed class RoostWindow : Window
     private void LayoutTiled(IReadOnlyList<RoostPane> shown, string? reveal)
     {
         var sized = shown.Select(p => (p.Key, _sizes[p.Key])).ToList();
-        int capacity = RoostLayout.CellCapacity(CellHeight(), MiniHeight(), CellGap);
-        var cells = RoostLayout.Pack(sized, capacity);
+        // Auto's shape follows the cell count, and how many mini cards a cell stacks follows the shape: pack for
+        // the shape the pane count suggests, then once more if the packed count lands on a different one.
+        double aspect = StageAspect();
+        var template = RoostTemplates.Resolve(_template, Math.Min(shown.Count, RoostTemplates.AutoMaxCells), aspect);
+        var cells = RoostLayout.Pack(sized, RoostLayout.CellCapacity(CellHeight(template), MiniHeight(), CellGap));
+        var packed = RoostTemplates.Resolve(_template, cells.Count, aspect);
+        if (packed != template)
+        {
+            template = packed;
+            cells = RoostLayout.Pack(sized, RoostLayout.CellCapacity(CellHeight(template), MiniHeight(), CellGap));
+        }
+        _drawnTemplate = template;
+        var shape = RoostTemplates.Shape(template);
+        _cells = cells;
         _cellCount = cells.Count;
-        if (reveal is not null) _firstRow = RoostLayout.ScrollToReveal(RoostLayout.CellOf(cells, reveal), _firstRow, cells.Count);
-        _firstRow = RoostLayout.ClampFirstRow(_firstRow, cells.Count);
+        _perPage = shape.Slots.Count;
+        if (reveal is not null) _page = RoostLayout.PageToReveal(RoostLayout.CellOf(cells, reveal), _page, cells.Count, _perPage);
+        _page = RoostLayout.ClampPage(_page, cells.Count, _perPage);
 
-        int first = _firstRow * RoostLayout.Columns;
-        var visibleCells = cells.Skip(first).Take(RoostLayout.Columns * RoostLayout.VisibleRows).ToList();
+        var visibleCells = cells.Skip(_page * _perPage).Take(_perPage).ToList();
         EnsureBuiltFor(RoostLayoutMode.Tiled);
+        ApplyGridShape(shape);
 
         // Only the cells whose contents changed are touched: detach them all first (a pane may be moving from
         // one changed cell to another), then fill them. An unchanged cell — say, the one holding the composer
@@ -552,10 +601,45 @@ internal sealed class RoostWindow : Window
         }
     }
 
-    private double CellHeight()
+    private double StageAspect()
+    {
+        var b = _stage.Bounds;
+        return b.Width > 0 && b.Height > 0 ? b.Width / b.Height : 1.6;
+    }
+
+    // The template's shortest row — the cell height that decides how many mini cards a cell stacks.
+    private double CellHeight(RoostSnapTemplate template)
     {
         double h = _stage.Bounds.Height;
-        return h <= 0 ? 600 : Math.Max(120, (h - 2 * StagePad - CellGap) / 2);
+        if (h <= 0) h = 700;
+        var shape = RoostTemplates.Shape(template);
+        double usable = h - 2 * StagePad - (shape.Rows.Count - 1) * CellGap;
+        return Math.Max(120, shape.Rows.Min() / shape.Rows.Sum() * usable);
+    }
+
+    // Lays the grid out for a template: its rows and columns, and each host at its slot (spare hosts hidden). A
+    // geometry change detaches every cell, so the fill that follows re-parents them into their new slots.
+    private void ApplyGridShape(RoostTemplateShape shape)
+    {
+        if (shape.Signature == _gridSig) return;
+        _gridSig = shape.Signature;
+        _grid.ColumnDefinitions.Clear();
+        foreach (var w in shape.Columns) _grid.ColumnDefinitions.Add(new ColumnDefinition(w, GridUnitType.Star));
+        _grid.RowDefinitions.Clear();
+        foreach (var w in shape.Rows) _grid.RowDefinitions.Add(new RowDefinition(w, GridUnitType.Star));
+        for (int i = 0; i < _cellHosts.Length; i++)
+        {
+            var host = _cellHosts[i];
+            DetachHost(host);
+            _cellSigs[i] = null;
+            host.IsVisible = i < shape.Slots.Count;
+            if (!host.IsVisible) continue;
+            var slot = shape.Slots[i];
+            Grid.SetRow(host, slot.Row);
+            Grid.SetColumn(host, slot.Column);
+            Grid.SetRowSpan(host, slot.RowSpan);
+            Grid.SetColumnSpan(host, slot.ColumnSpan);
+        }
     }
 
     // A mini card's height, measured once per stage size from a probe pane (fonts decide it, never a guess).
@@ -574,12 +658,12 @@ internal sealed class RoostWindow : Window
         return _miniHeight;
     }
 
-    private void Page(int rows)
+    private void Page(int pages)
     {
         if (_mode != RoostLayoutMode.Tiled) return;
-        int next = RoostLayout.ClampFirstRow(_firstRow + rows, _cellCount);
-        if (next == _firstRow) return;
-        _firstRow = next;
+        int next = RoostLayout.ClampPage(_page + pages, _cellCount, _perPage);
+        if (next == _page) return;
+        _page = next;
         Refresh();
     }
 
@@ -730,6 +814,142 @@ internal sealed class RoostWindow : Window
         };
     }
 
+    // The snap-layout button: a thumbnail of the grid Tiled is drawing now. A click opens the template flyout.
+    private Control SnapButton()
+    {
+        var b = new Border
+        {
+            CornerRadius = new CornerRadius(9), Padding = new Thickness(8, 5), Margin = new Thickness(0, 0, 8, 0),
+            BorderThickness = new Thickness(1), BorderBrush = _p.Border, Background = _p.Surface,
+            Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
+            [ToolTip.TipProperty] = "Snap layout",
+        };
+        b.PointerEntered += (_, _) => b.BorderBrush = _p.BrandLine;
+        b.PointerExited += (_, _) => b.BorderBrush = _p.Border;
+        b.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowSnapFlyout(b); };
+        _snapButton = b;
+        return b;
+    }
+
+    private void RefreshSnapButton()
+    {
+        if (_snapButton is null) return;
+        var shown = _mode == RoostLayoutMode.Tiled ? _drawnTemplate : RoostSnapTemplate.Full;
+        _snapButton.Child = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 6,
+            Children =
+            {
+                TemplateThumb(RoostTemplates.Shape(shown), 26, 16, _mode == RoostLayoutMode.Tiled ? _p.Brand : _p.Muted, onSlot: null),
+                new TextBlock
+                {
+                    Text = _template == RoostSnapTemplate.Auto ? "Auto" : RoostTemplates.Name(_template),
+                    FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+                    Foreground = _mode == RoostLayoutMode.Tiled ? _p.Text : _p.Muted,
+                },
+            },
+        };
+    }
+
+    // Windows-style snap flyout: a thumbnail per template. A click on a thumbnail's cell picks the template and
+    // puts the focused pane in that cell; a click on the thumbnail's caption just picks the template.
+    private void ShowSnapFlyout(Control anchor)
+    {
+        var flyout = new Flyout { Placement = global::Avalonia.Controls.PlacementMode.BottomEdgeAlignedRight };
+        var wrap = new global::Avalonia.Controls.Primitives.UniformGrid { Columns = 3 };
+        double aspect = StageAspect();
+        foreach (var template in RoostTemplates.Picker)
+        {
+            var t = template;
+            bool on = t == _template;
+            // Auto previews the shape it would draw right now.
+            var shape = RoostTemplates.Shape(t == RoostSnapTemplate.Auto
+                ? RoostTemplates.Resolve(t, Math.Min(Math.Max(1, _cellCount), RoostTemplates.AutoMaxCells), aspect)
+                : t);
+            var caption = new TextBlock
+            {
+                Text = RoostTemplates.Name(t), FontFamily = _p.Body, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center,
+                Foreground = on ? _p.Text : _p.Muted, FontWeight = on ? FontWeight.SemiBold : FontWeight.Normal,
+            };
+            var tile = new Border
+            {
+                Width = 84, Margin = new Thickness(4), Padding = new Thickness(6), CornerRadius = new CornerRadius(8),
+                BorderThickness = new Thickness(1), BorderBrush = on ? _p.BrandLine : Brushes.Transparent,
+                Background = on ? _p.BrandWash : Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand),
+                Child = new StackPanel
+                {
+                    Spacing = 5,
+                    Children =
+                    {
+                        TemplateThumb(shape, 70, 44, _p.Muted, onSlot: slot => { flyout.Hide(); SnapFocused(t, slot); }),
+                        caption,
+                    },
+                },
+            };
+            if (!on)
+            {
+                tile.PointerEntered += (_, _) => tile.Background = _p.Raised2;
+                tile.PointerExited += (_, _) => tile.Background = Brushes.Transparent;
+            }
+            tile.PointerReleased += (_, e) =>
+            {
+                if (e.InitialPressMouseButton != MouseButton.Left || e.Handled) return;
+                flyout.Hide();
+                SetTemplate(t);
+            };
+            wrap.Children.Add(tile);
+        }
+        flyout.Content = new StackPanel
+        {
+            Spacing = 6,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = _focused is null ? "Pick a layout" : "Pick a layout · click a cell to put the focused pane there",
+                    FontFamily = _p.Body, FontSize = 11.5, Foreground = _p.Faint, Margin = new Thickness(4, 0),
+                },
+                wrap,
+            },
+        };
+        flyout.ShowAt(anchor);
+    }
+
+    // A template drawn small: one rounded cell per slot. With onSlot, each cell highlights on hover and clicks
+    // report its index.
+    private Control TemplateThumb(RoostTemplateShape shape, double width, double height, IBrush stroke, Action<int>? onSlot)
+    {
+        const double gap = 2;
+        var grid = new Grid { Width = width, Height = height };
+        foreach (var w in shape.Columns) grid.ColumnDefinitions.Add(new ColumnDefinition(w, GridUnitType.Star));
+        foreach (var w in shape.Rows) grid.RowDefinitions.Add(new RowDefinition(w, GridUnitType.Star));
+        for (int i = 0; i < shape.Slots.Count; i++)
+        {
+            var slot = shape.Slots[i];
+            int index = i;
+            var cell = new Border
+            {
+                Margin = new Thickness(gap / 2), CornerRadius = new CornerRadius(onSlot is null ? 2 : 3),
+                BorderThickness = new Thickness(1.2), BorderBrush = stroke, Background = _p.Raised,
+                [Grid.RowProperty] = slot.Row, [Grid.ColumnProperty] = slot.Column,
+                [Grid.RowSpanProperty] = slot.RowSpan, [Grid.ColumnSpanProperty] = slot.ColumnSpan,
+            };
+            if (onSlot is not null)
+            {
+                cell.PointerEntered += (_, _) => { cell.Background = _p.Brand; cell.BorderBrush = _p.Brand; };
+                cell.PointerExited += (_, _) => { cell.Background = _p.Raised; cell.BorderBrush = stroke; };
+                cell.PointerReleased += (_, e) =>
+                {
+                    if (e.InitialPressMouseButton != MouseButton.Left) return;
+                    e.Handled = true;
+                    onSlot(index);
+                };
+            }
+            grid.Children.Add(cell);
+        }
+        return grid;
+    }
+
     private void RefreshSegments()
     {
         foreach (var (mode, seg) in _segments)
@@ -758,7 +978,7 @@ internal sealed class RoostWindow : Window
 
     private void RefreshOverflow(IReadOnlyList<RoostCell> cells)
     {
-        var o = RoostLayout.Overflow(cells, _firstRow,
+        var o = RoostLayout.Overflow(cells, _page, _perPage,
             k => _roster.Find(k) is { Group: RoostGroup.NeedsYou });
         _pillUp.IsVisible = o.Above > 0;
         _pillUpText.Text = o.AboveNeedsYou > 0 ? $"↑ {o.Above} more · {o.AboveNeedsYou} need{(o.AboveNeedsYou == 1 ? "s" : "")} you" : $"↑ {o.Above} more";
@@ -851,7 +1071,7 @@ internal sealed class RoostWindow : Window
         {
             if (e.InitialPressMouseButton != MouseButton.Left) return;
             _filter = _filter == group ? null : group;
-            _firstRow = 0;
+            _page = 0;
             Refresh();
         };
         return chip;

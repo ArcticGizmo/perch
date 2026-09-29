@@ -1558,13 +1558,15 @@ public partial class App : Application
             () =>
             {
                 var w = new RoostWindow(_roostRoster, CreateRoostFeed,
-                    layout: _appSettings?.RoostLayout ?? Perch.Data.Roost.RoostLayoutMode.Tiled);
+                    layout: _appSettings?.RoostLayout ?? Perch.Data.Roost.RoostLayoutMode.Tiled,
+                    template: _appSettings?.RoostTemplate ?? Perch.Data.Roost.RoostSnapTemplate.Auto);
                 // A prompt that was only "seen" in the Roost gets its toast once the user looks away from it.
                 w.Deactivated += (_, _) => { foreach (var sw in _sessionWindows) sw.ReevaluateAttention(); };
                 w.NewSessionRequested += OpenSessionWindow;
                 w.OpenSessionRequested += FocusSession;
                 w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
                 w.LayoutChanged += mode => { if (_appSettings is { } s) { s.RoostLayout = mode; s.Save(); } };
+                w.TemplateChanged += t => { if (_appSettings is { } s) { s.RoostTemplate = t; s.Save(); } };
                 w.ClosedPanesChanged += () =>
                 {
                     if (_appSettings is not { } s) return;

@@ -519,9 +519,10 @@ internal static class HeadlessRenderer
         // pane's layout scale, every tool card (even an edit's diff) collapsed, in dark and light.
         RenderRoostThreadCompact(outDir);
 
-        // The Roost window (CP7): rail + Tiled 2×2 stage over the sample roster — every status, Perch and
+        // The Roost window (CP7): rail + Tiled stage over the sample roster — every status, Perch and
         // terminal/IDE origins, expanded panes beside stacked mini cards, and the "↓ N more · needs you" pill.
         RenderRoost(outDir);
+        RenderRoostSnap(outDir);
 
         // The rich Perch-controlled session window (docs/session-ui-plan.md): composed turns — user bubble,
         // Claude prose under the bird mark, collapsed thinking, tool cards, a pending permission card — in
@@ -1470,6 +1471,43 @@ internal static class HeadlessRenderer
                 break;
         }
         return c;
+    }
+
+    // Snap layouts: two running sessions under Auto (side by side, both expanded because both fit), three under
+    // Auto (one + two), a fixed Two rows, and the snap flyout open.
+    private static void RenderRoostSnap(string outDir)
+    {
+        var all = RoostSampleSessions();
+        void Shot(string name, int count, Perch.Data.Roost.RoostSnapTemplate template, bool flyout = false)
+        {
+            var roster = new Perch.Data.Roost.RoostRoster();
+            var picked = all.Where(s => s.ProjectName is "perch" or "extension" or "api").Take(count).ToList();
+            roster.Update(picked, Clock.Now);
+            var w = new Windows.RoostWindow(roster,
+                pane => RoostFeed.ForFixed(RoostSampleConversation(pane.Session), pane.Session.SessionId,
+                    controlled: pane.Session.IsPerchControlled),
+                SessionPalette.For(true), template: template)
+            { Width = 1280, Height = 800 };
+            w.Show();
+            for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
+            if (flyout)
+            {
+                w.FocusPane(picked[0].Pid);
+                w.OpenSnapFlyoutForRender();
+                for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
+            }
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, name));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+        Shot("roost_snap_auto2_1x.png", 2, Perch.Data.Roost.RoostSnapTemplate.Auto);
+        Shot("roost_snap_auto3_1x.png", 3, Perch.Data.Roost.RoostSnapTemplate.Auto);
+        Shot("roost_snap_rows2_1x.png", 2, Perch.Data.Roost.RoostSnapTemplate.Rows2);
+        Shot("roost_snap_flyout_1x.png", 2, Perch.Data.Roost.RoostSnapTemplate.Auto, flyout: true);
     }
 
     private static void RenderRoost(string outDir)
