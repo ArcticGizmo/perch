@@ -59,6 +59,10 @@ internal sealed class RoostWindow : Window
     // the tree and back in would restyle and re-measure its whole thread.
     private readonly Border[] _cellHosts = new Border[RoostTemplates.AutoMaxCells];
     private readonly Dictionary<string, Border> _paneHosts = new(StringComparer.Ordinal);
+    // Panes that left the stage keep their host, hidden, with the thread still built — so bringing one back
+    // is a show, not a rebuild. Oldest-hidden first; past WarmLimit the oldest is parked.
+    private const int WarmLimit = 8;
+    private readonly List<string> _warm = [];
     private IReadOnlyList<string> _cellKeys = [];
     // Main + stack
     private readonly Grid _mainGrid;
@@ -241,7 +245,7 @@ internal sealed class RoostWindow : Window
         _pulseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
         _pulseTimer.Tick += (_, _) => PulseFrame();
         _clockTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _clockTimer.Tick += (_, _) => { foreach (var k in _placed.Keys) _views[k].Tick(); RefreshRail(); };
+        _clockTimer.Tick += (_, _) => { foreach (var k in _placed.Keys) _views[k].Tick(); TickRail(); };
         _clockTimer.Start();
         _holdTimer = new DispatcherTimer();
         _holdTimer.Tick += (_, _) => { _holdTimer.Stop(); Refresh(); };
@@ -440,7 +444,7 @@ internal sealed class RoostWindow : Window
             view.Update(pane, _feeds[pane.Key]);
             view.SetFocused(pane.Key == _focused);
             if (_placed.TryGetValue(pane.Key, out var size)) view.SetSize(size, held: false);
-            else view.Park();
+            else if (!_warm.Contains(pane.Key)) view.Park();   // a warm pane keeps its thread, hidden
         }
 
         _emptyNote.IsVisible = all.Count == 0;
@@ -510,7 +514,14 @@ internal sealed class RoostWindow : Window
         // Panes leaving the stage leave the tree; a pane that stays keeps its host and only moves (so a swap,
         // or the layout changing shape, never re-parents it — it keeps its focus, scroll and measured thread).
         var onStage = keys.ToHashSet(StringComparer.Ordinal);
-        foreach (var gone in _paneHosts.Keys.Where(k => !onStage.Contains(k)).ToList()) RemovePaneHost(gone);
+        foreach (var (key, host) in _paneHosts)
+        {
+            if (onStage.Contains(key) || _warm.Contains(key)) continue;
+            host.IsVisible = false;
+            RoostTilePanel.SetSlot(host, -1);
+            _warm.Add(key);
+        }
+        while (_warm.Count > WarmLimit) RemovePaneHost(_warm[0]);   // parked by the refresh that follows
         for (int i = 0; i < keys.Count; i++)
         {
             if (!_paneHosts.TryGetValue(keys[i], out var host))
@@ -519,6 +530,8 @@ internal sealed class RoostWindow : Window
                 _paneHosts[keys[i]] = host;
                 _grid.Children.Add(host);
             }
+            _warm.Remove(keys[i]);
+            host.IsVisible = true;
             if (RoostTilePanel.GetSlot(host) != i) RoostTilePanel.SetSlot(host, i);
         }
         _cellKeys = keys.ToList();
@@ -574,6 +587,7 @@ internal sealed class RoostWindow : Window
 
     private void RemovePaneHost(string key)
     {
+        _warm.Remove(key);
         if (!_paneHosts.Remove(key, out var host)) return;
         host.Child = null;
         _grid.Children.Remove(host);
@@ -1076,9 +1090,32 @@ internal sealed class RoostWindow : Window
         return chip;
     }
 
+    // The rail's per-row elapsed labels ("41s", "2m"), so the 1s clock updates their text instead of rebuilding
+    // every row.
+    private readonly Dictionary<string, (RoostPane Pane, TextBlock Label)> _railElapsed = new(StringComparer.Ordinal);
+
+    private static string RailElapsed(RoostPane pane)
+    {
+        var s = pane.Session;
+        return pane.Ended ? "ended"
+            : s.Status == SessionStatus.AwaitingInput ? s.AwaitingElapsedLabel() ?? ""
+            : s.Status == SessionStatus.Running ? s.RunningElapsedLabel() ?? ""
+            : "";
+    }
+
+    private void TickRail()
+    {
+        foreach (var (pane, label) in _railElapsed.Values)
+        {
+            var text = RailElapsed(pane);
+            if (label.Text != text) label.Text = text;
+        }
+    }
+
     private void RefreshRail()
     {
-        if (_press is not null) return;   // rebuilding would drop the row being pressed / dragged
+        if (_press is not null) return;
+        _railElapsed.Clear();   // rebuilding would drop the row being pressed / dragged
         _rail.Children.Clear();
         if (_roster.Panes.Count == 0)
         {
@@ -1127,10 +1164,12 @@ internal sealed class RoostWindow : Window
                 _ => _p.Idle,
             },
         };
-        string elapsed = pane.Ended ? "ended"
-            : s.Status == SessionStatus.AwaitingInput ? s.AwaitingElapsedLabel() ?? ""
-            : s.Status == SessionStatus.Running ? s.RunningElapsedLabel() ?? ""
-            : "";
+        var elapsed = new TextBlock
+        {
+            Text = RailElapsed(pane), FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
+        };
+        _railElapsed[pane.Key] = (pane, elapsed);
         // Tiled: a pane waiting off stage reads dimmer; one that hasn't been on stage yet is marked "new".
         bool offStage = _mode == RoostLayoutMode.Tiled && !_cellKeys.Contains(pane.Key);
         bool fresh = offStage && _filter is null && !pane.Ended && !_onStage.WasEverOn(pane.Key);
@@ -1153,7 +1192,7 @@ internal sealed class RoostWindow : Window
                 Children =
                 {
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, [DockPanel.DockProperty] = Dock.Left, Children = { dot } },
-                    new TextBlock { Text = elapsed, FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right },
+                    elapsed,
                     newTag,
                     new TextBlock
                     {
