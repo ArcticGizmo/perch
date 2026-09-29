@@ -46,7 +46,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP19](#cp19) | ⚪ P3 | Build | Build/installer hygiene (em dashes, PATH type, versioning) | S | ⬜ |
 | [CP20](#cp20) | 🟠 P1 | Performance | Session scan off the UI thread + incremental transcripts | L | 🟦 code + tests done, dogfood owed |
 | [CP21](#cp21) | 🟠 P1 | Performance | All-time stats: cache history, don't re-parse it | M | ⬜ |
-| [CP22](#cp22) | 🟠 P1 | Performance | Streaming chat O(n²) + SessionThreadView leak | M | ⬜ |
+| [CP22](#cp22) | 🟠 P1 | Performance | Streaming chat O(n²) + SessionThreadView leak | M | 🟦 code + headless checks done, dogfood owed |
 | [CP23](#cp23) | 🟡 P2 | Performance | Overlay paint path: no IO, no per-frame allocations | M | ⬜ |
 | [CP24](#cp24) | 🟡 P2 | Performance | Misc perf batch (metrics, history tail, diff, arcade, images, watcher) | M | ⬜ |
 | [CP25](#cp25) | ⚪ P3 | Correctness | Watcher race, PID reuse, Process disposal | S | ⬜ |
@@ -637,7 +637,7 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 - [ ] xUnit: a cached result equals a fresh result, and an appended file only reads the delta.
 
 <a id="cp22"></a>
-### CP22 — Streaming chat O(n²) + SessionThreadView leak · 🟠 P1 · M · ⬜
+### CP22 — Streaming chat O(n²) + SessionThreadView leak · 🟠 P1 · M · 🟦
 
 **Problem.**
 - **Settled prefix is rebuilt each time.** `SessionThreadView.cs:871-909` (`RenderRevealed`) rebuilds the whole settled prefix (Markdig parse, control tree, `File.Exists` calls) at every block boundary.
@@ -646,11 +646,35 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 - **Closing a window leaks its chat view.** `SessionWindow.Detach` (`SessionWindow.cs:837-847`) never unbinds `_thread`, and the session outlives the window by design. Every close and reopen leaves a whole chat tree subscribed and processing deltas.
 
 **Tasks**
-- [ ] Make settled blocks append-only: render only the newly settled slice and add it as a new child.
-- [ ] Throttle tail rendering by size: fall back to plain text while the tail is over N KB or inside an open fence, or re-highlight at most every 250ms.
-- [ ] Use a `StringBuilder` in `TextPart`, and batch `Changed` notifications.
-- [ ] Add `SessionThreadView.Unbind()` (the roost branch has one; port or merge it), and call it from `Detach` and `OnClosed`.
-- [ ] Verify: stream a long reply from a fixture replay and watch frame time. Close and reopen a window 10 times and confirm the old views are collected (a debug counter or the memory profiler).
+- [x] **Settled blocks are append-only.** When a block boundary appears in the tail, `StreamingProse` builds only the newly settled slice and inserts it just above the tail. Slices already on screen are never rebuilt. The prose is tracked as offsets into the part's text (`_settledLen`, `_shown`), so a frame allocates only its tail, not the revealed prefix. The finalise step is unchanged: one clean whole-message build, which also corrects anything a slice boundary got wrong (e.g. a reference link defined in a later slice).
+- [x] **Tail throttle.** The policy is in a new UI-free `Perch.Data.Control.StreamingTail`:
+  - **Open code fence → plain text.** `TryOpenFence` follows CommonMark fence rules (≤3 spaces of indent, ≥3 backticks or tildes, no backtick in a backtick fence's info string, a closer at least as long with nothing after it). While the fence is open, the tail is a plain code panel (`MarkdownView.BuildStreamingCode`, the same chrome as a finished block) whose text is updated in place: no parse, no highlighting, no new controls. It gets its real build and syntax colours once the fence closes. While it's open the settle scan is skipped entirely, since no block can start until it closes.
+  - **Large tail → slower cadence.** A rich tail over 4 KB, or a plain-fence tail over 16 KB, re-renders at most every 250 ms (`MinInterval`). It still re-renders immediately when its text just moved into a settled slice, or when it switches between plain and rich. A throttled frame marks the tail stale, and a caught-up tick settles it, so the last text always lands.
+  - **No per-frame `File.Exists`.** The tail renders without file-ref probing; settled slices and the final build still arm file references.
+- [x] **`TextPart` uses a `StringBuilder`.** `Append` adds the delta and `Text` materialises and caches the string only when read. `StreamingProse` no longer receives the text per delta: `Poke()` just restarts pacing, and the control reads `part.Text` once per 40 ms frame. **Changed is batched in the view rather than in the conversation**, which keeps `SessionConversation` deterministic for its tests. `Updated` notifications are collected into a set and applied in one pass, posted at the same priority as the queued deltas (FIFO, so it can't starve). An `Added` flushes the set first, so the column always matches applying every change in order. `SyncParts` is idempotent, which is what makes coalescing safe.
+- [x] **`SessionThreadView.Unbind()`**, ported from roost and extended. It unsubscribes, and also drops the column and any pending sync; dropping the column detaches the controls, which stops any streaming timer. `Bind` goes through it. `SessionWindow.Detach` calls it, which covers both `OnClosed` and re-pointing via `Attach`. `HistoryWindow` owns its conversation, so it can't leak this way and is unchanged.
+- [x] **Verify.** Both checks live in `perch render`: the streaming scene always runs, and the benchmark and leak check run with `PERCH_BENCH=1`.
+  - **Mid-stream capture** (`session_streaming_1x.png`, cut in the middle of the trailing code fence). It's identical to the old render, apart from the still-open fence being unhighlighted, which is intended.
+  - **Frame-time benchmark.** A 43 KB reply (40 headed steps, lists, tables and a 250-line fenced block) streamed in 24-char deltas, one paced frame per delta, with the layout pass timed. Same machine, before → after:
+    - total: **154 s → 9.7 s**
+    - mean per frame: **85 → 5.4 ms** (the frame budget is 40 ms)
+    - p50: **33 → 2.1 ms**
+    - p95: **175 → 19 ms**
+    - p99: **1,240 → 25 ms**
+    - max: **1,783 → 35 ms**
+    - inside the open fence: mean **141 → 7.4 ms**
+  - **Leak check.** Ten windows are opened and closed onto one live, still-streaming session, then GC runs. Before: **10/10** windows still reachable (checked by temporarily removing the `Unbind` call). After: **0/10**. Avalonia keeps the most recently closed window reachable until another window opens, whatever the fix; the check opens one untracked window to account for that.
+  - xUnit `StreamingTextTests` (28): deltas accumulate to their exact concatenation over 2,000 random deltas; `Text` is cached until the next delta; the final text replaces the accumulation; an empty delta is a no-op; 23 fence cases (open, opener still arriving, closed, the wrong closer character, a shorter closer, an indented closer, a 4-space indented code block, inline code, a fence inside a list, CRLF); the `MinInterval` thresholds.
+- [ ] Dogfood:
+  - a long live reply streams smoothly;
+  - a code block shows plain while it streams, then highlights when it closes;
+  - the finished message matches a non-streamed render;
+  - closing and reopening a live session's window mid-stream still shows the full thread;
+  - find (Ctrl+F) and the jump buttons still work mid-stream.
+
+**Verify.** Done 2026-09-29. `dotnet build perch.slnx` is clean, and the .NET suite passes 1610 with 1 skipped.
+
+**Landed:** commit `84b8576`.
 
 <a id="cp23"></a>
 ### CP23 — Overlay paint path: no IO, no per-frame allocations · 🟡 P2 · M · ⬜
