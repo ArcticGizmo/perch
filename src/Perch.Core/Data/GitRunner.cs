@@ -19,7 +19,8 @@ using System.Diagnostics;
 /// So every <see cref="Trust.Automatic"/> run turns fsmonitor off, passes <c>--no-ext-diff --no-textconv</c> to
 /// <c>diff</c>/<c>show</c>/<c>log</c>, and blanks every filter driver the repo's <b>own</b> config defines (local or
 /// worktree scope). Drivers from the user's global or system config, such as git-lfs, are theirs and keep
-/// working. The results are unchanged for an ordinary repo.
+/// working, and so does a repo-local git-lfs whose commands are exactly the stock ones (<c>git lfs install
+/// --local</c>). The results are unchanged for an ordinary repo.
 ///
 /// Also: git is always the absolute PATH copy (CP7), every run has a timeout that kills the process tree, and at
 /// most <see cref="MaxConcurrent"/> git processes run at once across the whole app. Never throws: a failure to
@@ -179,8 +180,9 @@ internal static class GitRunner
             if (key.StartsWith("filter.", StringComparison.Ordinal))
             {
                 int last = key.LastIndexOf('.');
-                if (last > "filter.".Length)
-                    filters.Add((nl < 0 ? entry : entry[..nl])["filter.".Length..last]);
+                string name = last > "filter.".Length ? (nl < 0 ? entry : entry[..nl])["filter.".Length..last] : "";
+                if (name.Length > 0 && !IsStockLfs(name, key[(last + 1)..], nl < 0 ? "" : entry[(nl + 1)..]))
+                    filters.Add(name);
             }
         }
 
@@ -199,6 +201,18 @@ internal static class GitRunner
 
         return new Probe(filters.ToArray(), stamps, cacheable, DateTime.UtcNow);
     }
+
+    // What `git lfs install --local` writes. A repo-local lfs driver made only of these runs the same git-lfs a
+    // system/global install would, so it's left alone; blanking it makes every LFS file read as modified (the
+    // pointer in the index against the real content). Any other value, even one entry, blanks the whole driver.
+    private static bool IsStockLfs(string name, string var, string value) => name == "lfs" && (var, value) switch
+    {
+        ("clean", "git-lfs clean -- %f") => true,
+        ("smudge", "git-lfs smudge -- %f" or "git-lfs smudge --skip -- %f") => true,
+        ("process", "git-lfs filter-process" or "git-lfs filter-process --skip") => true,
+        ("required", "true" or "false") => true,
+        _ => false,
+    };
 
     internal sealed record Probe(
         IReadOnlyCollection<string> Filters,

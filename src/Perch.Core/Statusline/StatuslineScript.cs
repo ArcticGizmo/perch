@@ -449,18 +449,29 @@ internal static class StatuslineScript
         // A repo's own config can name commands that `git diff` runs: core.fsmonitor, a filter driver that
         // .gitattributes selects, an external diff, textconv. So (like Perch's GitRunner): fsmonitor off, no
         // external diff or textconv, and every filter driver the repo's OWN config defines blanked. The user's
-        // global/system drivers (git-lfs) keep working. `git config` itself runs nothing.
+        // global/system drivers (git-lfs) keep working, as does a repo-local git-lfs made only of the stock
+        // commands `git lfs install --local` writes. `git config` itself runs nothing.
+        const STOCK_LFS = new Set(['clean\ngit-lfs clean -- %f', 'smudge\ngit-lfs smudge -- %f',
+          'smudge\ngit-lfs smudge --skip -- %f', 'process\ngit-lfs filter-process',
+          'process\ngit-lfs filter-process --skip', 'required\ntrue', 'required\nfalse']);
         function gitHardening(git, opt) {
           const out = ['-c', 'core.fsmonitor=false'];
           try {
             const parts = execFileSync(git, ['config', '--show-scope', '-z', '--get-regexp', '^filter\\.'], opt).split('\0');
+            const blank = new Set();
             for (let i = 0; i + 1 < parts.length; i += 2) {
               if (parts[i] !== 'local' && parts[i] !== 'worktree') continue;
-              const key = parts[i + 1].split('\n')[0];
-              const name = key.slice('filter.'.length, key.lastIndexOf('.'));
+              const nl = parts[i + 1].indexOf('\n');
+              const key = nl < 0 ? parts[i + 1] : parts[i + 1].slice(0, nl);
+              const value = nl < 0 ? '' : parts[i + 1].slice(nl + 1);
+              const dot = key.lastIndexOf('.');
+              const name = key.slice('filter.'.length, dot);
               if (!key.startsWith('filter.') || !name) continue;
-              for (const v of ['clean=', 'smudge=', 'process=', 'required=false']) out.push('-c', 'filter.' + name + '.' + v);
+              if (name === 'lfs' && STOCK_LFS.has(key.slice(dot + 1).toLowerCase() + '\n' + value)) continue;
+              blank.add(name);
             }
+            for (const name of blank)
+              for (const v of ['clean=', 'smudge=', 'process=', 'required=false']) out.push('-c', 'filter.' + name + '.' + v);
           } catch {}   // exit 1 = no filter drivers at all
           return out;
         }

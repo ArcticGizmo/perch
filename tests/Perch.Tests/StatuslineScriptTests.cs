@@ -389,6 +389,42 @@ public sealed class StatuslineScriptTests
         }
     }
 
+    // Dogfood regression: a repo-local stock git-lfs (`git lfs install --local`) must keep working, or every stat-dirty
+    // LFS file counts as an unstaged change (the pointer in the index against the real content).
+    [Fact]
+    public void Generated_script_keeps_a_repo_local_git_lfs_working()
+    {
+        var node = FindNode();
+        var git = ExecutableResolver.Find("git");
+        if (node is null || git is null || ExecutableResolver.Find("git-lfs") is null) return;   // needs all three
+
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-lfs-" + Guid.NewGuid().ToString("N"));
+        var repo = Directory.CreateDirectory(Path.Combine(dir, "repo")).FullName;
+        try
+        {
+            RunGit(git, repo, "init", "-q");
+            RunGit(git, repo, "config", "user.email", "t@example.com");
+            RunGit(git, repo, "config", "user.name", "t");
+            RunGit(git, repo, "config", "commit.gpgsign", "false");
+            RunGit(git, repo, "lfs", "install", "--local");
+            File.WriteAllText(Path.Combine(repo, ".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n");
+            File.WriteAllText(Path.Combine(repo, "data.bin"), "payload\n");
+            RunGit(git, repo, "add", "-A");
+            RunGit(git, repo, "commit", "-q", "-m", "init");
+            File.SetLastWriteTimeUtc(Path.Combine(repo, "data.bin"), new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, StatuslineScript.Generate(
+                new StatuslineProfile { Name = "t", Template = "S{{git.staged}}U{{git.unstaged}}" }, devMarker: false));
+
+            Assert.Equal("S0U0", RunNode(node, scriptPath, System.Text.Json.JsonSerializer.Serialize(new { cwd = repo })).Trim());
+        }
+        finally
+        {
+            DeleteTree(dir);
+        }
+    }
+
     // git marks its object files read-only, which makes a plain recursive delete fail and leave the temp repo behind.
     private static void DeleteTree(string dir)
     {

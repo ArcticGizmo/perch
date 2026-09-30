@@ -471,9 +471,13 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
   - A statusline end-to-end test does the same under node: the control fires, and the script counts `S0U1` with no marker.
 
   With the hardening switched off (GitRunner passing args through, the script's old call), both end-to-end tests fail.
-- [ ] Dogfood: the git-stats glyph, the changed-files panel with an untracked file, the review window's diffs, stage/commit from the Tree window, and a statusline with git counts, all in a normal repo and one that uses git-lfs.
+- [x] **Found in dogfood: a repo-local git-lfs.** Git for Windows puts git-lfs in *system* config, which was never blanked, so the result there is unchanged. But `git lfs install --local` writes `filter.lfs.*` into the repo's own config. Blanking that made every stat-dirty LFS file read as ` M`, and its diff showed the pointer text against the real content. The statusline counts had the same problem.
+  - Fix: a repo-local driver named exactly `lfs` is left alone when every entry is one of the stock values `git lfs install --local` writes. Those are `git-lfs clean -- %f`, `git-lfs smudge [--skip] -- %f`, `git-lfs filter-process [--skip]` and `required=true|false`. It runs the same `git-lfs` a system install would, so the exposure is no greater than before. If any single entry is anything else, the whole driver is blanked as before.
+  - The fix covers both `GitRunner.ParseConfigList` and the statusline's `gitHardening()`.
+  - Tests (3): a parser unit, where the stock form and the `--skip` form are kept, while one hostile entry, a hostile duplicate, `LFS` or the stock commands under another name are blanked. Then two end-to-end runs, a `GitRepoService` status/numstat and the statusline (`S0U0`), each in a real `git lfs install --local` repo with a stat-dirty LFS file. The GitRunner run includes a blanked-filter control that shows the file as modified. With the exemption switched off, all three tests fail.
+- [ ] Dogfood: the git-stats glyph, the changed-files panel with an untracked file, the review window's diffs, stage/commit from the Tree window, and a statusline with git counts, all in a normal repo and one that uses git-lfs. *(The git-lfs cases are checked from the command line, for both system-scope and repo-local lfs. The UI walk-through is still owed.)*
 
-**Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1666 with 1 skipped.
+**Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1666 with 1 skipped. After the lfs fix: 1711 passed, 1 skipped.
 
 **Landed:** commit `c8557d9`: `GitRunner`, plus `GitRepoService`, `GitStatsService`, `MarkdownProjectScan`, `ProjectFileScan`, `PrStatusService` and `StatuslineScript`.
 

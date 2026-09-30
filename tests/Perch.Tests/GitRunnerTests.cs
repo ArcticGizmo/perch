@@ -89,6 +89,34 @@ public sealed class GitRunnerTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 
+    [Fact]
+    public void A_repo_local_stock_git_lfs_is_left_alone_but_any_other_value_blanks_it()
+    {
+        var dir = Directory.CreateTempSubdirectory("perch-gitcfg-").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ".git"));
+            File.WriteAllText(Path.Combine(dir, ".git", "config"), "[core]\n");
+            string Lfs(string name, string smudge = "git-lfs smudge -- %f", string process = "git-lfs filter-process") =>
+                Entry("local", "file:.git/config", $"filter.{name}.clean", "git-lfs clean -- %f") +
+                Entry("local", "file:.git/config", $"filter.{name}.smudge", smudge) +
+                Entry("local", "file:.git/config", $"filter.{name}.process", process) +
+                Entry("local", "file:.git/config", $"filter.{name}.required", "true");
+
+            // What `git lfs install --local` writes (and its --skip-smudge form).
+            Assert.Empty(GitRunner.ParseConfigList(Lfs("lfs"), dir).Filters);
+            Assert.Empty(GitRunner.ParseConfigList(Lfs("lfs", "git-lfs smudge --skip -- %f", "git-lfs filter-process --skip"), dir).Filters);
+
+            // One non-stock entry, or the stock commands under another name, and the driver is blanked.
+            Assert.Equal(["lfs"], GitRunner.ParseConfigList(Lfs("lfs", process: "sh -c 'echo pwned'"), dir).Filters);
+            Assert.Equal(["lfs"], GitRunner.ParseConfigList(
+                Lfs("lfs") + Entry("local", "file:.git/config", "filter.lfs.process", "git-lfs filter-process; calc"), dir).Filters);
+            Assert.Equal(["LFS"], GitRunner.ParseConfigList(Lfs("LFS"), dir).Filters);
+            Assert.Equal(["evil"], GitRunner.ParseConfigList(Lfs("evil"), dir).Filters);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
     [Theory]
     [InlineData("local", "include.path", "../extra.cfg")]
     [InlineData("local", "includeIf.gitdir:~/x/.path", "y")]
@@ -170,6 +198,45 @@ public sealed class GitRunnerTests
             Assert.Equal("1\t0\ta.txt", numstat.Stdout.Trim());
             Assert.Contains(stats, s => s.Path == "new.txt" && s.Untracked && s.Added == 3);
             Assert.Contains("new.txt", files.RelativePaths);
+        }
+        finally
+        {
+            foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+                try { File.SetAttributes(f, FileAttributes.Normal); } catch { }
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    // Dogfood regression: with git-lfs installed in the repo's own config (`git lfs install --local`), blanking the
+    // lfs filter made every stat-dirty LFS file read as modified (the pointer in the index against the real content).
+    [Fact]
+    public void A_repo_local_git_lfs_install_still_reads_its_files_as_clean()
+    {
+        var git = ExecutableResolver.Find("git");
+        if (git is null || ExecutableResolver.Find("git-lfs") is null) return;   // needs git and git-lfs on the host
+
+        var dir = Directory.CreateTempSubdirectory("perch-gitlfs-").FullName;
+        try
+        {
+            Git(git, dir, "init", "-q");
+            Git(git, dir, "config", "user.email", "t@example.com");
+            Git(git, dir, "config", "user.name", "t");
+            Git(git, dir, "config", "commit.gpgsign", "false");
+            Git(git, dir, "lfs", "install", "--local");
+            File.WriteAllText(Path.Combine(dir, ".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n");
+            File.WriteAllText(Path.Combine(dir, "data.bin"), "payload\n");
+            Git(git, dir, "add", "-A");
+            Git(git, dir, "commit", "-q", "-m", "init");
+            File.SetLastWriteTimeUtc(Path.Combine(dir, "data.bin"), new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+            // Control: with the lfs filter blanked (the old behaviour) the untouched file reads as modified.
+            var blanked = GitRunner.Run(dir, 10_000, "-c", "filter.lfs.clean=", "-c", "filter.lfs.process=",
+                "-c", "filter.lfs.required=false", "--no-optional-locks", "status", "--porcelain");
+            Assert.Contains("data.bin", blanked.Stdout);
+
+            var status = new GitRepoService().GetStatus(dir);
+            Assert.DoesNotContain(status!.Value.Changes, c => c.Path == "data.bin");
+            Assert.Equal("", GitRunner.Run(dir, 10_000, "--no-optional-locks", "diff", "--numstat").Stdout.Trim());
         }
         finally
         {
