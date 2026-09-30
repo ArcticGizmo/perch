@@ -260,7 +260,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 
 **Verify.** Done locally on 2026-09-30: `supabase test db` 158/158 across five files; `dotnet build perch.slnx` clean; the .NET suite passes 1647 with 1 skipped.
 
-**Landed:** migration `20260930130000_block_suspend_coverage.sql`, plus `SupabaseSocialClient.GetFeedAsync` and `FakeSocialClient.GetFriendsAsync`.
+**Landed:** commit `6d80e21`: migration `20260930130000_block_suspend_coverage.sql`, plus `SupabaseSocialClient.GetFeedAsync` and `FakeSocialClient.GetFriendsAsync`.
 
 ---
 
