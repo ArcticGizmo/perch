@@ -224,7 +224,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 
 **Verify.** Done locally on 2026-09-30: `supabase test db` 132/132 across all four files; `dotnet build perch.slnx` clean; the .NET suite passes 1644 with 1 skipped.
 
-**Landed:** migration `20260930120000_draw_state_checks.sql`, plus `DrawStrokeCodec`, `DrawWords`, `DrawGuessing`, `SupabaseSocialClient.Draw.cs` and `FakeSocialClient.Draw.cs`.
+**Landed:** commit `d05b39a`: migration `20260930120000_draw_state_checks.sql`, plus `DrawStrokeCodec`, `DrawWords`, `DrawGuessing`, `SupabaseSocialClient.Draw.cs` and `FakeSocialClient.Draw.cs`.
 
 <a id="cp6"></a>
 ### CP6 — Block/suspension coverage, `find_profile` throttle, feed query · 🟡 P2 · M · ⬜
