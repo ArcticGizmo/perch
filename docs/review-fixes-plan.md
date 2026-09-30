@@ -36,7 +36,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP9](#cp9) | 🟠 P1 | Client | No UNC/remote path probing (NTLM leak + UI hang) | S | ✅ |
 | [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | ✅ (cross-user squat check untested) |
 | [CP11](#cp11) | 🟡 P2 | Client | Hardened shared `GitRunner` | M | 🟦 code + tests done, dogfood owed |
-| [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | 🟦 code + tests done, dogfood owed |
+| [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | ✅ |
 | [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | ⬜ |
 | [CP14](#cp14) | 🟠 P1 | Data safety | Never wipe `.claude.json`; atomic writes everywhere | M | ✅ |
 | [CP15](#cp15) | 🟡 P2 | Privacy | Recording-export redaction gaps | S | ⬜ |
@@ -478,7 +478,7 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 **Landed:** commit `c8557d9`: `GitRunner`, plus `GitRepoService`, `GitStatsService`, `MarkdownProjectScan`, `ProjectFileScan`, `PrStatusService` and `StatuslineScript`.
 
 <a id="cp12"></a>
-### CP12 — cmd-shim metacharacters (VS Code / GitKraken launch) · 🟡 P2 · S · 🟦
+### CP12 — cmd-shim metacharacters (VS Code / GitKraken launch) · 🟡 P2 · S · ✅
 
 **Problem.**
 - `FileRevealer.cs:35-38` (`code` → `code.cmd`) and `GitKrakenLauncher.cs:55-67` (`cmd.exe /c <cli.cmd>`) go through cmd. .NET only quotes arguments that contain whitespace or quotes, so `&`, `|` and `^` pass through. A file named `x&calc&.md` plus "Open in VS Code" runs calc. A benign `C:\work\R&D` breaks the GitKraken launch.
@@ -496,7 +496,7 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
   - The overlay's and daemon list's "Open transcript in VS Code" and the markdown window's "Open in VS Code" now call `IFileRevealer.OpenInEditor` instead of shell-executing `code` themselves.
 - [x] Remove the default-handler fallback, or restrict it to viewer-safe extensions (`.md .txt .json .png …`). *(Done in CP8: the fallback is `IFileRevealer.OpenWithDefault`, gated on `OpenTargets.IsViewerSafeFile`.)*
 - [x] xUnit `CmdShimTests` (12 cases; the planted tools are empty files, and nothing is ever started): a shim runs through cmd with the exact quoted command line; `x&calc&.md`, `R&D`, `|`, `%PATH%`, `!`, `^`, `<>`, a quote and a line break are each refused; a shim on a path holding a metacharacter is refused; a real `.exe` gets an argument list with `&` passed through untouched.
-- [ ] Dogfood: "Open in VS Code" from a file ref, a changed file and the markdown window; "Open transcript in VS Code" from the overlay and the daemon list; "Open in GitKraken" on a repo whose path has a space or `&`. VS Code should open without a console flash.
+- [x] Dogfood: "Open in VS Code" from a file ref, a changed file and the markdown window; "Open transcript in VS Code" from the overlay and the daemon list; "Open in GitKraken" on a repo whose path has a space or `&`. VS Code should open without a console flash. *(User-confirmed on 2026-09-30.)*
 
 **Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1678 with 1 skipped.
 
