@@ -42,13 +42,13 @@ internal sealed class GitKrakenLauncher
     }
 
     // Runs `gitkraken -p <cwd>` with no visible window, then waits (bounded) for the CLI to finish handing the repo
-    // to the GUI. The CLI is a gitkraken.cmd shim; running it through `cmd /c` let cmd parse the repo path, so a
-    // benign `C:\work\R&D` broke the launch (and a crafted name could run a command). CmdShim starts gitkraken.exe
-    // itself with the shim's environment, so cmd never sees the path (review fixes CP12).
+    // to the GUI. The CLI is a gitkraken.cmd shim, which only runs through cmd; the old `cmd /c` left the repo path
+    // unquoted, so a benign `C:\work\R&D` broke the launch (and a crafted name could run a command). CmdShim quotes
+    // every argument (review fixes CP12).
     private static void RunCli(string cli, string cwd)
     {
         var psi = Perch.Data.CmdShim.StartInfo(cli, ["-p", cwd]);
-        if (psi is null) return;   // an unreadable shim and a path cmd can't be trusted with: don't launch
+        if (psi is null) return;   // the path holds a character cmd would still act on (such as %): don't launch
 
         using var p = Process.Start(psi);
         p?.WaitForExit(15_000);

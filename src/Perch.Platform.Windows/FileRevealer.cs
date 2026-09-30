@@ -10,8 +10,8 @@ namespace Perch.Platform.Windows;
 /// single command-line string, so it is passed as a raw argument string, not an argument list). A directory is
 /// opened directly. <see cref="OpenInEditor"/> launches VS Code via the <c>code</c> launcher on PATH
 /// (<c>code -g path:line</c>), falling back to the file's default handler when VS Code isn't installed. The launcher is
-/// a <c>code.cmd</c> shim, so it goes through <see cref="CmdShim"/>, which starts <c>Code.exe</c> itself: cmd never
-/// parses the path (review fixes CP12).
+/// a <c>code.cmd</c> shim, so it goes through <see cref="CmdShim"/>: cmd with the path quoted, or no launch when the
+/// path holds a character cmd would still act on (review fixes CP12).
 /// </summary>
 public sealed class FileRevealer : IFileRevealer
 {
@@ -38,9 +38,10 @@ public sealed class FileRevealer : IFileRevealer
         try
         {
             // `code` is a .cmd shim on PATH, resolved to an absolute path rather than left to ShellExecute, which
-            // would look in the current directory first (review fixes CP7). Shell-executing the shim meant cmd parsed
-            // the path, so a file named `x&calc&.md` ran calc; CmdShim starts Code.exe directly instead, or refuses
-            // (review fixes CP12). Not found or refused → the fallback below.
+            // would look in the current directory first (review fixes CP7). Shell-executing the shim let cmd parse the
+            // unquoted path, so a file named `x&calc&.md` ran calc; CmdShim quotes it, and refuses a name with a
+            // character quoting can't neutralise, such as `%` (review fixes CP12). Not found or refused → the
+            // fallback below.
             var code = ExecutableResolver.Find("code") ?? throw new FileNotFoundException("VS Code isn't on PATH.");
             string[] args = line > 0 ? ["-g", $"{path}:{line}"] : [path];
             var psi = CmdShim.StartInfo(code, args) ?? throw new InvalidOperationException("Unsafe for the code shim.");
