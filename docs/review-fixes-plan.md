@@ -662,6 +662,8 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 
 **Verify.** Done 2026-09-30. All four YAML files parse. The permissions, gates and pins were checked by reading the parsed YAML back. `dotnet tool restore` restores vpk 1.2.0 and `dotnet vpk` runs. `dotnet --version` resolves 10.0.401 through `global.json`, and `dotnet build perch.slnx` is clean. The pipeline files stay ASCII: the diff adds no non-ASCII characters, and `publish-mac.sh`'s two pre-existing em dashes are CP19's. The repo stores `publish-mac.sh` with LF line endings (`git ls-files --eol`).
 
+**Landed:** commit `0c0b18d`: the three workflows, `dependabot.yml`, `.config/dotnet-tools.json`, `global.json`, `publish.bat`, `publish-mac.sh` and the README.
+
 <a id="cp18"></a>
 ### CP18 — Code signing + signature verification · 🟡 P2 · L · ⬜
 
