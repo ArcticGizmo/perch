@@ -508,7 +508,7 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 
 **Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1688 with 1 skipped.
 
-**Landed:** `CmdShim`, plus the Windows `FileRevealer`, `GitKrakenLauncher`, `OverlayCanvas`, `DaemonListWindow` and `MarkdownWindow`.
+**Landed:** commit `cd8dc69`: `CmdShim`, plus the Windows `FileRevealer`, `GitKrakenLauncher`, `OverlayCanvas`, `DaemonListWindow` and `MarkdownWindow`.
 - [x] Remove the default-handler fallback, or restrict it to viewer-safe extensions (`.md .txt .json .png …`). *(Done in CP8: the fallback is `IFileRevealer.OpenWithDefault`, gated on `OpenTargets.IsViewerSafeFile`.)*
 
 <a id="cp13"></a>
