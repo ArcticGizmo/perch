@@ -754,6 +754,8 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 
 **Dogfood owed:** after an install and an uninstall, `reg query HKCU\Environment /v Path` is still `REG_EXPAND_SZ`, with its `%VAR%` entries intact. The registry IO itself has no automated test; the test project is Core-only.
 
+**Landed:** commit `054ef00`.
+
 ---
 
 ## Performance
