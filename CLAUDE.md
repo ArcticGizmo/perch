@@ -61,6 +61,10 @@ set at compile time with `#if WINDOWS`. `Nullable` and `ImplicitUsings` enabled 
 
 ## Testing
 
+CI (`.github/workflows/ci.yml`) runs both suites on every push: on Windows, the whole solution build, the .NET
+suite and the installer tests; on macOS, the `net10.0` head build and the .NET suite. Keep new tests passing on
+both hosts; gate genuinely Windows-only ones with `OperatingSystem.IsWindows()`, as the existing ones do.
+
 Two suites. Run the .NET one with `dotnet test tests/Perch.Tests/Perch.Tests.csproj`, and — after touching
 `install.ps1` — `powershell -NoProfile -File tools\test-install.ps1`, which covers the installer's manifest
 parsing, its cross-host (`5.1`/`7.x`) response decoding, and its download/verify path against a loopback

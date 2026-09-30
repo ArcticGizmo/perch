@@ -45,7 +45,7 @@ if [[ ! -f "$ICNS" ]]; then
     ./tools/gen-icns.sh
 fi
 if [[ ! -f "$DMG_BG" ]]; then
-    echo "$DMG_BG missing — generating it..." >&2
+    echo "$DMG_BG missing - generating it..." >&2
     ./tools/gen-dmg-background.sh
 fi
 
@@ -137,7 +137,7 @@ echo "Styling DMG window ..."
 dev="$(hdiutil attach -readwrite -noverify -noautoopen "$rw" | grep -Eo '/dev/disk[0-9]+' | head -1)"
 vol="/Volumes/$VOL"
 
-# Best-effort Finder styling: on a headless/locked session the AppleScript can fail — the DMG is still a
+# Best-effort Finder styling: on a headless/locked session the AppleScript can fail - the DMG is still a
 # functional drag-install image (app + Applications alias + background folder), so warn and carry on rather
 # than sinking the whole release.
 if osascript <<APPLESCRIPT

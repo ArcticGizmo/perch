@@ -43,7 +43,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP16](#cp16) | ⚪ P3 | Client | Small security hardening batch | M | 🟦 code + tests done, dogfood owed (incl. sign-in on the new OAuth ports) |
 | [CP17](#cp17) | 🟡 P2 | Supply chain | CI permissions, pinning, deploy-secret scoping | S | 🟦 done in code; env protection (settings) + first live runs owed; lock files ⏸ |
 | [CP18](#cp18) | 🟡 P2 | Supply chain | Code signing + signature verification in `install.ps1` | L | ⬜ |
-| [CP19](#cp19) | ⚪ P3 | Build | Build/installer hygiene (em dashes, PATH type, versioning) | S | ⬜ |
+| [CP19](#cp19) | ⚪ P3 | Build | Build/installer hygiene (em dashes, PATH type, versioning) | S | 🟦 em dashes fixed |
 | [CP20](#cp20) | 🟠 P1 | Performance | Session scan off the UI thread + incremental transcripts | L | ✅ |
 | [CP21](#cp21) | 🟠 P1 | Performance | All-time stats: cache history, don't re-parse it | M | ✅ |
 | [CP22](#cp22) | 🟠 P1 | Performance | Streaming chat O(n²) + SessionThreadView leak | M | ✅ |
@@ -734,7 +734,7 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 <a id="cp19"></a>
 ### CP19 — Build/installer hygiene · ⚪ P3 · S · ⬜
 
-- [ ] `publish-mac.sh:48,140` contains em dashes, which fails `tools/test-install.ps1`'s ASCII check. **The test currently fails.** Replace them with plain hyphens.
+- [x] `publish-mac.sh:48,140` contains em dashes, which fails `tools/test-install.ps1`'s ASCII check. **The test currently fails.** Replace them with plain hyphens. *(Done 2026-09-30, alongside the new CI workflow, which runs `test-install.ps1` on every push.)*
 - [ ] `test-install.ps1`: build the ASCII file list from a glob so it covers `db-migrate.yml`, `functions-deploy.yml`, `tools/gen-dmg-background.sh` and `tools/focus.ps1`. Replace `Invoke-Expression` (line 21) with dot-sourcing a temp copy.
 - [ ] `PathInstaller.cs:17-34`: read and write `HKCU\Environment` with `DoNotExpandEnvironmentNames`, keep `REG_EXPAND_SZ`, and write only when the value changed. Today every install or uninstall permanently expands `%VAR%` entries in the user's PATH.
 - [ ] `publish.bat`: pass `-p:Version=%VERSION%` to both publishes, and hash only this version's files, not stale nupkgs. `release.yml`: pass `-p:Version` to the Windows hook build.
