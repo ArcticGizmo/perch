@@ -218,6 +218,37 @@ internal readonly record struct RealtimePost(Guid Id, Guid Author, string Body, 
 /// realtime disabled on the project — this just keeps retrying quietly; nothing surfaces to the user, and the
 /// caller's polling cadence still updates. Realtime only makes the next poll fire <em>sooner</em>.</para>
 /// </summary>
+/// <summary>
+/// Reassembles a WebSocket message from its fragments (review fixes CP16). The bytes are gathered and decoded
+/// as UTF-8 once, when the message ends; decoding each 16 KB fragment on its own turned a multi-byte character
+/// split across a fragment boundary into two replacement characters (an emoji in a post, say). A message
+/// larger than <see cref="MaxMessageBytes"/> is dropped whole rather than buffered without limit.
+/// </summary>
+internal sealed class FrameAssembler
+{
+    public const int MaxMessageBytes = 1024 * 1024;
+
+    private readonly MemoryStream _bytes = new();
+    private bool _oversized;
+
+    /// <summary>Adds one fragment. Returns the decoded message when <paramref name="endOfMessage"/> completes
+    /// it, or null (more to come, or the message was over the cap).</summary>
+    public string? Add(ReadOnlySpan<byte> fragment, bool endOfMessage)
+    {
+        if (!_oversized)
+        {
+            if (_bytes.Length + fragment.Length > MaxMessageBytes) { _oversized = true; _bytes.SetLength(0); }
+            else _bytes.Write(fragment);
+        }
+        if (!endOfMessage) return null;
+
+        string? message = _oversized ? null : Encoding.UTF8.GetString(_bytes.GetBuffer(), 0, (int)_bytes.Length);
+        _bytes.SetLength(0);
+        _oversized = false;
+        return message;
+    }
+}
+
 internal sealed class SupabaseRealtimeConnection : IDisposable
 {
     private static readonly TimeSpan HeartbeatEvery = TimeSpan.FromSeconds(25);
@@ -262,9 +293,17 @@ internal sealed class SupabaseRealtimeConnection : IDisposable
             if (DateTimeOffset.UtcNow - connectedAt > TimeSpan.FromSeconds(30))
                 backoff = TimeSpan.FromSeconds(2);
 
-            try { await Task.Delay(backoff, ct); } catch (OperationCanceledException) { return; }
+            try { await Task.Delay(Jittered(backoff), ct); } catch (OperationCanceledException) { return; }
             backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, MaxBackoff.Ticks));
         }
+    }
+
+    /// <summary>The backoff with ±25% random jitter (review fixes CP16), so every client dropped by one server
+    /// blip doesn't reconnect in the same instant, and again on every doubling after that.</summary>
+    internal static TimeSpan Jittered(TimeSpan backoff, double? unit = null)
+    {
+        double r = unit ?? Random.Shared.NextDouble();   // [0, 1)
+        return TimeSpan.FromTicks((long)(backoff.Ticks * (0.75 + 0.5 * r)));
     }
 
     private async Task SessionAsync(CancellationToken ct)
@@ -309,7 +348,7 @@ internal sealed class SupabaseRealtimeConnection : IDisposable
     private async Task ReceiveLoop(ClientWebSocket ws, CancellationToken ct)
     {
         var buffer = new byte[16 * 1024];
-        var sb = new StringBuilder();
+        var assembler = new FrameAssembler();
         while (!ct.IsCancellationRequested && ws.State == WebSocketState.Open)
         {
             WebSocketReceiveResult res;
@@ -317,11 +356,8 @@ internal sealed class SupabaseRealtimeConnection : IDisposable
             catch (OperationCanceledException) { return; }
 
             if (res.MessageType == WebSocketMessageType.Close) return;
-            sb.Append(Encoding.UTF8.GetString(buffer, 0, res.Count));
-            if (!res.EndOfMessage) continue;
+            if (assembler.Add(buffer.AsSpan(0, res.Count), res.EndOfMessage) is not { } frame) continue;
 
-            var frame = sb.ToString();
-            sb.Clear();
             bool relevant = _channel.Kind == RealtimeKind.Broadcast
                 ? RealtimeProtocol.IsBroadcast(frame)
                 : RealtimeProtocol.IsChange(frame, _channel.Schema, _channel.Table);

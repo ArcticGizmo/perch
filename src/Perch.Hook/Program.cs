@@ -299,6 +299,21 @@ static string ProfileFolder()
     return dev ? "Perch (Dev)" : "Perch";
 }
 
+// The perch.path breadcrumb. HookInstaller writes it into the same bin dir it copies this binary to, so look beside
+// this binary first — that dir moved to %LOCALAPPDATA% on Windows (review fixes CP16) — then at the pre-CP16
+// location under the roaming profile dir.
+static string MarkerPath()
+{
+    try
+    {
+        string own = Path.Combine(AppContext.BaseDirectory, "perch.path");
+        if (File.Exists(own)) return own;
+    }
+    catch { /* fall through */ }
+    string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+    return Path.Combine(appData, ProfileFolder(), "bin", "perch.path");
+}
+
 // Self-heal: the installer records the tray executable's path in <bin>/perch.path (HookInstaller). If
 // that file is gone, Perch was uninstalled without its cleanup running — strip our managed hook block so
 // settings.json doesn't keep pointing at a dead binary. Fail-open: no breadcrumb → leave hooks alone.
@@ -306,9 +321,8 @@ static void MaybeSelfHeal()
 {
     try
     {
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         string profile = ProfileFolder();
-        string marker = Path.Combine(appData, profile, "bin", "perch.path");
+        string marker = MarkerPath();
         if (!File.Exists(marker)) return;
 
         string trayPath = File.ReadAllText(marker).Trim();
@@ -318,7 +332,7 @@ static void MaybeSelfHeal()
         // its own (this running binary's path, or the _perch.dev marker) so it never strips release's hooks.
         bool isDev = profile == "Perch (Dev)";
         string ownBin = Environment.ProcessPath
-            ?? Path.Combine(appData, profile, "bin", OperatingSystem.IsWindows() ? "perch-hook.exe" : "perch-hook");
+            ?? Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "perch-hook.exe" : "perch-hook");
         StripManagedHooks(Path.Combine(ResolveClaudeDir(), "settings.json"), isDev, ownBin);
     }
     catch { /* best-effort */ }
@@ -475,8 +489,7 @@ static string? TrayExecutable()
 {
     try
     {
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        string marker = Path.Combine(appData, ProfileFolder(), "bin", "perch.path");
+        string marker = MarkerPath();
         if (File.Exists(marker))
         {
             string recorded = File.ReadAllText(marker).Trim();
@@ -507,8 +520,7 @@ static string? TrayExecutable()
 // app. Returns false (fall through to the PATH launch) if the marker or bundle can't be resolved.
 static bool TryLaunchMacBundle()
 {
-    string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-    string marker = Path.Combine(appData, ProfileFolder(), "bin", "perch.path");
+    string marker = MarkerPath();
     if (!File.Exists(marker)) return false;
 
     string trayPath = File.ReadAllText(marker).Trim(); // …/Perch.app/Contents/MacOS/perch

@@ -308,6 +308,27 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
         Assert.All(ManagedHooks(root), m => Assert.True(m.Dev));
     }
 
+    // CP16: the hook binary moved from the roaming to the local profile dir. A dev instance whose entries lost their
+    // _perch marker only recognises them by path, so HookInstaller strips the OLD path once before reconciling onto
+    // the new one — which must leave exactly one set, at the new path, and release's entries alone.
+    [Fact]
+    public void Dev_move_to_a_new_bin_dir_leaves_one_set_at_the_new_path()
+    {
+        const string roaming = @"C:\Users\me\AppData\Roaming\Perch (Dev)\bin\perch-hook.exe";
+        const string local = @"C:\Users\me\AppData\Local\Perch (Dev)\bin\perch-hook.exe";
+        ClaudeUserSettings.ReconcileHooks(_settings, "/rel/perch-hook", "1.0.0", isDev: false);
+        ClaudeUserSettings.ReconcileHooks(_settings, roaming, "9.9.9", isDev: true);
+        StripPerchMarkers();
+
+        ClaudeUserSettings.RemoveManagedHooks(_settings, true, roaming);   // MigrateFromLegacyBin (dev only)
+        ClaudeUserSettings.ReconcileHooks(_settings, local, "9.9.9", isDev: true);
+
+        var root = Read();
+        Assert.Equal(0, CountCommand(root, roaming));
+        Assert.Equal(Expected.Length, CountCommand(root, local));
+        Assert.Equal(Expected.Length, CountCommand(root, "/rel/perch-hook"));   // release untouched
+    }
+
     [Fact]
     public void Reconcile_PreservesUserHooksAndOtherKeys()
     {

@@ -626,7 +626,7 @@ internal sealed class TranscriptReader
         {
             var result = JsonNode.Parse(line)?["toolUseResult"];
             var url = result?["url"]?.GetValue<string>();
-            if (string.IsNullOrEmpty(url) || !url.Contains("/artifact/"))
+            if (!IsArtifactUrl(url))
                 return;
 
             var title = result?["title"]?.GetValue<string>();
@@ -642,6 +642,20 @@ internal sealed class TranscriptReader
             // Malformed/partial line (transcripts are appended live) — skip it.
         }
     }
+
+    /// <summary>
+    /// True for a hosted Artifact page: an <c>https://claude.ai/…/artifact/…</c> URL (either scheme, see
+    /// <see cref="StepArtifacts"/>). Any tool result can carry a <c>url</c>, and a fetched page or an MCP server
+    /// could put <c>/artifact/</c> in one, so the host is checked too (review fixes CP16): only Anthropic's own
+    /// artifact pages become the session's clickable Artifact links.
+    /// </summary>
+    internal static bool IsArtifactUrl([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u)
+        && u.Scheme == Uri.UriSchemeHttps
+        && u.Host.Equals("claude.ai", StringComparison.OrdinalIgnoreCase)
+        && u.IsDefaultPort
+        && string.IsNullOrEmpty(u.UserInfo)
+        && u.AbsolutePath.Contains("/artifact/", StringComparison.Ordinal);
 
     private static IReadOnlyList<Artifact> FinishArtifacts(ArtifactsState s) =>
         s.Order.Count == 0 ? [] : s.Order.Select(u => new Artifact(u, s.Titles[u])).ToList();

@@ -20,8 +20,17 @@ namespace Perch.Social;
 /// </summary>
 public sealed partial class SupabaseSocialClient : ISocialClient
 {
-    // Where the refresh token lives (via ISecretStore → DPAPI / Keychain).
-    private const string RefreshTokenKey = "supabase.refresh_token";
+    // Where the refresh token lives (via ISecretStore → DPAPI / Keychain). Stored per origin — the key is
+    // "supabase.refresh_token@https://<host[:port]>" — so a token is only ever sent back to the server that
+    // issued it: a PERCH_SUPABASE_URL / .env.local override pointing somewhere else finds no token and can't
+    // harvest the real one (review fixes CP16). The bare key is the pre-CP16 location, adopted once by the
+    // compiled-in origin (see StoredRefreshToken).
+    private const string LegacyRefreshTokenKey = "supabase.refresh_token";
+
+    internal static string RefreshKeyFor(string url) =>
+        Uri.TryCreate(url?.Trim(), UriKind.Absolute, out var u)
+            ? $"{LegacyRefreshTokenKey}@{u.Scheme}://{u.Authority}".ToLowerInvariant()
+            : $"{LegacyRefreshTokenKey}@invalid";
 
     // A freshly minted GoTrue token can carry an iat/nbf a beat ahead of the node that will validate it
     // (small clock differences between Supabase's own services), so the very next PostgREST call is rejected
@@ -64,11 +73,40 @@ public sealed partial class SupabaseSocialClient : ISocialClient
     private static readonly TimeSpan DriftGrace = TimeSpan.FromSeconds(6);
 
     public SupabaseSocialClient(SupabaseConfig config, ISecretStore secrets, IUrlOpener urls, HttpClient? http = null)
+        : this(config, secrets, urls, http, SupabaseDefaults.Url) { }
+
+    /// <summary>Test seam: <paramref name="compiledUrl"/> stands in for the compiled-in
+    /// <see cref="SupabaseDefaults.Url"/> (the only origin that adopts a pre-CP16 refresh token).</summary>
+    internal SupabaseSocialClient(SupabaseConfig config, ISecretStore secrets, IUrlOpener urls, HttpClient? http, string compiledUrl)
     {
         _config = config;
         _secrets = secrets;
         _urls = urls;
         _http = http ?? new HttpClient();
+        _refreshKey = RefreshKeyFor(config.Url);
+        _adoptsLegacyToken = !string.IsNullOrWhiteSpace(compiledUrl) && RefreshKeyFor(compiledUrl) == _refreshKey;
+    }
+
+    private readonly string _refreshKey;
+    private readonly bool _adoptsLegacyToken;
+
+    // One refresh at a time (review fixes CP16). GoTrue rotates refresh tokens, so two pollers refreshing at once
+    // would redeem the same token twice — and a reused token can get the whole session revoked.
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
+
+    // This origin's stored refresh token. The first time the compiled-in origin looks, it adopts a token left at
+    // the pre-CP16 unkeyed location (every release install signed in before the change); any other origin — an
+    // override — never touches that one, so it can't be sent anywhere else.
+    private string? StoredRefreshToken()
+    {
+        var token = _secrets.Get(_refreshKey);
+        if (token is null && _adoptsLegacyToken && _secrets.Get(LegacyRefreshTokenKey) is { Length: > 0 } legacy)
+        {
+            _secrets.Set(_refreshKey, legacy);
+            _secrets.Delete(LegacyRefreshTokenKey);
+            token = legacy;
+        }
+        return token;
     }
 
     public AuthState Current
@@ -191,13 +229,20 @@ public sealed partial class SupabaseSocialClient : ISocialClient
     /// state. Call at startup; never throws — a stale/rejected token just leaves you signed out.</summary>
     public async Task<AuthState> TryRestoreAsync(CancellationToken ct = default)
     {
-        var refresh = _secrets.Get(RefreshTokenKey);
-        if (string.IsNullOrEmpty(refresh) || !_config.IsConfigured)
+        if (!_config.IsConfigured)
+            return Current;
+        var refresh = StoredRefreshToken();
+        if (string.IsNullOrEmpty(refresh))
             return Current;
         try
         {
-            var token = await ExchangeAsync("refresh_token", new { refresh_token = refresh }, ct);
-            ApplySession(token);
+            await _refreshGate.WaitAsync(ct);
+            try
+            {
+                var token = await ExchangeAsync("refresh_token", new { refresh_token = refresh }, ct);
+                ApplySession(token);
+            }
+            finally { _refreshGate.Release(); }
             Raise();
             // A profile-load failure here is best-effort: the session is valid; the profile can load later.
             // Only a rejected *refresh* (below) means the stored token is dead and should be forgotten.
@@ -206,7 +251,7 @@ public sealed partial class SupabaseSocialClient : ISocialClient
         }
         catch (SocialException)
         {
-            _secrets.Delete(RefreshTokenKey);   // the refresh token was rejected — forget it
+            _secrets.Delete(_refreshKey);   // the refresh token was rejected — forget it
             return Current;
         }
     }
@@ -233,7 +278,7 @@ public sealed partial class SupabaseSocialClient : ISocialClient
             _inboxSenders = new Dictionary<Guid, string>();
             _inboxSendersRefreshedAt = default;
         }
-        _secrets.Delete(RefreshTokenKey);
+        _secrets.Delete(_refreshKey);
         AuthChanged?.Invoke(AuthState.SignedOut);
     }
 
@@ -786,21 +831,31 @@ public sealed partial class SupabaseSocialClient : ISocialClient
             _signedIn = true;
         }
         if (!string.IsNullOrEmpty(token.RefreshToken))
-            _secrets.Set(RefreshTokenKey, token.RefreshToken);
+            _secrets.Set(_refreshKey, token.RefreshToken);
     }
 
-    // Returns a non-expired access token, refreshing via the stored refresh token if needed.
+    // Returns a non-expired access token, refreshing via the stored refresh token if needed. Single-flight:
+    // callers that find the token expired queue on the gate, and all but the first find it fresh again.
     private async Task<string> ValidAccessTokenAsync(CancellationToken ct)
     {
-        lock (_gate)
+        if (CurrentAccessToken() is { } fresh) return fresh;
+        await _refreshGate.WaitAsync(ct);
+        try
         {
-            if (_accessToken is { } tok && DateTimeOffset.UtcNow < _accessExpiry) return tok;
+            if (CurrentAccessToken() is { } refreshed) return refreshed;   // another caller just refreshed
+            var refresh = StoredRefreshToken()
+                ?? throw new SocialException("You're signed out. Sign in again.");
+            var token = await ExchangeAsync("refresh_token", new { refresh_token = refresh }, ct);
+            ApplySession(token);
+            return token.AccessToken!;
         }
-        var refresh = _secrets.Get(RefreshTokenKey)
-            ?? throw new SocialException("You're signed out. Sign in again.");
-        var token = await ExchangeAsync("refresh_token", new { refresh_token = refresh }, ct);
-        ApplySession(token);
-        return _accessToken!;
+        finally { _refreshGate.Release(); }
+    }
+
+    private string? CurrentAccessToken()
+    {
+        lock (_gate)
+            return _accessToken is { } tok && DateTimeOffset.UtcNow < _accessExpiry ? tok : null;
     }
 
     private async Task LoadMeAsync(CancellationToken ct)

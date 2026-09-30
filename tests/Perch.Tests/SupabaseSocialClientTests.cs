@@ -18,9 +18,15 @@ public sealed class SupabaseSocialClientTests
     private const string Other = "22222222-2222-4222-8222-222222222222";
     private const string Other2 = "33333333-3333-4333-8333-333333333333";
 
-    private static SupabaseSocialClient NewClient(StubHandler handler, ISecretStore secrets) =>
-        new(new SupabaseConfig("https://demo.supabase.co", "sb_publishable_test"),
-            secrets, new NoopUrlOpener(), new HttpClient(handler));
+    // The demo origin plays the compiled-in project, so a token seeded at the pre-CP16 unkeyed location
+    // ("supabase.refresh_token") is adopted into its per-origin key — the upgrade path every release takes.
+    private const string DemoUrl = "https://demo.supabase.co";
+    private const string LegacyKey = "supabase.refresh_token";
+    private const string DemoKey = "supabase.refresh_token@https://demo.supabase.co";
+
+    private static SupabaseSocialClient NewClient(HttpMessageHandler handler, ISecretStore secrets, string url = DemoUrl) =>
+        new(new SupabaseConfig(url, "sb_publishable_test"),
+            secrets, new NoopUrlOpener(), new HttpClient(handler), compiledUrl: DemoUrl);
 
     private static string TokenJson() =>
         ("""{"access_token":"JWT","refresh_token":"rt2","expires_in":3600,"user":{"id":"UID"}}""")
@@ -65,7 +71,56 @@ public sealed class SupabaseSocialClientTests
 
         Assert.True(state.SignedIn);
         Assert.Equal("ada", state.Me?.Handle);
-        Assert.Equal("rt2", secrets.Get("supabase.refresh_token"));   // rotated refresh token persisted
+        Assert.Equal("rt2", secrets.Get(DemoKey));   // rotated refresh token persisted, under this origin's key
+        Assert.Null(secrets.Get(LegacyKey));         // the pre-CP16 location was adopted and cleared
+    }
+
+    // CP16: a config override (PERCH_SUPABASE_URL / .env.local) pointing at another server must never be handed
+    // the real project's refresh token — neither the per-origin one nor a not-yet-adopted legacy one.
+    [Fact]
+    public async Task An_overridden_origin_never_sends_another_origins_refresh_token()
+    {
+        var secrets = new InMemorySecretStore();
+        secrets.Set(LegacyKey, "real-legacy");
+        secrets.Set(DemoKey, "real-keyed");
+        var sent = new List<string>();
+        var handler = new StubHandler(req =>
+        {
+            sent.Add(req.RequestUri!.ToString());
+            return (HttpStatusCode.OK, TokenJson());
+        });
+
+        var state = await NewClient(handler, secrets, url: "https://attacker.example").TryRestoreAsync();
+
+        Assert.False(state.SignedIn);
+        Assert.Empty(sent);                                   // nothing went to the other server at all
+        Assert.Equal("real-legacy", secrets.Get(LegacyKey));  // and the real tokens are untouched
+        Assert.Equal("real-keyed", secrets.Get(DemoKey));
+    }
+
+    // CP16: concurrent callers that find the access token expired share one refresh. GoTrue rotates refresh
+    // tokens, so redeeming the same one twice can revoke the session.
+    [Fact]
+    public async Task Concurrent_callers_share_one_token_refresh()
+    {
+        var secrets = new InMemorySecretStore();
+        secrets.Set(DemoKey, "rt1");
+        int refreshes = 0;
+        var handler = new SlowHandler(async req =>
+        {
+            if (req.RequestUri!.AbsolutePath == "/auth/v1/token")
+            {
+                Interlocked.Increment(ref refreshes);
+                await Task.Delay(150);   // long enough that an unguarded second caller would start its own
+                return (HttpStatusCode.OK, TokenJson());
+            }
+            return (HttpStatusCode.OK, "[]");
+        });
+        var client = NewClient(handler, secrets);
+
+        await Task.WhenAll(Enumerable.Range(0, 5).Select(_ => client.FindByHandleAsync("ada")));
+
+        Assert.Equal(1, refreshes);
     }
 
     [Fact]
@@ -131,7 +186,8 @@ public sealed class SupabaseSocialClientTests
         var state = await NewClient(handler, secrets).TryRestoreAsync();
 
         Assert.False(state.SignedIn);
-        Assert.Null(secrets.Get("supabase.refresh_token"));           // forgotten
+        Assert.Null(secrets.Get(DemoKey));           // forgotten
+        Assert.Null(secrets.Get(LegacyKey));
     }
 
     [Fact]
@@ -318,7 +374,7 @@ public sealed class SupabaseSocialClientTests
 
         Assert.True(hit);                                             // the Edge Function was invoked
         Assert.False(client.Current.SignedIn);                       // local session cleared
-        Assert.Null(secrets.Get("supabase.refresh_token"));          // stored token forgotten
+        Assert.Null(secrets.Get(DemoKey));                           // stored token forgotten
     }
 
     [Fact]
@@ -331,7 +387,7 @@ public sealed class SupabaseSocialClientTests
 
         await Assert.ThrowsAsync<SocialException>(() => client.DeleteAccountAsync());
         Assert.True(client.Current.SignedIn);                        // still signed in — nothing cleared
-        Assert.Equal("rt2", secrets.Get("supabase.refresh_token"));  // token retained for a retry
+        Assert.Equal("rt2", secrets.Get(DemoKey));                   // token retained for a retry
     }
 
     [Fact]
@@ -403,6 +459,15 @@ public sealed class SupabaseSocialClientTests
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json"),
             });
+        }
+    }
+
+    private sealed class SlowHandler(Func<HttpRequestMessage, Task<(HttpStatusCode, string)>> responder) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var (code, json) = await responder(request);
+            return new HttpResponseMessage(code) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
         }
     }
 

@@ -17,16 +17,23 @@ public static class DiagnosticLog
         Path.Combine(Path.GetDirectoryName(AppSettings.SettingsFilePath) ?? Path.GetTempPath(), "logs");
 
     /// <summary>Appends a timestamped line to <c>logs/&lt;fileName&gt;</c>.</summary>
-    public static void Append(string fileName, string message)
+    public static void Append(string fileName, string message) =>
+        AppendRaw(fileName, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}  {message}", MaxBytes);
+
+    /// <summary>Appends <paramref name="line"/> as-is to <c>logs/&lt;fileName&gt;</c>, starting the file over once
+    /// it passes <paramref name="maxBytes"/>. <paramref name="fileName"/> is a bare name: anything with a
+    /// directory part is refused, so no caller can steer a log out of the logs folder.</summary>
+    public static void AppendRaw(string fileName, string line, long maxBytes)
     {
         try
         {
+            if (fileName != Path.GetFileName(fileName) || fileName.Length == 0) return;
             var path = Path.Combine(Dir, fileName);
             lock (Gate)
             {
                 Directory.CreateDirectory(Dir);
-                if (File.Exists(path) && new FileInfo(path).Length > MaxBytes) File.Delete(path);
-                File.AppendAllText(path, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}  {message}{Environment.NewLine}", Encoding.UTF8);
+                if (File.Exists(path) && new FileInfo(path).Length > maxBytes) File.Delete(path);
+                File.AppendAllText(path, line + Environment.NewLine, Encoding.UTF8);
             }
         }
         catch { /* diagnostics must never break the caller */ }

@@ -276,6 +276,23 @@ public class TranscriptReaderTests
         Assert.Contains("/artifact/NewScheme22CharIdAbcd", artifacts[1].Url);
     }
 
+    // CP16: any tool result can carry a url, so "/artifact/" alone isn't enough — only claude.ai's own pages count.
+    [Theory]
+    [InlineData("https://claude.ai/artifact/NewScheme22CharIdAbcd", true)]
+    [InlineData("https://claude.ai/code/artifact/abc123", true)]
+    [InlineData("https://CLAUDE.AI/artifact/x", true)]
+    [InlineData("http://claude.ai/artifact/x", false)]              // not https
+    [InlineData("https://claude.ai.evil.example/artifact/x", false)]
+    [InlineData("https://evil.example/claude.ai/artifact/x", false)]
+    [InlineData("https://claude.ai@evil.example/artifact/x", false)]  // userinfo trick: the host is evil.example
+    [InlineData("https://claude.ai:8443/artifact/x", false)]
+    [InlineData("https://claude.ai/chat/x?next=/artifact/y", false)] // "/artifact/" only in the query
+    [InlineData("https://claude.ai/settings", false)]
+    [InlineData("claude.ai/artifact/x", false)]                     // not absolute
+    [InlineData(null, false)]
+    public void Only_claude_ai_artifact_pages_count_as_artifacts(string? url, bool expected) =>
+        Assert.Equal(expected, TranscriptReader.IsArtifactUrl(url));
+
     [Fact]
     public void GetArtifacts_EmptyWhenNonePublished()
     {

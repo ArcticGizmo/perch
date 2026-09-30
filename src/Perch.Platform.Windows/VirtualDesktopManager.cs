@@ -1,5 +1,5 @@
 using System.Runtime.InteropServices;
-using System.Text;
+using Perch.Data;
 using Perch.Platform;
 
 namespace Perch.Platform.Windows;
@@ -17,7 +17,8 @@ namespace Perch.Platform.Windows;
 /// per-desktop window, else the first enumerated top-level window the shell reports as on the current
 /// desktop. This sidesteps the version-unstable <c>IVirtualDesktopManagerInternal</c> entirely.
 /// </para>
-/// Set <c>PERCH_VDM_DEBUG=1</c> to append a line per call to <c>%TEMP%\perch-vdm.log</c>.
+/// Set <c>PERCH_VDM_DEBUG=1</c> to append a line per call to <c>logs\vdm.log</c> in Perch's settings folder
+/// (see <c>DebugSwitches</c>).
 /// </summary>
 public sealed class VirtualDesktopManager : IVirtualDesktopManager
 {
@@ -107,13 +108,8 @@ public sealed class VirtualDesktopManager : IVirtualDesktopManager
     // Opt-in, so it's inert in normal runs. Returns `result` so call sites read as one expression.
     private static bool Log(string message, bool result)
     {
-        if (Environment.GetEnvironmentVariable("PERCH_VDM_DEBUG") is not "1") return result;
-        try
-        {
-            var line = $"{DateTime.Now:HH:mm:ss.fff} [{(result ? "moved" : "noop ")}] {message}{Environment.NewLine}";
-            File.AppendAllText(Path.Combine(Path.GetTempPath(), "perch-vdm.log"), line, Encoding.UTF8);
-        }
-        catch { /* diagnostics must never affect behaviour */ }
+        if (!DebugSwitches.VdmDebugOn) return result;
+        DiagnosticLog.Append(DebugSwitches.VdmLogFile, $"[{(result ? "moved" : "noop ")}] {message}");   // never throws
         return result;
     }
 

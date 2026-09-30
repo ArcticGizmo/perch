@@ -262,6 +262,33 @@ public sealed class StatuslineScriptTests
         }
     }
 
+    // CP16: placeholders inside the template or the profile name are data, not further substitution sites. The old
+    // chained Replace re-scanned substituted text, so "@@NAME@@" in a template had the name's JSON literal (quotes
+    // and all) spliced into the template's string literal, breaking out of it.
+    [Theory]
+    [InlineData("a@@NAME@@b@@PERCHSETTINGS@@c@@DEV@@d@@TEMPLATE@@e", "t")]
+    [InlineData("plain", "x@@TEMPLATE@@\"; process.exit(7); //")]
+    public void Placeholders_in_the_template_or_name_are_left_as_text(string template, string name)
+    {
+        var script = StatuslineScript.Generate(new StatuslineProfile { Name = name, Template = template }, devMarker: false);
+        Assert.Contains(System.Text.Json.JsonSerializer.Serialize(template), script);   // the literal, verbatim
+
+        var node = FindNode();
+        if (node is null) return;
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-inject-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, script);
+            Assert.Equal(template, RunNode(node, scriptPath, """{"cwd":"/tmp/nowhere"}""").Trim());
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     // CP7 end-to-end: a repo that ships its own git.exe must not have it picked up by the statusline. Node on Windows
     // looks in the spawn's cwd before PATH, so the old `execFileSync('git', …, {cwd})` resolved to the planted file.
     // The plant is an EMPTY file — nothing is ever executed from it; it only has to exist to win (or not) the lookup.

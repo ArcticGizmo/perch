@@ -40,7 +40,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | 🟦 code + tests done, dogfood owed |
 | [CP14](#cp14) | 🟠 P1 | Data safety | Never wipe `.claude.json`; atomic writes everywhere | M | ✅ |
 | [CP15](#cp15) | 🟡 P2 | Privacy | Recording-export redaction gaps | S | ✅ |
-| [CP16](#cp16) | ⚪ P3 | Client | Small security hardening batch | M | ⬜ |
+| [CP16](#cp16) | ⚪ P3 | Client | Small security hardening batch | M | 🟦 code + tests done, dogfood owed; OAuth port-range issue found |
 | [CP17](#cp17) | 🟡 P2 | Supply chain | CI permissions, pinning, deploy-secret scoping | S | 🟦 done in code; env protection (settings) + first live runs owed; lock files ⏸ |
 | [CP18](#cp18) | 🟡 P2 | Supply chain | Code signing + signature verification in `install.ps1` | L | ⬜ |
 | [CP19](#cp19) | ⚪ P3 | Build | Build/installer hygiene (em dashes, PATH type, versioning) | S | ⬜ |
@@ -615,17 +615,54 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 **Landed:** commit `601107c`: `TranscriptRedactor`, `RecordingExporter`.
 
 <a id="cp16"></a>
-### CP16 — Small security hardening batch · ⚪ P3 · M · ⬜
+### CP16 — Small security hardening batch · ⚪ P3 · M · 🟦
 
-- [ ] **Statusline template injection** (`StatuslineScript.cs:88-96`). The chained `.Replace` substitutes `@@NAME@@` inside the already-substituted template, which breaks out of the JS string literal. Do a single-pass substitution with the template last, and add an xUnit with `@@NAME@@` in the template.
-- [ ] **Loopback OAuth listener** (`LoopbackListener.cs:51-67`). Loop accepting until you get `GET /callback` with a matching random `state`, ignoring everything else. Add `state` to the auth URL.
-- [ ] **Supabase config override** (`SupabaseConfig.cs:29-47`, `DotEnv.cs`). In release builds, ignore `PERCH_SUPABASE_URL` and ancestor `.env.local` files unless a dev flag is set, and pin the refresh token to the compiled-in origin.
-- [ ] **Token refresh single-flight.** `SemaphoreSlim` around refresh (`SupabaseSocialClient.cs:187,760`).
-- [ ] **Realtime reconnect.** Add jitter to the backoff, and decode UTF-8 once per whole message rather than per fragment (`SupabaseRealtime.cs:241-263,315`).
-- [ ] **`PERCH_SESSION_LOG`** (`ClaudeSessionController.cs:127`). Show a visible warning when it's active, write only under the per-user app-data folder, and cap its size. Do the same for `PERCH_VDM_DEBUG`.
-- [ ] **Login Run key** (`App.axaml.cs:562`, `LoginItem.cs:27`). Register only when `InstallChannel` is `Setup`, so portable or dev copies don't hijack it.
-- [ ] **Hook exe location.** Move the hook exe out of Roaming `%APPDATA%\Perch\bin` to `%LocalAppData%`. That needs a migration of the hook paths in settings.json.
-- [ ] **Artifact detection.** `TranscriptReader.cs:576-583`: host-check `toolUseResult.url` as `claude.ai` before treating it as an artifact.
+- [x] **Statusline template injection** (`StatuslineScript.cs:88-96`). The chained `.Replace` substitutes `@@NAME@@` inside the already-substituted template, which breaks out of the JS string literal.
+  - *Done:* `Generate` now does one regex pass over the body with a placeholder → value map, so substituted text is never scanned again.
+  - Tests: two cases, `@@NAME@@`/`@@PERCHSETTINGS@@`/`@@DEV@@`/`@@TEMPLATE@@` inside the template and a hostile profile name. The generated script contains the template's JSON literal verbatim, and under node it prints the template text unchanged.
+- [x] **Loopback OAuth listener** (`LoopbackListener.cs:51-67`). The plan said: "Loop accepting until you get `GET /callback` with a matching random `state`, ignoring everything else. Add `state` to the auth URL."
+  - **Changed from the plan (user decision):** no `state`. GoTrue runs its own `state` with GitHub and doesn't echo a client one back to `redirect_to`. The equivalent, a per-sign-in nonce in the redirect path, needs the Supabase Redirect URLs allowlist widened to a wildcard first, so it was declined.
+  - *Done:*
+    - The listener keeps accepting until a connection is `GET /callback` with a non-empty `code` or `error`. Everything else (a favicon, a port scan, a page poking 127.0.0.1) gets a 404 and the wait goes on.
+    - Each connection has 5s to send its request line, so a silent one can't block the real redirect.
+    - A forged callback that does carry a code still can't sign anyone in, because PKCE binds the code to this sign-in's verifier.
+    - What's left: a local process that wins the race with a bogus `code`, failing that one sign-in.
+  - Tests: `IsCallback` (9 cases), plus an end-to-end run where a stray request is answered 404, a silent client is dropped, and the real callback then completes the wait.
+  - **Found along the way:** see "Loopback port range" below.
+- [x] **Supabase config override** (`SupabaseConfig.cs:29-47`, `DotEnv.cs`). *Done, both halves:*
+  - `Resolve` honours `PERCH_SUPABASE_URL`/`.env.local` only for a dev instance, or a build with no compiled-in project (a fork).
+  - The refresh token is **stored per origin**, under the key `supabase.refresh_token@https://<host>`, and only ever read back for that origin. An override pointing elsewhere finds no token, and nothing goes to it. The pin matters because `PERCH_DEV=1` can force dev mode on a release build, and the macOS keychain entry (service `Perch`) is shared between profiles.
+  - Upgrade: the compiled-in origin adopts a token at the old unkeyed key once and clears it, so release users stay signed in. A dev checkout (no compiled-in project) doesn't adopt it, so **a dev instance signs in again once**.
+  - Tests: the release/dev/fork gate. An overridden origin sends no request and leaves both real tokens untouched. The legacy token is adopted into the keyed slot.
+- [x] **Token refresh single-flight** (`SupabaseSocialClient.cs:187,760`). *Done:* a `SemaphoreSlim` around every refresh (restore and `ValidAccessTokenAsync`), re-checking for a fresh token once inside, so queued callers reuse the first caller's refresh. Test: five concurrent calls against a token endpoint slowed to 150ms make exactly one refresh.
+- [x] **Realtime reconnect** (`SupabaseRealtime.cs:241-263,315`). *Done:*
+  - Backoff delays are jittered ±25%.
+  - A new `FrameAssembler` gathers a message's bytes and decodes them once at the end. Decoding each 16 KB fragment separately corrupted a multi-byte character split across a fragment boundary.
+  - **Also added:** messages over 1 MiB are dropped whole instead of buffered without limit.
+  - Tests: a rocket emoji split mid-sequence decodes intact; an oversized message is dropped and the next one still arrives; the jitter bounds.
+- [x] **`PERCH_SESSION_LOG` / `PERCH_VDM_DEBUG`** (`ClaudeSessionController.cs:127`). *Done* (`Perch.Data.DebugSwitches`):
+  - A value only switches a log on: any non-empty value other than `0`/`false`. It's **never used as a path**.
+  - The session stream goes to `logs/session-stream.log`, capped at 32 MB. The VDM log goes to `logs/vdm.log` (1 MB), instead of `%TEMP%`. Both are in Perch's per-user settings folder, via `DiagnosticLog.AppendRaw`, which also refuses any file name with a directory part.
+  - While either is on, the tray tooltip reads "debug logging on" and the tray menu opens with a disabled "⚠ Debug logging on: … — see <logs dir>" item.
+  - Tests: the on/off values (an old-style path value just means on), the warning text, and names with a directory part being refused.
+- [x] **Login Run key** (`App.axaml.cs:562`, `LoginItem.cs:27`). *Done:* `SyncLoginItem` registers only when `InstallChannel` is `Setup`. A portable or dev copy **leaves an existing entry alone** rather than removing it: settings are shared with the install, so removing it would delete the installed Perch's own entry. It still unregisters when the user turns start-at-login off. In a portable copy, choosing "At login" does nothing. The setting doesn't say so yet; that's a small follow-up if wanted.
+- [x] **Hook exe location.** Moved from Roaming `%APPDATA%\Perch[ (Dev)]\bin` to `%LOCALAPPDATA%\Perch[ (Dev)]\bin` on Windows only; Unix is unchanged. *Done:*
+  - The release reconcile rewrites every hook onto the new path, since it recognises its entries by the binary's name.
+  - On the first launch after the move, a dev instance also strips entries that name the old path, before reconciling. Dev entries whose `_perch` marker Claude Code dropped are only recognisable by path.
+  - **7-day grace (user decision):** the old folder stays for a week, stamped at the move, because sessions already running keep calling it until they restart. After that, a later launch deletes it. Uninstall removes both folders.
+  - `perch-hook` finds its `perch.path` breadcrumb beside its own binary first, then at the old location.
+  - Test: the dev move leaves exactly one set, at the new path, with release's entries untouched. The release move is covered by the existing `Reconcile_MatchesBinaryPath_AcrossSeparatorsAndExeSuffix`.
+- [x] **Artifact detection** (`TranscriptReader.cs:576-583`). *Done:* `IsArtifactUrl` requires an absolute `https` URL on host `claude.ai` with the default port, no userinfo, and `/artifact/` in the path, not the query. Tests: 12 cases, including `claude.ai.evil.example`, `claude.ai@evil.example`, http, a non-default port, and `/artifact/` only in the query.
+- [ ] Dogfood:
+  - Social sign-in end to end (see the port-range finding below);
+  - an upgrade from a signed-in release, which should stay signed in;
+  - the tray warning with `PERCH_SESSION_LOG=1`;
+  - the hook move on a machine with an existing install: hooks rewritten to `%LOCALAPPDATA%`, the old folder still there, sessions keep working;
+  - start-at-login from the installed copy.
+
+**Loopback port range (new, not fixed here).** Windows reserves dynamic TCP port ranges for Hyper-V/WSL/Docker, and they can change on reboot. On the dev machine, 53588–53687 is excluded, which covers **all four** OAuth candidate ports (53682–53685). There, `LoopbackListener.Start()` throws "Couldn't open a local port", so **Social sign-in can't work** until the reservation moves. The robust fix is a port outside the usual ranges, or an ephemeral port with a wildcard-port Redirect URL. Either needs a Supabase dashboard change. Track it as its own item.
+
+**Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean (0 warnings); the .NET suite passes 1781 with 1 skipped.
 
 ---
 

@@ -576,7 +576,14 @@ public partial class App : Application
     {
         try
         {
-            if (mode == StartMode.OnLogin) PlatformServices.LoginItem.Register();
+            // Only a real install registers (review fixes CP16). A portable copy or a dev build would otherwise
+            // point the login entry at wherever it happened to be run from — a Downloads folder, a build output —
+            // and take the entry over from the installed Perch. Such a copy leaves an existing entry alone rather
+            // than removing it: settings are shared with the install, whose entry it is.
+            if (mode == StartMode.OnLogin)
+            {
+                if (InstallChannel.Kind == InstallChannelKind.Setup) PlatformServices.LoginItem.Register();
+            }
             else if (PlatformServices.LoginItem.IsRegistered()) PlatformServices.LoginItem.Unregister();
         }
         catch { /* best-effort */ }
@@ -2628,10 +2635,13 @@ public partial class App : Application
         var exitItem = new NativeMenuItem("Exit");
         exitItem.Click += (_, _) => desktop.Shutdown();
 
+        // An opt-in debug log (PERCH_SESSION_LOG records full session output) is named in the tooltip and at the
+        // top of the menu, so one switched on by accident — or by something else — can't go unnoticed (CP16).
+        var debugWarning = DebugSwitches.ActiveWarning;
         var tray = new TrayIcon
         {
             Icon = icon,
-            ToolTipText = $"Perch{AppProfile.DisplaySuffix}",
+            ToolTipText = $"Perch{AppProfile.DisplaySuffix}" + (debugWarning is null ? "" : " - debug logging on"),
             Menu = new NativeMenu
             {
                 versionItem,
@@ -2649,6 +2659,11 @@ public partial class App : Application
                 exitItem,
             },
         };
+        if (debugWarning is not null && tray.Menu is { } menu)
+        {
+            menu.Items.Insert(0, new NativeMenuItem("⚠ " + debugWarning) { IsEnabled = false });
+            menu.Items.Insert(1, new NativeMenuItemSeparator());
+        }
         // Left-clicking the tray icon opens Settings (matching the WinForms tray); dense mode is toggled
         // via the global hotkey (Alt+Shift+W).
         tray.Clicked += (_, _) => OpenSettings();
