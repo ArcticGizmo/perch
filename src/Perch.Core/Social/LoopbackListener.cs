@@ -16,9 +16,13 @@ namespace Perch.Social;
 /// </summary>
 internal sealed class LoopbackListener : IDisposable
 {
-    // Candidate ports. The first is the one to allowlist in Supabase's Redirect URLs; the rest are only
-    // used if it's momentarily busy. Keep the primary stable so the allowlist entry keeps working.
-    public static readonly int[] CandidatePorts = [53682, 53683, 53684, 53685];
+    // Candidate ports, tried in order; every one must be in Supabase's Redirect URLs allowlist
+    // (http://127.0.0.1:<port>/callback), or GoTrue silently redirects to the Site URL instead. Keep them stable.
+    //
+    // They sit below Windows' dynamic port range (49152-65535 by default). Hyper-V / WSL / Docker reserve
+    // blocks inside that range, which can move on reboot; the old 53682-53685 fell in one (53588-53687), so
+    // sign-in couldn't bind a port at all on such machines. Keep any new port below 49152 too.
+    public static readonly int[] CandidatePorts = [41532, 41533, 41534, 41535];
 
     private readonly TcpListener _listener;
     public int Port { get; }

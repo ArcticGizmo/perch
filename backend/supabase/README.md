@@ -36,9 +36,14 @@ backend/supabase/
    (Project Settings → API Keys). The publishable key is non-secret and ships in the app; the `service_role`
    key must **never** leave the server.
 2. Enable **GitHub** as an auth provider (Authentication → Providers → GitHub) and register a GitHub
-   OAuth app, putting its client id/secret into Supabase. Add the desktop loopback redirect
-   (`http://127.0.0.1:<port>/callback`) to the allowed redirect URLs — the exact port is finalised
-   in M2.
+   OAuth app, putting its client id/secret into Supabase. Add the desktop loopback redirects to the allowed
+   redirect URLs (Authentication → URL Configuration → Redirect URLs), one per candidate port in
+   `LoopbackListener.CandidatePorts`:
+   `http://127.0.0.1:41532/callback`, `http://127.0.0.1:41533/callback`, `http://127.0.0.1:41534/callback`,
+   `http://127.0.0.1:41535/callback`. A redirect to a port that isn't listed falls back to the Site URL and
+   the sign-in never completes. The ports sit below Windows' dynamic range (49152+), because Hyper-V/WSL/Docker
+   reserve blocks inside it. The previous ports, `53682`–`53685`, fell inside one such block. Keep their
+   entries only until no installed Perch still uses them.
 
 ## Point the app at your project
 

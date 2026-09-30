@@ -25,6 +25,24 @@ public sealed class LoopbackListenerTests
     public void Only_the_real_redirect_counts_as_the_callback(string requestLine, bool expected) =>
         Assert.Equal(expected, LoopbackListener.IsCallback(requestLine, out _));
 
+    // The candidates must sit below Windows' dynamic port range (49152+): Hyper-V / WSL / Docker reserve blocks
+    // inside it, and the old 53682-53685 fell in one, so sign-in couldn't bind at all on those machines. Every
+    // candidate must also be in Supabase's Redirect URLs allowlist (see backend/supabase/README.md).
+    [Fact]
+    public void Candidate_ports_stay_below_the_dynamic_range()
+    {
+        Assert.Equal([41532, 41533, 41534, 41535], LoopbackListener.CandidatePorts);
+        Assert.All(LoopbackListener.CandidatePorts, p => Assert.InRange(p, 1024, 49151));
+    }
+
+    [Fact]
+    public void The_real_candidates_bind_on_this_host()
+    {
+        using var listener = LoopbackListener.Start();
+        Assert.Contains(listener.Port, LoopbackListener.CandidatePorts);
+        Assert.Equal($"http://127.0.0.1:{listener.Port}/callback", listener.RedirectUri);
+    }
+
     [Fact]
     public async Task Stray_and_silent_connections_do_not_end_the_wait()
     {

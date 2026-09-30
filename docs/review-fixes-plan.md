@@ -40,7 +40,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | 🟦 code + tests done, dogfood owed |
 | [CP14](#cp14) | 🟠 P1 | Data safety | Never wipe `.claude.json`; atomic writes everywhere | M | ✅ |
 | [CP15](#cp15) | 🟡 P2 | Privacy | Recording-export redaction gaps | S | ✅ |
-| [CP16](#cp16) | ⚪ P3 | Client | Small security hardening batch | M | 🟦 code + tests done, dogfood owed; OAuth port-range issue found |
+| [CP16](#cp16) | ⚪ P3 | Client | Small security hardening batch | M | 🟦 code + tests done, dogfood owed (incl. sign-in on the new OAuth ports) |
 | [CP17](#cp17) | 🟡 P2 | Supply chain | CI permissions, pinning, deploy-secret scoping | S | 🟦 done in code; env protection (settings) + first live runs owed; lock files ⏸ |
 | [CP18](#cp18) | 🟡 P2 | Supply chain | Code signing + signature verification in `install.ps1` | L | ⬜ |
 | [CP19](#cp19) | ⚪ P3 | Build | Build/installer hygiene (em dashes, PATH type, versioning) | S | ⬜ |
@@ -660,7 +660,12 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
   - the hook move on a machine with an existing install: hooks rewritten to `%LOCALAPPDATA%`, the old folder still there, sessions keep working;
   - start-at-login from the installed copy.
 
-**Loopback port range (new, not fixed here).** Windows reserves dynamic TCP port ranges for Hyper-V/WSL/Docker, and they can change on reboot. On the dev machine, 53588–53687 is excluded, which covers **all four** OAuth candidate ports (53682–53685). There, `LoopbackListener.Start()` throws "Couldn't open a local port", so **Social sign-in can't work** until the reservation moves. The robust fix is a port outside the usual ranges, or an ephemeral port with a wildcard-port Redirect URL. Either needs a Supabase dashboard change. Track it as its own item.
+**Loopback port range (found here, fixed as a follow-up).** Windows reserves dynamic TCP port ranges for Hyper-V/WSL/Docker, and they can change on reboot. On the dev machine, 53588–53687 was excluded, which covered **all four** old OAuth candidate ports (53682–53685). There, `LoopbackListener.Start()` threw "Couldn't open a local port", so Social sign-in couldn't work.
+- [x] The candidates are now **41532–41535**. They sit below the dynamic range (49152–65535 by default), which is where those reservations are carved. All four were checked free and bindable on the affected machine, and the real `Start()` now binds there.
+- [x] The user added the four `http://127.0.0.1:4153x/callback` entries to the Supabase Redirect URLs allowlist (Authentication → URL Configuration) **before** the code change. The old `53682`–`53685` entries stay until no installed Perch still uses them.
+- [x] `backend/supabase/README.md` lists the exact entries. Tests pin the list and the below-49152 rule, and check that the real candidates bind on the test host.
+- [ ] Dogfood: a real GitHub sign-in end to end (the redirect must land on the loopback, not the Site URL).
+- [ ] Later: remove the old `53682`–`53685` allowlist entries once released builds have moved over.
 
 **Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean (0 warnings); the .NET suite passes 1781 with 1 skipped.
 
