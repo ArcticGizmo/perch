@@ -500,7 +500,7 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 
 **Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1678 with 1 skipped.
 
-**Landed:** commit `cd8dc69`, simplified in @@HASH@@: `CmdShim`, plus the Windows `FileRevealer`, `GitKrakenLauncher`, `OverlayCanvas`, `DaemonListWindow` and `MarkdownWindow`.
+**Landed:** commit `cd8dc69`, simplified in `a29a4d1`: `CmdShim`, plus the Windows `FileRevealer`, `GitKrakenLauncher`, `OverlayCanvas`, `DaemonListWindow` and `MarkdownWindow`.
 
 <a id="cp13"></a>
 ### CP13 — Control-pipe intent validation + launcher quoting · 🟡 P2 · S · ⬜
