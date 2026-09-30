@@ -43,7 +43,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP16](#cp16) | ⚪ P3 | Client | Small security hardening batch | M | 🟦 code + tests done, dogfood owed (incl. sign-in on the new OAuth ports) |
 | [CP17](#cp17) | 🟡 P2 | Supply chain | CI permissions, pinning, deploy-secret scoping | S | 🟦 done in code; env protection (settings) + first live runs owed; lock files ⏸ |
 | [CP18](#cp18) | 🟡 P2 | Supply chain | Code signing + signature verification in `install.ps1` | L | ⬜ |
-| [CP19](#cp19) | ⚪ P3 | Build | Build/installer hygiene (em dashes, PATH type, versioning) | S | 🟦 em dashes fixed |
+| [CP19](#cp19) | ⚪ P3 | Build | Build/installer hygiene (em dashes, PATH type, versioning) | S | 🟦 code + tests done, PATH dogfood owed |
 | [CP20](#cp20) | 🟠 P1 | Performance | Session scan off the UI thread + incremental transcripts | L | ✅ |
 | [CP21](#cp21) | 🟠 P1 | Performance | All-time stats: cache history, don't re-parse it | M | ✅ |
 | [CP22](#cp22) | 🟠 P1 | Performance | Streaming chat O(n²) + SessionThreadView leak | M | ✅ |
@@ -732,12 +732,27 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 ## Build and hygiene
 
 <a id="cp19"></a>
-### CP19 — Build/installer hygiene · ⚪ P3 · S · ⬜
+### CP19 — Build/installer hygiene · ⚪ P3 · S · 🟦
 
 - [x] `publish-mac.sh:48,140` contains em dashes, which fails `tools/test-install.ps1`'s ASCII check. **The test currently fails.** Replace them with plain hyphens. *(Done 2026-09-30, alongside the new CI workflow, which runs `test-install.ps1` on every push.)*
-- [ ] `test-install.ps1`: build the ASCII file list from a glob so it covers `db-migrate.yml`, `functions-deploy.yml`, `tools/gen-dmg-background.sh` and `tools/focus.ps1`. Replace `Invoke-Expression` (line 21) with dot-sourcing a temp copy.
-- [ ] `PathInstaller.cs:17-34`: read and write `HKCU\Environment` with `DoNotExpandEnvironmentNames`, keep `REG_EXPAND_SZ`, and write only when the value changed. Today every install or uninstall permanently expands `%VAR%` entries in the user's PATH.
-- [ ] `publish.bat`: pass `-p:Version=%VERSION%` to both publishes, and hash only this version's files, not stale nupkgs. `release.yml`: pass `-p:Version` to the Windows hook build.
+- [x] `test-install.ps1`: build the ASCII file list from a glob so it covers `db-migrate.yml`, `functions-deploy.yml`, `tools/gen-dmg-background.sh` and `tools/focus.ps1`. Replace `Invoke-Expression` (line 21) with dot-sourcing a temp copy.
+  - The glob is the three root release scripts, plus `tools/*.ps1|sh|cmd|bat`, plus every workflow. Compiled sources under `tools/` (the Swift DMG generator, IconGen) aren't shell-parsed, so they're out.
+  - **Found:** the `.sh` LF check failed on any `core.autocrlf=true` checkout, which covers this machine and the GitHub Windows runner, so the new CI job would have gone red. A new `.gitattributes` pins `*.sh` to `eol=lf`. The four scripts were re-checked-out, so their stored bytes didn't change.
+- [x] `PathInstaller.cs:17-34`: read and write `HKCU\Environment` with `DoNotExpandEnvironmentNames`, keep `REG_EXPAND_SZ`, and write only when the value changed. Today every install or uninstall permanently expands `%VAR%` entries in the user's PATH.
+  - The editing is a pure Core helper, `Perch.Platform.PathList` (`WithEntry` / `WithoutEntry`, which return null for no change). An entry matches literally, or after `%VAR%` expansion, ignoring case, padding and a trailing slash.
+  - Uninstall used to re-trim every entry and drop empty ones; it now removes only ours and leaves the rest byte-for-byte.
+  - The value keeps its registry type. A new value is `REG_EXPAND_SZ`, as Windows creates it.
+- [x] `publish.bat`: pass `-p:Version=%VERSION%` to both publishes, and hash only this version's files, not stale nupkgs. `release.yml`: pass `-p:Version` to the Windows hook build.
+  - Also the AOT-fallback hook publish.
+  - Only `Perch-<version>-*.nupkg` are hashed. Every other file is rewritten by each pack.
+  - **Found:** `-Exclude 'SHA256SUMS.txt'` is silently ignored alongside `-LiteralPath` in Windows PowerShell 5.1, so a second `publish.bat` run hashed the old manifest into the new one. It's now filtered by name. Checked against a dummy `releases\` folder holding two versions' nupkgs and an old manifest: only the current version's 5 files are hashed.
+- [x] Tests: `PathListTests` (10 cases: append, no-op when present literally, by variable, by case, padded or with a trailing slash, remove-only-ours keeping the rest verbatim, a prefix isn't a match).
+
+**Verify.** Done 2026-09-30:
+- `dotnet build perch.slnx` is clean, and the .NET suite passes 1841 with 1 skipped.
+- `tools/test-install.ps1` passes 33 with 0 failed, now 14 pipeline files instead of 8. The download checks skip without a local `releases\`.
+
+**Dogfood owed:** after an install and an uninstall, `reg query HKCU\Environment /v Path` is still `REG_EXPAND_SZ`, with its `%VAR%` entries intact. The registry IO itself has no automated test; the test project is Core-only.
 
 ---
 

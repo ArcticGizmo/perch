@@ -1,0 +1,4 @@
+# Shell scripts are always checked out with LF, whatever core.autocrlf says (this machine and the GitHub
+# Windows runners both default it to true). A CRLF shebang fails on macOS/Linux with "bad interpreter", and
+# tools/test-install.ps1 checks the working copy.
+*.sh text eol=lf

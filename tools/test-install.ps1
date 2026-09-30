@@ -18,7 +18,12 @@ $root = Split-Path -Parent $PSScriptRoot
 
 $installPs1 = Join-Path $root 'install.ps1'
 $src = (Get-Content $installPs1 -Raw) -replace '(?m)^Install-Perch\s+.*$', ''
-Invoke-Expression $src
+# Dot-source a temp copy with the entrypoint call stripped, so its functions land in this scope without
+# evaluating a string as code. A try block is not a new scope, so the functions survive it.
+$loader = Join-Path ([System.IO.Path]::GetTempPath()) ("perch-install-under-test-" + [guid]::NewGuid().ToString('N') + '.ps1')
+[System.IO.File]::WriteAllText($loader, $src)
+try { . $loader }
+finally { Remove-Item -LiteralPath $loader -Force -ErrorAction SilentlyContinue }
 
 $pass = 0; $fail = 0
 function Check($name, $cond, $detail = '') {
@@ -38,9 +43,16 @@ Write-Host "`n=== Encoding and parse (whole release pipeline) ===" -ForegroundCo
 #
 # Only the .ps1 files can break that way, but the whole pipeline is held to ASCII: it's one rule instead of
 # three, and it keeps console output legible under any codepage. Use plain hyphens.
-$pipeline = 'install.ps1', 'publish.bat', 'publish-mac.sh',
-'tools\test-install.ps1', 'tools\gen-icns.sh', 'tools\gen-icons.ps1', 'tools\gen-icons.cmd',
-'.github\workflows\release.yml'
+#
+# The list is globbed, so a new script or workflow is covered without anyone remembering to add it: the three
+# root release scripts, every script under tools\, and every workflow. (Compiled sources under tools\, like the
+# Swift DMG-background generator and IconGen, aren't parsed by a shell and aren't held to it.)
+$pipeline = @('install.ps1', 'publish.bat', 'publish-mac.sh') +
+@(Get-ChildItem -File -LiteralPath (Join-Path $root 'tools') |
+    Where-Object { $_.Extension -in '.ps1', '.sh', '.cmd', '.bat' } | ForEach-Object { "tools\$($_.Name)" }) +
+@(Get-ChildItem -File -LiteralPath (Join-Path $root '.github\workflows') |
+    Where-Object { $_.Extension -in '.yml', '.yaml' } | ForEach-Object { ".github\workflows\$($_.Name)" }) |
+Sort-Object -Unique
 foreach ($rel in $pipeline) {
     $path = Join-Path $root $rel
     if (-not (Test-Path -LiteralPath $path)) { Check "$rel exists" $false 'file not found'; continue }

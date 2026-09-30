@@ -236,7 +236,9 @@ running the tray app.
   actually break: they ship with no BOM, so Windows PowerShell 5.1 decodes them as the system codepage, and a
   UTF-8 em dash becomes three chars ending in `0x94` = U+201D — a curly quote, which PowerShell honours as a
   *string delimiter*, silently mis-parsing everything after it. Holding the whole pipeline to ASCII is one
-  rule instead of three. Shell scripts must also stay LF (a CRLF shebang fails on macOS).
+  rule instead of three. Shell scripts must also stay LF (a CRLF shebang fails on macOS); `.gitattributes`
+  pins `*.sh` to `eol=lf` so a `core.autocrlf=true` checkout can't convert them. `tools/test-install.ps1`
+  globs the file list (root release scripts, `tools/*.ps1|sh|cmd|bat`, every workflow), so new ones are covered.
 - **Never wait on the installer's process tree.** `Start-Process -Wait` waits for descendants, so it hangs
   forever on the tray app Velopack's Setup launches — wait on the Setup process's own handle instead
   (`[Diagnostics.Process]::Start(...)` + `WaitForExit`). `tools/test-install.ps1` guards all of the above.
