@@ -446,13 +446,33 @@ internal static class StatuslineScript
           }
           return null;
         }
+        // A repo's own config can name commands that `git diff` runs: core.fsmonitor, a filter driver that
+        // .gitattributes selects, an external diff, textconv. So (like Perch's GitRunner): fsmonitor off, no
+        // external diff or textconv, and every filter driver the repo's OWN config defines blanked. The user's
+        // global/system drivers (git-lfs) keep working. `git config` itself runs nothing.
+        function gitHardening(git, opt) {
+          const out = ['-c', 'core.fsmonitor=false'];
+          try {
+            const parts = execFileSync(git, ['config', '--show-scope', '-z', '--get-regexp', '^filter\\.'], opt).split('\0');
+            for (let i = 0; i + 1 < parts.length; i += 2) {
+              if (parts[i] !== 'local' && parts[i] !== 'worktree') continue;
+              const key = parts[i + 1].split('\n')[0];
+              const name = key.slice('filter.'.length, key.lastIndexOf('.'));
+              if (!key.startsWith('filter.') || !name) continue;
+              for (const v of ['clean=', 'smudge=', 'process=', 'required=false']) out.push('-c', 'filter.' + name + '.' + v);
+            }
+          } catch {}   // exit 1 = no filter drivers at all
+          return out;
+        }
         // staged/unstaged file counts — this one does shell out to git (like a classic bash statusline),
         // but only when the template needs it (NEED_GIT_COUNTS). Any failure yields nothing.
         function gitCounts(dir) {
           try {
             const git = gitExe(); if (!git) return null;
             const opt = { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 };
-            const count = args => execFileSync(git, args, opt).split('\n').filter(l => l.trim().length > 0).length;
+            const safe = gitHardening(git, opt);
+            const count = args => execFileSync(git, [...safe, ...args, '--no-ext-diff', '--no-textconv'], opt)
+              .split('\n').filter(l => l.trim().length > 0).length;
             const staged = count(['diff', '--cached', '--numstat']);
             const unstaged = count(['diff', '--numstat']);
             const changes = staged + unstaged;

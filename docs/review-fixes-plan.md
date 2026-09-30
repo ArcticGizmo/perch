@@ -35,7 +35,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP8](#cp8) | 🟠 P1 | Client | Link opening: scheme allowlist + browser argument injection | S | ✅ |
 | [CP9](#cp9) | 🟠 P1 | Client | No UNC/remote path probing (NTLM leak + UI hang) | S | ✅ |
 | [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | ✅ (cross-user squat check untested) |
-| [CP11](#cp11) | 🟡 P2 | Client | Hardened shared `GitRunner` | M | ⬜ |
+| [CP11](#cp11) | 🟡 P2 | Client | Hardened shared `GitRunner` | M | 🟦 code + tests done, dogfood owed |
 | [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | ⬜ |
 | [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | ⬜ |
 | [CP14](#cp14) | 🟠 P1 | Data safety | Never wipe `.claude.json`; atomic writes everywhere | M | ✅ |
@@ -433,22 +433,49 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 **Landed (control pipe):** commit `2ab614c`: `ControlProtocol`, `ControlServer`, `Program.ForwardSessionIntent` and `ControlServerTests`.
 
 <a id="cp11"></a>
-### CP11 — Hardened shared `GitRunner` · 🟡 P2 · M · ⬜
+### CP11 — Hardened shared `GitRunner` · 🟡 P2 · M · 🟦
 
 **Problem.**
 - git runs automatically in untrusted repos: `GitStatsService` every 3s, plus `GitRepoService` status/diff and the statusline `.mjs`. None of these neutralise `core.fsmonitor`, `diff.external` or textconv. A repo that arrives with a pre-populated `.git` (zip, shared drive, or a config written by an injected session) runs its command on the next poll.
 - There are four copy-pasted `RunGit` implementations (GitRepoService, GitStatsService, MarkdownProjectScan, ProjectFileScan), and no global concurrency cap.
 - `PrStatusService.cs:198` blocks thread-pool threads on `_gate.Wait()`.
 
+**Found first (git 2.55, a scratch repo whose own config pointed each key at a marker-writing `echo`):**
+- `status` and `ls-files --others` run **core.fsmonitor**.
+- `diff` and `diff --numstat` run fsmonitor, the **filter driver** `.gitattributes` selects (`filter.<driver>.clean`), and **diff.external**.
+- `diff` and `show` run **textconv** (`diff.<driver>.textconv`).
+- `log --format` ran nothing.
+
+The planned `-c` set doesn't cover filter drivers at all. Their names are arbitrary, so they can't be blanked by a fixed override.
+
 **Tasks**
-- [ ] One `Perch.Core` `GitRunner`. It:
+- [x] One `Perch.Core` `GitRunner` (`Data/GitRunner.cs`). It:
   - uses the absolute git path (CP7);
-  - always passes `-c core.fsmonitor= -c diff.external= -c core.hooksPath=` and `--no-ext-diff --no-textconv` on diff and status;
+  - has two trust levels:
+    - **Automatic**, for everything Perch runs by itself, including every read the UI triggers: `-c core.fsmonitor=false -c log.showSignature=false`, plus `--no-ext-diff --no-textconv` inserted after a `diff`/`show`/`log` subcommand. It also blanks **every filter driver the repo's own config defines** (`filter.<name>.clean/smudge/process=` and `required=false`), found with `git config --show-scope --show-origin -z --list`, which reads config and runs nothing. Drivers from global or system config, such as git-lfs, are the user's and keep working. That probe is cached per directory until one of its config files changes (length or mtime), and at most for a minute. It is never cached when the repo's config has an `include`, an `includeIf` or per-worktree config, since those can pull in a file that doesn't exist yet.
+    - **UserAction**, for the stage/unstage/discard/apply/commit the user clicks: git behaves as in their terminal, so their hooks and filters run. Only fsmonitor is off.
   - applies a timeout with tree-kill;
-  - is limited by a global `SemaphoreSlim` (for example 4) with `WaitAsync`.
-- [ ] Migrate all four callers, and the statusline `.mjs` flags.
-- [ ] Cap `GetChangeStats`' sequential `git diff --no-index` calls, or batch them.
-- [ ] xUnit: a fixture repo with `core.fsmonitor` pointed at a marker script; the marker is never created.
+  - caps git at **4 processes at once, app-wide**. A caller waits up to its own timeout for a slot, then gets exit -1.
+  - **Changed from the plan:**
+    - `core.hooksPath=` isn't passed. No read-only command fires a hook, and the only hook-firing call is the user's own commit, where their hooks (lint-staged, commit-msg checks) are expected to run, as they would in a terminal.
+    - `diff.external=` is replaced by `--no-ext-diff`, which also covers `diff.<driver>.command`.
+    - Filter drivers are added: the plan missed them, and they're the vector no fixed override can reach.
+    - The gate is a synchronous `Wait` with a timeout, since every caller is already a synchronous background call that blocks on the process anyway.
+- [x] All four callers migrated: `GitRepoService` (reads Automatic, writes UserAction), `GitStatsService`, `MarkdownProjectScan` and `ProjectFileScan`. Their copy-pasted runners are gone.
+- [x] `PrStatusService` awaits its gate (`WaitAsync`) instead of blocking a pool thread, and tolerates being disposed while queued.
+- [x] Statusline `.mjs`: `gitHardening()` builds the same overrides (fsmonitor off, the repo's own filter drivers blanked, via `git config --show-scope -z --get-regexp ^filter\.`), and both counts pass `--no-ext-diff --no-textconv`.
+- [x] `GetChangeStats` no longer runs a `git diff --no-index` per untracked file (up to 100 processes in a row). It counts lines in-process with `CountUntrackedLines`, the way git's added-file diff does: every line, including a final one without a newline, and 0 for binary (a NUL in the first 8000 bytes). It skips links and files over 8 MB, and stops after 500 files.
+- [x] Tests (19 new cases):
+  - `GitRunnerTests`: the argument builder (Automatic/UserAction, the insertion point, a path named `diff` not mistaken for a subcommand, dotted filter names); the config parser (only local/worktree drivers, case kept, stamps invalidated by a config edit, include/includeIf/worktree config never cached); and line counting.
+  - **End to end:** a real repo whose own config sets all four vectors to marker-writing `echo` commands. They're config strings git's own shell runs; no executable file is planted. A plain-git control run creates every marker. Then every Automatic path (status, working/tree/commit diff, change stats, numstat, the file scan) creates none and still returns the right answers. The probe is warmed **before** the config turns hostile, so the test also proves the cache notices the change.
+  - A statusline end-to-end test does the same under node: the control fires, and the script counts `S0U1` with no marker.
+
+  With the hardening switched off (GitRunner passing args through, the script's old call), both end-to-end tests fail.
+- [ ] Dogfood: the git-stats glyph, the changed-files panel with an untracked file, the review window's diffs, stage/commit from the Tree window, and a statusline with git counts, all in a normal repo and one that uses git-lfs.
+
+**Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1666 with 1 skipped.
+
+**Landed:** `GitRunner`, plus `GitRepoService`, `GitStatsService`, `MarkdownProjectScan`, `ProjectFileScan`, `PrStatusService` and `StatuslineScript`.
 
 <a id="cp12"></a>
 ### CP12 — cmd-shim metacharacters (VS Code / GitKraken launch) · 🟡 P2 · S · ⬜

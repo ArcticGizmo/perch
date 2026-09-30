@@ -127,44 +127,11 @@ internal static class MarkdownProjectScan
         name.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
         || name.EndsWith(".markdown", StringComparison.OrdinalIgnoreCase);
 
-    // A minimal, best-effort `git` runner mirroring GitStatsService/GitRepoService: UTF-8 pipes, async
-    // draining so a large listing can't deadlock the child, a hard timeout with tree-kill, and (-1, "") on
-    // any failure. Duplicated rather than shared because those runners are private to their own services.
+    // The file lists come from an Automatic git run (see GitRunner): the picker opens on whatever repo the
+    // session is in.
     private static (int Exit, string Stdout) RunGit(string cwd, int timeoutMs, params string[] args)
     {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = ExecutableResolver.Resolve("git"),   // absolute: never a git.exe planted in the repo (CP7)
-                WorkingDirectory = cwd,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                StandardOutputEncoding = System.Text.Encoding.UTF8,
-                StandardErrorEncoding = System.Text.Encoding.UTF8,
-            };
-            foreach (var a in args)
-                psi.ArgumentList.Add(a);
-
-            using var proc = Process.Start(psi);
-            if (proc == null)
-                return (-1, "");
-
-            var stdout = proc.StandardOutput.ReadToEndAsync();
-            _ = proc.StandardError.ReadToEndAsync();
-
-            if (!proc.WaitForExit(timeoutMs))
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { }
-                return (-1, "");
-            }
-            return (proc.ExitCode, stdout.GetAwaiter().GetResult());
-        }
-        catch
-        {
-            return (-1, "");
-        }
+        var r = GitRunner.Run(cwd, timeoutMs, args);
+        return (r.Exit, r.Stdout);
     }
 }

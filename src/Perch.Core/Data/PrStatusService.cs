@@ -191,11 +191,12 @@ internal sealed class PrStatusService : IDisposable
         if (!_fetching.TryAdd(key, 0))
             return;
 
-        Task.Run(() =>
+        Task.Run(async () =>
         {
             try
             {
-                _gate.Wait();
+                // Awaited, not Wait(): a queued refresh holds no thread-pool thread while the gate is full.
+                await _gate.WaitAsync().ConfigureAwait(false);
                 try
                 {
                     if (_disposed || !_enabled)
@@ -212,8 +213,12 @@ internal sealed class PrStatusService : IDisposable
                 }
                 finally
                 {
-                    _gate.Release();
+                    try { _gate.Release(); } catch (ObjectDisposedException) { }
                 }
+            }
+            catch (ObjectDisposedException)
+            {
+                // Disposed while queued on the gate: nothing to refresh.
             }
             finally
             {

@@ -175,7 +175,7 @@ public sealed partial class FakeSocialClient
                 AddScoreLocked(fg, round.Drawer, dp);
             }
             fg.Updated = DateTimeOffset.UtcNow;
-            state = StateLocked(fg, _me.Id); gameId = fg.Id;
+            state = StateLocked(fg, _me!.Id); gameId = fg.Id;
         }
         NotifyDraw(gameId);
         return Task.FromResult(state);
@@ -190,7 +190,7 @@ public sealed partial class FakeSocialClient
             RequireCurrentGuessLocked(fg, round);
             round.Status = DrawRoundStatus.GaveUp;
             fg.Updated = DateTimeOffset.UtcNow;
-            state = StateLocked(fg, _me.Id); gameId = fg.Id;
+            state = StateLocked(fg, _me!.Id); gameId = fg.Id;
         }
         NotifyDraw(gameId);
         return Task.FromResult(state);

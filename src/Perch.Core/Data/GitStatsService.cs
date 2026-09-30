@@ -1,7 +1,6 @@
 ﻿namespace Perch.Data;
 
 using System.Collections.Concurrent;
-using System.Diagnostics;
 
 /// <summary>
 /// Unstaged line churn for a working tree: lines added / deleted per <c>git diff --numstat</c>
@@ -113,46 +112,9 @@ internal sealed class GitStatsService : IDisposable
         if (!Directory.Exists(cwd))
             return null;
 
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = ExecutableResolver.Resolve("git"),   // absolute: never a git.exe planted in the repo (CP7)
-                Arguments = "--no-optional-locks diff --numstat",
-                WorkingDirectory = cwd,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                // Decode git's output as UTF-8, not the console/ANSI code page. See GitRepoService.RunGit.
-                StandardOutputEncoding = System.Text.Encoding.UTF8,
-                StandardErrorEncoding = System.Text.Encoding.UTF8,
-            };
-
-            using var proc = Process.Start(psi);
-            if (proc == null)
-                return null;
-
-            // Read both pipes async so a large diff (or any stderr) can't fill a buffer and deadlock
-            // the child before it exits.
-            var stdout = proc.StandardOutput.ReadToEndAsync();
-            _ = proc.StandardError.ReadToEndAsync();
-
-            if (!proc.WaitForExit(GitTimeoutMs))
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { }
-                return null;
-            }
-            if (proc.ExitCode != 0)
-                return null;
-
-            return ParseNumstat(stdout.GetAwaiter().GetResult());
-        }
-        catch
-        {
-            // git not on PATH, access denied, etc. — no chip.
-            return null;
-        }
+        // An Automatic run: this polls every few seconds in whatever repo a session is in (see GitRunner).
+        var r = GitRunner.Run(cwd, GitTimeoutMs, "--no-optional-locks", "diff", "--numstat");
+        return r.Exit == 0 ? ParseNumstat(r.Stdout) : null;
     }
 
     /// <summary>

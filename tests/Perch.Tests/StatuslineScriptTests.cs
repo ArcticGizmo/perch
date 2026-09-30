@@ -44,7 +44,9 @@ public sealed class StatuslineScriptTests
         Assert.Contains("execFileSync", withCounts);   // the git subprocess is present
         // …but by the PATH-resolved absolute path, never the bare name Node would look up in the repo first (CP7).
         Assert.DoesNotContain("execFileSync('git'", withCounts);
-        Assert.Contains("execFileSync(git, args, opt)", withCounts);
+        // …and hardened against the repo's own command hooks (CP11): fsmonitor off, no external diff or textconv.
+        Assert.Contains("execFileSync(git, [...safe, ...args, '--no-ext-diff', '--no-textconv'], opt)", withCounts);
+        Assert.Contains("'core.fsmonitor=false'", withCounts);
 
         var withoutCounts = StatuslineScript.Generate(new StatuslineProfile
         {
@@ -328,6 +330,58 @@ public sealed class StatuslineScriptTests
             string Run(string cwd) => RunNode(node, scriptPath, System.Text.Json.JsonSerializer.Serialize(new { cwd })).Trim();
             Assert.Equal("B[wt-branch]", Run(viaRelative));
             Assert.Equal("B[]", Run(viaDevice));
+        }
+        finally
+        {
+            DeleteTree(dir);
+        }
+    }
+
+    // CP11 end-to-end: the counts run `git diff --numstat` in the session's repo on every refresh, so a repo whose own
+    // config names a command (fsmonitor, a filter driver selected by .gitattributes, an external diff, textconv)
+    // must not get it run. Each command only writes a marker; it's a config string git's own shell runs, not an
+    // executable file. A plain-git control proves the vectors fire on this host; the script must still count right.
+    [Fact]
+    public void Generated_script_never_runs_commands_from_the_repos_own_git_config()
+    {
+        var node = FindNode();
+        var git = ExecutableResolver.Find("git");
+        if (node is null || git is null) return;   // needs both on the host
+
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-hooks-" + Guid.NewGuid().ToString("N"));
+        var repo = Directory.CreateDirectory(Path.Combine(dir, "repo")).FullName;
+        string Marker(string name) => Path.Combine(dir, "mark_" + name);
+        string ShPath(string name) => Marker(name).Replace('\\', '/');
+        try
+        {
+            RunGit(git, repo, "init", "-q");
+            RunGit(git, repo, "config", "user.email", "t@example.com");
+            RunGit(git, repo, "config", "user.name", "t");
+            RunGit(git, repo, "config", "commit.gpgsign", "false");
+            File.WriteAllText(Path.Combine(repo, ".gitattributes"), "*.txt filter=evil diff=evil\n");
+            File.WriteAllText(Path.Combine(repo, "a.txt"), "hello\n");
+            RunGit(git, repo, "add", "-A");
+            RunGit(git, repo, "commit", "-q", "-m", "init");
+            RunGit(git, repo, "config", "core.fsmonitor", $"echo x > '{ShPath("fsmonitor")}'");
+            RunGit(git, repo, "config", "filter.evil.clean", $"sh -c 'echo x > \"{ShPath("filter")}\"; cat'");
+            RunGit(git, repo, "config", "diff.evil.textconv", $"sh -c 'echo x > \"{ShPath("textconv")}\"; cat \"$0\"'");
+            RunGit(git, repo, "config", "diff.external", $"sh -c 'echo x > \"{ShPath("external")}\"'");
+            File.AppendAllText(Path.Combine(repo, "a.txt"), "changed\n");
+            File.SetLastWriteTimeUtc(Path.Combine(repo, "a.txt"), new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+            // Control: the script's own command line, minus the hardening, fires them.
+            RunGit(git, repo, "diff", "--numstat");
+            Assert.True(File.Exists(Marker("fsmonitor")) && File.Exists(Marker("filter")),
+                "control: plain git diff --numstat didn't run the repo's commands on this host");
+            foreach (var f in Directory.GetFiles(dir, "mark_*")) File.Delete(f);
+
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, StatuslineScript.Generate(
+                new StatuslineProfile { Name = "t", Template = "S{{git.staged}}U{{git.unstaged}}" }, devMarker: false));
+            var payload = System.Text.Json.JsonSerializer.Serialize(new { cwd = repo });
+
+            Assert.Equal("S0U1", RunNode(node, scriptPath, payload).Trim());
+            Assert.Empty(Directory.GetFiles(dir, "mark_*"));
         }
         finally
         {

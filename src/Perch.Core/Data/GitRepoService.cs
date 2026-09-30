@@ -162,14 +162,15 @@ internal sealed class GitRepoService
     /// <summary>
     /// The working tree's changed files with their <c>+</c>/<c>-</c> line counts — the data the session UI's
     /// "changed files" panel lists. Reads <see cref="GetStatus"/> for the file set + kinds and
-    /// <c>git diff --numstat HEAD</c> for tracked line counts; an untracked file's additions come from its
-    /// whole-file diff (<see cref="GetUntrackedDiff"/>). Empty when <paramref name="cwd"/> isn't a repo.
+    /// <c>git diff --numstat HEAD</c> for tracked line counts; an untracked file's additions are its line count,
+    /// read in-process (<see cref="CountUntrackedLines"/>). Empty when <paramref name="cwd"/> isn't a repo.
     /// Best-effort and never throws. Runs off the UI thread (spawns git).
     /// </summary>
-    // A ceiling on how many untracked files we'll open a per-file `git diff --no-index` for. Each is a process
-    // spawn; a repo with a large untracked tree would otherwise storm the disk. Beyond it, untracked files still
-    // list (as new) but without line counts.
-    private const int MaxUntrackedDiffs = 100;
+    // Ceilings on the in-process line counting of untracked files: how many files, and how big a file, before
+    // an untracked file lists (as new) without line counts. (This used to be a `git diff --no-index` process per
+    // file, up to 100 in a row — review fixes CP11.)
+    private const int MaxUntrackedCounts = 500;
+    private const long MaxUntrackedBytes = 8 * 1024 * 1024;
 
     public IReadOnlyList<GitChangeStat> GetChangeStats(string cwd)
     {
@@ -181,7 +182,7 @@ internal sealed class GitRepoService
         var numstat = exit == 0 ? ParseNumstat(stdout) : new Dictionary<string, (int, int, bool)>();
 
         var list = new List<GitChangeStat>(st.Changes.Count);
-        int untrackedDiffs = 0;
+        int untrackedCounts = 0;
         foreach (var ch in st.Changes)
         {
             int added = 0, removed = 0;
@@ -189,16 +190,13 @@ internal sealed class GitRepoService
             if (ch.Untracked)
             {
                 // A new file git isn't tracking yet: its whole content is "added". Skip a collapsed directory
-                // entry (a trailing slash) — diffing it would recurse the whole folder — and cap the number of
-                // per-file diffs so a big untracked tree can't spawn a storm of git processes.
+                // entry (a trailing slash), and cap how many files get counted.
                 bool isDir = ch.Path.EndsWith('/') || ch.Path.EndsWith('\\');
-                if (!isDir && untrackedDiffs < MaxUntrackedDiffs
-                    && GetUntrackedDiff(cwd, ch.Path) is { Files.Count: > 0 } d)
+                if (!isDir && untrackedCounts < MaxUntrackedCounts
+                    && CountUntrackedLines(Path.Combine(cwd, ch.Path)) is { } c)
                 {
-                    untrackedDiffs++;
-                    var f = d.Files[0];
-                    binary = f.IsBinary;
-                    added = f.Hunks.Sum(h => h.Lines.Count(l => l.Kind == GitDiffLineKind.Added));
+                    untrackedCounts++;
+                    (added, binary) = c;
                 }
             }
             else if (numstat.TryGetValue(ch.Path, out var v))
@@ -208,6 +206,45 @@ internal sealed class GitRepoService
             list.Add(new GitChangeStat(ch.Path, ch.OrigPath, OverallKind(ch), added, removed, binary, ch.Untracked));
         }
         return list;
+    }
+
+    /// <summary>
+    /// An untracked file's line count as git would report it in an added-file diff: every line, including a
+    /// final one with no newline; zero for a binary file (a NUL in the first 8000 bytes, git's own test). Null
+    /// when the file can't be read, is over <see cref="MaxUntrackedBytes"/>, or is a link (which could point
+    /// anywhere). Internal for unit testing.
+    /// </summary>
+    internal static (int Added, bool Binary)? CountUntrackedLines(string path)
+    {
+        try
+        {
+            var fi = new FileInfo(path);
+            if (!fi.Exists || (fi.Attributes & FileAttributes.ReparsePoint) != 0 || fi.Length > MaxUntrackedBytes)
+                return null;
+
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var buf = new byte[64 * 1024];
+            int lines = 0, read;
+            long total = 0;
+            byte last = (byte)'\n';
+            while ((read = fs.Read(buf, 0, buf.Length)) > 0)
+            {
+                for (int i = 0; i < read; i++)
+                {
+                    byte b = buf[i];
+                    if (b == 0 && total + i < 8000) return (0, true);
+                    if (b == (byte)'\n') lines++;
+                }
+                total += read;
+                last = buf[read - 1];
+            }
+            if (total > 0 && last != (byte)'\n') lines++;   // a final line without a newline still counts
+            return (lines, false);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     // The single "overall" change kind for a status entry: an untracked file reads as Added, otherwise the
@@ -911,65 +948,24 @@ internal sealed class GitRepoService
 
     // ---- process plumbing -----------------------------------------------------------------------------
 
-    // Runs `git <args>` in cwd, returning (exitCode, stdout) — the read-side convenience wrapper that drops
-    // stderr. Takes an argument list so paths/hashes with spaces are passed safely.
+    // Runs `git <args>` in cwd, returning (exitCode, stdout) — the read side, which drops stderr. It's an
+    // Automatic run: the review window opens on repos Perch didn't choose, so the repo's own command hooks are
+    // neutralised (see GitRunner). Takes an argument list so paths/hashes with spaces are passed safely.
     private static (int Exit, string Stdout) RunGit(string cwd, int timeoutMs, params string[] args)
     {
-        var r = RunGitCore(cwd, timeoutMs, null, args);
+        var r = GitRunner.Run(cwd, timeoutMs, args);
         return (r.Exit, r.Stdout);
     }
 
-    // As RunGit, but also returns stderr — the write operations surface it as the failure message. When
-    // <paramref name="stdin"/> is non-null it is written to the child's standard input then closed (for
-    // `git apply`, which reads a patch from stdin). Exit is -1 on any failure to launch/complete.
+    // The write side: a stage/commit/apply the user asked for, so git behaves as in their terminal (their hooks
+    // and filters run). Returns stderr too, which surfaces as the failure message. When <paramref name="stdin"/>
+    // is non-null it is written to the child's standard input then closed (for `git apply`, which reads a patch
+    // from stdin). Exit is -1 on any failure to launch/complete.
     private static (int Exit, string Stdout, string Stderr) RunGitCore(
         string cwd, int timeoutMs, string? stdin = null, params string[] args)
     {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = ExecutableResolver.Resolve("git"),   // absolute: never a git.exe planted in the repo (CP7)
-                WorkingDirectory = cwd,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = stdin is not null,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                // Git emits UTF-8 (file bytes, commit messages, paths); without this .NET would decode the
-                // child's output with the console/ANSI code page (CP1252 on Windows), mangling non-ASCII and
-                // rendering a file's UTF-8 BOM as "ï»¿".
-                StandardOutputEncoding = System.Text.Encoding.UTF8,
-                StandardErrorEncoding = System.Text.Encoding.UTF8,
-                StandardInputEncoding = stdin is not null ? new System.Text.UTF8Encoding(false) : null,
-            };
-            foreach (var a in args)
-                psi.ArgumentList.Add(a);
-
-            using var proc = Process.Start(psi);
-            if (proc == null)
-                return (-1, "", "");
-
-            // Drain both pipes async so a large diff (or a chatty stderr) can't deadlock the child.
-            var stdout = proc.StandardOutput.ReadToEndAsync();
-            var stderr = proc.StandardError.ReadToEndAsync();
-
-            if (stdin is not null)
-            {
-                try { proc.StandardInput.Write(stdin); proc.StandardInput.Close(); } catch { }
-            }
-
-            if (!proc.WaitForExit(timeoutMs))
-            {
-                try { proc.Kill(entireProcessTree: true); } catch { }
-                return (-1, "", "");
-            }
-            return (proc.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
-        }
-        catch
-        {
-            return (-1, "", "");
-        }
+        var r = GitRunner.Run(cwd, timeoutMs, GitRunner.Trust.UserAction, stdin, args);
+        return (r.Exit, r.Stdout, r.Stderr);
     }
 
     /// <summary>
