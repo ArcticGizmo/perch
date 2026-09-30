@@ -447,14 +447,37 @@ public sealed partial class SupabaseSocialClient : ISocialClient
 
     public async Task<IReadOnlyList<FeedItem>> GetFeedAsync(int limit = 50, CancellationToken ct = default)
     {
-        RequireUser();
+        var uid = RequireUser();
+        var friends = await GetFriendsAsync(ct);
+        return await GetFeedAsync(FeedAuthors(uid, friends), limit, ct);
+    }
+
+    // Authors per feed request: keeps the author=in.(...) URL around 4 KB.
+    private const int FeedAuthorChunk = 100;
+
+    // Whose posts the feed can show: me, plus accepted friends.
+    private static IReadOnlyList<Guid> FeedAuthors(Guid uid, IEnumerable<Friend> friends) =>
+        friends.Where(f => f.State == FriendshipState.Accepted).Select(f => f.Profile.Id)
+            .Prepend(uid).Distinct().ToList();
+
+    // The feed, restricted to the given authors. Unfiltered, PostgREST evaluates the posts_read RLS predicate
+    // against every post in the table (review fixes CP6); with the filter, the author index narrows the scan to
+    // these rows first. Large friend lists go in chunks, merged newest-first.
+    private async Task<IReadOnlyList<FeedItem>> GetFeedAsync(IReadOnlyList<Guid> authors, int limit, CancellationToken ct)
+    {
         var token = await ValidAccessTokenAsync(ct);
         limit = Math.Clamp(limit, 1, 200);
-        using var req = Rest(HttpMethod.Get,
-            $"/rest/v1/posts?select=id,author,body,mood_emoji,created_at&order=created_at.desc&limit={limit}", token);
-        using var resp = await _http.SendAsync(req, ct);
-        await EnsureOkAsync(resp, "load the feed", ct);
-        var rows = await resp.Content.ReadFromJsonAsync<PostRow[]>(Json, ct) ?? [];
+        var all = new List<PostRow>();
+        foreach (var chunk in authors.Chunk(FeedAuthorChunk))
+        {
+            using var req = Rest(HttpMethod.Get,
+                $"/rest/v1/posts?author=in.({string.Join(",", chunk)})" +
+                $"&select=id,author,body,mood_emoji,created_at&order=created_at.desc&limit={limit}", token);
+            using var resp = await _http.SendAsync(req, ct);
+            await EnsureOkAsync(resp, "load the feed", ct);
+            all.AddRange(await resp.Content.ReadFromJsonAsync<PostRow[]>(Json, ct) ?? []);
+        }
+        var rows = all.OrderByDescending(r => r.CreatedAt).Take(limit).ToList();
 
         var profiles = await FetchProfilesAsync(rows.Select(r => r.Author), token, ct);
         return rows.Select(r => new FeedItem(
@@ -479,7 +502,7 @@ public sealed partial class SupabaseSocialClient : ISocialClient
         SetInboxSenders(friends);
 
         // Latest post per author (the feed is newest-first, so the first hit per author is their latest).
-        var feed = await GetFeedAsync(200, ct);
+        var feed = await GetFeedAsync(FeedAuthors(uid, friends), 200, ct);
         var latestByAuthor = new Dictionary<Guid, FeedItem>();
         foreach (var item in feed) latestByAuthor.TryAdd(item.Author.Id, item);
 

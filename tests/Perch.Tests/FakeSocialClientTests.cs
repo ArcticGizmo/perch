@@ -300,6 +300,22 @@ public sealed class FakeSocialClientTests
     }
 
     [Fact]
+    public async Task A_block_hides_the_friendship_edge_until_unblocked()
+    {
+        // Mirrors the server (review fixes CP6): the friendships policy hides a blocked pair's edge from both
+        // sides, and unblocking brings it back as it was.
+        var c = SignedIn();
+        var ada = c.SeedUser("ada");
+        await c.SendRequestAsync(ada.Id); c.SimulateAccept(ada.Id);
+
+        await c.BlockAsync(ada.Id);
+        Assert.DoesNotContain(await c.GetFriendsAsync(), f => f.Profile.Id == ada.Id);
+
+        await c.UnblockAsync(ada.Id);
+        Assert.Contains(await c.GetFriendsAsync(), f => f.Profile.Id == ada.Id && f.State == FriendshipState.Accepted);
+    }
+
+    [Fact]
     public async Task Roster_carries_reactions_on_your_own_status()
     {
         var c = SignedIn();

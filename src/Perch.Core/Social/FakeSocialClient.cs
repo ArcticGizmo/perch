@@ -168,8 +168,9 @@ public sealed partial class FakeSocialClient : ISocialClient
     {
         lock (_gate)
         {
+            // A block hides the edge from both sides while it stands (the server's friendships policy, CP6).
             var list = _edges
-                .Where(e => e.Value != FriendshipState.Blocked && _profiles.ContainsKey(e.Key))
+                .Where(e => e.Value != FriendshipState.Blocked && !_blocked.Contains(e.Key) && _profiles.ContainsKey(e.Key))
                 .Select(e => new Friend(_profiles[e.Key], e.Value))
                 .ToList();
             return Task.FromResult<IReadOnlyList<Friend>>(list);

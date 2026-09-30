@@ -30,7 +30,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP3](#cp3) | 🟠 P1 | Supabase | Server-owned fields: no forged games, no backdated rows (+ least-privilege grants on every table) | M | ✅ |
 | [CP4](#cp4) | 🟠 P1 | Supabase | Realtime inbox authorisation + sender validation | M | ✅ (public-access follow-up open) |
 | [CP5](#cp5) | 🟡 P2 | Supabase | Draw with Perch: RPC state checks + size limits | S | 🟦 code + tests done, prod deploy owed |
-| [CP6](#cp6) | 🟡 P2 | Supabase | Block/suspension coverage, `find_profile` throttle, feed query | M | ⬜ |
+| [CP6](#cp6) | 🟡 P2 | Supabase | Block/suspension coverage, `find_profile` throttle, feed query | M | 🟦 code + tests done, prod deploy owed |
 | [CP7](#cp7) | 🔴 P0 | Client | Executable hijack via untrusted working directory | M | ✅ |
 | [CP8](#cp8) | 🟠 P1 | Client | Link opening: scheme allowlist + browser argument injection | S | ✅ |
 | [CP9](#cp9) | 🟠 P1 | Client | No UNC/remote path probing (NTLM leak + UI hang) | S | ✅ |
@@ -227,7 +227,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 **Landed:** commit `d05b39a`: migration `20260930120000_draw_state_checks.sql`, plus `DrawStrokeCodec`, `DrawWords`, `DrawGuessing`, `SupabaseSocialClient.Draw.cs` and `FakeSocialClient.Draw.cs`.
 
 <a id="cp6"></a>
-### CP6 — Block/suspension coverage, `find_profile` throttle, feed query · 🟡 P2 · M · ⬜
+### CP6 — Block/suspension coverage, `find_profile` throttle, feed query · 🟡 P2 · M · 🟦
 
 **Problem.**
 - Blocks don't gate `shares_edge`, new friendship inserts, or the game RPCs (`submit_draw_round`, `submit_draw_guess`, `drop_disc`).
@@ -236,12 +236,31 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - `GetFeedAsync` (`SupabaseSocialClient.cs:444`) has no author filter, so the RLS predicate runs for every post in the table. That is O(N²) across the platform.
 
 **Tasks**
-- [ ] Add `and not private.is_blocked(...)` to `private.shares_edge` and every game RPC. Leave the friendship insert alone: a visible failure there would tell a blocked user they were blocked (see CP2).
-- [ ] Mark shared games abandoned when one player blocks the other.
-- [ ] Apply `is_suspended` to reactions, game writes and profile edits.
-- [ ] Add a per-caller rate limit to `find_profile` (a counter table), and stop returning the id until a request exists. (CP1 already stopped **anonymous** calls; signed-in enumeration remains.)
-- [ ] Filter the feed with `author=in.(<accepted friend ids>)`, or add a join RPC. Reuse the friends and profiles `GetRosterAsync` already fetched.
-- [ ] pgTAP: a blocked user can't create an edge, read the profile, or move in a shared game.
+- [x] `private.shares_edge` ignores a blocked pair. The friendship insert is left alone, as planned: a blocked user's request still succeeds.
+  - **Widened from the plan: the friendships SELECT policy hides a blocked pair's row too, from both sides.** With only `shares_edge` changed, the blocked person would still see the accepted edge, with a profile they can no longer read, so the blocker would show as a friend called "unknown". Now, to the blocked person, a block looks like an unfriend. Their new friend request "succeeds" (ignore-duplicates, or a fresh pending row) but neither side sees it. Unblocking restores the edge as it was. The blocker's own UI already drops blocked people from the graph lists, so nothing changes for them.
+- [x] **Game RPCs — changed from the plan:** instead of editing six RPCs, one BEFORE INSERT OR UPDATE guard trigger (`private.guard_game_write`) on `games` and `draw_games` refuses any write that leaves a game in progress between a blocked pair ("game is over", 23514) or that a suspended account makes (42501). Every RPC that creates or advances a game (`accept_game_request`, `accept_draw_request`, `drop_disc`, `submit_draw_round`, `submit_draw_guess`, `give_up_draw_round`) writes that row in the same transaction, so all of them are covered, and so is any future RPC. Resigning (which ends the game) and abandonment pass through.
+- [x] Blocking ends shared play: an AFTER INSERT trigger on `blocks` (`private.end_play_on_block`) abandons the pair's in-progress Connect 4 and Draw games and deletes their pending invites of both kinds. The migration does the same for blocks that already exist.
+- [x] Suspension also stops reacting, profile edits, friend requests, and both kinds of game invite (WITH CHECK on each policy, so a refusal is an explicit 42501, not a silent no-op), as well as playing (the guard). Blocking and reporting stay available.
+- [x] `find_profile` is throttled to 20 lookups per caller per 10 minutes, through `private.find_profile_throttle` (keyed on the auth user, since you can look someone up before claiming a handle). It became VOLATILE plpgsql, because PostgREST runs STABLE functions in a read-only transaction where the counter write would fail.
+  - **Changed from the plan: it still returns the id.** Shipped clients need the id to send a friend request, and since CP3/CP4 an id unlocks nothing on its own (the inbox is private and every write checks the caller).
+- [x] Feed: `GetFeedAsync` sends `author=in.(<me + accepted friends>)`. The roster reuses the friend list it already fetched, and the public overload fetches it first. A large list goes in chunks of 100 authors, merged newest-first and capped. `EXPLAIN` under RLS confirms the filter uses `posts_author_created` (`uuid_eq` is leakproof, so the filter is applied before the RLS predicate), which then runs only on those rows. Old clients keep the unfiltered query until they update.
+- [x] pgTAP (`blocks_test.sql`, 26 new):
+  - **Block:** the blocker and the blocked user both lose the friendship row, and the blocked user can't read the profile. Both games are abandoned and both invites deleted. The blocked user can't move. A blocked friend's request, and a blocked stranger's, succeed but expose nothing to either side. Accepting a sneaked-in invite of either kind is refused. Even the owner can't put the pair's game back in progress. Unblocking restores the profile and the accepted edge.
+  - **Suspension:** reacting, editing the profile, a friend request, both kinds of invite and a move are all refused. Blocking and reporting still work.
+  - **Throttle:** the 21st lookup is refused, and an aged window lets lookups through again. `find_profile` is volatile, and the two new trigger functions aren't callable by clients.
+
+  Against the pre-CP6 schema, 8 of the first 11 block tests fail before the script aborts. A second run with the block section removed fails every suspension test and the throttle test.
+- [x] xUnit (3 new): the feed asks only for me and accepted friends (not a pending edge); 150 friends split into two requests, merged newest-first under the cap; and the fake hides a blocked friend's edge until unblocked (it now mirrors the policy in `GetFriendsAsync`). The existing feed test now answers the friendships call.
+- [x] Live check over local PostgREST with a real signed-in user: `rpc/find_profile` calls 1–20 return 200, and call 21 returns 400 with the rate-limit message.
+- [ ] **Deploy to prod** (`db-migrate.yml`). Then, with the debug puppet tool: block a friend who has a live game with you (the game ends for both, and each side's friends list drops the other), unblock (the friendship returns), and check that the feed still shows friends' statuses.
+
+**Known side effects.**
+- While a block stands, the data export's friends list omits that person too (it reads the same friendships). They still appear under blocked.
+- A blocker can't unfriend someone while blocking them; unblock first. That was already true in the UI, which hides blocked people from the graph lists.
+
+**Verify.** Done locally on 2026-09-30: `supabase test db` 158/158 across five files; `dotnet build perch.slnx` clean; the .NET suite passes 1647 with 1 skipped.
+
+**Landed:** migration `20260930130000_block_suspend_coverage.sql`, plus `SupabaseSocialClient.GetFeedAsync` and `FakeSocialClient.GetFriendsAsync`.
 
 ---
 

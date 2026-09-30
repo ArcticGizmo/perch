@@ -202,13 +202,81 @@ public sealed class SupabaseSocialClientTests
     public async Task Feed_resolves_author_handles()
     {
         var (client, _) = await SignedInClient(req =>
-            req.RequestUri!.AbsolutePath == "/rest/v1/posts" && req.Method == HttpMethod.Get
-                ? (HttpStatusCode.OK, PostsJson("hi from ada"))
-                : null);   // profiles fetch falls through to the default (UID -> ada)
+            req.RequestUri!.AbsolutePath switch
+            {
+                "/rest/v1/posts" when req.Method == HttpMethod.Get => (HttpStatusCode.OK, PostsJson("hi from ada")),
+                "/rest/v1/friendships" => (HttpStatusCode.OK, "[]"),
+                _ => null,   // profiles fetch falls through to the default (UID -> ada)
+            });
 
         var feed = await client.GetFeedAsync();
         Assert.Equal("ada", Assert.Single(feed).Author.Handle);
         Assert.Equal("hi from ada", feed[0].Body);
+    }
+
+    [Fact]
+    public async Task Feed_asks_only_for_my_posts_and_my_accepted_friends()
+    {
+        // Unfiltered, the server runs the posts RLS predicate over every post in the table (review fixes CP6).
+        var postQueries = new List<string>();
+        var (client, _) = await SignedInClient(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            if (path == "/rest/v1/posts" && req.Method == HttpMethod.Get)
+            {
+                postQueries.Add(Uri.UnescapeDataString(req.RequestUri!.Query));
+                return (HttpStatusCode.OK, "[]");
+            }
+            if (path == "/rest/v1/friendships")
+                return (HttpStatusCode.OK,
+                    ("""[{"requester":"OTHER","addressee":"UID","status":"pending"},{"requester":"UID","addressee":"OTHER2","status":"accepted"}]""")
+                        .Replace("UID", Uid).Replace("OTHER2", Other2).Replace("OTHER", Other));
+            if (path == "/rest/v1/profiles" && req.RequestUri!.Query.Contains("in."))
+                return (HttpStatusCode.OK, "[]");
+            return null;
+        });
+
+        await client.GetFeedAsync();
+
+        var q = Assert.Single(postQueries);
+        Assert.Contains($"author=in.({Uid},{Other2})", q);   // me + the accepted friend
+        Assert.DoesNotContain(Other + ",", q);               // not the pending one
+        Assert.DoesNotContain(Other + ")", q);
+    }
+
+    [Fact]
+    public async Task Feed_splits_a_large_friend_list_and_merges_newest_first()
+    {
+        // 150 accepted friends + me = 151 authors → two requests (100 + 51), merged by created_at and capped.
+        var friendIds = Enumerable.Range(1, 150).Select(i => $"00000000-0000-4000-8000-{i:D12}").ToList();
+        var postQueries = new List<string>();
+        var (client, _) = await SignedInClient(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            if (path == "/rest/v1/posts" && req.Method == HttpMethod.Get)
+            {
+                postQueries.Add(Uri.UnescapeDataString(req.RequestUri!.Query));
+                // Each chunk returns one post; the second chunk's is newer.
+                var (id, author, at) = postQueries.Count == 1
+                    ? ("aaaaaaaa-0000-4000-8000-000000000001", friendIds[0], "2026-01-01T00:00:00Z")
+                    : ("aaaaaaaa-0000-4000-8000-000000000002", friendIds[149], "2026-02-01T00:00:00Z");
+                return (HttpStatusCode.OK,
+                    $$"""[{"id":"{{id}}","author":"{{author}}","body":"b","mood_emoji":null,"created_at":"{{at}}"}]""");
+            }
+            if (path == "/rest/v1/friendships")
+                return (HttpStatusCode.OK,
+                    "[" + string.Join(",", friendIds.Select(f =>
+                        $$"""{"requester":"{{Uid}}","addressee":"{{f}}","status":"accepted"}""")) + "]");
+            if (path == "/rest/v1/profiles" && req.RequestUri!.Query.Contains("in."))
+                return (HttpStatusCode.OK, "[]");
+            return null;
+        });
+
+        var feed = await client.GetFeedAsync(limit: 1);
+
+        Assert.Equal(2, postQueries.Count);
+        Assert.Equal(151, postQueries.Sum(q => q[(q.IndexOf("in.(") + 4)..q.IndexOf(')')].Split(',').Length));
+        Assert.Equal(Guid.Parse(friendIds[149]), Assert.Single(feed).Author.Id);   // the newer post wins the cap
     }
 
     [Fact]
