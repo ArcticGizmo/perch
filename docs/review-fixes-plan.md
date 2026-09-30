@@ -1009,6 +1009,8 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 
 **Verify.** Done 2026-09-30: `dotnet build perch.slnx` is clean, and the .NET suite passes 1831 with 1 skipped. No dogfood beyond the overlay still listing live sessions and daemon workers as before.
 
+**Landed:** commit `477a682`.
+
 ---
 
 ## roost branch
