@@ -1,20 +1,17 @@
 name: CI
 
-# Builds and runs the test suites on every push, so a red test is caught by CI rather than by remembering to run
-# them locally.
+# Builds and runs the test suites on every pull request, so a red test is caught before it merges rather than by
+# remembering to run them locally.
 #
 #   windows - the whole solution (both app heads, the hook, the platform projects), the .NET suite, and
 #             tools/test-install.ps1 (the installer tests; its download/verify checks skip without a local
 #             releases\ folder, and nothing in it touches the network).
 #   macos   - the cross-platform app head (the macOS port) and the .NET suite, which is meant to be portable.
 #
-# Pushes to any branch run it. Pull requests run it only when they come from a fork, since a same-repo PR's
-# branch push has already run it. Docs, captures and the Supabase backend (tested separately with pgTAP) don't
-# trigger a run. Root-level *.md only: fixture .md files under tests/ must still trigger one.
+# Pull requests only (opened, new commits, reopened); a plain branch push doesn't run it. workflow_dispatch runs it
+# by hand on any branch. Docs, captures and the Supabase backend (tested separately with pgTAP) don't trigger a
+# run. Root-level *.md only: fixture .md files under tests/ must still trigger one.
 on:
-  push:
-    branches: ['**']
-    paths-ignore: ['*.md', 'docs/**', 'captures/**', 'backend/**']
   pull_request:
     paths-ignore: ['*.md', 'docs/**', 'captures/**', 'backend/**']
   workflow_dispatch:
@@ -24,7 +21,7 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same branch supersedes a run still in progress.
+# A newer push to the same PR supersedes a run still in progress.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -35,7 +32,6 @@ env:
 
 jobs:
   windows:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -72,7 +68,6 @@ jobs:
           if-no-files-found: ignore
 
   macos:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: macos-14
     timeout-minutes: 30
     steps:

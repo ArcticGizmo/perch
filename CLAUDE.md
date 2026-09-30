@@ -61,7 +61,7 @@ set at compile time with `#if WINDOWS`. `Nullable` and `ImplicitUsings` enabled 
 
 ## Testing
 
-CI (`.github/workflows/ci.yml`) runs both suites on every push: on Windows, the whole solution build, the .NET
+CI (`.github/workflows/ci.yml`) runs both suites on every pull request: on Windows, the whole solution build, the .NET
 suite and the installer tests; on macOS, the `net10.0` head build and the .NET suite. Keep new tests passing on
 both hosts; gate genuinely Windows-only ones with `OperatingSystem.IsWindows()`, as the existing ones do.
 
