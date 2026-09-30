@@ -285,7 +285,7 @@ internal static class Program
         {
             if (intent is not null)
             {
-                var file = Path.Combine(Path.GetTempPath(), $"perch-intent-{Guid.NewGuid():N}.json");
+                var file = Perch.Data.Control.SessionOpenIntent.NewHandoffFile();
                 File.WriteAllText(file, intent.ToJson());
                 psi.ArgumentList.Add("--open-intent-file");
                 psi.ArgumentList.Add(file);
@@ -316,11 +316,12 @@ internal static class Program
     }
 
     // Reads (and deletes) the session-intent handoff file named by `--open-intent-file <path>`, if present —
-    // the DetachTray relaunch's channel. Null when the flag is absent or the file can't be read/parsed.
+    // the DetachTray relaunch's channel. Null when the flag is absent or the file can't be read/parsed. Only a file
+    // DetachTray could have written is touched: anything else is ignored, never read or deleted (review fixes CP13).
     private static Perch.Data.Control.SessionOpenIntent? ReadRelaunchIntent(string[] args)
     {
         var path = ArgValue(args, "--open-intent-file");
-        if (path is null) return null;
+        if (path is null || !Perch.Data.Control.SessionOpenIntent.IsHandoffFile(path)) return null;
         Perch.Data.Control.SessionOpenIntent? intent = null;
         try { intent = Perch.Data.Control.SessionOpenIntent.Parse(File.ReadAllText(path)); } catch { }
         try { File.Delete(path); } catch { }

@@ -40,6 +40,13 @@ internal static class SessionLock
     public static string PathFor(string sessionId, string? sessionsDir = null) =>
         Path.Combine(sessionsDir ?? ClaudePaths.SessionsDir, sessionId + Extension);
 
+    /// <summary>The <c>sessions/</c> dir a session launched under <paramref name="configDir"/> uses, as the
+    /// <c>sessionsDir</c> argument of the other members: null (the primary) when no config dir is pinned. The lock
+    /// has to sit beside the session's own files, where that account's <c>perch-hook</c> looks for it (review fixes
+    /// CP13).</summary>
+    public static string? SessionsDirFor(string? configDir) =>
+        string.IsNullOrWhiteSpace(configDir) ? null : Path.Combine(configDir, "sessions");
+
     /// <summary>Writes the lock for <paramref name="sessionId"/>, owned by this process. Returns false when
     /// another <em>live</em> process already holds it (the caller should refuse to control the session) or
     /// the write failed; a stale lock is overwritten. <paramref name="sessionsDir"/> targets a non-primary

@@ -12,6 +12,9 @@ namespace Perch.Tests;
 /// </summary>
 public class ControlServerTests
 {
+    // A folder that exists: Parse refuses an intent for one that doesn't (review fixes CP13).
+    private static readonly string Here = AppContext.BaseDirectory.TrimEnd('\\', '/');
+
     private static string UniquePipe() => "perch-control-test-" + Guid.NewGuid().ToString("N");
 
     // The client exactly as Program.ForwardSessionIntent opens it: current-user-only (so Connect verifies the
@@ -40,7 +43,7 @@ public class ControlServerTests
         {
             Handle = i => { seen = i; return Task.FromResult(new ControlReply(true, "Opening in Perch.")); },
         };
-        var intent = new SessionOpenIntent(@"C:\proj", "abcdef12-3456-7890-abcd-ef1234567890", Model: "opus");
+        var intent = new SessionOpenIntent(Here, "abcdef12-3456-7890-abcd-ef1234567890", Model: "opus");
 
         var reply = ControlReply.Parse(await RoundTrip(server, pipe, intent.ToJson()));
 
@@ -65,7 +68,7 @@ public class ControlServerTests
     {
         var pipe = UniquePipe();
         using var server = new ControlServer(pipe) { Handle = _ => throw new InvalidOperationException("boom") };
-        var reply = ControlReply.Parse(await RoundTrip(server, pipe, new SessionOpenIntent(@"C:\proj").ToJson()));
+        var reply = ControlReply.Parse(await RoundTrip(server, pipe, new SessionOpenIntent(Here).ToJson()));
         Assert.NotNull(reply);
         Assert.False(reply!.Ok);
         Assert.Contains("boom", reply.Message);
@@ -131,7 +134,7 @@ public class ControlServerTests
 
         await using var client = Client(pipe);
         await client.ConnectAsync(5000);   // waits for the server's next retry to create the pipe
-        await client.WriteAsync(Encoding.UTF8.GetBytes(new SessionOpenIntent(@"C:\proj").ToJson() + "\n"));
+        await client.WriteAsync(Encoding.UTF8.GetBytes(new SessionOpenIntent(Here).ToJson() + "\n"));
         using var reader = new StreamReader(client, Encoding.UTF8, leaveOpen: true);
         var reply = ControlReply.Parse(await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)) ?? "");
         Assert.True(reply?.Ok);

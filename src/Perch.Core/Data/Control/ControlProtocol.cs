@@ -136,7 +136,7 @@ internal sealed record SessionOpenIntent(
                     if (Next() is { } m && IsToken(m)) { model = m; any = true; }
                     break;
                 case "--permission-mode":
-                    if (Next() is { } pm && IsToken(pm)) { mode = pm; any = true; }
+                    if (Next() is { } pm && IsPermissionMode(pm)) { mode = pm; any = true; }
                     break;
                 default:
                     if (!a.StartsWith('-') && cwd is null && Directory.Exists(a))
@@ -174,25 +174,68 @@ internal sealed record SessionOpenIntent(
         return o.ToJsonString();
     }
 
+    /// <summary>
+    /// Reads an intent sent over the control pipe or through the relaunch handoff file. Every field is held to the
+    /// same rules <see cref="FromArgs"/> applies to a command line (review fixes CP13): the folder must be an
+    /// existing absolute directory, a resume id must look like a session id, the model must be a plain token and
+    /// the permission mode one Claude Code knows. Anything else rejects the whole request (null) rather than
+    /// opening a session on a field that was dropped or guessed. <c>bypassPermissions</c> is allowed: a process
+    /// running as the user can already start <c>claude</c> in that mode itself, and refusing it here would only
+    /// break <c>perch --permission-mode bypassPermissions</c> while the tray runs.
+    /// </summary>
     public static SessionOpenIntent? Parse(string line)
     {
         try
         {
             if (JsonNode.Parse(line) is not JsonObject o) return null;
             var cwd = TranscriptJson.AsString(o["cwd"]);
-            if (string.IsNullOrEmpty(cwd)) return null;
+            var resume = TranscriptJson.AsString(o["resume"]);
+            var model = TranscriptJson.AsString(o["model"]);
+            var mode = TranscriptJson.AsString(o["mode"]);
+            if (string.IsNullOrEmpty(cwd) || !Path.IsPathFullyQualified(cwd) || !Directory.Exists(cwd)) return null;
+            if (resume is not null && !IsSessionId(resume)) return null;
+            if (model is not null && !IsToken(model)) return null;
+            if (mode is not null && !IsPermissionMode(mode)) return null;
             return new SessionOpenIntent(
                 cwd,
-                TranscriptJson.AsString(o["resume"]),
+                resume,
                 o["pick"]?.GetValue<bool>() ?? false,
                 o["continue"]?.GetValue<bool>() ?? false,
-                TranscriptJson.AsString(o["model"]),
-                TranscriptJson.AsString(o["mode"]),
+                model,
+                mode,
                 ParseMonitor(o["monitor"] as JsonObject));
         }
         catch
         {
             return null;
+        }
+    }
+
+    /// <summary>A fresh path for the detached relaunch's handoff file: <c>%TEMP%\perch-intent-&lt;32 hex&gt;.json</c>.</summary>
+    public static string NewHandoffFile() => Path.Combine(Path.GetTempPath(), $"perch-intent-{Guid.NewGuid():N}.json");
+
+    /// <summary>True only for a path <see cref="NewHandoffFile"/> could have produced: directly in the temp folder,
+    /// named <c>perch-intent-&lt;32 lower-case hex&gt;.json</c>. <c>--open-intent-file</c> reads and then DELETES its
+    /// file, so any other path is ignored, never touched (review fixes CP13).</summary>
+    public static bool IsHandoffFile(string path)
+    {
+        try
+        {
+            if (!Path.IsPathFullyQualified(path)) return false;
+            var full = Path.GetFullPath(path);
+            var dir = Path.GetDirectoryName(full);
+            var temp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!string.Equals(dir, temp, StringComparison.OrdinalIgnoreCase)) return false;
+            var name = Path.GetFileName(full);
+            const string prefix = "perch-intent-", suffix = ".json";
+            if (name.Length != prefix.Length + 32 + suffix.Length
+                || !name.StartsWith(prefix, StringComparison.Ordinal) || !name.EndsWith(suffix, StringComparison.Ordinal))
+                return false;
+            return name.AsSpan(prefix.Length, 32).ToString().All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'));
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -215,11 +258,17 @@ internal sealed record SessionOpenIntent(
 
     // Session ids are UUIDs; the CLI tolerates anything identifier-ish, and so do we (the controller
     // re-validates before it ever reaches a command line).
-    private static bool IsSessionId(string s) =>
-        s.Length >= 8 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
+    /// <summary>A session id: 8+ ASCII letters, digits, <c>-</c> or <c>_</c>. Safe as a bare command-line token.</summary>
+    internal static bool IsSessionId(string s) => ClaudeCli.IsSessionId(s);
 
     private static bool IsToken(string s) =>
         s.Length > 0 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.' or '_');
+
+    /// <summary>The permission modes Claude Code accepts for <c>--permission-mode</c> (the session window's own list).</summary>
+    internal static readonly IReadOnlySet<string> PermissionModes =
+        new HashSet<string>(StringComparer.Ordinal) { "default", "auto", "plan", "acceptEdits", "bypassPermissions" };
+
+    private static bool IsPermissionMode(string s) => PermissionModes.Contains(s);
 }
 
 /// <summary>The tray's one-line answer to a <see cref="SessionOpenIntent"/>.</summary>

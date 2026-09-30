@@ -37,7 +37,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | ✅ (cross-user squat check untested) |
 | [CP11](#cp11) | 🟡 P2 | Client | Hardened shared `GitRunner` | M | 🟦 code + tests done, dogfood owed |
 | [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | ✅ |
-| [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | ⬜ |
+| [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | 🟦 code + tests done, dogfood owed |
 | [CP14](#cp14) | 🟠 P1 | Data safety | Never wipe `.claude.json`; atomic writes everywhere | M | ✅ |
 | [CP15](#cp15) | 🟡 P2 | Privacy | Recording-export redaction gaps | S | ⬜ |
 | [CP16](#cp16) | ⚪ P3 | Client | Small security hardening batch | M | ⬜ |
@@ -503,7 +503,7 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 **Landed:** commit `cd8dc69`, simplified in `a29a4d1`: `CmdShim`, plus the Windows `FileRevealer`, `GitKrakenLauncher`, `OverlayCanvas`, `DaemonListWindow` and `MarkdownWindow`.
 
 <a id="cp13"></a>
-### CP13 — Control-pipe intent validation + launcher quoting · 🟡 P2 · S · ⬜
+### CP13 — Control-pipe intent validation + launcher quoting · 🟡 P2 · S · 🟦
 
 **Problem.**
 - `SessionOpenIntent.Parse` (`ControlProtocol.cs:116-123`) doesn't validate `mode`, `cwd` or `resume`. Any same-user process can open a `bypassPermissions` session in a folder of its choosing, focused.
@@ -512,11 +512,26 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 - `SessionLock.Acquire` (`ClaudeSessionController.cs:91,144`) always writes to the primary `sessions/` dir and ignores a `false` return.
 
 **Tasks**
-- [ ] `Parse`: allowlist the modes (refuse `bypassPermissions` over the pipe), require `Directory.Exists(cwd)`, and run `IsSafeToken` on ids. Reuse `FromArgs`' validation.
-- [ ] Accept, and delete, only `%TEMP%\perch-intent-<32 hex>.json`.
-- [ ] `SessionLauncher`: validate the id with `IsSafeToken`, trim trailing `\` from the cwd, escape `;` for wt, and use `ArgumentList`.
-- [ ] `SessionLock.Acquire`: use `Path.Combine(configDir, "sessions")`, and refuse to launch on `false`.
-- [ ] xUnit covering `Parse` and the launcher command-line builder.
+- [x] `Parse` holds every field to `FromArgs`' rules: the folder must be an existing, fully qualified directory, a resume id must be a session id, the model a plain token, and the mode one of `default`, `auto`, `plan`, `acceptEdits` or `bypassPermissions` (the session window's list). **Any** invalid field rejects the whole request, rather than opening a session on a dropped or guessed value; the CLI gets "didn't understand". `FromArgs` uses the same mode list, so an unknown `--permission-mode` is dropped there too.
+  - **Changed from the plan: `bypassPermissions` is still accepted over the pipe.** The pipe is current-user-only (CP10), and a process running as the user can already start `claude --permission-mode bypassPermissions` in any folder itself, so refusing it would only break `perch --permission-mode bypassPermissions` while the tray runs.
+- [x] `--open-intent-file` reads, and then deletes, only a path `SessionOpenIntent.NewHandoffFile()` could have produced: directly in the temp folder, named `perch-intent-<32 lower-case hex>.json`. Any other path is ignored and never touched. `DetachTray` writes its file through the same helper.
+- [x] `SessionLauncher`:
+  - `Reopen` refuses (returns false, so the app offers to copy the command) any id that isn't a plain session id (`ClaudeCli.IsSessionId`), since the id lands unquoted on a cmd, PowerShell or wt command line.
+  - The wt `-d` value comes from `ClaudeCli.WindowsTerminalStartDir`: a trailing backslash gets a harmless `.` (`"C:\."`), so it can't escape the closing quote, and `;` is escaped as `\;`.
+  - **Changed from the plan: no `ArgumentList`.** wt and cmd re-tokenise their own command lines, so an argument list gives no protection there; validating the tokens that go on the line does.
+- [x] `SessionLock`: the controller writes, reads and releases the lock in the **launching config dir's** `sessions/` (`SessionLock.SessionsDirFor(configDir)`, null = the primary), which is where that account's `perch-hook` looks. It **refuses to start** (`InvalidOperationException`, surfaced as the window's launch failure) when another live Perch holds the lock, checked before anything else. The session window's own pre-launch check reads the same dir.
+  - **Changed from the plan: a lock that merely can't be written still doesn't block.** `Acquire` returns false for both "held by another live Perch" and "write failed", and the lock is documented as best-effort; only the first means two writers on one transcript.
+- [x] xUnit (30 new):
+  - `Parse` rejects a missing or relative folder, a short or non-id resume, an unknown mode, a mode with a flag smuggled in, and a non-token model; it accepts each of the five modes (bypass included); `FromArgs` drops an unknown mode.
+  - The handoff check accepts only Perch's own file (not the wrong case, extension or folder, a subfolder, a `..` climb, a relative path, or an arbitrary document).
+  - `WindowsTerminalStartDir` handles a plain path, spaces, a drive root, a trailing backslash and `;`; `IsSessionId` refuses `;`, `&`, a backtick, `$(…)`, empty and null.
+  - `SessionsDirFor`; and the controller refuses a session a live other process (a real one on the host, nothing spawned) holds in a non-primary config dir, writing nothing to the primary.
+  - Existing control-pipe tests now use a real folder, since a non-existent `C:\proj` is (correctly) rejected.
+- [ ] Dogfood: with the tray running, `perch`, `perch -c`, `perch --resume <id>` and `perch --permission-mode plan` from a terminal still open windows; "Reopen in terminal" (Windows Terminal) for a session whose folder is a drive root, like `D:\`; and a session under a non-primary account shows its `.perch-lock` in that account's `sessions/` folder while it runs.
+
+**Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1708 with 1 skipped.
+
+**Landed:** @@HASH@@: `SessionOpenIntent` (`Parse`, handoff file), `ClaudeCli` (`IsSessionId`, `WindowsTerminalStartDir`), `SessionLock.SessionsDirFor`, `ClaudeSessionController`, `SessionLauncher`, `Program` and `SessionWindow`.
 
 <a id="cp14"></a>
 ### CP14 — Never wipe `.claude.json`; atomic writes everywhere · 🟠 P1 · M · ✅

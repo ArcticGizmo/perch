@@ -94,4 +94,47 @@ public class SessionLockTests
 
     [Fact]
     public void Acquire_RejectsEmptyId() => Assert.False(SessionLock.Acquire("", "C:\\x"));
+
+    // Review fixes CP13: the lock sits in the launching config dir's own sessions/ (where that account's perch-hook
+    // looks), not always the primary's.
+    [Fact]
+    public void SessionsDirFor_IsThePinnedConfigDirsSessionsFolder_OrThePrimary()
+    {
+        Assert.Null(SessionLock.SessionsDirFor(null));
+        Assert.Null(SessionLock.SessionsDirFor("  "));
+        Assert.Equal(Path.Combine(@"C:\Users\x\.claude-work", "sessions"), SessionLock.SessionsDirFor(@"C:\Users\x\.claude-work"));
+    }
+
+    // Review fixes CP13: another live Perch holding the lock (dev beside release) refuses the launch, before any
+    // process starts. The "other owner" is a real live process that isn't this one; nothing is spawned.
+    [Fact]
+    public void Controller_RefusesASessionAnotherLivePerchHolds_InThatConfigDir()
+    {
+        int self = Environment.ProcessId;
+        var other = System.Diagnostics.Process.GetProcesses()
+            .Select(p => { using (p) return p.Id; })
+            .FirstOrDefault(pid => pid != self && SessionLock.IsProcessAlive(pid));
+        if (other == 0) return;   // no inspectable live process on this host
+
+        var configDir = Directory.CreateTempSubdirectory("perch-lockdir-").FullName;
+        try
+        {
+            var id = FreshId();
+            var sessions = SessionLock.SessionsDirFor(configDir)!;
+            Directory.CreateDirectory(sessions);
+            File.WriteAllText(SessionLock.PathFor(id, sessions),
+                $$"""{"sessionId":"{{id}}","pid":"{{other}}","cwd":"C:\\x","profile":"Perch-Dev","since":"2026-01-01T00:00:00Z"}""");
+
+            using var controller = new ClaudeSessionController();
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                controller.Start(AppContext.BaseDirectory, resumeSessionId: id, configDir: configDir));
+            Assert.Contains("Perch-Dev", ex.Message);
+            Assert.False(controller.IsRunning);
+            Assert.Null(SessionLock.Read(id));   // nothing written to the primary's sessions/ either
+        }
+        finally
+        {
+            try { Directory.Delete(configDir, recursive: true); } catch { }
+        }
+    }
 }

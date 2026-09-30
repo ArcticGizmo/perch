@@ -163,6 +163,31 @@ public class ClaudeCliTerminalCommandTests
     public void Cmd_line_refuses_a_config_dir_it_cant_pass_safely(string dir) =>
         Assert.Null(ClaudeCli.WindowsCmdLine(Claude, "--resume abc", dir));
 
+    // Review fixes CP13: wt's -d value. A trailing backslash escaped the closing quote (`-d "C:\"` read as `C:"` and
+    // swallowed the rest of the line), and wt splits subcommands at every `;`, quoted or not.
+    [Theory]
+    [InlineData(@"C:\work\repo", @"""C:\work\repo""")]
+    [InlineData(@"C:\work\my repo", @"""C:\work\my repo""")]
+    [InlineData(@"C:\", @"""C:\.""")]
+    [InlineData(@"C:\work\repo\", @"""C:\work\repo\.""")]
+    [InlineData(@"C:\a;b", @"""C:\a\;b""")]
+    public void Windows_terminal_start_dir_survives_a_trailing_backslash_and_semicolons(string cwd, string expected) =>
+        Assert.Equal(expected, ClaudeCli.WindowsTerminalStartDir(cwd));
+
+    // Review fixes CP13: a reopen puts the id unquoted on a cmd / PowerShell / wt command line.
+    [Theory]
+    [InlineData("5b4d131d-dfd4-4103-860c-f5c96094b598", true)]
+    [InlineData("abc12345_x", true)]
+    [InlineData("short", false)]
+    [InlineData("5b4d131d; calc", false)]
+    [InlineData("5b4d131d&calc", false)]
+    [InlineData("5b4d131d`n", false)]
+    [InlineData("$(calc)00", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void Only_a_plain_session_id_is_passed_to_a_terminal(string? id, bool ok) =>
+        Assert.Equal(ok, ClaudeCli.IsSessionId(id));
+
     [Fact]
     public void PowerShell_script_sets_the_env_var_with_literal_quoting()
     {

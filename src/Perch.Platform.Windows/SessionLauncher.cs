@@ -15,8 +15,10 @@ namespace Perch.Platform.Windows;
 /// </summary>
 public sealed class SessionLauncher : ISessionLauncher
 {
+    // The id lands unquoted on a cmd / PowerShell / wt command line, so anything but a plain session id is refused
+    // (false → the app offers to copy the command instead; review fixes CP13).
     public bool Reopen(string cwd, string sessionId, TerminalApp terminal, string? configDir = null) =>
-        RunClaudeCommand(cwd, $"--resume {sessionId}", terminal, configDir);
+        ClaudeCli.IsSessionId(sessionId) && RunClaudeCommand(cwd, $"--resume {sessionId}", terminal, configDir);
 
     public bool RunClaudeCommand(string cwd, string claudeArgs, TerminalApp terminal, string? configDir = null)
     {
@@ -44,7 +46,8 @@ public sealed class SessionLauncher : ISessionLauncher
 
     // -d sets Windows Terminal's tab start directory (wt ignores the parent's cwd); everything else takes
     // WorkingDirectory. Every host is an absolute path too: ShellExecute searches WorkingDirectory — the repo —
-    // for a bare name. wt.exe is an execution alias on PATH, so it goes through the resolver.
+    // for a bare name. wt.exe is an execution alias on PATH, so it goes through the resolver. The -d value survives
+    // a trailing backslash and a `;` (ClaudeCli.WindowsTerminalStartDir; review fixes CP13).
     private static ProcessStartInfo StartInfo(
         TerminalApp terminal, string cwd, string claude, string claudeArgs, string cmdLine, string? configDir)
     {
@@ -59,7 +62,8 @@ public sealed class SessionLauncher : ISessionLauncher
             TerminalApp.CommandPrompt =>
                 new ProcessStartInfo(cmd, $"/k {cmdLine}") { UseShellExecute = true, WorkingDirectory = cwd },
             _ => // WindowsTerminal, and Auto → Windows Terminal (the Reopen fallback then covers Command Prompt)
-                new ProcessStartInfo(ExecutableResolver.Resolve("wt.exe"), $"-d \"{cwd}\" {QuoteIfSpaced(cmd)} /k {cmdLine}")
+                new ProcessStartInfo(ExecutableResolver.Resolve("wt.exe"),
+                        $"-d {ClaudeCli.WindowsTerminalStartDir(cwd)} {QuoteIfSpaced(cmd)} /k {cmdLine}")
                     { UseShellExecute = true },
         };
     }

@@ -27,8 +27,8 @@ public class ControlProtocolTests
     [Fact]
     public void StartFresh_IsACwdOnlyIntent()
     {
-        var i = SessionOpenIntent.StartFresh(@"C:\proj");
-        Assert.Equal(@"C:\proj", i.Cwd);
+        var i = SessionOpenIntent.StartFresh(Here);
+        Assert.Equal(Here, i.Cwd);
         Assert.Null(i.ResumeId);
         Assert.False(i.Continue);
         Assert.False(i.PickResume);
@@ -85,16 +85,16 @@ public class ControlProtocolTests
     [Fact]
     public void Json_RoundTrips()
     {
-        var intent = new SessionOpenIntent(@"C:\proj", "abc12345-id", PickResume: false, Continue: false, Model: "sonnet", PermissionMode: "acceptEdits");
+        var intent = new SessionOpenIntent(Here, "abc12345-id", PickResume: false, Continue: false, Model: "sonnet", PermissionMode: "acceptEdits");
         var back = SessionOpenIntent.Parse(intent.ToJson());
         Assert.Equal(intent, back);
 
-        var pick = new SessionOpenIntent(@"C:\proj", PickResume: true);
+        var pick = new SessionOpenIntent(Here, PickResume: true);
         Assert.Equal(pick, SessionOpenIntent.Parse(pick.ToJson()));
 
         // The launch-monitor hint (the terminal's monitor) survives the round trip, so the tray places the
         // window where the CLI process sampled it.
-        var withMon = new SessionOpenIntent(@"C:\proj",
+        var withMon = new SessionOpenIntent(Here,
             OriginMonitor: new Perch.Platform.MonitorGeometry(-1920, 0, 1920, 1080, -1920, 0, 1920, 1040, 1.5));
         Assert.Equal(withMon, SessionOpenIntent.Parse(withMon.ToJson()));
 
@@ -103,5 +103,56 @@ public class ControlProtocolTests
 
         var reply = new ControlReply(true, "opened");
         Assert.Equal(reply, ControlReply.Parse(reply.ToJson()));
+    }
+    // ---- review fixes CP13: an intent from the pipe or the handoff file is validated like a command line ----
+
+    [Theory]
+    [InlineData("{\"cwd\":\"C:\\\\definitely\\\\not\\\\a\\\\real\\\\dir\\\\xyz\"}")]   // no such folder
+    [InlineData("{\"cwd\":\"relative\\\\dir\"}")]                                     // not absolute
+    [InlineData("{\"cwd\":\"@HERE@\",\"resume\":\"x\"}")]                            // too short for an id
+    [InlineData("{\"cwd\":\"@HERE@\",\"resume\":\"abcdefgh & calc\"}")]              // not an id at all
+    [InlineData("{\"cwd\":\"@HERE@\",\"mode\":\"yolo\"}")]                           // an unknown mode
+    [InlineData("{\"cwd\":\"@HERE@\",\"mode\":\"plan --dangerously-skip-permissions\"}")]
+    [InlineData("{\"cwd\":\"@HERE@\",\"model\":\"opus; rm -rf\"}")]                  // not a token
+    public void Parse_RejectsAnIntentWithAnyInvalidField(string json)
+    {
+        Assert.Null(SessionOpenIntent.Parse(json.Replace("@HERE@", Here.Replace("\\", "\\\\"))));
+    }
+
+    [Theory]
+    [InlineData("default")]
+    [InlineData("auto")]
+    [InlineData("plan")]
+    [InlineData("acceptEdits")]
+    [InlineData("bypassPermissions")]   // allowed: the user's own `perch --permission-mode bypassPermissions`
+    public void Parse_AcceptsEveryKnownPermissionMode(string mode)
+    {
+        var intent = new SessionOpenIntent(Here, PermissionMode: mode);
+        Assert.Equal(intent, SessionOpenIntent.Parse(intent.ToJson()));
+    }
+
+    [Fact]
+    public void FromArgs_IgnoresAnUnknownPermissionMode()
+    {
+        var i = SessionOpenIntent.FromArgs(["-c", "--permission-mode", "yolo"], Here);
+        Assert.NotNull(i);                       // -c still asks for a session
+        Assert.Null(i!.PermissionMode);          // but the unknown mode is dropped, as claude would refuse it
+    }
+
+    [Fact]
+    public void HandoffFile_IsOnlyPerchsOwnTempFile()
+    {
+        var mine = SessionOpenIntent.NewHandoffFile();
+        Assert.True(SessionOpenIntent.IsHandoffFile(mine));
+
+        var temp = Path.GetTempPath();
+        Assert.False(SessionOpenIntent.IsHandoffFile(Path.Combine(temp, "perch-intent-XYZ.json")));
+        Assert.False(SessionOpenIntent.IsHandoffFile(Path.Combine(temp, "perch-intent-" + new string('A', 32) + ".json")));
+        Assert.False(SessionOpenIntent.IsHandoffFile(Path.Combine(temp, "perch-intent-" + new string('a', 32) + ".txt")));
+        Assert.False(SessionOpenIntent.IsHandoffFile(Path.Combine(temp, "sub", Path.GetFileName(mine))));   // not directly in temp
+        Assert.False(SessionOpenIntent.IsHandoffFile(Path.Combine(temp, "..", Path.GetFileName(mine))));   // climbs out
+        Assert.False(SessionOpenIntent.IsHandoffFile(Path.Combine(Here, Path.GetFileName(mine))));        // right name, wrong folder
+        Assert.False(SessionOpenIntent.IsHandoffFile(Path.GetFileName(mine)));                             // relative
+        Assert.False(SessionOpenIntent.IsHandoffFile(@"C:\Users\me\Documents\thesis.docx"));
     }
 }

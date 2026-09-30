@@ -9,6 +9,11 @@ namespace Perch.Data;
 /// </summary>
 public static class ClaudeCli
 {
+    /// <summary>True for a session id: 8+ ASCII letters, digits, <c>-</c> or <c>_</c>, so it's safe as a bare token on
+    /// any command line Perch builds (review fixes CP13).</summary>
+    public static bool IsSessionId(string? s) =>
+        s is { Length: >= 8 } && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
+
     /// <summary>The command that resumes an existing session by id: <c>claude --resume &lt;sessionId&gt;</c>.</summary>
     public static string ResumeCommand(string sessionId) => $"claude --resume {sessionId}";
 
@@ -66,6 +71,18 @@ public static class ClaudeCli
     }
 
     private static string QuoteIfSpaced(string path) => path.Contains(' ') ? $"\"{path}\"" : path;
+
+    /// <summary>
+    /// Windows Terminal's quoted <c>-d</c> value for <paramref name="cwd"/> (review fixes CP13). A trailing
+    /// backslash would escape the closing quote (<c>-d "C:\"</c> reads as <c>C:"</c> and swallows the rest of the
+    /// line), so the folder gets a harmless trailing <c>.</c> instead. wt splits its command line into subcommands
+    /// at every <c>;</c>, even inside quotes, so each one is escaped as <c>\;</c>.
+    /// </summary>
+    public static string WindowsTerminalStartDir(string cwd)
+    {
+        var dir = cwd.EndsWith('\\') ? cwd + "." : cwd;
+        return "\"" + dir.Replace(";", "\\;") + "\"";
+    }
 
     /// <summary>The Windows half of <see cref="CreateStartInfo"/>, over an already-resolved path (split out for tests).</summary>
     internal static ProcessStartInfo CreateWindowsStartInfo(string claudePath, string args, string cmdPath)

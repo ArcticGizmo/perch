@@ -26,6 +26,8 @@ internal sealed class ClaudeSessionController : IDisposable
 
     private Process? _process;
     private StreamWriter? _stdin;
+    // The sessions/ dir the lock sidecar lives in: the pinned config dir's, or null for the primary.
+    private string? _lockDir;
     private readonly Lock _writeLock = new();
     private int _requestCounter;
 
@@ -53,6 +55,13 @@ internal sealed class ClaudeSessionController : IDisposable
 
         bool resume = IsSafeToken(resumeSessionId);
         var id = resume ? resumeSessionId! : (IsSafeToken(newSessionId) ? newSessionId! : Guid.NewGuid().ToString());
+
+        // The lock lives in the session's own config dir. Another live Perch holding it (dev beside release) means two
+        // writers on one transcript, so that refuses the launch before anything else happens (review fixes CP13). A
+        // lock that merely can't be written stays best-effort below and doesn't block.
+        var lockDir = SessionLock.SessionsDirFor(configDir);
+        if (SessionLock.HeldByOther(id, lockDir) is { } other)
+            throw new InvalidOperationException($"Session {id} is already controlled by {other.Profile} (PID {other.Pid}).");
 
         var args = "-p --input-format stream-json --output-format stream-json --verbose" +
                    " --include-partial-messages --permission-prompt-tool stdio";
@@ -86,10 +95,11 @@ internal sealed class ClaudeSessionController : IDisposable
 
         // Ownership is claimed before the process exists so nothing can race the pre-init window; a
         // failed launch releases it again below.
+        _lockDir = lockDir;
         SessionId = id;
         Cwd = cwd;
         ControlledSessions.Register(id);
-        SessionLock.Acquire(id, cwd);
+        SessionLock.Acquire(id, cwd, _lockDir);
 
         Process process;
         try
@@ -99,7 +109,7 @@ internal sealed class ClaudeSessionController : IDisposable
         catch
         {
             ControlledSessions.Unregister(id);
-            SessionLock.Release(id);
+            SessionLock.Release(id, _lockDir);
             SessionId = null;
             throw;
         }
@@ -139,10 +149,10 @@ internal sealed class ClaudeSessionController : IDisposable
                     if (ev is SessionInitEvent init && init.SessionId.Length > 0 && init.SessionId != SessionId)
                     {
                         ControlledSessions.Unregister(SessionId);
-                        SessionLock.Release(SessionId);
+                        SessionLock.Release(SessionId, _lockDir);
                         SessionId = init.SessionId;
                         ControlledSessions.Register(init.SessionId);   // focus routing skips owned sessions
-                        SessionLock.Acquire(init.SessionId, Cwd);
+                        SessionLock.Acquire(init.SessionId, Cwd, _lockDir);
                     }
                     EventReceived?.Invoke(ev);
                 }
@@ -164,7 +174,7 @@ internal sealed class ClaudeSessionController : IDisposable
         }
         catch { /* best effort */ }
         ControlledSessions.Unregister(SessionId);
-        SessionLock.Release(SessionId);
+        SessionLock.Release(SessionId, _lockDir);
         Exited?.Invoke(exitCode, errTail);
     }
 

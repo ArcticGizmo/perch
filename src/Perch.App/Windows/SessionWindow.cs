@@ -1455,7 +1455,15 @@ internal sealed partial class SessionWindow : Window
         }
 
         // Collision defences (docs/session-ui-plan.md §Phase 4 (a)): never drive an id that is already
-        // running in a real terminal, or under another Perch instance.
+        // running in a real terminal, or under another Perch instance. The lock is looked for in the session's own
+        // config dir, where the controller writes it (review fixes CP13).
+        string? configDir;
+        try { configDir = LaunchConfigDir(_cwd); }
+        catch (Exception ex)
+        {
+            LaunchFail($"failed to start claude: {ex.Message}");
+            return;
+        }
         if (_resumeId is { } rid)
         {
             if (LiveLookup?.Invoke(rid) is { IsPerchControlled: false } live)
@@ -1464,7 +1472,7 @@ internal sealed partial class SessionWindow : Window
                            "it's running. Close it there, or use “Elevate to Perch” on its overlay row.");
                 return;
             }
-            if (SessionLock.HeldByOther(rid) is { } other)
+            if (SessionLock.HeldByOther(rid, SessionLock.SessionsDirFor(configDir)) is { } other)
             {
                 LaunchFail($"session {Shorten(rid)} is already controlled by {other.Profile} (PID {other.Pid}).");
                 return;
@@ -1474,7 +1482,6 @@ internal sealed partial class SessionWindow : Window
         PerchSession session;
         try
         {
-            var configDir = LaunchConfigDir(_cwd);
             LaunchLog.Write(_resumeId is { } logRid
                 ? $"perch window resume: {TranscriptLocator.DescribeResume(logRid, _cwd)}"
                 : $"perch window new session: cwd={LaunchLog.Show(_cwd)} CLAUDE_CONFIG_DIR={LaunchLog.Show(configDir)}");
