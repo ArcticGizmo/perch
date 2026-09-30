@@ -11,39 +11,50 @@ name: Supabase migrations
 #
 # MANUAL RUN: Actions tab -> "Supabase migrations" -> "Run workflow" applies unconditionally, bypassing
 # BOTH gates (it re-pushes all migrations; idempotent, so that's safe). Use it to apply out of band or to
-# recover after a skipped/failed run. Pick the branch in the Run-workflow dialog.
+# recover after a skipped/failed run. It only runs from main: a dispatch on any other branch is skipped.
 #
 # Requires three repo secrets (Settings -> Secrets and variables -> Actions):
 #   SUPABASE_ACCESS_TOKEN  - a personal access token (supabase.com/dashboard/account/tokens)
 #   SUPABASE_DB_PASSWORD   - the project's database password (Project Settings -> Database)
 #   SUPABASE_PROJECT_REF   - the project ref, e.g. ecrehwttqpgdpzroazwp (not sensitive; it's in the URL)
+#
+# The job runs in the `production` environment. Give it required reviewers and restrict its deployment
+# branches to main (Settings -> Environments -> production), so a prod change needs a human approval.
+# The secrets are handed only to the steps that use them, and the CLI version is pinned.
 on:
   push:
     branches: [main]
     paths: ['backend/supabase/migrations/**']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   migrate:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    env:
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0   # need history to diff this push's base against its tip
+          persist-credentials: false
 
       # Tokenless: decide whether any NEW migration file was added in this push. Renames are treated as an
       # add (--no-renames) since a new timestamp is a new version. A manual dispatch, or a push with no
       # usable base commit (new branch / first push), always runs.
       - id: detect
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$EVENT" = "workflow_dispatch" ]; then
             echo "Manual dispatch -> run."; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          before='${{ github.event.before }}'
-          after='${{ github.sha }}'
+          before="$BEFORE"
+          after="$AFTER"
           if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ] \
              || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
             echo "No usable base commit -> run."; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
@@ -60,17 +71,25 @@ jobs:
 
       # A manual dispatch always applies (its own guarantee, independent of the detect gate); an automatic
       # push applies only when detect found a newly-added migration.
-      - uses: supabase/setup-cli@v1
+      # Pinned to the CLI version the migrations are tested with locally (pgTAP); bump deliberately.
+      - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb # v1.7.3
         if: steps.detect.outputs.run == 'true' || github.event_name == 'workflow_dispatch'
         with:
-          version: latest
+          version: 2.115.0
 
       - name: Link the project
         if: steps.detect.outputs.run == 'true' || github.event_name == 'workflow_dispatch'
-        run: supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}" --workdir backend
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: supabase link --project-ref "$PROJECT_REF" --workdir backend
 
       - name: Push migrations
         if: steps.detect.outputs.run == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: supabase db push --workdir backend
 
       - name: Nothing to apply

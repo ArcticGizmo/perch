@@ -52,10 +52,18 @@ if %ERRORLEVEL% neq 0 (
 
 echo Packaging ...
 
-dnx vpk pack --packId Perch --packTitle "Perch" --packVersion %VERSION% --packDir publish\ --mainExe perch.exe --outputDir releases\
+:: vpk is a local tool pinned in .config\dotnet-tools.json (to the app's Velopack library version), so a
+:: local pack uses the same vpk as CI rather than whatever is newest on nuget.org.
+dotnet tool restore
+if %ERRORLEVEL% neq 0 (
+    echo Could not restore the pinned vpk CLI.
+    exit /b %ERRORLEVEL%
+)
+
+dotnet vpk pack --packId Perch --packTitle "Perch" --packVersion %VERSION% --packDir publish\ --mainExe perch.exe --outputDir releases\
 
 if %ERRORLEVEL% neq 0 (
-    echo Pack failed. Is the vpk CLI installed? Run: dotnet tool install -g vpk
+    echo Pack failed.
     exit /b %ERRORLEVEL%
 )
 

@@ -241,13 +241,9 @@ build-provenance attestation) — see [`docs/distribution-plan.md`](docs/distrib
 
 ### Building locally (optional)
 
-If you want to produce release artifacts without pushing a tag, install the `vpk` CLI once:
-
-```
-dotnet tool install -g vpk
-```
-
-Then run:
+If you want to produce release artifacts without pushing a tag, run the packaging script for your platform.
+The `vpk` CLI is a local tool pinned in `.config/dotnet-tools.json`, and both scripts restore it for you
+(`dotnet tool restore`), so there's nothing to install globally:
 
 ```
 publish.bat        # Windows: Perch-win-Setup.exe + SHA256SUMS.txt

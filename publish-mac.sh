@@ -35,9 +35,9 @@ if [[ -z "${VERSION:-}" ]]; then
 fi
 
 # --- prerequisites -------------------------------------------------------------------------------
-if ! command -v vpk >/dev/null 2>&1; then
-    echo "Error: the vpk CLI isn't on PATH. Install it: dotnet tool install -g vpk" >&2
-    echo "(then ensure ~/.dotnet/tools is on PATH)" >&2
+# vpk is a local tool pinned in .config/dotnet-tools.json (to the app's Velopack library version).
+if ! dotnet tool restore >/dev/null; then
+    echo "Error: couldn't restore the pinned vpk CLI (dotnet tool restore)." >&2
     exit 1
 fi
 if [[ ! -f "$ICNS" ]]; then
@@ -86,7 +86,7 @@ sed "s/__VERSION__/$VERSION/g" "$PLIST_SRC" > "$plist_tmp"
 
 # --- pack the unsigned .app + DMG ----------------------------------------------------------------
 echo "Packaging ..."
-vpk pack \
+dotnet vpk pack \
     --runtime "$RID" \
     --packId Perch \
     --packTitle "Perch" \

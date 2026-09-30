@@ -41,7 +41,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP14](#cp14) | 🟠 P1 | Data safety | Never wipe `.claude.json`; atomic writes everywhere | M | ✅ |
 | [CP15](#cp15) | 🟡 P2 | Privacy | Recording-export redaction gaps | S | ✅ |
 | [CP16](#cp16) | ⚪ P3 | Client | Small security hardening batch | M | ⬜ |
-| [CP17](#cp17) | 🟡 P2 | Supply chain | CI permissions, pinning, deploy-secret scoping | S | ⬜ |
+| [CP17](#cp17) | 🟡 P2 | Supply chain | CI permissions, pinning, deploy-secret scoping | S | 🟦 done in code; env protection (settings) + first live runs owed; lock files ⏸ |
 | [CP18](#cp18) | 🟡 P2 | Supply chain | Code signing + signature verification in `install.ps1` | L | ⬜ |
 | [CP19](#cp19) | ⚪ P3 | Build | Build/installer hygiene (em dashes, PATH type, versioning) | S | ⬜ |
 | [CP20](#cp20) | 🟠 P1 | Performance | Session scan off the UI thread + incremental transcripts | L | ✅ |
@@ -632,7 +632,7 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 ## Supply chain
 
 <a id="cp17"></a>
-### CP17 — CI permissions, pinning, deploy-secret scoping · 🟡 P2 · S · ⬜
+### CP17 — CI permissions, pinning, deploy-secret scoping · 🟡 P2 · S · 🟦
 
 **Problem.**
 - **`release.yml`.**
@@ -646,10 +646,21 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
   - There is no `environment:` gate, and `workflow_dispatch` accepts any branch.
 
 **Tasks**
-- [ ] `release.yml`: `contents: read` on the build jobs and `write` only on the release job. Add `persist-credentials: false` to checkout.
-- [ ] Pin every action to a commit SHA, with the version in a comment. Add Dependabot for `github-actions`.
-- [ ] Pin `vpk` to the Velopack library version (`--version 1.2.0`, or `.config/dotnet-tools.json`). Add `global.json`, plus NuGet lock files with `--locked-mode`.
-- [ ] Supabase workflows: secrets only on the steps that use them; pin the setup-cli SHA and CLI version; add `environment: production` with required reviewers, limited to `main`; add `permissions: contents: read`.
+- [x] `release.yml`: the workflow default is now `contents: read`, and only the `release` job gets `contents: write`. That job checks nothing out and builds nothing. Both build checkouts use `persist-credentials: false`.
+- [x] Every action is pinned to a commit SHA, with the version in a trailing comment. The pin is the latest release **within the major already in use** (checkout v4.4.0, setup-dotnet v4.3.1, upload-artifact v4.6.2, download-artifact v4.3.0, action-gh-release v2.6.2, setup-cli v1.7.3), so behaviour is unchanged. Newer majors exist (checkout v7, the artifact actions v7/v8, action-gh-release v3, setup-cli v3). `.github/dependabot.yml` (github-actions, weekly, one grouped PR) proposes those upgrades as reviewable PRs rather than taking them silently.
+- [x] `vpk` is pinned to 1.2.0 in `.config/dotnet-tools.json`, matching the `Velopack` 1.2.0 library the app references. `release.yml`, `publish.bat` and `publish-mac.sh` run `dotnet tool restore` + `dotnet vpk`, replacing `dotnet tool install -g vpk` and the unpinned `dnx vpk`. The README drops its global-install step. vpk 1.2.161 exists, but the CLI and library move together, so bumping them is a deliberate separate change.
+- [x] `global.json` pins SDK 10.0.401 (`rollForward: latestFeature`, no prerelease). Both build jobs set up .NET with `global-json-file: global.json` instead of the floating `'10.x'`.
+- [ ] ⏸ **NuGet lock files: deferred.** The app head's target frameworks differ by host (the csproj drops the Windows TFM on macOS). So one committed `packages.lock.json` can't satisfy `--locked-mode` on both runners, since NuGet treats a framework mismatch as an inconsistent lock file. `publish -r win-x64` / `-r osx-arm64` would also need every RID declared in the lock file. The remaining gap is small: every direct `PackageReference` is already an exact version, and restore verifies nuget.org's repository signatures. Revisit if the head stops varying its TFMs by host.
+- [x] Supabase workflows (`db-migrate.yml`, `functions-deploy.yml`):
+  - `permissions: contents: read`, and `persist-credentials: false` on checkout.
+  - The job runs only on `main` (`if: github.ref == 'refs/heads/main'`), so a dispatch from another branch is skipped.
+  - `environment: production`.
+  - Secrets are passed only to the steps that use them: link/push get the token and DB password, deploy gets the token. The project ref and the event SHAs go through `env:` rather than being interpolated into the script.
+  - setup-cli is pinned by SHA, and the CLI to **2.115.0**, the version the migrations are tested with locally (pgTAP).
+- [ ] **Owed (repo settings, a manual step):** in Settings → Environments → `production`, add required reviewers and set the deployment branches to `main` only. Until then, GitHub creates the environment on first use with no protection rules, so the workflows run as before without the approval gate.
+- [ ] Verify on the next real runs: a `v*` tag builds both heads and publishes (the release job is the only writer), a migration push waits for approval once the environment is protected, and Dependabot opens its first grouped PR.
+
+**Verify.** Done 2026-09-30. All four YAML files parse. The permissions, gates and pins were checked by reading the parsed YAML back. `dotnet tool restore` restores vpk 1.2.0 and `dotnet vpk` runs. `dotnet --version` resolves 10.0.401 through `global.json`, and `dotnet build perch.slnx` is clean. The pipeline files stay ASCII: the diff adds no non-ASCII characters, and `publish-mac.sh`'s two pre-existing em dashes are CP19's. The repo stores `publish-mac.sh` with LF line endings (`git ls-files --eol`).
 
 <a id="cp18"></a>
 ### CP18 — Code signing + signature verification · 🟡 P2 · L · ⬜
