@@ -531,7 +531,7 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 
 **Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1708 with 1 skipped.
 
-**Landed:** @@HASH@@: `SessionOpenIntent` (`Parse`, handoff file), `ClaudeCli` (`IsSessionId`, `WindowsTerminalStartDir`), `SessionLock.SessionsDirFor`, `ClaudeSessionController`, `SessionLauncher`, `Program` and `SessionWindow`.
+**Landed:** commit `2cf418a`: `SessionOpenIntent` (`Parse`, handoff file), `ClaudeCli` (`IsSessionId`, `WindowsTerminalStartDir`), `SessionLock.SessionsDirFor`, `ClaudeSessionController`, `SessionLauncher`, `Program` and `SessionWindow`.
 
 <a id="cp14"></a>
 ### CP14 — Never wipe `.claude.json`; atomic writes everywhere · 🟠 P1 · M · ✅
