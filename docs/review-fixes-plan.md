@@ -889,6 +889,8 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 
 **Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1736 with 1 skipped.
 
+**Landed:** commit `63db67d`: `OverlayDraw`, `OverlayCanvas*`, `UsageBarRenderer`, `HeadlessRenderer` (the benchmark), `OrgProvider`, `ClaudeJsonReader`, `UsageMonitor`, and the new `LruCache`/`TextFit`.
+
 <a id="cp24"></a>
 ### CP24 — Misc perf batch · 🟡 P2 · M · ⬜
 
