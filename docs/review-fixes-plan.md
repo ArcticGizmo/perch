@@ -39,7 +39,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | ✅ |
 | [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | 🟦 code + tests done, dogfood owed |
 | [CP14](#cp14) | 🟠 P1 | Data safety | Never wipe `.claude.json`; atomic writes everywhere | M | ✅ |
-| [CP15](#cp15) | 🟡 P2 | Privacy | Recording-export redaction gaps | S | ⬜ |
+| [CP15](#cp15) | 🟡 P2 | Privacy | Recording-export redaction gaps | S | 🟦 code + tests done, dogfood owed |
 | [CP16](#cp16) | ⚪ P3 | Client | Small security hardening batch | M | ⬜ |
 | [CP17](#cp17) | 🟡 P2 | Supply chain | CI permissions, pinning, deploy-secret scoping | S | ⬜ |
 | [CP18](#cp18) | 🟡 P2 | Supply chain | Code signing + signature verification in `install.ps1` | L | ⬜ |
@@ -586,7 +586,7 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 **Landed:** commit `3d1dd96`.
 
 <a id="cp15"></a>
-### CP15 — Recording-export redaction gaps · 🟡 P2 · S · ⬜
+### CP15 — Recording-export redaction gaps · 🟡 P2 · S · 🟦
 
 **Problem.**
 - `TranscriptRedactor.cs:52` ships unparseable lines verbatim, including the partially written trailing line of a live transcript.
@@ -595,11 +595,22 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 - `RecordingExporter.cs:267-276` keeps the `/rename` title, `waitingFor` and `bridgeSessionId` in the snapshot.
 
 **Tasks**
-- [ ] Replace unparseable lines with the redaction token, or drop them.
-- [ ] Apply preserve keys only at known structural paths, and only to scalar values.
-- [ ] Keep only the extracted model name from the model-switch stdout.
-- [ ] Use an allowlist for snapshot fields when redact is on.
-- [ ] xUnit using fixture lines for each leak.
+- [x] Unparseable lines (and an unparseable agent meta sidecar) become the redaction token. The line count stays the same, and the readers skip the token as malformed, just as they skipped the original partial line.
+- [x] Preserve keys apply only at the structural path the readers use: the record, its `message`, that message's content blocks, and an image block's `source`. Inside a `tool_use` block's `input`, only `subagent_type` is kept, because the roster reads it. Everything else is payload, where nothing is preserved: `toolUseResult`, a `tool_result`'s content, nested input values and progress data. Preserved values must also be scalars, so an object under a preserved key is recursed into, not cloned. Numbers and bools still pass everywhere, so token counts and `toolUseResult.isAsync` survive. `usage` left the preserve list, since its token counts are numbers and pass anyway. The meta sidecar's keys apply at its top level only.
+- [x] Model-switch stdout is rebuilt around the extracted name: `<local-command-stdout>Set model to ESC[1m{name}ESC[22m</local-command-stdout>`. `Kept model as` is handled the same way; it was previously scrubbed, which lost the model. The name goes through `ModelContext.ParseDisplayName` on the unwrapped text and must look like a model name (letters, digits and ` .,:()[]/_+·-`, at most 64 characters). Otherwise the whole stdout is scrubbed.
+- [x] The redacted snapshot is an allowlist (`RecordingExporter.RedactSnapshot`). It keeps `pid`, `sessionId` and `cwd` (rewritten), plus only what the projector reads back: `entrypoint` if it's a plain token, and `bridgeSessionId` replaced by the placeholder `session_redacted`. Replay still shows the session as remote-controlled, but the real claude.ai id never leaves the machine. The title, `waitingFor`, `status` and any future field are dropped. Unredacted exports keep the old rewrite.
+- [x] xUnit (`ReplayRedactorTests`, 7 new cases, 2 updated):
+  - a partial trailing line and a partial meta sidecar;
+  - `name`/`id`/`type`/`model` inside a tool input, a nested input, a `toolUseResult` and a `tool_result`'s content blocks, with the tool's own name, id pairing, `subagent_type`, `isAsync` and token counts still intact;
+  - an object under a preserved key, and an image source's shape;
+  - nested meta keys;
+  - model lines with trailing secrets (`Set`/`Kept`), plus one whose "name" isn't a name;
+  - the snapshot allowlist, covering the bridge placeholder, no bridge, an odd entrypoint and unparseable JSON.
+- [ ] Dogfood: export a redacted recording of a session that has sub-agents, a `/model` switch and Remote Control, and replay it. The model, token burn, sub-agent roster and RC glyph should match the unredacted replay.
+
+**Known residual:** object *keys* aren't redacted, only values. Tool inputs have schema-defined keys, but a free-form map (such as an `env` object) could carry a name in a key. This is left as is. Scrubbing keys would make them collide, since one object can't hold two `[redacted]` keys, and it would change the input shapes the tool summaries read.
+
+**Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1718 with 1 skipped.
 
 <a id="cp16"></a>
 ### CP16 — Small security hardening batch · ⚪ P3 · M · ⬜
