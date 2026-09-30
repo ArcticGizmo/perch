@@ -612,6 +612,8 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 
 **Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1718 with 1 skipped.
 
+**Landed:** commit `601107c`: `TranscriptRedactor`, `RecordingExporter`.
+
 <a id="cp16"></a>
 ### CP16 — Small security hardening batch · ⚪ P3 · M · ⬜
 
