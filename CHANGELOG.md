@@ -9,6 +9,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.0] - 2026-09-30
+
+- A broad security and privacy hardening pass, app and friends backend (details withheld, on purpose)
+- Tighter redaction in exported session recordings
+- Perch no longer risks clobbering your Claude config on a bad write
+- Settings and saved state are written atomically (a crash can't leave half a file)
+- Overlay stays smooth with busy sessions and enormous transcripts
+- Overlay repaints cost a fraction of the CPU and memory they used to
+- All-time stats load in moments, not tens of seconds
+- Long streamed replies no longer slow the session window to a crawl
+- Closed session windows actually let go of their session
+- Resumed sessions run under the account that owns their transcript
+- GitHub sign-in works where Windows had quietly reserved its old ports
+- Token counts go up to billions and trillions (we believe in you)
+- Huge diffs open fast; files past the first few thousand lines start collapsed
+- Session history follows a live transcript without re-reading it
+- Image previews load in the background and skip absurdly large images
+- Images over 5 MB are refused at attach time, with a note saying why
+- Git tree ignores `node_modules` churn and git's own housekeeping
+- Stale sessions no longer linger when Windows reuses their process ID
+- One odd entry in the daemon roster no longer empties the daemon strip
+- Install and uninstall leave the `%VARIABLES%` in your PATH alone
+
+---
+
 ## [v0.4.26] - 2026-09-24
 
 - Check the arcade again (bring a friend, and something to draw with)
