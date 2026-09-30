@@ -47,7 +47,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP20](#cp20) | 🟠 P1 | Performance | Session scan off the UI thread + incremental transcripts | L | ✅ |
 | [CP21](#cp21) | 🟠 P1 | Performance | All-time stats: cache history, don't re-parse it | M | ✅ |
 | [CP22](#cp22) | 🟠 P1 | Performance | Streaming chat O(n²) + SessionThreadView leak | M | ✅ |
-| [CP23](#cp23) | 🟡 P2 | Performance | Overlay paint path: no IO, no per-frame allocations | M | ⬜ |
+| [CP23](#cp23) | 🟡 P2 | Performance | Overlay paint path: no IO, no per-frame allocations | M | 🟦 code + tests done, dogfood owed |
 | [CP24](#cp24) | 🟡 P2 | Performance | Misc perf batch (metrics, history tail, diff, arcade, images, watcher) | M | ⬜ |
 | [CP25](#cp25) | ⚪ P3 | Correctness | Watcher race, PID reuse, Process disposal | S | ⬜ |
 | [CP26](#cp26) | 🟡 P2 | roost | Roost-branch findings (land on `roost`) | M | ⬜ |
@@ -839,7 +839,7 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 **Landed:** commit `84b8576`.
 
 <a id="cp23"></a>
-### CP23 — Overlay paint path: no IO, no per-frame allocations · 🟡 P2 · M · ⬜
+### CP23 — Overlay paint path: no IO, no per-frame allocations · 🟡 P2 · M · 🟦
 
 **Problem.**
 - **File IO while painting.** `OverlayCanvas.cs:2838` → `AccountMismatch` → `OrgProvider.GetLive` (`OrgProvider.cs:43-87`) does four file stats per rule-governed row per frame, and a full `.claude.json` parse inside `Render` whenever the mtime changes.
@@ -849,13 +849,45 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 - **Brushes are recreated.** New `SolidColorBrush` objects are created in the row loop.
 - **UsageMonitor blocks the UI thread first.** `UsageMonitor.FetchAsync` does synchronous file IO before its first await (`UsageMonitor.cs:86,93`).
 
+**Found first (a new `PERCH_BENCH=1` overlay benchmark, measured on the full sample overlay with the attention chase and a mismatch row):** the per-frame allocation wasn't text. It was **mutable `Pen`s**. A `Pen` is a full AvaloniaObject (property store, change events) of about a kilobyte, and the chase built one per perimeter sample per glow pass, thousands a frame. The review's list missed this, and it was about 95% of the 5 MB/frame. An in-process GC allocation-tick sampler named the types.
+
 **Tasks**
-- [ ] Compute the account mismatch per scan in `Update()`, off-thread, and cache it on the row. Throttle the `.claude.json` stamp check to about 2s, and parse only the `oauthAccount` field with a streaming reader (`Utf8JsonReader`).
-- [ ] Stop the pulse when the overlay isn't visible, and invalidate only the outline rect.
-- [ ] Static cached typefaces, cached frozen brushes, and a small LRU of `FormattedText` keyed by (text, size, weight, brush).
-- [ ] Compute truncated labels once per `Update`, on grapheme boundaries (`StringInfo`).
-- [ ] Move `UsageMonitor`'s token and CLI-version reads into the `Task.Run`.
-- [ ] Verify: a render-mode visual diff shows no change, and a frame-time counter during the chase animation shows an improvement.
+- [x] The account mismatch is computed off the paint path and cached per session (`RecomputeMismatches`): when the sessions, the rules or the provider change, and on the 1s tick and pulse ticks, so a `/login` still shows promptly. The paint path's `AccountMismatch` is now a dictionary read. `OrgProvider` trusts a cached answer for **2s** before looking at the file stamps again (the test seam takes a clock). `ClaudeJsonReader` now streams the top level with `Utf8JsonReader` and materialises only `oauthAccount`, skipping everything else (the project history).
+  - **Changed from the plan:** it runs on the UI thread, not a pool thread. What's left is at most two file stats per config dir every 2s, plus a streaming parse of a file of about 190 KB only after it changes. Keeping it synchronous also keeps the render harness and preview deterministic, since they set the rules right after `Update()`.
+- [x] The pulse stops once the overlay can't be seen (not effectively visible, window hidden or minimised). Before, no frame cleared `_anyMismatchThisFrame`, so it invalidated forever. The next paint restarts it.
+  - **Not done:** invalidating only the outline rect. Avalonia re-renders a control whole, so there's no sub-rect invalidation of a single `Render` short of splitting the outline into its own visual. The caches make the whole repaint cheap instead.
+- [x] `OverlayDraw`:
+  - typefaces cached per weight;
+  - `Text`/`Emoji` served from a 1024-entry LRU keyed by (text, size, weight, **colour + opacity**, emoji face), each entry painting with its own immutable brush. Keying by brush *reference* would never hit (brushes built per frame), and would hand back a stale colour after a theme swap mutates the palette's cached brushes. They're shared, so they must not be mutated: the one caller that did (`UsageBarRenderer`) uses the new `NewText`;
+  - `Brush(color)`, a cached immutable brush. 52 per-paint `new SolidColorBrush` in `OverlayCanvas*.cs` now use it;
+  - `Pen(...)` (same signature as `new Pen`) returns an `ImmutablePen`. It replaces 26 per-paint `new Pen`;
+  - `SolidPen(color, width)`, a cached immutable pen for the chase comet.
+
+  Fields keep `new Pen`/`new SolidColorBrush`, and the CLAUDE.md convention records this.
+- [x] Truncation cuts only between graphemes (`Perch.Data.TextFit`, `StringInfo.GetNextTextElementLength`) and is memoised (a 512-entry LRU keyed by text, size, width and weight). That gives the "once, not per frame" effect without moving the width-dependent layout into `Update`.
+- [x] `UsageMonitor.FetchAsync` reads the token and CLI version inside `Task.Run`, so none of that IO (or the macOS keychain call) runs on the UI thread before the first await.
+- [x] Tests (18 new cases):
+  - `TextFitTests`: plain text, surrogate pairs, a ZWJ family emoji, a combining mark, and a logarithmic probe count;
+  - `LruCacheTests`: hits, LRU eviction, and bounded under concurrency;
+  - `OrgProviderTests`: the recheck window (no stat inside it, a stat and re-read after it, and `Invalidate` still forcing a read);
+  - `ClaudeJsonReaderTests`: the account found behind 2,000 nested projects containing decoy `oauthAccount` keys, after a BOM, and null, junk, numeric and blank values read as before.
+
+  The BOM case caught a real bug in the first cut: a `"\xEF…"u8` literal isn't the BOM bytes, and the old `StreamReader` path had stripped the BOM silently.
+- [x] Verify:
+  - **Visual diff:** 154 of 167 renders are pixel-identical to the baseline. The 13 that differ are run-to-run noise. Twelve of them differ just as much between two renders of the *same* new code (animations, clocks, random games). The thirteenth, `reaction_bubbles_1x`, shows the same glyphs at a slightly different float-animation phase. The mismatch outline's pulse alpha also moves with the wall clock.
+  - **Benchmark:** the same harness, old paint code vs new:
+
+    | | before | after |
+    |---|---|---|
+    | full frame (raster included), mean | 15.6 ms | 11.6 ms |
+    | overlay draw calls only | 4.00 ms | 1.67 ms |
+    | allocated per frame | 5,057 KB | 270 KB |
+    | org lookups per frame | 1.0 | 0 |
+
+    The remaining ~26 KB/frame of text layout is text whose content or alpha really changes each frame: live elapsed labels, and a fading pill.
+- [ ] Dogfood: the overlay with the attention chase, an account-mismatch row (it should appear and clear within about 2s of a `/login`), and a theme swap (text colours must follow). Hide the overlay while a mismatch pulses and check that the pulse stops (no CPU).
+
+**Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1736 with 1 skipped.
 
 <a id="cp24"></a>
 ### CP24 — Misc perf batch · 🟡 P2 · M · ⬜

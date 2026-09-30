@@ -161,6 +161,7 @@ internal static class HeadlessRenderer
         });
         RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_1x.png"), 96);
         RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_1.5x.png"), 144);
+        BenchOverlayPaint();
 
         var probe = new OverlayCanvas();
         probe.Update(SampleData.Sessions());
@@ -1184,6 +1185,71 @@ internal static class HeadlessRenderer
         rtb.Render(control);
         using var fs = File.Create(path);
         rtb.Save(fs);
+    }
+
+    // CP23: with PERCH_BENCH=1, repaints the full sample overlay (attention chase on, one account-mismatch row, so
+    // the pulse path is live) as the pulse/chase timers would, and prints the per-frame paint cost, the bytes
+    // the UI thread allocates per frame, and how many org lookups (file stats, at runtime) each frame makes.
+    private static void BenchOverlayPaint()
+    {
+        if (Environment.GetEnvironmentVariable("PERCH_BENCH") != "1") return;
+        int lookups = 0;
+        var bench = new OverlayCanvas();
+        bench.SetShowPullRequests(true);
+        bench.SetShowJiraTickets(true);
+        bench.SetShowMarkdown(true);
+        bench.SetOrgProvider(new OrgProvider(
+            _ => new Org("contoso-uuid") { Name = "Contoso" }, _ => { lookups++; return 0L; }));
+        bench.Update(SampleData.Sessions());
+        bench.UpdateUsage(SampleData.OrgUsages());
+        bench.SetAccountRules(new[]
+        {
+            new AccountRule { Path = @"C:\src\perch", Allowed = new() { new AccountRef { Uuid = "acme-uuid", Name = "Acme Corp" } } },
+        });
+        bench.TriggerAttention();
+        bench.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        bench.Arrange(new Rect(bench.DesiredSize));
+        var px = new PixelSize((int)Math.Ceiling(bench.DesiredSize.Width), (int)Math.Ceiling(bench.DesiredSize.Height));
+        using var rtb = new RenderTargetBitmap(px, new Vector(96, 96));
+
+        for (int i = 0; i < 30; i++) rtb.Render(bench);   // warm-up: JIT, font load, first shaping
+        const int Frames = 300;
+        var ms = new List<double>(Frames);
+        lookups = 0;
+        long bytes0 = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < Frames; i++)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            rtb.Render(bench);
+            ms.Add(sw.Elapsed.TotalMilliseconds);
+        }
+        long bytes = GC.GetAllocatedBytesForCurrentThread() - bytes0;
+        var sorted = ms.OrderBy(x => x).ToList();
+        double P(double q) => sorted[Math.Min(sorted.Count - 1, (int)(q * sorted.Count))];
+        Console.WriteLine($"overlay paint bench: {Frames} frames - mean {ms.Average():N2} ms, p50 {P(0.5):N2}, " +
+                          $"p95 {P(0.95):N2}, max {sorted[^1]:N2} ms; {bytes / Frames / 1024.0:N1} KB allocated/frame; " +
+                          $"{lookups / (double)Frames:N1} org lookups/frame");
+
+        // The same frames split up: the canvas's own draw calls into a 1x1 target (Skia culls nearly all the
+        // rasterising, so this is roughly what the overlay's code costs), and the measure pass (layout), so the
+        // rasteriser's share of the total is visible.
+        (double Ms, double Kb) Time(Action a)
+        {
+            for (int i = 0; i < 10; i++) a();
+            long b0 = GC.GetAllocatedBytesForCurrentThread();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < Frames; i++) a();
+            return (sw.Elapsed.TotalMilliseconds / Frames, (GC.GetAllocatedBytesForCurrentThread() - b0) / Frames / 1024.0);
+        }
+        using var tiny = new RenderTargetBitmap(new PixelSize(1, 1), new Vector(96, 96));
+        var record = Time(() => tiny.Render(bench));
+        var measure = Time(() =>
+        {
+            bench.InvalidateMeasure();
+            bench.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        });
+        Console.WriteLine($"  draw calls only (1x1 target): {record.Ms:N2} ms, {record.Kb:N1} KB/frame; " +
+                          $"measure pass: {measure.Ms:N2} ms, {measure.Kb:N1} KB/frame");
     }
 
     // A spread of marker kinds across a 5-minute scene, so the timeline shows each tick colour.

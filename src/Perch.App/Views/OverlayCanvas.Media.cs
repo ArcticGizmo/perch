@@ -200,7 +200,7 @@ public sealed partial class OverlayCanvas
         const double headR = 2.7;
         double headCx = x + headR, headCy = cy + 3;
         ctx.DrawEllipse(b, null, new Point(headCx, headCy), headR, headR * 0.82);
-        var pen = new Pen(b, 1.4);
+        var pen = OverlayDraw.Pen(b, 1.4);
         double stemX = headCx + headR - 0.4;
         ctx.DrawLine(pen, new Point(stemX, headCy), new Point(stemX, cy - 5));
         ctx.DrawLine(pen, new Point(stemX, cy - 5), new Point(stemX + 3, cy - 2.5));

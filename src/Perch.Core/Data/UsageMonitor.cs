@@ -83,14 +83,16 @@ internal sealed class UsageMonitor
     {
         try
         {
-            var token = _readToken();
+            // The credential and CLI-version reads are file IO (and on macOS a keychain call), and the host
+            // awaits this from the UI thread, so they run on the pool rather than before the first await (CP23).
+            var (token, cliVersion) = await Task.Run(() => (_readToken(), ReadCliVersion())).ConfigureAwait(false);
             if (string.IsNullOrEmpty(token))
                 return Fail("Couldn't read Claude credentials — sign in to Claude Code");
 
             using var req = new HttpRequestMessage(HttpMethod.Get, UsageUrl);
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             req.Headers.TryAddWithoutValidation("anthropic-beta", OAuthBeta);
-            req.Headers.UserAgent.ParseAdd($"claude-code/{ReadCliVersion()}");
+            req.Headers.UserAgent.ParseAdd($"claude-code/{cliVersion}");
             req.Headers.Accept.ParseAdd("application/json");
 
             using var resp = await Http.SendAsync(req).ConfigureAwait(false);

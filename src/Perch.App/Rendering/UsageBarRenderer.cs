@@ -35,7 +35,7 @@ internal static class UsageBarRenderer
         // Session/Weekly bars, but a scoped bar is captioned with the model's display name from the
         // endpoint, which would otherwise run under the track.
         Color capColor = stale ? Palette.Blend(muted, bgBlend, 0.5f) : muted;
-        var capFt = OverlayDraw.Text(caption, capSize, new SolidColorBrush(capColor));
+        var capFt = OverlayDraw.NewText(caption, capSize, OverlayDraw.Brush(capColor));   // mutated below: not the shared cache
         capFt.MaxTextWidth = Math.Max(0, captionW - 4);
         capFt.Trimming = TextTrimming.CharacterEllipsis;
         OverlayDraw.TextLeftMid(ctx, capFt, left, midY);

@@ -122,7 +122,7 @@ public sealed partial class OverlayCanvas
         {
             bool hot = _hoveredTodoRow == 0;
             if (hot)
-                ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+                ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb(28, 255, 255, 255)),
                     new Rect(4, y, Math.Max(0, width - 8), lineH));
             var addFt = OverlayDraw.Text("add one…", HyperRowSize, hot ? FgBrush : MutedBrush);
             OverlayDraw.TextLeftMid(ctx, addFt, nameX, y + lineH / 2);
@@ -135,10 +135,10 @@ public sealed partial class OverlayCanvas
             double midY = y + lineH / 2;
 
             if (_hoveredTodoRow == i)
-                ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+                ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb(28, 255, 255, 255)),
                     new Rect(4, y, Math.Max(0, width - 8), lineH));
 
-            ctx.DrawEllipse(new SolidColorBrush(t.Overdue ? AttentionColor : accent), null,
+            ctx.DrawEllipse(OverlayDraw.Brush(t.Overdue ? AttentionColor : accent), null,
                 new Point(HorizPad + DotR, midY), DotR, DotR);
 
             // Trailing due label (right-aligned): overdue reads in the attention hue, upcoming is muted.
@@ -152,7 +152,7 @@ public sealed partial class OverlayCanvas
 
             if (due.Length > 0)
             {
-                var dueFt = OverlayDraw.Text(due, HyperMetaSize, t.Overdue ? new SolidColorBrush(AttentionColor) : MutedBrush);
+                var dueFt = OverlayDraw.Text(due, HyperMetaSize, t.Overdue ? OverlayDraw.Brush(AttentionColor) : MutedBrush);
                 OverlayDraw.TextLeftMid(ctx, dueFt, width - HorizPad - dueFt.Width, midY);
             }
 

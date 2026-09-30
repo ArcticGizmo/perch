@@ -95,6 +95,15 @@ running the tray app.
   anything that must survive a DPI change. This has bitten the stat cards in `StatsDashboard` before;
   watch for it in any new card/badge/number rendering. The `OverlayDraw` mini-PaintKit bakes this in — go
   through it.
+- **Paint paths allocate nothing heavy and touch no files.** The overlay repaints on a 60ms pulse, a per-frame
+  chase and a per-second tick. So: `OverlayDraw.Text`/`Emoji` return **shared, cached** `FormattedText`, so
+  **never mutate one** (`MaxTextWidth`, `Trimming`, `SetForegroundBrush`…). Use `OverlayDraw.NewText` for a
+  mutable one. Per-paint pens go through `OverlayDraw.Pen(...)`, which takes the same arguments as `new Pen`
+  and returns an `ImmutablePen`. A mutable `Pen` is a full AvaloniaObject, and building them per frame was
+  ~95% of the overlay's per-frame allocation. Per-paint brushes go through `OverlayDraw.Brush(color)`. Keep
+  `new Pen`/`new SolidColorBrush` for fields only. Anything that reads a file (e.g. the account-mismatch org
+  lookup) is computed in `Update`/a timer and cached, never in `Render`. `PERCH_BENCH=1 … render <dir>`
+  prints the overlay's per-frame paint time and allocation.
 - **Dashboards are owner-drawn through a single measure-or-paint routine.** e.g. `StatsDashboard.Draw(DrawingContext?, width)`
   returns the content height when the context is null (measure pass) and paints when it isn't. Keep the
   two in one method so the measured height and the painted layout can never drift apart.
