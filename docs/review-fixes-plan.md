@@ -479,7 +479,7 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 
 **Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1666 with 1 skipped. After the lfs fix: 1711 passed, 1 skipped.
 
-**Landed:** commit `c8557d9`: `GitRunner`, plus `GitRepoService`, `GitStatsService`, `MarkdownProjectScan`, `ProjectFileScan`, `PrStatusService` and `StatuslineScript`.
+**Landed:** commit `c8557d9`: `GitRunner`, plus `GitRepoService`, `GitStatsService`, `MarkdownProjectScan`, `ProjectFileScan`, `PrStatusService` and `StatuslineScript`. The lfs fix is commit `1a8283c`.
 
 <a id="cp12"></a>
 ### CP12 — cmd-shim metacharacters (VS Code / GitKraken launch) · 🟡 P2 · S · ✅
