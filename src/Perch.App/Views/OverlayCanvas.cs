@@ -5256,12 +5256,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         var path = TranscriptLocator.Resolve(sessionId, cwd);
         if (path == null) return;
-        try
-        {
-            System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo(Perch.Data.ExecutableResolver.Resolve("code"), $"\"{path}\"") { UseShellExecute = true });
-        }
-        catch { /* best-effort — VS Code may not be on PATH */ }
+        // Through the revealer, never a shell-executed `code.cmd`: cmd would expand a % in the path (CP12).
+        PlatformServices.FileRevealer.OpenInEditor(path);
     }
 
     // ── Attention chase-border animation (4.14) ───────────────────────────────

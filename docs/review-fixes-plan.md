@@ -36,7 +36,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP9](#cp9) | 🟠 P1 | Client | No UNC/remote path probing (NTLM leak + UI hang) | S | ✅ |
 | [CP10](#cp10) | 🟠 P1 | Client | Named pipes: current-user only, park the valet hook | S | ✅ (cross-user squat check untested) |
 | [CP11](#cp11) | 🟡 P2 | Client | Hardened shared `GitRunner` | M | 🟦 code + tests done, dogfood owed |
-| [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | ⬜ |
+| [CP12](#cp12) | 🟡 P2 | Client | cmd-shim metacharacters (VS Code / GitKraken launch) | S | 🟦 code + tests done, dogfood owed |
 | [CP13](#cp13) | 🟡 P2 | Client | Control-pipe intent validation + launcher quoting | S | ⬜ |
 | [CP14](#cp14) | 🟠 P1 | Data safety | Never wipe `.claude.json`; atomic writes everywhere | M | ✅ |
 | [CP15](#cp15) | 🟡 P2 | Privacy | Recording-export redaction gaps | S | ⬜ |
@@ -478,15 +478,37 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 **Landed:** commit `c8557d9`: `GitRunner`, plus `GitRepoService`, `GitStatsService`, `MarkdownProjectScan`, `ProjectFileScan`, `PrStatusService` and `StatuslineScript`.
 
 <a id="cp12"></a>
-### CP12 — cmd-shim metacharacters (VS Code / GitKraken launch) · 🟡 P2 · S · ⬜
+### CP12 — cmd-shim metacharacters (VS Code / GitKraken launch) · 🟡 P2 · S · 🟦
 
 **Problem.**
 - `FileRevealer.cs:35-38` (`code` → `code.cmd`) and `GitKrakenLauncher.cs:55-67` (`cmd.exe /c <cli.cmd>`) go through cmd. .NET only quotes arguments that contain whitespace or quotes, so `&`, `|` and `^` pass through. A file named `x&calc&.md` plus "Open in VS Code" runs calc. A benign `C:\work\R&D` breaks the GitKraken launch.
 - `FileRevealer.cs:43` falls back to shell-opening the path itself, so a `.bat` file ref gets executed.
 
+**Also found:** three more places shell-executed `code` with a hand-quoted path: "Open transcript in VS Code" on the overlay and in the daemon list, and the markdown window's "Open in VS Code". Quoting stops `&`, but cmd still expands `%` inside quotes, so a name like `%PATH%.md` was rewritten.
+
 **Tasks**
-- [ ] Launch `Code.exe` and `gitkraken.exe` directly, resolved from the install location or registry, and not the `.cmd` shims.
-- [ ] If a shim is unavoidable, caret-escape the arguments and refuse `% & | ^ < >`.
+- [x] Launch `Code.exe` and `gitkraken.exe` directly. **How:** both CLIs are Electron shims of one shape: `set ELECTRON_RUN_AS_NODE=1`, then `"%~dp0..\App.exe" "%~dp0..\…\cli.js" %*`. GitKraken's `bin\gitkraken.cmd` first hops to the versioned app's own shim. The new `Perch.Data.CmdShim` reads the shim itself, following up to three hops, and starts the `.exe` with an argument list and the shim's environment (`ELECTRON_RUN_AS_NODE=1`, `VSCODE_DEV` unset). That is exactly what the shim would run, and cmd never sees the arguments. Reading the shim beats guessing the install layout or the registry, and survives GitKraken's versioned `app-x.y.z` folders.
+  - Only a shim made entirely of lines Perch understands qualifies: `@echo off`, `setlocal`/`endlocal`, a `set` with no `%`, comments, error-level checks, and exactly one launch line of quoted `%~dp0`-relative tokens followed by `%*`. The `.exe` must exist. Anything else isn't guessed at.
+- [x] If a shim is unavoidable (one Perch can't read), the fallback is `cmd /d /s /c ""tool" "arg" …"`, with every argument quoted and AutoRun skipped. It **refuses** (no launch) when the tool or an argument holds `% ! " & | ^ < >` or a newline. Refusing instead of caret-escaping keeps one rule, and a path with those characters is rare enough that the fallback just doesn't open it.
+- [x] Callers:
+  - `FileRevealer.OpenInEditor` (Windows) goes through `CmdShim`; not found or refused → the viewer-safe default handler (CP8).
+  - `GitKrakenLauncher.RunCli` goes through `CmdShim`; refused → no launch.
+  - The overlay's and daemon list's "Open transcript in VS Code" and the markdown window's "Open in VS Code" now call `IFileRevealer.OpenInEditor` instead of shell-executing `code` themselves.
+- [x] Remove the default-handler fallback, or restrict it to viewer-safe extensions (`.md .txt .json .png …`). *(Done in CP8: the fallback is `IFileRevealer.OpenWithDefault`, gated on `OpenTargets.IsViewerSafeFile`.)*
+- [x] xUnit `CmdShimTests` (22 cases; every planted `.exe` is an **empty** file, and nothing is ever started):
+  - verbatim copies of VS Code's and GitKraken's shims resolve to the exe, cli script and environment;
+  - `x&calc&.md:3` is handed to `Code.exe` as one argument, not to cmd;
+  - seven unfamiliar shapes aren't guessed at: another command, an absolute exe, another variable, `%1` instead of `%*`, an expanding `set`, two launches, a missing exe;
+  - a shim loop ends;
+  - the cmd fallback's exact command line;
+  - each metacharacter is refused;
+  - a real `.exe` is started directly;
+  - and, when the host has them, the **installed** `code` and `gitkraken` shims resolve to an existing exe, which catches an update that changes their shape. Both do on this machine.
+- [ ] Dogfood: "Open in VS Code" from a file ref, a changed file and the markdown window; "Open transcript in VS Code" from the overlay and the daemon list; "Open in GitKraken" on a repo (ideally one whose path has a space or `&`, which the old launch broke). VS Code should open without a console flash.
+
+**Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean; the .NET suite passes 1688 with 1 skipped.
+
+**Landed:** `CmdShim`, plus the Windows `FileRevealer`, `GitKrakenLauncher`, `OverlayCanvas`, `DaemonListWindow` and `MarkdownWindow`.
 - [x] Remove the default-handler fallback, or restrict it to viewer-safe extensions (`.md .txt .json .png …`). *(Done in CP8: the fallback is `IFileRevealer.OpenWithDefault`, gated on `OpenTargets.IsViewerSafeFile`.)*
 
 <a id="cp13"></a>

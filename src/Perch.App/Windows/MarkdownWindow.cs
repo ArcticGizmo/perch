@@ -1167,15 +1167,9 @@ internal sealed class MarkdownWindow : Window
         return item;
     }
 
-    private static void OpenInVsCode(string path)
-    {
-        try
-        {
-            System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo(Perch.Data.ExecutableResolver.Resolve("code"), $"\"{path}\"") { UseShellExecute = true });
-        }
-        catch { /* best-effort — VS Code may have been removed from PATH since we probed */ }
-    }
+    // Through the revealer, never a shell-executed `code.cmd`: cmd would run a `&` in a file name, or expand a `%`
+    // (review fixes CP12). A markdown file comes from a repo, so its name is the repo's choice.
+    private static void OpenInVsCode(string path) => PlatformServices.FileRevealer.OpenInEditor(path);
 
     // Selecting a different file while the buffer is dirty asks before discarding; if kept, the previous
     // selection is restored. Group/folder rows never load a file.
