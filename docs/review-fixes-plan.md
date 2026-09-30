@@ -49,7 +49,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP22](#cp22) | 🟠 P1 | Performance | Streaming chat O(n²) + SessionThreadView leak | M | ✅ |
 | [CP23](#cp23) | 🟡 P2 | Performance | Overlay paint path: no IO, no per-frame allocations | M | 🟦 code + tests done, dogfood owed |
 | [CP24](#cp24) | 🟡 P2 | Performance | Misc perf batch (metrics, history tail, diff, arcade, images, watcher) | M | 🟦 code + tests done, dogfood owed |
-| [CP25](#cp25) | ⚪ P3 | Correctness | Watcher race, PID reuse, Process disposal | S | ⬜ |
+| [CP25](#cp25) | ⚪ P3 | Correctness | Watcher race, PID reuse, Process disposal | S | 🟦 code + tests done, dogfood owed |
 | [CP26](#cp26) | 🟡 P2 | roost | Roost-branch findings (land on `roost`) | M | ⬜ |
 
 **Suggested order:**
@@ -992,11 +992,22 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 ## Correctness
 
 <a id="cp25"></a>
-### CP25 — Watcher race, PID reuse, Process disposal · ⚪ P3 · S · ⬜
+### CP25 — Watcher race, PID reuse, Process disposal · ⚪ P3 · S · 🟦
 
 - [x] `SessionMonitor.cs:1264-1277`: `OnWatcherError` mutates `_watchers` on a thread-pool thread while the UI thread uses it. Post the teardown to the owning thread, or lock. After CP20 this becomes "the scan worker's thread". *(Done in CP20: `_watchGate` guards every access.)*
-- [ ] `IProcessProbe.cs:23-33`: liveness should compare the process start time against the session file's `startedAt`, as `SessionTerminator` already does, so a reused PID doesn't keep a dead session alive. Dispose `Process` objects.
-- [ ] `DaemonRosterReader`: one worker with a mistyped field shouldn't drop the whole roster.
+- [x] `IProcessProbe.cs:23-33`: liveness should compare the process start time against the session file's `startedAt`, as `SessionTerminator` already does, so a reused PID doesn't keep a dead session alive. Dispose `Process` objects.
+  - New `IProcessProbe.IsAlive(pid, startedAt)`. A default interface method ignores the start time, so replay's `Projector` and the test fakes are unchanged.
+  - `SystemProcessProbe` implements it and now disposes its `Process`. `SessionMonitor.ReadSession` passes the session file's `startedAt`, read leniently.
+  - The shared tolerance is `Perch.Data.ProcessIdentity`, which `SessionTerminator` now uses too.
+  - **Changed from the plan: the check is one-sided.** A pid counts as recycled only when the live process started more than 2 min *after* the recorded start. A process older than the record holds the pid, so it must be the one that wrote the record. That stays correct even if Claude Code ever refreshed `startedAt` mid-session, which a two-sided check would turn into hidden live sessions. Measured on 4 live sessions, including ones hours old: `startedAt` trails the process start by 1-3 s.
+  - An unreadable start time keeps the old pid-only answer. The kill check in `SessionTerminator` stays two-sided, since refusing a kill is the safe failure.
+  - Also fixed: `SessionMonitor.SyncProcessSubscriptions` leaked the `Process` when `EnableRaisingEvents` threw (access denied).
+- [x] `DaemonRosterReader`: one worker with a mistyped field shouldn't drop the whole roster. Each worker is parsed on its own (`ReadWorker`, inside its own try), through the tolerant `TranscriptJson` readers. A mistyped optional field reads as absent; only an unusable `pid` or `sessionId` skips the worker. The roster's `startedAt` feeds the same recycled-pid check. New `Parse(json, probe)` seam for tests.
+- [x] Tests (10 new):
+  - `ProcessIdentityTests`: the one-sided rule; the real probe against the test process's own pid and start time; a real `SessionMonitor.Scan` that drops a live-pid session file recorded an hour before that process started, and keeps it with the right start;
+  - `DaemonRosterReaderTests`: mistyped `pid`/`sessionId`/`cwd`/`startedAt`/`source`/`name` skip only their worker or field, a pid written as a double reads, and the recorded start reaches the probe.
+
+**Verify.** Done 2026-09-30: `dotnet build perch.slnx` is clean, and the .NET suite passes 1831 with 1 skipped. No dogfood beyond the overlay still listing live sessions and daemon workers as before.
 
 ---
 

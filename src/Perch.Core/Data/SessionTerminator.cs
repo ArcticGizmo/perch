@@ -28,10 +28,9 @@ public enum TerminateResult
 public static class SessionTerminator
 {
     // How far a live process's start time may sit from the session file's recorded startedAt and still be
-    // accepted as the same process. Claude Code writes startedAt a beat *after* the process starts (~2s in
-    // practice), so this can't be exact — but a recycled PID is a different process launched minutes or
-    // hours later, which this comfortably separates.
-    private static readonly TimeSpan StartTimeTolerance = TimeSpan.FromMinutes(2);
+    // accepted as the same process (shared with the liveness probe). The kill check below stays two-sided:
+    // refusing a kill is the safe failure, unlike hiding a live session.
+    private static readonly TimeSpan StartTimeTolerance = ProcessIdentity.Tolerance;
 
     /// <summary>
     /// Kills the session running under <paramref name="pid"/> along with its descendants (MCP servers,

@@ -493,8 +493,12 @@ internal sealed class SessionMonitor : IDisposable
                     ? DateTimeOffset.FromUnixTimeMilliseconds(updatedAtMs).LocalDateTime
                     : now;
 
-            if (!IsProcessRunning(pid))
-                return null; // dead pid — drop the stale session file (replay's probe keeps recorded pids alive)
+            // The file's startedAt lets the probe tell a recycled pid from the session's own process: a file left
+            // by an unclean exit would otherwise stay "alive" for as long as some newer process held its pid.
+            var startedAtMs = TranscriptJson.AsLong(node["startedAt"]);
+            DateTime? startedAt = startedAtMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(startedAtMs).LocalDateTime : null;
+            if (!IsProcessRunning(pid, startedAt))
+                return null; // dead or recycled pid — drop the stale session file (replay's probe keeps recorded pids alive)
 
             // A session Perch drives over stream-json is the one case where the CLI's own status is useless:
             // Claude Code only heartbeats the session file's "status" in interactive TUI mode, so a controlled
@@ -1186,8 +1190,8 @@ internal sealed class SessionMonitor : IDisposable
         return rawStatus == "waiting" || !string.IsNullOrWhiteSpace(waitingFor);
     }
 
-    private bool IsProcessRunning(string pid)
-        => int.TryParse(pid, out var id) && _processProbe.IsAlive(id);
+    private bool IsProcessRunning(string pid, DateTime? startedAt)
+        => int.TryParse(pid, out var id) && _processProbe.IsAlive(id, startedAt);
 
     // ----- Event-driven trigger plumbing -------------------------------------------------
 
@@ -1322,9 +1326,10 @@ internal sealed class SessionMonitor : IDisposable
                 continue;
             if (!int.TryParse(pid, out var id))
                 continue;
+            Process? proc = null;
             try
             {
-                var proc = Process.GetProcessById(id);
+                proc = Process.GetProcessById(id);
                 proc.EnableRaisingEvents = true;
                 proc.Exited += OnTrackedProcessExited;
                 if (proc.HasExited)
@@ -1338,7 +1343,13 @@ internal sealed class SessionMonitor : IDisposable
             }
             catch
             {
-                // Process gone or inaccessible; the reconciliation poll covers it.
+                // Process gone or inaccessible (EnableRaisingEvents needs a handle we may not get); the
+                // reconciliation poll covers it. Don't leak the Process we did open.
+                if (proc is not null)
+                {
+                    try { proc.Exited -= OnTrackedProcessExited; } catch { }
+                    proc.Dispose();
+                }
             }
         }
     }

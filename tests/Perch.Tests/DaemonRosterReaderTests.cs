@@ -65,4 +65,47 @@ public class DaemonRosterReaderTests
     {
         Assert.Empty(DaemonRosterReader.Read(new FakeProbe()));
     }
+
+    // Review fixes CP25: a field of an unexpected type used to throw out of the whole read, so one odd worker
+    // emptied the daemon strip.
+    [Fact]
+    public void Parse_MistypedFields_SkipOnlyThatWorker_OrJustThatField()
+    {
+        const string json = """
+            {"workers":{
+              "aaaaaaaa":{"pid":"61112","sessionId":"aaaaaaaa-1"},
+              "bbbbbbbb":{"pid":62548,"sessionId":12345},
+              "cccccccc":{"pid":61112,"sessionId":"cccccccc-1","cwd":42,"startedAt":"soon",
+                          "dispatch":{"source":["slash"],"seed":{"name":7,"intent":"fix the build"}}},
+              "dddddddd":{"pid":62548.0,"sessionId":"dddddddd-1","startedAt":1759200000000},
+              "eeeeeeee":"not an object"
+            }}
+            """;
+        var workers = DaemonRosterReader.Parse(json, new FakeProbe(SparePid, NamedPid));
+
+        // A string pid and a numeric sessionId disqualify their workers; the rest survive.
+        Assert.Equal(["cccccccc", "dddddddd"], workers.Select(w => w.ShortId).Order());
+        var odd = Assert.Single(workers, w => w.ShortId == "cccccccc");
+        Assert.Equal("", odd.Cwd);                     // mistyped optional fields read as absent
+        Assert.Equal("", odd.Source);
+        Assert.Equal("fix the build", odd.Name);       // a non-string name falls through to the intent
+        Assert.Equal(DateTime.MinValue, odd.StartedAt);
+        Assert.Equal(SparePid, Assert.Single(workers, w => w.ShortId == "dddddddd").Pid);   // a pid written as a double
+    }
+
+    [Fact]
+    public void Parse_PassesTheRecordedStartToTheProbe()
+    {
+        const string json = """{"workers":{"aaaaaaaa":{"pid":61112,"sessionId":"s","startedAt":1759200000000}}}""";
+        var probe = new StartCapturingProbe();
+        DaemonRosterReader.Parse(json, probe);
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1759200000000).LocalDateTime, probe.Seen);
+    }
+
+    private sealed class StartCapturingProbe : IProcessProbe
+    {
+        public DateTime? Seen;
+        public bool IsAlive(int pid) => true;
+        public bool IsAlive(int pid, DateTime? startedAt) { Seen = startedAt; return true; }
+    }
 }
