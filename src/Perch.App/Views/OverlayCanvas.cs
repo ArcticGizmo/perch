@@ -97,7 +97,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dev-instance marker: a hot-pink brand so an isolated dev build is unmistakable next to a running
     // installed Perch — a 2px border around the panel plus a "Perch - DEV" header label. Only ever used
     // when AppProfile.IsDev, so a normal build never pays for it.
-    private static readonly IBrush DevPinkBrush   = new SolidColorBrush(Color.FromRgb(244, 114, 182));
+    private static readonly Color  DevPinkColor   = Color.FromRgb(244, 114, 182);
+    private static readonly IBrush DevPinkBrush   = new SolidColorBrush(DevPinkColor);
     private static readonly IPen   DevBorderPen   = new Pen(DevPinkBrush, 2);
     // Replay-instance marker: a light-blue brand + "Perch - Replay" header label so a replay is
     // unmistakable and can't be read as live sessions. Mirrors the dev marker and takes precedence over
@@ -119,6 +120,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private static readonly IBrush FgBrush        = Palette.FgBrush;
     private static Color RunningColor   => Palette.Active.StatusRunning.ToColor();
     private static Color AttentionColor => Palette.Active.StatusAttention.ToColor();
+    // The attention chase's colour: the theme's attention hue, or the dev pink in a dev build so the chase
+    // stands in for (and stays recognisable as) the dev instance border it replaces while it runs.
+    private Color ChaseColor => AppProfile.IsDev && !ReplayMode ? DevPinkColor : AttentionColor;
     private static Color AwaitingColor  => Palette.Active.StatusAwaiting.ToColor();
     private static Color IdleColor      => Palette.Active.StatusIdle.ToColor();
     private static Color ApiErrorColor  => Palette.Active.StatusError.ToColor();   // red — a failed run, distinct from the orange "done"
@@ -1868,7 +1872,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (ctx != null)
         {
             var pr = new Rect(0.5, 0.5, width - 1, h - 1);
-            if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, Corner); DrawChaseBorder(ctx, pr, AttentionColor); }
+            if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, Corner); DrawChaseBorder(ctx, pr, ChaseColor); }
             else OverlayDraw.Panel(ctx, pr, BgBrush, BorderPen, Corner);
             _denseCtl.PaintStrip(ctx, width);
             DrawInstanceBorder(ctx, width, h);
@@ -1930,7 +1934,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (_attentionFlash)
             {
                 OverlayDraw.Panel(ctx, panelRect, BgBrush, null, corner);
-                DrawChaseBorder(ctx, panelRect, AttentionColor);
+                DrawChaseBorder(ctx, panelRect, ChaseColor);
             }
             else
             {
@@ -2018,6 +2022,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         var pen = ReplayMode ? ReplayBorderPen : AppProfile.IsDev ? DevBorderPen : null;
         if (pen == null) return;
+        // A dev build's pink border sits on top of the attention chase and hid it, so while the chase runs the
+        // chase itself is drawn pink instead (see ChaseColor) and this static border steps aside.
+        if (_attentionFlash && !ReplayMode) return;
         var r = new Rect(1, 1, width - 2, height - 2);
         if (r.Width <= 0 || r.Height <= 0) return;
         OverlayDraw.Panel(ctx, r, null, pen, _docked ? 0 : Corner - 1);
