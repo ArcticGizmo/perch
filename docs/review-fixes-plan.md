@@ -985,6 +985,8 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
   - a > 5 MB image is refused with a note;
   - `npm install` in a watched repo doesn't make the git tree churn.
 
+**Landed:** commit `d683e87`.
+
 ---
 
 ## Correctness
