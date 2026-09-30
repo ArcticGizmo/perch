@@ -1,4 +1,6 @@
-﻿namespace Perch.Platform;
+﻿using System.Diagnostics;
+
+namespace Perch.Platform;
 
 /// <summary>
 /// The platform-specific whole-machine sampling behind a seam, so Perch.Core's <c>MetricsMonitor</c>
@@ -21,4 +23,22 @@ public interface ISystemMetrics
     /// its process tree. An empty map (the snapshot failed, or the platform can't enumerate) collapses
     /// each session to its own root pid for that tick.</summary>
     IReadOnlyDictionary<int, int> ReadParentMap();
+
+    /// <summary>One process's working set (bytes) and cumulative CPU time, or null when it has gone or
+    /// can't be opened. Called once per measured pid per tick, so it must be a cheap per-process read,
+    /// never a whole-machine snapshot. The default goes through <see cref="Process"/>, which is per-pid on
+    /// macOS; Windows overrides it because <c>Process.WorkingSet64</c> there takes a snapshot of every
+    /// process on the machine each time it's read.</summary>
+    (long workingSet, TimeSpan cpu)? ReadProcess(int pid)
+    {
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+            return (proc.WorkingSet64, proc.TotalProcessorTime);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }

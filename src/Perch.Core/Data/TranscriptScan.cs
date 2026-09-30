@@ -44,4 +44,20 @@ internal static class TranscriptScan
         long len = new FileInfo(path).Length;
         return ReadLinesFrom(path, Math.Max(0, len - tailBytes));
     }
+
+    /// <summary>The last <paramref name="max"/> lines of <paramref name="lines"/>, and whether any were dropped.
+    /// Keeps at most <paramref name="max"/> lines while it reads (a ring buffer), rather than holding the whole
+    /// file and trimming it after. Review fixes CP24.</summary>
+    public static (List<string> Lines, bool Clipped) LastLines(IEnumerable<string> lines, int max)
+    {
+        var ring = new Queue<string>(Math.Min(max, 1024));
+        bool clipped = false;
+        foreach (var line in lines)
+        {
+            if (max <= 0) { clipped = true; continue; }
+            if (ring.Count == max) { ring.Dequeue(); clipped = true; }
+            ring.Enqueue(line);
+        }
+        return (ring.ToList(), clipped);
+    }
 }

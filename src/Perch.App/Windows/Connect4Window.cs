@@ -203,6 +203,7 @@ internal sealed class Connect4Window : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Palette.OverlaySurfaceBrush;
         Content = _board;
+        ArcadeLoopGate.Attach(this, _board.Begin, _board.Stop);
     }
 
     private void OpenLobby()
@@ -396,7 +397,10 @@ internal sealed class Connect4Board : Control
         _composeSent = false;
         _onlineSummary = state.Summary;
         var g = state.ToGame();
-        bool animate = _onlineApplied && !wasComposing && g.MoveCount == _lastMoveCount + 1 && state.Moves.Count > 0;
+        // No drop animation while the loop is paused (the window is behind another or minimised), or the disc
+        // would hang at the top of the board until the window came back; it just lands settled instead.
+        bool animate = _onlineApplied && !wasComposing && g.MoveCount == _lastMoveCount + 1 && state.Moves.Count > 0
+                       && _timer?.IsEnabled == true;
         _game = g;
         _lastMoveCount = g.MoveCount;
         _onlineApplied = true;

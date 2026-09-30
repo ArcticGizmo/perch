@@ -136,7 +136,11 @@ running the tray app.
   `Dispatcher.UIThread.Post(...)` (or `ContinueWith(..., TaskScheduler.FromCurrentSynchronizationContext())`).
   Guard the callback against a window that closed mid-flight (`IsVisible` / disposed checks) and swallow
   the resulting exceptions. See the `*MonitorHost` services, `HistoryWindow`, `StatsWindow`, and
-  `UpdateService` for the pattern.
+  `UpdateService` for the pattern. **User- or transcript-supplied images go through `Views/BoundedBitmap`**
+  (`LoadAsync`, with a width for previews): it reads the header first (`Perch.Data.ImageHeader`), refuses
+  anything past a pixel cap and decodes off the UI thread. Never `new Bitmap(path)` on such a file on the UI
+  thread, because a small file can decode to gigabytes. Perch's own small cached icons (e.g. quick-link icons)
+  are exempt.
 - **Colour comes through `Theming.Palette`, but from one of two sources — pick the right one.** Colours in
   `Perch.Core` are kept UI-free as `Rgb`, split by whether they vary per theme:
   - **`Perch.Theming.Theme`** — everything a theme varies: surfaces/chrome, text, `Accent`/`AccentHover`,

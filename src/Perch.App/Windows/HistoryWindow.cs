@@ -59,8 +59,9 @@ internal sealed class HistoryWindow : Window
 
     private HistoryEntry? _loaded;
     private SessionConversation? _conv;
-    private int _consumedLines;      // transcript lines already folded into _conv (for incremental tailing)
-    private bool _tailBusy;          // a tail re-read is in flight — coalesce further ticks
+    private TranscriptLineTail? _tail;   // the loaded transcript's read offset (for incremental tailing), one per load
+    private bool _tailBusy;          // a tail read is in flight — coalesce further ticks
+    private bool _tailAgain;         // a change arrived while one was in flight — read once more when it lands
     private bool _renderSample;
 
     private readonly FileSystemWatcher _watcher = new();
@@ -329,7 +330,7 @@ internal sealed class HistoryWindow : Window
     {
         StopWatching();
         _conv = null;
-        _consumedLines = 0;
+        _tail = null;
         _loaded = entry;
 
         // Large transcripts can lag or exhaust memory — gate behind an explicit confirmation.
@@ -357,28 +358,38 @@ internal sealed class HistoryWindow : Window
     {
         SetPlaceholderBody("Loading…");
         var path = entry.Path;
-        System.Threading.Tasks.Task.Run(() => ReadCompleteLines(path)).ContinueWith(t =>
+        var tail = new TranscriptLineTail();
+        _tail = tail;
+        // The read and the decode both run off the UI thread; an unreadable file just stays on "Loading…".
+        System.Threading.Tasks.Task.Run(() =>
+            DecodeConversation(entry, tail.Read(path)?.Lines ?? throw new IOException("Transcript unreadable.")))
+            .ContinueWith(t =>
         {
             if (!t.IsCompletedSuccessfully) return;
             Dispatcher.UIThread.Post(() =>
             {
-                if (!IsVisible || _loaded?.SessionId != entry.SessionId) return;
-                BuildConversation(entry, t.Result);
+                if (!IsVisible || _loaded?.SessionId != entry.SessionId || !ReferenceEquals(_tail, tail)) return;
+                ShowConversation(entry, t.Result);
             });
         });
     }
 
-    // Decodes the transcript lines into a read-only conversation and binds the rich thread to it. A completed
-    // (inactive) session is finalised so nothing reads as mid-turn; an active one is left open for tailing.
-    private void BuildConversation(HistoryEntry entry, List<string> lines)
+    // Decodes the transcript lines into a read-only conversation. Runs off the UI thread: the conversation isn't
+    // bound to a view yet, and the per-line JSON parse and any base64 image recovery are the costly part. A
+    // completed (inactive) session is finalised so nothing reads as mid-turn; an active one is left open for tailing.
+    private static SessionConversation DecodeConversation(HistoryEntry entry, List<string> lines)
     {
         var conv = new SessionConversation();
         conv.UseHistorySession(entry.SessionId);
         foreach (var line in lines) conv.AppendTranscriptLine(line);
         if (!entry.IsActive) conv.FinalizeHistory();
+        return conv;
+    }
 
+    // Binds the rich thread to a decoded conversation (on the UI thread).
+    private void ShowConversation(HistoryEntry entry, SessionConversation conv)
+    {
         _conv = conv;
-        _consumedLines = lines.Count;
 
         if (conv.Items.Count == 0)
         {
@@ -437,32 +448,48 @@ internal sealed class HistoryWindow : Window
         return t;
     }
 
-    // Re-reads the transcript off-thread and folds in only the newly-appended lines — the bound thread appends
-    // them incrementally (no rebuild). A shrunk file (replaced/truncated) rebuilds from the top.
+    // What a tail read produced: a whole new conversation (the file was truncated or replaced), or the appended
+    // lines, already decoded.
+    private sealed record TailResult(SessionConversation? Rebuilt, List<SessionConversation.ParsedTranscriptLine> Appended);
+
+    // Reads only the bytes appended since the last read and decodes the new lines, both off the UI thread; the
+    // bound thread then appends them incrementally (no rebuild). A truncated or replaced file rebuilds from the top.
     private void TailNow()
     {
-        if (_conv is null || _loaded is not { } entry || _tailBusy) return;
+        if (_conv is null || _loaded is not { } entry || _tail is not { } tail) return;
+        if (_tailBusy) { _tailAgain = true; return; }
         _tailBusy = true;
+        _tailAgain = false;
         var path = entry.Path;
-        System.Threading.Tasks.Task.Run(() => ReadCompleteLines(path)).ContinueWith(t =>
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            if (tail.Read(path) is not { } read) return new TailResult(null, []);
+            if (read.Reset) return new TailResult(DecodeConversation(entry, read.Lines), []);
+            var parsed = new List<SessionConversation.ParsedTranscriptLine>(read.Lines.Count);
+            foreach (var line in read.Lines)
+                if (SessionConversation.ParseTranscriptLine(line, entry.SessionId) is { } p) parsed.Add(p);
+            return new TailResult(null, parsed);
+        }).ContinueWith(t =>
         {
             Dispatcher.UIThread.Post(() =>
             {
                 _tailBusy = false;
-                if (!t.IsCompletedSuccessfully || !IsVisible || _conv is null || _loaded?.SessionId != entry.SessionId) return;
-                var lines = t.Result;
-                if (lines.Count < _consumedLines) { BuildConversation(entry, lines); return; }
-                if (lines.Count == _consumedLines) return;
-
-                // A conversation that started empty has no bound thread yet — swap the placeholder for it now.
-                if (!ReferenceEquals(_bodyHost.Child, _thread))
+                if (!t.IsCompletedSuccessfully || !IsVisible || _conv is null || _loaded?.SessionId != entry.SessionId
+                    || !ReferenceEquals(_tail, tail)) return;
+                var result = t.Result;
+                if (result.Rebuilt is { } rebuilt) ShowConversation(entry, rebuilt);
+                else if (result.Appended.Count > 0)
                 {
-                    _thread.Cwd = entry.Cwd;
-                    ShowThread();
-                    _thread.Bind(_conv);
+                    // A conversation that started empty has no bound thread yet — swap the placeholder for it now.
+                    if (!ReferenceEquals(_bodyHost.Child, _thread))
+                    {
+                        _thread.Cwd = entry.Cwd;
+                        ShowThread();
+                        _thread.Bind(_conv);
+                    }
+                    foreach (var line in result.Appended) _conv.AppendParsedTranscriptLine(line);
                 }
-                for (int i = _consumedLines; i < lines.Count; i++) _conv.AppendTranscriptLine(lines[i]);
-                _consumedLines = lines.Count;
+                if (_tailAgain) TailNow();
             });
         });
     }
@@ -540,24 +567,5 @@ internal sealed class HistoryWindow : Window
         UpdateCrumb();
         ShowThread();
         _thread.Bind(conv);
-    }
-
-    // ── Helpers ────────────────────────────────────────────────────────────────
-    // Reads the transcript's complete (newline-terminated) lines with a shared handle — the file is written
-    // live. A trailing partial line (a half-written record) is left out and picked up on the next read.
-    private static List<string> ReadCompleteLines(string path)
-    {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var sr = new StreamReader(fs);
-        var text = sr.ReadToEnd();
-        var lines = new List<string>();
-        int start = 0;
-        for (int i = 0; i < text.Length; i++)
-            if (text[i] == '\n')
-            {
-                lines.Add(text[start..i].TrimEnd('\r'));
-                start = i + 1;
-            }
-        return lines;
     }
 }

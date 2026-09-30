@@ -1,5 +1,4 @@
-﻿using System.Diagnostics;
-using Perch.Platform;
+﻿using Perch.Platform;
 
 namespace Perch.Data;
 
@@ -253,6 +252,7 @@ internal sealed class MetricsMonitor : IDisposable
         // A single fresh CPU-time reading per process this tick, reused across sessions that might
         // share a descendant, and carried into _prevCpu for next tick's delta.
         var curCpu = new Dictionary<int, TimeSpan>();
+        var read = new Dictionary<int, (long, TimeSpan)?>();
         var parentByPid = IncludeSubprocesses ? _platform.ReadParentMap() : null;
         int cores = Environment.ProcessorCount;
 
@@ -269,8 +269,12 @@ internal sealed class MetricsMonitor : IDisposable
 
             foreach (var pid in tree)
             {
-                if (!TryReadProcess(pid, curCpu, out var procRam, out var procCpu))
+                // A pid shared by two sessions' trees is read once per tick.
+                if (!read.TryGetValue(pid, out var sample))
+                    read[pid] = sample = _platform.ReadProcess(pid);
+                if (sample is not var (procRam, procCpu))
                     continue;
+                curCpu[pid] = procCpu;
                 counted++;
                 ram += procRam;
                 if (_prevCpu.TryGetValue(pid, out var was) && procCpu >= was)
@@ -285,26 +289,6 @@ internal sealed class MetricsMonitor : IDisposable
 
         _prevCpu = curCpu;
         return result;
-    }
-
-    // Reads a process's working set and total CPU time, recording the CPU time into curCpu for the
-    // next delta. Returns false if the process has gone or is inaccessible.
-    private static bool TryReadProcess(int pid, Dictionary<int, TimeSpan> curCpu, out long ram, out TimeSpan cpu)
-    {
-        ram = 0;
-        cpu = TimeSpan.Zero;
-        try
-        {
-            using var proc = Process.GetProcessById(pid);
-            ram = proc.WorkingSet64;
-            cpu = proc.TotalProcessorTime;
-            curCpu[pid] = cpu;
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     public void Dispose()

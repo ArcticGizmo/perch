@@ -16,14 +16,14 @@ namespace Perch.Avalonia.Views;
 /// <summary>
 /// Makes the <c>[Image #N]</c> placeholder tokens inside a resumed user message interactive: the token is
 /// tinted (the UI's "special/link" violet) so it reads as more than text, hovering it for ~750ms floats a
-/// full-resolution preview of the image, and a plain left-click opens it in the in-app
+/// preview of the image, and a plain left-click opens it in the in-app
 /// <see cref="ImageViewerWindow"/>. The k-th token pairs with the k-th image attachment on the message. Text
 /// stays selectable — a click that moved (a drag) or that left a selection never opens.
 ///
 /// The hover preview is deliberately delayed and hit-test-transparent so it never sits under the cursor
 /// stealing a click. Hit-testing reuses the block's own <c>TextLayout.HitTestPoint</c> (as
 /// <see cref="LinkText"/> does); the popup is parented to a caller-supplied panel (a Popup needs a rooted
-/// parent), and each image is decoded at native resolution the first time it is shown.
+/// parent), and each image is decoded (off the UI thread, at preview size) the first time it is shown.
 /// </summary>
 internal static partial class ImageRefText
 {
@@ -78,11 +78,12 @@ internal static partial class ImageRefText
         var press = new Point();
         var hand = new Cursor(StandardCursorType.Hand);
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(PreviewDelayMs) };
-        timer.Tick += (_, _) =>
+        timer.Tick += async (_, _) =>
         {
             timer.Stop();
             if (pending is not { } a) return;
-            var bmp = Load(cache, a);
+            var bmp = await Load(cache, a);
+            if (!ReferenceEquals(pending, a)) return;   // the pointer moved on while it decoded
             previewImage.Source = bmp;
             popup.IsOpen = bmp is not null;
         };
@@ -159,10 +160,11 @@ internal static partial class ImageRefText
         tb.Inlines = inlines;
     }
 
-    private static Bitmap? Load(Dictionary<MessageAttachment, Bitmap?> cache, MessageAttachment a)
+    // Decoded off the UI thread at preview size (crisp at 200%, bounded by BoundedBitmap), once per image.
+    private static async Task<Bitmap?> Load(Dictionary<MessageAttachment, Bitmap?> cache, MessageAttachment a)
     {
         if (cache.TryGetValue(a, out var b)) return b;
-        try { b = new Bitmap(a.Path); } catch { b = null; }   // native resolution for a crisp preview
+        b = await BoundedBitmap.LoadAsync(a.Path, BoundedBitmap.PreviewWidth);
         cache[a] = b;
         return b;
     }

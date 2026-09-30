@@ -413,6 +413,55 @@ public class SessionConversationTests
     }
 
     [Fact]
+    public void ParseTranscriptLine_ThenApply_MatchesAppendTranscriptLine()
+    {
+        // Review fixes CP24: the history viewer decodes lines on a worker (ParseTranscriptLine) and applies them on
+        // the UI thread (AppendParsedTranscriptLine). The two halves must add up to exactly AppendTranscriptLine.
+        var lines = new[]
+        {
+            """{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>"}}""",
+            """{"type":"user","message":{"role":"user","content":"fix the rounding bug"},"timestamp":"2026-09-01T10:00:00Z"}""",
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a.cs"}}]}}""",
+            """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"class A {}"}]}}""",
+            """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Fixed."}]}}""",
+            """{"type":"user","isSidechain":true,"message":{"role":"user","content":"sub-agent chatter"}}""",
+            """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Image #1] look"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8gd29ybGQ="}}]}}""",
+            "",
+            "not json",
+        };
+        var (direct, _) = Make();
+        direct.UseHistorySession("synthetic-session-id");
+        foreach (var l in lines) direct.AppendTranscriptLine(l);
+
+        var parsed = new List<SessionConversation.ParsedTranscriptLine>();
+        var worker = new Thread(() =>
+        {
+            foreach (var l in lines)
+                if (SessionConversation.ParseTranscriptLine(l, "synthetic-session-id") is { } p) parsed.Add(p);
+        });
+        worker.Start();
+        worker.Join();
+        var (split, _) = Make();
+        foreach (var p in parsed) split.AppendParsedTranscriptLine(p);
+
+        Assert.Equal(5, parsed.Count);   // the /clear echo, the sidechain line, the blank and the junk add nothing
+        Assert.Equal(Describe(direct), Describe(split));
+        Assert.Contains("user:[Image #1] look+1", Describe(split));
+
+        static string Describe(SessionConversation c) => string.Join("\n", c.Items.Select(i => i switch
+        {
+            UserMessageItem u => $"user:{u.Text}+{u.Attachments?.Count ?? 0}",
+            AssistantMessageItem a => "assistant:" + string.Join(",", a.Parts.Select(p => p switch
+            {
+                ToolCallPart t => $"tool {t.Status} {t.ResultText}",
+                TextPart t => $"text {t.Text}",
+                _ => p.GetType().Name,
+            })),
+            _ => i.GetType().Name,
+        }));
+    }
+
+    [Fact]
     public void FinalizeHistory_ClosesAToolThatNeverRecordedItsResult()
     {
         var (conv, _) = Make();

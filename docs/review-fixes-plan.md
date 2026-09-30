@@ -48,7 +48,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP21](#cp21) | 🟠 P1 | Performance | All-time stats: cache history, don't re-parse it | M | ✅ |
 | [CP22](#cp22) | 🟠 P1 | Performance | Streaming chat O(n²) + SessionThreadView leak | M | ✅ |
 | [CP23](#cp23) | 🟡 P2 | Performance | Overlay paint path: no IO, no per-frame allocations | M | 🟦 code + tests done, dogfood owed |
-| [CP24](#cp24) | 🟡 P2 | Performance | Misc perf batch (metrics, history tail, diff, arcade, images, watcher) | M | ⬜ |
+| [CP24](#cp24) | 🟡 P2 | Performance | Misc perf batch (metrics, history tail, diff, arcade, images, watcher) | M | 🟦 code + tests done, dogfood owed |
 | [CP25](#cp25) | ⚪ P3 | Correctness | Watcher race, PID reuse, Process disposal | S | ⬜ |
 | [CP26](#cp26) | 🟡 P2 | roost | Roost-branch findings (land on `roost`) | M | ⬜ |
 
@@ -936,16 +936,54 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 **Landed:** commit `63db67d`: `OverlayDraw`, `OverlayCanvas*`, `UsageBarRenderer`, `HeadlessRenderer` (the benchmark), `OrgProvider`, `ClaudeJsonReader`, `UsageMonitor`, and the new `LruCache`/`TextFit`.
 
 <a id="cp24"></a>
-### CP24 — Misc perf batch · 🟡 P2 · M · ⬜
+### CP24 — Misc perf batch · 🟡 P2 · M · 🟦
 
-- [ ] `MetricsMonitor.cs:292-308`: take one process snapshot per tick (pid → parent, working set), rather than calling `GetProcessById().WorkingSet64` for each process (each of which triggers a system-wide snapshot). Read CPU times with `GetProcessTimes`.
-- [ ] `HistoryWindow.cs:442-468,548-560`: offset-based tail, reading only appended bytes, via `TranscriptTailReader` from roost. Decode base64 images off the UI thread.
-- [ ] `DiffView.cs:82`: add a global line budget, collapse files past N by default, truncate very long lines, and consider virtualisation.
-- [ ] Arcade windows (`WordleWindow.cs:143`, `ArcadeMenuWindow.cs:144`, Frogger, SpaceInvaders, Connect4, DrawWithPerch): pause the 16ms timer on deactivate or minimize, and stop Wordle and the menu when nothing is animating.
-- [ ] Image decode (`ImageViewerWindow.cs:94`, `ImageRefText.cs:165`, `AttachmentChip.cs:156`): read the header dimensions first and cap the pixel count, use `DecodeToWidth` for previews, and decode off-thread. `PerchSession.cs:218`: cap attachment size (about 5MB) before base64.
-- [ ] `GitTreeWindow.cs:1313-1355`: coalesce watcher events on the background thread before posting; filter `node_modules`, `bin/obj` and `.git` internals other than HEAD, index and refs.
-- [ ] `CodeHighlight`: build keyword sets once, statically.
-- [ ] `PerchSession.LoadHistoryAsync`: use a ring buffer instead of reading the whole transcript into a list and then trimming to 4000 lines.
+- [x] **Metrics.** `MetricsMonitor` reads each process through a new `ISystemMetrics.ReadProcess(pid)` seam instead of `Process.GetProcessById(pid).WorkingSet64`, which on Windows snapshots every process on the machine per call.
+  - Windows (`WindowsSystemMetrics`) opens one `PROCESS_QUERY_LIMITED_INFORMATION` handle and reads `GetProcessTimes` + `K32GetProcessMemoryInfo`, with no snapshot.
+  - The default interface method (used on macOS, where `Process` is already per-pid) keeps the old `Process` path.
+  - A pid shared by two sessions' trees is read once per tick.
+  - **Changed from the plan:** there's no extra working-set snapshot. The parent map is already one Toolhelp snapshot per tick, and a per-pid handle read is cheaper than a second whole-machine snapshot.
+- [x] **History tail.** `HistoryWindow` tails by byte offset through a new `TranscriptLineTail`, a thin wrapper over CP20's `TranscriptFold` (one collecting folder), so it shares the fold's rules and tests: partial lines wait, the head check spots a replacement, and a BOM is stripped. This replaces porting roost's `TranscriptTailReader`, which is still unmerged. A truncated or replaced file reports `Reset` and rebuilds.
+  - The whole-transcript decode (JSON parse, `StreamJsonParser`, base64 image recovery) now runs off the UI thread. The initial conversation is built on the worker, since it isn't bound to a view yet. Tail lines are decoded on the worker by the new `SessionConversation.ParseTranscriptLine` and applied on the UI thread by `AppendParsedTranscriptLine`. `AppendTranscriptLine` is now those two halves, so the paths can't disagree.
+  - A change that lands while a tail read is in flight is no longer dropped (`_tailAgain`).
+- [x] **DiffView.** Past 10,000 lines or 100 files across the whole diff, files start collapsed. A collapsed file builds **no rows** until it's expanded; the first expand rebuilds, so its rows join the selection streams and find order in document order.
+  - The budget counts every file's lines in file order, whatever the user has expanded, so expanding one file never flips the files after it.
+  - The user's toggles are remembered per file key across rebuilds. A one-line note says when later files start collapsed.
+  - Lines over 2,000 characters are cut for display, with a "… [N more characters]" suffix and never splitting a surrogate pair. Copy still takes the whole line.
+  - **Not done:** virtualisation. Lazy files bound the worst case (a 4,000-line file cap × whatever the user expands), which covers the review's 800k-row commit.
+- [x] **Arcade.** A new `ArcadeLoopGate` pauses each of the six windows' loop on deactivate or minimise and resumes it on activate. The games count time in ticks, so a pause just freezes play.
+  - Wordle's timer runs only while something moves (a shake, a toast, the end-of-game shimmer); typing repaints directly.
+  - Connect 4 skips the drop animation for a move that arrives while paused, rather than leaving the disc hanging at the top.
+  - **Changed from the plan:** the menu animates continuously by design (the shimmering prompt, the bobbing sprite), so the gate is what stops it.
+- [x] **Images.** A new `ImageHeader` (Core) reads PNG/JPEG/GIF/WebP/BMP dimensions from the header. A JPEG's frame header is found by walking its segments, past any size of EXIF.
+  - `BoundedBitmap` (App) refuses anything over 64 MP (a decode would be over 256 MB, however small the file) and decodes previews at up to 1,120 px wide (2× their 560 DIP box) via `DecodeToWidth`.
+  - Every decode is off the UI thread: the viewer (still full resolution, with a "can't preview" caption past the cap), the chip thumbnail (glyph until it lands), the chip hover preview and the `[Image #N]` hover preview. Stale results are dropped.
+  - Attachments are capped at **5 MB** (the API's per-image limit). The composer refuses a bigger one with a note saying why, and `BuildImageContents` checks again before reading and base64-encoding.
+- [x] **Git tree watcher.** The debounce is now a pool timer that the watcher thread re-arms, so a burst costs one UI post when it settles, not one per event. `Error` (buffer overflow) now triggers a refresh.
+  - A new `RepoWatchFilter` (Core) ignores `node_modules` and `.git` internals other than `HEAD`, `index`, `packed-refs` and `refs/`.
+  - **Changed from the plan:** `bin/` and `obj/` are **not** filtered. Plenty of repos track a `bin/` of scripts, and once events are coalesced a build costs one refresh.
+- [x] **CodeHighlight.** Each language profile is built once per tag and cached in a `ConcurrentDictionary`. The sets are never mutated after construction. Unknown tags aren't cached, so arbitrary fence tags can't grow the map.
+- [x] **Resume history.** `PerchSession.LoadHistoryAsync` keeps the last 4,000 lines in a ring buffer while it reads (`TranscriptScan.LastLines`).
+  - **Not done:** `Conversation.LoadHistory` still decodes those 4,000 lines on the UI thread. Out of scope here; the `ParseTranscriptLine` split makes it a small follow-up.
+- [x] Tests (38 new cases):
+  - `MetricsMonitorSamplingTests`: a tree is summed, and each pid is read once per tick even when a session is listed twice;
+  - `TranscriptLineTailTests` (5): the first read then only appends, a partial line waits, an append to about 200 KB reads only the append plus the head check, truncation and replacement reset, and a missing file;
+  - `SessionConversationTests`: parsing on another thread then applying equals `AppendTranscriptLine`, including image recovery;
+  - `ImageHeaderTests` (8): every format, including a JPEG frame behind a 40 KB APP1 and a DHT, and truncated, zero-sized and unknown inputs;
+  - `RepoWatchFilterTests` (19 cases);
+  - `TranscriptScanLastLinesTests` (3);
+  - `CodeHighlightTests`: shared profiles under `Parallel.For`, and derived profiles (TS, C++) don't leak keywords into their base.
+- [x] **Verify.** Done 2026-09-30: `dotnet build perch.slnx` is clean, and the .NET suite passes 1821 with 1 skipped.
+  - `perch render` against the latest baseline: 155 of 167 renders are identical. The 12 that differ are the known run-to-run set (the random games, clocks, the streaming timer, reaction bubbles). Every touched surface (git tree, history, Wordle, the arcade menu, Connect 4, Draw) is byte-identical.
+  - The Windows `ReadProcess` interop has no automated coverage, since the test project is Core-only.
+- [ ] Dogfood:
+  - per-session CPU/RAM figures look as before (Windows `ReadProcess`);
+  - the history viewer tails an active session, and a `/clear`-rotated or truncated transcript rebuilds;
+  - a huge commit in the git tree opens quickly with later files collapsed, and expanding one works (selection, find, staging);
+  - the arcade games pause when you click away and resume on return;
+  - image thumbnails, hover previews and the viewer still show;
+  - a > 5 MB image is refused with a note;
+  - `npm install` in a watched repo doesn't make the git tree churn.
 
 ---
 

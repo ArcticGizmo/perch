@@ -1662,7 +1662,24 @@ internal sealed partial class SessionWindow : Window
         catch { return null; }
     }
 
-    private void AddAttachment(MessageAttachment a) { _pendingAttachments.Add(a); RenderAttachTray(); }
+    private void AddAttachment(MessageAttachment a)
+    {
+        // An image over the API's per-image limit would only fail the send, so refuse it here and say why.
+        if (a.Kind == AttachmentKind.Image && FileLength(a.Path) is { } len && len > PerchSession.MaxImageBytes)
+        {
+            Conv.AddNote($"{a.DisplayName} is {len / (1024.0 * 1024):0.#} MB, over the {PerchSession.MaxImageBytes / (1024 * 1024)} MB image limit, so it wasn't attached",
+                NoteKind.Error);
+            return;
+        }
+        _pendingAttachments.Add(a);
+        RenderAttachTray();
+    }
+
+    private static long? FileLength(string path)
+    {
+        try { return new FileInfo(path).Length; }
+        catch { return null; }
+    }
     private void RemoveAttachment(MessageAttachment a) { _pendingAttachments.Remove(a); RenderAttachTray(); }
     private void ClearAttachments() { _pendingAttachments.Clear(); RenderAttachTray(); }
 

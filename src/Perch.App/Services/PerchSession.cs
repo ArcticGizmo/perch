@@ -132,12 +132,16 @@ internal sealed class PerchSession : IDisposable
         }
         Task.Run(() =>
         {
-            var lines = new List<string>();
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(fs);
-            while (reader.ReadLine() is { } line) lines.Add(line);
-            bool clipped = lines.Count > MaxHistoryLines;
-            if (clipped) lines.RemoveRange(0, lines.Count - MaxHistoryLines);
+            List<string> lines;
+            bool clipped;
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var reader = new StreamReader(fs))
+                (lines, clipped) = TranscriptScan.LastLines(ReadAll(reader), MaxHistoryLines);
+
+            static IEnumerable<string> ReadAll(StreamReader r)
+            {
+                while (r.ReadLine() is { } line) yield return line;
+            }
             // The CLI replays no usage on --resume, so seed the context gauge from the transcript's last
             // prompt size — the same figure the resume estimate showed on the launcher.
             var (contextTokens, _) = TranscriptReader.ReadContextUsage(path, Cwd);
@@ -204,8 +208,13 @@ internal sealed class PerchSession : IDisposable
         if (RenameArg(text) is { } title) SetTitle(title);
     }
 
+    /// <summary>The largest image Perch will attach: the API's own per-image limit. Checked when the image is
+    /// staged (so the user hears about it then), and again here before the file is read and base64-encoded on
+    /// the UI thread, in case it grew since.</summary>
+    internal const long MaxImageBytes = 5 * 1024 * 1024;
+
     // Reads each image attachment off disk and base64-encodes it for the outgoing content block. Best-effort:
-    // an unreadable image is dropped rather than aborting the send. Null when there are no images.
+    // an unreadable or over-size image is dropped rather than aborting the send. Null when there are no images.
     private static IReadOnlyList<ImageContent>? BuildImageContents(IReadOnlyList<MessageAttachment>? attachments)
     {
         if (attachments is null) return null;
@@ -215,6 +224,7 @@ internal sealed class PerchSession : IDisposable
             if (a.Kind != AttachmentKind.Image) continue;
             try
             {
+                if (new FileInfo(a.Path).Length > MaxImageBytes) continue;
                 var bytes = File.ReadAllBytes(a.Path);
                 var media = a.MediaType ?? MediaTypeForPath(a.Path);
                 (images ??= []).Add(new ImageContent(media, Convert.ToBase64String(bytes)));
