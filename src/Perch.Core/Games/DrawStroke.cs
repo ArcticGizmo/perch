@@ -72,6 +72,11 @@ public static class DrawStrokeCodec
     /// <summary>Upper bound on points across the whole drawing (decode stops once reached).</summary>
     public const int MaxTotalPoints = 12000;
 
+    /// <summary>The largest payload the server stores (the <c>strokes_size</c> CHECK on <c>draw_rounds</c> and
+    /// <c>draw_requests</c>) and the largest <see cref="Decode"/> will parse. <see cref="Encode"/>'s caps keep the
+    /// busiest possible drawing at about 138 KB, under this with room to spare (pinned by a test).</summary>
+    public const int MaxEncodedBytes = 160 * 1024;
+
     private const int FormatVersion = 1;
 
     /// <summary>Encodes the strokes to a compact JSON string: <c>{"v":1,"s":[{"c":0,"z":1,"p":[x,y,x,y,...]}]}</c>.
@@ -117,11 +122,12 @@ public static class DrawStrokeCodec
 
     /// <summary>Decodes a drawing produced by <see cref="Encode"/>. Lenient: malformed JSON yields an empty
     /// drawing, and individual bad strokes/points are clamped or dropped rather than thrown, so a corrupt or
-    /// oversized payload never breaks the view.</summary>
+    /// oversized payload never breaks the view. A payload over <see cref="MaxEncodedBytes"/> isn't parsed at all
+    /// (its character count never exceeds its UTF-8 size, so this check can't refuse a payload the server took).</summary>
     public static IReadOnlyList<DrawStroke> Decode(string? json)
     {
         var result = new List<DrawStroke>();
-        if (string.IsNullOrWhiteSpace(json)) return result;
+        if (string.IsNullOrWhiteSpace(json) || json.Length > MaxEncodedBytes) return result;
         try
         {
             using var doc = JsonDocument.Parse(json);

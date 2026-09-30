@@ -26,6 +26,7 @@ public sealed partial class FakeSocialClient
             RequireMe();
             if (opponentUserId == _me!.Id) throw new SocialException("You can't play yourself.");
             if (string.IsNullOrWhiteSpace(word)) throw new SocialException("Pick a word to draw first.");
+            if (word.Length > DrawWords.MaxWordLength) throw new SocialException("That word is too long.");
             if (!AreFriendsLocked(opponentUserId)) throw new SocialException("You can only challenge an accepted friend.");
             if (_drawRequests.Values.Any(r => r.Requester == _me.Id && r.Addressee == opponentUserId))
                 throw new SocialException("You've already challenged them.");
@@ -137,6 +138,7 @@ public sealed partial class FakeSocialClient
             var fg = RequireMyDrawGameLocked(gameId);
             if (fg.Status != DrawGameStatus.InProgress) throw new SocialException("The game is over.");
             if (string.IsNullOrWhiteSpace(word)) throw new SocialException("Pick a word to draw first.");
+            if (word.Length > DrawWords.MaxWordLength) throw new SocialException("That word is too long.");
             var last = fg.Rounds[^1];
             if (last.Status == DrawRoundStatus.Guessing) throw new SocialException("Wait for your opponent's guess.");
             // The ex-guesser draws the next round.
@@ -159,9 +161,9 @@ public sealed partial class FakeSocialClient
         DrawGameState state; Guid gameId;
         lock (_gate)
         {
+            if ((guess?.Length ?? 0) > DrawGuessing.MaxGuessLength) throw new SocialException("That guess is too long.");
             var (fg, round) = RequireMyDrawRoundLocked(roundId);
-            if (round.Status != DrawRoundStatus.Guessing) throw new SocialException("That round is already over.");
-            if (round.Guesser != _me!.Id) throw new SocialException("It's not your round to guess.");
+            RequireCurrentGuessLocked(fg, round);
 
             round.Guesses.Add(guess ?? "");
             if (DrawGuessing.IsCorrect(guess, round.Word))
@@ -185,8 +187,8 @@ public sealed partial class FakeSocialClient
         lock (_gate)
         {
             var (fg, round) = RequireMyDrawRoundLocked(roundId);
-            if (round.Guesser != _me!.Id) throw new SocialException("It's not your round to guess.");
-            if (round.Status == DrawRoundStatus.Guessing) round.Status = DrawRoundStatus.GaveUp;
+            RequireCurrentGuessLocked(fg, round);
+            round.Status = DrawRoundStatus.GaveUp;
             fg.Updated = DateTimeOffset.UtcNow;
             state = StateLocked(fg, _me.Id); gameId = fg.Id;
         }
@@ -319,6 +321,16 @@ public sealed partial class FakeSocialClient
             if (round is not null) return (fg, round);
         }
         throw new SocialException("No such round.");
+    }
+
+    /// <summary>The server's guess/give-up gate (CP5): only the guesser, only on an in-progress game, and only on
+    /// its latest round while that round is still open. Replaying an old round must never move the game.</summary>
+    private void RequireCurrentGuessLocked(FakeDrawGame fg, FakeDrawRound round)
+    {
+        if (round.Guesser != _me!.Id) throw new SocialException("It's not your round to guess.");
+        if (fg.Status != DrawGameStatus.InProgress) throw new SocialException("The game is over.");
+        if (round.Status != DrawRoundStatus.Guessing) throw new SocialException("That round is already over.");
+        if (!ReferenceEquals(round, fg.Rounds[^1])) throw new SocialException("That round is already over.");
     }
 
     private Guid OpponentLocked(FakeDrawGame fg, Guid me) => me == fg.PlayerA ? fg.PlayerB : fg.PlayerA;

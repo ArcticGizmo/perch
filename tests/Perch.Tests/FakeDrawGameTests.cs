@@ -166,6 +166,65 @@ public class FakeDrawGameTests
     }
 
     [Fact]
+    public async Task Giving_up_twice_is_refused()
+    {
+        var (fake, _, friend) = SignedInWithFriend();
+        var req = fake.SimulateIncomingDrawRequest(friend.Id, DrawDifficulty.Easy, "cat");
+        var state = await fake.AcceptDrawRequestAsync(req.Id);
+        await fake.GiveUpDrawRoundAsync(state.Current!.Id);
+
+        await Assert.ThrowsAsync<SocialException>(() => fake.GiveUpDrawRoundAsync(state.Current.Id));
+    }
+
+    [Fact]
+    public async Task Replaying_an_old_round_cannot_steal_the_drawing_turn()
+    {
+        // I guessed round 1, drew round 2, and it's the friend's turn to guess it. Giving up (or guessing) my old
+        // round 1 again must be refused and leave round 2 open -- the server's CP5 turn-steal fix.
+        var (fake, _, friend) = SignedInWithFriend();
+        var req = fake.SimulateIncomingDrawRequest(friend.Id, DrawDifficulty.Easy, "cat");
+        var state = await fake.AcceptDrawRequestAsync(req.Id);
+        var round1 = state.Current!.Id;
+        await fake.SubmitDrawGuessAsync(round1, "cat");
+        await fake.SubmitDrawRoundAsync(state.Summary.Id, DrawDifficulty.Easy, "dog", "3", Doodle());
+
+        await Assert.ThrowsAsync<SocialException>(() => fake.GiveUpDrawRoundAsync(round1));
+        await Assert.ThrowsAsync<SocialException>(() => fake.SubmitDrawGuessAsync(round1, "cat"));
+
+        var after = await fake.GetDrawGameAsync(state.Summary.Id);
+        Assert.Equal(2, after.Current!.RoundNo);
+        Assert.Equal(DrawRoundStatus.Guessing, after.Current.Status);
+        Assert.True(after.Summary.IsTurnOf(friend.Id));
+    }
+
+    [Fact]
+    public async Task Nothing_moves_once_the_game_is_abandoned()
+    {
+        var (fake, _, friend) = SignedInWithFriend();
+        var req = fake.SimulateIncomingDrawRequest(friend.Id, DrawDifficulty.Easy, "cat");
+        var state = await fake.AcceptDrawRequestAsync(req.Id);
+        await fake.ResignDrawGameAsync(state.Summary.Id);
+
+        await Assert.ThrowsAsync<SocialException>(() => fake.SubmitDrawGuessAsync(state.Current!.Id, "cat"));
+        await Assert.ThrowsAsync<SocialException>(() => fake.GiveUpDrawRoundAsync(state.Current!.Id));
+    }
+
+    [Fact]
+    public async Task Overlong_words_and_guesses_are_refused()
+    {
+        var (fake, _, friend) = SignedInWithFriend();
+        string longWord = new('w', DrawWords.MaxWordLength + 1);
+        await Assert.ThrowsAsync<SocialException>(() =>
+            fake.RequestDrawGameAsync(friend.Id, DrawDifficulty.Easy, longWord, "41", Doodle()));
+
+        var req = fake.SimulateIncomingDrawRequest(friend.Id, DrawDifficulty.Easy, "cat");
+        var state = await fake.AcceptDrawRequestAsync(req.Id);
+        await Assert.ThrowsAsync<SocialException>(() =>
+            fake.SubmitDrawGuessAsync(state.Current!.Id, new string('g', DrawGuessing.MaxGuessLength + 1)));
+        Assert.Empty((await fake.GetDrawGameAsync(state.Summary.Id)).Current!.Guesses);
+    }
+
+    [Fact]
     public async Task Opponent_guessing_fires_the_subscription()
     {
         var (fake, me, friend) = SignedInWithFriend();

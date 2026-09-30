@@ -33,6 +33,10 @@ public static class DrawWords
         };
     }
 
+    /// <summary>The longest word (and letter hint) the server stores: the <c>word_length</c> / <c>hint_length</c>
+    /// CHECKs on <c>draw_rounds</c> and <c>draw_requests</c>. Every word in the bank fits (pinned by a test).</summary>
+    public const int MaxWordLength = 40;
+
     /// <summary>All words in a tier, lowercase. Exposed for tests and the (rare) UI that wants to browse.</summary>
     public static IReadOnlyList<string> Words(DrawDifficulty d) => d switch
     {

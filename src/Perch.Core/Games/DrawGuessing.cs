@@ -12,6 +12,9 @@ namespace Perch.Games;
 /// </summary>
 public static class DrawGuessing
 {
+    /// <summary>The longest guess <c>submit_draw_guess</c> accepts. The guess field stops typing well before it.</summary>
+    public const int MaxGuessLength = 64;
+
     /// <summary>Folds a word or guess to its comparison form: lower-cased, with everything that isn't a letter
     /// or digit removed. So spacing, hyphens and punctuation are ignored ("ice cream" == "icecream" == "Ice-Cream").</summary>
     public static string Normalize(string? text)

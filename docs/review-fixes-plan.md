@@ -29,7 +29,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP2](#cp2) | 🔴 P0 | Supabase | Friendship consent: no self-accepting | S | ✅ (audit-column decision open) |
 | [CP3](#cp3) | 🟠 P1 | Supabase | Server-owned fields: no forged games, no backdated rows (+ least-privilege grants on every table) | M | ✅ |
 | [CP4](#cp4) | 🟠 P1 | Supabase | Realtime inbox authorisation + sender validation | M | ✅ (public-access follow-up open) |
-| [CP5](#cp5) | 🟡 P2 | Supabase | Draw with Perch: RPC state checks + size limits | S | ⬜ |
+| [CP5](#cp5) | 🟡 P2 | Supabase | Draw with Perch: RPC state checks + size limits | S | 🟦 code + tests done, prod deploy owed |
 | [CP6](#cp6) | 🟡 P2 | Supabase | Block/suspension coverage, `find_profile` throttle, feed query | M | ⬜ |
 | [CP7](#cp7) | 🔴 P0 | Client | Executable hijack via untrusted working directory | M | ✅ |
 | [CP8](#cp8) | 🟠 P1 | Client | Link opening: scheme allowlist + browser argument injection | S | ✅ |
@@ -194,18 +194,37 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 **Landed:** commit `b84159e`: migration `20260929140000_realtime_inbox_authz.sql`, plus `InboxGate`, `CoalescingTrigger`, the private inbox channel and `SocialFeedMonitorHost`.
 
 <a id="cp5"></a>
-### CP5 — Draw with Perch: RPC state checks + size limits · 🟡 P2 · S · ⬜
+### CP5 — Draw with Perch: RPC state checks + size limits · 🟡 P2 · S · 🟦
 
 **Problem.**
 - `give_up_draw_round` and `submit_draw_guess` (`20260924120000_draw_with_perch.sql:194-282`) don't check the round, phase or game state. Replaying an old round lets a player take the drawing turn and orphan the opponent's rounds.
 - There are no length CHECKs on `strokes`, `word`, `letter_hint` or individual guesses, so multi-MB payloads fill storage and every client ends up parsing them.
 
 **Tasks**
-- [ ] In both RPCs, require `g.status='in_progress' and g.phase='guess' and g.whose_turn=me and r.round_no=g.round_no and r.status='guessing'`.
-- [ ] Add CHECKs: `octet_length(strokes) <= 65536`, `word` ≤ 40, `letter_hint` ≤ 40, each guess ≤ 64 (checked in the RPC).
-- [ ] Add a rate limit on `draw_requests` inserts.
-- [ ] Client: check payload size before `JsonDocument.Parse` in `DrawStrokeCodec`.
-- [ ] pgTAP: give-up on a stale round fails, and oversized strokes are rejected.
+- [x] In both RPCs, require `g.status='in_progress' and g.phase='guess' and g.whose_turn=me and r.round_no=g.round_no and r.status='guessing'`. Each failure has its own message (game is over, round is over, not the current round, not your turn). **Giving up is no longer idempotent:** a second give-up on the same round is refused, where it used to re-apply the turn change, which is what made the replay work.
+  - Both RPCs now lock the **game before the round**, the same order as `submit_draw_round` and a game delete's cascade, so a guess racing a delete can't deadlock. A round deleted between the unlocked lookup and the lock reports "no such round".
+- [x] CHECKs on **both** `draw_rounds` and `draw_requests`: `word` ≤ 40 and `letter_hint` ≤ 40 characters, and `strokes` ≤ 160 KiB. Each guess ≤ 64 characters is checked in `submit_draw_guess`. Existing rows over the limits are trimmed first so the constraints validate.
+  - **Changed from the plan:** the strokes cap is **160 KiB, not 64 KB.** `DrawStrokeCodec`'s own caps (800 strokes, 12,000 points) let a legitimate busy drawing encode to about 138 KB, so 64 KB would have refused real drawings. The cap is the shared `DrawStrokeCodec.MaxEncodedBytes`, and a test encodes the worst-case drawing to prove it fits.
+- [x] `draw_requests` rate limit: 10 challenges per requester per 10 minutes. It's a fixed-window counter in `private.draw_request_throttle` (no grants, like `post_throttle`), written by the SECURITY DEFINER trigger `private.enforce_draw_request_rate_limit`. A counter is needed because a sent-then-cancelled invite leaves no row to count. A refused insert (the limit, RLS or the unique index) rolls its count back.
+- [x] Client:
+  - `DrawStrokeCodec.Decode` refuses a payload over `MaxEncodedBytes` before `JsonDocument.Parse`.
+  - New shared limits `DrawWords.MaxWordLength` (40) and `DrawGuessing.MaxGuessLength` (64). `SupabaseSocialClient` checks them before sending, with a friendly message.
+  - `FakeSocialClient` mirrors the new gate (`RequireCurrentGuessLocked`) and the limits.
+- [x] pgTAP (`draw_test.sql`, 15 new, 35 in the file):
+  - give-up twice, and bob replaying give-up on the old round 1, are refused, and the game state doesn't move;
+  - a 41-character word, strokes of 160 KiB + 1 on a round and on an invite, and a 65-character guess are refused, while strokes exactly at the cap are accepted;
+  - with round 3 live, give-up and guess on round 1 are refused and round 3 is untouched;
+  - guess and give-up on an abandoned game are refused;
+  - all six constraints exist;
+  - the 11th send-then-cancel challenge inside the window is refused, and an aged window lets challenges through again.
+  
+  Against the pre-CP5 schema the replay tests fail: bob's replay really did take the drawing turn.
+- [x] xUnit (8 new cases): every bank word and its hint fit `MaxWordLength`; the worst-case drawing in two layouts fits `MaxEncodedBytes` (and exceeds 128 KB, which documents why 64 KB was wrong); an over-cap payload isn't parsed, while one exactly at the cap is; and the fake refuses a double give-up, an old-round replay, moves on an abandoned game, and over-long words and guesses.
+- [ ] **Deploy to prod** (`db-migrate.yml`). Then, between two current builds: play a round through (draw, wrong guess, right guess, give up), and send a challenge.
+
+**Verify.** Done locally on 2026-09-30: `supabase test db` 132/132 across all four files; `dotnet build perch.slnx` clean; the .NET suite passes 1644 with 1 skipped.
+
+**Landed:** migration `20260930120000_draw_state_checks.sql`, plus `DrawStrokeCodec`, `DrawWords`, `DrawGuessing`, `SupabaseSocialClient.Draw.cs` and `FakeSocialClient.Draw.cs`.
 
 <a id="cp6"></a>
 ### CP6 — Block/suspension coverage, `find_profile` throttle, feed query · 🟡 P2 · M · ⬜

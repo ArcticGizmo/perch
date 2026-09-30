@@ -30,6 +30,17 @@ public class DrawWordsTests
         foreach (var d in new[] { DrawDifficulty.Easy, DrawDifficulty.Medium, DrawDifficulty.Hard })
             Assert.All(DrawWords.Words(d), w => Assert.False(string.IsNullOrWhiteSpace(w)));
     }
+
+    [Fact]
+    public void EveryWordAndItsHintFitTheServersLengthLimit()
+    {
+        foreach (var d in new[] { DrawDifficulty.Easy, DrawDifficulty.Medium, DrawDifficulty.Hard })
+            Assert.All(DrawWords.Words(d), w =>
+            {
+                Assert.InRange(w.Length, 1, DrawWords.MaxWordLength);
+                Assert.InRange(DrawGuessing.LetterHint(w).Length, 1, DrawWords.MaxWordLength);
+            });
+    }
 }
 
 public class DrawGuessingTests
@@ -152,5 +163,38 @@ public class DrawStrokeCodecTests
         var back = DrawStrokeCodec.Decode(DrawStrokeCodec.Encode(strokes));
         Assert.Equal(0, back[0].Color);
         Assert.Equal(0, back[0].Size);
+    }
+
+    // The busiest drawing Encode can emit: every stroke slot used, the widest colour index, and every coordinate
+    // four digits. Two layouts, since strokes past the point cap are still written (with no points).
+    public static TheoryData<int, int> WorstCaseLayouts => new()
+    {
+        { DrawStrokeCodec.MaxStrokes, DrawStrokeCodec.MaxTotalPoints / DrawStrokeCodec.MaxStrokes },
+        { DrawStrokeCodec.MaxStrokes, DrawStrokeCodec.MaxPointsPerStroke },
+    };
+
+    [Theory]
+    [MemberData(nameof(WorstCaseLayouts))]
+    public void TheLargestPossibleDrawingFitsTheServersSizeLimit(int strokes, int pointsPerStroke)
+    {
+        var busy = Enumerable.Range(0, strokes)
+            .Select(_ => new DrawStroke((byte)(DrawPalette.Colors.Count - 1), (byte)(DrawPalette.Sizes.Count - 1),
+                Enumerable.Repeat(new DrawPoint(1000, 1000), pointsPerStroke).ToList()))
+            .ToList();
+        int bytes = System.Text.Encoding.UTF8.GetByteCount(DrawStrokeCodec.Encode(busy));
+
+        Assert.True(bytes <= DrawStrokeCodec.MaxEncodedBytes, $"{bytes} bytes");
+        // The 64 KB first planned for the server's CHECK would have refused a legitimate drawing.
+        Assert.True(bytes > 128 * 1024, $"{bytes} bytes");
+    }
+
+    [Fact]
+    public void APayloadOverTheSizeLimitIsNotParsed()
+    {
+        const string drawing = "{\"v\":1,\"s\":[{\"c\":0,\"z\":0,\"p\":[1,2]}]}";
+        string atCap = drawing + new string(' ', DrawStrokeCodec.MaxEncodedBytes - drawing.Length);
+
+        Assert.Single(DrawStrokeCodec.Decode(atCap));
+        Assert.Empty(DrawStrokeCodec.Decode(atCap + " "));
     }
 }
