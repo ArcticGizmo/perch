@@ -664,6 +664,8 @@ The planned `-c` set doesn't cover filter drivers at all. Their names are arbitr
 
 **Verify.** Done 2026-09-30: `dotnet build perch.slnx` clean (0 warnings); the .NET suite passes 1781 with 1 skipped.
 
+**Landed:** commit `a236499`.
+
 ---
 
 ## Supply chain
