@@ -25,10 +25,10 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 
 | CP | Pri | Area | Title | Effort | Status |
 |---|---|---|---|---|---|
-| [CP1](#cp1) | 🔴 P0 | Supabase | Revoke EXECUTE on internal SECURITY DEFINER functions | S | 🟦 code + tests done, prod deploy owed |
-| [CP2](#cp2) | 🔴 P0 | Supabase | Friendship consent: no self-accepting | S | 🟦 code + tests done, prod deploy owed |
-| [CP3](#cp3) | 🟠 P1 | Supabase | Server-owned fields: no forged games, no backdated rows (+ least-privilege grants on every table) | M | 🟦 code + tests done, prod deploy owed |
-| [CP4](#cp4) | 🟠 P1 | Supabase | Realtime inbox authorisation + sender validation | M | 🟦 code + tests done, prod deploy + dogfood owed |
+| [CP1](#cp1) | 🔴 P0 | Supabase | Revoke EXECUTE on internal SECURITY DEFINER functions | S | ✅ |
+| [CP2](#cp2) | 🔴 P0 | Supabase | Friendship consent: no self-accepting | S | ✅ (audit-column decision open) |
+| [CP3](#cp3) | 🟠 P1 | Supabase | Server-owned fields: no forged games, no backdated rows (+ least-privilege grants on every table) | M | ✅ |
+| [CP4](#cp4) | 🟠 P1 | Supabase | Realtime inbox authorisation + sender validation | M | ✅ (public-access follow-up open) |
 | [CP5](#cp5) | 🟡 P2 | Supabase | Draw with Perch: RPC state checks + size limits | S | ⬜ |
 | [CP6](#cp6) | 🟡 P2 | Supabase | Block/suspension coverage, `find_profile` throttle, feed query | M | ⬜ |
 | [CP7](#cp7) | 🔴 P0 | Client | Executable hijack via untrusted working directory | M | ✅ |
@@ -44,9 +44,9 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP17](#cp17) | 🟡 P2 | Supply chain | CI permissions, pinning, deploy-secret scoping | S | ⬜ |
 | [CP18](#cp18) | 🟡 P2 | Supply chain | Code signing + signature verification in `install.ps1` | L | ⬜ |
 | [CP19](#cp19) | ⚪ P3 | Build | Build/installer hygiene (em dashes, PATH type, versioning) | S | ⬜ |
-| [CP20](#cp20) | 🟠 P1 | Performance | Session scan off the UI thread + incremental transcripts | L | 🟦 code + tests done, dogfood owed |
-| [CP21](#cp21) | 🟠 P1 | Performance | All-time stats: cache history, don't re-parse it | M | 🟦 code + tests done, dogfood owed |
-| [CP22](#cp22) | 🟠 P1 | Performance | Streaming chat O(n²) + SessionThreadView leak | M | 🟦 code + headless checks done, dogfood owed |
+| [CP20](#cp20) | 🟠 P1 | Performance | Session scan off the UI thread + incremental transcripts | L | ✅ |
+| [CP21](#cp21) | 🟠 P1 | Performance | All-time stats: cache history, don't re-parse it | M | ✅ |
+| [CP22](#cp22) | 🟠 P1 | Performance | Streaming chat O(n²) + SessionThreadView leak | M | ✅ |
 | [CP23](#cp23) | 🟡 P2 | Performance | Overlay paint path: no IO, no per-frame allocations | M | ⬜ |
 | [CP24](#cp24) | 🟡 P2 | Performance | Misc perf batch (metrics, history tail, diff, arcade, images, watcher) | M | ⬜ |
 | [CP25](#cp25) | ⚪ P3 | Correctness | Watcher race, PID reuse, Process disposal | S | ⬜ |
@@ -67,7 +67,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 > Each checkpoint below needs a pgTAP test that runs the attack as an `authenticated` (or `anon`) role and asserts that it fails. `rls_test.sql` currently does its accepts as superuser, which is why none of these were caught.
 
 <a id="cp1"></a>
-### CP1 — Revoke EXECUTE on internal SECURITY DEFINER functions · 🔴 P0 · S · 🟦
+### CP1 — Revoke EXECUTE on internal SECURITY DEFINER functions · 🔴 P0 · S · ✅
 
 **Problem.** Postgres grants EXECUTE on every new function to `PUBLIC`, and Supabase's default privileges add `anon` and `authenticated` on top. No migration contains a `REVOKE EXECUTE`. As a result:
 - `rpc/cleanup_old_games {"older_than":"0 seconds"}` deletes **every finished game for every user**. `cleanup_old_draw_games` does the same for draw data. The comment at `20260822140000_connect4_game_cleanup.sql:15` says "deliberately NOT granted", but that is false.
@@ -83,14 +83,14 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - [x] **Found while testing:** every client RPC was also callable with the bare **anon** key (via PUBLIC). For example, `find_profile` let anyone enumerate handles without an account. All ten are now revoked from `public, anon`; each already had an explicit `authenticated` grant.
 - [x] Misleading comment: applied migrations aren't edited. The new migration's header documents that the "NOT granted" comments were wrong.
 - [x] pgTAP (`tests/security_test.sql`, tests 1–11): no helper left in `public`; anon has no USAGE on `private` and no EXECUTE on the helpers or client RPCs; `authenticated` keeps EXECUTE on the client RPCs; the sweeps and `connect4_has_win` throw 42501 as `authenticated`; `posts_read` and `profiles_friends_select` still resolve through the moved helpers.
-- [ ] **Deploy to prod** (`db-migrate.yml`), then re-run the curl probes below against the live project.
+- [x] **Deploy to prod** (`db-migrate.yml`), then re-run the curl probes below against the live project. *(User-confirmed on 2026-09-30.)*
 
-**Verify.** Done locally on 2026-09-29. `supabase test db` gave 84/84 across all four files. Local REST probes with the anon key gave `rpc/cleanup_old_games` 401, `rpc/cleanup_old_draw_games` 401, `rpc/find_profile` 401, and `rpc/are_friends` / `rpc/is_blocked` 404. **Still owed:** the same probes against prod after deploy.
+**Verify.** Done locally on 2026-09-29. `supabase test db` gave 84/84 across all four files. Local REST probes with the anon key gave `rpc/cleanup_old_games` 401, `rpc/cleanup_old_draw_games` 401, `rpc/find_profile` 401, and `rpc/are_friends` / `rpc/is_blocked` 404. The same probes against prod were user-confirmed on 2026-09-30.
 
 **Landed:** migration `20260929120000_security_hardening.sql` (commit `ab0c93f`).
 
 <a id="cp2"></a>
-### CP2 — Friendship consent: no self-accepting · 🔴 P0 · S · 🟦
+### CP2 — Friendship consent: no self-accepting · 🔴 P0 · S · ✅
 
 **Problem.** In `20260819120100_rls.sql:33-40`, `friendships_request` only checks `requester = auth.uid()`, and `friendships_respond` has USING but no WITH CHECK. On top of that, `20260819120200_grants.sql:10` grants full-column UPDATE. So `POST /rest/v1/friendships {"requester":"<me>","addressee":"<victim>","status":"accepted"}`, or a PATCH of your own pending row, makes you the victim's friend without their consent. That gives access to their posts and profile and lets you challenge them to games.
 
@@ -102,7 +102,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 - [x] Client: `SendRequestAsync` now uses `resolution=ignore-duplicates` (ON CONFLICT DO NOTHING) instead of `merge-duplicates`. `RespondAsync` (a PATCH by the addressee) is unchanged and still works.
 - [ ] Existing forged edges in prod can't be detected: there's no `accepted_at` / `accepted_by` column. Decide whether to add an audit column going forward.
 - [x] pgTAP (`tests/security_test.sql`, tests 12–18): insert as `accepted` or `blocked` → 42501; pending insert and ignore-duplicates re-send succeed; the requester's PATCH matches nothing; re-pointing the requester while accepting → 42501; the addressee's accept succeeds.
-- [ ] **Deploy to prod** (`db-migrate.yml`).
+- [x] **Deploy to prod** (`db-migrate.yml`). *(User-confirmed on 2026-09-30.)*
 
 **Verify.** Done locally on 2026-09-29. Beyond pgTAP, an end-to-end run over local PostgREST with real signed-in test users checked each case:
 - forged accepted insert → 403;
@@ -118,7 +118,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 **Landed:** same migration as CP1, plus `SupabaseSocialClient.SendRequestAsync` (commit `ab0c93f`).
 
 <a id="cp3"></a>
-### CP3 — Server-owned fields: no forged games, no backdated rows · 🟠 P1 · M · 🟦
+### CP3 — Server-owned fields: no forged games, no backdated rows · 🟠 P1 · M · ✅
 
 **Problem.**
 - **Forged games.** `20260821120000_connect4.sql:60-66` still allows a direct `INSERT` into `games`, where the client chooses `status`, `winner`, `turn`, `move_count` and `updated_at`. That lets someone create forged losses that sort first forever, escape cleanup, and get fetched with no limit on every 60s poll.
@@ -143,14 +143,14 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
   - **Tripwire:** pins the exact privilege matrix: table grants for `authenticated` and `service_role`, every client-writable column, the executable-function allowlist, RLS on everywhere, all policies `TO authenticated`, nothing for `anon`, nothing on `private` tables, no TRUNCATE/REFERENCES/TRIGGER/MAINTAIN, and a probe table and function created in the test start closed.
   - **Attacks:** anon can't read; forged game insert, game UPDATE and moves insert → 42501; backdated post → 42501; the owner's backdated insert is re-stamped to `now()`; the flood-guard stamp is unreachable and is the server clock; two posts in the interval → 23514; the claim-handle upsert works in PostgREST's exact SQL shape; `id` can't be re-pointed.
   - `connect4_test` and `draw_test` fixtures now create games as the owner, and let the server generate request ids.
-- [ ] **Deploy to prod** (`db-migrate.yml`), then run the probes below.
+- [x] **Deploy to prod** (`db-migrate.yml`), then run the probes below. *(User-confirmed on 2026-09-30.)*
 
 **Verify.** Done locally on 2026-09-29:
 - `supabase test db` 110/110 across all four files.
 - .NET suite 1406 passed, 1 skipped; both heads build.
 - An end-to-end run over local PostgREST with real signed-in users replayed every REST call `SupabaseSocialClient` makes, and all passed: claim handle (insert and update paths), friends (old-client merge-duplicates, ignore-duplicates, re-send, accept), posts, reactions, invite → accept → move → resign → delete for Connect 4 and Draw, block/unblock, report, and account deletion through the auth admin API cascading. The same run confirmed that direct game insert, game PATCH, backdated post, post DELETE, reading `reports` or `moderation`, every anon read, and `service_role` reads outside moderation are all refused.
 
-**Still owed after deploy:**
+**After deploy** (user-confirmed on 2026-09-30):
 - Against prod, with a puppet account: claim or edit a handle (this confirms the 20260918 break is fixed), post twice inside 5s (the second is refused), and send a POST `/rest/v1/games` (403).
 - With the bare publishable key: `GET /rest/v1/posts` and `/profiles` (401).
 - Confirm Realtime postgres_changes still delivers (moves, draw_rounds, posts). Realtime runs as `supabase_admin` and the published tables keep table-level SELECT, so it should be unaffected, but it hasn't been checked live.
@@ -159,7 +159,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 **Landed:** commit `c996bf1`: migration `20260929130000_least_privilege.sql`, plus client changes in `SupabaseSocialClient.Games.cs`/`.Draw.cs`, `ISocialClient`, `FakeSocialClient.Games.cs`, `Connect4Window` and `DebugSocialWindow`.
 
 <a id="cp4"></a>
-### CP4 — Realtime inbox authorisation + sender validation · 🟠 P1 · M · 🟦
+### CP4 — Realtime inbox authorisation + sender validation · 🟠 P1 · M · ✅
 
 **Problem.** `perch:inbox:<uid>` is a **public** broadcast topic (`SupabaseRealtime.cs:192`, `SupabaseSocialClient.Games.cs:233-278`). Anyone holding the anon key can:
 - subscribe to any user's inbox and see who invites or nudges them, along with game ids;
@@ -185,8 +185,8 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
   - A receives B's private broadcast.
   - A receives none of C's private broadcast, a public broadcast on the same topic name, or B's broadcast after A blocks B.
   - A public snooper on the same name sees none of the private traffic.
-- [ ] **Deploy to prod** (`db-migrate.yml`). Then, from two real accounts, check that an invite and a nudge still arrive instantly, and that a non-friend's broadcast doesn't.
-- [ ] Dogfood: invite, accept, decline and nudge flows between two current builds (the debug puppet tool works). **Mixed versions:** a pre-CP4 client still uses the public topic, so its broadcasts don't reach a CP4 client and vice versa. Both fall back to the 60s poll, so nothing breaks, it's just slower until both update.
+- [x] **Deploy to prod** (`db-migrate.yml`). Then, from two real accounts, check that an invite and a nudge still arrive instantly, and that a non-friend's broadcast doesn't. *(User-confirmed on 2026-09-30.)*
+- [x] Dogfood: invite, accept, decline and nudge flows between two current builds (the debug puppet tool works). **Mixed versions:** a pre-CP4 client still uses the public topic, so its broadcasts don't reach a CP4 client and vice versa. Both fall back to the 60s poll, so nothing breaks, it's just slower until both update. *(User-confirmed on 2026-09-30.)*
 - [ ] **Follow-up to decide:** old clients can still abuse *each other's* public inbox. The only way to close that server-side is to turn off Realtime's "allow public access" in the dashboard. That also requires moving the posts, moves and draw_rounds change streams to private channels, with `realtime.messages` SELECT policies for `postgres_changes`. Without that change, old clients' realtime would fail and they would drop to polling.
 
 **Verify.** Done locally on 2026-09-29: `supabase test db` 117/117; .NET 1416 passed, 1 skipped; both heads build; the realtime probe above passed.
@@ -577,7 +577,7 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 ## Performance
 
 <a id="cp20"></a>
-### CP20 — Session scan off the UI thread + incremental transcripts · 🟠 P1 · L · 🟦
+### CP20 — Session scan off the UI thread + incremental transcripts · 🟠 P1 · L · ✅
 
 **Problem.**
 - **Scan runs on the UI thread.** Every trigger (watcher, the 2s controlled poll, reconcile) calls `SessionMonitor.Scan()` on the dispatcher (`SessionMonitorHost.cs:81-88`).
@@ -613,7 +613,7 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
   - `TranscriptFoldTests` (11): arbitrary chunk splits, mid-line and mid-UTF-8-character; an unchanged file reads nothing; an append to about 1 MB reads only the append plus the head check; a record without its newline is taken once; a partial record waits; truncation; replacement by a no-shorter file; BOM; a missing then created file; a throwing folder.
   - `TranscriptFoldEquivalenceTests` (7): a combined real transcript grown in random chunks with 3 seeds; after **every** chunk, the readers that watched it grow equal fresh readers for every folded value. Also the task fixtures grown alone, the async launch-then-notify transition, truncation and replacement, and an append to a 5 MB transcript that reads only the append.
   - `TranscriptLocatorMissCacheTests` (3), a `SubAgentReader` skip test (a quiet ordinary agent is never parsed, a quiet teammate still is), and a `CoalescingTrigger` test: 400 requests from 8 threads never overlap, the burst collapses, and the last request is served.
-- [ ] Dogfood:
+- [x] Dogfood: *(User-confirmed on 2026-09-30.)*
   - the overlay still fills at launch and tracks sessions;
   - a finished session's "done" badge and toast still arrive on time;
   - acknowledging (focus or click) clears it;
@@ -627,7 +627,7 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 **Landed:** commits `ceecfc9` (the fold, readers, locator and sub-agent skip) and `e6fdbe8` (the background scan worker, trigger debounce and locks).
 
 <a id="cp21"></a>
-### CP21 — All-time stats: cache history, don't re-parse it · 🟠 P1 · M · 🟦
+### CP21 — All-time stats: cache history, don't re-parse it · 🟠 P1 · M · ✅
 
 **Problem.** `App.axaml.cs:1166-1188` → `SessionStatsService.ReportAllTime` (`:252-395`) and `TeamReader.cs:86` JSON-parse every line of every transcript whenever a session finishes, throttled to once per 3 minutes. With GBs of history, that is tens of seconds of a pegged core and heavy LOH churn in an all-day process. The Stats and Achievements windows pay the same cost.
 
@@ -666,7 +666,7 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
   - **warm**, nothing changed: **79 ms**;
   - **restart**, load the snapshot and report: **110 ms**, reading 0 transcript bytes;
   - snapshot size: **1.3 MB**.
-- [ ] Dogfood:
+- [x] Dogfood: *(User-confirmed on 2026-09-30.)*
   - the Stats window (Today, 7 days, 30 days, All time) and the Achievements window show the same figures as before;
   - `stats-cache.bin` appears in the profile dir after the first report;
   - a later launch's first all-time report is quick.
@@ -676,7 +676,7 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 **Landed:** commit `cc9a436`.
 
 <a id="cp22"></a>
-### CP22 — Streaming chat O(n²) + SessionThreadView leak · 🟠 P1 · M · 🟦
+### CP22 — Streaming chat O(n²) + SessionThreadView leak · 🟠 P1 · M · ✅
 
 **Problem.**
 - **Settled prefix is rebuilt each time.** `SessionThreadView.cs:871-909` (`RenderRevealed`) rebuilds the whole settled prefix (Markdig parse, control tree, `File.Exists` calls) at every block boundary.
@@ -704,7 +704,7 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
     - inside the open fence: mean **141 → 7.4 ms**
   - **Leak check.** Ten windows are opened and closed onto one live, still-streaming session, then GC runs. Before: **10/10** windows still reachable (checked by temporarily removing the `Unbind` call). After: **0/10**. Avalonia keeps the most recently closed window reachable until another window opens, whatever the fix; the check opens one untracked window to account for that.
   - xUnit `StreamingTextTests` (28): deltas accumulate to their exact concatenation over 2,000 random deltas; `Text` is cached until the next delta; the final text replaces the accumulation; an empty delta is a no-op; 23 fence cases (open, opener still arriving, closed, the wrong closer character, a shorter closer, an indented closer, a 4-space indented code block, inline code, a fence inside a list, CRLF); the `MinInterval` thresholds.
-- [ ] Dogfood:
+- [x] Dogfood: *(User-confirmed on 2026-09-30.)*
   - a long live reply streams smoothly;
   - a code block shows plain while it streams, then highlights when it closes;
   - the finished message matches a non-streamed render;
