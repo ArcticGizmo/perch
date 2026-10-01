@@ -234,7 +234,25 @@ Uniqueness is enforced in one place, so lifting it later is a policy change, not
 The green gate for every checkpoint is the one from `roost-plan.md`: both heads build, the full .NET suite
 passes, `render <dir>` is eyeballed for the Roost shots, and there's one commit per checkpoint.
 
-### T1: Rail sort (independent; can ship first)
+### T1: Rail sort (independent; can ship first) ✅ d5cfda8
+*As built:*
+- The roster exposes `RailAlphabetical` (a property, rebuilt with `Rail`) instead of a `RailFor(sort)` method.
+- The window's rail renders "sections" (status groups, or one `ALL SESSIONS` list), and its rebuild
+  signature includes the sort.
+- The `Status | A–Z` toggle is docked above the rail's scroll area.
+
+### T2: `RoostGridLayout` ✅
+*As built:*
+- **Dividers are the smallest run the touching regions fit inside**, not the maximal run of the line. In a
+  2×2 grid each half of the middle line moves on its own, and beside a tall region the divider is that
+  region's full height.
+- `MoveDivider` clamps to `DividerRange` rather than try-then-validate. Because both sides move along the
+  whole run, the tiling can't break, and every edit still goes through `Create` (validation) anyway.
+- The painter's × is `Remove(id)`: the neighbour from `MergeTarget` (larger, then left/top) grows into the
+  space, and the removed region's id goes. `RoostRegion` is a record struct that round-trips through
+  System.Text.Json as-is.
+
+### T1 / T2 original scope
 - `RoostRailSort` + `RoostRoster.RailFor`, a header toggle in the rail, the persisted `RoostRailSort`, and
   the row rebuild signature including the sort.
 - Tests: alphabetical order, ties, ended panes last, a sort flip rebuilding rows.
