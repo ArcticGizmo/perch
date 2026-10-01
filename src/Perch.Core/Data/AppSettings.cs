@@ -167,6 +167,10 @@ internal sealed class AppSettings
     // missing = the default for it). UI state, like RoostLayout.
     public Dictionary<int, Roost.RoostSnapTemplate>? RoostLayoutByCount { get; set; }
 
+    // How the Roost's rail orders sessions (by status group, or A–Z), picked by the toggle in the rail's header.
+    // UI state, like RoostLayout. See docs/roost-tabs-plan.md.
+    public Roost.RoostRailSort RoostRailSort { get; set; } = Roost.RoostRailSort.Status;
+
     // The Roost's pane order as "pid/sessionId" tokens (RoostRoster.PersistedOrder), rearranged by dragging pane
     // headers, so it survives a restart while the sessions run — and a recycled pid never inherits a place.
     public List<string>? RoostOrder { get; set; }

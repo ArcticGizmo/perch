@@ -33,6 +33,15 @@ public sealed record RoostPane(string Key, ClaudeSession Session, RoostGroup Gro
     public bool Ended => EndedAt is not null;
 }
 
+/// <summary>How the Roost's left rail orders its sessions (a persisted toggle in the rail's header).</summary>
+public enum RoostRailSort
+{
+    /// <summary>Grouped by urgency: Needs you → Done · review → Working → Quiet (<see cref="RoostRoster.Rail"/>).</summary>
+    Status = 0,
+    /// <summary>One flat list by name (<see cref="RoostRoster.RailAlphabetical"/>).</summary>
+    Alphabetical = 1,
+}
+
 /// <summary>A rail heading and its panes, in rail order.</summary>
 public sealed record RoostRailGroup(RoostGroup Group, IReadOnlyList<RoostPane> Panes);
 
@@ -104,6 +113,14 @@ public sealed class RoostRoster
     /// <summary>The rail: all four groups in urgency order (a group may be empty). Within <see cref="RoostGroup.NeedsYou"/>
     /// the longest-waiting pane leads; other groups keep first-seen order, with ended panes last in Quiet.</summary>
     public IReadOnlyList<RoostRailGroup> Rail => _rail;
+
+    /// <summary>The rail as one flat list: live panes by <see cref="ClaudeSession.DisplayName"/> (case-insensitive;
+    /// ties keep first-seen order), then ended panes the same way.</summary>
+    public IReadOnlyList<RoostPane> RailAlphabetical { get; private set; } = [];
+
+    /// <summary>A persisted sort read back as a real one: a value no build defines falls back to
+    /// <see cref="RoostRailSort.Status"/>.</summary>
+    public static RoostRailSort Normalize(RoostRailSort sort) => Enum.IsDefined(sort) ? sort : RoostRailSort.Status;
 
     public RoostCounts Counts { get; private set; }
 
@@ -391,6 +408,9 @@ public sealed class RoostRoster
             rail.Add(new RoostRailGroup(g, members.ToList()));
         }
         _rail = rail;
+        // OrderBy is stable, so equal names keep first-seen order.
+        RailAlphabetical = panes.OrderBy(p => p.Ended)
+            .ThenBy(p => p.Session.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
 
         Counts = new RoostCounts(
             rail[(int)RoostGroup.NeedsYou].Panes.Count,

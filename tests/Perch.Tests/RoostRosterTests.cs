@@ -438,4 +438,49 @@ public class RoostRosterTests
         Assert.Single(r.Panes);
         Assert.Equal(SessionStatus.Running, r.Panes[0].Session.Status);   // first wins
     }
+
+    private static ClaudeSession Named(string pid, string name, SessionStatus status = SessionStatus.Running) =>
+        S(pid, status) with { ProjectName = name };
+
+    [Fact]
+    public void TheAlphabeticalRailSortsByNameIgnoringCaseAndStatus()
+    {
+        var r = new RoostRoster();
+        r.Update([Named("1", "web"), Named("2", "Api", SessionStatus.Idle), Named("3", "perch", SessionStatus.AwaitingInput)], T0);
+        Assert.Equal(["2", "3", "1"], Keys(r.RailAlphabetical));   // Api, perch, web — urgency plays no part
+    }
+
+    [Fact]
+    public void TheAlphabeticalRailKeepsFirstSeenOrderForEqualNames()
+    {
+        var r = new RoostRoster();
+        r.Update([Named("9", "perch"), Named("4", "PERCH"), Named("5", "api")], T0);
+        Assert.Equal(["5", "9", "4"], Keys(r.RailAlphabetical));
+    }
+
+    [Fact]
+    public void TheAlphabeticalRailPutsEndedPanesLast()
+    {
+        var r = new RoostRoster();
+        r.Update([Named("1", "alpha"), Named("2", "beta")], T0);
+        r.Update([Named("2", "beta")], T0.AddMinutes(1));   // alpha ended, lingering
+        Assert.Equal(["2", "1"], Keys(r.RailAlphabetical));
+        Assert.True(r.RailAlphabetical[1].Ended);
+    }
+
+    [Fact]
+    public void TheAlphabeticalRailLeavesClosedPanesOut()
+    {
+        var r = new RoostRoster();
+        r.Update([Named("1", "alpha"), Named("2", "beta")], T0);
+        r.Close("1");
+        Assert.Equal(["2"], Keys(r.RailAlphabetical));
+    }
+
+    [Fact]
+    public void AnUnknownPersistedRailSortReadsBackAsStatus()
+    {
+        Assert.Equal(RoostRailSort.Alphabetical, RoostRoster.Normalize(RoostRailSort.Alphabetical));
+        Assert.Equal(RoostRailSort.Status, RoostRoster.Normalize((RoostRailSort)42));
+    }
 }

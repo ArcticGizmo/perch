@@ -99,18 +99,22 @@ internal sealed class RoostWindow : Window
     private Border? _snapButton;
     private readonly DispatcherTimer _snapHintTimer;
     private RoostGroup? _filter;
+    private RoostRailSort _railSort;
+    private readonly Dictionary<RoostRailSort, Border> _sortSegments = new();
     private string? _focused;
     // "+ New session" was clicked: the first new Perch pane to appear before the deadline goes on stage.
     private HashSet<string>? _keysAtNewSession;
     private DateTime _newSessionUntil;
 
     public RoostWindow(RoostRoster roster, Func<RoostPane, RoostFeed?> feedFactory, SessionPalette? palette = null,
-        RoostLayoutMode layout = RoostLayoutMode.Tiled, IReadOnlyDictionary<int, RoostSnapTemplate>? layoutByCount = null)
+        RoostLayoutMode layout = RoostLayoutMode.Tiled, IReadOnlyDictionary<int, RoostSnapTemplate>? layoutByCount = null,
+        RoostRailSort railSort = RoostRailSort.Status)
     {
         _roster = roster;
         _feedFactory = feedFactory;
         _p = palette ?? SessionPalette.Current;
         _mode = RoostLayout.Normalize(layout);
+        _railSort = RoostRoster.Normalize(railSort);
         _layoutByCount = layoutByCount is null ? new() : new(layoutByCount);
 
         Title = "Roost";
@@ -150,13 +154,21 @@ internal sealed class RoostWindow : Window
             },
         };
 
-        // ── Rail ──
-        _rail = new StackPanel { Spacing = 14, Margin = new Thickness(8, 12) };
+        // ── Rail: the sort toggle, then the sessions ──
+        _rail = new StackPanel { Spacing = 14, Margin = new Thickness(8, 4, 8, 12) };
         var railHost = new Border
         {
             Width = 216, Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(0, 0, 1, 0),
             [DockPanel.DockProperty] = Dock.Left,
-            Child = new ScrollViewer { HorizontalScrollBarVisibility = global::Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled, Content = _rail },
+            Child = new DockPanel
+            {
+                LastChildFill = true,
+                Children =
+                {
+                    RailSortToggle(),
+                    new ScrollViewer { HorizontalScrollBarVisibility = global::Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled, Content = _rail },
+                },
+            },
         };
 
         // ── Stage: one container per layout, only the active one visible ──
@@ -278,6 +290,22 @@ internal sealed class RoostWindow : Window
 
     /// <summary>The layout toggle moved (persist it).</summary>
     public event Action<RoostLayoutMode>? LayoutChanged;
+
+    /// <summary>The rail's sort toggle moved (persist it).</summary>
+    public event Action<RoostRailSort>? RailSortChanged;
+
+    public RoostRailSort RailSort => _railSort;
+
+    /// <summary>Re-orders the rail (its header toggle).</summary>
+    public void SetRailSort(RoostRailSort sort)
+    {
+        sort = RoostRoster.Normalize(sort);
+        if (sort == _railSort) return;
+        _railSort = sort;
+        RefreshSortSegments();
+        RailSortChanged?.Invoke(sort);
+        RefreshRail();
+    }
 
     /// <summary>A layout was picked for a stage count (persist the whole map).</summary>
     public event Action<IReadOnlyDictionary<int, RoostSnapTemplate>>? LayoutByCountChanged;
@@ -1116,21 +1144,28 @@ internal sealed class RoostWindow : Window
     // the row being pressed or dragged (EndDrag refreshes once it lets go).
     private void RefreshRail()
     {
-        var sig = string.Join("|", _roster.Rail.Where(g => g.Panes.Count > 0)
-            .Select(g => $"{(int)g.Group}:{string.Join(",", g.Panes.Select(p => p.Key))}"));
+        var sections = RailSections();
+        var sig = $"{(int)_railSort}#" + string.Join("|", sections
+            .Select(s => $"{s.Title}:{string.Join(",", s.Panes.Select(p => p.Key))}"));
         if (sig != _railSig && _press is null)
         {
             _railSig = sig;
-            RebuildRail();
+            RebuildRail(sections);
         }
-        foreach (var group in _roster.Rail)
-            foreach (var pane in group.Panes)
+        foreach (var section in sections)
+            foreach (var pane in section.Panes)
                 if (_railRows.TryGetValue(pane.Key, out var row)) UpdateRailRow(row, pane);
     }
 
     private void TickRail() => RefreshRail();
 
-    private void RebuildRail()
+    // The rail's headed sections for the current sort: the non-empty status groups, or one A–Z list.
+    private List<(string Title, IReadOnlyList<RoostPane> Panes)> RailSections() =>
+        _railSort == RoostRailSort.Alphabetical
+            ? _roster.RailAlphabetical.Count > 0 ? [("ALL SESSIONS", _roster.RailAlphabetical)] : []
+            : _roster.Rail.Where(g => g.Panes.Count > 0).Select(g => (GroupTitle(g.Group), g.Panes)).ToList();
+
+    private void RebuildRail(IReadOnlyList<(string Title, IReadOnlyList<RoostPane> Panes)> sections)
     {
         _rail.Children.Clear();
         _railRows.Clear();
@@ -1139,26 +1174,69 @@ internal sealed class RoostWindow : Window
             _rail.Children.Add(new TextBlock { Text = "No live sessions", Margin = new Thickness(8, 0), FontSize = 12, Foreground = _p.Faint });
             return;
         }
-        foreach (var group in _roster.Rail)
+        foreach (var (title, panes) in sections)
         {
-            if (group.Panes.Count == 0) continue;
             var col = new StackPanel { Spacing = 2 };
             col.Children.Add(new DockPanel
             {
                 Margin = new Thickness(8, 0, 8, 4),
                 Children =
                 {
-                    new TextBlock { Text = group.Panes.Count.ToString(), FontFamily = _p.Mono, FontSize = 10.5, Foreground = _p.Faint, [DockPanel.DockProperty] = Dock.Right },
-                    new TextBlock { Text = GroupTitle(group.Group), FontFamily = _p.Mono, FontSize = 10.5, LetterSpacing = 1.2, Foreground = _p.Faint },
+                    new TextBlock { Text = panes.Count.ToString(), FontFamily = _p.Mono, FontSize = 10.5, Foreground = _p.Faint, [DockPanel.DockProperty] = Dock.Right },
+                    new TextBlock { Text = title, FontFamily = _p.Mono, FontSize = 10.5, LetterSpacing = 1.2, Foreground = _p.Faint },
                 },
             });
-            foreach (var pane in group.Panes)
+            foreach (var pane in panes)
             {
                 var row = RailRow(pane.Key);
                 _railRows[pane.Key] = row;
                 col.Children.Add(row.Row);
             }
             _rail.Children.Add(col);
+        }
+    }
+
+    // The rail header's "Status | A–Z" toggle: a small segmented control, docked above the scrolling list.
+    private Control RailSortToggle()
+    {
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
+        foreach (var (sort, label, tip) in new[]
+                 {
+                     (RoostRailSort.Status, "Status", "Group sessions by what they need from you"),
+                     (RoostRailSort.Alphabetical, "A–Z", "List sessions by name"),
+                 })
+        {
+            var seg = new Border
+            {
+                Padding = new Thickness(8, 3), Cursor = new Cursor(StandardCursorType.Hand),
+                BorderBrush = _p.Border, BorderThickness = new Thickness(sort == RoostRailSort.Status ? 0 : 1, 0, 0, 0),
+                [Grid.ColumnProperty] = (int)sort, [ToolTip.TipProperty] = tip,
+                Child = new TextBlock
+                {
+                    Text = label, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 11.5,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                },
+            };
+            seg.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) SetRailSort(sort); };
+            _sortSegments[sort] = seg;
+            row.Children.Add(seg);
+        }
+        RefreshSortSegments();
+        return new Border
+        {
+            Margin = new Thickness(16, 12, 16, 8), CornerRadius = new CornerRadius(8), BorderBrush = _p.Border,
+            BorderThickness = new Thickness(1), Background = _p.Surface, ClipToBounds = true,
+            [DockPanel.DockProperty] = Dock.Top, Child = row,
+        };
+    }
+
+    private void RefreshSortSegments()
+    {
+        foreach (var (sort, seg) in _sortSegments)
+        {
+            bool on = sort == _railSort;
+            seg.Background = on ? _p.BrandWash : Brushes.Transparent;
+            ((TextBlock)seg.Child!).Foreground = on ? _p.Text : _p.Muted;
         }
     }
 

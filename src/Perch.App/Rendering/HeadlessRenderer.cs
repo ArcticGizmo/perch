@@ -1609,6 +1609,11 @@ internal static class HeadlessRenderer
             Capture(dark ? "roost_tiled_1x.png" : "roost_tiled_light_1x.png");
             if (dark)
             {
+                // The rail sorted A–Z (roost-tabs T1): one flat list by name, the ended scratch last.
+                w.SetRailSort(Perch.Data.Roost.RoostRailSort.Alphabetical);
+                Capture("roost_rail_alpha_1x.png");
+                w.SetRailSort(Perch.Data.Roost.RoostRailSort.Status);
+
                 // The "needs you" chip as a filter: only the blocked sessions.
                 w.FilterForRender(Perch.Data.Roost.RoostGroup.NeedsYou);
                 Capture("roost_tiled_filtered_1x.png");

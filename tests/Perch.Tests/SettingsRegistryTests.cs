@@ -32,6 +32,8 @@ public class SettingsRegistryTests
         nameof(AppSettings.RoostLayout),
         nameof(AppSettings.RoostLayoutByCount),
         nameof(AppSettings.RoostOrder),
+        // …and the rail's sort, by the toggle in the rail's header.
+        nameof(AppSettings.RoostRailSort),
         // …and the panes closed from a pane's own menu (reopened from its "N hidden" chip).
         nameof(AppSettings.RoostClosedPanes),
         // The usage strip's per-account collapse overrides, toggled by clicking an account on the overlay —

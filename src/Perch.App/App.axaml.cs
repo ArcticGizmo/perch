@@ -1615,7 +1615,8 @@ public partial class App : Application
             {
                 var w = new RoostWindow(_roostRoster, CreateRoostFeed,
                     layout: Perch.Data.Roost.RoostLayout.Normalize(_appSettings?.RoostLayout ?? default),
-                    layoutByCount: _appSettings?.RoostLayoutByCount);
+                    layoutByCount: _appSettings?.RoostLayoutByCount,
+                    railSort: _appSettings?.RoostRailSort ?? default);
                 // A prompt that was only "seen" in the Roost gets its toast once the user looks away from it.
                 w.Deactivated += (_, _) =>
                 {
@@ -1627,6 +1628,7 @@ public partial class App : Application
                 w.OpenSessionRequested += FocusSession;
                 w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
                 w.LayoutChanged += mode => { if (_appSettings is { } s) { s.RoostLayout = mode; s.Save(); } };
+                w.RailSortChanged += sort => { if (_appSettings is { } s) { s.RoostRailSort = sort; s.Save(); } };
                 w.LayoutByCountChanged += picks =>
                 {
                     if (_appSettings is not { } s) return;
