@@ -37,6 +37,65 @@ public class RoostRosterTests
     }
 
     [Fact]
+    public void SwapAndMoveToEndReorderAndSurviveAScan()
+    {
+        var r = new RoostRoster();
+        r.Update([S("1"), S("2"), S("3")], T0);
+        r.Swap("1", "3");
+        Assert.Equal(["3", "2", "1"], Keys(r.Panes));
+        r.MoveToEnd("3");
+        Assert.Equal(["2", "1", "3"], Keys(r.Panes));
+        r.Update([S("1"), S("2"), S("3")], T0);
+        Assert.Equal(["2", "1", "3"], Keys(r.Panes));
+        r.Swap("2", "missing");
+        Assert.Equal(["2", "1", "3"], Keys(r.Panes));
+    }
+
+    [Fact]
+    public void ASeededOrderPlacesPanesAsTheyArrive()
+    {
+        var r = new RoostRoster();
+        r.SeedOrder(["3/sess-3", "1/sess-1", "2/sess-2"]);
+        r.Update([S("1"), S("2"), S("4")], T0);
+        Assert.Equal(["1", "2", "4"], Keys(r.Panes));
+        r.Update([S("1"), S("2"), S("3"), S("4")], T0);   // 3 was first in the saved order
+        Assert.Equal(["3", "1", "2", "4"], Keys(r.Panes));
+        r.Update([S("1"), S("2"), S("3"), S("4"), S("5")], T0);
+        Assert.Equal(["3", "1", "2", "4", "5"], Keys(r.Panes));
+    }
+
+    [Fact]
+    public void SeedingAfterPanesExistReordersThem()
+    {
+        var r = new RoostRoster();
+        r.Update([S("1"), S("2"), S("3")], T0);
+        r.SeedOrder(["2/sess-2", "3/sess-3"]);
+        Assert.Equal(["2", "3", "1"], Keys(r.Panes));
+        Assert.Equal(["2/sess-2", "3/sess-3", "1/sess-1"], r.PersistedOrder);
+    }
+
+    [Fact]
+    public void ASeededOrderIgnoresRecycledPidsAndBarePids()
+    {
+        // Had pid 3's token matched, it would land ahead of 1 (rank 0). Saved under another session, or as a bare
+        // pid, it's just a newcomer appended after the seeded pane.
+        var recycled = new RoostRoster();
+        recycled.SeedOrder(["3/old", "1/sess-1"]);
+        recycled.Update([S("1"), S("3")], T0);
+        Assert.Equal(["1", "3"], Keys(recycled.Panes));
+
+        var bare = new RoostRoster();
+        bare.SeedOrder(["3", "1/sess-1"]);
+        bare.Update([S("1"), S("3")], T0);
+        Assert.Equal(["1", "3"], Keys(bare.Panes));
+
+        var matching = new RoostRoster();
+        matching.SeedOrder(["3/sess-3", "1/sess-1"]);
+        matching.Update([S("1"), S("3")], T0);
+        Assert.Equal(["3", "1"], Keys(matching.Panes));
+    }
+
+    [Fact]
     public void ScanOrderDoesNotReorderExistingPanes()
     {
         var r = new RoostRoster();

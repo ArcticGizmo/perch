@@ -71,8 +71,13 @@ public sealed class RoostRoster
         public RoostPin Pin;
     }
 
-    // Insertion-ordered: _order is first-seen, _entries the state by key.
+    // Insertion-ordered: _order is first-seen (reordered only by Swap / MoveToEnd, or placed by a seeded order),
+    // _entries the state by key.
     private readonly List<string> _order = [];
+    // A persisted order's rank (and the session id it was saved under) per key not yet seen, and the ranks of the
+    // keys placed by it.
+    private readonly Dictionary<string, (int Rank, string SessionId)> _seedRank = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _placedRank = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly HashSet<string> _closed = new(StringComparer.Ordinal);
     // Persisted closed tokens not yet matched: pid -> the session id it was closed under. Resolved (or dropped)
@@ -167,6 +172,50 @@ public sealed class RoostRoster
         ClosedChanged?.Invoke();
     }
 
+    /// <summary>Every pane's key in order, closed ones included.</summary>
+    public IReadOnlyList<string> Order => _order;
+
+    /// <summary>The order as it's persisted: one <c>pid/sessionId</c> token per pane, so after a restart a recycled
+    /// pid can't inherit an unrelated session's place (the same rule as <see cref="PersistedClosed"/>).</summary>
+    public IReadOnlyList<string> PersistedOrder =>
+        _order.Select(k => Token(k, _entries[k].Session.SessionId)).ToList();
+
+    /// <summary>Restores a <see cref="PersistedOrder"/>. A pane arriving later takes its place among the panes
+    /// placed by it when its pid and session id both match its token; anything else is appended as usual. Bare
+    /// pids are ignored.</summary>
+    public void SeedOrder(IEnumerable<string> tokens)
+    {
+        int rank = 0;
+        foreach (var t in tokens)
+        {
+            int slash = t.IndexOf('/');
+            if (slash <= 0 || slash == t.Length - 1) continue;
+            _seedRank.TryAdd(t[..slash], (rank++, t[(slash + 1)..]));
+        }
+        if (_order.Count == 0) return;
+        // Panes already here: the saved ones first, in the saved order, then the rest as they were.
+        var ranks = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var k in _order)
+            if (_seedRank.Remove(k, out var seed) && seed.SessionId == _entries[k].Session.SessionId) ranks[k] = seed.Rank;
+        var sorted = _order.OrderBy(k => ranks.TryGetValue(k, out var r) ? r : int.MaxValue).ToList();
+        _order.Clear();
+        foreach (var k in sorted)
+        {
+            if (ranks.TryGetValue(k, out var r)) _placedRank[k] = r;
+            _order.Add(k);
+        }
+        Rebuild();
+    }
+
+    // Appends a key, or with a matching seeded rank inserts it before the first key placed with a later rank.
+    private void Place(string key, string sessionId)
+    {
+        if (!_seedRank.Remove(key, out var seed) || seed.SessionId != sessionId) { _order.Add(key); return; }
+        _placedRank[key] = seed.Rank;
+        int at = _order.FindIndex(k => _placedRank.TryGetValue(k, out var r) && r > seed.Rank);
+        _order.Insert(at < 0 ? _order.Count : at, key);
+    }
+
     /// <summary>Folds a scan into the roster. <paramref name="now"/> ages lingering ended panes.</summary>
     public void Update(IReadOnlyList<ClaudeSession> live, DateTime now)
     {
@@ -182,7 +231,7 @@ public sealed class RoostRoster
             else
             {
                 _entries[s.Pid] = new Entry { Session = s };
-                _order.Add(s.Pid);
+                Place(s.Pid, s.SessionId);
             }
         }
 
@@ -203,6 +252,7 @@ public sealed class RoostRoster
             {
                 _entries.Remove(key);
                 _order.RemoveAt(i);
+                _placedRank.Remove(key);
             }
         }
 
@@ -263,6 +313,23 @@ public sealed class RoostRoster
     {
         if (!_entries.TryGetValue(key, out var e) || e.Pin == pin) return;
         e.Pin = pin;
+        Rebuild();
+    }
+
+    /// <summary>Swaps two panes' places in the order (the snap flyout putting a pane in a chosen cell).</summary>
+    public void Swap(string a, string b)
+    {
+        int i = _order.IndexOf(a), j = _order.IndexOf(b);
+        if (i < 0 || j < 0 || i == j) return;
+        (_order[i], _order[j]) = (_order[j], _order[i]);
+        Rebuild();
+    }
+
+    /// <summary>Moves a pane to the end of the order.</summary>
+    public void MoveToEnd(string key)
+    {
+        if (!_order.Remove(key)) return;
+        _order.Add(key);
         Rebuild();
     }
 

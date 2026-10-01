@@ -188,6 +188,7 @@ public partial class App : Application
             var settings = AppSettings.Load();
             _appSettings = settings;
             if (settings.RoostClosedPanes is { Count: > 0 } closedPanes) _roostRoster.SeedClosed(closedPanes);
+            if (settings.RoostOrder is { Count: > 0 } order) _roostRoster.SeedOrder(order);
             // Closing / reopening a pane, and the roster pruning one whose session ended, all move the saved set.
             _roostRoster.ClosedChanged += () =>
             {
@@ -1613,7 +1614,8 @@ public partial class App : Application
             () =>
             {
                 var w = new RoostWindow(_roostRoster, CreateRoostFeed,
-                    layout: Perch.Data.Roost.RoostLayout.Normalize(_appSettings?.RoostLayout ?? default));
+                    layout: Perch.Data.Roost.RoostLayout.Normalize(_appSettings?.RoostLayout ?? default),
+                    layoutByCount: _appSettings?.RoostLayoutByCount);
                 // A prompt that was only "seen" in the Roost gets its toast once the user looks away from it.
                 w.Deactivated += (_, _) =>
                 {
@@ -1625,6 +1627,13 @@ public partial class App : Application
                 w.OpenSessionRequested += FocusSession;
                 w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
                 w.LayoutChanged += mode => { if (_appSettings is { } s) { s.RoostLayout = mode; s.Save(); } };
+                w.LayoutByCountChanged += picks =>
+                {
+                    if (_appSettings is not { } s) return;
+                    s.RoostLayoutByCount = picks.Count > 0 ? new(picks) : null;
+                    s.Save();
+                };
+                w.OrderChanged += () => { if (_appSettings is { } s) { s.RoostOrder = _roostRoster.PersistedOrder.ToList(); s.Save(); } };
                 w.PermissionAnswered += (sid, item, allow, mode) =>
                     PerchSessionFor(sid)?.AnswerPermission(item, allow, mode);
                 w.QuestionAnswered += (sid, item, answers) => PerchSessionFor(sid)?.AnswerQuestion(item, answers);

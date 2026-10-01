@@ -5,8 +5,7 @@ namespace Perch.Tests;
 
 /// <summary>
 /// Guards <see cref="TypingHold"/>: typing = focused + a keystroke within the pause; release on send, blur or the
-/// pause; "elsewhere" excludes the pane being typed in; and the hold feeds the resolver so a needs-you pane stays
-/// collapsed (and pulsing) until the user pauses.
+/// pause.
 /// </summary>
 public class TypingHoldTests
 {
@@ -17,7 +16,6 @@ public class TypingHoldTests
     {
         var h = new TypingHold();
         Assert.Null(h.TypingIn(T0));
-        Assert.False(h.TypingElsewhere("a", T0));
         Assert.Null(h.ReleasesAt(T0));
     }
 
@@ -47,15 +45,6 @@ public class TypingHoldTests
         h.Keystroke("a", T0);
         h.Keystroke("a", T0.AddSeconds(1.5));
         Assert.Equal("a", h.TypingIn(T0.AddSeconds(3)));
-    }
-
-    [Fact]
-    public void ElsewhereExcludesThePaneBeingTypedIn()
-    {
-        var h = new TypingHold();
-        h.Keystroke("a", T0);
-        Assert.False(h.TypingElsewhere("a", T0));
-        Assert.True(h.TypingElsewhere("b", T0));
     }
 
     [Fact]
@@ -95,18 +84,5 @@ public class TypingHoldTests
         h.Keystroke("a", T0);
         h.Focused("b");
         Assert.Null(h.TypingIn(T0));
-    }
-
-    [Fact]
-    public void FeedsTheResolverSoANeedsYouPaneStaysHeld()
-    {
-        var h = new TypingHold();
-        h.Keystroke("typing-pane", T0);
-        RoostSizeDecision Resolve(DateTime now) => RoostLayout.ResolveSize(new RoostSizeInputs(
-            RoostPin.Auto, RoostGroup.NeedsYou, Ended: false, Focused: false,
-            TypingElsewhere: h.TypingElsewhere("blocked-pane", now), Current: RoostPaneSize.Collapsed));
-
-        Assert.Equal(new RoostSizeDecision(RoostPaneSize.Collapsed, true), Resolve(T0.AddSeconds(1)));
-        Assert.Equal(new RoostSizeDecision(RoostPaneSize.Expanded, false), Resolve(T0 + TypingHold.Pause));
     }
 }

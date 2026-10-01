@@ -40,6 +40,14 @@ internal sealed class SessionThreadView : ScrollViewer
     private SessionConversation? _conv;
     private bool _stickToBottom = true;
 
+    // Compact threads materialise newest-first: Bind builds the last EagerItems items, then older ones are
+    // prepended in time-boxed batches at background priority. _backlog = how many of the bound conversation's
+    // leading items aren't built yet; _bindGen invalidates a pending batch when the view rebinds or unbinds.
+    private const int EagerItems = 6;
+    private static readonly TimeSpan BacklogSlice = TimeSpan.FromMilliseconds(6);
+    private int _backlog;
+    private int _bindGen;
+
     // Ctrl+F find. Each item's Root is wrapped in a Border (so a hidden/collapsed section can be located by
     // its visible card). Matches are painted as translucent rectangles in an overlay layer above the thread
     // (_highlightLayer): every occurrence dim, the current one brighter — so all hits are visible at a glance
@@ -205,7 +213,12 @@ internal sealed class SessionThreadView : ScrollViewer
     {
         Unbind();
         _conv = conversation;
-        foreach (var item in conversation.Items) AddItem(item);
+        // Unbind cleared the column. A compact (Roost) thread builds its newest items now and the older ones in
+        // background batches.
+        var items = conversation.Items;
+        _backlog = Compact ? Math.Max(0, items.Count - EagerItems) : 0;
+        for (int i = _backlog; i < items.Count; i++) AddItem(items[i]);
+        if (_backlog > 0) ScheduleBacklog(_bindGen);
         conversation.Changed += OnChanged;
         conversation.Reset += OnReset;
         conversation.StateChanged += OnStateChanged;
@@ -220,6 +233,8 @@ internal sealed class SessionThreadView : ScrollViewer
     /// processing deltas behind a view nobody can see.</summary>
     public void Unbind()
     {
+        _bindGen++;   // drops any pending backlog batch
+        _backlog = 0;
         if (_conv is { } c)
         {
             c.Changed -= OnChanged;
@@ -337,6 +352,42 @@ internal sealed class SessionThreadView : ScrollViewer
             sp.PumpForRender();
     }
 
+    private void ScheduleBacklog(int gen) =>
+        Dispatcher.UIThread.Post(() => BuildBacklog(gen), DispatcherPriority.Background);
+
+    // Prepends the next older items above what's built, for up to one slice, then yields. Scrolled up, the
+    // view keeps its place (the offset moves by the height added above); at the tail it stays at the tail.
+    private void BuildBacklog(int gen)
+    {
+        if (gen != _bindGen || _conv is not { } conv || _backlog <= 0) return;
+        double extentBefore = Extent.Height;
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        do PrependNext(conv);
+        while (_backlog > 0 && started.Elapsed < BacklogSlice);
+        if (!_stickToBottom)
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (gen == _bindGen) Offset = new Vector(Offset.X, Offset.Y + (Extent.Height - extentBefore));
+            }, DispatcherPriority.Loaded);
+        else ScrollToEndSoon();
+        if (_backlog > 0) ScheduleBacklog(gen);
+    }
+
+    // Builds every item not built yet, now — before anything that walks the whole thread (find, jump to top).
+    private void FlushBacklog()
+    {
+        if (_conv is not { } conv) return;
+        while (_backlog > 0) PrependNext(conv);
+    }
+
+    // Builds the newest unbuilt item into the top of the column.
+    private void PrependNext(SessionConversation conv)
+    {
+        var item = conv.Items[--_backlog];
+        var root = AddItem(item, at: 0);
+        if (item is UserMessageItem) _userRows.Insert(0, root);
+    }
+
     private void ScrollToEndSoon() =>
         Dispatcher.UIThread.Post(() => { if (_stickToBottom) ScrollToEnd(); }, DispatcherPriority.Background);
 
@@ -353,6 +404,7 @@ internal sealed class SessionThreadView : ScrollViewer
     /// <summary>Scroll to the very top of the thread (the "jump to top" button).</summary>
     public void JumpToTop()
     {
+        FlushBacklog();
         _stickToBottom = false;
         Offset = new Vector(Offset.X, 0);
         RecomputeScrollState();
@@ -382,6 +434,7 @@ internal sealed class SessionThreadView : ScrollViewer
     /// repeated clicks walk upward through earlier prompts. No-op when nothing is above.</summary>
     public void JumpToPreviousPrompt()
     {
+        FlushBacklog();
         // The closest prompt above = the one with the greatest content-top still above the viewport top.
         double bestTop = double.NegativeInfinity;
         foreach (var row in _userRows)
@@ -423,7 +476,9 @@ internal sealed class SessionThreadView : ScrollViewer
 
     // ── Items ────────────────────────────────────────────────────────────────────
 
-    private void AddItem(ConversationItem item)
+    // Builds an item's view and adds it at the end of the column, or at index <paramref name="at"/> (the
+    // backlog prepending older items). Returns the item's root.
+    private Control AddItem(ConversationItem item, int at = -1)
     {
         ItemView view = item switch
         {
@@ -443,9 +498,14 @@ internal sealed class SessionThreadView : ScrollViewer
             BorderThickness = new Thickness(1), BorderBrush = Brushes.Transparent, Background = Brushes.Transparent,
         };
         _wraps[item] = wrap;
-        _stack.Children.Add(wrap);
-        if (item is UserMessageItem) _userRows.Add(view.Root);
+        if (at < 0)
+        {
+            _stack.Children.Add(wrap);
+            if (item is UserMessageItem) _userRows.Add(view.Root);
+        }
+        else _stack.Children.Insert(at, wrap);
         Dispatcher.UIThread.Post(RecomputeScrollState, DispatcherPriority.Background);
+        return view.Root;
     }
 
     private void UpdateItem(ConversationItem item)
@@ -484,6 +544,7 @@ internal sealed class SessionThreadView : ScrollViewer
     {
         ClearSearch();
         if (_conv is null || string.IsNullOrWhiteSpace(query)) return 0;
+        FlushBacklog();
 
         foreach (var item in _conv.Items)
         {
