@@ -288,6 +288,28 @@ passes, `render <dir>` is eyeballed for the Roost shots, and there's one commit 
   update. First run (D8) creates "Main" when `RoostTabs` is null.
 - Render shots: `roost_tabs_{main,main_light,infra,picker,focus,drag,dropped,started,zoom,keys,hidden}_1x`.
 
+### T5: Tab management + lights ✅
+*As built:*
+- **Rename in place**: double-click a tab, press F2, or pick it from the menu. Enter or clicking away keeps the
+  name, Esc cancels, and a blank name is refused. A new tab (`+` / Ctrl+T) opens with its name already selected,
+  ready to type over.
+- **Right-click menu**: Rename (F2) / Duplicate / Close tab. Duplicate switches to the empty copy. "Edit
+  layout…" joins in T6. A **middle-click** closes a tab, as in a browser. Focus has no menu and can't be renamed
+  or dragged.
+- **Drop on a tab header** (`RoostTabSet.DropOnTab`): the session goes into the tab's first empty region in
+  reading order. If there's none, it takes the tab's `LastRegion` (the last region assigned to or focused, via
+  `NoteFocus`), and the occupant swaps to where the session came from. The drop **doesn't switch tabs**, like
+  dropping a file on a folder. Dropped on the active tab, the session is focused.
+- **Tab reorder (the stretch)**: drag a tab header onto another one and it takes that tab's place. Onto Focus
+  means first.
+- **Pulse**: a *background* tab whose light is needs-you (Awaiting / Error) breathes a halo behind its dot on
+  the window's existing `_pulseTimer`, held steady under reduced motion. The active tab doesn't pulse, because
+  its panes already ring.
+- **Focus is always in the active tab**: when the focused pane leaves (dropped elsewhere, removed, ended, tab
+  closed), focus falls to the tab's zoomed pane, else its first in reading order.
+- The rail tab tags and the active-tab left bar were already in T4.
+- Render shots: `roost_tabs_{lights,rename,menu,droptab,droptab_done,reorder,reordered}_1x`.
+
 ### T1 / T2 / T3 original scope
 - `RoostRailSort` + `RoostRoster.RailFor`, a header toggle in the rail, the persisted `RoostRailSort`, and
   the row rebuild signature including the sort.

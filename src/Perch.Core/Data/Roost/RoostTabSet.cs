@@ -28,6 +28,10 @@ public sealed class RoostTab
     /// <summary>The region temporarily filling the tab (double-click a header, Ctrl+Shift+Z), or null. Not persisted.</summary>
     public int? Zoomed { get; internal set; }
 
+    /// <summary>The region last assigned or focused in this tab — where a drop on the tab's header lands when it has
+    /// no empty region. Not persisted.</summary>
+    public int? LastRegion { get; internal set; }
+
     /// <summary>The fixed first "tab": one full region for sessions that aren't in any tab.</summary>
     public bool IsFocus => Id == RoostTabSet.FocusId;
 
@@ -220,6 +224,7 @@ public sealed class RoostTabSet
     {
         if (Find(tabId) is not { } tab || tab.Layout.Find(regionId) is null) return null;
         var occupant = tab.At(regionId);
+        tab.LastRegion = regionId;
         if (occupant == key) return null;
         string? unplaced = null;
         if (UniquePlacement)
@@ -271,8 +276,33 @@ public sealed class RoostTabSet
         if (at.Count == 0) Assign(FocusId, p.RegionId, key);
         var tab = Find(p.TabId)!;
         if (tab.Zoomed is { } z && z != p.RegionId) tab.Zoomed = null;
+        tab.LastRegion = p.RegionId;
         Activate(p.TabId);
         return p;
+    }
+
+    /// <summary>The user focused <paramref name="key"/>'s pane (a click inside it, Alt+N): remember its region as its
+    /// tab's <see cref="RoostTab.LastRegion"/>.</summary>
+    public void NoteFocus(string key)
+    {
+        foreach (var p in Locate(key)) Find(p.TabId)!.LastRegion = p.RegionId;
+    }
+
+    /// <summary>
+    /// A session dropped on a tab's header: it goes into the tab's first empty region (reading order), or — when
+    /// there's none — takes the tab's <see cref="RoostTab.LastRegion"/> (its first region if that's gone), the
+    /// occupant swapping to where the session came from (<see cref="Assign"/>). A session already in the tab stays
+    /// put. Returns where it now is, or null for an unknown tab.
+    /// </summary>
+    public RoostPlacement? DropOnTab(string tabId, string key)
+    {
+        if (Find(tabId) is not { } tab) return null;
+        if (Locate(key).FirstOrDefault(p => p.TabId == tabId) is { TabId: not null } here) return here;
+        var order = tab.Layout.ReadingOrder;
+        int region = order.Where(r => tab.At(r.Id) is null).Select(r => (int?)r.Id).FirstOrDefault()
+            ?? (tab.LastRegion is { } last && tab.Layout.Find(last) is not null ? last : order[0].Id);
+        Assign(tabId, region, key);
+        return new RoostPlacement(tabId, region);
     }
 
     /// <summary>Zooms a tab's region to fill the tab, or (null, or the zoomed one again) restores it. Returns the

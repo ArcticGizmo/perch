@@ -176,6 +176,69 @@ public class RoostTabSetTests
         Assert.Equal([new RoostPlacement(b.Id, 1)], set.Locate("1"));
     }
 
+    // ── Drop on a tab header (T5) ─────────────────────────────────────────────
+
+    [Fact]
+    public void DroppingOnATabHeaderFillsItsFirstEmptyRegionInReadingOrder()
+    {
+        var set = new RoostTabSet();
+        var t = set.AddTab("T", Three)!;
+        set.Assign(t.Id, 0, "1");
+        Assert.Equal(new RoostPlacement(t.Id, 1), set.DropOnTab(t.Id, "2"));
+        Assert.Equal(new RoostPlacement(t.Id, 2), set.DropOnTab(t.Id, "3"));
+        Assert.Equal(RoostTabSet.FocusId, set.ActiveId);   // the drop doesn't switch tabs
+    }
+
+    [Fact]
+    public void DroppingOnAFullTabSwapsWithItsLastFocusedRegion()
+    {
+        var (set, a, b) = TwoTabs();
+        set.Assign(a.Id, 0, "1");
+        set.Assign(b.Id, 0, "2");
+        set.Assign(b.Id, 1, "3");
+        set.NoteFocus("2");
+        Assert.Equal(new RoostPlacement(b.Id, 0), set.DropOnTab(b.Id, "1"));
+        Assert.Equal("1", b.At(0));
+        Assert.Equal("2", a.At(0));   // the occupant took the dropped session's old place
+        Assert.Equal("3", b.At(1));
+    }
+
+    [Fact]
+    public void DroppingAnUnplacedSessionOnAFullTabSendsTheOccupantToTheRail()
+    {
+        var (set, _, b) = TwoTabs();
+        var roster = Roster(S("1"), S("2"), S("3"));
+        set.Assign(b.Id, 0, "2");
+        set.Assign(b.Id, 1, "3");   // the last assignment is region 1
+        set.DropOnTab(b.Id, "1");
+        Assert.Equal("1", b.At(1));
+        Assert.Equal(["3"], set.Unplaced(roster.Panes).Select(p => p.Key));
+    }
+
+    [Fact]
+    public void DroppingOnTheTabItIsAlreadyInLeavesItPut()
+    {
+        var (set, a, _) = TwoTabs();
+        set.Assign(a.Id, 1, "1");
+        int changes = 0;
+        set.Changed += () => changes++;
+        Assert.Equal(new RoostPlacement(a.Id, 1), set.DropOnTab(a.Id, "1"));
+        Assert.Equal(0, changes);
+        Assert.Null(set.DropOnTab("nope", "1"));
+    }
+
+    [Fact]
+    public void DroppingOnTheFocusHeaderSwapsWithTheOneOff()
+    {
+        var (set, a, _) = TwoTabs();
+        var roster = Roster(S("1"), S("2"));
+        set.Show("1");
+        set.Assign(a.Id, 0, "2");
+        Assert.Equal(new RoostPlacement(RoostTabSet.FocusId, 0), set.DropOnTab(RoostTabSet.FocusId, "2"));
+        Assert.Equal("1", a.At(0));   // swapped into the dropped session's old region
+        Assert.Empty(set.Unplaced(roster.Panes));
+    }
+
     [Fact]
     public void DroppingAPlacedSessionOnAnOccupiedRegionSwaps()
     {

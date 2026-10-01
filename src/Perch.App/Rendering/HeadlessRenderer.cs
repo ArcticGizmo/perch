@@ -1643,6 +1643,71 @@ internal static class HeadlessRenderer
             }
             w.Close();
         }
+        RenderRoostTabStrip(outDir);
+    }
+
+    // roost-tabs T5: the tab strip in every light state, a rename in progress, the tab menu, a session dropped on a
+    // tab header, and a tab dragged to a new place.
+    private static void RenderRoostTabStrip(string outDir)
+    {
+        var roster = new Perch.Data.Roost.RoostRoster();
+        roster.Update(RoostSampleSessions(), Clock.Now);
+        var tabs = new Perch.Data.Roost.RoostTabSet();
+        tabs.Sync(roster.Panes);
+        var two = Perch.Data.Roost.RoostGridLayout.FromTemplate(Perch.Data.Roost.RoostSnapTemplate.Columns2);
+        Perch.Data.Roost.RoostTab Tab(string name, params string[] keys)
+        {
+            var t = tabs.AddTab(name, two)!;
+            for (int i = 0; i < keys.Length; i++) tabs.Assign(t.Id, i, keys[i]);
+            return t;
+        }
+        // Main (active, working) · API (an API error) · Waiting (two awaiting input) · Review (done) · Notes (quiet)
+        // · Empty (no light). The background error and awaiting tabs breathe.
+        var main = Tab("Main", "1234", "8801");
+        var api = Tab("API", "6543");
+        Tab("Waiting", "8803", "5678");
+        var review = Tab("Review", "9012");
+        Tab("Notes", "3456");
+        var empty = Tab("Empty");
+        tabs.Activate(main.Id);
+        var w = new Windows.RoostWindow(roster, tabs,
+            pane => RoostFeed.ForFixed(RoostSampleConversation(pane.Session), pane.Session.SessionId, controlled: pane.Session.IsPerchControlled),
+            SessionPalette.For(true))
+        { Width = 1280, Height = 800 };
+        w.Show();
+        void Capture(string name)
+        {
+            for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
+            var frame = w.CaptureRenderedFrame();
+            if (frame == null) return;
+            using var fs = File.Create(Path.Combine(outDir, name));
+            frame.Save(fs);
+        }
+        Capture("roost_tabs_lights_1x.png");
+
+        // Renaming "Empty" in place (double-click / F2), part-way through typing.
+        w.RenameForRender(empty.Id, "Scratch work");
+        Capture("roost_tabs_rename_1x.png");
+        w.EndRenameForRender(commit: true);
+
+        // Review's right-click menu.
+        w.OpenTabMenuForRender(review.Id);
+        Capture("roost_tabs_menu_1x.png");
+        w.CloseFlyoutForRender();
+
+        // "agent" (in no tab) dragged from the rail onto Review's header, then dropped: it fills Review's empty
+        // region and Main stays active.
+        w.DragOntoTabForRender("8802", null, review.Id);
+        Capture("roost_tabs_droptab_1x.png");
+        w.DropForRender();
+        Capture("roost_tabs_droptab_done_1x.png");
+
+        // The renamed tab dragged onto API's header: it takes API's place.
+        w.DragOntoTabForRender(null, empty.Id, api.Id);
+        Capture("roost_tabs_reorder_1x.png");
+        w.DropForRender();
+        Capture("roost_tabs_reordered_1x.png");
+        w.Close();
     }
 
     private static List<Perch.Data.Control.SessionEvent> HistorySampleEvents() =>

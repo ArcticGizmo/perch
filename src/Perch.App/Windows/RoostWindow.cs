@@ -73,8 +73,10 @@ internal sealed class RoostWindow : Window
     private readonly Canvas _overlay;
     private readonly Border _dropMark;
     private (string Key, Point Start, Control Source)? _press;
+    private (string TabId, Point Start, Control Source)? _tabPress;
     private Border? _ghost;
     private int _dropSlot = -1;
+    private string? _dropTab;
 
     private readonly DispatcherTimer _pulseTimer;
     private readonly DispatcherTimer _clockTimer;
@@ -323,6 +325,7 @@ internal sealed class RoostWindow : Window
             _everPlaced.Add(key);
         }
         _focused = key;
+        _tabs.NoteFocus(key);
         if (pane is { Ended: false, Session.Status: SessionStatus.NeedsAttention })
             AcknowledgeRequested?.Invoke(pane.Session.Pid);
         if (!unchanged) Refresh();
@@ -331,13 +334,14 @@ internal sealed class RoostWindow : Window
     /// <summary>Switches tab (the strip, Ctrl+0–9, Ctrl+Tab). Focus moves to the tab's first session.</summary>
     public void ActivateTab(string id)
     {
-        if (!_tabs.Activate(id)) return;
-        var tab = _tabs.Active;
-        _focused = _focused is { } f && tab.Cells.Values.Contains(f)
-            ? f
-            : tab.Layout.ReadingOrder.Select(r => tab.At(r.Id)).FirstOrDefault(k => k is not null);
-        Refresh();
+        if (_tabs.Activate(id)) Refresh();   // Refresh moves focus into the tab
     }
+
+    // The session focus falls to in a tab: the zoomed one, else the first in reading order.
+    private static string? FirstIn(RoostTab tab) =>
+        tab.Zoomed is { } z && tab.At(z) is { } zoomed
+            ? zoomed
+            : tab.Layout.ReadingOrder.Select(r => tab.At(r.Id)).FirstOrDefault(k => k is not null);
 
     /// <summary>Re-orders the rail (its header toggle).</summary>
     public void SetRailSort(RoostRailSort sort)
@@ -388,7 +392,33 @@ internal sealed class RoostWindow : Window
         if (host.TranslatePoint(new Point(host.Bounds.Width / 2, host.Bounds.Height / 2), _overlay) is { } at) MoveGhost(at);
     }
 
+    /// <summary>HeadlessRenderer hook: a drag of pane <paramref name="key"/> (or, with <paramref name="key"/> null, of
+    /// tab <paramref name="tabId"/>) hovering tab <paramref name="ontoId"/>'s header.</summary>
+    internal void DragOntoTabForRender(string? key, string? tabId, string ontoId)
+    {
+        if (key is not null) { _press = (key, default, this); StartGhost(key); }
+        else { _tabPress = (tabId!, default, this); StartGhost(null, _tabs.Find(tabId!)?.Name); }
+        var b = _tabViews[ontoId].Button;
+        if (b.TranslatePoint(new Point(b.Bounds.Width / 2, b.Bounds.Height / 2), _overlay) is { } at) MoveGhost(at);
+    }
+
     internal void DropForRender() => EndDrag(drop: true);
+
+    /// <summary>HeadlessRenderer hook: tab <paramref name="id"/>'s name being edited, with <paramref name="text"/>
+    /// typed so far.</summary>
+    internal void RenameForRender(string id, string text)
+    {
+        BeginRename(id);
+        if (_tabViews.TryGetValue(id, out var v)) { v.Editor.Text = text; v.Editor.CaretIndex = text.Length; }
+    }
+
+    internal void EndRenameForRender(bool commit) => EndRename(commit);
+
+    /// <summary>HeadlessRenderer hook: tab <paramref name="id"/>'s right-click menu.</summary>
+    internal void OpenTabMenuForRender(string id)
+    {
+        if (_tabViews.TryGetValue(id, out var v) && v.Button.ContextFlyout is { } menu) { _openFlyout = menu; menu.ShowAt(v.Button); }
+    }
 
     /// <summary>HeadlessRenderer hook: close a pane as its menu would.</summary>
     internal void ClosePaneForRender(string key) => OnPaneAction(key, RoostPaneAction.Close);
@@ -415,7 +445,9 @@ internal sealed class RoostWindow : Window
         _tabs.Sync(all);   // a close / reopen from this window (the app feeds adoptions with each scan)
         SyncFeedsAndViews(all);
         AdmitStartedSession(all);
-        if (_focused is { } f && !_tabs.IsPlaced(f)) _focused = null;
+        // Focus is always in the active tab: a tab switch, a close, or a pane leaving (dropped on another tab,
+        // removed, ended) hands it to the tab's first session.
+        if (_focused is not { } f || !_tabs.Active.Cells.Values.Contains(f)) _focused = FirstIn(_tabs.Active);
 
         _placed.Clear();
         LayoutStage(_tabs.Active);
@@ -645,8 +677,12 @@ internal sealed class RoostWindow : Window
             case RoostCommand.NextNeedingYou:
                 if (_roster.NextNeedingYou(_focused) is { } next) FocusPane(next);
                 return true;
+            case RoostCommand.RenameTab:
+                if (_tabs.Active.IsFocus || _renaming is not null) return false;
+                BeginRename(_tabs.ActiveId);
+                return true;
             default:
-                return false;   // RenameTab: the tab strip's own editor (roost-tabs T5)
+                return false;
         }
     }
 
@@ -730,40 +766,47 @@ internal sealed class RoostWindow : Window
 
     // ── Pulse ─────────────────────────────────────────────────────────────────
 
+    // Placed panes that need you breathe their ring, and so do the dots of background tabs that need you.
     private void UpdatePulse()
     {
-        bool any = _placed.Keys.Any(k => _views[k].Pulsing);
-        bool still = Pulse.ReduceMotion;
-        if (any && still) foreach (var k in _placed.Keys) _views[k].PulseTick(1, reduceMotion: true);
-        if (any && !still) { if (!_pulseTimer.IsEnabled) _pulseTimer.Start(); }
+        bool any = _pulsingTabs.Count > 0 || _placed.Keys.Any(k => _views[k].Pulsing);
+        if (any) PulseFrame();   // paint a frame now, so a fresh light doesn't wait for the timer
+        if (any && !Pulse.ReduceMotion) { if (!_pulseTimer.IsEnabled) _pulseTimer.Start(); }
         else if (_pulseTimer.IsEnabled) _pulseTimer.Stop();
     }
 
     private void PulseFrame()
     {
-        double i = Pulse.Intensity(2200);
         bool still = Pulse.ReduceMotion;
+        double i = still ? 1 : Pulse.Intensity(2200);
         foreach (var k in _placed.Keys) _views[k].PulseTick(i, still);
+        foreach (var id in _pulsingTabs)
+            if (_tabViews.TryGetValue(id, out var v)) v.Halo.Opacity = still ? 0.3 : 0.12 + 0.4 * i;
         if (still) _pulseTimer.Stop();
     }
 
     // ── Tab strip ─────────────────────────────────────────────────────────────
 
-    private sealed record TabView(Border Button, Ellipse Dot, TextBlock Name, Border CountPill, TextBlock Count);
+    private sealed record TabView(Border Button, Ellipse Dot, Ellipse Halo, TextBlock Name, TextBox Editor, Border CountPill, TextBlock Count);
 
     private readonly Dictionary<string, TabView> _tabViews = new(StringComparer.Ordinal);
     private string? _stripSig;
+    // Background tabs whose light is needs-you (awaiting input or an API error): their dot's halo breathes.
+    private readonly HashSet<string> _pulsingTabs = new(StringComparer.Ordinal);
+    // The tab whose name is being edited in place (double-click, F2, its menu, or a new tab), or null.
+    private string? _renaming;
 
     // The strip is rebuilt only when its tabs change (added, closed, renamed, reordered); every other pass just
-    // re-lights the existing buttons.
+    // re-lights the existing buttons. Never mid-drag: that would drop the captured tab.
     private void RefreshTabStrip()
     {
         var sig = string.Join("|", _tabs.All.Select(t => $"{t.Id}:{t.Name}"));
-        if (sig != _stripSig)
+        if (sig != _stripSig && _tabPress is null)
         {
             _stripSig = sig;
             _tabStrip.Children.Clear();
             _tabViews.Clear();
+            _renaming = null;
             int n = 0;
             foreach (var tab in _tabs.All)
             {
@@ -773,17 +816,26 @@ internal sealed class RoostWindow : Window
             }
             if (_tabs.Tabs.Count < RoostTabSet.MaxTabs) _tabStrip.Children.Add(NewTabButton());
         }
+        _pulsingTabs.Clear();
         foreach (var tab in _tabs.All)
             if (_tabViews.TryGetValue(tab.Id, out var view)) UpdateTabButton(view, tab);
     }
 
     private TabView TabButton(RoostTab tab, int number)
     {
-        var dot = new Ellipse { Width = 7, Height = 7, VerticalAlignment = VerticalAlignment.Center };
+        var dot = new Ellipse { Width = 7, Height = 7, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        var halo = new Ellipse { Width = 15, Height = 15, Opacity = 0, IsHitTestVisible = false };
         var name = new TextBlock
         {
             Text = tab.IsFocus ? "◻ Focus" : tab.Name, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12.5,
             VerticalAlignment = VerticalAlignment.Center, MaxWidth = 180, TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var editor = new TextBox
+        {
+            Text = tab.Name, PlaceholderText = "Tab name", MaxLength = RoostTabSet.MaxNameLength, FontFamily = _p.Body,
+            FontWeight = FontWeight.SemiBold, FontSize = 12.5, MinHeight = 0, MinWidth = 90, MaxWidth = 180,
+            // The negative margin keeps the editor (taller than the name: its border and padding) from growing the strip.
+            Padding = new Thickness(5, 1), Margin = new Thickness(0, -4), VerticalAlignment = VerticalAlignment.Center, IsVisible = false,
         };
         var count = new TextBlock { FontFamily = _p.Mono, FontSize = 10.5, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
         var countPill = new Border
@@ -794,31 +846,110 @@ internal sealed class RoostWindow : Window
         var chord = tab.IsFocus ? RoostKeys.ChordFor(RoostCommand.FocusTab) : number <= 9 ? RoostKeys.ChordFor(RoostCommand.Tab, number) : null;
         var button = new Border
         {
-            CornerRadius = new CornerRadius(8, 8, 0, 0), Padding = new Thickness(11, 6, 11, 7), BorderThickness = new Thickness(1, 1, 1, 0),
+            CornerRadius = new CornerRadius(8, 8, 0, 0), Padding = new Thickness(9, 6, 11, 7), BorderThickness = new Thickness(1, 1, 1, 0),
             Cursor = new Cursor(StandardCursorType.Hand), MinHeight = 32,
-            [ToolTip.TipProperty] = (tab.IsFocus ? "Focus — sessions in no tab open here" : tab.Name) + (chord is null ? "" : $"  ·  {chord}"),
-            Child = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7, Children = { dot, name, countPill } },
+            [ToolTip.TipProperty] = (tab.IsFocus ? "Focus — sessions in no tab open here" : $"{tab.Name} — double-click to rename")
+                + (chord is null ? "" : $"  ·  {chord}"),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 5,
+                Children =
+                {
+                    new Panel { Width = 15, Height = 15, VerticalAlignment = VerticalAlignment.Center, Children = { halo, dot } },
+                    name, editor, countPill,
+                },
+            },
         };
         var id = tab.Id;
         button.PointerEntered += (_, _) => { if (id != _tabs.ActiveId) button.Background = _p.Raised2; };
         button.PointerExited += (_, _) => { if (id != _tabs.ActiveId) button.Background = Brushes.Transparent; };
-        button.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ActivateTab(id); };
-        return new TabView(button, dot, name, countPill, count);
+        if (!tab.IsFocus)
+        {
+            AttachTabDragSource(button, id);   // first, so a reorder marks the release handled before the click sees it
+            button.DoubleTapped += (_, e) => { if (_renaming != id) { e.Handled = true; BeginRename(id); } };
+            button.ContextFlyout = TabMenu(id);
+            editor.KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Enter) { e.Handled = true; EndRename(commit: true); }
+                else if (e.Key == Key.Escape) { e.Handled = true; EndRename(commit: false); }
+            };
+            editor.LostFocus += (_, _) => { if (_renaming == id) EndRename(commit: true); };
+        }
+        button.PointerReleased += (_, e) =>
+        {
+            if (e.Handled || _renaming == id) return;
+            if (e.InitialPressMouseButton == MouseButton.Left) ActivateTab(id);
+            else if (e.InitialPressMouseButton == MouseButton.Middle && !tab.IsFocus) CloseTab(id);   // as a browser tab
+        };
+        return new TabView(button, dot, halo, name, editor, countPill, count);
+    }
+
+    // A tab's right-click menu. "Edit layout…" joins it with the painter (roost-tabs T6).
+    private MenuFlyout TabMenu(string id)
+    {
+        var rename = new MenuItem { Header = "Rename", InputGesture = new KeyGesture(Key.F2) };
+        rename.Click += (_, _) => BeginRename(id);
+        var duplicate = new MenuItem { Header = "Duplicate" };
+        duplicate.Click += (_, _) => { if (_tabs.DuplicateTab(id) is { } copy) ActivateTab(copy.Id); };
+        var close = new MenuItem { Header = "Close tab" };
+        close.Click += (_, _) => CloseTab(id);
+        var menu = new MenuFlyout { Items = { rename, duplicate, new Separator(), close } };
+        // Duplicate needs room for one more tab.
+        menu.Opening += (_, _) => duplicate.IsEnabled = _tabs.Tabs.Count < RoostTabSet.MaxTabs;
+        return menu;
     }
 
     private void UpdateTabButton(TabView v, RoostTab tab)
     {
         bool on = tab.Id == _tabs.ActiveId;
         var light = RoostTabStatus.For(tab, _roster.Panes);
+        var brush = LightBrush(light.Light);
         v.Button.Background = on ? _p.Ground : v.Button.IsPointerOver ? _p.Raised2 : Brushes.Transparent;
         v.Button.BorderBrush = on ? _p.Border : Brushes.Transparent;
         v.Name.Foreground = on ? _p.Title : _p.Muted;
-        v.Dot.IsVisible = light.Light != RoostLight.None;
-        v.Dot.Fill = LightBrush(light.Light);
+        ((Control)v.Dot.Parent!).IsVisible = light.Light != RoostLight.None;
+        v.Dot.Fill = brush;
+        v.Halo.Fill = brush;
         v.CountPill.IsVisible = light.Count > 0;
         v.Count.Text = light.Count.ToString();
-        v.Count.Foreground = LightBrush(light.Light);
-        v.CountPill.BorderBrush = LightBrush(light.Light);
+        v.Count.Foreground = brush;
+        v.CountPill.BorderBrush = brush;
+        // Needs-you in a tab you're not looking at breathes, like a pane's ring; the active tab's panes ring themselves.
+        if (!on && light.Light >= RoostLight.Awaiting) _pulsingTabs.Add(tab.Id);
+        else v.Halo.Opacity = 0;
+    }
+
+    // ── Tab rename / close ────────────────────────────────────────────────────
+
+    /// <summary>Edits a tab's name in place (Focus can't be renamed): Enter or a click away keeps it, Esc
+    /// cancels.</summary>
+    private void BeginRename(string id)
+    {
+        if (_renaming is not null) EndRename(commit: true);
+        if (id == RoostTabSet.FocusId || _tabs.Find(id) is not { } tab || !_tabViews.TryGetValue(id, out var v)) return;
+        _renaming = id;
+        v.Editor.Text = tab.Name;
+        v.Name.IsVisible = false;
+        v.Editor.IsVisible = true;
+        v.Editor.Focus();
+        v.Editor.SelectAll();
+    }
+
+    private void EndRename(bool commit)
+    {
+        if (_renaming is not { } id) return;
+        _renaming = null;
+        if (!_tabViews.TryGetValue(id, out var v)) return;
+        bool renamed = commit && _tabs.RenameTab(id, v.Editor.Text ?? "");
+        v.Editor.IsVisible = false;
+        v.Name.IsVisible = true;
+        if (renamed) Refresh();   // the strip rebuilds with the new name (and tooltip)
+    }
+
+    private void CloseTab(string id)
+    {
+        if (_renaming == id) EndRename(commit: false);
+        if (_tabs.CloseTab(id)) Refresh();
     }
 
     private Border NewTabButton()
@@ -836,9 +967,12 @@ internal sealed class RoostWindow : Window
         return b;
     }
 
+    // A new tab opens with its name ready to type over ("Tab 3"; Esc keeps it).
     private void AddTab()
     {
-        if (_tabs.AddTab(layout: RoostGridLayout.FromTemplate(RoostSnapTemplate.Columns2)) is { } tab) ActivateTab(tab.Id);
+        if (_tabs.AddTab(layout: RoostGridLayout.FromTemplate(RoostSnapTemplate.Columns2)) is not { } tab) return;
+        ActivateTab(tab.Id);
+        BeginRename(tab.Id);
     }
 
     private IBrush LightBrush(RoostLight light) => light switch
@@ -1289,9 +1423,64 @@ internal sealed class RoostWindow : Window
         };
     }
 
-    private void StartGhost(string key)
+    // Pressing a tab header and moving a few pixels drags the tab: letting go over another tab's header moves it
+    // to that tab's place (Focus stays first).
+    private void AttachTabDragSource(Control source, string tabId)
     {
-        var name = _roster.Find(key)?.Session.DisplayName ?? key;
+        source.PointerPressed += (_, e) =>
+        {
+            if (_renaming == tabId || !e.GetCurrentPoint(source).Properties.IsLeftButtonPressed) return;
+            _tabPress = (tabId, e.GetPosition(_overlay), source);
+            e.Pointer.Capture(source);
+        };
+        source.PointerMoved += (_, e) =>
+        {
+            if (_tabPress is not { } press || !ReferenceEquals(press.Source, source)) return;
+            var at = e.GetPosition(_overlay);
+            if (_ghost is null)
+            {
+                if (Math.Abs(at.X - press.Start.X) + Math.Abs(at.Y - press.Start.Y) < 6) return;
+                StartGhost(null, _tabs.Find(tabId)?.Name ?? "");
+            }
+            MoveGhost(at);
+        };
+        source.PointerReleased += (_, e) =>
+        {
+            if (_tabPress is not { } press || !ReferenceEquals(press.Source, source)) return;
+            if (_ghost is not null) e.Handled = true;
+            EndDrag(drop: true);
+            e.Pointer.Capture(null);
+        };
+        source.PointerCaptureLost += (_, _) =>
+        {
+            if (_tabPress is { } press && ReferenceEquals(press.Source, source)) EndDrag(drop: false);
+        };
+    }
+
+    // The tab header under the pointer, if any.
+    private string? TabAt(Point at)
+    {
+        foreach (var (id, v) in _tabViews)
+        {
+            if (!v.Button.IsVisible || v.Button.TranslatePoint(default, _overlay) is not { } origin) continue;
+            if (new Rect(origin, v.Button.Bounds.Size).Contains(at)) return id;
+        }
+        return null;
+    }
+
+    private void MarkDrop(Control target)
+    {
+        if (target.TranslatePoint(default, _overlay) is not { } origin) return;
+        Canvas.SetLeft(_dropMark, origin.X);
+        Canvas.SetTop(_dropMark, origin.Y);
+        _dropMark.Width = target.Bounds.Width;
+        _dropMark.Height = target.Bounds.Height;
+        _dropMark.CornerRadius = target is Border { CornerRadius: var r } ? r : new CornerRadius(12);
+    }
+
+    private void StartGhost(string? key, string? label = null)
+    {
+        var name = label ?? _roster.Find(key!)?.Session.DisplayName ?? key;
         _ghost = new Border
         {
             CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(12, 5), BorderThickness = new Thickness(1),
@@ -1301,41 +1490,67 @@ internal sealed class RoostWindow : Window
         _overlay.Children.Add(_ghost);
     }
 
-    // Moves the ghost to the pointer and marks the region under it.
+    // Moves the ghost to the pointer and marks what's under it: a session drag targets the active tab's regions or
+    // any tab header; a tab drag, another tab header.
     private void MoveGhost(Point at)
     {
         if (_ghost is null) return;
         Canvas.SetLeft(_ghost, at.X + 12);
         Canvas.SetTop(_ghost, at.Y + 8);
         _dropSlot = -1;
-        for (int i = 0; i < _slotRegions.Count; i++)
-        {
-            var host = _cells[i].Host;
-            if (!host.IsVisible || host.TranslatePoint(default, _overlay) is not { } origin) continue;
-            var rect = new Rect(origin, host.Bounds.Size);
-            if (!rect.Contains(at)) continue;
-            _dropSlot = i;
-            Canvas.SetLeft(_dropMark, rect.X);
-            Canvas.SetTop(_dropMark, rect.Y);
-            _dropMark.Width = rect.Width;
-            _dropMark.Height = rect.Height;
-            break;
-        }
-        _dropMark.IsVisible = _dropSlot >= 0;
+        _dropTab = TabAt(at);
+        if (_tabPress is { } tp && _dropTab == tp.TabId) _dropTab = null;
+        if (_dropTab is { } tabId) MarkDrop(_tabViews[tabId].Button);
+        else if (_press is not null)
+            for (int i = 0; i < _slotRegions.Count; i++)
+            {
+                var host = _cells[i].Host;
+                if (!host.IsVisible || host.TranslatePoint(default, _overlay) is not { } origin) continue;
+                if (!new Rect(origin, host.Bounds.Size).Contains(at)) continue;
+                _dropSlot = i;
+                MarkDrop(host);
+                _dropMark.CornerRadius = new CornerRadius(12);
+                break;
+            }
+        _dropMark.IsVisible = _dropSlot >= 0 || _dropTab is not null;
     }
 
     private void EndDrag(bool drop)
     {
         var key = _press?.Key;
+        var movingTab = _tabPress?.TabId;
         int slot = _dropSlot;
+        var tabId = _dropTab;
         bool dragged = _ghost is not null;
         _press = null;
+        _tabPress = null;
         if (_ghost is not null) _overlay.Children.Remove(_ghost);
         _ghost = null;
         _dropMark.IsVisible = false;
         _dropSlot = -1;
-        if (drop && dragged && key is not null && slot >= 0) PlacePane(key, slot);
-        else RefreshRail();
+        _dropTab = null;
+        if (drop && dragged && movingTab is not null && tabId is not null) MoveTabTo(movingTab, tabId);
+        else if (drop && dragged && key is not null && tabId is not null) DropOnTab(key, tabId);
+        else if (drop && dragged && key is not null && slot >= 0) PlacePane(key, slot);
+        else { RefreshRail(); RefreshTabStrip(); }
+    }
+
+    // A session dropped on a tab header goes into that tab (its first empty region, else a swap) without switching
+    // to it — like dropping a file on a folder. Dropped on the active tab, it's focused there.
+    private void DropOnTab(string key, string tabId)
+    {
+        if (_roster.Find(key) is null || _tabs.DropOnTab(tabId, key) is null) return;
+        _everPlaced.Add(key);
+        if (tabId == _tabs.ActiveId) FocusPane(key);
+        Refresh();
+    }
+
+    // A tab dragged onto another's header takes its place (onto Focus = first).
+    private void MoveTabTo(string tabId, string ontoId)
+    {
+        int to = ontoId == RoostTabSet.FocusId ? 0 : _tabs.Tabs.ToList().FindIndex(t => t.Id == ontoId);
+        if (to >= 0 && _tabs.MoveTab(tabId, to)) Refresh();
+        else RefreshTabStrip();
     }
 
     private Border BarButton(string label, Action onClick)
