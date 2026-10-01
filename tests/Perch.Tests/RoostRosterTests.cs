@@ -172,10 +172,60 @@ public class RoostRosterTests
     [Fact]
     public void PersistedClosedKeysPruneToLiveSessions()
     {
-        var r = new RoostRoster(["1", "stale"]);
+        var r = new RoostRoster(["1/sess-1", "7/sess-7"]);
+        int saves = 0;
+        r.ClosedChanged += () => saves++;
         r.Update([S("1"), S("2")], T0);
         Assert.Equal(["2"], Keys(r.Panes));
         Assert.Equal(["1"], r.ClosedKeys);
+        Assert.Equal(["1/sess-1"], r.PersistedClosed);   // the stale token is pruned from the saved form too
+        Assert.Equal(1, saves);
+    }
+
+    [Fact]
+    public void ARecycledPidIsNotPreHiddenAfterARestart()
+    {
+        // Closed before the restart under session "old"; the OS has since handed pid 1 to an unrelated session.
+        var r = new RoostRoster(["1/old"]);
+        r.Update([S("1", sessionId: "new"), S("2")], T0);
+        Assert.Equal(["1", "2"], Keys(r.Panes));
+        Assert.Empty(r.ClosedKeys);
+        Assert.Empty(r.PersistedClosed);
+
+        r.Update([S("1", sessionId: "old"), S("2")], T0);   // the seed was spent on the first sighting
+        Assert.Equal(["1", "2"], Keys(r.Panes));
+    }
+
+    [Fact]
+    public void BarePidTokensFromOldSettingsAreIgnored()
+    {
+        var r = new RoostRoster(["1"]);
+        r.Update([S("1")], T0);
+        Assert.Equal(["1"], Keys(r.Panes));
+    }
+
+    [Fact]
+    public void ClosedChangedFollowsCloseReopenPruneAndClear()
+    {
+        var r = new RoostRoster();
+        r.Update([S("1", sessionId: "a"), S("2")], T0);
+        int saves = 0;
+        r.ClosedChanged += () => saves++;
+
+        r.Close("1");
+        Assert.Equal(1, saves);
+        Assert.Equal(["1/a"], r.PersistedClosed);
+
+        r.Update([S("1", sessionId: "b"), S("2")], T0);     // /clear under the same process: still closed, new token
+        Assert.Equal(2, saves);
+        Assert.Equal(["1/b"], r.PersistedClosed);
+
+        r.Update([S("1", sessionId: "b"), S("2")], T0);     // nothing moved
+        Assert.Equal(2, saves);
+
+        r.Update([S("2")], T0.AddMinutes(1));               // the session ended: pruned, and saved pruned
+        Assert.Equal(3, saves);
+        Assert.Empty(r.PersistedClosed);
     }
 
     [Fact]
@@ -194,10 +244,16 @@ public class RoostRosterTests
     public void SeededClosedKeysApplyBeforeAndAfterTheFirstScan()
     {
         var r = new RoostRoster();
-        r.SeedClosed(["2", "gone"]);                  // settings load after the roster exists
+        r.SeedClosed(["2/sess-2", "9/gone"]);         // settings load after the roster exists
         r.Update([S("1"), S("2")], T0);
         Assert.Equal(["1"], Keys(r.Panes));
         Assert.Equal(["2"], r.ClosedKeys);            // "gone" pruned
+        Assert.Equal(["2/sess-2"], r.PersistedClosed);
+
+        var late = new RoostRoster();
+        late.Update([S("1"), S("2")], T0);
+        late.SeedClosed(["2/sess-2"]);                // seeded after the first scan applies at once
+        Assert.Equal(["1"], Keys(late.Panes));
     }
 
     [Fact]

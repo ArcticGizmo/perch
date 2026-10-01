@@ -52,7 +52,11 @@ public readonly record struct RoostCounts(int NeedsYou, int DoneReview, int Work
 ///
 /// <para><b>Closed panes</b> are hidden until their session leaves the scan; the closed set is pruned to keys
 /// still present, so it never grows without bound and a fresh session (a new process) is never pre-closed.
-/// The set round-trips through settings via <see cref="ClosedKeys"/>.</para>
+/// The set round-trips through settings via <see cref="PersistedClosed"/> as <c>pid/sessionId</c> tokens, never
+/// bare pids: after a restart a token only re-hides a pane whose process <em>and</em> session id both match, so a
+/// recycled pid can't pre-hide an unrelated session. <see cref="ClosedChanged"/> fires whenever that persisted
+/// form moves — a close or reopen, and also a prune, a <c>/clear</c> or a seed resolving — so the file on disk
+/// stays pruned too (review fixes CP26).</para>
 ///
 /// <para>Lives in the app (not the window) so pins and order survive closing and reopening the Roost.</para>
 /// </summary>
@@ -70,13 +74,24 @@ public sealed class RoostRoster
     // Insertion-ordered: _order is first-seen, _entries the state by key.
     private readonly List<string> _order = [];
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _closed;
+    private readonly HashSet<string> _closed = new(StringComparer.Ordinal);
+    // Persisted closed tokens not yet matched: pid -> the session id it was closed under. Resolved (or dropped)
+    // the first time that pid shows up in a scan.
+    private readonly Dictionary<string, string> _seeds = new(StringComparer.Ordinal);
+    private string _persistedSig = "";
 
     private IReadOnlyList<RoostPane> _panes = [];
     private IReadOnlyList<RoostRailGroup> _rail = [];
 
-    public RoostRoster(IEnumerable<string>? closedKeys = null) =>
-        _closed = new HashSet<string>(closedKeys ?? [], StringComparer.Ordinal);
+    /// <param name="persistedClosed">A persisted closed set (<see cref="PersistedClosed"/> tokens).</param>
+    public RoostRoster(IEnumerable<string>? persistedClosed = null)
+    {
+        AddSeeds(persistedClosed ?? []);
+        _persistedSig = Signature(persistedClosed ?? []);
+    }
+
+    /// <summary>The persisted closed set (<see cref="PersistedClosed"/>) changed — save it.</summary>
+    public event Action? ClosedChanged;
 
     /// <summary>Visible panes (closed ones excluded) in stable first-seen order.</summary>
     public IReadOnlyList<RoostPane> Panes => _panes;
@@ -93,19 +108,63 @@ public sealed class RoostRoster
 
     private HashSet<string> _needsYouBefore = new(StringComparer.Ordinal);
 
-    /// <summary>The closed pane keys, for persisting. Pruned to keys the roster still holds.</summary>
+    /// <summary>The closed pane keys (pids). Pruned to keys the roster still holds.</summary>
     public IReadOnlyCollection<string> ClosedKeys => _closed;
+
+    /// <summary>The closed set as it's persisted: one <c>pid/sessionId</c> token per closed pane, in first-seen
+    /// order. Seeds that haven't matched a live session yet are left out, so a save prunes them.</summary>
+    public IReadOnlyList<string> PersistedClosed =>
+        _order.Where(_closed.Contains).Select(k => Token(k, _entries[k].Session.SessionId)).ToList();
 
     /// <summary>The hidden (closed) panes whose sessions are still live, in first-seen order — what a "N hidden"
     /// menu offers to reopen.</summary>
     public IReadOnlyList<RoostPane> ClosedPanes { get; private set; } = [];
 
-    /// <summary>Restores a persisted closed set (the roster can exist before settings load). Keys that don't
-    /// match a live session are pruned by the next <see cref="Update"/>.</summary>
-    public void SeedClosed(IEnumerable<string> keys)
+    /// <summary>Restores a persisted closed set (the roster can exist before settings load). A token only hides
+    /// the pane whose pid and session id both match it; one that never matches is dropped from the next save.
+    /// Bare pids (the pre-CP26 format) can't be trusted after a restart and are ignored.</summary>
+    public void SeedClosed(IEnumerable<string> tokens)
     {
-        foreach (var k in keys) _closed.Add(k);
+        var list = tokens.ToList();
+        AddSeeds(list);
+        _persistedSig = Signature(list);
+        ResolveSeeds();
         Rebuild();
+        RaiseIfClosedChanged();
+    }
+
+    private void AddSeeds(IEnumerable<string> tokens)
+    {
+        foreach (var t in tokens)
+        {
+            int slash = t.IndexOf('/');
+            if (slash <= 0 || slash == t.Length - 1) continue;
+            _seeds[t[..slash]] = t[(slash + 1)..];
+        }
+    }
+
+    // A seed meets its pid: it closes the pane only if the session id matches too (else the pid was recycled).
+    private void ResolveSeeds()
+    {
+        if (_seeds.Count == 0) return;
+        foreach (var key in _order)
+        {
+            if (!_seeds.Remove(key, out var sessionId)) continue;
+            var e = _entries[key];
+            if (e.EndedAt is null && e.Session.SessionId == sessionId) _closed.Add(key);
+        }
+    }
+
+    private static string Token(string key, string sessionId) => $"{key}/{sessionId}";
+
+    private static string Signature(IEnumerable<string> tokens) => string.Join("\n", tokens);
+
+    private void RaiseIfClosedChanged()
+    {
+        var sig = Signature(PersistedClosed);
+        if (sig == _persistedSig) return;
+        _persistedSig = sig;
+        ClosedChanged?.Invoke();
     }
 
     /// <summary>Folds a scan into the roster. <paramref name="now"/> ages lingering ended panes.</summary>
@@ -131,6 +190,7 @@ public sealed class RoostRoster
         foreach (var key in _order)
             if (!seen.Contains(key)) _entries[key].EndedAt ??= now;
 
+        ResolveSeeds();
         AdoptContinuations();
 
         // Expired or closed lingering panes drop.
@@ -152,6 +212,7 @@ public sealed class RoostRoster
         var needsYou = _rail[(int)RoostGroup.NeedsYou].Panes.Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
         NeedsYouArrivals = needsYou.Where(k => !_needsYouBefore.Contains(k)).ToList();
         _needsYouBefore = needsYou;
+        RaiseIfClosedChanged();
     }
 
     // The same conversation continuing under a new process — "Take over in Perch" (the terminal process stops,
@@ -179,11 +240,12 @@ public sealed class RoostRoster
         }
     }
 
-    /// <summary>Hides a pane. Returns true when the closed set changed (so the caller persists it).</summary>
+    /// <summary>Hides a pane. Returns true when the closed set changed.</summary>
     public bool Close(string key)
     {
         if (!_entries.ContainsKey(key) || !_closed.Add(key)) return false;
         Rebuild();
+        RaiseIfClosedChanged();
         return true;
     }
 
@@ -192,6 +254,7 @@ public sealed class RoostRoster
     {
         if (!_closed.Remove(key)) return false;
         Rebuild();
+        RaiseIfClosedChanged();
         return true;
     }
 

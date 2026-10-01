@@ -90,7 +90,7 @@ internal sealed class RoostWindow : Window
         _roster = roster;
         _feedFactory = feedFactory;
         _p = palette ?? SessionPalette.Current;
-        _mode = layout;
+        _mode = RoostLayout.Normalize(layout);
 
         Title = "Roost";
         Width = 1280;
@@ -266,8 +266,9 @@ internal sealed class RoostWindow : Window
     /// <summary>A Perch pane's composer sent a reply: (session id, text).</summary>
     public event Action<string, string>? PromptSubmitted;
 
-    /// <summary>A pane was closed or reopened — persist <see cref="RoostRoster.ClosedKeys"/>.</summary>
-    public event Action? ClosedPanesChanged;
+    /// <summary>The set of panes on screen changed (paging, a filter, a layout switch, a scan) — a toast the
+    /// Roost swallowed as "seen" may now be owed.</summary>
+    public event Action? PlacementChanged;
 
     /// <summary>"Take over in Perch" on a terminal pane (the app confirms before stopping anything).</summary>
     public event Action<ClaudeSession>? TakeOverRequested;
@@ -292,6 +293,9 @@ internal sealed class RoostWindow : Window
     public void RosterChanged()
     {
         Refresh();
+        // Each scan nudges every feed: a tailed pane re-reads even if its watcher missed the write (or never
+        // armed, the folder not existing yet), and one whose transcript didn't exist yet looks for it again.
+        foreach (var f in _feeds.Values) f?.Poke();
         if (_roster.NeedsYouArrivals.Count > 0 && !IsActive && TryGetPlatformHandle() is { } handle)
             PlatformServices.WindowChrome.FlashTaskbar(handle.Handle);
     }
@@ -301,11 +305,14 @@ internal sealed class RoostWindow : Window
     public void FocusPane(string key)
     {
         if (_roster.Find(key) is not { } pane) return;
+        // Every press inside a pane lands here; one on the pane that's already focused and on screen changes
+        // nothing, so it skips the layout pass.
+        bool unchanged = _focused == key && _placed.ContainsKey(key);
         if (_filter is { } f && pane.Group != f) _filter = null;   // focusing something filtered out lifts the filter
         _focused = key;
         if (pane is { Ended: false, Session.Status: SessionStatus.NeedsAttention })
             AcknowledgeRequested?.Invoke(pane.Session.Pid);
-        Refresh(reveal: key);
+        if (!unchanged) Refresh(reveal: key);
     }
 
     /// <summary>Switches layout (the toggle, Ctrl+Shift+Z).</summary>
@@ -369,7 +376,12 @@ internal sealed class RoostWindow : Window
         RefreshRail();
         UpdatePulse();
         ArmHoldTimer();
+
+        var placedSig = string.Join(",", _placed.Keys.Order(StringComparer.Ordinal));
+        if (placedSig != _placedSig) { _placedSig = placedSig; PlacementChanged?.Invoke(); }
     }
+
+    private string _placedSig = "";
 
     // While a pane is held back by the typing hold, wake when the hold lapses so it then expands.
     private void ArmHoldTimer()
@@ -630,9 +642,12 @@ internal sealed class RoostWindow : Window
     // The focused Perch pane's permission keys, as in SessionWindow (and the TUI): Enter allows a pending
     // permission (a question card is answered by picking, never a bare Enter); Esc denies it, or with nothing
     // pending interrupts a running turn. Terminal/IDE panes have no control channel, so these do nothing there.
+    // Only for a pane the user can actually see: placed by the current layout (not paged, filtered or zoomed
+    // away) and expanded, so the card is on screen — else a bare Enter could approve a command never seen.
     private bool FocusedPerchKey(Key key)
     {
         if (_focused is not { } k || _roster.Find(k) is not { Ended: false } pane) return false;
+        if (!_placed.TryGetValue(k, out var place) || place.Size != RoostPaneSize.Expanded) return false;
         if (!_feeds.TryGetValue(k, out var feed) || feed is not { IsControlled: true }) return false;
         var conv = feed.Conversation;
         var sid = pane.Session.SessionId;
@@ -676,7 +691,7 @@ internal sealed class RoostWindow : Window
                 if (!pane.Ended && CanTakeOver?.Invoke(pane.Session) == true) TakeOverRequested?.Invoke(pane.Session);
                 break;
             case RoostPaneAction.Close:
-                if (_roster.Close(key)) { ClosedPanesChanged?.Invoke(); Refresh(); }
+                if (_roster.Close(key)) Refresh();   // the roster's ClosedChanged persists it
                 break;
         }
     }
@@ -822,7 +837,6 @@ internal sealed class RoostWindow : Window
         bool changed = false;
         foreach (var k in keys) changed |= _roster.Reopen(k);
         if (!changed) return;
-        ClosedPanesChanged?.Invoke();
         if (keys.Count == 1) FocusPane(keys[0]);
         else Refresh();
     }
@@ -857,9 +871,32 @@ internal sealed class RoostWindow : Window
         return chip;
     }
 
+    // One rail row's controls, kept so the 1s clock and each scan update text and colour in place.
+    private sealed record RailRowView(Border Row, Ellipse Dot, TextBlock Elapsed, TextBlock Diamond, TextBlock Name);
+
+    private readonly Dictionary<string, RailRowView> _railRows = new(StringComparer.Ordinal);
+    private string? _railSig;
+
+    // The rail's controls are rebuilt only when its shape changes (a pane joins, leaves or changes group); every
+    // other pass, the clock's included, just re-labels the existing rows.
     private void RefreshRail()
     {
+        var sig = string.Join("|", _roster.Rail.Where(g => g.Panes.Count > 0)
+            .Select(g => $"{(int)g.Group}:{string.Join(",", g.Panes.Select(p => p.Key))}"));
+        if (sig != _railSig)
+        {
+            _railSig = sig;
+            RebuildRail();
+        }
+        foreach (var group in _roster.Rail)
+            foreach (var pane in group.Panes)
+                if (_railRows.TryGetValue(pane.Key, out var row)) UpdateRailRow(row, pane);
+    }
+
+    private void RebuildRail()
+    {
         _rail.Children.Clear();
+        _railRows.Clear();
         if (_roster.Panes.Count == 0)
         {
             _rail.Children.Add(new TextBlock { Text = "No live sessions", Margin = new Thickness(8, 0), FontSize = 12, Foreground = _p.Faint });
@@ -878,7 +915,12 @@ internal sealed class RoostWindow : Window
                     new TextBlock { Text = GroupTitle(group.Group), FontFamily = _p.Mono, FontSize = 10.5, LetterSpacing = 1.2, Foreground = _p.Faint },
                 },
             });
-            foreach (var pane in group.Panes) col.Children.Add(RailRow(pane));
+            foreach (var pane in group.Panes)
+            {
+                var row = RailRow(pane.Key);
+                _railRows[pane.Key] = row;
+                col.Children.Add(row.Row);
+            }
             _rail.Children.Add(col);
         }
     }
@@ -891,58 +933,63 @@ internal sealed class RoostWindow : Window
         _ => "QUIET",
     };
 
-    private Control RailRow(RoostPane pane)
+    // A rail row's controls; UpdateRailRow fills them from the pane.
+    private RailRowView RailRow(string key)
     {
-        var s = pane.Session;
-        bool on = pane.Key == _focused;
-        var dot = new Ellipse
+        var dot = new Ellipse { Width = 8, Height = 8, VerticalAlignment = VerticalAlignment.Center };
+        var elapsed = new TextBlock { FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right };
+        var diamond = new TextBlock
         {
-            Width = 8, Height = 8, VerticalAlignment = VerticalAlignment.Center,
-            Fill = pane.Ended ? _p.Faint : s.Status switch
-            {
-                SessionStatus.AwaitingInput => _p.Await,
-                SessionStatus.ApiError => _p.Err,
-                SessionStatus.NeedsAttention => _p.Attn,
-                SessionStatus.Running => _p.Ok,
-                _ => _p.Idle,
-            },
+            Text = "◆", FontSize = 9, Foreground = _p.Brand, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(5, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right,
         };
-        string elapsed = pane.Ended ? "ended"
-            : s.Status == SessionStatus.AwaitingInput ? s.AwaitingElapsedLabel() ?? ""
-            : s.Status == SessionStatus.Running ? s.RunningElapsedLabel() ?? ""
-            : "";
+        var name = new TextBlock
+        {
+            FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 13, Foreground = _p.Text,
+            TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0),
+        };
         var row = new Border
         {
             CornerRadius = new CornerRadius(8), Padding = new Thickness(8, 6), BorderThickness = new Thickness(1),
-            BorderBrush = on ? _p.BrandLine : Brushes.Transparent, Background = on ? _p.BrandWash : Brushes.Transparent,
-            Cursor = new Cursor(StandardCursorType.Hand), Opacity = pane.Ended ? 0.6 : 1,
+            Cursor = new Cursor(StandardCursorType.Hand),
             Child = new DockPanel
             {
                 LastChildFill = true,
                 Children =
                 {
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, [DockPanel.DockProperty] = Dock.Left, Children = { dot } },
-                    new TextBlock { Text = elapsed, FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right },
-                    new TextBlock
-                    {
-                        Text = s.IsPerchControlled ? "◆" : "", FontSize = 9, Foreground = _p.Brand, VerticalAlignment = VerticalAlignment.Center,
-                        Margin = new Thickness(5, 0, 0, 0), IsVisible = s.IsPerchControlled, [DockPanel.DockProperty] = Dock.Right,
-                    },
-                    new TextBlock
-                    {
-                        Text = s.DisplayName, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 13, Foreground = _p.Text,
-                        TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0),
-                    },
+                    elapsed, diamond, name,
                 },
             },
         };
-        if (!on)
+        // Focus moves without a rebuild, so the hover reads it at event time.
+        row.PointerEntered += (_, _) => { if (key != _focused) row.Background = _p.Raised2; };
+        row.PointerExited += (_, _) => row.Background = key == _focused ? _p.BrandWash : Brushes.Transparent;
+        row.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) FocusPane(key); };
+        return new RailRowView(row, dot, elapsed, diamond, name);
+    }
+
+    private void UpdateRailRow(RailRowView v, RoostPane pane)
+    {
+        var s = pane.Session;
+        bool on = pane.Key == _focused;
+        v.Dot.Fill = pane.Ended ? _p.Faint : s.Status switch
         {
-            row.PointerEntered += (_, _) => row.Background = _p.Raised2;
-            row.PointerExited += (_, _) => row.Background = Brushes.Transparent;
-        }
-        row.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) FocusPane(pane.Key); };
-        return row;
+            SessionStatus.AwaitingInput => _p.Await,
+            SessionStatus.ApiError => _p.Err,
+            SessionStatus.NeedsAttention => _p.Attn,
+            SessionStatus.Running => _p.Ok,
+            _ => _p.Idle,
+        };
+        v.Elapsed.Text = pane.Ended ? "ended"
+            : s.Status == SessionStatus.AwaitingInput ? s.AwaitingElapsedLabel() ?? ""
+            : s.Status == SessionStatus.Running ? s.RunningElapsedLabel() ?? ""
+            : "";
+        v.Diamond.IsVisible = s.IsPerchControlled;
+        v.Name.Text = s.DisplayName;
+        v.Row.BorderBrush = on ? _p.BrandLine : Brushes.Transparent;
+        if (on || !v.Row.IsPointerOver) v.Row.Background = on ? _p.BrandWash : Brushes.Transparent;
+        v.Row.Opacity = pane.Ended ? 0.6 : 1;
     }
 
     private Border BarButton(string label, Action onClick)

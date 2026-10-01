@@ -209,6 +209,36 @@ public sealed class TranscriptTailReaderTests : IDisposable
         Assert.Equal(whole.Items.Select(i => i.GetType().Name), tailed.Items.Select(i => i.GetType().Name));
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    [InlineData(7)]
+    public void SmallReadChunksStillYieldWholeLines(int chunk)
+    {
+        // Lines, a BOM and multibyte characters all straddle chunk boundaries; the result must match one big read.
+        AppendBytes([0xEF, 0xBB, 0xBF]);
+        Append("{\"t\":\"café — 🐦\"}\r\n\nsecond line\n{\"half\":");
+        var tail = new TranscriptTailReader(_path, 0, readChunk: chunk);
+        Assert.Equal(["{\"t\":\"café — 🐦\"}", "second line"], tail.Read().Lines);
+
+        Append("true}\nlast\n");
+        Assert.Equal(["{\"half\":true}", "last"], tail.Read().Lines);
+        Assert.Empty(tail.Read().Lines);
+
+        File.WriteAllText(_path, "fresh\n");                 // the fingerprint survives chunking: a replace resets
+        var r = tail.Read();
+        Assert.True(r.Reset);
+        Assert.Equal(["fresh"], r.Lines);
+    }
+
+    [Fact]
+    public void ALineLongerThanTheChunkIsCarriedWhole()
+    {
+        var big = new string('x', 5000);
+        Append($"{big}\nshort\n");
+        Assert.Equal([big, "short"], new TranscriptTailReader(_path, 0, readChunk: 1024).Read().Lines);
+    }
+
     [Fact]
     public void ResetReappliesTheInitialSeek()
     {

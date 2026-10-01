@@ -119,13 +119,32 @@ internal static class ActivitySummary
             case ToolCallStatus.Failed:
                 return new ActivityLine(ActivityKind.ToolFailed, phrase + " (failed)");
             default:
-                JsonNode? input = null;
-                try { input = JsonNode.Parse(t.InputJson); } catch { /* summary only */ }
-                return ToolResultFormat.CollapsedSummary(t.ToolName, input, t.ResultText) is { } result
+                return CollapsedResult(t) is { } result
                     ? new ActivityLine(ActivityKind.Tool, Clip($"{phrase} · {result}"))
                     : new ActivityLine(ActivityKind.Tool, phrase);
         }
     }
+
+    // A finished tool's collapsed result ("Read 42 lines") means parsing its InputJson; mini cards rebuild on
+    // every feed change, so it's worked out once per part and reused until its result text changes (a part's
+    // input never does; its result is replaced, not edited, so a reference check is enough). Weak-keyed: the
+    // entry goes with the conversation.
+    private sealed record CachedResult(string ResultText, string? Summary);
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ToolCallPart, CachedResult> Results = new();
+
+    private static string? CollapsedResult(ToolCallPart t)
+    {
+        if (Results.TryGetValue(t, out var cached) && ReferenceEquals(cached.ResultText, t.ResultText))
+            return cached.Summary;
+        JsonNode? input = null;
+        try { input = JsonNode.Parse(t.InputJson); } catch { /* summary only */ }
+        var summary = ToolResultFormat.CollapsedSummary(t.ToolName, input, t.ResultText);
+        Results.AddOrUpdate(t, new CachedResult(t.ResultText, summary));
+        return summary;
+    }
+
+    /// <summary>Test probe: whether a tool part holds a cached collapsed result.</summary>
+    internal static bool HasCachedResult(ToolCallPart t) => Results.TryGetValue(t, out _);
 
     private static ActivityLine Pending(PermissionItem p)
     {

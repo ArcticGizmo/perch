@@ -464,9 +464,10 @@ miss. It may shrink to cherry-picking those features into the lite composer rath
 the highlight layer. Extracting it isn't needed to meet the ask, so it waits until everything else is proven.
 
 ## Owed live checks (log results here as they're done)
-- [ ] CP4: the history viewer still live-tails an **active** session (now through `TranscriptTailHost`). Render is
-      unchanged and a fixture round-trip test (tail in pieces = read whole) is green, but the watcher path needs
-      a real session.
+- [x] CP4: superseded by the merge into hardened `main` (`roost-merge`): the history viewer now tails through
+      `main`'s CP24 `TranscriptLineTail` (off-thread decode), and `TranscriptTailHost` serves the Roost only. The
+      adversarial-review fixes for the Roost (CP26) are tracked in `docs/review-fixes-plan.md`, with their own
+      owed checks.
 - [ ] P1: a real terminal session tails into a pane, and the mini card updates while collapsed.
 - [ ] CP8: walk the keyboard — Ctrl+1–9, Ctrl+. (cycles Needs you → Done), Ctrl+Shift+E, Ctrl+Shift+Z (and
       back), PgUp/PgDn (and a focused thread's own PgUp still scrolls it); focusing a done-review pane clears its

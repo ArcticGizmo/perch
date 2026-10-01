@@ -163,8 +163,9 @@ internal sealed class AppSettings
     // Settings-window control. See docs/roost-plan.md.
     public Roost.RoostLayoutMode RoostLayout { get; set; } = Roost.RoostLayoutMode.Tiled;
 
-    // The Roost panes the user closed (by session process id), so they stay hidden across restarts while their
-    // session lives; pruned to live sessions as the roster runs. UI state, not a Settings-window control.
+    // The Roost panes the user closed, as "pid/sessionId" tokens (RoostRoster.PersistedClosed), so they stay hidden
+    // across restarts while their session lives — and a recycled pid never hides an unrelated one. Pruned to live
+    // sessions as the roster runs, on disk too. UI state, not a Settings-window control.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? RoostClosedPanes { get; set; }
 

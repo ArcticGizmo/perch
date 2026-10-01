@@ -48,6 +48,11 @@ public readonly record struct RoostOverflow(int Above, int AboveNeedsYou, int Be
 /// </summary>
 public static class RoostLayout
 {
+    /// <summary>A persisted layout read back as a real mode: a value no build defines (a hand-edited or
+    /// newer settings file) falls back to <see cref="RoostLayoutMode.Tiled"/>.</summary>
+    public static RoostLayoutMode Normalize(RoostLayoutMode mode) =>
+        Enum.IsDefined(mode) ? mode : RoostLayoutMode.Tiled;
+
     /// <summary>The Tiled viewport: two columns, two rows.</summary>
     public const int Columns = 2;
     public const int VisibleRows = 2;

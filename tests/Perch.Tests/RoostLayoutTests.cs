@@ -15,6 +15,15 @@ public class RoostLayoutTests
         RoostPin pin = RoostPin.Auto, bool ended = false, bool focused = false, bool typing = false) =>
         RoostLayout.ResolveSize(new RoostSizeInputs(pin, group, ended, focused, typing, current));
 
+    [Fact]
+    public void PersistedLayoutNormalisesUnknownValuesToTiled()
+    {
+        Assert.Equal(RoostLayoutMode.Zoom, RoostLayout.Normalize(RoostLayoutMode.Zoom));
+        Assert.Equal(RoostLayoutMode.MainStack, RoostLayout.Normalize(RoostLayoutMode.MainStack));
+        Assert.Equal(RoostLayoutMode.Tiled, RoostLayout.Normalize((RoostLayoutMode)7));
+        Assert.Equal(RoostLayoutMode.Tiled, RoostLayout.Normalize((RoostLayoutMode)(-1)));
+    }
+
     // ── Collapse resolver ─────────────────────────────────────────────────────────
 
     [Theory]

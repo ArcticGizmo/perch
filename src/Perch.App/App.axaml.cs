@@ -188,6 +188,14 @@ public partial class App : Application
             var settings = AppSettings.Load();
             _appSettings = settings;
             if (settings.RoostClosedPanes is { Count: > 0 } closedPanes) _roostRoster.SeedClosed(closedPanes);
+            // Closing / reopening a pane, and the roster pruning one whose session ended, all move the saved set.
+            _roostRoster.ClosedChanged += () =>
+            {
+                if (_appSettings is not { } s) return;
+                var closed = _roostRoster.PersistedClosed;
+                s.RoostClosedPanes = closed.Count > 0 ? closed.ToList() : null;
+                s.Save();
+            };
 
             // Seed the user-defined initial placements before the window is shown (OnOpened applies the
             // floating one; the dense one is used on first dense entry). Null on either keeps the default.
@@ -822,11 +830,31 @@ public partial class App : Application
             "Elevate", "Cancel");
         if (!confirmed) return;
 
+        // The dialog can sit open a while: act on the session as it is now, not as it was at the click. It may
+        // have ended, been /cleared onto another conversation, or been taken over already.
+        var current = _lastSessions.FirstOrDefault(s => s.Pid == session.Pid);
+        if (current is null || !CanElevate(current))
+        {
+            _notifier?.Show("Not taken over", $"{session.DisplayName} changed while you were deciding, so Perch left it alone.",
+                ToastLevel.Warning, null, null);
+            return;
+        }
+
         // Stop the external process so its --resume can be picked up, then rescan to drop the dead row —
-        // the window's refuse-if-live guard would otherwise (rightly) see it as still running.
-        SessionTerminator.Terminate(session.Pid);
+        // the window's refuse-if-live guard would otherwise (rightly) see it as still running. Resume only once
+        // it's really stopped: a refused or failed kill leaves the terminal session running.
+        var result = SessionTerminator.Terminate(current.Pid);
         _monitorHost?.Rescan();
-        OpenSessionResume(session.SessionId, session.Cwd);
+        if (result is not (TerminateResult.Terminated or TerminateResult.AlreadyGone))
+        {
+            _notifier?.Show("Couldn't take over",
+                result == TerminateResult.NotTheSession
+                    ? $"PID {current.Pid} no longer looks like {current.DisplayName}, so Perch left it alone."
+                    : $"{current.DisplayName} (PID {current.Pid}) refused to stop — it may be running elevated.",
+                ToastLevel.Error, null, null);
+            return;
+        }
+        OpenSessionResume(current.SessionId, current.Cwd);
     }
 
     // Opens the artifact the user picked from the overlay's artifact-glyph list. Middle-click asks for a
@@ -1163,7 +1191,7 @@ public partial class App : Application
         // Controlled (Perch-window) sessions still alert: you might not be watching the window, so a finished
         // turn should flash + toast like any other. Clicking through focuses the Perch window (FocusSession).
         _overlay!.Canvas.TriggerAttention(SessionStatus.NeedsAttention);
-        if (!SeenInRoost(session)) _notifications?.Notify(NotificationKind.Done, session);
+        NotifyUnlessSeenInRoost(NotificationKind.Done, session);
         CheckAchievements(force: false); // a finish is a natural moment to have crossed a threshold
     }
 
@@ -1232,7 +1260,7 @@ public partial class App : Application
     {
         if (IsDaemonSession(session)) return;
         _overlay!.Canvas.TriggerAttention(SessionStatus.AwaitingInput);
-        if (!SeenInRoost(session)) _notifications?.Notify(NotificationKind.WaitingForInput, session);
+        NotifyUnlessSeenInRoost(NotificationKind.WaitingForInput, session);
     }
 
     // A session's last API request failed (e.g. 529 Overloaded): flash the overlay and fire the API-error
@@ -1241,7 +1269,7 @@ public partial class App : Application
     {
         if (IsDaemonSession(session)) return;
         _overlay!.Canvas.TriggerAttention(SessionStatus.ApiError);
-        if (!SeenInRoost(session)) _notifications?.Notify(NotificationKind.ApiFailed, session);
+        NotifyUnlessSeenInRoost(NotificationKind.ApiFailed, session);
     }
 
     // A tracked PR changed state (merged/closed, reviewed, approved): fire the matching desktop alert (toast/
@@ -1534,6 +1562,7 @@ public partial class App : Application
     {
         _roostRoster.Update(sessions.Where(s => !s.IsBackground).ToList(), Clock.Now);
         _roostWindow?.RosterChanged();
+        ReplayRoostSuppressed();
     }
 
     // The Roost half of AttentionSeen for a session: is the Roost the active window, and is the pane on screen?
@@ -1547,24 +1576,55 @@ public partial class App : Application
         return Perch.Data.Roost.AttentionSeen.Seen(ownWindowActive: false, active, onScreen);
     }
 
+    // Toasts the Roost swallowed because the pane was in front of the user, by session id. They aren't dropped:
+    // if the user looks away (the Roost deactivates or closes, or the pane pages / filters out of view) while the
+    // session is still in that state, the toast fires then. One that's been dealt with, or moved on, is forgotten.
+    private readonly Dictionary<string, NotificationKind> _roostSuppressed = new(StringComparer.Ordinal);
+
+    private void NotifyUnlessSeenInRoost(NotificationKind kind, ClaudeSession session)
+    {
+        if (SeenInRoost(session)) { _roostSuppressed[session.SessionId] = kind; return; }
+        _roostSuppressed.Remove(session.SessionId);
+        _notifications?.Notify(kind, session);
+    }
+
+    private void ReplayRoostSuppressed()
+    {
+        if (_roostSuppressed.Count == 0) return;
+        foreach (var (sid, kind) in _roostSuppressed.ToList())
+        {
+            var s = _lastSessions.FirstOrDefault(x => x.SessionId == sid);
+            if (s is null || s.Status != StatusOf(kind)) { _roostSuppressed.Remove(sid); continue; }
+            if (SeenInRoost(s)) continue;
+            _roostSuppressed.Remove(sid);
+            _notifications?.Notify(kind, s);
+        }
+
+        static SessionStatus StatusOf(NotificationKind k) => k switch
+        {
+            NotificationKind.Done => SessionStatus.NeedsAttention,
+            NotificationKind.WaitingForInput => SessionStatus.AwaitingInput,
+            _ => SessionStatus.ApiError,
+        };
+    }
+
     private void OpenRoost() =>
         _roostWindow = WindowHost.ShowOrFocus(_roostWindow,
             () =>
             {
                 var w = new RoostWindow(_roostRoster, CreateRoostFeed,
-                    layout: _appSettings?.RoostLayout ?? Perch.Data.Roost.RoostLayoutMode.Tiled);
+                    layout: Perch.Data.Roost.RoostLayout.Normalize(_appSettings?.RoostLayout ?? default));
                 // A prompt that was only "seen" in the Roost gets its toast once the user looks away from it.
-                w.Deactivated += (_, _) => { foreach (var sw in _sessionWindows) sw.ReevaluateAttention(); };
+                w.Deactivated += (_, _) =>
+                {
+                    foreach (var sw in _sessionWindows) sw.ReevaluateAttention();
+                    ReplayRoostSuppressed();
+                };
+                w.PlacementChanged += ReplayRoostSuppressed;
                 w.NewSessionRequested += OpenSessionWindow;
                 w.OpenSessionRequested += FocusSession;
                 w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
                 w.LayoutChanged += mode => { if (_appSettings is { } s) { s.RoostLayout = mode; s.Save(); } };
-                w.ClosedPanesChanged += () =>
-                {
-                    if (_appSettings is not { } s) return;
-                    s.RoostClosedPanes = _roostRoster.ClosedKeys.Count > 0 ? _roostRoster.ClosedKeys.ToList() : null;
-                    s.Save();
-                };
                 w.PermissionAnswered += (sid, item, allow, mode) =>
                     PerchSessionFor(sid)?.AnswerPermission(item, allow, mode);
                 w.QuestionAnswered += (sid, item, answers) => PerchSessionFor(sid)?.AnswerQuestion(item, answers);
@@ -1575,7 +1635,7 @@ public partial class App : Application
                 w.TakeOverRequested += s => OnElevateToPerch(s, _roostWindow);
                 return w;
             },
-            () => _roostWindow = null);
+            () => { _roostWindow = null; ReplayRoostSuppressed(); });
 
     // A Perch-driven session reads its live in-memory conversation; anything else (or a Perch session this
     // app doesn't own) tails its transcript from disk.

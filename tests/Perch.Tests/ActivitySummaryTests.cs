@@ -42,6 +42,22 @@ public class ActivitySummaryTests
     }
 
     [Fact]
+    public void CollapsedResultIsCachedPerPartUntilItsResultChanges()
+    {
+        var conv = Conv(
+            new ToolUseEvent("t1", "Read", "Reading Routes.cs", """{"file_path":"Routes.cs"}"""),
+            new ToolResultEvent("t1", "a\nb\nc", false));
+        var part = conv.Items.OfType<AssistantMessageItem>().SelectMany(a => a.Parts).OfType<ToolCallPart>().Single();
+
+        Assert.Equal("Reading Routes.cs · Read 3 lines", ActivitySummary.Build(conv, sessionRunning: true)[^1].Text);
+        Assert.True(ActivitySummary.HasCachedResult(part));
+        Assert.Equal("Reading Routes.cs · Read 3 lines", ActivitySummary.Build(conv, sessionRunning: true)[^1].Text);
+
+        part.ResultText = "a\nb";   // a replaced result is re-summarised, not served stale
+        Assert.Equal("Reading Routes.cs · Read 2 lines", ActivitySummary.Build(conv, sessionRunning: true)[^1].Text);
+    }
+
+    [Fact]
     public void KeepsOnlyTheNewestLinesInOrder()
     {
         var conv = Conv(

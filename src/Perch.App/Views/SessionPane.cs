@@ -64,6 +64,8 @@ internal sealed class SessionPane : Border
     private readonly TextBlock _footerButtonText;
     private readonly Border _takeOverButton;
     private readonly Border _earlierBar;
+    private readonly TextBlock _earlierText;
+    private bool _earlierArmed;   // a large "load earlier" was clicked once; the next click confirms it
 
     /// <summary>Whether this pane's session can be taken over in Perch (an interactive terminal session Perch
     /// doesn't already own, still running). Set by the window — the eligibility rule is the overlay's.</summary>
@@ -221,11 +223,11 @@ internal sealed class SessionPane : Border
         _body = new Border { ClipToBounds = true, CornerRadius = new CornerRadius(0, 0, 11, 11) };
 
         // A tailed pane starts from the transcript's last RoostFeed.TailLines lines; this strip atop its thread
-        // loads the rest.
-        var earlierText = new TextBlock
+        // loads the rest (asking first when that's a large transcript).
+        var earlierText = _earlierText = new TextBlock
         {
-            Text = $"Showing the last {RoostFeed.TailLines} lines  ·  Load earlier",
             FontFamily = _p.Body, FontSize = 11.5, Foreground = _p.Muted, HorizontalAlignment = HorizontalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
         };
         _earlierBar = new Border
         {
@@ -235,7 +237,7 @@ internal sealed class SessionPane : Border
         };
         _earlierBar.PointerEntered += (_, _) => earlierText.Foreground = _p.Brand;
         _earlierBar.PointerExited += (_, _) => earlierText.Foreground = _p.Muted;
-        _earlierBar.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) _feed?.LoadEarlier(); };
+        _earlierBar.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) OnLoadEarlier(); };
 
         Child = new DockPanel { LastChildFill = true, Children = { _header, _footer, _body } };
 
@@ -278,6 +280,7 @@ internal sealed class SessionPane : Border
         {
             if (_feed is not null) _feed.Changed -= OnFeedChanged;
             _feed = feed;
+            _earlierArmed = false;
             if (_feed is not null) _feed.Changed += OnFeedChanged;
         }
         RefreshHeader();
@@ -507,9 +510,28 @@ internal sealed class SessionPane : Border
         FillMiniLines();
     }
 
-    private void EnsureThread(RoostFeed feed)
+    // "Load earlier": a large transcript (the history viewer's gate) takes a second, confirming click; the read
+    // and decode then run off the UI thread and the thread rebinds when the whole conversation lands.
+    private void OnLoadEarlier()
+    {
+        if (_feed is not { CanLoadEarlier: true, IsLoadingEarlier: false } feed) return;
+        if (feed.EarlierIsLarge && !_earlierArmed) { _earlierArmed = true; RefreshEarlierBar(feed); return; }
+        _earlierArmed = false;
+        feed.LoadEarlier();
+        RefreshEarlierBar(feed);
+    }
+
+    private void RefreshEarlierBar(RoostFeed feed)
     {
         _earlierBar.IsVisible = feed.CanLoadEarlier;
+        _earlierText.Text = feed.IsLoadingEarlier ? "Loading earlier…"
+            : _earlierArmed ? $"The whole transcript is {SessionHistory.FormatSize(feed.TranscriptBytes)} and may be slow  ·  Load anyway"
+            : $"Showing the last {RoostFeed.TailLines} lines  ·  Load earlier";
+    }
+
+    private void EnsureThread(RoostFeed feed)
+    {
+        RefreshEarlierBar(feed);
         if (_thread is not null)
         {
             // Already materialised: at most a rebind (a tail reset / "load earlier" swapped the conversation).
