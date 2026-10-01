@@ -2337,6 +2337,10 @@ internal sealed class SettingsWindow : Window
         });
         page.Children.Add(header);
 
+        var star = SettingsUi.StarOnGitHub();
+        star.Margin = new Thickness(0, 2, 0, 12);
+        page.Children.Add(star);
+
         page.Children.Add(LinkRow("GitHub repository", AppInfo.RepoUrl));
         page.Children.Add(LinkRow("Report an issue on GitHub", AppInfo.IssuesUrl));
         page.Children.Add(LinkRow($"Email {AppInfo.SupportEmail}", "mailto:" + AppInfo.SupportEmail));

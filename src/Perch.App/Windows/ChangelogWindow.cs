@@ -11,8 +11,8 @@ namespace Perch.Avalonia.Windows;
 
 /// <summary>
 /// The post-update "what's new" card, centred on screen: a headline, a scrollable list of the changelog
-/// sections released since the version that last ran here, and two buttons — Close, and a "Don't show
-/// changelogs again" that suppresses future pop-ups via <see cref="_onSuppress"/>. Shown once per update
+/// sections released since the version that last ran here, a "Star on GitHub" pill, and two buttons — Close,
+/// and a "Don't show changelogs again" that suppresses future pop-ups via <see cref="_onSuppress"/>. Shown once per update
 /// from the app startup check; the entries are picked by <see cref="ChangelogParser"/>. Styled off
 /// <see cref="QrWindow"/> so the two popups read as one app.
 /// </summary>
@@ -36,7 +36,7 @@ internal sealed class ChangelogWindow : Window
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         Topmost = true;
         CanResize = false;
-        Width = 480;
+        Width = 520;   // room for the star pill beside the two footer buttons
         Height = 560;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
@@ -95,11 +95,23 @@ internal sealed class ChangelogWindow : Window
         close.MinWidth = 84;
         close.Click += (_, _) => Close();
 
-        var buttons = new StackPanel
+        // Footer: the star pill bottom-left (secondary, eye-catching), the dismiss buttons bottom-right.
+        var star = SettingsUi.StarOnGitHub("Star on GitHub");
+        star.Margin = new Thickness(0, 0, 12, 0);
+        DockPanel.SetDock(star, Dock.Left);
+        var buttons = new DockPanel
         {
-            Orientation = Orientation.Horizontal, Spacing = 8,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Children = { suppress, close },
+            LastChildFill = false,
+            Children =
+            {
+                star,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal, Spacing = 8,
+                    [DockPanel.DockProperty] = Dock.Right,
+                    Children = { suppress, close },
+                },
+            },
         };
 
         var grid = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto") };
