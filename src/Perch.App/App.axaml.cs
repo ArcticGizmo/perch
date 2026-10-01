@@ -192,7 +192,6 @@ public partial class App : Application
             var settings = AppSettings.Load();
             _appSettings = settings;
             if (settings.RoostClosedPanes is { Count: > 0 } closedPanes) _roostRoster.SeedClosed(closedPanes);
-            if (settings.RoostOrder is { Count: > 0 } order) _roostRoster.SeedOrder(order);
             // Closing / reopening a pane, and the roster pruning one whose session ended, all move the saved set.
             _roostRoster.ClosedChanged += () =>
             {

@@ -37,65 +37,6 @@ public class RoostRosterTests
     }
 
     [Fact]
-    public void SwapAndMoveToEndReorderAndSurviveAScan()
-    {
-        var r = new RoostRoster();
-        r.Update([S("1"), S("2"), S("3")], T0);
-        r.Swap("1", "3");
-        Assert.Equal(["3", "2", "1"], Keys(r.Panes));
-        r.MoveToEnd("3");
-        Assert.Equal(["2", "1", "3"], Keys(r.Panes));
-        r.Update([S("1"), S("2"), S("3")], T0);
-        Assert.Equal(["2", "1", "3"], Keys(r.Panes));
-        r.Swap("2", "missing");
-        Assert.Equal(["2", "1", "3"], Keys(r.Panes));
-    }
-
-    [Fact]
-    public void ASeededOrderPlacesPanesAsTheyArrive()
-    {
-        var r = new RoostRoster();
-        r.SeedOrder(["3/sess-3", "1/sess-1", "2/sess-2"]);
-        r.Update([S("1"), S("2"), S("4")], T0);
-        Assert.Equal(["1", "2", "4"], Keys(r.Panes));
-        r.Update([S("1"), S("2"), S("3"), S("4")], T0);   // 3 was first in the saved order
-        Assert.Equal(["3", "1", "2", "4"], Keys(r.Panes));
-        r.Update([S("1"), S("2"), S("3"), S("4"), S("5")], T0);
-        Assert.Equal(["3", "1", "2", "4", "5"], Keys(r.Panes));
-    }
-
-    [Fact]
-    public void SeedingAfterPanesExistReordersThem()
-    {
-        var r = new RoostRoster();
-        r.Update([S("1"), S("2"), S("3")], T0);
-        r.SeedOrder(["2/sess-2", "3/sess-3"]);
-        Assert.Equal(["2", "3", "1"], Keys(r.Panes));
-        Assert.Equal(["2/sess-2", "3/sess-3", "1/sess-1"], r.PersistedOrder);
-    }
-
-    [Fact]
-    public void ASeededOrderIgnoresRecycledPidsAndBarePids()
-    {
-        // Had pid 3's token matched, it would land ahead of 1 (rank 0). Saved under another session, or as a bare
-        // pid, it's just a newcomer appended after the seeded pane.
-        var recycled = new RoostRoster();
-        recycled.SeedOrder(["3/old", "1/sess-1"]);
-        recycled.Update([S("1"), S("3")], T0);
-        Assert.Equal(["1", "3"], Keys(recycled.Panes));
-
-        var bare = new RoostRoster();
-        bare.SeedOrder(["3", "1/sess-1"]);
-        bare.Update([S("1"), S("3")], T0);
-        Assert.Equal(["1", "3"], Keys(bare.Panes));
-
-        var matching = new RoostRoster();
-        matching.SeedOrder(["3/sess-3", "1/sess-1"]);
-        matching.Update([S("1"), S("3")], T0);
-        Assert.Equal(["3", "1"], Keys(matching.Panes));
-    }
-
-    [Fact]
     public void ScanOrderDoesNotReorderExistingPanes()
     {
         var r = new RoostRoster();
@@ -128,7 +69,7 @@ public class RoostRosterTests
 
         Assert.Equal([RoostGroup.NeedsYou, RoostGroup.DoneReview, RoostGroup.Working, RoostGroup.Quiet],
             r.Rail.Select(g => g.Group));
-        Assert.Equal(new RoostCounts(NeedsYou: 2, DoneReview: 1, Working: 1, Quiet: 1), r.Counts);
+        Assert.Equal([2, 1, 1, 1], r.Rail.Select(g => g.Panes.Count));
         Assert.Equal(["done"], Keys(Group(r, RoostGroup.DoneReview).Panes));
         Assert.Equal(["run"], Keys(Group(r, RoostGroup.Working).Panes));
     }
@@ -157,7 +98,7 @@ public class RoostRosterTests
         Assert.True(ended.Ended);
         Assert.Equal(T0.AddMinutes(1), ended.EndedAt);
         Assert.Equal(RoostGroup.Quiet, ended.Group);                 // no longer "needs you"
-        Assert.Equal(0, r.Counts.NeedsYou);
+        Assert.Empty(Group(r, RoostGroup.NeedsYou).Panes);
         Assert.Equal(["1", "2"], Keys(r.Panes));                    // still in place
 
         r.Update([S("1")], T0.AddMinutes(10).AddSeconds(59));        // 9m59s after ending
@@ -325,19 +266,6 @@ public class RoostRosterTests
     }
 
     [Fact]
-    public void PinsSurviveRescansAndClearWithAuto()
-    {
-        var r = new RoostRoster();
-        r.Update([S("1")], T0);
-        r.SetPin("1", RoostPin.Collapsed);
-        r.Update([S("1", SessionStatus.AwaitingInput, awaitingSince: T0)], T0);
-        Assert.Equal(RoostPin.Collapsed, r.Find("1")!.Pin);
-
-        r.SetPin("1", RoostPin.Auto);
-        Assert.Equal(RoostPin.Auto, r.Find("1")!.Pin);
-    }
-
-    [Fact]
     public void NextNeedingYouCyclesNeedsYouThenDoneAndWraps()
     {
         var r = new RoostRoster();
@@ -370,13 +298,12 @@ public class RoostRosterTests
         // "Take over in Perch": the terminal process (pid 2) stops and Perch resumes the same session under pid 9.
         var r = new RoostRoster();
         r.Update([S("1"), S("2", sessionId: "conv"), S("3")], T0);
-        r.SetPin("2", RoostPin.Expanded);
 
         r.Update([S("1"), S("3"), S("9", sessionId: "conv")], T0.AddSeconds(5));
         Assert.Equal(["1", "9", "3"], Keys(r.Panes));          // in place, not appended
         Assert.False(r.Find("9")!.Ended);
-        Assert.Equal(RoostPin.Expanded, r.Find("9")!.Pin);    // the pin carries over
         Assert.Null(r.Find("2"));
+        Assert.Equal("9", r.Adopted["2"]);                    // the tabs follow the move
     }
 
     [Fact]
@@ -388,17 +315,6 @@ public class RoostRosterTests
         Assert.Equal(["2", "3", "9"], Keys(r.Panes));
         r.Update([S("3"), S("9", sessionId: "conv")], T0.AddSeconds(2));
         Assert.Equal(["9", "3"], Keys(r.Panes));
-    }
-
-    [Fact]
-    public void AContinuationKeepsItsOwnPin()
-    {
-        var r = new RoostRoster();
-        r.Update([S("2", sessionId: "conv"), S("9", sessionId: "conv")], T0);
-        r.SetPin("2", RoostPin.Expanded);
-        r.SetPin("9", RoostPin.Collapsed);
-        r.Update([S("9", sessionId: "conv")], T0.AddSeconds(1));
-        Assert.Equal(RoostPin.Collapsed, r.Find("9")!.Pin);
     }
 
     [Fact]

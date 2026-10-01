@@ -5,7 +5,8 @@ using Perch.Data.Roost;
 namespace Perch.Avalonia.Views;
 
 /// <summary>
-/// The Roost's Tiled stage: lays each child into a cell of a <see cref="RoostTemplateShape"/>, picked by the
+/// The Roost's stage: lays each child into a cell of a <see cref="RoostTemplateShape"/> (the active tab's layout,
+/// <see cref="RoostGridLayout.ToShape"/>), picked by the
 /// attached <see cref="SlotProperty"/>. Each child is measured with exactly its cell's size, so moving a child to
 /// another cell of the same size leaves its measured layout valid — a swap re-arranges, it doesn't re-measure the
 /// panes' threads.

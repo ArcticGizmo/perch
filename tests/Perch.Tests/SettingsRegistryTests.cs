@@ -28,11 +28,7 @@ public class SettingsRegistryTests
         // chevron on the overlay, not Settings-window controls.
         nameof(AppSettings.TodosExpanded),
         nameof(AppSettings.HypertreeExpanded),
-        // The Roost's layout is picked by the Roost window's own title-bar toggle.
-        nameof(AppSettings.RoostLayout),
-        nameof(AppSettings.RoostLayoutByCount),
-        nameof(AppSettings.RoostOrder),
-        // …and the rail's sort, by the toggle in the rail's header.
+        // The Roost's rail sort is picked by the toggle in the rail's header…
         nameof(AppSettings.RoostRailSort),
         // …and its tabs, managed in the Roost's tab strip.
         nameof(AppSettings.RoostTabs),

@@ -159,16 +159,9 @@ internal sealed class AppSettings
     // its header. Toggled by the section's own chevron. Defaults to expanded.
     public bool HypertreeExpanded { get; set; } = true;
 
-    // The Roost window's layout (Tiled / Main + stack / Zoom), picked by its title-bar toggle. UI state, not a
-    // Settings-window control. See docs/roost-plan.md.
-    public Roost.RoostLayoutMode RoostLayout { get; set; } = Roost.RoostLayoutMode.Tiled;
-
-    // The Tiled grid's shape per number of panes on stage, picked from the Roost's snap-layout flyout (a count
-    // missing = the default for it). UI state, like RoostLayout.
-    public Dictionary<int, Roost.RoostSnapTemplate>? RoostLayoutByCount { get; set; }
-
     // How the Roost's rail orders sessions (by status group, or A–Z), picked by the toggle in the rail's header.
-    // UI state, like RoostLayout. See docs/roost-tabs-plan.md.
+    // UI state, not a Settings-window control. See docs/roost-tabs-plan.md. (The pre-tabs RoostLayout,
+    // RoostLayoutByCount and RoostOrder keys an older file may still carry are ignored when it loads.)
     public Roost.RoostRailSort RoostRailSort { get; set; } = Roost.RoostRailSort.Status;
 
     // The Roost's tabs (RoostTabSet.ToState): each tab's name, painted layout and the "pid/sessionId" token of the
@@ -181,10 +174,6 @@ internal sealed class AppSettings
     // presets. Null = none. UI state. See docs/roost-tabs-plan.md.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<Roost.RoostSavedLayout>? RoostSavedLayouts { get; set; }
-
-    // The Roost's pane order as "pid/sessionId" tokens (RoostRoster.PersistedOrder), rearranged by dragging pane
-    // headers, so it survives a restart while the sessions run — and a recycled pid never inherits a place.
-    public List<string>? RoostOrder { get; set; }
 
     // The Roost panes the user closed, as "pid/sessionId" tokens (RoostRoster.PersistedClosed), so they stay hidden
     // across restarts while their session lives — and a recycled pid never hides an unrelated one. Pruned to live

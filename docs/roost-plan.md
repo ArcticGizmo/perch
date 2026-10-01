@@ -1,5 +1,18 @@
 # Roost — design & checkpoint plan
 
+> **Partly superseded (2026-10-01) by [`roost-tabs-plan.md`](roost-tabs-plan.md).** The stage is now **tabs**,
+> each with a painted layout, plus a fixed Focus tab. These parts of this doc no longer describe the code, and
+> were deleted in roost-tabs T7:
+> - the three layouts (**Tiled / Main + stack / Zoom**) and their toggle (Zoom lives on as an in-tab maximise)
+> - the **collapse model** and Tiled packing (mini cards stacking in cells, `RoostStage` admit/bump, row paging)
+> - the per-count **snap flyout** (its templates are now the painter's presets)
+> - the **title-bar chips** and chip filters ("N hidden" moved to the rail footer)
+> - **"Keep on stage" pins**, the persisted pane order (`RoostOrder`), and `TypingHold`'s stage hold
+> - the keyboard table, where Ctrl+1–9 now means tabs and Alt+1–8 regions (see `RoostKeys`)
+>
+> Still current: the rail and its grouping, pane anatomy and status treatment, the overlay entry point, the
+> feeds (`RoostFeed`), interactive Perch panes (P2) and the P3 polish that wasn't about layouts.
+
 **Status (2026-09-25):** CP1–CP14 and CP16 are built and committed on branch `roost`, each through the green gate
 and render-verified. **CP15 (shared composer) is paused** pending dogfooding. Nothing has been live-tested yet: the
 next step is the *Owed live checks* list at the bottom.

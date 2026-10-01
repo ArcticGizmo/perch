@@ -1,7 +1,8 @@
 # Roost tabs — design & checkpoint plan
 
-Status: **PLAN ONLY** (2026-10-01). Builds on the merged Roost (`docs/roost-plan.md`, branch `roost-merge`).
-Suggested branch: `roost-tabs`, cut from `roost-merge`.
+Status: **T1–T7 built** (2026-10-01) on branch `roost-tabs`, cut from `roost-merge`. Each checkpoint passed the
+green gate and was checked by render, but **nothing has been live-tested yet**: the owed live checks at the bottom
+come next. Builds on the merged Roost (`docs/roost-plan.md`, now partly superseded by this doc).
 
 ## The ask
 
@@ -338,6 +339,25 @@ passes, `render <dir>` is eyeballed for the Roost shots, and there's one commit 
 - Fixed along the way: the empty-region chord on the stage counted regions in creation order, but Alt+N goes
   by reading order.
 - Render shots: `roost_painter{,_hover,_drag,_refused,_saved}_1x`, `roost_tabs_painted_1x`.
+
+### T7: Cleanup + docs ✅
+*As built:*
+- **Deleted:** `RoostStage` and `TypingHold` along with their tests; `RoostLayoutMode` and the `RoostLayout`
+  rules class along with their tests (what's left of that file is the `RoostPaneSize` enum, now in
+  `RoostPaneSize.cs`); and the `AppSettings.RoostLayout`, `RoostLayoutByCount` and `RoostOrder` settings.
+  An older settings file still loads, because unknown keys are ignored, and a test covers that.
+- **Roster:** the pin path (`RoostPin`, `SetPin`, `RoostPane.Pin`) is gone, and so are `Swap` / `MoveToEnd`,
+  the persisted order (`SeedOrder` / `PersistedOrder`), `Order`, and the title-bar `RoostCounts`. Panes are
+  plain first-seen order, and an adoption still takes the ended pane's place.
+- **Templates:** the per-count pick (`For`, `Fits`, `Capacity`) is gone. What remains are the shapes, the
+  names, `Picker` (the presets' order) and `ForCount` (the first-run tab).
+- **`SessionPane`:** the typing-hold "held" ring and its pulse are gone. The mini-card body stays, because it's
+  also what an expanded pane shows while its thread loads.
+- **`RoostBench`** already ran on tabs from T4. Only its description changed. Its output goes through
+  `AttachParentConsole`, so it has to be run from a real terminal.
+- **Docs:** `roost-plan.md` has a "partly superseded" banner, and the CHANGELOG's Unreleased section
+  introduces the Roost as it now works. It had never been in the changelog. `CLAUDE.md` doesn't mention the
+  Roost.
 
 ### T1 / T2 / T3 original scope
 - `RoostRailSort` + `RoostRoster.RailFor`, a header toggle in the rail, the persisted `RoostRailSort`, and

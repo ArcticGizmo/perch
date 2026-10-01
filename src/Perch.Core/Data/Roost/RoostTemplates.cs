@@ -1,6 +1,7 @@
 namespace Perch.Data.Roost;
 
-/// <summary>The shape of the Tiled grid. The snap-layout flyout picks one per stage count (persisted).</summary>
+/// <summary>A built-in layout shape: the tab painter's presets (<see cref="RoostGridLayout.FromTemplate"/>), and the
+/// first-run tab's shape for the live session count.</summary>
 public enum RoostSnapTemplate
 {
     /// <summary>The default for the count and the stage's shape (<see cref="RoostTemplates.ForCount"/>).</summary>
@@ -31,13 +32,14 @@ public sealed record RoostTemplateShape(IReadOnlyList<double> Columns, IReadOnly
         + string.Join(";", Slots.Select(s => $"{s.Row}.{s.Column}.{s.RowSpan}.{s.ColumnSpan}"));
 }
 
-/// <summary>The snap-layout templates (UI-free, unit-tested).</summary>
+/// <summary>The built-in layout templates (UI-free, unit-tested): the tab painter's presets
+/// (<see cref="RoostGridLayout.Presets"/>) and the first-run tab's shape (<see cref="ForCount"/>).</summary>
 public static class RoostTemplates
 {
-    /// <summary>The most cells any template has — the stage's capacity.</summary>
+    /// <summary>The most cells any template has — how many sessions the first-run tab takes.</summary>
     public const int AutoMaxCells = 6;
 
-    /// <summary>The flyout's order.</summary>
+    /// <summary>The presets' order in the painter (Auto, which has no grid of its own, is left out there).</summary>
     public static readonly IReadOnlyList<RoostSnapTemplate> Picker =
     [
         RoostSnapTemplate.Auto, RoostSnapTemplate.Full, RoostSnapTemplate.Columns2, RoostSnapTemplate.Rows2,
@@ -76,12 +78,6 @@ public static class RoostTemplates
         _ => Uniform(1, 1),
     };
 
-    /// <summary>How many cells <paramref name="t"/> has (Auto: up to <see cref="AutoMaxCells"/>).</summary>
-    public static int Capacity(RoostSnapTemplate t) => t == RoostSnapTemplate.Auto ? AutoMaxCells : Shape(t).Slots.Count;
-
-    /// <summary>Whether <paramref name="t"/> has a cell for each of <paramref name="count"/> panes.</summary>
-    public static bool Fits(RoostSnapTemplate t, int count) => Capacity(t) >= count;
-
     /// <summary>
     /// Auto's pick for <paramref name="cells"/> cells on a stage <paramref name="aspect"/> (width / height) wide:
     /// one fills the stage; two sit side by side (stacked on a stage taller than wide); three go one + two
@@ -96,14 +92,6 @@ public static class RoostTemplates
         5 => RoostSnapTemplate.TwoPlusThree,
         _ => RoostSnapTemplate.Grid3x2,
     };
-
-    /// <summary>The template to draw for <paramref name="count"/> panes: the user's pick for that count when it
-    /// still fits them, else the default. A persisted pick no build defines (a hand-edited or newer settings
-    /// file) counts as no pick.</summary>
-    public static RoostSnapTemplate For(int count, IReadOnlyDictionary<int, RoostSnapTemplate>? picks, double aspect) =>
-        picks is not null && picks.TryGetValue(count, out var t) && t != RoostSnapTemplate.Auto && Enum.IsDefined(t) && Fits(t, count)
-            ? t
-            : ForCount(count, aspect);
 
     private static RoostTemplateShape Uniform(int columns, int rows)
     {

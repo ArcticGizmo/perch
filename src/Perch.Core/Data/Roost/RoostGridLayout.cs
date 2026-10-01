@@ -290,7 +290,7 @@ public sealed class RoostGridLayout
         return Create(regions) ?? Full;
     }
 
-    /// <summary>The built-in presets, in the snap flyout's order (Auto left out).</summary>
+    /// <summary>The built-in presets, in <see cref="RoostTemplates.Picker"/> order (Auto left out).</summary>
     public static IReadOnlyList<(RoostSnapTemplate Template, string Name, RoostGridLayout Layout)> Presets { get; } =
         RoostTemplates.Picker.Where(t => t != RoostSnapTemplate.Auto)
             .Select(t => (t, RoostTemplates.Name(t), FromTemplate(t))).ToList();

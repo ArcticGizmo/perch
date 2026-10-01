@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- The Roost: every session in one window, with a rail sorted by who needs you most
+- Roost tabs, each with its own layout, plus a Focus tab for quick looks
+- Paint your own tab layouts (split, remove, drag the dividers) and save the good ones
+- Drag sessions between regions and tabs; hold one over a tab to open it mid-drag
+- Tabs light up when something in them needs you, so you can stop checking each one like a fridge
+- Sort the rail by status or A–Z
+
 ---
 
 ## [v0.5.1] - 2026-10-01

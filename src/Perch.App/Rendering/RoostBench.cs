@@ -11,9 +11,9 @@ using Perch.Data.Roost;
 namespace Perch.Avalonia.Rendering;
 
 /// <summary>
-/// <c>perch bench-roost [turns]</c>: times the Roost's Tiled interactions headlessly over six panes with long
-/// conversations — a drag's ghost moves, a focus change, a drop that swaps two cells, a drop from the rail (a
-/// pane's first appearance, and one brought back), and a refresh. Per operation it prints the time to the first
+/// <c>perch bench-roost [turns]</c>: times the Roost's tab interactions headlessly over two tabs of six panes with
+/// long conversations — a drag's ghost moves, a focus change, a drop that swaps two regions, a drop from the rail
+/// (a pane's first appearance, and one brought back), a tab switch, and a refresh. Per operation it prints the time to the first
 /// frame (the call, the layout it needs and one render, with background work left queued) and the time until
 /// background work (older turns filling in) is done.
 /// </summary>

@@ -3,8 +3,8 @@ using Xunit;
 
 namespace Perch.Tests;
 
-/// <summary>Guards <see cref="RoostTemplates"/>: Auto's pick per pane count and stage shape, and that every
-/// template's cells tile its grid exactly once.</summary>
+/// <summary>Guards <see cref="RoostTemplates"/> (the painter's presets and the first-run tab's shape): the pick per
+/// session count and stage shape, and that every template's cells tile its grid exactly once.</summary>
 public class RoostTemplatesTests
 {
     [Theory]
@@ -19,29 +19,6 @@ public class RoostTemplatesTests
     [InlineData(6, 1.6, RoostSnapTemplate.Grid3x2)]
     public void AutoFitsThePaneCount(int cells, double aspect, RoostSnapTemplate expected) =>
         Assert.Equal(expected, RoostTemplates.ForCount(cells, aspect));
-
-    [Fact]
-    public void APickForTheCountWinsWhileItFits()
-    {
-        var picks = new Dictionary<int, RoostSnapTemplate>
-        {
-            [2] = RoostSnapTemplate.Rows2,
-            [3] = RoostSnapTemplate.Columns2,     // too few cells for 3 — ignored
-            [4] = RoostSnapTemplate.Auto,         // Auto = the default
-        };
-        Assert.Equal(RoostSnapTemplate.Rows2, RoostTemplates.For(2, picks, 1.6));
-        Assert.Equal(RoostSnapTemplate.MainPlusTwo, RoostTemplates.For(3, picks, 1.6));
-        Assert.Equal(RoostSnapTemplate.Grid2x2, RoostTemplates.For(4, picks, 1.6));
-        Assert.Equal(RoostSnapTemplate.Columns2, RoostTemplates.For(2, null, 1.6));
-    }
-
-    [Fact]
-    public void AnUndefinedPersistedPickFallsBackToTheDefault()
-    {
-        var picks = new Dictionary<int, RoostSnapTemplate> { [1] = (RoostSnapTemplate)42, [4] = (RoostSnapTemplate)(-3) };
-        Assert.Equal(RoostSnapTemplate.Full, RoostTemplates.For(1, picks, 1.6));
-        Assert.Equal(RoostSnapTemplate.Grid2x2, RoostTemplates.For(4, picks, 1.6));
-    }
 
     [Fact]
     public void EveryTemplateTilesItsGridOnce()
@@ -62,12 +39,4 @@ public class RoostTemplatesTests
     [Fact]
     public void ThePickerOffersEveryTemplate() =>
         Assert.Equal(Enum.GetValues<RoostSnapTemplate>().OrderBy(t => t), RoostTemplates.Picker.OrderBy(t => t));
-
-    [Fact]
-    public void CapacityIsTheSlotCountOrAutosCeiling()
-    {
-        Assert.Equal(RoostTemplates.AutoMaxCells, RoostTemplates.Capacity(RoostSnapTemplate.Auto));
-        Assert.Equal(3, RoostTemplates.Capacity(RoostSnapTemplate.MainPlusTwo));
-        Assert.Equal(1, RoostTemplates.Capacity(RoostSnapTemplate.Full));
-    }
 }

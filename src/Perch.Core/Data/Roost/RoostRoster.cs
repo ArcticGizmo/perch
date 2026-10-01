@@ -13,21 +13,12 @@ public enum RoostGroup
     Quiet = 3,
 }
 
-/// <summary>A user's manual expand/collapse pin on a pane. <see cref="Auto"/> = no pin; the collapse
-/// resolver decides from status.</summary>
-public enum RoostPin
-{
-    Auto = 0,
-    Expanded = 1,
-    Collapsed = 2,
-}
-
 /// <summary>
 /// One pane in the Roost: the latest snapshot of a session, keyed by <see cref="Key"/> (the process id — stable
 /// across a <c>/clear</c>, which swaps the session id under the same process). An <see cref="Ended"/> pane keeps
 /// its last live snapshot while it lingers.
 /// </summary>
-public sealed record RoostPane(string Key, ClaudeSession Session, RoostGroup Group, RoostPin Pin, DateTime? EndedAt)
+public sealed record RoostPane(string Key, ClaudeSession Session, RoostGroup Group, DateTime? EndedAt)
 {
     /// <summary>True once the session has left the scan (its process exited); the pane lingers greyed.</summary>
     public bool Ended => EndedAt is not null;
@@ -44,9 +35,6 @@ public enum RoostRailSort
 
 /// <summary>A rail heading and its panes, in rail order.</summary>
 public sealed record RoostRailGroup(RoostGroup Group, IReadOnlyList<RoostPane> Panes);
-
-/// <summary>The title-bar summary chips.</summary>
-public readonly record struct RoostCounts(int NeedsYou, int DoneReview, int Working, int Quiet);
 
 /// <summary>
 /// The Roost's session roster (UI-free, unit-tested): folds each monitor scan into a stable pane list plus
@@ -67,7 +55,8 @@ public readonly record struct RoostCounts(int NeedsYou, int DoneReview, int Work
 /// form moves — a close or reopen, and also a prune, a <c>/clear</c> or a seed resolving — so the file on disk
 /// stays pruned too (review fixes CP26).</para>
 ///
-/// <para>Lives in the app (not the window) so pins and order survive closing and reopening the Roost.</para>
+/// <para>Lives in the app (not the window) so the closed set survives closing and reopening the Roost. Where a pane
+/// is shown is the tabs' business (<see cref="RoostTabSet"/>), not the roster's.</para>
 /// </summary>
 public sealed class RoostRoster
 {
@@ -77,16 +66,11 @@ public sealed class RoostRoster
     {
         public required ClaudeSession Session;
         public DateTime? EndedAt;
-        public RoostPin Pin;
     }
 
-    // Insertion-ordered: _order is first-seen (reordered only by Swap / MoveToEnd, or placed by a seeded order),
-    // _entries the state by key.
+    // Insertion-ordered: _order is first-seen (an adoption puts the new key in the ended one's place), _entries
+    // the state by key.
     private readonly List<string> _order = [];
-    // A persisted order's rank (and the session id it was saved under) per key not yet seen, and the ranks of the
-    // keys placed by it.
-    private readonly Dictionary<string, (int Rank, string SessionId)> _seedRank = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, int> _placedRank = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly HashSet<string> _closed = new(StringComparer.Ordinal);
     // Persisted closed tokens not yet matched: pid -> the session id it was closed under. Resolved (or dropped)
@@ -121,8 +105,6 @@ public sealed class RoostRoster
     /// <summary>A persisted sort read back as a real one: a value no build defines falls back to
     /// <see cref="RoostRailSort.Status"/>.</summary>
     public static RoostRailSort Normalize(RoostRailSort sort) => Enum.IsDefined(sort) ? sort : RoostRailSort.Status;
-
-    public RoostCounts Counts { get; private set; }
 
     /// <summary>Panes that entered <see cref="RoostGroup.NeedsYou"/> in the latest <see cref="Update"/> (weren't
     /// in it after the previous one) — a new "needs you" arrival, which flashes an inactive Roost's taskbar.</summary>
@@ -196,50 +178,6 @@ public sealed class RoostRoster
         ClosedChanged?.Invoke();
     }
 
-    /// <summary>Every pane's key in order, closed ones included.</summary>
-    public IReadOnlyList<string> Order => _order;
-
-    /// <summary>The order as it's persisted: one <c>pid/sessionId</c> token per pane, so after a restart a recycled
-    /// pid can't inherit an unrelated session's place (the same rule as <see cref="PersistedClosed"/>).</summary>
-    public IReadOnlyList<string> PersistedOrder =>
-        _order.Select(k => Token(k, _entries[k].Session.SessionId)).ToList();
-
-    /// <summary>Restores a <see cref="PersistedOrder"/>. A pane arriving later takes its place among the panes
-    /// placed by it when its pid and session id both match its token; anything else is appended as usual. Bare
-    /// pids are ignored.</summary>
-    public void SeedOrder(IEnumerable<string> tokens)
-    {
-        int rank = 0;
-        foreach (var t in tokens)
-        {
-            int slash = t.IndexOf('/');
-            if (slash <= 0 || slash == t.Length - 1) continue;
-            _seedRank.TryAdd(t[..slash], (rank++, t[(slash + 1)..]));
-        }
-        if (_order.Count == 0) return;
-        // Panes already here: the saved ones first, in the saved order, then the rest as they were.
-        var ranks = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var k in _order)
-            if (_seedRank.Remove(k, out var seed) && seed.SessionId == _entries[k].Session.SessionId) ranks[k] = seed.Rank;
-        var sorted = _order.OrderBy(k => ranks.TryGetValue(k, out var r) ? r : int.MaxValue).ToList();
-        _order.Clear();
-        foreach (var k in sorted)
-        {
-            if (ranks.TryGetValue(k, out var r)) _placedRank[k] = r;
-            _order.Add(k);
-        }
-        Rebuild();
-    }
-
-    // Appends a key, or with a matching seeded rank inserts it before the first key placed with a later rank.
-    private void Place(string key, string sessionId)
-    {
-        if (!_seedRank.Remove(key, out var seed) || seed.SessionId != sessionId) { _order.Add(key); return; }
-        _placedRank[key] = seed.Rank;
-        int at = _order.FindIndex(k => _placedRank.TryGetValue(k, out var r) && r > seed.Rank);
-        _order.Insert(at < 0 ? _order.Count : at, key);
-    }
-
     /// <summary>Folds a scan into the roster. <paramref name="now"/> ages lingering ended panes.</summary>
     public void Update(IReadOnlyList<ClaudeSession> live, DateTime now)
     {
@@ -255,7 +193,7 @@ public sealed class RoostRoster
             else
             {
                 _entries[s.Pid] = new Entry { Session = s };
-                Place(s.Pid, s.SessionId);
+                _order.Add(s.Pid);
             }
         }
 
@@ -277,7 +215,6 @@ public sealed class RoostRoster
             {
                 _entries.Remove(key);
                 _order.RemoveAt(i);
-                _placedRank.Remove(key);
             }
         }
 
@@ -293,7 +230,7 @@ public sealed class RoostRoster
     // The same conversation continuing under a new process — "Take over in Perch" (the terminal process stops,
     // Perch resumes the session id), or any `claude --resume` of a session whose pane is still lingering — takes
     // over the ended pane's slot rather than appending a second pane at the end: the live process moves into the
-    // ended one's position (inheriting its pin unless it has its own) and the ended pane goes.
+    // ended one's position and the ended pane goes (the tabs follow it through Adopted).
     private void AdoptContinuations()
     {
         for (int i = 0; i < _order.Count; i++)
@@ -305,8 +242,6 @@ public sealed class RoostRoster
                                           && live.Session.SessionId == ended.Session.SessionId);
             if (j < 0) continue;
             var liveKey = _order[j];
-            var live = _entries[liveKey];
-            if (live.Pin == RoostPin.Auto) live.Pin = ended.Pin;
             _order[i] = liveKey;
             _order.RemoveAt(j);
             _entries.Remove(endedKey);
@@ -332,31 +267,6 @@ public sealed class RoostRoster
         Rebuild();
         RaiseIfClosedChanged();
         return true;
-    }
-
-    /// <summary>Sets (or, with <see cref="RoostPin.Auto"/>, clears) a pane's manual collapse pin.</summary>
-    public void SetPin(string key, RoostPin pin)
-    {
-        if (!_entries.TryGetValue(key, out var e) || e.Pin == pin) return;
-        e.Pin = pin;
-        Rebuild();
-    }
-
-    /// <summary>Swaps two panes' places in the order (the snap flyout putting a pane in a chosen cell).</summary>
-    public void Swap(string a, string b)
-    {
-        int i = _order.IndexOf(a), j = _order.IndexOf(b);
-        if (i < 0 || j < 0 || i == j) return;
-        (_order[i], _order[j]) = (_order[j], _order[i]);
-        Rebuild();
-    }
-
-    /// <summary>Moves a pane to the end of the order.</summary>
-    public void MoveToEnd(string key)
-    {
-        if (!_order.Remove(key)) return;
-        _order.Add(key);
-        Rebuild();
     }
 
     /// <summary>The visible pane with <paramref name="key"/>, or null.</summary>
@@ -396,7 +306,7 @@ public sealed class RoostRoster
         foreach (var key in _order)
         {
             var e = _entries[key];
-            var pane = new RoostPane(key, e.Session, GroupFor(e.Session.Status, e.EndedAt is not null), e.Pin, e.EndedAt);
+            var pane = new RoostPane(key, e.Session, GroupFor(e.Session.Status, e.EndedAt is not null), e.EndedAt);
             (_closed.Contains(key) ? closed : panes).Add(pane);
         }
         _panes = panes;
@@ -420,11 +330,5 @@ public sealed class RoostRoster
         // OrderBy is stable, so equal names keep first-seen order.
         RailAlphabetical = panes.OrderBy(p => p.Ended)
             .ThenBy(p => p.Session.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
-
-        Counts = new RoostCounts(
-            rail[(int)RoostGroup.NeedsYou].Panes.Count,
-            rail[(int)RoostGroup.DoneReview].Panes.Count,
-            rail[(int)RoostGroup.Working].Panes.Count,
-            rail[(int)RoostGroup.Quiet].Panes.Count);
     }
 }

@@ -498,7 +498,7 @@ internal sealed class RoostWindow : Window
             view.CanTakeOver = !pane.Ended && CanTakeOver?.Invoke(pane.Session) == true;
             view.Update(pane, _feeds[pane.Key]);
             view.SetFocused(pane.Key == _focused);
-            if (_placed.TryGetValue(pane.Key, out var size)) view.SetSize(size, held: false);
+            if (_placed.TryGetValue(pane.Key, out var size)) view.SetSize(size);
             else if (!_warm.Contains(pane.Key)) view.Park();   // a warm pane keeps its thread, hidden
         }
 

@@ -78,7 +78,7 @@ internal sealed class SessionPane : Border
     private SessionThreadView? _thread;
     private SessionConversation? _boundConversation;
     private RoostPaneSize _size = RoostPaneSize.Collapsed;
-    private bool _held, _focused, _parked = true;
+    private bool _focused, _parked = true;
 
     public SessionPane(SessionPalette palette, string key)
     {
@@ -291,13 +291,12 @@ internal sealed class SessionPane : Border
         RefreshBody();
     }
 
-    /// <summary>Sets the resolved size. <paramref name="held"/> = wants to expand but is held collapsed (it pulses).</summary>
-    public void SetSize(RoostPaneSize size, bool held)
+    /// <summary>Sets the pane's size (a placed pane is expanded).</summary>
+    public void SetSize(RoostPaneSize size)
     {
-        bool changed = _parked || size != _size || held != _held;   // back from parked = body is stale
+        bool changed = _parked || size != _size;   // back from parked = body is stale
         _parked = false;
         _size = size;
-        _held = held;
         if (!changed) return;
         RefreshChrome();
         RefreshBody();
@@ -322,8 +321,8 @@ internal sealed class SessionPane : Border
         DropThread();
     }
 
-    /// <summary>True when this pane is animating its ring (needs-you, or held from expanding).</summary>
-    public bool Pulsing => _pane is { Ended: false } p && (_held || p.Session.Status == SessionStatus.AwaitingInput);
+    /// <summary>True when this pane is animating its ring (it needs the user).</summary>
+    public bool Pulsing => _pane is { Ended: false } p && p.Session.Status == SessionStatus.AwaitingInput;
 
     /// <summary>One pulse frame: <paramref name="intensity"/> 0..1 breathes the glow around the ring.</summary>
     public void PulseTick(double intensity, bool reduceMotion)
@@ -419,14 +418,7 @@ internal sealed class SessionPane : Border
         _ => _p.Idle,
     };
 
-    private Color RingColor()
-    {
-        if (_pane is not { } pane) return Colors.Transparent;
-        var brush = _held && pane.Group != RoostGroup.NeedsYou && pane.Group != RoostGroup.DoneReview
-            ? _p.Await
-            : DotBrush(pane);
-        return ((ISolidColorBrush)brush).Color;
-    }
+    private Color RingColor() => _pane is { } pane ? ((ISolidColorBrush)DotBrush(pane)).Color : Colors.Transparent;
 
     private static BoxShadows Ring(Color c, double spread, double glow, double glowAlpha)
     {
@@ -448,7 +440,6 @@ internal sealed class SessionPane : Border
         {
             SessionStatus.AwaitingInput or SessionStatus.ApiError => Ring(RingColor(), 2, 0, 0),
             SessionStatus.NeedsAttention => Ring(RingColor(), 1.5, 0, 0),
-            _ when _held => Ring(RingColor(), 1.5, 0, 0),
             _ => default,
         };
         BorderBrush = _focused ? _p.BrandLine : _p.Border;
