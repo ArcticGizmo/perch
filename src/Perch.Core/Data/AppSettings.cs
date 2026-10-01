@@ -159,6 +159,15 @@ internal sealed class AppSettings
     // its header. Toggled by the section's own chevron. Defaults to expanded.
     public bool HypertreeExpanded { get; set; } = true;
 
+    // The Roost window's layout (Tiled / Main + stack / Zoom), picked by its title-bar toggle. UI state, not a
+    // Settings-window control. See docs/roost-plan.md.
+    public Roost.RoostLayoutMode RoostLayout { get; set; } = Roost.RoostLayoutMode.Tiled;
+
+    // The Roost panes the user closed (by session process id), so they stay hidden across restarts while their
+    // session lives; pruned to live sessions as the roster runs. UI state, not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? RoostClosedPanes { get; set; }
+
     // Per-account collapse state for the usage strip: an account renders as full stacked bars or a compact
     // chip. The default follows activity (active account → bars, known-but-idle account → chip); this map
     // holds only the accounts the user has explicitly toggled, keyed by org UUID (or the config-dir path
@@ -226,6 +235,11 @@ internal sealed class AppSettings
     // artifacts. Off hides the glyph (the row click just focuses the terminal) and lets the session name
     // reclaim its width; the artifacts are still tracked. Defaults to true; a missing key keeps it on.
     public bool ShowArtifacts { get; set; } = true;
+
+    // Whether the overlay's "+ New session" row carries the right-aligned split-panes button that opens the
+    // Roost (every session side by side — docs/roost-plan.md). The Roost stays reachable from the tray menu and
+    // its hotkey either way. Defaults to true.
+    public bool ShowRoostButton { get; set; } = true;
 
     // Whether to draw the Markdown glyph next to a session that has produced (written/edited) one or more
     // .md files. Purely the glyph: the "Markdown files..." right-click item is always available regardless.
@@ -579,6 +593,9 @@ internal sealed class AppSettings
     public HotkeyBinding HotkeyOpenSwitcher { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, ' ');
     //  • Docked — collapse/expand the docked column (Ctrl+Shift+W). Only fires anything in Docked mode.
     public HotkeyBinding HotkeyToggleDocked { get; set; } = new(HotkeyModifiers.Control | HotkeyModifiers.Shift, 'W');
+    //  • Roost — open/focus the Roost, every session side by side (Alt+Shift+R). The dense strip has no
+    //    "+ New session" row, so this (and the tray menu) is how it's reached there.
+    public HotkeyBinding HotkeyOpenRoost { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 'R');
 
     // Which terminal the session switcher launches when reopening a closed session (`claude --resume <id>`
     // in its working directory). Auto picks the best available (Windows Terminal, else Command Prompt); an

@@ -28,6 +28,10 @@ public class SettingsRegistryTests
         // chevron on the overlay, not Settings-window controls.
         nameof(AppSettings.TodosExpanded),
         nameof(AppSettings.HypertreeExpanded),
+        // The Roost's layout is picked by the Roost window's own title-bar toggle.
+        nameof(AppSettings.RoostLayout),
+        // …and the panes closed from a pane's own menu (reopened from its "N hidden" chip).
+        nameof(AppSettings.RoostClosedPanes),
         // The usage strip's per-account collapse overrides, toggled by clicking an account on the overlay —
         // not a Settings-window control.
         nameof(AppSettings.UsageAccountCollapsed),
@@ -77,6 +81,7 @@ public class SettingsRegistryTests
         nameof(AppSettings.HotkeyCycleSessions),
         nameof(AppSettings.HotkeyOpenSwitcher),
         nameof(AppSettings.HotkeyToggleDocked),
+        nameof(AppSettings.HotkeyOpenRoost),
         nameof(AppSettings.ReopenTerminal),
     };
 

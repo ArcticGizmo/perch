@@ -1185,6 +1185,12 @@ internal sealed class SettingsWindow : Window
             "Active sessions jump to their terminal; recently-closed ones reopen in a fresh one (Ctrl+Enter " +
             "copies the claude --resume command instead). Esc or clicking away dismisses it.");
 
+        page.Children.Add(SettingsUi.Separator());
+
+        AddHotkeyRow(page, "Open the Roost", _settings.HotkeyOpenRoost,
+            "Opens the Roost — every live session side by side, with the ones that need you drawn to the eye. " +
+            "The way in from the dense strip, which has no + New session row.");
+
 #if WINDOWS
         page.Children.Add(SettingsUi.Separator());
         BuildReopenTerminalSection(page);

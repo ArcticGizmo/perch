@@ -64,6 +64,7 @@ internal enum PreviewTarget
     PerchReacts,
     FeedStrip,
     ConfigDirLabel,
+    RoostButton,
 }
 
 /// <summary>
