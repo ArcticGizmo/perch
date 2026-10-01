@@ -160,6 +160,50 @@ internal static class SettingsUi
         btn.FontWeight = selected ? FontWeight.Bold : FontWeight.Normal;
     }
 
+    // The "star Perch on GitHub" pill (About page + the post-update changelog). Meant to catch the eye without
+    // shouting: an outlined gold pill with a faint gold wash and a gold ★, brightening on hover — never a solid
+    // fill, so it stays secondary to a window's accent-filled primary button. Left-click opens the repo;
+    // middle-click forces a fresh browser window, as LinkRow does.
+    public static Control StarOnGitHub(string label = "Star Perch on GitHub")
+    {
+        static IBrush Gold(byte alpha) => new SolidColorBrush(Color.FromArgb(alpha, Palette.Yellow.R, Palette.Yellow.G, Palette.Yellow.B));
+
+        var pill = new Border
+        {
+            CornerRadius = new CornerRadius(999), Padding = new Thickness(12, 5, 14, 5),
+            BorderThickness = new Thickness(1), BorderBrush = Gold(140), Background = Gold(22),
+            HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            [ToolTip.TipProperty] = "Enjoying Perch? A star helps other people find it.",
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 6,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "★", FontSize = 14, Foreground = new SolidColorBrush(Palette.Yellow),
+                        VerticalAlignment = VerticalAlignment.Center,
+                    },
+                    new TextBlock
+                    {
+                        Text = label, FontSize = 12.5, FontWeight = FontWeight.SemiBold, Foreground = Palette.FgBrush,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    },
+                },
+            },
+        };
+        // Re-read the hue on each hover so a theme swap while the window is open still lands.
+        pill.PointerEntered += (_, _) => { pill.Background = Gold(48); pill.BorderBrush = Gold(255); };
+        pill.PointerExited += (_, _) => { pill.Background = Gold(22); pill.BorderBrush = Gold(140); };
+        pill.PointerReleased += (_, e) =>
+        {
+            if (e.InitialPressMouseButton == MouseButton.Middle) PlatformServices.UrlOpener.OpenInNewWindow(AppInfo.RepoUrl);
+            else if (e.InitialPressMouseButton == MouseButton.Left) PlatformServices.UrlOpener.Open(AppInfo.RepoUrl);
+        };
+        return pill;
+    }
+
     // A horizontal row of buttons (LeftToRight, small gap), for the action rows on each page.
     public static StackPanel ButtonRow() => new()
     {

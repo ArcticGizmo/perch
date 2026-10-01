@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.1] - 2026-10-01
+
+- If you like Perch, a star on GitHub would be swell!
+- A "Star Perch on GitHub" button in About and this very window (no pressure)
+
+---
+
 ## [v0.5.0] - 2026-09-30
 
 - A broad security and privacy hardening pass, app and friends backend (details withheld, on purpose)
