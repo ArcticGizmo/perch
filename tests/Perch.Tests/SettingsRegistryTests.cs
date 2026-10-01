@@ -36,6 +36,8 @@ public class SettingsRegistryTests
         nameof(AppSettings.RoostRailSort),
         // …and its tabs, managed in the Roost's tab strip.
         nameof(AppSettings.RoostTabs),
+        // …and the layouts saved from its tab painter.
+        nameof(AppSettings.RoostSavedLayouts),
         // …and the panes closed from a pane's own menu (reopened from its "N hidden" chip).
         nameof(AppSettings.RoostClosedPanes),
         // The usage strip's per-account collapse overrides, toggled by clicking an account on the overlay —

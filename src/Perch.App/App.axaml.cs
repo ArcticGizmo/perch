@@ -75,6 +75,7 @@ public partial class App : Application
     private readonly Perch.Data.Roost.RoostRoster _roostRoster = new();
     // …and so are its tabs (docs/roost-tabs-plan.md), saved (debounced) whenever their persisted form moves.
     private readonly Perch.Data.Roost.RoostTabSet _roostTabs = new();
+    private readonly Perch.Data.Roost.RoostLayoutLibrary _roostLayouts = new();
     private DispatcherTimer? _roostTabsSave;
     private RoostWindow? _roostWindow;
     private GitTreeWindow? _treeWindow;
@@ -211,6 +212,14 @@ public partial class App : Application
                 s.Save();
             };
             _roostTabs.Changed += () => { _roostTabsSave.Stop(); _roostTabsSave.Start(); };
+            // Saved painter layouts change only on an explicit save / rename / delete, so they're written at once.
+            _roostLayouts.Seed(settings.RoostSavedLayouts);
+            _roostLayouts.Changed += () =>
+            {
+                if (_appSettings is not { } s) return;
+                s.RoostSavedLayouts = _roostLayouts.ToState();
+                s.Save();
+            };
 
             // Seed the user-defined initial placements before the window is shown (OnOpened applies the
             // floating one; the dense one is used on first dense entry). Null on either keeps the default.
@@ -1635,7 +1644,7 @@ public partial class App : Application
                 if (_appSettings is { RoostTabs: null } && _roostTabs.Tabs.Count == 0)
                     _roostTabs.CreateDefault(_roostRoster.Panes, aspect: 1.6);
                 var w = new RoostWindow(_roostRoster, _roostTabs, CreateRoostFeed,
-                    railSort: _appSettings?.RoostRailSort ?? default);
+                    railSort: _appSettings?.RoostRailSort ?? default, layouts: _roostLayouts);
                 // A prompt that was only "seen" in the Roost gets its toast once the user looks away from it.
                 w.Deactivated += (_, _) =>
                 {

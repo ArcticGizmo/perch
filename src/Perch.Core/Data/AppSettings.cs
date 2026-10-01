@@ -177,6 +177,11 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Roost.RoostTabsState? RoostTabs { get; set; }
 
+    // The layouts saved from the Roost's tab painter (RoostLayoutLibrary.ToState), listed after the built-in
+    // presets. Null = none. UI state. See docs/roost-tabs-plan.md.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<Roost.RoostSavedLayout>? RoostSavedLayouts { get; set; }
+
     // The Roost's pane order as "pid/sessionId" tokens (RoostRoster.PersistedOrder), rearranged by dragging pane
     // headers, so it survives a restart while the sessions run — and a recycled pid never inherits a place.
     public List<string>? RoostOrder { get; set; }

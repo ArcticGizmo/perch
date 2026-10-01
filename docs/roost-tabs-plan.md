@@ -314,6 +314,31 @@ passes, `render <dir>` is eyeballed for the Roost shots, and there's one commit 
 - The rail tab tags and the active-tab left bar were already in T4.
 - Render shots: `roost_tabs_{lights,rename,menu,droptab,droptab_done,reorder,reordered,hoverswitch,hoverswitch_done}_1x`.
 
+### T6: Layout painter + saved layouts ✅
+*As built:*
+- **Entry**: "Edit layout…" in a tab's right-click menu (not on Focus). `Views/RoostLayoutPainter` covers the
+  stage. The canvas draws the layout at the stage's real aspect, captured when the painter opens. Switching
+  tabs cancels the edit, and so does closing the tab.
+- **Canvas** (`RoostPaintCanvas`, owner-drawn): each region shows its session's name (or "empty") and its
+  Alt+N chord. Hovering a region shows three buttons: split side by side, split top and bottom, and remove.
+  An edit that isn't allowed is dimmed, and its tooltip says why. Every divider has a grip. Dragging one snaps
+  to the 12-unit grid, shows the unit lines on top of the regions, and stops at the last valid line
+  (`MoveDivider` from the layout the drag started on, clamped).
+- **New region ids only ever grow** during an edit. `Split` now takes the new region's id, so a region you
+  removed, whose session goes back to the rail, can't have that session come back on a later split.
+- **Presets and saved layouts** are mapped onto the layout the edit *began* with (`AdoptIds(original)`). So
+  trying one preset and then another doesn't drop sessions along the way. A row lights up when the working
+  copy's `GeometryKey` matches it.
+- **Saved layouts**: `RoostLayoutLibrary` (Core, tested) is app-owned and persisted to
+  `AppSettings.RoostSavedLayouts` on each change. Names are unique ignoring case, so saving under a taken name
+  replaces that layout (the button reads "Replace"). There's a cap of 24. Right-click a saved row to rename it
+  in place or delete it.
+- **Footer**: `N / 8 regions`, a hint, then Cancel and Done. Esc is Cancel and Enter is Done. The painter takes
+  keyboard focus when it opens, so a hidden pane's composer or permission card never gets that Enter.
+- Fixed along the way: the empty-region chord on the stage counted regions in creation order, but Alt+N goes
+  by reading order.
+- Render shots: `roost_painter{,_hover,_drag,_refused,_saved}_1x`, `roost_tabs_painted_1x`.
+
 ### T1 / T2 / T3 original scope
 - `RoostRailSort` + `RoostRoster.RailFor`, a header toggle in the rail, the persisted `RoostRailSort`, and
   the row rebuild signature including the sort.

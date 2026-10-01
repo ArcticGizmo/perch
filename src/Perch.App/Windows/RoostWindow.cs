@@ -39,6 +39,9 @@ internal sealed class RoostWindow : Window
 
     private readonly RoostRoster _roster;
     private readonly RoostTabSet _tabs;
+    private readonly RoostLayoutLibrary _layouts;
+    // The layout painter, while a tab's layout is being edited (it covers the stage), or null.
+    private RoostLayoutPainter? _painter;
     private readonly Func<RoostPane, RoostFeed?> _feedFactory;
     private readonly SessionPalette _p;
 
@@ -98,10 +101,11 @@ internal sealed class RoostWindow : Window
     private RoostPlacement? _newSessionTarget;
 
     public RoostWindow(RoostRoster roster, RoostTabSet tabs, Func<RoostPane, RoostFeed?> feedFactory,
-        SessionPalette? palette = null, RoostRailSort railSort = RoostRailSort.Status)
+        SessionPalette? palette = null, RoostRailSort railSort = RoostRailSort.Status, RoostLayoutLibrary? layouts = null)
     {
         _roster = roster;
         _tabs = tabs;
+        _layouts = layouts ?? new RoostLayoutLibrary();
         _feedFactory = feedFactory;
         _p = palette ?? SessionPalette.Current;
         _railSort = RoostRoster.Normalize(railSort);
@@ -477,6 +481,8 @@ internal sealed class RoostWindow : Window
     {
         var all = _roster.Panes;
         _tabs.Sync(all);   // a close / reopen from this window (the app feeds adoptions with each scan)
+        // The painter edits the active tab only: switching away (or the tab closing) cancels the edit.
+        if (_painter is { } painter && painter.TabId != _tabs.ActiveId) ClosePainter(null, refresh: false);
         SyncFeedsAndViews(all);
         AdmitStartedSession(all);
         // Focus is always in the active tab: a tab switch, a close, or a pane leaving (dropped on another tab,
@@ -557,6 +563,8 @@ internal sealed class RoostWindow : Window
     private void RefreshCells(IReadOnlyList<RoostPane> all)
     {
         var tab = _tabs.Active;
+        // Alt+N counts regions in reading order (as the key handler does), not in slot (creation) order.
+        var reading = tab.Layout.ReadingOrder.Select(r => r.Id).ToList();
         for (int slot = 0; slot < _slotRegions.Count; slot++)
         {
             bool empty = tab.At(_slotRegions[slot]) is null;
@@ -568,7 +576,7 @@ internal sealed class RoostWindow : Window
                     ? ("No live sessions", "Sessions appear in the rail as soon as they start — or start one with + New session.")
                     : ("Focus", "Click a session in the rail to look at it here.")
                 : ("Empty region", "Drop a session here, or click to pick one.");
-            cell.Chord.Text = tab.IsFocus ? "" : RoostKeys.ChordFor(RoostCommand.Region, slot + 1) ?? "";
+            cell.Chord.Text = tab.IsFocus ? "" : RoostKeys.ChordFor(RoostCommand.Region, reading.IndexOf(_slotRegions[slot]) + 1) ?? "";
             cell.Host.Cursor = tab.IsFocus ? Cursor.Default : new Cursor(StandardCursorType.Hand);
         }
     }
@@ -725,6 +733,15 @@ internal sealed class RoostWindow : Window
     {
         if (e.Handled || e.KeyModifiers != KeyModifiers.None) return;
         if (e.Key == Key.Escape && _ghost is not null) { EndDrag(drop: false); e.Handled = true; return; }
+        // The painter takes Esc (Cancel) and Enter (Done) — and Enter must never reach a pane it covers, where it
+        // would allow a permission the user can't see.
+        if (_painter is { } painter && e.Key is Key.Escape or Key.Enter)
+        {
+            if (e.Key == Key.Escape) painter.Cancel();
+            else painter.Done();
+            e.Handled = true;
+            return;
+        }
         if (e.Key is Key.Enter or Key.Escape) e.Handled = FocusedPerchKey(e.Key);
         if (!e.Handled && e.Key == Key.Escape && _tabs.Active.Zoomed is not null)
         {
@@ -923,11 +940,13 @@ internal sealed class RoostWindow : Window
     {
         var rename = new MenuItem { Header = "Rename", InputGesture = new KeyGesture(Key.F2) };
         rename.Click += (_, _) => BeginRename(id);
+        var edit = new MenuItem { Header = "Edit layout…" };
+        edit.Click += (_, _) => EditLayout(id);
         var duplicate = new MenuItem { Header = "Duplicate" };
         duplicate.Click += (_, _) => { if (_tabs.DuplicateTab(id) is { } copy) ActivateTab(copy.Id); };
         var close = new MenuItem { Header = "Close tab" };
         close.Click += (_, _) => CloseTab(id);
-        var menu = new MenuFlyout { Items = { rename, duplicate, new Separator(), close } };
+        var menu = new MenuFlyout { Items = { rename, edit, duplicate, new Separator(), close } };
         // Duplicate needs room for one more tab.
         menu.Opening += (_, _) => duplicate.IsEnabled = _tabs.Tabs.Count < RoostTabSet.MaxTabs;
         return menu;
@@ -984,6 +1003,46 @@ internal sealed class RoostWindow : Window
     {
         if (_renaming == id) EndRename(commit: false);
         if (_tabs.CloseTab(id)) Refresh();
+    }
+
+    // ── Layout painter ────────────────────────────────────────────────────────
+
+    /// <summary>Opens the painter on a tab (its menu's "Edit layout…"): it covers the stage, at the stage's shape,
+    /// until Done applies the new layout (sessions follow their regions; ones whose region went go back to the rail)
+    /// or Cancel / Esc puts the old one back. Switching tabs cancels it.</summary>
+    private void EditLayout(string id)
+    {
+        if (id == RoostTabSet.FocusId || _tabs.Find(id) is not { } tab) return;
+        ClosePainter(null, refresh: false);
+        ActivateTab(id);
+        double aspect = _stage.Bounds.Height > 0 ? _stage.Bounds.Width / _stage.Bounds.Height : 1.6;
+        var painter = new RoostLayoutPainter(_p, tab, _layouts,
+            region => tab.At(region) is { } key ? _roster.Find(key)?.Session.DisplayName ?? key : null, aspect);
+        painter.Finished += layout => ClosePainter(layout, refresh: true);
+        _painter = painter;
+        _grid.IsVisible = false;
+        _stage.Children.Add(painter);
+        // Focus out of whatever pane had it — a hidden composer must not take the Enter meant for Done.
+        painter.Focusable = true;
+        painter.Focus();
+    }
+
+    // Takes the painter down, applying <paramref name="layout"/> to its tab (null = cancelled).
+    private void ClosePainter(RoostGridLayout? layout, bool refresh)
+    {
+        if (_painter is not { } painter) return;
+        _painter = null;
+        _stage.Children.Remove(painter);
+        _grid.IsVisible = true;
+        if (layout is not null) _tabs.ApplyLayout(painter.TabId, layout);
+        if (refresh) Refresh();
+    }
+
+    /// <summary>HeadlessRenderer hook: open the painter on a tab.</summary>
+    internal RoostLayoutPainter? EditLayoutForRender(string id)
+    {
+        EditLayout(id);
+        return _painter;
     }
 
     private Border NewTabButton()
@@ -1534,7 +1593,7 @@ internal sealed class RoostWindow : Window
         _dropTab = TabAt(at);
         if (_tabPress is { } tp && _dropTab == tp.TabId) _dropTab = null;
         if (_dropTab is { } tabId) MarkDrop(_tabViews[tabId].Button);
-        else if (_press is not null)
+        else if (_press is not null && _painter is null)   // the painter covers the regions
             for (int i = 0; i < _slotRegions.Count; i++)
             {
                 var host = _cells[i].Host;

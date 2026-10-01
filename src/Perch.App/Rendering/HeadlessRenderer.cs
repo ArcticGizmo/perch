@@ -1716,6 +1716,36 @@ internal static class HeadlessRenderer
         Capture("roost_tabs_hoverswitch_1x.png");
         w.DropForRender();
         Capture("roost_tabs_hoverswitch_done_1x.png");
+
+        // T6: the painter on Main (two columns: perch | extension) — the preset strip lights "Two columns".
+        void Pump() { for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); } }
+        var painter = w.EditLayoutForRender(main.Id)!;
+        Capture("roost_painter_1x.png");
+        // Hovering the right region's "split top and bottom", then clicking it: three regions, the new one empty.
+        painter.HoverForRender(1, Views.RoostPaintButton.SplitRows);
+        Capture("roost_painter_hover_1x.png");
+        painter.ClickForRender(1, Views.RoostPaintButton.SplitRows);
+        Pump();
+        // The middle divider mid-drag to 8/12: the unit gridlines show and the regions follow.
+        painter.DragForRender(painter.Working.Dividers.First(d => d.Axis == Perch.Data.Roost.RoostAxis.Vertical), 8, release: false);
+        Capture("roost_painter_drag_1x.png");
+        painter.DragForRender(painter.Working.Dividers.First(d => d.Axis == Perch.Data.Roost.RoostAxis.Vertical), 8, release: true);
+        // A pinwheel: no region shares a whole side with a neighbour, so × is refused (dimmed) everywhere.
+        var pinwheel = Perch.Data.Roost.RoostGridLayout.Create(
+        [
+            new(0, 0, 0, 4, 8), new(1, 0, 8, 8, 4), new(2, 8, 4, 4, 8), new(3, 4, 0, 8, 4), new(4, 4, 4, 4, 4),
+        ])!;
+        painter.UseForRender(pinwheel);
+        Pump();
+        painter.HoverForRender(painter.Working.ReadingOrder[3].Id, Views.RoostPaintButton.Remove);
+        Capture("roost_painter_refused_1x.png");
+        // Saved as "Pinwheel": it joins the strip's saved list, lit as the current layout.
+        painter.TypeSaveNameForRender("Pinwheel");
+        painter.SaveForRender();
+        Capture("roost_painter_saved_1x.png");
+        // Done: Main takes the pinwheel; perch and extension keep the first two reading positions.
+        painter.Done();
+        Capture("roost_tabs_painted_1x.png");
         w.Close();
     }
 

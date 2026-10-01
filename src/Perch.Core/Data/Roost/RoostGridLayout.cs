@@ -67,6 +67,15 @@ public sealed class RoostGridLayout
     /// <summary>A key that changes whenever the geometry or the ids do.</summary>
     public string Signature { get; }
 
+    /// <summary>A key for the geometry alone (ids ignored): two layouts with the same key look the same — how the
+    /// painter tells which preset or saved layout a tab currently is.</summary>
+    public string GeometryKey => _geometryKey ??= string.Join(";", ReadingOrder.Select(r => $"{r.Row}.{r.Column}.{r.RowSpan}.{r.ColumnSpan}"));
+
+    private string? _geometryKey;
+
+    /// <summary>The highest region id in use.</summary>
+    public int MaxId => _regions.Max(r => r.Id);
+
     public RoostRegion? Find(int id) => Array.FindIndex(_regions, r => r.Id == id) is var i and >= 0 ? _regions[i] : null;
 
     /// <summary>A layout from persisted (or otherwise untrusted) regions, or null when they don't form a valid one.</summary>
@@ -111,19 +120,22 @@ public sealed class RoostGridLayout
 
     /// <summary>
     /// Cuts region <paramref name="id"/> in two at the unit line nearest its middle. The region keeps its id on the
-    /// left (or top) half; the other half gets a new id. Null when a half would fall under <see cref="MinSpan"/> or
-    /// the layout already has <see cref="MaxRegions"/>.
+    /// left (or top) half; the other half gets <paramref name="newId"/> (by default one past the highest id — the
+    /// painter passes its own, so an id it removed earlier, whose session went back to the rail, is never reused).
+    /// Null when a half would fall under <see cref="MinSpan"/>, the layout already has <see cref="MaxRegions"/>, or
+    /// <paramref name="newId"/> is taken.
     /// </summary>
-    public RoostGridLayout? Split(int id, RoostSplit how)
+    public RoostGridLayout? Split(int id, RoostSplit how, int? newId = null)
     {
         if (_regions.Length >= MaxRegions || Find(id) is not { } r) return null;
         int span = how == RoostSplit.Columns ? r.ColumnSpan : r.RowSpan;
         int first = span / 2, second = span - first;
         if (first < MinSpan || second < MinSpan) return null;
-        int newId = _regions.Max(x => x.Id) + 1;
+        newId ??= _regions.Max(x => x.Id) + 1;
+        if (Find(newId.Value) is not null) return null;
         var (a, b) = how == RoostSplit.Columns
-            ? (r with { ColumnSpan = first }, new RoostRegion(newId, r.Row, r.Column + first, r.RowSpan, second))
-            : (r with { RowSpan = first }, new RoostRegion(newId, r.Row + first, r.Column, second, r.ColumnSpan));
+            ? (r with { ColumnSpan = first }, new RoostRegion(newId.Value, r.Row, r.Column + first, r.RowSpan, second))
+            : (r with { RowSpan = first }, new RoostRegion(newId.Value, r.Row + first, r.Column, second, r.ColumnSpan));
         return With(_regions.Select(x => x.Id == id ? a : x).Append(b));
     }
 
