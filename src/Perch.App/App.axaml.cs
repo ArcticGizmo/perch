@@ -73,6 +73,9 @@ public partial class App : Application
     // The Roost (docs/roost-plan.md): its roster is app-owned and fed every scan, so pane order and pins
     // survive closing the window; the window (and its per-pane feeds) exists only while it's open.
     private readonly Perch.Data.Roost.RoostRoster _roostRoster = new();
+    // …and so are its tabs (docs/roost-tabs-plan.md), saved (debounced) whenever their persisted form moves.
+    private readonly Perch.Data.Roost.RoostTabSet _roostTabs = new();
+    private DispatcherTimer? _roostTabsSave;
     private RoostWindow? _roostWindow;
     private GitTreeWindow? _treeWindow;
     private MarkdownWindow? _markdownWindow;
@@ -197,6 +200,17 @@ public partial class App : Application
                 s.RoostClosedPanes = closed.Count > 0 ? closed.ToList() : null;
                 s.Save();
             };
+            _roostTabs.Seed(settings.RoostTabs);
+            // A drag or a tab switch moves the saved tabs; coalesce a burst of them into one write.
+            _roostTabsSave = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+            _roostTabsSave.Tick += (_, _) =>
+            {
+                _roostTabsSave.Stop();
+                if (_appSettings is not { } s) return;
+                s.RoostTabs = _roostTabs.ToState();
+                s.Save();
+            };
+            _roostTabs.Changed += () => { _roostTabsSave.Stop(); _roostTabsSave.Start(); };
 
             // Seed the user-defined initial placements before the window is shown (OnOpened applies the
             // floating one; the dense one is used on first dense entry). Null on either keeps the default.
@@ -644,6 +658,7 @@ public partial class App : Application
         _onboardingWindow?.Close();
         _historyWindow?.Close();
         _roostWindow?.Close();
+        FlushRoostTabs();
         _treeWindow?.Close();
         _markdownWindow?.CloseWithoutPrompt();
         _placementEditor?.Close();
@@ -1562,6 +1577,8 @@ public partial class App : Application
     private void UpdateRoost(IReadOnlyList<ClaudeSession> sessions)
     {
         _roostRoster.Update(sessions.Where(s => !s.IsBackground).ToList(), Clock.Now);
+        // Before the window's own sync: a take-over re-keys a pane, and its region must follow the new key.
+        _roostTabs.Sync(_roostRoster.Panes, _roostRoster.Adopted);
         _roostWindow?.RosterChanged();
         ReplayRoostSuppressed();
     }
@@ -1613,9 +1630,11 @@ public partial class App : Application
         _roostWindow = WindowHost.ShowOrFocus(_roostWindow,
             () =>
             {
-                var w = new RoostWindow(_roostRoster, CreateRoostFeed,
-                    layout: Perch.Data.Roost.RoostLayout.Normalize(_appSettings?.RoostLayout ?? default),
-                    layoutByCount: _appSettings?.RoostLayoutByCount,
+                // First run (D8): nothing was ever saved, so start the user off with a "Main" tab holding the
+                // live sessions. Once tabs have been saved — even all closed — this never fires again.
+                if (_appSettings is { RoostTabs: null } && _roostTabs.Tabs.Count == 0)
+                    _roostTabs.CreateDefault(_roostRoster.Panes, aspect: 1.6);
+                var w = new RoostWindow(_roostRoster, _roostTabs, CreateRoostFeed,
                     railSort: _appSettings?.RoostRailSort ?? default);
                 // A prompt that was only "seen" in the Roost gets its toast once the user looks away from it.
                 w.Deactivated += (_, _) =>
@@ -1627,15 +1646,7 @@ public partial class App : Application
                 w.NewSessionRequested += OpenSessionWindow;
                 w.OpenSessionRequested += FocusSession;
                 w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
-                w.LayoutChanged += mode => { if (_appSettings is { } s) { s.RoostLayout = mode; s.Save(); } };
                 w.RailSortChanged += sort => { if (_appSettings is { } s) { s.RoostRailSort = sort; s.Save(); } };
-                w.LayoutByCountChanged += picks =>
-                {
-                    if (_appSettings is not { } s) return;
-                    s.RoostLayoutByCount = picks.Count > 0 ? new(picks) : null;
-                    s.Save();
-                };
-                w.OrderChanged += () => { if (_appSettings is { } s) { s.RoostOrder = _roostRoster.PersistedOrder.ToList(); s.Save(); } };
                 w.PermissionAnswered += (sid, item, allow, mode) =>
                     PerchSessionFor(sid)?.AnswerPermission(item, allow, mode);
                 w.QuestionAnswered += (sid, item, answers) => PerchSessionFor(sid)?.AnswerQuestion(item, answers);
@@ -1646,7 +1657,17 @@ public partial class App : Application
                 w.TakeOverRequested += s => OnElevateToPerch(s, _roostWindow);
                 return w;
             },
-            () => { _roostWindow = null; ReplayRoostSuppressed(); });
+            () => { _roostWindow = null; FlushRoostTabs(); ReplayRoostSuppressed(); });
+
+    // Writes a pending (debounced) tab save now — the Roost closing, or an update about to restart the app.
+    private void FlushRoostTabs()
+    {
+        if (_roostTabsSave is not { IsEnabled: true } timer) return;
+        timer.Stop();
+        if (_appSettings is not { } s) return;
+        s.RoostTabs = _roostTabs.ToState();
+        s.Save();
+    }
 
     // A Perch-driven session reads its live in-memory conversation; anything else (or a Perch session this
     // app doesn't own) tails its transcript from disk.

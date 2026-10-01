@@ -34,23 +34,34 @@ internal static class RoostBench
             RunningSince: now.AddMinutes(-i))).ToList();
         var roster = new RoostRoster();
         roster.Update(sessions.Take(6).ToList(), now);
+        // Two 3×2 tabs: the first six sessions in A, B empty until the rest arrive.
+        var tabs = new RoostTabSet();
+        tabs.Sync(roster.Panes);
+        var a = tabs.CreateDefault(roster.Panes, 1.6)!;
+        var b = tabs.AddTab("B", RoostGridLayout.FromTemplate(RoostSnapTemplate.Grid3x2))!;
 
-        var w = new Windows.RoostWindow(roster,
+        var w = new Windows.RoostWindow(roster, tabs,
             pane => RoostFeed.ForFixed(LongConversation(turns), pane.Session.SessionId),
             SessionPalette.For(true))
         { Width = 1600, Height = 1000 };
         w.Show();
         Settle();
 
-        Console.WriteLine($"6 panes on stage, {turns} turns each");
+        Console.WriteLine($"6 panes per tab, {turns} turns each");
         Time("ghost move (drag hover)", 60, i => w.DragForRender("1001", i % 6), after: () => w.DropForRender());
         Time("focus change only", 20, i => w.FocusPane(i % 2 == 0 ? "1001" : "1002"));
-        Time("drop: swap two cells", 20, i => w.PlacePane("1001", i % 2 == 0 ? 1 : 0));
+        Time("drop: swap two regions", 20, i => w.PlacePane("1001", i % 2 == 0 ? 1 : 0));
         roster.Update(sessions, now);
+        tabs.Sync(roster.Panes);
         w.RosterChanged();
         Settle();
-        Time("drop: from rail, first time", 6, i => w.PlacePane($"{1007 + i}", 2));
+        Time("drop: from rail, first time", 6, i => w.PlacePane($"{1007 + i}", i % 6));
         Time("drop: from rail, again", 10, i => w.PlacePane(i % 2 == 0 ? "1007" : "1008", 2));
+        // Fill B, then flip between the tabs: every pane stays warm, so a switch is a show, not a rebuild.
+        w.ActivateTab(b.Id);
+        for (int i = 0; i < 6; i++) w.PlacePane($"{1007 + i}", i);
+        Settle();
+        Time("tab switch (warm panes)", 20, i => w.ActivateTab(i % 2 == 0 ? a.Id : b.Id));
         Time("refresh (a scan landing)", 20, _ => w.RosterChanged());
         w.Close();
         return 0;

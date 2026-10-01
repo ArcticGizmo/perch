@@ -16,9 +16,9 @@ namespace Perch.Avalonia.Views;
 /// <summary>What a pane's menu / footer asked for.</summary>
 internal enum RoostPaneAction
 {
-    /// <summary>Pin / unpin the pane on the Tiled stage, so it's never bumped (Ctrl+Shift+E, the menu).</summary>
-    KeepOnStage,
-    /// <summary>Zoom the pane, or back out of Zoom (header double-click).</summary>
+    /// <summary>Take the session out of its tab (back to the rail).</summary>
+    RemoveFromTab,
+    /// <summary>Zoom the pane to fill its tab, or restore it (header double-click, Ctrl+Shift+Z).</summary>
     Zoom,
     /// <summary>Open the Perch session window / focus the terminal hosting the session.</summary>
     OpenSession,
@@ -699,11 +699,10 @@ internal sealed class SessionPane : Border
     {
         if (_pane is not { } pane) return;
         var flyout = new MenuFlyout { Placement = PlacementMode.BottomEdgeAlignedRight };
-        var keep = new MenuItem
-        {
-            Header = "Keep on stage", ToggleType = MenuItemToggleType.CheckBox, IsChecked = pane.Pin == RoostPin.Expanded,
-        };
-        keep.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.KeepOnStage);
+        var zoom = new MenuItem { Header = "Zoom / restore", InputGesture = new KeyGesture(global::Avalonia.Input.Key.Z, KeyModifiers.Control | KeyModifiers.Shift) };
+        zoom.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.Zoom);
+        var remove = new MenuItem { Header = "Remove from tab" };
+        remove.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.RemoveFromTab);
         var open = new MenuItem
         {
             Header = pane.Session.IsPerchControlled ? "Open full window" : "Focus terminal",
@@ -712,7 +711,8 @@ internal sealed class SessionPane : Border
         open.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.OpenSession);
         var copy = new MenuItem { Header = "Copy resume command" };
         copy.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.CopyResume);
-        flyout.Items.Add(keep);
+        flyout.Items.Add(zoom);
+        flyout.Items.Add(remove);
         flyout.Items.Add(new Separator());
         flyout.Items.Add(open);
         if (CanTakeOver && !pane.Session.IsPerchControlled && !pane.Ended)

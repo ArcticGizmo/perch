@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Collections;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
@@ -7,7 +8,6 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Services;
 using Perch.Avalonia.Theming;
@@ -19,63 +19,57 @@ using Perch.Data.Roost;
 namespace Perch.Avalonia.Windows;
 
 /// <summary>
-/// The Roost (docs/roost-plan.md): a tmux-style view of every live session — an urgency-ranked rail on the left
-/// (Needs you → Done · review → Working → Quiet) and a stage of <see cref="SessionPane"/>s on the right, laid out
-/// by the pure <see cref="RoostStage"/> / <see cref="RoostTemplates"/> / <see cref="RoostLayout"/> rules. Pane order
-/// is the user's (first-seen, rearranged by dragging headers; never reordered by a status flip). The session list
-/// itself is the app-owned <see cref="RoostRoster"/>, so pins and order survive closing the window; this window
-/// owns only the per-pane feeds (<see cref="RoostFeed"/>: a Perch session's in-memory conversation, or a tailed
-/// transcript), which live only while it's open.
+/// The Roost (docs/roost-plan.md, docs/roost-tabs-plan.md): a tmux-style view of every live session — a rail on the
+/// left (grouped by status, or A–Z) and, on the right, <b>tabs</b>, each a painted <see cref="RoostGridLayout"/> with a
+/// <see cref="SessionPane"/> per region. The fixed first tab, Focus, is one full region for sessions in no tab.
 ///
-/// <para>Three layouts (a persisted title-bar toggle): <b>Tiled</b> — up to six panes on stage, each a full thread,
-/// in a grid shaped for how many there are (the title bar's snap flyout picks the shape per count); the rest wait
-/// in the rail; <b>Main + stack</b> — the focused pane large and expanded, every other pane a mini card in the
-/// stack; <b>Zoom</b> — the focused pane alone. Only placed panes hold controls: anything off-screen is parked (no
-/// materialised thread). The
-/// visible layout is rebuilt only when its shape changes; a scan that only moves text refreshes the panes in
-/// place, so an expanded thread keeps its scroll. The title-bar chips double as group filters.</para>
+/// <para>Placement is entirely the user's (D2): drag a rail row or a pane header onto a region, or click an empty
+/// region to pick a session; a rail click goes to the session's tab, or shows it in Focus. Nothing moves by itself.
+/// The tabs and the session list are app-owned (<see cref="RoostTabSet"/>, <see cref="RoostRoster"/>), so they survive
+/// closing the window; this window owns only the per-pane feeds (<see cref="RoostFeed"/>), which live while it's open.</para>
+///
+/// <para>Every tab's panes share one <see cref="RoostTilePanel"/>, drawn in the active tab's shape: a pane in another
+/// tab is a hidden host, so switching tabs (or moving a pane between them) is a visibility flip, never a re-parent —
+/// a pane keeps its focus, scroll and measured thread. Hidden hosts stay warm up to <see cref="WarmLimit"/>; past
+/// that the oldest is parked (no materialised thread).</para>
 /// </summary>
 internal sealed class RoostWindow : Window
 {
     private const double StagePad = 14, CellGap = 14;
 
     private readonly RoostRoster _roster;
+    private readonly RoostTabSet _tabs;
     private readonly Func<RoostPane, RoostFeed?> _feedFactory;
     private readonly SessionPalette _p;
 
     private readonly Dictionary<string, RoostFeed?> _feeds = new(StringComparer.Ordinal);
+    // One view per session (D1: a session is in one place, so a move within or between tabs keeps its view).
+    // Lifting D1 would make this one view per placement, the feed shared.
     private readonly Dictionary<string, SessionPane> _views = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RoostPaneSize> _placed = new(StringComparer.Ordinal);
+    // Sessions that have been in a tab (or Focus) since this window opened: a rail row without one reads "new".
+    private readonly HashSet<string> _everPlaced = new(StringComparer.Ordinal);
 
-    private readonly StackPanel _chips;
-    private readonly Dictionary<RoostLayoutMode, Border> _segments = new();
+    private readonly StackPanel _tabStrip;
     private readonly StackPanel _rail;
     private readonly Panel _stage;
-    // Tiled
-    private readonly RoostStage _onStage = new();
     private readonly RoostTilePanel _grid;
-    // Empty per-cell borders at each slot's position: what a drag hit-tests against. The panes themselves sit in
-    // _paneHosts, one per pane on stage, moved between cells by their grid position only — taking a pane out of
-    // the tree and back in would restyle and re-measure its whole thread.
-    private readonly Border[] _cellHosts = new Border[RoostTemplates.AutoMaxCells];
+    // One border per region of the active tab, at its slot: the empty-region placeholder, and what a drag
+    // hit-tests against (a pane's host sits on top of an occupied one).
+    private readonly RegionCell[] _cells = new RegionCell[RoostGridLayout.MaxRegions];
     private readonly Dictionary<string, Border> _paneHosts = new(StringComparer.Ordinal);
-    // Panes that left the stage keep their host, hidden, with the thread still built — so bringing one back
-    // is a show, not a rebuild. Oldest-hidden first; past WarmLimit the oldest is parked.
     private const int WarmLimit = 8;
     private readonly List<string> _warm = [];
-    private IReadOnlyList<string> _cellKeys = [];
-    // Main + stack
-    private readonly Grid _mainGrid;
-    private readonly Border _mainHost;
-    private readonly StackPanel _stack;
-    // Zoom
-    private readonly Border _zoomHost;
-    private readonly Border _emptyNote;
-    private readonly TextBlock _emptyTitle, _emptyBody;
-    private readonly Border _offPill;
-    private readonly TextBlock _offPillText;
-    private readonly Ellipse _offPillDot;
-    // Drag a pane by its header (or a rail row) onto a cell: the ghost chip and the drop-cell mark ride an overlay.
+    // The active tab's regions in slot order (slot i = region _slotRegions[i]), as last laid out.
+    private IReadOnlyList<int> _slotRegions = [];
+
+    private readonly Border _unplacedPill, _elsewherePill;
+    private readonly TextBlock _unplacedText, _elsewhereText;
+    private readonly Ellipse _unplacedDot, _elsewhereDot;
+    private readonly Border _hiddenRow;
+    private readonly TextBlock _hiddenText;
+
+    // Drag a pane by its header (or a rail row) onto a region: the ghost chip and the drop mark ride an overlay.
     private readonly Canvas _overlay;
     private readonly Border _dropMark;
     private (string Key, Point Start, Control Source)? _press;
@@ -84,38 +78,24 @@ internal sealed class RoostWindow : Window
 
     private readonly DispatcherTimer _pulseTimer;
     private readonly DispatcherTimer _clockTimer;
-    private readonly DispatcherTimer _holdTimer;   // re-runs layout when a typing hold lapses
-    private readonly TypingHold _typing = new();
 
-    // What the stage containers currently hold, so a layout pass only touches what changed — re-parenting a
-    // pane drops keyboard focus, which must never happen to the composer being typed in.
-    private RoostLayoutMode? _builtMode;
-
-    private RoostLayoutMode _mode;
-    private RoostLayoutMode _preZoomMode = RoostLayoutMode.Tiled;
-    private readonly Dictionary<int, RoostSnapTemplate> _layoutByCount;
-    private RoostSnapTemplate _drawnTemplate = RoostSnapTemplate.Full;
-    private int _drawnCount = -1;
-    private Border? _snapButton;
-    private readonly DispatcherTimer _snapHintTimer;
-    private RoostGroup? _filter;
     private RoostRailSort _railSort;
     private readonly Dictionary<RoostRailSort, Border> _sortSegments = new();
     private string? _focused;
-    // "+ New session" was clicked: the first new Perch pane to appear before the deadline goes on stage.
+    // "+ New session" was clicked: the first new Perch pane to appear before the deadline is shown — in the region
+    // it was started from (the empty-region picker), else Focus.
     private HashSet<string>? _keysAtNewSession;
     private DateTime _newSessionUntil;
+    private RoostPlacement? _newSessionTarget;
 
-    public RoostWindow(RoostRoster roster, Func<RoostPane, RoostFeed?> feedFactory, SessionPalette? palette = null,
-        RoostLayoutMode layout = RoostLayoutMode.Tiled, IReadOnlyDictionary<int, RoostSnapTemplate>? layoutByCount = null,
-        RoostRailSort railSort = RoostRailSort.Status)
+    public RoostWindow(RoostRoster roster, RoostTabSet tabs, Func<RoostPane, RoostFeed?> feedFactory,
+        SessionPalette? palette = null, RoostRailSort railSort = RoostRailSort.Status)
     {
         _roster = roster;
+        _tabs = tabs;
         _feedFactory = feedFactory;
         _p = palette ?? SessionPalette.Current;
-        _mode = RoostLayout.Normalize(layout);
         _railSort = RoostRoster.Normalize(railSort);
-        _layoutByCount = layoutByCount is null ? new() : new(layoutByCount);
 
         Title = "Roost";
         Width = 1280;
@@ -125,7 +105,7 @@ internal sealed class RoostWindow : Window
         Background = _p.Ground;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        // ── Title bar: name · summary chips (filters) ········ layout toggle · + New session ──
+        // ── Title bar: name ········ + New session ──
         var title = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 9, VerticalAlignment = VerticalAlignment.Center,
@@ -135,27 +115,27 @@ internal sealed class RoostWindow : Window
                 new TextBlock { Text = "Roost", FontFamily = _p.Display, FontWeight = FontWeight.Bold, FontSize = 15, Foreground = _p.Title, VerticalAlignment = VerticalAlignment.Center },
             },
         };
-        _chips = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(14, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-        var newSession = BarButton("+ New session", StartNewSession);
-        newSession.Margin = new Thickness(10, 0, 0, 0);
-        var right = new StackPanel
-        {
-            Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, [DockPanel.DockProperty] = Dock.Right,
-            Children = { SnapButton(), SegmentedToggle(), newSession },
-        };
+        var newSession = BarButton("+ New session", () => StartNewSession(null));
+        newSession[DockPanel.DockProperty] = Dock.Right;
         var bar = new Border
         {
             Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(0, 0, 0, 1),
             Padding = new Thickness(14, 10), [DockPanel.DockProperty] = Dock.Top,
-            Child = new DockPanel
-            {
-                LastChildFill = true,
-                Children = { right, new StackPanel { Orientation = Orientation.Horizontal, Children = { title, _chips } } },
-            },
+            Child = new DockPanel { LastChildFill = true, Children = { newSession, title } },
         };
 
-        // ── Rail: the sort toggle, then the sessions ──
+        // ── Rail: the sort toggle, the sessions, then "N hidden" and the keys cheat-sheet ──
         _rail = new StackPanel { Spacing = 14, Margin = new Thickness(8, 4, 8, 12) };
+        (_hiddenRow, _hiddenText) = RailFooterRow("", "Closed panes — click to reopen");
+        _hiddenRow.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowHiddenMenu(_hiddenRow); };
+        var (keysRow, _) = RailFooterRow("⌨  Keys", "Every Roost shortcut");
+        keysRow.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowKeys(keysRow); };
+        var railFooter = new Border
+        {
+            BorderBrush = _p.Border, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(8, 6),
+            [DockPanel.DockProperty] = Dock.Bottom,
+            Child = new StackPanel { Spacing = 2, Children = { _hiddenRow, keysRow } },
+        };
         var railHost = new Border
         {
             Width = 216, Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(0, 0, 1, 0),
@@ -166,68 +146,70 @@ internal sealed class RoostWindow : Window
                 Children =
                 {
                     RailSortToggle(),
+                    railFooter,
                     new ScrollViewer { HorizontalScrollBarVisibility = global::Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled, Content = _rail },
                 },
             },
         };
 
-        // ── Stage: one container per layout, only the active one visible ──
-        // Each cell host carries half a gap on every side, so the grid's own margin is the pad less that half.
-        _grid = new RoostTilePanel { Margin = new Thickness(StagePad - CellGap / 2) };
-        for (int i = 0; i < _cellHosts.Length; i++)
+        // ── Tab strip (over the stage only) ──
+        _tabStrip = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Bottom };
+        var stripHost = new Border
         {
-            _cellHosts[i] = new Border { Margin = new Thickness(CellGap / 2) };
-            _grid.Children.Add(_cellHosts[i]);
-        }
-
-        _mainHost = new Border { Margin = new Thickness(0, 0, CellGap / 2, 0), [Grid.ColumnProperty] = 0 };
-        _stack = new StackPanel { Spacing = CellGap, Margin = new Thickness(CellGap / 2, 0, 0, 0) };
-        _mainGrid = new Grid
-        {
-            Margin = new Thickness(StagePad), ColumnDefinitions = new ColumnDefinitions("1.75*,*"), IsVisible = false,
-            Children =
+            Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(0, 0, 0, 1),
+            Padding = new Thickness(StagePad - 4, 6, StagePad, 0), [DockPanel.DockProperty] = Dock.Top,
+            Child = new ScrollViewer
             {
-                _mainHost,
-                new ScrollViewer
-                {
-                    [Grid.ColumnProperty] = 1,
-                    HorizontalScrollBarVisibility = global::Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
-                    Content = _stack,
-                },
+                HorizontalScrollBarVisibility = global::Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = global::Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+                Content = _tabStrip,
             },
         };
-        _zoomHost = new Border { Margin = new Thickness(StagePad), IsVisible = false };
 
-        _emptyTitle = new TextBlock { FontFamily = _p.Display, FontWeight = FontWeight.Bold, FontSize = 16, Foreground = _p.Title, HorizontalAlignment = HorizontalAlignment.Center };
-        _emptyBody = new TextBlock { FontFamily = _p.Body, FontSize = 13, Foreground = _p.Muted, HorizontalAlignment = HorizontalAlignment.Center };
-        _emptyNote = new Border
+        // ── Stage: region cells, then the pane hosts on top ──
+        // Each cell carries half a gap on every side, so the grid's own margin is the pad less that half.
+        _grid = new RoostTilePanel { Margin = new Thickness(StagePad - CellGap / 2) };
+        for (int i = 0; i < _cells.Length; i++)
         {
-            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, IsVisible = false,
-            Child = new StackPanel { Spacing = 6, Children = { _emptyTitle, _emptyBody } },
-        };
-        _stage = new Panel { Background = _p.Ground, Children = { _grid, _mainGrid, _zoomHost, _emptyNote } };
-        _stage.SizeChanged += (_, _) => Refresh();   // the stage's shape can change the default layout
+            _cells[i] = RegionCell.Create(_p, CellGap / 2);
+            int slot = i;
+            _cells[i].Host.PointerReleased += (_, e) =>
+            {
+                if (e.InitialPressMouseButton != MouseButton.Left || e.Handled) return;
+                if (slot < _slotRegions.Count && _tabs.Active.At(_slotRegions[slot]) is null) ShowPicker(slot);
+            };
+            _grid.Children.Add(_cells[i].Host);
+        }
+        _stage = new Panel { Background = _p.Ground, Children = { _grid } };
 
-        // ── Bottom bar: key hints · the "N off stage" pill (its own band, so it never covers a pane) ──
-        (_offPill, _offPillText, _offPillDot) = OverflowPill();
-        _offPill[ToolTip.TipProperty] = "Waiting in the rail — click to bring the most urgent on stage";
-        _offPill.PointerReleased += (_, e) =>
+        // ── Bottom bar: key hints · the "not in a tab" / "other tabs" pills ──
+        (_unplacedPill, _unplacedText, _unplacedDot) = Pill();
+        _unplacedPill[ToolTip.TipProperty] = "Sessions in no tab — click to focus the most urgent";
+        _unplacedPill.PointerReleased += (_, e) =>
         {
             if (e.InitialPressMouseButton != MouseButton.Left) return;
-            var visible = _cellKeys.ToHashSet(StringComparer.Ordinal);
-            var next = ShownPanes().Where(p => !visible.Contains(p.Key)).OrderBy(RoostStage.Urgency).FirstOrDefault();
-            if (next is not null) FocusPane(next.Key);
+            if (MostUrgent(_tabs.Unplaced(_roster.Panes).Where(p => !p.Ended).Select(p => p.Key)) is { } key) FocusPane(key);
+        };
+        (_elsewherePill, _elsewhereText, _elsewhereDot) = Pill();
+        _elsewherePill[ToolTip.TipProperty] = "Waiting in another tab — click to go there";
+        _elsewherePill.PointerReleased += (_, e) =>
+        {
+            if (e.InitialPressMouseButton != MouseButton.Left) return;
+            var elsewhere = _tabs.All.Where(t => t.Id != _tabs.ActiveId).SelectMany(t => t.Cells.Values);
+            if (MostUrgent(elsewhere) is { } key) FocusPane(key);
         };
         var hints = new TextBlock
         {
-            Text = "Ctrl+1–9 pane  ·  Ctrl+. next needing you  ·  drag a header to move  ·  double-click a header to zoom  ·  Ctrl+Shift+E keep on stage",
+            Text = RoostKeys.HintLine + "  ·  drag to place  ·  ⌨ more",
             FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextTrimming = TextTrimming.CharacterEllipsis, Cursor = new Cursor(StandardCursorType.Hand),
+            [ToolTip.TipProperty] = "Every Roost shortcut",
         };
+        hints.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowKeys(hints); };
         var pills = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(12, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center, Children = { _offPill },
+            VerticalAlignment = VerticalAlignment.Center, Children = { _elsewherePill, _unplacedPill },
             [DockPanel.DockProperty] = Dock.Right,
         };
         var bottomBar = new Border
@@ -236,7 +218,7 @@ internal sealed class RoostWindow : Window
             Padding = new Thickness(14, 5), MinHeight = 36, [DockPanel.DockProperty] = Dock.Bottom,
             Child = new DockPanel { LastChildFill = true, Children = { pills, hints } },
         };
-        var stageColumn = new DockPanel { LastChildFill = true, Children = { bottomBar, _stage } };
+        var stageColumn = new DockPanel { LastChildFill = true, Children = { stripHost, bottomBar, _stage } };
 
         _dropMark = new Border
         {
@@ -259,27 +241,21 @@ internal sealed class RoostWindow : Window
         _clockTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _clockTimer.Tick += (_, _) => { foreach (var k in _placed.Keys) _views[k].Tick(); TickRail(); };
         _clockTimer.Start();
-        _holdTimer = new DispatcherTimer();
-        _holdTimer.Tick += (_, _) => { _holdTimer.Stop(); Refresh(); };
-        _snapHintTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
-        _snapHintTimer.Tick += (_, _) => { _snapHintTimer.Stop(); RefreshSnapButton(); };
 
         Closed += (_, _) =>
         {
             _pulseTimer.Stop();
             _clockTimer.Stop();
-            _holdTimer.Stop();
-            _snapHintTimer.Stop();
             foreach (var v in _views.Values) v.Park();
             foreach (var f in _feeds.Values) f?.Dispose();
             _feeds.Clear();
         };
 
-        RefreshSegments();
+        foreach (var tab in _tabs.All) foreach (var k in tab.Cells.Values) _everPlaced.Add(k);
         Refresh();
     }
 
-    /// <summary>"+ New session" in the title bar.</summary>
+    /// <summary>"+ New session" in the title bar (or an empty region's picker).</summary>
     public event Action? NewSessionRequested;
 
     /// <summary>A pane asked to open its session (the Perch window, or focus the terminal).</summary>
@@ -288,30 +264,8 @@ internal sealed class RoostWindow : Window
     /// <summary>A done-review pane was focused — acknowledge it (by pid), as clicking its overlay row does.</summary>
     public event Action<string>? AcknowledgeRequested;
 
-    /// <summary>The layout toggle moved (persist it).</summary>
-    public event Action<RoostLayoutMode>? LayoutChanged;
-
     /// <summary>The rail's sort toggle moved (persist it).</summary>
     public event Action<RoostRailSort>? RailSortChanged;
-
-    public RoostRailSort RailSort => _railSort;
-
-    /// <summary>Re-orders the rail (its header toggle).</summary>
-    public void SetRailSort(RoostRailSort sort)
-    {
-        sort = RoostRoster.Normalize(sort);
-        if (sort == _railSort) return;
-        _railSort = sort;
-        RefreshSortSegments();
-        RailSortChanged?.Invoke(sort);
-        RefreshRail();
-    }
-
-    /// <summary>A layout was picked for a stage count (persist the whole map).</summary>
-    public event Action<IReadOnlyDictionary<int, RoostSnapTemplate>>? LayoutByCountChanged;
-
-    /// <summary>A drag rearranged the panes — persist <see cref="RoostRoster.PersistedOrder"/>.</summary>
-    public event Action? OrderChanged;
 
     /// <summary>A permission card in a Perch pane was answered: (session id, item, allow, switch mode).</summary>
     public event Action<string, PermissionItem, bool, bool>? PermissionAnswered;
@@ -322,8 +276,8 @@ internal sealed class RoostWindow : Window
     /// <summary>A Perch pane's composer sent a reply: (session id, text).</summary>
     public event Action<string, string>? PromptSubmitted;
 
-    /// <summary>The set of panes on screen changed (paging, a filter, a layout switch, a scan) — a toast the
-    /// Roost swallowed as "seen" may now be owed.</summary>
+    /// <summary>The set of panes on screen changed (a tab switch, a placement, a zoom, a scan) — a toast the Roost
+    /// swallowed as "seen" may now be owed.</summary>
     public event Action? PlacementChanged;
 
     /// <summary>"Take over in Perch" on a terminal pane (the app confirms before stopping anything).</summary>
@@ -336,11 +290,10 @@ internal sealed class RoostWindow : Window
     /// <summary>A question card in a Perch pane was answered: (session id, item, answers).</summary>
     public event Action<string, PermissionItem, IReadOnlyDictionary<string, IReadOnlyList<string>>>? QuestionAnswered;
 
-    public RoostLayoutMode Mode => _mode;
+    public RoostRailSort RailSort => _railSort;
 
-    /// <summary>Whether the session's pane is on screen right now — placed by the current layout, expanded or as
-    /// a mini card (not paged, filtered or zoomed away). With <see cref="Window.IsActive"/> it's the Roost half of
-    /// <see cref="AttentionSeen"/>.</summary>
+    /// <summary>Whether the session's pane is on screen right now: in the active tab and not hidden behind another
+    /// pane's zoom. With <see cref="Window.IsActive"/> it's the Roost half of <see cref="AttentionSeen"/>.</summary>
     public bool IsOnScreen(string sessionId) =>
         _roster.Panes.FirstOrDefault(p => p.Session.SessionId == sessionId) is { } pane && _placed.ContainsKey(pane.Key);
 
@@ -356,121 +309,116 @@ internal sealed class RoostWindow : Window
             PlatformServices.WindowChrome.FlashTaskbar(handle.Handle);
     }
 
-    /// <summary>Focuses a pane: brings it into view (Tiled puts it on stage in the weakest pane's cell if it's
-    /// waiting in the rail, Zoom shows it, Main + stack makes it main), and acknowledges a done-review session.</summary>
+    /// <summary>Goes to a session (a rail click, Ctrl+., a pill): its tab, or Focus when it's in none. Acknowledges
+    /// a done-review session.</summary>
     public void FocusPane(string key)
     {
         if (_roster.Find(key) is not { } pane) return;
         // Every press inside a pane lands here; one on the pane that's already focused and on screen changes
         // nothing, so it skips the layout pass.
         bool unchanged = _focused == key && _placed.ContainsKey(key);
-        if (_filter is { } f && pane.Group != f) _filter = null;   // focusing something filtered out lifts the filter
-        if (_filter is null) _onStage.Bring(key, _roster.Panes, Guard());   // the old focus is spared
+        if (!unchanged)
+        {
+            _tabs.Show(key);
+            _everPlaced.Add(key);
+        }
         _focused = key;
         if (pane is { Ended: false, Session.Status: SessionStatus.NeedsAttention })
             AcknowledgeRequested?.Invoke(pane.Session.Pid);
         if (!unchanged) Refresh();
     }
 
-    /// <summary>Switches layout (the toggle, Ctrl+Shift+Z).</summary>
-    public void SetMode(RoostLayoutMode mode)
+    /// <summary>Switches tab (the strip, Ctrl+0–9, Ctrl+Tab). Focus moves to the tab's first session.</summary>
+    public void ActivateTab(string id)
     {
-        if (mode == _mode) return;
-        if (mode == RoostLayoutMode.Zoom) _preZoomMode = _mode;
-        _mode = mode;
-        RefreshSegments();
-        LayoutChanged?.Invoke(mode);
+        if (!_tabs.Activate(id)) return;
+        var tab = _tabs.Active;
+        _focused = _focused is { } f && tab.Cells.Values.Contains(f)
+            ? f
+            : tab.Layout.ReadingOrder.Select(r => tab.At(r.Id)).FirstOrDefault(k => k is not null);
         Refresh();
     }
 
-    /// <summary>Picks the layout for <paramref name="count"/> panes on stage (Auto clears the pick). Switches to
-    /// Tiled, since the layouts are Tiled's.</summary>
-    public void SetLayoutFor(int count, RoostSnapTemplate template)
+    /// <summary>Re-orders the rail (its header toggle).</summary>
+    public void SetRailSort(RoostRailSort sort)
     {
-        bool changed = template == RoostSnapTemplate.Auto
-            ? _layoutByCount.Remove(count)
-            : !_layoutByCount.TryGetValue(count, out var had) || had != template;
-        if (template != RoostSnapTemplate.Auto) _layoutByCount[count] = template;
-        if (changed) LayoutByCountChanged?.Invoke(new Dictionary<int, RoostSnapTemplate>(_layoutByCount));
-        if (_mode != RoostLayoutMode.Tiled) { SetMode(RoostLayoutMode.Tiled); return; }
-        if (changed) Refresh();
+        sort = RoostRoster.Normalize(sort);
+        if (sort == _railSort) return;
+        _railSort = sort;
+        RefreshSortSegments();
+        RailSortChanged?.Invoke(sort);
+        RefreshRail();
     }
 
-    /// <summary>Puts pane <paramref name="key"/> in cell <paramref name="slot"/> (a drag, or a flyout cell): a pane on
-    /// stage swaps cells with the one there, a pane from the rail takes the cell and sends its occupant to the
-    /// rail. The two also swap places in the saved order.</summary>
+    /// <summary>Puts <paramref name="key"/> in the active tab's region at <paramref name="slot"/> (a drop, the
+    /// picker): it moves there, and the region's occupant takes its old place, or goes back to the rail.</summary>
     public void PlacePane(string key, int slot)
     {
-        if (_roster.Find(key) is null) return;
-        _filter = null;
-        if (_mode != RoostLayoutMode.Tiled) SetMode(RoostLayoutMode.Tiled);
-        if (slot < _onStage.Slots.Count && _onStage.Slots[slot] == key) { FocusPane(key); return; }   // its own cell
-        var displaced = _onStage.Place(key, slot, _roster.Panes);
-        if (displaced is not null) _roster.Swap(key, displaced);
-        else _roster.MoveToEnd(key);
-        OrderChanged?.Invoke();
+        if (_roster.Find(key) is null || slot < 0 || slot >= _slotRegions.Count) return;
+        var tab = _tabs.Active;
+        _tabs.Assign(tab.Id, _slotRegions[slot], key);
+        _everPlaced.Add(key);
         _focused = key;
         Refresh();
     }
 
-    // "+ New session": remember what's here, so the Perch session it starts can be put on stage when it appears.
-    private void StartNewSession()
+    // "+ New session": remember what's here, so the Perch session it starts can be shown when it appears.
+    private void StartNewSession(RoostPlacement? target)
     {
         _keysAtNewSession = _roster.Panes.Select(p => p.Key).ToHashSet(StringComparer.Ordinal);
         _newSessionUntil = Clock.Now.AddMinutes(1);
+        _newSessionTarget = target;
         NewSessionRequested?.Invoke();
     }
 
     /// <summary>HeadlessRenderer hook: "+ New session" clicked.</summary>
-    internal void StartNewSessionForRender() => StartNewSession();
+    internal void StartNewSessionForRender() => StartNewSession(null);
 
     /// <summary>HeadlessRenderer hook: whether pane <paramref name="key"/> is placed right now.</summary>
     internal bool IsOnScreenKey(string key) => _placed.ContainsKey(key);
 
-    /// <summary>HeadlessRenderer hook: a drag of pane <paramref name="key"/> hovering cell <paramref name="slot"/>
-    /// (the ghost at that cell's centre). <see cref="DropForRender"/> lets go.</summary>
+    /// <summary>HeadlessRenderer hook: a drag of pane <paramref name="key"/> hovering the active tab's region at
+    /// <paramref name="slot"/> (the ghost at its centre). <see cref="DropForRender"/> lets go.</summary>
     internal void DragForRender(string key, int slot)
     {
         _press = (key, default, this);
         StartGhost(key);
-        if (slot < 0 || slot >= _cellHosts.Length || !_cellHosts[slot].IsVisible) return;
-        var host = _cellHosts[slot];
+        if (slot < 0 || slot >= _cells.Length || !_cells[slot].Host.IsVisible) return;
+        var host = _cells[slot].Host;
         if (host.TranslatePoint(new Point(host.Bounds.Width / 2, host.Bounds.Height / 2), _overlay) is { } at) MoveGhost(at);
     }
 
     internal void DropForRender() => EndDrag(drop: true);
 
-    /// <summary>HeadlessRenderer hook: open the snap-layout flyout.</summary>
-    internal void OpenSnapFlyoutForRender() { if (_snapButton is { } b) ShowSnapFlyout(b); }
-
-    /// <summary>HeadlessRenderer hook: pretend the user is mid-reply in pane <paramref name="key"/> (the typing hold).</summary>
-    internal void TypeForRender(string key) => _typing.Keystroke(key, Clock.Now);
-
     /// <summary>HeadlessRenderer hook: close a pane as its menu would.</summary>
     internal void ClosePaneForRender(string key) => OnPaneAction(key, RoostPaneAction.Close);
 
-    /// <summary>HeadlessRenderer hook: apply a chip filter (null clears).</summary>
-    internal void FilterForRender(RoostGroup? group) { _filter = group; Refresh(); }
+    /// <summary>HeadlessRenderer hook: zoom a pane as a header double-click would.</summary>
+    internal void ZoomForRender(string key) => OnPaneAction(key, RoostPaneAction.Zoom);
+
+    /// <summary>HeadlessRenderer hook: open the empty-region picker on slot <paramref name="slot"/>.</summary>
+    internal void OpenPickerForRender(int slot) => ShowPicker(slot);
+
+    /// <summary>HeadlessRenderer hook: open the keys cheat-sheet.</summary>
+    internal void OpenKeysForRender() => ShowKeys(_hiddenRow.Parent as Control ?? this);
+
+    /// <summary>HeadlessRenderer hook: dismiss the picker / cheat-sheet.</summary>
+    internal void CloseFlyoutForRender() { _openFlyout?.Hide(); _openFlyout = null; }
+
+    private global::Avalonia.Controls.Primitives.FlyoutBase? _openFlyout;
 
     // ── Layout pass ───────────────────────────────────────────────────────────
 
     private void Refresh()
     {
         var all = _roster.Panes;
+        _tabs.Sync(all);   // a close / reopen from this window (the app feeds adoptions with each scan)
         SyncFeedsAndViews(all);
-        var shown = _filter is { } g ? all.Where(p => p.Group == g).ToList() : all;
-        if (_filter is not null && shown.Count == 0) { _filter = null; shown = all; }   // the group emptied
+        AdmitStartedSession(all);
+        if (_focused is { } f && !_tabs.IsPlaced(f)) _focused = null;
 
         _placed.Clear();
-        switch (_mode)
-        {
-            case RoostLayoutMode.MainStack: LayoutMainStack(shown); break;
-            case RoostLayoutMode.Zoom: LayoutZoom(shown); break;
-            default: LayoutTiled(all, shown); break;
-        }
-        _grid.IsVisible = _mode == RoostLayoutMode.Tiled;
-        _mainGrid.IsVisible = _mode == RoostLayoutMode.MainStack;
-        _zoomHost.IsVisible = _mode == RoostLayoutMode.Zoom;
+        LayoutStage(_tabs.Active);
 
         foreach (var pane in all)
         {
@@ -482,14 +430,12 @@ internal sealed class RoostWindow : Window
             else if (!_warm.Contains(pane.Key)) view.Park();   // a warm pane keeps its thread, hidden
         }
 
-        _emptyNote.IsVisible = all.Count == 0;
-        _emptyTitle.Text = "No live sessions";
-        _emptyBody.Text = "Sessions appear here as soon as they start — or start one with + New session.";
-        RefreshChips();
+        RefreshCells(all);
+        RefreshTabStrip();
         RefreshRail();
-        RefreshSnapButton();
+        RefreshPills(all);
+        RefreshHiddenRow();
         UpdatePulse();
-        ArmHoldTimer();
 
         var placedSig = string.Join(",", _placed.Keys.Order(StringComparer.Ordinal));
         if (placedSig != _placedSig) { _placedSig = placedSig; PlacementChanged?.Invoke(); }
@@ -497,63 +443,26 @@ internal sealed class RoostWindow : Window
 
     private string _placedSig = "";
 
-    // While typing holds the stage, wake when the hold lapses so a waiting pane then goes on stage.
-    private void ArmHoldTimer()
+    // Lays the active tab out: its shape on the tile panel (one full slot while a region is zoomed), a cell per
+    // region, and each of its sessions' hosts at its region's slot. Hosts of panes elsewhere hide and stay warm.
+    private void LayoutStage(RoostTab tab)
     {
-        _holdTimer.Stop();
-        if (_mode != RoostLayoutMode.Tiled || _typing.ReleasesAt(Clock.Now) is not { } at) return;
-        var wait = at - Clock.Now;
-        _holdTimer.Interval = wait > TimeSpan.Zero ? wait + TimeSpan.FromMilliseconds(50) : TimeSpan.FromMilliseconds(50);
-        _holdTimer.Start();
-    }
+        var layout = tab.Layout;
+        int? zoom = tab.Zoomed is { } z && tab.At(z) is not null ? z : null;
+        _grid.Shape = zoom is null ? layout.ToShape() : RoostTemplates.Shape(RoostSnapTemplate.Full);
+        _slotRegions = zoom is null ? layout.Regions.Select(r => r.Id).ToList() : [];
 
-    private void OnComposerTyping(string key)
-    {
-        _typing.Keystroke(key, Clock.Now);
-        ArmHoldTimer();   // keep pushing the release out while the typing continues
-    }
-
-    private void OnComposerFocusChanged(string key, bool focused)
-    {
-        if (focused) { _typing.Focused(key); return; }
-        _typing.Blurred(key);
-        Refresh();   // leaving the composer releases the hold at once
-    }
-
-    private void OnPromptSubmitted(string key, string text)
-    {
-        if (_roster.Find(key) is not { Ended: false } pane) return;
-        PromptSubmitted?.Invoke(pane.Session.SessionId, text);
-        _typing.Sent(key);
-        Refresh();
-    }
-
-    private RoostStageGuard Guard() => new(_focused, _typing.TypingIn(Clock.Now));
-
-    private void LayoutTiled(IReadOnlyList<RoostPane> all, IReadOnlyList<RoostPane> shown)
-    {
-        IReadOnlyList<string> keys;
-        if (_filter is null)
+        for (int i = 0; i < _cells.Length; i++)
         {
-            var guard = Guard();
-            _onStage.Sync(all, guard, hold: guard.TypingIn is not null);
-            AdmitStartedSession(all, guard);
-            keys = _onStage.Slots;
+            _cells[i].Host.IsVisible = i < _slotRegions.Count;
+            RoostTilePanel.SetSlot(_cells[i].Host, i < _slotRegions.Count ? i : -1);
         }
-        else keys = RoostStage.Strict(shown);   // a filter shows its group without touching the sticky places
 
-        int count = Math.Max(1, keys.Count);
-        var template = RoostTemplates.For(count, _layoutByCount, StageAspect());
-        if (_drawnCount >= 0 && count != _drawnCount) FlashSnapHint();
-        _drawnCount = count;
-        _drawnTemplate = template;
-        EnsureBuiltFor(RoostLayoutMode.Tiled);
-        var shape = RoostTemplates.Shape(template);
-        ApplyGridShape(shape);
-
-        // Panes leaving the stage leave the tree; a pane that stays keeps its host and only moves (so a swap,
-        // or the layout changing shape, never re-parents it — it keeps its focus, scroll and measured thread).
-        var onStage = keys.ToHashSet(StringComparer.Ordinal);
+        var shown = zoom is { } zr
+            ? [(tab.At(zr)!, 0)]
+            : layout.Regions.Select((r, i) => (Key: tab.At(r.Id), Slot: i)).Where(x => x.Key is not null)
+                .Select(x => (x.Key!, x.Slot)).ToList();
+        var onStage = shown.Select(s => s.Item1).ToHashSet(StringComparer.Ordinal);
         foreach (var (key, host) in _paneHosts)
         {
             if (onStage.Contains(key) || _warm.Contains(key)) continue;
@@ -562,67 +471,59 @@ internal sealed class RoostWindow : Window
             _warm.Add(key);
         }
         while (_warm.Count > WarmLimit) RemovePaneHost(_warm[0]);   // parked by the refresh that follows
-        for (int i = 0; i < keys.Count; i++)
+        foreach (var (key, slot) in shown)
         {
-            if (!_paneHosts.TryGetValue(keys[i], out var host))
+            if (!_views.TryGetValue(key, out var view)) continue;
+            if (!_paneHosts.TryGetValue(key, out var host))
             {
-                host = new Border { Margin = new Thickness(CellGap / 2), Child = _views[keys[i]] };
-                _paneHosts[keys[i]] = host;
+                host = new Border { Margin = new Thickness(CellGap / 2), Child = view };
+                _paneHosts[key] = host;
                 _grid.Children.Add(host);
             }
-            _warm.Remove(keys[i]);
+            _warm.Remove(key);
             host.IsVisible = true;
-            if (RoostTilePanel.GetSlot(host) != i) RoostTilePanel.SetSlot(host, i);
+            if (RoostTilePanel.GetSlot(host) != slot) RoostTilePanel.SetSlot(host, slot);
+            _placed[key] = RoostPaneSize.Expanded;
         }
-        _cellKeys = keys.ToList();
-        foreach (var k in keys) _placed[k] = RoostPaneSize.Expanded;
-        RefreshOffStage(shown);
     }
 
-    // A session the user started with "+ New session" goes on stage when it first appears, even over a full one.
-    private void AdmitStartedSession(IReadOnlyList<RoostPane> all, RoostStageGuard guard)
+    // The empty-region placeholders: shown where a region holds no session, with the words for the tab.
+    private void RefreshCells(IReadOnlyList<RoostPane> all)
+    {
+        var tab = _tabs.Active;
+        for (int slot = 0; slot < _slotRegions.Count; slot++)
+        {
+            bool empty = tab.At(_slotRegions[slot]) is null;
+            var cell = _cells[slot];
+            cell.Placeholder.IsVisible = empty;
+            if (!empty) continue;
+            (cell.Title.Text, cell.Body.Text) = tab.IsFocus
+                ? all.Count == 0
+                    ? ("No live sessions", "Sessions appear in the rail as soon as they start — or start one with + New session.")
+                    : ("Focus", "Click a session in the rail to look at it here.")
+                : ("Empty region", "Drop a session here, or click to pick one.");
+            cell.Chord.Text = tab.IsFocus ? "" : RoostKeys.ChordFor(RoostCommand.Region, slot + 1) ?? "";
+            cell.Host.Cursor = tab.IsFocus ? Cursor.Default : new Cursor(StandardCursorType.Hand);
+        }
+    }
+
+    // A session the user started with "+ New session" is shown when it first appears: in the region it was started
+    // from if that's still empty, else wherever a rail click would put it (Focus).
+    private void AdmitStartedSession(IReadOnlyList<RoostPane> all)
     {
         if (_keysAtNewSession is not { } before) return;
         if (Clock.Now > _newSessionUntil) { _keysAtNewSession = null; return; }
         if (all.FirstOrDefault(p => p.Session.IsPerchControlled && !p.Ended && !before.Contains(p.Key)) is not { } started) return;
         _keysAtNewSession = null;
-        _onStage.Bring(started.Key, all, guard);
-    }
-
-    private void LayoutMainStack(IReadOnlyList<RoostPane> shown)
-    {
-        var (main, stack) = RoostLayout.MainStack(shown.Select(p => p.Key).ToList(), _focused);
-        EnsureBuiltFor(RoostLayoutMode.MainStack);
-        var mainView = main is null ? null : _views[main];
-        bool stackChanged = !_stack.Children.Cast<SessionPane>().Select(v => v.Key).SequenceEqual(stack);
-        if (stackChanged) _stack.Children.Clear();                       // first, in case main came out of it
-        if (!ReferenceEquals(_mainHost.Child, mainView)) _mainHost.Child = null;
-        if (stackChanged) foreach (var k in stack) _stack.Children.Add(_views[k]);
-        if (_mainHost.Child is null && mainView is not null) _mainHost.Child = mainView;
-        if (main is not null) _placed[main] = RoostPaneSize.Expanded;
-        foreach (var k in stack) _placed[k] = RoostPaneSize.Collapsed;
-        HideOverflow();
-    }
-
-    private void LayoutZoom(IReadOnlyList<RoostPane> shown)
-    {
-        var target = RoostLayout.ZoomTarget(shown.Select(p => p.Key).ToList(), _focused);
-        EnsureBuiltFor(RoostLayoutMode.Zoom);
-        var view = target is null ? null : _views[target];
-        if (!ReferenceEquals(_zoomHost.Child, view)) _zoomHost.Child = view;
-        if (target is not null) _placed[target] = RoostPaneSize.Expanded;
-        HideOverflow();
-    }
-
-    // A layout switch empties every container, so the new layout can re-parent the panes it places.
-    private void EnsureBuiltFor(RoostLayoutMode mode)
-    {
-        if (_builtMode == mode) return;
-        _builtMode = mode;
-        foreach (var key in _paneHosts.Keys.ToList()) RemovePaneHost(key);
-        _mainHost.Child = null;
-        _stack.Children.Clear();
-        _zoomHost.Child = null;
+        if (_newSessionTarget is { } t && _tabs.Find(t.TabId) is { } tab && tab.Layout.Find(t.RegionId) is not null && tab.At(t.RegionId) is null)
+        {
+            _tabs.Assign(t.TabId, t.RegionId, started.Key);
+            _tabs.Activate(t.TabId);
+        }
+        else _tabs.Show(started.Key);
+        _newSessionTarget = null;
+        _everPlaced.Add(started.Key);
+        _focused = started.Key;
     }
 
     private void RemovePaneHost(string key)
@@ -640,16 +541,11 @@ internal sealed class RoostWindow : Window
         var live = new HashSet<string>(panes.Select(p => p.Key), StringComparer.Ordinal);
         foreach (var gone in _views.Keys.Where(k => !live.Contains(k)).ToList())
         {
-            var dropped = _views[gone];
-            dropped.Park();
+            _views[gone].Park();
             _views.Remove(gone);
             if (_feeds.Remove(gone, out var f)) f?.Dispose();
             if (_focused == gone) _focused = null;
-            // A dropped pane still sitting in a Tiled host, Zoom or Main (the stack diff drops it on its own,
-            // since its key leaves the stack's signature).
             RemovePaneHost(gone);
-            if (ReferenceEquals(_zoomHost.Child, dropped)) _zoomHost.Child = null;
-            if (ReferenceEquals(_mainHost.Child, dropped)) _mainHost.Child = null;
         }
 
         foreach (var pane in panes)
@@ -674,60 +570,83 @@ internal sealed class RoostWindow : Window
                 view.QuestionAnswered += (item, answers) => { if (Sid() is { } s) QuestionAnswered?.Invoke(s, item, answers); };
                 view.InterruptRequested += _ => { if (Sid() is { } s) InterruptRequested?.Invoke(s); };
                 view.PromptSubmitted += OnPromptSubmitted;
-                view.ComposerTyping += OnComposerTyping;
-                view.ComposerFocusChanged += OnComposerFocusChanged;
                 AttachDragSource(view.Header, key);
                 _views[pane.Key] = view;
             }
         }
     }
 
-    private double StageAspect()
+    private void OnPromptSubmitted(string key, string text)
     {
-        var b = _stage.Bounds;
-        return b.Width > 0 && b.Height > 0 ? b.Width / b.Height : 1.6;
+        if (_roster.Find(key) is not { Ended: false } pane) return;
+        PromptSubmitted?.Invoke(pane.Session.SessionId, text);
     }
 
-    // Lays the stage out for a template, with each cell border at its slot (spare ones hidden).
-    private void ApplyGridShape(RoostTemplateShape shape)
+    // The most urgent of some sessions (by tab light, then roster order), or null.
+    private string? MostUrgent(IEnumerable<string> keys)
     {
-        _grid.Shape = shape;
-        for (int i = 0; i < _cellHosts.Length; i++)
-        {
-            _cellHosts[i].IsVisible = i < shape.Slots.Count;
-            RoostTilePanel.SetSlot(_cellHosts[i], i);
-        }
+        var wanted = keys.ToHashSet(StringComparer.Ordinal);
+        return _roster.Panes.Where(p => wanted.Contains(p.Key))
+            .OrderByDescending(RoostTabStatus.LightOf).Select(p => p.Key).FirstOrDefault();
     }
 
     // ── Keyboard ──────────────────────────────────────────────────────────────
 
+    private static RoostMods ToMods(KeyModifiers m) =>
+        (m.HasFlag(KeyModifiers.Control) ? RoostMods.Ctrl : 0)
+        | (m.HasFlag(KeyModifiers.Shift) ? RoostMods.Shift : 0)
+        | (m.HasFlag(KeyModifiers.Alt) ? RoostMods.Alt : 0);
+
+    // Every window chord comes from RoostKeys — the same table the cheat-sheet and hint line read.
     private void OnChordKeyDown(object? sender, KeyEventArgs e)
     {
-        var mods = e.KeyModifiers;
-        bool ctrl = mods.HasFlag(KeyModifiers.Control), shift = mods.HasFlag(KeyModifiers.Shift);
-        if (!ctrl) return;
+        var mods = ToMods(e.KeyModifiers);
+        if (mods == RoostMods.None && e.Key != Key.F2) return;
+        if (RoostKeys.Resolve(e.Key.ToString(), mods) is not { } hit) return;
+        e.Handled = Run(hit.Command, hit.Arg);
+    }
 
-        if (!shift && e.Key is >= Key.D1 and <= Key.D9)
+    private bool Run(RoostCommand command, int arg)
+    {
+        switch (command)
         {
-            var shown = ShownPanes();
-            int index = e.Key - Key.D1;
-            if (index < shown.Count) FocusPane(shown[index].Key);
-            e.Handled = true;
-        }
-        else if (!shift && e.Key == Key.OemPeriod)
-        {
-            if (_roster.NextNeedingYou(_focused) is { } next) FocusPane(next);
-            e.Handled = true;
-        }
-        else if (shift && e.Key == Key.E)
-        {
-            if (_focused is { } key) OnPaneAction(key, RoostPaneAction.KeepOnStage);
-            e.Handled = true;
-        }
-        else if (shift && e.Key == Key.Z)
-        {
-            SetMode(_mode == RoostLayoutMode.Zoom ? _preZoomMode : RoostLayoutMode.Zoom);
-            e.Handled = true;
+            case RoostCommand.FocusTab:
+                ActivateTab(RoostTabSet.FocusId);
+                return true;
+            case RoostCommand.Tab:
+                if (arg <= _tabs.Tabs.Count) ActivateTab(_tabs.Tabs[arg - 1].Id);
+                return true;
+            case RoostCommand.NextTab:
+            case RoostCommand.PreviousTab:
+            {
+                var ids = _tabs.All.Select(t => t.Id).ToList();
+                int at = ids.IndexOf(_tabs.ActiveId);
+                ActivateTab(ids[(at + (command == RoostCommand.NextTab ? 1 : ids.Count - 1)) % ids.Count]);
+                return true;
+            }
+            case RoostCommand.NewTab:
+                AddTab();
+                return true;
+            case RoostCommand.Region:
+            {
+                var tab = _tabs.Active;
+                var order = tab.Layout.ReadingOrder;
+                if (arg <= order.Count && tab.At(order[arg - 1].Id) is { } key)
+                {
+                    if (tab.Zoomed is { } z && z != order[arg - 1].Id) _tabs.ToggleZoom(tab.Id, null);
+                    FocusPane(key);
+                    Refresh();
+                }
+                return true;
+            }
+            case RoostCommand.Zoom:
+                if (_focused is { } focused) OnPaneAction(focused, RoostPaneAction.Zoom);
+                return true;
+            case RoostCommand.NextNeedingYou:
+                if (_roster.NextNeedingYou(_focused) is { } next) FocusPane(next);
+                return true;
+            default:
+                return false;   // RenameTab: the tab strip's own editor (roost-tabs T5)
         }
     }
 
@@ -737,14 +656,19 @@ internal sealed class RoostWindow : Window
         if (e.Handled || e.KeyModifiers != KeyModifiers.None) return;
         if (e.Key == Key.Escape && _ghost is not null) { EndDrag(drop: false); e.Handled = true; return; }
         if (e.Key is Key.Enter or Key.Escape) e.Handled = FocusedPerchKey(e.Key);
+        if (!e.Handled && e.Key == Key.Escape && _tabs.Active.Zoomed is not null)
+        {
+            _tabs.ToggleZoom(_tabs.ActiveId, null);
+            Refresh();
+            e.Handled = true;
+        }
     }
 
     // The focused Perch pane's permission keys, as in SessionWindow (and the TUI): Enter allows a pending
     // permission (a question card is answered by picking, never a bare Enter); Esc denies it, or with nothing
     // pending interrupts a running turn. Terminal/IDE panes have no control channel, so these do nothing there.
-    // Only for a pane the user can actually see: placed by the current layout (not off stage, filtered or zoomed
-    // away, nor a hidden warm pane) and expanded, so the card is on screen — else a bare Enter could approve a
-    // command never seen.
+    // Only for a pane the user can actually see (in the active tab, not behind a zoom) — else a bare Enter could
+    // approve a command never seen.
     private bool FocusedPerchKey(Key key)
     {
         if (_focused is not { } k || _roster.Find(k) is not { Ended: false } pane) return false;
@@ -763,24 +687,25 @@ internal sealed class RoostWindow : Window
         return false;
     }
 
-    private List<RoostPane> ShownPanes() =>
-        _filter is { } g ? _roster.Panes.Where(p => p.Group == g).ToList() : _roster.Panes.ToList();
-
     private void OnPaneAction(string key, RoostPaneAction action)
     {
         if (_roster.Find(key) is not { } pane) return;
         switch (action)
         {
-            case RoostPaneAction.KeepOnStage:
-                bool keep = pane.Pin != RoostPin.Expanded;
-                _roster.SetPin(key, keep ? RoostPin.Expanded : RoostPin.Auto);
-                if (keep) FocusPane(key);   // pinning a pane from the rail brings it on stage
-                else Refresh();
+            case RoostPaneAction.RemoveFromTab:
+                if (_tabs.Unassign(key))
+                {
+                    if (_focused == key) _focused = null;
+                    Refresh();
+                }
                 break;
             case RoostPaneAction.Zoom:
-                _focused = key;
-                if (_mode == RoostLayoutMode.Zoom) SetMode(_preZoomMode);
-                else SetMode(RoostLayoutMode.Zoom);
+                if (_tabs.Locate(key).FirstOrDefault(p => p.TabId == _tabs.ActiveId) is { TabId: not null } at)
+                {
+                    _focused = key;
+                    _tabs.ToggleZoom(at.TabId, at.RegionId);
+                    Refresh();
+                }
                 break;
             case RoostPaneAction.OpenSession:
                 OpenSessionRequested?.Invoke(pane.Session);
@@ -792,7 +717,7 @@ internal sealed class RoostWindow : Window
                 if (!pane.Ended && CanTakeOver?.Invoke(pane.Session) == true) TakeOverRequested?.Invoke(pane.Session);
                 break;
             case RoostPaneAction.Close:
-                if (_roster.Close(key)) Refresh();   // the roster's ClosedChanged persists it
+                if (_roster.Close(key)) Refresh();   // the roster's ClosedChanged persists it; Sync empties its region
                 break;
         }
     }
@@ -822,206 +747,112 @@ internal sealed class RoostWindow : Window
         if (still) _pulseTimer.Stop();
     }
 
-    // ── Chrome: layout toggle, overflow pills, chips, rail ────────────────────
+    // ── Tab strip ─────────────────────────────────────────────────────────────
 
-    private Control SegmentedToggle()
+    private sealed record TabView(Border Button, Ellipse Dot, TextBlock Name, Border CountPill, TextBlock Count);
+
+    private readonly Dictionary<string, TabView> _tabViews = new(StringComparer.Ordinal);
+    private string? _stripSig;
+
+    // The strip is rebuilt only when its tabs change (added, closed, renamed, reordered); every other pass just
+    // re-lights the existing buttons.
+    private void RefreshTabStrip()
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal };
-        foreach (var (mode, label) in new[] { (RoostLayoutMode.Tiled, "Tiled"), (RoostLayoutMode.MainStack, "Main + stack"), (RoostLayoutMode.Zoom, "Zoom") })
+        var sig = string.Join("|", _tabs.All.Select(t => $"{t.Id}:{t.Name}"));
+        if (sig != _stripSig)
         {
-            var seg = new Border
+            _stripSig = sig;
+            _tabStrip.Children.Clear();
+            _tabViews.Clear();
+            int n = 0;
+            foreach (var tab in _tabs.All)
             {
-                Padding = new Thickness(11, 5), Cursor = new Cursor(StandardCursorType.Hand),
-                BorderBrush = _p.Border, BorderThickness = new Thickness(mode == RoostLayoutMode.Tiled ? 0 : 1, 0, 0, 0),
-                Child = new TextBlock { Text = label, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12 },
-            };
-            seg.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) SetMode(mode); };
-            _segments[mode] = seg;
-            row.Children.Add(seg);
+                var view = TabButton(tab, tab.IsFocus ? 0 : ++n);
+                _tabViews[tab.Id] = view;
+                _tabStrip.Children.Add(view.Button);
+            }
+            if (_tabs.Tabs.Count < RoostTabSet.MaxTabs) _tabStrip.Children.Add(NewTabButton());
         }
-        return new Border
-        {
-            CornerRadius = new CornerRadius(9), BorderBrush = _p.Border, BorderThickness = new Thickness(1),
-            Background = _p.Surface, ClipToBounds = true, VerticalAlignment = VerticalAlignment.Center, Child = row,
-        };
+        foreach (var tab in _tabs.All)
+            if (_tabViews.TryGetValue(tab.Id, out var view)) UpdateTabButton(view, tab);
     }
 
-    // The snap-layout button: a thumbnail of the grid Tiled is drawing now. A click opens the template flyout.
-    private Control SnapButton()
+    private TabView TabButton(RoostTab tab, int number)
+    {
+        var dot = new Ellipse { Width = 7, Height = 7, VerticalAlignment = VerticalAlignment.Center };
+        var name = new TextBlock
+        {
+            Text = tab.IsFocus ? "◻ Focus" : tab.Name, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12.5,
+            VerticalAlignment = VerticalAlignment.Center, MaxWidth = 180, TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        var count = new TextBlock { FontFamily = _p.Mono, FontSize = 10.5, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        var countPill = new Border
+        {
+            CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(6, 0), BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Center, Child = count,
+        };
+        var chord = tab.IsFocus ? RoostKeys.ChordFor(RoostCommand.FocusTab) : number <= 9 ? RoostKeys.ChordFor(RoostCommand.Tab, number) : null;
+        var button = new Border
+        {
+            CornerRadius = new CornerRadius(8, 8, 0, 0), Padding = new Thickness(11, 6, 11, 7), BorderThickness = new Thickness(1, 1, 1, 0),
+            Cursor = new Cursor(StandardCursorType.Hand), MinHeight = 32,
+            [ToolTip.TipProperty] = (tab.IsFocus ? "Focus — sessions in no tab open here" : tab.Name) + (chord is null ? "" : $"  ·  {chord}"),
+            Child = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7, Children = { dot, name, countPill } },
+        };
+        var id = tab.Id;
+        button.PointerEntered += (_, _) => { if (id != _tabs.ActiveId) button.Background = _p.Raised2; };
+        button.PointerExited += (_, _) => { if (id != _tabs.ActiveId) button.Background = Brushes.Transparent; };
+        button.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ActivateTab(id); };
+        return new TabView(button, dot, name, countPill, count);
+    }
+
+    private void UpdateTabButton(TabView v, RoostTab tab)
+    {
+        bool on = tab.Id == _tabs.ActiveId;
+        var light = RoostTabStatus.For(tab, _roster.Panes);
+        v.Button.Background = on ? _p.Ground : v.Button.IsPointerOver ? _p.Raised2 : Brushes.Transparent;
+        v.Button.BorderBrush = on ? _p.Border : Brushes.Transparent;
+        v.Name.Foreground = on ? _p.Title : _p.Muted;
+        v.Dot.IsVisible = light.Light != RoostLight.None;
+        v.Dot.Fill = LightBrush(light.Light);
+        v.CountPill.IsVisible = light.Count > 0;
+        v.Count.Text = light.Count.ToString();
+        v.Count.Foreground = LightBrush(light.Light);
+        v.CountPill.BorderBrush = LightBrush(light.Light);
+    }
+
+    private Border NewTabButton()
     {
         var b = new Border
         {
-            CornerRadius = new CornerRadius(9), Padding = new Thickness(8, 5), Margin = new Thickness(0, 0, 8, 0),
-            BorderThickness = new Thickness(1), BorderBrush = _p.Border, Background = _p.Surface,
+            CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 4), Margin = new Thickness(2, 0, 0, 4),
             Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center,
-            [ToolTip.TipProperty] = "Snap layout",
+            [ToolTip.TipProperty] = $"New tab  ·  {RoostKeys.ChordFor(RoostCommand.NewTab)}",
+            Child = new TextBlock { Text = "+", FontSize = 15, FontWeight = FontWeight.SemiBold, Foreground = _p.Muted },
         };
-        b.PointerEntered += (_, _) => b.BorderBrush = _p.BrandLine;
-        b.PointerExited += (_, _) => b.BorderBrush = _p.Border;
-        b.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowSnapFlyout(b); };
-        _snapButton = b;
+        b.PointerEntered += (_, _) => b.Background = _p.Raised2;
+        b.PointerExited += (_, _) => b.Background = Brushes.Transparent;
+        b.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) AddTab(); };
         return b;
     }
 
-    // How many panes the stage holds — the count the flyout picks a layout for.
-    private int StageCount() => _mode == RoostLayoutMode.Tiled && _drawnCount > 0
-        ? _drawnCount
-        : Math.Clamp(ShownPanes().Count, 1, RoostStage.Capacity);
-
-    private void RefreshSnapButton()
+    private void AddTab()
     {
-        if (_snapButton is null) return;
-        bool tiled = _mode == RoostLayoutMode.Tiled;
-        bool hint = _snapHintTimer.IsEnabled;
-        var shown = tiled ? _drawnTemplate : RoostSnapTemplate.Full;
-        _snapButton.BorderBrush = hint ? _p.Brand : _p.Border;
-        _snapButton.Background = hint ? _p.BrandWash : _p.Surface;
-        _snapButton.Child = new StackPanel
-        {
-            Orientation = Orientation.Horizontal, Spacing = 6,
-            Children =
-            {
-                TemplateThumb(RoostTemplates.Shape(shown), 26, 16, tiled ? _p.Brand : _p.Muted, onSlot: null),
-                new TextBlock
-                {
-                    Text = tiled ? $"{StageCount()} · {RoostTemplates.Name(shown)}" : "Layout",
-                    FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
-                    Foreground = tiled ? _p.Text : _p.Muted,
-                },
-            },
-        };
+        if (_tabs.AddTab(layout: RoostGridLayout.FromTemplate(RoostSnapTemplate.Columns2)) is { } tab) ActivateTab(tab.Id);
     }
 
-    // The stage count changed and the layout with it: light the snap button up for a moment, so the switch is
-    // noticed and the flyout (which picks for the new count) is one click away.
-    private void FlashSnapHint()
+    private IBrush LightBrush(RoostLight light) => light switch
     {
-        _snapHintTimer.Stop();
-        _snapHintTimer.Start();
-    }
+        RoostLight.Error => _p.Err,
+        RoostLight.Awaiting => _p.Await,
+        RoostLight.Done => _p.Attn,
+        RoostLight.Working => _p.Ok,
+        _ => _p.Idle,
+    };
 
-    // Windows-style snap flyout for the current stage count: a thumbnail per layout, those with too few cells
-    // dimmed. A click on a thumbnail picks it for this count; a click on one of its cells also puts the focused
-    // pane in that cell.
-    private void ShowSnapFlyout(Control anchor)
-    {
-        var flyout = new Flyout { Placement = global::Avalonia.Controls.PlacementMode.BottomEdgeAlignedRight };
-        var grid = new global::Avalonia.Controls.Primitives.UniformGrid { Columns = 4 };
-        int count = StageCount();
-        var picked = _layoutByCount.TryGetValue(count, out var pick) && RoostTemplates.Fits(pick, count) ? pick : RoostSnapTemplate.Auto;
-        var fallback = RoostTemplates.ForCount(count, StageAspect());
-        foreach (var template in RoostTemplates.Picker)
-        {
-            var t = template;
-            bool on = t == picked, fits = RoostTemplates.Fits(t, count);
-            var shape = RoostTemplates.Shape(t == RoostSnapTemplate.Auto ? fallback : t);
-            var caption = new TextBlock
-            {
-                Text = t == RoostSnapTemplate.Auto ? "Default" : RoostTemplates.Name(t),
-                FontFamily = _p.Body, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center,
-                Foreground = on ? _p.Text : _p.Muted, FontWeight = on ? FontWeight.SemiBold : FontWeight.Normal,
-            };
-            var tile = new Border
-            {
-                Width = 84, Margin = new Thickness(4), Padding = new Thickness(6), CornerRadius = new CornerRadius(8),
-                BorderThickness = new Thickness(1), BorderBrush = on ? _p.BrandLine : Brushes.Transparent,
-                Background = on ? _p.BrandWash : Brushes.Transparent, Opacity = fits ? 1 : 0.35,
-                Cursor = fits ? new Cursor(StandardCursorType.Hand) : Cursor.Default,
-                [ToolTip.TipProperty] = fits ? null : $"Fewer than {count} cells",
-                Child = new StackPanel
-                {
-                    Spacing = 5,
-                    Children =
-                    {
-                        TemplateThumb(shape, 70, 44, _p.Muted, onSlot: fits ? slot =>
-                        {
-                            flyout.Hide();
-                            SetLayoutFor(count, t);
-                            if (_focused is { } key) PlacePane(key, slot);
-                        } : null),
-                        caption,
-                    },
-                },
-            };
-            if (fits)
-            {
-                if (!on)
-                {
-                    tile.PointerEntered += (_, _) => tile.Background = _p.Raised2;
-                    tile.PointerExited += (_, _) => tile.Background = Brushes.Transparent;
-                }
-                tile.PointerReleased += (_, e) =>
-                {
-                    if (e.InitialPressMouseButton != MouseButton.Left || e.Handled) return;
-                    flyout.Hide();
-                    SetLayoutFor(count, t);
-                };
-            }
-            grid.Children.Add(tile);
-        }
-        flyout.Content = new StackPanel
-        {
-            Spacing = 6,
-            Children =
-            {
-                new TextBlock
-                {
-                    Text = $"Layout for {count} session{(count == 1 ? "" : "s")}"
-                           + (_focused is null ? "" : " · click a cell to put the focused pane there"),
-                    FontFamily = _p.Body, FontSize = 11.5, Foreground = _p.Faint, Margin = new Thickness(4, 0),
-                },
-                grid,
-            },
-        };
-        flyout.ShowAt(anchor);
-    }
+    // ── Pills, hidden panes, keys ─────────────────────────────────────────────
 
-    // A template drawn small: one rounded cell per slot. With onSlot, each cell highlights on hover and clicks
-    // report its index.
-    private Control TemplateThumb(RoostTemplateShape shape, double width, double height, IBrush stroke, Action<int>? onSlot)
-    {
-        const double gap = 2;
-        var grid = new Grid { Width = width, Height = height };
-        foreach (var w in shape.Columns) grid.ColumnDefinitions.Add(new ColumnDefinition(w, GridUnitType.Star));
-        foreach (var w in shape.Rows) grid.RowDefinitions.Add(new RowDefinition(w, GridUnitType.Star));
-        for (int i = 0; i < shape.Slots.Count; i++)
-        {
-            var slot = shape.Slots[i];
-            int index = i;
-            var cell = new Border
-            {
-                Margin = new Thickness(gap / 2), CornerRadius = new CornerRadius(onSlot is null ? 2 : 3),
-                BorderThickness = new Thickness(1.2), BorderBrush = stroke, Background = _p.Raised,
-                [Grid.RowProperty] = slot.Row, [Grid.ColumnProperty] = slot.Column,
-                [Grid.RowSpanProperty] = slot.RowSpan, [Grid.ColumnSpanProperty] = slot.ColumnSpan,
-            };
-            if (onSlot is not null)
-            {
-                cell.PointerEntered += (_, _) => { cell.Background = _p.Brand; cell.BorderBrush = _p.Brand; };
-                cell.PointerExited += (_, _) => { cell.Background = _p.Raised; cell.BorderBrush = stroke; };
-                cell.PointerReleased += (_, e) =>
-                {
-                    if (e.InitialPressMouseButton != MouseButton.Left) return;
-                    e.Handled = true;
-                    onSlot(index);
-                };
-            }
-            grid.Children.Add(cell);
-        }
-        return grid;
-    }
-
-    private void RefreshSegments()
-    {
-        foreach (var (mode, seg) in _segments)
-        {
-            bool on = mode == _mode;
-            seg.Background = on ? _p.BrandWash : Brushes.Transparent;
-            ((TextBlock)seg.Child!).Foreground = on ? _p.Text : _p.Muted;
-        }
-    }
-
-    private (Border, TextBlock, Ellipse) OverflowPill()
+    private (Border, TextBlock, Ellipse) Pill()
     {
         var dot = new Ellipse { Width = 7, Height = 7, Fill = _p.Await, IsVisible = false, VerticalAlignment = VerticalAlignment.Center };
         var text = new TextBlock { FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = _p.Muted, VerticalAlignment = VerticalAlignment.Center };
@@ -1035,64 +866,66 @@ internal sealed class RoostWindow : Window
         return (pill, text, dot);
     }
 
-    private void HideOverflow() => _offPill.IsVisible = false;
-
-    // "N off stage · 1 needs you": the shown panes waiting in the rail.
-    private void RefreshOffStage(IReadOnlyList<RoostPane> shown)
+    // "N not in a tab · 1 needs you", and "K need you in other tabs" when another tab is calling.
+    private void RefreshPills(IReadOnlyList<RoostPane> all)
     {
-        var visible = _cellKeys.ToHashSet(StringComparer.Ordinal);
-        var off = shown.Where(p => !visible.Contains(p.Key)).ToList();
+        var off = _tabs.Unplaced(all).Where(p => !p.Ended).ToList();
         int needs = off.Count(p => p.Group == RoostGroup.NeedsYou);
-        _offPill.IsVisible = off.Count > 0;
-        _offPillText.Text = needs > 0 ? $"{off.Count} off stage · {needs} need{(needs == 1 ? "s" : "")} you" : $"{off.Count} off stage";
-        _offPillDot.IsVisible = needs > 0;
-        _offPill.BorderBrush = needs > 0 ? _p.Await : _p.Border;
-        _offPillText.Foreground = needs > 0 ? _p.Await : _p.Muted;
+        _unplacedPill.IsVisible = off.Count > 0;
+        _unplacedText.Text = needs > 0 ? $"{off.Count} not in a tab · {needs} need{(needs == 1 ? "s" : "")} you" : $"{off.Count} not in a tab";
+        _unplacedDot.IsVisible = needs > 0;
+        _unplacedPill.BorderBrush = needs > 0 ? _p.Await : _p.Border;
+        _unplacedText.Foreground = needs > 0 ? _p.Await : _p.Muted;
+
+        var elsewhere = _tabs.Elsewhere(all);
+        _elsewherePill.IsVisible = elsewhere.Count > 0;
+        _elsewhereText.Text = $"{elsewhere.Count} need{(elsewhere.Count == 1 ? "s" : "")} you in other tabs";
+        var brush = LightBrush(elsewhere.Light);
+        _elsewhereDot.IsVisible = true;
+        _elsewhereDot.Fill = brush;
+        _elsewherePill.BorderBrush = brush;
+        _elsewhereText.Foreground = brush;
     }
 
-    private void RefreshChips()
+    private (Border Row, TextBlock Text) RailFooterRow(string text, string tip)
     {
-        var c = _roster.Counts;
-        _chips.Children.Clear();
-        if (c.NeedsYou > 0) _chips.Children.Add(Chip($"{c.NeedsYou} need{(c.NeedsYou == 1 ? "s" : "")} you", _p.Await, RoostGroup.NeedsYou, strong: true));
-        if (c.Working > 0) _chips.Children.Add(Chip($"{c.Working} working", _p.Ok, RoostGroup.Working, strong: false));
-        if (c.DoneReview > 0) _chips.Children.Add(Chip($"{c.DoneReview} done", _p.Attn, RoostGroup.DoneReview, strong: false));
-        if (c.Quiet > 0) _chips.Children.Add(Chip($"{c.Quiet} quiet", _p.Idle, RoostGroup.Quiet, strong: false));
-        if (_roster.ClosedPanes.Count > 0) _chips.Children.Add(HiddenChip());
+        var label = new TextBlock { Text = text, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = _p.Muted };
+        var row = new Border
+        {
+            CornerRadius = new CornerRadius(8), Padding = new Thickness(8, 5), Cursor = new Cursor(StandardCursorType.Hand),
+            [ToolTip.TipProperty] = tip, Child = label,
+        };
+        row.PointerEntered += (_, _) => { row.Background = _p.Raised2; label.Foreground = _p.Text; };
+        row.PointerExited += (_, _) => { row.Background = Brushes.Transparent; label.Foreground = _p.Muted; };
+        return (row, label);
+    }
+
+    private void RefreshHiddenRow()
+    {
+        int n = _roster.ClosedPanes.Count;
+        _hiddenRow.IsVisible = n > 0;
+        _hiddenText.Text = $"{n} hidden";
     }
 
     // "N hidden": closed panes whose sessions still run. A click lists them to reopen (one, or all).
-    private Border HiddenChip()
+    private void ShowHiddenMenu(Control anchor)
     {
-        var hidden = _roster.ClosedPanes;
-        var chip = new Border
+        var flyout = new MenuFlyout { Placement = global::Avalonia.Controls.PlacementMode.RightEdgeAlignedBottom };
+        foreach (var pane in _roster.ClosedPanes)
         {
-            CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(10, 3), BorderThickness = new Thickness(1),
-            BorderBrush = _p.Border, Background = Brushes.Transparent, VerticalAlignment = VerticalAlignment.Center,
-            Cursor = new Cursor(StandardCursorType.Hand), [ToolTip.TipProperty] = "Closed panes — click to reopen",
-            Child = new TextBlock { Text = $"{hidden.Count} hidden", FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = _p.Faint },
-        };
-        chip.PointerReleased += (_, e) =>
+            var item = new MenuItem { Header = $"Reopen {pane.Session.DisplayName}" };
+            var key = pane.Key;
+            item.Click += (_, _) => Reopen([key]);
+            flyout.Items.Add(item);
+        }
+        if (_roster.ClosedPanes.Count > 1)
         {
-            if (e.InitialPressMouseButton != MouseButton.Left) return;
-            var flyout = new MenuFlyout { Placement = global::Avalonia.Controls.PlacementMode.BottomEdgeAlignedLeft };
-            foreach (var pane in _roster.ClosedPanes)
-            {
-                var item = new MenuItem { Header = $"Reopen {pane.Session.DisplayName}" };
-                var key = pane.Key;
-                item.Click += (_, _) => Reopen([key]);
-                flyout.Items.Add(item);
-            }
-            if (_roster.ClosedPanes.Count > 1)
-            {
-                flyout.Items.Add(new Separator());
-                var all = new MenuItem { Header = "Reopen all" };
-                all.Click += (_, _) => Reopen(_roster.ClosedPanes.Select(p => p.Key).ToList());
-                flyout.Items.Add(all);
-            }
-            flyout.ShowAt(chip);
-        };
-        return chip;
+            flyout.Items.Add(new Separator());
+            var all = new MenuItem { Header = "Reopen all" };
+            all.Click += (_, _) => Reopen(_roster.ClosedPanes.Select(p => p.Key).ToList());
+            flyout.Items.Add(all);
+        }
+        flyout.ShowAt(anchor);
     }
 
     private void Reopen(IReadOnlyList<string> keys)
@@ -1104,44 +937,129 @@ internal sealed class RoostWindow : Window
         else Refresh();
     }
 
-    // A summary chip that filters the stage to its group (click again to clear).
-    private Border Chip(string label, IBrush dot, RoostGroup group, bool strong)
+    // The cheat-sheet: every RoostKeys row, by section.
+    private void ShowKeys(Control anchor)
     {
-        bool on = _filter == group;
-        var chip = new Border
+        var body = new StackPanel { Spacing = 10, MinWidth = 320 };
+        foreach (var group in RoostKeys.All.GroupBy(r => r.Group))
         {
-            CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(10, 3), BorderThickness = new Thickness(1),
-            BorderBrush = on ? _p.BrandLine : _p.Border, Background = on ? _p.BrandWash : _p.Surface,
-            VerticalAlignment = VerticalAlignment.Center, Cursor = new Cursor(StandardCursorType.Hand),
-            [ToolTip.TipProperty] = on ? "Show every session" : "Show only these",
-            Child = new StackPanel
+            var rows = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), RowSpacing = 4, ColumnSpacing = 14 };
+            int r = 0;
+            foreach (var key in group)
             {
-                Orientation = Orientation.Horizontal, Spacing = 6,
+                rows.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+                rows.Children.Add(new TextBlock { Text = key.Chord, FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Text, [Grid.RowProperty] = r });
+                rows.Children.Add(new TextBlock
+                {
+                    Text = key.Description, FontFamily = _p.Body, FontSize = 12, Foreground = _p.Muted, TextWrapping = TextWrapping.Wrap,
+                    [Grid.RowProperty] = r, [Grid.ColumnProperty] = 1,
+                });
+                r++;
+            }
+            body.Children.Add(new StackPanel
+            {
+                Spacing = 5,
                 Children =
                 {
-                    new Ellipse { Width = 7, Height = 7, Fill = dot, VerticalAlignment = VerticalAlignment.Center },
-                    new TextBlock { Text = label, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = strong || on ? _p.Text : _p.Muted },
+                    new TextBlock { Text = group.Key.ToString().ToUpperInvariant(), FontFamily = _p.Mono, FontSize = 10.5, LetterSpacing = 1.2, Foreground = _p.Faint },
+                    rows,
                 },
-            },
-        };
-        chip.PointerReleased += (_, e) =>
+            });
+        }
+        body.Children.Add(new TextBlock
         {
-            if (e.InitialPressMouseButton != MouseButton.Left) return;
-            _filter = _filter == group ? null : group;
-            Refresh();
-        };
-        return chip;
+            Text = "Drag a rail row or a pane header onto a region to place it · double-click a header to zoom",
+            FontFamily = _p.Body, FontSize = 11.5, Foreground = _p.Faint, TextWrapping = TextWrapping.Wrap, MaxWidth = 340,
+        });
+        var flyout = new Flyout { Placement = global::Avalonia.Controls.PlacementMode.TopEdgeAlignedLeft, Content = body };
+        _openFlyout = flyout;
+        flyout.ShowAt(anchor);
     }
 
+    // ── Empty-region picker ──────────────────────────────────────────────────
+
+    // Click an empty region: pick a session for it — those in no tab first (most urgent first), then the ones in
+    // other tabs (picking one moves it here) — or start a new session in it.
+    private void ShowPicker(int slot)
+    {
+        if (slot < 0 || slot >= _slotRegions.Count) return;
+        var tab = _tabs.Active;
+        if (tab.IsFocus) return;
+        int region = _slotRegions[slot];
+        var flyout = new Flyout { Placement = global::Avalonia.Controls.PlacementMode.Center };
+        var list = new StackPanel { Spacing = 1, MinWidth = 260 };
+        list.Children.Add(new TextBlock
+        {
+            Text = "Put a session here", FontFamily = _p.Body, FontSize = 11.5, Foreground = _p.Faint, Margin = new Thickness(8, 0, 8, 4),
+        });
+        var candidates = _roster.Panes.Where(p => !p.Ended && !tab.Cells.Values.Contains(p.Key))
+            .OrderBy(p => _tabs.IsPlaced(p.Key))
+            .ThenByDescending(RoostTabStatus.LightOf)
+            .ThenBy(p => p.Session.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (candidates.Count == 0)
+            list.Children.Add(new TextBlock { Text = "Every live session is already in this tab", FontSize = 12, Foreground = _p.Muted, Margin = new Thickness(8, 4) });
+        foreach (var pane in candidates)
+        {
+            var key = pane.Key;
+            list.Children.Add(PickerRow(pane, TabTagFor(key), () => { flyout.Hide(); PlacePane(key, slot); }));
+        }
+        list.Children.Add(new Border { Height = 1, Background = _p.Border, Margin = new Thickness(4, 4) });
+        list.Children.Add(PickerRow(null, null, () => { flyout.Hide(); StartNewSession(new RoostPlacement(tab.Id, region)); }));
+        flyout.Content = new ScrollViewer { MaxHeight = 380, Content = list };
+        _openFlyout = flyout;
+        flyout.ShowAt(_cells[slot].Host);
+    }
+
+    private Border PickerRow(RoostPane? pane, string? tag, Action onPick)
+    {
+        var dock = new DockPanel { LastChildFill = true };
+        if (pane is not null)
+        {
+            dock.Children.Add(new Ellipse
+            {
+                Width = 8, Height = 8, Fill = LightBrush(RoostTabStatus.LightOf(pane)), VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0), [DockPanel.DockProperty] = Dock.Left,
+            });
+            if (tag is not null)
+                dock.Children.Add(new TextBlock
+                {
+                    Text = tag, FontFamily = _p.Mono, FontSize = 10.5, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(10, 0, 0, 0), MaxWidth = 90, TextTrimming = TextTrimming.CharacterEllipsis,
+                    [DockPanel.DockProperty] = Dock.Right,
+                });
+        }
+        dock.Children.Add(new TextBlock
+        {
+            Text = pane?.Session.DisplayName ?? "+ New session here", FontFamily = _p.Body, FontSize = 13,
+            FontWeight = FontWeight.SemiBold, Foreground = pane is null ? _p.Brand : _p.Text,
+            TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
+        });
+        var row = new Border
+        {
+            CornerRadius = new CornerRadius(7), Padding = new Thickness(8, 6), Cursor = new Cursor(StandardCursorType.Hand), Child = dock,
+        };
+        row.PointerEntered += (_, _) => row.Background = _p.Raised2;
+        row.PointerExited += (_, _) => row.Background = Brushes.Transparent;
+        row.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) { e.Handled = true; onPick(); } };
+        return row;
+    }
+
+    // The tab a session lives in, as the rail and picker label it — null when it's in none.
+    private string? TabTagFor(string key) =>
+        _tabs.Locate(key).FirstOrDefault() is { TabId: { } id } ? id == RoostTabSet.FocusId ? "focus" : _tabs.Find(id)?.Name : null;
+
+    // ── Rail ──────────────────────────────────────────────────────────────────
+
     // One rail row's controls, kept so the 1s clock and each scan update text and colour in place.
-    private sealed record RailRowView(Border Row, Ellipse Dot, TextBlock Elapsed, Border NewTag, TextBlock Diamond, TextBlock Name);
+    private sealed record RailRowView(Border Row, Border Bar, Ellipse Dot, TextBlock Elapsed, Border NewTag, TextBlock Diamond, TextBlock Tag, TextBlock Name);
 
     private readonly Dictionary<string, RailRowView> _railRows = new(StringComparer.Ordinal);
     private string? _railSig;
 
-    // The rail's controls are rebuilt only when its shape changes (a pane joins, leaves or changes group); every
-    // other pass, the clock's included, just re-labels the existing rows. Never mid-press: rebuilding would drop
-    // the row being pressed or dragged (EndDrag refreshes once it lets go).
+    // The rail's controls are rebuilt only when its shape changes (a pane joins, leaves or changes group, or the
+    // sort flips); every other pass, the clock's included, just re-labels the existing rows. Never mid-press:
+    // rebuilding would drop the row being pressed or dragged (EndDrag refreshes once it lets go).
     private void RefreshRail()
     {
         var sections = RailSections();
@@ -1251,8 +1169,14 @@ internal sealed class RoostWindow : Window
     // A rail row's controls; UpdateRailRow fills them from the pane.
     private RailRowView RailRow(string key)
     {
+        var bar = new Border { Width = 3, CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 1, 6, 1), [DockPanel.DockProperty] = Dock.Left };
         var dot = new Ellipse { Width = 8, Height = 8, VerticalAlignment = VerticalAlignment.Center };
         var elapsed = new TextBlock { FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0), [DockPanel.DockProperty] = Dock.Right };
+        var tag = new TextBlock
+        {
+            FontFamily = _p.Mono, FontSize = 10, Foreground = _p.Faint, VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0), MaxWidth = 56, TextTrimming = TextTrimming.CharacterEllipsis, [DockPanel.DockProperty] = Dock.Right,
+        };
         var newTag = new Border
         {
             CornerRadius = SessionPalette.PillRadius, Padding = new Thickness(6, 0), Margin = new Thickness(6, 0, 0, 0),
@@ -1272,15 +1196,16 @@ internal sealed class RoostWindow : Window
         };
         var row = new Border
         {
-            CornerRadius = new CornerRadius(8), Padding = new Thickness(8, 6), BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8), Padding = new Thickness(2, 6, 8, 6), BorderThickness = new Thickness(1),
             Cursor = new Cursor(StandardCursorType.Hand),
             Child = new DockPanel
             {
                 LastChildFill = true,
                 Children =
                 {
+                    bar,
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, [DockPanel.DockProperty] = Dock.Left, Children = { dot } },
-                    elapsed, newTag, diamond, name,
+                    elapsed, tag, newTag, diamond, name,
                 },
             },
         };
@@ -1289,16 +1214,16 @@ internal sealed class RoostWindow : Window
         row.PointerExited += (_, _) => row.Background = key == _focused ? _p.BrandWash : Brushes.Transparent;
         AttachDragSource(row, key);   // first, so a drop marks the release handled before the click sees it
         row.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left && !e.Handled) FocusPane(key); };
-        return new RailRowView(row, dot, elapsed, newTag, diamond, name);
+        return new RailRowView(row, bar, dot, elapsed, newTag, diamond, tag, name);
     }
 
     private void UpdateRailRow(RailRowView v, RoostPane pane)
     {
         var s = pane.Session;
         bool on = pane.Key == _focused;
-        // Tiled: a pane waiting off stage reads dimmer; one that hasn't been on stage yet is marked "new".
-        bool offStage = _mode == RoostLayoutMode.Tiled && !_cellKeys.Contains(pane.Key);
-        bool fresh = offStage && _filter is null && !pane.Ended && !_onStage.WasEverOn(pane.Key);
+        var tag = TabTagFor(pane.Key);
+        bool inActive = _tabs.Active.Cells.Values.Contains(pane.Key);
+        bool fresh = tag is null && !pane.Ended && !_everPlaced.Contains(pane.Key);
         v.Dot.Fill = pane.Ended ? _p.Faint : s.Status switch
         {
             SessionStatus.AwaitingInput => _p.Await,
@@ -1312,25 +1237,31 @@ internal sealed class RoostWindow : Window
             : s.Status == SessionStatus.Running ? s.RunningElapsedLabel() ?? ""
             : "";
         if (v.Elapsed.Text != elapsed) v.Elapsed.Text = elapsed;
+        v.Bar.Background = inActive ? _p.Brand : Brushes.Transparent;
+        // Its own tab is marked by the bar; another tab's name is the tag.
+        v.Tag.Text = inActive ? "" : tag ?? "";
+        v.Tag.IsVisible = !inActive && tag is not null;
         v.NewTag.IsVisible = fresh;
         v.Diamond.IsVisible = s.IsPerchControlled;
         v.Name.Text = s.DisplayName;
-        v.Name.Foreground = offStage ? _p.Faint : _p.Text;
+        v.Name.Foreground = _p.Text;
         v.Row.BorderBrush = on ? _p.BrandLine : Brushes.Transparent;
         if (on || !v.Row.IsPointerOver) v.Row.Background = on ? _p.BrandWash : Brushes.Transparent;
         v.Row.Opacity = pane.Ended ? 0.6 : 1;
-        ToolTip.SetTip(v.Row, offStage ? "Off stage — click to bring it on, or drag it onto a cell" : null);
+        ToolTip.SetTip(v.Row, inActive ? "In this tab" : tag is null
+            ? "In no tab — click to look at it in Focus, or drag it onto a region"
+            : $"In {tag} — click to go there, or drag it onto a region here");
     }
 
-    // ── Drag to rearrange ─────────────────────────────────────────────────────
+    // ── Drag to place ─────────────────────────────────────────────────────────
 
-    // Pressing a pane header (or a rail row) and moving a few pixels starts a drag in Tiled: a ghost chip follows
-    // the pointer and the cell under it is marked; letting go there puts the pane in that cell (PlacePane).
+    // Pressing a pane header (or a rail row) and moving a few pixels starts a drag: a ghost chip follows the
+    // pointer and the region under it is marked; letting go there puts the session in that region (PlacePane).
     private void AttachDragSource(Control source, string key)
     {
         source.PointerPressed += (_, e) =>
         {
-            if (_mode != RoostLayoutMode.Tiled || !e.GetCurrentPoint(source).Properties.IsLeftButtonPressed) return;
+            if (!e.GetCurrentPoint(source).Properties.IsLeftButtonPressed) return;
             _press = (key, e.GetPosition(_overlay), source);
             e.Pointer.Capture(source);
         };
@@ -1370,17 +1301,16 @@ internal sealed class RoostWindow : Window
         _overlay.Children.Add(_ghost);
     }
 
-    // Moves the ghost to the pointer and marks the Tiled cell under it (an empty cell counts: dropping there
-    // moves the pane to the end).
+    // Moves the ghost to the pointer and marks the region under it.
     private void MoveGhost(Point at)
     {
         if (_ghost is null) return;
         Canvas.SetLeft(_ghost, at.X + 12);
         Canvas.SetTop(_ghost, at.Y + 8);
         _dropSlot = -1;
-        for (int i = 0; i < _cellHosts.Length; i++)
+        for (int i = 0; i < _slotRegions.Count; i++)
         {
-            var host = _cellHosts[i];
+            var host = _cells[i].Host;
             if (!host.IsVisible || host.TranslatePoint(default, _overlay) is not { } origin) continue;
             var rect = new Rect(origin, host.Bounds.Size);
             if (!rect.Contains(at)) continue;
@@ -1431,4 +1361,44 @@ internal sealed class RoostWindow : Window
         VerticalAlignment = VerticalAlignment.Center,
         Data = Geometry.Parse("M3,2 H13 A1.5,1.5 0 0 1 14.5,3.5 V12.5 A1.5,1.5 0 0 1 13,14 H3 A1.5,1.5 0 0 1 1.5,12.5 V3.5 A1.5,1.5 0 0 1 3,2 Z M7.5,2 V14 M7.5,8 H14.5"),
     };
+
+    // One region's cell: a host border at the region's slot holding a dashed placeholder (shown while the region
+    // is empty) — the pane host for an occupied region sits on top of it.
+    private sealed record RegionCell(Border Host, Panel Placeholder, TextBlock Title, TextBlock Body, TextBlock Chord)
+    {
+        public static RegionCell Create(SessionPalette p, double margin)
+        {
+            var title = new TextBlock { FontFamily = p.Display, FontWeight = FontWeight.Bold, FontSize = 14, Foreground = p.Muted, HorizontalAlignment = HorizontalAlignment.Center };
+            var body = new TextBlock
+            {
+                FontFamily = p.Body, FontSize = 12, Foreground = p.Faint, HorizontalAlignment = HorizontalAlignment.Center,
+                TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, MaxWidth = 260,
+            };
+            var chord = new TextBlock
+            {
+                FontFamily = p.Mono, FontSize = 10.5, Foreground = p.Faint, Margin = new Thickness(12, 10),
+                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+            };
+            var placeholder = new Panel
+            {
+                Children =
+                {
+                    new Rectangle
+                    {
+                        Stroke = p.Border, StrokeThickness = 1.5, StrokeDashArray = new AvaloniaList<double> { 4, 3 }, RadiusX = 12, RadiusY = 12,
+                        Fill = p.Surface, Opacity = 0.9,
+                    },
+                    new StackPanel
+                    {
+                        Spacing = 6, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(16),
+                        Children = { new TextBlock { Text = "+", FontSize = 22, Foreground = p.Faint, HorizontalAlignment = HorizontalAlignment.Center }, title, body },
+                    },
+                    chord,
+                },
+            };
+            var host = new Border { Margin = new Thickness(margin), Background = Brushes.Transparent, Child = placeholder };
+            return new RegionCell(host, placeholder, title, body, chord);
+        }
+    }
 }

@@ -520,10 +520,9 @@ internal static class HeadlessRenderer
         // pane's layout scale, every tool card (even an edit's diff) collapsed, in dark and light.
         RenderRoostThreadCompact(outDir);
 
-        // The Roost window (CP7): rail + Tiled stage over the sample roster — every status, Perch and
-        // terminal/IDE origins, expanded panes beside stacked mini cards, and the "↓ N more · needs you" pill.
+        // The Roost window (docs/roost-tabs-plan.md): rail + tab strip + the active tab's regions over the sample
+        // roster — every status, Perch and terminal/IDE origins, tab lights, empty regions and the Focus tab.
         RenderRoost(outDir);
-        RenderRoostSnap(outDir);
 
         // The rich Perch-controlled session window (docs/session-ui-plan.md): composed turns — user bubble,
         // Claude prose under the bird mark, collapsed thinking, tool cards, a pending permission card — in
@@ -1539,44 +1538,6 @@ internal static class HeadlessRenderer
         return c;
     }
 
-    // Snap layouts: two sessions under the default (side by side), three (one + two), five (two + three), a
-    // "Two rows" pick for two, and the snap flyout open.
-    private static void RenderRoostSnap(string outDir)
-    {
-        var all = RoostSampleSessions();
-        void Shot(string name, int count, Dictionary<int, Perch.Data.Roost.RoostSnapTemplate>? picks = null, bool flyout = false)
-        {
-            var roster = new Perch.Data.Roost.RoostRoster();
-            var picked = all.Where(s => s.ProjectName is "perch" or "api" or "extension" or "docs-site" or "service").Take(count).ToList();
-            roster.Update(picked, Clock.Now);
-            var w = new Windows.RoostWindow(roster,
-                pane => RoostFeed.ForFixed(RoostSampleConversation(pane.Session), pane.Session.SessionId,
-                    controlled: pane.Session.IsPerchControlled),
-                SessionPalette.For(true), layoutByCount: picks)
-            { Width = 1280, Height = 800 };
-            w.Show();
-            for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
-            if (flyout)
-            {
-                w.FocusPane(picked[0].Pid);
-                w.OpenSnapFlyoutForRender();
-                for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
-            }
-            var frame = w.CaptureRenderedFrame();
-            if (frame != null)
-            {
-                using var fs = File.Create(Path.Combine(outDir, name));
-                frame.Save(fs);
-            }
-            w.Close();
-        }
-        Shot("roost_snap_auto2_1x.png", 2);
-        Shot("roost_snap_auto3_1x.png", 3);
-        Shot("roost_snap_auto5_1x.png", 5);
-        Shot("roost_snap_rows2_1x.png", 2, new() { [2] = Perch.Data.Roost.RoostSnapTemplate.Rows2 });
-        Shot("roost_snap_flyout_1x.png", 2, flyout: true);
-    }
-
     private static void RenderRoost(string outDir)
     {
         foreach (var dark in new[] { true, false })
@@ -1586,8 +1547,16 @@ internal static class HeadlessRenderer
             var sessions = RoostSampleSessions();
             roster.Update(sessions, Clock.Now.AddMinutes(-3));
             roster.Update(sessions.Where(s => s.ProjectName != "scratch").ToList(), Clock.Now);
+            // Tabs: "Main" as the first run makes it (the six live sessions, 3×2), and "Infra" (one + two) holding
+            // only "extension" — two empty regions. "agent" is in no tab.
+            var tabs = new Perch.Data.Roost.RoostTabSet();
+            tabs.Sync(roster.Panes);
+            var main = tabs.CreateDefault(roster.Panes.Where(p => p.Key != "8801" && p.Key != "8802").ToList(), 1.6)!;
+            var infra = tabs.AddTab("Infra", Perch.Data.Roost.RoostGridLayout.FromTemplate(Perch.Data.Roost.RoostSnapTemplate.MainPlusTwo))!;
+            tabs.Assign(infra.Id, 0, "8801");
+            tabs.Activate(main.Id);
             var convs = new Dictionary<string, Perch.Data.Control.SessionConversation>();
-            var w = new Windows.RoostWindow(roster,
+            var w = new Windows.RoostWindow(roster, tabs,
                 pane => RoostFeed.ForFixed(convs[pane.Session.SessionId] = RoostSampleConversation(pane.Session),
                     pane.Session.SessionId, controlled: pane.Session.IsPerchControlled),
                 SessionPalette.For(dark))
@@ -1604,34 +1573,38 @@ internal static class HeadlessRenderer
                 using var fs = File.Create(Path.Combine(outDir, name));
                 frame.Save(fs);
             }
-            // Nine panes: the six most urgent on stage (3×2); ext, agent and the ended scratch wait in the rail,
-            // dimmed (the two live ones marked "new"), and the bottom bar reads "3 off stage".
-            Capture(dark ? "roost_tiled_1x.png" : "roost_tiled_light_1x.png");
+            // Main active: six panes; the strip lights Main (an API error, three wanting you) and Infra (working);
+            // the rail tags the Infra session, "agent" reads "new", and the bottom bar says "1 not in a tab".
+            Capture(dark ? "roost_tabs_main_1x.png" : "roost_tabs_main_light_1x.png");
             if (dark)
             {
-                // The rail sorted A–Z (roost-tabs T1): one flat list by name, the ended scratch last.
+                // The rail sorted A–Z (T1): one flat list by name, the ended scratch last.
                 w.SetRailSort(Perch.Data.Roost.RoostRailSort.Alphabetical);
                 Capture("roost_rail_alpha_1x.png");
                 w.SetRailSort(Perch.Data.Roost.RoostRailSort.Status);
 
-                // The "needs you" chip as a filter: only the blocked sessions.
-                w.FilterForRender(Perch.Data.Roost.RoostGroup.NeedsYou);
-                Capture("roost_tiled_filtered_1x.png");
-                w.FilterForRender(null);
+                // Infra: one pane and two empty regions; "need you in other tabs" points back at Main.
+                w.ActivateTab(infra.Id);
+                Capture("roost_tabs_infra_1x.png");
+                // Clicking an empty region: the picker (sessions in no tab first, then the ones elsewhere).
+                w.OpenPickerForRender(1);
+                Capture("roost_tabs_picker_1x.png");
+                w.CloseFlyoutForRender();
 
-                // Selecting "extension" in the rail: it takes the weakest pane's cell (the least recently viewed
-                // working pane, perch); nothing else moves and perch goes to the rail.
-                w.FocusPane("8801");
-                Capture("roost_tiled_brought_1x.png");
+                // A rail click on "agent", which is in no tab: it opens in Focus.
+                w.FocusPane("8802");
+                Capture("roost_tabs_focus_1x.png");
 
-                // Dragging "agent" from the rail over the first cell (ghost + drop mark), then letting go: agent
-                // takes that cell and its pane returns to the rail.
-                w.DragForRender("8802", 0);
-                Capture("roost_tiled_drag_1x.png");
+                // Back in Infra, drag "agent" from the rail over the top-right region (ghost + drop mark), and
+                // let go: it moves out of Focus into that region.
+                w.ActivateTab(infra.Id);
+                for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }   // lay Infra out before hit-testing its regions
+                w.DragForRender("8802", 1);
+                Capture("roost_tabs_drag_1x.png");
                 w.DropForRender();
-                Capture("roost_tiled_dropped_1x.png");
+                Capture("roost_tabs_dropped_1x.png");
 
-                // "+ New session": the Perch session it starts goes on stage when it appears, over a full stage.
+                // "+ New session": the Perch session it starts opens in Focus when it appears.
                 w.StartNewSessionForRender();
                 sessions = [.. sessions, sessions.First(s => s.ProjectName == "api") with
                 {
@@ -1639,15 +1612,14 @@ internal static class HeadlessRenderer
                     AwaitingSince = null, RunningSince = Clock.Now.AddSeconds(-2),
                 }];
                 roster.Update(sessions.Where(s => s.ProjectName != "scratch").ToList(), Clock.Now);
+                tabs.Sync(roster.Panes, roster.Adopted);
                 w.RosterChanged();
-                Capture("roost_tiled_started_1x.png");
+                Capture("roost_tabs_started_1x.png");
 
-                // Main + stack with the Perch "api" pane focused (main), then Zoom on it.
-                w.FocusPane("5678");
-                w.SetMode(Perch.Data.Roost.RoostLayoutMode.MainStack);
-                Capture("roost_mainstack_1x.png");
-                w.SetMode(Perch.Data.Roost.RoostLayoutMode.Zoom);
-                Capture("roost_zoom_1x.png");
+                // Main, the Perch "api" pane zoomed to fill the tab.
+                w.ActivateTab(main.Id);
+                w.ZoomForRender("5678");
+                Capture("roost_tabs_zoom_1x.png");
 
                 // CP10: the permission answered (as PerchSession.AnswerPermission resolves it) — the card turns
                 // into a receipt in place, through conversation state.
@@ -1656,24 +1628,18 @@ internal static class HeadlessRenderer
                     api.ResolvePermission(pending, allowed: true);
                     Capture("roost_zoom_answered_1x.png");
                 }
+                w.ZoomForRender("5678");
 
-                // Typing hold: the user is mid-reply in "api" when an off-stage session starts needing input — it
-                // waits in the rail ("off stage · 1 needs you") instead of bumping a pane under the cursor.
-                w.SetMode(Perch.Data.Roost.RoostLayoutMode.Tiled);
-                w.TypeForRender("5678");
-                var offStage = roster.Panes.First(p => !p.Ended && !w.IsOnScreenKey(p.Key)).Key;
-                roster.Update(sessions.Where(s => s.ProjectName != "scratch")
-                    .Select(s => s.Pid == offStage
-                        ? s with { Status = SessionStatus.AwaitingInput, AwaitingSince = Clock.Now.AddSeconds(-3) }
-                        : s).ToList(), Clock.Now);
-                w.RosterChanged();
-                Capture("roost_tiled_held_1x.png");
+                // The keys cheat-sheet (the rail footer's "⌨ Keys").
+                w.OpenKeysForRender();
+                Capture("roost_tabs_keys_1x.png");
+                w.CloseFlyoutForRender();
 
-                // CP16: close two panes from their menus — they leave the grid and the rail, and the title bar
-                // grows a "2 hidden" chip that reopens them.
+                // CP16: close two panes from their menus — their regions empty, and the rail footer grows a
+                // "2 hidden" row that reopens them.
                 w.ClosePaneForRender("9012");   // docs-site
                 w.ClosePaneForRender("1234");   // perch
-                Capture("roost_tiled_hidden_1x.png");
+                Capture("roost_tabs_hidden_1x.png");
             }
             w.Close();
         }

@@ -267,6 +267,27 @@ passes, `render <dir>` is eyeballed for the Roost shots, and there's one commit 
 - `RoostTabStatus` returns a `RoostLight` (None < Quiet < Working < Done < Awaiting < Error) plus a count.
 - `UniquePlacement = false` is covered by a test (the D1 door).
 
+### T4: Tabs in the window ✅
+*As built:*
+- **One `RoostTilePanel` for every tab**, drawn in the active tab's shape, rather than a panel per tab. A pane
+  in another tab is a hidden host, so a tab switch *or* a cross-tab move is a visibility flip and never a
+  re-parent. Hidden hosts stay warm, least recently shown first (up to `WarmLimit`).
+  `perch bench-roost 20`: a tab switch takes about 18 ms, a swap about 8 ms, a scan about 7 ms.
+- **Views stay keyed by session**, not by placement as T4 originally said. That's what keeps a move inside
+  a tab from rebuilding the thread. Lifting D1 later means a view per placement, with the feed shared.
+- The window no longer uses `TypingHold` (nothing moves by itself any more).
+- `RoostStage`, `RoostLayoutMode`, the per-count snap picks and `RoostOrder` are no longer read; T7 deletes
+  them.
+- The pane menu gains "Zoom / restore" and "Remove from tab" ("Keep on stage" is gone).
+- The strip already has lights + counts and a `+` (new tab, two columns) here. Rename, close, duplicate
+  and drop-on-tab-header are T5.
+- The empty-region picker lists sessions in no tab first (most urgent first), then the ones in other tabs,
+  then "+ New session here" (the new session lands in that region).
+- The App seeds the tabs from `AppSettings.RoostTabs`, runs `Sync(panes, Adopted)` before the window's own
+  pass, and saves with a 600 ms debounce. A pending save is flushed when the Roost closes and before an
+  update. First run (D8) creates "Main" when `RoostTabs` is null.
+- Render shots: `roost_tabs_{main,main_light,infra,picker,focus,drag,dropped,started,zoom,keys,hidden}_1x`.
+
 ### T1 / T2 / T3 original scope
 - `RoostRailSort` + `RoostRoster.RailFor`, a header toggle in the rail, the persisted `RoostRailSort`, and
   the row rebuild signature including the sort.
