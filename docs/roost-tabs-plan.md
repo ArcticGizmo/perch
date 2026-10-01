@@ -300,6 +300,10 @@ passes, `render <dir>` is eyeballed for the Roost shots, and there's one commit 
   reading order. If there's none, it takes the tab's `LastRegion` (the last region assigned to or focused, via
   `NoteFocus`), and the occupant swaps to where the session came from. The drop **doesn't switch tabs**, like
   dropping a file on a folder. Dropped on the active tab, the session is focused.
+- **Hover to switch**: hold a session drag over a background tab's header for 550 ms and that tab opens, with
+  the drag still going, so the session can be let go on one of its regions. Once a drag starts, the pointer
+  capture moves from the row or header it started on to the window's root panel, because the switch hides that
+  header and a hidden control can't keep the capture. The keys cheat-sheet mentions the gesture.
 - **Tab reorder (the stretch)**: drag a tab header onto another one and it takes that tab's place. Onto Focus
   means first.
 - **Pulse**: a *background* tab whose light is needs-you (Awaiting / Error) breathes a halo behind its dot on
@@ -308,7 +312,7 @@ passes, `render <dir>` is eyeballed for the Roost shots, and there's one commit 
 - **Focus is always in the active tab**: when the focused pane leaves (dropped elsewhere, removed, ended, tab
   closed), focus falls to the tab's zoomed pane, else its first in reading order.
 - The rail tab tags and the active-tab left bar were already in T4.
-- Render shots: `roost_tabs_{lights,rename,menu,droptab,droptab_done,reorder,reordered}_1x`.
+- Render shots: `roost_tabs_{lights,rename,menu,droptab,droptab_done,reorder,reordered,hoverswitch,hoverswitch_done}_1x`.
 
 ### T1 / T2 / T3 original scope
 - `RoostRailSort` + `RoostRoster.RailFor`, a header toggle in the rail, the persisted `RoostRailSort`, and
@@ -372,6 +376,8 @@ passes, `render <dir>` is eyeballed for the Roost shots, and there's one commit 
 - [ ] Take over in Perch from a pane in a tab: the new Perch session lands in the same region.
 - [ ] Perch restart (update) with sessions still running: the tabs come back populated, and a recycled pid
       doesn't.
+- [ ] Drag hover-switch: holding a rail row / pane header over a tab opens it after ~0.5 s, the drag survives the
+      switch (capture on the root), and Esc mid-drag cancels cleanly.
 - [ ] Painter divider drag feels right at 1× and 1.5× and never produces an invalid layout.
 - [ ] 8 expanded regions + 3 tabs: tab switch and drag latency (`perch bench-roost`).
 

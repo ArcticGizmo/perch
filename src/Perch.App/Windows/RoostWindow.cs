@@ -77,6 +77,13 @@ internal sealed class RoostWindow : Window
     private Border? _ghost;
     private int _dropSlot = -1;
     private string? _dropTab;
+    private readonly Panel _root;
+    // A session drag resting on another tab's header switches to that tab, so it can be dropped on a region there.
+    private const int HoverSwitchMs = 550;
+    private readonly DispatcherTimer _hoverTimer;
+    private string? _hoverTab;
+
+    private bool DragOwnsRoot => ReferenceEquals(_press?.Source, _root) || ReferenceEquals(_tabPress?.Source, _root);
 
     private readonly DispatcherTimer _pulseTimer;
     private readonly DispatcherTimer _clockTimer;
@@ -228,10 +235,24 @@ internal sealed class RoostWindow : Window
             Background = _p.BrandWash, Opacity = 0.7, IsVisible = false,
         };
         _overlay = new Canvas { IsHitTestVisible = false, Children = { _dropMark } };
-        Content = new Panel
+        _root = new Panel
         {
             Children = { new DockPanel { LastChildFill = true, Children = { bar, railHost, stageColumn } }, _overlay },
         };
+        Content = _root;
+        // A drag under way holds the pointer here, not on the row or header it started from: a hover-switch to
+        // another tab hides that header, and a hidden control can't keep the capture.
+        _root.PointerMoved += (_, e) => { if (DragOwnsRoot) MoveGhost(e.GetPosition(_overlay)); };
+        _root.PointerReleased += (_, e) =>
+        {
+            if (!DragOwnsRoot) return;
+            e.Handled = true;
+            EndDrag(drop: true);
+            e.Pointer.Capture(null);
+        };
+        _root.PointerCaptureLost += (_, _) => { if (DragOwnsRoot) EndDrag(drop: false); };
+        _hoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(HoverSwitchMs) };
+        _hoverTimer.Tick += (_, _) => HoverSwitch();
 
         // Window chords tunnel (so a focused thread can't swallow them); Enter / Esc bubble, so a focused control
         // takes them first.
@@ -248,6 +269,7 @@ internal sealed class RoostWindow : Window
         {
             _pulseTimer.Stop();
             _clockTimer.Stop();
+            _hoverTimer.Stop();
             foreach (var v in _views.Values) v.Park();
             foreach (var f in _feeds.Values) f?.Dispose();
             _feeds.Clear();
@@ -400,6 +422,18 @@ internal sealed class RoostWindow : Window
         else { _tabPress = (tabId!, default, this); StartGhost(null, _tabs.Find(tabId!)?.Name); }
         var b = _tabViews[ontoId].Button;
         if (b.TranslatePoint(new Point(b.Bounds.Width / 2, b.Bounds.Height / 2), _overlay) is { } at) MoveGhost(at);
+    }
+
+    /// <summary>HeadlessRenderer hook: the hover delay running out on the tab the drag is over.</summary>
+    internal void HoverSwitchForRender() => HoverSwitch();
+
+    /// <summary>HeadlessRenderer hook: the drag under way moving over the active tab's region at
+    /// <paramref name="slot"/>.</summary>
+    internal void MoveDragForRender(int slot)
+    {
+        if (slot < 0 || slot >= _cells.Length || !_cells[slot].Host.IsVisible) return;
+        var host = _cells[slot].Host;
+        if (host.TranslatePoint(new Point(host.Bounds.Width / 2, host.Bounds.Height / 2), _overlay) is { } at) MoveGhost(at);
     }
 
     internal void DropForRender() => EndDrag(drop: true);
@@ -1102,7 +1136,8 @@ internal sealed class RoostWindow : Window
         }
         body.Children.Add(new TextBlock
         {
-            Text = "Drag a rail row or a pane header onto a region to place it · double-click a header to zoom",
+            Text = "Drag a rail row or a pane header onto a region to place it, or onto a tab (hold it there to switch "
+                + "to that tab) · double-click a header to zoom",
             FontFamily = _p.Body, FontSize = 11.5, Foreground = _p.Faint, TextWrapping = TextWrapping.Wrap, MaxWidth = 340,
         });
         var flyout = new Flyout { Placement = global::Avalonia.Controls.PlacementMode.TopEdgeAlignedLeft, Content = body };
@@ -1403,11 +1438,10 @@ internal sealed class RoostWindow : Window
         {
             if (_press is not { } press || !ReferenceEquals(press.Source, source)) return;
             var at = e.GetPosition(_overlay);
-            if (_ghost is null)
-            {
-                if (Math.Abs(at.X - press.Start.X) + Math.Abs(at.Y - press.Start.Y) < 6) return;
-                StartGhost(press.Key);
-            }
+            if (Math.Abs(at.X - press.Start.X) + Math.Abs(at.Y - press.Start.Y) < 6) return;
+            _press = press with { Source = _root };   // first, so the source's capture-lost doesn't end the drag
+            e.Pointer.Capture(_root);
+            StartGhost(press.Key);
             MoveGhost(at);
         };
         source.PointerReleased += (_, e) =>
@@ -1437,11 +1471,10 @@ internal sealed class RoostWindow : Window
         {
             if (_tabPress is not { } press || !ReferenceEquals(press.Source, source)) return;
             var at = e.GetPosition(_overlay);
-            if (_ghost is null)
-            {
-                if (Math.Abs(at.X - press.Start.X) + Math.Abs(at.Y - press.Start.Y) < 6) return;
-                StartGhost(null, _tabs.Find(tabId)?.Name ?? "");
-            }
+            if (Math.Abs(at.X - press.Start.X) + Math.Abs(at.Y - press.Start.Y) < 6) return;
+            _tabPress = press with { Source = _root };
+            e.Pointer.Capture(_root);
+            StartGhost(null, _tabs.Find(tabId)?.Name ?? "");
             MoveGhost(at);
         };
         source.PointerReleased += (_, e) =>
@@ -1513,6 +1546,23 @@ internal sealed class RoostWindow : Window
                 break;
             }
         _dropMark.IsVisible = _dropSlot >= 0 || _dropTab is not null;
+
+        // A session held over a background tab's header: arm the switch (moving onto another tab re-arms it).
+        var hover = _press is not null && _dropTab != _tabs.ActiveId ? _dropTab : null;
+        if (hover == _hoverTab) return;
+        _hoverTab = hover;
+        _hoverTimer.Stop();
+        if (hover is not null) _hoverTimer.Start();
+    }
+
+    // The hover delay ran out with the drag still over that tab: switch to it. The drag carries on, so the session
+    // can be let go on one of its regions (or right there on its header).
+    private void HoverSwitch()
+    {
+        _hoverTimer.Stop();
+        if (_press is null || _ghost is null || _hoverTab is not { } id || _dropTab != id) return;
+        _hoverTab = null;
+        ActivateTab(id);
     }
 
     private void EndDrag(bool drop)
@@ -1529,6 +1579,8 @@ internal sealed class RoostWindow : Window
         _dropMark.IsVisible = false;
         _dropSlot = -1;
         _dropTab = null;
+        _hoverTab = null;
+        _hoverTimer.Stop();
         if (drop && dragged && movingTab is not null && tabId is not null) MoveTabTo(movingTab, tabId);
         else if (drop && dragged && key is not null && tabId is not null) DropOnTab(key, tabId);
         else if (drop && dragged && key is not null && slot >= 0) PlacePane(key, slot);

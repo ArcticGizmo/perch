@@ -1667,7 +1667,7 @@ internal static class HeadlessRenderer
         var api = Tab("API", "6543");
         Tab("Waiting", "8803", "5678");
         var review = Tab("Review", "9012");
-        Tab("Notes", "3456");
+        var notes = Tab("Notes", "3456");
         var empty = Tab("Empty");
         tabs.Activate(main.Id);
         var w = new Windows.RoostWindow(roster, tabs,
@@ -1707,6 +1707,15 @@ internal static class HeadlessRenderer
         Capture("roost_tabs_reorder_1x.png");
         w.DropForRender();
         Capture("roost_tabs_reordered_1x.png");
+
+        // "claude-thoughts" held over Notes' header until the tab opens, then carried down onto its empty region.
+        w.DragOntoTabForRender("5566", null, notes.Id);
+        w.HoverSwitchForRender();
+        for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }   // lay Notes out before hit-testing
+        w.MoveDragForRender(1);
+        Capture("roost_tabs_hoverswitch_1x.png");
+        w.DropForRender();
+        Capture("roost_tabs_hoverswitch_done_1x.png");
         w.Close();
     }
 
