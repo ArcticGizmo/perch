@@ -305,6 +305,22 @@ public sealed class RoostGridLayout
         Enumerable.Repeat(1.0, Units).ToArray(), Enumerable.Repeat(1.0, Units).ToArray(),
         _regions.Select(r => new RoostSlot(r.Row, r.Column, r.RowSpan, r.ColumnSpan)).ToArray());
 
+    /// <summary>
+    /// This layout (a preset or a saved one) renumbered to take over <paramref name="previous"/>'s region ids in
+    /// reading order: its first region (top-left) gets the id of <paramref name="previous"/>'s first, and so on.
+    /// Regions past <paramref name="previous"/>'s count get fresh ids. A tab's sessions then follow the swap by
+    /// reading position, and the extras' sessions go back to the rail (D9).
+    /// </summary>
+    public RoostGridLayout AdoptIds(RoostGridLayout previous)
+    {
+        var from = previous.ReadingOrder;
+        var to = ReadingOrder;
+        int next = previous._regions.Max(r => r.Id) + 1;
+        var ids = new Dictionary<int, int>();
+        for (int i = 0; i < to.Count; i++) ids[to[i].Id] = i < from.Count ? from[i].Id : next++;
+        return Create(_regions.Select(r => r with { Id = ids[r.Id] }))!;
+    }
+
     /// <summary>The <see cref="ToShape"/> slot of region <paramref name="id"/>, or -1.</summary>
     public int SlotOf(int id) => Array.FindIndex(_regions, r => r.Id == id);
 }

@@ -252,7 +252,22 @@ passes, `render <dir>` is eyeballed for the Roost shots, and there's one commit 
   space, and the removed region's id goes. `RoostRegion` is a record struct that round-trips through
   System.Text.Json as-is.
 
-### T1 / T2 original scope
+### T3: `RoostTabSet` + `RoostTabStatus` + `RoostKeys` ✅
+*As built:*
+- `RoostTabSet.Sync(panes, roster.Adopted)` is the one entry point per roster update. It follows
+  re-keyed panes, settles persisted cells on its first call and empties regions whose session left (ended
+  and dropped, or closed).
+- Persisted cells that haven't been settled yet are kept in `ToState`, so a save before the first scan
+  doesn't lose them.
+- Presets are applied through `RoostGridLayout.AdoptIds(previous)`, which renumbers the preset in reading
+  order. That leaves `ApplyLayout` with one mode: sessions follow region ids.
+- `RoostKeys.Resolve(keyName, mods)` takes Avalonia's `Key.ToString()`, so the window's handler is driven
+  by the same table the cheat-sheet reads. Enter / Esc are listed rows with no command (the pane handles
+  them).
+- `RoostTabStatus` returns a `RoostLight` (None < Quiet < Working < Done < Awaiting < Error) plus a count.
+- `UniquePlacement = false` is covered by a test (the D1 door).
+
+### T1 / T2 / T3 original scope
 - `RoostRailSort` + `RoostRoster.RailFor`, a header toggle in the rail, the persisted `RoostRailSort`, and
   the row rebuild signature including the sort.
 - Tests: alphabetical order, ties, ended panes last, a sort flip rebuilding rows.

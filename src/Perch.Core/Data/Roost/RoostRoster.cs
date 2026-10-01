@@ -128,6 +128,13 @@ public sealed class RoostRoster
     /// in it after the previous one) — a new "needs you" arrival, which flashes an inactive Roost's taskbar.</summary>
     public IReadOnlyList<string> NeedsYouArrivals { get; private set; } = [];
 
+    /// <summary>The panes the latest <see cref="Update"/> re-keyed: ended key → the live key that took its place
+    /// (Take over in Perch, or a <c>--resume</c> while the old pane lingered). Anything holding pane keys — the
+    /// Roost's tabs — follows the move.</summary>
+    public IReadOnlyDictionary<string, string> Adopted => _adopted;
+
+    private readonly Dictionary<string, string> _adopted = new(StringComparer.Ordinal);
+
     private HashSet<string> _needsYouBefore = new(StringComparer.Ordinal);
 
     /// <summary>The closed pane keys (pids). Pruned to keys the roster still holds.</summary>
@@ -257,6 +264,7 @@ public sealed class RoostRoster
             if (!seen.Contains(key)) _entries[key].EndedAt ??= now;
 
         ResolveSeeds();
+        _adopted.Clear();
         AdoptContinuations();
 
         // Expired or closed lingering panes drop.
@@ -303,6 +311,7 @@ public sealed class RoostRoster
             _order.RemoveAt(j);
             _entries.Remove(endedKey);
             _closed.Remove(endedKey);
+            _adopted[endedKey] = liveKey;
             if (j < i) i--;   // the slot we filled shifted left
         }
     }
