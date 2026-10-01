@@ -33,8 +33,8 @@ public class ClaudeConfigDirTests
     [Fact]
     public void Label_PrefersSlug_ThenDirName()
     {
-        Assert.Equal("work", new ClaudeConfigDir(@"C:\envs\work\.claude", slug: "work").Label);
-        Assert.Equal(".claude", new ClaudeConfigDir(@"C:\Users\me\.claude").Label);
+        Assert.Equal("work", new ClaudeConfigDir(Path.Combine(Path.GetTempPath(), "envs", "work", ".claude"), slug: "work").Label);
+        Assert.Equal(".claude", new ClaudeConfigDir(Path.Combine(Path.GetTempPath(), "me", ".claude")).Label);
     }
 
     [Fact]
@@ -53,8 +53,9 @@ public class ClaudeConfigDirTests
     [Fact]
     public void RealRoot_TrimsTrailingSeparator()
     {
-        var a = new ClaudeConfigDir(@"C:\envs\work\.claude\");
-        var b = new ClaudeConfigDir(@"C:\envs\work\.claude");
+        var root = Path.Combine(Path.GetTempPath(), "envs", "work", ".claude");   // native separators
+        var a = new ClaudeConfigDir(root + Path.DirectorySeparatorChar);
+        var b = new ClaudeConfigDir(root);
         Assert.Equal(a, b);
     }
 

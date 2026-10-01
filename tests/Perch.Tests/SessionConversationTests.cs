@@ -24,8 +24,8 @@ public class SessionConversationTests
         var (conv, _) = Make();
         var attachments = new List<MessageAttachment>
         {
-            new() { Kind = AttachmentKind.Image, Path = @"C:\tmp\shot.png", MediaType = "image/png" },
-            new() { Kind = AttachmentKind.File, Path = @"C:\tmp\notes.txt" },
+            new() { Kind = AttachmentKind.Image, Path = Path.Combine(Path.GetTempPath(), "shot.png"), MediaType = "image/png" },
+            new() { Kind = AttachmentKind.File, Path = Path.Combine(Path.GetTempPath(), "notes.txt") },
         };
         conv.AddUserPrompt("look at these", attachments);
 

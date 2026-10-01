@@ -50,6 +50,8 @@ public class LocalPathTests
     [Fact]
     public void A_share_is_safe_only_when_the_trusted_root_is_on_it()
     {
+        // A UNC cwd only exists on Windows (on macOS '\' isn't a separator, so it isn't rooted and vouches for nothing).
+        if (!OperatingSystem.IsWindows()) return;
         // The user working on \\srv\s may open files on \\srv\s — no host they didn't choose is contacted.
         const string cwd = @"\\perch-cp9.invalid\Share\repo";
         Assert.True(LocalPath.IsSafeToProbe(@"\\PERCH-CP9.invalid\share\other\a.md", cwd));
@@ -97,6 +99,7 @@ public class FileRefResolverTests
     [Fact]
     public void A_span_on_the_cwds_own_share_is_probed()
     {
+        if (!OperatingSystem.IsWindows()) return;   // a UNC cwd is Windows-only (see LocalPathTests)
         const string cwd = @"\\perch-cp9.invalid\s\repo";
         Assert.Equal(@"\\perch-cp9.invalid\s\repo\a.md", FileRefResolver.Resolve(cwd, "a.md", Exists));
         Assert.Equal(@"\\perch-cp9.invalid\s\b.md", FileRefResolver.Resolve(cwd, @"\\perch-cp9.invalid\s\b.md", Exists));

@@ -27,7 +27,8 @@ public static class DiagnosticLog
     {
         try
         {
-            if (fileName != Path.GetFileName(fileName) || fileName.Length == 0) return;
+            // Either slash is refused on every OS (a '\' is a plain name character on macOS), so one rule holds everywhere.
+            if (fileName.Length == 0 || fileName.IndexOfAny(['/', '\\']) >= 0 || fileName != Path.GetFileName(fileName)) return;
             var path = Path.Combine(Dir, fileName);
             lock (Gate)
             {

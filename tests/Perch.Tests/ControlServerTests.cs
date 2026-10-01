@@ -15,7 +15,9 @@ public class ControlServerTests
     // A folder that exists: Parse refuses an intent for one that doesn't (review fixes CP13).
     private static readonly string Here = AppContext.BaseDirectory.TrimEnd('\\', '/');
 
-    private static string UniquePipe() => "perch-control-test-" + Guid.NewGuid().ToString("N");
+    // Kept short: on macOS/Linux .NET backs the pipe with a Unix socket at $TMPDIR/CoreFxPipe_<name>, and the
+    // whole path must fit in 104 bytes (macOS's TMPDIR alone is ~50).
+    private static string UniquePipe() => "perch-t-" + Guid.NewGuid().ToString("N")[..12];
 
     // The client exactly as Program.ForwardSessionIntent opens it: current-user-only (so Connect verifies the
     // server's owner) and identification-only impersonation.
