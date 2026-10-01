@@ -97,7 +97,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dev-instance marker: a hot-pink brand so an isolated dev build is unmistakable next to a running
     // installed Perch — a 2px border around the panel plus a "Perch - DEV" header label. Only ever used
     // when AppProfile.IsDev, so a normal build never pays for it.
-    private static readonly IBrush DevPinkBrush   = new SolidColorBrush(Color.FromRgb(244, 114, 182));
+    private static readonly Color  DevPinkColor   = Color.FromRgb(244, 114, 182);
+    private static readonly IBrush DevPinkBrush   = new SolidColorBrush(DevPinkColor);
     private static readonly IPen   DevBorderPen   = new Pen(DevPinkBrush, 2);
     // Replay-instance marker: a light-blue brand + "Perch - Replay" header label so a replay is
     // unmistakable and can't be read as live sessions. Mirrors the dev marker and takes precedence over
@@ -119,6 +120,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private static readonly IBrush FgBrush        = Palette.FgBrush;
     private static Color RunningColor   => Palette.Active.StatusRunning.ToColor();
     private static Color AttentionColor => Palette.Active.StatusAttention.ToColor();
+    // The attention chase's colour: the theme's attention hue, or the dev pink in a dev build so the chase
+    // stands in for (and stays recognisable as) the dev instance border it replaces while it runs.
+    private Color ChaseColor => AppProfile.IsDev && !ReplayMode ? DevPinkColor : AttentionColor;
     private static Color AwaitingColor  => Palette.Active.StatusAwaiting.ToColor();
     private static Color IdleColor      => Palette.Active.StatusIdle.ToColor();
     private static Color ApiErrorColor  => Palette.Active.StatusError.ToColor();   // red — a failed run, distinct from the orange "done"
@@ -1446,7 +1450,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Layer-2 live-org lookup for the config-dir chip's hover tooltip. Cached (mtime-invalidated) so a
     // repaint/hover never re-parses .claude.json needlessly. Swappable for the render/preview harness.
     private IOrgProvider _orgProvider = new OrgProvider();
-    internal void SetOrgProvider(IOrgProvider provider) => _orgProvider = provider;
+    internal void SetOrgProvider(IOrgProvider provider)
+    {
+        _orgProvider = provider;
+        RecomputeMismatches();
+    }
 
     // Account guardrails (Layer 2, M2): the user's "this directory must run on one of these accounts" rules.
     // A session under a rule's path but signed into a forbidden org gets the pulsing red mismatch outline.
@@ -1455,6 +1463,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     public void SetAccountRules(IReadOnlyList<AccountRule>? rules)
     {
         _accountRules = rules ?? System.Array.Empty<AccountRule>();
+        RecomputeMismatches();
         InvalidateVisual();
     }
     // Set during paint whenever a mismatch row is drawn, so the pulse timer runs only while one is on screen.
@@ -1786,6 +1795,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 s.Status is not (SessionStatus.NeedsAttention or SessionStatus.AwaitingInput or SessionStatus.ApiError)))
             StopAttention();
 
+        RecomputeMismatches();
         UpdateTickTimer();
         RemeasurePanel();
     }
@@ -1862,7 +1872,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (ctx != null)
         {
             var pr = new Rect(0.5, 0.5, width - 1, h - 1);
-            if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, Corner); DrawChaseBorder(ctx, pr, AttentionColor); }
+            if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, Corner); DrawChaseBorder(ctx, pr, ChaseColor); }
             else OverlayDraw.Panel(ctx, pr, BgBrush, BorderPen, Corner);
             _denseCtl.PaintStrip(ctx, width);
             DrawInstanceBorder(ctx, width, h);
@@ -1924,7 +1934,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (_attentionFlash)
             {
                 OverlayDraw.Panel(ctx, panelRect, BgBrush, null, corner);
-                DrawChaseBorder(ctx, panelRect, AttentionColor);
+                DrawChaseBorder(ctx, panelRect, ChaseColor);
             }
             else
             {
@@ -2012,6 +2022,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         var pen = ReplayMode ? ReplayBorderPen : AppProfile.IsDev ? DevBorderPen : null;
         if (pen == null) return;
+        // A dev build's pink border sits on top of the attention chase and hid it, so while the chase runs the
+        // chase itself is drawn pink instead (see ChaseColor) and this static border steps aside.
+        if (_attentionFlash && !ReplayMode) return;
         var r = new Rect(1, 1, width - 2, height - 2);
         if (r.Width <= 0 || r.Height <= 0) return;
         OverlayDraw.Panel(ctx, r, null, pen, _docked ? 0 : Corner - 1);
@@ -2121,7 +2134,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         ctx.DrawEllipse(hovered ? UpdateHover : UpdateBrush, null, r.Center, r.Width / 2, r.Height / 2);
 
-        var pen = new Pen(Brushes.White, 1.5, lineCap: PenLineCap.Round);
+        var pen = OverlayDraw.Pen(Brushes.White, 1.5, lineCap: PenLineCap.Round);
         double cx = r.Left + r.Width / 2;
         double midY = r.Top + r.Height / 2;
         double top = midY - 4, bot = midY + 2;
@@ -2141,16 +2154,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                                          Color dotColor, Color textColor)
     {
         if (count == 0) return x;
-        ctx.DrawEllipse(new SolidColorBrush(dotColor), null, new Point(x + 4, midY), 4, 4);
+        ctx.DrawEllipse(OverlayDraw.Brush(dotColor), null, new Point(x + 4, midY), 4, 4);
         x += 12;
-        var label = OverlayDraw.Text(count.ToString(), 12, new SolidColorBrush(textColor), FontWeight.Bold);
+        var label = OverlayDraw.Text(count.ToString(), 12, OverlayDraw.Brush(textColor), FontWeight.Bold);
         OverlayDraw.TextLeftMid(ctx, label, x, midY);
         return x + label.Width + 8;
     }
 
     private static void DrawSideCollapseIcon(DrawingContext ctx, Rect r, bool reversed)
     {
-        var pen = new Pen(MutedBrush, 1.6, lineCap: PenLineCap.Round);
+        var pen = OverlayDraw.Pen(MutedBrush, 1.6, lineCap: PenLineCap.Round);
         double midY = r.Top + r.Height / 2;
         double pad = 3, left = r.Left + pad, right = r.Right - pad, headLen = 4;
 
@@ -2190,7 +2203,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (NextVisibleSection(OverlaySection.SystemInfo) == OverlaySection.ClaudeMetrics)
         {
             double sepY = SystemInfoTop + SysMetricsStripHeight - 4;
-            ctx.DrawLine(new Pen(new SolidColorBrush(SepColor), 1),
+            ctx.DrawLine(OverlayDraw.Pen(OverlayDraw.Brush(SepColor), 1),
                 new Point(HorizPad, sepY), new Point(width - HorizPad, sepY));
         }
     }
@@ -2398,7 +2411,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                              double? expectedPct, bool stale)
     {
         Color track = stale ? Palette.Blend(UsageTrackColor, BgColor, 0.4f) : UsageTrackColor;
-        OverlayDraw.Pill(ctx, new SolidColorBrush(track), new Rect(x, y, w, ChipBarH));
+        OverlayDraw.Pill(ctx, OverlayDraw.Brush(track), new Rect(x, y, w, ChipBarH));
 
         if (percent is { } p)
         {
@@ -2408,14 +2421,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 : Palette.UsageColor(clamped);
             if (stale) fill = Palette.Blend(fill, BgColor, 0.5f);
             double fw = Math.Round(w * clamped / 100.0);
-            if (fw > 0) OverlayDraw.Pill(ctx, new SolidColorBrush(fill), new Rect(x, y, fw, ChipBarH));
+            if (fw > 0) OverlayDraw.Pill(ctx, OverlayDraw.Brush(fill), new Rect(x, y, fw, ChipBarH));
         }
 
         if (expectedPct is { } ep && w > 0)
         {
             double markX = x + Math.Round(w * ep / 100.0);
             Color mark = stale ? Palette.Blend(ExpectedMarkColor, BgColor, 0.5f) : ExpectedMarkColor;
-            ctx.DrawRectangle(new SolidColorBrush(mark), null,
+            ctx.DrawRectangle(OverlayDraw.Brush(mark), null,
                 new Rect(markX - 0.5, y - 1, 1.5, ChipBarH + 2));
         }
     }
@@ -2470,7 +2483,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double noteX = startX;
         double iconY0 = centerY - IconSize / 2;
         if (_hoveredNoteButton)
-            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+            ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb(28, 255, 255, 255)),
                 new Rect(noteX - HitPad, iconY0 - HitPad, IconSize + HitPad * 2, IconSize + HitPad * 2));
         DrawNoteIcon(ctx, noteX + (IconSize - 10) / 2, centerY);
         _noteButtonRect = new Rect(noteX - HitPad, iconY0 - HitPad, IconSize + HitPad * 2, IconSize + HitPad * 2);
@@ -2481,7 +2494,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             double iconY = centerY - IconSize / 2;
 
             if (_hoveredQuickLink == i)
-                ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+                ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb(28, 255, 255, 255)),
                     new Rect(iconX - HitPad, iconY - HitPad, IconSize + HitPad * 2, IconSize + HitPad * 2));
 
             var icon = i < _quickLinkIcons.Count ? _quickLinkIcons[i] : null;
@@ -2508,7 +2521,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             else
             {
                 var initials = Initials(_quickLinks[i].Name);
-                var ft = OverlayDraw.Text(initials, 9.5, new SolidColorBrush(FallbackColor(_quickLinks[i].Name)),
+                var ft = OverlayDraw.Text(initials, 9.5, OverlayDraw.Brush(FallbackColor(_quickLinks[i].Name)),
                     FontWeight.Bold);
                 ctx.DrawText(ft, new Point(iconX + (IconSize - ft.Width) / 2, iconY + (IconSize - ft.Height) / 2));
             }
@@ -2582,13 +2595,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             double midY = y + lineH / 2;
 
             if (_hoveredHypertreeRow == i)
-                ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+                ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb(28, 255, 255, 255)),
                     new Rect(4, y, Math.Max(0, width - 8), lineH));
 
             // "You are here" is a bar in the gutter rather than a glyph: at this line height a glyph
             // would cost width the branch names need, and the bar reads at a glance.
             if (here)
-                OverlayDraw.Pill(ctx, new SolidColorBrush(CycleColor),
+                OverlayDraw.Pill(ctx, OverlayDraw.Brush(CycleColor),
                     new Rect(HorizPad, y + 3, MarkerW, Math.Max(2, lineH - 6)));
 
             // The trailing desktop label gives up width first — the branch name is what's being chosen.
@@ -2627,7 +2640,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     if (chipHot)
                         // Deliberately stronger than the line's own hover wash (alpha 28), which is drawn
                         // underneath it — the chip has to read as its own target, not just a lit row.
-                        OverlayDraw.Panel(ctx, chip, new SolidColorBrush(Color.FromArgb(58, 255, 255, 255)),
+                        OverlayDraw.Panel(ctx, chip, OverlayDraw.Brush(Color.FromArgb(58, 255, 255, 255)),
                             null, 4);
                 }
 
@@ -2688,7 +2701,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             double midY = y + lineH / 2;
 
             if (_hoveredDaemonRow == i)
-                ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+                ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb(28, 255, 255, 255)),
                     new Rect(4, y, Math.Max(0, width - 8), lineH));
 
             var match = MatchingSession(w);
@@ -2700,7 +2713,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 SessionStatus.ApiError       => ApiErrorColor,
                 _                            => IdleColor,
             };
-            ctx.DrawEllipse(new SolidColorBrush(dotColor), null, new Point(HorizPad + DotR, midY), DotR, DotR);
+            ctx.DrawEllipse(OverlayDraw.Brush(dotColor), null, new Point(HorizPad + DotR, midY), DotR, DotR);
 
             // Trailing label: a named task shows its project so the line still says where the work runs;
             // an unnamed worker (project as its name) shows its id. (Spares never reach the strip.)
@@ -2728,7 +2741,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             bool hot = _hoveredDaemonRow == VisibleDaemonCount;
             if (hot)
-                ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+                ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb(28, 255, 255, 255)),
                     new Rect(4, y, Math.Max(0, width - 8), lineH));
             var moreFt = OverlayDraw.Text($"show +{_stripDaemonWorkers.Count - VisibleDaemonCount} more",
                 HyperRowSize, hot ? FgBrush : MutedBrush);
@@ -2840,7 +2853,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             _anyMismatchThisFrame = true;
             var d = MismatchColor;
-            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(38, d.R, d.G, d.B)),
+            ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb(38, d.R, d.G, d.B)),
                 new Rect(1, top + 1, width - 2, rowH - 1));
         }
 
@@ -2851,8 +2864,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (session.SessionId == _cycleHighlightId && CycleHighlightOpacity() is > 0 and var op)
         {
             var rowRect = new Rect(1, top + 1, width - 2, rowH - 1);
-            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb((byte)(46 * op), CycleColor.R, CycleColor.G, CycleColor.B)), rowRect);
-            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb((byte)(255 * op), CycleColor.R, CycleColor.G, CycleColor.B)),
+            ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb((byte)(46 * op), CycleColor.R, CycleColor.G, CycleColor.B)), rowRect);
+            ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb((byte)(255 * op), CycleColor.R, CycleColor.G, CycleColor.B)),
                 new Rect(1, top + 1, 3, rowH - 1));
         }
 
@@ -2876,9 +2889,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double nameMidY   = activityLine ? top + 15 : top + rowH / 2;
 
         IBrush secondLine = mismatch
-            ? new SolidColorBrush(MismatchColor)
+            ? OverlayDraw.Brush(MismatchColor)
             : awaiting
-                ? new SolidColorBrush(WarmWaitingColor(session.AwaitingElapsed() ?? TimeSpan.Zero))
+                ? OverlayDraw.Brush(WarmWaitingColor(session.AwaitingElapsed() ?? TimeSpan.Zero))
                 : MutedBrush;
 
         var dotColor = session.Status switch
@@ -2905,7 +2918,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (session.IsPerchControlled && !_originIcons.ContainsKey(PerchOriginKey)) _originIcons[PerchOriginKey] = Brand;
         if (session.IsPerchControlled || (_showIdeStatusIcons && (session.IsDesktop || session.IsIde)))
         {
-            var hostBrush = new SolidColorBrush(dotColor);
+            var hostBrush = OverlayDraw.Brush(dotColor);
             var tinted = hostKey is not null ? TintedIcon(hostKey, dotColor) : null;
             if (tinted is not null)
             {
@@ -2932,7 +2945,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         }
         else
         {
-            ctx.DrawEllipse(new SolidColorBrush(dotColor), null, new Point(dotCx, nameMidY), 4, 4);
+            ctx.DrawEllipse(OverlayDraw.Brush(dotColor), null, new Point(dotCx, nameMidY), 4, 4);
         }
 
         string statusText = session.Status switch
@@ -3141,7 +3154,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         {
             var d = MismatchColor;
             byte a = (byte)(140 + 115 * PulseIntensity());   // alpha breathes 140..255
-            var pen = new Pen(new SolidColorBrush(Color.FromArgb(a, d.R, d.G, d.B)), 2.5);
+            var pen = OverlayDraw.Pen(OverlayDraw.Brush(Color.FromArgb(a, d.R, d.G, d.B)), 2.5);
             ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(2.5, top + 2.5, width - 5, rowH - 4), 5));
         }
     }
@@ -3150,9 +3163,34 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // The fixed destructive red (theme-independent by design — see Palette/FixedColors).
     private static Color MismatchColor => Palette.Danger;
 
+    // Each session's wrong-account state, worked out off the paint path (review fixes CP23): the live-org lookup
+    // stats .claude.json, and paint used to do it per governed row per frame. Recomputed when the sessions, the
+    // rules or the provider change, and on the tick/pulse timers so a /login is noticed (the provider only
+    // re-stats every couple of seconds). Keyed by the session object: rows paint the same instances.
+    private Dictionary<ClaudeSession, string> _mismatches = new(ReferenceEqualityComparer.Instance);
+
+    private void RecomputeMismatches()
+    {
+        var next = new Dictionary<ClaudeSession, string>(ReferenceEqualityComparer.Instance);
+        if (_accountRules.Count > 0)
+            foreach (var s in _sessions)
+                if (EvaluateMismatch(s) is { Mismatch: true } m)
+                    next[s] = m.Text;
+
+        bool same = next.Count == _mismatches.Count
+            && next.All(kv => _mismatches.TryGetValue(kv.Key, out var t) && t == kv.Value);
+        if (same) return;
+        _mismatches = next;
+        InvalidateVisual();
+    }
+
+    // The paint path's read: the cached state, no IO.
+    private (bool Mismatch, string Text) AccountMismatch(ClaudeSession session) =>
+        _mismatches.TryGetValue(session, out var text) ? (true, text) : (false, "");
+
     // Does an account rule govern this session's directory, and if so is it on a forbidden org? Returns the
     // wrong-account state and the red second-line text ("⚠ Acme ≠ Contoso"). Cheap when no rules are set.
-    private (bool Mismatch, string Text) AccountMismatch(ClaudeSession session)
+    private (bool Mismatch, string Text) EvaluateMismatch(ClaudeSession session)
     {
         if (_accountRules.Count == 0) return (false, "");
         var rule = AccountGuard.RuleFor(session.Cwd, _accountRules);
@@ -3185,6 +3223,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     // Runs a ~17fps repaint only while a mismatch outline is on screen (see _anyMismatchThisFrame), so the
     // pulse animates without spinning a timer when nothing is wrong. Mirrors UpdateTickTimer.
+    //
+    // It also stops once the overlay can't be seen (hidden, minimised, detached): no frame is painted then, so
+    // _anyMismatchThisFrame never gets cleared and the timer used to invalidate forever (CP23). The next paint
+    // after the overlay reappears restarts it. (Avalonia re-renders a control whole, so the pulse can't
+    // invalidate just the outline; the text caches keep those repaints cheap instead.)
     private DispatcherTimer? _pulseTimer;
     private void UpdatePulseTimer()
     {
@@ -3196,9 +3239,25 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private DispatcherTimer CreatePulseTimer()
     {
         var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(60) };
-        t.Tick += (_, _) => InvalidateVisual();
+        t.Tick += (_, _) =>
+        {
+            if (!OnScreen())
+            {
+                t.Stop();
+                return;
+            }
+            RecomputeMismatches();
+            InvalidateVisual();
+        };
         return t;
     }
+
+    // Whether a repaint could reach the screen: this control is effectively visible in a shown, non-minimised
+    // window.
+    private bool OnScreen() =>
+        IsEffectivelyVisible
+        && TopLevel.GetTopLevel(this) is { IsVisible: true } top
+        && (top as Window)?.WindowState != WindowState.Minimized;
 
     private Color WarmWaitingColor(TimeSpan waited)
     {
@@ -3320,8 +3379,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Color teamColor = Palette.TeamColor(sub.Color);
         Color nameColor = idle ? Palette.Blend(teamColor, BgColor, 0.55f) : teamColor;
         Color textColor = idle ? Palette.Blend(FgColor, BgColor, 0.55f) : FgColor;
-        var nameBrush = new SolidColorBrush(nameColor);
-        var textBrush = new SolidColorBrush(textColor);
+        var nameBrush = OverlayDraw.Brush(nameColor);
+        var textBrush = OverlayDraw.Brush(textColor);
 
         DrawTeammateGlyph(ctx, glyphX, midY, nameColor);
 
@@ -3354,7 +3413,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // A small "person" mark — a head circle above a shoulders dome — in the given colour, centred on (x, midY).
     private static void DrawTeammateGlyph(DrawingContext ctx, double x, double midY, Color color)
     {
-        var brush = new SolidColorBrush(color);
+        var brush = OverlayDraw.Brush(color);
         const double headD = 5;
         ctx.DrawEllipse(brush, null, new Point(x + headD / 2, midY - 5 + headD / 2), headD / 2, headD / 2);
 
@@ -3375,7 +3434,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // The background-session robot glyph: antenna + rounded-square face + two dot eyes.
     private static void DrawBotIcon(DrawingContext ctx, double x, double midY)
     {
-        var pen = new Pen(BotBrush, 1.3, lineCap: PenLineCap.Round);
+        var pen = OverlayDraw.Pen(BotBrush, 1.3, lineCap: PenLineCap.Round);
         const double w = 11, h = 9;
         double left = x, top = midY - h / 2 + 1;
         double cx = left + w / 2;
@@ -3391,7 +3450,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // (in the status-dot slot) until its real app icon resolves; drawn in the row's status colour.
     private static void DrawDesktopIcon(DrawingContext ctx, double x, double midY, IBrush brush)
     {
-        var pen = new Pen(brush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = OverlayDraw.Pen(brush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
         const double w = 11, h = 7.5;
         double left = x, top = midY - h / 2 - 1;
         double cx = left + w / 2, bottom = top + h;
@@ -3463,7 +3522,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         const double w = 12, h = 13;
         double left = x, top = midY - h / 2, cx = left + w / 2, cy = midY;
-        var pen = new Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = OverlayDraw.Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
         var apex   = new Point(cx, top);
         var uR     = new Point(left + w, top + 0.25 * h);
         var lR     = new Point(left + w, top + 0.75 * h);
@@ -3491,7 +3550,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         const double w = 12, h = 13;
         double left = x, top = midY - h / 2;
         double mastX = left + 3;
-        var pen = new Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = OverlayDraw.Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
 
         var sail = new StreamGeometry();
         using (var gc = sail.Open())
@@ -3523,7 +3582,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         const double w = 12, h = 12;
         double left = x, top = midY - h / 2;
-        var pen = new Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = OverlayDraw.Pen(brush, 1.2, null, PenLineCap.Round, PenLineJoin.Round);
 
         var chevrons = new StreamGeometry();
         using (var gc = chevrons.Open())
@@ -3545,7 +3604,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // internal so the composer toolbar's RemoteGlyph can paint the exact same mark (see Views.RemoteGlyph).
     internal static void DrawRemoteIcon(DrawingContext ctx, double originX, double midY)
     {
-        var pen = new Pen(RemoteBrush, 2.25, lineCap: PenLineCap.Round);
+        var pen = OverlayDraw.Pen(RemoteBrush, 2.25, lineCap: PenLineCap.Round);
         double oy = midY + 4;
         ctx.DrawEllipse(RemoteBrush, null, new Point(originX, oy), 2, 2);
         OverlayDraw.Arc(ctx, pen, originX, oy, 5, 270, 90);
@@ -3556,7 +3615,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // internal so the composer toolbar's MailGlyph can paint the exact same mark (see Views.MailGlyph).
     internal static void DrawMailIcon(DrawingContext ctx, double x, double midY)
     {
-        var pen = new Pen(MailBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = OverlayDraw.Pen(MailBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
         const double w = 11, h = 8;
         double top = midY - h / 2;
         ctx.DrawRectangle(null, pen, new Rect(x, top, w, h));
@@ -3575,7 +3634,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // lines, in the sticky-note amber. Marks a row that carries a note; hovering it pops the full text.
     internal static void DrawNoteIcon(DrawingContext ctx, double x, double midY, IBrush? brush = null)
     {
-        var pen = new Pen(brush ?? NoteBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = OverlayDraw.Pen(brush ?? NoteBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
         const double w = 10, h = 12, fold = 3.5;
         double left = x, top = midY - h / 2, right = left + w, bottom = top + h;
 
@@ -3614,7 +3673,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// same mark as the overlay row (see <see cref="Views.ArtifactGlyph"/>). Defaults to the ambient amber.</summary>
     internal static void DrawArtifactIcon(DrawingContext ctx, double x, double midY, IBrush? brush)
     {
-        var pen = new Pen(brush ?? ArtifactBrush, 1.4, null, PenLineCap.Flat, PenLineJoin.Round);
+        var pen = OverlayDraw.Pen(brush ?? ArtifactBrush, 1.4, null, PenLineCap.Flat, PenLineJoin.Round);
         const double side = 8, offset = 3, radius = 2;
         double top = midY - (side + offset) / 2;
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(x, top, side, side), radius));
@@ -3631,7 +3690,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// same mark as the overlay row (see <see cref="Views.MarkdownGlyph"/>). Defaults to the full-strength pink.</summary>
     internal static void DrawMdIcon(DrawingContext ctx, double x, double midY, IBrush? brush)
     {
-        var pen = new Pen(brush ?? MarkdownBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = OverlayDraw.Pen(brush ?? MarkdownBrush, 1.3, null, PenLineCap.Round, PenLineJoin.Round);
         const double w = 16, h = 11, radius = 2.5;
         double left = x, top = midY - h / 2;
         ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(left, top, w, h), radius));
@@ -3678,7 +3737,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             PrState.Draft  => hovered ? PrDraftHover  : PrDraftBrush,
             _              => hovered ? PrOpenHover   : PrOpenBrush,
         };
-        var pen = new Pen(brush, 1.4, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = OverlayDraw.Pen(brush, 1.4, null, PenLineCap.Round, PenLineJoin.Round);
 
         const double node = 1.9;
         double lx = x + 3;             // left (base) branch column
@@ -3727,7 +3786,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     internal static void DrawJiraIcon(DrawingContext ctx, double x, double midY)
     {
         var brush = Palette.JiraBrush;
-        var pen = new Pen(brush, 1.4, null, PenLineCap.Round, PenLineJoin.Round);
+        var pen = OverlayDraw.Pen(brush, 1.4, null, PenLineCap.Round, PenLineJoin.Round);
 
         double top = midY - 4.5, bot = midY + 4.5;
         double tipX = x + 2, bodyX = x + 6, rightX = x + 13;
@@ -3790,7 +3849,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// Static + threshold-parameterised so the session window (<see cref="ThermoGlyph"/>) shares the glyph.</summary>
     internal static void DrawThermo(DrawingContext ctx, float fill, float yellow, float orange, float red, double x, double midY)
     {
-        var colBrush = new SolidColorBrush(ThermoColor(fill, yellow, orange, red));
+        var colBrush = OverlayDraw.Brush(ThermoColor(fill, yellow, orange, red));
 
         double cx = x + 5;
         var tube = new Rect(cx - 2, midY - 7, 4, 9);
@@ -3833,7 +3892,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         Color c = Palette.ModeColor(mode);
         if (alpha < 255) c = Color.FromArgb((byte)alpha, c.R, c.G, c.B);
-        DrawModeChevrons(ctx, new SolidColorBrush(c), x, midY);
+        DrawModeChevrons(ctx, OverlayDraw.Brush(c), x, midY);
     }
 
     /// <summary>The mode badge's glyph — two fast-forward chevrons (~11×8 DIPs, left edge at <paramref name="x"/>,
@@ -3882,10 +3941,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
     private static void DrawMiniBar(DrawingContext ctx, double x, double y, double w, double h, double pct)
     {
-        OverlayDraw.Pill(ctx, new SolidColorBrush(UsageTrackColor), new Rect(x, y, w, h));
+        OverlayDraw.Pill(ctx, OverlayDraw.Brush(UsageTrackColor), new Rect(x, y, w, h));
         double fillW = Math.Round(w * pct / 100.0);
         if (fillW > 0)
-            OverlayDraw.Pill(ctx, new SolidColorBrush(Palette.UsageColor(pct)), new Rect(x, y, fillW, h));
+            OverlayDraw.Pill(ctx, OverlayDraw.Brush(Palette.UsageColor(pct)), new Rect(x, y, fillW, h));
     }
 
     // ── Pointer interaction ──────────────────────────────────────────────────
@@ -5256,12 +5315,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         var path = TranscriptLocator.Resolve(sessionId, cwd);
         if (path == null) return;
-        try
-        {
-            System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo("code", $"\"{path}\"") { UseShellExecute = true });
-        }
-        catch { /* best-effort — VS Code may not be on PATH */ }
+        // Through the revealer, never a shell-executed `code.cmd`: cmd would expand a % in the path (CP12).
+        PlatformServices.FileRevealer.OpenInEditor(path);
     }
 
     // ── Attention chase-border animation (4.14) ───────────────────────────────
@@ -5486,14 +5541,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         var rowRect = new Rect(1, top + 1, width - 2, rowH - 1);
         // A dark base first, so at partial (fading) alpha the colour reads true rather than letting the row's
         // text bleed through the tint.
-        ctx.FillRectangle(new SolidColorBrush(Color.FromArgb((byte)(255 * op), BgColor.R, BgColor.G, BgColor.B)), rowRect);
-        ctx.FillRectangle(new SolidColorBrush(Color.FromArgb((byte)(235 * op), c.R, c.G, c.B)), rowRect);
-        ctx.FillRectangle(new SolidColorBrush(Color.FromArgb((byte)(255 * op), c.R, c.G, c.B)),
+        ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb((byte)(255 * op), BgColor.R, BgColor.G, BgColor.B)), rowRect);
+        ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb((byte)(235 * op), c.R, c.G, c.B)), rowRect);
+        ctx.FillRectangle(OverlayDraw.Brush(Color.FromArgb((byte)(255 * op), c.R, c.G, c.B)),
             new Rect(1, top + 1, 4, rowH - 1));
 
         double midY = top + rowH / 2;
         var label = OverlayDraw.Text(_prBannerText, NameSize,
-            new SolidColorBrush(Color.FromArgb((byte)(255 * op), 255, 255, 255)), FontWeight.SemiBold);
+            OverlayDraw.Brush(Color.FromArgb((byte)(255 * op), 255, 255, 255)), FontWeight.SemiBold);
         OverlayDraw.TextLeftMid(ctx, label, HorizPad + 14, midY);
     }
 
@@ -5573,7 +5628,11 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private DispatcherTimer CreateTickTimer()
     {
         var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        t.Tick += (_, _) => InvalidateVisual();
+        t.Tick += (_, _) =>
+        {
+            RecomputeMismatches();   // a /login flipping a row's account (see RecomputeMismatches)
+            InvalidateVisual();
+        };
         return t;
     }
 
@@ -5589,7 +5648,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         double left = HorizPad, right = width - HorizPad;
         double fillW = Math.Round((right - left) * frac);
         if (fillW > 0)
-            OverlayDraw.Pill(ctx, new SolidColorBrush(IdleColor), new Rect(left, Y, fillW, TrackH));
+            OverlayDraw.Pill(ctx, OverlayDraw.Brush(IdleColor), new Rect(left, Y, fillW, TrackH));
     }
 
     // ── Service status footer ─────────────────────────────────────────────────
@@ -5607,7 +5666,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // bottom corners follow the panel edge instead of squaring off past it.
         var panelRect = new Rect(0.5, 0.5, width - 1, panelHeight - 1);
         using (ctx.PushClip(new RoundedRect(panelRect, Corner)))
-            ctx.FillRectangle(new SolidColorBrush(color, _hoveredFooter ? 0.30 : 0.18),
+            ctx.FillRectangle(OverlayDraw.Brush(color, _hoveredFooter ? 0.30 : 0.18),
                 new Rect(1, top, width - 2, FooterHeight));
 
         // Hairline rule separating the band from whatever's above it.
@@ -5615,16 +5674,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
 
         double midY = top + FooterHeight / 2;
         double x = HorizPad;
-        ctx.DrawEllipse(new SolidColorBrush(color), null, new Point(x + 3, midY), 3, 3);
+        ctx.DrawEllipse(OverlayDraw.Brush(color), null, new Point(x + 3, midY), 3, 3);
         x += 12;
 
         // Chevron on the right hints the click target; reserve its width so the text truncates before it.
-        var chevron = OverlayDraw.Text("›", 12, new SolidColorBrush(color), FontWeight.Bold);
+        var chevron = OverlayDraw.Text("›", 12, OverlayDraw.Brush(color), FontWeight.Bold);
         double chevX = width - HorizPad - chevron.Width;
 
         string text = string.IsNullOrWhiteSpace(_status.Description) ? "Service issue" : _status.Description;
         var label = OverlayDraw.Text(OverlayDraw.Truncate(text, StatusSize, chevX - x - 6, FontWeight.Bold),
-            StatusSize, new SolidColorBrush(color), FontWeight.Bold);
+            StatusSize, OverlayDraw.Brush(color), FontWeight.Bold);
         OverlayDraw.TextLeftMid(ctx, label, x, midY);
         OverlayDraw.TextLeftMid(ctx, chevron, chevX, midY);
     }
@@ -5674,7 +5733,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         int samples = pts.Length;
         if (samples < 2)
         {
-            ctx.DrawRectangle(null, new Pen(new ImmutableSolidColorBrush(color), 1.5), new RoundedRect(rect, radius));
+            ctx.DrawRectangle(null, OverlayDraw.Pen(new ImmutableSolidColorBrush(color), 1.5), new RoundedRect(rect, radius));
             return;
         }
 
@@ -5706,8 +5765,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                     if (a <= 1) continue;
                     // Heat the colour toward white near the head for the neon "hot core" look.
                     Color c = inten > 0.05 ? Palette.Blend(color, Colors.White, (float)(inten * 0.5)) : color;
-                    var pen = new Pen(new ImmutableSolidColorBrush(Color.FromArgb((byte)a, c.R, c.G, c.B)), w,
-                        lineCap: PenLineCap.Round, lineJoin: PenLineJoin.Round);
+                    var pen = OverlayDraw.SolidPen(Color.FromArgb((byte)a, c.R, c.G, c.B), w,
+                        PenLineCap.Round, PenLineJoin.Round);
                     ctx.DrawLine(pen, pts[k], pts[(k + 1) % samples]);
                 }
             }

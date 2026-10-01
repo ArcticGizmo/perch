@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Perch.Avalonia.Theming;
+using Perch.Avalonia.Views;
 
 namespace Perch.Avalonia.Windows;
 
@@ -54,7 +55,7 @@ public sealed class ImageViewerWindow : Window
             {
                 ToolbarButton("Reveal in Explorer", () => PlatformServices.FileRevealer.RevealInFileManager(_path)),
                 ToolbarButton("Open with…", () => PlatformServices.FileRevealer.OpenWith(_path)),
-                ToolbarButton("Open", () => { try { PlatformServices.UrlOpener.Open(_path); } catch { } }),
+                ToolbarButton("Open", () => PlatformServices.FileRevealer.OpenWithDefault(_path)),
             },
         };
         var bar = new DockPanel
@@ -86,13 +87,18 @@ public sealed class ImageViewerWindow : Window
         _instance.Activate();
     }
 
-    private void Load(string path)
+    // Full resolution (the viewer is where crispness matters), but decoded off the UI thread and refused past the
+    // pixel cap (BoundedBitmap). A retarget while a decode is in flight drops the stale result.
+    private async void Load(string path)
     {
         _path = path;
         Title = System.IO.Path.GetFileName(path);
         _caption.Text = path;
-        try { _image.Source = new Bitmap(path); }   // full resolution — the viewer is where crispness matters
-        catch { _image.Source = null; }
+        _image.Source = null;
+        Bitmap? bmp = await BoundedBitmap.LoadAsync(path);
+        if (_path != path || !IsVisible) { bmp?.Dispose(); return; }
+        _image.Source = bmp;
+        if (bmp is null) _caption.Text = $"{path}  ·  can't preview this image";
     }
 
     private Button ToolbarButton(string label, Action onClick)

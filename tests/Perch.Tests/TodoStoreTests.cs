@@ -114,4 +114,55 @@ public class TodoStoreTests
         due.ReminderFiredUtc = now;
         Assert.Empty(TodoStore.DueForReminder(store.All(), now));
     }
+
+    // ── CP14: a bad or unreadable file never becomes an empty list that the next save persists ──────────
+    // Each case gets its own folder: the unreadable copy is written beside todos.json.
+    private static string TempDirFile() =>
+        Path.Combine(Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"perch-todo-{Guid.NewGuid():N}")).FullName, "todos.json");
+
+    [Fact]
+    public void Unparseable_file_is_copied_aside_before_the_list_starts_over()
+    {
+        var path = TempDirFile();
+        try
+        {
+            const string torn = """{ "Todos": [ { "Title": "Ship rel""";   // a torn write from the old non-atomic save
+            File.WriteAllText(path, torn);
+
+            var store = TodoStore.LoadFrom(path);
+            Assert.Empty(store.All());
+            Assert.False(store.SaveSuppressed);
+            Assert.Equal(torn, File.ReadAllText(TodoStore.UnreadableCopyPath(path)));   // recoverable
+
+            store.Add("New", "", null);
+            store.Save();
+            Assert.Single(TodoStore.LoadFrom(path).All());
+        }
+        finally { Directory.Delete(Path.GetDirectoryName(path)!, recursive: true); }
+    }
+
+    [Fact]
+    public void File_locked_at_load_is_never_overwritten_that_session()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var path = TempDirFile();
+        try
+        {
+            var original = TodoStore.LoadFrom(path);
+            original.Add("Keep me", "", null);
+            original.Save();
+            var bytes = File.ReadAllBytes(path);
+
+            TodoStore store;
+            using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                store = TodoStore.LoadFrom(path);
+
+            Assert.True(store.SaveSuppressed);
+            store.Add("Would clobber", "", null);
+            store.Save();
+            Assert.Equal(bytes, File.ReadAllBytes(path));
+            Assert.False(File.Exists(TodoStore.UnreadableCopyPath(path)));   // unread, so nothing to copy
+        }
+        finally { Directory.Delete(Path.GetDirectoryName(path)!, recursive: true); }
+    }
 }

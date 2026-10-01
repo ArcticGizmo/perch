@@ -67,7 +67,7 @@ internal sealed class SessionMonitor : IDisposable
                 return;
             _pr.Enabled = value;
             if (value)
-                ChangeDetected?.Invoke();
+                RequestScanDebounced();
         }
     }
 
@@ -92,7 +92,7 @@ internal sealed class SessionMonitor : IDisposable
                 return;
             _jiraEnabled = value;
             if (value)
-                ChangeDetected?.Invoke();
+                RequestScanDebounced();
         }
     }
 
@@ -162,8 +162,11 @@ internal sealed class SessionMonitor : IDisposable
     private readonly Dictionary<string, Process> _trackedProcesses = new();
 
     // One watcher per distinct sessions/ dir in the config-dir set, keyed by dir path. Attached lazily
-    // (a non-primary env's sessions/ is created only when first used) and reconciled on set changes.
+    // (a non-primary env's sessions/ is created only when first used) and reconciled on set changes. Touched
+    // from the scan, a config-set change and a watcher's own error callback — different threads — so every
+    // access holds _watchGate (review fixes CP20/CP25).
     private readonly Dictionary<string, FileSystemWatcher> _watchers = new();
+    private readonly object _watchGate = new();
     private readonly System.Threading.Timer _debounceTimer;
     private bool _disposed;
 
@@ -194,14 +197,16 @@ internal sealed class SessionMonitor : IDisposable
     /// <summary>
     /// Raised when a session asks (via the plugin's <c>/history</c> command, which drops a one-shot
     /// <c>{sessionId}.history</c> trigger file) to open the history viewer on that session. Fired
-    /// from <see cref="Scan"/>, i.e. already on the UI thread.
+    /// from <see cref="Scan"/>, on whatever thread runs it — like every event here.
     /// </summary>
     public event Action<string>? OpenHistoryRequested;
 
     /// <summary>
-    /// Raised (on a thread-pool thread) whenever something happened that warrants a re-scan:
-    /// a session file changed, a tracked process exited, or the watcher dropped events.
-    /// The owner is responsible for marshaling <see cref="Scan"/> onto the UI thread.
+    /// Raised (on a thread-pool thread, after a short debounce) whenever something happened that warrants a
+    /// re-scan: a session file changed, a tracked process exited, the watcher dropped events, a background git/PR
+    /// refresh landed, or a controlled session changed state. Every trigger funnels through the one debounce, so a
+    /// burst costs one scan. The owner decides where <see cref="Scan"/> runs; the app runs it on a background
+    /// worker and marshals the events <see cref="Scan"/> raises back to the UI thread (review fixes CP20).
     /// </summary>
     public event Action? ChangeDetected;
 
@@ -235,8 +240,9 @@ internal sealed class SessionMonitor : IDisposable
         _debounceTimer = new System.Threading.Timer(_ => ChangeDetected?.Invoke());
         // A background git refresh landing with new numbers should repaint the overlay — treat it like
         // any other change trigger. The rescan re-reads the (now-fresh) cache, so it settles at once.
-        _gitStats.StatsUpdated += () => ChangeDetected?.Invoke();
-        _pr.Updated += () => ChangeDetected?.Invoke();
+        // Debounced like everything else: refreshes for several directories land in a burst.
+        _gitStats.StatsUpdated += RequestScanDebounced;
+        _pr.Updated += RequestScanDebounced;
         // A Perch-controlled session's status lives in memory (no file), so a turn starting/finishing fires no
         // filesystem event — nudge a (debounced) rescan directly, else the overlay would only catch up on the
         // 30s reconcile poll.
@@ -487,8 +493,12 @@ internal sealed class SessionMonitor : IDisposable
                     ? DateTimeOffset.FromUnixTimeMilliseconds(updatedAtMs).LocalDateTime
                     : now;
 
-            if (!IsProcessRunning(pid))
-                return null; // dead pid — drop the stale session file (replay's probe keeps recorded pids alive)
+            // The file's startedAt lets the probe tell a recycled pid from the session's own process: a file left
+            // by an unclean exit would otherwise stay "alive" for as long as some newer process held its pid.
+            var startedAtMs = TranscriptJson.AsLong(node["startedAt"]);
+            DateTime? startedAt = startedAtMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(startedAtMs).LocalDateTime : null;
+            if (!IsProcessRunning(pid, startedAt))
+                return null; // dead or recycled pid — drop the stale session file (replay's probe keeps recorded pids alive)
 
             // A session Perch drives over stream-json is the one case where the CLI's own status is useless:
             // Claude Code only heartbeats the session file's "status" in interactive TUI mode, so a controlled
@@ -1180,14 +1190,20 @@ internal sealed class SessionMonitor : IDisposable
         return rawStatus == "waiting" || !string.IsNullOrWhiteSpace(waitingFor);
     }
 
-    private bool IsProcessRunning(string pid)
-        => int.TryParse(pid, out var id) && _processProbe.IsAlive(id);
+    private bool IsProcessRunning(string pid, DateTime? startedAt)
+        => int.TryParse(pid, out var id) && _processProbe.IsAlive(id, startedAt);
 
     // ----- Event-driven trigger plumbing -------------------------------------------------
 
     // Attaches a watcher to each distinct sessions/ dir in the set that exists and isn't already watched.
     // A non-primary env's sessions/ is created only when first used, so watchers come and go lazily.
     private void EnsureWatchers()
+    {
+        lock (_watchGate)
+            EnsureWatchersLocked();
+    }
+
+    private void EnsureWatchersLocked()
     {
         if (_disposed)
             return;
@@ -1264,20 +1280,34 @@ internal sealed class SessionMonitor : IDisposable
     private void OnWatcherError(object sender, ErrorEventArgs e)
     {
         // The watcher buffer overflowed (or its dir went away). Tear that one down (keyed off the sender)
-        // so the next Scan re-attaches a fresh one, and force an immediate reconciliation scan.
+        // so the next Scan re-attaches a fresh one, and force a reconciliation scan. Runs on a pool thread
+        // while a scan may be using the map, hence the lock.
         if (sender is FileSystemWatcher watcher)
         {
             DisposeWatcher(watcher);
-            var key = _watchers.FirstOrDefault(kv => ReferenceEquals(kv.Value, watcher)).Key;
-            if (key != null)
-                _watchers.Remove(key);
+            lock (_watchGate)
+            {
+                var key = _watchers.FirstOrDefault(kv => ReferenceEquals(kv.Value, watcher)).Key;
+                if (key != null)
+                    _watchers.Remove(key);
+            }
         }
 
-        ChangeDetected?.Invoke();
+        RequestScanDebounced();
     }
 
     private void SyncProcessSubscriptions(HashSet<string> activePids)
     {
+        lock (_trackedProcesses)
+            SyncProcessSubscriptionsLocked(activePids);
+    }
+
+    // Runs on the scan's thread; Dispose (the UI thread, at exit) takes the same lock.
+    private void SyncProcessSubscriptionsLocked(HashSet<string> activePids)
+    {
+        if (_disposed)
+            return;
+
         // Drop subscriptions for PIDs that are no longer active.
         foreach (var pid in _trackedProcesses.Keys.Where(k => !activePids.Contains(k)).ToList())
         {
@@ -1296,9 +1326,10 @@ internal sealed class SessionMonitor : IDisposable
                 continue;
             if (!int.TryParse(pid, out var id))
                 continue;
+            Process? proc = null;
             try
             {
-                var proc = Process.GetProcessById(id);
+                proc = Process.GetProcessById(id);
                 proc.EnableRaisingEvents = true;
                 proc.Exited += OnTrackedProcessExited;
                 if (proc.HasExited)
@@ -1312,12 +1343,18 @@ internal sealed class SessionMonitor : IDisposable
             }
             catch
             {
-                // Process gone or inaccessible; the reconciliation poll covers it.
+                // Process gone or inaccessible (EnableRaisingEvents needs a handle we may not get); the
+                // reconciliation poll covers it. Don't leak the Process we did open.
+                if (proc is not null)
+                {
+                    try { proc.Exited -= OnTrackedProcessExited; } catch { }
+                    proc.Dispose();
+                }
             }
         }
     }
 
-    private void OnTrackedProcessExited(object? sender, EventArgs e) => ChangeDetected?.Invoke();
+    private void OnTrackedProcessExited(object? sender, EventArgs e) => RequestScanDebounced();
 
     public void Acknowledge(string pid) => _idleSince.Remove(pid);
 
@@ -1333,15 +1370,21 @@ internal sealed class SessionMonitor : IDisposable
         _gitStats.Dispose();
         _pr.Dispose();
 
-        foreach (var watcher in _watchers.Values)
-            DisposeWatcher(watcher);
-        _watchers.Clear();
-
-        foreach (var proc in _trackedProcesses.Values)
+        lock (_watchGate)
         {
-            try { proc.Exited -= OnTrackedProcessExited; } catch { }
-            proc.Dispose();
+            foreach (var watcher in _watchers.Values)
+                DisposeWatcher(watcher);
+            _watchers.Clear();
         }
-        _trackedProcesses.Clear();
+
+        lock (_trackedProcesses)
+        {
+            foreach (var proc in _trackedProcesses.Values)
+            {
+                try { proc.Exited -= OnTrackedProcessExited; } catch { }
+                proc.Dispose();
+            }
+            _trackedProcesses.Clear();
+        }
     }
 }

@@ -14,8 +14,9 @@ namespace Perch.Data;
 /// sub-agent is sitting in a long, silent shell command (where a file-mtime heuristic would
 /// wrongly report it as finished).
 ///
-/// Results are cached per transcript by (length, last-write) so the common case — a scan while
-/// a sub-agent runs, during which the parent transcript does not change — costs a stat, not a parse.
+/// Transcripts are folded incrementally (<see cref="TranscriptFold"/>), so the common case — a scan while
+/// a sub-agent runs, during which the parent transcript does not change — costs a stat, not a parse, and a
+/// growing agent transcript costs only its new bytes.
 /// </summary>
 internal sealed class SubAgentReader
 {
@@ -31,11 +32,13 @@ internal sealed class SubAgentReader
 
     private readonly TimeSpan _staleAfter;
 
-    // Legacy parent-transcript scan, memoised by the parent transcript's (length, last-write).
-    private readonly MtimeCache<IReadOnlyList<SubAgent>> _legacy = new();
-    // 2.1+ per-agent turn classification (working/idle + current activity), memoised by each agent
-    // file's mtime — the expensive transcript parse only re-runs when that agent's file grows.
-    private readonly MtimeCache<Classification> _agentState = new();
+    // Legacy parent-transcript scan, and the 2.1+ per-agent turn classification (working/idle + current
+    // activity), both folded incrementally (review fixes CP20): an unchanged file costs a stat, and a growing
+    // one — a working agent appends constantly — only its new bytes, not a re-read of the whole transcript.
+    private static readonly LineFolder<LegacyState> LegacyFolder = new(() => new(), StepLegacy);
+    private static readonly LineFolder<ClassifyState> ClassifyFolder = new(() => new(), StepClassify);
+    private readonly TranscriptFold _legacy = new(LegacyFolder);
+    private readonly TranscriptFold _agentState = new(ClassifyFolder);
     // Per-agent meta sidecar, cached by path: a .meta.json is written once and never changes, so
     // re-reading it every poll (now for idle teammates too, not just running agents) is wasted IO.
     private readonly Dictionary<string, AgentMeta> _meta = new();
@@ -78,8 +81,12 @@ internal sealed class SubAgentReader
 
         // Legacy (synchronous Task/Agent) model: a sub-agent is running while its tool_use in the
         // parent transcript has no matching tool_result.
-        return _legacy.GetOrCompute(path, Parse, []);
+        return LegacyAt(path);
     }
+
+    // Test seams: the legacy parse of a parent transcript at a path, and bytes the agent classifier has read.
+    internal IReadOnlyList<SubAgent> LegacyAt(string path) => _legacy.Get(path, LegacyFolder, FinishLegacy, []);
+    internal long AgentBytesRead => _agentState.BytesRead;
 
     // The sub-agents under {sessionId}/subagents/ to surface for the parent session, assembled into a
     // parent → child tree. Every agent (however deep) lives flat in this one directory, described by its
@@ -89,7 +96,7 @@ internal sealed class SubAgentReader
     //     roster doesn't flicker as members go quiet between messages from the lead.
     // The turn classification is cached per agent file by (length, last-write) so an unchanged
     // transcript costs a stat, not a parse.
-    private IReadOnlyList<SubAgent> ScanBackground(string dir)
+    internal IReadOnlyList<SubAgent> ScanBackground(string dir)
     {
         var nowUtc = Clock.UtcNow;
 
@@ -102,7 +109,14 @@ internal sealed class SubAgentReader
             try
             {
                 var meta = ReadAgentMeta(Path.ChangeExtension(file, null) + ".meta.json");
-                var state = _agentState.GetOrCompute(file, Classify, default);
+
+                // An ordinary sub-agent is surfaced only while working, and a file silent past the stale window
+                // can't be (a working tail there is demoted as stale below) — so skip it before classifying. A
+                // long session accumulates dozens of finished agent files; this spares each a first-time parse.
+                if (!meta.IsTeammate && IsStale(file, nowUtc))
+                    continue;
+
+                var state = _agentState.Get(file, ClassifyFolder, FinishClassify, default);
 
                 // An explicit SubagentStop / TeammateIdle hook marker (written by the perch plugin)
                 // retires a "working"-looking tail the instant the turn really ended, instead of waiting
@@ -301,115 +315,124 @@ internal sealed class SubAgentReader
     // trailing "system" bookkeeping), which also keeps a long, silent shell command correctly pegged as
     // working rather than guessing from file mtime. When working, the most recent tool_use also yields a
     // present-tense activity phrase ("Reading Foo.cs") for the teammate row.
-    private static Classification Classify(string path)
+    private sealed class ClassifyState
     {
-        bool sawTurn = false;
-        bool lastWasUser = false;
-        bool lastAssistantHadToolUse = false;
-        string? lastToolName = null;
-        JsonNode? lastToolInput = null;
-        List<string>? launched = null;  // Task/Agent tool_use ids this transcript has spawned
+        public bool SawTurn;
+        public bool LastWasUser;
+        public bool LastAssistantHadToolUse;
+        public string? LastToolName;
+        public JsonNode? LastToolInput;
+        public List<string>? Launched;  // Task/Agent tool_use ids this transcript has spawned
+    }
 
-        foreach (var line in TranscriptScan.ReadLines(path))
+    private static void StepClassify(ClassifyState s, string line)
+    {
+        // Only assistant/user records carry the turn boundary we need; skip the rest (system,
+        // summary, file-history snapshots) without the cost of parsing them as JSON.
+        if (line.Length == 0 || (!line.Contains("assistant") && !line.Contains("user")))
+            return;
+
+        JsonNode? node;
+        try { node = JsonNode.Parse(line); }
+        catch { return; }
+
+        var type = node?["type"]?.GetValue<string>();
+        if (type == "user")
         {
-            // Only assistant/user records carry the turn boundary we need; skip the rest (system,
-            // summary, file-history snapshots) without the cost of parsing them as JSON.
-            if (line.Length == 0 || (!line.Contains("assistant") && !line.Contains("user")))
-                continue;
-
-            JsonNode? node;
-            try { node = JsonNode.Parse(line); }
-            catch { continue; }
-
-            var type = node?["type"]?.GetValue<string>();
-            if (type == "user")
+            s.SawTurn = true;
+            s.LastWasUser = true;
+        }
+        else if (type == "assistant")
+        {
+            s.SawTurn = true;
+            s.LastWasUser = false;
+            s.LastAssistantHadToolUse = false;
+            if (TranscriptJson.ContentArray(node) is { } content)
             {
-                sawTurn = true;
-                lastWasUser = true;
-            }
-            else if (type == "assistant")
-            {
-                sawTurn = true;
-                lastWasUser = false;
-                lastAssistantHadToolUse = false;
-                if (TranscriptJson.ContentArray(node) is { } content)
+                foreach (var block in content)
                 {
-                    foreach (var block in content)
+                    if (TranscriptJson.BlockType(block) == "tool_use")
                     {
-                        if (TranscriptJson.BlockType(block) == "tool_use")
-                        {
-                            lastAssistantHadToolUse = true;
-                            lastToolName = block!["name"]?.GetValue<string>();
-                            lastToolInput = block["input"];
-                            // A Task/Agent tool_use here spawned a nested sub-agent; remember its id so the
-                            // child (whose meta.ToolUseId matches) can be wired up under this agent.
-                            if (lastToolName is "Agent" or "Task"
-                                && block["id"]?.GetValue<string>() is { } spawnId)
-                                (launched ??= new List<string>()).Add(spawnId);
-                        }
+                        s.LastAssistantHadToolUse = true;
+                        s.LastToolName = block!["name"]?.GetValue<string>();
+                        s.LastToolInput = block["input"];
+                        // A Task/Agent tool_use here spawned a nested sub-agent; remember its id so the
+                        // child (whose meta.ToolUseId matches) can be wired up under this agent.
+                        if (s.LastToolName is "Agent" or "Task"
+                            && block["id"]?.GetValue<string>() is { } spawnId)
+                            (s.Launched ??= new List<string>()).Add(spawnId);
                     }
                 }
             }
         }
+    }
 
-        if (!sawTurn)
+    private static Classification FinishClassify(ClassifyState s)
+    {
+        var launched = s.Launched?.ToList();   // a copy: the fold keeps appending to its own list
+        if (!s.SawTurn)
             return new Classification(false, null, launched);  // nothing yet / just spawned — idle
-        bool working = lastWasUser           // an injected prompt or a tool_result awaiting the next step
-            || lastAssistantHadToolUse;      // assistant ended on a tool_use -> awaiting its result
-        string? activity = working && !string.IsNullOrEmpty(lastToolName)
-            ? ToolSummary.Describe(lastToolName!, lastToolInput)
+        bool working = s.LastWasUser           // an injected prompt or a tool_result awaiting the next step
+            || s.LastAssistantHadToolUse;      // assistant ended on a tool_use -> awaiting its result
+        string? activity = working && !string.IsNullOrEmpty(s.LastToolName)
+            ? ToolSummary.Describe(s.LastToolName!, s.LastToolInput)
             : null;
         return new Classification(working, activity, launched);
     }
 
-    private static IReadOnlyList<SubAgent> Parse(string path)
+    // Collect every Task tool_use and the set of tool_use ids that already have a result;
+    // a Task whose id never gets a result is a sub-agent still running.
+    private sealed class LegacyState
     {
-        // Collect every Task tool_use and the set of tool_use ids that already have a result;
-        // a Task whose id never gets a result is a sub-agent still running.
-        var taskUses = new Dictionary<string, (string Desc, string Type)>();
-        var resultIds = new HashSet<string>();
+        public readonly Dictionary<string, (string Desc, string Type)> TaskUses = new();
+        public readonly HashSet<string> ResultIds = new();
+    }
 
-        foreach (var line in TranscriptScan.ReadLines(path))
+    private static void StepLegacy(LegacyState s, string line)
+    {
+        // Cheap pre-filter: only the (rare) lines that could carry a sub-agent tool_use or
+        // any tool_result are worth parsing as JSON. Most transcript lines match neither.
+        if (!line.Contains("\"Agent\"") && !line.Contains("\"Task\"") && !line.Contains("tool_result"))
+            return;
+
+        try
         {
-            // Cheap pre-filter: only the (rare) lines that could carry a sub-agent tool_use or
-            // any tool_result are worth parsing as JSON. Most transcript lines match neither.
-            if (!line.Contains("\"Agent\"") && !line.Contains("\"Task\"") && !line.Contains("tool_result"))
-                continue;
+            if (TranscriptJson.ContentArray(JsonNode.Parse(line)) is not { } content)
+                return;
 
-            try
+            foreach (var block in content)
             {
-                if (TranscriptJson.ContentArray(JsonNode.Parse(line)) is not { } content)
-                    continue;
-
-                foreach (var block in content)
+                var type = TranscriptJson.BlockType(block);
+                // The sub-agent launcher is the "Agent" tool (older Claude Code called it "Task").
+                var name = type == "tool_use" ? block!["name"]?.GetValue<string>() : null;
+                if (name is "Agent" or "Task")
                 {
-                    var type = TranscriptJson.BlockType(block);
-                    // The sub-agent launcher is the "Agent" tool (older Claude Code called it "Task").
-                    var name = type == "tool_use" ? block!["name"]?.GetValue<string>() : null;
-                    if (name is "Agent" or "Task")
-                    {
-                        var id = block!["id"]?.GetValue<string>();
-                        if (id == null)
-                            continue;
-                        var input = block["input"];
-                        var desc = input?["description"]?.GetValue<string>() ?? "";
-                        var atype = input?["subagent_type"]?.GetValue<string>() ?? "";
-                        taskUses[id] = (desc, atype);
-                    }
-                    else if (type == "tool_result")
-                    {
-                        var rid = block!["tool_use_id"]?.GetValue<string>();
-                        if (rid != null)
-                            resultIds.Add(rid);
-                    }
+                    var id = block!["id"]?.GetValue<string>();
+                    if (id == null)
+                        continue;
+                    var input = block["input"];
+                    var desc = input?["description"]?.GetValue<string>() ?? "";
+                    var atype = input?["subagent_type"]?.GetValue<string>() ?? "";
+                    s.TaskUses[id] = (desc, atype);
+                }
+                else if (type == "tool_result")
+                {
+                    var rid = block!["tool_use_id"]?.GetValue<string>();
+                    if (rid != null)
+                        s.ResultIds.Add(rid);
                 }
             }
-            catch
-            {
-                // Malformed/partial line (transcripts are appended live) — skip it.
-            }
         }
+        catch
+        {
+            // Malformed/partial line (transcripts are appended live) — skip it.
+        }
+    }
 
+    private static IReadOnlyList<SubAgent> FinishLegacy(LegacyState s)
+    {
+        var taskUses = s.TaskUses;
+        var resultIds = s.ResultIds;
         var running = new List<SubAgent>();
         foreach (var (id, info) in taskUses)
         {

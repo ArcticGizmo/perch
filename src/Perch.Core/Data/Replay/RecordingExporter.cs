@@ -205,7 +205,8 @@ internal static class RecordingExporter
         // it's often absent for a historical session. Capture it when present for its static fields.
         if (FindSessionSnapshot(sid) is { } snapshot)
             WriteEntry(archive, $"{baseEntry}/{ReplayFormat.SessionSnapshot}",
-                RewriteSnapshot(snapshot, placeholderCwd, syntheticPid, sid));
+                redact ? RedactSnapshot(snapshot, placeholderCwd, syntheticPid, sid)
+                       : RewriteSnapshot(snapshot, placeholderCwd, syntheticPid, sid));
 
         void TryCopySidecar(string fileName, string entry)
         {
@@ -262,8 +263,8 @@ internal static class RecordingExporter
         return null;
     }
 
-    // Rewrites a captured session.json onto the placeholder cwd + synthetic pid so the tree is
-    // self-consistent; status/waitingFor/updatedAt/entrypoint/bridgeSessionId are non-PII and kept.
+    // An unredacted export: rewrites a captured session.json onto the synthetic pid so the tree is
+    // self-consistent, keeping every other field as captured. (Redacted exports use RedactSnapshot.)
     private static string RewriteSnapshot(string json, string placeholderCwd, int syntheticPid, string sessionId)
     {
         try
@@ -285,6 +286,37 @@ internal static class RecordingExporter
             ["cwd"] = placeholderCwd,
             ["status"] = "idle",
         }.ToJsonString();
+    }
+
+    /// <summary>The placeholder a redacted snapshot carries for a Remote Control session: the replay still
+    /// shows the session as remote-controlled, but the real claude.ai session id (a deep link into the
+    /// user's account) never leaves the machine.</summary>
+    internal const string RedactedBridgeSessionId = "session_redacted";
+
+    // The redacted snapshot is an allowlist (review fixes CP15): the identity fields rewritten as above plus
+    // only what the projector reads back — the entrypoint (a plain token) and whether Remote Control was on.
+    // The session's /rename title, waitingFor, the real bridge id and any field a future CLI adds are dropped.
+    internal static string RedactSnapshot(string json, string placeholderCwd, int syntheticPid, string sessionId)
+    {
+        var obj = new JsonObject
+        {
+            ["pid"] = syntheticPid,
+            ["sessionId"] = sessionId,
+            ["cwd"] = placeholderCwd,
+        };
+        try
+        {
+            if (JsonNode.Parse(json) is JsonObject src)
+            {
+                if (TranscriptJson.AsString(src["entrypoint"]) is { } ep
+                    && System.Text.RegularExpressions.Regex.IsMatch(ep, "^[A-Za-z0-9._-]{1,32}$"))
+                    obj["entrypoint"] = ep;
+                if (src["bridgeSessionId"] is not null)
+                    obj["bridgeSessionId"] = RedactedBridgeSessionId;
+            }
+        }
+        catch { }
+        return obj.ToJsonString();
     }
 
     private static void WriteEntry(ZipArchive archive, string entryName, string content)

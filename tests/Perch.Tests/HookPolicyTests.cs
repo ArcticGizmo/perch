@@ -56,6 +56,7 @@ public sealed class HookPolicyTests
     [Fact]
     public void Matching_tolerates_trailing_separator()
     {
-        Assert.False(HookPolicy.IsEnabled(ConfigDirProvenance.Declared, @"C:\d\", new[] { @"C:\d" }, None));
+        var dir = Path.Combine(Path.GetTempPath(), "d");   // native separators: '\' isn't one on macOS
+        Assert.False(HookPolicy.IsEnabled(ConfigDirProvenance.Declared, dir + Path.DirectorySeparatorChar, new[] { dir }, None));
     }
 }

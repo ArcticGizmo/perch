@@ -161,6 +161,7 @@ internal static class HeadlessRenderer
         });
         RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_1x.png"), 96);
         RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_1.5x.png"), 144);
+        BenchOverlayPaint();
 
         var probe = new OverlayCanvas();
         probe.Update(SampleData.Sessions());
@@ -1186,6 +1187,71 @@ internal static class HeadlessRenderer
         rtb.Save(fs);
     }
 
+    // CP23: with PERCH_BENCH=1, repaints the full sample overlay (attention chase on, one account-mismatch row, so
+    // the pulse path is live) as the pulse/chase timers would, and prints the per-frame paint cost, the bytes
+    // the UI thread allocates per frame, and how many org lookups (file stats, at runtime) each frame makes.
+    private static void BenchOverlayPaint()
+    {
+        if (Environment.GetEnvironmentVariable("PERCH_BENCH") != "1") return;
+        int lookups = 0;
+        var bench = new OverlayCanvas();
+        bench.SetShowPullRequests(true);
+        bench.SetShowJiraTickets(true);
+        bench.SetShowMarkdown(true);
+        bench.SetOrgProvider(new OrgProvider(
+            _ => new Org("contoso-uuid") { Name = "Contoso" }, _ => { lookups++; return 0L; }));
+        bench.Update(SampleData.Sessions());
+        bench.UpdateUsage(SampleData.OrgUsages());
+        bench.SetAccountRules(new[]
+        {
+            new AccountRule { Path = @"C:\src\perch", Allowed = new() { new AccountRef { Uuid = "acme-uuid", Name = "Acme Corp" } } },
+        });
+        bench.TriggerAttention();
+        bench.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        bench.Arrange(new Rect(bench.DesiredSize));
+        var px = new PixelSize((int)Math.Ceiling(bench.DesiredSize.Width), (int)Math.Ceiling(bench.DesiredSize.Height));
+        using var rtb = new RenderTargetBitmap(px, new Vector(96, 96));
+
+        for (int i = 0; i < 30; i++) rtb.Render(bench);   // warm-up: JIT, font load, first shaping
+        const int Frames = 300;
+        var ms = new List<double>(Frames);
+        lookups = 0;
+        long bytes0 = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < Frames; i++)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            rtb.Render(bench);
+            ms.Add(sw.Elapsed.TotalMilliseconds);
+        }
+        long bytes = GC.GetAllocatedBytesForCurrentThread() - bytes0;
+        var sorted = ms.OrderBy(x => x).ToList();
+        double P(double q) => sorted[Math.Min(sorted.Count - 1, (int)(q * sorted.Count))];
+        Console.WriteLine($"overlay paint bench: {Frames} frames - mean {ms.Average():N2} ms, p50 {P(0.5):N2}, " +
+                          $"p95 {P(0.95):N2}, max {sorted[^1]:N2} ms; {bytes / Frames / 1024.0:N1} KB allocated/frame; " +
+                          $"{lookups / (double)Frames:N1} org lookups/frame");
+
+        // The same frames split up: the canvas's own draw calls into a 1x1 target (Skia culls nearly all the
+        // rasterising, so this is roughly what the overlay's code costs), and the measure pass (layout), so the
+        // rasteriser's share of the total is visible.
+        (double Ms, double Kb) Time(Action a)
+        {
+            for (int i = 0; i < 10; i++) a();
+            long b0 = GC.GetAllocatedBytesForCurrentThread();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < Frames; i++) a();
+            return (sw.Elapsed.TotalMilliseconds / Frames, (GC.GetAllocatedBytesForCurrentThread() - b0) / Frames / 1024.0);
+        }
+        using var tiny = new RenderTargetBitmap(new PixelSize(1, 1), new Vector(96, 96));
+        var record = Time(() => tiny.Render(bench));
+        var measure = Time(() =>
+        {
+            bench.InvalidateMeasure();
+            bench.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        });
+        Console.WriteLine($"  draw calls only (1x1 target): {record.Ms:N2} ms, {record.Kb:N1} KB/frame; " +
+                          $"measure pass: {measure.Ms:N2} ms, {measure.Kb:N1} KB/frame");
+    }
+
     // A spread of marker kinds across a 5-minute scene, so the timeline shows each tick colour.
     private static IReadOnlyList<ReplayMarker> SampleMarkers() =>
     [
@@ -1532,6 +1598,8 @@ internal static class HeadlessRenderer
         }
         launcher.Close();
 
+        RenderStreaming(outDir, cwd);
+
         void Capture(Theming.SessionPalette palette, string file, List<Perch.Data.Control.SessionEvent> scene,
             string? userPrompt = prompt, IReadOnlyList<Perch.Data.Control.MessageAttachment>? attach = null)
         {
@@ -1606,6 +1674,119 @@ internal static class HeadlessRenderer
             }
             w.Close();
         }
+    }
+
+    // A long assistant reply streamed live into the session window (CP22): captured mid-way through an open
+    // fenced code block, so the streaming tail's rendering can be eyeballed. With PERCH_BENCH=1 it also streams
+    // the whole reply in small deltas, one paced frame each, and prints the per-frame cost.
+    private static void RenderStreaming(string outDir, string cwd)
+    {
+        var reply = LongStreamingReply();
+        var init = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "default", 18),
+        };
+
+        // The capture: coarse deltas up to the middle of the trailing code block, then catch the reveal up.
+        int codeMid = reply.IndexOf("```csharp", StringComparison.Ordinal) + 2400;
+        var coarse = Chunk(reply[..codeMid], 400);
+        var w = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 980 };
+        w.FeedSampleForRender(cwd, "Walk me through the scan worker, step by step.", init);
+        w.Show();
+        Dispatcher.UIThread.RunJobs();
+        w.StreamSampleForRender(coarse);
+        w.StreamSampleForRender(Enumerable.Repeat("", 40).ToList());   // no new text: lets the reveal catch up
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        if (w.CaptureRenderedFrame() is { } frame)
+        {
+            using var fs = File.Create(Path.Combine(outDir, "session_streaming_1x.png"));
+            frame.Save(fs);
+        }
+        w.Close();
+
+        if (Environment.GetEnvironmentVariable("PERCH_BENCH") != "1") return;
+        var fine = Chunk(reply, 24);
+        var bench = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 980 };
+        bench.FeedSampleForRender(cwd, "Walk me through the scan worker, step by step.", init);
+        bench.Show();
+        Dispatcher.UIThread.RunJobs();
+        var ms = bench.StreamSampleForRender(fine);
+        bench.Close();
+        var sorted = ms.OrderBy(x => x).ToList();
+        double P(double q) => sorted[Math.Min(sorted.Count - 1, (int)(q * sorted.Count))];
+        Console.WriteLine($"streaming bench: {reply.Length:N0} chars in {ms.Count} frames - total {ms.Sum():N0} ms, " +
+                          $"mean {ms.Average():N2} ms, p50 {P(0.5):N2}, p95 {P(0.95):N2}, p99 {P(0.99):N2}, max {sorted[^1]:N2} ms");
+        // The frames spent inside the open code block (the last stretch) are the worst case for a naive tail.
+        int fenceAt = reply.IndexOf("```csharp", StringComparison.Ordinal) / 24;
+        var fence = ms.Skip(fenceAt).ToList();
+        Console.WriteLine($"  inside the open fence: {fence.Count} frames - mean {fence.Average():N2} ms, max {fence.Max():N2} ms");
+
+        // The leak check: the session outlives its windows by design, so opening and closing a window onto a
+        // live (still-streaming) session ten times must leave none of those windows reachable from it.
+        var session = Services.PerchSession.ForRender(cwd);
+        session.Conversation.AddUserPrompt("Walk me through the scan worker, step by step.");
+        session.Conversation.Apply(new Perch.Data.Control.TextDeltaEvent("Here's the whole pipeline, "));
+        var windows = new List<WeakReference>();
+        for (int i = 0; i < 10; i++) OpenAndClose(session, windows);
+        // Avalonia keeps the most recently closed window reachable until another window opens (observed: without
+        // this, exactly the last one survives, however many were opened), so open one more, untracked, first.
+        OpenAndClose(session, new List<WeakReference>());
+        session.Conversation.Apply(new Perch.Data.Control.TextDeltaEvent("one step at a time."));   // a delta after every close
+        Dispatcher.UIThread.RunJobs();
+        for (int i = 0; i < 3; i++) { GC.Collect(); GC.WaitForPendingFinalizers(); }
+        var alive = Enumerable.Range(0, windows.Count).Where(i => windows[i].IsAlive).ToList();
+        Console.WriteLine($"leak check: {alive.Count}/{windows.Count} closed session windows still reachable" +
+                          (alive.Count > 0 ? $" (#{string.Join(", #", alive)})" : ""));
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        static void OpenAndClose(Services.PerchSession s, List<WeakReference> refs)
+        {
+            var win = new Windows.SessionWindow(Theming.SessionPalette.For(dark: true)) { Width = 880, Height = 980 };
+            win.Attach(s);
+            win.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            refs.Add(new WeakReference(win));
+            win.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+
+        static List<string> Chunk(string s, int n)
+        {
+            var list = new List<string>();
+            for (int i = 0; i < s.Length; i += n) list.Add(s.Substring(i, Math.Min(n, s.Length - i)));
+            return list;
+        }
+    }
+
+    // ~30 KB of typical assistant prose: headed steps with inline code and file references, a few lists and
+    // tables, and a long fenced code block last (the case that used to be re-highlighted on every frame).
+    private static string LongStreamingReply()
+    {
+        var sb = new System.Text.StringBuilder("Here's the whole pipeline, one step at a time.\n\n");
+        for (int i = 1; i <= 40; i++)
+        {
+            sb.Append($"### Step {i}\n\n");
+            sb.Append($"Step {i} hands its batch to `TranscriptFold.Advance`, which reads only `[offset, EOF)` and feeds " +
+                      "every registered folder once. A folder that throws is skipped for that line so it can't starve " +
+                      "the others, and the consumed offset only moves past whole lines. See `src/Perch.Core/Data/TranscriptFold.cs` " +
+                      "for the details, and **don't** re-read the file from the start.\n\n");
+            if (i % 8 == 0)
+                sb.Append("- the watcher requests a scan\n- the trigger coalesces the burst\n- the worker scans once\n" +
+                          "- alerts post to the UI thread in order\n- the overlay updates last\n\n");
+            if (i % 10 == 0)
+            {
+                sb.Append("| Reader | Before | After |\n|---|---:|---:|\n");
+                for (int r = 0; r < 12; r++) sb.Append($"| reader {r} | {700 + r * 13} ms | {2 + r * 0.1:0.0} ms |\n");
+                sb.Append('\n');
+            }
+        }
+        sb.Append("And the worker itself:\n\n```csharp\n");
+        for (int l = 0; l < 250; l++)
+            sb.Append($"    if (_pending.TryDequeue(out var job{l})) {{ job{l}.Run(); Interlocked.Increment(ref _done); }} // {l}\n");
+        sb.Append("```\n\nThat's the lot.\n");
+        return sb.ToString();
     }
 
     private static void RenderMarkdownWindow(string outDir)

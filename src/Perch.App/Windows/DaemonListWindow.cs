@@ -211,12 +211,8 @@ internal sealed class DaemonListWindow : Window
     {
         var path = TranscriptLocator.Resolve(w.SessionId, w.Cwd);
         if (path == null) return;
-        try
-        {
-            System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo("code", $"\"{path}\"") { UseShellExecute = true });
-        }
-        catch { /* best-effort — VS Code may not be on PATH */ }
+        // Through the revealer, never a shell-executed `code.cmd`: cmd would expand a % in the path (CP12).
+        PlatformServices.FileRevealer.OpenInEditor(path);
     }
 
     protected override void OnKeyDown(KeyEventArgs e)

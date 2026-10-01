@@ -79,6 +79,28 @@ public sealed class RealtimeProtocolTests
         Assert.False((bool)config["broadcast"]!["self"]!);
     }
 
+    // Review fixes CP4: the inbox is a private channel (authorised by the realtime.messages policies); the table
+    // change streams stay public (RLS already filters them) so they need no policies of their own.
+    [Fact]
+    public void Inbox_join_is_private_and_table_streams_are_not()
+    {
+        static bool IsPrivate(RealtimeChannel ch) =>
+            (bool?)JsonNode.Parse(RealtimeProtocol.Join(1, "jwt", ch))!["payload"]!["config"]!["private"] == true;
+
+        Assert.True(IsPrivate(RealtimeChannel.Inbox(Guid.NewGuid())));
+        Assert.False(IsPrivate(RealtimeChannel.Posts));
+        Assert.False(IsPrivate(RealtimeChannel.Moves(Guid.NewGuid())));
+        Assert.False(IsPrivate(RealtimeChannel.DrawRounds(Guid.NewGuid())));
+    }
+
+    // private.inbox_owner() only accepts the canonical lower-case form; the client must produce exactly that.
+    [Fact]
+    public void Inbox_broadcast_name_matches_the_server_topic_parser()
+    {
+        var name = RealtimeChannel.Inbox(Guid.NewGuid()).BroadcastName;
+        Assert.Matches("^perch:inbox:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", name);
+    }
+
     [Fact]
     public void Inbox_channel_strips_the_realtime_prefix_for_the_broadcast_endpoint()
     {

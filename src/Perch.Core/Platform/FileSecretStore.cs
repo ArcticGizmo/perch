@@ -87,9 +87,6 @@ public class FileSecretStore : ISecretStore
         return new Dictionary<string, string>();
     }
 
-    private void Write(Dictionary<string, string> map)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-        File.WriteAllText(_filePath, JsonSerializer.Serialize(map, new JsonSerializerOptions { WriteIndented = true }));
-    }
+    private void Write(Dictionary<string, string> map) =>
+        AtomicFile.Write(_filePath, JsonSerializer.Serialize(map, new JsonSerializerOptions { WriteIndented = true }));
 }

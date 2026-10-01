@@ -142,6 +142,14 @@ internal static class Program
         if (sessionIntent is not null && fromTerminal)
             sessionIntent = sessionIntent with { OriginMonitor = PlatformServices.WindowChrome.GetForegroundMonitorGeometry() };
 
+        // Every use of the launch directory is above (the intents captured it). From here on, run from our own
+        // install directory: a terminal launch (or the SessionStart hook) would otherwise leave the tray's current
+        // directory inside whatever repo it started in — for its whole lifetime — and every bare-name process start
+        // (CreateProcess, ShellExecute, and .NET on Unix all search the current directory before PATH) would then
+        // prefer a git.exe/cmd.exe committed to that repo. It also stops the tray pinning that folder against
+        // delete/rename. See ExecutableResolver and docs/review-fixes-plan.md CP7.
+        try { Directory.SetCurrentDirectory(AppContext.BaseDirectory); } catch { /* keep going from wherever we are */ }
+
         // A replay instance gets its own mutex so it runs alongside a live tray instead of no-op'ing
         // against it — you can watch a recording play while your real sessions keep running.
         var mutexName = SingleInstanceMutexName + (isReplay ? "_Replay" : "");
@@ -214,6 +222,9 @@ internal static class Program
     // The CLI half of the control pipe: send the intent to the running tray as one JSON line, print its
     // one-line answer to the launching terminal, and exit with 0 on success. Bounded waits so a wedged tray
     // can't hang the shell; every failure is reported rather than swallowed, since the user is watching.
+    // Current-user-only: Connect verifies the pipe's server is owned by this user, so a pipe another user
+    // squatted under the name is refused before the intent is written; Identification lets the tray see who is
+    // calling but never act as them (review fixes CP10).
     private static int ForwardSessionIntent(Perch.Data.Control.SessionOpenIntent intent)
     {
         AttachParentConsole();
@@ -221,8 +232,13 @@ internal static class Program
         {
             using var pipe = new System.IO.Pipes.NamedPipeClientStream(
                 ".", Perch.Data.Control.ControlProtocol.PipeName, System.IO.Pipes.PipeDirection.InOut,
-                System.IO.Pipes.PipeOptions.Asynchronous);
-            pipe.Connect(3000);
+                Perch.Data.Control.ControlProtocol.Options, Perch.Data.Control.ControlProtocol.ClientImpersonation);
+            try { pipe.Connect(3000); }
+            catch (UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine("Perch's control pipe is owned by another user; not sending the request.");
+                return 1;
+            }
             var payload = System.Text.Encoding.UTF8.GetBytes(intent.ToJson() + "\n");
             pipe.Write(payload, 0, payload.Length);
             pipe.Flush();
@@ -262,16 +278,17 @@ internal static class Program
             return 0;
         }
 
-        var psi = new ProcessStartInfo { FileName = exe, UseShellExecute = true };
+        // Started from our own install directory, never the session's: the session cwd travels inside the intent,
+        // and the tray must not run from a repo (see the SetCurrentDirectory in Main).
+        var psi = new ProcessStartInfo { FileName = exe, UseShellExecute = true, WorkingDirectory = AppContext.BaseDirectory };
         try
         {
             if (intent is not null)
             {
-                var file = Path.Combine(Path.GetTempPath(), $"perch-intent-{Guid.NewGuid():N}.json");
+                var file = Perch.Data.Control.SessionOpenIntent.NewHandoffFile();
                 File.WriteAllText(file, intent.ToJson());
                 psi.ArgumentList.Add("--open-intent-file");
                 psi.ArgumentList.Add(file);
-                if (Directory.Exists(intent.Cwd)) psi.WorkingDirectory = intent.Cwd;
             }
             else
             {
@@ -299,11 +316,12 @@ internal static class Program
     }
 
     // Reads (and deletes) the session-intent handoff file named by `--open-intent-file <path>`, if present —
-    // the DetachTray relaunch's channel. Null when the flag is absent or the file can't be read/parsed.
+    // the DetachTray relaunch's channel. Null when the flag is absent or the file can't be read/parsed. Only a file
+    // DetachTray could have written is touched: anything else is ignored, never read or deleted (review fixes CP13).
     private static Perch.Data.Control.SessionOpenIntent? ReadRelaunchIntent(string[] args)
     {
         var path = ArgValue(args, "--open-intent-file");
-        if (path is null) return null;
+        if (path is null || !Perch.Data.Control.SessionOpenIntent.IsHandoffFile(path)) return null;
         Perch.Data.Control.SessionOpenIntent? intent = null;
         try { intent = Perch.Data.Control.SessionOpenIntent.Parse(File.ReadAllText(path)); } catch { }
         try { File.Delete(path); } catch { }

@@ -22,24 +22,35 @@ internal sealed class TranscriptReader
 {
     private const int TailBytes = 32 * 1024;
 
+    // Tail readers: a 32KB window, memoised by (length, last-write) — cheap to redo on growth.
     private readonly MtimeCache<string?> _activity = new();
-    private readonly MtimeCache<string?> _title = new();
-    private readonly MtimeCache<(float? Fill, ContextWindowInfo Window)> _contextFill = new();
     private readonly MtimeCache<double?> _burnRate = new();
     private readonly MtimeCache<bool> _bareCommand = new();
     private readonly MtimeCache<bool> _interrupted = new();
     private readonly MtimeCache<bool> _awaitingAssistant = new();
-    private readonly MtimeCache<bool> _outstandingAsync = new();
+    private readonly MtimeCache<StuckMetrics> _stuck = new();
+    private readonly MtimeCache<ApiFailure?> _apiError = new();
 
     // The tool-use-id a delivered <task-notification> is answering, pulled from the raw transcript line
     // (angle brackets aren't JSON-escaped, so this matches without a full parse of what can be a very
-    // large notification record). Links a finished async agent back to its launch. See ParseOutstandingAsyncAgent.
+    // large notification record). Links a finished async agent back to its launch. See StepAsyncAgent.
     private static readonly Regex TaskNotificationToolUseId =
         new(@"<tool-use-id>([^<]+)</tool-use-id>", RegexOptions.Compiled);
-    private readonly MtimeCache<IReadOnlyList<Artifact>> _artifacts = new();
-    private readonly MtimeCache<IReadOnlyList<TaskItem>> _tasks = new();
-    private readonly MtimeCache<StuckMetrics> _stuck = new();
-    private readonly MtimeCache<ApiFailure?> _apiError = new();
+
+    // Whole-file readers — a fact can sit anywhere in the session (a task created early, an artifact, a /model
+    // line, a rename, an async launch). They used to re-read the entire transcript on every append; now each is
+    // a folder on one shared incremental fold, so a growing transcript is read once, and after that only its new
+    // bytes, by all five together (review fixes CP20).
+    private static readonly LineFolder<AsyncAgentState> AsyncAgentFolder = new(() => new(), StepAsyncAgent);
+    private static readonly LineFolder<TasksState> TasksFolder = new(() => new(), StepTasks);
+    private static readonly LineFolder<ArtifactsState> ArtifactsFolder = new(() => new(), StepArtifacts);
+    private static readonly LineFolder<ContextState> ContextFolder = new(() => new(), StepContext);
+    private static readonly LineFolder<TitleState> TitleFolder = new(() => new(), StepTitle);
+
+    private readonly TranscriptFold _fold = new(AsyncAgentFolder, TasksFolder, ArtifactsFolder, ContextFolder, TitleFolder);
+
+    /// <summary>Bytes the whole-file readers have read from disk (test/benchmark probe; see <see cref="TranscriptFold"/>).</summary>
+    internal long FoldBytesRead => _fold.BytesRead;
 
     // How many of the most recent tool calls the failing-loop heuristic looks across. Tuned against
     // real transcripts (see the throwaway analysis behind this feature): with proper per-command
@@ -149,60 +160,73 @@ internal sealed class TranscriptReader
     /// Unlike the parent's live session status (which the sessions-dir watcher can miss, since it never
     /// sees the agent transcript change), these are durable facts in the parent transcript. Whole-file but
     /// cheap: task-notifications are matched by regex on the raw line (their embedded result can be huge)
-    /// and only the small <c>isAsync</c> launch records are JSON-parsed; cached by (length, last-write)
-    /// like the other readers. Best-effort; false on any failure.
+    /// and only the small <c>isAsync</c> launch records are JSON-parsed; folded incrementally (see
+    /// <see cref="TranscriptFold"/>). Best-effort; false on any failure.
     /// </summary>
     public bool HasOutstandingAsyncAgent(string sessionId, string cwd)
     {
         if (string.IsNullOrEmpty(sessionId))
             return false;
         var path = TranscriptLocator.Resolve(sessionId, cwd);
-        return path != null && _outstandingAsync.GetOrCompute(path, ParseOutstandingAsyncAgent, false);
+        return path != null && HasOutstandingAsyncAgentAt(path);
     }
 
-    private static bool ParseOutstandingAsyncAgent(string path)
+    // Path-based forms of the folded readers — what the public (sessionId, cwd) getters call once they've
+    // located the transcript, and the seam tests use to drive a growing temp file.
+    internal bool HasOutstandingAsyncAgentAt(string path) => _fold.Get(path, AsyncAgentFolder, FinishAsyncAgent, false);
+    internal string? TitleAt(string path) => _fold.Get(path, TitleFolder, s => s.Custom, null);
+    internal IReadOnlyList<Artifact> ArtifactsAt(string path) => _fold.Get(path, ArtifactsFolder, FinishArtifacts, []);
+    internal IReadOnlyList<TaskItem> TasksAt(string path) => _fold.Get(path, TasksFolder, FinishTasks, []);
+    internal (float? Fill, ContextWindowInfo Window) ContextFillAt(string path, string cwd) =>
+        _fold.Get(path, ContextFolder, s => ToFill(FinishContext(s, cwd)), (null, UnknownWindow));
+
+    private sealed class AsyncAgentState
     {
-        HashSet<string>? launched = null; // async-launch Agent/Task tool_use ids
-        HashSet<string>? notified = null; // tool-use-ids a <task-notification> has reported back
-        foreach (var line in TranscriptScan.ReadLines(path))
+        public HashSet<string>? Launched; // async-launch Agent/Task tool_use ids
+        public HashSet<string>? Notified; // tool-use-ids a <task-notification> has reported back
+    }
+
+    private static void StepAsyncAgent(AsyncAgentState s, string line)
+    {
+        if (line.Length == 0)
+            return;
+
+        // A delivered task-notification (as a user record and/or a queue-operation) names the
+        // tool-use-id it answers. Regex it off the raw line — the embedded agent result can be large,
+        // and a task-notification never carries an isAsync launch, so handle it first and skip the parse.
+        if (line.Contains("<task-notification>"))
         {
-            if (line.Length == 0)
-                continue;
-
-            // A delivered task-notification (as a user record and/or a queue-operation) names the
-            // tool-use-id it answers. Regex it off the raw line — the embedded agent result can be large,
-            // and a task-notification never carries an isAsync launch, so handle it first and skip the parse.
-            if (line.Contains("<task-notification>"))
-            {
-                var m = TaskNotificationToolUseId.Match(line);
-                if (m.Success)
-                    (notified ??= new()).Add(m.Groups[1].Value);
-                continue;
-            }
-
-            // An async launch: the small "Async agent launched" tool_result with toolUseResult.isAsync.
-            if (!line.Contains("isAsync"))
-                continue;
-            JsonNode? node;
-            try { node = JsonNode.Parse(line); }
-            catch { continue; }
-            try
-            {
-                if (node?["toolUseResult"]?["isAsync"]?.GetValue<bool>() != true)
-                    continue;
-            }
-            catch { continue; } // isAsync present but not a bool
-            if (TranscriptJson.ContentArray(node) is { } content)
-                foreach (var block in content)
-                    if (TranscriptJson.BlockType(block) == "tool_result"
-                        && block!["tool_use_id"]?.GetValue<string>() is { } id)
-                        (launched ??= new()).Add(id);
+            var m = TaskNotificationToolUseId.Match(line);
+            if (m.Success)
+                (s.Notified ??= new()).Add(m.Groups[1].Value);
+            return;
         }
 
-        if (launched == null)
+        // An async launch: the small "Async agent launched" tool_result with toolUseResult.isAsync.
+        if (!line.Contains("isAsync"))
+            return;
+        JsonNode? node;
+        try { node = JsonNode.Parse(line); }
+        catch { return; }
+        try
+        {
+            if (node?["toolUseResult"]?["isAsync"]?.GetValue<bool>() != true)
+                return;
+        }
+        catch { return; } // isAsync present but not a bool
+        if (TranscriptJson.ContentArray(node) is { } content)
+            foreach (var block in content)
+                if (TranscriptJson.BlockType(block) == "tool_result"
+                    && block!["tool_use_id"]?.GetValue<string>() is { } id)
+                    (s.Launched ??= new()).Add(id);
+    }
+
+    private static bool FinishAsyncAgent(AsyncAgentState s)
+    {
+        if (s.Launched == null)
             return false;
-        foreach (var id in launched)
-            if (notified == null || !notified.Contains(id))
+        foreach (var id in s.Launched)
+            if (s.Notified == null || !s.Notified.Contains(id))
                 return true;
         return false;
     }
@@ -212,24 +236,44 @@ internal sealed class TranscriptReader
     /// a <c>custom-title</c> transcript record. Null when the transcript can't be located/read or was
     /// never renamed. The auto-generated <c>ai-title</c> is deliberately ignored.
     ///
-    /// A <c>/rename</c> title may have been set once early on, so — like Claude Code itself — we look
-    /// in the tail first (where a later rename lands) and fall back to the head.
+    /// A <c>/rename</c> can land anywhere in the session, so this is the <em>latest</em> <c>custom-title</c>
+    /// in the whole file — folded incrementally, so a live session pays for its new bytes only.
     /// </summary>
     public string? GetTitle(string sessionId, string cwd)
     {
         if (string.IsNullOrEmpty(sessionId))
             return null;
         var path = TranscriptLocator.Resolve(sessionId, cwd);
-        return path == null ? null : _title.GetOrCompute(path, p => ParseTitle(p, tailOnly: false), null);
+        return path == null ? null : TitleAt(path);
+    }
+
+    private sealed class TitleState { public string? Custom; }
+
+    // Keeps the last custom-title (the /rename name) record seen.
+    private static void StepTitle(TitleState s, string line)
+    {
+        // Cheap pre-filter: the /rename record type is "custom-title".
+        if (!line.Contains("custom-title"))
+            return;
+        try
+        {
+            var node = JsonNode.Parse(line);
+            if (node?["type"]?.GetValue<string>() == "custom-title")
+                s.Custom = node["customTitle"]?.GetValue<string>() ?? s.Custom;
+        }
+        catch
+        {
+            // Malformed/partial line — skip it.
+        }
     }
 
     /// <summary>Reads the <c>/rename</c> title (a <c>custom-title</c> record) straight from a transcript
-    /// file, tail-first then head — for callers that already have a path but no live
-    /// <see cref="TranscriptReader"/> instance (e.g. the session listing). Null when never renamed or
-    /// unreadable. Never throws. Pass <paramref name="tailOnly"/> to skip the head fallback: a <c>/rename</c>
-    /// record lands at the tail, so a tail-only scan finds it for the common case at a fraction of the IO —
-    /// used by the bulk session listing, where re-reading a 32KB head of every untitled multi-MB transcript
-    /// dominates the scan.</summary>
+    /// file, tail-first then the whole file — for callers that already have a path but no live
+    /// <see cref="TranscriptReader"/> instance (a one-shot read when a session window opens). Null when never
+    /// renamed or unreadable. Never throws. Pass <paramref name="tailOnly"/> to skip the whole-file fallback: a
+    /// <c>/rename</c> record usually lands in the tail, so a tail-only scan finds it for the common case at a
+    /// fraction of the IO — used by the bulk session listing, where re-reading every untitled multi-MB
+    /// transcript would dominate the scan.</summary>
     public static string? ReadTitle(string path, bool tailOnly = false)
     {
         try { return ParseTitle(path, tailOnly); }
@@ -258,9 +302,7 @@ internal sealed class TranscriptReader
         if (string.IsNullOrEmpty(sessionId))
             return (null, UnknownWindow);
         var path = TranscriptLocator.Resolve(sessionId, cwd);
-        if (path == null)
-            return (null, UnknownWindow);
-        return _contextFill.GetOrCompute(path, p => ParseContextFill(p, cwd), (null, UnknownWindow));
+        return path == null ? (null, UnknownWindow) : ContextFillAt(path, cwd);
     }
 
     private static readonly ContextWindowInfo UnknownWindow =
@@ -292,7 +334,7 @@ internal sealed class TranscriptReader
         if (string.IsNullOrEmpty(sessionId))
             return [];
         var path = TranscriptLocator.Resolve(sessionId, cwd);
-        return path == null ? [] : _artifacts.GetOrCompute(path, ParseArtifacts, []);
+        return path == null ? [] : ArtifactsAt(path);
     }
 
     /// <summary>
@@ -398,10 +440,19 @@ internal sealed class TranscriptReader
         if (string.IsNullOrEmpty(sessionId))
             return [];
         var path = TranscriptLocator.Resolve(sessionId, cwd);
-        return path == null ? [] : _tasks.GetOrCompute(path, ParseTasks, []);
+        return path == null ? [] : TasksAt(path);
     }
 
-    private static IReadOnlyList<TaskItem> ParseTasks(string path)
+    private sealed class TasksState
+    {
+        public readonly Dictionary<int, (string Subject, string ActiveForm, TaskState State)> ById = new();
+        public readonly List<int> BatchIds = new();   // ids of the current batch, in creation order
+        public int NextId = 1;                        // session-monotonic id counter (never reset)
+        public bool PromptSinceTask;                  // a genuine user prompt has arrived since the last create
+        public DateTime? LastTaskTs, LastPromptTs;
+    }
+
+    private static void StepTasks(TasksState s, string line)
     {
         // Claude Code builds its checklist with the TaskCreate tool and advances it with TaskUpdate;
         // there is no durable task file on disk, so we reconstruct the list by replaying those calls.
@@ -414,108 +465,103 @@ internal sealed class TranscriptReader
         // Ids are session-monotonic: TaskCreate carries no id, but the k-th create has id k and that's
         // what TaskUpdate.taskId references, so we key by a running counter (which keeps advancing
         // across batches) rather than list position — otherwise a second batch's ids wouldn't resolve.
-        // A task can be created early in a long session, so we read the whole file; it's cheap (the
-        // substring pre-filter skips almost every line, and the result is cached by length+mtime).
-        var byId = new Dictionary<int, (string Subject, string ActiveForm, TaskState State)>();
-        var batchIds = new List<int>();         // ids of the current batch, in creation order
-        int nextId = 1;                         // session-monotonic id counter (never reset)
-        bool promptSinceTask = false;           // a genuine user prompt has arrived since the last create
-        DateTime? lastTaskTs = null, lastPromptTs = null;
+        // A task can be created early in a long session, so this covers the whole file — incrementally, with a
+        // substring pre-filter that skips almost every line.
 
-        foreach (var line in TranscriptScan.ReadLines(path))
+        // Cheap pre-filter: the task tool calls, plus genuine user prompts (a user record that
+        // isn't a tool result or an assistant tool_use line) — those drive batching and staleness.
+        bool maybeTask   = line.Contains("TaskCreate") || line.Contains("TaskUpdate");
+        bool maybePrompt = line.Contains("\"type\":\"user\"") && !line.Contains("tool_result") && !line.Contains("tool_use");
+        if (!maybeTask && !maybePrompt)
+            return;
+
+        try
         {
-            // Cheap pre-filter: the task tool calls, plus genuine user prompts (a user record that
-            // isn't a tool result or an assistant tool_use line) — those drive batching and staleness.
-            bool maybeTask   = line.Contains("TaskCreate") || line.Contains("TaskUpdate");
-            bool maybePrompt = line.Contains("\"type\":\"user\"") && !line.Contains("tool_result") && !line.Contains("tool_use");
-            if (!maybeTask && !maybePrompt)
-                continue;
+            var node = JsonNode.Parse(line);
+            DateTime? ts = null;
+            try { ts = TranscriptJson.ParseTimestamp(node?["timestamp"]?.GetValue<string>()); }
+            catch { }
 
-            try
+            if (maybePrompt && IsGenuineUserPrompt(node))
             {
-                var node = JsonNode.Parse(line);
-                DateTime? ts = null;
-                try { ts = TranscriptJson.ParseTimestamp(node?["timestamp"]?.GetValue<string>()); }
-                catch { }
-
-                if (maybePrompt && IsGenuineUserPrompt(node))
-                {
-                    promptSinceTask = true;
-                    if (ts is { } pt && (lastPromptTs is null || pt > lastPromptTs))
-                        lastPromptTs = pt;
-                    continue;
-                }
-
-                if (TranscriptJson.ContentArray(node) is not { } content)
-                    continue;
-
-                foreach (var block in content)
-                {
-                    if (TranscriptJson.BlockType(block) != "tool_use")
-                        continue;
-                    var name = block!["name"]?.GetValue<string>();
-                    var input = block["input"];
-
-                    if (name == "TaskCreate")
-                    {
-                        int id = nextId++;
-                        // A create after a fresh prompt opens a new batch — drop the previous one.
-                        if (promptSinceTask)
-                        {
-                            batchIds.Clear();
-                            byId.Clear();
-                            promptSinceTask = false;
-                        }
-                        // The tool_use *input* carries the task text in "content" (the "subject"/"id"
-                        // names only appear in the tool *result*). Accept "subject" as a fallback so a
-                        // future schema tweak can't silently blank the list.
-                        var subject = (input?["content"] ?? input?["subject"])?.GetValue<string>()?.Trim() ?? "";
-                        var activeForm = input?["activeForm"]?.GetValue<string>()?.Trim() ?? "";
-                        byId[id] = (subject, activeForm, TaskState.Pending);
-                        batchIds.Add(id);
-                        if (ts is { } ct) lastTaskTs = ct;
-                    }
-                    else if (name == "TaskUpdate")
-                    {
-                        // task_id/status come through as JSON strings; ToString() is robust whether the
-                        // id is encoded as a string ("1") or a bare number, where GetValue<string> throws.
-                        // The input field is "task_id" ("taskId" is the *result* field — kept as a fallback).
-                        var idStr = (input?["task_id"] ?? input?["taskId"])?.ToString();
-                        var status = input?["status"]?.ToString();
-                        // Only updates to a task in the current batch matter; ids from a dropped batch
-                        // are absent from byId and harmlessly ignored.
-                        if (int.TryParse(idStr, out int id) && byId.TryGetValue(id, out var cur))
-                        {
-                            TaskState? state = status switch
-                            {
-                                "in_progress" => TaskState.InProgress,
-                                "completed"   => TaskState.Completed,
-                                "pending"     => TaskState.Pending,
-                                _             => null,
-                            };
-                            if (state is { } s)
-                                byId[id] = (cur.Subject, cur.ActiveForm, s);
-                        }
-                        if (ts is { } ut) lastTaskTs = ut;
-                    }
-                }
+                s.PromptSinceTask = true;
+                if (ts is { } pt && (s.LastPromptTs is null || pt > s.LastPromptTs))
+                    s.LastPromptTs = pt;
+                return;
             }
-            catch
+
+            if (TranscriptJson.ContentArray(node) is not { } content)
+                return;
+
+            foreach (var block in content)
             {
-                // Malformed/partial line (transcripts are appended live) — skip it.
+                if (TranscriptJson.BlockType(block) != "tool_use")
+                    continue;
+                var name = block!["name"]?.GetValue<string>();
+                var input = block["input"];
+
+                if (name == "TaskCreate")
+                {
+                    int id = s.NextId++;
+                    // A create after a fresh prompt opens a new batch — drop the previous one.
+                    if (s.PromptSinceTask)
+                    {
+                        s.BatchIds.Clear();
+                        s.ById.Clear();
+                        s.PromptSinceTask = false;
+                    }
+                    // The tool_use *input* carries the task text in "content" (the "subject"/"id"
+                    // names only appear in the tool *result*). Accept "subject" as a fallback so a
+                    // future schema tweak can't silently blank the list.
+                    var subject = (input?["content"] ?? input?["subject"])?.GetValue<string>()?.Trim() ?? "";
+                    var activeForm = input?["activeForm"]?.GetValue<string>()?.Trim() ?? "";
+                    s.ById[id] = (subject, activeForm, TaskState.Pending);
+                    s.BatchIds.Add(id);
+                    if (ts is { } ct) s.LastTaskTs = ct;
+                }
+                else if (name == "TaskUpdate")
+                {
+                    // task_id/status come through as JSON strings; ToString() is robust whether the
+                    // id is encoded as a string ("1") or a bare number, where GetValue<string> throws.
+                    // The input field is "task_id" ("taskId" is the *result* field — kept as a fallback).
+                    var idStr = (input?["task_id"] ?? input?["taskId"])?.ToString();
+                    var status = input?["status"]?.ToString();
+                    // Only updates to a task in the current batch matter; ids from a dropped batch
+                    // are absent from ById and harmlessly ignored.
+                    if (int.TryParse(idStr, out int id) && s.ById.TryGetValue(id, out var cur))
+                    {
+                        TaskState? state = status switch
+                        {
+                            "in_progress" => TaskState.InProgress,
+                            "completed"   => TaskState.Completed,
+                            "pending"     => TaskState.Pending,
+                            _             => null,
+                        };
+                        if (state is { } st)
+                            s.ById[id] = (cur.Subject, cur.ActiveForm, st);
+                    }
+                    if (ts is { } ut) s.LastTaskTs = ut;
+                }
             }
         }
+        catch
+        {
+            // Malformed/partial line (transcripts are appended live) — skip it.
+        }
+    }
 
-        if (batchIds.Count == 0)
+    private static IReadOnlyList<TaskItem> FinishTasks(TasksState s)
+    {
+        if (s.BatchIds.Count == 0)
             return [];
 
         // Stale: the user moved on after the batch's last task touch, so the checklist is abandoned.
-        if (lastPromptTs is { } p && (lastTaskTs is null || p > lastTaskTs))
+        if (s.LastPromptTs is { } p && (s.LastTaskTs is null || p > s.LastTaskTs))
             return [];
 
-        return batchIds.Select(id => byId[id])
-                       .Select(t => new TaskItem(t.Subject, t.ActiveForm, t.State))
-                       .ToList();
+        return s.BatchIds.Select(id => s.ById[id])
+                         .Select(t => new TaskItem(t.Subject, t.ActiveForm, t.State))
+                         .ToList();
     }
 
     // True for a real typed user prompt: a "user" record whose message content is plain text — not a
@@ -557,51 +603,62 @@ internal sealed class TranscriptReader
         return false;
     }
 
-    private static IReadOnlyList<Artifact> ParseArtifacts(string path)
+    // An Artifact can be published anywhere in the session, so this covers the whole file — incrementally,
+    // with a substring pre-filter that skips almost every line. Each publish leaves one record whose
+    // toolUseResult.url is the hosted page; re-publishing reuses the URL, so we de-dupe by URL (last title
+    // wins) while preserving first-seen order.
+    private sealed class ArtifactsState
     {
-        // An Artifact can be published anywhere in the session, so we read the whole file — but it's
-        // cheap: a substring pre-filter skips almost every line, and the result is cached by
-        // length+mtime so this only re-runs when the transcript actually changed. Each publish leaves
-        // one record whose toolUseResult.url is the hosted page; re-publishing reuses the URL, so we
-        // de-dupe by URL (last title wins) while preserving first-seen order.
-        var order = new List<string>();
-        var titles = new Dictionary<string, string>();
-
-        foreach (var line in TranscriptScan.ReadLines(path))
-        {
-            // Cheap pre-filter: only the publish result records carry the artifact URL stem. Both the
-            // original scheme (claude.ai/code/artifact/{uuid}) and the current one (claude.ai/artifact/{id})
-            // share the "/artifact/" segment, so that's what we key on — the earlier "code/artifact" filter
-            // silently dropped every artifact published under the new, shorter URL.
-            if (!line.Contains("/artifact/"))
-                continue;
-
-            try
-            {
-                var result = JsonNode.Parse(line)?["toolUseResult"];
-                var url = result?["url"]?.GetValue<string>();
-                if (string.IsNullOrEmpty(url) || !url.Contains("/artifact/"))
-                    continue;
-
-                var title = result?["title"]?.GetValue<string>();
-                if (string.IsNullOrWhiteSpace(title))
-                    title = "Untitled artifact";
-
-                if (!titles.ContainsKey(url))
-                    order.Add(url);
-                titles[url] = title.Trim();
-            }
-            catch
-            {
-                // Malformed/partial line (transcripts are appended live) — skip it.
-            }
-        }
-
-        if (order.Count == 0)
-            return [];
-
-        return order.Select(u => new Artifact(u, titles[u])).ToList();
+        public readonly List<string> Order = new();
+        public readonly Dictionary<string, string> Titles = new();
     }
+
+    private static void StepArtifacts(ArtifactsState s, string line)
+    {
+        // Cheap pre-filter: only the publish result records carry the artifact URL stem. Both the
+        // original scheme (claude.ai/code/artifact/{uuid}) and the current one (claude.ai/artifact/{id})
+        // share the "/artifact/" segment, so that's what we key on — the earlier "code/artifact" filter
+        // silently dropped every artifact published under the new, shorter URL.
+        if (!line.Contains("/artifact/"))
+            return;
+
+        try
+        {
+            var result = JsonNode.Parse(line)?["toolUseResult"];
+            var url = result?["url"]?.GetValue<string>();
+            if (!IsArtifactUrl(url))
+                return;
+
+            var title = result?["title"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(title))
+                title = "Untitled artifact";
+
+            if (!s.Titles.ContainsKey(url))
+                s.Order.Add(url);
+            s.Titles[url] = title.Trim();
+        }
+        catch
+        {
+            // Malformed/partial line (transcripts are appended live) — skip it.
+        }
+    }
+
+    /// <summary>
+    /// True for a hosted Artifact page: an <c>https://claude.ai/…/artifact/…</c> URL (either scheme, see
+    /// <see cref="StepArtifacts"/>). Any tool result can carry a <c>url</c>, and a fetched page or an MCP server
+    /// could put <c>/artifact/</c> in one, so the host is checked too (review fixes CP16): only Anthropic's own
+    /// artifact pages become the session's clickable Artifact links.
+    /// </summary>
+    internal static bool IsArtifactUrl([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u)
+        && u.Scheme == Uri.UriSchemeHttps
+        && u.Host.Equals("claude.ai", StringComparison.OrdinalIgnoreCase)
+        && u.IsDefaultPort
+        && string.IsNullOrEmpty(u.UserInfo)
+        && u.AbsolutePath.Contains("/artifact/", StringComparison.Ordinal);
+
+    private static IReadOnlyList<Artifact> FinishArtifacts(ArtifactsState s) =>
+        s.Order.Count == 0 ? [] : s.Order.Select(u => new Artifact(u, s.Titles[u])).ToList();
 
     /// <summary>
     /// The terminal output a slash command captured, or null when the record isn't one. Claude Code has
@@ -639,95 +696,92 @@ internal sealed class TranscriptReader
     /// </summary>
     public static (long Used, ContextWindowInfo Window) ReadContextUsage(string path, string cwd)
     {
-        try { return ScanContext(path, cwd); }
+        try { return FinishContext(ContextFolder.FoldAll(TranscriptScan.ReadLines(path)), cwd); }
         catch { return (0, UnknownWindow); }
     }
 
-    private static (float? fill, ContextWindowInfo window) ParseContextFill(string path, string cwd)
-    {
-        var (used, window) = ScanContext(path, cwd);
-        return used == 0 ? (null, window) : (Math.Clamp((float)used / window.Tokens, 0f, 1f), window);
-    }
+    private static (float? fill, ContextWindowInfo window) ToFill((long used, ContextWindowInfo window) c) =>
+        c.used == 0 ? (null, c.window) : (Math.Clamp((float)c.used / c.window.Tokens, 0f, 1f), c.window);
 
-    // The shared scan behind both the fill gauge and the resume estimate: reads the whole transcript,
-    // tracking the newest /model line, the running model id, and the largest + latest prompt sizes.
-    private static (long used, ContextWindowInfo window) ScanContext(string path, string cwd)
+    // The shared fold behind both the fill gauge and the resume estimate, tracking the newest /model line, the
+    // running model id, and the largest + latest prompt sizes. A /model switch can land anywhere in the
+    // transcript and the most recent one wins, so unlike the activity tail-scan this covers the whole file —
+    // incrementally (see TranscriptFold), with a substring pre-filter that skips almost every line untouched.
+    private sealed class ContextState
     {
-        // A /model switch can land anywhere in the transcript, and the most recent one wins — so unlike
-        // the activity/title tail-scans we must read the whole file. It's cheap: a substring pre-filter
-        // skips almost every line untouched (model records are rare, usage records parse only near the
-        // end's worth of assistant turns), and the result is cached by length+mtime so this full pass
-        // only re-runs when the transcript actually changed.
-        long latestUsed = 0;
-        long maxUsed = 0;
-        string? latestDisplayName = null;
-        string? latestModelId = null;
+        public long LatestUsed;
+        public long MaxUsed;
+        public string? LatestDisplayName;
+        public string? LatestModelId;
         // The model answering *since* the last /model line, which is how the resolver tells a live line
         // from one the session has already moved on from. Reset whenever a newer line appears.
-        string? modelIdSinceLine = null;
+        public string? ModelIdSinceLine;
+    }
 
-        foreach (var line in TranscriptScan.ReadLines(path))
+    private static void StepContext(ContextState s, string line)
+    {
+        if (line.Length == 0)
+            return;
+
+        // /model confirmation — the captured stdout of the slash command, in either of the two shapes
+        // Claude Code has written it (see LocalCommandStdout). A later line supersedes an earlier one,
+        // and resets the "who has answered since" tracker the resolver uses to spot a stale line.
+        if (line.Contains("local-command-stdout") && ModelContext.LooksLikeModelLine(line))
         {
-            if (line.Length == 0)
-                continue;
-
-            // /model confirmation — the captured stdout of the slash command, in either of the two shapes
-            // Claude Code has written it (see LocalCommandStdout). A later line supersedes an earlier one,
-            // and resets the "who has answered since" tracker the resolver uses to spot a stale line.
-            if (line.Contains("local-command-stdout") && ModelContext.LooksLikeModelLine(line))
+            try
             {
-                try
+                var dn = ModelContext.ParseDisplayName(LocalCommandStdout(JsonNode.Parse(line)));
+                if (dn != null)
                 {
-                    var dn = ModelContext.ParseDisplayName(LocalCommandStdout(JsonNode.Parse(line)));
-                    if (dn != null)
-                    {
-                        latestDisplayName = dn;
-                        modelIdSinceLine = null;
-                    }
+                    s.LatestDisplayName = dn;
+                    s.ModelIdSinceLine = null;
                 }
-                catch { }
             }
-
-            if (line.Contains("\"usage\""))
-            {
-                try
-                {
-                    var message = JsonNode.Parse(line)?["message"];
-
-                    // The running model id (e.g. "claude-opus-4-8"). Ambiguous about 200k vs 1M, but it's
-                    // the only record of what model is actually answering when the session never ran
-                    // /model and settings.json carries no "model" — the common case. Most recent wins.
-                    var model = message?["model"]?.GetValue<string>();
-                    if (!string.IsNullOrEmpty(model))
-                        latestModelId = modelIdSinceLine = model;
-
-                    var usage = message?["usage"];
-                    if (usage != null)
-                    {
-                        // The prompt's true size is all three input buckets summed. Omitting
-                        // cache_creation badly under-counts right after a /model switch (or any
-                        // cache-invalidating event): the switch resets the prompt cache, so
-                        // cache_read collapses to 0 and the whole live context lands in
-                        // cache_creation. Steady-state turns keep cache_creation small, so this
-                        // only mattered visibly once model switches entered the picture.
-                        long total = TranscriptJson.AsLong(usage["input_tokens"])
-                                   + TranscriptJson.AsLong(usage["cache_read_input_tokens"])
-                                   + TranscriptJson.AsLong(usage["cache_creation_input_tokens"]);
-                        if (total > 0)
-                        {
-                            latestUsed = total;
-                            // The high-water mark is evidence about the window itself: the API rejects a
-                            // prompt bigger than the window, so the largest prompt this session ever sent
-                            // is a hard floor on its size. Kept even across a compaction that drops the
-                            // live fill back to nothing — the proof stands.
-                            maxUsed = Math.Max(maxUsed, total);
-                        }
-                    }
-                }
-                catch { }
-            }
+            catch { }
         }
 
+        if (line.Contains("\"usage\""))
+        {
+            try
+            {
+                var message = JsonNode.Parse(line)?["message"];
+
+                // The running model id (e.g. "claude-opus-4-8"). Ambiguous about 200k vs 1M, but it's
+                // the only record of what model is actually answering when the session never ran
+                // /model and settings.json carries no "model" — the common case. Most recent wins.
+                var model = message?["model"]?.GetValue<string>();
+                if (!string.IsNullOrEmpty(model))
+                    s.LatestModelId = s.ModelIdSinceLine = model;
+
+                var usage = message?["usage"];
+                if (usage != null)
+                {
+                    // The prompt's true size is all three input buckets summed. Omitting
+                    // cache_creation badly under-counts right after a /model switch (or any
+                    // cache-invalidating event): the switch resets the prompt cache, so
+                    // cache_read collapses to 0 and the whole live context lands in
+                    // cache_creation. Steady-state turns keep cache_creation small, so this
+                    // only mattered visibly once model switches entered the picture.
+                    long total = TranscriptJson.AsLong(usage["input_tokens"])
+                               + TranscriptJson.AsLong(usage["cache_read_input_tokens"])
+                               + TranscriptJson.AsLong(usage["cache_creation_input_tokens"]);
+                    if (total > 0)
+                    {
+                        s.LatestUsed = total;
+                        // The high-water mark is evidence about the window itself: the API rejects a
+                        // prompt bigger than the window, so the largest prompt this session ever sent
+                        // is a hard floor on its size. Kept even across a compaction that drops the
+                        // live fill back to nothing — the proof stands.
+                        s.MaxUsed = Math.Max(s.MaxUsed, total);
+                    }
+                }
+            }
+            catch { }
+        }
+    }
+
+    private static (long used, ContextWindowInfo window) FinishContext(ContextState s, string cwd)
+    {
         // Hand every signal we gathered to the resolver, which ranks them: the /model line, then
         // settings.json's id (the only one that keeps the "[1m]" opt-in marker), then the running
         // message.model, and finally the largest prompt observed — which overrides the lot when it
@@ -735,13 +789,13 @@ internal sealed class TranscriptReader
         // is variant-stripped ("claude-opus-5" on both the 200k and 1M variants), so on its own it can
         // only ever under-size.
         var window = ModelContext.Resolve(new ContextEvidence(
-            ModelLineName: latestDisplayName,
-            ModelIdSinceLine: modelIdSinceLine,
-            RunningModelId: latestModelId,
+            ModelLineName: s.LatestDisplayName,
+            ModelIdSinceLine: s.ModelIdSinceLine,
+            RunningModelId: s.LatestModelId,
             ConfiguredModelId: ReadConfiguredModel(cwd),
-            MaxObservedPrompt: maxUsed));
+            MaxObservedPrompt: s.MaxUsed));
 
-        return (latestUsed, window);
+        return (s.LatestUsed, window);
     }
 
     // How far apart two assistant turns can be and still count as one continuous burst of work.
@@ -1194,11 +1248,11 @@ internal sealed class TranscriptReader
         return null;
     }
 
+    // The one-shot static read (not the live scan path, which folds — see GetTitle). Scan the tail first — a
+    // later /rename lands here. If none and the file spans more than one window, the rename may be anywhere
+    // earlier, so read the whole file before giving up (unless the caller opted out for a cheap bulk scan).
     private static string? ParseTitle(string path, bool tailOnly)
     {
-        // Scan the tail first — a later /rename lands here. If none and the file spans more than one
-        // window, a title set once early may be in the head, so look there before giving up (unless the
-        // caller opted out of that second read for a cheap bulk scan).
         long len = new FileInfo(path).Length;
         var tail = ScanWindowForTitle(TranscriptScan.ReadLinesFrom(path, Math.Max(0, len - TailBytes)));
         if (tail != null || tailOnly) return tail;
@@ -1206,28 +1260,5 @@ internal sealed class TranscriptReader
     }
 
     // Returns the last custom-title (the /rename name) record in the given lines, or null.
-    private static string? ScanWindowForTitle(IEnumerable<string> lines)
-    {
-        string? custom = null;
-
-        foreach (var line in lines)
-        {
-            // Cheap pre-filter: the /rename record type is "custom-title".
-            if (!line.Contains("custom-title"))
-                continue;
-
-            try
-            {
-                var node = JsonNode.Parse(line);
-                if (node?["type"]?.GetValue<string>() == "custom-title")
-                    custom = node["customTitle"]?.GetValue<string>() ?? custom;
-            }
-            catch
-            {
-                // Malformed/partial line — skip it.
-            }
-        }
-
-        return custom;
-    }
+    private static string? ScanWindowForTitle(IEnumerable<string> lines) => TitleFolder.FoldAll(lines).Custom;
 }

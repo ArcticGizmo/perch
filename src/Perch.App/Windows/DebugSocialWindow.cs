@@ -430,16 +430,28 @@ internal sealed class DebugSocialWindow : Window
     private async Task<string?> StartConnect4()
     {
         var (_, me, pup) = Players();
-        GameSummary? game = null;
-        await Befriending(me, pup, async () => game = await _real.CreateGameAsync(pup.Id));
+        var game = await NewConnect4Game();
         _refreshReal();
-        OpenBoards(game!);
-        return $"Opened both boards. You (@{me.Handle}) are red and move first; the puppet (@{pup.Handle}) plays in the other window.";
+        OpenBoards(game);
+        return $"Opened both boards. You (@{me.Handle}) are red and opened in the centre; it's the puppet's (@{pup.Handle}) move in the other window.";
     }
 
+    // The server only creates a game from an accepted invite, so do exactly that: you invite with an opening disc
+    // in the centre column, and the puppet accepts at once.
+    private async Task<GameSummary> NewConnect4Game()
+    {
+        var (p, me, pup) = Players();
+        GameRequest? req = null;
+        await Befriending(me, pup, async () => req = await _real.RequestGameAsync(pup.Id, firstColumn: 3));
+        return (await p.AcceptGameRequestAsync(req!.Id)).Summary;
+    }
+
+    // Each board's onRematch hook: a new game, with both boards reopened on it.
+    private async Task RematchBoards() => OpenBoards(await NewConnect4Game());
+
     // Opens both sides of one game (yours + the puppet's), side by side. Closes any previous pair first so a
-    // rematch swaps the pair cleanly rather than leaving stale windows. Passed as each board's onRematch hook,
-    // so "Rematch" reopens both boards for the new game (not just one side — that was the glitch).
+    // rematch swaps the pair cleanly rather than leaving stale windows. "Rematch" on either board goes through
+    // RematchBoards, so it reopens both boards for the new game (not just one side — that was the glitch).
     private void OpenBoards(GameSummary game)
     {
         if (_real.Current.Me is not { } me || _puppet?.Current.Me is not { } pup) return;
@@ -447,12 +459,12 @@ internal sealed class DebugSocialWindow : Window
         foreach (var w in _c4Windows) { try { w.Close(); } catch { } }
         _c4Windows.Clear();
 
-        var mine = new Connect4Window(_real, me.Id, game, OpenBoards) { WindowStartupLocation = WindowStartupLocation.Manual };
+        var mine = new Connect4Window(_real, me.Id, game, RematchBoards) { WindowStartupLocation = WindowStartupLocation.Manual };
         mine.Position = new PixelPoint(60, 90);
         mine.Title = $"Connect 4 — YOU (@{me.Handle})";
         mine.Show();
 
-        var theirs = new Connect4Window(_puppet, pup.Id, game, OpenBoards) { WindowStartupLocation = WindowStartupLocation.Manual };
+        var theirs = new Connect4Window(_puppet, pup.Id, game, RematchBoards) { WindowStartupLocation = WindowStartupLocation.Manual };
         theirs.Position = new PixelPoint(620, 90);
         theirs.Title = $"Connect 4 — PUPPET (@{pup.Handle})";
         theirs.Show();

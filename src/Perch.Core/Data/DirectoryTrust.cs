@@ -24,8 +24,9 @@ namespace Perch.Data;
 /// itself emits (e.g. <c>C:/Users/me/proj</c>) so the key we persist is the one Claude will match.</para>
 /// <para>All IO is best-effort and never throws: an unreadable file reads as "untrusted" and a failed
 /// write returns <c>false</c> (the caller still proceeds for the launch it was granted). The whole file is
-/// round-tripped through <see cref="JsonNode"/> — every other field is preserved — and replaced atomically;
-/// a file that exists but does not parse as an object is left untouched rather than clobbered.</para>
+/// round-tripped through <see cref="JsonNode"/> — every other field is preserved — and replaced atomically
+/// (<see cref="AtomicFile"/>). A file that exists but is unreadable, empty, or not a JSON object is left
+/// untouched rather than clobbered: it also holds the user's Claude sign-in (see <see cref="GrantAt"/>).</para>
 /// </remarks>
 internal static class DirectoryTrust
 {
@@ -128,41 +129,37 @@ internal static class DirectoryTrust
 
     /// <summary>Sets <c>hasTrustDialogAccepted: true</c> for <paramref name="cwd"/> in the given
     /// <c>.claude.json</c>, preserving every other field and reusing an existing key for the same directory.
-    /// Best-effort: returns false (without touching the file) if it exists but is not a JSON object.</summary>
+    /// Returns whether the folder is now recorded as trusted.</summary>
+    /// <remarks>
+    /// <c>.claude.json</c> also holds the user's Claude sign-in and every project's state, so this never replaces
+    /// it with anything but a merge of what's there (review fixes CP14). A fresh object is used <b>only</b> when
+    /// the file provably doesn't exist; a read failure (Claude has it locked mid-write), an empty file, or content
+    /// that isn't a JSON object all return false with the bytes untouched. The file is re-read just before the
+    /// atomic replace, and the merge redone if Claude changed it in between. Already trusted → no write at all.
+    /// </remarks>
     public static bool GrantAt(string claudeJsonPath, string cwd)
     {
         try
         {
-            var json = ReadAllText(claudeJsonPath);
-            JsonObject root;
-            if (string.IsNullOrWhiteSpace(json))
-                root = new JsonObject();
-            else if (JsonNode.Parse(json) is JsonObject obj)
-                root = obj;
-            else
-                return false;   // unexpected shape — never clobber it
-
-            if (root["projects"] is not JsonObject projects)
+            for (int attempt = 0; attempt < 3; attempt++)
             {
-                projects = new JsonObject();
-                root["projects"] = projects;
+                var read = AtomicFile.TryRead(claudeJsonPath, out var json);
+                if (read == AtomicFile.ReadResult.Failed) return false;
+                if (read == AtomicFile.ReadResult.Ok && string.IsNullOrWhiteSpace(json)) return false;   // mid-write, or damaged
+
+                var merged = Merge(read == AtomicFile.ReadResult.Missing ? null : json, cwd);
+                if (merged is null) return false;          // not a JSON object — never clobber it
+                if (merged.Value.AlreadyTrusted) return true;
+
+                // Claude writes this file often; only replace it if it's still what we merged into.
+                var again = AtomicFile.TryRead(claudeJsonPath, out var now);
+                if (again != read || (read == AtomicFile.ReadResult.Ok && !string.Equals(now, json, StringComparison.Ordinal)))
+                    continue;
+
+                AtomicFile.Write(claudeJsonPath, merged.Value.Text);
+                return true;
             }
-
-            // Reuse an existing entry for this directory (any path spelling) rather than adding a duplicate.
-            string? existing = null;
-            foreach (var (key, _) in projects)
-                if (ClaudeConfigDir.PathComparer.Equals(Canonical(key), Canonical(cwd))) { existing = key; break; }
-
-            var target = existing ?? CanonicalKey(cwd);
-            if (projects[target] is not JsonObject entry)
-            {
-                entry = new JsonObject();
-                projects[target] = entry;
-            }
-            entry["hasTrustDialogAccepted"] = true;
-
-            AtomicWrite(claudeJsonPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-            return true;
+            return false;   // the file kept changing under us — leave it to the next launch
         }
         catch
         {
@@ -170,43 +167,46 @@ internal static class DirectoryTrust
         }
     }
 
+    // The trust grant merged into `json` (null = no file yet): the new text, or AlreadyTrusted when the folder's
+    // entry is already accepted (nothing to write). Null when `json` isn't a JSON object. Throws on unparseable
+    // JSON (the caller's catch turns that into "don't touch it").
+    private static (string Text, bool AlreadyTrusted)? Merge(string? json, string cwd)
+    {
+        JsonObject root;
+        if (json is null) root = new JsonObject();
+        else if (JsonNode.Parse(json) is JsonObject obj) root = obj;
+        else return null;
+
+        if (root["projects"] is not JsonObject projects)
+        {
+            projects = new JsonObject();
+            root["projects"] = projects;
+        }
+
+        // Reuse an existing entry for this directory (any path spelling) rather than adding a duplicate.
+        string? existing = null;
+        foreach (var (key, _) in projects)
+            if (ClaudeConfigDir.PathComparer.Equals(Canonical(key), Canonical(cwd))) { existing = key; break; }
+
+        var target = existing ?? CanonicalKey(cwd);
+        if (projects[target] is not JsonObject entry)
+        {
+            entry = new JsonObject();
+            projects[target] = entry;
+        }
+        else if (IsAccepted(entry))
+        {
+            return ("", true);
+        }
+        entry["hasTrustDialogAccepted"] = true;
+
+        return (root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), false);
+    }
+
     private static bool IsAccepted(JsonObject entry) =>
         entry["hasTrustDialogAccepted"] is JsonValue v && v.TryGetValue(out bool accepted) && accepted;
 
-    private static string? ReadAllText(string path)
-    {
-        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
-        try
-        {
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(fs);
-            return reader.ReadToEnd();
-        }
-        catch { return null; }
-    }
-
-    private static void AtomicWrite(string path, string text)
-    {
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        File.WriteAllText(tmp, text);
-        try
-        {
-            if (File.Exists(path)) File.Replace(tmp, path, null);
-            else File.Move(tmp, path);
-        }
-        catch
-        {
-            // A locked target (Claude writing concurrently) — fall back to a plain overwrite, then give up
-            // leaving the temp behind rather than throwing out of a best-effort write.
-            try { File.Move(tmp, path, overwrite: true); }
-            catch { TryDelete(tmp); throw; }
-        }
-    }
-
-    private static void TryDelete(string path)
-    {
-        try { if (File.Exists(path)) File.Delete(path); } catch { /* ignore */ }
-    }
+    // For the read-only lookup, where missing and unreadable both mean "no trust recorded".
+    private static string? ReadAllText(string path) =>
+        string.IsNullOrEmpty(path) ? null : AtomicFile.ReadShared(path);
 }

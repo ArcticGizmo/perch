@@ -424,7 +424,12 @@ internal sealed class MarkdownView
             text.Inlines = inlines;
         }
 
-        return new Border
+        return CodePanel(text);
+    }
+
+    // The chrome around a code block's text: a rounded, bordered panel that scrolls sideways on long lines.
+    private Border CodePanel(Control text) =>
+        new()
         {
             Background = _s.CodeBg, CornerRadius = new CornerRadius(6),
             BorderBrush = _s.TableBorder, BorderThickness = new Thickness(1),
@@ -441,6 +446,22 @@ internal sealed class MarkdownView
                 Content = text,
             },
         };
+
+    /// <summary>A code block still streaming (its closing fence hasn't arrived): the same panel a finished block
+    /// gets, laid out as one <see cref="Build(string, MarkdownStyle)"/> block, but plain — no parse, no syntax
+    /// colours. The caller updates <paramref name="text"/>'s <c>Text</c> in place as code arrives, and swaps in a
+    /// real build once the fence closes.</summary>
+    public static Control BuildStreamingCode(MarkdownStyle style, out SelectableTextBlock text)
+    {
+        var view = new MarkdownView(style, null);
+        text = new SelectableTextBlock
+        {
+            FontFamily = Mono, FontSize = 12.5, Foreground = style.CodeFg, TextWrapping = TextWrapping.NoWrap,
+        };
+        var root = new StackPanel { Margin = style.RootMargin };
+        if (style.BodyFont is { } bodyFont) TextElement.SetFontFamily(root, bodyFont);
+        root.Children.Add(view.Wrap(view.CodePanel(text)));
+        return root;
     }
 
     private IBrush SyntaxBrush(CodeToken kind) => kind switch
@@ -548,7 +569,14 @@ internal sealed class MarkdownView
         public readonly List<(int Start, int Length, string Text)> Codes = new();   // inline-code spans (file-ref candidates)
         public int Pos;
         public void Add(global::Avalonia.Controls.Documents.Inline run, int charLen) { Inlines.Add(run); Pos += charLen; }
-        public void MarkLink(int start, string? url) { if (!string.IsNullOrEmpty(url)) Links.Add(new UrlSpan(start, Pos - start, url)); }
+        // Only an http(s)/mailto target becomes a browser link (review fixes CP8). A relative or file: target
+        // joins the file-ref candidates instead, so it opens in the viewer only if it names a real local file;
+        // any other scheme (javascript:, search-ms:, ms-*:) is left as inert text.
+        public void MarkLink(int start, string? url)
+        {
+            if (OpenTargets.WebUrl(url) is { } web) Links.Add(new UrlSpan(start, Pos - start, web));
+            else if (OpenTargets.LinkFilePath(url) is { } path) Codes.Add((start, Pos - start, path));
+        }
     }
 
     // Arm any inline-code spans in this block that resolve to a real file (relative to the session cwd, or an
@@ -559,29 +587,12 @@ internal sealed class MarkdownView
             return;
         List<FileRef.FileSpan>? spans = null;
         foreach (var (start, len, text) in sink.Codes)
-            if (ResolveFile(f.Cwd, text) is { } abs)
+            // Never probes a UNC/device/network-drive path (NTLM leak + UI hang), and caches per (cwd, text) so a
+            // streaming re-render doesn't hit the disk again (review fixes CP9).
+            if (FileRefResolver.Resolve(f.Cwd, text) is { } abs)
                 (spans ??= new()).Add(new FileRef.FileSpan(start, len, abs));
         if (spans is { Count: > 0 })
             FileRef.AttachInline(tb, spans, f.OpenViewer, f.ViewDiff);
-    }
-
-    // The absolute path a code span points at, or null when it isn't a real file. A cheap pre-filter (must
-    // contain a '.', '/' or '\') skips the disk check for plainly non-path code like `true` or `SessionStart`.
-    private static string? ResolveFile(string cwd, string text)
-    {
-        text = text.Trim();
-        if (text.Length is 0 or > 260 || text.IndexOfAny(['.', '/', '\\']) < 0)
-            return null;
-        try
-        {
-            if (System.IO.Path.IsPathRooted(text))
-                return System.IO.File.Exists(text) ? text : null;
-            if (string.IsNullOrEmpty(cwd))
-                return null;
-            var abs = System.IO.Path.GetFullPath(System.IO.Path.Combine(cwd, text));
-            return System.IO.File.Exists(abs) ? abs : null;
-        }
-        catch { return null; }
     }
 
     private void AppendInlines(InlineSink sink, ContainerInline container, Run2 style)
@@ -623,7 +634,7 @@ internal sealed class MarkdownView
                 case AutolinkInline auto:
                     int autoStart = sink.Pos;
                     sink.Add(Styled(auto.Url, style with { Brush = _s.Link, Link = true }), auto.Url.Length);
-                    sink.MarkLink(autoStart, auto.Url);
+                    sink.MarkLink(autoStart, auto.IsEmail ? "mailto:" + auto.Url : auto.Url);
                     break;
                 case TaskList task:
                     sink.Add(new InlineUIContainer(Checkbox(task.Checked, style.Size))

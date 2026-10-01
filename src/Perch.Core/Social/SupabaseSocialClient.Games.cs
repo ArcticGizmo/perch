@@ -14,25 +14,12 @@ namespace Perch.Social;
 /// </summary>
 public sealed partial class SupabaseSocialClient
 {
-    public async Task<GameSummary> CreateGameAsync(Guid opponentUserId, CancellationToken ct = default)
-    {
-        var uid = RequireUser();
-        if (opponentUserId == uid) throw new SocialException("You can't play yourself.");
-        var token = await ValidAccessTokenAsync(ct);
+    // Cap on the Connect 4 and Draw game lists (most-recently-active first). Finished games are swept after two
+    // days, so this only bites when someone is flooded with games -- it bounds what every lobby poll fetches.
+    private const int GameListLimit = 50;
 
-        using var req = Rest(HttpMethod.Post, "/rest/v1/games", token);
-        req.Headers.Add("Prefer", "return=representation");
-        req.Content = JsonContent.Create(new { player_red = uid, player_yellow = opponentUserId });
-        using var resp = await _http.SendAsync(req, ct);
-        // The games_create RLS policy requires an accepted friendship, so a stranger is rejected here.
-        await EnsureOkAsync(resp, "start the game", ct);
-        var rows = await resp.Content.ReadFromJsonAsync<GameRow[]>(Json, ct) ?? [];
-        if (rows.Length == 0) throw new SocialException("The game wasn't created.");
-
-        var profiles = await FetchProfilesAsync([uid, opponentUserId], token, ct);
-        return ToSummary(rows[0], profiles);
-    }
-
+    // Games are born only from an accepted invite (accept_game_request); the server refuses a direct insert into
+    // games, so there is deliberately no create call here (review fixes CP3).
     public async Task<GameRequest> RequestGameAsync(Guid opponentUserId, int firstColumn, CancellationToken ct = default)
     {
         var uid = RequireUser();
@@ -124,7 +111,8 @@ public sealed partial class SupabaseSocialClient
         var token = await ValidAccessTokenAsync(ct);
         using var req = Rest(HttpMethod.Get,
             $"/rest/v1/games?or=(player_red.eq.{uid},player_yellow.eq.{uid})" +
-            "&select=id,player_red,player_yellow,status,turn,move_count,updated_at&order=updated_at.desc", token);
+            "&select=id,player_red,player_yellow,status,turn,move_count,updated_at&order=updated_at.desc" +
+            $"&limit={GameListLimit}", token);
         using var resp = await _http.SendAsync(req, ct);
         await EnsureOkAsync(resp, "load your games", ct);
         var rows = await resp.Content.ReadFromJsonAsync<GameRow[]>(Json, ct) ?? [];
@@ -208,10 +196,44 @@ public sealed partial class SupabaseSocialClient
         return new SupabaseRealtimeConnection(BaseUrl, _config.PublishableKey, RealtimeChannel.Inbox(me),
             ValidAccessTokenAsync, frame =>
             {
-                if (RealtimeProtocol.TryParseBroadcast(frame, out var name, out var payload) &&
-                    name == InboxEvent && TryReadInbox(payload, out var msg))
-                    onMessage(msg);
+                if (!RealtimeProtocol.TryParseBroadcast(frame, out var name, out var payload) ||
+                    name != InboxEvent || !TryReadInbox(payload, out var msg)) return;
+                if (InboxGate.TryAccept(msg, me, InboxSenders(), out var accepted)) onMessage(accepted);
+                else if (msg.FromUserId != Guid.Empty && msg.FromUserId != me)
+                    _ = AcceptAfterFriendRefreshAsync(msg, me, onMessage);
             });
+    }
+
+    // How often an inbox message from an unknown sender may trigger a friend-graph re-read.
+    private static readonly TimeSpan InboxSenderRefreshGap = TimeSpan.FromSeconds(15);
+
+    private IReadOnlyDictionary<Guid, string> InboxSenders() { lock (_gate) return _inboxSenders; }
+
+    private void SetInboxSenders(IEnumerable<Friend> acceptedUnblocked)
+    {
+        var map = new Dictionary<Guid, string>();
+        foreach (var f in acceptedUnblocked) map.TryAdd(f.Profile.Id, f.Profile.Handle);
+        lock (_gate) { _inboxSenders = map; _inboxSendersRefreshedAt = DateTimeOffset.UtcNow; }
+    }
+
+    // A message from someone not in the sender list yet: most likely a friendship accepted moments ago, before the
+    // next roster poll. Re-read the friend graph -- at most once per InboxSenderRefreshGap, so a stream of junk
+    // can't become a stream of REST calls -- and deliver only if the sender now qualifies.
+    private async Task AcceptAfterFriendRefreshAsync(InboxMessage msg, Guid me, Action<InboxMessage> onMessage)
+    {
+        lock (_gate)
+        {
+            if (DateTimeOffset.UtcNow - _inboxSendersRefreshedAt < InboxSenderRefreshGap) return;
+            _inboxSendersRefreshedAt = DateTimeOffset.UtcNow;
+        }
+        try
+        {
+            var graph = await GetFriendsAsync();
+            var blocked = (await GetBlockedAsync()).Select(p => p.Id).ToHashSet();
+            SetInboxSenders(graph.Where(f => f.State == FriendshipState.Accepted && !blocked.Contains(f.Profile.Id)));
+            if (InboxGate.TryAccept(msg, me, InboxSenders(), out var accepted)) onMessage(accepted);
+        }
+        catch { /* best-effort: the poll still surfaces the underlying change */ }
     }
 
     public async Task SendNudgeAsync(Guid gameId, Guid opponentUserId, CancellationToken ct = default)
@@ -229,7 +251,9 @@ public sealed partial class SupabaseSocialClient
     private string? MyHandle() { lock (_gate) return _me?.Handle; }
 
     // Posts one transient broadcast to another user's inbox channel via the Realtime broadcast REST endpoint —
-    // no DB write. Best-effort: a failure is swallowed (the persistent row + the recipient's poll still cover it).
+    // no DB write. It's a PRIVATE channel: the server only accepts it from an accepted, unblocked friend of the
+    // recipient (realtime.messages policies). No handle is sent — the recipient names the sender from its own
+    // friend list. Best-effort: a failure is swallowed (the persistent row + the recipient's poll still cover it).
     private async Task BroadcastInboxAsync(Guid toUserId, InboxMessage msg, string token, CancellationToken ct)
     {
         try
@@ -239,7 +263,6 @@ public sealed partial class SupabaseSocialClient
             {
                 ["kind"] = (int)msg.Kind,
                 ["from"] = msg.FromUserId.ToString(),
-                ["from_handle"] = msg.FromHandle,
                 ["game_id"] = msg.GameId?.ToString(),
                 ["request_id"] = msg.RequestId?.ToString(),
             };
@@ -250,7 +273,7 @@ public sealed partial class SupabaseSocialClient
                     ["topic"] = channel.BroadcastName,
                     ["event"] = InboxEvent,
                     ["payload"] = payload,
-                    ["private"] = false,
+                    ["private"] = channel.Private,
                 }),
             };
             using var req = Rest(HttpMethod.Post, "/realtime/v1/api/broadcast", token);
@@ -271,7 +294,7 @@ public sealed partial class SupabaseSocialClient
             Guid.TryParse((string?)p["from"], out var from);
             Guid? game = Guid.TryParse((string?)p["game_id"], out var g) ? g : null;
             Guid? request = Guid.TryParse((string?)p["request_id"], out var r) ? r : null;
-            msg = new InboxMessage(kind, from, (string?)p["from_handle"], game, request);
+            msg = new InboxMessage(kind, from, null, game, request);   // the handle comes from InboxGate, never the payload
             return true;
         }
         catch { return false; }

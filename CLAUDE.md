@@ -61,6 +61,10 @@ set at compile time with `#if WINDOWS`. `Nullable` and `ImplicitUsings` enabled 
 
 ## Testing
 
+CI (`.github/workflows/ci.yml`) runs both suites on every pull request: on Windows, the whole solution build, the .NET
+suite and the installer tests; on macOS, the `net10.0` head build and the .NET suite. Keep new tests passing on
+both hosts; gate genuinely Windows-only ones with `OperatingSystem.IsWindows()`, as the existing ones do.
+
 Two suites. Run the .NET one with `dotnet test tests/Perch.Tests/Perch.Tests.csproj`, and — after touching
 `install.ps1` — `powershell -NoProfile -File tools\test-install.ps1`, which covers the installer's manifest
 parsing, its cross-host (`5.1`/`7.x`) response decoding, and its download/verify path against a loopback
@@ -95,6 +99,15 @@ running the tray app.
   anything that must survive a DPI change. This has bitten the stat cards in `StatsDashboard` before;
   watch for it in any new card/badge/number rendering. The `OverlayDraw` mini-PaintKit bakes this in — go
   through it.
+- **Paint paths allocate nothing heavy and touch no files.** The overlay repaints on a 60ms pulse, a per-frame
+  chase and a per-second tick. So: `OverlayDraw.Text`/`Emoji` return **shared, cached** `FormattedText`, so
+  **never mutate one** (`MaxTextWidth`, `Trimming`, `SetForegroundBrush`…). Use `OverlayDraw.NewText` for a
+  mutable one. Per-paint pens go through `OverlayDraw.Pen(...)`, which takes the same arguments as `new Pen`
+  and returns an `ImmutablePen`. A mutable `Pen` is a full AvaloniaObject, and building them per frame was
+  ~95% of the overlay's per-frame allocation. Per-paint brushes go through `OverlayDraw.Brush(color)`. Keep
+  `new Pen`/`new SolidColorBrush` for fields only. Anything that reads a file (e.g. the account-mismatch org
+  lookup) is computed in `Update`/a timer and cached, never in `Render`. `PERCH_BENCH=1 … render <dir>`
+  prints the overlay's per-frame paint time and allocation.
 - **Dashboards are owner-drawn through a single measure-or-paint routine.** e.g. `StatsDashboard.Draw(DrawingContext?, width)`
   returns the content height when the context is null (measure pass) and paints when it isn't. Keep the
   two in one method so the measured height and the painted layout can never drift apart.
@@ -127,7 +140,11 @@ running the tray app.
   `Dispatcher.UIThread.Post(...)` (or `ContinueWith(..., TaskScheduler.FromCurrentSynchronizationContext())`).
   Guard the callback against a window that closed mid-flight (`IsVisible` / disposed checks) and swallow
   the resulting exceptions. See the `*MonitorHost` services, `HistoryWindow`, `StatsWindow`, and
-  `UpdateService` for the pattern.
+  `UpdateService` for the pattern. **User- or transcript-supplied images go through `Views/BoundedBitmap`**
+  (`LoadAsync`, with a width for previews): it reads the header first (`Perch.Data.ImageHeader`), refuses
+  anything past a pixel cap and decodes off the UI thread. Never `new Bitmap(path)` on such a file on the UI
+  thread, because a small file can decode to gigabytes. Perch's own small cached icons (e.g. quick-link icons)
+  are exempt.
 - **Colour comes through `Theming.Palette`, but from one of two sources — pick the right one.** Colours in
   `Perch.Core` are kept UI-free as `Rgb`, split by whether they vary per theme:
   - **`Perch.Theming.Theme`** — everything a theme varies: surfaces/chrome, text, `Accent`/`AccentHover`,
@@ -219,7 +236,9 @@ running the tray app.
   actually break: they ship with no BOM, so Windows PowerShell 5.1 decodes them as the system codepage, and a
   UTF-8 em dash becomes three chars ending in `0x94` = U+201D — a curly quote, which PowerShell honours as a
   *string delimiter*, silently mis-parsing everything after it. Holding the whole pipeline to ASCII is one
-  rule instead of three. Shell scripts must also stay LF (a CRLF shebang fails on macOS).
+  rule instead of three. Shell scripts must also stay LF (a CRLF shebang fails on macOS); `.gitattributes`
+  pins `*.sh` to `eol=lf` so a `core.autocrlf=true` checkout can't convert them. `tools/test-install.ps1`
+  globs the file list (root release scripts, `tools/*.ps1|sh|cmd|bat`, every workflow), so new ones are covered.
 - **Never wait on the installer's process tree.** `Start-Process -Wait` waits for descendants, so it hangs
   forever on the tray app Velopack's Setup launches — wait on the Setup process's own handle instead
   (`[Diagnostics.Process]::Start(...)` + `WaitForExit`). `tools/test-install.ps1` guards all of the above.

@@ -1,6 +1,4 @@
 ﻿using System.Diagnostics;
-using System.IO.Pipes;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -14,19 +12,17 @@ using System.Text.Json.Nodes;
 //
 // Events (mapped from Claude Code hooks):
 //   mode         PreToolUse / PostToolUse / Stop  → write {sid}.mode (permission mode)
-//   valet        PreToolUse                       → permission valet: relay the request to the tray's
-//                                                   named pipe and echo an explicit user decision back
-//                                                   (arg 2 = pipe name, baked in by the registering tray)
 //   agentstop    SubagentStop                     → drop agent-{id}.stopped beside the agent transcript
 //   teammateidle TeammateIdle                     → drop agent-{id}.idle beside the matching transcript
 //   start        SessionStart                     → launch the tray if the user opted into auto-start
 //   cleanup      SessionEnd                       → remove this session's sidecars + sweep agent markers
 //
 // Two invariants keep a stale hook from ever wedging a Claude Code session: it always exits 0, and it
-// never volunteers a decision on stdout — the only outputs it ever writes are `valet` relaying a choice a
-// user explicitly made in the Perch UI, and `start`'s advisory systemMessage when a normal claude opens a
-// session Perch is already controlling ({sid}.perch-lock); every failure path is silent, which Claude Code
-// treats as "no opinion" (normal permission flow). Honours CLAUDE_CONFIG_DIR (data view) and PERCH_DEV
+// never volunteers a decision on stdout — its only output is `start`'s advisory systemMessage when a normal
+// claude opens a session Perch is already controlling ({sid}.perch-lock); every failure path is silent,
+// which Claude Code treats as "no opinion" (normal permission flow). An unknown event is a silent no-op —
+// e.g. the retired `valet` event (review fixes CP10), still registered in settings.json until the tray's
+// next hook reconcile strips it. Honours CLAUDE_CONFIG_DIR (data view) and PERCH_DEV
 // (which profile's settings to read) exactly like the app, so dev/hermetic testing works end to end.
 
 string action = args.Length > 0 ? args[0] : "";
@@ -60,12 +56,6 @@ try
         // The hot path, fired on every tool call.
         case "mode":
             WriteMode(sessionsDir, f);
-            break;
-
-        // The permission valet (session-control M2): also PreToolUse, kept separate from `mode` so the
-        // sidecar write can never be delayed by pipe IO.
-        case "valet":
-            HandleValet(payload, args.Length > 1 ? args[1] : null);
             break;
 
         // SessionStart also seeds the initial mode (if present), warns if the id is Perch-controlled, then
@@ -252,82 +242,6 @@ static void HandleCleanup(string sessionsDir, Dictionary<string, string?> f)
     }
 }
 
-// The permission valet (session-control M2): forward the raw PreToolUse payload to the tray's named
-// pipe and, only when the tray relays an explicit user choice ("allow"/"deny"), echo it to Claude Code
-// as hookSpecificOutput JSON. Fail-open at every step — no tray listening (a missing pipe fails the
-// connect instantly, so a quit Perch costs ~nothing per tool call), a "pass" reply, a missed deadline,
-// or any error → exit silently, leaving the normal permission flow (allowlists, the terminal prompt)
-// untouched. The tray replies "pass" immediately unless it is actually showing prompt UI. The pipe name
-// is baked into the registration by the tray profile that wrote it (so dev and release trays never
-// intercept each other's sessions); the env-derived fallback covers a hand-authored registration.
-static void HandleValet(byte[] payload, string? pipeName)
-{
-    if (string.IsNullOrEmpty(pipeName))
-        pipeName = ProfileFolder() == "Perch (Dev)" ? "perch-valet-dev" : "perch-valet";
-
-    try
-    {
-        using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        try { pipe.Connect(200); } catch { return; }   // no tray → no opinion
-
-        // Newlines in the compact payload can only be inter-token whitespace (a literal newline inside
-        // a JSON string is invalid), so blanking them lets the payload travel as one line.
-        for (int i = 0; i < payload.Length; i++)
-            if (payload[i] is (byte)'\n' or (byte)'\r')
-                payload[i] = (byte)' ';
-
-        pipe.Write(payload, 0, payload.Length);
-        pipe.WriteByte((byte)'\n');
-        pipe.Flush();
-
-        // The tray auto-passes an unanswered prompt well before this; the deadline is the backstop that
-        // keeps a wedged tray from stalling the session for hook-timeout minutes.
-        string? reply = ReadLineWithDeadline(pipe, 20_000);
-        if (reply is null) return;
-
-        var r = ReadFields(Encoding.UTF8.GetBytes(reply), "decision", "reason");
-        string? decision = r["decision"];
-        if (decision is not ("allow" or "deny")) return;
-
-        var output = new JsonObject
-        {
-            ["hookSpecificOutput"] = new JsonObject
-            {
-                ["hookEventName"] = "PreToolUse",
-                ["permissionDecision"] = decision,
-                ["permissionDecisionReason"] = r["reason"]
-                    ?? (decision == "allow" ? "Approved by the user in Perch." : "Denied by the user in Perch."),
-            },
-        };
-        Console.Out.Write(output.ToJsonString());
-    }
-    catch { /* fail open */ }
-}
-
-// Reads one newline-terminated UTF-8 line from the pipe, or null when the deadline passes or it closes.
-static string? ReadLineWithDeadline(NamedPipeClientStream pipe, int deadlineMs)
-{
-    var ms = new MemoryStream();
-    var buf = new byte[4096];
-    long deadline = Environment.TickCount64 + deadlineMs;
-    while (Environment.TickCount64 < deadline)
-    {
-        var read = pipe.ReadAsync(buf, 0, buf.Length);
-        int remaining = (int)Math.Max(1, deadline - Environment.TickCount64);
-        if (!read.Wait(remaining)) return null;
-        int n = read.Result;
-        if (n <= 0) return null;
-        for (int i = 0; i < n; i++)
-        {
-            if (buf[i] != (byte)'\n') continue;
-            ms.Write(buf, 0, i);
-            return Encoding.UTF8.GetString(ms.ToArray());
-        }
-        ms.Write(buf, 0, n);
-    }
-    return null;
-}
-
 // ── helpers ───────────────────────────────────────────────────────────────────────
 
 static byte[] ReadStdin()
@@ -385,6 +299,21 @@ static string ProfileFolder()
     return dev ? "Perch (Dev)" : "Perch";
 }
 
+// The perch.path breadcrumb. HookInstaller writes it into the same bin dir it copies this binary to, so look beside
+// this binary first — that dir moved to %LOCALAPPDATA% on Windows (review fixes CP16) — then at the pre-CP16
+// location under the roaming profile dir.
+static string MarkerPath()
+{
+    try
+    {
+        string own = Path.Combine(AppContext.BaseDirectory, "perch.path");
+        if (File.Exists(own)) return own;
+    }
+    catch { /* fall through */ }
+    string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+    return Path.Combine(appData, ProfileFolder(), "bin", "perch.path");
+}
+
 // Self-heal: the installer records the tray executable's path in <bin>/perch.path (HookInstaller). If
 // that file is gone, Perch was uninstalled without its cleanup running — strip our managed hook block so
 // settings.json doesn't keep pointing at a dead binary. Fail-open: no breadcrumb → leave hooks alone.
@@ -392,9 +321,8 @@ static void MaybeSelfHeal()
 {
     try
     {
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         string profile = ProfileFolder();
-        string marker = Path.Combine(appData, profile, "bin", "perch.path");
+        string marker = MarkerPath();
         if (!File.Exists(marker)) return;
 
         string trayPath = File.ReadAllText(marker).Trim();
@@ -404,7 +332,7 @@ static void MaybeSelfHeal()
         // its own (this running binary's path, or the _perch.dev marker) so it never strips release's hooks.
         bool isDev = profile == "Perch (Dev)";
         string ownBin = Environment.ProcessPath
-            ?? Path.Combine(appData, profile, "bin", OperatingSystem.IsWindows() ? "perch-hook.exe" : "perch-hook");
+            ?? Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "perch-hook.exe" : "perch-hook");
         StripManagedHooks(Path.Combine(ResolveClaudeDir(), "settings.json"), isDev, ownBin);
     }
     catch { /* best-effort */ }
@@ -448,7 +376,37 @@ static void StripManagedHooks(string settingsPath, bool isDev, string ownBin)
 
     if (!changed) return;
     if (hooks.Count == 0) root.Remove("hooks");
-    File.WriteAllText(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+    AtomicWrite(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+}
+
+// Crash-safe whole-file replace: write a unique temp beside the target, flush it to disk, then rename it over
+// the target (retried briefly on a sharing violation), so Claude Code never reads a truncated settings.json.
+// Mirrors Perch.Data.AtomicFile.Write (review fixes CP14); duplicated so perch-hook stays free of Perch.Core.
+static void AtomicWrite(string path, string text)
+{
+    string tmp = $"{path}.{Guid.NewGuid():N}.tmp";
+    try
+    {
+        using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            byte[] bytes = new System.Text.UTF8Encoding(false).GetBytes(text);
+            fs.Write(bytes, 0, bytes.Length);
+            fs.Flush(flushToDisk: true);
+        }
+        int[] delays = [20, 40, 80, 160, 300];
+        for (int attempt = 0; ; attempt++)
+        {
+            try { File.Move(tmp, path, overwrite: true); return; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException && attempt < delays.Length)
+            {
+                Thread.Sleep(delays[attempt]);
+            }
+        }
+    }
+    finally
+    {
+        try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+    }
 }
 
 // An entry is Perch's if it carries the _perch.managed marker, or — since Claude Code drops our unknown
@@ -509,11 +467,50 @@ static void LaunchPerch()
     {
         if (OperatingSystem.IsMacOS() && TryLaunchMacBundle()) return;
 
-        var psi = new ProcessStartInfo("perch") { UseShellExecute = true };
+        // Never the bare name: this hook runs with the session's project folder as its current directory, and
+        // ShellExecute looks there before PATH — so a perch.cmd/perch.exe committed to a repo would run the moment
+        // `claude` started in it (review fixes CP7). Prefer the installer's breadcrumb, else search PATH only.
+        if (TrayExecutable() is not { } tray) return;
+        var psi = new ProcessStartInfo(tray)
+        {
+            UseShellExecute = true,
+            WorkingDirectory = Path.GetDirectoryName(tray) ?? "",
+        };
         psi.ArgumentList.Add("--autostarted");
         Process.Start(psi);
     }
-    catch { /* not on PATH (e.g. dev build) → no-op */ }
+    catch { /* not installed (e.g. dev build) → no-op */ }
+}
+
+// The tray executable by absolute path: the perch.path breadcrumb HookInstaller writes on every tray launch, else
+// the first `perch` on PATH (absolute entries only — a relative one resolves against the current directory, the
+// thing being avoided). Null when neither resolves.
+static string? TrayExecutable()
+{
+    try
+    {
+        string marker = MarkerPath();
+        if (File.Exists(marker))
+        {
+            string recorded = File.ReadAllText(marker).Trim();
+            if (Path.IsPathFullyQualified(recorded) && File.Exists(recorded)) return recorded;
+        }
+    }
+    catch { /* fall through to PATH */ }
+
+    string exe = OperatingSystem.IsWindows() ? "perch.exe" : "perch";
+    foreach (var raw in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
+    {
+        var dir = raw.Trim().Trim('"');
+        if (dir.Length == 0 || !Path.IsPathFullyQualified(dir)) continue;
+        try
+        {
+            var full = Path.Combine(dir, exe);
+            if (File.Exists(full)) return full;
+        }
+        catch { /* malformed entry */ }
+    }
+    return null;
 }
 
 // macOS: `perch` is only a ~/.local/bin symlink, which the hook's PATH usually lacks, and the tray is a
@@ -523,8 +520,7 @@ static void LaunchPerch()
 // app. Returns false (fall through to the PATH launch) if the marker or bundle can't be resolved.
 static bool TryLaunchMacBundle()
 {
-    string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-    string marker = Path.Combine(appData, ProfileFolder(), "bin", "perch.path");
+    string marker = MarkerPath();
     if (!File.Exists(marker)) return false;
 
     string trayPath = File.ReadAllText(marker).Trim(); // …/Perch.app/Contents/MacOS/perch

@@ -407,11 +407,7 @@ internal sealed class ClaudeConfigSet
             foreach (var root in snapshot) arr.Add(root);
             var obj = new System.Text.Json.Nodes.JsonObject { ["selfReported"] = arr };
 
-            var path = PersistencePath;
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            var tmp = path + ".tmp";
-            File.WriteAllText(tmp, obj.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-            File.Move(tmp, path, overwrite: true);
+            AtomicFile.Write(PersistencePath, obj.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
         }
         catch
         {

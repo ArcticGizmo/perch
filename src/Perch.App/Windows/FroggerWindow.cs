@@ -31,6 +31,7 @@ public sealed class FroggerWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Palette.OverlaySurfaceBrush;
         Content = _field;
+        ArcadeLoopGate.Attach(this, _field.Begin, _field.Stop);
     }
 
     protected override void OnOpened(EventArgs e)

@@ -81,6 +81,7 @@ public class ControlledSessionsTests
         try
         {
             Assert.False(ControlledSessions.Owns(id));
+            Assert.False(ControlledSessions.Owns(null));
             Assert.Null(ControlledSessions.Activity(id));
 
             ControlledSessions.Register(id);

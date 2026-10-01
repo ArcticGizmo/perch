@@ -20,4 +20,10 @@ public interface IFileRevealer
     /// <summary>Shows the OS "Open with…" application chooser for <paramref name="path"/> (Windows'
     /// <c>OpenAs_RunDLL</c>, macOS falls back to the default handler). No-op on a blank/unresolvable path.</summary>
     void OpenWith(string path);
+
+    /// <summary>Opens an existing local file with its default handler — but only a type that handler merely
+    /// views (<see cref="Perch.Data.OpenTargets.IsViewerSafeFile"/>). Anything else (an executable, script,
+    /// shortcut, HTML…) is revealed in the file manager instead, so the action is never a dead end and never
+    /// runs code. No-op on a blank/missing path.</summary>
+    void OpenWithDefault(string path);
 }

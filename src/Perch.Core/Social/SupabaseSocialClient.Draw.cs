@@ -26,6 +26,7 @@ public sealed partial class SupabaseSocialClient
         var uid = RequireUser();
         if (opponentUserId == uid) throw new SocialException("You can't play yourself.");
         if (string.IsNullOrWhiteSpace(word)) throw new SocialException("Pick a word to draw first.");
+        if (word.Length > DrawWords.MaxWordLength) throw new SocialException("That word is too long.");
         var token = await ValidAccessTokenAsync(ct);
 
         using var req = Rest(HttpMethod.Post, "/rest/v1/draw_requests", token);
@@ -110,7 +111,7 @@ public sealed partial class SupabaseSocialClient
         var token = await ValidAccessTokenAsync(ct);
         using var req = Rest(HttpMethod.Get,
             $"/rest/v1/draw_games?or=(player_a.eq.{uid},player_b.eq.{uid})" +
-            $"&select={DrawGameSelect}&order=updated_at.desc", token);
+            $"&select={DrawGameSelect}&order=updated_at.desc&limit={GameListLimit}", token);
         using var resp = await _http.SendAsync(req, ct);
         await EnsureOkAsync(resp, "load your games", ct);
         var rows = await resp.Content.ReadFromJsonAsync<DrawGameRow[]>(Json, ct) ?? [];
@@ -147,6 +148,7 @@ public sealed partial class SupabaseSocialClient
     {
         RequireUser();
         if (string.IsNullOrWhiteSpace(word)) throw new SocialException("Pick a word to draw first.");
+        if (word.Length > DrawWords.MaxWordLength) throw new SocialException("That word is too long.");
         var token = await ValidAccessTokenAsync(ct);
         using var req = Rest(HttpMethod.Post, "/rest/v1/rpc/submit_draw_round", token);
         req.Content = JsonContent.Create(new
@@ -162,6 +164,7 @@ public sealed partial class SupabaseSocialClient
     public async Task<DrawGameState> SubmitDrawGuessAsync(Guid roundId, string guess, CancellationToken ct = default)
     {
         RequireUser();
+        if ((guess?.Length ?? 0) > DrawGuessing.MaxGuessLength) throw new SocialException("That guess is too long.");
         var token = await ValidAccessTokenAsync(ct);
         using var req = Rest(HttpMethod.Post, "/rest/v1/rpc/submit_draw_guess", token);
         req.Content = JsonContent.Create(new { p_round = roundId, p_guess = guess ?? "" });

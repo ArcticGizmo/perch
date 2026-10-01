@@ -95,12 +95,20 @@ internal static class StatsFormat
         return "<1m";
     }
 
-    /// <summary>Compact token count: 12.3M / 45.6k / 789.</summary>
+    private static readonly (long Scale, string Suffix)[] TokenUnits =
+    [
+        (1_000, "k"), (1_000_000, "M"), (1_000_000_000, "B"), (1_000_000_000_000, "T"),
+    ];
+
+    /// <summary>Compact token count: 789 / 45.6k / 12.3M / 1.5B / 4.2T. Steps up a unit whenever the one-decimal
+    /// figure would reach 1000, so 999,960 reads "1.0M" rather than "1000.0k" (trillions are the ceiling).</summary>
     public static string Tokens(long n)
     {
-        if (n >= 1_000_000) return $"{n / 1_000_000.0:0.0}M";
-        if (n >= 1_000) return $"{n / 1_000.0:0.0}k";
-        return n.ToString();
+        if (n < 1_000) return n.ToString();
+        int i = 0;
+        while (i < TokenUnits.Length - 1 && Math.Round(n / (double)TokenUnits[i].Scale, 1) >= 1000) i++;
+        var (scale, suffix) = TokenUnits[i];
+        return $"{n / (double)scale:0.0}{suffix}";
     }
 
     public static string Cost(decimal usd) => usd >= 100m ? $"${usd:0}" : $"${usd:0.00}";
@@ -108,9 +116,11 @@ internal static class StatsFormat
 
 /// <summary>
 /// Computes session statistics by scanning Claude Code transcripts on disk
-/// (<c>~/.claude/projects/{enc-cwd}/{sessionId}.jsonl</c>). Transcript-derived and retroactive: it
-/// records nothing of its own, just reads the append-only logs Claude Code already writes, so it works
-/// for sessions that ran long before this feature existed — and survives the tray being closed.
+/// (<c>~/.claude/projects/{enc-cwd}/{sessionId}.jsonl</c>). Transcript-derived and retroactive: it reads
+/// the append-only logs Claude Code already writes, so it works for sessions that ran long before this
+/// feature existed — and survives the tray being closed. The reports fold those logs through
+/// <see cref="SessionStatsCache"/> (incremental, persisted), which is only ever a cache of them: deleting it
+/// just costs one full re-read.
 ///
 /// Each transcript is one session; a record's <c>timestamp</c> places it on a calendar day. "Active
 /// time" is inferred, not measured: walking a session's records in time order, each gap counts toward
@@ -237,168 +247,210 @@ internal static class SessionStatsService
 
     /// <summary>The full report for a single day. Heavier than <see cref="ForDay"/> — call off the UI thread.</summary>
     public static StatsReport ReportForDay(DateOnly day) =>
-        ComposeReport(day, Scan(day.ToDateTime(TimeOnly.MinValue), day.AddDays(1).ToDateTime(TimeOnly.MinValue)).Values);
+        ComposeReport(day, Scan(SessionStatsCache.Shared, CandidateTranscripts(day), day, day.AddDays(1)).Values);
 
     /// <summary>Statistics over the inclusive day range [from, to], with a trend series and records.
     /// <paramref name="scopeLabel"/> names the span (e.g. "Last 7 days").</summary>
     public static RangeReport ReportForRange(DateOnly from, DateOnly to, string scopeLabel)
     {
-        var buckets = Scan(from.ToDateTime(TimeOnly.MinValue), to.AddDays(1).ToDateTime(TimeOnly.MinValue));
+        var buckets = Scan(SessionStatsCache.Shared, CandidateTranscripts(from), from, to.AddDays(1));
         return Assemble(buckets, scopeLabel, trendFrom: from, to: to, streakMeaningful: false);
     }
 
     /// <summary>Statistics over every transcript on disk: all-time totals, streak and records, with the
-    /// trend showing the last 30 days. Scans the full project history, so it's the slowest path.</summary>
-    public static RangeReport ReportAllTime(DateOnly today)
+    /// trend showing the last 30 days. Covers the full project history, but through
+    /// <see cref="SessionStatsCache"/>: only transcripts that grew since the last report are read (just their
+    /// new bytes), so after the first run this is cheap.</summary>
+    public static RangeReport ReportAllTime(DateOnly today) =>
+        ReportAllTime(today, SessionStatsCache.Shared, TranscriptLocator.EnumerateTranscripts());
+
+    // The test/benchmark seam: an explicit cache and transcript set.
+    internal static RangeReport ReportAllTime(DateOnly today, SessionStatsCache cache, IEnumerable<string> transcripts)
     {
-        var buckets = Scan(null, today.AddDays(1).ToDateTime(TimeOnly.MinValue));
+        var buckets = Scan(cache, transcripts, null, today.AddDays(1), prune: true);
         return Assemble(buckets, "All time", trendFrom: today.AddDays(-29), to: today, streakMeaningful: true);
     }
 
-    // Scans candidate transcripts and buckets every accepted record by its local day. Each transcript is
-    // one session; a session active on N days contributes to N day-buckets. from==null means all-time
-    // (no mtime filter and no lower time bound).
-    private static Dictionary<DateOnly, DayBucket> Scan(DateTime? from, DateTime to)
-    {
-        var map = new Dictionary<DateOnly, DayBucket>();
-        foreach (var file in EnumerateCandidateTranscripts(from))
-        {
-            var sessionId = Path.GetFileNameWithoutExtension(file);
-            foreach (var (day, sdd) in ParseSession(file, from, to))
-            {
-                var bucket = map.TryGetValue(day, out var b) ? b : (map[day] = new DayBucket());
-                FoldSession(bucket, sessionId, sdd);
-            }
+    private static IEnumerable<string> CandidateTranscripts(DateOnly from) =>
+        EnumerateCandidateTranscripts(from.ToDateTime(TimeOnly.MinValue));
 
-            // Agent-Teams teammates run in their own transcripts under {sessionId}/subagents/, which the
-            // session scan above never sees. Roll their counts/tokens into the same day-buckets.
-            foreach (var (day, td) in TeamReader.ParseContributions(file, from, to))
+    // Buckets every record of the given transcripts that falls on a local day in [from, to) (from == null:
+    // no lower bound). Each transcript is one session; a session active on N days contributes to N
+    // day-buckets. The per-(session, day) figures come from the cache, which folds each transcript
+    // incrementally — so this is the same result a fresh parse would give, at the cost of reading only what
+    // was appended. `prune` (the all-time scan, which sees every transcript) drops cache state for files
+    // that no longer exist.
+    private static Dictionary<DateOnly, DayBucket> Scan(SessionStatsCache cache, IEnumerable<string> transcripts,
+        DateOnly? from, DateOnly to, bool prune = false)
+    {
+        bool InRange(DateOnly d) => (from is not { } f || d >= f) && d < to;
+        var map = new Dictionary<DateOnly, DayBucket>();
+        DayBucket BucketFor(DateOnly day) => map.TryGetValue(day, out var b) ? b : (map[day] = new DayBucket());
+
+        cache.Use(view =>
+        {
+            foreach (var file in transcripts)
             {
-                var bucket = map.TryGetValue(day, out var b) ? b : (map[day] = new DayBucket());
-                bucket.Teammates += td.Teammates;
-                bucket.TeammateTokens += td.Tokens;
+                var sessionId = Path.GetFileNameWithoutExtension(file);
+                if (view.Session(file) is { } session)
+                    foreach (var (day, sdd) in session.Days)
+                        if (InRange(day))
+                            FoldSession(BucketFor(day), sessionId, sdd, session.Project, session.Branch);
+
+                // Agent-Teams teammates run in their own transcripts under {sessionId}/subagents/, which the
+                // session fold above never sees. Roll their counts/tokens into the same day-buckets.
+                foreach (var team in view.Teammates(file))
+                    foreach (var (day, td) in TeamReader.Contributions(team, InRange))
+                    {
+                        var bucket = BucketFor(day);
+                        bucket.Teammates += td.Teammates;
+                        bucket.TeammateTokens += td.Tokens;
+                    }
             }
-        }
+            if (prune) view.PruneUnseen();
+        });
         return map;
     }
 
-    // Parses one transcript and buckets its in-range records by local day. The cwd and git branch are
-    // session constants, captured once and stamped onto every day-bucket for the session.
-    // (internal for golden tests — this is a primary target of the Phase 2 parsing consolidation.)
+    /// <summary>
+    /// The incremental reducer behind a session's statistics: one transcript's records bucketed by local day.
+    /// The cwd and git branch are session constants, captured from the first line that carries them. With
+    /// <see cref="From"/>/<see cref="To"/> set it keeps only records in that time range (the one-shot
+    /// <see cref="ParseSession"/>); the cache leaves them null, keeps every record, and filters by day when a
+    /// report asks.
+    /// </summary>
+    internal sealed class SessionFoldState
+    {
+        public DateTime? From;
+        public DateTime? To;
+        public string Project = "";
+        public string Branch = "";
+        public readonly Dictionary<DateOnly, SessionDayData> Days = new();
+    }
+
+    // Bump when StepSession's rules (or anything it counts — SwearFilter's list, prompt detection) change:
+    // the persisted cache folded old transcripts under the old rules and must be rebuilt.
+    internal const int SessionFoldVersion = 1;
+
+    internal static readonly LineFolder<SessionFoldState> SessionFolder = new(() => new SessionFoldState(), StepSession);
+
+    // Parses one transcript into per-day data, keeping records in [from, to). The cwd and git branch are
+    // stamped onto every day for the session. (internal for golden tests.) Shares StepSession with the
+    // cache, so the two can never disagree; a malformed or oddly-shaped line is skipped, never fatal.
     internal static Dictionary<DateOnly, SessionDayData> ParseSession(string file, DateTime? from, DateTime to)
     {
-        var perDay = new Dictionary<DateOnly, SessionDayData>();
-        string project = "", branch = "";
+        var state = new SessionFoldState { From = from, To = to };
         try
         {
             foreach (var line in TranscriptScan.ReadLines(file))
             {
-                if (string.IsNullOrWhiteSpace(line))
-                    continue;
-
-                JsonNode? node;
-                try { node = JsonNode.Parse(line); }
-                catch { continue; }
-                if (node == null)
-                    continue;
-
-                if (project.Length == 0)
-                {
-                    var cwd = node["cwd"]?.GetValue<string>();
-                    if (!string.IsNullOrEmpty(cwd))
-                        project = PathLeaf.Of(cwd!);
-                }
-                if (branch.Length == 0)
-                {
-                    var gb = node["gitBranch"]?.GetValue<string>();
-                    if (!string.IsNullOrEmpty(gb))
-                        branch = gb!;
-                }
-
-                if (TranscriptJson.ParseTimestamp(node["timestamp"]?.GetValue<string>()) is not { } t)
-                    continue;
-                if ((from != null && t < from) || t >= to)
-                    continue;
-
-                var day = DateOnly.FromDateTime(t);
-                var data = perDay.TryGetValue(day, out var d) ? d : (perDay[day] = new SessionDayData());
-                data.Times.Add(t);
-
-                var type = node["type"]?.GetValue<string>();
-                bool isMeta = node["isMeta"]?.GetValue<bool>() ?? false;
-                var message = node["message"];
-                var content = message?["content"];
-
-                // Whoops detection: a genuine typed prompt that was submitted, cancelled (ctrl+c) and
-                // re-typed leaves *two* user prompts sharing one parentUuid — a fork in the append-only
-                // tree, since both branch from the same prior leaf. Tally genuine prompts per parent here;
-                // the count-minus-one per shared parent becomes the whoops total below.
-                if (type == "user" && !isMeta && IsGenuineTypedPrompt(content)
-                    && node["parentUuid"]?.GetValue<string>() is { Length: > 0 } parent)
-                {
-                    data.PromptsByParent[parent] = data.PromptsByParent.GetValueOrDefault(parent) + 1;
-                }
-
-                if (type == "user" && !isMeta && IsUserPrompt(content))
-                {
-                    data.Prompts++;
-                    // Tally profanity in the authored text (plain string, or the text blocks of an array).
-                    if (content is JsonValue pv && pv.TryGetValue<string>(out var ptext))
-                        data.Swears += SwearFilter.Count(ptext);
-                    else if (content is JsonArray parr)
-                        foreach (var block in parr)
-                            if (block?["type"]?.GetValue<string>() == "text")
-                                data.Swears += SwearFilter.Count(block["text"]?.GetValue<string>());
-                }
-
-                // Token usage rides on assistant records; attribute it to the record's model.
-                if (message?["usage"] is { } usage)
-                {
-                    var model = message["model"]?.GetValue<string>() ?? "unknown";
-                    var tt = new TokenTotals(
-                        TranscriptJson.AsLong(usage["input_tokens"]),
-                        TranscriptJson.AsLong(usage["output_tokens"]),
-                        TranscriptJson.AsLong(usage["cache_creation_input_tokens"]),
-                        TranscriptJson.AsLong(usage["cache_read_input_tokens"]));
-                    data.Tokens += tt;
-                    data.Models[model] = data.Models.GetValueOrDefault(model, TokenTotals.Zero) + tt;
-                }
-
-                if (content is JsonArray blocks)
-                {
-                    foreach (var b in blocks)
-                    {
-                        if (TranscriptJson.BlockType(b) != "tool_use")
-                            continue;
-                        var name = b!["name"]?.GetValue<string>() ?? "tool";
-                        data.ToolCalls++;
-                        data.ToolCounts[name] = data.ToolCounts.GetValueOrDefault(name) + 1;
-                        if (name == "Task")
-                            data.SubAgents++;   // the Task tool is how a session spawns a sub-agent
-                    }
-                }
+                try { StepSession(state, line); }
+                catch { /* one bad line doesn't cost the rest of the file */ }
             }
         }
         catch { }
 
-        foreach (var d in perDay.Values)
+        foreach (var d in state.Days.Values)
         {
-            d.Project = project;
-            d.Branch = branch;
-            // Each parent shared by N genuine prompts contributed N-1 abandoned (re-typed) prompts; the
-            // surviving branch is not a whoops. Summed over every fork this session-day.
-            foreach (var count in d.PromptsByParent.Values)
-                if (count > 1)
-                    d.Whoops += count - 1;
+            d.Project = state.Project;
+            d.Branch = state.Branch;
         }
-        return perDay;
+        return state.Days;
+    }
+
+    private static void StepSession(SessionFoldState state, string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return;
+
+        JsonNode? node;
+        try { node = JsonNode.Parse(line); }
+        catch { return; }
+        if (node == null)
+            return;
+
+        if (state.Project.Length == 0)
+        {
+            var cwd = node["cwd"]?.GetValue<string>();
+            if (!string.IsNullOrEmpty(cwd))
+                state.Project = PathLeaf.Of(cwd!);
+        }
+        if (state.Branch.Length == 0)
+        {
+            var gb = node["gitBranch"]?.GetValue<string>();
+            if (!string.IsNullOrEmpty(gb))
+                state.Branch = gb!;
+        }
+
+        if (TranscriptJson.ParseTimestamp(node["timestamp"]?.GetValue<string>()) is not { } t)
+            return;
+        if ((state.From is { } from && t < from) || (state.To is { } to && t >= to))
+            return;
+
+        var day = DateOnly.FromDateTime(t);
+        var data = state.Days.TryGetValue(day, out var d) ? d : (state.Days[day] = new SessionDayData());
+        data.AddTime(t);
+
+        var type = node["type"]?.GetValue<string>();
+        bool isMeta = node["isMeta"]?.GetValue<bool>() ?? false;
+        var message = node["message"];
+        var content = message?["content"];
+
+        // Whoops detection: a genuine typed prompt that was submitted, cancelled (ctrl+c) and re-typed leaves
+        // *two* user prompts sharing one parentUuid — a fork in the append-only tree, since both branch from
+        // the same prior leaf. Tally genuine prompts per parent here; SessionDayData.Whoops derives the
+        // count-minus-one per shared parent.
+        if (type == "user" && !isMeta && IsGenuineTypedPrompt(content)
+            && node["parentUuid"]?.GetValue<string>() is { Length: > 0 } parent)
+        {
+            data.PromptsByParent[parent] = data.PromptsByParent.GetValueOrDefault(parent) + 1;
+        }
+
+        if (type == "user" && !isMeta && IsUserPrompt(content))
+        {
+            data.Prompts++;
+            // Tally profanity in the authored text (plain string, or the text blocks of an array).
+            if (content is JsonValue pv && pv.TryGetValue<string>(out var ptext))
+                data.Swears += SwearFilter.Count(ptext);
+            else if (content is JsonArray parr)
+                foreach (var block in parr)
+                    if (block?["type"]?.GetValue<string>() == "text")
+                        data.Swears += SwearFilter.Count(block["text"]?.GetValue<string>());
+        }
+
+        // Token usage rides on assistant records; attribute it to the record's model.
+        if (message?["usage"] is { } usage)
+        {
+            var model = message["model"]?.GetValue<string>() ?? "unknown";
+            var tt = new TokenTotals(
+                TranscriptJson.AsLong(usage["input_tokens"]),
+                TranscriptJson.AsLong(usage["output_tokens"]),
+                TranscriptJson.AsLong(usage["cache_creation_input_tokens"]),
+                TranscriptJson.AsLong(usage["cache_read_input_tokens"]));
+            data.Tokens += tt;
+            data.Models[model] = data.Models.GetValueOrDefault(model, TokenTotals.Zero) + tt;
+        }
+
+        if (content is JsonArray blocks)
+        {
+            foreach (var b in blocks)
+            {
+                if (TranscriptJson.BlockType(b) != "tool_use")
+                    continue;
+                var name = b!["name"]?.GetValue<string>() ?? "tool";
+                data.ToolCalls++;
+                data.ToolCounts[name] = data.ToolCounts.GetValueOrDefault(name) + 1;
+                if (name == "Task")
+                    data.SubAgents++;   // the Task tool is how a session spawns a sub-agent
+            }
+        }
     }
 
     // Folds one session's single-day data into that day's bucket. Active time is per (session, day) so a
     // session spanning midnight is attributed correctly; the longest such span feeds the records.
-    private static void FoldSession(DayBucket bucket, string sessionId, SessionDayData s)
+    private static void FoldSession(DayBucket bucket, string sessionId, SessionDayData s, string project, string branch)
     {
-        s.Times.Sort();
+        s.EnsureSorted();
         var span = ActiveSpan(s.Times);
         bucket.Sessions.Add(sessionId);
         bucket.Active += span;
@@ -418,9 +470,9 @@ internal static class SessionStatsService
             bucket.ToolCounts[k] = bucket.ToolCounts.GetValueOrDefault(k) + v;
         foreach (var (k, v) in s.Models)
             bucket.Models[k] = bucket.Models.GetValueOrDefault(k, TokenTotals.Zero) + v;
-        AddGroup(bucket.Projects, s.Project.Length > 0 ? s.Project : "session", span, s.Tokens.Total);
-        if (s.Branch.Length > 0)
-            AddGroup(bucket.Branches, s.Branch, span, s.Tokens.Total);
+        AddGroup(bucket.Projects, project.Length > 0 ? project : "session", span, s.Tokens.Total);
+        if (branch.Length > 0)
+            AddGroup(bucket.Branches, branch, span, s.Tokens.Total);
     }
 
     private static void AddGroup(Dictionary<string, (int sessions, TimeSpan active, long tokens)> d,
@@ -612,16 +664,17 @@ internal static class SessionStatsService
         return null;   // unknown model — surfaced as "—" rather than a fabricated figure
     }
 
-    // Mutable per-(session, day) scratch used only while parsing one transcript.
+    // Per-(session, day) figures: accumulated by StepSession, held by the cache between reports, and
+    // persisted by SessionStatsCache's codec (add a field there too, and bump SessionFoldVersion).
     // (internal so golden tests can assert the parsed fields.)
     internal sealed class SessionDayData
     {
-        public string Project = "";
+        public string Project = "";   // stamped by the one-shot ParseSession only; the cache keeps it per file
         public string Branch = "";
-        public readonly List<DateTime> Times = new();
+        public readonly List<DateTime> Times = new();   // record timestamps; ascending once EnsureSorted runs
+        public bool TimesUnsorted;                      // a record arrived out of order since the last sort
         public int Prompts;
         public int Swears;
-        public int Whoops;
         public int ToolCalls;
         public int SubAgents;
         public TokenTotals Tokens = TokenTotals.Zero;
@@ -629,6 +682,35 @@ internal static class SessionStatsService
         public readonly Dictionary<string, TokenTotals> Models = new();
         // Genuine typed prompts keyed by parentUuid, to spot forks (a shared parent = a cancelled re-type).
         public readonly Dictionary<string, int> PromptsByParent = new();
+
+        // Each parent shared by N genuine prompts contributed N-1 abandoned (re-typed) prompts; the surviving
+        // branch is not a whoops. Summed over every fork this session-day. Derived, so an append that adds a
+        // sibling to an earlier prompt is counted however the day was folded.
+        public int Whoops
+        {
+            get
+            {
+                int n = 0;
+                foreach (var count in PromptsByParent.Values)
+                    if (count > 1) n += count - 1;
+                return n;
+            }
+        }
+
+        public void AddTime(DateTime t)
+        {
+            if (Times.Count > 0 && t < Times[^1]) TimesUnsorted = true;
+            Times.Add(t);
+        }
+
+        // Records are almost always appended in time order, so a cached day is usually sorted already and a
+        // report doesn't pay for re-sorting its whole history each time.
+        public void EnsureSorted()
+        {
+            if (!TimesUnsorted) return;
+            Times.Sort();
+            TimesUnsorted = false;
+        }
     }
 
     // Aggregated stats for one calendar day, accumulated across every session active that day.

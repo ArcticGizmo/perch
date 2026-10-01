@@ -1,6 +1,8 @@
 ﻿using System.Globalization;
 using Avalonia;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
+using Perch.Data;
 
 namespace Perch.Avalonia.Rendering;
 
@@ -12,10 +14,53 @@ namespace Perch.Avalonia.Rendering;
 /// </summary>
 internal static class OverlayDraw
 {
+    // Review fixes CP23: the overlay repaints on a 60ms pulse, a per-frame chase and a per-second tick, and
+    // used to build a fresh Typeface + FormattedText (and so re-shape) for every string on every frame. Text is
+    // now shaped once and reused from an LRU keyed by what determines its look.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<FontWeight, Typeface> Faces = new();
+
     /// <summary>The overlay's default typeface. WithInterFont() makes Inter the default family, so
-    /// <see cref="Typeface.Default"/> resolves to Inter — matching the rest of the app.</summary>
+    /// <see cref="Typeface.Default"/> resolves to Inter — matching the rest of the app. Cached per weight.</summary>
     public static Typeface Face(FontWeight weight = FontWeight.Normal) =>
-        new(FontFamily.Default, FontStyle.Normal, weight);
+        Faces.GetOrAdd(weight, w => new Typeface(FontFamily.Default, FontStyle.Normal, w));
+
+    // Shaped text by (text, size, weight, colour, emoji face). Keyed by the brush's colour rather than the brush
+    // object: callers often pass a brush built that frame, and the palette's cached brushes change colour in
+    // place on a theme swap, so a reference key would either never hit or hand back the old colour. The cached
+    // FormattedText paints with its own immutable brush of that colour.
+    private readonly record struct TextKey(string Text, double Size, FontWeight Weight, Color Color, double Opacity, bool Emoji);
+    private static readonly LruCache<TextKey, FormattedText> TextCache = new(1024);
+
+    private static readonly LruCache<(Color, double), IImmutableSolidColorBrush> BrushCache = new(512);
+
+    /// <summary>A shared immutable brush of <paramref name="color"/> — for paint code that would otherwise build
+    /// a <see cref="SolidColorBrush"/> per call.</summary>
+    public static IBrush Brush(Color color, double opacity = 1.0) =>
+        BrushCache.GetOrAdd((color, opacity), k => new ImmutableSolidColorBrush(k.Item1, k.Item2));
+
+    private static readonly LruCache<(Color, double, PenLineCap, PenLineJoin), IPen> SolidPenCache = new(4096);
+
+    /// <summary>A shared immutable pen of one colour and width, for animation paths that stroke hundreds of
+    /// segments a frame from a repeating set of colours (the attention chase's comet).</summary>
+    public static IPen SolidPen(Color color, double thickness, PenLineCap lineCap = PenLineCap.Flat,
+        PenLineJoin lineJoin = PenLineJoin.Miter) =>
+        SolidPenCache.GetOrAdd((color, thickness, lineCap, lineJoin),
+            k => new ImmutablePen((IImmutableBrush)Brush(k.Item1), k.Item2, null, k.Item3, k.Item4));
+
+    /// <summary>
+    /// A pen for one paint call — same parameters as <see cref="global::Avalonia.Media.Pen"/>'s constructor. A
+    /// <see cref="global::Avalonia.Media.Pen"/> is a full AvaloniaObject (property store, change notifications),
+    /// about a kilobyte each; the attention chase alone built thousands per frame, which was nearly all of the
+    /// overlay's per-frame allocation (CP23). An <see cref="ImmutablePen"/> is a plain object a fraction of the
+    /// size. Keep <c>new Pen</c> for pens stored in fields.
+    /// </summary>
+    public static IPen Pen(IBrush? brush, double thickness = 1, IDashStyle? dashStyle = null,
+        PenLineCap lineCap = PenLineCap.Flat, PenLineJoin lineJoin = PenLineJoin.Miter, double miterLimit = 10) =>
+        new ImmutablePen(
+            brush as IImmutableBrush ?? brush?.ToImmutable(),
+            thickness,
+            dashStyle is null ? null : dashStyle as ImmutableDashStyle ?? new ImmutableDashStyle(dashStyle.Dashes, dashStyle.Offset),
+            lineCap, lineJoin, miterLimit);
 
     /// <summary>Fills (and optionally strokes) a rounded rectangle.</summary>
     public static void Panel(DrawingContext ctx, Rect r, IBrush? fill, IPen? border, double radius)
@@ -33,21 +78,37 @@ internal static class OverlayDraw
         ctx.DrawRectangle(brush, null, new RoundedRect(r, radius));
     }
 
-    /// <summary>Builds a <see cref="FormattedText"/> ready to draw. Read <c>.Height</c>/<c>.Width</c>
-    /// to position it — never assume a pixel line height.</summary>
+    /// <summary>A shaped <see cref="FormattedText"/> ready to draw. Read <c>.Height</c>/<c>.Width</c>
+    /// to position it — never assume a pixel line height. <b>Shared and cached: never mutate the result</b>
+    /// (<c>MaxTextWidth</c>, <c>Trimming</c>, <c>SetForegroundBrush</c>…); use <see cref="NewText"/> for that.</summary>
     public static FormattedText Text(string s, double size, IBrush brush,
-        FontWeight weight = FontWeight.Normal) =>
+        FontWeight weight = FontWeight.Normal) => Shaped(s, size, brush, weight, emoji: false);
+
+    /// <summary>A fresh, uncached <see cref="FormattedText"/> the caller may mutate.</summary>
+    public static FormattedText NewText(string s, double size, IBrush brush, FontWeight weight = FontWeight.Normal) =>
         new(s ?? "", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Face(weight), size, brush);
 
     // The platform emoji typeface, tried before Inter so an emoji glyph resolves rather than falling to tofu.
     private static readonly Typeface EmojiFace =
         new(new FontFamily("Segoe UI Emoji, Apple Color Emoji, Noto Color Emoji, Twemoji Mozilla"));
 
-    /// <summary>Builds a <see cref="FormattedText"/> for an emoji glyph using the platform emoji font, so the
+    /// <summary>A shaped <see cref="FormattedText"/> for an emoji glyph using the platform emoji font, so the
     /// mood/reaction glyphs render (as colour where the toolkit supports it, else a monochrome outline) instead
-    /// of falling through Inter to a tofu box.</summary>
+    /// of falling through Inter to a tofu box. Shared and cached, like <see cref="Text"/>.</summary>
     public static FormattedText Emoji(string s, double size, IBrush brush) =>
-        new(s ?? "", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, EmojiFace, size, brush);
+        Shaped(s, size, brush, FontWeight.Normal, emoji: true);
+
+    private static FormattedText Shaped(string? s, double size, IBrush brush, FontWeight weight, bool emoji)
+    {
+        s ??= "";
+        // Only a solid colour has a value to key on; anything else (a gradient) is built fresh each time.
+        if (brush is not ISolidColorBrush solid)
+            return new FormattedText(s, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+                emoji ? EmojiFace : Face(weight), size, brush);
+        return TextCache.GetOrAdd(new TextKey(s, size, weight, solid.Color, solid.Opacity, emoji), k =>
+            new FormattedText(k.Text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+                k.Emoji ? EmojiFace : Face(k.Weight), k.Size, Brush(k.Color, k.Opacity)));
+    }
 
     /// <summary>Draws an emoji built via <see cref="Emoji"/> vertically centred on <paramref name="midY"/>, with
     /// its left edge at <paramref name="x"/>. Colour-emoji metrics don't give a clean centre: the FormattedText
@@ -101,24 +162,20 @@ internal static class OverlayDraw
         ctx.DrawGeometry(null, pen, geo);
     }
 
-    /// <summary>Measured width of a string at the given size/weight (uses a throwaway brush).</summary>
+    /// <summary>Measured width of a string at the given size/weight (shaped once, then cached).</summary>
     public static double MeasureWidth(string s, double size, FontWeight weight = FontWeight.Normal)
         => Text(s, size, Brushes.White, weight).Width;
 
+    private static readonly LruCache<(string, double, double, FontWeight), string> TruncateCache = new(512);
+
     /// <summary>Truncates <paramref name="text"/> with a trailing ellipsis so it fits
     /// <paramref name="maxWidth"/> at the given size/weight — the Avalonia counterpart of the WinForms
-    /// TruncateString helper. Binary-searches the longest prefix that fits.</summary>
+    /// TruncateString helper. Cuts only between graphemes (<see cref="TextFit"/>), and remembers the answer, so
+    /// a repaint doesn't re-run the binary search's shaping probes.</summary>
     public static string Truncate(string text, double size, double maxWidth, FontWeight weight = FontWeight.Normal)
     {
-        if (string.IsNullOrEmpty(text) || MeasureWidth(text, size, weight) <= maxWidth) return text ?? "";
-        if (maxWidth <= 0) return "";
-        const string ell = "…";
-        int lo = 0, hi = text.Length;
-        while (lo < hi)
-        {
-            int mid = (lo + hi + 1) / 2;
-            if (MeasureWidth(text[..mid] + ell, size, weight) <= maxWidth) lo = mid; else hi = mid - 1;
-        }
-        return lo == 0 ? ell : text[..lo] + ell;
+        if (string.IsNullOrEmpty(text)) return "";
+        return TruncateCache.GetOrAdd((text, size, maxWidth, weight),
+            k => TextFit.Truncate(k.Item1, k.Item3, s => MeasureWidth(s, k.Item2, k.Item4)));
     }
 }

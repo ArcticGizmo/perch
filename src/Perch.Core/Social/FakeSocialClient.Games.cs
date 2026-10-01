@@ -103,6 +103,8 @@ public sealed partial class FakeSocialClient
         return Task.CompletedTask;
     }
 
+    /// <summary>Fixture helper (tests + headless render): creates a live game directly, you as red. Not part of
+    /// <see cref="ISocialClient"/> -- the real backend only creates games from an accepted invite.</summary>
     public Task<GameSummary> CreateGameAsync(Guid opponentUserId, CancellationToken ct = default)
     {
         GameSummary summary;

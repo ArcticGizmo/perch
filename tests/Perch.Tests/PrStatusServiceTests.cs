@@ -414,4 +414,31 @@ public sealed class PrStatusServiceBranchTests : IDisposable
         Assert.Null(PrStatusService.FindGitDir(plain));
         Assert.Null(PrStatusService.ReadHeadRef(plain));
     }
+
+    // CP9: a .git file is repo content, so its gitdir must never lead a HEAD read onto a share (NTLM leak +
+    // stall). The UNC hosts are unresolvable (.invalid) so nothing is ever contacted — they're refused unprobed.
+    [Theory]
+    [InlineData(@"\\perch-cp9.invalid\s\realgit")]
+    [InlineData("//perch-cp9.invalid/s/realgit")]
+    public void WorktreeGitdirOnAShareIsNotFollowed(string target)
+    {
+        var wt = Make("worktree");
+        File.WriteAllText(Path.Combine(wt, ".git"), $"gitdir: {target}\n");
+        Assert.Null(PrStatusService.FindGitDir(wt));
+        Assert.Null(PrStatusService.ReadHeadRef(wt));
+    }
+
+    // The discriminating case: a device-path spelling of a real, local git dir. The old code followed it and read
+    // the branch; the fix refuses any "\\"-led target not on the repo's own share, so this must yield null.
+    [Fact]
+    public void WorktreeGitdirAsADevicePathIsNotFollowed()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var wt = Make("worktree");
+        var gitDir = Make(Path.Combine("realgit", "worktrees", "wt"));
+        File.WriteAllText(Path.Combine(gitDir, "HEAD"), "ref: refs/heads/wt-branch\n");
+        File.WriteAllText(Path.Combine(wt, ".git"), $@"gitdir: \\?\{gitDir}" + "\n");
+
+        Assert.Null(PrStatusService.ReadHeadRef(wt));
+    }
 }

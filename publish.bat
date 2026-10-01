@@ -19,6 +19,7 @@ dotnet publish src\Perch.App\Perch.App.csproj -c Release -f net10.0-windows10.0.
     -p:PublishSingleFile=true ^
     -p:EnableCompressionInSingleFile=true ^
     -p:DebugType=embedded ^
+    -p:Version=%VERSION% ^
     -o publish\
 
 if %ERRORLEVEL% neq 0 (
@@ -34,7 +35,7 @@ echo Publishing perch-hook (NativeAOT) ...
 :: development with C++" workload for the native linker. When that's missing (common on a fresh dev box)
 :: the AOT publish can't link, so fall back to a self-contained single-file build below so LOCAL packaging
 :: still works. CI releases (release.yml, on a runner that has the workload) stay AOT.
-dotnet publish src\Perch.Hook\Perch.Hook.csproj -c Release -r win-x64 -o publish\
+dotnet publish src\Perch.Hook\Perch.Hook.csproj -c Release -r win-x64 -p:Version=%VERSION% -o publish\
 
 if %ERRORLEVEL% neq 0 (
     echo.
@@ -42,7 +43,7 @@ if %ERRORLEVEL% neq 0 (
     echo packaging can proceed. This local build has a slower hook cold-start than a CI/AOT release;
     echo install the C++ workload from https://aka.ms/nativeaot-prerequisites for an AOT-equivalent build.
     echo.
-    dotnet publish src\Perch.Hook\Perch.Hook.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishAot=false -p:EnableCompressionInSingleFile=true -o publish\
+    dotnet publish src\Perch.Hook\Perch.Hook.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishAot=false -p:EnableCompressionInSingleFile=true -p:Version=%VERSION% -o publish\
 )
 
 if %ERRORLEVEL% neq 0 (
@@ -52,10 +53,18 @@ if %ERRORLEVEL% neq 0 (
 
 echo Packaging ...
 
-dnx vpk pack --packId Perch --packTitle "Perch" --packVersion %VERSION% --packDir publish\ --mainExe perch.exe --outputDir releases\
+:: vpk is a local tool pinned in .config\dotnet-tools.json (to the app's Velopack library version), so a
+:: local pack uses the same vpk as CI rather than whatever is newest on nuget.org.
+dotnet tool restore
+if %ERRORLEVEL% neq 0 (
+    echo Could not restore the pinned vpk CLI.
+    exit /b %ERRORLEVEL%
+)
+
+dotnet vpk pack --packId Perch --packTitle "Perch" --packVersion %VERSION% --packDir publish\ --mainExe perch.exe --outputDir releases\
 
 if %ERRORLEVEL% neq 0 (
-    echo Pack failed. Is the vpk CLI installed? Run: dotnet tool install -g vpk
+    echo Pack failed.
     exit /b %ERRORLEVEL%
 )
 
@@ -63,9 +72,12 @@ echo Writing checksums ...
 
 :: Mirrors the SHA256SUMS.txt that release.yml publishes, so install.ps1 can be pointed at a local pack and
 :: a hand-uploaded release still ships checksums. Written LF-terminated with lower-case hex in sha256sum's
-:: own format, so `sha256sum -c SHA256SUMS.txt` validates it as-is. Note this hashes EVERYTHING currently in
-:: releases\ -- a local dir accumulates older versions' nupkgs, unlike CI's clean per-run artifact set.
-powershell -NoProfile -Command "$d = Resolve-Path 'releases'; $lines = Get-ChildItem -File -LiteralPath $d -Exclude 'SHA256SUMS.txt' | Sort-Object Name | ForEach-Object { '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name }; [System.IO.File]::WriteAllText((Join-Path $d 'SHA256SUMS.txt'), ($lines -join [char]10) + [char]10); Write-Host ('  ' + @($lines).Count + ' files hashed')"
+:: own format, so `sha256sum -c SHA256SUMS.txt` validates it as-is. A local releases\ accumulates older
+:: versions' nupkgs (Perch-<ver>-full/delta.nupkg), unlike CI's clean per-run artifact set, so only this
+:: version's nupkgs are hashed; every other file (Setup, Portable, RELEASES, the json feeds) is rewritten by
+:: each pack and is always current. The manifest itself is filtered by name: -Exclude is silently ignored
+:: alongside -LiteralPath in Windows PowerShell, so a second run used to hash the old manifest into the new one.
+powershell -NoProfile -Command "$d = Resolve-Path 'releases'; $v = '%VERSION%'; $lines = Get-ChildItem -File -LiteralPath $d | Where-Object { $_.Name -ne 'SHA256SUMS.txt' -and ($_.Extension -ne '.nupkg' -or $_.Name.StartsWith('Perch-' + $v + '-', [StringComparison]::OrdinalIgnoreCase)) } | Sort-Object Name | ForEach-Object { '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name }; [System.IO.File]::WriteAllText((Join-Path $d 'SHA256SUMS.txt'), ($lines -join [char]10) + [char]10); Write-Host ('  ' + @($lines).Count + ' files hashed')"
 
 if %ERRORLEVEL% neq 0 (
     echo Checksum generation failed.

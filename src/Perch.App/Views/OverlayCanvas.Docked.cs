@@ -408,7 +408,7 @@ public sealed partial class OverlayCanvas
         if (ctx != null)
         {
             var pr = new Rect(0.5, 0.5, width - 1, h - 1);
-            if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, 0); DrawChaseBorder(ctx, pr, AttentionColor); }
+            if (_attentionFlash) { OverlayDraw.Panel(ctx, pr, BgBrush, null, 0); DrawChaseBorder(ctx, pr, ChaseColor); }
             else OverlayDraw.Panel(ctx, pr, BgBrush, BorderPen, 0);
             _denseCtl.PaintStrip(ctx, width);
             DrawDockToggleHandle(ctx, width, h, expanded: false);

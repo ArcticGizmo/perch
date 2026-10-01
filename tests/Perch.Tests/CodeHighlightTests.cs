@@ -8,6 +8,34 @@ public class CodeHighlightTests
     private static string Reconstruct(IEnumerable<(string Text, CodeToken Kind)> toks) =>
         string.Concat(toks.Select(t => t.Text));
 
+    // Review fixes CP24: language profiles are built once and shared, so concurrent highlighting (render threads,
+    // several windows) must see the same answer as a single thread, including for the profiles derived from
+    // another (TypeScript from JavaScript, C++ from C) that must not leak their extra keywords into the base.
+    [Fact]
+    public void Shared_profiles_give_the_same_tokens_under_concurrency()
+    {
+        var samples = new (string Lang, string Code)[]
+        {
+            ("js", "interface Foo { const x = 1; }"),
+            ("ts", "interface Foo { const x: string = 'a'; }"),
+            ("c", "class A { int x; }"),
+            ("cpp", "class A { int x; };"),
+            ("sql", "select * from t where id = 1"),
+            ("bash", "echo $HOME # hi"),
+        };
+        var expected = samples.Select(s => CodeHighlight.Tokenize(s.Lang, s.Code).ToList()).ToList();
+        Parallel.For(0, 400, i =>
+        {
+            var s = samples[i % samples.Length];
+            Assert.Equal(expected[i % samples.Length], CodeHighlight.Tokenize(s.Lang, s.Code));
+        });
+        // Derived profiles didn't add to their base: "interface" is a TS keyword, not a JS one; "class" C++ not C.
+        Assert.DoesNotContain(("interface", CodeToken.Keyword), expected[0]);
+        Assert.Contains(("interface", CodeToken.Keyword), expected[1]);
+        Assert.DoesNotContain(("class", CodeToken.Keyword), expected[2]);
+        Assert.Contains(("class", CodeToken.Keyword), expected[3]);
+    }
+
     // Every span's text concatenated must equal the input exactly — no char dropped or duplicated.
     [Theory]
     [InlineData("bash", "if [ -f x ]; then echo \"$HOME/#notacomment\"; fi  # done\n")]

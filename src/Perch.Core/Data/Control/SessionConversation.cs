@@ -58,11 +58,31 @@ internal sealed class AssistantMessageItem : ConversationItem
 internal abstract class AssistantPart;
 
 /// <summary>Prose. <see cref="IsStreaming"/> while deltas accumulate; the completed block replaces the
-/// accumulated text (so the UI can swap a plain streaming block for a Markdown render).</summary>
+/// accumulated text (so the UI can swap a plain streaming block for a Markdown render). Deltas append to a
+/// builder and <see cref="Text"/> materialises (and caches) the string only when read, so a long reply costs
+/// one copy per read rather than one whole-reply copy per delta.</summary>
 internal sealed class TextPart : AssistantPart
 {
-    public string Text { get; internal set; } = "";
+    private readonly System.Text.StringBuilder _sb = new();
+    private string? _text = "";   // cached materialisation of _sb; null when a delta has landed since
+
+    public string Text
+    {
+        get => _text ??= _sb.ToString();
+        internal set { _sb.Clear().Append(value); _text = value; }
+    }
+
+    /// <summary>Characters accumulated so far (no materialisation).</summary>
+    public int Length => _sb.Length;
+
     public bool IsStreaming { get; internal set; } = true;
+
+    internal void Append(string delta)
+    {
+        if (delta.Length == 0) return;
+        _sb.Append(delta);
+        _text = null;
+    }
 }
 
 internal sealed class ThinkingPart(string text) : AssistantPart
@@ -207,7 +227,7 @@ internal sealed class SessionConversation
             case TextDeltaEvent delta:
             {
                 var owner = OpenAssistant();
-                if (owner.Last is TextPart { IsStreaming: true } streaming) streaming.Text += delta.Text;
+                if (owner.Last is TextPart { IsStreaming: true } streaming) streaming.Append(delta.Text);
                 else owner.Add(new TextPart { Text = delta.Text });
                 Changed?.Invoke(owner, ConversationChange.Updated);
                 break;
@@ -452,21 +472,62 @@ internal sealed class SessionConversation
         StateChanged?.Invoke();
     }
 
+    /// <summary>
+    /// One transcript line, decoded but not yet applied: either a genuine user prompt (with any recovered image
+    /// attachments) or the stream-json events it carries. Decoding touches no conversation state, so a viewer can
+    /// run it on a worker thread (the JSON parse and any base64 image decode are the costly part) and then apply
+    /// the result on the UI thread with <see cref="AppendParsedTranscriptLine"/>. Review fixes CP24.
+    /// </summary>
+    internal sealed record ParsedTranscriptLine(string? Prompt, IReadOnlyList<MessageAttachment>? Images,
+        IReadOnlyList<SessionEvent> Events);
+
+    /// <summary>Decodes one transcript line (see <see cref="ParsedTranscriptLine"/>); null for a line that adds
+    /// nothing (blank, malformed, or a sub-agent's). <paramref name="sessionId"/> is the image-cache id, as for
+    /// <see cref="UseHistorySession"/>. Thread-agnostic. Never throws.</summary>
+    public static ParsedTranscriptLine? ParseTranscriptLine(string line, string? sessionId)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(line)) return null;
+            if (System.Text.Json.Nodes.JsonNode.Parse(line) is not { } root) return null;
+            if (root["isSidechain"]?.GetValue<bool>() == true) return null;   // a sub-agent's line, not this thread
+            if (TranscriptJson.AsString(root["type"]) == "user" && GenuineUserPrompt(root) is { } prompt)
+            {
+                // A resumed message that carried a pasted image: recover the image as an attachment. The "[Image #N]"
+                // placeholder is kept in the text (it gives context, and the view makes the token itself hover/click
+                // to the image) — the k-th token pairs with the k-th image attachment.
+                var images = TranscriptImages.Extract(TranscriptJson.ContentArray(root), prompt, sessionId);
+                return new ParsedTranscriptLine(prompt, images.Count > 0 ? images : null, []);
+            }
+            var events = StreamJsonParser.Parse(line);
+            return events.Count > 0 ? new ParsedTranscriptLine(null, null, events) : null;
+        }
+        catch
+        {
+            return null;   // a malformed line is skipped, never fatal
+        }
+    }
+
+    /// <summary>Read-only viewer: <see cref="AppendTranscriptLine"/> for a line already decoded by
+    /// <see cref="ParseTranscriptLine"/>. Never throws on a bad line.</summary>
+    public void AppendParsedTranscriptLine(ParsedTranscriptLine parsed)
+    {
+        try { ApplyParsed(parsed); } catch { /* as AppendTranscriptLine */ }
+    }
+
     private void ApplyTranscriptLine(string line)
     {
-        if (string.IsNullOrWhiteSpace(line)) return;
-        if (System.Text.Json.Nodes.JsonNode.Parse(line) is not { } root) return;
-        if (root["isSidechain"]?.GetValue<bool>() == true) return;   // a sub-agent's line, not this thread
-        if (TranscriptJson.AsString(root["type"]) == "user" && GenuineUserPrompt(root) is { } prompt)
+        if (ParseTranscriptLine(line, _historySessionId) is { } parsed) ApplyParsed(parsed);
+    }
+
+    private void ApplyParsed(ParsedTranscriptLine parsed)
+    {
+        if (parsed.Prompt is { } prompt)
         {
-            // A resumed message that carried a pasted image: recover the image as an attachment. The "[Image #N]"
-            // placeholder is kept in the text (it gives context, and the view makes the token itself hover/click
-            // to the image) — the k-th token pairs with the k-th image attachment.
-            var images = TranscriptImages.Extract(TranscriptJson.ContentArray(root), prompt, _historySessionId);
-            Append(new UserMessageItem(prompt, images.Count > 0 ? images : null));
+            Append(new UserMessageItem(prompt, parsed.Images));
             return;
         }
-        foreach (var ev in StreamJsonParser.Parse(line)) Apply(ev);
+        foreach (var ev in parsed.Events) Apply(ev);
     }
 
     // A typed prompt: string content, or an array with text blocks and no tool_result — minus slash-command

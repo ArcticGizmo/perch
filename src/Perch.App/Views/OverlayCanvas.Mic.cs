@@ -120,7 +120,7 @@ public sealed partial class OverlayCanvas
         double cx = x + w / 2;
         OverlayDraw.Panel(ctx, new Rect(cx - w / 2, cy - h / 2 - 2, w, h), b, null, w / 2);
 
-        var pen = new Pen(b, 1.3);
+        var pen = OverlayDraw.Pen(b, 1.3);
         ctx.DrawLine(pen, new Point(cx - 3.6, cy + 2.2), new Point(cx + 3.6, cy + 2.2));
         ctx.DrawLine(pen, new Point(cx, cy + 2.2), new Point(cx, cy + 5.4));
     }

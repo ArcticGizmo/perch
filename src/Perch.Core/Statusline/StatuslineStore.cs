@@ -104,8 +104,7 @@ internal static class StatuslineStore
             foreach (var p in config.Profiles)
                 if (!builtinNames.Contains(p.Name)) toSave.Profiles.Add(p);
 
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(toSave, Options));
+            AtomicFile.Write(path, JsonSerializer.Serialize(toSave, Options));   // the user's own profiles: never torn
             return true;
         }
         catch

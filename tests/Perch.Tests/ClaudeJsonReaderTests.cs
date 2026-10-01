@@ -89,6 +89,38 @@ public class ClaudeJsonReaderTests : IDisposable
         Assert.Null(ClaudeJsonReader.ReadLiveOrg(path));
     }
 
+    // CP23: the reader streams the top level and only materialises oauthAccount, so it must find the block
+    // wherever it sits — behind a large, deeply nested projects map, after a BOM — and read null/odd values as
+    // the old full parse did.
+    [Fact]
+    public void StreamingRead_FindsTheAccountBehindLargeNestedContent()
+    {
+        var projects = string.Join(",", Enumerable.Range(0, 2000).Select(i =>
+            $$"""
+            "C:/src/p{{i}}": { "history": [{ "display": "x", "pastedContents": { "oauthAccount": { "organizationUuid": "decoy" } } }], "n": {{i}} }
+            """));
+        var path = WriteClaudeJson("\uFEFF{ \"numStartups\": 3, \"projects\": {" + projects + "}, " +
+            "\"oauthAccount\": { \"organizationUuid\": \"real-uuid\", \"organizationName\": \"Org A\" }, \"tail\": [1, 2] }");
+
+        var org = ClaudeJsonReader.ReadLiveOrg(path);
+
+        Assert.Equal("real-uuid", org!.Uuid);   // the nested "oauthAccount" decoys are skipped, not matched
+        Assert.Equal("Org A", org.Name);
+    }
+
+    [Theory]
+    [InlineData("""{ "oauthAccount": null }""", "NotSignedIn", null, null)]
+    [InlineData("""{ "oauthAccount": "junk" }""", "NotSignedIn", null, null)]
+    [InlineData("""{ "oauthAccount": { "organizationUuid": 42, "email": "a@example.com" } }""", "Org", "42", "a@example.com")]
+    [InlineData("""{ "oauthAccount": { "organizationUuid": "  ", "emailAddress": "b@example.com" } }""", "Personal", null, "b@example.com")]
+    public void StreamingRead_KeepsTheOldValueRules(string json, string state, string? uuid, string? email)
+    {
+        var signIn = ClaudeJsonReader.ReadSignIn(WriteClaudeJson(json));
+        Assert.Equal(Enum.Parse<SignInState>(state), signIn.State);
+        Assert.Equal(uuid, signIn.Org?.Uuid);
+        Assert.Equal(email, signIn.Email);
+    }
+
     [Fact]
     public void PersonalAccount_NoOrgUuid_ReadsNull()
     {

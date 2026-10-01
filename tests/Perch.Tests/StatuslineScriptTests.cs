@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using Perch.Data;
 using Perch.Statusline;
 using Xunit;
 
@@ -41,6 +42,11 @@ public sealed class StatuslineScriptTests
         });
         Assert.Contains("const NEED_GIT_COUNTS = true;", withCounts);
         Assert.Contains("execFileSync", withCounts);   // the git subprocess is present
+        // …but by the PATH-resolved absolute path, never the bare name Node would look up in the repo first (CP7).
+        Assert.DoesNotContain("execFileSync('git'", withCounts);
+        // …and hardened against the repo's own command hooks (CP11): fsmonitor off, no external diff or textconv.
+        Assert.Contains("execFileSync(git, [...safe, ...args, '--no-ext-diff', '--no-textconv'], opt)", withCounts);
+        Assert.Contains("'core.fsmonitor=false'", withCounts);
 
         var withoutCounts = StatuslineScript.Generate(new StatuslineProfile
         {
@@ -256,6 +262,216 @@ public sealed class StatuslineScriptTests
         }
     }
 
+    // CP16: placeholders inside the template or the profile name are data, not further substitution sites. The old
+    // chained Replace re-scanned substituted text, so "@@NAME@@" in a template had the name's JSON literal (quotes
+    // and all) spliced into the template's string literal, breaking out of it.
+    [Theory]
+    [InlineData("a@@NAME@@b@@PERCHSETTINGS@@c@@DEV@@d@@TEMPLATE@@e", "t")]
+    [InlineData("plain", "x@@TEMPLATE@@\"; process.exit(7); //")]
+    public void Placeholders_in_the_template_or_name_are_left_as_text(string template, string name)
+    {
+        var script = StatuslineScript.Generate(new StatuslineProfile { Name = name, Template = template }, devMarker: false);
+        Assert.Contains(System.Text.Json.JsonSerializer.Serialize(template), script);   // the literal, verbatim
+
+        var node = FindNode();
+        if (node is null) return;
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-inject-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, script);
+            Assert.Equal(template, RunNode(node, scriptPath, """{"cwd":"/tmp/nowhere"}""").Trim());
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    // CP7 end-to-end: a repo that ships its own git.exe must not have it picked up by the statusline. Node on Windows
+    // looks in the spawn's cwd before PATH, so the old `execFileSync('git', …, {cwd})` resolved to the planted file.
+    // The plant is an EMPTY file — nothing is ever executed from it; it only has to exist to win (or not) the lookup.
+    // So git must resolve to the copy on PATH: the resolver says so directly, and the script proves it by producing
+    // real counts ("S1U0" for exactly one staged file) — resolving to the empty plant would fail to start and yield
+    // no counts at all ("SU").
+    [Fact]
+    public void Generated_script_resolves_git_from_PATH_not_a_git_exe_in_the_repo()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var node = FindNode();
+        var git = ExecutableResolver.Find("git");
+        if (node is null || git is null) return;   // needs both on the host
+
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-plant-" + Guid.NewGuid().ToString("N"));
+        var repo = Directory.CreateDirectory(Path.Combine(dir, "repo")).FullName;
+        try
+        {
+            RunGit(git, repo, "init", "-q");
+            File.WriteAllText(Path.Combine(repo, "a.txt"), "hello");
+            RunGit(git, repo, "add", "a.txt");
+            var planted = Path.Combine(repo, "git.exe");
+            File.WriteAllBytes(planted, []);   // empty: a name to shadow, never something that could run
+
+            // git still resolves to the PATH copy, outside the repo.
+            Assert.Equal(git, ExecutableResolver.Find("git"));
+            Assert.False(git.StartsWith(repo, StringComparison.OrdinalIgnoreCase), $"git resolved inside the repo: {git}");
+
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, StatuslineScript.Generate(
+                new StatuslineProfile { Name = "t", Template = "S{{git.staged}}U{{git.unstaged}}" }, devMarker: false));
+            var payload = System.Text.Json.JsonSerializer.Serialize(new { cwd = repo });
+            Assert.Equal("S1U0", RunNode(node, scriptPath, payload).Trim());
+        }
+        finally
+        {
+            DeleteTree(dir);
+        }
+    }
+
+    // CP9 end-to-end: a worktree .git file whose gitdir is "\\"-led must not be followed by the script's HEAD read
+    // (on a real share that read is an SMB connection — NTLM leak + a stall per refresh). A device-path spelling of a
+    // real LOCAL git dir discriminates without touching the network: the old script read the branch through it, the
+    // fixed one refuses it. The plain relative pointer beside it proves ordinary worktrees still work.
+    [Fact]
+    public void Generated_script_does_not_follow_a_gitdir_onto_a_share()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var node = FindNode();
+        if (node is null) return;
+
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-gitdir-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var gitDir = Directory.CreateDirectory(Path.Combine(dir, "realgit", "worktrees", "wt")).FullName;
+            File.WriteAllText(Path.Combine(gitDir, "HEAD"), "ref: refs/heads/wt-branch\n");
+            var viaDevice = Directory.CreateDirectory(Path.Combine(dir, "wt-device")).FullName;
+            File.WriteAllText(Path.Combine(viaDevice, ".git"), $@"gitdir: \\?\{gitDir}" + "\n");
+            var viaRelative = Directory.CreateDirectory(Path.Combine(dir, "wt-relative")).FullName;
+            File.WriteAllText(Path.Combine(viaRelative, ".git"), $"gitdir: {Path.GetRelativePath(viaRelative, gitDir)}\n");
+
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, StatuslineScript.Generate(
+                new StatuslineProfile { Name = "t", Template = "B[{{git.branch}}]" }, devMarker: false));
+
+            string Run(string cwd) => RunNode(node, scriptPath, System.Text.Json.JsonSerializer.Serialize(new { cwd })).Trim();
+            Assert.Equal("B[wt-branch]", Run(viaRelative));
+            Assert.Equal("B[]", Run(viaDevice));
+        }
+        finally
+        {
+            DeleteTree(dir);
+        }
+    }
+
+    // CP11 end-to-end: the counts run `git diff --numstat` in the session's repo on every refresh, so a repo whose own
+    // config names a command (fsmonitor, a filter driver selected by .gitattributes, an external diff, textconv)
+    // must not get it run. Each command only writes a marker; it's a config string git's own shell runs, not an
+    // executable file. A plain-git control proves the vectors fire on this host; the script must still count right.
+    [Fact]
+    public void Generated_script_never_runs_commands_from_the_repos_own_git_config()
+    {
+        var node = FindNode();
+        var git = ExecutableResolver.Find("git");
+        if (node is null || git is null) return;   // needs both on the host
+
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-hooks-" + Guid.NewGuid().ToString("N"));
+        var repo = Directory.CreateDirectory(Path.Combine(dir, "repo")).FullName;
+        string Marker(string name) => Path.Combine(dir, "mark_" + name);
+        string ShPath(string name) => Marker(name).Replace('\\', '/');
+        try
+        {
+            RunGit(git, repo, "init", "-q");
+            RunGit(git, repo, "config", "user.email", "t@example.com");
+            RunGit(git, repo, "config", "user.name", "t");
+            RunGit(git, repo, "config", "commit.gpgsign", "false");
+            File.WriteAllText(Path.Combine(repo, ".gitattributes"), "*.txt filter=evil diff=evil\n");
+            File.WriteAllText(Path.Combine(repo, "a.txt"), "hello\n");
+            RunGit(git, repo, "add", "-A");
+            RunGit(git, repo, "commit", "-q", "-m", "init");
+            RunGit(git, repo, "config", "core.fsmonitor", $"echo x > '{ShPath("fsmonitor")}'");
+            RunGit(git, repo, "config", "filter.evil.clean", $"sh -c 'echo x > \"{ShPath("filter")}\"; cat'");
+            RunGit(git, repo, "config", "diff.evil.textconv", $"sh -c 'echo x > \"{ShPath("textconv")}\"; cat \"$0\"'");
+            RunGit(git, repo, "config", "diff.external", $"sh -c 'echo x > \"{ShPath("external")}\"'");
+            File.AppendAllText(Path.Combine(repo, "a.txt"), "changed\n");
+            File.SetLastWriteTimeUtc(Path.Combine(repo, "a.txt"), new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+            // Control: the script's own command line, minus the hardening, fires them.
+            RunGit(git, repo, "diff", "--numstat");
+            Assert.True(File.Exists(Marker("fsmonitor")) && File.Exists(Marker("filter")),
+                "control: plain git diff --numstat didn't run the repo's commands on this host");
+            foreach (var f in Directory.GetFiles(dir, "mark_*")) File.Delete(f);
+
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, StatuslineScript.Generate(
+                new StatuslineProfile { Name = "t", Template = "S{{git.staged}}U{{git.unstaged}}" }, devMarker: false));
+            var payload = System.Text.Json.JsonSerializer.Serialize(new { cwd = repo });
+
+            Assert.Equal("S0U1", RunNode(node, scriptPath, payload).Trim());
+            Assert.Empty(Directory.GetFiles(dir, "mark_*"));
+        }
+        finally
+        {
+            DeleteTree(dir);
+        }
+    }
+
+    // Dogfood regression: a repo-local stock git-lfs (`git lfs install --local`) must keep working, or every stat-dirty
+    // LFS file counts as an unstaged change (the pointer in the index against the real content).
+    [Fact]
+    public void Generated_script_keeps_a_repo_local_git_lfs_working()
+    {
+        var node = FindNode();
+        var git = ExecutableResolver.Find("git");
+        if (node is null || git is null || ExecutableResolver.Find("git-lfs") is null) return;   // needs all three
+
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-lfs-" + Guid.NewGuid().ToString("N"));
+        var repo = Directory.CreateDirectory(Path.Combine(dir, "repo")).FullName;
+        try
+        {
+            RunGit(git, repo, "init", "-q");
+            RunGit(git, repo, "config", "user.email", "t@example.com");
+            RunGit(git, repo, "config", "user.name", "t");
+            RunGit(git, repo, "config", "commit.gpgsign", "false");
+            RunGit(git, repo, "lfs", "install", "--local");
+            File.WriteAllText(Path.Combine(repo, ".gitattributes"), "*.bin filter=lfs diff=lfs merge=lfs -text\n");
+            File.WriteAllText(Path.Combine(repo, "data.bin"), "payload\n");
+            RunGit(git, repo, "add", "-A");
+            RunGit(git, repo, "commit", "-q", "-m", "init");
+            File.SetLastWriteTimeUtc(Path.Combine(repo, "data.bin"), new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, StatuslineScript.Generate(
+                new StatuslineProfile { Name = "t", Template = "S{{git.staged}}U{{git.unstaged}}" }, devMarker: false));
+
+            Assert.Equal("S0U0", RunNode(node, scriptPath, System.Text.Json.JsonSerializer.Serialize(new { cwd = repo })).Trim());
+        }
+        finally
+        {
+            DeleteTree(dir);
+        }
+    }
+
+    // git marks its object files read-only, which makes a plain recursive delete fail and leave the temp repo behind.
+    private static void DeleteTree(string dir)
+    {
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+                File.SetAttributes(f, FileAttributes.Normal);
+            Directory.Delete(dir, recursive: true);
+        }
+        catch { /* best effort */ }
+    }
+
+    private static void RunGit(string git, string cwd, params string[] args)
+    {
+        var psi = new ProcessStartInfo(git) { WorkingDirectory = cwd, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        p.WaitForExit(15000);
+    }
+
     private static string? FindNode()
     {
         try
@@ -288,6 +504,10 @@ public sealed class StatuslineScriptTests
                 StandardOutputEncoding = new UTF8Encoding(false),
             },
         };
+        // A plain Windows environment: when the test host inherits NoDefaultCurrentDirectoryInExePath (Claude Code sets
+        // it for its tools), Node skips the cwd search and the planted-git test would pass even against the old
+        // bare-name code. Nothing else here depends on it.
+        p.StartInfo.Environment.Remove("NoDefaultCurrentDirectoryInExePath");
         p.Start();
         p.StandardInput.Write(stdin);
         p.StandardInput.Close();

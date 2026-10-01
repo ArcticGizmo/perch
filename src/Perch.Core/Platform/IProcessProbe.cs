@@ -11,20 +11,34 @@ namespace Perch.Platform;
 public interface IProcessProbe
 {
     bool IsAlive(int pid);
+
+    /// <summary>As <see cref="IsAlive(int)"/>, but also false when the pid has been recycled: the live process
+    /// started well after <paramref name="startedAt"/>, the start the session record carries (null = unknown,
+    /// don't check). The default ignores the start time, which suits replay's synthetic pids.</summary>
+    bool IsAlive(int pid, DateTime? startedAt) => IsAlive(pid);
 }
 
-/// <summary>The real probe: a pid is alive iff the OS still has a non-exited process for it. Wraps the
-/// logic <see cref="Perch.Data.SessionMonitor"/> previously inlined. <c>Process.GetProcessById</c> is
-/// cross-platform, so this lives in the core rather than the platform heads.</summary>
+/// <summary>The real probe: a pid is alive iff the OS still has a non-exited process for it, and, when the
+/// caller knows when its process started, that process isn't a newer one that inherited the pid
+/// (<see cref="Perch.Data.ProcessIdentity"/>). <c>Process.GetProcessById</c> is cross-platform, so this lives
+/// in the core rather than the platform heads.</summary>
 public sealed class SystemProcessProbe : IProcessProbe
 {
     public static readonly SystemProcessProbe Instance = new();
 
-    public bool IsAlive(int pid)
+    public bool IsAlive(int pid) => IsAlive(pid, null);
+
+    public bool IsAlive(int pid, DateTime? startedAt)
     {
         try
         {
-            return !Process.GetProcessById(pid).HasExited;
+            using var process = Process.GetProcessById(pid);
+            if (process.HasExited) return false;
+            if (startedAt is not { } recorded) return true;
+            DateTime processStart;
+            try { processStart = process.StartTime; }
+            catch { return true; }   // can't read its start time: keep the pid-only answer rather than hide a session
+            return !Perch.Data.ProcessIdentity.IsRecycled(processStart, recorded);
         }
         catch
         {

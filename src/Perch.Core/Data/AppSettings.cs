@@ -697,6 +697,10 @@ internal sealed class AppSettings
     private static bool _persistenceDisabled;
     public static void DisablePersistence() => _persistenceDisabled = true;
 
+    /// <summary>True in a process that must never persist (tests, the headless renderer). Other per-profile stores
+    /// that shouldn't touch the real files there (e.g. <see cref="SessionStatsCache"/>) read this one switch.</summary>
+    internal static bool PersistenceDisabled => _persistenceDisabled;
+
     // Set on the stand-in returned when a settings file exists but couldn't be read (locked by another
     // process mid-write, a permissions hiccup). This instance is defaults, not the user's data — persisting
     // it would overwrite their intact file — so Save() declines for the rest of the session and the next
@@ -865,6 +869,9 @@ internal sealed class AppSettings
     public AppSettings Clone() =>
         JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(this)) ?? new();
 
+    // Saves run one at a time: two threads saving at once used to share a fixed ".tmp" name and could tear it.
+    private static readonly Lock SaveGate = new();
+
     public void Save()
     {
         // No-persist guards: the render/test hosts (process-wide) and the unreadable-file stand-in
@@ -872,14 +879,14 @@ internal sealed class AppSettings
         if (_persistenceDisabled || SaveSuppressed) return;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            // Write-then-move so a process killed mid-save can never leave a truncated file for the next
-            // launch to misread as corrupt.
-            string tmp = FilePath + ".tmp";
-            File.WriteAllText(tmp,
-                JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-            File.Move(tmp, FilePath, overwrite: true);
+            // Atomic (unique temp, flushed, then renamed over the file) so a process killed mid-save can never
+            // leave a truncated file for the next launch to misread as corrupt (review fixes CP14).
+            lock (SaveGate)
+                AtomicFile.Write(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch { }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Append("settings.log", $"Save failed for {FilePath}: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 }

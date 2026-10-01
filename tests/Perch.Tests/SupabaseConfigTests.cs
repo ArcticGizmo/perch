@@ -32,6 +32,30 @@ public sealed class SupabaseConfigTests
         }
     }
 
+    // CP16: a shipped release (not dev, compiled-in project present) ignores PERCH_SUPABASE_URL / .env.local; a
+    // dev instance or a fork with nothing compiled in still honours them.
+    [Fact]
+    public void A_release_build_ignores_overrides_but_dev_and_forks_honour_them()
+    {
+        var prevUrl = Environment.GetEnvironmentVariable("PERCH_SUPABASE_URL");
+        var prevKey = Environment.GetEnvironmentVariable("PERCH_SUPABASE_PUBLISHABLE_KEY");
+        try
+        {
+            Environment.SetEnvironmentVariable("PERCH_SUPABASE_URL", "https://override.example");
+            Environment.SetEnvironmentVariable("PERCH_SUPABASE_PUBLISHABLE_KEY", "sb_publishable_override");
+            var compiled = new SupabaseConfig("https://real.supabase.co", "sb_publishable_real");
+
+            Assert.Equal(compiled, SupabaseConfig.Resolve(allowOverrides: false, compiled));
+            Assert.Equal("https://override.example", SupabaseConfig.Resolve(allowOverrides: true, compiled).Url);
+            Assert.Equal("https://override.example", SupabaseConfig.Resolve(allowOverrides: false, new SupabaseConfig("", "")).Url);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PERCH_SUPABASE_URL", prevUrl);
+            Environment.SetEnvironmentVariable("PERCH_SUPABASE_PUBLISHABLE_KEY", prevKey);
+        }
+    }
+
     [Fact]
     public void IsConfigured_is_false_when_a_value_is_missing()
     {

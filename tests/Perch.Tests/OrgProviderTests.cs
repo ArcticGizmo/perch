@@ -85,6 +85,38 @@ public class OrgProviderTests
         Assert.Equal(1, reads); // one physical dir, one read
     }
 
+    // CP23: the overlay asks several times a second, so within the recheck window a cached answer is returned
+    // without touching the file system at all (no stamp), and the stamp is looked at again once it passes.
+    [Fact]
+    public void WithinRecheckWindow_TheFileIsNotStatted()
+    {
+        long now = 0, stamp = 100;
+        int stamps = 0, reads = 0;
+        var provider = new OrgProvider(
+            _ => { reads++; return new Org("u" + stamp); },
+            _ => { stamps++; return stamp; },
+            () => now, TimeSpan.FromSeconds(2));
+
+        Assert.Equal("u100", provider.GetLive(Dir())!.Uuid);
+        Assert.Equal((1, 1), (stamps, reads));
+
+        now = 1_500; stamp = 200;                       // a /login lands, but inside the window
+        Assert.Equal("u100", provider.GetLive(Dir())!.Uuid);
+        Assert.Equal((1, 1), (stamps, reads));          // no stat, no read
+
+        now = 2_100;                                    // window passed: stat again, see the change
+        Assert.Equal("u200", provider.GetLive(Dir())!.Uuid);
+        Assert.Equal((2, 2), (stamps, reads));
+
+        now = 4_300;                                    // unchanged file: a stat, no re-read
+        Assert.Equal("u200", provider.GetLive(Dir())!.Uuid);
+        Assert.Equal((3, 2), (stamps, reads));
+
+        provider.Invalidate();                          // a manual refresh still forces a read
+        Assert.Equal("u200", provider.GetLive(Dir())!.Uuid);
+        Assert.Equal((4, 3), (stamps, reads));
+    }
+
     [Fact]
     public void RealFile_ReReadsWhenLastWriteChanges()
     {
@@ -96,7 +128,8 @@ public class OrgProviderTests
             File.WriteAllText(path, """{ "oauthAccount": { "organizationUuid": "u1", "organizationName": "Org A" } }""");
             File.SetLastWriteTimeUtc(path, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
 
-            var provider = new OrgProvider(); // real reader + real mtime stamp
+            // Real reader + real mtime stamp, without the recheck window (covered above) so the edit is seen at once.
+            var provider = new OrgProvider(ClaudeJsonReader.ReadLiveOrg, OrgProvider.DefaultStamp);
             Assert.Equal("Org A", provider.GetLive(new ClaudeConfigDir(tmp))!.Name);
 
             File.WriteAllText(path, """{ "oauthAccount": { "organizationUuid": "u2", "organizationName": "Org B" } }""");

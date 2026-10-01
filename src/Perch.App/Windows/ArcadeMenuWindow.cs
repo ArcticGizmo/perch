@@ -28,6 +28,9 @@ public sealed class ArcadeMenuWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Palette.OverlaySurfaceBrush;
         Content = _menu;
+        // The chooser animates continuously while it's in front (the shimmering prompt, the selected card's
+        // bobbing sprite), so the gate is what stops it: paused whenever it's behind another window or minimised.
+        ArcadeLoopGate.Attach(this, _menu.Begin, _menu.Stop);
 
         _menu.SetBasketballOn(basketballOn());
         _menu.Chosen += index =>

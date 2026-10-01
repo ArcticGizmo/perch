@@ -41,30 +41,14 @@ internal sealed class GitKrakenLauncher
         });
     }
 
-    // Runs `gitkraken -p <cwd>` with no visible window. A .cmd/.bat can't be started directly with
-    // UseShellExecute=false (CreateProcess rejects a non-PE file) and UseShellExecute=true would pop a
-    // console, so a script is driven through `cmd /c` with CreateNoWindow; a real .exe is launched
-    // directly. Waits (bounded) for the CLI to finish handing the repo to the GUI.
+    // Runs `gitkraken -p <cwd>` with no visible window, then waits (bounded) for the CLI to finish handing the repo
+    // to the GUI. The CLI is a gitkraken.cmd shim, which only runs through cmd; the old `cmd /c` left the repo path
+    // unquoted, so a benign `C:\work\R&D` broke the launch (and a crafted name could run a command). CmdShim quotes
+    // every argument (review fixes CP12).
     private static void RunCli(string cli, string cwd)
     {
-        var ext = Path.GetExtension(cli);
-        bool script = OperatingSystem.IsWindows()
-            && (ext.Equals(".cmd", StringComparison.OrdinalIgnoreCase)
-                || ext.Equals(".bat", StringComparison.OrdinalIgnoreCase));
-
-        var psi = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true };
-        if (script)
-        {
-            psi.FileName = "cmd.exe";
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add(cli);
-        }
-        else
-        {
-            psi.FileName = cli;
-        }
-        psi.ArgumentList.Add("-p");
-        psi.ArgumentList.Add(cwd);
+        var psi = Perch.Data.CmdShim.StartInfo(cli, ["-p", cwd]);
+        if (psi is null) return;   // the path holds a character cmd would still act on (such as %): don't launch
 
         using var p = Process.Start(psi);
         p?.WaitForExit(15_000);
@@ -101,29 +85,6 @@ internal sealed class GitKrakenLauncher
         return null;
     }
 
-    private static string? Resolve()
-    {
-        var pathVar = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrEmpty(pathVar)) return null;
-
-        // Same CLI name across platforms; on Windows it's typically the .cmd shim, but accept an .exe too.
-        string[] names = OperatingSystem.IsWindows()
-            ? ["gitkraken.exe", "gitkraken.cmd", "gitkraken.bat", "gitkraken"]
-            : ["gitkraken"];
-
-        foreach (var dir in pathVar.Split(Path.PathSeparator))
-        {
-            if (string.IsNullOrWhiteSpace(dir)) continue;
-            foreach (var name in names)
-            {
-                try
-                {
-                    var full = Path.Combine(dir, name);
-                    if (File.Exists(full)) return full;
-                }
-                catch { /* malformed PATH entry - skip */ }
-            }
-        }
-        return null;
-    }
+    // Same CLI name across platforms; on Windows it's typically the .cmd shim (PATHEXT also accepts an .exe).
+    private static string? Resolve() => Perch.Data.ExecutableResolver.Find("gitkraken");
 }

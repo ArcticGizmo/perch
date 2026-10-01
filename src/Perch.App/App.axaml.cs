@@ -56,18 +56,9 @@ public partial class App : Application
     // session's overlay row reopens a window onto it. Several sessions/windows may exist at once.
     private readonly List<Services.PerchSession> _perchSessions = new();
     private readonly List<SessionWindow> _sessionWindows = new();
-    // PoC: the permission valet (session-control M2), now PARKED in favour of the embedded terminal
-    // (docs/session-control-plan.md). The pipe server still runs (answers "pass" instantly), but there's
-    // no tray toggle to arm it, so _valetArmed stays false and DecideValet always passes. Kept wired so
-    // un-parking is a one-line change rather than a rebuild.
-    private Perch.Data.Control.ValetServer? _valetServer;
-    private ValetPromptWindow? _valetPrompt;
     // The `perch` CLI's way in: a second `perch --resume …` / `perch [dir]` launch forwards its request here
     // over a named pipe and this tray opens the session window (docs/session-ui-plan.md, Phase 3).
     private Perch.Data.Control.ControlServer? _controlServer;
-#pragma warning disable CS0649 // parked: never armed (no tray toggle); DecideValet short-circuits to pass
-    private bool _valetArmed;
-#pragma warning restore CS0649
     private ArcadeMenuWindow? _arcadeWindow;        // shhh
     private SpaceInvadersWindow? _invadersWindow;   // shhh
     private FroggerWindow? _froggerWindow;          // shhh
@@ -174,7 +165,6 @@ public partial class App : Application
                 _hypertreeHost?.Dispose();
                 _daemonHost?.Dispose();
                 _todoHost?.Dispose();
-                _valetServer?.Dispose();
                 _controlServer?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
@@ -315,9 +305,6 @@ public partial class App : Application
             _monitorHost.PrApproved += OnPrApproved;
             _monitorHost.OpenHistoryRequested += OpenHistory; // the plugin's jump-to-session
 
-            // Permission valet (PoC): accept perch-hook's PreToolUse relays for the whole tray lifetime.
-            _valetServer = new Perch.Data.Control.ValetServer { Decide = DecideValet };
-            _valetServer.Start();
             // A tray that crashed mid-session leaves {sessionId}.perch-lock behind; drop the dead ones so no
             // resume is ever refused over phantom ownership (docs/session-ui-plan.md, defence (b)).
             Task.Run(() => Perch.Data.Control.SessionLock.SweepStale());
@@ -495,7 +482,7 @@ public partial class App : Application
                 Dispatcher.UIThread.Post(ShowOnboarding, DispatcherPriority.Background);
 
             _metricsHost.Configure(system: settings.ShowSystemMetrics, perSession: settings.ShowSessionMetrics, subprocess: settings.IncludeSubprocessMetrics);
-            _monitorHost.Start(); // initial scan (we're on the UI thread here) — also sets the pids
+            _monitorHost.Start(); // initial scan, on the monitor's worker — its result (which also sets the pids) is posted back
 
             // Replay: hand the monitor over to the transport, which advances the scrub position, projects
             // the sandbox, and forces a rescan. The controller window binds play/pause/scrub/markers to
@@ -589,7 +576,14 @@ public partial class App : Application
     {
         try
         {
-            if (mode == StartMode.OnLogin) PlatformServices.LoginItem.Register();
+            // Only a real install registers (review fixes CP16). A portable copy or a dev build would otherwise
+            // point the login entry at wherever it happened to be run from — a Downloads folder, a build output —
+            // and take the entry over from the installed Perch. Such a copy leaves an existing entry alone rather
+            // than removing it: settings are shared with the install, whose entry it is.
+            if (mode == StartMode.OnLogin)
+            {
+                if (InstallChannel.Kind == InstallChannelKind.Setup) PlatformServices.LoginItem.Register();
+            }
             else if (PlatformServices.LoginItem.IsRegistered()) PlatformServices.LoginItem.Unregister();
         }
         catch { /* best-effort */ }
@@ -2114,41 +2108,6 @@ public partial class App : Application
         OpenSessionNew(intent.Cwd, intent.Model, intent.PermissionMode, intent.OriginMonitor);
     }
 
-    // The permission valet's verdict (session-control M2), called on the pipe server's worker thread
-    // with the session's tool call blocked until the returned task resolves — so everything but the
-    // "actually show a prompt" path answers pass immediately: valet disarmed, a session this Perch owns
-    // over stream-json (its console already answers can_use_tool), or a read-only tool the interactive
-    // session would overwhelmingly auto-allow (the PoC heuristic — the hook can't see whether Claude
-    // Code would have prompted).
-    private Task<Perch.Data.Control.ValetDecision> DecideValet(Perch.Data.Control.ValetRequest request)
-    {
-        if (!_valetArmed
-            || Perch.Data.Control.ControlledSessions.Owns(request.SessionId)
-            || Perch.Data.Control.ValetProtocol.IsReadOnlyTool(request.ToolName))
-            return Task.FromResult(Perch.Data.Control.ValetDecision.Pass);
-
-        var tcs = new TaskCompletionSource<Perch.Data.Control.ValetDecision>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        Dispatcher.UIThread.Post(() =>
-        {
-            try
-            {
-                if (_valetPrompt is null || !_valetPrompt.IsVisible)
-                {
-                    _valetPrompt = new ValetPromptWindow();
-                    _valetPrompt.Closed += (_, _) => _valetPrompt = null;
-                    _valetPrompt.Show();
-                }
-                _valetPrompt.Enqueue(request, d => tcs.TrySetResult(d));
-            }
-            catch
-            {
-                tcs.TrySetResult(Perch.Data.Control.ValetDecision.Pass);   // UI failed → fail open
-            }
-        });
-        return tcs.Task;
-    }
-
     // The reward for long-pressing the brand mark: the arcade chooser. It hands off to one of the three toys
     // below and closes as it does. All are reused like every other aux window.
     private void OpenArcade() =>
@@ -2664,10 +2623,6 @@ public partial class App : Application
         var newSessionItem = new NativeMenuItem("New session…");
         newSessionItem.Click += (_, _) => OpenSessionWindow();
 
-        // Note: the permission valet (session-control M2) is parked in favour of the embedded terminal —
-        // its server/hook stay wired but there's no tray toggle to arm it, so it stays dormant (always
-        // "pass"). See docs/session-control-plan.md.
-
         // Reads "Check for Updates…" normally; flips to "Update available" once a pending update is
         // detected (see OnUpdateAvailabilityChanged). Clicking it applies the pending update, else checks.
         _updateItem = new NativeMenuItem("Check for Updates…");
@@ -2680,10 +2635,13 @@ public partial class App : Application
         var exitItem = new NativeMenuItem("Exit");
         exitItem.Click += (_, _) => desktop.Shutdown();
 
+        // An opt-in debug log (PERCH_SESSION_LOG records full session output) is named in the tooltip and at the
+        // top of the menu, so one switched on by accident — or by something else — can't go unnoticed (CP16).
+        var debugWarning = DebugSwitches.ActiveWarning;
         var tray = new TrayIcon
         {
             Icon = icon,
-            ToolTipText = $"Perch{AppProfile.DisplaySuffix}",
+            ToolTipText = $"Perch{AppProfile.DisplaySuffix}" + (debugWarning is null ? "" : " - debug logging on"),
             Menu = new NativeMenu
             {
                 versionItem,
@@ -2701,6 +2659,11 @@ public partial class App : Application
                 exitItem,
             },
         };
+        if (debugWarning is not null && tray.Menu is { } menu)
+        {
+            menu.Items.Insert(0, new NativeMenuItem("⚠ " + debugWarning) { IsEnabled = false });
+            menu.Items.Insert(1, new NativeMenuItemSeparator());
+        }
         // Left-clicking the tray icon opens Settings (matching the WinForms tray); dense mode is toggled
         // via the global hotkey (Alt+Shift+W).
         tray.Clicked += (_, _) => OpenSettings();
@@ -2824,10 +2787,14 @@ public partial class App : Application
     // Reopen a closed session: spawn a fresh terminal running `claude --resume <id>` in its working
     // directory. If no terminal can be launched (or the platform doesn't implement it yet), fall back to
     // copying the command so the user can paste it wherever they like.
+    // The terminal runs under the config dir that owns the transcript: a session from a non-primary account resumed
+    // under the primary's CLAUDE_CONFIG_DIR finds no such session.
     private void ReopenSession(string cwd, string sessionId)
     {
         var terminal = _appSettings?.ReopenTerminal ?? TerminalApp.Auto;
-        if (!PlatformServices.SessionLauncher.Reopen(cwd, sessionId, terminal))
+        var configDir = TranscriptLocator.ResumeConfigRoot(sessionId, cwd);
+        LaunchLog.Write($"switcher reopen: {TranscriptLocator.DescribeResume(sessionId, cwd)}");
+        if (!PlatformServices.SessionLauncher.Reopen(cwd, sessionId, terminal, configDir))
             CopyResumeCommand(sessionId);
     }
 

@@ -15,17 +15,15 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
     private readonly string _dir;
     private readonly string _settings;
 
-    // The (event, first-arg) pairs Perch manages — mirror of ClaudeUserSettings.ManagedHooks. (The
-    // valet entry carries a second arg, its pipe name, which these tests don't pin — it varies by the
-    // profile the suite runs under.)
+    // The (event, first-arg) pairs Perch manages — mirror of ClaudeUserSettings.ManagedHooks.
     private static readonly (string Event, string Arg)[] Expected =
     {
-        ("PreToolUse", "mode"), ("PreToolUse", "valet"), ("PostToolUse", "mode"), ("Stop", "mode"),
+        ("PreToolUse", "mode"), ("PostToolUse", "mode"), ("Stop", "mode"),
         ("SubagentStop", "agentstop"), ("TeammateIdle", "teammateidle"),
         ("SessionStart", "start"), ("SessionEnd", "cleanup"),
     };
 
-    // How many managed entries a given event carries (PreToolUse has two: mode + valet).
+    // How many managed entries a given event carries.
     private static int ExpectedCount(string evt) => Expected.Count(e => e.Event == evt);
 
     public ClaudeUserSettingsHookTests()
@@ -178,6 +176,87 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
         Assert.Equal(ExpectedCount("PreToolUse"), ((JsonArray)((JsonObject)Read()["hooks"]!)["PreToolUse"]!).Count);
     }
 
+    [Fact]
+    public void Reconcile_StripsTheRetiredValetHook_FromAnOldInstall()
+    {
+        // Review fixes CP10: the parked permission valet's PreToolUse entry ("valet" + its pipe name) was
+        // registered by every earlier build. Reconcile must drop it, marked or (after a Claude Code rewrite)
+        // marker-less, and never re-add it — so an upgrade stops paying the per-tool-call pipe connect.
+        File.WriteAllText(_settings, """
+        {
+          "hooks": {
+            "PreToolUse": [
+              { "matcher": "", "hooks": [ { "type": "command", "command": "/bin/perch-hook", "args": ["mode"],
+                "_perch": { "managed": true, "dev": false, "version": "0.9.0" } } ] },
+              { "matcher": "", "hooks": [ { "type": "command", "command": "/bin/perch-hook", "args": ["valet", "perch-valet"],
+                "_perch": { "managed": true, "dev": false, "version": "0.9.0" } } ] },
+              { "matcher": "", "hooks": [ { "type": "command",
+                "command": "C:\\Users\\me\\AppData\\Roaming\\Perch\\bin\\perch-hook.exe", "args": ["valet", "perch-valet"] } ] }
+            ]
+          }
+        }
+        """);
+
+        ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "1.0.0");
+
+        Assert.DoesNotContain("valet", File.ReadAllText(_settings));
+        Assert.Equal(Expected.Length, ManagedHooks(Read()).Count);
+        Assert.Equal(ExpectedCount("PreToolUse"), ((JsonArray)((JsonObject)Read()["hooks"]!)["PreToolUse"]!).Count);
+    }
+
+    // ── CP14: never rewrite without cause, never replace what couldn't be read ─────────────
+    private static readonly DateTime Old = new(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void Reconcile_of_an_already_reconciled_file_does_not_write()
+    {
+        ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0");
+        File.SetLastWriteTimeUtc(_settings, Old);
+
+        Assert.True(ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0"));
+        Assert.Equal(Old, File.GetLastWriteTimeUtc(_settings));
+    }
+
+    [Fact]
+    public void Reconcile_after_a_reformat_alone_does_not_write()
+    {
+        // Claude Code rewrites settings.json in its own formatting; the content is unchanged, so reconcile must
+        // compare meaning, not bytes — else every launch after a Claude rewrite would rewrite the file again.
+        ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0");
+        var compact = Read().ToJsonString();   // same JSON, no indentation
+        File.WriteAllText(_settings, compact);
+        File.SetLastWriteTimeUtc(_settings, Old);
+
+        ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0");
+        Assert.Equal(Old, File.GetLastWriteTimeUtc(_settings));
+        Assert.Equal(compact, File.ReadAllText(_settings));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("{ not json")]
+    public void Reconcile_leaves_an_empty_unparseable_or_non_object_file_alone(string content)
+    {
+        File.WriteAllText(_settings, content);
+        Assert.False(ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0"));
+        Assert.Equal(content, File.ReadAllText(_settings));
+    }
+
+    [Fact]
+    public void Reconcile_against_a_locked_file_refuses_and_leaves_it_intact()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        const string original = """{ "model": "claude-opus" }""";
+        File.WriteAllText(_settings, original);
+
+        using (new FileStream(_settings, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            Assert.False(ClaudeUserSettings.ReconcileHooks(_settings, "/bin/perch-hook", "0.2.0"));
+
+        Assert.Equal(original, File.ReadAllText(_settings));
+    }
+
     // ── dev / release profile scope ─────────────────────────────────────────────────────
     [Fact]
     public void Reconcile_Dev_LeavesReleaseHooksIntact_AndAddsItsOwn()
@@ -227,6 +306,27 @@ public sealed class ClaudeUserSettingsHookTests : IDisposable
         Assert.Equal(Expected.Length, CountCommand(root, "/rel/perch-hook")); // release untouched
         // Release stayed marker-less (dev didn't rewrite it); only dev's set carries fresh markers.
         Assert.All(ManagedHooks(root), m => Assert.True(m.Dev));
+    }
+
+    // CP16: the hook binary moved from the roaming to the local profile dir. A dev instance whose entries lost their
+    // _perch marker only recognises them by path, so HookInstaller strips the OLD path once before reconciling onto
+    // the new one — which must leave exactly one set, at the new path, and release's entries alone.
+    [Fact]
+    public void Dev_move_to_a_new_bin_dir_leaves_one_set_at_the_new_path()
+    {
+        const string roaming = @"C:\Users\me\AppData\Roaming\Perch (Dev)\bin\perch-hook.exe";
+        const string local = @"C:\Users\me\AppData\Local\Perch (Dev)\bin\perch-hook.exe";
+        ClaudeUserSettings.ReconcileHooks(_settings, "/rel/perch-hook", "1.0.0", isDev: false);
+        ClaudeUserSettings.ReconcileHooks(_settings, roaming, "9.9.9", isDev: true);
+        StripPerchMarkers();
+
+        ClaudeUserSettings.RemoveManagedHooks(_settings, true, roaming);   // MigrateFromLegacyBin (dev only)
+        ClaudeUserSettings.ReconcileHooks(_settings, local, "9.9.9", isDev: true);
+
+        var root = Read();
+        Assert.Equal(0, CountCommand(root, roaming));
+        Assert.Equal(Expected.Length, CountCommand(root, local));
+        Assert.Equal(Expected.Length, CountCommand(root, "/rel/perch-hook"));   // release untouched
     }
 
     [Fact]

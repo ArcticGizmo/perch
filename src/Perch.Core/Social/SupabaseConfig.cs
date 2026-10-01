@@ -19,13 +19,27 @@ namespace Perch.Social;
 /// </list>
 /// <see cref="IsConfigured"/> is false when nothing supplied both values — the app then keeps Social inert
 /// (the sign-in button explains it needs configuring) rather than throwing.
+///
+/// <para>Steps 1 and 2 are honoured only by a dev instance (<see cref="Perch.Data.AppProfile.IsDev"/>), or by a
+/// build that has no compiled-in project at all (a fork), review fixes CP16. A shipped release ignores them, so
+/// an environment variable or a stray <c>.env.local</c> can't point it at another server. That's a first
+/// line, not the whole defence: <c>PERCH_DEV</c> can force dev mode on, so the refresh token is also stored per
+/// origin and only ever sent to the server that issued it (see <c>SupabaseSocialClient</c>).</para>
 /// </summary>
 public sealed record SupabaseConfig(string Url, string PublishableKey)
 {
     public bool IsConfigured => !string.IsNullOrWhiteSpace(Url) && !string.IsNullOrWhiteSpace(PublishableKey);
 
-    public static SupabaseConfig Resolve()
+    public static SupabaseConfig Resolve() =>
+        Resolve(Perch.Data.AppProfile.IsDev, new SupabaseConfig(SupabaseDefaults.Url, SupabaseDefaults.PublishableKey));
+
+    /// <summary>Test seam: <paramref name="allowOverrides"/> is the dev flag, <paramref name="compiled"/> the
+    /// compiled-in defaults.</summary>
+    internal static SupabaseConfig Resolve(bool allowOverrides, SupabaseConfig compiled)
     {
+        if (!allowOverrides && compiled.IsConfigured)
+            return compiled;
+
         // 1) Environment (dev / CI).
         var envUrl = Environment.GetEnvironmentVariable("PERCH_SUPABASE_URL");
         var envKey = Environment.GetEnvironmentVariable("PERCH_SUPABASE_PUBLISHABLE_KEY");
@@ -47,6 +61,6 @@ public sealed record SupabaseConfig(string Url, string PublishableKey)
         catch { /* best-effort: fall through */ }
 
         // 3) Compiled-in defaults (empty in a plain checkout; filled only for release).
-        return new(SupabaseDefaults.Url, SupabaseDefaults.PublishableKey);
+        return compiled;
     }
 }

@@ -26,6 +26,8 @@ internal sealed class ClaudeSessionController : IDisposable
 
     private Process? _process;
     private StreamWriter? _stdin;
+    // The sessions/ dir the lock sidecar lives in: the pinned config dir's, or null for the primary.
+    private string? _lockDir;
     private readonly Lock _writeLock = new();
     private int _requestCounter;
 
@@ -54,6 +56,13 @@ internal sealed class ClaudeSessionController : IDisposable
         bool resume = IsSafeToken(resumeSessionId);
         var id = resume ? resumeSessionId! : (IsSafeToken(newSessionId) ? newSessionId! : Guid.NewGuid().ToString());
 
+        // The lock lives in the session's own config dir. Another live Perch holding it (dev beside release) means two
+        // writers on one transcript, so that refuses the launch before anything else happens (review fixes CP13). A
+        // lock that merely can't be written stays best-effort below and doesn't block.
+        var lockDir = SessionLock.SessionsDirFor(configDir);
+        if (SessionLock.HeldByOther(id, lockDir) is { } other)
+            throw new InvalidOperationException($"Session {id} is already controlled by {other.Profile} (PID {other.Pid}).");
+
         var args = "-p --input-format stream-json --output-format stream-json --verbose" +
                    " --include-partial-messages --permission-prompt-tool stdio";
         args += resume ? $" --resume {id}" : $" --session-id {id}";
@@ -61,11 +70,9 @@ internal sealed class ClaudeSessionController : IDisposable
         if (IsSafeToken(permissionMode) && permissionMode != "default") args += $" --permission-mode {permissionMode}";
         if (IsEffortLevel(effort)) args += $" --effort {effort}";
 
-        // `claude` is a .cmd shim on Windows PATH, so it needs a shell host (same reason
-        // SessionLauncher.Reopen never execs it directly). Elsewhere it's a plain executable.
-        var psi = OperatingSystem.IsWindows()
-            ? new ProcessStartInfo { FileName = "cmd.exe", Arguments = $"/d /s /c \"claude {args}\"" }
-            : new ProcessStartInfo { FileName = "/bin/sh", Arguments = $"-lc \"claude {args}\"" };
+        // Resolved to an absolute path, never against `cwd`: the session runs inside a repo Perch didn't write, and
+        // a `claude.cmd` committed there would otherwise run in place of the real CLI (review fixes CP7).
+        var psi = ClaudeCli.CreateStartInfo(args);
         psi.WorkingDirectory = cwd;
         psi.UseShellExecute = false;
         psi.CreateNoWindow = true;
@@ -82,13 +89,17 @@ internal sealed class ClaudeSessionController : IDisposable
         // Set on the child env — never the command line — so an odd path can't break arg parsing or inject.
         if (!string.IsNullOrWhiteSpace(configDir))
             psi.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+        LaunchLog.Write($"controlled session start: file={LaunchLog.Show(psi.FileName)} cwd={LaunchLog.Show(cwd)} " +
+                        $"resume={resume} id={id} CLAUDE_CONFIG_DIR={LaunchLog.Show(configDir)} " +
+                        $"(inherited: {LaunchLog.Show(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR"))})");
 
         // Ownership is claimed before the process exists so nothing can race the pre-init window; a
         // failed launch releases it again below.
+        _lockDir = lockDir;
         SessionId = id;
         Cwd = cwd;
         ControlledSessions.Register(id);
-        SessionLock.Acquire(id, cwd);
+        SessionLock.Acquire(id, cwd, _lockDir);
 
         Process process;
         try
@@ -98,7 +109,7 @@ internal sealed class ClaudeSessionController : IDisposable
         catch
         {
             ControlledSessions.Unregister(id);
-            SessionLock.Release(id);
+            SessionLock.Release(id, _lockDir);
             SessionId = null;
             throw;
         }
@@ -121,16 +132,17 @@ internal sealed class ClaudeSessionController : IDisposable
     private void Pump(Process process)
     {
         var stderr = process.StandardError.ReadToEndAsync();
-        // Opt-in raw capture: set PERCH_SESSION_LOG to a file path to append every stdout line verbatim, for
-        // pinning down record shapes we haven't captured yet (e.g. /compact's progress). Off by default; it
-        // writes the full stream, so it's a deliberate debug switch, not something left on.
-        var rawLog = Environment.GetEnvironmentVariable("PERCH_SESSION_LOG");
+        // Opt-in raw capture: set PERCH_SESSION_LOG=1 to append every stdout line verbatim to
+        // logs/session-stream.log, for pinning down record shapes we haven't captured yet (e.g. /compact's
+        // progress). Off by default; it writes the full stream, so it's a deliberate debug switch, not something
+        // left on — the tray says when it is (see DebugSwitches).
+        bool rawLog = DebugSwitches.SessionLogOn;
         try
         {
             while (process.StandardOutput.ReadLine() is { } line)
             {
-                if (rawLog is { Length: > 0 })
-                    try { File.AppendAllText(rawLog, line + Environment.NewLine); } catch { /* best effort */ }
+                if (rawLog)
+                    DiagnosticLog.AppendRaw(DebugSwitches.SessionLogFile, line, DebugSwitches.SessionLogMaxBytes);
                 foreach (var ev in StreamJsonParser.Parse(line))
                 {
                     // Normally confirms the pinned/resumed id; if the CLI reports a different one (it shouldn't),
@@ -138,10 +150,10 @@ internal sealed class ClaudeSessionController : IDisposable
                     if (ev is SessionInitEvent init && init.SessionId.Length > 0 && init.SessionId != SessionId)
                     {
                         ControlledSessions.Unregister(SessionId);
-                        SessionLock.Release(SessionId);
+                        SessionLock.Release(SessionId, _lockDir);
                         SessionId = init.SessionId;
-                        ControlledSessions.Register(init.SessionId);   // the valet + focus routing skip owned sessions
-                        SessionLock.Acquire(init.SessionId, Cwd);
+                        ControlledSessions.Register(init.SessionId);   // focus routing skips owned sessions
+                        SessionLock.Acquire(init.SessionId, Cwd, _lockDir);
                     }
                     EventReceived?.Invoke(ev);
                 }
@@ -163,7 +175,7 @@ internal sealed class ClaudeSessionController : IDisposable
         }
         catch { /* best effort */ }
         ControlledSessions.Unregister(SessionId);
-        SessionLock.Release(SessionId);
+        SessionLock.Release(SessionId, _lockDir);
         Exited?.Invoke(exitCode, errTail);
     }
 

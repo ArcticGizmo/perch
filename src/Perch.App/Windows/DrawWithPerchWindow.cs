@@ -183,6 +183,7 @@ internal sealed class DrawWithPerchWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Palette.OverlaySurfaceBrush;
         Content = _board;
+        ArcadeLoopGate.Attach(this, _board.Begin, _board.Stop);
     }
 
     protected override void OnOpened(EventArgs e)

@@ -1,6 +1,6 @@
 -- Perch — Connect 4 tests (pgTAP)
 -- Proves the networked-game authorization boundary and the server-side move rules against a real Postgres:
--- only an accepted friend can start a game, a third party can't see the game or its moves, drop_disc enforces
+-- no client can insert a game directly (only an accepted invite creates one), a third party can't see the game or its moves, drop_disc enforces
 -- whose turn it is and stops after a win, connect4_has_win detects a four-in-a-row, resign hands the win over,
 -- and the per-player move rate limit fires.
 --
@@ -33,22 +33,26 @@ begin
   perform set_config('request.jwt.claims', json_build_object('sub', uid, 'role', 'authenticated')::text, true);
 end $$;
 
--- 1) An accepted friend can start a game (as red).
+-- 1) Not even an accepted friend can create a game row directly (review fixes CP3): a game is born only in
+-- accept_game_request, so the client can never choose its status/winner/turn/timestamps.
 select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
+select throws_ok(
+  $$insert into public.games (player_red, player_yellow)
+      values ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222')$$,
+  '42501', NULL, 'games: an accepted friend cannot insert a game directly');
+reset role;
+
+-- The game the move tests below play out, created as the owner (the way accept_game_request does).
 insert into public.games (id, player_red, player_yellow)
   values ('a0000000-0000-0000-0000-000000000001',
           '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222');
-select is(
-  (select count(*)::int from public.games where id = 'a0000000-0000-0000-0000-000000000001'),
-  1, 'games_create: an accepted friend can start a game');
-reset role;
 
--- 2) You cannot start a game with a non-friend (carol is a stranger to alice) — RLS WITH CHECK rejects it.
+-- 2) ...and certainly not a forged, already-decided game against a non-friend.
 select pg_temp.act_as('33333333-3333-3333-3333-333333333333');
 select throws_ok(
-  $$insert into public.games (player_red, player_yellow)
-      values ('33333333-3333-3333-3333-333333333333', '11111111-1111-1111-1111-111111111111')$$,
-  '42501', NULL, 'games_create: cannot start a game with a non-friend');
+  $$insert into public.games (player_red, player_yellow, status, winner)
+      values ('33333333-3333-3333-3333-333333333333', '11111111-1111-1111-1111-111111111111', 'red_won', 'red')$$,
+  '42501', NULL, 'games: a forged, decided game cannot be inserted');
 reset role;
 
 -- 3) A third party cannot even see the game.
@@ -108,11 +112,9 @@ select is(
 reset role;
 
 -- 11) Resign hands the win to the opponent (bob resigns → red/alice wins).
-select pg_temp.act_as('11111111-1111-1111-1111-111111111111');
 insert into public.games (id, player_red, player_yellow)
   values ('a0000000-0000-0000-0000-000000000002',
           '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222');
-reset role;
 select pg_temp.act_as('22222222-2222-2222-2222-222222222222');
 select public.resign_game('a0000000-0000-0000-0000-000000000002');
 reset role;
@@ -153,14 +155,17 @@ select is(
 
 -- ── game invites (request / accept) ──────────────────────────────
 -- 15) An accepted friend can send an invite.
+-- The id is server-generated (clients can't choose it, CP3), so pin it as the owner afterwards.
 select pg_temp.act_as('11111111-1111-1111-1111-111111111111');   -- alice invites bob
-insert into public.game_requests (id, requester, addressee, first_col)
-  values ('c0000000-0000-0000-0000-000000000001',
-          '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', 4);
+insert into public.game_requests (requester, addressee, first_col)
+  values ('11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', 4);
 select is(
-  (select count(*)::int from public.game_requests where id = 'c0000000-0000-0000-0000-000000000001'),
+  (select count(*)::int from public.game_requests
+    where requester = '11111111-1111-1111-1111-111111111111' and addressee = '22222222-2222-2222-2222-222222222222'),
   1, 'game invite: an accepted friend can invite');
 reset role;
+update public.game_requests set id = 'c0000000-0000-0000-0000-000000000001'
+  where requester = '11111111-1111-1111-1111-111111111111' and addressee = '22222222-2222-2222-2222-222222222222';
 
 -- 16) A stranger cannot invite (RLS WITH CHECK).
 select pg_temp.act_as('33333333-3333-3333-3333-333333333333');

@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Input;
 using Avalonia.Media;
+using Perch.Avalonia.Rendering;
 using Perch.Avalonia.Theming;
 using Perch.Data;
 
@@ -154,7 +155,7 @@ public sealed partial class OverlayCanvas
     // ── Painting (called from Draw's body, inside the panel clip) ────────────────────────────────────────────
     private void DrawRearrangeAffordances(DrawingContext ctx, double width)
     {
-        var accent = new SolidColorBrush(Palette.Active.Accent.ToColor());
+        var accent = OverlayDraw.Brush(Palette.Active.Accent.ToColor());
 
         foreach (var s in _sectionOrder)
         {
@@ -164,9 +165,9 @@ public sealed partial class OverlayCanvas
 
             // A faint band outline per section, brighter for the one being dragged, so the movable units read.
             var band = new Rect(1.5, top + 0.5, Math.Max(0, width - 3), Math.Max(0, h - 1));
-            var pen = new Pen(new SolidColorBrush(Color.FromArgb((byte)(dragging ? 220 : 46), 255, 255, 255)),
+            var pen = OverlayDraw.Pen(OverlayDraw.Brush(Color.FromArgb((byte)(dragging ? 220 : 46), 255, 255, 255)),
                 dragging ? 1.5 : 1);
-            ctx.DrawRectangle(dragging ? new SolidColorBrush(Color.FromArgb(24, 255, 255, 255)) : null, pen, band);
+            ctx.DrawRectangle(dragging ? OverlayDraw.Brush(Color.FromArgb(24, 255, 255, 255)) : null, pen, band);
 
             // A drag-handle grip (⋮⋮) at the right edge.
             DrawGrip(ctx, width - 13, top + h / 2, MutedBrush);
@@ -176,7 +177,7 @@ public sealed partial class OverlayCanvas
         if (_dragSection is not null && _dropIndex >= 0)
         {
             double y = InsertionY(_dropIndex);
-            ctx.DrawLine(new Pen(accent, 2), new Point(6, y), new Point(width - 6, y));
+            ctx.DrawLine(OverlayDraw.Pen(accent, 2), new Point(6, y), new Point(width - 6, y));
         }
     }
 

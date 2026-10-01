@@ -55,6 +55,32 @@ public sealed class WindowsSystemMetrics : ISystemMetrics
         return map;
     }
 
+    // One handle per process, read with GetProcessTimes + GetProcessMemoryInfo. Process.WorkingSet64
+    // would take a snapshot of every process on the machine per call, which the monitor used to do
+    // for every pid in every session tree every 2s.
+    public (long workingSet, TimeSpan cpu)? ReadProcess(int pid)
+    {
+        var handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
+        if (handle == IntPtr.Zero) return null;
+        try
+        {
+            if (!GetProcessTimes(handle, out _, out _, out var kernel, out var user))
+                return null;
+            var counters = new PROCESS_MEMORY_COUNTERS { cb = (uint)Marshal.SizeOf<PROCESS_MEMORY_COUNTERS>() };
+            if (!K32GetProcessMemoryInfo(handle, ref counters, counters.cb))
+                return null;
+            return ((long)(ulong)counters.WorkingSetSize, TimeSpan.FromTicks((long)(ToTicks(kernel) + ToTicks(user))));
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            CloseHandle(handle);
+        }
+    }
+
     private static ulong ToTicks(FILETIME ft) => ((ulong)ft.High << 32) | ft.Low;
 
     // ── P/Invoke ──────────────────────────────────────────────────────────────────
@@ -113,4 +139,33 @@ public sealed class WindowsSystemMetrics : ISystemMetrics
 
     [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr hObject);
+
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessTimes(IntPtr hProcess, out FILETIME creation, out FILETIME exit,
+        out FILETIME kernel, out FILETIME user);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_MEMORY_COUNTERS
+    {
+        public uint cb;
+        public uint PageFaultCount;
+        public UIntPtr PeakWorkingSetSize;
+        public UIntPtr WorkingSetSize;
+        public UIntPtr QuotaPeakPagedPoolUsage;
+        public UIntPtr QuotaPagedPoolUsage;
+        public UIntPtr QuotaPeakNonPagedPoolUsage;
+        public UIntPtr QuotaNonPagedPoolUsage;
+        public UIntPtr PagefileUsage;
+        public UIntPtr PeakPagefileUsage;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool K32GetProcessMemoryInfo(IntPtr hProcess, ref PROCESS_MEMORY_COUNTERS counters, uint cb);
 }

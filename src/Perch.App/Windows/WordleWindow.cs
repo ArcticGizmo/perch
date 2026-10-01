@@ -35,6 +35,7 @@ internal sealed class WordleWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Palette.OverlaySurfaceBrush;
         Content = _board;
+        ArcadeLoopGate.Attach(this, _board.Begin, _board.Stop);
     }
 
     protected override void OnOpened(EventArgs e)
@@ -140,13 +141,31 @@ internal sealed class WordleBoard : Control
     }
 
     // ── Lifecycle ──
+    // The timer only runs while something moves: a row shaking, a toast counting down, or the end-of-game verdict
+    // shimmering. Typing repaints directly, so a board sitting mid-game costs nothing. _running is the window's
+    // say (open, active, not minimised); Wake starts the timer when there's something to animate.
+    private bool _running;
+
+    private bool Animating => _shake > 0 || _messageTicks > 0 || (_phase != Phase.Playing && _message is not null);
+
     public void Begin()
     {
+        _running = true;
+        Wake();
+    }
+
+    public void Stop()
+    {
+        _running = false;
+        _timer?.Stop();
+    }
+
+    private void Wake()
+    {
+        if (!_running || !Animating) return;
         _timer ??= CreateTimer();
         if (!_timer.IsEnabled) _timer.Start();
     }
-
-    public void Stop() => _timer?.Stop();
 
     private DispatcherTimer CreateTimer()
     {
@@ -157,6 +176,7 @@ internal sealed class WordleBoard : Control
             if (_shake > 0) _shake--;
             if (_messageTicks > 0 && --_messageTicks == 0) _message = null;
             InvalidateVisual();
+            if (!Animating) t.Stop();
         };
         return t;
     }
@@ -221,6 +241,7 @@ internal sealed class WordleBoard : Control
         _messageTicks = persistent ? 0 : 140;   // ~2.3s at 16ms, or sticky for the end-of-game verdict
         if (!persistent) _shake = 30;
         InvalidateVisual();
+        Wake();
     }
 
     private static string WinWord(int guesses) => guesses switch

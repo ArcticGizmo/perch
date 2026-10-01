@@ -10,19 +10,24 @@ namespace Perch.Platform.Windows;
 /// default browser's executable from the per-user URL association and launches it with the browser's
 /// "new window" switch, so the fresh window opens on the active virtual desktop rather than the OS
 /// activating an existing window on whatever desktop it happens to live on.
+///
+/// <para>Every entry point first passes the URL through <see cref="Perch.Data.OpenTargets.WebUrl"/>: only http(s)
+/// and mailto are opened, so a <c>file:</c>/UNC/<c>search-ms:</c> link can't execute via the shell, and the
+/// browser exe only ever receives a scheme-led URL (never a <c>--switch</c>). Review fixes CP8.</para>
 /// </summary>
 public sealed class UrlOpener : IUrlOpener
 {
     public void Open(string url)
     {
-        if (string.IsNullOrWhiteSpace(url)) return;
-        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+        if (Perch.Data.OpenTargets.WebUrl(url) is not { } safe) return;
+        try { Process.Start(new ProcessStartInfo(safe) { UseShellExecute = true }); }
         catch { /* best-effort — no default handler, blocked, etc. */ }
     }
 
     public void OpenInNewWindow(string url)
     {
-        if (string.IsNullOrWhiteSpace(url)) return;
+        if (Perch.Data.OpenTargets.WebUrl(url) is not { } safe) return;
+        if (!Perch.Data.OpenTargets.IsHttp(safe)) { Open(safe); return; }   // mailto: belongs to the mail client
 
         var browser = ResolveDefaultBrowser();
         if (browser is { } b)
@@ -34,19 +39,21 @@ public sealed class UrlOpener : IUrlOpener
                 // on the current desktop instead of the shell handing the URL to the existing process.
                 var psi = new ProcessStartInfo(b.ExePath) { UseShellExecute = false };
                 psi.ArgumentList.Add(b.Family == BrowserFamily.Gecko ? "-new-window" : "--new-window");
-                psi.ArgumentList.Add(url);
+                AddUrl(psi, b.Family, safe);
                 Process.Start(psi);
                 return;
             }
             catch { /* fall through to the plain shell open below */ }
         }
 
-        Open(url);
+        Open(safe);
     }
 
     public void OpenPrivate(string url)
     {
-        if (string.IsNullOrWhiteSpace(url)) return;
+        if (Perch.Data.OpenTargets.WebUrl(url) is not { } safe) return;
+        if (!Perch.Data.OpenTargets.IsHttp(safe)) { Open(safe); return; }
+        url = safe;
 
         var browser = ResolveDefaultBrowser();
         if (browser is { } b)
@@ -65,7 +72,7 @@ public sealed class UrlOpener : IUrlOpener
                     BrowserFamily.Opera => "--private",
                     _ => "--incognito",
                 });
-                psi.ArgumentList.Add(url);
+                AddUrl(psi, b.Family, url);
                 Process.Start(psi);
                 return;
             }
@@ -74,6 +81,15 @@ public sealed class UrlOpener : IUrlOpener
 
         // Couldn't resolve the browser or launch privately: a normal new window is the honest fallback.
         OpenInNewWindow(url);
+    }
+
+    // The URL goes after Chromium's "--" switch terminator (the form Chrome registers for itself), so even a
+    // URL that somehow began with "-" would be read as a URL, not a switch. Gecko has no terminator (Firefox
+    // registers "-osint -url"), so it relies on the WebUrl check guaranteeing a scheme-led URL.
+    private static void AddUrl(ProcessStartInfo psi, BrowserFamily family, string url)
+    {
+        if (family != BrowserFamily.Gecko) psi.ArgumentList.Add("--");
+        psi.ArgumentList.Add(url);
     }
 
     private enum BrowserFamily { Chromium, Edge, Opera, Gecko }

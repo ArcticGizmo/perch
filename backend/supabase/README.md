@@ -20,8 +20,14 @@ backend/supabase/
     <ts>_reactions.sql          # emoji reactions on posts (friends-only via can_see_post)
     <ts>_reactions_one_per_user.sql # PK (post_id, reactor): one reaction per user per post
     <ts>_friendship_dedupe.sql  # collapse duplicate unordered pairs + unique index on least/greatest
+    <ts>_security_hardening.sql # policy helpers -> unexposed `private` schema; sweeps + client RPCs revoked
+                                # from anon/PUBLIC; friendship consent (only the addressee accepts)
+    <ts>_least_privilege.sql    # deny-by-default: every grant revoked then re-granted per column; anon gets
+                                # nothing; no direct game inserts; server-stamped timestamps; closed defaults
+    <ts>_realtime_inbox_authz.sql # private inbox channel: only the owner joins, only friends broadcast
   tests/
-    rls_test.sql    # pgTAP: non-friends can't read posts, blocking, rate limit, suspension, dedupe, etc.
+    rls_test.sql      # pgTAP: non-friends can't read posts, blocking, rate limit, suspension, dedupe, etc.
+    security_test.sql # pgTAP: the review-fix attacks fail, and the whole privilege matrix is pinned
 ```
 
 ## One-time setup (needs your account)
@@ -30,9 +36,14 @@ backend/supabase/
    (Project Settings → API Keys). The publishable key is non-secret and ships in the app; the `service_role`
    key must **never** leave the server.
 2. Enable **GitHub** as an auth provider (Authentication → Providers → GitHub) and register a GitHub
-   OAuth app, putting its client id/secret into Supabase. Add the desktop loopback redirect
-   (`http://127.0.0.1:<port>/callback`) to the allowed redirect URLs — the exact port is finalised
-   in M2.
+   OAuth app, putting its client id/secret into Supabase. Add the desktop loopback redirects to the allowed
+   redirect URLs (Authentication → URL Configuration → Redirect URLs), one per candidate port in
+   `LoopbackListener.CandidatePorts`:
+   `http://127.0.0.1:41532/callback`, `http://127.0.0.1:41533/callback`, `http://127.0.0.1:41534/callback`,
+   `http://127.0.0.1:41535/callback`. A redirect to a port that isn't listed falls back to the Site URL and
+   the sign-in never completes. The ports sit below Windows' dynamic range (49152+), because Hyper-V/WSL/Docker
+   reserve blocks inside it. The previous ports, `53682`–`53685`, fell inside one such block. Keep their
+   entries only until no installed Perch still uses them.
 
 ## Point the app at your project
 
@@ -175,24 +186,61 @@ JWT `sub`, so `auth.uid()` resolves like a real signed-in user):
 - **(M6)** the per-author **rate limit** rejects the 11th post inside a minute;
 - **(M6)** a **suspended** author's posts are hidden from a friend and the handle stops resolving.
 
+`security_test.sql` replays the 2026-09 review attacks (`docs/review-fixes-plan.md` CP1-CP3): the policy
+helpers are out of `public`, anon can't call client RPCs, the retention sweeps aren't client-callable, a
+friendship can't be inserted as accepted, self-accepted by the requester, or re-pointed while accepting, a
+game can't be forged, and a post can't be backdated past the flood guard. It also pins the **entire privilege
+matrix** (every table's grants per role, every client-writable column, every executable function, RLS on
+everywhere, every policy `TO authenticated`) - so a new table, column or function fails the suite until it is
+deliberately added.
+
 > Status: authored in M0, extended with the M6 safety checks, **not yet run against a live project** —
 > that waits on the Supabase project above. The `auth.users` insert in the test assumes the standard
 > Supabase local stack; if a required column has no default in your version, add it to the fixture insert.
 
 ## Safety model (M6)
 
+- **Privileges are deny-by-default and explicit** (`*_least_privilege.sql`). Never rely on Supabase's
+  defaults: they grant `ALL` (including TRUNCATE, which RLS doesn't cover) on every new `public` table to
+  `anon`, `authenticated` and `service_role`. That migration revokes everything and the postgres default
+  privileges in `public`, so a new table starts **closed**. When adding a table: enable RLS, write policies
+  `TO authenticated`, grant `SELECT` table-level and `INSERT`/`UPDATE` as **column lists of what the client
+  sends** (never ids, timestamps or server state), add it to the `stamp_created_at` trigger loop if it has a
+  `created_at`, and update the expected matrix in `security_test.sql` (tests 21-23). `anon` gets nothing and
+  has no USAGE on `public`; `service_role` only has the moderation surface (`moderation`, `reports`).
+  PostgREST gotchas when narrowing: a `merge-duplicates` upsert SETs every sent column (so the UPDATE list
+  must include them, even the key), and `return=representation` is `RETURNING *` (so SELECT must cover every
+  column - keep server-only state in `private` instead of hiding a column).
+- **Server-owned fields** - `created_at` (every table) and `updated_at` (games, draw tables, moderation) are
+  stamped with `now()` by BEFORE triggers; clients have no grant on them. Games are created only by
+  `accept_game_request` (no client INSERT on `games`).
+- **Realtime inbox is a private channel** (`*_realtime_inbox_authz.sql`). Invites/nudges ride
+  `perch:inbox:<uid>` as a *private* broadcast channel, authorised by RLS on `realtime.messages`: only the
+  owner may join (SELECT), only an accepted, unblocked friend may broadcast (INSERT). Private and public
+  channels are separate namespaces, so a public subscriber/broadcaster on the same name reaches nothing. The
+  client also re-checks the claimed sender against its friend list and never shows a payload-supplied handle.
+  The table change streams (posts, moves, draw_rounds) stay public channels - table RLS already filters them.
+- **Policy helpers live in `private`** — `are_friends`, `is_blocked`, `shares_edge`, `is_suspended` and
+  `can_see_post` are SECURITY DEFINER and take arbitrary uuids, so exposing them would leak the social graph
+  and who blocked whom. They sit in the `private` schema, which the Data API doesn't serve; policies call
+  them by OID. **Any new SECURITY DEFINER helper goes there too**, and a new owner-only function (a sweep)
+  needs an explicit `revoke execute … from public, anon, authenticated` — Postgres grants EXECUTE to
+  PUBLIC by default.
 - **Block** — a private, one-sided row in `blocks` (blocker → blocked). `are_friends()` consults
   `is_blocked()`, so a block kills post visibility in **both** directions regardless of friendship. It's a
-  separate table, not the `friendships` enum, precisely because `friendships_respond` lets either party
-  update an edge — a blocked user must never be able to lift their own block. `list_blocked()` (SECURITY
+  separate table, not the `friendships` enum, so a blocked user can never lift their own block.
+- **Friendship consent** — a request can only be inserted as `pending`; only the **addressee** may update
+  an edge, and only `pending → accepted`; a trigger (`private.friendships_guard`) makes the parties
+  immutable. Declining/unfriending is a delete by either party. `list_blocked()` (SECURITY
   DEFINER) returns only the caller's blocked profiles for the "unblock" UI.
 - **Report** — `reports` is insert-only for `authenticated` (no select policy), so it's a write-only queue
   only `service_role` (you, in the dashboard) can read. The app's "Report" also blocks, since a lone report
   leaves the content in your feed.
-- **Rate limit** — a `BEFORE INSERT` trigger on `posts` rejects an author's 11th post inside a rolling
-  minute. Enforced in the DB, so a tampered client can't flood; the compose window's guard is courtesy only.
-- **Moderation kill-switch** — the `moderation` table (RLS on, **no policies/grants**, so only
-  `service_role` touches it) suspends a handle: `posts_read` hides a suspended author's posts, a trigger
+- **Rate limit** — a `BEFORE INSERT` trigger on `posts` rejects a post within 5 seconds of the author's
+  previous one. The stamp lives in `private.post_throttle` (no grants, server clock only), so a client can
+  neither read nor reset it. Enforced in the DB; the compose window's guard is courtesy only.
+- **Moderation kill-switch** — the `moderation` table (RLS on, **no policies**, no client grants; only
+  `service_role` and the dashboard touch it) suspends a handle: `posts_read` hides a suspended author's posts, a trigger
   blocks them from posting, and `find_profile` stops resolving them — all via the `is_suspended()` SECURITY
   DEFINER helper. Suspend/lift from the SQL editor (see the header of `*_moderation.sql`).
 

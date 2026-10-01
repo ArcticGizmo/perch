@@ -142,7 +142,7 @@ public sealed partial class OverlayCanvas
 
         var brush = needsYou ? Palette.AccentBrush : MutedBrush;
         double r = d / 2 - 1;
-        if (requested) ctx.DrawEllipse(null, new Pen(brush, 2), center, r, r);
+        if (requested) ctx.DrawEllipse(null, OverlayDraw.Pen(brush, 2), center, r, r);
         else ctx.DrawEllipse(brush, null, center, r, r);
         if (needsYou) DrawAttentionBadge(ctx, center, r);
 
@@ -168,7 +168,7 @@ public sealed partial class OverlayCanvas
     }
 
     private void DrawAttentionBadge(DrawingContext ctx, Point center, double r) =>
-        ctx.DrawEllipse(new SolidColorBrush(AttentionColor), null,
+        ctx.DrawEllipse(OverlayDraw.Brush(AttentionColor), null,
             new Point(center.X + r * 0.72, center.Y - r * 0.72), 2.6, 2.6);
 
     private int HitTestGameIcon(Point p)

@@ -191,11 +191,12 @@ internal sealed class PrStatusService : IDisposable
         if (!_fetching.TryAdd(key, 0))
             return;
 
-        Task.Run(() =>
+        Task.Run(async () =>
         {
             try
             {
-                _gate.Wait();
+                // Awaited, not Wait(): a queued refresh holds no thread-pool thread while the gate is full.
+                await _gate.WaitAsync().ConfigureAwait(false);
                 try
                 {
                     if (_disposed || !_enabled)
@@ -212,8 +213,12 @@ internal sealed class PrStatusService : IDisposable
                 }
                 finally
                 {
-                    _gate.Release();
+                    try { _gate.Release(); } catch (ObjectDisposedException) { }
                 }
+            }
+            catch (ObjectDisposedException)
+            {
+                // Disposed while queued on the gate: nothing to refresh.
             }
             finally
             {
@@ -408,7 +413,7 @@ internal sealed class PrStatusService : IDisposable
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "gh",
+                FileName = ExecutableResolver.Resolve("gh"),     // absolute: never a gh.exe planted in the repo (CP7)
                 Arguments = args,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -465,7 +470,10 @@ internal sealed class PrStatusService : IDisposable
                     if (!line.StartsWith(prefix, StringComparison.Ordinal))
                         return null;
                     var p = line[prefix.Length..].Trim();
-                    return Path.IsPathRooted(p) ? p : Path.GetFullPath(Path.Combine(d.FullName, p));
+                    var target = Path.IsPathRooted(p) || LocalPath.IsNetworkShaped(p) ? p : Path.GetFullPath(Path.Combine(d.FullName, p));
+                    // The .git file is repo content: a "gitdir: \\attacker\s" would have the HEAD read below open
+                    // an SMB connection (NTLM leak + stall). Only follow it on the repo's own volume or a local disk.
+                    return LocalPath.IsSafeToProbe(target, d.FullName) ? target : null;
                 }
             }
         }

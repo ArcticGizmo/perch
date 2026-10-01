@@ -52,27 +52,7 @@ internal sealed class MarkdownWindow : Window
     private static readonly IBrush ProducedDotBrush = new SolidColorBrush(Color.FromRgb(244, 114, 182));
 
     // Whether a `code` launcher is on PATH — gates the "Open in VS Code" context item. Resolved once.
-    private static readonly Lazy<bool> CodeAvailable = new(() =>
-    {
-        try
-        {
-            var pathEnv = Environment.GetEnvironmentVariable("PATH");
-            if (string.IsNullOrEmpty(pathEnv))
-                return false;
-            var exts = OperatingSystem.IsWindows() ? new[] { ".cmd", ".exe", ".bat" } : new[] { "" };
-            foreach (var dir in pathEnv.Split(Path.PathSeparator))
-            {
-                if (string.IsNullOrWhiteSpace(dir))
-                    continue;
-                foreach (var ext in exts)
-                {
-                    try { if (File.Exists(Path.Combine(dir, "code" + ext))) return true; } catch { }
-                }
-            }
-            return false;
-        }
-        catch { return false; }
-    });
+    private static readonly Lazy<bool> CodeAvailable = new(() => ExecutableResolver.Find("code") is not null);
 
     private readonly AppSettings _settings;
 
@@ -1187,15 +1167,9 @@ internal sealed class MarkdownWindow : Window
         return item;
     }
 
-    private static void OpenInVsCode(string path)
-    {
-        try
-        {
-            System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo("code", $"\"{path}\"") { UseShellExecute = true });
-        }
-        catch { /* best-effort — VS Code may have been removed from PATH since we probed */ }
-    }
+    // Through the revealer, never a shell-executed `code.cmd`: cmd would run a `&` in a file name, or expand a `%`
+    // (review fixes CP12). A markdown file comes from a repo, so its name is the repo's choice.
+    private static void OpenInVsCode(string path) => PlatformServices.FileRevealer.OpenInEditor(path);
 
     // Selecting a different file while the buffer is dirty asks before discarding; if kept, the previous
     // selection is restored. Group/folder rows never load a file.

@@ -6,7 +6,8 @@ using System.Text.Json;
 /// The user's to-do / reminder list, persisted per-profile next to <c>settings.json</c> as
 /// <c>todos.json</c>. Modelled on <see cref="AchievementStore"/>: a private ctor, a static
 /// <see cref="Load"/> (plus an <see cref="LoadFrom"/> seam so tests round-trip a temp path), and
-/// best-effort IO throughout — a read/write failure degrades to an empty list rather than throwing.
+/// best-effort IO throughout — a read/write failure degrades to an empty list rather than throwing, but never
+/// to an empty list that then overwrites the real one (see <see cref="LoadFrom"/>).
 ///
 /// <para>Deliberately its own file rather than an <see cref="AppSettings"/> collection: the list is
 /// edited from a dedicated window and polled by a monitor host, so it has no place in the settings
@@ -21,27 +22,49 @@ internal sealed class TodoStore
     private readonly string _path;
     private readonly List<Todo> _todos;
 
-    private TodoStore(string path, List<Todo> todos)
+    /// <summary>True when the file exists but couldn't be read at load (locked, permissions): the list is an empty
+    /// stand-in, so <see cref="Save"/> declines rather than overwrite todos it never saw (review fixes CP14).</summary>
+    internal bool SaveSuppressed { get; }
+
+    private TodoStore(string path, List<Todo> todos, bool saveSuppressed = false)
     {
         _path = path;
         _todos = todos;
+        SaveSuppressed = saveSuppressed;
     }
 
     public static TodoStore Load() => LoadFrom(DefaultPath);
 
+    /// <summary>Where a <c>todos.json</c> that wouldn't parse is copied before the next save replaces it.</summary>
+    internal static string UnreadableCopyPath(string path) =>
+        Path.Combine(Path.GetDirectoryName(path) ?? "", "todos.unreadable.json");
+
     // internal for tests — round-trips through a temp path without touching the real profile.
+    // A read failure and a parse failure are both "not an empty list" (review fixes CP14): an unreadable file
+    // suppresses saving for the session, and one that won't parse is copied aside (latest wins, like
+    // settings.unreadable.json) before the list starts over — so the next Save can never silently erase todos.
     internal static TodoStore LoadFrom(string path)
     {
+        switch (AtomicFile.TryRead(path, out var json))
+        {
+            case AtomicFile.ReadResult.Missing:
+                return new TodoStore(path, []);
+            case AtomicFile.ReadResult.Failed:
+                return new TodoStore(path, [], saveSuppressed: true);
+        }
         try
         {
-            if (File.Exists(path))
-            {
-                var model = JsonSerializer.Deserialize<Model>(File.ReadAllText(path));
-                return new TodoStore(path, model?.Todos ?? []);
-            }
+            return new TodoStore(path, JsonSerializer.Deserialize<Model>(json)?.Todos ?? []);
         }
-        catch { }
-        return new TodoStore(path, []);
+        catch
+        {
+            if (!string.IsNullOrWhiteSpace(json))
+            {
+                try { AtomicFile.Write(UnreadableCopyPath(path), json); }
+                catch { return new TodoStore(path, [], saveSuppressed: true); }   // couldn't keep a copy: don't overwrite
+            }
+            return new TodoStore(path, []);
+        }
     }
 
     /// <summary>Every todo, in stored order (newest additions last).</summary>
@@ -116,11 +139,11 @@ internal sealed class TodoStore
 
     public void Save()
     {
+        if (SaveSuppressed) return;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var model = new Model { Todos = _todos };
-            File.WriteAllText(_path, JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true }));
+            AtomicFile.Write(_path, JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch { }
     }

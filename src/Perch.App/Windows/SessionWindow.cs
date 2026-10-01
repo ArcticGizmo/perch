@@ -843,6 +843,9 @@ internal sealed partial class SessionWindow : Window
         s.Ended -= OnSessionEnded;
         s.RemoteControlChanged -= OnRemoteControlChanged;
         s.Conversation.Changed -= OnConversationChangedForChanges;
+        // The session outlives this window by design: without this its conversation keeps the whole chat tree
+        // subscribed (and rendering deltas) after the window closes.
+        _thread.Unbind();
         _session = null;
     }
 
@@ -1452,7 +1455,15 @@ internal sealed partial class SessionWindow : Window
         }
 
         // Collision defences (docs/session-ui-plan.md §Phase 4 (a)): never drive an id that is already
-        // running in a real terminal, or under another Perch instance.
+        // running in a real terminal, or under another Perch instance. The lock is looked for in the session's own
+        // config dir, where the controller writes it (review fixes CP13).
+        string? configDir;
+        try { configDir = LaunchConfigDir(_cwd); }
+        catch (Exception ex)
+        {
+            LaunchFail($"failed to start claude: {ex.Message}");
+            return;
+        }
         if (_resumeId is { } rid)
         {
             if (LiveLookup?.Invoke(rid) is { IsPerchControlled: false } live)
@@ -1461,7 +1472,7 @@ internal sealed partial class SessionWindow : Window
                            "it's running. Close it there, or use “Elevate to Perch” on its overlay row.");
                 return;
             }
-            if (SessionLock.HeldByOther(rid) is { } other)
+            if (SessionLock.HeldByOther(rid, SessionLock.SessionsDirFor(configDir)) is { } other)
             {
                 LaunchFail($"session {Shorten(rid)} is already controlled by {other.Profile} (PID {other.Pid}).");
                 return;
@@ -1471,9 +1482,9 @@ internal sealed partial class SessionWindow : Window
         PerchSession session;
         try
         {
-            // Account selection applies to fresh sessions only; a resume must run under the dir that owns the
-            // transcript, so it keeps inheriting Perch's environment (docs/session-account-selector-plan.md).
-            var configDir = _resumeId is null ? EffectiveConfigDir(_cwd) : null;
+            LaunchLog.Write(_resumeId is { } logRid
+                ? $"perch window resume: {TranscriptLocator.DescribeResume(logRid, _cwd)}"
+                : $"perch window new session: cwd={LaunchLog.Show(_cwd)} CLAUDE_CONFIG_DIR={LaunchLog.Show(configDir)}");
             session = start(new SessionLaunchOptions(_cwd, _model, StartingMode, _effort, _resumeId, configDir));
         }
         catch (Exception ex)
@@ -1494,12 +1505,21 @@ internal sealed partial class SessionWindow : Window
     private async System.Threading.Tasks.Task EnsureTrustedThenStartAsync(bool replace)
     {
         var cwd = _cwd;
-        // Same config dir the spawn will pin (fresh sessions honour the account selector; a resume inherits
-        // Perch's environment), so trust is read/written in the file that launch will actually use.
-        var configDir = _resumeId is null ? EffectiveConfigDir(cwd) : null;
-
+        // Same config dir the spawn will pin (see LaunchConfigDir), so trust is read/written in the file that launch
+        // will actually use. A fresh session's dir comes from the account picker (UI state, so read here); a resume's
+        // is the transcript's owner, found off the UI thread since that may mean searching for the transcript.
+        var resumeId = _resumeId;
+        var freshDir = resumeId is null ? EffectiveConfigDir(cwd) : null;
+        string? configDir = freshDir;
         bool trusted;
-        try { trusted = await System.Threading.Tasks.Task.Run(() => DirectoryTrust.Evaluate(configDir, cwd)); }
+        try
+        {
+            (configDir, trusted) = await System.Threading.Tasks.Task.Run(() =>
+            {
+                var dir = resumeId is null ? freshDir : TranscriptLocator.ResumeConfigRoot(resumeId, cwd);
+                return (dir, DirectoryTrust.Evaluate(dir, cwd));
+            });
+        }
         catch { trusted = false; }
 
         if (!trusted)
@@ -1642,7 +1662,24 @@ internal sealed partial class SessionWindow : Window
         catch { return null; }
     }
 
-    private void AddAttachment(MessageAttachment a) { _pendingAttachments.Add(a); RenderAttachTray(); }
+    private void AddAttachment(MessageAttachment a)
+    {
+        // An image over the API's per-image limit would only fail the send, so refuse it here and say why.
+        if (a.Kind == AttachmentKind.Image && FileLength(a.Path) is { } len && len > PerchSession.MaxImageBytes)
+        {
+            Conv.AddNote($"{a.DisplayName} is {len / (1024.0 * 1024):0.#} MB, over the {PerchSession.MaxImageBytes / (1024 * 1024)} MB image limit, so it wasn't attached",
+                NoteKind.Error);
+            return;
+        }
+        _pendingAttachments.Add(a);
+        RenderAttachTray();
+    }
+
+    private static long? FileLength(string path)
+    {
+        try { return new FileInfo(path).Length; }
+        catch { return null; }
+    }
     private void RemoveAttachment(MessageAttachment a) { _pendingAttachments.Remove(a); RenderAttachTray(); }
     private void ClearAttachments() { _pendingAttachments.Clear(); RenderAttachTray(); }
 
@@ -1815,9 +1852,12 @@ internal sealed partial class SessionWindow : Window
 
     // /login, /logout → shell out to `claude auth …` in a terminal: the OAuth flow opens a browser and prompts
     // in the terminal, which the stream-json channel can't host. Perch picks up the new auth on its next poll.
+    // Runs under this window's account — the running session's, else the one a launch here would use — so a login
+    // signs in (and a logout signs out of) that config dir rather than always the primary.
     private void RunClaudeAuth(string args)
     {
-        if (PlatformServices.SessionLauncher.RunClaudeCommand(_cwd, args, TerminalApp.Auto))
+        var configDir = _session is { } s ? s.ConfigDir : LaunchConfigDir(_cwd);
+        if (PlatformServices.SessionLauncher.RunClaudeCommand(_cwd, args, TerminalApp.Auto, configDir))
             Conv.AddNote($"opened a terminal — finish in it: claude {args}");
         else
             Conv.AddNote("couldn't open a terminal for authentication", NoteKind.Error);
@@ -3242,6 +3282,12 @@ internal sealed partial class SessionWindow : Window
         _accountPillText.Text = isDefault ? $"{choice.Label} (default)" : choice.Label;
     }
 
+    /// <summary>The config dir this window's launch runs under. A fresh session honours the account selector
+    /// (<see cref="EffectiveConfigDir"/>); a resume must run under the dir that <em>owns the transcript</em> — inheriting
+    /// Perch's environment would mean the primary account, where a session from another config dir doesn't exist.</summary>
+    private string? LaunchConfigDir(string cwd) =>
+        _resumeId is { } rid ? TranscriptLocator.ResumeConfigRoot(rid, cwd) : EffectiveConfigDir(cwd);
+
     /// <summary>The config dir to launch under (injected as <c>CLAUDE_CONFIG_DIR</c>), or <c>null</c> to inherit
     /// Perch's own environment. Resolves synchronously from <paramref name="cwd"/> so a single-allowed guardrail
     /// is enforced as the default on every path, including the launcher-less CLI open; a user's explicit menu
@@ -3599,6 +3645,26 @@ internal sealed partial class SessionWindow : Window
 
     /// <summary>HeadlessRenderer: show the thread over synthetic events (no process), so the composed turns —
     /// bubble, prose, thinking, tool cards, a pending permission card — can be captured.</summary>
+    /// <summary>Render mode only: streams <paramref name="deltas"/> into the attached sample session one text
+    /// delta per paced frame, laying out after each, and returns each frame's cost in ms (the CP22 benchmark).
+    /// <paramref name="stopAfter"/> caps how many deltas are fed (so a capture can be taken mid-stream).</summary>
+    internal List<double> StreamSampleForRender(IReadOnlyList<string> deltas, int start = 0, int stopAfter = int.MaxValue)
+    {
+        var times = new List<double>();
+        if (_session is not { } s) return times;
+        var sw = new System.Diagnostics.Stopwatch();
+        for (int i = start; i < deltas.Count && i < stopAfter; i++)
+        {
+            sw.Restart();
+            s.Conversation.Apply(new TextDeltaEvent(deltas[i]));
+            Dispatcher.UIThread.RunJobs();
+            _thread.PumpStreamingForRender();
+            _thread.UpdateLayout();
+            times.Add(sw.Elapsed.TotalMilliseconds);
+        }
+        return times;
+    }
+
     internal void FeedSampleForRender(string cwd, string? userPrompt, IEnumerable<SessionEvent> events,
         IReadOnlyList<MessageAttachment>? attachments = null)
     {

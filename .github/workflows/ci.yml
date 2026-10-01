@@ -1,0 +1,97 @@
+name: CI
+
+# Builds and runs the test suites on every pull request, so a red test is caught before it merges rather than by
+# remembering to run them locally.
+#
+#   windows - the whole solution (both app heads, the hook, the platform projects), the .NET suite, and
+#             tools/test-install.ps1 (the installer tests; its download/verify checks skip without a local
+#             releases\ folder, and nothing in it touches the network).
+#   macos   - the cross-platform app head (the macOS port) and the .NET suite, which is meant to be portable.
+#
+# Pull requests only (opened, new commits, reopened); a plain branch push doesn't run it. workflow_dispatch runs it
+# by hand on any branch. Docs, captures and the Supabase backend (tested separately with pgTAP) don't trigger a
+# run. Root-level *.md only: fixture .md files under tests/ must still trigger one.
+on:
+  pull_request:
+    paths-ignore: ['*.md', 'docs/**', 'captures/**', 'backend/**']
+  workflow_dispatch:
+
+# Read-only: nothing here writes to the repo. Every action is pinned to a commit SHA (the version is in the
+# trailing comment); Dependabot proposes bumps.
+permissions:
+  contents: read
+
+# A newer push to the same PR supersedes a run still in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The SDK comes from global.json, so CI builds with the same SDK as a local build.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+
+      # On Windows the app head multi-targets, so this compiles both heads as well as the tests.
+      - name: Build
+        run: dotnet build perch.slnx -c Release
+
+      # --blame-hang-timeout turns a hung test into a failure with a dump, instead of a run that sits until the
+      # job timeout.
+      - name: Test (.NET)
+        run: dotnet test tests/Perch.Tests/Perch.Tests.csproj -c Release --no-build --blame-hang-timeout 10m --logger "trx;LogFileName=results.trx" --results-directory TestResults
+
+      # Windows PowerShell 5.1, as documented in CLAUDE.md: the installer has to work there.
+      - name: Test (installer)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools\test-install.ps1
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results-windows
+          path: TestResults/
+          if-no-files-found: ignore
+
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+
+      # Not the whole solution: Perch.Platform.Windows targets net10.0-windows, which doesn't build here. On this
+      # host the app head builds only as the cross-platform net10.0 head (the macOS port).
+      - name: Build (app head)
+        run: dotnet build src/Perch.App/Perch.App.csproj -c Release
+
+      - name: Test (.NET)
+        run: dotnet test tests/Perch.Tests/Perch.Tests.csproj -c Release --blame-hang-timeout 10m --logger "trx;LogFileName=results.trx" --results-directory TestResults
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results-macos
+          path: TestResults/
+          if-no-files-found: ignore

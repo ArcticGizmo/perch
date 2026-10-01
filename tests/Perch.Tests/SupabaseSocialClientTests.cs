@@ -18,9 +18,15 @@ public sealed class SupabaseSocialClientTests
     private const string Other = "22222222-2222-4222-8222-222222222222";
     private const string Other2 = "33333333-3333-4333-8333-333333333333";
 
-    private static SupabaseSocialClient NewClient(StubHandler handler, ISecretStore secrets) =>
-        new(new SupabaseConfig("https://demo.supabase.co", "sb_publishable_test"),
-            secrets, new NoopUrlOpener(), new HttpClient(handler));
+    // The demo origin plays the compiled-in project, so a token seeded at the pre-CP16 unkeyed location
+    // ("supabase.refresh_token") is adopted into its per-origin key — the upgrade path every release takes.
+    private const string DemoUrl = "https://demo.supabase.co";
+    private const string LegacyKey = "supabase.refresh_token";
+    private const string DemoKey = "supabase.refresh_token@https://demo.supabase.co";
+
+    private static SupabaseSocialClient NewClient(HttpMessageHandler handler, ISecretStore secrets, string url = DemoUrl) =>
+        new(new SupabaseConfig(url, "sb_publishable_test"),
+            secrets, new NoopUrlOpener(), new HttpClient(handler), compiledUrl: DemoUrl);
 
     private static string TokenJson() =>
         ("""{"access_token":"JWT","refresh_token":"rt2","expires_in":3600,"user":{"id":"UID"}}""")
@@ -65,7 +71,56 @@ public sealed class SupabaseSocialClientTests
 
         Assert.True(state.SignedIn);
         Assert.Equal("ada", state.Me?.Handle);
-        Assert.Equal("rt2", secrets.Get("supabase.refresh_token"));   // rotated refresh token persisted
+        Assert.Equal("rt2", secrets.Get(DemoKey));   // rotated refresh token persisted, under this origin's key
+        Assert.Null(secrets.Get(LegacyKey));         // the pre-CP16 location was adopted and cleared
+    }
+
+    // CP16: a config override (PERCH_SUPABASE_URL / .env.local) pointing at another server must never be handed
+    // the real project's refresh token — neither the per-origin one nor a not-yet-adopted legacy one.
+    [Fact]
+    public async Task An_overridden_origin_never_sends_another_origins_refresh_token()
+    {
+        var secrets = new InMemorySecretStore();
+        secrets.Set(LegacyKey, "real-legacy");
+        secrets.Set(DemoKey, "real-keyed");
+        var sent = new List<string>();
+        var handler = new StubHandler(req =>
+        {
+            sent.Add(req.RequestUri!.ToString());
+            return (HttpStatusCode.OK, TokenJson());
+        });
+
+        var state = await NewClient(handler, secrets, url: "https://attacker.example").TryRestoreAsync();
+
+        Assert.False(state.SignedIn);
+        Assert.Empty(sent);                                   // nothing went to the other server at all
+        Assert.Equal("real-legacy", secrets.Get(LegacyKey));  // and the real tokens are untouched
+        Assert.Equal("real-keyed", secrets.Get(DemoKey));
+    }
+
+    // CP16: concurrent callers that find the access token expired share one refresh. GoTrue rotates refresh
+    // tokens, so redeeming the same one twice can revoke the session.
+    [Fact]
+    public async Task Concurrent_callers_share_one_token_refresh()
+    {
+        var secrets = new InMemorySecretStore();
+        secrets.Set(DemoKey, "rt1");
+        int refreshes = 0;
+        var handler = new SlowHandler(async req =>
+        {
+            if (req.RequestUri!.AbsolutePath == "/auth/v1/token")
+            {
+                Interlocked.Increment(ref refreshes);
+                await Task.Delay(150);   // long enough that an unguarded second caller would start its own
+                return (HttpStatusCode.OK, TokenJson());
+            }
+            return (HttpStatusCode.OK, "[]");
+        });
+        var client = NewClient(handler, secrets);
+
+        await Task.WhenAll(Enumerable.Range(0, 5).Select(_ => client.FindByHandleAsync("ada")));
+
+        Assert.Equal(1, refreshes);
     }
 
     [Fact]
@@ -131,7 +186,8 @@ public sealed class SupabaseSocialClientTests
         var state = await NewClient(handler, secrets).TryRestoreAsync();
 
         Assert.False(state.SignedIn);
-        Assert.Null(secrets.Get("supabase.refresh_token"));           // forgotten
+        Assert.Null(secrets.Get(DemoKey));           // forgotten
+        Assert.Null(secrets.Get(LegacyKey));
     }
 
     [Fact]
@@ -202,13 +258,81 @@ public sealed class SupabaseSocialClientTests
     public async Task Feed_resolves_author_handles()
     {
         var (client, _) = await SignedInClient(req =>
-            req.RequestUri!.AbsolutePath == "/rest/v1/posts" && req.Method == HttpMethod.Get
-                ? (HttpStatusCode.OK, PostsJson("hi from ada"))
-                : null);   // profiles fetch falls through to the default (UID -> ada)
+            req.RequestUri!.AbsolutePath switch
+            {
+                "/rest/v1/posts" when req.Method == HttpMethod.Get => (HttpStatusCode.OK, PostsJson("hi from ada")),
+                "/rest/v1/friendships" => (HttpStatusCode.OK, "[]"),
+                _ => null,   // profiles fetch falls through to the default (UID -> ada)
+            });
 
         var feed = await client.GetFeedAsync();
         Assert.Equal("ada", Assert.Single(feed).Author.Handle);
         Assert.Equal("hi from ada", feed[0].Body);
+    }
+
+    [Fact]
+    public async Task Feed_asks_only_for_my_posts_and_my_accepted_friends()
+    {
+        // Unfiltered, the server runs the posts RLS predicate over every post in the table (review fixes CP6).
+        var postQueries = new List<string>();
+        var (client, _) = await SignedInClient(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            if (path == "/rest/v1/posts" && req.Method == HttpMethod.Get)
+            {
+                postQueries.Add(Uri.UnescapeDataString(req.RequestUri!.Query));
+                return (HttpStatusCode.OK, "[]");
+            }
+            if (path == "/rest/v1/friendships")
+                return (HttpStatusCode.OK,
+                    ("""[{"requester":"OTHER","addressee":"UID","status":"pending"},{"requester":"UID","addressee":"OTHER2","status":"accepted"}]""")
+                        .Replace("UID", Uid).Replace("OTHER2", Other2).Replace("OTHER", Other));
+            if (path == "/rest/v1/profiles" && req.RequestUri!.Query.Contains("in."))
+                return (HttpStatusCode.OK, "[]");
+            return null;
+        });
+
+        await client.GetFeedAsync();
+
+        var q = Assert.Single(postQueries);
+        Assert.Contains($"author=in.({Uid},{Other2})", q);   // me + the accepted friend
+        Assert.DoesNotContain(Other + ",", q);               // not the pending one
+        Assert.DoesNotContain(Other + ")", q);
+    }
+
+    [Fact]
+    public async Task Feed_splits_a_large_friend_list_and_merges_newest_first()
+    {
+        // 150 accepted friends + me = 151 authors → two requests (100 + 51), merged by created_at and capped.
+        var friendIds = Enumerable.Range(1, 150).Select(i => $"00000000-0000-4000-8000-{i:D12}").ToList();
+        var postQueries = new List<string>();
+        var (client, _) = await SignedInClient(req =>
+        {
+            var path = req.RequestUri!.AbsolutePath;
+            if (path == "/rest/v1/posts" && req.Method == HttpMethod.Get)
+            {
+                postQueries.Add(Uri.UnescapeDataString(req.RequestUri!.Query));
+                // Each chunk returns one post; the second chunk's is newer.
+                var (id, author, at) = postQueries.Count == 1
+                    ? ("aaaaaaaa-0000-4000-8000-000000000001", friendIds[0], "2026-01-01T00:00:00Z")
+                    : ("aaaaaaaa-0000-4000-8000-000000000002", friendIds[149], "2026-02-01T00:00:00Z");
+                return (HttpStatusCode.OK,
+                    $$"""[{"id":"{{id}}","author":"{{author}}","body":"b","mood_emoji":null,"created_at":"{{at}}"}]""");
+            }
+            if (path == "/rest/v1/friendships")
+                return (HttpStatusCode.OK,
+                    "[" + string.Join(",", friendIds.Select(f =>
+                        $$"""{"requester":"{{Uid}}","addressee":"{{f}}","status":"accepted"}""")) + "]");
+            if (path == "/rest/v1/profiles" && req.RequestUri!.Query.Contains("in."))
+                return (HttpStatusCode.OK, "[]");
+            return null;
+        });
+
+        var feed = await client.GetFeedAsync(limit: 1);
+
+        Assert.Equal(2, postQueries.Count);
+        Assert.Equal(151, postQueries.Sum(q => q[(q.IndexOf("in.(") + 4)..q.IndexOf(')')].Split(',').Length));
+        Assert.Equal(Guid.Parse(friendIds[149]), Assert.Single(feed).Author.Id);   // the newer post wins the cap
     }
 
     [Fact]
@@ -250,7 +374,7 @@ public sealed class SupabaseSocialClientTests
 
         Assert.True(hit);                                             // the Edge Function was invoked
         Assert.False(client.Current.SignedIn);                       // local session cleared
-        Assert.Null(secrets.Get("supabase.refresh_token"));          // stored token forgotten
+        Assert.Null(secrets.Get(DemoKey));                           // stored token forgotten
     }
 
     [Fact]
@@ -263,7 +387,7 @@ public sealed class SupabaseSocialClientTests
 
         await Assert.ThrowsAsync<SocialException>(() => client.DeleteAccountAsync());
         Assert.True(client.Current.SignedIn);                        // still signed in — nothing cleared
-        Assert.Equal("rt2", secrets.Get("supabase.refresh_token"));  // token retained for a retry
+        Assert.Equal("rt2", secrets.Get(DemoKey));                   // token retained for a retry
     }
 
     [Fact]
@@ -335,6 +459,15 @@ public sealed class SupabaseSocialClientTests
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json"),
             });
+        }
+    }
+
+    private sealed class SlowHandler(Func<HttpRequestMessage, Task<(HttpStatusCode, string)>> responder) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var (code, json) = await responder(request);
+            return new HttpResponseMessage(code) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
         }
     }
 

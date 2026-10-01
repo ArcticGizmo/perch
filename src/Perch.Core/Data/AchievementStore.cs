@@ -60,9 +60,8 @@ internal sealed class AchievementStore
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             var model = new Model { Unlocked = _unlocked.OrderBy(x => x, StringComparer.Ordinal).ToList() };
-            File.WriteAllText(_path, JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true }));
+            AtomicFile.Write(_path, JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch { }
     }

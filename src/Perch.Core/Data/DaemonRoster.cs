@@ -56,6 +56,19 @@ public static class DaemonRosterReader
             using (var reader = new StreamReader(fs))
                 json = reader.ReadToEnd();
 
+            return Parse(json, probe);
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>The live workers in a roster file's text. Never throws.</summary>
+    internal static IReadOnlyList<DaemonWorker> Parse(string json, IProcessProbe probe)
+    {
+        try
+        {
             if (JsonNode.Parse(json) is not JsonObject root
                 || root["workers"] is not JsonObject workers)
                 return [];
@@ -63,35 +76,14 @@ public static class DaemonRosterReader
             var result = new List<DaemonWorker>();
             foreach (var (shortId, node) in workers)
             {
-                if (node is not JsonObject w) continue;
-
-                int pid = (int)(w["pid"]?.GetValue<long>() ?? 0);
-                if (pid <= 0 || !probe.IsAlive(pid)) continue;
-
-                var sessionId = w["sessionId"]?.GetValue<string>() ?? "";
-                if (sessionId.Length == 0) continue;
-
-                var cwd = w["cwd"]?.GetValue<string>() ?? "";
-                var startedAtMs = w["startedAt"]?.GetValue<long>() ?? 0;
-                var startedAt = startedAtMs > 0
-                    ? DateTimeOffset.FromUnixTimeMilliseconds(startedAtMs).LocalDateTime
-                    : DateTime.MinValue;
-
-                var dispatch = w["dispatch"] as JsonObject;
-                var source = dispatch?["source"]?.GetValue<string>() ?? "";
-
-                // The human label: the dispatch seed's explicit name when Claude Code assigned one,
-                // else the seed intent (the prompt that launched the worker). Blank → null, so the
-                // display falls back to the project name.
-                var seed = dispatch?["seed"] as JsonObject;
-                var name = seed?["name"]?.GetValue<string>();
-                if (string.IsNullOrWhiteSpace(name)) name = seed?["intent"]?.GetValue<string>();
-                name = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
-
-                result.Add(new DaemonWorker(
-                    shortId, sessionId, pid, cwd,
-                    string.IsNullOrEmpty(cwd) ? "" : PathLeaf.Of(cwd),
-                    source, name, startedAt));
+                // One worker at a time (review fixes CP25): a field of an unexpected type skips at most that
+                // worker, never the whole roster. Optional fields read leniently (a mistyped one is just absent);
+                // only a missing or unusable pid/sessionId disqualifies a worker.
+                try
+                {
+                    if (ReadWorker(shortId, node, probe) is { } worker) result.Add(worker);
+                }
+                catch { /* this worker only */ }
             }
 
             // Stable order: oldest worker first, then by key, so the strip doesn't shuffle between reads.
@@ -104,5 +96,42 @@ public static class DaemonRosterReader
         {
             return [];
         }
+    }
+
+    private static DaemonWorker? ReadWorker(string shortId, JsonNode? node, IProcessProbe probe)
+    {
+        if (node is not JsonObject w) return null;
+
+        long pidValue = TranscriptJson.AsLong(w["pid"]);
+        if (pidValue <= 0 || pidValue > int.MaxValue) return null;
+        int pid = (int)pidValue;
+
+        var sessionId = TranscriptJson.AsString(w["sessionId"]) ?? "";
+        if (sessionId.Length == 0) return null;
+
+        var startedAtMs = TranscriptJson.AsLong(w["startedAt"]);
+        DateTime? recordedStart = startedAtMs > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(startedAtMs).LocalDateTime
+            : null;
+        // A killed daemon leaves its roster behind, so the pid is the only tell. With a start time, a pid some
+        // newer process has since inherited doesn't count either.
+        if (!probe.IsAlive(pid, recordedStart)) return null;
+
+        var cwd = TranscriptJson.AsString(w["cwd"]) ?? "";
+        var dispatch = w["dispatch"] as JsonObject;
+        var source = TranscriptJson.AsString(dispatch?["source"]) ?? "";
+
+        // The human label: the dispatch seed's explicit name when Claude Code assigned one,
+        // else the seed intent (the prompt that launched the worker). Blank → null, so the
+        // display falls back to the project name.
+        var seed = dispatch?["seed"] as JsonObject;
+        var name = TranscriptJson.AsString(seed?["name"]);
+        if (string.IsNullOrWhiteSpace(name)) name = TranscriptJson.AsString(seed?["intent"]);
+        name = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+
+        return new DaemonWorker(
+            shortId, sessionId, pid, cwd,
+            string.IsNullOrEmpty(cwd) ? "" : PathLeaf.Of(cwd),
+            source, name, recordedStart ?? DateTime.MinValue);
     }
 }

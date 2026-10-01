@@ -81,6 +81,15 @@ internal sealed class DiffView : Border
     // (generated / minified) file can't spawn tens of thousands of row controls.
     private const int MaxLinesPerFile = 4000;
 
+    // Across the whole diff: files past either limit start collapsed and build no rows until expanded, so a huge
+    // commit (thousands of files, or a few enormous ones) opens at a bounded cost. Review fixes CP24.
+    private const int MaxAutoExpandedLines = 10000;
+    private const int MaxAutoExpandedFiles = 100;
+
+    // A line longer than this is cut for display (minified bundles, lockfiles): one multi-megabyte TextBlock is
+    // slow to lay out, and wrapping makes it worse. Copy still takes the whole line.
+    private const int MaxDisplayChars = 2000;
+
     private IReadOnlyList<DiffSection> _sections = [];
     private string? _note = "Select a file or commit to see its diff.";
     private bool _loading;
@@ -93,9 +102,12 @@ internal sealed class DiffView : Border
     // all-context lines. Forces a single column and suppresses all staging buttons regardless of split/hunk.
     private bool _plain;
 
-    // Collapsed file sections, keyed per file so the state survives a rebuild (wrap/split toggle). The key
-    // being built for the file currently under construction, so AddText can tag each line with it.
+    // Collapsed file sections as currently shown. The user's own toggles are kept per file key in _expandState
+    // (true = expanded), so they survive a rebuild (wrap/split toggle); a file the user never toggled follows the
+    // auto-collapse budget. The key being built for the file currently under construction, so AddText can tag
+    // each line with it.
     private readonly HashSet<string> _collapsed = new();
+    private readonly Dictionary<string, bool> _expandState = new();
     private string _currentFileKey = "";
 
     // Find state. _lines is every body line control in render order (for split: row0-left, row0-right,
@@ -422,6 +434,7 @@ internal sealed class DiffView : Border
         _charStream = _charAnchorPos = _charAnchorCh = _charFocusPos = _charFocusCh = -1;
         _dragging = false;
         _autoScroll?.Stop();
+        _collapsed.Clear();
         var root = new StackPanel { Orientation = Orientation.Vertical };
 
         if (_loading)
@@ -429,13 +442,28 @@ internal sealed class DiffView : Border
         else if (_sections.Count == 0)
             root.Children.Add(Message(_note ?? "No changes."));
         else
+        {
+            // The auto-collapse budget counts every file's lines in order, whatever the user has expanded, so
+            // expanding one file never flips the default of the files after it.
+            int fileIndex = 0;
+            long linesBefore = 0;
+            bool anyAutoCollapsed = false;
             foreach (var section in _sections)
             {
                 if (section.Label is { } label)
                     root.Children.Add(SectionHeader(label));
                 foreach (var file in section.Diff.Files)
-                    root.Children.Add(FileSection(section.Label, file, section.Action));
+                {
+                    bool auto = fileIndex >= MaxAutoExpandedFiles || linesBefore >= MaxAutoExpandedLines;
+                    anyAutoCollapsed |= auto;
+                    root.Children.Add(FileSection(section.Label, file, section.Action, auto));
+                    linesBefore += Math.Min(file.Hunks.Sum(h => h.Lines.Count), MaxLinesPerFile);
+                    fileIndex++;
+                }
             }
+            if (anyAutoCollapsed)
+                root.Children.Insert(0, Message("Large diff: later files start collapsed. Click a file to show it."));
+        }
 
         // The match-highlight layer sits behind the content (first child) so highlights paint behind the
         // text; it reads the live match list at paint time.
@@ -452,10 +480,11 @@ internal sealed class DiffView : Border
         }
     }
 
-    private Control FileSection(string? sectionLabel, GitDiffFile file, HunkStageAction action)
+    private Control FileSection(string? sectionLabel, GitDiffFile file, HunkStageAction action, bool autoCollapsed)
     {
         string key = (sectionLabel ?? "") + "\n" + FileLabel(file);
-        bool collapsed = _collapsed.Contains(key);
+        bool collapsed = _expandState.TryGetValue(key, out var expanded) ? !expanded : autoCollapsed;
+        if (collapsed) _collapsed.Add(key);
         _currentFileKey = key;
         string? filePath = file.NewPath ?? file.OldPath;
 
@@ -497,42 +526,56 @@ internal sealed class DiffView : Border
             Child = headerChild,
         };
 
+        // A collapsed file builds no rows: they're built when it's first expanded.
         var content = new StackPanel { Orientation = Orientation.Vertical, IsVisible = !collapsed };
-        if (file.IsBinary)
-            content.Children.Add(Message("Binary file — not shown."));
-        else if (file.Hunks.Count == 0)
-            content.Children.Add(Message("No textual changes (mode/rename only)."));
-        else
+        bool built = !collapsed;
+        if (!collapsed)
         {
-            int budget = MaxLinesPerFile;
-            string? path = filePath;
-            foreach (var hunk in file.Hunks)
+            if (file.IsBinary)
+                content.Children.Add(Message("Binary file — not shown."));
+            else if (file.Hunks.Count == 0)
+                content.Children.Add(Message("No textual changes (mode/rename only)."));
+            else
             {
-                var (oldStart, newStart) = HunkStarts(hunk.Header);
-                if (!_plain) content.Children.Add(HunkHeader(hunk.Header, hunkAction, path));
-                var hunkBody = split
-                    ? SplitHunk(hunk, oldStart, newStart, ref budget, hunkAction, path)
-                    : UnifiedHunk(hunk, oldStart, newStart, ref budget, hunkAction, path);
-                hunkBody.Margin = new Thickness(0, 0, 0, 18); // breathing room between hunks
-                content.Children.Add(hunkBody);
-                if (budget <= 0)
+                int budget = MaxLinesPerFile;
+                string? path = filePath;
+                foreach (var hunk in file.Hunks)
                 {
-                    content.Children.Add(Message("… diff truncated (file too large)."));
-                    break;
+                    var (oldStart, newStart) = HunkStarts(hunk.Header);
+                    if (!_plain) content.Children.Add(HunkHeader(hunk.Header, hunkAction, path));
+                    var hunkBody = split
+                        ? SplitHunk(hunk, oldStart, newStart, ref budget, hunkAction, path)
+                        : UnifiedHunk(hunk, oldStart, newStart, ref budget, hunkAction, path);
+                    hunkBody.Margin = new Thickness(0, 0, 0, 18); // breathing room between hunks
+                    content.Children.Add(hunkBody);
+                    if (budget <= 0)
+                    {
+                        content.Children.Add(Message("… diff truncated (file too large)."));
+                        break;
+                    }
                 }
             }
         }
 
-        // Click the header bar to collapse/expand this file (persisted via _collapsed). Toggled in place so
+        // Click the header bar to collapse/expand this file (remembered in _expandState). Toggled in place so
         // the diff scroll position is preserved; matches are recomputed since collapsed lines aren't searched.
         header.PointerPressed += (_, e) =>
         {
             bool nowCollapsed = !_collapsed.Remove(key); // Remove returns false when it wasn't there → now collapse
             if (nowCollapsed) _collapsed.Add(key);
+            _expandState[key] = !nowCollapsed;
+            e.Handled = true; // consume, so the body's click-to-select doesn't fire on the header
+            if (!nowCollapsed && !built)
+            {
+                // Never built: rebuild, so its rows join the selection streams and the find order in document
+                // order (the content above is unchanged, so the scroll position holds). Posted, since the rebuild
+                // replaces the header this press is still being routed through.
+                Dispatcher.UIThread.Post(Rebuild);
+                return;
+            }
             content.IsVisible = !nowCollapsed;
             chevron.Text = nowCollapsed ? "▸" : "▾";
             if (_query.Length > 0) { RecomputeMatches(); Highlight(); RaiseResults(); }
-            e.Handled = true; // consume, so the body's click-to-select doesn't fire on the header
         };
 
         return new StackPanel
@@ -706,13 +749,14 @@ internal sealed class DiffView : Border
     }
 
     // The code cell. A plain TextBlock (not SelectableTextBlock): selection is done ourselves through the
-    // HighlightLayer so it can span lines, which native per-control selection can't.
+    // HighlightLayer so it can span lines, which native per-control selection can't. An over-long line shows cut
+    // (see MaxDisplayChars); the caller's RegisterLine keeps the whole line as the copy content.
     private TextBlock AddText(Grid grid, int row, int col, string text, IBrush brush)
     {
         EnsureRow(grid, row);
         var tb = new TextBlock
         {
-            Text = text,
+            Text = DisplayText(text),
             FontFamily = Mono,
             FontSize = LineSize,
             Foreground = brush,
@@ -1054,6 +1098,14 @@ internal sealed class DiffView : Border
         }
 
         public override void Render(DrawingContext ctx) => _owner.RenderHighlights(ctx, this);
+    }
+
+    // A line cut to MaxDisplayChars with a note of how much is hidden, never splitting a surrogate pair.
+    internal static string DisplayText(string text)
+    {
+        if (text.Length <= MaxDisplayChars) return text;
+        int cut = char.IsHighSurrogate(text[MaxDisplayChars - 1]) ? MaxDisplayChars - 1 : MaxDisplayChars;
+        return $"{text[..cut]} … [{text.Length - cut:N0} more characters]";
     }
 
     private static string NextContext(ref int oldNo, ref int newNo)

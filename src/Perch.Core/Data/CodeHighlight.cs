@@ -195,6 +195,11 @@ public static class CodeHighlight
         // Case-insensitive set, for languages whose keywords don't care about case (SQL, Dockerfile).
         private static HashSet<string> SetI(params string[] words) => new(words, StringComparer.OrdinalIgnoreCase);
 
+        // Each profile is built once per language tag and shared (review fixes CP24): the keyword/type sets are
+        // never mutated after construction, and a HashSet is safe for concurrent readers. Unknown tags aren't
+        // cached, so an arbitrary fence tag can't grow the map.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, LangProfile> Cache = new();
+
         public static LangProfile? For(string? language)
         {
             var lang = (language ?? "").Trim().ToLowerInvariant();
@@ -202,6 +207,13 @@ public static class CodeHighlight
             int sp = lang.IndexOfAny([' ', '\t', ',', ';']);
             if (sp >= 0) lang = lang[..sp];
 
+            if (Cache.TryGetValue(lang, out var cached)) return cached;
+            var built = Build(lang);
+            return built is null ? null : Cache.GetOrAdd(lang, built);
+        }
+
+        private static LangProfile? Build(string lang)
+        {
             return lang switch
             {
                 "bash" or "sh" or "shell" or "zsh" or "console" or "shell-session" => Shell(),

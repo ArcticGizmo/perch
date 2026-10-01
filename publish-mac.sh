@@ -35,9 +35,9 @@ if [[ -z "${VERSION:-}" ]]; then
 fi
 
 # --- prerequisites -------------------------------------------------------------------------------
-if ! command -v vpk >/dev/null 2>&1; then
-    echo "Error: the vpk CLI isn't on PATH. Install it: dotnet tool install -g vpk" >&2
-    echo "(then ensure ~/.dotnet/tools is on PATH)" >&2
+# vpk is a local tool pinned in .config/dotnet-tools.json (to the app's Velopack library version).
+if ! dotnet tool restore >/dev/null; then
+    echo "Error: couldn't restore the pinned vpk CLI (dotnet tool restore)." >&2
     exit 1
 fi
 if [[ ! -f "$ICNS" ]]; then
@@ -45,7 +45,7 @@ if [[ ! -f "$ICNS" ]]; then
     ./tools/gen-icns.sh
 fi
 if [[ ! -f "$DMG_BG" ]]; then
-    echo "$DMG_BG missing — generating it..." >&2
+    echo "$DMG_BG missing - generating it..." >&2
     ./tools/gen-dmg-background.sh
 fi
 
@@ -86,7 +86,7 @@ sed "s/__VERSION__/$VERSION/g" "$PLIST_SRC" > "$plist_tmp"
 
 # --- pack the unsigned .app + DMG ----------------------------------------------------------------
 echo "Packaging ..."
-vpk pack \
+dotnet vpk pack \
     --runtime "$RID" \
     --packId Perch \
     --packTitle "Perch" \
@@ -137,7 +137,7 @@ echo "Styling DMG window ..."
 dev="$(hdiutil attach -readwrite -noverify -noautoopen "$rw" | grep -Eo '/dev/disk[0-9]+' | head -1)"
 vol="/Volumes/$VOL"
 
-# Best-effort Finder styling: on a headless/locked session the AppleScript can fail — the DMG is still a
+# Best-effort Finder styling: on a headless/locked session the AppleScript can fail - the DMG is still a
 # functional drag-install image (app + Applications alias + background folder), so warn and carry on rather
 # than sinking the whole release.
 if osascript <<APPLESCRIPT

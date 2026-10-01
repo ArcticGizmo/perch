@@ -355,7 +355,7 @@ public sealed partial class OverlayCanvas
             var nFt = OverlayDraw.Text(invites.ToString(), FeedCaptionSize, BgBrush, FontWeight.SemiBold);
             double pillW = Math.Max(16, nFt.Width + 10);
             var pill = new Rect(x, midY - FeedCaptionHeight / 2, pillW, FeedCaptionHeight);
-            OverlayDraw.Pill(ctx, new SolidColorBrush(AttentionColor), pill);
+            OverlayDraw.Pill(ctx, OverlayDraw.Brush(AttentionColor), pill);
             OverlayDraw.TextLeftMid(ctx, nFt, x + (pillW - nFt.Width) / 2, midY);
             _socialInviteRect = pill;
         }
@@ -375,7 +375,7 @@ public sealed partial class OverlayCanvas
             var ft = OverlayDraw.Text($"{online} active", FeedCaptionSize, MutedBrush);
             double cx = addRect.Left - 10 - ft.Width;
             OverlayDraw.TextLeftMid(ctx, ft, cx, midY);
-            ctx.DrawEllipse(new SolidColorBrush(RunningColor), null, new Point(cx - 8, midY), 3, 3);
+            ctx.DrawEllipse(OverlayDraw.Brush(RunningColor), null, new Point(cx - 8, midY), 3, 3);
         }
 
         _socialHeaderRect = new Rect(0, top, width, SocialHeaderHeight);
@@ -394,7 +394,7 @@ public sealed partial class OverlayCanvas
         if (glow > 0.01)
         {
             var g = Palette.Accent;
-            var wash = new SolidColorBrush(Color.FromArgb((byte)(46 * glow), g.R, g.G, g.B));
+            var wash = OverlayDraw.Brush(Color.FromArgb((byte)(46 * glow), g.R, g.G, g.B));
             OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 1, width - 2 * (HorizPad - 4), rowH - 2), wash, null, 6);
         }
 
@@ -508,9 +508,9 @@ public sealed partial class OverlayCanvas
         double chipH = FeedReactionHeight - 4;
         double w = ChipWidth(c);
         var chip = new Rect(x, midY - chipH / 2, w, chipH);
-        var mineFill = new SolidColorBrush(Color.FromArgb(40, Palette.Accent.R, Palette.Accent.G, Palette.Accent.B));
+        var mineFill = OverlayDraw.Brush(Color.FromArgb(40, Palette.Accent.R, Palette.Accent.G, Palette.Accent.B));
         OverlayDraw.Panel(ctx, chip, c.Mine ? mineFill : FeedChipBrush,
-            c.Mine && rowHovered ? new Pen(Palette.AccentBrush, 1) : null, 8);
+            c.Mine && rowHovered ? OverlayDraw.Pen(Palette.AccentBrush, 1) : null, 8);
         var emojiFt = OverlayDraw.Emoji(c.Emoji, FeedReactionSize, FgBrush);
         OverlayDraw.EmojiLeftMid(ctx, emojiFt, x + 7, midY, FeedReactionSize);
         if (ShowsCount(c))
@@ -599,14 +599,14 @@ public sealed partial class OverlayCanvas
         }
         else
         {
-            ctx.DrawEllipse(new SolidColorBrush(AvatarColor(handle)), null, new Point(cx, cy), 3.5, 3.5);
+            ctx.DrawEllipse(OverlayDraw.Brush(AvatarColor(handle)), null, new Point(cx, cy), 3.5, 3.5);
         }
     }
 
     // A small "+" for the react button (drawn, not a glyph, so it can't fall to tofu).
     private static void DrawPlusGlyph(DrawingContext ctx, IBrush b, double cx, double cy)
     {
-        var pen = new Pen(b, 1.4);
+        var pen = OverlayDraw.Pen(b, 1.4);
         ctx.DrawLine(pen, new Point(cx - 3.5, cy), new Point(cx + 3.5, cy));
         ctx.DrawLine(pen, new Point(cx, cy - 3.5), new Point(cx, cy + 3.5));
     }
@@ -614,7 +614,7 @@ public sealed partial class OverlayCanvas
     // A small chevron: ▸ when collapsed, ▾ when expanded.
     private void DrawChevron(DrawingContext ctx, double cx, double cy, bool expanded)
     {
-        var pen = new Pen(MutedBrush, 1.4);
+        var pen = OverlayDraw.Pen(MutedBrush, 1.4);
         if (expanded)
         {
             ctx.DrawLine(pen, new Point(cx - 3, cy - 1.5), new Point(cx, cy + 2));

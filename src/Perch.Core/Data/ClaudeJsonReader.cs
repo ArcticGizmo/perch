@@ -1,4 +1,4 @@
-using System.Text.Json.Nodes;
+using System.Text.Json;
 
 namespace Perch.Data;
 
@@ -68,27 +68,45 @@ internal static class ClaudeJsonReader
     /// <see cref="ClaudeSignIn.None"/> when logged out / unreadable.</summary>
     public static ClaudeSignIn ReadSignIn(string claudeJsonPath)
     {
-        var json = ReadAllText(claudeJsonPath);
-        if (string.IsNullOrEmpty(json))
-            return ClaudeSignIn.None;
+        var bytes = ReadAllBytes(claudeJsonPath);
+        return bytes is { Length: > 0 } ? ParseSignIn(bytes) : ClaudeSignIn.None;
+    }
+
+    /// <summary>
+    /// Reads the sign-in out of a <c>.claude.json</c>'s bytes. Streams the top level with a
+    /// <see cref="Utf8JsonReader"/> and materialises only the <c>oauthAccount</c> value, skipping everything
+    /// else — the file also holds every project's history, so building a tree of it all (as a full parse did)
+    /// was the costly part (review fixes CP23). Malformed JSON reads as <see cref="ClaudeSignIn.None"/>.
+    /// </summary>
+    internal static ClaudeSignIn ParseSignIn(ReadOnlySpan<byte> json)
+    {
+        if (json.StartsWith("﻿"u8))   // the UTF-8 BOM, EF BB BF
+            json = json[3..];   // Utf8JsonReader refuses a BOM
 
         try
         {
-            var account = JsonNode.Parse(json)?.AsObject()["oauthAccount"];
-            if (account is null)
+            var reader = new Utf8JsonReader(json, new JsonReaderOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
                 return ClaudeSignIn.None;
 
-            var email = Str(account["emailAddress"]) ?? Str(account["email"]);
-            var uuid = Str(account["organizationUuid"]);
-            if (string.IsNullOrWhiteSpace(uuid))
-                return new ClaudeSignIn(SignInState.Personal, null, email); // signed in, no org
-
-            var org = new Org(uuid!)
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
             {
-                Name = Str(account["organizationName"]),
-                AccountEmail = email,
-            };
-            return new ClaudeSignIn(SignInState.Org, org, email);
+                bool isAccount = reader.ValueTextEquals("oauthAccount"u8);
+                reader.Read();
+                if (!isAccount)
+                {
+                    reader.Skip();
+                    continue;
+                }
+                return reader.TokenType == JsonTokenType.StartObject
+                    ? FromAccount(JsonElement.ParseValue(ref reader))
+                    : ClaudeSignIn.None;   // null / not an object: logged out
+            }
+            return ClaudeSignIn.None;
         }
         catch
         {
@@ -96,21 +114,45 @@ internal static class ClaudeJsonReader
         }
     }
 
-    private static string? Str(JsonNode? node)
+    private static ClaudeSignIn FromAccount(JsonElement account)
     {
-        var s = node?.ToString();
+        var email = Str(account, "emailAddress") ?? Str(account, "email");
+        var uuid = Str(account, "organizationUuid");
+        if (string.IsNullOrWhiteSpace(uuid))
+            return new ClaudeSignIn(SignInState.Personal, null, email); // signed in, no org
+
+        var org = new Org(uuid!)
+        {
+            Name = Str(account, "organizationName"),
+            AccountEmail = email,
+        };
+        return new ClaudeSignIn(SignInState.Org, org, email);
+    }
+
+    // A property as text: a string's value, any other scalar's raw JSON (as the old JsonNode.ToString did),
+    // null when absent, null or blank.
+    private static string? Str(JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out var v)) return null;
+        var s = v.ValueKind switch
+        {
+            JsonValueKind.String => v.GetString(),
+            JsonValueKind.Null or JsonValueKind.Undefined => null,
+            _ => v.GetRawText(),
+        };
         return string.IsNullOrWhiteSpace(s) ? null : s;
     }
 
-    private static string? ReadAllText(string path)
+    private static byte[]? ReadAllBytes(string path)
     {
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
             return null;
         try
         {
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(fs);
-            return reader.ReadToEnd();
+            using var ms = new MemoryStream();
+            fs.CopyTo(ms);
+            return ms.ToArray();
         }
         catch
         {

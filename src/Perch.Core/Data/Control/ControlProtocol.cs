@@ -1,3 +1,6 @@
+using System.IO.Pipes;
+using System.Security.Principal;
+using System.Text;
 using System.Text.Json.Nodes;
 
 namespace Perch.Data.Control;
@@ -6,13 +9,78 @@ namespace Perch.Data.Control;
 /// The wire contract between a second <c>perch</c> launch acting as a CLI (<c>perch --resume &lt;id&gt;</c>,
 /// <c>perch -c</c>, <c>perch [dir]</c> — the <c>claude</c>-shaped arguments, docs/session-ui-plan.md Phase 3)
 /// and the running tray: a local named pipe (<see cref="PipeName"/>), one newline-delimited JSON
-/// <see cref="SessionOpenIntent"/> per connection, one <see cref="ControlReply"/> line back. Modelled on
-/// <see cref="ValetProtocol"/>; per-profile pipe names keep a dev tray and an installed one apart.
+/// <see cref="SessionOpenIntent"/> per connection, one <see cref="ControlReply"/> line back. Per-profile pipe
+/// names keep a dev tray and an installed one apart.
+///
+/// <para>Hardened in review fixes CP10: the name carries the user (so two users on a shared/RDS host never
+/// share a pipe), both ends open it <see cref="PipeOptions.CurrentUserOnly"/> (the server's ACL admits only
+/// this user; the client verifies the server is owned by this user, so a pipe another user squatted under the
+/// name is refused rather than handed the request), the client allows identification but never impersonation,
+/// and the server bounds each request line in size (<see cref="MaxLineBytes"/>) and time
+/// (<see cref="ReadTimeout"/>).</para>
 /// </summary>
 internal static class ControlProtocol
 {
-    /// <summary>This profile's pipe name — <c>perch-control</c> or <c>perch-control-dev</c>.</summary>
-    public static string PipeName => AppProfile.IsDev ? "perch-control-dev" : "perch-control";
+    /// <summary>This profile's pipe name for the current user — <c>perch-control-&lt;user&gt;</c> or
+    /// <c>perch-control-dev-&lt;user&gt;</c>, where the user is the Windows SID (the account name elsewhere).</summary>
+    public static string PipeName => PipeNameFor(AppProfile.IsDev, UserSuffix.Value);
+
+    /// <summary>The options every end of the pipe opens it with.</summary>
+    public const PipeOptions Options = PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly;
+
+    /// <summary>The client's impersonation level: the tray may learn who is calling, never act as them.</summary>
+    public const TokenImpersonationLevel ClientImpersonation = TokenImpersonationLevel.Identification;
+
+    /// <summary>The largest request line the server reads. A real intent is well under 1KB.</summary>
+    public const int MaxLineBytes = 64 * 1024;
+
+    /// <summary>How long the server waits for a connected client to send its line.</summary>
+    public static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(5);
+
+    internal static string PipeNameFor(bool dev, string user) => (dev ? "perch-control-dev-" : "perch-control-") + user;
+
+    private static readonly Lazy<string> UserSuffix = new(ComputeUserSuffix);
+
+    // The SID on Windows (stable across renames); the account name elsewhere, where .NET backs the pipe with a
+    // Unix socket in the per-user temp dir anyway. Sanitised to a safe name charset either way.
+    private static string ComputeUserSuffix()
+    {
+        string raw;
+        try
+        {
+            raw = OperatingSystem.IsWindows()
+                ? System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName
+                : Environment.UserName;
+        }
+        catch { raw = Environment.UserName; }
+        var clean = new string(raw.Where(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_').Take(64).ToArray());
+        return clean.Length > 0 ? clean : "user";
+    }
+
+    /// <summary>
+    /// Reads one newline-terminated UTF-8 line, never buffering more than <paramref name="maxBytes"/>: returns the
+    /// line (without <c>\r\n</c>), whatever arrived if the stream ends first (null if nothing did), and throws
+    /// <see cref="InvalidDataException"/> once the line outgrows the cap. Cancellation (the read timeout) surfaces as
+    /// <see cref="OperationCanceledException"/>. One request line per connection, so bytes after the newline are
+    /// ignored.
+    /// </summary>
+    public static async Task<string?> ReadLineAsync(Stream stream, int maxBytes, CancellationToken ct)
+    {
+        var buffer = new byte[Math.Min(4096, maxBytes + 1)];
+        using var line = new MemoryStream();
+        while (true)
+        {
+            int n = await stream.ReadAsync(buffer, ct).ConfigureAwait(false);
+            if (n <= 0) return line.Length == 0 ? null : Decode(line);
+            int nl = Array.IndexOf(buffer, (byte)'\n', 0, n);
+            int take = nl >= 0 ? nl : n;
+            if (line.Length + take > maxBytes) throw new InvalidDataException("Request line too long.");
+            line.Write(buffer, 0, take);
+            if (nl >= 0) return Decode(line);
+        }
+    }
+
+    private static string Decode(MemoryStream line) => Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length).TrimEnd('\r');
 }
 
 /// <summary>
@@ -68,7 +136,7 @@ internal sealed record SessionOpenIntent(
                     if (Next() is { } m && IsToken(m)) { model = m; any = true; }
                     break;
                 case "--permission-mode":
-                    if (Next() is { } pm && IsToken(pm)) { mode = pm; any = true; }
+                    if (Next() is { } pm && IsPermissionMode(pm)) { mode = pm; any = true; }
                     break;
                 default:
                     if (!a.StartsWith('-') && cwd is null && Directory.Exists(a))
@@ -106,25 +174,68 @@ internal sealed record SessionOpenIntent(
         return o.ToJsonString();
     }
 
+    /// <summary>
+    /// Reads an intent sent over the control pipe or through the relaunch handoff file. Every field is held to the
+    /// same rules <see cref="FromArgs"/> applies to a command line (review fixes CP13): the folder must be an
+    /// existing absolute directory, a resume id must look like a session id, the model must be a plain token and
+    /// the permission mode one Claude Code knows. Anything else rejects the whole request (null) rather than
+    /// opening a session on a field that was dropped or guessed. <c>bypassPermissions</c> is allowed: a process
+    /// running as the user can already start <c>claude</c> in that mode itself, and refusing it here would only
+    /// break <c>perch --permission-mode bypassPermissions</c> while the tray runs.
+    /// </summary>
     public static SessionOpenIntent? Parse(string line)
     {
         try
         {
             if (JsonNode.Parse(line) is not JsonObject o) return null;
             var cwd = TranscriptJson.AsString(o["cwd"]);
-            if (string.IsNullOrEmpty(cwd)) return null;
+            var resume = TranscriptJson.AsString(o["resume"]);
+            var model = TranscriptJson.AsString(o["model"]);
+            var mode = TranscriptJson.AsString(o["mode"]);
+            if (string.IsNullOrEmpty(cwd) || !Path.IsPathFullyQualified(cwd) || !Directory.Exists(cwd)) return null;
+            if (resume is not null && !IsSessionId(resume)) return null;
+            if (model is not null && !IsToken(model)) return null;
+            if (mode is not null && !IsPermissionMode(mode)) return null;
             return new SessionOpenIntent(
                 cwd,
-                TranscriptJson.AsString(o["resume"]),
+                resume,
                 o["pick"]?.GetValue<bool>() ?? false,
                 o["continue"]?.GetValue<bool>() ?? false,
-                TranscriptJson.AsString(o["model"]),
-                TranscriptJson.AsString(o["mode"]),
+                model,
+                mode,
                 ParseMonitor(o["monitor"] as JsonObject));
         }
         catch
         {
             return null;
+        }
+    }
+
+    /// <summary>A fresh path for the detached relaunch's handoff file: <c>%TEMP%\perch-intent-&lt;32 hex&gt;.json</c>.</summary>
+    public static string NewHandoffFile() => Path.Combine(Path.GetTempPath(), $"perch-intent-{Guid.NewGuid():N}.json");
+
+    /// <summary>True only for a path <see cref="NewHandoffFile"/> could have produced: directly in the temp folder,
+    /// named <c>perch-intent-&lt;32 lower-case hex&gt;.json</c>. <c>--open-intent-file</c> reads and then DELETES its
+    /// file, so any other path is ignored, never touched (review fixes CP13).</summary>
+    public static bool IsHandoffFile(string path)
+    {
+        try
+        {
+            if (!Path.IsPathFullyQualified(path)) return false;
+            var full = Path.GetFullPath(path);
+            var dir = Path.GetDirectoryName(full);
+            var temp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!string.Equals(dir, temp, StringComparison.OrdinalIgnoreCase)) return false;
+            var name = Path.GetFileName(full);
+            const string prefix = "perch-intent-", suffix = ".json";
+            if (name.Length != prefix.Length + 32 + suffix.Length
+                || !name.StartsWith(prefix, StringComparison.Ordinal) || !name.EndsWith(suffix, StringComparison.Ordinal))
+                return false;
+            return name.AsSpan(prefix.Length, 32).ToString().All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'));
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -147,11 +258,17 @@ internal sealed record SessionOpenIntent(
 
     // Session ids are UUIDs; the CLI tolerates anything identifier-ish, and so do we (the controller
     // re-validates before it ever reaches a command line).
-    private static bool IsSessionId(string s) =>
-        s.Length >= 8 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
+    /// <summary>A session id: 8+ ASCII letters, digits, <c>-</c> or <c>_</c>. Safe as a bare command-line token.</summary>
+    internal static bool IsSessionId(string s) => ClaudeCli.IsSessionId(s);
 
     private static bool IsToken(string s) =>
         s.Length > 0 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.' or '_');
+
+    /// <summary>The permission modes Claude Code accepts for <c>--permission-mode</c> (the session window's own list).</summary>
+    internal static readonly IReadOnlySet<string> PermissionModes =
+        new HashSet<string>(StringComparer.Ordinal) { "default", "auto", "plan", "acceptEdits", "bypassPermissions" };
+
+    private static bool IsPermissionMode(string s) => PermissionModes.Contains(s);
 }
 
 /// <summary>The tray's one-line answer to a <see cref="SessionOpenIntent"/>.</summary>

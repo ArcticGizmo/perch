@@ -130,9 +130,10 @@ internal sealed class GitTreeWindow : Window
     private IReadOnlyList<string> _baseCandidates = [];
     private string? _effectiveBase; // what the current node list is actually scoped to (null = unscoped)
 
-    // Auto-refresh (filesystem watcher, debounced).
+    // Auto-refresh (filesystem watcher, debounced). The debounce is a pool timer that the watcher's own thread
+    // re-arms, so a burst of events costs one UI post when it settles, not one per event.
     private FileSystemWatcher? _watcher;
-    private DispatcherTimer? _debounce;
+    private System.Threading.Timer? _debounce;
     // When we perform our own staging write, the .git/index change trips the watcher into a redundant full
     // refresh. This timestamp (Environment.TickCount64) lets the debounce swallow that self-induced fire.
     private long _lastSelfRefresh;
@@ -1322,43 +1323,40 @@ internal sealed class GitTreeWindow : Window
                 IncludeSubdirectories = true,
                 NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.Size,
             };
-            void Bump(object? _, FileSystemEventArgs __) => Dispatcher.UIThread.Post(RestartDebounce);
-            w.Changed += Bump;
-            w.Created += Bump;
-            w.Deleted += Bump;
-            w.Renamed += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+            // On the watcher's thread: drop the noise (RepoWatchFilter), re-arm the debounce for the rest.
+            _debounce ??= new System.Threading.Timer(_ => Dispatcher.UIThread.Post(OnWatchSettled));
+            var debounce = _debounce;
+            void Bump(string? name)
+            {
+                if (!RepoWatchFilter.IsRelevant(name)) return;
+                try { debounce.Change(600, Timeout.Infinite); } catch (ObjectDisposedException) { }
+            }
+            w.Changed += (_, e) => Bump(e.Name);
+            w.Created += (_, e) => Bump(e.Name);
+            w.Deleted += (_, e) => Bump(e.Name);
+            w.Renamed += (_, e) => { Bump(e.OldName); Bump(e.Name); };
+            w.Error += (_, _) => Bump(null);   // the buffer overflowed and events were lost: refresh anyway
             w.EnableRaisingEvents = true;
             _watcher = w;
         }
         catch { /* best-effort */ }
     }
 
-    private void RestartDebounce()
+    // The watcher has been quiet for 600 ms after a relevant change (on the UI thread).
+    private void OnWatchSettled()
     {
-        _debounce ??= CreateDebounce();
-        _debounce.Stop();
-        _debounce.Start();
-    }
-
-    private DispatcherTimer CreateDebounce()
-    {
-        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
-        t.Tick += (_, _) =>
-        {
-            _debounce?.Stop();
-            // Swallow the watcher fire our own staging write just triggered — RefreshWorkingTree already
-            // re-read the tree, so a full AutoRefresh here would only re-spawn git for nothing.
-            if (Environment.TickCount64 - _lastSelfRefresh < 900) return;
-            if (IsVisible) AutoRefresh();
-        };
-        return t;
+        // Swallow the watcher fire our own staging write just triggered — RefreshWorkingTree already
+        // re-read the tree, so a full AutoRefresh here would only re-spawn git for nothing.
+        if (Environment.TickCount64 - _lastSelfRefresh < 900) return;
+        if (IsVisible) AutoRefresh();
     }
 
     protected override void OnClosed(EventArgs e)
     {
         _watcher?.Dispose();
         _watcher = null;
-        _debounce?.Stop();
+        _debounce?.Dispose();
+        _debounce = null;
         base.OnClosed(e);
     }
 

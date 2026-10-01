@@ -10,9 +10,10 @@ namespace Perch.Avalonia.Services;
 ///
 /// The copy is needed because the Velopack install dir is <em>versioned</em> —
 /// <see cref="AppContext.BaseDirectory"/> changes on every update — so the hooks must reference a
-/// path that survives updates. The stable location lives under the app's own profile dir
-/// (<c>%APPDATA%\Perch[ (Dev)]\bin</c> on Windows, <c>~/.config/Perch[ (Dev)]/bin</c> on Unix — the
-/// same base as <c>AppSettings</c>, which <c>perch-hook</c>'s own profile logic also reads).
+/// path that survives updates. The stable location is <c>%LOCALAPPDATA%\Perch[ (Dev)]\bin</c> on Windows
+/// and <c>~/.config/Perch[ (Dev)]/bin</c> on Unix. It used to be the <em>roaming</em> <c>%APPDATA%</c> on
+/// Windows too (review fixes CP16), where an executable follows a roaming profile between machines and looks
+/// like persistence to endpoint security. <see cref="MigrateFromLegacyBin"/> moves an existing install over.
 ///
 /// Everything here is best-effort and must never throw out of startup: a missing binary, an unreadable
 /// settings file, or a locked directory all collapse to "hooks simply don't get wired this launch".
@@ -23,10 +24,21 @@ internal static class HookInstaller
 {
     private static string HookFileName => OperatingSystem.IsWindows() ? "perch-hook.exe" : "perch-hook";
 
-    /// <summary>The stable per-user bin dir the hooks point at (profile-aware).</summary>
+    /// <summary>The stable per-user bin dir the hooks point at (profile-aware): local, never roaming.</summary>
     public static string BinDir { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        Environment.GetFolderPath(OperatingSystem.IsWindows()
+            ? Environment.SpecialFolder.LocalApplicationData
+            : Environment.SpecialFolder.ApplicationData),
         AppProfile.DataFolderName, "bin");
+
+    // Where the bin dir lived before CP16 (the roaming %APPDATA% on Windows; the same as BinDir elsewhere).
+    private static string LegacyBinDir { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), AppProfile.DataFolderName, "bin");
+
+    // How long the old copy stays after the hooks are moved off it: a Claude session reads its hook commands
+    // when it starts, so one already running keeps calling the old path until it's restarted.
+    private static readonly TimeSpan LegacyGrace = TimeSpan.FromDays(7);
+    private const string LegacyMovedStamp = "moved-from-roaming";
 
     /// <summary>Absolute path to the installed (stable) <c>perch-hook</c> binary.</summary>
     public static string HookBinaryPath => Path.Combine(BinDir, HookFileName);
@@ -78,7 +90,10 @@ internal static class HookInstaller
             // published perch-hook alongside it has nothing to point at — skip rather than write a
             // dangling command).
             if (File.Exists(HookBinaryPath))
+            {
+                MigrateFromLegacyBin();   // before the reconcile: see there
                 ReconcileAll();
+            }
 
             // Keep the hooks in step as config dirs appear/vanish (declared, self-reported). Idempotent
             // to arm; the reconcile it triggers is serialised with the startup one.
@@ -145,6 +160,43 @@ internal static class HookInstaller
         }
     }
 
+    /// <summary>
+    /// Moves an install off the pre-CP16 roaming bin dir (Windows). The reconcile that follows rewrites every
+    /// hook onto <see cref="HookBinaryPath"/> — a release reconcile recognises its entries by the binary's name
+    /// wherever it lives. On the first launch after the move a dev instance also strips hooks that name the old
+    /// copy by path, which is the only way to recognise its entries once Claude Code has dropped their
+    /// <c>_perch</c> marker; it has to run before the reconcile, because a dev strip also takes entries carrying
+    /// the dev marker, which the reconcile is about to write. The old folder itself stays for
+    /// <see cref="LegacyGrace"/> (sessions already running still call it) and is deleted on a later launch.
+    /// </summary>
+    private static void MigrateFromLegacyBin()
+    {
+        if (!OperatingSystem.IsWindows()
+            || string.Equals(LegacyBinDir, BinDir, StringComparison.OrdinalIgnoreCase)
+            || !Directory.Exists(LegacyBinDir))
+            return;
+        try
+        {
+            var stamp = Path.Combine(BinDir, LegacyMovedStamp);
+            if (!File.Exists(stamp))
+            {
+                // Only a dev instance needs this: a release reconcile already owns every Perch entry.
+                var legacyHook = Path.Combine(LegacyBinDir, HookFileName);
+                if (AppProfile.IsDev)
+                    lock (ReconcileGate)
+                        foreach (var dir in ClaudeConfigSet.Instance.All)
+                            try { ClaudeUserSettings.RemoveManagedHooks(dir.UserSettingsFile, true, legacyHook); }
+                            catch { /* one bad dir must not stop the rest */ }
+                File.WriteAllText(stamp, DateTime.UtcNow.ToString("O"));
+                return;
+            }
+            if (DateTime.TryParse(File.ReadAllText(stamp), null, System.Globalization.DateTimeStyles.RoundtripKind, out var movedAt)
+                && DateTime.UtcNow - movedAt.ToUniversalTime() >= LegacyGrace)
+                Directory.Delete(LegacyBinDir, recursive: true);
+        }
+        catch { /* best-effort: retried next launch */ }
+    }
+
     /// <summary>Re-reconciles hooks whenever the config-dir set changes (a dir was declared or a session
     /// self-reported one), on the thread pool. Idempotent — arms the subscription at most once.</summary>
     public static void WatchForNewConfigDirs()
@@ -171,6 +223,7 @@ internal static class HookInstaller
                 catch { }
         }
         try { if (Directory.Exists(BinDir)) Directory.Delete(BinDir, recursive: true); } catch { }
+        try { if (Directory.Exists(LegacyBinDir)) Directory.Delete(LegacyBinDir, recursive: true); } catch { }
     }
 
     // Copy when the destination is missing, a different size, or older than the source — so the stable
