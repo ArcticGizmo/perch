@@ -83,6 +83,21 @@ public sealed class WindowChrome : IWindowChrome
     /// <summary>No-op on macOS — moving a window between Spaces isn't controlled this way here.</summary>
     public void MoveWindowToCurrentDesktop(IntPtr handle) { }
 
+    private const nint NSInformationalRequest = 10;
+
+    /// <summary>One Dock bounce (<c>-[NSApplication requestUserAttention:NSInformationalRequest]</c>) — the macOS
+    /// counterpart of a taskbar flash. AppKit ignores it while the app is active. The NSInteger request id it
+    /// returns is dropped. Best-effort (unverified on a Mac, like the rest of this project).</summary>
+    public void FlashTaskbar(IntPtr handle)
+    {
+        try
+        {
+            IntPtr app = ObjC.SendGet(ObjC.Class("NSApplication"), ObjC.Sel("sharedApplication"));
+            if (app != IntPtr.Zero) ObjC.SendVoid(app, ObjC.Sel("requestUserAttention:"), NSInformationalRequest);
+        }
+        catch { /* best-effort */ }
+    }
+
     private static void Configure(IntPtr handle, bool clickThrough)
     {
         try

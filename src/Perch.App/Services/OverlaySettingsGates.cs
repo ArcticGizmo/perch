@@ -40,6 +40,7 @@ internal static class OverlaySettingsGates
         c.SetShowWaitingTimer(s.ShowWaitingTimer);
         c.SetWaitingTimerRedMinutes(s.WaitingTimerRedMinutes);
         c.SetShowArtifacts(s.ShowArtifacts);
+        c.SetShowRoostButton(s.ShowRoostButton);
         c.SetShowMarkdown(s.ShowMarkdown);
         c.SetShowIdeStatusIcons(s.ShowIdeStatusIcons);
         c.SetServiceStatusEnabled(s.ShowServiceStatus);

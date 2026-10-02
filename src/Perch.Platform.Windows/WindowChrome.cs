@@ -92,6 +92,37 @@ public sealed class WindowChrome : IWindowChrome
     [DllImport("user32.dll")] private static extern IntPtr SetFocus(IntPtr hWnd);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FLASHWINFO
+    {
+        public uint cbSize;
+        public IntPtr hwnd;
+        public uint dwFlags;
+        public uint uCount;
+        public uint dwTimeout;
+    }
+
+    private const uint FLASHW_TRAY = 0x2, FLASHW_TIMERNOFG = 0xC;
+    [DllImport("user32.dll")] private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
+    /// <summary>Flashes the taskbar button (not the caption) until the window comes to the foreground
+    /// (<c>FLASHW_TRAY | FLASHW_TIMERNOFG</c>). Best-effort; a zero handle is ignored.</summary>
+    public void FlashTaskbar(IntPtr handle)
+    {
+        if (handle == IntPtr.Zero) return;
+        try
+        {
+            if (GetForegroundWindow() == handle) return;
+            var info = new FLASHWINFO
+            {
+                cbSize = (uint)Marshal.SizeOf<FLASHWINFO>(), hwnd = handle,
+                dwFlags = FLASHW_TRAY | FLASHW_TIMERNOFG, uCount = 0, dwTimeout = 0,
+            };
+            FlashWindowEx(ref info);
+        }
+        catch { /* best-effort */ }
+    }
+
     /// <summary>Marks the window as a no-activate tool window. Best-effort; a zero handle is ignored.</summary>
     public void MakeToolWindowNoActivate(IntPtr handle)
     {

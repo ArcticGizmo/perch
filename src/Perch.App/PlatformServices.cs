@@ -31,6 +31,8 @@ internal static class PlatformServices
     public static IFileRevealer FileRevealer { get; } = new Impl.FileRevealer();
     // Resolves a session's host editor/IDE from its process ancestry (drives the overlay's IDE glyph).
     public static IIdeHostDetector IdeHostDetector { get; } = new Impl.IdeHostDetector();
+    // The OS "reduce motion" preference: pulsing attention cues fall back to a steady ring (see Rendering/Pulse).
+    public static IMotionPreference MotionPreference { get; } = new Impl.MotionPreference();
 #if WINDOWS
     public static IAppIconProvider AppIconProvider { get; } = new Impl.WindowsAppIconProvider();
     public static ISystemMetrics SystemMetrics { get; } = new Impl.WindowsSystemMetrics();

@@ -1,0 +1,844 @@
+<title>Perch Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --ground:#efe7df; --surface:#fbf7f3; --raised:#ffffff; --raised-2:#f2e9e1;
+    --border:#e5dace; --border-soft:#eee5db;
+    --text:#2c231d; --title:#170f0a; --muted:#7d6f64; --faint:#9a8c80;
+    --brand:#e23a22; --accent:#b9675a; --accent-wash:rgba(185,103,90,.12); --accent-line:rgba(185,103,90,.45);
+    --ok:#15803d; --await:#a16207; --attn:#c2410c; --err:#b4231f; --idle:#475569; --violet:#6d28d9;
+    --await-wash:rgba(161,98,7,.09); --attn-wash:rgba(194,65,12,.08); --err-wash:rgba(180,35,31,.08);
+    --await-glow:rgba(161,98,7,.28);
+    --code-bg:#f4ede5; --code-ink:#8a3b2e;
+    --shadow:0 30px 70px -40px rgba(60,30,10,.45);
+    --display:"Bricolage Grotesque","Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+    --body:"Hanken Grotesk","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+    --mono:"JetBrains Mono","Cascadia Code",Consolas,ui-monospace,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      color-scheme:dark;
+      --ground:#161010; --surface:#1e1714; --raised:#26201b; --raised-2:#332a24;
+      --border:#3a2f28; --border-soft:#2c241f;
+      --text:#ece6e1; --title:#fcf7f3; --muted:#a4978d; --faint:#877a70;
+      --brand:#ff442d; --accent:#dd9e8e; --accent-wash:rgba(221,158,142,.12); --accent-line:rgba(221,158,142,.5);
+      --ok:#3fb950; --await:#f4c534; --attn:#fb923c; --err:#ef5350; --idle:#64748b; --violet:#a78bfa;
+      --await-wash:rgba(244,197,52,.08); --attn-wash:rgba(251,146,60,.08); --err-wash:rgba(239,83,80,.09);
+      --await-glow:rgba(244,197,52,.25);
+      --code-bg:#171210; --code-ink:#f0b3a3;
+      --shadow:0 30px 80px -40px rgba(0,0,0,.9);
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --ground:#161010; --surface:#1e1714; --raised:#26201b; --raised-2:#332a24;
+    --border:#3a2f28; --border-soft:#2c241f;
+    --text:#ece6e1; --title:#fcf7f3; --muted:#a4978d; --faint:#877a70;
+    --brand:#ff442d; --accent:#dd9e8e; --accent-wash:rgba(221,158,142,.12); --accent-line:rgba(221,158,142,.5);
+    --ok:#3fb950; --await:#f4c534; --attn:#fb923c; --err:#ef5350; --idle:#64748b; --violet:#a78bfa;
+    --await-wash:rgba(244,197,52,.08); --attn-wash:rgba(251,146,60,.08); --err-wash:rgba(239,83,80,.09);
+    --await-glow:rgba(244,197,52,.25);
+    --code-bg:#171210; --code-ink:#f0b3a3;
+    --shadow:0 30px 80px -40px rgba(0,0,0,.9);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--text);font:15px/1.5 var(--body);padding:0 16px}
+  .page{max-width:1340px;margin:0 auto;padding-block:36px 64px;display:flex;flex-direction:column;gap:44px}
+  h1,h2,h3{font-family:var(--display);color:var(--title);margin:0;text-wrap:balance}
+  h1{font-size:clamp(30px,4vw,42px);font-weight:800;letter-spacing:-.02em;line-height:1.05}
+  h2{font-size:22px;font-weight:700;letter-spacing:-.01em}
+  h3{font-size:15px;font-weight:700}
+  p{margin:0}
+  code{font-family:var(--mono);font-size:.86em;background:var(--code-bg);color:var(--code-ink);padding:1px 5px;border-radius:5px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+  .lede{max-width:68ch;color:var(--muted);font-size:16px}
+  .lede b{color:var(--text);font-weight:600}
+  section{display:flex;flex-direction:column;gap:18px}
+  .sec-head{display:flex;flex-direction:column;gap:6px;max-width:74ch}
+  .sec-head p{color:var(--muted)}
+
+  header.top{display:flex;flex-direction:column;gap:14px}
+  .asks{display:flex;flex-wrap:wrap;gap:8px}
+  .ask{font-size:13px;border:1px solid var(--border);background:var(--surface);border-radius:999px;padding:4px 12px;color:var(--muted)}
+  .ask b{color:var(--text);font-weight:600}
+
+  /* ───────── Entry point ───────── */
+  .entry{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+  .ov-card{display:flex;flex-direction:column;gap:10px}
+  .ov-cap{font-size:13px;color:var(--muted)}
+  .ov-cap b{color:var(--text);font-weight:600}
+  .overlay{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:6px 0 8px;font-size:12px;box-shadow:var(--shadow);position:relative}
+  .ov-row{display:flex;align-items:center;gap:8px;height:26px;padding:0 10px;position:relative}
+  .ov-new{color:var(--muted)}
+  .ov-new .plus{width:10px;height:10px;position:relative;flex:none}
+  .ov-new .plus::before,.ov-new .plus::after{content:"";position:absolute;background:currentColor;border-radius:1px}
+  .ov-new .plus::before{left:4px;top:0;width:1.6px;height:10px}
+  .ov-new .plus::after{top:4px;left:0;height:1.6px;width:10px}
+  .ov-new .cc-btn{margin-left:auto;width:22px;height:20px;border-radius:6px;display:grid;place-items:center;color:var(--muted);position:relative}
+  .ov-new .cc-btn.hover{background:var(--accent-wash);color:var(--accent)}
+  .ov-new .cc-btn svg{width:15px;height:15px;overflow:visible}
+  .ov-new.band-hover{background:var(--raised-2);color:var(--accent)}
+  .tip{position:absolute;right:4px;top:-30px;background:var(--title);color:var(--surface);font-size:11px;padding:3px 8px;border-radius:6px;white-space:nowrap}
+  .tip kbd{font-family:var(--mono);opacity:.7;margin-left:6px;font-size:10px}
+  .ov-sess{color:var(--text)}
+  .ov-sess .d{width:8px;height:8px;border-radius:50%;flex:none}
+  .ov-sess .n{font-weight:600;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ov-sess .m{margin-left:auto;color:var(--faint);font-family:var(--mono);font-size:10.5px;white-space:nowrap}
+  .badge-dot{fill:var(--await);stroke:var(--surface);stroke-width:1.6}
+  .badge-pulse{animation:badge 1.8s ease-in-out infinite;transform-origin:14px 2.5px}
+  @keyframes badge{0%,100%{transform:scale(1)}50%{transform:scale(1.25)}}
+
+  .glyphs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+  .glyph-opt{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;gap:16px;align-items:center}
+  .glyph-opt.pick{border-color:var(--accent-line);background:linear-gradient(0deg,var(--accent-wash),var(--accent-wash)),var(--surface)}
+  .glyph-big{width:56px;height:56px;border-radius:12px;background:var(--raised-2);display:grid;place-items:center;color:var(--text);flex:none}
+  .glyph-big svg{width:34px;height:34px}
+  .glyph-opt .t{display:flex;flex-direction:column;gap:3px;min-width:0}
+  .glyph-opt .t span{font-size:13px;color:var(--muted)}
+  .tag{align-self:flex-start;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);border:1px solid var(--accent-line);border-radius:999px;padding:1px 8px}
+  .tiny{display:flex;gap:10px;align-items:center;margin-top:4px;color:var(--muted)}
+  .tiny svg{width:15px;height:15px}
+
+  /* ───────── The window ───────── */
+  .win{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow);display:flex;flex-direction:column}
+  .win-bar{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--raised);flex-wrap:wrap}
+  .win-title{display:flex;align-items:center;gap:9px;font-family:var(--display);font-weight:700;color:var(--title);font-size:15px}
+  .win-title svg{width:18px;height:18px;color:var(--accent)}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{font:600 12px var(--body);border:1px solid var(--border);background:var(--surface);color:var(--muted);border-radius:999px;padding:3px 10px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+  .chip .d{width:7px;height:7px;border-radius:50%}
+  .chip[aria-pressed="true"]{border-color:var(--accent-line);background:var(--accent-wash);color:var(--text)}
+  .chip.need{color:var(--text)}
+  .chip.need .d{background:var(--await)}
+  .chip:focus-visible,.seg button:focus-visible,.rail-row:focus-visible,.btn:focus-visible,.pane:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .spacer{flex:1}
+  .seg{display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden;background:var(--surface)}
+  .seg button{font:600 12px var(--body);border:0;background:none;color:var(--muted);padding:5px 11px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+  .seg button+button{border-left:1px solid var(--border)}
+  .seg button[aria-pressed="true"]{background:var(--accent-wash);color:var(--text)}
+  .seg svg{width:13px;height:13px}
+  .btn{font:600 12.5px var(--body);border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:9px;padding:5px 11px;cursor:pointer;white-space:nowrap}
+  .btn:hover{border-color:var(--accent-line)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--surface)}
+  .btn.quiet{background:none}
+  .btn.sm{font-size:11.5px;padding:3px 9px;border-radius:8px}
+
+  .win-body{display:grid;grid-template-columns:216px minmax(0,1fr);height:680px}
+  .rail{border-right:1px solid var(--border);background:var(--raised);overflow:auto;padding:12px 8px;display:flex;flex-direction:column;gap:14px}
+  .rail-group{display:flex;flex-direction:column;gap:2px}
+  .rail-group h4{margin:0 8px 4px;font:500 10.5px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);display:flex;justify-content:space-between}
+  .rail-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:13px;border:1px solid transparent;background:none;color:var(--text);text-align:left;width:100%;font-family:var(--body)}
+  .rail-row:hover{background:var(--raised-2)}
+  .rail-row.on{border-color:var(--accent-line);background:var(--accent-wash)}
+  .rail-row .n{font-weight:600;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .rail-row .e{margin-left:auto;font:11px var(--mono);color:var(--faint);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .rail-row .pm{color:var(--brand);font-size:9px;flex:none}
+  .rail-row .min{font:10px var(--mono);color:var(--faint)}
+  .sd{width:8px;height:8px;border-radius:50%;flex:none;background:var(--idle)}
+  .s-await .sd,.sd.s-await{background:var(--await)} .s-error .sd,.sd.s-error{background:var(--err)}
+  .s-attn .sd,.sd.s-attn{background:var(--attn)} .s-run .sd,.sd.s-run{background:var(--ok)}
+  .rail-empty{margin:0 8px;font-size:12px;color:var(--faint)}
+
+  .stage{display:flex;flex-direction:column;min-height:0;min-width:0;position:relative}
+  .grid{flex:1;min-height:0;padding:14px;display:grid;gap:14px;overflow:auto;align-content:start}
+  /* Tiled = a 2×2 viewport: two rows fill the stage exactly, further panes scroll in a row at a time. */
+  .grid.tiled{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:292px;scroll-snap-type:y mandatory;scroll-padding:14px}
+  .grid.tiled .pane{scroll-snap-align:start}
+  .more{position:absolute;left:50%;transform:translateX(-50%);font:600 12px var(--body);border:1px solid var(--border);background:var(--raised);color:var(--muted);border-radius:999px;padding:4px 12px;cursor:pointer;box-shadow:var(--shadow);display:inline-flex;align-items:center;gap:7px;z-index:2}
+  .more:hover{border-color:var(--accent-line);color:var(--text)}
+  .more.need{border-color:var(--await);color:var(--await);background:linear-gradient(0deg,var(--await-wash),var(--await-wash)),var(--raised)}
+  .more.need .sd{background:var(--await)}
+  .more:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .grid.main{grid-template-columns:minmax(0,1.75fr) minmax(0,1fr);grid-auto-rows:minmax(92px,1fr)}
+  .grid.main .pane.is-main{grid-column:1;grid-row:1 / span 5}
+  .grid.main .pane:not(.is-main){grid-column:2}
+  .grid.zoom{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+  .ministrip{display:flex;align-items:center;gap:8px;padding:0 12px 10px;font-size:12px;color:var(--faint);flex-wrap:wrap}
+  .ministrip .chip{font-weight:500}
+
+  .pane{border:1px solid var(--border);border-radius:12px;background:var(--surface);display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden;position:relative;transition:box-shadow .3s}
+  .pane.focused{border-color:var(--accent-line)}
+  .pane.focused .p-head{background:linear-gradient(0deg,var(--accent-wash),var(--accent-wash)),var(--raised)}
+  .pane.s-await{box-shadow:0 0 0 2px var(--await);animation:ring 2.2s ease-in-out infinite}
+  .pane.s-error{box-shadow:0 0 0 2px var(--err)}
+  .pane.s-attn{box-shadow:0 0 0 1.5px var(--attn)}
+  .pane.s-idle .p-head{opacity:.75}
+  @keyframes ring{0%,100%{box-shadow:0 0 0 2px var(--await),0 0 0 0 var(--await-glow)}50%{box-shadow:0 0 0 2px var(--await),0 0 0 7px var(--await-glow)}}
+  .p-head{padding:8px 10px 7px;background:var(--raised);border-bottom:1px solid var(--border-soft);display:flex;flex-direction:column;gap:3px;cursor:pointer}
+  .pane.s-await .p-head{background:linear-gradient(0deg,var(--await-wash),var(--await-wash)),var(--raised)}
+  .pane.s-error .p-head{background:linear-gradient(0deg,var(--err-wash),var(--err-wash)),var(--raised)}
+  .pane.s-attn .p-head{background:linear-gradient(0deg,var(--attn-wash),var(--attn-wash)),var(--raised)}
+  .p-l1{display:flex;align-items:center;gap:7px;min-width:0}
+  .p-name{font-family:var(--display);font-weight:700;font-size:14px;color:var(--title);min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .origin{font:500 10.5px var(--mono);border-radius:5px;padding:1px 6px;white-space:nowrap;flex:none;border:1px solid var(--border);color:var(--muted)}
+  .origin.perch{color:var(--brand);border-color:color-mix(in srgb,var(--brand) 35%,transparent)}
+  .pill{margin-left:auto;font:600 11px var(--body);border-radius:999px;padding:2px 9px;white-space:nowrap;flex:none;font-variant-numeric:tabular-nums;border:1px solid var(--border);color:var(--muted);background:var(--surface)}
+  .s-await .pill{color:var(--await);border-color:var(--await);background:var(--await-wash)}
+  .s-error .pill{color:var(--err);border-color:var(--err);background:var(--err-wash)}
+  .s-attn .pill{color:var(--attn);border-color:var(--attn);background:var(--attn-wash)}
+  .s-run .pill{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
+  .p-l2{display:flex;align-items:center;gap:10px;font:11px var(--mono);color:var(--faint);min-width:0}
+  .p-l2 span{white-space:nowrap}
+  .p-l2 .br{overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .ctx{margin-left:auto;display:inline-flex;align-items:center;gap:5px;flex:none}
+  .ctx i{display:block;width:36px;height:4px;border-radius:2px;background:var(--raised-2);overflow:hidden;position:relative}
+  .ctx i b{position:absolute;inset:0 auto 0 0;background:var(--ok);border-radius:2px}
+  .ctx i b.warm{background:var(--await)}
+
+  .thread{flex:1;min-height:0;overflow:auto;padding:10px 10px 12px;display:flex;flex-direction:column;gap:8px;font-size:12.5px;line-height:1.5}
+  .m-user{align-self:flex-end;max-width:88%;background:var(--raised-2);border-radius:12px 12px 3px 12px;padding:6px 10px;color:var(--text)}
+  .m-user .q{display:block;font:10px var(--mono);color:var(--faint);margin-top:2px}
+  .m-ai{display:flex;gap:7px;align-items:flex-start}
+  .m-ai .av{width:18px;height:18px;border-radius:6px;background:var(--accent-wash);display:grid;place-items:center;flex:none;margin-top:1px}
+  .m-ai .av svg{width:12px;height:12px;color:var(--accent)}
+  .m-ai .tx{background:var(--raised);border:1px solid var(--border-soft);border-radius:3px 12px 12px 12px;padding:6px 10px;min-width:0}
+  .m-ai .tx code{font-size:11px}
+  .caret{display:inline-block;width:6px;height:12px;background:var(--accent);vertical-align:-1px;margin-left:2px;animation:blink 1s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .m-tool{display:flex;align-items:center;gap:7px;margin-left:25px;border:1px solid var(--border-soft);border-radius:8px;padding:4px 8px;font:11.5px var(--mono);color:var(--text);min-width:0;background:var(--surface)}
+  .m-tool .tn{color:var(--violet);font-weight:500;flex:none}
+  .m-tool .ta{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;direction:rtl;text-align:left}
+  .m-tool .ta bdi{direction:ltr}
+  .m-tool .tr{margin-left:auto;color:var(--faint);white-space:nowrap;flex:none}
+  .m-tool .add{color:var(--ok)} .m-tool .del{color:var(--err)}
+  .m-fold{margin-left:25px;font-size:11.5px;color:var(--faint);display:flex;gap:6px;align-items:center}
+  .m-fold::before{content:"▸";font-size:9px}
+  .m-err{margin-left:25px;border:1px solid var(--err);background:var(--err-wash);color:var(--text);border-radius:8px;padding:6px 9px;font-size:12px}
+  .m-err b{color:var(--err)}
+  .m-perm{margin-left:25px;border:1.5px solid var(--await);background:var(--await-wash);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:7px}
+  .m-perm .pt{font-size:12px;color:var(--text)} .m-perm .pt b{font-weight:700}
+  .m-perm .cmd{font:11.5px var(--mono);background:var(--code-bg);border-radius:6px;padding:4px 7px;color:var(--text);overflow-wrap:anywhere}
+  .m-perm .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .m-perm .ro{font-size:11.5px;color:var(--muted)}
+  .m-perm.done{border-color:var(--border);background:var(--surface);flex-direction:row;align-items:center;gap:8px;padding:5px 9px;font-size:11.5px;color:var(--muted)}
+  .m-perm.done b{color:var(--ok)} .m-perm.done b.no{color:var(--err)}
+  .typing{margin-left:25px;display:flex;gap:3px;padding:4px 0}
+  .typing i{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:dots 1.2s infinite ease-in-out}
+  .typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+  @keyframes dots{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
+
+  .p-foot{border-top:1px solid var(--border-soft);padding:7px 8px;display:flex;gap:6px;align-items:flex-end;background:var(--surface)}
+  .p-foot textarea{flex:1;min-width:0;resize:none;height:30px;max-height:80px;border:1px solid var(--border);border-radius:9px;background:var(--raised);color:var(--text);font:12.5px/1.4 var(--body);padding:6px 9px}
+  .p-foot textarea:focus{outline:none;border-color:var(--accent-line)}
+  .p-foot textarea::placeholder{color:var(--faint)}
+  .icon-btn{width:30px;height:30px;border-radius:9px;border:1px solid var(--border);background:var(--raised);color:var(--muted);display:grid;place-items:center;cursor:pointer;flex:none}
+  .icon-btn:hover{color:var(--accent);border-color:var(--accent-line)}
+  .icon-btn svg{width:14px;height:14px}
+  .p-foot.ro{align-items:center;font-size:11.5px;color:var(--faint);flex-wrap:wrap}
+  .p-foot.ro .live{display:inline-flex;align-items:center;gap:6px;margin-right:auto}
+  .p-foot.ro .live i{width:6px;height:6px;border-radius:50%;background:var(--ok);animation:dots 2s infinite}
+  .p-foot.ro.wait .live{color:var(--await);font-weight:600}
+  .p-foot.ro.wait .live i{background:var(--await)}
+  .grid.main .pane:not(.is-main) .p-foot{display:none}
+  .grid.main .pane:not(.is-main) .thread{padding-top:6px}
+
+  .keys{display:flex;flex-wrap:wrap;gap:6px 18px;padding:8px 14px;border-top:1px solid var(--border);background:var(--raised);font-size:12px;color:var(--muted)}
+  .keys kbd{font:500 10.5px var(--mono);border:1px solid var(--border);border-bottom-width:2px;border-radius:5px;padding:0 5px;background:var(--surface);color:var(--text)}
+  .keys .note{margin-left:auto;color:var(--faint)}
+  .toast{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);background:var(--title);color:var(--surface);font-size:12.5px;padding:7px 14px;border-radius:9px;box-shadow:var(--shadow);pointer-events:none;opacity:0;transition:opacity .2s;white-space:nowrap;max-width:90%;overflow:hidden;text-overflow:ellipsis}
+  .toast.show{opacity:1}
+
+  /* ───────── Reference ───────── */
+  .ref{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:20px;align-items:start}
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+  table{border-collapse:collapse;width:100%;font-size:13px;min-width:560px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--border-soft);vertical-align:top}
+  th{font:500 10.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);background:var(--raised)}
+  tr:last-child td{border-bottom:0}
+  td .st{display:inline-flex;align-items:center;gap:7px;font-weight:600;white-space:nowrap}
+  .cards{display:flex;flex-direction:column;gap:12px}
+  .card{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+  .card ul{margin:0;padding-left:18px;color:var(--muted);font-size:13.5px;display:flex;flex-direction:column;gap:4px}
+  .card ul b{color:var(--text);font-weight:600}
+  .phases{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+  .phase{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+  .phase .ph{font:500 11px var(--mono);color:var(--accent);letter-spacing:.08em}
+  .phase p{font-size:13.5px;color:var(--muted)}
+  .phase .meets{font-size:12px;color:var(--faint);margin-top:auto}
+  .qs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .q{border-left:2px solid var(--accent-line);padding:2px 0 2px 12px;font-size:13.5px;color:var(--muted)}
+  .q b{color:var(--text);display:block;font-weight:600;margin-bottom:2px}
+  .foot{font-size:12.5px;color:var(--faint)}
+
+  @media (max-width:1100px){
+    .entry,.glyphs{grid-template-columns:minmax(0,1fr)}
+    .ref{grid-template-columns:minmax(0,1fr)}
+    .phases{grid-template-columns:minmax(0,1fr)}
+  }
+  @media (max-width:760px){
+    .win-body{grid-template-columns:minmax(0,1fr);height:auto}
+    .rail{border-right:0;border-bottom:1px solid var(--border);max-height:220px}
+    .grid,.grid.main,.grid.tiled{grid-template-columns:minmax(0,1fr);grid-auto-rows:340px;overflow:visible;scroll-snap-type:none}
+    .grid.main .pane.is-main,.grid.main .pane:not(.is-main){grid-column:1;grid-row:auto}
+    .grid.main .pane:not(.is-main) .p-foot{display:flex}
+    .grid.zoom{grid-template-rows:480px}
+    .keys .note{margin-left:0}
+    .qs{grid-template-columns:minmax(0,1fr)}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .pane.s-await{animation:none;box-shadow:0 0 0 3px var(--await)}
+    .badge-pulse,.caret,.typing i,.p-foot.ro .live i{animation:none}
+  }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="g-split" viewBox="0 0 16 16"><rect x="1.6" y="2.6" width="12.8" height="10.8" rx="2.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 2.6v10.8M8 8h6.4" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+    <symbol id="g-grid" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2" width="5" height="5" rx="1.3"/><rect x="9" y="2" width="5" height="5" rx="1.3"/><rect x="2" y="9" width="5" height="5" rx="1.3"/><rect x="9" y="9" width="5" height="5" rx="1.3"/></g></symbol>
+    <symbol id="g-radar" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="2.8" opacity=".55"/><path d="M8 8l4.2-4.2"/></g><circle cx="10.8" cy="10.4" r="1.2" fill="currentColor"/></symbol>
+    <symbol id="g-main" viewBox="0 0 16 16"><rect x="1.6" y="2.6" width="12.8" height="10.8" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M9.6 2.6v10.8M9.6 6.2h4.8M9.6 9.8h4.8" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+    <symbol id="g-zoom" viewBox="0 0 16 16"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="g-pop" viewBox="0 0 16 16"><path d="M9 2.5h4.5V7M13.5 2.5 8 8M6.5 3.5H4A1.5 1.5 0 0 0 2.5 5v7A1.5 1.5 0 0 0 4 13.5h7a1.5 1.5 0 0 0 1.5-1.5V9.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="g-send" viewBox="0 0 16 16"><path d="M8 13V3.5M3.8 7.5 8 3.3l4.2 4.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="g-bird" viewBox="0 0 16 16"><path d="M3 10.5c0-3.3 2.4-6 5.6-6 1.7 0 3 .8 3.8 2l1.6.5-1.4.9c.1 2.9-2.3 5.1-5.3 5.1H3.2l1.6-1.4C3.9 11.4 3 11.1 3 10.5Z" fill="currentColor"/></symbol>
+  </defs>
+</svg>
+
+<div class="page">
+  <header class="top">
+    <span class="eyebrow">Perch · design mockup · 25 Sep 2026</span>
+    <h1>Command center</h1>
+    <p class="lede">A tmux-style view of every Claude Code session at once. It opens from a glyph beside <b>+ New session</b>. Each session gets a live pane. Sessions Perch controls can be <b>answered and driven from their pane</b>. Terminal and IDE sessions are <b>tailed read-only</b>. Anything blocked on you, or finished and unreviewed, <b>stands out on the pane, in the rail, and on the overlay glyph</b>.</p>
+    <div class="asks" aria-label="The request">
+      <span class="ask"><b>History</b> with live tailing</span>
+      <span class="ask"><b>Interactive</b> Perch-controlled panes</span>
+      <span class="ask"><b>Attention states</b> that draw the eye</span>
+      <span class="ask"><b>Glyph</b> after + New session</span>
+    </div>
+  </header>
+
+  <!-- ───────── Entry point ───────── -->
+  <section aria-labelledby="entry-h">
+    <div class="sec-head">
+      <span class="eyebrow">Entry point</span>
+      <h2 id="entry-h">A split-panes glyph on the New session row</h2>
+      <p>It sits right-aligned in an 18px hit box of its own, the same idiom as the collapsible headers' "+". The rest of the row still starts a new session. When a session is blocked on you, the glyph gets a status dot, so it draws the eye even with the session list scrolled or collapsed.</p>
+    </div>
+    <div class="entry">
+      <div class="ov-card">
+        <div class="overlay" aria-label="Overlay at rest">
+          <div class="ov-row ov-new"><span class="plus"></span>New session<span class="cc-btn"><svg><use href="#g-split"/></svg></span></div>
+          <div class="ov-row ov-sess"><span class="d" style="background:var(--ok)"></span><span class="n">perch</span><span class="m">opus · 41s</span></div>
+          <div class="ov-row ov-sess"><span class="d" style="background:var(--idle)"></span><span class="n">docs-site</span><span class="m">sonnet · idle</span></div>
+        </div>
+        <p class="ov-cap"><b>At rest.</b> Muted, same weight as the "+".</p>
+      </div>
+      <div class="ov-card">
+        <div class="overlay" aria-label="Overlay with the glyph hovered">
+          <div class="ov-row ov-new"><span class="plus"></span>New session<span class="cc-btn hover"><svg><use href="#g-split"/></svg><span class="tip">Command center<kbd>Ctrl+Shift+K</kbd></span></span></div>
+          <div class="ov-row ov-sess"><span class="d" style="background:var(--ok)"></span><span class="n">perch</span><span class="m">opus · 41s</span></div>
+          <div class="ov-row ov-sess"><span class="d" style="background:var(--idle)"></span><span class="n">docs-site</span><span class="m">sonnet · idle</span></div>
+        </div>
+        <p class="ov-cap"><b>Hover.</b> Its own wash and the accent colour. The New session band does not light up.</p>
+      </div>
+      <div class="ov-card">
+        <div class="overlay" aria-label="Overlay with a session needing input">
+          <div class="ov-row ov-new"><span class="plus"></span>New session<span class="cc-btn"><svg viewBox="0 0 16 16"><use href="#g-split"/><circle class="badge-dot badge-pulse" cx="14" cy="2.5" r="2.6"/></svg></span></div>
+          <div class="ov-row ov-sess"><span class="d" style="background:var(--await)"></span><span class="n">perch-api</span><span class="m">opus · waiting 2m</span></div>
+          <div class="ov-row ov-sess"><span class="d" style="background:var(--ok)"></span><span class="n">perch</span><span class="m">opus · 41s</span></div>
+        </div>
+        <p class="ov-cap"><b>Something needs you.</b> A dot in the awaiting (or error) hue, pulsing gently. The dot disappears once nothing is blocked.</p>
+      </div>
+    </div>
+
+    <div class="glyphs" role="list" aria-label="Glyph options">
+      <div class="glyph-opt pick" role="listitem">
+        <div class="glyph-big"><svg><use href="#g-split"/></svg></div>
+        <div class="t"><span class="tag">Recommended</span><h3>Split panes</h3><span>A tmux main-vertical layout. Reads as "many sessions, tiled".</span><div class="tiny"><svg><use href="#g-split"/></svg>at 15px</div></div>
+      </div>
+      <div class="glyph-opt" role="listitem">
+        <div class="glyph-big"><svg><use href="#g-grid"/></svg></div>
+        <div class="t"><h3>2 × 2 grid</h3><span>Clear, but it reads as an app launcher more than a monitor.</span><div class="tiny"><svg><use href="#g-grid"/></svg>at 15px</div></div>
+      </div>
+      <div class="glyph-opt" role="listitem">
+        <div class="glyph-big"><svg><use href="#g-radar"/></svg></div>
+        <div class="t"><h3>Radar</h3><span>"Watching everything", but it gets muddy at overlay size.</span><div class="tiny"><svg><use href="#g-radar"/></svg>at 15px</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────── The window ───────── -->
+  <section aria-labelledby="win-h">
+    <div class="sec-head">
+      <span class="eyebrow">The window · interactive</span>
+      <h2 id="win-h">Rail for urgency, panes that stay put</h2>
+      <p>The rail on the left ranks sessions by how much they need you. The panes keep the order they arrived in, so a status change never moves a pane out from under someone typing. Tiled shows four panes at a time and scrolls a row at a time. A pill counts panes out of view and turns amber when one of them needs you. Try it: allow the permission in <b>perch-api</b>, reply in a Perch pane, switch layouts, or press <kbd style="font:11px var(--mono)">.</kbd> to jump to the next session that needs you.</p>
+    </div>
+
+    <div class="win" id="win" style="position:relative">
+      <div class="win-bar">
+        <div class="win-title"><svg><use href="#g-split"/></svg>Command center</div>
+        <div class="chips" id="chips"></div>
+        <div class="spacer"></div>
+        <div class="seg" role="group" aria-label="Layout">
+          <button type="button" data-layout="tiled" aria-pressed="true"><svg><use href="#g-grid"/></svg>Tiled</button>
+          <button type="button" data-layout="main" aria-pressed="false"><svg><use href="#g-main"/></svg>Main + stack</button>
+          <button type="button" data-layout="zoom" aria-pressed="false"><svg><use href="#g-zoom"/></svg>Zoom</button>
+        </div>
+        <button type="button" class="btn quiet" id="newSess">+ New session</button>
+      </div>
+      <div class="win-body">
+        <nav class="rail" id="rail" aria-label="Sessions by urgency"></nav>
+        <div class="stage">
+          <div class="grid tiled" id="grid"></div>
+          <button type="button" class="more" id="more" hidden></button>
+          <div class="ministrip" id="ministrip"></div>
+        </div>
+      </div>
+      <div class="keys">
+        <span><kbd>Ctrl</kbd>+<kbd>1–9</kbd> focus pane</span>
+        <span><kbd>Ctrl</kbd>+<kbd>.</kbd> next needing you</span>
+        <span><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> zoom</span>
+        <span><kbd>Enter</kbd> allow · <kbd>Esc</kbd> deny / interrupt</span>
+        <span class="note">In this mockup: <kbd>1–9</kbd>, <kbd>.</kbd> and <kbd>z</kbd> outside a text box.</span>
+      </div>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <!-- ───────── Reference ───────── -->
+  <section aria-labelledby="ref-h">
+    <div class="sec-head">
+      <span class="eyebrow">How it reads</span>
+      <h2 id="ref-h">Status treatment and the two kinds of pane</h2>
+      <p>The hues are Perch's existing semantic theme roles, so custom themes and the colour-blind preview carry over. Only the two blocking states move, and the pulse turns into a thicker steady ring under reduced motion.</p>
+    </div>
+    <div class="ref">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Status</th><th>Pane</th><th>Pill</th><th>Rail group</th><th>Clears when</th></tr></thead>
+          <tbody>
+            <tr><td><span class="st"><span class="sd s-await"></span>Awaiting input</span></td><td>2px ring, slow pulse, header wash</td><td>Needs your input · 2m</td><td>Needs you</td><td>Answered</td></tr>
+            <tr><td><span class="st"><span class="sd s-error"></span>API error</span></td><td>2px ring, steady</td><td>API error · 529</td><td>Needs you</td><td>Session resumes work</td></tr>
+            <tr><td><span class="st"><span class="sd s-attn"></span>Needs attention</span></td><td>1.5px ring, steady</td><td>Done 4m ago · review</td><td>Done · review</td><td>You focus the pane (acknowledge)</td></tr>
+            <tr><td><span class="st"><span class="sd s-run"></span>Running</span></td><td>Typing dots in the thread</td><td>Working · 41s</td><td>Working</td><td>n/a</td></tr>
+            <tr><td><span class="st"><span class="sd"></span>Idle</span></td><td>Dimmed header</td><td>Idle</td><td>Quiet</td><td>n/a</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <h3><span style="color:var(--brand)">◆</span> Perch-controlled pane</h3>
+          <ul>
+            <li><b>Source:</b> the in-memory conversation, so it streams token by token.</li>
+            <li><b>Permission, question and plan cards</b> can be answered right in the pane.</li>
+            <li><b>Footer:</b> a compact composer (Enter sends, Esc interrupts) and ⤢ to open the full session window.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>▣ Terminal / IDE pane</h3>
+          <ul>
+            <li><b>Source:</b> the transcript file, tailed from its last byte offset.</li>
+            <li><b>Blocked prompts</b> are shown but can only be answered in the terminal.</li>
+            <li><b>Footer:</b> Focus terminal ↗, and Take over in Perch to hand off with <code>--resume</code>.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="ph-h">
+    <div class="sec-head">
+      <span class="eyebrow">Build order</span>
+      <h2 id="ph-h">Three phases, read-only first</h2>
+      <p>Phase 1 meets three of the four asks on its own. Interactivity comes second because it depends on reusing the session window's composer, the riskiest piece to extract.</p>
+    </div>
+    <div class="phases">
+      <div class="phase"><span class="ph">PHASE 1</span><h3>Read-only command center</h3><p>Window, urgency rail, three layouts, status chrome, byte-offset transcript tailing for every pane, the overlay glyph with its badge, acknowledge on focus, Focus terminal.</p><span class="meets">Meets: history + tailing, attention states, glyph</span></div>
+      <div class="phase"><span class="ph">PHASE 2</span><h3>Interactive Perch panes</h3><p>Bind the live conversation, answer permission/question/plan cards in the pane, a lite composer, interrupt, open the full window, and no duplicate toasts for a pane already on screen.</p><span class="meets">Meets: interactive Perch sessions</span></div>
+      <div class="phase"><span class="ph">PHASE 3</span><h3>Polish</h3><p>Share the full composer (slash palette, @-mentions, history). Add Take over in Perch, taskbar flash, a global hotkey, pinning and closing panes, and a "load earlier" affordance.</p><span class="meets">Parity with the session window</span></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="q-h">
+    <div class="sec-head">
+      <span class="eyebrow">Open questions</span>
+      <h2 id="q-h">For the requester</h2>
+    </div>
+    <div class="qs">
+      <p class="q"><b>Ended sessions?</b>Proposed: they stay greyed out for 10 minutes, then drop. The History window keeps the rest.</p>
+      <p class="q"><b>More than six sessions?</b>Tiled shows four at a time and scrolls to six. Past six, the quietest collapse into the strip under the grid, as <i>scratch</i> does here.</p>
+      <p class="q"><b>Terminal sessions stay read-only.</b>There is no control channel into a terminal <code>claude</code>. Is Take over in Perch enough?</p>
+      <p class="q"><b>Name.</b>"Command center" as asked. "Roost" would fit the bird if you want one.</p>
+    </div>
+    <p class="foot">Full plan: <code>docs/command-center-plan.md</code>. Sample sessions and projects are invented.</p>
+  </section>
+</div>
+
+<script>
+(function(){
+  const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const now = () => Date.now();
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const md = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+  const RANK = {await:0, error:0, attn:1, run:2, idle:3};
+  const GROUPS = [['Needs you',['await','error']],['Done · review',['attn']],['Working',['run']],['Quiet',['idle']]];
+  const MAX_PANES = 6;
+
+  const S = [
+    { id:'perch-api', origin:'perch', status:'await', ago:130, branch:'feat/orders-paging', model:'opus', ctx:34, items:[
+      {t:'user', text:'Add pagination to the /orders endpoint and make sure the tests still pass.'},
+      {t:'fold', text:'Searched for 2 patterns, read 4 files'},
+      {t:'tool', name:'Edit', arg:'src/Api/Orders/OrdersController.cs', add:38, del:6},
+      {t:'tool', name:'Edit', arg:'src/Api/Orders/OrdersQuery.cs', add:21, del:0},
+      {t:'ai', text:'Pagination is in: `page` and `pageSize` query params, capped at 200, plus a `Link` header for the next page. I\'d like to run the API tests to check nothing regressed.'},
+      {t:'perm', tool:'Bash', cmd:'dotnet test tests/Api.Tests', state:'pending'} ]},
+    { id:'web-dashboard', origin:'term', originLabel:'Terminal', status:'await', ago:312, branch:'chore/chart-v5', model:'sonnet', ctx:58, items:[
+      {t:'user', text:'Upgrade the chart library to v5 and fix whatever breaks.'},
+      {t:'tool', name:'Bash', arg:'npm install chart-lib@5', res:'ok · 9.1s'},
+      {t:'fold', text:'Read 6 files'},
+      {t:'ai', text:'Three components used the removed `legend.labels.generate` option. I\'ve moved them to the v5 plugin API. Next I\'ll build to confirm.'},
+      {t:'perm', tool:'Bash', cmd:'npm run build', state:'pending', ro:true} ]},
+    { id:'perch', origin:'perch', status:'run', ago:41, branch:'command-center', model:'opus', ctx:22, items:[
+      {t:'user', text:'Put a command-center button on the New session row, right-aligned.'},
+      {t:'fold', text:'Searched for 3 patterns, read 2 files'} ],
+      script:[
+        {stream:'The row\'s whole band is the hit target today (`_newSessionRect`), so I\'ll carve an 18px box off the right edge and shrink the band to match.'},
+        {tool:{name:'Edit', arg:'src/Perch.App/Views/OverlayCanvas.Sections.cs', add:24, del:3}},
+        {tool:{name:'Edit', arg:'src/Perch.App/Views/OverlayCanvas.cs', add:31, del:2}},
+        {stream:'Done. The glyph has its own hover and a tooltip, and it raises `CommandCenterRequested`. It shows a status dot while any session is awaiting input.'},
+        {finish:true} ]},
+    { id:'infra-terraform', origin:'ide', originLabel:'VS Code', status:'attn', ago:248, branch:'staging-subnet', model:'sonnet', ctx:41, items:[
+      {t:'user', text:'Plan the move of the staging DB to the new subnet. Don\'t apply anything.'},
+      {t:'tool', name:'Bash', arg:'terraform plan -out=staging.plan', res:'3 to change'},
+      {t:'ai', text:'The plan changes 3 resources and destroys none: the subnet group, one security-group ingress rule, and the parameter-group reference. It\'s saved as `staging.plan`. Nothing was applied.'} ]},
+    { id:'docs-site', origin:'term', originLabel:'Terminal', status:'run', ago:12, branch:'fix/broken-links', model:'haiku', ctx:12, items:[
+      {t:'user', text:'Fix the broken links the checker reported.'},
+      {t:'tool', name:'Bash', arg:'npm run check-links', res:'7 broken'} ],
+      loop:[
+        {tool:{name:'Read', arg:'content/guides/install.md', res:'212 lines'}},
+        {tool:{name:'Edit', arg:'content/guides/install.md', add:2, del:2}},
+        {tool:{name:'Grep', arg:'/api/v1/', res:'4 files'}},
+        {tool:{name:'Edit', arg:'content/reference/rest.md', add:3, del:3}},
+        {ai:'Two of the seven pointed at the old `/api/v1/` paths. Those are fixed. Checking the rest.'},
+        {tool:{name:'Bash', arg:'npm run check-links', res:'3 broken'}} ]},
+    { id:'billing-svc', origin:'term', originLabel:'Terminal', status:'error', ago:95, branch:'main', model:'opus', ctx:67, items:[
+      {t:'user', text:'Regenerate the invoice fixtures from the new schema.'},
+      {t:'fold', text:'Read 3 files'},
+      {t:'tool', name:'Bash', arg:'npm run fixtures:gen', res:'ok · 3.2s'},
+      {t:'err', text:'<b>API error 529 · Overloaded.</b> The request stopped. Retry in the terminal, or take it over in Perch.'} ]},
+    { id:'scratch', origin:'perch', status:'idle', ago:1900, branch:'main', model:'haiku', ctx:4, items:[
+      {t:'user', text:'What does `git rerere` do?'},
+      {t:'ai', text:'It records how you resolved a merge conflict and replays that resolution the next time the same conflict appears.'} ]},
+  ];
+  S.forEach((s,i) => { s.since = now() - s.ago*1000; s.order = i; });
+
+  let focused = 'perch-api', layout = 'tiled', filter = null;
+  const grid = document.getElementById('grid'), rail = document.getElementById('rail'),
+        chips = document.getElementById('chips'), mini = document.getElementById('ministrip'),
+        toastEl = document.getElementById('toast');
+  const byId = id => S.find(s => s.id === id);
+
+  function fmt(sec){ sec = Math.max(0, Math.round(sec)); return sec < 60 ? sec + 's' : sec < 3600 ? Math.floor(sec/60) + 'm' : Math.floor(sec/3600) + 'h'; }
+  function el(s){ return (now() - s.since)/1000; }
+  function pillText(s){
+    const e = fmt(el(s));
+    return {await:'Needs your input · ' + e, error:'API error · 529', attn:'Done ' + e + ' ago · review', run:'Working · ' + e, idle:'Idle'}[s.status];
+  }
+  function railTime(s){ const e = fmt(el(s)); return {await:'waiting ' + e, error:'failed', attn:e + ' ago', run:e, idle:e + ' ago'}[s.status]; }
+  let toastT;
+  function toast(msg){ toastEl.textContent = msg; toastEl.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('show'), 2400); }
+
+  // Which sessions get a full pane: at most six, dropping the quietest first (stable order otherwise).
+  function paneSet(){
+    const byUrgency = [...S].sort((a,b) => RANK[a.status]-RANK[b.status] || a.order-b.order);
+    const keep = new Set(byUrgency.slice(0, MAX_PANES).map(s => s.id));
+    return S.filter(s => keep.has(s.id));
+  }
+
+  function itemHTML(it, s){
+    switch(it.t){
+      case 'user': return '<div class="m-user">' + md(it.text) + (it.queued ? '<span class="q">queued · sends when the turn ends</span>' : '') + '</div>';
+      case 'ai': return '<div class="m-ai"><span class="av"><svg><use href="#g-bird"/></svg></span><div class="tx">' + md(it.text) + (it.streaming ? '<span class="caret"></span>' : '') + '</div></div>';
+      case 'fold': return '<div class="m-fold">' + esc(it.text) + '</div>';
+      case 'err': return '<div class="m-err">' + it.text + '</div>';
+      case 'tool': {
+        const r = it.add != null ? '<span class="add">+' + it.add + '</span> <span class="del">−' + it.del + '</span>' : esc(it.res || '');
+        return '<div class="m-tool"><span class="tn">' + esc(it.name) + '</span><span class="ta"><bdi>' + esc(it.arg) + '</bdi></span><span class="tr">' + r + '</span></div>';
+      }
+      case 'perm': {
+        if (it.state !== 'pending') return '<div class="m-perm done">' + (it.state === 'allowed' ? '<b>✓ Allowed</b>' : '<b class="no">✕ Denied</b>') + '<span>' + esc(it.tool) + ' · <code>' + esc(it.cmd) + '</code></span></div>';
+        const acts = it.ro
+          ? '<span class="ro">Waiting in the terminal. Answer it there.</span>'
+          : '<button type="button" class="btn sm primary" data-act="allow">Allow ↵</button><button type="button" class="btn sm" data-act="allow-edits">Allow &amp; accept edits</button><button type="button" class="btn sm quiet" data-act="deny">Deny esc</button>';
+        return '<div class="m-perm"><span class="pt"><b>Allow ' + esc(it.tool) + '?</b></span><span class="cmd">' + esc(it.cmd) + '</span><div class="acts">' + acts + '</div></div>';
+      }
+    }
+    return '';
+  }
+
+  function buildPane(s, idx){
+    const p = document.createElement('article');
+    p.className = 'pane'; p.dataset.id = s.id; p.tabIndex = -1;
+    const origin = s.origin === 'perch' ? '<span class="origin perch">◆ Perch</span>' : '<span class="origin">' + esc(s.originLabel) + '</span>';
+    const foot = s.origin === 'perch'
+      ? '<div class="p-foot"><textarea rows="1" aria-label="Reply to ' + esc(s.id) + '" placeholder="Reply…"></textarea><button type="button" class="icon-btn" data-act="send" title="Send (Enter)"><svg><use href="#g-send"/></svg></button><button type="button" class="icon-btn" data-act="pop" title="Open in session window"><svg><use href="#g-pop"/></svg></button></div>'
+      : '<div class="p-foot ro"><span class="live"><i></i><span class="lt"></span></span><button type="button" class="btn sm" data-act="focus-term">Focus terminal ↗</button><button type="button" class="btn sm quiet" data-act="takeover">Take over in Perch</button></div>';
+    p.innerHTML =
+      '<div class="p-head" data-act="focus"><div class="p-l1"><span class="sd"></span><span class="p-name">' + esc(s.id) + '</span>' + origin + '<span class="pill"></span></div>' +
+      '<div class="p-l2"><span class="br">⑂ ' + esc(s.branch) + '</span><span>' + esc(s.model) + '</span><span class="ctx">ctx <i><b style="width:' + s.ctx + '%"' + (s.ctx > 60 ? ' class="warm"' : '') + '></b></i> ' + s.ctx + '%</span></div></div>' +
+      '<div class="thread"></div>' + foot;
+    s.el = p; s.thread = p.querySelector('.thread');
+    s.items.forEach(it => appendItem(s, it, true));
+    return p;
+  }
+
+  function atBottom(t){ return t.scrollHeight - t.scrollTop - t.clientHeight < 24; }
+  function appendItem(s, it, initial){
+    const stick = initial || atBottom(s.thread);
+    const wrap = document.createElement('div'); wrap.innerHTML = itemHTML(it, s);
+    const node = wrap.firstElementChild; it.node = node;
+    const typing = s.thread.querySelector('.typing');
+    s.thread.insertBefore(node, typing || null);
+    if (!initial && !s.items.includes(it)) s.items.push(it);
+    if (stick) s.thread.scrollTop = s.thread.scrollHeight;
+  }
+  function rerenderItem(s, it){
+    const stick = atBottom(s.thread);
+    const wrap = document.createElement('div'); wrap.innerHTML = itemHTML(it, s);
+    const n = wrap.firstElementChild; it.node.replaceWith(n); it.node = n;
+    if (stick) s.thread.scrollTop = s.thread.scrollHeight;
+  }
+  function setTyping(s, on){
+    const t = s.thread.querySelector('.typing');
+    if (on && !t){ const d = document.createElement('div'); d.className = 'typing'; d.innerHTML = '<i></i><i></i><i></i>'; const stick = atBottom(s.thread); s.thread.appendChild(d); if (stick) s.thread.scrollTop = s.thread.scrollHeight; }
+    if (!on && t) t.remove();
+  }
+
+  function setStatus(s, st){
+    if (s.status === st) return;
+    s.status = st; s.since = now();
+    refresh();
+  }
+
+  function paintPane(s){
+    const p = s.el; if (!p) return;
+    p.classList.remove('s-await','s-error','s-attn','s-run','s-idle');
+    p.classList.add('s-' + s.status);
+    p.classList.toggle('focused', s.id === focused);
+    p.querySelector('.pill').textContent = pillText(s);
+    const lt = p.querySelector('.lt');
+    if (lt){
+      const waiting = s.status === 'await';
+      p.querySelector('.p-foot').classList.toggle('wait', waiting);
+      lt.textContent = waiting ? 'Waiting for you in the ' + (s.origin === 'ide' ? 'editor' : 'terminal') : s.status === 'run' ? 'Tailing · read-only' : 'Read-only';
+    }
+    setTyping(s, s.status === 'run');
+  }
+
+  function renderRail(){
+    let h = '';
+    const panes = new Set(paneSet().map(s => s.id));
+    GROUPS.forEach(([name, sts]) => {
+      const rows = S.filter(s => sts.includes(s.status)).sort((a,b) => RANK[a.status]-RANK[b.status] || b.since - a.since);
+      h += '<div class="rail-group"><h4><span>' + name + '</span><span>' + rows.length + '</span></h4>';
+      if (!rows.length) h += '<span class="rail-empty">Nothing here</span>';
+      rows.forEach(s => {
+        h += '<button type="button" class="rail-row s-' + s.status + (s.id === focused ? ' on' : '') + '" data-id="' + s.id + '"><span class="sd"></span><span class="n">' + esc(s.id) + '</span>' +
+             (s.origin === 'perch' ? '<span class="pm" title="Perch-controlled">◆</span>' : '') +
+             (!panes.has(s.id) ? '<span class="min">min</span>' : '') +
+             '<span class="e">' + railTime(s) + '</span></button>';
+      });
+      h += '</div>';
+    });
+    rail.innerHTML = h;
+  }
+
+  function renderChips(){
+    const c = k => S.filter(s => k.includes(s.status)).length;
+    const defs = [['need','need you',['await','error'],'var(--await)'],['run','working',['run'],'var(--ok)'],['attn','to review',['attn'],'var(--attn)']];
+    chips.innerHTML = defs.map(([k,label,sts,col]) =>
+      '<button type="button" class="chip' + (k === 'need' && c(sts) ? ' need' : '') + '" data-filter="' + k + '" aria-pressed="' + (filter === k) + '"><span class="d" style="background:' + col + '"></span>' + c(sts) + ' ' + label + '</button>').join('');
+  }
+
+  function layoutPanes(){
+    grid.className = 'grid ' + layout;
+    const shown = paneSet();
+    const shownIds = new Set(shown.map(s => s.id));
+    const fsts = filter === 'need' ? ['await','error'] : filter === 'run' ? ['run'] : filter === 'attn' ? ['attn'] : null;
+    S.forEach(s => {
+      if (!s.el) return;
+      let vis;
+      if (layout === 'zoom') vis = s.id === focused;
+      else vis = shownIds.has(s.id) && (!fsts || fsts.includes(s.status));
+      s.el.hidden = !vis;
+      s.el.classList.toggle('is-main', layout === 'main' && s.id === focused);
+    });
+    // Main + stack: the focused pane leads the DOM so it takes the big slot; others keep arrival order.
+    const order = [...S].sort((a,b) => a.order - b.order);
+    if (layout === 'main' && byId(focused)) { const f = byId(focused); order.splice(order.indexOf(f),1); order.unshift(f); }
+    order.forEach(s => s.el && grid.appendChild(s.el));
+    const hidden = S.filter(s => !shownIds.has(s.id));
+    mini.innerHTML = layout === 'zoom' || !hidden.length ? '' :
+      '<span>Minimised ' + hidden.length + ':</span>' + hidden.map(s => '<button type="button" class="chip" data-zoom="' + s.id + '"><span class="sd s-' + s.status + '"></span>' + esc(s.id) + '</button>').join('');
+    document.querySelectorAll('.seg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.layout === layout));
+  }
+
+  // Tiled scrolls by row, so an off-screen pane could hide something blocked on you: the pill counts what's
+  // out of view and takes the awaiting hue when any of it needs you. Click scrolls to the first one.
+  const moreBtn = document.getElementById('more');
+  function offscreen(){
+    if (layout !== 'tiled') return {below:[], above:[]};
+    const g = grid.getBoundingClientRect();
+    const vis = S.filter(s => s.el && !s.el.hidden);
+    return {
+      below: vis.filter(s => s.el.getBoundingClientRect().top >= g.bottom - 40),
+      above: vis.filter(s => s.el.getBoundingClientRect().bottom <= g.top + 40),
+    };
+  }
+  function updateMore(){
+    const {below, above} = offscreen();
+    const list = below.length ? below : above;
+    if (!list.length || grid.scrollHeight <= grid.clientHeight + 2){ moreBtn.hidden = true; return; }
+    const need = list.filter(s => s.status === 'await' || s.status === 'error').length;
+    moreBtn.hidden = false;
+    moreBtn.classList.toggle('need', need > 0);
+    moreBtn.innerHTML = (need ? '<span class="sd"></span>' : '') + (below.length ? '↓ ' + list.length + ' more' : '↑ ' + list.length + ' above') + (need ? ' · ' + need + ' need' + (need === 1 ? 's' : '') + ' you' : '');
+    moreBtn.style.bottom = below.length ? (mini.offsetHeight + 12) + 'px' : '';
+    moreBtn.style.top = below.length ? '' : '12px';
+    moreBtn.dataset.target = list[0].id;
+  }
+  function ensureVisible(s){
+    if (layout !== 'tiled' || !s.el || s.el.hidden) return;
+    const g = grid.getBoundingClientRect(), r = s.el.getBoundingClientRect();
+    if (r.top < g.top || r.bottom > g.bottom) grid.scrollBy({top: r.top - g.top - 14, behavior: reduce ? 'auto' : 'smooth'});
+  }
+  moreBtn.addEventListener('click', () => { const s = byId(moreBtn.dataset.target); if (s) ensureVisible(s); });
+  grid.addEventListener('scroll', () => requestAnimationFrame(updateMore), {passive:true});
+  window.addEventListener('resize', () => requestAnimationFrame(updateMore));
+
+  function refresh(){ S.forEach(paintPane); renderRail(); renderChips(); layoutPanes(); requestAnimationFrame(updateMore); }
+
+  function focus(id, opts){
+    const s = byId(id); if (!s) return;
+    focused = id;
+    if (opts && opts.zoom) layout = 'zoom';
+    if (!paneSet().includes(s) && layout !== 'zoom') layout = 'zoom';
+    // Viewing a finished session acknowledges it (SessionMonitorHost.Acknowledge).
+    if (s.status === 'attn') setTimeout(() => { if (focused === id && s.status === 'attn') { setStatus(s, 'idle'); toast(id + ' acknowledged'); } }, 900);
+    refresh();
+    ensureVisible(s);
+    const ta = s.el && s.el.querySelector('textarea');
+    if (ta && !(opts && opts.noInput)) ta.focus({preventScroll:true}); else if (s.el) s.el.focus({preventScroll:true});
+  }
+
+  function nextNeeding(){
+    const q = S.filter(s => s.status === 'await' || s.status === 'error' || s.status === 'attn')
+               .sort((a,b) => RANK[a.status]-RANK[b.status] || a.order-b.order);
+    if (!q.length){ toast('Nothing needs you'); return; }
+    const i = q.findIndex(s => s.id === focused);
+    focus(q[(i+1) % q.length].id, {noInput:true});
+  }
+
+  // ── Scripted activity ──
+  function stream(s, text, done){
+    const it = {t:'ai', text:'', streaming:true};
+    appendItem(s, it);
+    const words = text.split(' '); let i = 0;
+    const step = () => {
+      if (!s.el) return;
+      it.text = words.slice(0, ++i).join(' ');
+      if (i >= words.length){ it.streaming = false; rerenderItem(s, it); done && done(); return; }
+      rerenderItem(s, it); setTimeout(step, reduce ? 20 : 70);
+    };
+    step();
+  }
+  function runScript(s, steps, onEnd){
+    let i = 0;
+    const next = () => {
+      if (i >= steps.length){ onEnd && onEnd(); return; }
+      const st = steps[i++];
+      if (st.stream) stream(s, st.stream, () => setTimeout(next, 900));
+      else if (st.tool){ appendItem(s, Object.assign({t:'tool'}, st.tool)); setTimeout(next, 1300); }
+      else if (st.ai){ appendItem(s, {t:'ai', text:st.ai}); setTimeout(next, 1300); }
+      else if (st.finish){ setStatus(s, 'attn'); onEnd && onEnd(); }
+    };
+    setTimeout(next, 1200);
+  }
+  function flushQueued(s){
+    const q = s.items.filter(it => it.t === 'user' && it.queued);
+    q.forEach(it => { it.queued = false; rerenderItem(s, it); });
+    return q.length;
+  }
+  function reply(s){
+    setStatus(s, 'run');
+    runScript(s, [{stream:'Got it. I\'ll pick that up now.'}, {finish:true}], () => { if (flushQueued(s)) reply(s); });
+  }
+
+  // ── Events ──
+  grid.addEventListener('click', e => {
+    const pane = e.target.closest('.pane'); if (!pane) return;
+    const s = byId(pane.dataset.id);
+    const act = e.target.closest('[data-act]'); const a = act && act.dataset.act;
+    if (a === 'allow' || a === 'allow-edits' || a === 'deny'){
+      const perm = s.items.find(it => it.t === 'perm' && it.state === 'pending' && !it.ro);
+      if (!perm) return;
+      perm.state = a === 'deny' ? 'denied' : 'allowed'; rerenderItem(s, perm);
+      setStatus(s, 'run');
+      const steps = a === 'deny'
+        ? [{stream:'OK, I won\'t run the tests. The change is ready for you to review: two files, +59 −6.'}, {finish:true}]
+        : [{tool:{name:'Bash', arg:perm.cmd, res:'214 passed · 18.3s'}}, {stream:'All 214 API tests pass, including the 6 new pagination cases.'}, {finish:true}];
+      runScript(s, steps);
+      toast(a === 'deny' ? 'Denied · ' + s.id : 'Allowed · ' + s.id);
+      return;
+    }
+    if (a === 'send'){ send(s); return; }
+    if (a === 'pop'){ toast('Opens ' + s.id + ' in its full session window'); return; }
+    if (a === 'focus-term'){ toast('Brings ' + s.id + '’s ' + (s.origin === 'ide' ? 'VS Code window' : 'terminal') + ' to the front'); return; }
+    if (a === 'takeover'){ toast('Hands ' + s.id + ' to Perch via --resume once the terminal exits'); return; }
+    if (focused !== s.id) focus(s.id, {noInput: !!e.target.closest('.thread')});
+  });
+  function send(s){
+    const ta = s.el.querySelector('textarea'); const text = ta.value.trim(); if (!text) return;
+    ta.value = '';
+    const busy = s.status === 'run';
+    appendItem(s, {t:'user', text, queued: busy});
+    if (!busy) reply(s);
+  }
+  grid.addEventListener('keydown', e => {
+    if (e.target.tagName !== 'TEXTAREA') return;
+    const s = byId(e.target.closest('.pane').dataset.id);
+    const perm = s.items.find(it => it.t === 'perm' && it.state === 'pending' && !it.ro);
+    if (e.key === 'Enter' && !e.shiftKey){
+      e.preventDefault();
+      if (!e.target.value.trim() && perm) s.el.querySelector('[data-act="allow"]').click();
+      else send(s);
+    } else if (e.key === 'Escape'){
+      if (!e.target.value.trim() && perm) s.el.querySelector('[data-act="deny"]').click();
+      else if (s.status === 'run') toast('Interrupt sent to ' + s.id);
+    }
+  });
+  grid.addEventListener('focusin', e => { const p = e.target.closest('.pane'); if (p && p.dataset.id !== focused) { focused = p.dataset.id; S.forEach(paintPane); renderRail(); } });
+  rail.addEventListener('click', e => { const r = e.target.closest('.rail-row'); if (r) focus(r.dataset.id, {noInput:true}); });
+  chips.addEventListener('click', e => { const c = e.target.closest('.chip'); if (!c) return; filter = filter === c.dataset.filter ? null : c.dataset.filter; if (layout === 'zoom') layout = 'tiled'; refresh(); });
+  mini.addEventListener('click', e => { const c = e.target.closest('[data-zoom]'); if (c) focus(c.dataset.zoom, {zoom:true}); });
+  document.querySelector('.seg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; layout = b.dataset.layout; refresh(); });
+  document.getElementById('newSess').addEventListener('click', () => toast('Opens the new-session launcher'));
+  document.addEventListener('keydown', e => {
+    if (/^(TEXTAREA|INPUT)$/.test(e.target.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === '.'){ e.preventDefault(); nextNeeding(); }
+    else if (e.key === 'z' || e.key === 'Z'){ layout = layout === 'zoom' ? 'tiled' : 'zoom'; refresh(); }
+    else if (/^[1-9]$/.test(e.key)){ const ps = paneSet(); const s = ps[+e.key - 1]; if (s) focus(s.id, {noInput:true}); }
+  });
+
+  // ── Boot ──
+  S.forEach((s,i) => grid.appendChild(buildPane(s, i)));
+  refresh();
+  S.forEach(s => { if (s.script) runScript(s, s.script, () => { if (flushQueued(s)) reply(s); }); });
+  const docs = byId('docs-site'); let li = 0;
+  setInterval(() => {
+    if (docs.status !== 'run') return;
+    const st = docs.loop[li++ % docs.loop.length];
+    if (st.tool) appendItem(docs, Object.assign({t:'tool'}, st.tool)); else appendItem(docs, {t:'ai', text:st.ai});
+  }, 2600);
+  // Tick the elapsed labels in place (re-rendering the rail every second would swallow clicks).
+  setInterval(() => {
+    S.forEach(s => { if (s.el) s.el.querySelector('.pill').textContent = pillText(s); });
+    rail.querySelectorAll('.rail-row').forEach(r => { const s = byId(r.dataset.id); r.querySelector('.e').textContent = railTime(s); });
+    updateMore();
+  }, 1000);
+})();
+</script>

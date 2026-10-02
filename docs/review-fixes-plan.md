@@ -50,7 +50,7 @@ Fixes land on the branch `review-fixes`. The exception is roost-only findings, w
 | [CP23](#cp23) | 🟡 P2 | Performance | Overlay paint path: no IO, no per-frame allocations | M | 🟦 code + tests done, dogfood owed |
 | [CP24](#cp24) | 🟡 P2 | Performance | Misc perf batch (metrics, history tail, diff, arcade, images, watcher) | M | 🟦 code + tests done, dogfood owed |
 | [CP25](#cp25) | ⚪ P3 | Correctness | Watcher race, PID reuse, Process disposal | S | 🟦 code + tests done, dogfood owed |
-| [CP26](#cp26) | 🟡 P2 | roost | Roost-branch findings (land on `roost`) | M | ⬜ |
+| [CP26](#cp26) | 🟡 P2 | roost | Roost-branch findings (landed on `roost-merge`) | M | 🟦 code + tests done, dogfood owed |
 
 **Suggested order:**
 1. CP1 → CP2 → CP7. These three are the P0s. CP1 and CP2 can ship as a single migration.
@@ -1033,18 +1033,24 @@ The upshot is that a stolen maintainer or CI token means every one-liner install
 ## roost branch
 
 <a id="cp26"></a>
-### CP26 — Roost-branch findings · 🟡 P2 · M · ⬜
+### CP26 — Roost-branch findings · 🟡 P2 · M · 🟦
 
-These live on `roost` (not merged). Fix them there before it merges; they are tracked here so nothing gets lost. Line numbers are as on `roost`.
+These lived on `roost` (not merged). `roost` was merged into the hardened `main` on the branch `roost-merge` (merge 9d9da91), and they were fixed there, ahead of the merge to `main`. Line numbers are as on `roost`.
 
-- [ ] 🟠 **Enter/Esc can approve or deny a pane you can't see** (`RoostWindow.cs:626,641`). They act on the *focused* Perch pane's pending permission even after paging or filtering has taken it off screen. Require `_placed.ContainsKey(_focused)` and an expanded pane, or clear `_focused` when the pane leaves view.
-- [ ] 🟠 **New-session panes never recover** (`RoostFeed.cs:79`). A null transcript path (a new session with no `.jsonl` yet) is never retried, so the pane stays on "No activity yet" forever. Tail the direct encoded path, or re-resolve on each roster scan.
-- [ ] 🟡 **Closed panes are remembered by bare PID** (`RoostRoster.cs:105,149`). They are persisted that way and pruned only in memory, so after a restart a recycled PID pre-hides an unrelated session. Key by pid + sessionId, and persist the pruned set.
-- [ ] 🟡 **Tailing depends entirely on the watcher** (`TranscriptTailHost.cs:48,55`). `Poke()` is never called, `Error` is unhandled, and a missing directory means it never watches. Call `Poke()` from `UpdateRoost`, and re-arm on `Error`.
-- [ ] 🟡 **"Load earlier" freezes the UI** (`RoostFeed.cs:95,113`). It reads the whole transcript and folds it in a single UI post. Reuse HistoryWindow's size gate, and fold in batches at Background priority.
-- [ ] ⚪ **Mini cards re-parse on every rebuild** (`ActivitySummary.cs:123` / `SessionPane.cs:486-507`). They re-parse tool `InputJson`. Cache per item version.
-- [ ] ⚪ **`TranscriptTailReader.Read` can throw** (`TranscriptTailReader.cs:77,101,104`). It throws when the file shrinks between length and read (`n == 0`) and on files over 2GB. Guard, read in bounded chunks, and catch everything.
-- [ ] ⚪ **Take-over uses a stale snapshot** (`App.axaml.cs:833`, `OnElevateToPerch`). Re-read the pane after the confirm, and abort unless `Terminate` returns Terminated or AlreadyGone.
-- [ ] ⚪ **Suppressed toasts are lost.** A toast suppressed as "seen in Roost" is dropped for good. Queue it and replay on Deactivated, or when the pane leaves view.
-- [ ] ⚪ **Rail rows rebuild every second** (`RoostWindow.cs:229`), and pointer presses trigger a full `Refresh`. Update rows in place, and skip when focus is unchanged.
-- [ ] ⚪ **`RoostLayout` isn't validated.** Normalise it with `Enum.IsDefined`.
+- [x] 🟠 **Enter/Esc can approve or deny a pane you can't see** (`RoostWindow.cs:626,641`). They act on the *focused* Perch pane's pending permission even after paging or filtering has taken it off screen. Require `_placed.ContainsKey(_focused)` and an expanded pane, or clear `_focused` when the pane leaves view. *Done: `FocusedPerchKey` refuses unless the pane is placed by the current layout and expanded.*
+- [x] 🟠 **New-session panes never recover** (`RoostFeed.cs:79`). A null transcript path (a new session with no `.jsonl` yet) is never retried, so the pane stays on "No activity yet" forever. Tail the direct encoded path, or re-resolve on each roster scan. *Done: re-resolves on each scan via `RoostFeed.Poke` (throttled to 2 s; a miss is cheap since CP20's miss cache).*
+- [x] 🟡 **Closed panes are remembered by bare PID** (`RoostRoster.cs:105,149`). They are persisted that way and pruned only in memory, so after a restart a recycled PID pre-hides an unrelated session. Key by pid + sessionId, and persist the pruned set. *Done: persisted as `pid/sessionId` tokens (`RoostRoster.PersistedClosed`; old bare-pid entries are ignored), and `RoostRoster.ClosedChanged` fires on prunes and `/clear` too, so the file stays pruned. Tests in `RoostRosterTests`.*
+- [x] 🟡 **Tailing depends entirely on the watcher** (`TranscriptTailHost.cs:48,55`). `Poke()` is never called, `Error` is unhandled, and a missing directory means it never watches. Call `Poke()` from `UpdateRoost`, and re-arm on `Error`. *Done: every scan pokes each feed; `Poke` arms a watcher that never started; `Error` re-arms with a catch-up read.*
+- [x] 🟡 **"Load earlier" freezes the UI** (`RoostFeed.cs:95,113`). It reads the whole transcript and folds it in a single UI post. Reuse HistoryWindow's size gate, and fold in batches at Background priority. *Done differently: `TranscriptTailHost<T>` runs the consumer's decode on the pool, so a fresh start builds the whole conversation off the UI thread (appends arrive pre-parsed, as in CP24's history tail). Transcripts ≥ `SessionHistory.LargeTranscriptBytes` need a second, confirming click.*
+- [x] ⚪ **Mini cards re-parse on every rebuild** (`ActivitySummary.cs:123` / `SessionPane.cs:486-507`). They re-parse tool `InputJson`. Cache per item version. *Done: collapsed result cached per `ToolCallPart` (weak table), invalidated when its `ResultText` reference changes.*
+- [x] ⚪ **`TranscriptTailReader.Read` can throw** (`TranscriptTailReader.cs:77,101,104`). It throws when the file shrinks between length and read (`n == 0`) and on files over 2GB. Guard, read in bounded chunks, and catch everything. *Done: 1 MiB chunks with a carried partial line, the offset committed only when a read completes, catch-all.*
+- [x] ⚪ **Take-over uses a stale snapshot** (`App.axaml.cs:833`, `OnElevateToPerch`). Re-read the pane after the confirm, and abort unless `Terminate` returns Terminated or AlreadyGone. *Done, with a toast for each abort.*
+- [x] ⚪ **Suppressed toasts are lost.** A toast suppressed as "seen in Roost" is dropped for good. Queue it and replay on Deactivated, or when the pane leaves view. *Done: queued per session; replayed on Deactivated, on close, and when the placed set changes (`RoostWindow.PlacementChanged`), while the session is still in that state.*
+- [x] ⚪ **Rail rows rebuild every second** (`RoostWindow.cs:229`), and pointer presses trigger a full `Refresh`. Update rows in place, and skip when focus is unchanged. *Done.*
+- [x] ⚪ **`RoostLayout` isn't validated.** Normalise it with `Enum.IsDefined`. *Done: `RoostLayout.Normalize`.*
+
+**Merge notes (`roost-merge`):** `HistoryWindow` keeps `main`'s CP24 tail (`TranscriptLineTail`, which decodes off the UI thread), and roost's switch to `TranscriptTailHost` was dropped. `SessionThreadView.Unbind` is `main`'s clearing version (CP22). The Roost button's glyph and badge paint through `OverlayDraw.Pen`/`Brush` (CP23).
+
+**Snap layouts (`dionfoster/roost-snap-layouts`, merged onto `roost-merge`):** that branch replaced Tiled's paged 2×2 with a top-6 stage (`RoostStage`), snap templates and warm (hidden) panes, so the CP26 window fixes were carried onto the new design. Enter/Esc still need the pane placed and expanded, which now also rules out off-stage and warm panes. The rail keeps the in-place row updates, plus that branch's "new" tag, off-stage dimming and drag-from-rail. The new persisted pane order (`AppSettings.RoostOrder`) uses the same `pid/sessionId` tokens as the closed set (`RoostRoster.PersistedOrder`), so a recycled pid can't inherit a saved place. A persisted snap template no build defines falls back to the default (`RoostTemplates.For`). `bench-roost 200` after the merge: swap drop 11 ms, a pane back from the rail 32 ms, which matches that branch's own figures.
+
+**Dogfood owed:** Enter/Esc with the focused pane moved off stage, filtered away or zoomed out; a brand-new terminal session's pane filling in once its transcript appears; a closed pane staying closed across a restart (and a recycled pid not being hidden); "Load earlier" on a transcript over 10 MB; Take over after the session ends while the confirm is open; a done/waiting toast arriving after you switch away from the Roost.

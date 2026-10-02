@@ -70,6 +70,14 @@ public partial class App : Application
     private IDisposable? _inboxSub;                  // transient inbox (Connect 4 invites / nudges / rematches)
     private NudgeBubbleWindow? _nudgeBubble;         // at most one on screen at a time
     private HistoryWindow? _historyWindow;
+    // The Roost (docs/roost-plan.md): its roster is app-owned and fed every scan, so the rail and the closed
+    // panes survive closing the window; the window (and its per-pane feeds) exists only while it's open.
+    private readonly Perch.Data.Roost.RoostRoster _roostRoster = new();
+    // …and so are its tabs (docs/roost-tabs-plan.md), saved (debounced) whenever their persisted form moves.
+    private readonly Perch.Data.Roost.RoostTabSet _roostTabs = new();
+    private readonly Perch.Data.Roost.RoostLayoutLibrary _roostLayouts = new();
+    private DispatcherTimer? _roostTabsSave;
+    private RoostWindow? _roostWindow;
     private GitTreeWindow? _treeWindow;
     private MarkdownWindow? _markdownWindow;
     private PlacementEditorWindow? _placementEditor;
@@ -183,6 +191,28 @@ public partial class App : Application
             _overlay.Canvas.ReplayMode = Services.Replay.ReplaySession.IsActive;
             var settings = AppSettings.Load();
             _appSettings = settings;
+            if (settings.RoostClosedPanes is { Count: > 0 } closedPanes) _roostRoster.SeedClosed(closedPanes);
+            // Closing / reopening a pane, and the roster pruning one whose session ended, all move the saved set.
+            _roostRoster.ClosedChanged += () =>
+            {
+                if (_appSettings is not { } s) return;
+                var closed = _roostRoster.PersistedClosed;
+                s.RoostClosedPanes = closed.Count > 0 ? closed.ToList() : null;
+                s.Save();
+            };
+            _roostTabs.Seed(settings.RoostTabs);
+            // A drag or a tab switch moves the saved tabs; coalesce a burst of them into one write.
+            _roostTabsSave = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+            _roostTabsSave.Tick += (_, _) => FlushRoostTabs();
+            _roostTabs.Changed += () => { _roostTabsSave.Stop(); _roostTabsSave.Start(); };
+            // Saved painter layouts change only on an explicit save / rename / delete, so they're written at once.
+            _roostLayouts.Seed(settings.RoostSavedLayouts);
+            _roostLayouts.Changed += () =>
+            {
+                if (_appSettings is not { } s) return;
+                s.RoostSavedLayouts = _roostLayouts.ToState();
+                s.Save();
+            };
 
             // Seed the user-defined initial placements before the window is shown (OnOpened applies the
             // floating one; the dense one is used on first dense entry). Null on either keeps the default.
@@ -279,6 +309,7 @@ public partial class App : Application
                 RefreshSessionActivity(sessions);   // mirror each session's live sub-agents into its own window
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
+                UpdateRoost(sessions);
                 RefreshOriginIcons(sessions);
                 RefreshComposerActions();   // grow/drop each session window's artifact + markdown glyphs
                 UpdateUsageDirs(sessions);  // one usage bar-set per org currently in use (+ the default)
@@ -320,6 +351,7 @@ public partial class App : Application
             // the chosen artifact is opened here.
             _overlay.Canvas.SessionActivated += FocusSession;
             _overlay.Canvas.NewSessionRequested += OpenSessionWindow;   // "+ New session" row → rich session window
+            _overlay.Canvas.RoostRequested += OpenRoost;                // …its split-panes button → the Roost
             _overlay.Canvas.ArtifactChosen += OpenArtifact;
             _overlay.Canvas.DaemonListRequested += OpenDaemonList;
 
@@ -627,6 +659,8 @@ public partial class App : Application
         _settings?.Close();
         _onboardingWindow?.Close();
         _historyWindow?.Close();
+        _roostWindow?.Close();
+        FlushRoostTabs();
         _treeWindow?.Close();
         _markdownWindow?.CloseWithoutPrompt();
         _placementEditor?.Close();
@@ -792,9 +826,18 @@ public partial class App : Application
     // external terminal's process, then resume the same session id in Perch's own embedded ConPTY
     // terminal. The conversation continues under the same id/transcript in a real terminal that lives
     // inside Perch's rich session window — no orphaned external window.
-    private async void OnElevateToPerch(ClaudeSession session)
+    // Only a real interactive CLI session can be elevated (not desktop / SDK, or one Perch already owns) — the
+    // overlay row menu's rule, shared with the Roost's "Take over in Perch".
+    internal static bool CanElevate(ClaudeSession s) =>
+        s.Entrypoint == "cli" && !Perch.Data.Control.ControlledSessions.Owns(s.SessionId);
+
+    private void OnElevateToPerch(ClaudeSession session) => OnElevateToPerch(session, null);
+
+    // The confirm is modal over whichever window asked (the Roost, else the overlay); nothing stops until Elevate.
+    private async void OnElevateToPerch(ClaudeSession session, Window? requester)
     {
-        if (_overlay is not { } owner) return;
+        Window? owner = requester ?? _overlay;
+        if (owner is null) return;
 
         bool confirmed = await ConfirmDialog.ShowAsync(
             owner,
@@ -805,11 +848,31 @@ public partial class App : Application
             "Elevate", "Cancel");
         if (!confirmed) return;
 
+        // The dialog can sit open a while: act on the session as it is now, not as it was at the click. It may
+        // have ended, been /cleared onto another conversation, or been taken over already.
+        var current = _lastSessions.FirstOrDefault(s => s.Pid == session.Pid);
+        if (current is null || !CanElevate(current))
+        {
+            _notifier?.Show("Not taken over", $"{session.DisplayName} changed while you were deciding, so Perch left it alone.",
+                ToastLevel.Warning, null, null);
+            return;
+        }
+
         // Stop the external process so its --resume can be picked up, then rescan to drop the dead row —
-        // the window's refuse-if-live guard would otherwise (rightly) see it as still running.
-        SessionTerminator.Terminate(session.Pid);
+        // the window's refuse-if-live guard would otherwise (rightly) see it as still running. Resume only once
+        // it's really stopped: a refused or failed kill leaves the terminal session running.
+        var result = SessionTerminator.Terminate(current.Pid);
         _monitorHost?.Rescan();
-        OpenSessionResume(session.SessionId, session.Cwd);
+        if (result is not (TerminateResult.Terminated or TerminateResult.AlreadyGone))
+        {
+            _notifier?.Show("Couldn't take over",
+                result == TerminateResult.NotTheSession
+                    ? $"PID {current.Pid} no longer looks like {current.DisplayName}, so Perch left it alone."
+                    : $"{current.DisplayName} (PID {current.Pid}) refused to stop — it may be running elevated.",
+                ToastLevel.Error, null, null);
+            return;
+        }
+        OpenSessionResume(current.SessionId, current.Cwd);
     }
 
     // Opens the artifact the user picked from the overlay's artifact-glyph list. Middle-click asks for a
@@ -1146,7 +1209,7 @@ public partial class App : Application
         // Controlled (Perch-window) sessions still alert: you might not be watching the window, so a finished
         // turn should flash + toast like any other. Clicking through focuses the Perch window (FocusSession).
         _overlay!.Canvas.TriggerAttention(SessionStatus.NeedsAttention);
-        _notifications?.Notify(NotificationKind.Done, session);
+        NotifyUnlessSeenInRoost(NotificationKind.Done, session);
         CheckAchievements(force: false); // a finish is a natural moment to have crossed a threshold
     }
 
@@ -1215,7 +1278,7 @@ public partial class App : Application
     {
         if (IsDaemonSession(session)) return;
         _overlay!.Canvas.TriggerAttention(SessionStatus.AwaitingInput);
-        _notifications?.Notify(NotificationKind.WaitingForInput, session);
+        NotifyUnlessSeenInRoost(NotificationKind.WaitingForInput, session);
     }
 
     // A session's last API request failed (e.g. 529 Overloaded): flash the overlay and fire the API-error
@@ -1224,7 +1287,7 @@ public partial class App : Application
     {
         if (IsDaemonSession(session)) return;
         _overlay!.Canvas.TriggerAttention(SessionStatus.ApiError);
-        _notifications?.Notify(NotificationKind.ApiFailed, session);
+        NotifyUnlessSeenInRoost(NotificationKind.ApiFailed, session);
     }
 
     // A tracked PR changed state (merged/closed, reviewed, approved): fire the matching desktop alert (toast/
@@ -1509,6 +1572,115 @@ public partial class App : Application
                 w.ShowSession(sessionId);
             });
     }
+
+    // ── Roost ─────────────────────────────────────────────────────────────────
+    // Every scan folds into the roster (cheap — no IO), and an open Roost re-syncs. Autonomous SDK runs stay
+    // out, as they do from the overlay's main list: nobody is at the keyboard for them.
+    private void UpdateRoost(IReadOnlyList<ClaudeSession> sessions)
+    {
+        _roostRoster.Update(sessions.Where(s => !s.IsBackground).ToList(), Clock.Now);
+        // Before the window's own sync: a take-over re-keys a pane, and its region must follow the new key.
+        _roostTabs.Sync(_roostRoster.Panes, _roostRoster.Adopted);
+        _roostWindow?.RosterChanged();
+        ReplayRoostSuppressed();
+    }
+
+    // The Roost half of AttentionSeen for a session: is the Roost the active window, and is the pane on screen?
+    private (bool RoostActive, bool OnScreen) RoostView(string sessionId) =>
+        _roostWindow is { } r ? (r.IsActive, r.IsOnScreen(sessionId)) : (false, false);
+
+    // The monitor's done / waiting / API-error toasts skip a session the Roost already has in front of the user.
+    private bool SeenInRoost(ClaudeSession session)
+    {
+        var (active, onScreen) = RoostView(session.SessionId);
+        return Perch.Data.Roost.AttentionSeen.Seen(ownWindowActive: false, active, onScreen);
+    }
+
+    // Toasts the Roost swallowed because the pane was in front of the user, by session id. They aren't dropped:
+    // if the user looks away (the Roost deactivates or closes, or the pane pages / filters out of view) while the
+    // session is still in that state, the toast fires then. One that's been dealt with, or moved on, is forgotten.
+    private readonly Dictionary<string, NotificationKind> _roostSuppressed = new(StringComparer.Ordinal);
+
+    private void NotifyUnlessSeenInRoost(NotificationKind kind, ClaudeSession session)
+    {
+        if (SeenInRoost(session)) { _roostSuppressed[session.SessionId] = kind; return; }
+        _roostSuppressed.Remove(session.SessionId);
+        _notifications?.Notify(kind, session);
+    }
+
+    private void ReplayRoostSuppressed()
+    {
+        if (_roostSuppressed.Count == 0) return;
+        foreach (var (sid, kind) in _roostSuppressed.ToList())
+        {
+            var s = _lastSessions.FirstOrDefault(x => x.SessionId == sid);
+            if (s is null || s.Status != StatusOf(kind)) { _roostSuppressed.Remove(sid); continue; }
+            if (SeenInRoost(s)) continue;
+            _roostSuppressed.Remove(sid);
+            _notifications?.Notify(kind, s);
+        }
+
+        static SessionStatus StatusOf(NotificationKind k) => k switch
+        {
+            NotificationKind.Done => SessionStatus.NeedsAttention,
+            NotificationKind.WaitingForInput => SessionStatus.AwaitingInput,
+            _ => SessionStatus.ApiError,
+        };
+    }
+
+    private void OpenRoost() =>
+        _roostWindow = WindowHost.ShowOrFocus(_roostWindow,
+            () =>
+            {
+                // First run (D8): nothing was ever saved, so start the user off with a "Main" tab holding the
+                // live sessions. Once tabs have been saved — even all closed — this never fires again.
+                if (_appSettings is { RoostTabs: null } && _roostTabs.Tabs.Count == 0)
+                    _roostTabs.CreateDefault(_roostRoster.Panes, aspect: 1.6);
+                var w = new RoostWindow(_roostRoster, _roostTabs, CreateRoostFeed,
+                    railSort: _appSettings?.RoostRailSort ?? default, layouts: _roostLayouts);
+                // A prompt that was only "seen" in the Roost gets its toast once the user looks away from it.
+                w.Deactivated += (_, _) =>
+                {
+                    foreach (var sw in _sessionWindows) sw.ReevaluateAttention();
+                    ReplayRoostSuppressed();
+                };
+                w.PlacementChanged += ReplayRoostSuppressed;
+                w.NewSessionRequested += OpenSessionWindow;
+                w.OpenSessionRequested += FocusSession;
+                w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
+                w.RailSortChanged += sort => { if (_appSettings is { } s) { s.RoostRailSort = sort; s.Save(); } };
+                w.PermissionAnswered += (sid, item, allow, mode) =>
+                    PerchSessionFor(sid)?.AnswerPermission(item, allow, mode);
+                w.QuestionAnswered += (sid, item, answers) => PerchSessionFor(sid)?.AnswerQuestion(item, answers);
+                w.InterruptRequested += sid => PerchSessionFor(sid)?.Interrupt();
+                w.PromptSubmitted += (sid, text) => PerchSessionFor(sid)?.SendPrompt(text);
+                // Take over = the overlay's Elevate: same eligibility, same confirm (modal over the Roost).
+                w.CanTakeOver = CanElevate;
+                w.TakeOverRequested += s => OnElevateToPerch(s, _roostWindow);
+                return w;
+            },
+            () => { _roostWindow = null; FlushRoostTabs(); ReplayRoostSuppressed(); });
+
+    // Writes a pending (debounced) tab save: the debounce running out, or now — the Roost closing, or an update
+    // about to restart the app. Nothing pending, nothing written.
+    private void FlushRoostTabs()
+    {
+        if (_roostTabsSave is not { IsEnabled: true } timer) return;
+        timer.Stop();
+        if (_appSettings is not { } s) return;
+        s.RoostTabs = _roostTabs.ToState();
+        s.Save();
+    }
+
+    // A Perch-driven session reads its live in-memory conversation; anything else (or a Perch session this
+    // app doesn't own) tails its transcript from disk.
+    private RoostFeed? CreateRoostFeed(Perch.Data.Roost.RoostPane pane) =>
+        PerchSessionFor(pane.Session.SessionId) is { } owned
+            ? RoostFeed.ForControlled(owned)
+            : RoostFeed.ForTranscript(pane.Session.SessionId, pane.Session.Cwd);
+
+    private Services.PerchSession? PerchSessionFor(string? sessionId) =>
+        sessionId is null ? null : _perchSessions.FirstOrDefault(s => s.SessionId == sessionId);
 
     private void OpenStats() =>
         _statsWindow = WindowHost.ShowOrFocus(_statsWindow,
@@ -1816,6 +1988,7 @@ public partial class App : Application
         w.ComposerOverflowRequested += anchor => ShowComposerOverflowMenu(anchor, w);   // "…" activate menu
         // A background session needing a decision (permission / question / plan) raises a desktop toast.
         w.AttentionRequested += (title, body) => _notifier?.Show(title, body, ToastLevel.Warning, null, null);
+        w.RoostView = RoostView;   // …unless the Roost already has it on screen
         _sessionWindows.Add(w);
         w.Closed += (_, _) => _sessionWindows.Remove(w);
         return w;
@@ -2623,6 +2796,9 @@ public partial class App : Application
         var newSessionItem = new NativeMenuItem("New session…");
         newSessionItem.Click += (_, _) => OpenSessionWindow();
 
+        var roostItem = new NativeMenuItem("Roost…");
+        roostItem.Click += (_, _) => OpenRoost();
+
         // Reads "Check for Updates…" normally; flips to "Update available" once a pending update is
         // detected (see OnUpdateAvailabilityChanged). Clicking it applies the pending update, else checks.
         _updateItem = new NativeMenuItem("Check for Updates…");
@@ -2654,6 +2830,7 @@ public partial class App : Application
                 achievementsItem,
                 todosItem,
                 newSessionItem,
+                roostItem,
                 _updateItem,
                 new NativeMenuItemSeparator(),
                 exitItem,
@@ -2717,6 +2894,8 @@ public partial class App : Application
         TryRegister(s.HotkeyToggleDense,   () => Dispatcher.UIThread.Post(ToggleDense));
         TryRegister(s.HotkeyCycleSessions, () => Dispatcher.UIThread.Post(CycleSessions));
         TryRegister(s.HotkeyOpenSwitcher,  () => Dispatcher.UIThread.Post(OpenSwitcher));
+        // A background tray can't take focus by itself, so the hotkey path forces the Roost to the front.
+        TryRegister(s.HotkeyOpenRoost,     () => Dispatcher.UIThread.Post(() => { OpenRoost(); if (_roostWindow is { } r) ForceFront(r); }));
         if (DockedModeAvailable) TryRegister(s.HotkeyToggleDocked, () => Dispatcher.UIThread.Post(ToggleDocked));
     }
 

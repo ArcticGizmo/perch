@@ -68,4 +68,10 @@ public interface IWindowChrome
     /// if it's already here, if virtual desktops are unavailable, or off-platform. Best-effort; a zero handle is
     /// ignored.</summary>
     void MoveWindowToCurrentDesktop(IntPtr handle);
+
+    /// <summary>Asks for the user's attention without stealing focus — the Roost does this when a session starts
+    /// needing them while it isn't the active window. Windows flashes the taskbar button until the window is
+    /// activated (<c>FlashWindowEx</c>); macOS bounces the Dock icon once (<c>requestUserAttention:</c>,
+    /// informational). No-op when the window is already active. Best-effort; a zero handle is ignored.</summary>
+    void FlashTaskbar(IntPtr handle);
 }

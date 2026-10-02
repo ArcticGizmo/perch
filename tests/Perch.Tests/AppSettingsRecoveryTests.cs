@@ -43,6 +43,16 @@ public class AppSettingsRecoveryTests
     }
 
     [Fact]
+    public void RetiredRoostKeysReadBackHarmlessly()
+    {
+        // The pre-tabs Roost layout settings (roost-tabs T7 deleted them) in a file written by an older build: the
+        // whole file still deserializes, and the settings that remain come through.
+        var json = """{"RoostLayout": 1, "RoostLayoutByCount": {"2": 3}, "RoostOrder": ["1234/s1"], "RoostRailSort": 1}""";
+        var s = System.Text.Json.JsonSerializer.Deserialize<AppSettings>(json)!;
+        Assert.Equal(Perch.Data.Roost.RoostRailSort.Alphabetical, s.RoostRailSort);
+    }
+
+    [Fact]
     public void GarbageFallsBackToDefaultsButNeverToTheWizard()
     {
         // A torn write isn't even JSON: nothing to salvage, but the file existed — no Quick Start.

@@ -1243,6 +1243,19 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         return tint;
     }
 
+    /// <summary>Show/hide the split-panes Roost button on the "+ New session" row (the Roost itself stays on
+    /// the tray menu and its hotkey).</summary>
+    public void SetShowRoostButton(bool show)
+    {
+        if (_showRoostButton == show) return;
+        _showRoostButton = show;
+        if (!show) { _roostRect = default; _hoveredRoost = false; }
+        InvalidateVisual();
+    }
+
+    /// <summary>HeadlessRenderer hook: paint the Roost button in its hovered state (no pointer in a capture).</summary>
+    internal void HoverRoostForRender(bool hovered) { _hoveredRoost = hovered; InvalidateVisual(); }
+
     /// <summary>Show/hide the clickable artifact glyph (the session still tracks its artifacts).</summary>
     public void SetShowArtifacts(bool show)
     {
@@ -1432,6 +1445,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private int _hoveredPrRow = -1;
     private bool _hoveredNewSession;      // the "+ New session" launcher row (session-control)
     private Rect _newSessionRect;         // captured at paint for hit-testing
+    private bool _showRoostButton = true; // the split-panes Roost button at the right of that row
+    private bool _hoveredRoost;
+    private Rect _roostRect;              // captured at paint; empty when the button is gated off
     private readonly Dictionary<int, Rect> _artifactRects = new();
     private readonly Dictionary<int, Rect> _mdRects = new();
     private readonly Dictionary<int, Rect> _thermoRects = new();
@@ -1589,6 +1605,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     /// overlay rather than a tray menu (session-control).</summary>
     internal event Action? NewSessionRequested;
 
+    /// <summary>Raised when the user clicks the split-panes button at the right of the "+ New session" row —
+    /// the app opens the Roost (every session side by side; docs/roost-plan.md).</summary>
+    internal event Action? RoostRequested;
+
     /// <summary>Raised when the user picks an artifact from the artifact glyph's popover list; the app
     /// opens it. The list is always shown (even for a single artifact), so this is the only artifact path.</summary>
     internal event Action<Artifact, bool>? ArtifactChosen; // bool: open in a new browser window (middle-click)
@@ -1725,7 +1745,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -3149,12 +3169,14 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             DrawPrBanner(ctx, top, rowH, width, prOp);
 
         // The wrong-account alarm: a thick, pulsing red outline framing the whole row, drawn after everything
-        // (even the PR banner) so nothing can hide it. The wash went down under the content up top.
+        // (even the PR banner) so nothing can hide it. The wash went down under the content up top. Under the
+        // OS reduce-motion preference it holds steady at full strength and a touch thicker instead.
         if (mismatch)
         {
             var d = MismatchColor;
-            byte a = (byte)(140 + 115 * PulseIntensity());   // alpha breathes 140..255
-            var pen = OverlayDraw.Pen(OverlayDraw.Brush(Color.FromArgb(a, d.R, d.G, d.B)), 2.5);
+            bool still = Pulse.ReduceMotion;
+            byte a = (byte)(140 + 115 * Pulse.Intensity());   // alpha breathes 140..255 (255 when still)
+            var pen = OverlayDraw.Pen(OverlayDraw.Brush(Color.FromArgb(a, d.R, d.G, d.B)), still ? 3.5 : 2.5);
             ctx.DrawRectangle(null, pen, new RoundedRect(new Rect(2.5, top + 2.5, width - 5, rowH - 4), 5));
         }
     }
@@ -3213,16 +3235,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         return names.Count == 1 ? names[0]! : $"{names[0]} +{names.Count - 1}";
     }
 
-    // A smooth 0→1→0 breathing curve (~1.1s period) off the wall clock, driving the outline's pulsing alpha.
-    private static double PulseIntensity()
-    {
-        const double periodMs = 1100;
-        double phase = (DateTime.Now.TimeOfDay.TotalMilliseconds % periodMs) / periodMs;
-        return 0.5 - 0.5 * Math.Cos(phase * 2 * Math.PI);
-    }
-
-    // Runs a ~17fps repaint only while a mismatch outline is on screen (see _anyMismatchThisFrame), so the
-    // pulse animates without spinning a timer when nothing is wrong. Mirrors UpdateTickTimer.
+    // Runs a ~17fps repaint only while a mismatch outline is on screen (see _anyMismatchThisFrame) and motion is
+    // allowed, so the pulse animates without spinning a timer when nothing is wrong (or when the outline is
+    // steady under reduced motion). Mirrors UpdateTickTimer.
     //
     // It also stops once the overlay can't be seen (hidden, minimised, detached): no frame is painted then, so
     // _anyMismatchThisFrame never gets cleared and the timer used to invalidate forever (CP23). The next paint
@@ -3232,8 +3247,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     private void UpdatePulseTimer()
     {
         _pulseTimer ??= CreatePulseTimer();
-        if (_anyMismatchThisFrame && !_pulseTimer.IsEnabled) _pulseTimer.Start();
-        else if (!_anyMismatchThisFrame && _pulseTimer.IsEnabled) _pulseTimer.Stop();
+        bool animate = _anyMismatchThisFrame && !Pulse.ReduceMotion;
+        if (animate && !_pulseTimer.IsEnabled) _pulseTimer.Start();
+        else if (!animate && _pulseTimer.IsEnabled) _pulseTimer.Stop();
     }
 
     private DispatcherTimer CreatePulseTimer()
@@ -4153,6 +4169,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         // The "+ New session" launcher band (guard on ShowFullPanel — its rect is stale in dense mode).
         bool overNewSession = ShowFullPanel && _newSessionRect.Width > 0 && _newSessionRect.Contains(p);
         if (overNewSession != _hoveredNewSession) { _hoveredNewSession = overNewSession; InvalidateVisual(); }
+        bool overRoost = ShowFullPanel && _roostRect.Width > 0 && _roostRect.Contains(p);
+        if (overRoost != _hoveredRoost) { _hoveredRoost = overRoost; InvalidateVisual(); }
 
         int ql = HitTestQuickLink(p);
         if (ql != _hoveredQuickLink) { _hoveredQuickLink = ql; InvalidateVisual(); }
@@ -4240,7 +4258,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Cursor = overResize ? ResizeCursor
             : (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
-               || overUsageToggle)
+               || overRoost || overUsageToggle)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -4268,6 +4286,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             _micLabelRect.Contains(p)                 ? (TipKind.Mic, -1) :
             _noteButtonRect.Width > 0
                 && _noteButtonRect.Contains(p)        ? (TipKind.NoteButton, -1) :
+            ShowFullPanel && _roostRect.Width > 0
+                && _roostRect.Contains(p)             ? (TipKind.Roost, -1) :
             HitTestGameIcon(p) is var gi && gi >= 0 ? (TipKind.Game, gi) :
             HitTestReactionSummary(p) is var rs && rs >= 0 ? (TipKind.ReactionSummary, rs) :
             HitTestSocialStatus(p) is var ss && ss >= 0 ? (TipKind.SocialStatus, ss) :
@@ -4304,6 +4324,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Dir:     ShowDirTooltip(_tipRow);     break;
             case TipKind.Origin:  ShowOriginTooltip(_tipRow);  break;
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
+            case TipKind.Roost:   ShowRoostTooltip();          break;
             case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
             case TipKind.ReactionSummary: ShowReactionSummaryTooltip(_tipRow); break;
             case TipKind.Game: ShowGameTooltip(_tipRow); break;
@@ -4324,6 +4345,20 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Tooltip().ShowLines(lines, ToScreen(_noteButtonRect.Left, _noteButtonRect.Bottom + 4));
     }
 
+    // The Roost button: what it opens, plus how many sessions are waiting when the badge is lit.
+    private void ShowRoostTooltip()
+    {
+        if (_roostRect.Width <= 0) return;
+        int waiting = _sessions.Count(s => !s.IsBackground && s.Status is SessionStatus.AwaitingInput or SessionStatus.ApiError);
+        var lines = new List<OverlayTooltip.Line>
+        {
+            new("Roost", OverlayTooltip.FgColor, true),
+            new("Every session, side by side", OverlayTooltip.MutedColor, false),
+        };
+        if (waiting > 0) lines.Add(new($"{waiting} need{(waiting == 1 ? "s" : "")} you", Palette.Yellow, false));
+        Tooltip().ShowLines(lines, ToScreen(_roostRect.Left - 60, _roostRect.Bottom + 4));
+    }
+
     private bool InUsageStrip(Point p) =>
         ShowFullPanel && UsageStripVisible
         && p.Y >= UsageStripTop && p.Y < UsageStripTop + UsageStripHeight;
@@ -4334,6 +4369,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         changed |= ClearSocialRegionHover();
         if (_hoveredUsageSet is not null) { _hoveredUsageSet = null; changed = true; }
         _hoveredSocial = false;
+        if (_hoveredRoost) { _hoveredRoost = false; changed = true; }
         _hoveredNewSession = false;
         _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHyperHeader = _hoveredAutonomousHeader = false;
         _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredTodoRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
@@ -4687,6 +4723,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             if (!_collapsedAgents.Remove(chevSub.AgentId))
                 _collapsedAgents.Add(chevSub.AgentId);
             Update(_sessions); // rebuild the render list under the new collapse state
+            return;
+        }
+
+        // The Roost button at the right of the "+ New session" row (never drawn in Rearrange preview).
+        if (!RearrangeMode && ShowFullPanel && _roostRect.Width > 0 && _roostRect.Contains(p))
+        {
+            RoostRequested?.Invoke();
             return;
         }
 

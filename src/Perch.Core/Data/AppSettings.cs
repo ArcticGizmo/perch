@@ -159,6 +159,28 @@ internal sealed class AppSettings
     // its header. Toggled by the section's own chevron. Defaults to expanded.
     public bool HypertreeExpanded { get; set; } = true;
 
+    // How the Roost's rail orders sessions (by status group, or A–Z), picked by the toggle in the rail's header.
+    // UI state, not a Settings-window control. See docs/roost-tabs-plan.md. (The pre-tabs RoostLayout,
+    // RoostLayoutByCount and RoostOrder keys an older file may still carry are ignored when it loads.)
+    public Roost.RoostRailSort RoostRailSort { get; set; } = Roost.RoostRailSort.Status;
+
+    // The Roost's tabs (RoostTabSet.ToState): each tab's name, painted layout and the "pid/sessionId" token of the
+    // session in each region, plus the active tab. Null = never saved, so the first open creates a "Main" tab;
+    // once saved it stays non-null even with every tab closed. UI state. See docs/roost-tabs-plan.md.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Roost.RoostTabsState? RoostTabs { get; set; }
+
+    // The layouts saved from the Roost's tab painter (RoostLayoutLibrary.ToState), listed after the built-in
+    // presets. Null = none. UI state. See docs/roost-tabs-plan.md.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<Roost.RoostSavedLayout>? RoostSavedLayouts { get; set; }
+
+    // The Roost panes the user closed, as "pid/sessionId" tokens (RoostRoster.PersistedClosed), so they stay hidden
+    // across restarts while their session lives — and a recycled pid never hides an unrelated one. Pruned to live
+    // sessions as the roster runs, on disk too. UI state, not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? RoostClosedPanes { get; set; }
+
     // Per-account collapse state for the usage strip: an account renders as full stacked bars or a compact
     // chip. The default follows activity (active account → bars, known-but-idle account → chip); this map
     // holds only the accounts the user has explicitly toggled, keyed by org UUID (or the config-dir path
@@ -226,6 +248,11 @@ internal sealed class AppSettings
     // artifacts. Off hides the glyph (the row click just focuses the terminal) and lets the session name
     // reclaim its width; the artifacts are still tracked. Defaults to true; a missing key keeps it on.
     public bool ShowArtifacts { get; set; } = true;
+
+    // Whether the overlay's "+ New session" row carries the right-aligned split-panes button that opens the
+    // Roost (every session side by side — docs/roost-plan.md). The Roost stays reachable from the tray menu and
+    // its hotkey either way. Defaults to true.
+    public bool ShowRoostButton { get; set; } = true;
 
     // Whether to draw the Markdown glyph next to a session that has produced (written/edited) one or more
     // .md files. Purely the glyph: the "Markdown files..." right-click item is always available regardless.
@@ -579,6 +606,9 @@ internal sealed class AppSettings
     public HotkeyBinding HotkeyOpenSwitcher { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, ' ');
     //  • Docked — collapse/expand the docked column (Ctrl+Shift+W). Only fires anything in Docked mode.
     public HotkeyBinding HotkeyToggleDocked { get; set; } = new(HotkeyModifiers.Control | HotkeyModifiers.Shift, 'W');
+    //  • Roost — open/focus the Roost, every session side by side (Alt+Shift+R). The dense strip has no
+    //    "+ New session" row, so this (and the tray menu) is how it's reached there.
+    public HotkeyBinding HotkeyOpenRoost { get; set; } = new(HotkeyModifiers.Alt | HotkeyModifiers.Shift, 'R');
 
     // Which terminal the session switcher launches when reopening a closed session (`claude --resume <id>`
     // in its working directory). Auto picks the best available (Windows Terminal, else Command Prompt); an

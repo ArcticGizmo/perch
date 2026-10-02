@@ -496,6 +496,7 @@ internal sealed class SettingsCatalogView : StackPanel
             PreviewTarget.PerchReacts     => ("mood",        Palette.Brand,   Color.FromRgb(45, 40, 26)),
             PreviewTarget.FeedStrip       => ("@ada · 2m",   Palette.Accent,  Color.FromRgb(38, 49, 74)),
             PreviewTarget.ConfigDirLabel  => ("work",        Palette.Muted,   Color.FromRgb(38, 38, 52)),
+            PreviewTarget.RoostButton     => ("◫ Roost",     Palette.Accent,  Color.FromRgb(38, 49, 74)),
             _                             => ("",            Palette.Muted, Color.FromRgb(30, 30, 40)),
         };
 

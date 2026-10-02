@@ -159,8 +159,23 @@ internal static class HeadlessRenderer
                 Allowed = new() { new AccountRef { Uuid = "acme-uuid", Name = "Acme Corp", Email = "jon@acme.com" } },
             },
         });
+        Pulse.Override = false;
         RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_1x.png"), 96);
         RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_1.5x.png"), 144);
+        // …and under the OS reduce-motion preference: a steady, full-strength, slightly thicker outline.
+        Pulse.Override = true;
+        RenderControl(mismatchProbe, Path.Combine(outDir, "overlay_account_mismatch_still_1x.png"), 96);
+        Pulse.Override = null;
+
+        // The Roost entry point on the "+ New session" row (docs/roost-plan.md CP9): hovered (the sample has
+        // sessions awaiting input, so it's badged), and gated off by its setting.
+        var roostProbe = new OverlayCanvas();
+        roostProbe.Update(SampleData.Sessions());
+        roostProbe.HoverRoostForRender(true);
+        RenderControl(roostProbe, Path.Combine(outDir, "overlay_roost_hover_1.5x.png"), 144);
+        roostProbe.HoverRoostForRender(false);
+        roostProbe.SetShowRoostButton(false);
+        RenderControl(roostProbe, Path.Combine(outDir, "overlay_roost_off_1x.png"), 96);
         BenchOverlayPaint();
 
         var probe = new OverlayCanvas();
@@ -500,6 +515,14 @@ internal static class HeadlessRenderer
         // History viewer's readable transcript view (session-control M1): markdown-rendered prose,
         // dimmed thinking, and tool expanders (one collapsed, one expanded with a stitched result).
         RenderHistoryReadable(outDir);
+
+        // The Roost pane's compact thread density (docs/roost-plan.md CP5): a tighter, full-width column at the
+        // pane's layout scale, every tool card (even an edit's diff) collapsed, in dark and light.
+        RenderRoostThreadCompact(outDir);
+
+        // The Roost window (docs/roost-tabs-plan.md): rail + tab strip + the active tab's regions over the sample
+        // roster — every status, Perch and terminal/IDE origins, tab lights, empty regions and the Focus tab.
+        RenderRoost(outDir);
 
         // The rich Perch-controlled session window (docs/session-ui-plan.md): composed turns — user bubble,
         // Claude prose under the bird mark, collapsed thinking, tool cards, a pending permission card — in
@@ -1373,24 +1396,13 @@ internal static class HeadlessRenderer
     // The history viewer's readable transcript body over synthetic events — the "rich mirror" reading
     // surface for live sessions (session-control M1). Markdown-heavy assistant prose so the block-level
     // MarkdownView styling (heading, fenced code, table) can be eyeballed alongside thinking + tools.
+    private const string HistorySamplePrompt =
+        "Why is the `PlacementMath` test flaky? Show me the fix as a diff and summarise the causes in a table.";
+
     private static void RenderHistoryReadable(string outDir)
     {
-        const string prompt = "Why is the `PlacementMath` test flaky? Show me the fix as a diff and summarise the causes in a table.";
-        var events = new List<Perch.Data.Control.SessionEvent>
-        {
-            new Perch.Data.Control.SessionInitEvent("f1a2b3c4-0000-4000-8000-000000000000", "claude-opus-5", "default", 18),
-            new Perch.Data.Control.AssistantThinkingEvent(
-                "The failure only reproduces at 1.5× DPI — the offset rounds twice, once in Snap and once in ToDip. Reading the test first."),
-            new Perch.Data.Control.ToolUseEvent("t1", "Read", "Reading PlacementMath.cs",
-                "{\"file_path\":\"src/Perch.Core/Data/PlacementMath.cs\"}"),
-            new Perch.Data.Control.ToolResultEvent("t1",
-                "public static PixelPoint Snap(PixelPoint p, double scale)\n{\n    …\n}", false),
-            new Perch.Data.Control.ToolUseEvent("t2", "Bash", "Running: dotnet test --filter PlacementMathTests",
-                "{\"command\":\"dotnet test --filter PlacementMathTests\"}"),
-            new Perch.Data.Control.ToolResultEvent("t2", "Passed!  - Failed: 0, Passed: 41", false),
-            new Perch.Data.Control.AssistantTextEvent(
-                "Found it — a **double-rounding** bug.\n\n### The fix\n\n```csharp\n// round once, at the edge\nvar dip = Math.Round(px / scale, MidpointRounding.AwayFromZero);\nreturn new PixelPoint((int)(dip * scale), p.Y);\n```\n\n### Causes\n\n| Cause | Effect |\n|-------|--------|\n| `Snap` rounds pixels | off-by-one at 1.5× |\n| `ToDip` rounds again | drift accumulates |\n\n> Only one of the two conversions may round; the other must stay exact."),
-        };
+        const string prompt = HistorySamplePrompt;
+        var events = HistorySampleEvents();
 
         // The read-only thread realises its templated controls only inside a shown window, so this is captured
         // via CaptureRenderedFrame like the markdown viewer, not a detached one-shot bitmap.
@@ -1407,6 +1419,361 @@ internal static class HeadlessRenderer
         }
         w.Close();
 
+        RenderHistorySearch(outDir);
+    }
+
+    // A compact SessionThreadView as a Roost pane body shows it: the history sample plus an Edit (its diff
+    // collapsed under compact) and a pending permission, scaled by CompactScale in a pane-sized window.
+    private static void RenderRoostThreadCompact(string outDir)
+    {
+        foreach (var dark in new[] { true, false })
+        {
+            var p = SessionPalette.For(dark);
+            var conv = new Perch.Data.Control.SessionConversation();
+            conv.AddUserPrompt(HistorySamplePrompt);
+            foreach (var ev in HistorySampleEvents()) conv.Apply(ev);
+            conv.Apply(new Perch.Data.Control.ToolUseEvent("t3", "Edit", "Editing PlacementMath.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/PlacementMath.cs\",\"old_string\":\"var dip = px / scale;\",\"new_string\":\"var dip = Math.Round(px / scale);\"}"));
+            conv.Apply(new Perch.Data.Control.ToolResultEvent("t3", "The file has been updated.", false));
+            conv.Apply(new Perch.Data.Control.PermissionRequestEvent("r1", "Bash", "dotnet test --filter PlacementMathTests",
+                "{\"command\":\"dotnet test --filter PlacementMathTests\"}", null));
+
+            var thread = new SessionThreadView(p, compact: true) { Cwd = @"C:\src\perch" };
+            var w = new Window
+            {
+                Width = 460, Height = 620, Background = p.Surface,
+                Content = new LayoutTransformControl
+                {
+                    LayoutTransform = new ScaleTransform(SessionThreadView.CompactScale, SessionThreadView.CompactScale),
+                    Child = thread,
+                },
+            };
+            thread.Bind(conv);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, dark ? "roost_thread_compact_1x.png" : "roost_thread_compact_light_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    // The sample roster as the Roost sees it (autonomous runs excluded), with "api" made a Perch-driven session
+    // blocked on a permission, and live timers so the pills read like the real thing.
+    internal static IReadOnlyList<ClaudeSession> RoostSampleSessions()
+    {
+        var now = Clock.Now;
+        return SampleData.Sessions()
+            .Where(s => !s.IsBackground)
+            .Select(s => s.ProjectName switch
+            {
+                "api" => s with { PerchControlled = true, AwaitingSince = now.AddMinutes(-2), Model = "claude-opus-5" },
+                "service" => s with { AwaitingSince = now.AddMinutes(-5) },
+                "perch" => s with { RunningSince = now.AddSeconds(-41), Model = "claude-sonnet-5" },
+                "docs-site" => s with { LastUpdated = now.AddMinutes(-4) },
+                "extension" => s with { RunningSince = now.AddSeconds(-12) },
+                _ => s,
+            })
+            .ToList();
+    }
+
+    // A small, per-session sample conversation so each pane (expanded thread or mini card) has something real.
+    internal static Perch.Data.Control.SessionConversation RoostSampleConversation(ClaudeSession s)
+    {
+        var c = new Perch.Data.Control.SessionConversation();
+        void Tool(string id, string name, string summary, string input, string? result, bool error = false)
+        {
+            c.Apply(new Perch.Data.Control.ToolUseEvent(id, name, summary, input));
+            if (result is not null) c.Apply(new Perch.Data.Control.ToolResultEvent(id, result, error));
+        }
+        var done = new Perch.Data.Control.TurnResultEvent(false, "success", 0.12, 1200, 800, 42_000);
+        switch (s.ProjectName)
+        {
+            case "api":
+                c.AddUserPrompt("Run the integration tests and fix whatever breaks.");
+                Tool("a1", "Read", "Reading Routes.cs", "{\"file_path\":\"src/Api/Routes.cs\"}", "line\nline\nline\nline");
+                Tool("a2", "Edit", "Editing Routes.cs", "{\"file_path\":\"src/Api/Routes.cs\",\"old_string\":\"MapGet(\\\"/v1\\\")\",\"new_string\":\"MapGet(\\\"/v2\\\")\"}", "The file has been updated.");
+                c.Apply(new Perch.Data.Control.AssistantTextEvent("Routes updated. Running the suite next."));
+                c.Apply(new Perch.Data.Control.PermissionRequestEvent("r1", "Bash", "dotnet test tests/Api.Tests",
+                    "{\"command\":\"dotnet test tests/Api.Tests\"}", null));
+                break;
+            case "perch":
+                c.AddUserPrompt("Port the overlay's section order to the Roost rail.");
+                Tool("p1", "Grep", "Searching for SectionOrder", "{\"pattern\":\"SectionOrder\"}", "a.cs\nb.cs\nc.cs");
+                Tool("p2", "Edit", "Editing OverlayForm.cs", "{\"file_path\":\"OverlayForm.cs\",\"old_string\":\"a\",\"new_string\":\"b\"}", "ok");
+                Tool("p3", "Bash", "Running dotnet build", "{\"command\":\"dotnet build\"}", null);
+                break;
+            case "docs-site":
+                c.AddUserPrompt("Restructure the docs nav.");
+                Tool("d1", "Glob", "Finding docs/**/*.md", "{\"pattern\":\"docs/**/*.md\"}", "a.md\nb.md\nc.md\nd.md\ne.md");
+                c.Apply(new Perch.Data.Control.AssistantTextEvent("Moved the guides under **/guides** and fixed every broken link.\n\nThe nav now has three sections."));
+                c.Apply(done);
+                break;
+            case "web":
+                c.AddUserPrompt("Why does the landing page flash on load?");
+                Tool("w1", "Read", "Reading index.html", "{\"file_path\":\"index.html\"}", "l\nl");
+                c.Apply(new Perch.Data.Control.AssistantTextEvent("API Error: 529 Overloaded."));
+                c.Apply(done);
+                break;
+            case "service":
+                c.AddUserPrompt("Bump the worker pool size.");
+                Tool("s1", "Edit", "Editing config.yaml", "{\"file_path\":\"config.yaml\",\"old_string\":\"4\",\"new_string\":\"8\"}", "ok");
+                Tool("s2", "Bash", "Running kubectl apply -f deploy/", "{\"command\":\"kubectl apply -f deploy/\"}", null);
+                break;
+            case "extension":
+                c.AddUserPrompt("Add the status bar item.");
+                Tool("e1", "Read", "Reading extension.ts", "{\"file_path\":\"src/extension.ts\"}", "l\nl\nl");
+                Tool("e2", "Bash", "Running npm run compile", "{\"command\":\"npm run compile\"}", null);
+                break;
+            default:
+                c.AddUserPrompt("Tidy up the scratch notes.");
+                c.Apply(new Perch.Data.Control.AssistantTextEvent("Done — merged the duplicates."));
+                c.Apply(done);
+                break;
+        }
+        return c;
+    }
+
+    // Lets a Roost window settle before a capture or a hit-test: queued jobs then a render tick, three times over (a
+    // tab switch lays the stage out, its panes measure, then they render).
+    private static void PumpRoost()
+    {
+        for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
+    }
+
+    private static void RenderRoost(string outDir)
+    {
+        foreach (var dark in new[] { true, false })
+        {
+            // Seed the roster, then rescan without "scratch" so it lingers as an ended (greyed) pane.
+            var roster = new Perch.Data.Roost.RoostRoster();
+            var sessions = RoostSampleSessions();
+            roster.Update(sessions, Clock.Now.AddMinutes(-3));
+            roster.Update(sessions.Where(s => s.ProjectName != "scratch").ToList(), Clock.Now);
+            // Tabs: "Main" as the first run makes it (the six live sessions, 3×2), and "Infra" (one + two) holding
+            // only "extension" — two empty regions. "agent" is in no tab.
+            var tabs = new Perch.Data.Roost.RoostTabSet();
+            tabs.Sync(roster.Panes);
+            var main = tabs.CreateDefault(roster.Panes.Where(p => p.Key != "8801" && p.Key != "8802").ToList(), 1.6)!;
+            var infra = tabs.AddTab("Infra", Perch.Data.Roost.RoostGridLayout.FromTemplate(Perch.Data.Roost.RoostSnapTemplate.MainPlusTwo))!;
+            tabs.Assign(infra.Id, 0, "8801");
+            tabs.Activate(main.Id);
+            var convs = new Dictionary<string, Perch.Data.Control.SessionConversation>();
+            var w = new Windows.RoostWindow(roster, tabs,
+                pane => RoostFeed.ForFixed(convs[pane.Session.SessionId] = RoostSampleConversation(pane.Session),
+                    pane.Session.SessionId, controlled: pane.Session.IsPerchControlled),
+                SessionPalette.For(dark))
+            { Width = 1280, Height = 800 };
+            // CP13: plain terminal panes offer "Take over in Perch" (the sample has no entrypoints, so stand in
+            // for App.CanElevate's "cli" check).
+            w.CanTakeOver = s => !s.IsPerchControlled && !s.IsDesktop && s.IdeHost is null;
+            w.Show();
+            void Capture(string name)
+            {
+                PumpRoost();
+                var frame = w.CaptureRenderedFrame();
+                if (frame == null) return;
+                using var fs = File.Create(Path.Combine(outDir, name));
+                frame.Save(fs);
+            }
+            // Main active: six panes; the strip lights Main (an API error, three wanting you) and Infra (working);
+            // the rail tags the Infra session, "agent" reads "new", and the bottom bar says "1 not in a tab".
+            Capture(dark ? "roost_tabs_main_1x.png" : "roost_tabs_main_light_1x.png");
+            if (dark)
+            {
+                // The rail sorted A–Z (T1): one flat list by name, the ended scratch last.
+                w.SetRailSort(Perch.Data.Roost.RoostRailSort.Alphabetical);
+                Capture("roost_rail_alpha_1x.png");
+                w.SetRailSort(Perch.Data.Roost.RoostRailSort.Status);
+
+                // Infra: one pane and two empty regions; "need you in other tabs" points back at Main.
+                w.ActivateTab(infra.Id);
+                Capture("roost_tabs_infra_1x.png");
+                // Clicking an empty region: the picker (sessions in no tab first, then the ones elsewhere).
+                w.OpenPickerForRender(1);
+                Capture("roost_tabs_picker_1x.png");
+                w.CloseFlyoutForRender();
+
+                // A rail click on "agent", which is in no tab: it opens in Focus.
+                w.FocusPane("8802");
+                Capture("roost_tabs_focus_1x.png");
+
+                // Back in Infra, drag "agent" from the rail over the top-right region (ghost + drop mark), and
+                // let go: it moves out of Focus into that region.
+                w.ActivateTab(infra.Id);
+                PumpRoost();   // lay Infra out before hit-testing its regions
+                w.DragForRender("8802", 1);
+                Capture("roost_tabs_drag_1x.png");
+                w.DropForRender();
+                Capture("roost_tabs_dropped_1x.png");
+
+                // "+ New session": the Perch session it starts opens in Focus when it appears.
+                w.StartNewSessionForRender();
+                sessions = [.. sessions, sessions.First(s => s.ProjectName == "api") with
+                {
+                    Pid = "7777", SessionId = "s-new", ProjectName = "new-session", Status = SessionStatus.Running,
+                    AwaitingSince = null, RunningSince = Clock.Now.AddSeconds(-2),
+                }];
+                roster.Update(sessions.Where(s => s.ProjectName != "scratch").ToList(), Clock.Now);
+                tabs.Sync(roster.Panes, roster.Adopted);
+                w.RosterChanged();
+                Capture("roost_tabs_started_1x.png");
+
+                // Main, the Perch "api" pane zoomed to fill the tab.
+                w.ActivateTab(main.Id);
+                w.ZoomForRender("5678");
+                Capture("roost_tabs_zoom_1x.png");
+
+                // CP10: the permission answered (as PerchSession.AnswerPermission resolves it) — the card turns
+                // into a receipt in place, through conversation state.
+                if (convs.TryGetValue("s2", out var api) && api.PendingPermission is { } pending)
+                {
+                    api.ResolvePermission(pending, allowed: true);
+                    Capture("roost_zoom_answered_1x.png");
+                }
+                w.ZoomForRender("5678");
+
+                // The keys cheat-sheet (the rail footer's "⌨ Keys").
+                w.OpenKeysForRender();
+                Capture("roost_tabs_keys_1x.png");
+                w.CloseFlyoutForRender();
+
+                // CP16: close two panes from their menus — their regions empty, and the rail footer grows a
+                // "2 hidden" row that reopens them.
+                w.ClosePaneForRender("9012");   // docs-site
+                w.ClosePaneForRender("1234");   // perch
+                Capture("roost_tabs_hidden_1x.png");
+            }
+            w.Close();
+        }
+        RenderRoostTabStrip(outDir);
+    }
+
+    // roost-tabs T5: the tab strip in every light state, a rename in progress, the tab menu, a session dropped on a
+    // tab header, and a tab dragged to a new place.
+    private static void RenderRoostTabStrip(string outDir)
+    {
+        var roster = new Perch.Data.Roost.RoostRoster();
+        roster.Update(RoostSampleSessions(), Clock.Now);
+        var tabs = new Perch.Data.Roost.RoostTabSet();
+        tabs.Sync(roster.Panes);
+        var two = Perch.Data.Roost.RoostGridLayout.FromTemplate(Perch.Data.Roost.RoostSnapTemplate.Columns2);
+        Perch.Data.Roost.RoostTab Tab(string name, params string[] keys)
+        {
+            var t = tabs.AddTab(name, two)!;
+            for (int i = 0; i < keys.Length; i++) tabs.Assign(t.Id, i, keys[i]);
+            return t;
+        }
+        // Main (active, working) · API (an API error) · Waiting (two awaiting input) · Review (done) · Notes (quiet)
+        // · Empty (no light). The background error and awaiting tabs breathe.
+        var main = Tab("Main", "1234", "8801");
+        var api = Tab("API", "6543");
+        Tab("Waiting", "8803", "5678");
+        var review = Tab("Review", "9012");
+        var notes = Tab("Notes", "3456");
+        var empty = Tab("Empty");
+        tabs.Activate(main.Id);
+        var w = new Windows.RoostWindow(roster, tabs,
+            pane => RoostFeed.ForFixed(RoostSampleConversation(pane.Session), pane.Session.SessionId, controlled: pane.Session.IsPerchControlled),
+            SessionPalette.For(true))
+        { Width = 1280, Height = 800 };
+        w.Show();
+        void Capture(string name)
+        {
+            PumpRoost();
+            var frame = w.CaptureRenderedFrame();
+            if (frame == null) return;
+            using var fs = File.Create(Path.Combine(outDir, name));
+            frame.Save(fs);
+        }
+        Capture("roost_tabs_lights_1x.png");
+
+        // Renaming "Empty" in place (double-click / F2), part-way through typing.
+        w.RenameForRender(empty.Id, "Scratch work");
+        Capture("roost_tabs_rename_1x.png");
+        w.EndRenameForRender(commit: true);
+
+        // Review's right-click menu.
+        w.OpenTabMenuForRender(review.Id);
+        Capture("roost_tabs_menu_1x.png");
+        w.CloseFlyoutForRender();
+
+        // "agent" (in no tab) dragged from the rail onto Review's header, then dropped: it fills Review's empty
+        // region and Main stays active.
+        w.DragOntoTabForRender("8802", null, review.Id);
+        Capture("roost_tabs_droptab_1x.png");
+        w.DropForRender();
+        Capture("roost_tabs_droptab_done_1x.png");
+
+        // The renamed tab dragged onto API's header: it takes API's place.
+        w.DragOntoTabForRender(null, empty.Id, api.Id);
+        Capture("roost_tabs_reorder_1x.png");
+        w.DropForRender();
+        Capture("roost_tabs_reordered_1x.png");
+
+        // "claude-thoughts" held over Notes' header until the tab opens, then carried down onto its empty region.
+        w.DragOntoTabForRender("5566", null, notes.Id);
+        w.HoverSwitchForRender();
+        PumpRoost();   // lay Notes out before hit-testing
+        w.MoveDragForRender(1);
+        Capture("roost_tabs_hoverswitch_1x.png");
+        w.DropForRender();
+        Capture("roost_tabs_hoverswitch_done_1x.png");
+
+        // T6: the painter on Main (two columns: perch | extension) — the preset strip lights "Two columns".
+        var painter = w.EditLayoutForRender(main.Id)!;
+        Capture("roost_painter_1x.png");
+        // Hovering the right region's "split top and bottom", then clicking it: three regions, the new one empty.
+        painter.HoverForRender(1, Views.RoostPaintButton.SplitRows);
+        Capture("roost_painter_hover_1x.png");
+        painter.ClickForRender(1, Views.RoostPaintButton.SplitRows);
+        PumpRoost();
+        // The middle divider mid-drag to 8/12: the unit gridlines show and the regions follow.
+        painter.DragForRender(painter.Working.Dividers.First(d => d.Axis == Perch.Data.Roost.RoostAxis.Vertical), 8, release: false);
+        Capture("roost_painter_drag_1x.png");
+        painter.DragForRender(painter.Working.Dividers.First(d => d.Axis == Perch.Data.Roost.RoostAxis.Vertical), 8, release: true);
+        // A pinwheel: no region shares a whole side with a neighbour, so × is refused (dimmed) everywhere.
+        var pinwheel = Perch.Data.Roost.RoostGridLayout.Create(
+        [
+            new(0, 0, 0, 4, 8), new(1, 0, 8, 8, 4), new(2, 8, 4, 4, 8), new(3, 4, 0, 8, 4), new(4, 4, 4, 4, 4),
+        ])!;
+        painter.UseForRender(pinwheel);
+        PumpRoost();
+        painter.HoverForRender(painter.Working.ReadingOrder[3].Id, Views.RoostPaintButton.Remove);
+        Capture("roost_painter_refused_1x.png");
+        // Saved as "Pinwheel": it joins the strip's saved list, lit as the current layout.
+        painter.TypeSaveNameForRender("Pinwheel");
+        painter.SaveForRender();
+        Capture("roost_painter_saved_1x.png");
+        // Done: Main takes the pinwheel; perch and extension keep the first two reading positions.
+        painter.Done();
+        Capture("roost_tabs_painted_1x.png");
+        w.Close();
+    }
+
+    private static List<Perch.Data.Control.SessionEvent> HistorySampleEvents() =>
+        new()
+        {
+            new Perch.Data.Control.SessionInitEvent("f1a2b3c4-0000-4000-8000-000000000000", "claude-opus-5", "default", 18),
+            new Perch.Data.Control.AssistantThinkingEvent(
+                "The failure only reproduces at 1.5× DPI — the offset rounds twice, once in Snap and once in ToDip. Reading the test first."),
+            new Perch.Data.Control.ToolUseEvent("t1", "Read", "Reading PlacementMath.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/PlacementMath.cs\"}"),
+            new Perch.Data.Control.ToolResultEvent("t1",
+                "public static PixelPoint Snap(PixelPoint p, double scale)\n{\n    …\n}", false),
+            new Perch.Data.Control.ToolUseEvent("t2", "Bash", "Running: dotnet test --filter PlacementMathTests",
+                "{\"command\":\"dotnet test --filter PlacementMathTests\"}"),
+            new Perch.Data.Control.ToolResultEvent("t2", "Passed!  - Failed: 0, Passed: 41", false),
+            new Perch.Data.Control.AssistantTextEvent(
+                "Found it — a **double-rounding** bug.\n\n### The fix\n\n```csharp\n// round once, at the edge\nvar dip = Math.Round(px / scale, MidpointRounding.AwayFromZero);\nreturn new PixelPoint((int)(dip * scale), p.Y);\n```\n\n### Causes\n\n| Cause | Effect |\n|-------|--------|\n| `Snap` rounds pixels | off-by-one at 1.5× |\n| `ToDip` rounds again | drift accumulates |\n\n> Only one of the two conversions may round; the other must stay exact."),
+        };
+
+    private static void RenderHistorySearch(string outDir)
+    {
         // The session search palette: a command-palette modal over a list of rich session rows
         // (project/title, cwd, when · size, a live dot).
         var now = DateTime.Now;

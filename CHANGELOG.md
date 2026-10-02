@@ -9,6 +9,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.2] - 2026-10-02
+
+- The Roost: every session in one window, with a rail sorted by who needs you most
+- Open it from the overlay, the tray, or Alt+Shift+R
+- Roost tabs, each with its own layout, plus a Focus tab for quick looks
+- Paint your own tab layouts (split, remove, drag the dividers) and save the good ones
+- Drag sessions between regions and tabs; hold one over a tab to open it mid-drag
+- Tabs light up when something in them needs you, so you can stop checking each one like a fridge
+- Sort the rail by status or A–Z
+- Reply to Perch sessions straight from their pane
+- Enter allows a pending permission, Esc denies it (in the pane you picked)
+- Take over a terminal session in Perch from its pane
+- Close panes you're done with; reopen them from "N hidden"
+- Keyboard shortcuts for tabs, regions and the next session needing you
+- No toast for what the Roost is already showing you
+- The taskbar flashes when a background Roost has news
+- Animations respect your system's reduce-motion setting
+
+---
+
 ## [v0.5.1] - 2026-10-01
 
 - If you like Perch, a star on GitHub would be swell!
