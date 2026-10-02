@@ -130,17 +130,42 @@ file in it. Search individual files.
 Each checkpoint is one commit with a green gate: both heads build, `dotnet test` passes, and the headless render
 is checked for anything owner-drawn.
 
-### R0 — probes (owed, mostly manual)
+### R0 — probes
 
-1. **Does a Perch-controlled (stream-json) session write `cost-state` when it's ended gracefully?** End one from
-   the session window and read its tail. If it never does, D1 for controlled sessions relies on the ledger alone
-   (already the plan) and nothing else changes.
-2. **What happens to controlled sessions on the overlay's plain Exit today?** (Expected: the pipe closes and
-   `claude` dies without `SessionEnd`, which matches the `sdk-cli` leftovers.)
-3. **Does Avalonia raise `ShutdownRequested` on an OS shutdown/logoff on Windows**, and how much time is there to
-   write a small file? Decides how `IShutdownSignal` is built.
-4. **Restart with Fast Startup off** (a full boot): does anything change (e.g. 1074/6006 logged, Claude gets more
-   time)? Only affects the event-log fallback.
+Probes 1 and 2 were run with a script that drives `claude` exactly like `ClaudeSessionController` (same flags,
+`--model haiku`, one "hi", wait for `result`). Probe 3 is half done: the source answers it, a live restart
+confirms it.
+
+1. ✅ **A Perch-controlled (stream-json) session ended gracefully writes `cost-state`.** Closing stdin
+   (`ClaudeSessionController.Stop`) → `claude` exited with code 0 after **2.5s**, transcript tail `cost-state`,
+   `SessionEnd` ran (sidecars cleaned). So D1's transcript rule works for controlled sessions too; the ledger is
+   still what says "this was open when Perch closed".
+2. ✅ **Perch exiting without ending its sessions is also graceful.** The parent exited with the child's pipes
+   open; the OS closed them, `claude` saw EOF and shut down cleanly (`cost-state`, `SessionEnd` ran). No job
+   object ties `claude` to Perch. The `sdk-cli` sessions found without a clean exit date from 17 Sep, before
+   the last full boot: they don't reflect today's code.
+   - **Risk found:** `Stop()` kills the process tree after **3s**, and a bare Haiku session already took 2.5s to
+     exit. With MCP servers or slow `SessionEnd` hooks it can pass 3s and get killed (→ abrupt). R5 raises the
+     timeout (~10s), since `Stop` runs off the UI thread anyway.
+3. 🟡 **Avalonia raises `ShutdownRequested` on an OS shutdown/logoff**, from source (Avalonia 12.0.5):
+   `Win32Platform` handles `WM_QUERYENDSESSION` on its hidden top-level window (not message-only, so it does get
+   the broadcast) and the lifetime raises `ShutdownRequested`, closes windows, then `Exit`.
+   `ShutdownRequestedEventArgs.IsOSShutdown` is `internal`, but it isn't needed: **Perch's own
+   `desktop.Shutdown()` is forced and skips `ShutdownRequested` entirely** (straight to `Exit`). So in Perch,
+   `ShutdownRequested` ⇔ OS shutdown/logoff, which makes `IShutdownSignal` on Windows a thin wrapper over it.
+   - **Existing bug found:** because `Shutdown()` skips `ShutdownRequested`, the cleanup Perch hangs on it
+     (disposing the monitor hosts, `ReleaseDocked`, `DisposeDense`, the replay sandbox) **never runs on a normal
+     Exit**, only on an OS shutdown. It belongs on `desktop.Exit`, which fires on both paths. Fixed in R5
+     (it's the same exit-path work as D9).
+   - **Live check owed:** a probe in `App` logs `shutdown requested (OS shutdown/logoff)` and `lifetime exit` to
+     `launch.log`. Run the **dev** build, restart Windows, and compare the timestamps with the power events
+     (Kernel-Power 42) and with a terminal session's last record: that says how much time there is to stamp.
+4. ⏳ **Restart with Fast Startup off** (a full boot): does anything change (1074/6006 logged, Claude given more
+   time)? Only affects the event-log fallback. Owed by the user.
+
+**Event-log fallback, observed:** every Fast Startup shutdown in the last three days logged the same pattern —
+`Kernel-Power` 42 "entering sleep", 107 "resumed" seconds later, then `Kernel-Boot` 27 "boot type 0x1" at the next
+power-on. So "the last 42 before the latest 27" is the shutdown time when Perch wasn't running.
 
 ### R1 — reading Claude's records (Core)
 
@@ -169,7 +194,9 @@ composer note. **Measure** the first-send delay (Q5).
 
 ### R5 — Perch's own exits
 
-D9: every exit path ends controlled sessions gracefully and records them as "open at exit" in the ledger. On the
+D9: every exit path ends controlled sessions gracefully and records them as "open at exit" in the ledger. Move
+Perch's exit cleanup from `ShutdownRequested` to `desktop.Exit` (R0.3: it never runs on a normal Exit today), and
+raise `ClaudeSessionController.Stop`'s kill timeout from 3s to ~10s (R0.2). On the
 next start they come back dormant: overlay rows (with a dormant style) and their old Roost slots. Ended-by-user
 sessions don't come back.
 

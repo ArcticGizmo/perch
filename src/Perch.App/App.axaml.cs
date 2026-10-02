@@ -159,8 +159,13 @@ public partial class App : Application
         {
             _desktop = desktop;
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown; // tray app — outlives its windows
+            // Session recovery R0 probe (docs/session-recovery-plan.md). Avalonia raises ShutdownRequested on
+            // WM_QUERYENDSESSION (an OS shutdown/logoff) but not on our own desktop.Shutdown(), which is forced and
+            // goes straight to Exit — so the two lines tell an OS shutdown from a normal Exit, with timestamps.
+            desktop.Exit += (_, _) => LaunchLog.Write("lifetime exit");
             desktop.ShutdownRequested += (_, _) =>
             {
+                LaunchLog.Write("shutdown requested (OS shutdown/logoff)");
                 _replayController?.Dispose();
                 _replayWindow?.Close();
                 _monitorHost?.Dispose();
