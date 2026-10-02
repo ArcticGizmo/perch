@@ -24,7 +24,6 @@ public class RoostGridLayoutTests
             Assert.True(RoostGridLayout.IsValid(layout.Regions), template.ToString());
             Assert.Equal(RoostTemplates.Shape(template).Slots.Count, layout.Regions.Count);
         }
-        Assert.DoesNotContain(RoostGridLayout.Presets, p => p.Template == RoostSnapTemplate.Auto);
     }
 
     [Fact]
@@ -35,7 +34,6 @@ public class RoostGridLayoutTests
         Assert.Equal(
             [R(0, 0, 0, 6, 6), R(1, 0, 6, 6, 6), R(2, 6, 0, 6, 4), R(3, 6, 4, 6, 4), R(4, 6, 8, 6, 4)],
             Preset(RoostSnapTemplate.TwoPlusThree).Regions);
-        Assert.Same(RoostGridLayout.Full, Preset(RoostSnapTemplate.Auto));
     }
 
     [Fact]
@@ -195,21 +193,22 @@ public class RoostGridLayoutTests
     }
 
     [Fact]
-    public void TheShapeHasOneSlotPerRegionInRegionOrder()
-    {
-        var layout = Preset(RoostSnapTemplate.MainPlusTwo).Remove(1)!;   // ids 0, 2
-        var shape = layout.ToShape();
-        Assert.Equal(U, shape.Columns.Count);
-        Assert.Equal(U, shape.Rows.Count);
-        Assert.Equal([new RoostSlot(0, 0, U, 7), new RoostSlot(0, 7, U, 5)], shape.Slots);
-        Assert.Equal(1, layout.SlotOf(2));
-        Assert.Equal(-1, layout.SlotOf(1));
-    }
-
-    [Fact]
     public void ReadingOrderGoesRowThenColumn()
     {
         var layout = RoostGridLayout.Create([R(7, 6, 0, 6, U), R(2, 0, 6, 6, 6), R(4, 0, 0, 6, 6)])!;
         Assert.Equal([4, 2, 7], layout.ReadingOrder.Select(r => r.Id));
+    }
+
+    [Fact]
+    public void RegionsAreNumberedInReadingOrder()
+    {
+        // Created bottom-first, so creation order and reading order differ: Alt+1 is the top-left region.
+        var layout = RoostGridLayout.Create([R(7, 6, 0, 6, U), R(2, 0, 6, 6, 6), R(4, 0, 0, 6, 6)])!;
+        Assert.Equal([1, 2, 3], new[] { 4, 2, 7 }.Select(layout.NumberOf));
+        Assert.Equal(0, layout.NumberOf(5));
+        Assert.Equal(4, layout.ByNumber(1)!.Value.Id);
+        Assert.Equal(7, layout.ByNumber(3)!.Value.Id);
+        Assert.Null(layout.ByNumber(0));
+        Assert.Null(layout.ByNumber(4));
     }
 }

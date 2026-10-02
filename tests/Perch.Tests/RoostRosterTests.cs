@@ -205,6 +205,16 @@ public class RoostRosterTests
     }
 
     [Fact]
+    public void ANullTokenInTheFileIsIgnored()
+    {
+        // System.Text.Json reads a null list element without complaint; it must not throw out of startup.
+        var r = new RoostRoster();
+        r.SeedClosed([null, "2/sess-2"]);
+        r.Update([S("1"), S("2")], T0);
+        Assert.Equal(["2"], r.ClosedKeys);
+    }
+
+    [Fact]
     public void ClosedChangedFollowsCloseReopenPruneAndClear()
     {
         var r = new RoostRoster();

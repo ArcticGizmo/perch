@@ -157,7 +157,6 @@ internal sealed class RoostLayoutPainter : DockPanel
         _count.Text = $"{Working.Regions.Count} / {RoostGridLayout.MaxRegions} regions";
         var key = Working.GeometryKey;
         foreach (var (k, row) in _rows) MarkRow(row, k == key);
-        _saveButtonText.Text = _library.Contains(_saveName.Text ?? "") ? "Replace" : "Save";
     }
 
     // ── Strip ─────────────────────────────────────────────────────────────────
@@ -175,7 +174,7 @@ internal sealed class RoostLayoutPainter : DockPanel
                 TextWrapping = TextWrapping.Wrap, Margin = new Thickness(6, 0, 6, 4),
             });
         foreach (var (name, layout) in _library.Saved) _saved.Children.Add(LayoutRow(name, layout, saved: true));
-        _saveRow.IsVisible = _library.Saved.Count < RoostLayoutLibrary.MaxSaved || _library.Contains(_saveName.Text ?? "");
+        RefreshSaveButton();
         OnLayoutChanged();
     }
 
@@ -197,8 +196,7 @@ internal sealed class RoostLayoutPainter : DockPanel
             BorderBrush = Brushes.Transparent, Cursor = new Cursor(StandardCursorType.Hand), Child = dock,
             [ToolTip.TipProperty] = saved ? $"{name} — right-click to rename or delete" : name,
         };
-        row.PointerEntered += (_, _) => { if (row.Tag is not true) row.Background = _p.Raised2; };
-        row.PointerExited += (_, _) => { if (row.Tag is not true) row.Background = Brushes.Transparent; };
+        row.HoverWash(_p.Raised2, keep: () => row.Tag is true);   // a lit row keeps its wash
         row.PointerReleased += (_, e) =>
         {
             if (e.InitialPressMouseButton != MouseButton.Left || _renaming == name) return;
@@ -249,7 +247,8 @@ internal sealed class RoostLayoutPainter : DockPanel
         }
     }
 
-    // "Save layout…": a name box and a Save (or Replace, when the name is taken) button.
+    // "Save layout…": a name box and a Save button (Replace when the name is taken, Full when there's no room for
+    // a new one — the row stays, so typing a saved name still replaces it).
     private (Border, TextBox, TextBlock) SaveRow()
     {
         var box = NameBox("");
@@ -261,25 +260,35 @@ internal sealed class RoostLayoutPainter : DockPanel
             Cursor = new Cursor(StandardCursorType.Hand), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0),
             [DockProperty] = Dock.Right, Child = text,
         };
-        void Save()
-        {
-            if (!_library.Save(box.Text ?? "", Working)) return;
-            box.Text = "";
-            RebuildStrip();
-        }
-        save.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) { e.Handled = true; Save(); } };
+        save.OnLeftClick(SaveCurrent, handle: true);
         box.KeyDown += (_, e) =>
         {
-            if (e.Key == Key.Enter) { e.Handled = true; Save(); }
+            if (e.Key == Key.Enter) { e.Handled = true; SaveCurrent(); }
             else if (e.Key == Key.Escape) { e.Handled = true; box.Text = ""; Focus(); }
         };
-        box.TextChanged += (_, _) => text.Text = _library.Contains(box.Text ?? "") ? "Replace" : "Save";
+        box.TextChanged += (_, _) => RefreshSaveButton();
         var row = new Border
         {
             Margin = new Thickness(0, 8, 0, 0),
             Child = new DockPanel { LastChildFill = true, Children = { save, box } },
         };
         return (row, box, text);
+    }
+
+    // Saves the working copy under the typed name (replacing a layout of that name).
+    private void SaveCurrent()
+    {
+        if (!_library.Save(_saveName.Text ?? "", Working)) return;
+        _saveName.Text = "";
+        RebuildStrip();
+    }
+
+    private void RefreshSaveButton()
+    {
+        bool taken = _library.Contains(_saveName.Text ?? "");
+        bool full = !taken && _library.Saved.Count >= RoostLayoutLibrary.MaxSaved;
+        _saveButtonText.Text = taken ? "Replace" : full ? "Full" : "Save";
+        ToolTip.SetTip(_saveRow, full ? $"{RoostLayoutLibrary.MaxSaved} layouts saved — delete one, or type a saved name to replace it" : null);
     }
 
     private TextBox NameBox(string text) => new()
@@ -307,8 +316,7 @@ internal sealed class RoostLayoutPainter : DockPanel
                 Foreground = primary ? _p.BrandInk : _p.Text,
             },
         };
-        b.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) { e.Handled = true; onClick(); } };
-        return b;
+        return b.OnLeftClick(onClick, handle: true);
     }
 
     // ── HeadlessRenderer hooks ────────────────────────────────────────────────
@@ -323,10 +331,7 @@ internal sealed class RoostLayoutPainter : DockPanel
 
     internal void TypeSaveNameForRender(string name) { _saveName.Text = name; }
 
-    internal void SaveForRender()
-    {
-        if (_library.Save(_saveName.Text ?? "", Working)) { _saveName.Text = ""; RebuildStrip(); }
-    }
+    internal void SaveForRender() => SaveCurrent();
 }
 
 /// <summary>A hovered region's buttons in the painter.</summary>
@@ -347,6 +352,14 @@ internal enum RoostPaintButton
 internal sealed class RoostPaintCanvas : Control
 {
     private const double Pad = 18, Gap = 10, Radius = 10, ButtonSize = 26, ButtonGap = 4, GripReach = 7;
+
+    private static readonly RoostPaintButton[] Buttons = [RoostPaintButton.SplitColumns, RoostPaintButton.SplitRows, RoostPaintButton.Remove];
+
+    // Cursors are platform objects: made once (on first hover, after the platform is up), not per hover change.
+    private static Cursor? _resizeX, _resizeY, _hand;
+    private static Cursor ResizeX => _resizeX ??= new Cursor(StandardCursorType.SizeWestEast);
+    private static Cursor ResizeY => _resizeY ??= new Cursor(StandardCursorType.SizeNorthSouth);
+    private static Cursor Hand => _hand ??= new Cursor(StandardCursorType.Hand);
 
     private readonly SessionPalette _p;
     private readonly Func<int, string?> _caption;
@@ -397,11 +410,7 @@ internal sealed class RoostPaintCanvas : Control
         return new Rect(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h);
     }
 
-    private static Rect RegionRect(Rect board, RoostRegion r)
-    {
-        double ux = board.Width / RoostGridLayout.Units, uy = board.Height / RoostGridLayout.Units;
-        return new Rect(board.X + r.Column * ux, board.Y + r.Row * uy, r.ColumnSpan * ux, r.RowSpan * uy).Deflate(Gap / 2);
-    }
+    private static Rect RegionRect(Rect board, RoostRegion r) => RoostTilePanel.UnitRect(board, r).Deflate(Gap / 2);
 
     // A divider's line segment on the board.
     private static (Point A, Point B) DividerLine(Rect board, RoostDivider d, int line)
@@ -434,7 +443,7 @@ internal sealed class RoostPaintCanvas : Control
         (RoostPaintButton.SplitRows, true) => "Split top and bottom",
         (RoostPaintButton.Remove, true) => "Remove — a neighbour grows into its space (its session goes back to the rail)",
         (RoostPaintButton.Remove, false) => "Can't remove: no neighbour shares a whole side with it",
-        (_, false) => "Too small to split (or the tab has 8 regions)",
+        (_, false) => $"Too small to split (or the tab has {RoostGridLayout.MaxRegions} regions)",
         _ => "",
     };
 
@@ -454,7 +463,7 @@ internal sealed class RoostPaintCanvas : Control
             OverlayDraw.Panel(ctx, r, hover ? _p.Raised2 : _p.Raised, OverlayDraw.Pen(hover ? _p.BrandLine : _p.Border, 1.5), Radius);
             PaintCaption(ctx, r, region.Id, i + 1);
             if (hover)
-                foreach (var b in new[] { RoostPaintButton.SplitColumns, RoostPaintButton.SplitRows, RoostPaintButton.Remove })
+                foreach (var b in Buttons)
                     PaintButton(ctx, ButtonRect(r, b), b, Allowed(region.Id, b), _hoverButton == b);
         }
 
@@ -593,7 +602,7 @@ internal sealed class RoostPaintCanvas : Control
                 var rect = RegionRect(board, r);
                 if (!rect.Contains(at)) continue;
                 region = r.Id;
-                foreach (var b in new[] { RoostPaintButton.SplitColumns, RoostPaintButton.SplitRows, RoostPaintButton.Remove })
+                foreach (var b in Buttons)
                     if (ButtonRect(rect, b).Contains(at)) button = b;
                 break;
             }
@@ -601,9 +610,9 @@ internal sealed class RoostPaintCanvas : Control
         _hoverDivider = divider;
         _hoverRegion = region;
         _hoverButton = button;
-        Cursor = divider is { Axis: RoostAxis.Vertical } ? new Cursor(StandardCursorType.SizeWestEast)
-            : divider is not null ? new Cursor(StandardCursorType.SizeNorthSouth)
-            : button != RoostPaintButton.None && region is { } id && Allowed(id, button) ? new Cursor(StandardCursorType.Hand)
+        Cursor = divider is { Axis: RoostAxis.Vertical } ? ResizeX
+            : divider is not null ? ResizeY
+            : button != RoostPaintButton.None && region is { } id && Allowed(id, button) ? Hand
             : Cursor.Default;
         ToolTip.SetTip(this, divider is not null ? "Drag to resize" : region is { } rid && button != RoostPaintButton.None ? Tip(button, Allowed(rid, button)) : null);
         InvalidateVisual();
@@ -623,13 +632,18 @@ internal sealed class RoostPaintCanvas : Control
         Edited?.Invoke(next);
     }
 
-    // The pointer's nearest unit line on the divider's axis; MoveDivider clamps it to the last valid line.
+    // The pointer's nearest unit line on the divider's axis.
     private void DragTo((RoostGridLayout From, RoostDivider Divider, int Line) drag, Point at)
     {
         var board = Board();
         bool v = drag.Divider.Axis == RoostAxis.Vertical;
         double unit = (v ? board.Width : board.Height) / RoostGridLayout.Units;
-        int line = (int)Math.Round(((v ? at.X - board.X : at.Y - board.Y)) / unit);
+        DragToLine(drag, (int)Math.Round((v ? at.X - board.X : at.Y - board.Y) / unit));
+    }
+
+    // Moves the dragged divider to unit line <paramref name="line"/>, clamped to the last valid one.
+    private void DragToLine((RoostGridLayout From, RoostDivider Divider, int Line) drag, int line)
+    {
         var (min, max) = drag.From.DividerRange(drag.Divider);
         line = Math.Clamp(line, min, max);
         if (line == drag.Line) return;
@@ -662,10 +676,7 @@ internal sealed class RoostPaintCanvas : Control
     internal void DragForRender(RoostDivider divider, int to, bool release)
     {
         _drag = (_layout, divider, divider.Line);
-        var board = Board();
-        bool v = divider.Axis == RoostAxis.Vertical;
-        double unit = (v ? board.Width : board.Height) / RoostGridLayout.Units;
-        DragTo(_drag.Value, v ? new Point(board.X + to * unit, 0) : new Point(0, board.Y + to * unit));
+        DragToLine(_drag.Value, to);
         if (release) EndDrag();
     }
 }
@@ -682,12 +693,8 @@ internal sealed class RoostLayoutThumb : Control
     public override void Render(DrawingContext ctx)
     {
         var b = new Rect(Bounds.Size);
-        double ux = b.Width / RoostGridLayout.Units, uy = b.Height / RoostGridLayout.Units;
         var pen = OverlayDraw.Pen(_p.Muted, 1);
         foreach (var r in Layout.Regions)
-        {
-            var rect = new Rect(r.Column * ux, r.Row * uy, r.ColumnSpan * ux, r.RowSpan * uy).Deflate(1.5);
-            OverlayDraw.Panel(ctx, rect, _p.Raised2, pen, 3);
-        }
+            OverlayDraw.Panel(ctx, RoostTilePanel.UnitRect(b, r).Deflate(1.5), _p.Raised2, pen, 3);
     }
 }

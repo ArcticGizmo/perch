@@ -1538,6 +1538,13 @@ internal static class HeadlessRenderer
         return c;
     }
 
+    // Lets a Roost window settle before a capture or a hit-test: queued jobs then a render tick, three times over (a
+    // tab switch lays the stage out, its panes measure, then they render).
+    private static void PumpRoost()
+    {
+        for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
+    }
+
     private static void RenderRoost(string outDir)
     {
         foreach (var dark in new[] { true, false })
@@ -1567,7 +1574,7 @@ internal static class HeadlessRenderer
             w.Show();
             void Capture(string name)
             {
-                for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
+                PumpRoost();
                 var frame = w.CaptureRenderedFrame();
                 if (frame == null) return;
                 using var fs = File.Create(Path.Combine(outDir, name));
@@ -1598,7 +1605,7 @@ internal static class HeadlessRenderer
                 // Back in Infra, drag "agent" from the rail over the top-right region (ghost + drop mark), and
                 // let go: it moves out of Focus into that region.
                 w.ActivateTab(infra.Id);
-                for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }   // lay Infra out before hit-testing its regions
+                PumpRoost();   // lay Infra out before hit-testing its regions
                 w.DragForRender("8802", 1);
                 Capture("roost_tabs_drag_1x.png");
                 w.DropForRender();
@@ -1677,7 +1684,7 @@ internal static class HeadlessRenderer
         w.Show();
         void Capture(string name)
         {
-            for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }
+            PumpRoost();
             var frame = w.CaptureRenderedFrame();
             if (frame == null) return;
             using var fs = File.Create(Path.Combine(outDir, name));
@@ -1711,21 +1718,20 @@ internal static class HeadlessRenderer
         // "claude-thoughts" held over Notes' header until the tab opens, then carried down onto its empty region.
         w.DragOntoTabForRender("5566", null, notes.Id);
         w.HoverSwitchForRender();
-        for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); }   // lay Notes out before hit-testing
+        PumpRoost();   // lay Notes out before hit-testing
         w.MoveDragForRender(1);
         Capture("roost_tabs_hoverswitch_1x.png");
         w.DropForRender();
         Capture("roost_tabs_hoverswitch_done_1x.png");
 
         // T6: the painter on Main (two columns: perch | extension) — the preset strip lights "Two columns".
-        void Pump() { for (int i = 0; i < 3; i++) { Dispatcher.UIThread.RunJobs(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); } }
         var painter = w.EditLayoutForRender(main.Id)!;
         Capture("roost_painter_1x.png");
         // Hovering the right region's "split top and bottom", then clicking it: three regions, the new one empty.
         painter.HoverForRender(1, Views.RoostPaintButton.SplitRows);
         Capture("roost_painter_hover_1x.png");
         painter.ClickForRender(1, Views.RoostPaintButton.SplitRows);
-        Pump();
+        PumpRoost();
         // The middle divider mid-drag to 8/12: the unit gridlines show and the regions follow.
         painter.DragForRender(painter.Working.Dividers.First(d => d.Axis == Perch.Data.Roost.RoostAxis.Vertical), 8, release: false);
         Capture("roost_painter_drag_1x.png");
@@ -1736,7 +1742,7 @@ internal static class HeadlessRenderer
             new(0, 0, 0, 4, 8), new(1, 0, 8, 8, 4), new(2, 8, 4, 4, 8), new(3, 4, 0, 8, 4), new(4, 4, 4, 4, 4),
         ])!;
         painter.UseForRender(pinwheel);
-        Pump();
+        PumpRoost();
         painter.HoverForRender(painter.Working.ReadingOrder[3].Id, Views.RoostPaintButton.Remove);
         Capture("roost_painter_refused_1x.png");
         // Saved as "Pinwheel": it joins the strip's saved list, lit as the current layout.

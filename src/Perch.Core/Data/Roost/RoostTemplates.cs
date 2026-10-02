@@ -1,11 +1,9 @@
 namespace Perch.Data.Roost;
 
 /// <summary>A built-in layout shape: the tab painter's presets (<see cref="RoostGridLayout.FromTemplate"/>), and the
-/// first-run tab's shape for the live session count.</summary>
+/// first-run tab's shape for the live session count (<see cref="RoostTemplates.ForCount"/>). Never persisted.</summary>
 public enum RoostSnapTemplate
 {
-    /// <summary>The default for the count and the stage's shape (<see cref="RoostTemplates.ForCount"/>).</summary>
-    Auto = 0,
     Full = 1,
     Columns2 = 2,
     Rows2 = 3,
@@ -24,13 +22,7 @@ public enum RoostSnapTemplate
 public readonly record struct RoostSlot(int Row, int Column, int RowSpan = 1, int ColumnSpan = 1);
 
 /// <summary>A template's grid: star weights per column and row, and its cells in fill order.</summary>
-public sealed record RoostTemplateShape(IReadOnlyList<double> Columns, IReadOnlyList<double> Rows, IReadOnlyList<RoostSlot> Slots)
-{
-    /// <summary>A key that changes whenever the grid's geometry does.</summary>
-    public string Signature =>
-        string.Join(",", Columns) + "|" + string.Join(",", Rows) + "|"
-        + string.Join(";", Slots.Select(s => $"{s.Row}.{s.Column}.{s.RowSpan}.{s.ColumnSpan}"));
-}
+public sealed record RoostTemplateShape(IReadOnlyList<double> Columns, IReadOnlyList<double> Rows, IReadOnlyList<RoostSlot> Slots);
 
 /// <summary>The built-in layout templates (UI-free, unit-tested): the tab painter's presets
 /// (<see cref="RoostGridLayout.Presets"/>) and the first-run tab's shape (<see cref="ForCount"/>).</summary>
@@ -39,17 +31,16 @@ public static class RoostTemplates
     /// <summary>The most cells any template has — how many sessions the first-run tab takes.</summary>
     public const int AutoMaxCells = 6;
 
-    /// <summary>The presets' order in the painter (Auto, which has no grid of its own, is left out there).</summary>
+    /// <summary>The presets' order in the painter.</summary>
     public static readonly IReadOnlyList<RoostSnapTemplate> Picker =
     [
-        RoostSnapTemplate.Auto, RoostSnapTemplate.Full, RoostSnapTemplate.Columns2, RoostSnapTemplate.Rows2,
+        RoostSnapTemplate.Full, RoostSnapTemplate.Columns2, RoostSnapTemplate.Rows2,
         RoostSnapTemplate.Wide60, RoostSnapTemplate.MainPlusTwo, RoostSnapTemplate.Columns3,
         RoostSnapTemplate.Grid2x2, RoostSnapTemplate.TwoPlusThree, RoostSnapTemplate.Grid3x2,
     ];
 
     public static string Name(RoostSnapTemplate t) => t switch
     {
-        RoostSnapTemplate.Auto => "Auto",
         RoostSnapTemplate.Full => "Single",
         RoostSnapTemplate.Columns2 => "Two columns",
         RoostSnapTemplate.Rows2 => "Two rows",
@@ -62,7 +53,7 @@ public static class RoostTemplates
         _ => t.ToString(),
     };
 
-    /// <summary>The grid for a fixed template. Auto has no grid of its own — resolve it first.</summary>
+    /// <summary>The template's grid.</summary>
     public static RoostTemplateShape Shape(RoostSnapTemplate t) => t switch
     {
         RoostSnapTemplate.Columns2 => Uniform(2, 1),
@@ -79,7 +70,7 @@ public static class RoostTemplates
     };
 
     /// <summary>
-    /// Auto's pick for <paramref name="cells"/> cells on a stage <paramref name="aspect"/> (width / height) wide:
+    /// The first-run tab's pick for <paramref name="cells"/> cells on a stage <paramref name="aspect"/> (width / height) wide:
     /// one fills the stage; two sit side by side (stacked on a stage taller than wide); three go one + two
     /// (three columns on a stage over twice as wide as tall); four 2×2; five two + three; six 3×2.
     /// </summary>

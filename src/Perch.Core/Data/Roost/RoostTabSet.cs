@@ -142,7 +142,7 @@ public sealed class RoostTabSet
     public RoostTab? AddTab(string? name = null, RoostGridLayout? layout = null)
     {
         if (_tabs.Count >= MaxTabs) return null;
-        var tab = new RoostTab(NewId(), Clean(name) ?? NextDefaultName(), layout ?? RoostGridLayout.Full);
+        var tab = new RoostTab(NewId(), CleanName(name) ?? NextDefaultName(), layout ?? RoostGridLayout.Full);
         _tabs.Add(tab);
         RaiseIfChanged();
         return tab;
@@ -152,7 +152,7 @@ public sealed class RoostTabSet
     /// is refused.</summary>
     public bool RenameTab(string id, string name)
     {
-        if (id == FocusId || Find(id) is not { } tab || Clean(name) is not { } clean || clean == tab.Name) return false;
+        if (id == FocusId || Find(id) is not { } tab || CleanName(name) is not { } clean || clean == tab.Name) return false;
         tab.Name = clean;
         RaiseIfChanged();
         return true;
@@ -175,7 +175,7 @@ public sealed class RoostTabSet
     public RoostTab? DuplicateTab(string id)
     {
         if (_tabs.Count >= MaxTabs || id == FocusId || Find(id) is not { } source) return null;
-        var copy = new RoostTab(NewId(), Clean($"{source.Name} copy")!, source.Layout);
+        var copy = new RoostTab(NewId(), CleanName($"{source.Name} copy")!, source.Layout);
         if (!UniquePlacement) foreach (var (r, k) in source.CellMap) copy.CellMap[r] = k;
         _tabs.Insert(_tabs.IndexOf(source) + 1, copy);
         RaiseIfChanged();
@@ -317,12 +317,36 @@ public sealed class RoostTabSet
     /// <summary>The panes in no tab, in roster order.</summary>
     public IReadOnlyList<RoostPane> Unplaced(IReadOnlyList<RoostPane> panes) => panes.Where(p => !IsPlaced(p.Key)).ToList();
 
-    /// <summary>The light across every tab but the active one: what "need you in other tabs" counts.</summary>
-    public RoostTabLight Elsewhere(IReadOnlyList<RoostPane> panes)
+    /// <summary>The sessions in every tab but the active one (and not also in the active one): what "need you in
+    /// other tabs" counts, and where its click goes.</summary>
+    public IReadOnlyList<string> ElsewhereKeys()
     {
         var active = Active.CellMap.Values.ToHashSet(StringComparer.Ordinal);
-        return RoostTabStatus.Of(All.Where(t => t.Id != ActiveId).SelectMany(t => t.CellMap.Values)
-            .Where(k => !active.Contains(k)), panes);
+        return All.Where(t => t.Id != ActiveId).SelectMany(t => t.CellMap.Values).Where(k => !active.Contains(k)).ToList();
+    }
+
+    /// <summary>The light across <see cref="ElsewhereKeys"/>.</summary>
+    public RoostTabLight Elsewhere(IReadOnlyList<RoostPane> panes) => RoostTabStatus.Of(ElsewhereKeys(), panes);
+
+    /// <summary>The tab <paramref name="delta"/> places from the active one in strip order (Focus first), wrapping —
+    /// Ctrl+Tab is +1, Ctrl+Shift+Tab -1.</summary>
+    public string Cycle(int delta)
+    {
+        var ids = All.Select(t => t.Id).ToList();
+        int at = Math.Max(0, ids.IndexOf(ActiveId));
+        return ids[((at + delta) % ids.Count + ids.Count) % ids.Count];
+    }
+
+    /// <summary>What the empty-region picker offers for tab <paramref name="tabId"/>: every live session not already
+    /// in it — those in no tab first (picking one in another tab moves it), then the most urgent, then by name.</summary>
+    public IReadOnlyList<RoostPane> Candidates(string tabId, IReadOnlyList<RoostPane> panes)
+    {
+        if (Find(tabId) is not { } tab) return [];
+        return panes.Where(p => !p.Ended && !tab.CellMap.ContainsValue(p.Key))
+            .OrderBy(p => IsPlaced(p.Key))
+            .ThenByDescending(RoostTabStatus.LightOf)
+            .ThenBy(p => p.Session.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     /// <summary>
@@ -400,21 +424,22 @@ public sealed class RoostTabSet
             var cells = new Dictionary<int, string>();
             foreach (var (region, key) in tab.CellMap) if (Token(key) is { } t) cells[region] = t;
             if (_seeds is not null)
-                foreach (var s in _seeds.Where(s => s.TabId == tab.Id)) cells.TryAdd(s.RegionId, $"{s.Pid}/{s.SessionId}");
+                foreach (var s in _seeds.Where(s => s.TabId == tab.Id)) cells.TryAdd(s.RegionId, RoostToken.Format(s.Pid, s.SessionId));
             state.Tabs.Add(new RoostTabState
             {
                 Id = tab.Id, Name = tab.Name, Layout = tab.Layout.Regions.ToList(), Cells = cells.Count > 0 ? cells : null,
             });
         }
         if (state.Focus is null && _seeds?.FirstOrDefault(s => s.TabId == FocusId) is { Pid: not null } f)
-            state.Focus = $"{f.Pid}/{f.SessionId}";
+            state.Focus = RoostToken.Format(f.Pid, f.SessionId);
         return state;
     }
 
     /// <summary>
     /// Restores a persisted state (replacing any tabs). Anything malformed is repaired rather than trusted: a bad
-    /// layout reads as one region, a blank or over-long name is renamed, duplicate or reserved ids are dropped, and a
-    /// cell whose token is malformed or names a missing region is ignored. Cells are placed by the first
+    /// layout reads as one region, a blank or over-long name is renamed, a null tab or one whose id is missing,
+    /// duplicated, reserved or not of the form <see cref="NewId"/> makes (<c>t</c> + a number) is dropped, and a cell
+    /// whose token is malformed or names a missing region is ignored. Cells are placed by the first
     /// <see cref="Sync"/>. Doesn't raise <see cref="Changed"/>.
     /// </summary>
     public void Seed(RoostTabsState? state)
@@ -424,32 +449,33 @@ public sealed class RoostTabSet
         _shown.Clear();
         _seeds = [];
         ActiveId = FocusId;
+        _nextId = 1;
         if (state is not null)
         {
             foreach (var t in state.Tabs ?? [])
             {
-                if (t is null || _tabs.Count >= MaxTabs || string.IsNullOrWhiteSpace(t.Id) || t.Id == FocusId || Find(t.Id) is not null) continue;
-                var tab = new RoostTab(t.Id, Clean(t.Name) ?? NextDefaultName(), RoostGridLayout.FromPersisted(t.Layout));
+                if (t is null || _tabs.Count >= MaxTabs || IdNumber(t.Id) is not { } n || Find(t.Id) is not null) continue;
+                var tab = new RoostTab(t.Id, CleanName(t.Name) ?? NextDefaultName(), RoostGridLayout.FromPersisted(t.Layout));
                 _tabs.Add(tab);
+                _nextId = Math.Max(_nextId, n + 1);
                 foreach (var (region, token) in t.Cells ?? [])
-                    if (tab.Layout.Find(region) is not null && Parse(token) is { } p) _seeds.Add((tab.Id, region, p.Pid, p.SessionId));
+                    if (tab.Layout.Find(region) is not null && RoostToken.Parse(token) is { } p) _seeds.Add((tab.Id, region, p.Pid, p.SessionId));
             }
-            if (Parse(state.Focus) is { } focus) _seeds.Add((FocusId, _focus.Layout.Regions[0].Id, focus.Pid, focus.SessionId));
+            if (RoostToken.Parse(state.Focus) is { } focus) _seeds.Add((FocusId, _focus.Layout.Regions[0].Id, focus.Pid, focus.SessionId));
             if (state.Active is { } active && Find(active) is not null) ActiveId = active;
         }
-        _nextId = 1 + _tabs.Select(t => t.Id.StartsWith('t') && int.TryParse(t.Id.AsSpan(1), out var n) ? n : 0).DefaultIfEmpty(0).Max();
         _sig = Signature();
     }
 
-    private string? Token(string? key) =>
-        key is not null && _sessionIds.TryGetValue(key, out var sid) && sid.Length > 0 ? $"{key}/{sid}" : null;
+    // A tab id's number ("t12" → 12), or null for anything NewId wouldn't have made: Focus's reserved id, a blank or
+    // hand-typed one, or one past nine digits (so the next id can't overflow).
+    private static int? IdNumber(string? id) =>
+        id is { Length: >= 2 and <= 10 } && id[0] == 't'
+        && int.TryParse(id.AsSpan(1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n)
+        && n > 0 ? n : null;
 
-    private static (string Pid, string SessionId)? Parse(string? token)
-    {
-        if (token is null) return null;
-        int slash = token.IndexOf('/');
-        return slash <= 0 || slash == token.Length - 1 ? null : (token[..slash], token[(slash + 1)..]);
-    }
+    private string? Token(string? key) =>
+        key is not null && _sessionIds.TryGetValue(key, out var sid) && sid.Length > 0 ? RoostToken.Format(key, sid) : null;
 
     private string NewId()
     {
@@ -467,18 +493,22 @@ public sealed class RoostTabSet
         }
     }
 
-    private static string? Clean(string? name)
+    /// <summary>A user-typed name (a tab's, a saved layout's) trimmed and capped at <see cref="MaxNameLength"/>; null
+    /// when blank.</summary>
+    internal static string? CleanName(string? name)
     {
         var t = name?.Trim();
         if (string.IsNullOrEmpty(t)) return null;
         return t.Length > MaxNameLength ? t[..MaxNameLength].TrimEnd() : t;
     }
 
+    // The persisted form as one string. State tab i is _tabs[i], whose layout is already validated and carries its
+    // own signature — no need to rebuild it from the persisted regions.
     private string Signature()
     {
         var s = ToState();
-        return $"{s.Active}|{s.Focus}|" + string.Join("¦", s.Tabs.Select(t =>
-            $"{t.Id}:{t.Name}:{RoostGridLayout.FromPersisted(t.Layout).Signature}:"
+        return $"{s.Active}|{s.Focus}|" + string.Join("¦", s.Tabs.Select((t, i) =>
+            $"{t.Id}:{t.Name}:{_tabs[i].Layout.Signature}:"
             + string.Join(",", (t.Cells ?? []).OrderBy(c => c.Key).Select(c => $"{c.Key}={c.Value}"))));
     }
 
@@ -524,6 +554,14 @@ public static class RoostTabStatus
             if (!p.Ended && p.Group is RoostGroup.NeedsYou or RoostGroup.DoneReview) count++;
         }
         return new RoostTabLight(light, count);
+    }
+
+    /// <summary>The most urgent of some sessions (by light, then roster order), or null when none is in the roster —
+    /// where a pill's click goes.</summary>
+    public static string? MostUrgent(IEnumerable<string> keys, IReadOnlyList<RoostPane> panes)
+    {
+        var wanted = keys.ToHashSet(StringComparer.Ordinal);
+        return panes.Where(p => wanted.Contains(p.Key)).OrderByDescending(LightOf).Select(p => p.Key).FirstOrDefault();
     }
 
     public static RoostLight LightOf(RoostPane p) => p.Ended ? RoostLight.Quiet : p.Session.Status switch

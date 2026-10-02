@@ -82,7 +82,7 @@ public sealed class RoostRoster
     private IReadOnlyList<RoostRailGroup> _rail = [];
 
     /// <param name="persistedClosed">A persisted closed set (<see cref="PersistedClosed"/> tokens).</param>
-    public RoostRoster(IEnumerable<string>? persistedClosed = null)
+    public RoostRoster(IEnumerable<string?>? persistedClosed = null)
     {
         AddSeeds(persistedClosed ?? []);
         _persistedSig = Signature(persistedClosed ?? []);
@@ -125,7 +125,7 @@ public sealed class RoostRoster
     /// <summary>The closed set as it's persisted: one <c>pid/sessionId</c> token per closed pane, in first-seen
     /// order. Seeds that haven't matched a live session yet are left out, so a save prunes them.</summary>
     public IReadOnlyList<string> PersistedClosed =>
-        _order.Where(_closed.Contains).Select(k => Token(k, _entries[k].Session.SessionId)).ToList();
+        _order.Where(_closed.Contains).Select(k => RoostToken.Format(k, _entries[k].Session.SessionId)).ToList();
 
     /// <summary>The hidden (closed) panes whose sessions are still live, in first-seen order — what a "N hidden"
     /// menu offers to reopen.</summary>
@@ -133,8 +133,9 @@ public sealed class RoostRoster
 
     /// <summary>Restores a persisted closed set (the roster can exist before settings load). A token only hides
     /// the pane whose pid and session id both match it; one that never matches is dropped from the next save.
-    /// Bare pids (the pre-CP26 format) can't be trusted after a restart and are ignored.</summary>
-    public void SeedClosed(IEnumerable<string> tokens)
+    /// Bare pids (the pre-CP26 format) can't be trusted after a restart and are ignored, as are malformed or null
+    /// entries (a hand-edited file).</summary>
+    public void SeedClosed(IEnumerable<string?> tokens)
     {
         var list = tokens.ToList();
         AddSeeds(list);
@@ -144,14 +145,10 @@ public sealed class RoostRoster
         RaiseIfClosedChanged();
     }
 
-    private void AddSeeds(IEnumerable<string> tokens)
+    private void AddSeeds(IEnumerable<string?> tokens)
     {
         foreach (var t in tokens)
-        {
-            int slash = t.IndexOf('/');
-            if (slash <= 0 || slash == t.Length - 1) continue;
-            _seeds[t[..slash]] = t[(slash + 1)..];
-        }
+            if (RoostToken.Parse(t) is { } p) _seeds[p.Pid] = p.SessionId;
     }
 
     // A seed meets its pid: it closes the pane only if the session id matches too (else the pid was recycled).
@@ -166,9 +163,7 @@ public sealed class RoostRoster
         }
     }
 
-    private static string Token(string key, string sessionId) => $"{key}/{sessionId}";
-
-    private static string Signature(IEnumerable<string> tokens) => string.Join("\n", tokens);
+    private static string Signature(IEnumerable<string?> tokens) => string.Join("\n", tokens);
 
     private void RaiseIfClosedChanged()
     {

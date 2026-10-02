@@ -34,7 +34,7 @@ public readonly record struct RoostDivider(RoostAxis Axis, int Line, int Start, 
 /// A tab's painted layout (docs/roost-tabs-plan.md): regions that exactly tile a <see cref="Units"/> × <see cref="Units"/>
 /// grid, each at least <see cref="MinSpan"/> units each way, at most <see cref="MaxRegions"/> of them. Immutable;
 /// every edit returns a new layout (or null when it isn't allowed), and an edit can never produce an invalid one.
-/// UI-free, unit-tested. <see cref="ToShape"/> hands it to the tile panel as an ordinary template shape.
+/// UI-free, unit-tested. The stage's tile panel lays child <c>i</c> into <see cref="Regions"/>[<c>i</c>].
 /// </summary>
 public sealed class RoostGridLayout
 {
@@ -66,8 +66,22 @@ public sealed class RoostGridLayout
     /// <summary>The regions, in the order they were created.</summary>
     public IReadOnlyList<RoostRegion> Regions => _regions;
 
-    /// <summary>The regions top-to-bottom, then left-to-right — the order a preset's sessions are mapped in.</summary>
-    public IReadOnlyList<RoostRegion> ReadingOrder => _regions.OrderBy(r => r.Row).ThenBy(r => r.Column).ToList();
+    /// <summary>The regions top-to-bottom, then left-to-right — the order a preset's sessions are mapped in, and the
+    /// regions' numbers (Alt+1–8).</summary>
+    public IReadOnlyList<RoostRegion> ReadingOrder => _readingOrder ??= _regions.OrderBy(r => r.Row).ThenBy(r => r.Column).ToArray();
+
+    private RoostRegion[]? _readingOrder;
+
+    /// <summary>Region number <paramref name="n"/> (1-based, reading order: Alt+N), or null.</summary>
+    public RoostRegion? ByNumber(int n) => n >= 1 && n <= ReadingOrder.Count ? ReadingOrder[n - 1] : null;
+
+    /// <summary>Region <paramref name="id"/>'s number (1-based, reading order), or 0 when it isn't in the layout.</summary>
+    public int NumberOf(int id)
+    {
+        var order = ReadingOrder;
+        for (int i = 0; i < order.Count; i++) if (order[i].Id == id) return i + 1;
+        return 0;
+    }
 
     /// <summary>A key that changes whenever the geometry or the ids do.</summary>
     public string Signature { get; }
@@ -284,11 +298,10 @@ public sealed class RoostGridLayout
     /// <summary>
     /// A snap template as a layout (the painter's built-in presets): each column and row boundary is its share of
     /// the star weights, rounded to the nearest unit line (so 60 / 40 becomes 7 / 5). Ids follow the template's fill
-    /// order. Auto has no grid of its own and reads as <see cref="Full"/>.
+    /// order.
     /// </summary>
     public static RoostGridLayout FromTemplate(RoostSnapTemplate template)
     {
-        if (template == RoostSnapTemplate.Auto) return Full;
         var shape = RoostTemplates.Shape(template);
         var xs = Boundaries(shape.Columns);
         var ys = Boundaries(shape.Rows);
@@ -297,10 +310,9 @@ public sealed class RoostGridLayout
         return Create(regions) ?? Full;
     }
 
-    /// <summary>The built-in presets, in <see cref="RoostTemplates.Picker"/> order (Auto left out).</summary>
+    /// <summary>The built-in presets, in <see cref="RoostTemplates.Picker"/> order.</summary>
     public static IReadOnlyList<(RoostSnapTemplate Template, string Name, RoostGridLayout Layout)> Presets { get; } =
-        RoostTemplates.Picker.Where(t => t != RoostSnapTemplate.Auto)
-            .Select(t => (t, RoostTemplates.Name(t), FromTemplate(t))).ToList();
+        RoostTemplates.Picker.Select(t => (t, RoostTemplates.Name(t), FromTemplate(t))).ToList();
 
     // Unit lines for star weights: 0, each cumulative share rounded, then Units.
     private static int[] Boundaries(IReadOnlyList<double> weights)
@@ -315,14 +327,6 @@ public sealed class RoostGridLayout
         lines[^1] = Units;
         return lines;
     }
-
-    /// <summary>
-    /// The layout as a tile-panel shape on a uniform unit grid. Slot <c>i</c> is <see cref="Regions"/>[<c>i</c>];
-    /// <see cref="SlotOf"/> maps a region id to it.
-    /// </summary>
-    public RoostTemplateShape ToShape() => new(
-        Enumerable.Repeat(1.0, Units).ToArray(), Enumerable.Repeat(1.0, Units).ToArray(),
-        _regions.Select(r => new RoostSlot(r.Row, r.Column, r.RowSpan, r.ColumnSpan)).ToArray());
 
     /// <summary>
     /// This layout (a preset or a saved one) renumbered to take over <paramref name="previous"/>'s region ids in
@@ -340,7 +344,4 @@ public sealed class RoostGridLayout
         // Only a previous layout at the id ceiling can push a fresh id past it; keep this layout's own ids then.
         return Create(_regions.Select(r => r with { Id = ids[r.Id] })) ?? this;
     }
-
-    /// <summary>The <see cref="ToShape"/> slot of region <paramref name="id"/>, or -1.</summary>
-    public int SlotOf(int id) => Array.FindIndex(_regions, r => r.Id == id);
 }

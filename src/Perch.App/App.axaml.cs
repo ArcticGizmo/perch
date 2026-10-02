@@ -70,8 +70,8 @@ public partial class App : Application
     private IDisposable? _inboxSub;                  // transient inbox (Connect 4 invites / nudges / rematches)
     private NudgeBubbleWindow? _nudgeBubble;         // at most one on screen at a time
     private HistoryWindow? _historyWindow;
-    // The Roost (docs/roost-plan.md): its roster is app-owned and fed every scan, so pane order and pins
-    // survive closing the window; the window (and its per-pane feeds) exists only while it's open.
+    // The Roost (docs/roost-plan.md): its roster is app-owned and fed every scan, so the rail and the closed
+    // panes survive closing the window; the window (and its per-pane feeds) exists only while it's open.
     private readonly Perch.Data.Roost.RoostRoster _roostRoster = new();
     // …and so are its tabs (docs/roost-tabs-plan.md), saved (debounced) whenever their persisted form moves.
     private readonly Perch.Data.Roost.RoostTabSet _roostTabs = new();
@@ -203,13 +203,7 @@ public partial class App : Application
             _roostTabs.Seed(settings.RoostTabs);
             // A drag or a tab switch moves the saved tabs; coalesce a burst of them into one write.
             _roostTabsSave = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
-            _roostTabsSave.Tick += (_, _) =>
-            {
-                _roostTabsSave.Stop();
-                if (_appSettings is not { } s) return;
-                s.RoostTabs = _roostTabs.ToState();
-                s.Save();
-            };
+            _roostTabsSave.Tick += (_, _) => FlushRoostTabs();
             _roostTabs.Changed += () => { _roostTabsSave.Stop(); _roostTabsSave.Start(); };
             // Saved painter layouts change only on an explicit save / rename / delete, so they're written at once.
             _roostLayouts.Seed(settings.RoostSavedLayouts);
@@ -1667,7 +1661,8 @@ public partial class App : Application
             },
             () => { _roostWindow = null; FlushRoostTabs(); ReplayRoostSuppressed(); });
 
-    // Writes a pending (debounced) tab save now — the Roost closing, or an update about to restart the app.
+    // Writes a pending (debounced) tab save: the debounce running out, or now — the Roost closing, or an update
+    // about to restart the app. Nothing pending, nothing written.
     private void FlushRoostTabs()
     {
         if (_roostTabsSave is not { IsEnabled: true } timer) return;

@@ -23,7 +23,7 @@ public class RoostTemplatesTests
     [Fact]
     public void EveryTemplateTilesItsGridOnce()
     {
-        foreach (var t in Enum.GetValues<RoostSnapTemplate>().Where(t => t != RoostSnapTemplate.Auto))
+        foreach (var t in Enum.GetValues<RoostSnapTemplate>())
         {
             var shape = RoostTemplates.Shape(t);
             var covered = new int[shape.Rows.Count, shape.Columns.Count];

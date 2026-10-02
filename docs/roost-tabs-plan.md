@@ -446,6 +446,22 @@ A perf / security / quality pass over T1–T7 turned up six issues, fixed togeth
 - **Saved placements survive an early open.** The window's own `Sync` passes `resolveSeeds: false`; only the
   app's scan-driven sync settles persisted cells.
 
+A second pass took the low-priority items and the duplication:
+
+- **Perf:** the pulse and the 1s clock idle while the Roost is minimised (`OnPropertyChanged(WindowState)` restarts
+  them); `RoostTabSet.Signature` reads each tab's own layout signature instead of re-validating it; Alt+N and a
+  drop on the active tab's header refresh once, not twice; cursors are shared instances.
+- **Robustness:** a tab id must look like one `NewId` makes (`t` + up to nine digits) or the tab is dropped; a null
+  closed-pane token no longer throws (`RoostToken.Parse` is the one parser, for the roster and the tabs); with 24
+  saved layouts the save row stays, reading "Full", so typing a saved name can still replace it.
+- **One of each:** the tile panel takes a `RoostGridLayout` directly (no star-weight round trip; `ToShape` /
+  `SlotOf` / `RoostSnapTemplate.Auto` / `RoostPaneSize` are gone) and `RoostTilePanel.UnitRect` is the one
+  region-rect helper for the stage, painter and thumbnails; `SessionPalette.Light` / `PaneDot` are the one status
+  colour map; one `AttachDragSource` for sessions and tabs; `RoostGridLayout.NumberOf` / `ByNumber` for Alt+N;
+  `PointerWiring.OnLeftClick` / `HoverWash` for the code-built buttons.
+- **Into Core, tested:** `RoostTabSet.Cycle` (Ctrl+Tab), `Candidates` (the empty-region picker), `ElsewhereKeys`
+  (the "other tabs" pill now leaves out what the active tab also shows) and `RoostTabStatus.MostUrgent`.
+
 ## Open questions (beyond D1–D9)
 
 - Should a region optionally **bind to a project** (cwd), so a new session started in that repo fills it

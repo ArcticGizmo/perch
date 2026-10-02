@@ -555,45 +555,85 @@ public class RoostTabSetTests
         Assert.Equal(new RoostTabLight(RoostLight.Done, 1), set.Elsewhere(roster.Panes));
         Assert.Equal(new RoostTabLight(RoostLight.Awaiting, 1), RoostTabStatus.For(a, roster.Panes));
     }
-}
 
-/// <summary>Guards the Roost's shortcut table (D6): every bound row resolves, modifiers must match exactly, and the
-/// tooltip/hint helpers read the same rows.</summary>
-public class RoostKeysTests
-{
     [Fact]
-    public void EveryBoundRowResolvesToItsCommand()
+    public void ElsewhereLeavesOutWhatTheActiveTabAlsoShows()
     {
-        foreach (var row in RoostKeys.All.Where(r => r.Command is not null))
-            for (int i = 0; i < row.Keys!.Count; i++)
-                Assert.Equal((row.Command!.Value, row.Keys.Count > 1 ? i + 1 : 0), RoostKeys.Resolve(row.Keys[i], row.Mods));
+        // Two places per session only happens without UniquePlacement; the pill must still not send you away from it.
+        var set = new RoostTabSet(uniquePlacement: false);
+        var a = set.AddTab("A", Two)!;
+        var b = set.AddTab("B", Two)!;
+        set.Assign(a.Id, 0, "1");
+        set.Assign(b.Id, 0, "1");
+        set.Assign(b.Id, 1, "2");
+        set.Activate(a.Id);
+        Assert.Equal(["2"], set.ElsewhereKeys());
     }
 
     [Fact]
-    public void ChordsDontCollide()
+    public void MostUrgentGoesByLightThenRosterOrder()
     {
-        var bound = RoostKeys.All.Where(r => r.Keys is not null).SelectMany(r => r.Keys!.Select(k => (k, r.Mods))).ToList();
-        Assert.Equal(bound.Count, bound.Distinct().Count());
+        var roster = Roster(S("1", SessionStatus.Running), S("2", SessionStatus.NeedsAttention),
+            S("3", SessionStatus.AwaitingInput), S("4", SessionStatus.AwaitingInput));
+        Assert.Equal("3", RoostTabStatus.MostUrgent(["1", "2", "3", "4"], roster.Panes));
+        Assert.Equal("2", RoostTabStatus.MostUrgent(["1", "2"], roster.Panes));
+        Assert.Null(RoostTabStatus.MostUrgent(["gone"], roster.Panes));
+    }
+
+    // ── Window helpers ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void CycleWrapsThroughFocusAndTheTabs()
+    {
+        var (set, a, b) = TwoTabs();
+        Assert.Equal(a.Id, set.Cycle(+1));                   // from Focus
+        Assert.Equal(b.Id, set.Cycle(-1));                   // Focus wraps back to the last tab
+        set.Activate(b.Id);
+        Assert.Equal(RoostTabSet.FocusId, set.Cycle(+1));    // the last tab wraps to Focus
+        Assert.Equal(a.Id, set.Cycle(-1));
     }
 
     [Fact]
-    public void ModifiersMustMatchExactly()
+    public void PickerCandidatesPutUnplacedFirstThenUrgencyThenName()
     {
-        Assert.Equal((RoostCommand.Tab, 3), RoostKeys.Resolve("D3", RoostMods.Ctrl));
-        Assert.Null(RoostKeys.Resolve("D3", RoostMods.Ctrl | RoostMods.Shift));
-        Assert.Equal((RoostCommand.Region, 3), RoostKeys.Resolve("D3", RoostMods.Alt));
-        Assert.Null(RoostKeys.Resolve("D9", RoostMods.Alt));   // only 8 regions
-        Assert.Equal((RoostCommand.PreviousTab, 0), RoostKeys.Resolve("Tab", RoostMods.Ctrl | RoostMods.Shift));
-        Assert.Null(RoostKeys.Resolve("Enter", RoostMods.None));   // a pane's own key
+        var (set, a, b) = TwoTabs();
+        var roster = Roster(S("1"), S("2", SessionStatus.AwaitingInput), S("3"), S("4", SessionStatus.AwaitingInput), S("5"));
+        set.Assign(a.Id, 0, "1");   // already here: never offered
+        set.Assign(b.Id, 0, "4");   // in another tab: offered after the unplaced, however urgent
+        var names = set.Candidates(a.Id, roster.Panes).Select(p => p.Key);
+        Assert.Equal(["2", "3", "5", "4"], names);
+        Assert.Empty(set.Candidates("missing", roster.Panes));
     }
 
     [Fact]
-    public void TooltipChordsAndTheHintLineComeFromTheTable()
+    public void ASeedDropsTabIdsItWouldNeverHaveMade()
     {
-        Assert.Equal("Ctrl+3", RoostKeys.ChordFor(RoostCommand.Tab, 3));
-        Assert.Equal("Alt+2", RoostKeys.ChordFor(RoostCommand.Region, 2));
-        Assert.Equal("Ctrl+0", RoostKeys.ChordFor(RoostCommand.FocusTab));
-        Assert.Equal("Ctrl+T", RoostKeys.ChordFor(RoostCommand.NewTab));
-        Assert.Equal("Ctrl+1–9 tab  ·  Alt+1–8 region  ·  Ctrl+. next needing you", RoostKeys.HintLine);
+        var state = new RoostTabsState
+        {
+            Tabs =
+            [
+                new() { Id = "t3", Name = "ok" },
+                new() { Id = "work", Name = "hand-typed" },
+                new() { Id = "t0", Name = "zero" },
+                new() { Id = "t1234567890", Name = "too long" },
+                new() { Id = new string('t', 1) + new string('9', 2000), Name = "huge" },
+            ],
+        };
+        var set = new RoostTabSet();
+        set.Seed(state);
+        Assert.Equal(["t3"], set.Tabs.Select(t => t.Id));
+        Assert.Equal("t4", set.AddTab()!.Id);
+    }
+
+    [Fact]
+    public void TokensRoundTripAndRejectWhatIsMalformed()
+    {
+        Assert.Equal("12/abc", RoostToken.Format("12", "abc"));
+        Assert.Equal(("12", "abc"), RoostToken.Parse("12/abc"));
+        Assert.Equal(("12", "a/b"), RoostToken.Parse("12/a/b"));   // a session id is everything after the first slash
+        Assert.Null(RoostToken.Parse(null));
+        Assert.Null(RoostToken.Parse("12"));
+        Assert.Null(RoostToken.Parse("/abc"));
+        Assert.Null(RoostToken.Parse("12/"));
     }
 }

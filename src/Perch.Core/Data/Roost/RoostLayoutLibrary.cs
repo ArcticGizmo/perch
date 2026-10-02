@@ -30,7 +30,7 @@ public sealed class RoostLayoutLibrary
     /// </summary>
     public bool Save(string name, RoostGridLayout layout)
     {
-        if (Clean(name) is not { } clean) return false;
+        if (RoostTabSet.CleanName(name) is not { } clean) return false;
         int at = IndexOf(clean);
         if (at >= 0) _saved[at] = (clean, layout);
         else if (_saved.Count >= MaxSaved) return false;
@@ -43,7 +43,7 @@ public sealed class RoostLayoutLibrary
     public bool Rename(string name, string newName)
     {
         int at = IndexOf(name);
-        if (at < 0 || Clean(newName) is not { } clean || clean == _saved[at].Name) return false;
+        if (at < 0 || RoostTabSet.CleanName(newName) is not { } clean || clean == _saved[at].Name) return false;
         int other = IndexOf(clean);
         if (other >= 0 && other != at) return false;
         _saved[at] = (clean, _saved[at].Layout);
@@ -61,7 +61,7 @@ public sealed class RoostLayoutLibrary
     }
 
     /// <summary>Whether <paramref name="name"/> is taken (ignoring case).</summary>
-    public bool Contains(string name) => Clean(name) is { } clean && IndexOf(clean) >= 0;
+    public bool Contains(string name) => RoostTabSet.CleanName(name) is { } clean && IndexOf(clean) >= 0;
 
     /// <summary>The persisted form, or null when there's nothing saved.</summary>
     public List<RoostSavedLayout>? ToState() =>
@@ -75,17 +75,10 @@ public sealed class RoostLayoutLibrary
         foreach (var s in state ?? [])
         {
             if (_saved.Count >= MaxSaved) break;
-            if (s is null || Clean(s.Name) is not { } name || IndexOf(name) >= 0) continue;
+            if (s is null || RoostTabSet.CleanName(s.Name) is not { } name || IndexOf(name) >= 0) continue;
             if (RoostGridLayout.Create(s.Regions) is { } layout) _saved.Add((name, layout));
         }
     }
 
     private int IndexOf(string name) => _saved.FindIndex(s => string.Equals(s.Name, name.Trim(), StringComparison.OrdinalIgnoreCase));
-
-    private static string? Clean(string? name)
-    {
-        var t = name?.Trim();
-        if (string.IsNullOrEmpty(t)) return null;
-        return t.Length > RoostTabSet.MaxNameLength ? t[..RoostTabSet.MaxNameLength].TrimEnd() : t;
-    }
 }

@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Media;
 using Perch.Avalonia.Rendering;
+using Perch.Data.Roost;
 using Perch.Theming;
 
 namespace Perch.Avalonia.Theming;
@@ -190,4 +191,18 @@ internal sealed class SessionPalette
     }
 
     private static Color WashColor(Color c, byte alpha) => Color.FromArgb(alpha, c.R, c.G, c.B);
+
+    /// <summary>A Roost light's colour: a tab's dot and count, the "other tabs" pill.</summary>
+    public SolidColorBrush Light(RoostLight light) => light switch
+    {
+        RoostLight.Error => Err,
+        RoostLight.Awaiting => Await,
+        RoostLight.Done => Attn,
+        RoostLight.Working => Ok,
+        _ => Idle,
+    };
+
+    /// <summary>A Roost session's status dot (the rail, its pane's header, the picker): its light, faint once it's
+    /// ended.</summary>
+    public SolidColorBrush PaneDot(RoostPane pane) => pane.Ended ? Faint : Light(RoostTabStatus.LightOf(pane));
 }

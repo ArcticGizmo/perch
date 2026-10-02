@@ -26,18 +26,18 @@ internal enum RoostPaneAction
     CopyResume,
     /// <summary>Take a terminal session over in Perch (the app confirms first — see <c>App.OnElevateToPerch</c>).</summary>
     TakeOver,
-    /// <summary>Hide the pane (the session keeps running; reopen it from the title bar's "N hidden" chip).</summary>
+    /// <summary>Hide the pane (the session keeps running; reopen it from the rail's "N hidden" row).</summary>
     Close,
 }
 
 /// <summary>
 /// One session in the Roost (docs/roost-plan.md): a header (status dot, name, origin badge, status pill, model,
-/// context thermo, ⋯ menu) over a body that is either the session's thread in compact density (expanded) or a
-/// <see cref="ActivitySummary"/> mini card (collapsed), plus an origin-dependent footer when expanded. Its chrome
-/// carries the status: a pulsing ring for needs-you, steady rings for an error / done-review, a dimmed header for
-/// idle and ended. Owns no state beyond what it's shown — the window resolves size/focus and feeds it data.
-/// An expanded pane creates its <see cref="SessionThreadView"/>; collapsing (or <see cref="Park"/>) drops and
-/// unbinds it, so a collapsed or off-screen pane holds no thread.
+/// context thermo, ⋯ menu) over a body that is the session's thread in compact density — or, while that loads, an
+/// <see cref="ActivitySummary"/> mini card — plus an origin-dependent footer. Its chrome carries the status: a
+/// pulsing ring for needs-you, steady rings for an error / done-review, a dimmed header for idle and ended. Owns no
+/// state beyond what it's shown — the window resolves placement/focus and feeds it data. A shown pane
+/// (<see cref="Show"/>) creates its <see cref="SessionThreadView"/>; <see cref="Park"/> drops and unbinds it, so an
+/// off-screen pane past the warm limit holds no thread.
 /// </summary>
 internal sealed class SessionPane : Border
 {
@@ -77,7 +77,6 @@ internal sealed class SessionPane : Border
     private RoostFeed? _feed;
     private SessionThreadView? _thread;
     private SessionConversation? _boundConversation;
-    private RoostPaneSize _size = RoostPaneSize.Collapsed;
     private bool _focused, _parked = true;
 
     public SessionPane(SessionPalette palette, string key)
@@ -193,9 +192,6 @@ internal sealed class SessionPane : Border
             MinHeight = 30, MaxHeight = 88, VerticalContentAlignment = VerticalAlignment.Center, IsVisible = false,
         };
         _composer.AddHandler(KeyDownEvent, OnComposerKeyDown, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
-        _composer.TextChanged += (_, _) => { if (_composer.IsFocused) ComposerTyping?.Invoke(Key); };
-        _composer.GotFocus += (_, _) => ComposerFocusChanged?.Invoke(Key, true);
-        _composer.LostFocus += (_, _) => ComposerFocusChanged?.Invoke(Key, false);
         _footerButtonText = new TextBlock { FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 11.5, Foreground = _p.Text };
         _footerButton = FooterButton(_footerButtonText, () => ActionRequested?.Invoke(Key, RoostPaneAction.OpenSession));
         _footerButton[DockPanel.DockProperty] = Dock.Right;
@@ -246,7 +242,6 @@ internal sealed class SessionPane : Border
     }
 
     public string Key { get; }
-    public RoostPaneSize Size => _size;
 
     /// <summary>The header band — the handle the Roost drags a pane by.</summary>
     public Control Header => _header;
@@ -269,12 +264,6 @@ internal sealed class SessionPane : Border
     /// <summary>Esc in the composer with a turn running (pane key).</summary>
     public event Action<string>? InterruptRequested;
 
-    /// <summary>A keystroke changed the composer's draft (pane key) — the typing hold.</summary>
-    public event Action<string>? ComposerTyping;
-
-    /// <summary>The composer gained / lost keyboard focus (pane key, focused).</summary>
-    public event Action<string, bool>? ComposerFocusChanged;
-
     /// <summary>Points the pane at its latest roster snapshot and feed; refreshes header, chrome and body.</summary>
     public void Update(RoostPane pane, RoostFeed? feed)
     {
@@ -291,13 +280,11 @@ internal sealed class SessionPane : Border
         RefreshBody();
     }
 
-    /// <summary>Sets the pane's size (a placed pane is expanded).</summary>
-    public void SetSize(RoostPaneSize size)
+    /// <summary>The pane is on stage: (re)build its body if it was parked (a parked pane's body is stale).</summary>
+    public void Show()
     {
-        bool changed = _parked || size != _size;   // back from parked = body is stale
+        if (!_parked) return;
         _parked = false;
-        _size = size;
-        if (!changed) return;
         RefreshChrome();
         RefreshBody();
     }
@@ -341,7 +328,7 @@ internal sealed class SessionPane : Border
         if (_pane is not { } pane) return;
         var s = pane.Session;
         _name.Text = s.DisplayName;
-        _dot.Fill = DotBrush(pane);
+        _dot.Fill = _p.PaneDot(pane);
 
         var (origin, perch) = s.IsPerchControlled ? ("◆ Perch", true)
             : s.IdeHost is { } ide ? (ShortIde(ide), false)
@@ -409,16 +396,7 @@ internal sealed class SessionPane : Border
 
     // ── Chrome ────────────────────────────────────────────────────────────────
 
-    private IBrush DotBrush(RoostPane pane) => pane.Ended ? _p.Faint : pane.Session.Status switch
-    {
-        SessionStatus.AwaitingInput => _p.Await,
-        SessionStatus.ApiError => _p.Err,
-        SessionStatus.NeedsAttention => _p.Attn,
-        SessionStatus.Running => _p.Ok,
-        _ => _p.Idle,
-    };
-
-    private Color RingColor() => _pane is { } pane ? ((ISolidColorBrush)DotBrush(pane)).Color : Colors.Transparent;
+    private Color RingColor() => _pane is { } pane ? _p.PaneDot(pane).Color : Colors.Transparent;
 
     private static BoxShadows Ring(Color c, double spread, double glow, double glowAlpha)
     {
@@ -482,16 +460,16 @@ internal sealed class SessionPane : Border
 
     private void OnFeedChanged()
     {
-        if (_size == RoostPaneSize.Expanded && _thread is not null && _feed is { } f)
+        if (_thread is not null && _feed is { } f)
             EnsureThread(f);   // rebinds after a tail reset / "load earlier"; re-shows or hides that strip
-        if (_size == RoostPaneSize.Collapsed || _thread is null) RefreshBody();
+        if (_thread is null) RefreshBody();
         else RefreshFooter();   // the composer's hint follows pending / running / idle
     }
 
     private void RefreshBody()
     {
         if (_pane is null || _parked) return;
-        if (_size == RoostPaneSize.Expanded && _feed is { IsLoading: false } feed)
+        if (_feed is { IsLoading: false } feed)
         {
             EnsureThread(feed);
             RefreshFooter();
