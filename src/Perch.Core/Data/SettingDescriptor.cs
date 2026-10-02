@@ -65,6 +65,7 @@ internal enum PreviewTarget
     FeedStrip,
     ConfigDirLabel,
     RoostButton,
+    RecentSessions,
 }
 
 /// <summary>

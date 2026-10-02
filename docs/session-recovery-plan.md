@@ -1,9 +1,8 @@
 # Session recovery — design & checkpoint plan
 
-Status: **plan only, decisions confirmed** (2026-10-02), on branch `session-recovery` (cut from `main`).
-Nothing is built yet. The
-spike that grounds it (what Claude Code leaves on disk for each way a session can end) is done and written up
-below; four small probes (R0) are still owed before the code that depends on them.
+Status: **R0–R8 built** (2026-10-02), on branch `session-recovery` (cut from `main`), one commit per checkpoint.
+Everything is unit-tested and render-verified; the live checks listed under each checkpoint are still owed. The
+spike that grounds it (what Claude Code leaves on disk for each way a session can end) is written up below.
 
 ## The ask
 
@@ -464,6 +463,19 @@ allocation-free: the list is computed off the UI thread and cached, never read i
 A `SettingDescriptor` for showing the Recent section (and anything else user-facing that R1–R7 added), a
 `PreviewTarget` + `SampleData` rows so the Settings preview shows it, headless render at 1× and 1.5×, the
 changelog's Unreleased section.
+
+**As built (R8):**
+- `AppSettings.ShowRecentSessions` (default on; the section still only appears while there's something recent) with a
+  `recent-sessions` descriptor on the Session row surface ("Recent sessions"; keywords recent / ended / interrupted /
+  restart / shutdown / resume / recover …), `PreviewTarget.RecentSessions` (catalogue chip "interrupted · 2h"), and a
+  line in `OverlaySettingsGates.Apply` → `SetShowRecent`, so the live overlay and the preview follow it through the
+  idempotent `DisplayChanged` path. It gates the overlay section only; the Roost's RECENT group is unaffected.
+- The Settings preview (`PreviewPane`) seeds `SampleData.RecentLines()`, so the section shows there and Rearrange
+  can place it (dimmed when the setting is off).
+- Nothing else user-facing needed a setting: `RecentExpanded`, `RecentDismissed` and the ledger are UI state; the
+  shutdown window, Recent window and row cap stay constants (D6, Q1).
+- `CHANGELOG.md` Unreleased: the whole feature (R1–R8) plus the Exit-cleanup fix from R5.
+- Render: `preview_pane_1x.png`, `settings_catalog_1x.png`.
 
 ## Risks
 

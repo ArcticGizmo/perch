@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- A Recent section on the overlay: sessions that ended lately, with the ones a restart cut off at the top
+- Sessions that ended just before a shutdown are marked too, for the "close everything and go home" crowd
+- Click one to pick it back up in Perch, resume it in a terminal, or dismiss it
+- Reopening a session shows the conversation straight away; Claude only starts when you send something
+- The resume cost estimate is now a quiet note above the composer, not a question before you can even look
+- Perch sessions that were open when Perch closed (an update, Exit, a restart) come back where you left them
+- Exiting Perch now ends its sessions properly, so your SessionEnd hooks run
+- Roost tabs survive a reboot: a session whose process is gone stays in its region until you send to it
+- A Recent group in the Roost rail, with Resume in terminal and Dismiss on each pane
+- Fixed Perch skipping its own tidy-up (including releasing a docked edge) on a normal Exit
+
 ---
 
 ## [v0.5.2] - 2026-10-02
