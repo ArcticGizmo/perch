@@ -6,7 +6,12 @@ namespace Perch.Data.Control;
 /// yield several events (an assistant message carries one event per content block). PoC scope: see
 /// <c>docs/session-control-poc.md</c>.
 /// </summary>
-internal abstract record SessionEvent;
+internal abstract record SessionEvent
+{
+    /// <summary>The record carried a <c>parent_tool_use_id</c>: a sub-agent's message, not the main thread's.
+    /// A background agent's messages keep arriving after the main turn's result.</summary>
+    public bool FromSubagent { get; init; }
+}
 
 /// <summary>One MCP server the CLI reported in <c>init</c>: its name and connection status
 /// (e.g. "connected", "needs-auth", "failed").</summary>
