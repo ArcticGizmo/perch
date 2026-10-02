@@ -365,6 +365,57 @@ terminal"). When the same session id goes live from **anywhere** (Perch or a ter
 `RoostRoster.AdoptContinuations` moves it into the slot. The rail gets a "Recent" group fed by `RecentSessions`.
 This also delivers the "Relaunching" future feature in `docs/roost-tabs-plan.md`.
 
+**As built (R6):**
+- **Dormant panes are supplied, not stored.** The app hands `RoostRoster.Update` a third list, `RoostDormant` (session id,
+  cwd, title, last activity, a `RoostDormantKind` — was open in Perch / interrupted / before shutdown / ended / exited /
+  not running — and whether it's Perch's). Each becomes a pane keyed `RoostToken.DormantKey` (`~sessionId`, which no
+  pid can equal), `IsDormant`, idle, in a new rail group **`RoostGroup.Recent`** in the app's order. One the app stops
+  naming goes at once (no linger); one whose session is live is never shown. `RoostPane.IsLive` (= not ended, not
+  dormant) replaces `!Ended` wherever the Roost means "running" (take over, the "not in a tab" pill, the first-run tab,
+  "+ New session" admission).
+- **Adoption both ways** (`RoostRoster.Adopt`): a live process takes over an ended **or dormant** pane of the same
+  conversation, and a dormant pane takes over an ended one. Tabs follow `Adopted`, so a region keeps its session from
+  live → dormant (the process went) → live (the first send, or a `--resume` anywhere). A dormant pane can't be closed:
+  its "Close"/"Dismiss" dismisses it.
+- **Tabs survive a restart.** A dormant cell persists as the pid-less token `~/sessionId`. A persisted cell now places
+  the pane whose pid **and** session id match; failing that (every pid is new after a reboot) the pane showing the same
+  conversation, live under another process, else dormant. A recycled pid alone still places nothing. Cells that match
+  nothing yet **wait** (`Sync(settleSeeds: false)`) until the app has supplied the dormant set, and
+  `RoostTabSet.SessionIds()` names them so it can.
+- **The dormant set** (`App.RoostDormant.cs`, `RoostDormantSessions`, recomposed on every fold from cached parts, in
+  this order, one per session, never live, never a dismissed ending): (1) the restorable sessions Perch had open when it
+  closed; (2) Perch sessions open dormant in a window, and woken ones the scan hasn't seen yet (so the dormant pane holds
+  the place until the live one takes it); (3) every conversation a tab holds that isn't running, looked up in the Recent
+  list, else the pane that just ended, else the dormant pane already showing it, else its transcript; (4) the Recent
+  list's top 5. The Recent list (`RecentSessions.Build` + `SessionHistory.ListAll`) is built off the UI thread after the
+  ledger begins, when the Roost opens, and 5s after a session leaves the scan (its exit flush may still be landing).
+  Folding waits for the monitor's first scan, and persisted cells settle only after the first Recent build.
+- **Waking from a pane** (`WakeFromRoostAsync`): the same gates as a session window, now shared in
+  **`Services/ResumeGate`** (`Refusal`: live in a terminal / held by another Perch; `ConfirmTrustAsync`: the folder-trust
+  question, here modal over the Roost), then `OpenDormantPerchSession` (the window's own dormant session if one is open,
+  so there's one writer), `Wake` with the user's default permission mode, and the send. A refusal toasts why and the pane
+  keeps the text; while it runs the composer is read-only ("Starting Claude…").
+- **Pane & rail:** the pill says why it's here ("Was open in Perch" in the brand hue; "Interrupted 15h ago" / "Before
+  shutdown · 15h ago" in the attention hue; "Ended 1m ago"), the footer has the composer ("Message to resume…"), **Resume
+  in terminal** (`ReopenSession`) and **Open window** (dormant session window); the menu swaps "Close pane" for
+  **Dismiss**. Rail rows under RECENT carry a short note (was open / interrupted / shutdown / age) and a dim dot (amber
+  when flagged).
+- **Dismiss** records `AppSettings.RecentDismissed` (id → the ending's time, pruned to 3 days; a `NotSettings` UI
+  state), forgets a restorable session in the ledger (it stops coming back), and takes the pane out of its tab.
+- **Render:** `roost_dormant_1x.png` / `roost_dormant_light_1x.png` / `roost_dormant_focus_1x.png`
+  (`RenderRoostDormant`). Tests: `RoostDormantTests` (11).
+
+**Owed live checks (R6):**
+- Two Perch sessions in a tab, Exit Perch, start it: both come back dormant in their regions (and at the top of RECENT,
+  "Was open in Perch"). Send in one: the trust/live/lock checks, then it wakes in place and the live pane keeps the
+  region (no flicker to empty).
+- Same with a terminal session in a tab across a reboot: it's dormant in its region; "Resume in terminal" opens it, and
+  the live terminal pane takes the region.
+- A terminal session in a tab ends: its pane turns dormant in place (no "Ended" linger, no emptied region).
+- Dismiss a dormant pane: it leaves the tab and RECENT; resume and end it again, and it's back.
+- A session interrupted by a restart: RECENT shows it first, amber.
+- Open the Roost with many transcripts: the Recent build doesn't stall the UI.
+
 ### R7 — overlay Recent section
 
 `OverlaySection.Recent` + `OverlaySectionOrder.Default` + the `SectionVisible`/`SectionHeight`/`PaintSectionCore`

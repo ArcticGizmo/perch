@@ -329,6 +329,7 @@ public partial class App : Application
                 RefreshSessionActivity(sessions);   // mirror each session's live sub-agents into its own window
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
+                _roostScanned = true;
                 UpdateRoost(sessions);
                 RefreshOriginIcons(sessions);
                 RefreshComposerActions();   // grow/drop each session window's artifact + markdown glyphs
@@ -1596,13 +1597,17 @@ public partial class App : Application
     // ── Roost ─────────────────────────────────────────────────────────────────
     // Every scan folds into the roster (cheap — no IO), and an open Roost re-syncs. Autonomous SDK runs stay
     // out, as they do from the overlay's main list: nobody is at the keyboard for them.
+    // The dormant panes (App.RoostDormant.cs) fold in with every scan too.
     private void UpdateRoost(IReadOnlyList<ClaudeSession> sessions)
     {
-        _roostRoster.Update(sessions.Where(s => !s.IsBackground).ToList(), Clock.Now);
-        // Before the window's own sync: a take-over re-keys a pane, and its region must follow the new key.
-        _roostTabs.Sync(_roostRoster.Panes, _roostRoster.Adopted);
+        var live = sessions.Where(s => !s.IsBackground).ToList();
+        _roostRoster.Update(live, Clock.Now, RoostDormantSessions(live));
+        // Before the window's own sync: a take-over (or a dormant pane waking, or a process ending) re-keys a pane, and
+        // its region must follow the new key. Persisted cells wait for the dormant set before they're settled.
+        _roostTabs.Sync(_roostRoster.Panes, _roostRoster.Adopted, settleSeeds: _roostDormantReady);
         _roostWindow?.RosterChanged();
         ReplayRoostSuppressed();
+        NoteRoostLiveSet(sessions);
     }
 
     // The Roost half of AttentionSeen for a session: is the Roost the active window, and is the pane on screen?
@@ -1648,7 +1653,13 @@ public partial class App : Application
         };
     }
 
-    private void OpenRoost() =>
+    private void OpenRoost()
+    {
+        if (_roostWindow is null) RefreshRecent();   // fresh ages and endings for its Recent group
+        OpenRoostWindow();
+    }
+
+    private void OpenRoostWindow() =>
         _roostWindow = WindowHost.ShowOrFocus(_roostWindow,
             () =>
             {
@@ -1667,6 +1678,12 @@ public partial class App : Application
                 w.PlacementChanged += ReplayRoostSuppressed;
                 w.NewSessionRequested += OpenSessionWindow;
                 w.OpenSessionRequested += FocusSession;
+                // Dormant panes (session recovery R6): open in a Perch window (still dormant), resume in a terminal,
+                // dismiss, or wake on the first send.
+                w.OpenDormantRequested += p => OpenSessionResume(p.Session.SessionId, p.Session.Cwd);
+                w.ResumeInTerminalRequested += p => ReopenSession(p.Session.Cwd, p.Session.SessionId);
+                w.DismissRequested += DismissRoostDormant;
+                w.WakeAndSend = WakeFromRoostAsync;
                 w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
                 w.RailSortChanged += sort => { if (_appSettings is { } s) { s.RoostRailSort = sort; s.Save(); } };
                 w.PermissionAnswered += (sid, item, allow, mode) =>
@@ -2019,21 +2036,23 @@ public partial class App : Application
             // A dormant session has no process to keep alive: once nothing views it, drop it (its transcript stays
             // on disk). A woken one is a live session and outlives its windows, as before. Swept rather than read off
             // `w`, because the window has already detached its session by the time Closed fires.
-            _perchSessions.RemoveAll(s => s.IsDormant && !_sessionWindows.Any(o => ReferenceEquals(o.Session, s)));
+            if (_perchSessions.RemoveAll(s => s.IsDormant && !_sessionWindows.Any(o => ReferenceEquals(o.Session, s))) > 0)
+                RefoldRoost();
         };
         return w;
     }
 
     // A resumed session opened dormant (docs/session-recovery-plan.md, D4): its conversation shows, and claude starts
     // on the first send. Owned like a started session, so opening the same id again shows this one rather than a
-    // twin that could wake into a second writer. It reaches the overlay and the Roost once it wakes (the monitor sees
-    // its process then).
+    // twin that could wake into a second writer. The Roost shows it as a dormant pane (App.RoostDormant.cs); the overlay
+    // once it wakes (the monitor sees its process then).
     private Services.PerchSession OpenDormantPerchSession(Services.SessionLaunchOptions options)
     {
         if (options.ResumeId is { } id && _perchSessions.FirstOrDefault(s => s.SessionId == id && !s.HasEnded) is { } existing)
             return existing;
         var session = Services.PerchSession.Dormant(options);
         _perchSessions.Add(session);
+        Dispatcher.UIThread.Post(RefoldRoost);   // after the caller has attached it
         session.Ended += s =>
         {
             _perchSessions.Remove(s);

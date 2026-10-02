@@ -204,5 +204,6 @@ internal sealed class SessionPalette
 
     /// <summary>A Roost session's status dot (the rail, its pane's header, the picker): its light, faint once it's
     /// ended.</summary>
-    public SolidColorBrush PaneDot(RoostPane pane) => pane.Ended ? Faint : Light(RoostTabStatus.LightOf(pane));
+    public SolidColorBrush PaneDot(RoostPane pane) =>
+        pane.Ended ? Faint : pane.Dormant is { } d ? d.IsFlagged ? Await : Faint : Light(RoostTabStatus.LightOf(pane));
 }

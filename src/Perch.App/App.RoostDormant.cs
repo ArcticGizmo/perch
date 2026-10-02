@@ -1,0 +1,273 @@
+using System.IO;
+using Avalonia.Threading;
+using Perch.Avalonia.Services;
+using Perch.Data;
+using Perch.Data.Roost;
+using Perch.Platform;
+
+namespace Perch.Avalonia;
+
+// Session recovery in the Roost (docs/session-recovery-plan.md, R6): the sessions it shows dormant — no process, the
+// conversation tailed from disk, a composer whose first send resumes it. They're what Perch had open when it closed,
+// Perch sessions open dormant in a window, whatever a tab region still holds once its process is gone (so a tab
+// survives Perch closing or a reboot), and the Recent list. The roster takes them with each fold and hands a region's
+// session across the change (RoostRoster.Adopted), live → dormant and back.
+public partial class App
+{
+    // The Recent list, built off the UI thread (it reads transcripts), plus every transcript by id: what a tab's cell is
+    // looked up in after a restart, when its session is in no other list.
+    private readonly RecentSessions _recentBuilder = new();
+    private IReadOnlyList<RecentSession> _recentRows = [];
+    private IReadOnlyDictionary<string, HistoryEntry> _transcriptsById = new Dictionary<string, HistoryEntry>();
+    private bool _recentBuilding, _recentRebuild;
+    private DispatcherTimer? _recentDebounce;
+    // The first Recent build has landed. Until then a tab's persisted cell that matches no live session waits rather
+    // than dropping: it may be about to come back dormant.
+    private bool _roostDormantReady;
+    private HashSet<string> _roostLiveIds = new(StringComparer.Ordinal);
+
+    // A session that just left the scan may still be writing its exit flush (cost-state): read it a few seconds later,
+    // or a clean exit would read as interrupted.
+    private static readonly TimeSpan RecentAfterEndDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>The Recent list as last built (newest build wins; empty until the first lands).</summary>
+    internal IReadOnlyList<RecentSession> RecentRows => _recentRows;
+
+    /// <summary>Rebuilds the Recent list off the UI thread, then re-folds the Roost. A request while one runs queues
+    /// one more. Under render, tests and replay (no ledger, no real history) it only marks the dormant set ready.</summary>
+    private void RefreshRecent()
+    {
+        if (!LedgerWritable)
+        {
+            if (!_roostDormantReady) { _roostDormantReady = true; RefoldRoost(); }
+            return;
+        }
+        if (_recentBuilding) { _recentRebuild = true; return; }
+        _recentBuilding = true;
+        var active = ActiveSessionIds();
+        var held = _ledger?.HeldIds() ?? new HashSet<string>(StringComparer.Ordinal);
+        var dismissed = new Dictionary<string, DateTime>(_appSettings?.RecentDismissed ?? [], StringComparer.Ordinal);
+        var shutdowns = _ledger?.ShutdownsSnapshot() ?? [];
+        Task.Run(() =>
+        {
+            var entries = SessionHistory.ListAll(active);
+            var rows = _recentBuilder.Build(entries, held, dismissed, shutdowns, DateTime.Now);
+            var byId = new Dictionary<string, HistoryEntry>(StringComparer.Ordinal);
+            foreach (var e in entries) byId.TryAdd(e.SessionId, e);
+            return (rows, byId);
+        }).ContinueWith(t =>
+        {
+            _recentBuilding = false;
+            if (t.IsCompletedSuccessfully) (_recentRows, _transcriptsById) = t.Result;
+            else LaunchLog.Write($"recent sessions: build failed ({t.Exception?.GetBaseException().GetType().Name})");
+            _roostDormantReady = true;
+            RefoldRoost();
+            if (_recentRebuild) { _recentRebuild = false; RefreshRecent(); }
+        }, TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    private void RefreshRecentAfterEnd()
+    {
+        if (_recentDebounce is null)
+        {
+            _recentDebounce = new DispatcherTimer { Interval = RecentAfterEndDelay };
+            _recentDebounce.Tick += (_, _) => { _recentDebounce.Stop(); RefreshRecent(); };
+        }
+        _recentDebounce.Stop();
+        _recentDebounce.Start();
+    }
+
+    // The monitor has delivered its first scan. Before that the roster has no live panes, and folding (or settling the
+    // tabs' persisted cells) against it would treat every running session as gone.
+    private bool _roostScanned;
+
+    /// <summary>Re-folds the Roost against the latest scan: the dormant set changed (a Recent build, a restore, a
+    /// dismissal, a dormant window opening or closing). Waits for the first scan, which folds them in anyway.</summary>
+    private void RefoldRoost()
+    {
+        if (_roostScanned) UpdateRoost(_lastSessions);
+    }
+
+    // After each fold: a session that left the scan may now be a Recent row.
+    private void NoteRoostLiveSet(IReadOnlyList<ClaudeSession> sessions)
+    {
+        var ids = sessions.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
+        if (_roostLiveIds.Any(id => !ids.Contains(id))) RefreshRecentAfterEnd();
+        _roostLiveIds = ids;
+    }
+
+    // ── The dormant set ───────────────────────────────────────────────────────────
+
+    /// <summary>Every session the Roost shows dormant, in the Recent group's order: what Perch had open when it closed,
+    /// then Perch sessions open dormant in a window, then what the tabs hold, then the Recent list. One per session,
+    /// never one that's live (the roster also refuses those), never a dismissed ending.</summary>
+    private List<RoostDormant> RoostDormantSessions(IReadOnlyList<ClaudeSession> live)
+    {
+        var liveIds = live.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
+        var recent = new Dictionary<string, RecentSession>(StringComparer.Ordinal);
+        foreach (var r in _recentRows) recent.TryAdd(r.Entry.SessionId, r);
+        var list = new List<RoostDormant>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        void Add(RoostDormant? d, bool dismissible = true)
+        {
+            if (d is null || liveIds.Contains(d.SessionId) || (dismissible && IsDismissed(d)) || !seen.Add(d.SessionId)) return;
+            list.Add(d);
+        }
+
+        foreach (var r in _restorable)
+            Add(new RoostDormant(r.SessionId, r.Cwd, ProjectOf(r.Cwd), r.Title, LastActiveOf(r.SessionId),
+                RoostDormantKind.WasOpenInPerch, PerchOrigin: true), dismissible: false);
+
+        // A woken one stays until the scan sees its process, so its pane holds the place for the live one to take.
+        foreach (var s in _perchSessions)
+        {
+            if (s.SessionId is not { } id) continue;
+            bool waking = s.IsRunning && _roostRoster.Find(RoostToken.DormantKey(id)) is not null;
+            if (!s.IsDormant && !waking) continue;
+            Add(new RoostDormant(id, s.Cwd, ProjectOf(s.Cwd), s.Title, LastActiveOf(id),
+                recent.TryGetValue(id, out var row) ? KindOf(row) : RoostDormantKind.NotRunning, PerchOrigin: true),
+                dismissible: !waking);
+        }
+
+        foreach (var id in _roostTabs.SessionIds())
+            if (!liveIds.Contains(id)) Add(TabHeldDormant(id, recent));
+
+        foreach (var row in _recentRows.Take(SessionRecovery.RecentRows))
+            Add(FromRecent(row, PerchOriginOf(row.Entry.SessionId)));
+
+        return list;
+    }
+
+    // A tab region's session that isn't running: from the Recent list when it's there (it knows how it ended), else the
+    // pane that just ended (the process went this run), else the dormant pane already showing it, else its transcript.
+    private RoostDormant? TabHeldDormant(string id, IReadOnlyDictionary<string, RecentSession> recent)
+    {
+        if (recent.TryGetValue(id, out var row)) return FromRecent(row, PerchOriginOf(id));
+        foreach (var p in _roostRoster.Panes)
+        {
+            if (p.Session.SessionId != id) continue;
+            if (p.Dormant is { } existing) return existing;
+            if (p.EndedAt is { } ended)
+                return new RoostDormant(id, p.Session.Cwd, p.Session.ProjectName, p.Session.Title, ended,
+                    RoostDormantKind.Ended, p.Session.IsPerchControlled);
+        }
+        return _transcriptsById.TryGetValue(id, out var e)
+            ? new RoostDormant(id, e.Cwd, e.ProjectName, e.Title, e.LastUpdated, RoostDormantKind.NotRunning)
+            : null;
+    }
+
+    private static RoostDormant FromRecent(RecentSession row, bool perch) => new(
+        row.Entry.SessionId, row.Entry.Cwd, row.Entry.ProjectName, row.Entry.Title, row.EndedAt, KindOf(row), perch);
+
+    private static RoostDormantKind KindOf(RecentSession row) =>
+        row.End.Kind == SessionEndKind.Abrupt ? RoostDormantKind.Interrupted
+        : row.JustBeforeShutdown ? RoostDormantKind.BeforeShutdown
+        : row.End.Kind == SessionEndKind.Exited ? RoostDormantKind.Exited
+        : RoostDormantKind.Ended;
+
+    // What the Roost already knows of a session's origin (a Recent row doesn't say).
+    private bool PerchOriginOf(string id) =>
+        _roostRoster.Panes.FirstOrDefault(p => p.Session.SessionId == id)?.Session.IsPerchControlled == true;
+
+    private DateTime LastActiveOf(string id) =>
+        _transcriptsById.TryGetValue(id, out var e) ? e.LastUpdated : DateTime.Now;
+
+    private static string ProjectOf(string cwd)
+    {
+        var name = Path.GetFileName(cwd.TrimEnd('\\', '/'));
+        return string.IsNullOrEmpty(name) ? cwd : name;
+    }
+
+    // A dismissal covers the ending it was made on (Q2): a later ending of the same session shows again.
+    private bool IsDismissed(RoostDormant d) =>
+        _appSettings?.RecentDismissed is { } map && map.TryGetValue(d.SessionId, out var at) && d.LastActive <= at;
+
+    // ── Pane actions ──────────────────────────────────────────────────────────────
+
+    /// <summary>A dormant pane's "Dismiss": it leaves the Roost (and its tab), and the Recent list remembers it. One that
+    /// Perch had open also stops coming back after the next restart.</summary>
+    private void DismissRoostDormant(RoostPane pane)
+    {
+        if (pane.Dormant is not { } d) return;
+        if (_restorable.Any(r => r.SessionId == d.SessionId))
+        {
+            _ledger?.Forget(d.SessionId);
+            DropRestorable(d.SessionId);
+            SaveLedgerSoon();
+        }
+        if (_appSettings is { } s)
+        {
+            var map = s.RecentDismissed ?? new Dictionary<string, DateTime>(StringComparer.Ordinal);
+            var cutoff = DateTime.Now - SessionRecovery.RecentWindow;
+            foreach (var old in map.Where(kv => kv.Value < cutoff).Select(kv => kv.Key).ToList()) map.Remove(old);
+            // Never earlier than the ending itself, whichever clock read it.
+            map[d.SessionId] = d.LastActive > DateTime.Now ? d.LastActive : DateTime.Now;
+            s.RecentDismissed = map;
+            s.Save();
+        }
+        _roostTabs.Unassign(pane.Key);
+        RefoldRoost();
+    }
+
+    /// <summary>
+    /// A dormant pane's first send: the same checks a session window runs before resuming (the folder-trust question,
+    /// over the Roost; not live in a terminal; not held by another Perch — <see cref="ResumeGate"/>), then the session
+    /// wakes and the message goes. True when it went; on a refusal the pane keeps the text and a toast says why. The
+    /// live pane takes the dormant one's place once the scan sees the process.
+    /// </summary>
+    private async Task<bool> WakeFromRoostAsync(RoostPane pane, string text)
+    {
+        var sid = pane.Session.SessionId;
+        var cwd = pane.Session.Cwd;
+        if (_roostWindow is not { } owner) return false;
+        if (!Directory.Exists(cwd)) return WakeRefused($"folder not found: {cwd}");
+
+        string? configDir;
+        bool trusted;
+        try
+        {
+            (configDir, trusted) = await Task.Run(() =>
+            {
+                var dir = TranscriptLocator.ResumeConfigRoot(sid, cwd);
+                return (dir, DirectoryTrust.Evaluate(dir, cwd));
+            });
+        }
+        catch (Exception ex) { return WakeRefused($"couldn't read the session: {ex.Message}"); }
+
+        if (!trusted)
+        {
+            if (!await ResumeGate.ConfirmTrustAsync(owner, cwd)) return false;   // declined: the text stays
+            _ = Task.Run(() => DirectoryTrust.Grant(configDir, cwd));
+        }
+        if (ResumeGate.Refusal(sid, configDir, id => _lastSessions.FirstOrDefault(s => s.SessionId == id)) is { } refusal)
+            return WakeRefused(refusal);
+
+        // The same PerchSession a window may already be showing dormant, so there's only ever one writer.
+        bool existed = _perchSessions.Any(s => s.SessionId == sid && !s.HasEnded);
+        var session = OpenDormantPerchSession(new SessionLaunchOptions(cwd, ResumeId: sid));
+        try
+        {
+            if (session.IsDormant)
+            {
+                LaunchLog.Write($"roost wake: {TranscriptLocator.DescribeResume(sid, cwd)}");
+                var mode = ClaudeUserSettings.ReadSessionDefaults().PermissionMode ?? Windows.SessionWindow.FallbackMode;
+                session.Wake(new SessionLaunchOptions(cwd, PermissionMode: mode, ResumeId: sid, ConfigDir: configDir));
+            }
+            session.SendPrompt(text);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (!existed && session.IsDormant) _perchSessions.Remove(session);
+            return WakeRefused($"failed to start claude: {ex.Message}");
+        }
+    }
+
+    private bool WakeRefused(string why)
+    {
+        LaunchLog.Write($"roost wake refused: {why}");
+        _notifier?.Show("Couldn't resume the session", why, ToastLevel.Warning, null, null);
+        return false;
+    }
+}

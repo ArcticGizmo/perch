@@ -28,6 +28,10 @@ internal enum RoostPaneAction
     TakeOver,
     /// <summary>Hide the pane (the session keeps running; reopen it from the rail's "N hidden" row).</summary>
     Close,
+    /// <summary>A dormant pane: <c>claude --resume</c> it in a new terminal.</summary>
+    ResumeInTerminal,
+    /// <summary>A dormant pane: drop it from the Roost and the Recent list.</summary>
+    Dismiss,
 }
 
 /// <summary>
@@ -38,6 +42,9 @@ internal enum RoostPaneAction
 /// state beyond what it's shown — the window resolves placement/focus and feeds it data. A shown pane
 /// (<see cref="Show"/>) creates its <see cref="SessionThreadView"/>; <see cref="Park"/> drops and unbinds it, so an
 /// off-screen pane past the warm limit holds no thread.
+/// <para>A <b>dormant</b> pane (<see cref="RoostPane.IsDormant"/>, docs/session-recovery-plan.md R6) shows a session with
+/// no process: its transcript, a pill saying how it ended, and a composer whose first send resumes it (the window asks
+/// the app through <see cref="PromptSubmitted"/>), plus "Resume in terminal".</para>
 /// </summary>
 internal sealed class SessionPane : Border
 {
@@ -70,6 +77,14 @@ internal sealed class SessionPane : Border
     /// <summary>Whether this pane's session can be taken over in Perch (an interactive terminal session Perch
     /// doesn't already own, still running). Set by the window — the eligibility rule is the overlay's.</summary>
     public bool CanTakeOver { get; set; }
+
+    /// <summary>Whether a dormant pane's composer can resume it (the window has somewhere to send the wake).</summary>
+    public bool CanWake { get; set; }
+
+    /// <summary>A dormant pane's first send is being checked and started: the composer holds the text, read-only.</summary>
+    public bool IsWaking { get; private set; }
+
+    private readonly Border _terminalButton;
     private readonly StackPanel _miniLines;
     private readonly Border _menuButton;
 
@@ -205,6 +220,14 @@ internal sealed class SessionPane : Border
         _takeOverButton.VerticalAlignment = VerticalAlignment.Bottom;
         _takeOverButton.IsVisible = false;
         _takeOverButton[ToolTip.TipProperty] = "Stop it in its terminal and continue the same conversation in Perch (asks first)";
+        _terminalButton = FooterButton(
+            new TextBlock { Text = "Resume in terminal", FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 11.5, Foreground = _p.Text },
+            () => ActionRequested?.Invoke(Key, RoostPaneAction.ResumeInTerminal));
+        _terminalButton[DockPanel.DockProperty] = Dock.Right;
+        _terminalButton.Margin = new Thickness(8, 0, 0, 0);
+        _terminalButton.VerticalAlignment = VerticalAlignment.Bottom;
+        _terminalButton.IsVisible = false;
+        _terminalButton[ToolTip.TipProperty] = "Open a terminal running claude --resume for this session";
         _footer = new Border
         {
             BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(8, 6),
@@ -213,7 +236,7 @@ internal sealed class SessionPane : Border
             Child = new DockPanel
             {
                 LastChildFill = true,
-                Children = { _footerButton, _takeOverButton, new Panel { Children = { _footerNote, _composer } } },
+                Children = { _footerButton, _takeOverButton, _terminalButton, new Panel { Children = { _footerNote, _composer } } },
             },
         };
         _body = new Border { ClipToBounds = true, CornerRadius = new CornerRadius(0, 0, 11, 11) };
@@ -360,6 +383,7 @@ internal sealed class SessionPane : Border
     internal static string PillText(RoostPane pane)
     {
         var s = pane.Session;
+        if (pane.Dormant is { } dormant) return DormantPillText(dormant);
         if (pane.EndedAt is { } ended) return $"Ended {Ago(ended)}";
         return s.Status switch
         {
@@ -371,10 +395,32 @@ internal sealed class SessionPane : Border
         };
     }
 
+    /// <summary>A dormant pane's pill: why it's here and when it stopped.</summary>
+    internal static string DormantPillText(RoostDormant d) => d.Kind switch
+    {
+        RoostDormantKind.WasOpenInPerch => "Was open in Perch",
+        RoostDormantKind.Interrupted => $"Interrupted {Ago(d.LastActive)}",
+        RoostDormantKind.BeforeShutdown => $"Before shutdown · {Ago(d.LastActive)}",
+        RoostDormantKind.Exited => $"Exited {Ago(d.LastActive)}",
+        RoostDormantKind.Ended => $"Ended {Ago(d.LastActive)}",
+        _ => "Not running",
+    };
+
+    /// <summary>A dormant pane's rail-row note: short, beside the name.</summary>
+    internal static string DormantRailLabel(RoostDormant d) => d.Kind switch
+    {
+        RoostDormantKind.WasOpenInPerch => "was open",
+        RoostDormantKind.Interrupted => "interrupted",
+        RoostDormantKind.BeforeShutdown => "shutdown",
+        RoostDormantKind.NotRunning => "",
+        _ => Ago(d.LastActive),
+    };
+
     private static string Ago(DateTime at)
     {
         var d = Clock.Now - at;
         if (d < TimeSpan.FromMinutes(1)) return "just now";
+        if (d.TotalDays >= 2) return $"{(int)d.TotalDays}d ago";
         return d.TotalHours >= 1 ? $"{(int)d.TotalHours}h ago" : $"{(int)d.TotalMinutes}m ago";
     }
 
@@ -433,14 +479,20 @@ internal sealed class SessionPane : Border
         _header.Opacity = ended ? 0.6 : status == SessionStatus.Idle ? 0.8 : 1;
         _body.Opacity = ended ? 0.6 : 1;
 
-        (IBrush fg, IBrush line, IBrush wash) = status switch
-        {
-            SessionStatus.AwaitingInput => ((IBrush)_p.Await, (IBrush)_p.Await, (IBrush)_p.AwaitWash),
-            SessionStatus.ApiError => (_p.Err, _p.Err, _p.ErrWash),
-            SessionStatus.NeedsAttention => (_p.Attn, _p.Attn, _p.AttnWash),
-            SessionStatus.Running => (_p.Ok, _p.Border, _p.Surface),
-            _ => (_p.Muted, _p.Border, _p.Surface),
-        };
+        // A dormant pane's pill: the attention hue for an ending worth noticing (interrupted, just before a shutdown),
+        // the brand for one Perch had open, else quiet.
+        (IBrush fg, IBrush line, IBrush wash) = pane.Dormant is { } d
+            ? d.IsFlagged ? ((IBrush)_p.Await, (IBrush)_p.Await, (IBrush)_p.AwaitWash)
+              : d.Kind == RoostDormantKind.WasOpenInPerch ? (_p.Brand, _p.BrandLine, _p.BrandWash)
+              : (_p.Muted, _p.Border, _p.Surface)
+            : status switch
+            {
+                SessionStatus.AwaitingInput => ((IBrush)_p.Await, (IBrush)_p.Await, (IBrush)_p.AwaitWash),
+                SessionStatus.ApiError => (_p.Err, _p.Err, _p.ErrWash),
+                SessionStatus.NeedsAttention => (_p.Attn, _p.Attn, _p.AttnWash),
+                SessionStatus.Running => (_p.Ok, _p.Border, _p.Surface),
+                _ => (_p.Muted, _p.Border, _p.Surface),
+            };
         _pillText.Foreground = fg;
         _pill.BorderBrush = line;
         _pill.Background = wash;
@@ -600,21 +652,37 @@ internal sealed class SessionPane : Border
     {
         if (_pane is not { } pane) return;
         bool perch = pane.Session.IsPerchControlled;                        // by origin: opens its window
-        bool canReply = perch && !pane.Ended && _feed is { IsControlled: true };
+        bool dormant = pane.IsDormant;
+        bool canReply = dormant ? CanWake : perch && !pane.Ended && _feed is { IsControlled: true };
         _composer.IsVisible = canReply;
         _footerNote.IsVisible = !canReply;
-        _footerNote.Text = pane.Ended ? "Session ended" : perch ? "Perch session" : "Tailing · read-only";
-        if (canReply && _feed is { } feed)
+        _footerNote.Text = dormant ? "Not running" : pane.Ended ? "Session ended" : perch ? "Perch session" : "Tailing · read-only";
+        ToolTip.SetTip(_composer, dormant ? "Claude isn't running — your first message resumes this session" : null);
+        if (dormant)
+            _composer.PlaceholderText = IsWaking ? "Starting Claude…" : "Message to resume…";
+        else if (canReply && _feed is { } feed)
         {
             var conv = feed.Conversation;
             _composer.PlaceholderText = conv.PendingPermission is { IsQuestion: false }
                 ? "Reply — or Enter to allow, Esc to deny"
                 : conv.TurnActive ? "Queue a message… (Esc interrupts)" : "Reply…";
         }
-        _footerButtonText.Text = perch ? "⤢ Open window" : "Focus terminal ↗";
+        // A dormant session opens in a Perch window (still dormant) whatever its origin.
+        _footerButtonText.Text = perch || dormant ? "⤢ Open window" : "Focus terminal ↗";
         _footerButton.IsVisible = !pane.Ended;
-        _takeOverButton.IsVisible = CanTakeOver && !perch && !pane.Ended;
+        _takeOverButton.IsVisible = CanTakeOver && !perch && pane.IsLive;
+        _terminalButton.IsVisible = dormant;
         _footer.IsVisible = true;
+    }
+
+    /// <summary>A dormant pane's send is (or stops) being checked and started. While waking the composer keeps the text
+    /// read-only; <paramref name="clear"/> empties it once the message went.</summary>
+    public void SetWaking(bool waking, bool clear = false)
+    {
+        IsWaking = waking;
+        _composer.IsReadOnly = waking;
+        if (clear) _composer.Text = "";
+        RefreshFooter();
     }
 
     // Enter sends (or, with nothing typed, allows a pending permission — never a question, which is answered by
@@ -622,6 +690,15 @@ internal sealed class SessionPane : Border
     // so these beat the TextBox's own Enter-inserts-a-newline.
     private void OnComposerKeyDown(object? sender, KeyEventArgs e)
     {
+        // A dormant pane: Enter is the first send, which resumes the session. The window clears the text once it went.
+        if (_pane is { IsDormant: true })
+        {
+            if (e.Key != global::Avalonia.Input.Key.Enter || e.KeyModifiers.HasFlag(KeyModifiers.Shift)) return;
+            e.Handled = true;
+            if (!IsWaking && _composer.Text is { } typed && !string.IsNullOrWhiteSpace(typed))
+                PromptSubmitted?.Invoke(Key, typed.TrimEnd());
+            return;
+        }
         if (_feed is not { IsControlled: true } feed) return;
         var conv = feed.Conversation;
         if (e.Key == global::Avalonia.Input.Key.Enter && !e.KeyModifiers.HasFlag(KeyModifiers.Shift))
@@ -674,7 +751,7 @@ internal sealed class SessionPane : Border
         remove.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.RemoveFromTab);
         var open = new MenuItem
         {
-            Header = pane.Session.IsPerchControlled ? "Open full window" : "Focus terminal",
+            Header = pane.Session.IsPerchControlled || pane.IsDormant ? "Open full window" : "Focus terminal",
             IsEnabled = !pane.Ended,
         };
         open.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.OpenSession);
@@ -684,7 +761,13 @@ internal sealed class SessionPane : Border
         flyout.Items.Add(remove);
         flyout.Items.Add(new Separator());
         flyout.Items.Add(open);
-        if (CanTakeOver && !pane.Session.IsPerchControlled && !pane.Ended)
+        if (pane.IsDormant)
+        {
+            var terminal = new MenuItem { Header = "Resume in terminal" };
+            terminal.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.ResumeInTerminal);
+            flyout.Items.Add(terminal);
+        }
+        if (CanTakeOver && !pane.Session.IsPerchControlled && pane.IsLive)
         {
             var take = new MenuItem { Header = "Take over in Perch…" };
             take.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.TakeOver);
@@ -692,8 +775,9 @@ internal sealed class SessionPane : Border
         }
         flyout.Items.Add(copy);
         flyout.Items.Add(new Separator());
-        var close = new MenuItem { Header = "Close pane" };
-        close.Click += (_, _) => ActionRequested?.Invoke(Key, RoostPaneAction.Close);
+        // A dormant pane isn't running, so there's nothing to hide: it's dismissed (from the Recent list too).
+        var close = pane.IsDormant ? new MenuItem { Header = "Dismiss" } : new MenuItem { Header = "Close pane" };
+        close.Click += (_, _) => ActionRequested?.Invoke(Key, pane.IsDormant ? RoostPaneAction.Dismiss : RoostPaneAction.Close);
         flyout.Items.Add(close);
         flyout.ShowAt(_menuButton);
     }

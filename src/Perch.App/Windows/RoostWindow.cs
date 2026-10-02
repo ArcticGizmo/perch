@@ -221,7 +221,7 @@ internal sealed partial class RoostWindow : Window
         _unplacedPill[ToolTip.TipProperty] = "Sessions in no tab — click to focus the most urgent";
         _unplacedPill.OnLeftClick(() =>
         {
-            var unplaced = _tabs.Unplaced(_roster.Panes).Where(p => !p.Ended).Select(p => p.Key);
+            var unplaced = _tabs.Unplaced(_roster.Panes).Where(p => p.IsLive).Select(p => p.Key);
             if (RoostTabStatus.MostUrgent(unplaced, _roster.Panes) is { } key) FocusPane(key);
         });
         (_elsewherePill, _elsewhereText, _elsewhereDot) = Pill();
@@ -337,6 +337,30 @@ internal sealed partial class RoostWindow : Window
     /// <summary>A question card in a Perch pane was answered: (session id, item, answers).</summary>
     public event Action<string, PermissionItem, IReadOnlyDictionary<string, IReadOnlyList<string>>>? QuestionAnswered;
 
+    /// <summary>A dormant pane's "Open window": its Perch session window, still dormant.</summary>
+    public event Action<RoostPane>? OpenDormantRequested;
+
+    /// <summary>A dormant pane's "Resume in terminal" (<c>claude --resume</c> in a new terminal).</summary>
+    public event Action<RoostPane>? ResumeInTerminalRequested;
+
+    /// <summary>A dormant pane's "Dismiss": it leaves the Roost and the Recent list.</summary>
+    public event Action<RoostPane>? DismissRequested;
+
+    /// <summary>A dormant pane's first send: the app runs the resume checks, wakes the session and sends the text.
+    /// True when it went (the pane clears its composer); false keeps the text. Null = dormant panes can't reply.</summary>
+    public Func<RoostPane, string, Task<bool>>? WakeAndSend
+    {
+        get => _wakeAndSend;
+        set
+        {
+            if (ReferenceEquals(_wakeAndSend, value)) return;
+            _wakeAndSend = value;
+            Refresh();   // dormant panes show (or drop) their composer
+        }
+    }
+
+    private Func<RoostPane, string, Task<bool>>? _wakeAndSend;
+
     public RoostRailSort RailSort => _railSort;
 
     /// <summary>Whether the session's pane is on screen right now: in the active tab and not hidden behind another
@@ -451,7 +475,8 @@ internal sealed partial class RoostWindow : Window
         foreach (var pane in all)
         {
             var view = _views[pane.Key];
-            view.CanTakeOver = !pane.Ended && CanTakeOver?.Invoke(pane.Session) == true;
+            view.CanTakeOver = pane.IsLive && CanTakeOver?.Invoke(pane.Session) == true;
+            view.CanWake = WakeAndSend is not null;
             view.Update(pane, _feeds[pane.Key]);
             view.SetFocused(pane.Key == _focused);
             if (_placed.Contains(pane.Key)) view.Show();
@@ -544,7 +569,7 @@ internal sealed partial class RoostWindow : Window
     {
         if (_keysAtNewSession is not { } before) return;
         if (Clock.Now > _newSessionUntil) { _keysAtNewSession = null; return; }
-        if (all.FirstOrDefault(p => p.Session.IsPerchControlled && !p.Ended && !before.Contains(p.Key)) is not { } started) return;
+        if (all.FirstOrDefault(p => p.Session.IsPerchControlled && p.IsLive && !before.Contains(p.Key)) is not { } started) return;
         _keysAtNewSession = null;
         if (_newSessionTarget is { } t && _tabs.Find(t.TabId) is { } tab && tab.Layout.Find(t.RegionId) is not null && tab.At(t.RegionId) is null)
         {
@@ -612,7 +637,21 @@ internal sealed partial class RoostWindow : Window
     private void OnPromptSubmitted(string key, string text)
     {
         if (_roster.Find(key) is not { Ended: false } pane) return;
+        if (pane.IsDormant) { _ = WakeAsync(pane, text); return; }
         PromptSubmitted?.Invoke(pane.Session.SessionId, text);
+    }
+
+    // A dormant pane's first send. The pane holds the text (read-only) while the app checks and starts the session; on
+    // success the live pane takes this one's place once the scan sees the process.
+    private async Task WakeAsync(RoostPane pane, string text)
+    {
+        if (WakeAndSend is not { } wake || !_views.TryGetValue(pane.Key, out var view) || view.IsWaking) return;
+        view.SetWaking(true);
+        bool sent;
+        try { sent = await wake(pane, text); }
+        catch { sent = false; }
+        // The view may be gone already: the live pane took its place.
+        if (_views.TryGetValue(pane.Key, out var still) && ReferenceEquals(still, view)) view.SetWaking(false, clear: sent);
     }
 
     // ── Keyboard ──────────────────────────────────────────────────────────────
@@ -736,16 +775,25 @@ internal sealed partial class RoostWindow : Window
                 }
                 break;
             case RoostPaneAction.OpenSession:
-                OpenSessionRequested?.Invoke(pane.Session);
+                if (pane.IsDormant) OpenDormantRequested?.Invoke(pane);
+                else OpenSessionRequested?.Invoke(pane.Session);
+                break;
+            case RoostPaneAction.ResumeInTerminal:
+                if (pane.IsDormant) ResumeInTerminalRequested?.Invoke(pane);
+                break;
+            case RoostPaneAction.Dismiss:
+                if (pane.IsDormant) DismissRequested?.Invoke(pane);
                 break;
             case RoostPaneAction.CopyResume:
                 _ = CopyAsync($"claude --resume {pane.Session.SessionId}");
                 break;
             case RoostPaneAction.TakeOver:
-                if (!pane.Ended && CanTakeOver?.Invoke(pane.Session) == true) TakeOverRequested?.Invoke(pane.Session);
+                if (pane.IsLive && CanTakeOver?.Invoke(pane.Session) == true) TakeOverRequested?.Invoke(pane.Session);
                 break;
             case RoostPaneAction.Close:
-                if (_roster.Close(key)) Refresh();   // the roster's ClosedChanged persists it; Sync empties its region
+                // A dormant pane has nothing running to hide: closing it is dismissing it.
+                if (pane.IsDormant) DismissRequested?.Invoke(pane);
+                else if (_roster.Close(key)) Refresh();   // the roster's ClosedChanged persists it; Sync empties its region
                 break;
         }
     }

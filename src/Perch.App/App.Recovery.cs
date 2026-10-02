@@ -20,8 +20,8 @@ public partial class App
     // rebinds the entry). A session leaves when the user releases it (ended / handed back) or its process ends.
     private readonly Dictionary<Services.PerchSession, string?> _heldSessions = new();
 
-    // Sessions the previous run held that haven't been picked up yet: the "Reopen Perch sessions" tray item (and, in
-    // R6/R7, the Roost rail and the top of the overlay's Recent section).
+    // Sessions the previous run held that haven't been picked up yet: the "Reopen Perch sessions" tray item, the top of
+    // the Roost's Recent group (dormant panes, App.RoostDormant.cs) and, in R7, of the overlay's Recent section.
     private List<LedgerSession> _restorable = [];
     private NativeMenuItem? _reopenItem;
 
@@ -41,7 +41,11 @@ public partial class App
     /// before <see cref="SessionLedger.BeginRun"/> has read it.</summary>
     private void StartSessionLedger()
     {
-        if (!LedgerWritable) return;
+        if (!LedgerWritable)
+        {
+            RefreshRecent();   // marks the Roost's dormant set ready (there's none to find)
+            return;
+        }
         var path = SessionLedger.DefaultPath;
         Task.Run(() =>
         {
@@ -54,7 +58,9 @@ public partial class App
             return ledger;
         }).ContinueWith(t =>
         {
-            if (!t.IsCompletedSuccessfully || _ledgerShutdownStamped) return;
+            if (_ledgerShutdownStamped) return;
+            // The Recent list needs the ledger (held sessions, shutdowns); without one it's built bare.
+            if (!t.IsCompletedSuccessfully) { RefreshRecent(); return; }
             var ledger = t.Result;
             _ledger = ledger;
 
@@ -69,6 +75,7 @@ public partial class App
                         ? "A Perch session was open when Perch closed. Reopen it from the tray menu."
                         : $"{_restorable.Count} Perch sessions were open when Perch closed. Reopen them from the tray menu.",
                     ToastLevel.Info, null, null);
+            RefreshRecent();
 
             _ledgerHeartbeat = new DispatcherTimer { Interval = SessionRecovery.HeartbeatInterval };
             _ledgerHeartbeat.Tick += (_, _) =>
@@ -149,6 +156,7 @@ public partial class App
 
     private void OnRestorableChanged()
     {
+        RefoldRoost();   // they're the top of the Roost's Recent group
         if (_reopenItem is not { } item) return;
         item.Header = _restorable.Count == 1 ? "Reopen Perch session" : $"Reopen Perch sessions ({_restorable.Count})";
         item.IsVisible = _restorable.Count > 0;

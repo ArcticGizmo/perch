@@ -67,9 +67,9 @@ public class RoostRosterTests
             S("err", SessionStatus.ApiError),
         ], T0);
 
-        Assert.Equal([RoostGroup.NeedsYou, RoostGroup.DoneReview, RoostGroup.Working, RoostGroup.Quiet],
+        Assert.Equal([RoostGroup.NeedsYou, RoostGroup.DoneReview, RoostGroup.Working, RoostGroup.Quiet, RoostGroup.Recent],
             r.Rail.Select(g => g.Group));
-        Assert.Equal([2, 1, 1, 1], r.Rail.Select(g => g.Panes.Count));
+        Assert.Equal([2, 1, 1, 1, 0], r.Rail.Select(g => g.Panes.Count));
         Assert.Equal(["done"], Keys(Group(r, RoostGroup.DoneReview).Panes));
         Assert.Equal(["run"], Keys(Group(r, RoostGroup.Working).Panes));
     }

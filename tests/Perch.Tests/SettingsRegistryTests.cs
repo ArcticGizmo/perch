@@ -36,6 +36,8 @@ public class SettingsRegistryTests
         nameof(AppSettings.RoostSavedLayouts),
         // …and the panes closed from a pane's own menu (reopened from its "N hidden" chip).
         nameof(AppSettings.RoostClosedPanes),
+        // The Recent list's dismissals (a Recent row's / a dormant Roost pane's "Dismiss").
+        nameof(AppSettings.RecentDismissed),
         // The usage strip's per-account collapse overrides, toggled by clicking an account on the overlay —
         // not a Settings-window control.
         nameof(AppSettings.UsageAccountCollapsed),

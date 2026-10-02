@@ -1651,6 +1651,69 @@ internal static class HeadlessRenderer
             w.Close();
         }
         RenderRoostTabStrip(outDir);
+        RenderRoostDormant(outDir);
+    }
+
+    // Session recovery R6: dormant panes. "Main" (two columns) keeps "perch" live beside "docs-site", whose process has
+    // gone, so it's dormant in its region; the rail's Recent group lists it with a session Perch had open, one a restart
+    // interrupted and one that ended just before a shutdown. Then the interrupted one, clicked: dormant in Focus.
+    private static void RenderRoostDormant(string outDir)
+    {
+        foreach (var dark in new[] { true, false })
+        {
+            var now = Clock.Now;
+            var sessions = RoostSampleSessions().Where(s => s.ProjectName is "perch" or "api" or "service" or "docs-site").ToList();
+            var docs = sessions.Single(s => s.ProjectName == "docs-site");
+            var roster = new Perch.Data.Roost.RoostRoster();
+            roster.Update(sessions, now.AddMinutes(-3));
+            var tabs = new Perch.Data.Roost.RoostTabSet();
+            tabs.Sync(roster.Panes);
+            var main = tabs.AddTab("Main", Perch.Data.Roost.RoostGridLayout.FromTemplate(Perch.Data.Roost.RoostSnapTemplate.Columns2))!;
+            tabs.Assign(main.Id, 0, sessions.Single(s => s.ProjectName == "perch").Pid);
+            tabs.Assign(main.Id, 1, docs.Pid);
+            tabs.Activate(main.Id);
+
+            const string Proj = @"C:\src\";
+            Perch.Data.Roost.RoostDormant Dormant(string sid, string project, string? title, TimeSpan ago,
+                Perch.Data.Roost.RoostDormantKind kind, bool perch = false) =>
+                new(sid, Proj + project, project, title, now - ago, kind, perch);
+            var dormant = new List<Perch.Data.Roost.RoostDormant>
+            {
+                Dormant("d-billing", "billing", "Invoice export", TimeSpan.FromHours(14), Perch.Data.Roost.RoostDormantKind.WasOpenInPerch, perch: true),
+                Dormant(docs.SessionId, "docs-site", null, TimeSpan.FromMinutes(1), Perch.Data.Roost.RoostDormantKind.Ended),
+                Dormant("d-gateway", "gateway", "Retry storm fix", TimeSpan.FromHours(15), Perch.Data.Roost.RoostDormantKind.Interrupted),
+                Dormant("d-notes", "notes", null, TimeSpan.FromHours(15.2), Perch.Data.Roost.RoostDormantKind.BeforeShutdown),
+            };
+            // The docs-site process ends; the app now names it dormant, and it takes the ended pane's region.
+            var live = sessions.Where(s => s != docs).ToList();
+            roster.Update(live, now, dormant);
+            tabs.Sync(roster.Panes, roster.Adopted);
+
+            var w = new Windows.RoostWindow(roster, tabs,
+                pane => RoostFeed.ForFixed(RoostSampleConversation(pane.Session), pane.Session.SessionId,
+                    controlled: pane.Session.IsPerchControlled && pane.IsLive),
+                SessionPalette.For(dark))
+            {
+                Width = 1280, Height = 800,
+                WakeAndSend = (_, _) => Task.FromResult(false),
+            };
+            w.Show();
+            void Capture(string name)
+            {
+                PumpRoost();
+                var frame = w.CaptureRenderedFrame();
+                if (frame == null) return;
+                using var fs = File.Create(Path.Combine(outDir, name));
+                frame.Save(fs);
+            }
+            Capture(dark ? "roost_dormant_1x.png" : "roost_dormant_light_1x.png");
+            if (dark)
+            {
+                w.FocusPane(Perch.Data.Roost.RoostToken.DormantKey("d-gateway"));
+                Capture("roost_dormant_focus_1x.png");
+            }
+            w.Close();
+        }
     }
 
     // roost-tabs T5: the tab strip in every light state, a rename in progress, the tab menu, a session dropped on a

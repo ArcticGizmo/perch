@@ -474,7 +474,9 @@ This branch is already large (T1–T7 plus two review passes), so two bigger ide
   new — they come back empty. A future feature would bring a tab back to life: bind a region to a project
   (cwd) so a session started there fills it, and/or offer to relaunch (`claude --resume`) the sessions a tab
   held. It needs its own decisions (what a region remembers, whether relaunch is automatic, which account /
-  config dir it runs under), so it isn't bolted on here.
+  config dir it runs under), so it isn't bolted on here. *(Delivered by session recovery R6,
+  `docs/session-recovery-plan.md`: a region keeps its session as a dormant pane once the process goes — `~/sessionId`
+  tokens survive a reboot — and the first send resumes it, under the account that owns the transcript.)*
 - **Cleverer aggregation.** Today the rail groups by status or A–Z and tabs are arranged by hand. Smarter
   grouping — a "By tab" rail sort, grouping by project or repo, suggested tabs for sessions that belong together,
   a roll-up of what a tab needs from you — is a follow-up once the tabs have had real use.

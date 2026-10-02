@@ -55,7 +55,7 @@ internal sealed partial class SessionWindow : Window
     // settings.json's permissions.defaultMode, then this. A plain terminal `claude` would fall back to
     // "default" (ask on every action), but a Perch session answers permissions in-UI, so "auto" is the
     // friendlier default. (This is the recent change from the old "manual"/default fallback.)
-    private const string FallbackMode = "auto";
+    internal const string FallbackMode = "auto";
     private string StartingMode => _mode ?? _defaults.PermissionMode ?? FallbackMode;
     private static readonly string[] ModelChoices = ["haiku", "sonnet", "opus", "fable"];
 
@@ -1538,19 +1538,10 @@ internal sealed partial class SessionWindow : Window
             LaunchFail($"failed to start claude: {ex.Message}");
             return;
         }
-        if (_resumeId is { } rid)
+        if (_resumeId is { } rid && ResumeGate.Refusal(rid, configDir, LiveLookup) is { } refusal)
         {
-            if (LiveLookup?.Invoke(rid) is { IsPerchControlled: false } live)
-            {
-                LaunchFail($"{live.DisplayName} is live in a terminal (PID {live.Pid}) — Perch can't take it over while " +
-                           "it's running. Close it there, or use “Elevate to Perch” on its overlay row.");
-                return;
-            }
-            if (SessionLock.HeldByOther(rid, SessionLock.SessionsDirFor(configDir)) is { } other)
-            {
-                LaunchFail($"session {Shorten(rid)} is already controlled by {other.Profile} (PID {other.Pid}).");
-                return;
-            }
+            LaunchFail(refusal);
+            return;
         }
 
         // A dormant session wakes in place: same PerchSession, same conversation, now with a process. The checks
@@ -1620,12 +1611,7 @@ internal sealed partial class SessionWindow : Window
 
         if (!trusted)
         {
-            bool ok = await ConfirmDialog.ShowAsync(this,
-                "Do you trust the files in this folder?",
-                $"{cwd}\n\nQuick safety check: is this a project you created or one you trust — like your own " +
-                "code, a well-known open-source project, or work from your team? Claude Code will be able to " +
-                "read, edit, and execute files in this folder. If you're not sure, review what's in it first.",
-                "Yes, proceed", "No, cancel");
+            bool ok = await ResumeGate.ConfirmTrustAsync(this, cwd);
             if (!ok) { LaunchFail("not started — folder not trusted"); return; }
             // Persist so this folder (and its subfolders) won't ask again — the same store Claude Code reads.
             _ = System.Threading.Tasks.Task.Run(() => DirectoryTrust.Grant(configDir, cwd));
@@ -3753,8 +3739,6 @@ internal sealed partial class SessionWindow : Window
         var version = string.Join(".", parts.Skip(1).TakeWhile(p => p.Length <= 2 && p.All(char.IsAsciiDigit)));
         return version.Length > 0 ? $"{name} {version}" : name;
     }
-
-    private static string Shorten(string id) => id.Length > 8 ? id[..8] : id;
 
     // ── Headless render hooks ─────────────────────────────────────────────────────
 

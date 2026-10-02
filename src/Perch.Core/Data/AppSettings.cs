@@ -181,6 +181,12 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? RoostClosedPanes { get; set; }
 
+    // The Recent list's dismissals (docs/session-recovery-plan.md, Q2): session id → the end time of the ending the
+    // user dismissed, so a session that's resumed and ends again comes back (RecentSessions.Build). Pruned to the
+    // Recent window on each dismissal. UI state, not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, DateTime>? RecentDismissed { get; set; }
+
     // Per-account collapse state for the usage strip: an account renders as full stacked bars or a compact
     // chip. The default follows activity (active account → bars, known-but-idle account → chip); this map
     // holds only the accounts the user has explicitly toggled, keyed by org UUID (or the config-dir path
