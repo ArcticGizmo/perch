@@ -1,0 +1,5 @@
+{"type":"permission-mode","permissionMode":"default","sessionId":"end-killed"}
+{"type":"user","message":{"role":"user","content":"refactor the parser"},"timestamp":"2026-10-01T05:10:00.000Z","sessionId":"end-killed","cwd":"C:\\fixtures\\proj"}
+{"type":"last-prompt","lastPrompt":"refactor the parser","sessionId":"end-killed"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"parser.cs"}}]},"timestamp":"2026-10-01T05:10:05.000Z","sessionId":"end-killed"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"..."}]},"timestamp":"2026-10-01T05:10:07.000Z","sessionId":"end-killed"}

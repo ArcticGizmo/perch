@@ -1,0 +1,7 @@
+{"type":"permission-mode","permissionMode":"default","sessionId":"end-graceful"}
+{"type":"user","message":{"role":"user","content":"hi"},"timestamp":"2026-10-01T05:00:00.000Z","sessionId":"end-graceful","cwd":"C:\\fixtures\\proj"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello!"}]},"timestamp":"2026-10-01T05:00:03.000Z","sessionId":"end-graceful"}
+{"type":"system","subtype":"turn_duration","timestamp":"2026-10-01T05:00:03.100Z","sessionId":"end-graceful"}
+{"type":"cost-state","sessionId":"end-graceful","totalCostUSD":0.01,"totalDuration":13360,"startTime":1790830000000}
+{"type":"last-prompt","lastPrompt":"hi","sessionId":"end-graceful"}
+{"type":"cost-state","sessionId":"end-graceful","totalCostUSD":0.01,"totalDuration":13370,"startTime":1790830000000}

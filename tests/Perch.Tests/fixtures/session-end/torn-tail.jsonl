@@ -1,0 +1,3 @@
+{"type":"user","message":{"role":"user","content":"hi"},"timestamp":"2026-10-01T07:00:00.000Z","sessionId":"end-torn","cwd":"C:\\fixtures\\proj"}
+{"type":"cost-state","sessionId":"end-torn","totalCostUSD":0.01,"totalDuration":13370,"startTime":1790830000000}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hel

@@ -1,0 +1,7 @@
+{"type":"user","message":{"role":"user","content":"hi"},"timestamp":"2026-10-01T05:00:00.000Z","sessionId":"end-resumed","cwd":"C:\\fixtures\\proj"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello!"}]},"timestamp":"2026-10-01T05:00:03.000Z","sessionId":"end-resumed"}
+{"type":"cost-state","sessionId":"end-resumed","totalCostUSD":0.01,"totalDuration":13370,"startTime":1790830000000}
+{"type":"permission-mode","permissionMode":"default","sessionId":"end-resumed"}
+{"type":"user","message":{"role":"user","content":"carry on"},"timestamp":"2026-10-01T06:00:00.000Z","sessionId":"end-resumed","cwd":"C:\\fixtures\\proj"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"On it."}]},"timestamp":"2026-10-01T06:00:05.000Z","sessionId":"end-resumed"}
+{"type":"last-prompt","lastPrompt":"carry on","sessionId":"end-resumed"}

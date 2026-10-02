@@ -38,7 +38,9 @@ What that means:
 - **`cost-state` is Claude's "I exited cleanly" record.** It is appended when the process shuts down gracefully
   and never during a live session (a long live transcript has none). It carries `startTime` and `totalDuration`
   (ms), so **`startTime + totalDuration` is the exact end time**. A `cost-state` in the *middle* of a file just
-  means the session exited and was later resumed; only the tail matters.
+  means the session exited and was later resumed; only the tail matters. *(Correction from R1: `startTime +
+  totalDuration` is only right for a session that was never resumed, since a resume keeps the original
+  `startTime` and adds to the duration. The file's last-write time is the exact end instead; see D7.)*
 - **Abrupt = the process is gone and the transcript's last record is not `cost-state`.** No marker file needed.
 - **Only `/exit` is distinguishable** among the graceful endings (via `history.jsonl`). Ctrl+C, Ctrl+D, closing
   the tab and closing the window all look identical on disk, which is fine: they're all "closed", not "abrupt".
@@ -71,7 +73,7 @@ file in it. Search individual files.
 | D4 | What is "dormant"? | A session shown with its **conversation loaded and a live composer, but no `claude` process.** The **first send** starts `claude --resume <id>` and delivers the message once it's up. Applies to **every** session Perch opens (launcher recents, Recent list, CLI `perch --resume`, restored sessions). | Ask 5. Opening to read costs nothing, so the cost estimate becomes an inline note at the point of sending instead of a gate before opening. |
 | D5 | Shutdown time — where from? | In order: **(1)** Perch's own stamp when the OS says it's shutting down / logging off; **(2)** Perch's last heartbeat, when it's older than Perch's own start and there's no clean-exit stamp; **(3)** Windows event log fallback (`Kernel-Power` 42 / `Kernel-Boot` 27), for when Perch wasn't running. | Fast Startup makes boot time useless (spike). The stamp is exact; the heartbeat covers a hard power-off; the event log covers "Perch wasn't running". |
 | D6 | "Just before shutdown" window | **10 minutes, a constant** (`SessionRecovery.ShutdownWindow`). It becomes a setting only if it ever feels wrong. | The user's call. One constant is easier to tune than a setting nobody touches. |
-| D7 | End time of an ended session | Graceful: `cost-state` `startTime + totalDuration`. Abrupt: the last transcript record's `timestamp`. | Both are Claude's own data. In the restart test the last record was 11s before the power event. |
+| D7 | End time of an ended session | Graceful: the transcript's **last-write time** (the exit flush is its last write). Abrupt: the last transcript record's `timestamp`. | **Corrected in R1:** `cost-state`'s `startTime + totalDuration` only works for a session that was never resumed. A resume restores the original `startTime` and keeps adding to `totalDuration`, so a resumed session's figure lands hours off (one real session: ~16h before its file's last write). In the restart test the last record was 11s before the power event. |
 | D8 | Terminal sessions | **Listed, never auto-resumed.** Each row offers **Resume in Perch** (opens dormant), **Resume in terminal** (`ISessionLauncher.Reopen`, which already exists and honours the config dir) and **Dismiss**. | Ask 3. The user keeps their terminal habit; Perch just remembers. |
 | D9 | Perch's own exits end their sessions **gracefully** | Every exit path (Exit menu, update, OS shutdown) calls `PerchSession.End()` (stdin close, kill after 3s), not just the update path. | Today only the update path ends controlled sessions; plain Exit doesn't. A graceful end lets the user's own `SessionEnd` hooks run (and `cost-state` get written — R0 confirms). |
 | D10 | Where the record lives | A small **`session-ledger.json`** in Perch's profile folder (beside `settings.json`), written atomically (`AtomicFile`) and debounced. **Not** `AppSettings`. | It changes every heartbeat and on every live-set change; churning `settings.json` for it would be wrong. |
@@ -93,7 +95,7 @@ file in it. Search individual files.
 - **`SessionEndReader`** — reads a transcript's tail (reusing `SessionHistory`'s existing tail read) and returns
   `(EndKind Kind, DateTime? EndedAt)` from the D1/D7 rules: tail `cost-state` → graceful, end =
   `startTime + totalDuration`; otherwise the last record's `timestamp`. Tolerates a partial trailing line (the
-  usual "parse defensively, never throw" rule).
+  usual "parse defensively, never throw" rule). *(As built, the end time follows the corrected D7.)*
 - **`ExitCommandIndex`** — the `/exit` entries from `history.jsonl` (`sessionId → last /exit timestamp`), read
   **incrementally** (it keeps its byte offset; the file is large and append-only) and per config dir.
 - **`SessionLedger`** — Perch's own record (D10): Perch's start time, heartbeat (`LastAlive`), clean-exit stamp,
@@ -173,6 +175,22 @@ power-on. So "the last 42 before the latest 27" is the shutdown time when Perch 
 ending in `cost-state`; one with a mid-file `cost-state` and later turns (resumed, then killed); one ending
 mid-turn; one with a torn last line; a `history.jsonl` with an `/exit` before and after a resume. The
 `history.jsonl` reader is tested for incremental reads (append, re-read only the new bytes).
+
+**As built (R1):**
+- `Perch.Core/Data/SessionEnd.cs`: `SessionEndKind` (`Unknown`/`Closed`/`Exited`/`Abrupt`), `SessionEnd(Kind,
+  EndedAt)`, and `SessionEndReader`. `Read(path, lastExitCommand)` scans a 64KB tail, growing ×4 up to 1MB only
+  when no record parses (one huge last record). The rule: a `cost-state` after the last **timestamped** record is a
+  clean exit; untimestamped bookkeeping (`last-prompt`, `mode`, `permission-mode`) is ignored either way; a torn
+  last line is abrupt. An `/exit` counts when it's at or after the last activity, so one from before a resume
+  doesn't. `Scan` and `Classify` are exposed internally for tests.
+- `Perch.Core/Data/ExitCommandIndex.cs`: one per config dir (`ClaudeConfigDir.HistoryFile` added). `Refresh()`
+  reads from its byte offset to the **last complete line** only, restarts from 0 when the file shrank, pre-filters
+  lines on `/exit`/`/quit` before parsing, matches the whole `display` (so "don't /exit yet" and `/exit-plan`
+  don't count), skips entries without a `sessionId`, keeps the newest per session. The first read of a large
+  history loads it once; later reads only the appended bytes.
+- Fixtures in `tests/Perch.Tests/fixtures/session-end/` (outside the `claude/` tree so `SessionHistory.ListAll`
+  tests don't see them): `graceful`, `killed-mid-turn`, `resumed-then-killed`, `torn-tail`. Tests:
+  `SessionEndReaderTests` (9), `ExitCommandIndexTests` (6).
 
 ### R2 — Perch's ledger and the shutdown clock (Core)
 
