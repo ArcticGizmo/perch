@@ -288,6 +288,20 @@ internal static class SampleData
         new("t-3", "Cut the next release", "Fri", Overdue: false),
     ];
 
+    /// <summary>The Recent section's lines (session recovery R7): one Perch had open, one a restart interrupted, one that
+    /// ended just before the shutdown, an ordinary ending and an <c>/exit</c> — every tone. Four more sit behind
+    /// "show +N more".</summary>
+    public static IReadOnlyList<OverlayCanvas.RecentLine> RecentLines() =>
+    [
+        new("r-1", @"C:\src\billing", "Invoice export", "billing", "was open", OverlayCanvas.RecentTone.Perch),
+        new("r-2", @"C:\src\gateway", "Retry storm fix", "gateway", "interrupted · 14h", OverlayCanvas.RecentTone.Flagged),
+        new("r-3", @"C:\src\notes", "notes", null, "before shutdown · 14h", OverlayCanvas.RecentTone.Flagged),
+        new("r-4", @"C:\src\docs-site", "docs-site", null, "2h ago", OverlayCanvas.RecentTone.Normal),
+        new("r-5", @"C:\src\scratch", "scratch", null, "1d ago", OverlayCanvas.RecentTone.Faded),
+    ];
+
+    public const int RecentMore = 4;
+
     /// <summary>A couple of daemon workers, for the daemon strip — hidden when the daemon setting is off.</summary>
     public static IReadOnlyList<DaemonWorker> DaemonWorkers()
     {

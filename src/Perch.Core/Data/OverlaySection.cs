@@ -29,6 +29,8 @@ public enum OverlaySection
     Todo,
     /// <summary>The session rows (and, directly beneath them, the daemon-worker strip).</summary>
     Sessions,
+    /// <summary>Sessions that ended lately, the interrupted ones first (docs/session-recovery-plan.md, R7).</summary>
+    Recent,
     /// <summary>The Social friends region (or the "sign in to Social" prompt when signed out).</summary>
     Friends,
     /// <summary>The now-playing media transport strip.</summary>
@@ -53,6 +55,7 @@ public static class OverlaySectionOrder
         OverlaySection.Hypertree,
         OverlaySection.Todo,
         OverlaySection.Sessions,
+        OverlaySection.Recent,
         OverlaySection.Friends,
         OverlaySection.Media,
         OverlaySection.Call,
@@ -64,7 +67,7 @@ public static class OverlaySectionOrder
     /// <summary>
     /// Turns a persisted order into a complete, valid one: keeps the saved order but drops unknown values and
     /// duplicates, then splices in any section the saved list is missing at its natural spot (right after the
-    /// last of its default-predecessors that's already present). A <c>null</c>/empty input yields
+    /// nearest of its default-predecessors that's already present). A <c>null</c>/empty input yields
     /// <see cref="Default"/>. This self-heals a settings file written by an older/newer version — a section
     /// added later simply appears in a sensible place rather than being lost or dumped at the end.
     /// </summary>
@@ -94,18 +97,13 @@ public static class OverlaySectionOrder
     public static bool IsDefault(IEnumerable<OverlaySection>? order)
         => Normalize(order).SequenceEqual(DefaultArr);
 
-    // Where a missing section belongs: just after the last of its earlier-in-default siblings that's already
-    // in the list (or the front, if none are present).
+    // Where a missing section belongs: just after its nearest earlier-in-default sibling that's already in the list
+    // (or the front, if none is) — so a section added after Sessions follows the session rows wherever the user
+    // moved them, rather than whichever earlier section they happened to drag to the bottom.
     private static int InsertionIndexFor(OverlaySection s, List<OverlaySection> result, HashSet<OverlaySection> seen)
     {
-        int di = Array.IndexOf(DefaultArr, s);
-        int insertAfter = -1;
-        for (int i = 0; i < di; i++)
-            if (seen.Contains(DefaultArr[i]))
-            {
-                int pos = result.IndexOf(DefaultArr[i]);
-                if (pos > insertAfter) insertAfter = pos;
-            }
-        return insertAfter + 1;
+        for (int i = Array.IndexOf(DefaultArr, s) - 1; i >= 0; i--)
+            if (seen.Contains(DefaultArr[i])) return result.IndexOf(DefaultArr[i]) + 1;
+        return 0;
     }
 }

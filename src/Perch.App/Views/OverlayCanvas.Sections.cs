@@ -8,7 +8,7 @@ namespace Perch.Avalonia.Views;
 
 /// <summary>
 /// The overlay panel's section ordering — the single source of truth for the vertical sequence of movable
-/// sections (system info, claude metrics, quick links, hypertree, todo, sessions, friends, media, call). The
+/// sections (system info, claude metrics, quick links, hypertree, todo, sessions, recent, friends, media, call). The
 /// header (top) and outage status bar (bottom) are fixed chrome and are laid out directly by <c>Draw</c>, so
 /// they aren't members here.
 ///
@@ -48,6 +48,7 @@ public sealed partial class OverlayCanvas
         OverlaySection.Hypertree     => HypertreeStripVisible,
         OverlaySection.Todo          => TodosStripVisible,
         OverlaySection.Sessions      => true,
+        OverlaySection.Recent        => RecentStripVisible,
         OverlaySection.Friends       => FeedStripVisible || SocialSignInStripVisible,
         OverlaySection.Media         => MediaStripVisible,
         OverlaySection.Call          => MicStripVisible,
@@ -64,6 +65,7 @@ public sealed partial class OverlayCanvas
         OverlaySection.Hypertree     => HypertreeStripHeight,
         OverlaySection.Todo          => TodosStripHeight,
         OverlaySection.Sessions      => SessionsSectionHeight,
+        OverlaySection.Recent        => RecentStripHeight,
         OverlaySection.Friends       => FriendsSectionHeight,
         OverlaySection.Media         => MediaStripHeight,
         OverlaySection.Call          => MicStripHeight,
@@ -127,6 +129,7 @@ public sealed partial class OverlayCanvas
             case OverlaySection.Hypertree:     DrawHypertreeStrip(ctx, width); break;
             case OverlaySection.Todo:          DrawTodosStrip(ctx, width, top); break;
             case OverlaySection.Sessions:      PaintSessions(ctx, width, top); break;
+            case OverlaySection.Recent:        DrawRecentStrip(ctx, width, top); break;
             case OverlaySection.Friends:
                 if (FeedStripVisible) DrawSocialRegion(ctx, width, top);
                 else if (SocialSignInStripVisible) DrawSocialSignInStrip(ctx, width, top);

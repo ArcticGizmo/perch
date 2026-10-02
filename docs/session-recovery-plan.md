@@ -425,6 +425,40 @@ Rows: title, folder (path rules: keep the name, elide the directory), age, badge
 startup toast when abrupt sessions are found ("3 sessions were interrupted by a restart"). Paint stays
 allocation-free: the list is computed off the UI thread and cached, never read in `Render`.
 
+**As built (R7):**
+- **`OverlaySection.Recent`**, right after Sessions in `OverlaySectionOrder.Default`, with its arms in `SectionVisible`/`SectionHeight`/`PaintSectionCore` and a
+  `_sectionTop`-backed `RecentTop`. `OverlayCanvas.Recent.cs` follows the collapsible pattern: chevron + "Recent"
+  header (collapsed, it says "2 interrupted" in the warning hue, else the count), expand state persisted as
+  `AppSettings.RecentExpanded` (`NotSettings`). Visible only while there's something recent (always in Rearrange
+  mode, where an empty one reads "nothing recent"); `SetShowRecent` is the gate R8's setting will drive.
+- **`OverlaySectionOrder.Normalize` splices a missing section after its *nearest* default predecessor** that's present,
+  not the furthest one. With the old rule a user's custom order would have put Recent at the very bottom (after
+  whichever early section they'd dragged last); now it follows the session rows wherever they are. Saved sections
+  keep their relative order either way.
+- **Lines** (`RecentLine`, precomputed by the app — paint formats nothing): what Perch had open first ("was open", brand
+  hue), then the Recent list as built (flagged first: "interrupted · 14h" / "before shutdown · 14h" in the warning hue;
+  then "2h ago"; an `/exit` de-emphasised), capped at 5 with "show +N more" (→ the launcher's full list). The title is
+  the `/rename` title, with the folder's name beside it in the faint hue, else the folder name alone. A session live
+  again drops out on the next fold; ages move on a 1-minute timer. `App.PushRecentLines` runs on every fold, after each
+  Recent build and when the restorable list changes; `SetRecent` is a no-op for unchanged lines.
+- **Actions:** click a line → Resume in Perch (a dormant window, `OpenSessionResume`); right-click → Resume in Perch /
+  Resume in terminal / Dismiss; hover swaps the note for a "×" that dismisses. Dismiss is now one
+  `App.DismissRecent(sessionId)` shared with the Roost's dormant panes (dismissal map stamped "now", ledger forget for a
+  restorable one, out of its Roost tab).
+- **Startup toast**: R5's "Pick up where you left off" now waits for the first Recent build and is merged with the
+  restart count — "2 Perch sessions were open when Perch closed, and 3 sessions were interrupted by a restart. They're
+  under Recent on the overlay." Interrupted = `Abrupt` + just-before-shutdown rows within the window of the shutdown
+  that ended the previous run (`BeginRun`'s answer, kept as `_previousShutdown`).
+- **Render:** `overlay_recent_1x.png` / `_1.5x` / `overlay_recent_collapsed_1x.png`, and the section in
+  `overlay_sections_default/reordered_1x.png`. `SampleData.RecentLines()` is ready for R8's preview.
+
+**Owed live checks (R7):**
+- After a restart with sessions open in terminals: the toast counts them, Recent lists them first in the warning hue.
+- Click a line: a dormant session window opens; send, and the line leaves Recent as the session goes live.
+- "×" and Dismiss: the line goes and stays gone across a restart; resume it in a terminal and end it, and it's back.
+- Collapse the section, restart Perch: it stays collapsed.
+- An older `settings.json` with a custom `SectionOrder`: Recent appears right after Sessions.
+
 ### R8 — settings + polish
 
 A `SettingDescriptor` for showing the Recent section (and anything else user-facing that R1–R7 added), a

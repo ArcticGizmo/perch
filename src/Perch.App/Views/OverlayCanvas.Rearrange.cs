@@ -60,6 +60,7 @@ public sealed partial class OverlayCanvas
         if (!_showSystemMetrics) _rearrangeDimmed.Add(OverlaySection.SystemInfo);
         if (!UsageStripVisible)  _rearrangeDimmed.Add(OverlaySection.ClaudeMetrics);
         if (!TodosStripVisible)  _rearrangeDimmed.Add(OverlaySection.Todo);
+        if (!RecentStripVisible) _rearrangeDimmed.Add(OverlaySection.Recent);
         if (!MediaStripVisible)  _rearrangeDimmed.Add(OverlaySection.Media);
         if (!MicStripVisible)    _rearrangeDimmed.Add(OverlaySection.Call);
         if (!FeedStripVisible)   _rearrangeDimmed.Add(OverlaySection.Friends);
@@ -67,6 +68,7 @@ public sealed partial class OverlayCanvas
         _showSystemMetrics = true;
         _usageEnabled = true;
         _todosEnabled = true;
+        _recentEnabled = true;
         _mediaEnabled = true;
         _micEnabled = true;
         _socialEnabled = true;

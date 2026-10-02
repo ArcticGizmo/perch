@@ -4200,6 +4200,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             InvalidateVisual();
         }
 
+        if (UpdateRecentHover(p)) InvalidateVisual();
+
         bool autoHeader = _autonomousHeaderRect.Width > 0 && _autonomousHeaderRect.Contains(p);
         if (autoHeader != _hoveredAutonomousHeader) { _hoveredAutonomousHeader = autoHeader; InvalidateVisual(); }
 
@@ -4367,6 +4369,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     {
         bool changed = _hoveredRow != -1 || _hoveredNewSession || _hoveredQuickLink != -1 || _hoveredHypertreeRow != -1 || _hoveredHyperDesktop != -1 || _hoveredDaemonRow != -1 || _hoveredTodoRow != -1 || _hoveredTodoHeader || _hoveredTodoAdd || _hoveredHyperHeader || _hoveredAutonomousHeader || _hoveredArtifactRow != -1 || _hoveredMarkdownRow != -1 || _hoveredPrRow != -1 || _hoveredUpdateIcon || _hoveredFooter || _hoveredNoteButton || _hoveredMediaButton != -1 || _hoveredMicLabel || _hoveredSocial;
         changed |= ClearSocialRegionHover();
+        changed |= ClearRecentHover();
         if (_hoveredUsageSet is not null) { _hoveredUsageSet = null; changed = true; }
         _hoveredSocial = false;
         if (_hoveredRoost) { _hoveredRoost = false; changed = true; }
@@ -4776,6 +4779,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             return;
         }
 
+        // The Recent section: the header toggles, a line resumes in Perch, its "×" dismisses it.
+        if (RouteRecentClick(p)) return;
+
         // The usage strip: clicking an account's NAME collapses just it to a chip; clicking its chip expands
         // it back (per-account, persisted). Clicking the bars themselves (or the strip padding) does nothing.
         if (InUsageStrip(p) && UsageToggleAt(p) is { } usageSet)
@@ -4873,6 +4879,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             ShowTodoMenu(todoRow);
             return;
         }
+
+        // A Recent line: Resume in Perch / in a terminal / Dismiss.
+        if (ShowRecentMenuAt(p)) return;
 
         // The note button leading the quick-links row: a right-click opens the searchable project-note
         // picker (its left-click still opens the global scratch pad). Tested before the generic menu so the

@@ -12,6 +12,9 @@ namespace Perch.Avalonia;
 public partial class App
 {
     private SessionLedger? _ledger;
+    // The shutdown that ended the previous run (BeginRun's answer), if any: the restart the startup toast is about.
+    private DateTime? _previousShutdown;
+    private bool _recoveryToastPending;
     private DispatcherTimer? _ledgerHeartbeat;
     private bool _ledgerShutdownStamped;
     private static readonly Lock LedgerSaveGate = new();
@@ -55,26 +58,23 @@ public partial class App
             LaunchLog.Write(shutdown is { } s
                 ? $"session ledger: the previous run ended with a shutdown at {s:yyyy-MM-dd HH:mm:ss}"
                 : "session ledger: no shutdown since the previous run");
-            return ledger;
+            return (ledger, shutdown);
         }).ContinueWith(t =>
         {
             if (_ledgerShutdownStamped) return;
             // The Recent list needs the ledger (held sessions, shutdowns); without one it's built bare.
             if (!t.IsCompletedSuccessfully) { RefreshRecent(); return; }
-            var ledger = t.Result;
+            var (ledger, shutdown) = t.Result;
             _ledger = ledger;
+            _previousShutdown = shutdown;
 
             // What the previous run held is what comes back — read before this run's own sessions are tracked in.
             var holding = _heldSessions.Keys.Select(s => s.SessionId).OfType<string>().ToHashSet();
             _restorable = ledger.Sessions.Where(s => !holding.Contains(s.SessionId)).ToList();
             foreach (var s in _heldSessions.Keys.ToList()) TrackHeld(s);   // started before the ledger was ready
             OnRestorableChanged();
-            if (_restorable.Count > 0)
-                _notifier?.Show("Pick up where you left off",
-                    _restorable.Count == 1
-                        ? "A Perch session was open when Perch closed. Reopen it from the tray menu."
-                        : $"{_restorable.Count} Perch sessions were open when Perch closed. Reopen them from the tray menu.",
-                    ToastLevel.Info, null, null);
+            // The toast waits for the Recent build, so it can also count the sessions a restart interrupted.
+            _recoveryToastPending = true;
             RefreshRecent();
 
             _ledgerHeartbeat = new DispatcherTimer { Interval = SessionRecovery.HeartbeatInterval };
@@ -156,7 +156,8 @@ public partial class App
 
     private void OnRestorableChanged()
     {
-        RefoldRoost();   // they're the top of the Roost's Recent group
+        RefoldRoost();       // they're the top of the Roost's Recent group…
+        PushRecentLines();   // …and of the overlay's Recent section
         if (_reopenItem is not { } item) return;
         item.Header = _restorable.Count == 1 ? "Reopen Perch session" : $"Reopen Perch sessions ({_restorable.Count})";
         item.IsVisible = _restorable.Count > 0;

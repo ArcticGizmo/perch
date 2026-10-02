@@ -62,6 +62,8 @@ public partial class App
             else LaunchLog.Write($"recent sessions: build failed ({t.Exception?.GetBaseException().GetType().Name})");
             _roostDormantReady = true;
             RefoldRoost();
+            PushRecentLines();
+            MaybeShowRecoveryToast();
             if (_recentRebuild) { _recentRebuild = false; RefreshRecent(); }
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
@@ -180,20 +182,28 @@ public partial class App
     }
 
     // A dismissal covers the ending it was made on (Q2): a later ending of the same session shows again.
-    private bool IsDismissed(RoostDormant d) =>
-        _appSettings?.RecentDismissed is { } map && map.TryGetValue(d.SessionId, out var at) && d.LastActive <= at;
+    private bool IsDismissed(RoostDormant d) => IsDismissed(d.SessionId, d.LastActive);
+
+    private bool IsDismissed(string sessionId, DateTime endedAt) =>
+        _appSettings?.RecentDismissed is { } map && map.TryGetValue(sessionId, out var at) && endedAt <= at;
 
     // ── Pane actions ──────────────────────────────────────────────────────────────
 
-    /// <summary>A dormant pane's "Dismiss": it leaves the Roost (and its tab), and the Recent list remembers it. One that
-    /// Perch had open also stops coming back after the next restart.</summary>
+    /// <summary>A dormant pane's "Dismiss" (<see cref="DismissRecent"/>).</summary>
     private void DismissRoostDormant(RoostPane pane)
     {
-        if (pane.Dormant is not { } d) return;
-        if (_restorable.Any(r => r.SessionId == d.SessionId))
+        if (pane.Dormant is { } d) DismissRecent(d.SessionId);
+    }
+
+    /// <summary>"Dismiss" on a Recent line or a dormant Roost pane: it leaves the overlay's Recent section and the Roost
+    /// (and its tab), and stays dismissed until the session ends again. One that Perch had open also stops coming back
+    /// after the next restart.</summary>
+    private void DismissRecent(string sessionId)
+    {
+        if (_restorable.Any(r => r.SessionId == sessionId))
         {
-            _ledger?.Forget(d.SessionId);
-            DropRestorable(d.SessionId);
+            _ledger?.Forget(sessionId);
+            DropRestorable(sessionId);
             SaveLedgerSoon();
         }
         if (_appSettings is { } s)
@@ -201,13 +211,102 @@ public partial class App
             var map = s.RecentDismissed ?? new Dictionary<string, DateTime>(StringComparer.Ordinal);
             var cutoff = DateTime.Now - SessionRecovery.RecentWindow;
             foreach (var old in map.Where(kv => kv.Value < cutoff).Select(kv => kv.Key).ToList()) map.Remove(old);
-            // Never earlier than the ending itself, whichever clock read it.
-            map[d.SessionId] = d.LastActive > DateTime.Now ? d.LastActive : DateTime.Now;
+            // "Now" covers the ending being dismissed (it's in the past, whichever clock read it); a later one isn't.
+            map[sessionId] = DateTime.Now;
             s.RecentDismissed = map;
             s.Save();
         }
-        _roostTabs.Unassign(pane.Key);
+        _roostTabs.Unassign(RoostToken.DormantKey(sessionId));
         RefoldRoost();
+        PushRecentLines();
+    }
+
+    // ── The overlay's Recent section ──────────────────────────────────────────────
+
+    private DispatcherTimer? _recentAgeTimer;
+
+    /// <summary>Pushes the overlay's Recent lines: what Perch had open first ("was open"), then the Recent list (flagged
+    /// first, newest first), capped at <see cref="SessionRecovery.RecentRows"/> with the rest behind "show +N more". Never
+    /// a session that's live now or dismissed. Cheap (no IO): run on every fold, and each minute so the ages move.</summary>
+    private void PushRecentLines()
+    {
+        if (_overlay is null) return;
+        var live = _lastSessions.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var lines = new List<Views.OverlayCanvas.RecentLine>();
+        int total = 0;
+        var now = DateTime.Now;
+
+        void Add(Views.OverlayCanvas.RecentLine line)
+        {
+            if (live.Contains(line.SessionId) || !seen.Add(line.SessionId)) return;
+            total++;
+            if (lines.Count < SessionRecovery.RecentRows) lines.Add(line);
+        }
+
+        foreach (var r in _restorable)
+            Add(Line(r.SessionId, r.Cwd, r.Title, "was open", Views.OverlayCanvas.RecentTone.Perch));
+        foreach (var row in _recentRows)
+        {
+            if (IsDismissed(row.Entry.SessionId, row.EndedAt)) continue;
+            var age = ShortAge(row.EndedAt, now);
+            var span = age.Replace(" ago", "");   // "interrupted · 14h": the badge carries the "when" itself
+            var (note, tone) = KindOf(row) switch
+            {
+                RoostDormantKind.Interrupted => ($"interrupted · {span}", Views.OverlayCanvas.RecentTone.Flagged),
+                RoostDormantKind.BeforeShutdown => ($"before shutdown · {span}", Views.OverlayCanvas.RecentTone.Flagged),
+                RoostDormantKind.Exited => (age, Views.OverlayCanvas.RecentTone.Faded),
+                _ => (age, Views.OverlayCanvas.RecentTone.Normal),
+            };
+            Add(Line(row.Entry.SessionId, row.Entry.Cwd, row.Entry.Title, note, tone));
+        }
+        _overlay.Canvas.SetRecent(lines, total - lines.Count);
+
+        if (_recentAgeTimer is null)
+        {
+            _recentAgeTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+            _recentAgeTimer.Tick += (_, _) => PushRecentLines();
+            _recentAgeTimer.Start();
+        }
+    }
+
+    // A line's title is the session's /rename title, else its folder; the folder rides beside a real title.
+    private static Views.OverlayCanvas.RecentLine Line(string id, string cwd, string? title, string note, Views.OverlayCanvas.RecentTone tone)
+    {
+        var folder = ProjectOf(cwd);
+        return string.IsNullOrWhiteSpace(title)
+            ? new(id, cwd, folder, null, note, tone)
+            : new(id, cwd, title.Trim(), folder, note, tone);
+    }
+
+    private static string ShortAge(DateTime at, DateTime now)
+    {
+        var d = now - at;
+        if (d < TimeSpan.FromMinutes(1)) return "just now";
+        if (d < TimeSpan.FromHours(1)) return $"{(int)d.TotalMinutes}m ago";
+        return d < TimeSpan.FromHours(48) ? $"{(int)d.TotalHours}h ago" : $"{(int)d.TotalDays}d ago";
+    }
+
+    /// <summary>The startup toast (once a run, after the first Recent build): the Perch sessions that were open when
+    /// Perch closed, and the sessions the restart that ended the previous run interrupted.</summary>
+    private void MaybeShowRecoveryToast()
+    {
+        if (!_recoveryToastPending) return;
+        _recoveryToastPending = false;
+        int open = _restorable.Count;
+        int interrupted = _previousShutdown is { } shutdown
+            ? _recentRows.Count(r => r.End.Kind == SessionEndKind.Abrupt && r.JustBeforeShutdown
+                                     && r.EndedAt >= shutdown - SessionRecovery.ShutdownWindow
+                                     && r.EndedAt <= shutdown + SessionRecovery.ShutdownGrace)
+            : 0;
+        if (open == 0 && interrupted == 0) return;
+
+        static string Count(int n, string what) => n == 1 ? $"1 {what} was" : $"{n} {what}s were";
+        var parts = new List<string>();
+        if (open > 0) parts.Add($"{Count(open, "Perch session")} open when Perch closed");
+        if (interrupted > 0) parts.Add($"{Count(interrupted, "session")} interrupted by a restart");
+        _notifier?.Show(open == 0 ? "Interrupted by a restart" : "Pick up where you left off",
+            string.Join(", and ", parts) + ". They're under Recent on the overlay.", ToastLevel.Info, null, null);
     }
 
     /// <summary>

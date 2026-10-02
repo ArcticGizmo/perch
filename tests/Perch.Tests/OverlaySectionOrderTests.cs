@@ -74,6 +74,23 @@ public class OverlaySectionOrderTests
     }
 
     [Fact]
+    public void AnOrderSavedBeforeRecentGetsItRightAfterSessions()
+    {
+        // A custom order from before session recovery R7 (no Recent): the section lands under the session rows,
+        // wherever the user moved those.
+        var saved = new[]
+        {
+            OverlaySection.Sessions, OverlaySection.Friends, OverlaySection.ClaudeMetrics, OverlaySection.Call,
+            OverlaySection.Media, OverlaySection.Todo, OverlaySection.Hypertree, OverlaySection.QuickLinks,
+            OverlaySection.SystemInfo,
+        };
+        var result = OverlaySectionOrder.Normalize(saved).ToList();
+        Assert.Equal(OverlaySection.Sessions, result[0]);
+        Assert.Equal(OverlaySection.Recent, result[1]);
+        Assert.Equal(OverlaySection.Friends, result[2]);
+    }
+
+    [Fact]
     public void IgnoresUnknownEnumValues()
     {
         // A value outside the defined members (e.g. written by a newer version) is dropped, not carried.
@@ -83,7 +100,9 @@ public class OverlaySectionOrderTests
 
         Assert.DoesNotContain((OverlaySection)999, result);
         Assert.Equal(OverlaySection.Media, result[0]);
-        Assert.Equal(OverlaySection.SystemInfo, result[1]);
+        // The saved pair keeps its order (missing sections splice in beside their default neighbours, so Call — which
+        // follows Media by default — may sit between them).
+        Assert.True(result.ToList().IndexOf(OverlaySection.Media) < result.ToList().IndexOf(OverlaySection.SystemInfo));
         Assert.Equal(Enum.GetValues<OverlaySection>().Length, result.Count);
     }
 }

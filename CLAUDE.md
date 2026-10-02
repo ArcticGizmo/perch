@@ -122,18 +122,18 @@ running the tray app.
   and written back through a `*ExpandChanged` event the App handles. Reuse this shape for any new collapsible
   section rather than inventing another; see `OverlayCanvas.Todos.cs` + `OverlayCanvas.Feed.cs`.
 - **The overlay panel's movable sections are laid out by one ordered pass, not a fixed sequence.** The
-  vertical order of the nine movable sections (system info, claude metrics, quick links, hypertree, todo,
-  sessions, friends, media, call — the header and outage bar are fixed chrome) is a user setting,
+  vertical order of the ten movable sections (system info, claude metrics, quick links, hypertree, todo,
+  sessions, recent, friends, media, call — the header and outage bar are fixed chrome) is a user setting,
   `AppSettings.SectionOrder` (a `List<OverlaySection>`; null = default; normalized by
   `Perch.Data.OverlaySectionOrder.Normalize`). Both the measure pass (`PanelBodyHeight`) and the paint
   pass (`Draw`) iterate `OverlayCanvas._sectionOrder` through the single
   `SectionVisible`/`SectionHeight`/`PaintSection` triple in `OverlayCanvas.Sections.cs`, recording each
   visible section's top in `_sectionTop`; the `…Top` getters (`UsageStripTop`, `QuickLinksTop`,
-  `HypertreeTop`, `TodosTop`, `RowsTop`, `SystemInfoTop`) read that dictionary so hit-testing follows the
+  `HypertreeTop`, `TodosTop`, `RecentTop`, `RowsTop`, `SystemInfoTop`) read that dictionary so hit-testing follows the
   painted order. **Adding a section:** add it to `OverlaySection` + `OverlaySectionOrder.Default`, then give
   it arms in `SectionVisible`/`SectionHeight`/`PaintSectionCore` (and, if its paint reads its own top, a
   `_sectionTop`-backed getter). The Settings preview reorders it by drag in `OverlayCanvas.Rearrange.cs`
-  (`RearrangeMode`, preview-only — it forces every gate on so all nine show, dims the ones off in settings,
+  (`RearrangeMode`, preview-only — it forces every gate on so all ten show, dims the ones off in settings,
   and raises `SectionOrderChanged`); the order is pushed onto both the live overlay and the preview through
   `OverlaySettingsGates.Apply` → `SetSectionOrder`. See `docs/section-order-plan.md`.
 - **IO / heavy work runs off the UI thread**, then marshals back: `Task.Run(...)` →

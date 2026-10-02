@@ -155,6 +155,10 @@ internal sealed class AppSettings
     // header. Toggled by the section's own chevron, not a Settings control. Defaults to expanded.
     public bool TodosExpanded { get; set; } = true;
 
+    // Whether the overlay's Recent section (sessions that ended lately) is expanded or collapsed to its header.
+    // Toggled by the section's own chevron, not a Settings control. Defaults to expanded.
+    public bool RecentExpanded { get; set; } = true;
+
     // Whether the overlay's Hypertree section is expanded (showing the branch lines) or collapsed to just
     // its header. Toggled by the section's own chevron. Defaults to expanded.
     public bool HypertreeExpanded { get; set; } = true;

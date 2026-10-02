@@ -302,6 +302,19 @@ internal static class HeadlessRenderer
         todoEmptyProbe.SetTopTodos([], 0);
         RenderControl(todoEmptyProbe, Path.Combine(outDir, "overlay_todos_empty_1x.png"), 96);
 
+        // Session recovery R7: the Recent section under the session rows — every tone, plus "show +N more" — and
+        // collapsed (the header counts the interrupted ones).
+        var recentProbe = new OverlayCanvas();
+        recentProbe.Update(SampleData.Sessions());
+        recentProbe.SetRecent(SampleData.RecentLines(), SampleData.RecentMore);
+        RenderControl(recentProbe, Path.Combine(outDir, "overlay_recent_1x.png"), 96);
+        RenderControl(recentProbe, Path.Combine(outDir, "overlay_recent_1.5x.png"), 144);
+        var recentCollapsedProbe = new OverlayCanvas();
+        recentCollapsedProbe.Update(SampleData.Sessions());
+        recentCollapsedProbe.SetRecentExpanded(false);
+        recentCollapsedProbe.SetRecent(SampleData.RecentLines(), SampleData.RecentMore);
+        RenderControl(recentCollapsedProbe, Path.Combine(outDir, "overlay_recent_collapsed_1x.png"), 96);
+
         // Section ordering: every movable section seeded at once, rendered in the default order and again in a
         // custom order, so the single ordered layout pass (measure + paint) can be eyeballed for clipping or
         // overlap. If these two differ only by section sequence, the reorder plumbing is sound.
@@ -315,6 +328,7 @@ internal static class HeadlessRenderer
             c.SetQuickLinks(links, icons);
             c.SetHypertree(SampleData.Hypertree());
             c.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
+            c.SetRecent(SampleData.RecentLines(), SampleData.RecentMore);
             c.SetDaemonWorkers(SampleData.DaemonWorkers());
             c.SetShowMediaController(true);   // off by default; enabled so the strip shows in this probe
             c.SetShowMicPresence(true);
@@ -332,7 +346,7 @@ internal static class HeadlessRenderer
         var sectionsReordered = AllSectionsProbe();
         sectionsReordered.SetSectionOrder(
         [
-            OverlaySection.Sessions, OverlaySection.Friends, OverlaySection.ClaudeMetrics,
+            OverlaySection.Sessions, OverlaySection.Friends, OverlaySection.Recent, OverlaySection.ClaudeMetrics,
             OverlaySection.Call, OverlaySection.Media, OverlaySection.Todo,
             OverlaySection.Hypertree, OverlaySection.QuickLinks, OverlaySection.SystemInfo,
         ]);
