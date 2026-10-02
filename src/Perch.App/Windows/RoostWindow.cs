@@ -94,6 +94,9 @@ internal sealed class RoostWindow : Window
     private RoostRailSort _railSort;
     private readonly Dictionary<RoostRailSort, Border> _sortSegments = new();
     private string? _focused;
+    // The user put focus on _focused (a click in the pane, the rail, Alt+N, a drop, zoom), rather than it falling
+    // there (window open, a tab switch, the focused pane leaving). Bare Enter / Esc answer a permission only then.
+    private bool _focusChosen;
     // "+ New session" was clicked: the first new Perch pane to appear before the deadline is shown — in the region
     // it was started from (the empty-region picker), else Focus.
     private HashSet<string>? _keysAtNewSession;
@@ -351,6 +354,7 @@ internal sealed class RoostWindow : Window
             _everPlaced.Add(key);
         }
         _focused = key;
+        _focusChosen = true;
         _tabs.NoteFocus(key);
         if (pane is { Ended: false, Session.Status: SessionStatus.NeedsAttention })
             AcknowledgeRequested?.Invoke(pane.Session.Pid);
@@ -389,6 +393,7 @@ internal sealed class RoostWindow : Window
         _tabs.Assign(tab.Id, _slotRegions[slot], key);
         _everPlaced.Add(key);
         _focused = key;
+        _focusChosen = true;
         Refresh();
     }
 
@@ -480,14 +485,21 @@ internal sealed class RoostWindow : Window
     private void Refresh()
     {
         var all = _roster.Panes;
-        _tabs.Sync(all);   // a close / reopen from this window (the app feeds adoptions with each scan)
+        // A close / reopen from this window. The app feeds adoptions and settles persisted cells with each scan; this
+        // sync may run before the first one (an early open), so it leaves those cells alone.
+        _tabs.Sync(all, resolveSeeds: false);
         // The painter edits the active tab only: switching away (or the tab closing) cancels the edit.
         if (_painter is { } painter && painter.TabId != _tabs.ActiveId) ClosePainter(null, refresh: false);
         SyncFeedsAndViews(all);
         AdmitStartedSession(all);
         // Focus is always in the active tab: a tab switch, a close, or a pane leaving (dropped on another tab,
         // removed, ended) hands it to the tab's first session.
-        if (_focused is not { } f || !_tabs.Active.Cells.Values.Contains(f)) _focused = FirstIn(_tabs.Active);
+        // Focus that falls somewhere wasn't chosen there, so it arms no Enter / Esc until the user picks a pane.
+        if (_focused is not { } f || !_tabs.Active.Cells.Values.Contains(f))
+        {
+            _focused = FirstIn(_tabs.Active);
+            _focusChosen = false;
+        }
 
         _placed.Clear();
         LayoutStage(_tabs.Active);
@@ -542,6 +554,9 @@ internal sealed class RoostWindow : Window
             RoostTilePanel.SetSlot(host, -1);
             _warm.Add(key);
         }
+        // Coming back on stage leaves the warm list first: a tab switched back to holds the oldest warm hosts, and
+        // trimming before this would evict exactly the panes about to show (a full re-parent per switch).
+        _warm.RemoveAll(onStage.Contains);
         while (_warm.Count > WarmLimit) RemovePaneHost(_warm[0]);   // parked by the refresh that follows
         foreach (var (key, slot) in shown)
         {
@@ -552,7 +567,6 @@ internal sealed class RoostWindow : Window
                 _paneHosts[key] = host;
                 _grid.Children.Add(host);
             }
-            _warm.Remove(key);
             host.IsVisible = true;
             if (RoostTilePanel.GetSlot(host) != slot) RoostTilePanel.SetSlot(host, slot);
             _placed[key] = RoostPaneSize.Expanded;
@@ -597,7 +611,9 @@ internal sealed class RoostWindow : Window
         else _tabs.Show(started.Key);
         _newSessionTarget = null;
         _everPlaced.Add(started.Key);
+        // It can turn up long after the click, mid-way through reading another pane: shown, but not armed.
         _focused = started.Key;
+        _focusChosen = false;
     }
 
     private void RemovePaneHost(string key)
@@ -754,11 +770,11 @@ internal sealed class RoostWindow : Window
     // The focused Perch pane's permission keys, as in SessionWindow (and the TUI): Enter allows a pending
     // permission (a question card is answered by picking, never a bare Enter); Esc denies it, or with nothing
     // pending interrupts a running turn. Terminal/IDE panes have no control channel, so these do nothing there.
-    // Only for a pane the user can actually see (in the active tab, not behind a zoom) — else a bare Enter could
-    // approve a command never seen.
+    // Only for a pane the user can actually see (in the active tab, not behind a zoom) and chose (_focusChosen) —
+    // else a bare Enter could approve a command never seen, or one in a pane focus merely fell to.
     private bool FocusedPerchKey(Key key)
     {
-        if (_focused is not { } k || _roster.Find(k) is not { Ended: false } pane) return false;
+        if (!_focusChosen || _focused is not { } k || _roster.Find(k) is not { Ended: false } pane) return false;
         if (!_placed.TryGetValue(k, out var size) || size != RoostPaneSize.Expanded) return false;
         if (!_feeds.TryGetValue(k, out var feed) || feed is not { IsControlled: true }) return false;
         var conv = feed.Conversation;
@@ -790,6 +806,7 @@ internal sealed class RoostWindow : Window
                 if (_tabs.Locate(key).FirstOrDefault(p => p.TabId == _tabs.ActiveId) is { TabId: not null } at)
                 {
                     _focused = key;
+                    _focusChosen = true;
                     _tabs.ToggleZoom(at.TabId, at.RegionId);
                     Refresh();
                 }

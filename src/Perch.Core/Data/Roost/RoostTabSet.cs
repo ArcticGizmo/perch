@@ -329,8 +329,11 @@ public sealed class RoostTabSet
     /// Folds a roster update in: follows re-keyed panes (<see cref="RoostRoster.Adopted"/>), resolves a persisted
     /// state's cells on the first call (a token places its session only if both pid and session id match), and
     /// empties regions whose session left the roster (ended and dropped, or closed).
+    /// <para>Pass <paramref name="resolveSeeds"/> false from a sync that doesn't carry a scan (the window's own,
+    /// after a close / reopen): a roster that hasn't seen its first scan yet is empty, and settling against it would
+    /// drop every persisted cell — permanently, once the emptied state is saved.</para>
     /// </summary>
-    public void Sync(IReadOnlyList<RoostPane> panes, IReadOnlyDictionary<string, string>? adopted = null)
+    public void Sync(IReadOnlyList<RoostPane> panes, IReadOnlyDictionary<string, string>? adopted = null, bool resolveSeeds = true)
     {
         if (adopted is { Count: > 0 })
             foreach (var tab in All)
@@ -346,7 +349,7 @@ public sealed class RoostTabSet
         _sessionIds.Clear();
         foreach (var (k, sid) in live) _sessionIds[k] = sid;
 
-        if (_seeds is { } seeds)
+        if (resolveSeeds && _seeds is { } seeds)
         {
             _seeds = null;
             foreach (var (tabId, region, pid, sid) in seeds)
@@ -425,7 +428,7 @@ public sealed class RoostTabSet
         {
             foreach (var t in state.Tabs ?? [])
             {
-                if (_tabs.Count >= MaxTabs || string.IsNullOrWhiteSpace(t.Id) || t.Id == FocusId || Find(t.Id) is not null) continue;
+                if (t is null || _tabs.Count >= MaxTabs || string.IsNullOrWhiteSpace(t.Id) || t.Id == FocusId || Find(t.Id) is not null) continue;
                 var tab = new RoostTab(t.Id, Clean(t.Name) ?? NextDefaultName(), RoostGridLayout.FromPersisted(t.Layout));
                 _tabs.Add(tab);
                 foreach (var (region, token) in t.Cells ?? [])

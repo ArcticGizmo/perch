@@ -47,6 +47,11 @@ public sealed class RoostGridLayout
     /// <summary>The most regions in one tab — each is a full thread, so this bounds the tab's cost.</summary>
     public const int MaxRegions = 8;
 
+    /// <summary>The highest region id a valid layout may hold. Ids only grow by one per split, so no real layout gets
+    /// near it; the bound keeps "highest id + 1" (a split's or <see cref="AdoptIds"/>'s fresh id) from overflowing on
+    /// a hand-edited one.</summary>
+    public const int MaxRegionId = 1_000_000;
+
     private readonly RoostRegion[] _regions;
 
     private RoostGridLayout(RoostRegion[] regions)
@@ -91,7 +96,7 @@ public sealed class RoostGridLayout
     public static RoostGridLayout FromPersisted(IEnumerable<RoostRegion>? regions) => Create(regions) ?? Full;
 
     /// <summary>Whether <paramref name="regions"/> exactly tile the grid within the size and count limits, with
-    /// distinct non-negative ids.</summary>
+    /// distinct ids in 0..<see cref="MaxRegionId"/>.</summary>
     public static bool IsValid(IReadOnlyList<RoostRegion> regions)
     {
         if (regions.Count is < 1 or > MaxRegions) return false;
@@ -100,8 +105,10 @@ public sealed class RoostGridLayout
         int area = 0;
         foreach (var r in regions)
         {
-            if (r.Id < 0 || r.Row < 0 || r.Column < 0 || r.RowSpan < MinSpan || r.ColumnSpan < MinSpan
-                || r.Bottom > Units || r.Right > Units) return false;
+            // Bounds are checked by subtraction, never Row + RowSpan: a hand-edited span near int.MaxValue would
+            // overflow the sum negative and slip an off-grid region past the check.
+            if (r.Id is < 0 or > MaxRegionId || r.RowSpan is < MinSpan or > Units || r.ColumnSpan is < MinSpan or > Units
+                || r.Row < 0 || r.Column < 0 || r.Row > Units - r.RowSpan || r.Column > Units - r.ColumnSpan) return false;
             for (int y = r.Row; y < r.Bottom; y++)
                 for (int x = r.Column; x < r.Right; x++)
                 {
@@ -330,7 +337,8 @@ public sealed class RoostGridLayout
         int next = previous._regions.Max(r => r.Id) + 1;
         var ids = new Dictionary<int, int>();
         for (int i = 0; i < to.Count; i++) ids[to[i].Id] = i < from.Count ? from[i].Id : next++;
-        return Create(_regions.Select(r => r with { Id = ids[r.Id] }))!;
+        // Only a previous layout at the id ceiling can push a fresh id past it; keep this layout's own ids then.
+        return Create(_regions.Select(r => r with { Id = ids[r.Id] })) ?? this;
     }
 
     /// <summary>The <see cref="ToShape"/> slot of region <paramref name="id"/>, or -1.</summary>

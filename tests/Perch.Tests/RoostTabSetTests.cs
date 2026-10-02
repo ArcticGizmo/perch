@@ -465,6 +465,38 @@ public class RoostTabSetTests
     }
 
     [Fact]
+    public void ANullTabInTheFileIsSkipped()
+    {
+        // System.Text.Json reads a null list element without complaint, so the settings salvage never sees it.
+        var state = JsonSerializer.Deserialize<RoostTabsState>(
+            """{"Tabs":[null,{"Id":"t2","Name":"ok","Layout":null,"Cells":null}],"Active":null,"Focus":null}""")!;
+        var set = new RoostTabSet();
+        set.Seed(state);
+        Assert.Equal(["t2"], set.Tabs.Select(t => t.Id));
+        Assert.Same(RoostGridLayout.Full, set.Tabs[0].Layout);
+    }
+
+    [Fact]
+    public void ASyncThatDoesNotResolveSeedsKeepsThemForTheFirstScan()
+    {
+        var (set, a, _) = TwoTabs();
+        set.Sync(Roster(S("1")).Panes);
+        set.Assign(a.Id, 0, "1");
+        var back = new RoostTabSet();
+        back.Seed(RoundTrip(set.ToState()));
+        int fired = 0;
+        back.Changed += () => fired++;
+
+        // The Roost opened before the first scan: its own sync sees an empty roster and must not settle the cells.
+        back.Sync([], resolveSeeds: false);
+        Assert.Equal(0, fired);
+        Assert.Equal("1/sess-1", back.ToState().Tabs[0].Cells![0]);
+
+        back.Sync(Roster(S("1")).Panes);   // the scan
+        Assert.Equal("1", back.Tabs[0].At(0));
+    }
+
+    [Fact]
     public void ChangedFiresOnlyWhenThePersistedFormMoves()
     {
         var set = new RoostTabSet();

@@ -425,6 +425,26 @@ passes, `render <dir>` is eyeballed for the Roost shots, and there's one commit 
       switch (capture on the root), and Esc mid-drag cancels cleanly.
 - [ ] Painter divider drag feels right at 1× and 1.5× and never produces an invalid layout.
 - [ ] 8 expanded regions + 3 tabs: tab switch and drag latency (`perch bench-roost`).
+- [ ] Bare Enter / Esc only act on a pane the user picked: after opening the Roost, a tab switch, or the
+      focused session ending, Enter on a pending permission does nothing until a pane is clicked (or reached by
+      the rail / Alt+N).
+- [ ] Opening the Roost straight after a Perch restart (before the first scan lands) keeps the saved placements.
+
+## Review fixes (post-T7)
+
+A perf / security / quality pass over T1–T7 turned up six issues, fixed together:
+
+- **Tab switch re-parented warm panes.** `LayoutStage` trimmed the warm list to `WarmLimit` before taking the
+  keys coming back on stage out of it, so the tab switched back to (the oldest warm entries) was exactly what got
+  evicted and rebuilt. On-stage keys now leave the list first.
+- **A null tab in settings crashed every launch.** `RoostTabSet.Seed` skips null entries.
+- **Grid validation overflowed.** `RoostGridLayout.IsValid` bounds spans and positions by subtraction (a huge
+  span used to wrap `Row + RowSpan` negative and pass) and caps region ids at `MaxRegionId`, so "highest id + 1"
+  can't overflow; `AdoptIds` falls back to the layout's own ids instead of returning null into the painter.
+- **Focus that falls somewhere no longer arms Enter / Esc** (`RoostWindow._focusChosen`): only a pane the user
+  put focus on answers a permission by keyboard — the pre-tabs behaviour.
+- **Saved placements survive an early open.** The window's own `Sync` passes `resolveSeeds: false`; only the
+  app's scan-driven sync settles persisted cells.
 
 ## Open questions (beyond D1–D9)
 

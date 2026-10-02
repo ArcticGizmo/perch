@@ -54,6 +54,31 @@ public class RoostGridLayoutTests
     }
 
     [Fact]
+    public void ValidationIsOverflowSafe()
+    {
+        // Row + RowSpan wraps to int.MinValue and RowSpan × ColumnSpan to 0, so a summing check would let this
+        // off-grid region through alongside a full one.
+        const int Half = 1 << 30;
+        Assert.False(RoostGridLayout.IsValid([R(0, 0, 0, U, U), R(1, Half, 0, Half, 4)]));
+        Assert.False(RoostGridLayout.IsValid([R(0, 0, 0, U, U), R(1, 0, Half, 4, Half)]));
+        Assert.False(RoostGridLayout.IsValid([R(0, int.MaxValue, 0, U, U)]));
+        Assert.False(RoostGridLayout.IsValid([R(0, 0, 0, int.MaxValue, U)]));
+    }
+
+    [Fact]
+    public void RegionIdsStopAtTheCeiling()
+    {
+        Assert.True(RoostGridLayout.IsValid([R(RoostGridLayout.MaxRegionId, 0, 0, U, U)]));
+        Assert.False(RoostGridLayout.IsValid([R(RoostGridLayout.MaxRegionId + 1, 0, 0, U, U)]));
+        Assert.False(RoostGridLayout.IsValid([R(int.MaxValue, 0, 0, U, U)]));
+        // A layout at the ceiling can't mint a fresh id: adopting it keeps the preset's own ids rather than failing.
+        var atCeiling = RoostGridLayout.FromPersisted([R(RoostGridLayout.MaxRegionId, 0, 0, U, U)]);
+        var two = Preset(RoostSnapTemplate.Columns2);
+        Assert.Same(two, two.AdoptIds(atCeiling));
+        Assert.Null(atCeiling.Split(RoostGridLayout.MaxRegionId, RoostSplit.Columns));
+    }
+
+    [Fact]
     public void AnInvalidPersistedLayoutReadsBackAsFull()
     {
         Assert.Same(RoostGridLayout.Full, RoostGridLayout.FromPersisted(null));
