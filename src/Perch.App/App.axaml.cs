@@ -159,13 +159,19 @@ public partial class App : Application
         {
             _desktop = desktop;
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown; // tray app — outlives its windows
-            // Session recovery R0 probe (docs/session-recovery-plan.md). Avalonia raises ShutdownRequested on
-            // WM_QUERYENDSESSION (an OS shutdown/logoff) but not on our own desktop.Shutdown(), which is forced and
-            // goes straight to Exit — so the two lines tell an OS shutdown from a normal Exit, with timestamps.
-            desktop.Exit += (_, _) => LaunchLog.Write("lifetime exit");
+            // Avalonia raises ShutdownRequested on WM_QUERYENDSESSION (an OS shutdown/logoff) but not on our own
+            // desktop.Shutdown(), which is forced and goes straight to Exit (docs/session-recovery-plan.md, R0). So
+            // ShutdownRequested is the OS-shutdown signal, and Exit fires on both paths. The log lines carry the
+            // timestamps for the owed live restart check.
+            desktop.Exit += (_, _) =>
+            {
+                LaunchLog.Write("lifetime exit");
+                StampLedgerExit();
+            };
             desktop.ShutdownRequested += (_, _) =>
             {
                 LaunchLog.Write("shutdown requested (OS shutdown/logoff)");
+                StampLedgerShutdown();
                 _replayController?.Dispose();
                 _replayWindow?.Close();
                 _monitorHost?.Dispose();
@@ -196,6 +202,7 @@ public partial class App : Application
             _overlay.Canvas.ReplayMode = Services.Replay.ReplaySession.IsActive;
             var settings = AppSettings.Load();
             _appSettings = settings;
+            StartSessionLedger();
             if (settings.RoostClosedPanes is { Count: > 0 } closedPanes) _roostRoster.SeedClosed(closedPanes);
             // Closing / reopening a pane, and the roster pruning one whose session ended, all move the saved set.
             _roostRoster.ClosedChanged += () =>

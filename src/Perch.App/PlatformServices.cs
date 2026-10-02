@@ -33,6 +33,8 @@ internal static class PlatformServices
     public static IIdeHostDetector IdeHostDetector { get; } = new Impl.IdeHostDetector();
     // The OS "reduce motion" preference: pulsing attention cues fall back to a steady ring (see Rendering/Pulse).
     public static IMotionPreference MotionPreference { get; } = new Impl.MotionPreference();
+    // When the device last shut down, for a shutdown Perch didn't stamp itself (session recovery's ShutdownClock).
+    public static IPowerHistory PowerHistory { get; } = new Impl.PowerHistory();
 #if WINDOWS
     public static IAppIconProvider AppIconProvider { get; } = new Impl.WindowsAppIconProvider();
     public static ISystemMetrics SystemMetrics { get; } = new Impl.WindowsSystemMetrics();

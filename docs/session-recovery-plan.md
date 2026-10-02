@@ -238,6 +238,32 @@ burst of `/exit`s 1–9 minutes before the machine went down. In practice the ha
 stamps the ledger on the signal, runs the heartbeat (every 60s plus on every live-set change), and writes a
 clean-exit stamp on a normal Exit.
 
+**As built (R3):**
+- **No `IShutdownSignal` interface.** R0 showed Avalonia's own `ShutdownRequested` *is* the OS-shutdown signal on
+  Windows (Perch's `desktop.Shutdown()` never raises it), so the App stamps the ledger there and a wrapper would add
+  nothing. It's **gated to Windows**: on macOS Avalonia raises the same event for an ordinary Cmd+Q / Dock "Quit"
+  (`applicationShouldTerminate`), so there a quit stays a plain exit until the port adds
+  `NSWorkspaceWillPowerOffNotification` (behind an interface, when it does).
+- `Perch.Core/Data/PowerTimeline.cs`: the pure "events → shutdowns" rule, in Core so it's tested on both CI hosts.
+  A shutdown is a `SleepEntered` (Kernel-Power 42, how a Fast Startup shutdown logs) or `ShutdownStarted` (User32
+  1074 / EventLog 6006) that a `Boot` (Kernel-Boot 27) follows. A `Resumed` (Kernel-Power 107) more than 2 minutes
+  after a 42 makes it an ordinary sleep; a Fast Startup shutdown resumes within seconds. When a 1074/6006 and a 42
+  precede one boot, the earlier 1074 (when the shutdown began) wins.
+- `Perch.Platform.Windows/PowerHistory.cs`: `EventLogReader` over the System log with an XPath filter on those ids
+  and the time window (read runs to now, so the boot after a shutdown is seen), matching **provider as well as id**
+  (a network driver also logs id 27 at every power transition). Needs the `System.Diagnostics.EventLog` package
+  (Microsoft, same 10.0.9 family as the project's other compat packages). `Perch.Platform.Mac/PowerHistory.cs`: stub,
+  `IsSupported = false`. Exposed as `PlatformServices.PowerHistory`.
+- `Perch.App/App.Recovery.cs`: `StartSessionLedger` (startup, off the UI thread: load, `BeginRun` with the power
+  history, save, log the shutdown it found to `launch.log`), then a 60s heartbeat (save off the UI thread).
+  `StampLedgerShutdown` on `ShutdownRequested` and `StampLedgerExit` on `Exit` both save **synchronously** (the
+  process may not get another chance); a shutdown-stamped run doesn't also get a clean-exit stamp. Skipped entirely
+  when `AppSettings.PersistenceDisabled` (render, tests) or under replay. The heartbeat on live-set changes waits for
+  R5, when the ledger starts holding sessions.
+- Tests: `PowerTimelineTests` (6), over the real event sequences from R0.
+- **Real-log check (read-only):** a scratch file-based program calling `PowerHistory` against this machine's System
+  log found exactly the seven shutdowns of the last four days that the R0 event dump showed, at the same times.
+
 ### R4 — dormant sessions everywhere
 
 `SessionWindow` dormant mode; every "open a session" path (launcher recents, CLI `--resume`, the overlay, the
