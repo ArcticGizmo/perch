@@ -71,7 +71,7 @@ file in it. Search individual files.
 | D2 | Kinds of ended session | `Exited` (graceful + `/exit` in `history.jsonl` after the session's last activity), `Closed` (graceful, no `/exit`), `Abrupt`. Orthogonal flag: `JustBeforeShutdown`. | `/exit` is the only deliberate "I'm done" signal Claude records. The shutdown flag applies to any kind (ask 4). A `/exit` older than a later resume doesn't count. |
 | D3 | Which sessions come back **automatically**? | **Perch-controlled sessions that were still open when Perch closed** (any reason), or that ended abruptly. They come back **dormant** (D4), in their old overlay row and Roost slot. Sessions the user explicitly **ended** in Perch don't. | Ask 2. Perch knows exactly which of its sessions were open, so it doesn't need the transcript rule for its own sessions. |
 | D4 | What is "dormant"? | A session shown with its **conversation loaded and a live composer, but no `claude` process.** The **first send** starts `claude --resume <id>` and delivers the message once it's up. Applies to **every** session Perch opens (launcher recents, Recent list, CLI `perch --resume`, restored sessions). | Ask 5. Opening to read costs nothing, so the cost estimate becomes an inline note at the point of sending instead of a gate before opening. |
-| D5 | Shutdown time — where from? | In order: **(1)** Perch's own stamp when the OS says it's shutting down / logging off; **(2)** Perch's last heartbeat, when it's older than Perch's own start and there's no clean-exit stamp; **(3)** Windows event log fallback (`Kernel-Power` 42 / `Kernel-Boot` 27), for when Perch wasn't running. | Fast Startup makes boot time useless (spike). The stamp is exact; the heartbeat covers a hard power-off; the event log covers "Perch wasn't running". |
+| D5 | Shutdown time — where from? | In order: **(1)** Perch's own stamp when the OS says it's shutting down / logging off; **(2)** the OS power history (Windows event log, `Kernel-Power` 42 / `Kernel-Boot` 27) after the previous run was last alive; **(3)** Perch's last heartbeat, only on a head with **no** power history and only when Perch didn't exit cleanly. | Fast Startup makes boot time useless (spike). The stamp is exact. **Refined in R2:** a missing stamp plus a stale heartbeat can't tell a power-off from a Perch *crash*, so the power history outranks the heartbeat wherever it exists (Windows); the heartbeat stays the fallback where it doesn't (the macOS stub). |
 | D6 | "Just before shutdown" window | **10 minutes, a constant** (`SessionRecovery.ShutdownWindow`). It becomes a setting only if it ever feels wrong. | The user's call. One constant is easier to tune than a setting nobody touches. |
 | D7 | End time of an ended session | Graceful: the transcript's **last-write time** (the exit flush is its last write). Abrupt: the last transcript record's `timestamp`. | **Corrected in R1:** `cost-state`'s `startTime + totalDuration` only works for a session that was never resumed. A resume restores the original `startTime` and keeps adding to `totalDuration`, so a resumed session's figure lands hours off (one real session: ~16h before its file's last write). In the restart test the last record was 11s before the power event. |
 | D8 | Terminal sessions | **Listed, never auto-resumed.** Each row offers **Resume in Perch** (opens dormant), **Resume in terminal** (`ISessionLauncher.Reopen`, which already exists and honours the config dir) and **Dismiss**. | Ask 3. The user keeps their terminal habit; Perch just remembers. |
@@ -197,6 +197,40 @@ mid-turn; one with a torn last line; a `history.jsonl` with an `/exit` before an
 `SessionLedger`, `ShutdownClock`, `RecentSessions`, and the `SessionRecovery.ShutdownWindow` constant. Tests: the
 D5 fallback order, the 10-minute boundary, a hard power-off (heartbeat only), "Perch wasn't running", dismissals,
 the 3-day window.
+
+**As built (R2):**
+- `SessionRecovery` (constants): `ShutdownWindow` 10 min, `ShutdownGrace` 2 min (a session's exit flush can land
+  just *after* Perch's stamp, since the OS closes apps in no fixed order), `RecentWindow` 3 days, `RecentRows` 5,
+  `HeartbeatInterval` 60s. `JustBeforeShutdown(endedAt, shutdowns)` checks against **every** recent shutdown, not
+  just the last, so an older evening's sweep stays flagged for the whole window.
+- `Perch.Platform.IPowerHistory` (`IsSupported`, `LastShutdownBetween(after, before)`): the Core interface R3
+  implements. Defined now so `ShutdownClock` can be tested against a fake.
+- `ShutdownClock.Resolve(previousRun, power, now)`: the refined D5 order. The power history is asked for a
+  shutdown after the previous run was last alive, minus one heartbeat of slack (heartbeats can still land while
+  the OS shuts down). No previous run (first launch) → the latest shutdown in the Recent window.
+- `SessionLedger` (`session-ledger.json` beside `settings.json`, `DefaultPath`): `Run` (`StartedAt`, `LastAlive`,
+  `CleanExitAt`, `ShutdownAt`), `Shutdowns` (deduped within a heartbeat, pruned to 3 days), `Sessions`
+  (`LedgerSession(SessionId, Cwd, ConfigDir, Title)`). `BeginRun(now, power)` resolves and records the shutdown
+  that ended the previous run, then resets the stamps; held sessions carry over (they come back dormant).
+  `Heartbeat`/`MarkCleanExit`/`MarkShutdown`, `Track` (upsert), `Forget` (user ended it), `Rebind` (`/clear`).
+  `Load` never throws (missing/corrupt → empty); `Save` is atomic. **The App must not save it from the headless
+  render or tests** (same rule as `AppSettings.DisablePersistence`): R3 wires that.
+  Roost placement isn't in `LedgerSession` yet: R6 adds it with the dormant pane token.
+- `RecentSessions.Build(entries, heldByPerch, dismissed, shutdowns, now)` → `RecentSession(Entry, End,
+  JustBeforeShutdown)` with `EndedAt` and `IsFlagged` (abrupt or just before shutdown). Flagged first, then newest.
+  Leaves out running sessions, Perch's held ones, endings older than 3 days, and dismissed endings (`dismissed` maps
+  an id to the end time it was dismissed at, so a later ending reappears — Q2). One `ExitCommandIndex` per config
+  dir, found from the transcript path (`{root}/projects/{enc}/{id}.jsonl` → `{root}/history.jsonl`), refreshed
+  once per build. `AppSettings.RecentDismissed` (the persisted dismissals) lands with the UI in R7.
+- Tests: `ShutdownClockTests` (11, incl. the window boundaries), `SessionLedgerTests` (6), `RecentSessionsTests`
+  (5, over a throwaway config dir built from the R1 fixtures).
+
+**Real-data check (R2, read-only, not committed):** run over a real `~/.claude` (591 transcripts, 64 ended in the
+last 3 days), every R0 spike session classified as observed (the restart → `Abrupt` + just before shutdown;
+`/exit` → `Exited`; Ctrl+C / Ctrl+D / tab / window / both stream-json probes → `Closed`). Fed the last three days'
+power events (`Kernel-Power` 42) as shutdowns, it flagged **15 sessions across four evenings**: each an end-of-day
+burst of `/exit`s 1–9 minutes before the machine went down. In practice the habit the feature targets ends with
+`/exit` more than with closing windows, and the shutdown flag is what brings those sessions back.
 
 ### R3 — platform signals
 
