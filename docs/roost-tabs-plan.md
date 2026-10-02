@@ -461,10 +461,20 @@ A second pass took the low-priority items and the duplication:
   `PointerWiring.OnLeftClick` / `HoverWash` for the code-built buttons.
 - **Into Core, tested:** `RoostTabSet.Cycle` (Ctrl+Tab), `Candidates` (the empty-region picker), `ElsewhereKeys`
   (the "other tabs" pill now leaves out what the active tab also shows) and `RoostTabStatus.MostUrgent`.
+- **`RoostWindow` split into partials** by area: `RoostWindow.cs` (build, public surface, layout pass, keys,
+  pulse), `.Tabs` (strip + painter), `.Rail` (rail, its footer, the bottom-bar pills), `.Placement` (picker +
+  drag-to-place) and `.RenderHooks` (HeadlessRenderer hooks). A pure move: no code changed — only `partial`, the
+  class comment's map of the files, and each file's usings.
 
-## Open questions (beyond D1–D9)
+## Future features (deliberately out of scope)
 
-- Should a region optionally **bind to a project** (cwd), so a new session started in that repo fills it
-  automatically? That would make tabs useful again after a reboot (when every pid is new). It's a natural
-  follow-up and out of scope here.
-- A third rail sort, **"By tab"** (rail grouped under tab names)? It's cheap once T5 lands.
+This branch is already large (T1–T7 plus two review passes), so two bigger ideas wait for their own plan:
+
+- **Relaunching.** Tabs only remember *live* sessions (`pid/sessionId` tokens), so after a reboot — every pid
+  new — they come back empty. A future feature would bring a tab back to life: bind a region to a project
+  (cwd) so a session started there fills it, and/or offer to relaunch (`claude --resume`) the sessions a tab
+  held. It needs its own decisions (what a region remembers, whether relaunch is automatic, which account /
+  config dir it runs under), so it isn't bolted on here.
+- **Cleverer aggregation.** Today the rail groups by status or A–Z and tabs are arranged by hand. Smarter
+  grouping — a "By tab" rail sort, grouping by project or repo, suggested tabs for sessions that belong together,
+  a roll-up of what a tab needs from you — is a follow-up once the tabs have had real use.
