@@ -1876,6 +1876,42 @@ internal static class HeadlessRenderer
         Capture(Theming.SessionPalette.For(dark: true), "session_window_1x.png", events);
         Capture(Theming.SessionPalette.For(dark: false), "session_window_light_1x.png", events);
 
+        // A resumed session opened dormant (session recovery D4): its history shows, the composer takes input, and
+        // the note above it says Claude starts on the first send — with what that send re-sends (cold cache).
+        var dormantEstimate = new Perch.Data.Control.ResumeEstimate(
+            ContextTokens: 142_000, WindowTokens: 1_000_000, Model: "claude-opus-5",
+            WindowSource: Perch.Data.ContextWindowSource.Assumed, Warmth: Perch.Data.Control.CacheWarmth.Cold,
+            Idle: TimeSpan.FromHours(14), ColdCostUsd: 0.89m, WarmCostUsd: 0.07m, FiveHourPercent: 2.8,
+            AssumedFiveHourBudget: Perch.Data.Control.ResumeEstimate.AssumedFiveHourInputTokens);
+        // A finished turn, as a transcript would hold it (permission prompts aren't recorded, so a dormant session
+        // never shows a live card).
+        var dormantScene = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "acceptEdits", 18),
+            new Perch.Data.Control.ToolUseEvent("d1", "Read", "Reading SessionLock.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/Control/SessionLock.cs\"}"),
+            new Perch.Data.Control.ToolResultEvent("d1", "     1\tnamespace Perch.Data.Control;", false),
+            new Perch.Data.Control.AssistantTextEvent(
+                "The lock lifecycle is wired: written on ownership, deleted on exit, and swept by `perch-hook cleanup`. " +
+                "Next up is the SessionStart warning — want me to carry on?"),
+            new Perch.Data.Control.TurnResultEvent(false, "success", 0.42, InputTokens: 3200, OutputTokens: 820, DurationMs: 19000),
+        };
+        foreach (var dark in new[] { true, false })
+        {
+            var w = new Windows.SessionWindow(Theming.SessionPalette.For(dark)) { Width = 880, Height = 980 };
+            w.FeedDormantSampleForRender(cwd, "a1b2c3d4-0000-4000-8000-000000000000", prompt, dormantScene, dormantEstimate);
+            w.SetComposerActions(sampleActions);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (w.CaptureRenderedFrame() is { } frame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, dark ? "session_dormant_1x.png" : "session_dormant_light_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+
         // A short scene so the user's message — with its attachment chips (a pasted image + a dropped file) —
         // sits in view at the top rather than scrolled off a long thread.
         var attachScene = new List<Perch.Data.Control.SessionEvent>

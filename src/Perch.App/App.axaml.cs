@@ -717,7 +717,7 @@ public partial class App : Application
         // A session Perch drives over stream-json lives in a SessionWindow, not a terminal — bring its window
         // forward (Activate switches to the virtual desktop it's on), or open a fresh view if the user had
         // closed it, instead of hunting for a terminal that doesn't exist.
-        if (_perchSessions.FirstOrDefault(s => s.SessionId == session.SessionId) is { } owned)
+        if (PerchSessionFor(session.SessionId) is { } owned)
         {
             ShowSessionView(owned);
             _monitorHost?.Acknowledge(session.Pid);
@@ -1691,8 +1691,10 @@ public partial class App : Application
             ? RoostFeed.ForControlled(owned)
             : RoostFeed.ForTranscript(pane.Session.SessionId, pane.Session.Cwd);
 
+    // The Perch session driving a live (monitor-seen) pane. A dormant one never is: it has no process, and if the same
+    // id is live in a terminal the pane must tail that, not the dormant copy.
     private Services.PerchSession? PerchSessionFor(string? sessionId) =>
-        sessionId is null ? null : _perchSessions.FirstOrDefault(s => s.SessionId == sessionId);
+        sessionId is null ? null : _perchSessions.FirstOrDefault(s => s.SessionId == sessionId && !s.IsDormant);
 
     private void OpenStats() =>
         _statsWindow = WindowHost.ShowOrFocus(_statsWindow,
@@ -1952,6 +1954,7 @@ public partial class App : Application
             // Refuse-if-live oracle: the monitor's latest roster (terminal-hosted sessions with a live PID).
             LiveLookup = id => _lastSessions.FirstOrDefault(s => s.SessionId == id),
             StartRequested = StartPerchSession,
+            DormantRequested = OpenDormantPerchSession,
             // Live account guardrails so the launcher's account selector reflects the current rules.
             AccountRulesProvider = () => _appSettings?.AccountRules,
         };
@@ -2002,8 +2005,34 @@ public partial class App : Application
         w.AttentionRequested += (title, body) => _notifier?.Show(title, body, ToastLevel.Warning, null, null);
         w.RoostView = RoostView;   // …unless the Roost already has it on screen
         _sessionWindows.Add(w);
-        w.Closed += (_, _) => _sessionWindows.Remove(w);
+        w.Closed += (_, _) =>
+        {
+            _sessionWindows.Remove(w);
+            // A dormant session has no process to keep alive: once nothing views it, drop it (its transcript stays
+            // on disk). A woken one is a live session and outlives its windows, as before. Swept rather than read off
+            // `w`, because the window has already detached its session by the time Closed fires.
+            _perchSessions.RemoveAll(s => s.IsDormant && !_sessionWindows.Any(o => ReferenceEquals(o.Session, s)));
+        };
         return w;
+    }
+
+    // A resumed session opened dormant (docs/session-recovery-plan.md, D4): its conversation shows, and claude starts
+    // on the first send. Owned like a started session, so opening the same id again shows this one rather than a
+    // twin that could wake into a second writer. It reaches the overlay and the Roost once it wakes (the monitor sees
+    // its process then).
+    private Services.PerchSession OpenDormantPerchSession(Services.SessionLaunchOptions options)
+    {
+        if (options.ResumeId is { } id && _perchSessions.FirstOrDefault(s => s.SessionId == id && !s.HasEnded) is { } existing)
+            return existing;
+        var session = Services.PerchSession.Dormant(options);
+        _perchSessions.Add(session);
+        session.Ended += s =>
+        {
+            _perchSessions.Remove(s);
+            _monitorHost?.Rescan();
+        };
+        session.Woke += _ => _monitorHost?.Rescan();
+        return session;
     }
 
     // Builds the composer toolbar's overlay-mirrored quick actions for a given window. Two kinds:

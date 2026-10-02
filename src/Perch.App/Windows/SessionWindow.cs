@@ -70,6 +70,11 @@ internal sealed partial class SessionWindow : Window
 
     private readonly SessionPalette _p;
     private PerchSession? _session;
+    // Dormant sessions (docs/session-recovery-plan.md, D4): the note above the composer, a send waiting on the wake
+    // (trust check, collision guards, process start), and a guard so a stale estimate never lands on another session.
+    private readonly TextBlock _dormantNote;
+    private bool _sendAfterWake;
+    private int _dormantEstimateGen;
     private readonly SessionConversation _emptyConversation = new();
     private SessionConversation Conv => _session?.Conversation ?? _emptyConversation;
     private bool _closed;
@@ -287,6 +292,10 @@ internal sealed partial class SessionWindow : Window
     /// <summary>Starts a session on the app's behalf (so the app owns it): (cwd, model, mode, resumeId) → the
     /// live session. Throws when the process can't start.</summary>
     public Func<SessionLaunchOptions, PerchSession>? StartRequested { get; set; }
+
+    /// <summary>Opens a resumed session <b>dormant</b> (its conversation, no process yet), app-owned like a started
+    /// one. Null → resumes start at once, the old way.</summary>
+    public Func<SessionLaunchOptions, PerchSession>? DormantRequested { get; set; }
 
     /// <summary>The account guardrails (<see cref="AppSettings.AccountRules"/>) that govern which account a
     /// folder may run under. Read live from the app (which owns <c>AppSettings</c>) so the account selector
@@ -569,7 +578,14 @@ internal sealed partial class SessionWindow : Window
         };
         _changesToggle[DockPanel.DockProperty] = Dock.Right;
         _attachTray = new WrapPanel { IsVisible = false, Margin = new Thickness(0, 0, 0, 2) };
-        var composerStack = new StackPanel { Children = { composerHeader, _attachTray, textScroll, cbar } };
+        // A dormant session's one-liner: Claude isn't running yet, and what the first send will cost to resume.
+        _dormantNote = new TextBlock
+        {
+            IsVisible = false, FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint,
+            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(2, 0, 0, 8),
+            Text = "Claude starts when you send",
+        };
+        var composerStack = new StackPanel { Children = { composerHeader, _dormantNote, _attachTray, textScroll, cbar } };
         _composerFrame = new Border
         {
             MaxWidth = SessionPalette.ThreadMaxWidth, Background = _p.Raised, BorderBrush = _p.Border,
@@ -833,13 +849,17 @@ internal sealed partial class SessionWindow : Window
         session.RemoteControlChanged += OnRemoteControlChanged;   // pop the QR when remote control turns on
         session.Conversation.Changed += OnConversationChangedForChanges;   // live-refresh the changed-files panel
         _thread.Cwd = session.Cwd;   // set before Bind so tool cards built during materialisation arm file refs
+        session.Woke += OnSessionWoke;
+        // A dormant session resumes its own id on the first send, whichever window it's viewed in.
+        if (session.IsDormant) _resumeId = session.SessionId;
         _thread.Bind(session.Conversation);
         ScanProjectFilesAsync();     // warm the "@"-mention file list for this project
         ShowThread();
         if (_changesOpen) RefreshChangesNow();
         ApplyRunState();
         RefreshBar();
-        if (session.IsRunning) _composer.Focus();
+        if (session.IsDormant) ShowDormantEstimate(session);
+        if (CanCompose) _composer.Focus();
     }
 
     private void Detach()
@@ -851,18 +871,27 @@ internal sealed partial class SessionWindow : Window
         s.Ended -= OnSessionEnded;
         s.RemoteControlChanged -= OnRemoteControlChanged;
         s.Conversation.Changed -= OnConversationChangedForChanges;
+        s.Woke -= OnSessionWoke;
+        _sendAfterWake = false;
         // The session outlives this window by design: without this its conversation keeps the whole chat tree
         // subscribed (and rendering deltas) after the window closes.
         _thread.Unbind();
         _session = null;
     }
 
-    // Composer / buttons follow whether the viewed session is running or has ended.
+    // The composer takes input for a live session, and for a dormant one (its first send starts claude).
+    private bool CanCompose => _session is { IsRunning: true } or { IsDormant: true };
+
+    // Composer / buttons follow whether the viewed session is running, dormant, or has ended.
     private void ApplyRunState()
     {
         bool running = _session is { IsRunning: true };
-        _composer.IsEnabled = running;
-        _composer.PlaceholderText = running ? "Reply, or type / for a command" : "Session ended — Resume to pick it back up";
+        bool dormant = _session is { IsDormant: true };
+        _composer.IsEnabled = running || dormant;
+        _composer.PlaceholderText = running ? "Reply, or type / for a command"
+            : dormant ? "Reply to pick this session back up"
+            : "Session ended — Resume to pick it back up";
+        _dormantNote.IsVisible = dormant;
         _endButton.IsVisible = running;
         _resumeButton.IsVisible = _session is { HasEnded: true } && _session.SessionId is not null;
         HideToast();
@@ -897,13 +926,44 @@ internal sealed partial class SessionWindow : Window
         });
     }
 
-    /// <summary>Opens straight onto an existing session (<c>--resume</c>) — the elevate / CLI path.</summary>
+    /// <summary>Opens straight onto an existing session (<c>--resume</c>) — the elevate / CLI path. Dormant: the
+    /// conversation shows at once and Claude starts on the first send.</summary>
     public void ResumeSession(string sessionId, string cwd)
     {
         _resumeId = sessionId;
         _cwd = cwd;
         _folderBox.Text = cwd;
-        StartSession();
+        OpenDormant();
+    }
+
+    /// <summary>Opens <see cref="_resumeId"/> dormant in this window (docs/session-recovery-plan.md, D4): its
+    /// conversation loads from the transcript, and <see cref="StartSession"/>'s checks and the process start wait for
+    /// the first send. Without a <see cref="DormantRequested"/> factory the resume starts at once, as it used to.</summary>
+    private void OpenDormant(bool replace = false)
+    {
+        if (_session is { IsRunning: true } && !replace) return;
+        if (DormantRequested is not { } open || _resumeId is not { } id)
+        {
+            StartSession(replace);
+            return;
+        }
+        if (!Directory.Exists(_cwd))
+        {
+            LaunchFail($"folder not found: {_cwd}");
+            return;
+        }
+        PerchSession session;
+        try
+        {
+            LaunchLog.Write($"perch window open dormant: {TranscriptLocator.DescribeResume(id, _cwd)}");
+            session = open(new SessionLaunchOptions(_cwd, ResumeId: id));
+        }
+        catch (Exception ex)
+        {
+            LaunchFail($"couldn't open the session: {ex.Message}");
+            return;
+        }
+        Attach(session);
     }
 
     /// <summary>Opens straight onto a fresh session in <paramref name="cwd"/> — the CLI's <c>perch [dir]</c>.</summary>
@@ -1300,13 +1360,15 @@ internal sealed partial class SessionWindow : Window
         _resumeId = e.SessionId;
         _cwd = e.Cwd;
         _folderBox.Text = e.Cwd;
-        StartSession();
+        OpenDormant();
         return System.Threading.Tasks.Task.CompletedTask;
     }
 
     // The guards every resume shares. A Perch-controlled session is already running under Perch, which supports
     // many UIs on one session — so open another window on it rather than resuming a new process. A session live
-    // in a real terminal can't be taken over. Otherwise: warn before a heavy resume, then run onChoose.
+    // in a real terminal can't be taken over. Otherwise run onChoose. There's no "heavy resume" confirm here any
+    // more: a resume opens dormant, so opening costs nothing, and the estimate shows above the composer instead
+    // (docs/session-recovery-plan.md, D4).
     private async System.Threading.Tasks.Task ChooseResume(HistoryEntry e, Func<HistoryEntry, System.Threading.Tasks.Task> onChoose)
     {
         var liveSession = e.SessionId is { } sid ? LiveLookup?.Invoke(sid) : null;
@@ -1322,32 +1384,36 @@ internal sealed partial class SessionWindow : Window
                        "Close it there, or use “Elevate to Perch” on its overlay row.");
             return;
         }
-        if (!await ConfirmHeavyResumeAsync(e)) return;
         await onChoose(e);
     }
 
-    // A resume that would spend more than this share of a 5-hour window gets an "are you sure?" with the
-    // impact spelled out, so a heavy old session isn't reopened (and its whole context re-billed) by reflex.
-    private const double HeavyResumeThresholdPercent = 5.0;
-
-    // True to proceed with the resume. Warns first for a session whose estimate exceeds the threshold; when no
-    // estimate is known (never computed, or the session has no usage on disk) there's nothing to warn about.
-    private async System.Threading.Tasks.Task<bool> ConfirmHeavyResumeAsync(HistoryEntry e)
+    // Fills the dormant note with the resume estimate, off the UI thread (it reads the transcript). The first send
+    // re-sends the whole context, so this is where that cost belongs: next to the send, not as a gate before opening.
+    private void ShowDormantEstimate(PerchSession session)
     {
-        if (e.SessionId is not { } id || !_estimates.TryGetValue(id, out var est) || !est.HasData)
-            return true;
-        if (est.FiveHourPercent <= HeavyResumeThresholdPercent)
-            return true;
+        int gen = ++_dormantEstimateGen;
+        _dormantNote.Text = "Claude starts when you send";
+        _dormantNote.Foreground = _p.Faint;
+        _dormantNote[ToolTip.TipProperty] = null;
+        if (session.SessionId is not { } id) return;
+        var cwd = session.Cwd;
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            if (TranscriptLocator.Resolve(id, cwd) is not { } path) return (ResumeEstimate?)null;
+            var (used, window) = TranscriptReader.ReadContextUsage(path, cwd);
+            return ResumeEstimate.Compute(used, window, DateTime.Now - File.GetLastWriteTime(path));
+        }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        {
+            if (_closed || gen != _dormantEstimateGen || !ReferenceEquals(_session, session) || !session.IsDormant) return;
+            if (t.IsCompletedSuccessfully && t.Result is { HasData: true } est) ApplyDormantEstimate(est);
+        }));
+    }
 
-        var cost = est.LikelyCostUsd is { } c ? $"   ·   ≈${c:0.00} first message" : "";
-        var body =
-            $"Resuming continues this conversation, so your first message re-sends its whole ≈{FormatTokens(est.ContextTokens)}-token " +
-            "context to the model. Rough impact of that first message:\n\n" +
-            $"    ≈ {est.FiveHourPercent:0.#}% of a 5-hour usage window   (theoretical)\n" +
-            $"    {est.ContextPercent:0}% of the model's {FormatTokens(est.WindowTokens)} context window\n" +
-            $"    cache {WarmthWord(est.Warmth)} — {(est.Warmth == CacheWarmth.Warm ? "likely served cheaply from cache" : "the whole context re-reads at full price, then re-caches")}{cost}\n\n" +
-            "Every figure is an estimate, not a bill. Resume anyway?";
-        return await ConfirmDialog.ShowAsync(this, $"Resume {e.DisplayName}?", body, "Resume anyway", "Cancel");
+    private void ApplyDormantEstimate(ResumeEstimate est)
+    {
+        _dormantNote.Text = "Claude starts when you send  ·  " + ResumeEstimateLine(est);
+        _dormantNote.Foreground = est.Warmth == CacheWarmth.Cold ? _p.Await : _p.Faint;
+        _dormantNote[ToolTip.TipProperty] = ResumeEstimateTip(est);
     }
 
     // The one-line resume estimate under a recent row: input tokens to resume, cache warmth, theoretical 5h
@@ -1433,7 +1499,7 @@ internal sealed partial class SessionWindow : Window
     {
         _resumeId = sessionId;
         _cwd = cwd;
-        StartSession(replace: true);
+        OpenDormant(replace: true);
     }
 
     private void StartSession(bool replace = false)
@@ -1485,6 +1551,28 @@ internal sealed partial class SessionWindow : Window
                 LaunchFail($"session {Shorten(rid)} is already controlled by {other.Profile} (PID {other.Pid}).");
                 return;
             }
+        }
+
+        // A dormant session wakes in place: same PerchSession, same conversation, now with a process. The checks
+        // above ran for it exactly as for any resume. A send that triggered the wake goes out once it's up.
+        if (!replace && _session is { IsDormant: true } dormant)
+        {
+            try
+            {
+                LaunchLog.Write($"perch window wake: {TranscriptLocator.DescribeResume(dormant.SessionId ?? "", _cwd)}");
+                dormant.Wake(new SessionLaunchOptions(_cwd, _model, StartingMode, _effort, dormant.SessionId, configDir));
+            }
+            catch (Exception ex)
+            {
+                LaunchFail($"failed to start claude: {ex.Message}");
+                return;
+            }
+            if (_sendAfterWake)
+            {
+                _sendAfterWake = false;
+                SendPrompt();
+            }
+            return;
         }
 
         PerchSession session;
@@ -1549,6 +1637,14 @@ internal sealed partial class SessionWindow : Window
         StartSession(replace);
     }
 
+    // The viewed dormant session started its process (from this window's send, or another view's).
+    private void OnSessionWoke(PerchSession session)
+    {
+        if (!ReferenceEquals(session, _session)) return;
+        ApplyRunState();
+        RefreshBar();
+    }
+
     private void OnSessionEnded(PerchSession session)
     {
         if (!ReferenceEquals(session, _session)) return;
@@ -1574,7 +1670,7 @@ internal sealed partial class SessionWindow : Window
     private void SendPrompt()
     {
         var text = _composer.Text?.Trim() ?? "";
-        if (_session is not { IsRunning: true } live) return;
+        if (!CanCompose || _session is not { } live) return;
         if (text.Length == 0 && _pendingAttachments.Count == 0) return;   // nothing to send
         ClosePalette();
         CloseMention();
@@ -1585,6 +1681,14 @@ internal sealed partial class SessionWindow : Window
             && SlashCommandCatalog.CommandName(text) is { } name && RunNativeCommand(name))
         {
             _composer.Text = "";
+            return;
+        }
+        // Dormant: start claude first (trust check + collision guards, maybe a dialog), then this same send runs
+        // again from the wake. The text stays in the composer until it actually goes, so a refused wake loses nothing.
+        if (live.IsDormant)
+        {
+            _sendAfterWake = true;
+            StartSession();
             return;
         }
         live.SendPrompt(text, _pendingAttachments.Count > 0 ? _pendingAttachments.ToList() : null);
@@ -1620,7 +1724,7 @@ internal sealed partial class SessionWindow : Window
             else
                 InsertPathIntoComposer(path);
         }
-        if (_session is { IsRunning: true }) _composer.Focus();
+        if (CanCompose) _composer.Focus();
     }
 
     // Insert a dropped (non-image) file's path at the caret — quoted if it has spaces — so Claude can read it.
@@ -1797,7 +1901,7 @@ internal sealed partial class SessionWindow : Window
             }
         }
         catch (Exception ex) { Conv.AddNote($"couldn't attach: {ex.Message}", NoteKind.Error); }
-        if (_session is { IsRunning: true }) _composer.Focus();
+        if (CanCompose) _composer.Focus();
     }
 
     // ── Native command dispatch ────────────────────────────────────────────────────
@@ -1950,7 +2054,7 @@ internal sealed partial class SessionWindow : Window
     private void CloseAutoCompactOverlay()
     {
         _autoCompactOverlay.IsVisible = false;
-        if (_session is { IsRunning: true }) _composer.Focus();
+        if (CanCompose) _composer.Focus();
     }
 
     // Save: update this window immediately and let the app persist + fan the setting out to sibling windows.
@@ -2070,7 +2174,7 @@ internal sealed partial class SessionWindow : Window
     private void CloseUsageOverlay()
     {
         _usageOverlay.IsVisible = false;
-        if (_session is { IsRunning: true }) _composer.Focus();
+        if (CanCompose) _composer.Focus();
     }
 
     // Fetches a fresh reading off the UI thread (UsageMonitorHost.RefreshAsync never throws) and repaints. The
@@ -2262,7 +2366,7 @@ internal sealed partial class SessionWindow : Window
     {
         _findBar.IsVisible = false;
         _thread.ClearSearch();
-        if (_session is { IsRunning: true }) _composer.Focus();
+        if (CanCompose) _composer.Focus();
     }
 
     // Re-run the query, wash the matches, update the counter, and optionally jump to the first hit.
@@ -2412,7 +2516,7 @@ internal sealed partial class SessionWindow : Window
     private void CloseResumeOverlay()
     {
         _resumeOverlay.IsVisible = false;
-        if (_session is { IsRunning: true }) _composer.Focus();
+        if (CanCompose) _composer.Focus();
     }
 
     private void LoadResumeList(string project)
@@ -2563,7 +2667,7 @@ internal sealed partial class SessionWindow : Window
     {
         var t = (_composer.Text ?? "").TrimStart();
         bool typingCommand = t.StartsWith('/') && !t.Contains(' ') && !t.Contains('\n');
-        if (_session is not { IsRunning: true } || !typingCommand)
+        if (!CanCompose || !typingCommand)
         {
             ClosePalette();
             return;
@@ -2701,7 +2805,7 @@ internal sealed partial class SessionWindow : Window
 
     private void UpdateMentionsFromText()
     {
-        if (_session is not { IsRunning: true } || ActiveMention() is not { } m)
+        if (!CanCompose || ActiveMention() is not { } m)
         {
             CloseMention();
             return;
@@ -2843,6 +2947,7 @@ internal sealed partial class SessionWindow : Window
 
     private void LaunchFail(string message)
     {
+        _sendAfterWake = false;   // a refused wake drops its pending send; the text stays in the composer
         // In the launcher, a floating toast (not text at the foot of the recents list, which a long list
         // pushes off-screen). Once a thread is showing, the error belongs inline as a note instead.
         if (_thread.IsVisible) { Conv.AddNote(message, NoteKind.Error); return; }
@@ -3673,6 +3778,19 @@ internal sealed partial class SessionWindow : Window
             times.Add(sw.Elapsed.TotalMilliseconds);
         }
         return times;
+    }
+
+    /// <summary>Render-only: a dormant session (its history shown, no process) with a sample resume estimate in the
+    /// note above the composer.</summary>
+    internal void FeedDormantSampleForRender(string cwd, string sessionId, string? userPrompt,
+        IEnumerable<SessionEvent> events, ResumeEstimate estimate)
+    {
+        var sample = PerchSession.DormantForRender(cwd, sessionId);
+        if (userPrompt is not null) sample.Conversation.AddUserPrompt(userPrompt);
+        foreach (var ev in events) sample.Conversation.Apply(ev);
+        Attach(sample);
+        _dormantEstimateGen++;   // drop the in-flight read (the sample has no transcript on disk)
+        ApplyDormantEstimate(estimate);
     }
 
     internal void FeedSampleForRender(string cwd, string? userPrompt, IEnumerable<SessionEvent> events,

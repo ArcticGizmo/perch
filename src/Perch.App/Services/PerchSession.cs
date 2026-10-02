@@ -13,10 +13,15 @@ namespace Perch.Avalonia.Services;
 /// the window hides the view while the session keeps running (its overlay row reopens it), and only an
 /// explicit <see cref="End"/> stops the process. Controller events are marshalled to the UI thread here, so
 /// every consumer (window, app) sees the conversation change on the UI thread.
+///
+/// <para>A resumed session starts <b>dormant</b> (<see cref="Dormant"/>, docs/session-recovery-plan.md D4): its
+/// conversation is loaded from the transcript but no <c>claude</c> process runs until the first send, which
+/// <see cref="Wake"/>s it. Opening a session just to read it spends nothing.</para>
 /// </summary>
 internal sealed class PerchSession : IDisposable
 {
-    private readonly ClaudeSessionController? _controller;
+    // Null while dormant (until Wake) and for the headless renderer's process-less stand-in.
+    private ClaudeSessionController? _controller;
 
     public SessionConversation Conversation { get; } = new();
     public string Cwd { get; }
@@ -27,11 +32,18 @@ internal sealed class PerchSession : IDisposable
     public string? Effort { get; private set; }
     /// <summary>The config dir this session was launched under (injected as <c>CLAUDE_CONFIG_DIR</c>), or null
     /// when it inherited Perch's environment (→ the primary account). Drives the footer's account chip.</summary>
-    public string? ConfigDir { get; }
+    public string? ConfigDir { get; private set; }
 
     /// <summary>Known from launch (pinned or resumed id).</summary>
     public string? SessionId => _controller?.SessionId ?? Conversation.SessionId;
     public bool IsRunning => _controller is { IsRunning: true } && !HasEnded;
+
+    /// <summary>Shown with its conversation, but no <c>claude</c> process yet: the first send <see cref="Wake"/>s it.
+    /// Not running and not ended.</summary>
+    public bool IsDormant { get; private set; }
+
+    /// <summary>A dormant session started its process (UI thread).</summary>
+    public event Action<PerchSession>? Woke;
     public bool HasEnded { get; private set; }
     public int ExitCode { get; private set; }
 
@@ -83,16 +95,57 @@ internal sealed class PerchSession : IDisposable
     /// Throws when the process can't start; the collision guards run before this, in the caller.</summary>
     public static PerchSession Start(SessionLaunchOptions o)
     {
+        var session = new PerchSession(null, o);
+        session.Launch(o);
+        if (o.ResumeId is { } resumeId)
+        {
+            session.Conversation.AddNote($"resumed session {Shorten(resumeId)}");
+            session.LoadHistoryAsync(resumeId);
+        }
+        return session;
+    }
+
+    /// <summary>A resumed session shown <b>without</b> starting <c>claude</c>: the conversation loads from the
+    /// transcript, and <see cref="Wake"/> starts the process on the first send. Never throws for a missing
+    /// transcript (the conversation says so); the collision guards run at wake, in the caller.</summary>
+    public static PerchSession Dormant(SessionLaunchOptions o)
+    {
+        if (o.ResumeId is not { Length: > 0 } resumeId)
+            throw new ArgumentException("A dormant session needs a session id to resume.", nameof(o));
+        var session = new PerchSession(null, o) { IsDormant = true };
+        session.Conversation.SetSessionId(resumeId);
+        session.LoadHistoryAsync(resumeId);
+        return session;
+    }
+
+    /// <summary>Starts <c>claude --resume</c> for a dormant session, with the launch settings chosen since it opened
+    /// (model, mode, effort, account). The conversation already holds the history, so nothing is reloaded. Throws
+    /// when the process can't start, leaving the session dormant.</summary>
+    public void Wake(SessionLaunchOptions o)
+    {
+        if (!IsDormant) return;
+        Launch(o with { ResumeId = SessionId });
+        IsDormant = false;
+        Model = o.Model;
+        PermissionMode = o.PermissionMode;
+        Effort = o.Effort;
+        ConfigDir = o.ConfigDir;
+        Conversation.AddNote($"resumed session {Shorten(SessionId ?? "")}");
+        Woke?.Invoke(this);
+    }
+
+    // Spawns the controller and wires it into this session. Throws (and disposes the controller) when it can't start.
+    private void Launch(SessionLaunchOptions o)
+    {
         var controller = new ClaudeSessionController();
-        var session = new PerchSession(controller, o);
         controller.EventReceived += ev => Dispatcher.UIThread.Post(() =>
         {
             // Remote-control acks aren't conversation items — route them to the session's own signal (which
             // still drops a note); everything else folds into the conversation model.
-            if (ev is RemoteControlEvent rc) session.OnRemoteControl(rc);
-            else session.Conversation.Apply(ev);
+            if (ev is RemoteControlEvent rc) OnRemoteControl(rc);
+            else Conversation.Apply(ev);
         });
-        controller.Exited += (code, err) => Dispatcher.UIThread.Post(() => session.OnExited(code, err));
+        controller.Exited += (code, err) => Dispatcher.UIThread.Post(() => OnExited(code, err));
         try
         {
             controller.Start(o.Cwd, o.Model, o.PermissionMode, o.ResumeId, effort: o.Effort, configDir: o.ConfigDir);
@@ -102,18 +155,13 @@ internal sealed class PerchSession : IDisposable
             controller.Dispose();
             throw;
         }
-        session.Conversation.SetSessionId(controller.SessionId);
+        _controller = controller;
+        Conversation.SetSessionId(controller.SessionId);
         // The CLI doesn't heartbeat the session-file status over stream-json, so publish our own live status
         // (busy/waiting/idle) into the in-process ControlledSessions registry the overlay reads. StateChanged
         // fires at turn/permission boundaries — exactly the transitions that move the status.
-        session.Conversation.StateChanged += session.PublishActivity;
-        session.PublishActivity();   // seed the real status from the (empty) starting state
-        if (o.ResumeId is { } resumeId)
-        {
-            session.Conversation.AddNote($"resumed session {Shorten(resumeId)}");
-            session.LoadHistoryAsync(resumeId);
-        }
-        return session;
+        Conversation.StateChanged += PublishActivity;
+        PublishActivity();   // seed the real status from the starting state
     }
 
     // Transcripts past this many lines show only their tail — a multi-MB history is neither readable nor
@@ -164,6 +212,14 @@ internal sealed class PerchSession : IDisposable
 
     /// <summary>A process-less session for the headless renderer: the conversation is fed synthetic events.</summary>
     internal static PerchSession ForRender(string cwd) => new(null, new SessionLaunchOptions(cwd));
+
+    /// <summary>A dormant stand-in for the headless renderer: no transcript is read, the caller feeds the history.</summary>
+    internal static PerchSession DormantForRender(string cwd, string sessionId)
+    {
+        var session = new PerchSession(null, new SessionLaunchOptions(cwd, ResumeId: sessionId)) { IsDormant = true };
+        session.Conversation.SetSessionId(sessionId);
+        return session;
+    }
 
     private void OnExited(int code, string stderrTail)
     {

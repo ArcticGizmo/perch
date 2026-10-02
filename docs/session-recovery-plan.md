@@ -270,6 +270,48 @@ clean-exit stamp on a normal Exit.
 Roost) opens dormant. The first send starts the process and delivers the message. The estimate becomes the
 composer note. **Measure** the first-send delay (Q5).
 
+**As built (R4):**
+- **Dormant is a state of `PerchSession`, not a second type.** `PerchSession.Dormant(options)` loads the transcript
+  history (the existing `LoadHistoryAsync`) with no controller; `IsDormant` is true (not running, not ended).
+  `Wake(options)` spawns `claude --resume <its id>` with the model/mode/effort/account chosen since it opened,
+  keeps the already-loaded conversation, adds the "resumed session" note and raises `Woke`. `Start` now shares the
+  spawn code (`Launch`). One object means the window, the app's session list and (later) the Roost all keep
+  dealing with one session.
+- **`SessionWindow`:** `ResumeSession` (CLI / elevate), `ResumeReplace` (/resume "resume here") and the launcher's
+  recents all go through `OpenDormant`, which calls the app's new `DormantRequested` factory and attaches the
+  result (no factory → starts at once, the old way). The first send sets `_sendAfterWake` and runs
+  `StartSession`, so **the trust check, the live-in-a-terminal refusal and the `.perch-lock` check all run at wake,
+  exactly as for any resume**; its dormant branch calls `Wake` and then re-sends. The text stays in the composer
+  until it actually goes, and `LaunchFail` drops the pending send, so a refused wake loses nothing. Native
+  commands (`/usage`, `/theme`, …) still run without waking. `CanCompose` (live **or** dormant) replaces the
+  `IsRunning` checks that gated the composer, focus, the command palette and `@`-mentions.
+- **The estimate moved** from a "Resume anyway?" dialog at open (deleted, with `HeavyResumeThresholdPercent`) to a
+  one-line note at the top of the composer: "Claude starts when you send · ↩ ≈142k in · cache cold · ≈2.8% of 5h
+  · ≈$0.89", amber when the cache is cold, with the full tooltip. Computed off the UI thread
+  (`ShowDormantEstimate`, generation-guarded).
+- **App:** `OpenDormantPerchSession` registers dormant sessions in `_perchSessions`, returning the existing one for
+  an id already open, so a second open can't create a twin that would wake into a second writer. When a session
+  window closes, dormant sessions no window views any more are dropped (swept, since the window has already
+  detached by `Closed`); a woken one outlives its windows as before. `PerchSessionFor` (Roost pane bindings and
+  actions) and overlay-row focus **skip dormant sessions**: if the same id is live in a terminal, that live
+  session is what they mean.
+- **Kept as-is:** a brand-new session (launcher "Start", `perch [dir]`) still starts at once, since there's no
+  conversation to show. The ended-session **Resume** button still starts at once (an ended session already closes
+  its window on End, so that path is rare). An abrupt session's unfinished tool shows as done, not running:
+  `LoadHistory` already settles it.
+- **Render:** `session_dormant_1x.png` / `session_dormant_light_1x.png` (`FeedDormantSampleForRender`).
+
+**Owed live checks (R4):**
+- Open a recent session from the launcher: the conversation shows, no `claude` process starts (Task Manager), the
+  note shows the estimate. Send: claude starts, the message goes, the reply streams in. Time the gap (Q5).
+- Same from the CLI (`perch --resume <id>`) and from the /resume overlay ("resume here").
+- Wake refusals: a session live in a terminal; an untrusted folder (decline the dialog) — the text stays in the
+  composer each time.
+- Open the same id twice (launcher, then CLI): one window, not two.
+- Close a dormant window, then open the same id again: it reloads cleanly.
+- Elevate a terminal session to Perch: it opens dormant now, so the Roost pane only follows once you send (R6
+  gives it a dormant pane).
+
 ### R5 — Perch's own exits
 
 D9: every exit path ends controlled sessions gracefully and records them as "open at exit" in the ledger. Move
