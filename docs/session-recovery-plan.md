@@ -316,7 +316,44 @@ composer note. **Measure** the first-send delay (Q5).
 
 D9: every exit path ends controlled sessions gracefully and records them as "open at exit" in the ledger. Move
 Perch's exit cleanup from `ShutdownRequested` to `desktop.Exit` (R0.3: it never runs on a normal Exit today), and
-raise `ClaudeSessionController.Stop`'s kill timeout from 3s to ~10s (R0.2). On the
+raise `ClaudeSessionController.Stop`'s kill timeout from 3s to ~10s (R0.2).
+
+**User decision (2026-10-02):** restored Perch sessions appear at the **top of the overlay's Recent section** with a
+"was open in Perch" marker (R7), not as dimmed rows in the Sessions section. No synthetic row kind in the Sessions
+section, the dense strip or the settings preview.
+
+**As built (R5):**
+- **Teardown moved to `desktop.Exit`.** `ShutdownRequested` now only logs and stamps the OS shutdown; everything it
+  used to dispose (monitor hosts, hotkeys, session lock, dense strip, replay sandbox) runs on `Exit`, which fires on
+  both the forced `Shutdown()` (Exit menu, auto-close) and an OS shutdown. **This fixes a live bug**: a normal Exit
+  skipped all of it. The docked edge (an AppBar, removed by window handle) is released on the overlay window's
+  `Closing`, since the lifetime closes every window before `Exit`.
+- **Every exit ends Perch's sessions cleanly**: `Exit` calls `End()` on each (stdin close; each `claude` writes its
+  exit flush and runs `SessionEnd`, the user's hooks included). `ClaudeSessionController.Stop`'s kill grace is now
+  10s (`StopGrace`), up from 3s.
+- **Holding sessions** (`App.Recovery.cs`): a session is held when it starts (`StartPerchSession`) or a dormant one
+  wakes. Held = `SessionLedger.Track` (re-tracked on a `/rename`), `Rebind` when `/clear` gives the process a new
+  id, and `Forget` only on **`PerchSession.Released`**: the user's confirmed "End session" (`EndByUser`) or "Hand
+  back to a terminal". Perch exiting, an update, a shutdown or a `claude` crash don't release, so those come back.
+  A dormant session that's opened but never woken isn't held (nothing was running).
+- **Restoring**: once the ledger has begun, the previous run's held sessions (minus any this run already holds)
+  become `RestorableSessions`. A startup toast says how many, and a tray item "Reopen Perch sessions (N)" (hidden
+  when there are none) opens each one dormant in its own window. Reopened-but-ignored ones stay in the ledger and
+  come back next time; R7's Dismiss is what lets one go. R6 adds them to the Roost; R7 to the top of Recent.
+- **A cancelled shutdown un-stamps itself**: the heartbeat keeps running after `ShutdownRequested`, and a tick that
+  finds a shutdown stamp means Perch is still alive, so it calls `SessionLedger.CancelShutdown()` (an unsaved note,
+  another app or the user can cancel a Windows shutdown after Perch has been asked).
+- **Ledger saves are serialised** (a gate around serialise-and-write), so a later save always writes the later
+  state; each runs off the UI thread except the two exit stamps, which must land synchronously.
+- Tests: `SessionLedgerTests.ACancelledShutdown_IsNotRecordedNextRun`.
+
+**Owed live checks (R5):**
+- Start two Perch sessions, Exit Perch from the tray: both `claude` processes exit within seconds (no kill), their
+  transcripts end in `cost-state`. Start Perch: the toast, then "Reopen Perch sessions (2)" opens both dormant.
+- End one with "End session" before exiting: only the other comes back.
+- Docked mode, then Exit: the reserved edge is released (maximised windows reclaim it) — the fixed bug.
+- Update Perch with a session open: it comes back after the restart.
+- Restart Windows with a Perch session open: it comes back, and the restart's sessions are flagged in R7. On the
 next start they come back dormant: overlay rows (with a dormant style) and their old Roost slots. Ended-by-user
 sessions don't come back.
 

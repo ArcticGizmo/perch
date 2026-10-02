@@ -299,6 +299,12 @@ internal sealed class ClaudeSessionController : IDisposable
         ["request"] = new JsonObject { ["subtype"] = "interrupt" },
     });
 
+    // How long a stopped session gets to exit on its own before its tree is killed. A clean exit writes the transcript's
+    // cost-state flush and runs SessionEnd hooks (the user's own included); a kill skips both, which reads as an abrupt
+    // end. A bare session took 2.5s to exit (docs/session-recovery-plan.md, R0), so 3s was too tight once MCP servers
+    // or slow hooks are involved. The wait runs off the UI thread.
+    private static readonly TimeSpan StopGrace = TimeSpan.FromSeconds(10);
+
     /// <summary>Ends the session: closing stdin lets the CLI finish and exit; a process that lingers is
     /// killed with its tree. The session remains resumable later via <c>claude --resume</c>.</summary>
     public void Stop()
@@ -314,7 +320,7 @@ internal sealed class ClaudeSessionController : IDisposable
         {
             try
             {
-                if (!process.WaitForExit(3000)) process.Kill(entireProcessTree: true);
+                if (!process.WaitForExit(StopGrace)) process.Kill(entireProcessTree: true);
             }
             catch { /* already exited */ }
         });

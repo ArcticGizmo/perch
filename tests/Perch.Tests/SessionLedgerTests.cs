@@ -74,6 +74,19 @@ public sealed class SessionLedgerTests : IDisposable
     }
 
     [Fact]
+    public void ACancelledShutdown_IsNotRecordedNextRun()
+    {
+        var ledger = new SessionLedger();
+        ledger.BeginRun(Now.AddHours(-5), null);
+        ledger.MarkShutdown(Now.AddHours(-4));
+        ledger.CancelShutdown();   // still alive a heartbeat later
+        ledger.MarkCleanExit(Now.AddHours(-3));
+
+        Assert.Null(ledger.BeginRun(Now, null));
+        Assert.Empty(ledger.Shutdowns);
+    }
+
+    [Fact]
     public void CleanExit_ThenNoPowerHistory_IsNoShutdown()
     {
         var ledger = new SessionLedger();

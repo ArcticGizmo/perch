@@ -1664,7 +1664,7 @@ internal sealed partial class SessionWindow : Window
         // End also closes the window so an ended session can't be resumed here by reflex (which would re-send its
         // whole context and burn tokens). The app owns the PerchSession, so End() finishes the process in the
         // background regardless of this view closing.
-        if (ok) { live.End(); Close(); }
+        if (ok) { live.EndByUser(); Close(); }
     }
 
     private void SendPrompt()

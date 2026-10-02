@@ -97,6 +97,13 @@ internal sealed class SessionLedger
         lock (_gate) Run.ShutdownAt = Run.LastAlive = now;
     }
 
+    /// <summary>The shutdown stamped earlier didn't happen: something cancelled it (an unsaved note in Perch, another
+    /// app, the user), and Perch is still running.</summary>
+    public void CancelShutdown()
+    {
+        lock (_gate) Run.ShutdownAt = null;
+    }
+
     /// <summary>Starts (or updates) holding a Perch-controlled session.</summary>
     public void Track(LedgerSession session)
     {

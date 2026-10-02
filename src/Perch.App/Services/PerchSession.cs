@@ -391,14 +391,28 @@ internal sealed class PerchSession : IDisposable
         RemoteControlChanged?.Invoke(ev);
     }
 
-    /// <summary>Stops the process. The session stays resumable on disk; <see cref="Ended"/> follows.</summary>
+    /// <summary>Stops the process. The session stays resumable on disk; <see cref="Ended"/> follows. Perch's own exits
+    /// call this too, and those sessions come back dormant on the next start; <see cref="EndByUser"/> is the user
+    /// being done with it.</summary>
     public void End() => _controller?.Stop();
+
+    /// <summary>The user let this session go from Perch (ended it, or handed it back to a terminal), so it doesn't
+    /// come back after a restart (docs/session-recovery-plan.md, D3). Raised before the process stops.</summary>
+    public event Action<PerchSession>? Released;
+
+    /// <summary>The user's "End session": <see cref="Released"/>, then <see cref="End"/>.</summary>
+    public void EndByUser()
+    {
+        Released?.Invoke(this);
+        End();
+    }
 
     /// <summary>Stops the process and reopens the same session in a real terminal (<c>claude --resume</c>).</summary>
     public void HandBackToTerminal()
     {
         var id = SessionId;
         if (string.IsNullOrEmpty(id)) return;
+        Released?.Invoke(this);   // it's a terminal session now, not Perch's to restore
         Conversation.AddNote($"handing session {Shorten(id)} to a terminal…");
         _controller?.Stop();
         // Same account the session ran under here, or the terminal's `claude --resume` can't find it.

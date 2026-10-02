@@ -161,17 +161,22 @@ public partial class App : Application
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown; // tray app — outlives its windows
             // Avalonia raises ShutdownRequested on WM_QUERYENDSESSION (an OS shutdown/logoff) but not on our own
             // desktop.Shutdown(), which is forced and goes straight to Exit (docs/session-recovery-plan.md, R0). So
-            // ShutdownRequested is the OS-shutdown signal, and Exit fires on both paths. The log lines carry the
+            // ShutdownRequested is only the OS-shutdown signal, and the teardown lives on Exit, which fires on both
+            // paths. (It used to hang on ShutdownRequested, so a normal Exit skipped it.) The log lines carry the
             // timestamps for the owed live restart check.
-            desktop.Exit += (_, _) =>
-            {
-                LaunchLog.Write("lifetime exit");
-                StampLedgerExit();
-            };
             desktop.ShutdownRequested += (_, _) =>
             {
                 LaunchLog.Write("shutdown requested (OS shutdown/logoff)");
                 StampLedgerShutdown();
+            };
+            desktop.Exit += (_, _) =>
+            {
+                LaunchLog.Write("lifetime exit");
+                // End Perch's own sessions cleanly on every exit, not just an update: closing stdin lets each claude
+                // write its exit flush and run SessionEnd hooks (the user's too). They stay held in the ledger, so
+                // they come back dormant next start (D9). Their exit finishes in the background after ours.
+                foreach (var s in _perchSessions.ToArray()) s.End();
+                StampLedgerExit();
                 _replayController?.Dispose();
                 _replayWindow?.Close();
                 _monitorHost?.Dispose();
@@ -187,7 +192,7 @@ public partial class App : Application
                 _controlServer?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
-                _overlay?.Canvas.ReleaseDocked();   // give the reserved screen edge back to the desktop
+                _overlay?.Canvas.ReleaseDocked();   // already done on the overlay's Closing; harmless twice
                 _overlay?.Canvas.DisposeDense();
                 Services.Replay.ReplayBootstrap.Cleanup(); // delete the disposable replay sandbox
             };
@@ -197,6 +202,9 @@ public partial class App : Application
             // Live overlay + the data pipelines that feed it. Every host delivers on the UI thread, so
             // feeding the owner-drawn canvas from their callbacks is UI-thread-safe.
             _overlay = new LiveOverlayWindow();
+            // Give the reserved screen edge back while the overlay's window still exists: the lifetime closes every
+            // window before Exit runs, and the AppBar is removed by window handle.
+            _overlay.Closing += (_, _) => _overlay.Canvas.ReleaseDocked();
             // Under `perch replay`, brand the overlay light-blue "Perch - Replay" (set before first paint)
             // so it's unmistakably a recording and not live sessions.
             _overlay.Canvas.ReplayMode = Services.Replay.ReplaySession.IsActive;
@@ -2031,7 +2039,11 @@ public partial class App : Application
             _perchSessions.Remove(s);
             _monitorHost?.Rescan();
         };
-        session.Woke += _ => _monitorHost?.Rescan();
+        session.Woke += s =>
+        {
+            HoldSession(s);   // live now: held like any started session
+            _monitorHost?.Rescan();
+        };
         return session;
     }
 
@@ -2262,6 +2274,7 @@ public partial class App : Application
             _perchSessions.Remove(s);
             _monitorHost?.Rescan();
         };
+        HoldSession(session);   // in the ledger, so it comes back dormant if Perch closes first
         _monitorHost?.Rescan();
         return session;
     }
@@ -2871,6 +2884,7 @@ public partial class App : Application
                 achievementsItem,
                 todosItem,
                 newSessionItem,
+                BuildReopenItem(),   // "Reopen Perch sessions (N)": hidden until some came back after a restart
                 roostItem,
                 _updateItem,
                 new NativeMenuItemSeparator(),
