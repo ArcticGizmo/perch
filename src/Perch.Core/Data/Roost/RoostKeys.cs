@@ -32,13 +32,15 @@ public enum RoostKeyGroup
     Tabs,
     Regions,
     Sessions,
+    View,
 }
 
 /// <summary>
 /// One row of the Roost's shortcut table. <see cref="Keys"/> are key names as the UI reports them (Avalonia's
 /// <c>Key.ToString()</c>: "D1", "Tab", "OemPeriod"…); for a ranged row ("Ctrl+1–9") key <c>i</c> resolves with
 /// argument <c>i + 1</c>. A row with no <see cref="Command"/> is listed for the cheat-sheet only — a key a focused
-/// pane handles itself (Enter / Esc on a permission card).
+/// pane handles itself (Enter / Esc on a permission card), or one the window handles outside this table (the zoom
+/// chords, which the session window shares — see <c>ZoomHost</c>).
 /// </summary>
 public sealed record RoostKey(
     string Chord, string Description, RoostKeyGroup Group, RoostCommand? Command = null,
@@ -65,6 +67,7 @@ public static class RoostKeys
         new("Ctrl+.", "Next session needing you", RoostKeyGroup.Sessions, RoostCommand.NextNeedingYou, RoostMods.Ctrl, ["OemPeriod"], Hint: true),
         new("Enter", "Allow the focused pane's permission", RoostKeyGroup.Sessions),
         new("Esc", "Deny it — or interrupt a running turn", RoostKeyGroup.Sessions),
+        new("Ctrl+= / Ctrl+−", "Bigger / smaller — the whole Roost (or Ctrl+wheel)", RoostKeyGroup.View),
     ];
 
     /// <summary>The command a key press runs, with its argument (a ranged row's 1-based index, else 0). Modifiers

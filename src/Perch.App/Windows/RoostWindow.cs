@@ -95,6 +95,7 @@ internal sealed partial class RoostWindow : Window
     private int _dropSlot = -1;
     private string? _dropTab;
     private readonly Panel _root;
+    private readonly ZoomHost _zoom;
     // A session drag resting on another tab's header switches to that tab, so it can be dropped on a region there.
     private const int HoverSwitchMs = 550;
     private readonly DispatcherTimer _hoverTimer;
@@ -262,7 +263,11 @@ internal sealed partial class RoostWindow : Window
         {
             Children = { new DockPanel { LastChildFill = true, Children = { bar, railHost, stageColumn } }, _overlay },
         };
-        Content = _root;
+        // Ctrl+= / Ctrl+− (and Ctrl+wheel) zoom the whole Roost. No Ctrl+0 reset: that's the Focus tab here.
+        _zoom = new ZoomHost(_p, _root);
+        _zoom.ZoomChanged += z => ZoomChanged?.Invoke(z);
+        _zoom.Attach(this);
+        Content = _zoom;
         // A drag under way holds the pointer here, not on the row or header it started from: a hover-switch to
         // another tab hides that header, and a hidden control can't keep the capture.
         _root.PointerMoved += (_, e) => { if (DragOwnsRoot) MoveGhost(e.GetPosition(_overlay)); };
@@ -313,6 +318,12 @@ internal sealed partial class RoostWindow : Window
 
     /// <summary>The rail's sort toggle moved (persist it).</summary>
     public event Action<RoostRailSort>? RailSortChanged;
+
+    /// <summary>The user zoomed the Roost (Ctrl+= / Ctrl+− / Ctrl+wheel) — persist it.</summary>
+    public event Action<double>? ZoomChanged;
+
+    /// <summary>Sets the Roost's zoom (the saved level) without raising <see cref="ZoomChanged"/>.</summary>
+    public void SetZoom(double zoom) => _zoom.SetZoom(zoom);
 
     /// <summary>A permission card in a Perch pane was answered: (session id, item, allow, switch mode).</summary>
     public event Action<string, PermissionItem, bool, bool>? PermissionAnswered;

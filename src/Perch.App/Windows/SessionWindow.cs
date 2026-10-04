@@ -251,6 +251,14 @@ internal sealed partial class SessionWindow : Window
     private readonly Popup _modelMenu, _modelVersions;
     private Border? _modelVersionsAnchor;      // the "›" cell _modelVersions is open beside (kept lit while it is)
     private DateTime _modelMenuClosedAt;       // see ShowModelMenu: the dismissing press mustn't reopen it
+
+    private readonly ZoomHost _zoom;
+
+    /// <summary>The user zoomed this window (Ctrl+= / Ctrl+− / Ctrl+0 / Ctrl+wheel): persist it and match the others.</summary>
+    public event Action<double>? ZoomChanged;
+
+    /// <summary>Sets the window's zoom without raising <see cref="ZoomChanged"/>.</summary>
+    public void SetZoom(double zoom) => _zoom.SetZoom(zoom);
     private IReadOnlyList<string> _projectFiles = [];
     private string _projectFilesFor = "";
     private IReadOnlyList<string> _mentionItems = [];
@@ -838,7 +846,17 @@ internal sealed partial class SessionWindow : Window
         // panel spans the full height (down past the composer) and the composer + thread stay aligned to its
         // left — rather than the composer running full-width underneath the panel. The activity strip docks
         // Top right below the header bar, above the thread.
-        Content = new DockPanel { Children = { barFrame, _activityStrip, _changesPanel, _composerDock, _center } };
+        // Ctrl+= / Ctrl+− / Ctrl+0 (and Ctrl+wheel) zoom the whole window; the app keeps every session window at
+        // one shared level (ZoomChanged → SetZoom on the others).
+        _zoom = new ZoomHost(_p, new DockPanel { Children = { barFrame, _activityStrip, _changesPanel, _composerDock, _center } })
+        {
+            ResetOnCtrl0 = true,
+        };
+        _zoom.ZoomChanged += z => ZoomChanged?.Invoke(z);
+        _zoom.Attach(this);
+        Content = _zoom;
+        // Its readout + level picker sits in the bar, just left of End session.
+        barRight.Children.Insert(barRight.Children.IndexOf(_endButton), new ZoomButton(_p, _zoom));
 
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
         // Focus changes can turn a pending prompt into a "background" one (or acknowledge it), so re-evaluate.

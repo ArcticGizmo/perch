@@ -1697,6 +1697,8 @@ public partial class App : Application
                 w.WakeAndSend = WakeFromRoostAsync;
                 w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
                 w.RailSortChanged += sort => { if (_appSettings is { } s) { s.RoostRailSort = sort; s.Save(); } };
+                w.SetZoom(_appSettings?.RoostZoom ?? ViewZoom.Default);
+                w.ZoomChanged += zoom => { if (_appSettings is { } s) { s.RoostZoom = zoom; s.Save(); } };
                 w.PermissionAnswered += (sid, item, allow, mode) =>
                     PerchSessionFor(sid)?.AnswerPermission(item, allow, mode);
                 w.QuestionAnswered += (sid, item, answers) => PerchSessionFor(sid)?.AnswerQuestion(item, answers);
@@ -2022,6 +2024,13 @@ public partial class App : Application
                 s.Save();
             }
             foreach (var sw in _sessionWindows) sw.SetAutoCompactConfig(enabled, threshold);
+        };
+        // Every session window shares one zoom: a step in one is saved and applied to the rest.
+        w.SetZoom(_appSettings?.SessionZoom ?? ViewZoom.Default);
+        w.ZoomChanged += zoom =>
+        {
+            if (_appSettings is { } s) { s.SessionZoom = zoom; s.Save(); }
+            foreach (var sw in _sessionWindows) if (!ReferenceEquals(sw, w)) sw.SetZoom(zoom);
         };
         w.NewSessionRequested += OpenSessionWindow;
         w.OpenSettingsRequested += page => OpenSettings(page);   // e.g. /theme → Settings → Appearance

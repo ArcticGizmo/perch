@@ -1604,6 +1604,11 @@ internal static class HeadlessRenderer
                 Capture("roost_rail_alpha_1x.png");
                 w.SetRailSort(Perch.Data.Roost.RoostRailSort.Status);
 
+                // The whole Roost zoomed to 125% (Ctrl+= twice): the stage re-lays out at the scaled size.
+                w.SetZoom(1.25);
+                Capture("roost_zoomed_1x.png");
+                w.SetZoom(Perch.Data.ViewZoom.Default);
+
                 // Infra: one pane and two empty regions; "need you in other tabs" points back at Main.
                 w.ActivateTab(infra.Id);
                 Capture("roost_tabs_infra_1x.png");
@@ -1952,6 +1957,8 @@ internal static class HeadlessRenderer
 
         Capture(Theming.SessionPalette.For(dark: true), "session_window_1x.png", events);
         Capture(Theming.SessionPalette.For(dark: false), "session_window_light_1x.png", events);
+        // Ctrl+= twice: the whole window at 125%, re-laid out to the scaled size.
+        Capture(Theming.SessionPalette.For(dark: true), "session_zoomed_1x.png", events, zoom: 1.25);
 
         // A resumed session opened dormant (session recovery D4): its history shows, the composer takes input, and
         // the note above it says Claude starts on the first send — with what that send re-sends (cold cache).
@@ -2081,11 +2088,13 @@ internal static class HeadlessRenderer
         RenderStreaming(outDir, cwd);
 
         void Capture(Theming.SessionPalette palette, string file, List<Perch.Data.Control.SessionEvent> scene,
-            string? userPrompt = prompt, IReadOnlyList<Perch.Data.Control.MessageAttachment>? attach = null)
+            string? userPrompt = prompt, IReadOnlyList<Perch.Data.Control.MessageAttachment>? attach = null,
+            double zoom = Perch.Data.ViewZoom.Default)
         {
             var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
             w.FeedSampleForRender(cwd, userPrompt, scene, attach);
             w.SetComposerActions(sampleActions);
+            w.SetZoom(zoom);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

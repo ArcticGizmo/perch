@@ -31,6 +31,9 @@ public class SettingsRegistryTests
         nameof(AppSettings.HypertreeExpanded),
         // The Roost's rail sort is picked by the toggle in the rail's header…
         nameof(AppSettings.RoostRailSort),
+        // The session windows' and the Roost's zoom, stepped by Ctrl+= / Ctrl+− in the window itself.
+        nameof(AppSettings.SessionZoom),
+        nameof(AppSettings.RoostZoom),
         // …and its tabs, managed in the Roost's tab strip.
         nameof(AppSettings.RoostTabs),
         // …and the layouts saved from its tab painter.

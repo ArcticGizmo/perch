@@ -172,6 +172,11 @@ internal sealed class AppSettings
     // RoostLayoutByCount and RoostOrder keys an older file may still carry are ignored when it loads.)
     public Roost.RoostRailSort RoostRailSort { get; set; } = Roost.RoostRailSort.Status;
 
+    // Whole-window zoom (1.0 = 100%) for the session windows (all share one level) and the Roost, stepped with
+    // Ctrl+= / Ctrl+− / Ctrl+wheel in the window itself — UI state, not a Settings control. See ViewZoom.
+    public double SessionZoom { get; set; } = ViewZoom.Default;
+    public double RoostZoom { get; set; } = ViewZoom.Default;
+
     // The Roost's tabs (RoostTabSet.ToState): each tab's name, painted layout and the "pid/sessionId" token of the
     // session in each region, plus the active tab. Null = never saved, so the first open creates a "Main" tab;
     // once saved it stays non-null even with every tab closed. UI state. See docs/roost-tabs-plan.md.
