@@ -72,6 +72,23 @@ public class SessionEndReaderTests
     }
 
     [Fact]
+    public void ATranscriptWithMessages_HasConversation()
+    {
+        Assert.True(SessionEndReader.Read(Fixture("graceful.jsonl"), null).HasConversation);
+        Assert.True(SessionEndReader.Read(Fixture("torn-tail.jsonl"), null).HasConversation);
+    }
+
+    [Fact]
+    public void BookkeepingOnly_HasNoConversation()
+    {
+        // Started and closed without a prompt: the exit flush and bookkeeping, but no user or assistant message.
+        var end = SessionEndReader.Read(Fixture("no-messages.jsonl"), null);
+
+        Assert.Equal(SessionEndKind.Closed, end.Kind);
+        Assert.False(end.HasConversation);
+    }
+
+    [Fact]
     public void MissingOrEmptyTranscript_IsUnknown()
     {
         Assert.Equal(SessionEnd.Unknown, SessionEndReader.Read(Fixture("does-not-exist.jsonl"), null));

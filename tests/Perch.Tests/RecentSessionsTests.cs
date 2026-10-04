@@ -69,6 +69,17 @@ public sealed class RecentSessionsTests : IDisposable
     }
 
     [Fact]
+    public void LeavesOutTranscriptsWithNoMessages()
+    {
+        var empty = Transcript("no-messages.jsonl", "empty", GracefulEnd);
+        var kept = Transcript("graceful.jsonl", "kept", GracefulEnd);
+
+        var rows = new RecentSessions().Build([empty, kept], None, NoDismissals, [], Now);
+
+        Assert.Equal(["kept"], rows.Select(r => r.Entry.SessionId));
+    }
+
+    [Fact]
     public void ADismissedEnding_IsHidden_UntilTheSessionEndsAgain()
     {
         var graceful = Transcript("graceful.jsonl", "g", GracefulEnd);

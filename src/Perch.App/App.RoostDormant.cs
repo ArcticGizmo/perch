@@ -48,17 +48,27 @@ public partial class App
         var held = _ledger?.HeldIds() ?? new HashSet<string>(StringComparer.Ordinal);
         var dismissed = new Dictionary<string, DateTime>(_appSettings?.RecentDismissed ?? [], StringComparer.Ordinal);
         var shutdowns = _ledger?.ShutdownsSnapshot() ?? [];
+        var restorableIds = _restorable.Select(r => r.SessionId).ToList();
         Task.Run(() =>
         {
             var entries = SessionHistory.ListAll(active);
             var rows = _recentBuilder.Build(entries, held, dismissed, shutdowns, DateTime.Now);
             var byId = new Dictionary<string, HistoryEntry>(StringComparer.Ordinal);
             foreach (var e in entries) byId.TryAdd(e.SessionId, e);
-            return (rows, byId);
+            // What Perch had open that has no transcript with a message in it (opened, never prompted): nothing to
+            // resume, so it doesn't come back as "was open".
+            var empty = restorableIds
+                .Where(id => !byId.TryGetValue(id, out var e) || !SessionEndReader.Read(e.Path, null).HasConversation)
+                .ToList();
+            return (rows, byId, empty);
         }).ContinueWith(t =>
         {
             _recentBuilding = false;
-            if (t.IsCompletedSuccessfully) (_recentRows, _transcriptsById) = t.Result;
+            if (t.IsCompletedSuccessfully)
+            {
+                (_recentRows, _transcriptsById, var empty) = t.Result;
+                foreach (var id in empty) DropRestorable(id);
+            }
             else LaunchLog.Write($"recent sessions: build failed ({t.Exception?.GetBaseException().GetType().Name})");
             _roostDormantReady = true;
             RefoldRoost();

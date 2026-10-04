@@ -18,8 +18,10 @@ internal enum SessionEndKind
     Abrupt,
 }
 
-/// <summary>A session's ending: its <see cref="Kind"/> and when it ended (local time), when that's known.</summary>
-internal readonly record struct SessionEnd(SessionEndKind Kind, DateTime? EndedAt)
+/// <summary>A session's ending: its <see cref="Kind"/> and when it ended (local time), when that's known.
+/// <see cref="HasConversation"/> is false when the transcript holds no user or assistant message — a session that
+/// started and ended without a prompt, with nothing to resume.</summary>
+internal readonly record struct SessionEnd(SessionEndKind Kind, DateTime? EndedAt, bool HasConversation = false)
 {
     public static SessionEnd Unknown { get; } = new(SessionEndKind.Unknown, null);
 }
@@ -52,10 +54,12 @@ internal static class SessionEndReader
             var file = new FileInfo(path);
             if (!file.Exists || file.Length == 0) return SessionEnd.Unknown;
 
+            // Grows until the tail holds a message: a transcript with none is small (bookkeeping only), so the window
+            // reaches the whole file and that's settled too.
             for (int window = TailBytes; ; window *= 4)
             {
                 var tail = Scan(TranscriptScan.ReadTailLines(path, window));
-                if (tail.SawRecord || window >= MaxTailBytes || window >= file.Length)
+                if (tail.SawMessage || window >= MaxTailBytes || window >= file.Length)
                     return Classify(tail, lastExitCommand, file.LastWriteTime);
             }
         }
@@ -65,13 +69,13 @@ internal static class SessionEndReader
         }
     }
 
-    /// <summary>What the tail says: whether any record parsed, whether it ends in the clean-exit flush, and the last
-    /// activity time (the newest record carrying a <c>timestamp</c>).</summary>
-    internal readonly record struct TailFacts(bool SawRecord, bool CleanExit, DateTime? LastActivity);
+    /// <summary>What the tail says: whether any record parsed, whether any was a user or assistant message, whether it
+    /// ends in the clean-exit flush, and the last activity time (the newest record carrying a <c>timestamp</c>).</summary>
+    internal readonly record struct TailFacts(bool SawRecord, bool CleanExit, DateTime? LastActivity, bool SawMessage = false);
 
     internal static TailFacts Scan(IEnumerable<string> lines)
     {
-        bool sawRecord = false, exitedAfterActivity = false, tornLast = false;
+        bool sawRecord = false, sawMessage = false, exitedAfterActivity = false, tornLast = false;
         DateTime? lastActivity = null;
         foreach (var raw in lines)
         {
@@ -83,7 +87,9 @@ internal static class SessionEndReader
 
             sawRecord = true;
             tornLast = false;
-            if (TranscriptJson.AsString(record["type"]) == "cost-state")
+            var type = TranscriptJson.AsString(record["type"]);
+            if (type is "user" or "assistant") sawMessage = true;
+            if (type == "cost-state")
             {
                 exitedAfterActivity = true;
             }
@@ -94,7 +100,7 @@ internal static class SessionEndReader
             }
             // Untimestamped bookkeeping (last-prompt, mode, permission-mode…) changes nothing either way.
         }
-        return new TailFacts(sawRecord, exitedAfterActivity && !tornLast, lastActivity);
+        return new TailFacts(sawRecord, exitedAfterActivity && !tornLast, lastActivity, sawMessage);
     }
 
     /// <summary>Applies the D2 rule. A graceful exit's last write is the exit flush itself, so the file's last-write
@@ -106,8 +112,8 @@ internal static class SessionEndReader
 
         // An /exit counts only if nothing happened after it: one typed before a later resume doesn't.
         bool exited = lastExitCommand is { } exit && (tail.LastActivity is not { } act || exit >= act);
-        if (exited) return new SessionEnd(SessionEndKind.Exited, lastWrite);
-        if (tail.CleanExit) return new SessionEnd(SessionEndKind.Closed, lastWrite);
-        return new SessionEnd(SessionEndKind.Abrupt, tail.LastActivity ?? lastWrite);
+        if (exited) return new SessionEnd(SessionEndKind.Exited, lastWrite, tail.SawMessage);
+        if (tail.CleanExit) return new SessionEnd(SessionEndKind.Closed, lastWrite, tail.SawMessage);
+        return new SessionEnd(SessionEndKind.Abrupt, tail.LastActivity ?? lastWrite, tail.SawMessage);
     }
 }

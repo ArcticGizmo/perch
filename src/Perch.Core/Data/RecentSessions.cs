@@ -14,8 +14,9 @@ internal sealed record RecentSession(HistoryEntry Entry, SessionEnd End, bool Ju
 /// <summary>
 /// Builds the Recent list (docs/session-recovery-plan.md, Q1/Q2/Q4): sessions that ended in the last
 /// <see cref="SessionRecovery.RecentWindow"/>, flagged ones first, then newest first. Leaves out sessions that are
-/// still running, the ones Perch holds itself (they're shown as Perch's own), and dismissed endings — a dismissal
-/// covers the ending it was made on, so a session that's resumed and ends again comes back.
+/// still running, the ones Perch holds itself (they're shown as Perch's own), ones whose transcript has no message
+/// (started and ended without a prompt), and dismissed endings — a dismissal covers the ending it was made on, so a
+/// session that's resumed and ends again comes back.
 /// <para>Holds one <see cref="ExitCommandIndex"/> per config dir, found from each transcript's path, so the prompt
 /// history is read incrementally across builds. Reads files: call it off the UI thread. Never throws.</para>
 /// </summary>
@@ -51,6 +52,7 @@ internal sealed class RecentSessions
                 var row = new RecentSession(
                     entry, SessionEndReader.Read(entry.Path, index?.LastExit(entry.SessionId)), false);
 
+                if (!row.End.HasConversation) continue;   // never got a prompt: nothing to resume
                 if (row.EndedAt < since) continue;
                 if (dismissed.TryGetValue(entry.SessionId, out var dismissedEnd) && row.EndedAt <= dismissedEnd) continue;
                 rows.Add(row with { JustBeforeShutdown = SessionRecovery.JustBeforeShutdown(row.EndedAt, shutdowns) });
