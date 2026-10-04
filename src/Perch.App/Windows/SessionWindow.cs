@@ -57,7 +57,6 @@ internal sealed partial class SessionWindow : Window
     // friendlier default. (This is the recent change from the old "manual"/default fallback.)
     internal const string FallbackMode = "auto";
     private string StartingMode => _mode ?? _defaults.PermissionMode ?? FallbackMode;
-    private static readonly string[] ModelChoices = ["haiku", "sonnet", "opus", "fable"];
 
     // What a session launches with when nothing is chosen here: the user's settings.json values, else the
     // CLI's own built-in default. Read once per window so the pills show the real starting state, not "default".
@@ -245,6 +244,13 @@ internal sealed partial class SessionWindow : Window
     // thread once per cwd; _mentionStart is the caret index of the "@" that opened the current token.
     private readonly Popup _mentionPopup;
     private readonly StackPanel _mentionRows;
+
+    // Model picker (the model half of the "model │ effort" pill): a row per family showing its newest release,
+    // split by a divider from a "›" cell whose hover opens _modelVersions beside it with every release of that
+    // family. Popups rather than a MenuFlyout, because a MenuItem can't split its click from its submenu.
+    private readonly Popup _modelMenu, _modelVersions;
+    private Border? _modelVersionsAnchor;      // the "›" cell _modelVersions is open beside (kept lit while it is)
+    private DateTime _modelMenuClosedAt;       // see ShowModelMenu: the dismissing press mustn't reopen it
     private IReadOnlyList<string> _projectFiles = [];
     private string _projectFilesFor = "";
     private IReadOnlyList<string> _mentionItems = [];
@@ -677,6 +683,20 @@ internal sealed partial class SessionWindow : Window
             },
         };
         composerStack.Children.Add(_mentionPopup);
+
+        _modelMenu = MenuPopup(_modelHalf, PlacementMode.TopEdgeAlignedLeft);
+        _modelMenu.IsLightDismissEnabled = true;
+        _modelMenu.VerticalOffset = -4;
+        _modelMenu.Closed += (_, _) => { _modelMenuClosedAt = DateTime.UtcNow; _modelVersions.IsOpen = false; };
+        _modelVersions = MenuPopup(_modelHalf, PlacementMode.RightEdgeAlignedTop);
+        _modelVersions.HorizontalOffset = 6;   // clear the menu's own padding + border
+        _modelVersions.Closed += (_, _) =>
+        {
+            if (_modelVersionsAnchor is { } anchor) anchor.Background = Brushes.Transparent;
+            _modelVersionsAnchor = null;
+        };
+        composerStack.Children.Add(_modelMenu);
+        composerStack.Children.Add(_modelVersions);
         // Hidden on the launcher; the thread and the composer appear together once a session starts.
         _composerDock = new Border
         {
@@ -3092,11 +3112,7 @@ internal sealed partial class SessionWindow : Window
         var conv = Conv;
         _idText.Text = SessionId ?? "";
         _idLine.IsVisible = SessionId is not null;
-        // Model: a mid-session switch (session.Model) beats what init reported; before launch, the launcher's
-        // pick, else what the session *will* start with (settings.json, else the CLI's built-in default).
-        var model = _session?.Model is { Length: > 0 } switched && switched != _model ? switched
-                  : conv.Model.Length > 0 ? conv.Model
-                  : _model ?? _defaults.Model ?? CliDefaultModel;
+        var model = DisplayedModel(conv);
         _modelPillText.Text = ShortModel(model);
         _modelHalf[ToolTip.TipProperty] = conv.Model.Length > 0 ? $"Model: {conv.Model} — click to change"
             : _model is not null ? "Model for this session — click to change"
@@ -3114,7 +3130,7 @@ internal sealed partial class SessionWindow : Window
         _modePillText.Foreground = ModeGlyph.BrushFor(modeEnum, _p.Muted, _p.Plan);
 
         var effort = _session?.Effort ?? _effort ?? _defaults.Effort;
-        _effortPillText.Text = effort is { Length: > 0 } ? $"{effort} effort" : "auto effort";
+        _effortPillText.Text = effort is { Length: > 0 } ? effort : "auto";
 
         UpdateUsagePills(conv, model);
 
@@ -3232,28 +3248,120 @@ internal sealed partial class SessionWindow : Window
         flyout.ShowAt(_modePill);
     }
 
+    // Model: a mid-session switch (session.Model) beats what init reported; before launch, the launcher's
+    // pick, else what the session *will* start with (settings.json, else the CLI's built-in default).
+    private string DisplayedModel(SessionConversation conv) =>
+        _session?.Model is { Length: > 0 } switched && switched != _model ? switched
+        : conv.Model.Length > 0 ? conv.Model
+        : _model ?? _defaults.Model ?? CliDefaultModel;
+
+    // A row per family (ModelCatalog) showing its newest release, which a click picks; a family with more than
+    // one release adds a divider and a "›" cell whose hover lists every release beside the menu. The model in
+    // use is drawn in the accent — on its family row if it's the newest, else on that row's "›" and in the list.
     private void ShowModelMenu()
     {
-        var flyout = new MenuFlyout { Placement = PlacementMode.TopEdgeAlignedLeft };
+        // The press that light-dismissed an open menu also lands its release on the pill; don't reopen on it.
+        if ((DateTime.UtcNow - _modelMenuClosedAt).TotalMilliseconds < 300) return;
+
+        var current = ModelCatalog.Find(DisplayedModel(Conv));
+        var rows = new StackPanel { Spacing = 1, MinWidth = 180 };
         if (_session is not { IsRunning: true })
         {
-            var reset = new MenuItem { Header = $"{ShortModel(_defaults.Model ?? CliDefaultModel)} (default)" };
-            reset.Click += (_, _) => { _model = null; RefreshBar(); };
-            flyout.Items.Add(reset);
+            var reset = MenuCell(MenuText($"{ShortModel(_defaults.Model ?? CliDefaultModel)} (default)", false));
+            reset.PointerEntered += (_, _) => _modelVersions.IsOpen = false;
+            reset.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) PickModel(null); };
+            rows.Children.Add(reset);
+            rows.Children.Add(new Border { Height = 1, Background = _p.Separator, Margin = new Thickness(6, 3) });
         }
-        foreach (var choice in ModelChoices)
-        {
-            var item = new MenuItem { Header = ShortModel(choice) };
-            var chosen = choice;
-            item.Click += (_, _) =>
-            {
-                if (_session is { IsRunning: true } live) live.SetModel(chosen);
-                else { _model = chosen; RefreshBar(); }
-            };
-            flyout.Items.Add(item);
-        }
-        flyout.ShowAt(_modelHalf);
+        foreach (var family in ModelCatalog.Families)
+            rows.Children.Add(ModelFamilyRow(family, current));
+
+        ((Border)_modelMenu.Child!).Child = rows;
+        _modelMenu.IsOpen = true;
     }
+
+    private Control ModelFamilyRow(ModelFamily family, ModelVersion? current)
+    {
+        var latest = family.Latest;
+        var pick = MenuCell(MenuText(latest.DisplayName, latest == current));
+        pick.PointerEntered += (_, _) => _modelVersions.IsOpen = false;
+        pick.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) PickModel(latest.Id); };
+        if (family.Versions.Count < 2) return pick;
+
+        bool olderInUse = current is not null && current != latest && family.Versions.Contains(current);
+        var arrow = MenuCell(new TextBlock
+        {
+            Text = "›", FontSize = 15, FontFamily = _p.Body, VerticalAlignment = VerticalAlignment.Center,
+            Foreground = olderInUse ? _p.Brand : _p.Muted,
+        });
+        arrow.Padding = new Thickness(10, 2);
+        arrow.PointerEntered += (_, _) => ShowModelVersions(family, current, arrow);
+        arrow.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowModelVersions(family, current, arrow); };
+
+        var divider = new Border { Width = 1, Background = _p.Border, Margin = new Thickness(2, 5) };
+        Grid.SetColumn(divider, 1);
+        Grid.SetColumn(arrow, 2);
+        return new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Children = { pick, divider, arrow } };
+    }
+
+    private void ShowModelVersions(ModelFamily family, ModelVersion? current, Border anchor)
+    {
+        if (_modelVersions.IsOpen && _modelVersionsAnchor == anchor) return;
+        _modelVersions.IsOpen = false;   // another family's list (its Closed un-lights that anchor)
+
+        var rows = new StackPanel { Spacing = 1, MinWidth = 120 };
+        foreach (var version in family.Versions.Reverse())   // newest first
+        {
+            var row = MenuCell(MenuText(version.DisplayName, version == current));
+            var id = version.Id;
+            row.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) PickModel(id); };
+            rows.Children.Add(row);
+        }
+        ((Border)_modelVersions.Child!).Child = rows;
+        _modelVersions.PlacementTarget = anchor;
+        _modelVersionsAnchor = anchor;
+        anchor.Background = _p.Raised2;
+        _modelVersions.IsOpen = true;
+    }
+
+    /// <summary>Applies a model pick: a live session switches over the control channel, otherwise it's the model
+    /// the session will launch with. Null goes back to the default.</summary>
+    private void PickModel(string? model)
+    {
+        _modelMenu.IsOpen = false;
+        if (model is not null && _session is { IsRunning: true } live) live.SetModel(model);
+        else { _model = model; RefreshBar(); }
+    }
+
+    private Popup MenuPopup(Control target, PlacementMode placement) => new()
+    {
+        PlacementTarget = target, Placement = placement,
+        Child = new Border
+        {
+            Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8), Padding = new Thickness(4),
+            BoxShadow = BoxShadows.Parse("0 10 30 0 #55000000"),
+        },
+    };
+
+    private Border MenuCell(Control content)
+    {
+        var cell = new Border
+        {
+            Background = Brushes.Transparent, CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6),
+            Cursor = new Cursor(StandardCursorType.Hand), Child = content,
+        };
+        cell.PointerEntered += (_, _) => cell.Background = _p.Raised2;
+        cell.PointerExited += (_, _) => { if (cell != _modelVersionsAnchor) cell.Background = Brushes.Transparent; };
+        return cell;
+    }
+
+    private TextBlock MenuText(string text, bool current) => new()
+    {
+        Text = text, FontSize = 13, FontFamily = _p.Body, VerticalAlignment = VerticalAlignment.Center,
+        FontWeight = current ? FontWeight.SemiBold : FontWeight.Normal,
+        Foreground = current ? _p.Brand : _p.Text,
+    };
 
     private void ShowEffortMenu()
     {
@@ -3728,17 +3836,10 @@ internal sealed partial class SessionWindow : Window
     // compaction gets there first, so Perch's early trigger would rarely beat it.
     private const int AutoCompactMin = 50, AutoCompactMax = 95;
 
-    /// <summary>"claude-opus-5" → "Opus 5"; "claude-haiku-4-5-20251001" → "Haiku 4.5"; null → "default model".</summary>
-    internal static string ShortModel(string? model)
-    {
-        if (string.IsNullOrWhiteSpace(model)) return "default model";
-        var parts = model.Split('-', StringSplitOptions.RemoveEmptyEntries).ToList();
-        if (parts.Count > 0 && parts[0].Equals("claude", StringComparison.OrdinalIgnoreCase)) parts.RemoveAt(0);
-        if (parts.Count == 0) return model;
-        var name = char.ToUpperInvariant(parts[0][0]) + parts[0][1..];
-        var version = string.Join(".", parts.Skip(1).TakeWhile(p => p.Length <= 2 && p.All(char.IsAsciiDigit)));
-        return version.Length > 0 ? $"{name} {version}" : name;
-    }
+    /// <summary>"claude-opus-5-5" / "opus" → "Opus 5.5"; a model the catalogue doesn't know is shown as given;
+    /// null → "default model".</summary>
+    internal static string ShortModel(string? model) =>
+        string.IsNullOrWhiteSpace(model) ? "default model" : ModelCatalog.DisplayName(model);
 
     // ── Headless render hooks ─────────────────────────────────────────────────────
 

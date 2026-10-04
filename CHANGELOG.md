@@ -17,6 +17,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Roost tabs survive a reboot: a session whose process is gone stays in its region until you send to it
 - A Recent group in the Roost rail, with Resume in terminal and Dismiss on each pane
 - Fixed Perch skipping its own tidy-up (including releasing a docked edge) on a normal Exit
+- The session's model pill names the version ("Opus 5.5"), and the effort pill just says "high", not "high effort"
+- The model menu offers each family's newest release; hover the › beside it to pick an older one
 
 ---
 
