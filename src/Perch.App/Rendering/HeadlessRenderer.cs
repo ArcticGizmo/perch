@@ -1929,8 +1929,10 @@ internal static class HeadlessRenderer
                 "{\"command\":\"git commit -am \\\"Add {sessionId}.perch-lock ownership sidecar\\\"\"}"),
             new Perch.Data.Control.PermissionRequestEvent("req-1", "Bash", "git commit",
                 "{\"command\":\"git commit -am \\\"Add {sessionId}.perch-lock ownership sidecar\\\"\"}", "acceptEdits"),
-            // A completed turn's usage, so the live token/context pills have something to show: a big cached
-            // prefix (context is ~62% full) with a little fresh input and output.
+            // The latest message's prompt size (occupancy is read per message, not off the result), so the
+            // context bar has something to show: ~62% of a 1M window, past the default yellow threshold.
+            new Perch.Data.Control.AssistantUsageEvent(620_200),
+            // A completed turn's usage: a big cached prefix with a little fresh input and output.
             new Perch.Data.Control.TurnResultEvent(false, "success", 0.42, InputTokens: 1200, OutputTokens: 820,
                 DurationMs: 5400, CacheReadTokens: 617_000, CacheCreationTokens: 2_000),
         };

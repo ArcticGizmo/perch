@@ -114,9 +114,11 @@ internal sealed partial class SessionWindow : Window
     // the permission-mode pill.
     private readonly TextBlock _modelPillText, _modePillText, _effortPillText;
     private readonly Border _modelEffortPill, _modelHalf, _effortHalf, _modePill;
-    // Live usage readout beside the settings chips: cumulative tokens in/out, and context-window pressure.
-    private readonly TextBlock _tokensPillText, _contextPillText;
-    private readonly Border _tokensPill, _contextPill;
+    // Live context readout beside the settings chips: thermometer + a fill bar + the percentage, coloured by
+    // the context-pressure thresholds.
+    private readonly TextBlock _contextPillText;
+    private readonly Border _contextPill, _contextBarFill;
+    private const double ContextBarWidth = 72;
 
     // Fixed strip under the header that mirrors what the floating overlay shows for THIS session: a chip per
     // background sub-agent/teammate currently working. Fed by the same SessionMonitor scan that drives the
@@ -126,11 +128,10 @@ internal sealed partial class SessionWindow : Window
     private readonly Border _activityStrip;
     private readonly WrapPanel _activityChips;
     // The context pill's thermometer — the overlay's own glyph/variants (OverlayCanvas.DrawThermo), at the
-    // thresholds the floating UI is configured with. Show/threshold/green-segment mirror settings, pushed
-    // by the app via SetContextPressureConfig; default to AppSettings' own defaults so it reads sanely if
-    // that call never comes.
+    // thresholds the floating UI is configured with. The thresholds mirror settings, pushed by the app via
+    // SetContextPressureConfig; they default to AppSettings' own defaults so the glyph reads sanely if that
+    // call never comes.
     private readonly ThermoGlyph _thermoGlyph;
-    private bool _showContextPressure = true, _showContextGreenSegment;
     // Perch-managed early auto-compaction: when enabled, once the context fill reaches the threshold Perch
     // fires `/compact` itself (rather than waiting for the CLI's near-full compaction). Pushed from settings
     // by SetAutoCompactConfig and edited in the /autocompact modal. `_autoCompactArmed` disarms after a fire
@@ -471,14 +472,17 @@ internal sealed partial class SessionWindow : Window
         }, _p.Raised2, _p.BorderSoft);
         _accountChip.IsVisible = false;
 
-        // Informational (not clickable): tokens in/out this session, and how full the context window is. Both
-        // hidden until a turn lands, so the launcher and a just-opened session stay uncluttered.
-        _tokensPillText = new TextBlock { FontSize = 12, FontFamily = _p.Mono, Foreground = _p.Muted, VerticalAlignment = VerticalAlignment.Center };
-        _tokensPill = Pill(_tokensPillText, _p.Raised2, _p.BorderSoft);
-        _tokensPill.IsVisible = false;
+        // Informational (not clickable): how full the context window is — thermometer, a fill bar and the
+        // percentage. Hidden until a turn lands, so the launcher and a just-opened session stay uncluttered.
         _contextPillText = new TextBlock { FontSize = 12, FontFamily = _p.Mono, Foreground = _p.Muted, VerticalAlignment = VerticalAlignment.Center };
-        _thermoGlyph = new ThermoGlyph { VerticalAlignment = VerticalAlignment.Center, IsVisible = false };
-        _contextPill = Pill(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { _thermoGlyph, _contextPillText } },
+        _thermoGlyph = new ThermoGlyph { VerticalAlignment = VerticalAlignment.Center };
+        _contextBarFill = new Border { HorizontalAlignment = HorizontalAlignment.Left, CornerRadius = new CornerRadius(3), Width = 0 };
+        var contextBarTrack = new Border
+        {
+            Width = ContextBarWidth, Height = 6, CornerRadius = new CornerRadius(3), Background = _p.BorderSoft,
+            VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true, Child = _contextBarFill,
+        };
+        _contextPill = Pill(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7, Children = { _thermoGlyph, contextBarTrack, _contextPillText } },
             _p.Raised2, _p.BorderSoft);
         _contextPill.IsVisible = false;
 
@@ -573,7 +577,7 @@ internal sealed partial class SessionWindow : Window
         // clipping. WrapPanel has no Spacing, so each chip carries its own right/bottom gap; the panel's negative
         // bottom margin absorbs the trailing row's gap so a single row keeps its original height.
         var chips = new WrapPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 0, -6) };
-        foreach (var chip in new Control[] { _modelEffortPill, _modePill, _branchPill, _accountChip, _tokensPill, _contextPill })
+        foreach (var chip in new Control[] { _modelEffortPill, _modePill, _branchPill, _accountChip, _contextPill })
         {
             chip.Margin = new Thickness(0, 0, 8, 6);
             chips.Children.Add(chip);
@@ -3192,20 +3196,11 @@ internal sealed partial class SessionWindow : Window
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
-    // Fills the two informational pills from the live conversation: cumulative tokens in/out, and how full
-    // the context window is (coloured as pressure rises). Both hide until there's something to show.
+    // Fills the context readout from the live conversation: thermometer, a fill bar and the percentage, all in
+    // the context-pressure variant colour (green → yellow → orange → red at the configured thresholds). Hidden
+    // until there's something to show.
     private void UpdateUsagePills(SessionConversation conv, string model)
     {
-        bool haveTokens = conv.TotalOutputTokens > 0 || conv.TotalFreshInputTokens > 0;
-        _tokensPill.IsVisible = haveTokens;
-        if (haveTokens)
-        {
-            _tokensPillText.Text = $"↑ {FormatTokens(conv.TotalFreshInputTokens)}   ↓ {FormatTokens(conv.TotalOutputTokens)}";
-            var lastIn = conv.LastTurn is { } lt ? $"\nLast message: {FormatTokens(lt.FreshInputTokens)} new + {FormatTokens(lt.CacheReadTokens)} cached in, {FormatTokens(lt.OutputTokens)} out" : "";
-            _tokensPill[ToolTip.TipProperty] =
-                $"Tokens this session — ↑ {FormatTokens(conv.TotalFreshInputTokens)} in (billed: fresh input + cache writes; cache re-reads excluded) · ↓ {FormatTokens(conv.TotalOutputTokens)} out.{lastIn}";
-        }
-
         long ctx = conv.ContextTokens;
         _contextPill.IsVisible = ctx > 0;
         if (ctx > 0)
@@ -3214,23 +3209,15 @@ internal sealed partial class SessionWindow : Window
             if (ctx > window) window = (int)Math.Min(int.MaxValue, Math.Ceiling(ctx / 1_000_000.0) * 1_000_000);
             double pct = Math.Clamp((double)ctx / window * 100.0, 0, 100);
             float fill = (float)(pct / 100.0);
-            _contextPillText.Text = $"ctx {FormatTokens(ctx)} · {pct:0}%";
 
-            // The thermometer + its matching text tint follow the floating overlay: same glyph, same
-            // green→yellow→orange→red variants at the same thresholds, hidden below yellow unless the
-            // overlay's green-segment variant is on (and gone entirely if context pressure is off there).
+            // The thermometer and bar carry the colour; the percentage stays in the chip's muted text colour,
+            // since the fixed yellow/orange hues don't clear text contrast on the light theme.
             _thermoGlyph.Fill = fill;
-            bool crossedYellow = fill >= _thermoGlyph.YellowThreshold;
-            _thermoGlyph.IsVisible = _showContextPressure && (crossedYellow || _showContextGreenSegment);
-            // Below the yellow threshold the readout stays calm (muted), matching the overlay row, which
-            // shows no colour there; at/above it the text warms to the thermometer's variant colour.
-            _contextPillText.Foreground = crossedYellow ? new SolidColorBrush(_thermoGlyph.VariantColor) : _p.Muted;
+            _contextBarFill.Width = ContextBarWidth * fill;
+            _contextBarFill.Background = new SolidColorBrush(_thermoGlyph.VariantColor);
+            _contextPillText.Text = $"{pct:0}%";
 
-            var nearFull = _autoCompactEnabled
-                ? $"and Perch will auto-compact it at {_autoCompactThreshold}% (/autocompact)."
-                : "and a compaction is coming as it nears full.";
-            _contextPill[ToolTip.TipProperty] =
-                $"Context window: {FormatTokens(ctx)} of {FormatTokens(window)} ({pct:0}%). This is what every new message re-sends to the model — the fuller it gets, the more each turn costs, {nearFull}";
+            _contextPill[ToolTip.TipProperty] = $"Context window {FormatTokens(ctx)} of {FormatTokens(window)} ({pct:0}%)";
 
             MaybeAutoCompact(pct);
         }
@@ -3827,14 +3814,11 @@ internal sealed partial class SessionWindow : Window
     private static string ClipChip(string s, int max) =>
         s.Length <= max ? s : s[..(max - 1)].TrimEnd() + "…";
 
-    /// <summary>Mirrors the floating overlay's context-pressure configuration onto the context pill's
-    /// thermometer: whether the feature is shown at all, its yellow/orange/red colour thresholds, and
-    /// whether the below-yellow green segment is drawn — so this glyph reads exactly like the overlay's.
-    /// The app pushes the current settings when it builds the window.</summary>
-    public void SetContextPressureConfig(bool show, int yellowPercent, int orangePercent, int redPercent, bool greenSegment)
+    /// <summary>Mirrors the floating overlay's context-pressure colour thresholds onto the context readout
+    /// (thermometer, bar and percentage), so it warms at the same points the overlay does. The app pushes the
+    /// current settings when it builds the window.</summary>
+    public void SetContextPressureConfig(int yellowPercent, int orangePercent, int redPercent)
     {
-        _showContextPressure = show;
-        _showContextGreenSegment = greenSegment;
         _thermoGlyph.SetThresholds(yellowPercent, orangePercent, redPercent);
         if (_session is not null) RefreshBar();   // re-evaluate visibility/colour if a session is already attached
     }

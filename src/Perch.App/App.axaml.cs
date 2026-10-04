@@ -1996,11 +1996,11 @@ public partial class App : Application
             // Live account guardrails so the launcher's account selector reflects the current rules.
             AccountRulesProvider = () => _appSettings?.AccountRules,
         };
-        // The context pill's thermometer mirrors the floating overlay's context-pressure settings so the two
-        // read alike (same glyph, variants and thresholds).
+        // The context readout mirrors the floating overlay's context-pressure thresholds so the two read alike
+        // (same thermometer glyph, same colour at the same fill).
         var cs = Effective;
-        w.SetContextPressureConfig(cs.ShowContextPressure, cs.ContextPressureYellowPercent,
-            cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent, cs.ShowContextGreenSegment);
+        w.SetContextPressureConfig(cs.ContextPressureYellowPercent,
+            cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent);
         w.SetAutoCompactConfig(cs.SessionAutoCompactEnabled, cs.SessionAutoCompactThresholdPercent);
         // /usage overlay reads the same account rate-limit data the floating strip does — the tray's cached
         // last reading, with a forced fetch on open/Refresh (works even when the overlay usage strip is off).
