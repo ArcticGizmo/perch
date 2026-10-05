@@ -96,6 +96,59 @@ public sealed class StatuslineScriptTests
     }
 
     [Fact]
+    public void Generate_gates_transcript_read_on_session_use()
+    {
+        var with = StatuslineScript.Generate(new StatuslineProfile { Name = "a", Template = "{{session.name}}" });
+        Assert.Contains("const NEED_SESSION = true;", with);
+
+        // session_id is a raw payload field, not the session.* extra — it mustn't trigger the read.
+        var without = StatuslineScript.Generate(new StatuslineProfile { Name = "b", Template = "{{session_id}}" });
+        Assert.Contains("const NEED_SESSION = false;", without);
+    }
+
+    // session.name comes off the transcript tail: the LAST custom-title record wins, a chat message that merely
+    // mentions custom-title is skipped, and a never-renamed or missing transcript renders blank.
+    [Fact]
+    public void Generated_script_reads_the_rename_title_from_the_transcript()
+    {
+        var node = FindNode();
+        if (node is null) return;
+
+        var dir = Path.Combine(Path.GetTempPath(), "perch-sl-node-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var scriptPath = Path.Combine(dir, "line.mjs");
+            File.WriteAllText(scriptPath, StatuslineScript.Generate(new StatuslineProfile
+            {
+                Name = "t", Template = "{{session.name|default:none}}",
+            }, devMarker: false));
+
+            var renamed = Path.Combine(dir, "renamed.jsonl");
+            File.WriteAllLines(renamed, new[]
+            {
+                """{"type":"user","message":{"role":"user","content":"hi"}}""",
+                """{"type":"custom-title","customTitle":"first-name","sessionId":"s"}""",
+                """{"type":"assistant","message":{"role":"assistant","content":"ok"}}""",
+                """{"type":"custom-title","customTitle":"second-name","sessionId":"s"}""",
+                """{"type":"user","message":{"role":"user","content":"what is a \"custom-title\" record?"}}""",
+            });
+            var plain = Path.Combine(dir, "plain.jsonl");
+            File.WriteAllLines(plain, new[] { """{"type":"user","message":{"role":"user","content":"hi"}}""" });
+
+            string Run(string transcript) => RunNode(node, scriptPath,
+                System.Text.Json.JsonSerializer.Serialize(new { transcript_path = transcript })).Trim();
+            Assert.Equal("second-name", Run(renamed));
+            Assert.Equal("none", Run(plain));
+            Assert.Equal("none", Run(Path.Combine(dir, "missing.jsonl")));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Generate_bakes_the_dev_marker_only_when_asked()
     {
         var p = new StatuslineProfile { Name = "d", Template = "{{model.display_name}}" };
@@ -184,6 +237,9 @@ public sealed class StatuslineScriptTests
         // and both engines read the same object — the host's real login can't perturb parity.
         { "{{#account.signed_in}}{{account.org|default:personal}} <{{account.email}}>{{/account.signed_in}}",
           """{"account":{"email":"you@example.com","org":"Example Org","org_uuid":"u","signed_in":true,"personal":false}}""" },
+        // session extra: supplied in the payload so injectSession leaves it alone — no transcript read
+        { "{{#session.name}}✎ {{session.name|color:violet}}{{/session.name}}",
+          """{"session":{"name":"statusline-polish"}}""" },
         // ctxcolor: perch.context supplied in the payload so injectPerch's "skip if present" leaves it alone —
         // both engines colour the same numeric value against the same bands (72 → orange band → amber).
         { "{{context_window.used_percentage|bar:8|ctxcolor}} {{context_window.used_percentage|pct|ctxcolor}}",

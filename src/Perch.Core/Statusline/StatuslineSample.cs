@@ -4,8 +4,8 @@ using System.Text.Json.Nodes;
 
 /// <summary>A representative statusLine stdin payload used by the designer's live preview and by tests.
 /// It mirrors the shape Claude Code sends (model, workspace, cost, context_window, prompt_cache,
-/// rate_limits, pr, effort, vim, version, output_style) and includes the Perch-injected <c>git</c>
-/// block, so every token the catalogue lists resolves against it.</summary>
+/// rate_limits, pr, effort, vim, version, output_style) and includes the Perch-injected blocks (<c>git</c>,
+/// <c>session</c>, <c>account</c>, <c>perch</c>), so every token the catalogue lists resolves against it.</summary>
 internal static class StatuslineSample
 {
     public const string Json = """
@@ -14,6 +14,7 @@ internal static class StatuslineSample
       "version": "2.1.90",
       "output_style": { "name": "default" },
       "session_id": "5f2c9a10-3b7e-4d1a-9c22-1e8a6b0d4477",
+      "transcript_path": "/home/user/.claude/projects/-home-user-git-personal-perch/5f2c9a10-3b7e-4d1a-9c22-1e8a6b0d4477.jsonl",
       "cwd": "/home/user/git/personal/perch",
       "workspace": {
         "current_dir": "/home/user/git/personal/perch",
@@ -47,6 +48,7 @@ internal static class StatuslineSample
       },
       "effort": { "level": "high" },
       "vim": { "mode": "NORMAL" },
+      "session": { "name": "statusline-polish" },
       "git": { "branch": "feat-0001", "staged": 2, "unstaged": 3, "changes": 5, "dirty": true },
       "account": { "email": "you@example.com", "org": "Example Org", "org_uuid": "0a1b2c3d-0000-0000-0000-000000000000", "signed_in": true, "personal": false },
       "perch": { "context": { "yellow": 50, "orange": 65, "red": 80 }, "guardrail": { "mismatch": true, "expected": "Acme Corp", "on": "Contoso" } }
