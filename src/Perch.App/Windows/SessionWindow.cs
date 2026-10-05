@@ -3701,6 +3701,7 @@ internal sealed partial class SessionWindow : Window
         return focused switch
         {
             TextBox tb => tb.SelectionStart != tb.SelectionEnd,
+            SessionThreadView thread => thread.HasSelection,   // a drag across blocks focuses the thread
             SelectableTextBlock stb => !string.IsNullOrEmpty(stb.SelectedText),
             _ => false,
         };

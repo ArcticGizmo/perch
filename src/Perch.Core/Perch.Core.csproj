@@ -29,4 +29,10 @@
     <!-- The searchable emoji dataset the picker uses (see EmojiCatalog). Regenerate with tools/gen-emoji.py. -->
     <EmbeddedResource Include="Data\emoji-data.tsv" LogicalName="Perch.emoji-data.tsv" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- Markdown parsing. Core owns the parse + the rendered-text/source mapping (MarkdownSourceMap) so the
+         copy-a-selection-as-Markdown logic is testable without the UI; the app head renders from the same AST. -->
+    <PackageReference Include="Markdig" Version="1.3.2" />
+  </ItemGroup>
 </Project>

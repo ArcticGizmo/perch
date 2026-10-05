@@ -85,12 +85,11 @@ internal sealed record CodeSyntax(
 /// </summary>
 internal sealed class MarkdownView
 {
-    // UseYamlFrontMatter parses a leading `---`…`---` block as a YamlFrontMatterBlock rather than a thematic
-    // break + setext heading, so RenderBlock can drop it — the GitHub/VS Code convention of hiding the
-    // metadata header of SKILL.md-style files in the rendered view (the raw source editor still shows it).
-    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
-        .UseYamlFrontMatter()
-        .UsePipeTables().UseEmphasisExtras().UseTaskLists().UseAutoLinks().UsePreciseSourceLocation().Build();
+    // Shared with the source map (Perch.Core), so the rendered view and the copy-as-Markdown mapping parse the same
+    // AST. It parses a leading `---`…`---` block as YAML frontmatter rather than a thematic break + setext heading,
+    // so RenderBlock can collapse it — the GitHub/VS Code convention of hiding the metadata header of SKILL.md-style
+    // files in the rendered view (the raw source editor still shows it).
+    private static MarkdownPipeline Pipeline => MarkdownSourceMap.Pipeline;
     private static readonly FontFamily Mono = new("Cascadia Code, Consolas, Menlo, monospace");
 
     /// <summary>Optional wiring that makes inline-code file references clickable: the session cwd to resolve
@@ -100,11 +99,17 @@ internal sealed class MarkdownView
 
     private readonly MarkdownStyle _s;
     private readonly FileRefContext? _files;
+    private readonly MarkdownCopyDoc _doc;   // the source every block's copy map indexes into
 
     private double BodySize => _s.BodySize;
     private double BlockGap => _s.BlockGap;   // vertical space below a block
 
-    private MarkdownView(MarkdownStyle s, FileRefContext? files) { _s = s; _files = files; }
+    private MarkdownView(MarkdownStyle s, FileRefContext? files, string md)
+    {
+        _s = s;
+        _files = files;
+        _doc = new MarkdownCopyDoc(md);
+    }
 
     /// <summary>The 0-based source line a rendered element came from, stamped on paragraphs, headings, list
     /// items, table rows and code blocks so a click can map to the right line (not just the enclosing block).
@@ -171,7 +176,7 @@ internal sealed class MarkdownView
     /// (<paramref name="files"/>), and returns the control tree plus its source-line anchors.</summary>
     public static Control Build(string md, MarkdownStyle style, FileRefContext? files, out IReadOnlyList<PreviewAnchor> anchors)
     {
-        var view = new MarkdownView(style, files);
+        var view = new MarkdownView(style, files, md);
         var list = new List<PreviewAnchor>();
         anchors = list;
         var root = new StackPanel { Margin = style.RootMargin };
@@ -239,11 +244,7 @@ internal sealed class MarkdownView
             FontSize = size, FontWeight = FontWeight.SemiBold, Foreground = _s.Title,
             TextWrapping = TextWrapping.Wrap,
         };
-        var sink = new InlineSink();
-        if (h.Inline != null) AppendInlines(sink, h.Inline, new Run2(size, _s.Title, Bold: true));
-        text.Inlines = sink.Inlines;
-        LinkText.Attach(text, sink.Links);
-        AttachFileRefs(text, sink);
+        Fill(text, h, h.Inline is { } inl ? [inl] : [], size, _s.Title, new MarkdownInlineStyle(Bold: true));
 
         // h1/h2 carry a bottom rule, like the GitHub/VS Code preview. Extra space above to set them apart.
         if (h.Level <= 2)
@@ -260,15 +261,21 @@ internal sealed class MarkdownView
     private SelectableTextBlock Paragraph(ParagraphBlock p, IBrush fg)
     {
         var tb = Paragraph("", fg);
-        if (p.Inline != null)
-        {
-            var sink = new InlineSink();
-            AppendInlines(sink, p.Inline, new Run2(BodySize, fg));
-            tb.Inlines = sink.Inlines;
-            LinkText.Attach(tb, sink.Links);
-            AttachFileRefs(tb, sink);
-        }
+        Fill(tb, p, p.Inline is { } inl ? [inl] : [], BodySize, fg, default);
         return tb;
+    }
+
+    // Lay out a prose block's inlines into tb (one pass through the shared walker, which also records the block's
+    // source map), arm its links and file references, and attach the map so a selection copies as Markdown.
+    private void Fill(SelectableTextBlock tb, Block owner, IEnumerable<ContainerInline> inlines, double size,
+        IBrush brush, MarkdownInlineStyle style, bool extendLead = true)
+    {
+        var sink = new InlineSink(this, size, brush);
+        var map = MarkdownSourceMap.ForInlines(_doc, owner, inlines, style, sink, extendLead);
+        tb.Inlines = sink.Inlines;
+        LinkText.Attach(tb, sink.Links);
+        AttachFileRefs(tb, sink);
+        BlockSelection.SetSourceMap(tb, map);
     }
 
     private SelectableTextBlock Paragraph(string text, IBrush fg) => new()
@@ -349,10 +356,14 @@ internal sealed class MarkdownView
     // follows the preview's own light/dark palette (a Fluent Expander would read the window's instead).
     private Control Frontmatter(YamlFrontMatterBlock yaml)
     {
-        // The block's captured text; strip any surrounding `---` fences so only the YAML body shows.
-        var lines = yaml.Lines.ToString().Replace("\r", "").Split('\n').ToList();
-        while (lines.Count > 0 && lines[0].Trim() == "---") lines.RemoveAt(0);
-        while (lines.Count > 0 && (lines[^1].Trim() == "---" || lines[^1].Length == 0)) lines.RemoveAt(lines.Count - 1);
+        // The block's captured text, without the surrounding `---` fences, so only the YAML body shows.
+        string body = MarkdownCopy.FrontmatterText(yaml);
+        var yamlText = new SelectableTextBlock
+        {
+            Text = body, FontFamily = Mono, FontSize = 12.5,
+            Foreground = _s.CodeFg, TextWrapping = TextWrapping.Wrap,
+        };
+        BlockSelection.SetSourceMap(yamlText, MarkdownSourceMap.ForWhole(_doc, yaml, body.Length));
 
         var content = new Border
         {
@@ -362,11 +373,7 @@ internal sealed class MarkdownView
             IsVisible = false,
             // Wrap the YAML rather than scroll it: frontmatter lines (long descriptions especially) would
             // otherwise force a horizontal scrollbar on the whole preview, which is awkward to use.
-            Child = new SelectableTextBlock
-            {
-                Text = string.Join("\n", lines), FontFamily = Mono, FontSize = 12.5,
-                Foreground = _s.CodeFg, TextWrapping = TextWrapping.Wrap,
-            },
+            Child = yamlText,
         };
 
         var chevron = new TextBlock
@@ -398,12 +405,15 @@ internal sealed class MarkdownView
 
     private Control Code(CodeBlock code)
     {
-        var lines = code.Lines.ToString().Replace("\r", "").TrimEnd('\n');
+        // The code's text comes from its source map, line for line, so a selection inside it copies verbatim and
+        // a whole block takes its fences along.
+        var map = MarkdownSourceMap.ForLines(_doc, code, out var lines);
         var text = new SelectableTextBlock
         {
             FontFamily = Mono, FontSize = 12.5, Foreground = _s.CodeFg,
             TextWrapping = TextWrapping.NoWrap,
         };
+        BlockSelection.SetSourceMap(text, map);
         // The rendered text is verbatim, so a click can be hit-tested to an exact line/column. Stamp the
         // first content line (the line after the opening fence, for a fenced block).
         Stamp(text, code is FencedCodeBlock ? code.Line + 1 : code.Line, verbatim: true);
@@ -453,7 +463,7 @@ internal sealed class MarkdownView
     /// real build once the fence closes.</summary>
     public static Control BuildStreamingCode(MarkdownStyle style, out SelectableTextBlock text)
     {
-        var view = new MarkdownView(style, null);
+        var view = new MarkdownView(style, null, "");
         text = new SelectableTextBlock
         {
             FontFamily = Mono, FontSize = 12.5, Foreground = style.CodeFg, TextWrapping = TextWrapping.NoWrap,
@@ -480,12 +490,18 @@ internal sealed class MarkdownView
         Height = 1, Background = _s.Rule, Margin = new Thickness(0, 6, 0, 14),
     };
 
-    private Control RawHtml(HtmlBlock html) => new SelectableTextBlock
+    private Control RawHtml(HtmlBlock html)
     {
-        Text = html.Lines.ToString().Replace("\r", "").TrimEnd('\n'),
-        FontFamily = Mono, FontSize = 12, Foreground = _s.Muted, TextWrapping = TextWrapping.Wrap,
-        Margin = new Thickness(0, 0, 0, BlockGap),
-    };
+        var map = MarkdownSourceMap.ForLines(_doc, html, out var text);
+        var tb = new SelectableTextBlock
+        {
+            Text = text,
+            FontFamily = Mono, FontSize = 12, Foreground = _s.Muted, TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, BlockGap),
+        };
+        BlockSelection.SetSourceMap(tb, map);
+        return tb;
+    }
 
     private Control Stack(ContainerBlock cb, IBrush fg)
     {
@@ -523,13 +539,9 @@ internal sealed class MarkdownView
                     FontSize = BodySize, Foreground = _s.Fg, TextWrapping = TextWrapping.Wrap,
                     FontWeight = header ? FontWeight.SemiBold : FontWeight.Normal,
                 };
-                var sink = new InlineSink();
-                foreach (var b in cell)
-                    if (b is LeafBlock { Inline: { } inl })
-                        AppendInlines(sink, inl, new Run2(BodySize, _s.Fg, Bold: header));
-                tb.Inlines = sink.Inlines;
-                LinkText.Attach(tb, sink.Links);
-                AttachFileRefs(tb, sink);
+                // Only the row's first cell owns the line start (its leading pipe) in the source.
+                Fill(tb, cell, cell.OfType<LeafBlock>().Select(b => b.Inline).OfType<ContainerInline>(),
+                    BodySize, _s.Fg, new MarkdownInlineStyle(Bold: header), extendLead: ci == 0);
 
                 var cellBorder = new Border
                 {
@@ -555,27 +567,43 @@ internal sealed class MarkdownView
 
     // ── Inlines ────────────────────────────────────────────────────────────────────────────────────
 
-    private readonly record struct Run2(double Size, IBrush Brush, bool Bold = false, bool Italic = false,
-        bool Strike = false, bool Link = false);
-
-    // Accumulates the inlines of one prose block plus the char-ranges of any http(s) links in it (so
-    // LinkText can make them clickable). Pos mirrors, char for char, what the block's TextLayout will
-    // count — every Run by its text length, an InlineUIContainer (checkbox) as one position — so a hit-test
-    // index maps back to the right link span.
-    private sealed class InlineSink
+    // Builds the runs of one prose block as the shared walker (MarkdownSourceMap.Walk) reports them, plus the
+    // char-ranges of its links (so LinkText can make them clickable) and inline-code spans (file-ref candidates).
+    // The walker owns the positions — every run by its text length, a checkbox as one position, exactly what the
+    // block's TextLayout counts — so a hit-test index maps back to the right span, and to the right source.
+    private sealed class InlineSink(MarkdownView view, double size, IBrush brush) : IMarkdownInlineSink
     {
         public readonly InlineCollection Inlines = new();
         public readonly List<UrlSpan> Links = new();
-        public readonly List<(int Start, int Length, string Text)> Codes = new();   // inline-code spans (file-ref candidates)
-        public int Pos;
-        public void Add(global::Avalonia.Controls.Documents.Inline run, int charLen) { Inlines.Add(run); Pos += charLen; }
+        public readonly List<(int Start, int Length, string Text)> Codes = new();
+
+        private IBrush BrushFor(MarkdownInlineStyle style) => style.Link ? view._s.Link : brush;
+
+        public void Text(string text, MarkdownInlineStyle style) => Inlines.Add(Styled(text, size, BrushFor(style), style));
+
+        public void Code(int pos, string code, MarkdownInlineStyle style)
+        {
+            Codes.Add((pos, code.Length, code));   // a possible file reference
+            var run = new Run(code)
+            {
+                FontFamily = Mono, Foreground = view._s.InlineCode ?? view._s.CodeFg, FontSize = size,
+            };
+            if (view._s.InlineCodeBg is { } codeBg) run.Background = codeBg;   // else: coloured text, no block
+            Inlines.Add(run);
+        }
+
+        public void Checkbox(bool isChecked, MarkdownInlineStyle style) =>
+            Inlines.Add(new InlineUIContainer(view.Checkbox(isChecked, size)) { BaselineAlignment = BaselineAlignment.Center });
+
+        public void LineBreak(string text, MarkdownInlineStyle style) => Inlines.Add(new Run(text) { Foreground = BrushFor(style) });
+
         // Only an http(s)/mailto target becomes a browser link (review fixes CP8). A relative or file: target
         // joins the file-ref candidates instead, so it opens in the viewer only if it names a real local file;
         // any other scheme (javascript:, search-ms:, ms-*:) is left as inert text.
-        public void MarkLink(int start, string? url)
+        public void Link(int start, int end, string? url)
         {
-            if (OpenTargets.WebUrl(url) is { } web) Links.Add(new UrlSpan(start, Pos - start, web));
-            else if (OpenTargets.LinkFilePath(url) is { } path) Codes.Add((start, Pos - start, path));
+            if (OpenTargets.WebUrl(url) is { } web) Links.Add(new UrlSpan(start, end - start, web));
+            else if (OpenTargets.LinkFilePath(url) is { } path) Codes.Add((start, end - start, path));
         }
     }
 
@@ -593,63 +621,6 @@ internal sealed class MarkdownView
                 (spans ??= new()).Add(new FileRef.FileSpan(start, len, abs));
         if (spans is { Count: > 0 })
             FileRef.AttachInline(tb, spans, f.OpenViewer, f.ViewDiff);
-    }
-
-    private void AppendInlines(InlineSink sink, ContainerInline container, Run2 style)
-    {
-        foreach (var inline in container)
-        {
-            switch (inline)
-            {
-                case LiteralInline lit:
-                    var litText = lit.Content.ToString();
-                    sink.Add(Styled(litText, style), litText.Length);
-                    break;
-                case CodeInline code:
-                    sink.Codes.Add((sink.Pos, code.Content.Length, code.Content));   // a possible file reference
-                    var codeRun = new Run(code.Content)
-                    {
-                        FontFamily = Mono, Foreground = _s.InlineCode ?? _s.CodeFg, FontSize = style.Size,
-                    };
-                    if (_s.InlineCodeBg is { } codeBg) codeRun.Background = codeBg;   // else: coloured text, no block
-                    sink.Add(codeRun, code.Content.Length);
-                    break;
-                case EmphasisInline em:
-                    var s = em.DelimiterChar == '~' ? style with { Strike = true }
-                          : em.DelimiterCount >= 2 ? style with { Bold = true }
-                          : style with { Italic = true };
-                    AppendInlines(sink, em, s);
-                    break;
-                case LinkInline link:
-                    int linkStart = sink.Pos;
-                    if (link.IsImage)
-                    {
-                        var imgText = $"🖼 {link.Url}";
-                        sink.Add(Styled(imgText, style with { Brush = _s.Link, Link = true }), imgText.Length);
-                    }
-                    else
-                        AppendInlines(sink, link, style with { Brush = _s.Link, Link = true, Strike = false });
-                    sink.MarkLink(linkStart, link.Url);
-                    break;
-                case AutolinkInline auto:
-                    int autoStart = sink.Pos;
-                    sink.Add(Styled(auto.Url, style with { Brush = _s.Link, Link = true }), auto.Url.Length);
-                    sink.MarkLink(autoStart, auto.IsEmail ? "mailto:" + auto.Url : auto.Url);
-                    break;
-                case TaskList task:
-                    sink.Add(new InlineUIContainer(Checkbox(task.Checked, style.Size))
-                    {
-                        BaselineAlignment = BaselineAlignment.Center,
-                    }, 1);
-                    break;
-                case LineBreakInline br:
-                    sink.Add(new Run(br.IsHard ? "\n" : " ") { Foreground = style.Brush }, 1);
-                    break;
-                case ContainerInline cc:
-                    AppendInlines(sink, cc, style);
-                    break;
-            }
-        }
     }
 
     // A drawn task-list checkbox — a rounded, bordered box with a soft drop shadow (and a check mark when
@@ -691,11 +662,11 @@ internal sealed class MarkdownView
         return box;
     }
 
-    private static Run Styled(string text, Run2 style)
+    private static Run Styled(string text, double size, IBrush brush, MarkdownInlineStyle style)
     {
         var run = new Run(text)
         {
-            Foreground = style.Brush, FontSize = style.Size,
+            Foreground = brush, FontSize = size,
             FontWeight = style.Bold ? FontWeight.Bold : FontWeight.Normal,
             FontStyle = style.Italic ? FontStyle.Italic : FontStyle.Normal,
         };

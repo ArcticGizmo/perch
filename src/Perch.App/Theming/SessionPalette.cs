@@ -53,6 +53,8 @@ internal sealed class SessionPalette
     public SolidColorBrush BrandInk { get; } = new(Colors.Transparent);
     public SolidColorBrush BrandWash { get; } = new(Colors.Transparent);
     public SolidColorBrush BrandLine { get; } = new(Colors.Transparent);
+    /// <summary>The wash painted over selected thread text (the cross-block selection layer).</summary>
+    public SolidColorBrush Selection { get; } = new(Colors.Transparent);
 
     // Semantic (state, never the accent)
     public SolidColorBrush Ok { get; } = new(Colors.Transparent);
@@ -169,6 +171,7 @@ internal sealed class SessionPalette
         BrandInk.Color = Contrast.BestForeground(t.Accent).ToColor();
         BrandWash.Color = WashColor(accent, dark ? (byte)0x24 : (byte)0x1A);
         BrandLine.Color = WashColor(accent, dark ? (byte)0x5C : (byte)0x47);
+        Selection.Color = WashColor(accent, dark ? (byte)0x55 : (byte)0x42);
 
         Ok.Color = t.StatusRunning.ToColor();
         Await.Color = await;

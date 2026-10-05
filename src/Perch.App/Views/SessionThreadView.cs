@@ -33,6 +33,7 @@ internal sealed class SessionThreadView : ScrollViewer
     private readonly SessionPalette _p;
     private readonly StackPanel _stack;
     private readonly Canvas _highlightLayer;   // translucent find-match rectangles, above the thread, click-through
+    private readonly BlockSelection _selection; // drag-select across blocks (a heading and its paragraph, list items, messages)
     private readonly Dictionary<ConversationItem, ItemView> _views = new();
     private readonly Dictionary<CompactionItem, CompactionCard> _compactions = new();
     private readonly HashSet<ConversationItem> _pendingSync = new();   // Updated items awaiting one batched sync
@@ -84,6 +85,9 @@ internal sealed class SessionThreadView : ScrollViewer
     // MUST exceed PromptLandGap: after a jump the target sits at exactly PromptLandGap, and if the epsilon were
     // smaller that prompt would read as "below" and the opposite-direction jump would snap straight back to it.
     private const double PromptAboveEpsilon = PromptLandGap + 2;
+
+    /// <summary>True when a cross-block text selection is up (so the window's Ctrl+C copies, not interrupts).</summary>
+    public bool HasSelection => _selection.HasSelection;
 
     /// <summary>True when the view is scrolled to (or near) the tail — the "jump to bottom" button hides.</summary>
     public bool AtBottom => _atBottom;
@@ -168,7 +172,11 @@ internal sealed class SessionThreadView : ScrollViewer
         // The find-match overlay sits above the thread in the same scrolled coordinate space, so its
         // translucent rectangles ride along as the content scrolls. Click-through so it never eats selection.
         _highlightLayer = new Canvas { IsHitTestVisible = false };
-        Content = new Panel { Children = { _stack, _highlightLayer } };
+        // Each Markdown block is its own SelectableTextBlock, whose native selection can't leave it; the shared
+        // cross-block selection lets a drag run across blocks and messages. It only starts on text, so presses on
+        // cards, buttons and empty space behave as before.
+        _selection = new BlockSelection(this, _p.Selection, startInGaps: false) { Root = _stack };
+        Content = new Panel { Children = { _stack, _highlightLayer, _selection.Layer } };
 
         // Follow the tail only while the user is at (or near) the bottom; scrolling up pins the view. Only a
         // change the *user* made (offset moved, extent unchanged) re-evaluates — content growing pushes the
@@ -252,6 +260,7 @@ internal sealed class SessionThreadView : ScrollViewer
         _matchCurrent = -1;
         _highlightLayer.Children.Clear();
         _compactions.Clear();
+        _selection.Reset();
     }
 
     // History landed in front of the live items: rebuild the whole column (cheap — a few hundred controls).
