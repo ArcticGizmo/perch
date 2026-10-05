@@ -11,7 +11,7 @@ namespace Perch.Avalonia.Views;
 /// Drag-to-reorder for the overlay's movable sections — used <em>only</em> by the Settings live-preview pane
 /// (<c>PreviewPane</c>), never the live overlay, so the overlay's normal drag/click routing is untouched.
 ///
-/// <para>Turning <see cref="RearrangeMode"/> on forces every section gate on (so all nine sections lay out
+/// <para>Turning <see cref="RearrangeMode"/> on forces every section gate on (so all ten sections lay out
 /// against the preview's sample data) and remembers which were <em>off</em> in the user's settings, so those
 /// paint dimmed but can still be positioned. A press picks up the section under the pointer; moving shows an
 /// accent insertion line; releasing splices the section into its new slot and raises
@@ -52,7 +52,7 @@ public sealed partial class OverlayCanvas
         }
     }
 
-    // Snapshot which sections are currently off (for dimming), then force every gate on so all nine sections
+    // Snapshot which sections are currently off (for dimming), then force every gate on so all ten sections
     // show with the preview's sample data. The order matters: read the real gates before overwriting them.
     private void EnterRearrange()
     {
@@ -60,6 +60,7 @@ public sealed partial class OverlayCanvas
         if (!_showSystemMetrics) _rearrangeDimmed.Add(OverlaySection.SystemInfo);
         if (!UsageStripVisible)  _rearrangeDimmed.Add(OverlaySection.ClaudeMetrics);
         if (!TodosStripVisible)  _rearrangeDimmed.Add(OverlaySection.Todo);
+        if (!GitHubStripVisible) _rearrangeDimmed.Add(OverlaySection.GitHub);
         if (!MediaStripVisible)  _rearrangeDimmed.Add(OverlaySection.Media);
         if (!MicStripVisible)    _rearrangeDimmed.Add(OverlaySection.Call);
         if (!FeedStripVisible)   _rearrangeDimmed.Add(OverlaySection.Friends);
@@ -67,6 +68,7 @@ public sealed partial class OverlayCanvas
         _showSystemMetrics = true;
         _usageEnabled = true;
         _todosEnabled = true;
+        _gitHubEnabled = true;
         _mediaEnabled = true;
         _micEnabled = true;
         _socialEnabled = true;

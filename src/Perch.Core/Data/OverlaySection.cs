@@ -27,6 +27,8 @@ public enum OverlaySection
     Hypertree,
     /// <summary>The user's own to-do section.</summary>
     Todo,
+    /// <summary>The one-line GitHub alerts strip: how many open PRs need you.</summary>
+    GitHub,
     /// <summary>The session rows (and, directly beneath them, the daemon-worker strip). Sessions that ended lately
     /// aren't a section: they're behind the Recent button on this section's "+ New session" row.</summary>
     Sessions,
@@ -53,6 +55,7 @@ public static class OverlaySectionOrder
         OverlaySection.QuickLinks,
         OverlaySection.Hypertree,
         OverlaySection.Todo,
+        OverlaySection.GitHub,
         OverlaySection.Sessions,
         OverlaySection.Friends,
         OverlaySection.Media,

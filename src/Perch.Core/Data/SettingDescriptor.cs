@@ -66,6 +66,7 @@ internal enum PreviewTarget
     ConfigDirLabel,
     RoostButton,
     RecentSessions,
+    GitHubAlerts,
 }
 
 /// <summary>

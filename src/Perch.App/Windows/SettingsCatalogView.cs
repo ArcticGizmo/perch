@@ -498,6 +498,7 @@ internal sealed class SettingsCatalogView : StackPanel
             PreviewTarget.ConfigDirLabel  => ("work",        Palette.Muted,   Color.FromRgb(38, 38, 52)),
             PreviewTarget.RoostButton     => ("◫ Roost",     Palette.Accent,  Color.FromRgb(38, 49, 74)),
             PreviewTarget.RecentSessions  => ("◷ Recent",    Palette.Orange, Color.FromRgb(48, 40, 30)),
+            PreviewTarget.GitHubAlerts    => ("2 PRs need you", Palette.Yellow, Color.FromRgb(45, 42, 28)),
             _                            => ("",            Palette.Muted, Color.FromRgb(30, 30, 40)),
         };
 

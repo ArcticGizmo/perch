@@ -288,6 +288,42 @@ internal static class SampleData
         new("t-3", "Cut the next release", "Fri", Overdue: false),
     ];
 
+    /// <summary>A GitHub alerts poll covering every reason the classifier can raise across three repos, plus PRs that
+    /// need nothing — so the strip, the window's "Needs you" view and its "All open" view all have something to show.
+    /// The viewer is "me"; times are relative to now so the "updated …" labels read naturally.</summary>
+    public static GitHubFetchResult GitHubAlerts()
+    {
+        var now = DateTime.UtcNow;
+        GhEvent Ev(string who, GhEventKind k, int minutesAgo, bool bot = false) => new(who, bot, k, now.AddMinutes(-minutesAgo));
+        GhPullRequest Pr(string repo, int n, string title, string author, GhPrRelation rel, int updatedMins) => new()
+        {
+            Repo = repo, Number = n, Title = title, Url = $"https://github.com/{repo}/pull/{n}", Author = author,
+            Relation = rel, UpdatedUtc = now.AddMinutes(-updatedMins), LastCommitUtc = now.AddHours(-6),
+            Mergeable = GhMergeable.Mergeable, MergeState = "CLEAN", Checks = GhChecks.Passing,
+            ReviewDecision = "REVIEW_REQUIRED",
+        };
+        return new GitHubFetchResult("me",
+        [
+            Pr("acme/web", 412, "Move the checkout form to the new design system", "me", GhPrRelation.Author, 25) with
+                { Events = [Ev("alice", GhEventKind.ChangesRequested, 25)], ReviewDecision = "CHANGES_REQUESTED" },
+            Pr("acme/web", 418, "Lazy-load the dashboard charts", "bob", GhPrRelation.ReviewRequested, 90),
+            Pr("acme/web", 401, "Bump the build toolchain", "me", GhPrRelation.Author, 60 * 26) with
+                { ReviewDecision = "APPROVED", HasApproval = true, Events = [Ev("carol", GhEventKind.Approved, 60 * 26)] },
+            Pr("acme/api", 77, "Rate-limit the export endpoint", "me", GhPrRelation.Author, 12) with
+                { Checks = GhChecks.Failing, Events = [Ev("dave", GhEventKind.Comment, 12), Ev("erin", GhEventKind.Commented, 8)] },
+            Pr("acme/api", 80, "Fix the pagination off-by-one", "frank", GhPrRelation.Assignee, 240),
+            Pr("acme/api", 69, "Drop the legacy auth shim", "me", GhPrRelation.Author, 60 * 50) with
+                { Mergeable = GhMergeable.Conflicting, MergeState = "DIRTY" },
+            Pr("tools/cli", 5, "Add a --json flag to status", "me", GhPrRelation.Author, 60 * 3) with
+                { IsDraft = true, Checks = GhChecks.Pending, Events = [Ev("ci-bot", GhEventKind.Comment, 30, bot: true)] },
+        ], null, now.AddMinutes(-2));
+    }
+
+    /// <summary>The overlay strip for <see cref="GitHubAlerts"/>, folded the way the monitor host folds it.</summary>
+    public static OverlayCanvas.GitHubStrip GitHubStrip() =>
+        Services.GitHubAlertsMonitorHost.ToStrip(
+            GitHubAlertsClassifier.Build(GitHubAlerts(), new Dictionary<string, DateTime>()));
+
     /// <summary>The Recent button's lines (session recovery): one Perch had open, one a restart interrupted (so also
     /// before the shutdown), one that ended just before the shutdown, ordinary endings and an <c>/exit</c> — every tone
     /// and every filter.</summary>

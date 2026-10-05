@@ -302,6 +302,30 @@ internal static class HeadlessRenderer
         todoEmptyProbe.SetTopTodos([], 0);
         RenderControl(todoEmptyProbe, Path.Combine(outDir, "overlay_todos_empty_1x.png"), 96);
 
+        // GitHub alerts strip: the one line in each of its states — PRs need you (count + summary + badge), all clear,
+        // still checking, and a failure with nothing to show.
+        void GitHubProbe(string file, OverlayCanvas.GitHubStrip strip, double dpi = 96, double? width = null)
+        {
+            var c = new OverlayCanvas();
+            c.Update(SampleData.Sessions());
+            c.SetShowGitHubAlerts(true);
+            c.SetGitHubStrip(strip);
+            if (width is { } w) c.SetFloatingWidth(w);
+            RenderControl(c, Path.Combine(outDir, file), dpi);
+        }
+        // The sample carries every kind at once: all seven symbol chips at the default width, then a narrow
+        // panel where the tail drops behind a "…" instead of running off the edge, then a typical two-kind day.
+        GitHubProbe("overlay_github_1x.png", SampleData.GitHubStrip());
+        GitHubProbe("overlay_github_1.5x.png", SampleData.GitHubStrip(), 144);
+        GitHubProbe("overlay_github_narrow_1x.png", SampleData.GitHubStrip(), width: OverlayCanvas.MinOverlayWidthDip);
+        GitHubProbe("overlay_github_two_1x.png", new(OverlayCanvas.GitHubStripStatus.Ok, 3, 5, "",
+            [(GhAlertKind.ReviewRequested, 2), (GhAlertKind.ReadyToMerge, 1)]));
+        GitHubProbe("overlay_github_clear_1x.png", new(OverlayCanvas.GitHubStripStatus.Ok, 0, 4, ""));
+        GitHubProbe("overlay_github_checking_1x.png", new(OverlayCanvas.GitHubStripStatus.Checking, 0, 0, ""));
+        GitHubProbe("overlay_github_error_1x.png",
+            new(OverlayCanvas.GitHubStripStatus.Error, 0, 0, "gh isn't signed in (run gh auth login)"));
+        RenderGitHubAlertsWindow(outDir);
+
         // Session recovery: the Recent (clock) button beside the Roost button, its badge lit by the unseen interrupted
         // lines; with the Roost button off it takes the far-right box. Then its flyout under each filter.
         var recentProbe = new OverlayCanvas();
@@ -329,6 +353,8 @@ internal static class HeadlessRenderer
             c.SetQuickLinks(links, icons);
             c.SetHypertree(SampleData.Hypertree());
             c.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
+            c.SetShowGitHubAlerts(true);
+            c.SetGitHubStrip(SampleData.GitHubStrip());
             c.SetRecent(SampleData.RecentLines());
             c.SetDaemonWorkers(SampleData.DaemonWorkers());
             c.SetShowMediaController(true);   // off by default; enabled so the strip shows in this probe
@@ -2437,6 +2463,35 @@ internal static class HeadlessRenderer
                     AvaloniaHeadlessPlatform.ForceRenderTimerTick();
                 }
             }
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, file));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
+    // The GitHub alerts window seeded with the sample poll, in its "Needs you" (default) and "All open" views. The
+    // host is seeded directly (no gh, no timer) over an in-memory seen store, so the render touches no files.
+    private static void RenderGitHubAlertsWindow(string outDir)
+    {
+        Capture("github_alerts_1x.png", needsYouOnly: true);
+        Capture("github_alerts_all_1x.png", needsYouOnly: false);
+        // A search narrowing the list (tab counts follow it), and one that matches nothing needing you.
+        Capture("github_alerts_search_1x.png", needsYouOnly: false, search: "api");
+        Capture("github_alerts_search_empty_1x.png", needsYouOnly: true, search: "json");
+
+        void Capture(string file, bool needsYouOnly, string? search = null)
+        {
+            using var host = new GitHubAlertsMonitorHost(GitHubAlertsSeenStore.InMemory(), _ => { }, null);
+            host.SeedForRender(SampleData.GitHubAlerts());
+            var w = new GitHubAlertsWindow(host);
+            w.SetNeedsYouOnlyForRender(needsYouOnly, search);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
             var frame = w.CaptureRenderedFrame();
             if (frame != null)
             {
