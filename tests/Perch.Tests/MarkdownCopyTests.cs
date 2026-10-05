@@ -8,7 +8,10 @@ namespace Perch.Tests;
 // Markdown), and a partial selection keeps the syntax around the parts it covers.
 public class MarkdownCopyTests
 {
-    private const string Sample = """
+    // A raw string literal takes the line endings of this file as checked out — CRLF on a Windows runner with
+    // core.autocrlf — so normalise to LF; the expectations below spell their newlines as \n. (CRLF sources are
+    // covered on purpose by Windows_line_endings_round_trip.)
+    private static readonly string Sample = """
         # Selection test: heading one
 
         This first paragraph sits directly under an h1. It contains **bold text**, *italic text*, ~~strikethrough~~, `inline code`, and a link to [Anthropic](https://www.anthropic.com).
@@ -56,7 +59,7 @@ public class MarkdownCopyTests
         ---
 
         Final paragraph after a thematic break. End of test.
-        """;
+        """.ReplaceLineEndings("\n");
 
     // Select every rendered block, start to end — what a drag from the top of a message to its bottom does.
     private static string SelectAll(string md, bool markdown = true) =>
@@ -114,7 +117,7 @@ public class MarkdownCopyTests
     [Fact]
     public void Windows_line_endings_round_trip()
     {
-        string crlf = Sample.Replace("\r\n", "\n").Replace("\n", "\r\n");
+        string crlf = Sample.ReplaceLineEndings("\r\n");
         Assert.Equal(crlf, SelectAll(crlf));
     }
 
@@ -166,7 +169,7 @@ public class MarkdownCopyTests
                 return a + b;
             }
             ```
-            """;
+            """.ReplaceLineEndings("\n");
         Assert.Equal(expected, Select(Sample, "public static", "return a + b;\n}"));
     }
 
