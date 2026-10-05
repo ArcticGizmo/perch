@@ -140,7 +140,7 @@ internal sealed partial class RoostWindow : Window
         Background = _p.Ground;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        // ── Title bar: name ········ + New session ──
+        // ── Title bar: name ········ zoom · + New session ──
         var title = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 9, VerticalAlignment = VerticalAlignment.Center,
@@ -150,13 +150,17 @@ internal sealed partial class RoostWindow : Window
                 new TextBlock { Text = "Roost", FontFamily = _p.Display, FontWeight = FontWeight.Bold, FontSize = 15, Foreground = _p.Title, VerticalAlignment = VerticalAlignment.Center },
             },
         };
-        var newSession = BarButton("+ New session", () => StartNewSession(null));
-        newSession[DockPanel.DockProperty] = Dock.Right;
+        var barRight = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
+            [DockPanel.DockProperty] = Dock.Right,
+            Children = { BarButton("+ New session", () => StartNewSession(null)) },
+        };
         var bar = new Border
         {
             Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(0, 0, 0, 1),
             Padding = new Thickness(14, 10), [DockPanel.DockProperty] = Dock.Top,
-            Child = new DockPanel { LastChildFill = true, Children = { newSession, title } },
+            Child = new DockPanel { LastChildFill = true, Children = { barRight, title } },
         };
 
         // ── Rail: the sort toggle, the sessions, then "Recent", "N hidden" and the keys cheat-sheet ──
@@ -268,6 +272,8 @@ internal sealed partial class RoostWindow : Window
         _zoom.ZoomChanged += z => ZoomChanged?.Invoke(z);
         _zoom.Attach(this);
         Content = _zoom;
+        // Its readout + level picker sits just left of + New session, as it does beside a session window's End session.
+        barRight.Children.Insert(0, new ZoomButton(_p, _zoom));
         // A drag under way holds the pointer here, not on the row or header it started from: a hover-switch to
         // another tab hides that header, and a hidden control can't keep the capture.
         _root.PointerMoved += (_, e) => { if (DragOwnsRoot) MoveGhost(e.GetPosition(_overlay)); };
