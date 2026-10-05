@@ -98,6 +98,9 @@ public partial class App : Application
     private TodoStore? _todoStore;
     private TodoWindow? _todoWindow;
     private Services.TodoMonitorHost? _todoHost;
+    // GitHub alerts: the poller behind the overlay's one-line GitHub strip, and the reused list window it opens.
+    private Services.GitHubAlertsMonitorHost? _gitHubHost;
+    private GitHubAlertsWindow? _gitHubWindow;
     private AppSettings? _appSettings;
     // The effective settings: _appSettings with the "playful" features masked off while Quiet mode is active
     // (see Perch.Data.QuietMode). Behavioral reads use Effective; editing/persistence uses _appSettings.
@@ -189,6 +192,7 @@ public partial class App : Application
                 _hypertreeHost?.Dispose();
                 _daemonHost?.Dispose();
                 _todoHost?.Dispose();
+                _gitHubHost?.Dispose();
                 _controlServer?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
@@ -485,6 +489,11 @@ public partial class App : Application
                 if (_appSettings is { } s) { s.TodosExpanded = expanded; s.Save(); }
             };
             _overlay.Canvas.TodosRequested += OpenTodos;
+            // GitHub alerts: the poller feeding the overlay's GitHub strip (started/stopped from
+            // ApplyDisplaySettings per ShowGitHubAlerts); clicking the strip opens the list window.
+            _gitHubHost = new Services.GitHubAlertsMonitorHost(
+                GitHubAlertsSeenStore.Load(), strip => _overlay!.Canvas.SetGitHubStrip(strip), _sessionLock);
+            _overlay.Canvas.GitHubAlertsRequested += OpenGitHubAlerts;
             // The Recent button's flyout (session recovery; lines from App.RoostDormant.cs's Recent build).
             _overlay.Canvas.RecentResumeRequested += (id, cwd) => OpenSessionResume(id, cwd);
             _overlay.Canvas.RecentTerminalRequested += (id, cwd) => ReopenSession(cwd, id);
@@ -718,6 +727,7 @@ public partial class App : Application
         _switcher?.Close();
         _projectPicker?.Close();
         _todoWindow?.Close();
+        _gitHubWindow?.Close();
         foreach (var note in _noteWindows.Values.ToList())
             note.CloseWithoutPrompt();
     }
@@ -1017,6 +1027,14 @@ public partial class App : Application
         {
             if (s.ShowTodos || s.TodoRemindersEnabled) todoHost.Start();
             else todoHost.Stop();
+        }
+
+        // Poll GitHub only while the alerts strip is on; off stops the poll and launches no further gh.
+        if (_gitHubHost is { } gitHubHost)
+        {
+            gitHubHost.IntervalMinutes = s.GitHubAlertsIntervalMinutes;
+            if (s.ShowGitHubAlerts) gitHubHost.Start();
+            else gitHubHost.Stop();
         }
 
         // Watch Windows Do Not Disturb only while Social is on and the auto-close option is enabled.
@@ -1864,6 +1882,16 @@ public partial class App : Application
         _todoWindow = WindowHost.ShowOrFocus(_todoWindow,
             () => new TodoWindow(_todoStore, () => _todoHost?.RefreshNow()),
             () => _todoWindow = null,
+            w => w.Retarget());
+    }
+
+    // Opens (or focuses) the GitHub alerts list. It renders the host's snapshot and re-renders on its Changed.
+    private void OpenGitHubAlerts()
+    {
+        if (_gitHubHost is not { } host) return;
+        _gitHubWindow = WindowHost.ShowOrFocus(_gitHubWindow,
+            () => new GitHubAlertsWindow(host),
+            () => _gitHubWindow = null,
             w => w.Retarget());
     }
 

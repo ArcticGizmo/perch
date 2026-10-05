@@ -36,6 +36,7 @@ internal static class OverlaySettingsGates
         c.SetShowJiraTickets(s.ShowJiraTicket);
         c.SetShowDaemonProcesses(s.ShowDaemonProcesses);
         c.SetShowTodos(s.ShowTodos);
+        c.SetShowGitHubAlerts(s.ShowGitHubAlerts);
         c.SetShowRecent(s.ShowRecentSessions);
         c.SetStuckDetectionEnabled(s.StuckDetectionEnabled);
         c.SetShowWaitingTimer(s.ShowWaitingTimer);

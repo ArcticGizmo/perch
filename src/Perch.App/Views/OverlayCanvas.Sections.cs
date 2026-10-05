@@ -8,7 +8,7 @@ namespace Perch.Avalonia.Views;
 
 /// <summary>
 /// The overlay panel's section ordering — the single source of truth for the vertical sequence of movable
-/// sections (system info, claude metrics, quick links, hypertree, todo, sessions, friends, media, call). The
+/// sections (system info, claude metrics, quick links, hypertree, todo, github, sessions, friends, media, call). The
 /// header (top) and outage status bar (bottom) are fixed chrome and are laid out directly by <c>Draw</c>, so
 /// they aren't members here.
 ///
@@ -39,7 +39,7 @@ public sealed partial class OverlayCanvas
     // Whether a section contributes to the panel at all. Uses the same gates the individual strips already
     // expose; Sessions is always present (an empty roster simply contributes its rows-plus-daemon block, which
     // may be near-empty). In Rearrange mode every gate is forced on (see OverlayCanvas.Rearrange.cs), so all
-    // nine sections are visible and can be positioned.
+    // ten sections are visible and can be positioned.
     private bool SectionVisible(OverlaySection s) => s switch
     {
         OverlaySection.SystemInfo    => _showSystemMetrics,
@@ -47,6 +47,7 @@ public sealed partial class OverlayCanvas
         OverlaySection.QuickLinks    => HasQuickLinksRow,
         OverlaySection.Hypertree     => HypertreeStripVisible,
         OverlaySection.Todo          => TodosStripVisible,
+        OverlaySection.GitHub        => GitHubStripVisible,
         OverlaySection.Sessions      => true,
         OverlaySection.Friends       => FeedStripVisible || SocialSignInStripVisible,
         OverlaySection.Media         => MediaStripVisible,
@@ -63,6 +64,7 @@ public sealed partial class OverlayCanvas
         OverlaySection.QuickLinks    => QuickLinksRowHeight,
         OverlaySection.Hypertree     => HypertreeStripHeight,
         OverlaySection.Todo          => TodosStripHeight,
+        OverlaySection.GitHub        => GitHubStripHeight,
         OverlaySection.Sessions      => SessionsSectionHeight,
         OverlaySection.Friends       => FriendsSectionHeight,
         OverlaySection.Media         => MediaStripHeight,
@@ -126,6 +128,7 @@ public sealed partial class OverlayCanvas
             case OverlaySection.QuickLinks:    DrawQuickLinksRow(ctx, width); break;
             case OverlaySection.Hypertree:     DrawHypertreeStrip(ctx, width); break;
             case OverlaySection.Todo:          DrawTodosStrip(ctx, width, top); break;
+            case OverlaySection.GitHub:        DrawGitHubStrip(ctx, width, top); break;
             case OverlaySection.Sessions:      PaintSessions(ctx, width, top); break;
             case OverlaySection.Friends:
                 if (FeedStripVisible) DrawSocialRegion(ctx, width, top);

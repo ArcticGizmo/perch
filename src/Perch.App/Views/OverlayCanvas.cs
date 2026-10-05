@@ -1746,7 +1746,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent, GitHub }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -4239,6 +4239,10 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         bool overMicLabel = HitTestMicLabel(p);
         if (overMicLabel != _hoveredMicLabel) { _hoveredMicLabel = overMicLabel; InvalidateVisual(); }
 
+        // The GitHub alerts strip is one control: the whole band opens the alerts window.
+        bool overGitHub = HitTestGitHub(p);
+        if (overGitHub != _hoveredGitHub) { _hoveredGitHub = overGitHub; InvalidateVisual(); }
+
         // The Social sign-in strip highlights on hover and takes the hand cursor like any other control.
         bool overSocial = _socialSignInRect.Contains(p);
         if (overSocial != _hoveredSocial) { _hoveredSocial = overSocial; InvalidateVisual(); }
@@ -4261,7 +4265,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Cursor = overResize ? ResizeCursor
             : (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
-               || overRoost || overRecent || overUsageToggle)
+               || overRoost || overRecent || overUsageToggle || overGitHub)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -4292,6 +4296,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             ShowFullPanel && _roostRect.Width > 0
                 && _roostRect.Contains(p)             ? (TipKind.Roost, -1) :
             OverRecentButton(p)                       ? (TipKind.Recent, -1) :
+            HitTestGitHub(p)                          ? (TipKind.GitHub, -1) :
             HitTestGameIcon(p) is var gi && gi >= 0 ? (TipKind.Game, gi) :
             HitTestReactionSummary(p) is var rs && rs >= 0 ? (TipKind.ReactionSummary, rs) :
             HitTestSocialStatus(p) is var ss && ss >= 0 ? (TipKind.SocialStatus, ss) :
@@ -4330,6 +4335,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
             case TipKind.Roost:   ShowRoostTooltip();          break;
             case TipKind.Recent:  ShowRecentTooltip();         break;
+            case TipKind.GitHub:  ShowGitHubTooltip();         break;
             case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
             case TipKind.ReactionSummary: ShowReactionSummaryTooltip(_tipRow); break;
             case TipKind.Game: ShowGameTooltip(_tipRow); break;
@@ -4384,6 +4390,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         _hoveredNoteButton = false;
         _hoveredMediaButton = -1;
         _hoveredMicLabel = false;
+        _hoveredGitHub = false;
         if (_hoverResizeEdge != ResizeEdge.None) { _hoverResizeEdge = ResizeEdge.None; changed = true; }
         Cursor = Cursor.Default;
         _tipKind = TipKind.None;
@@ -4778,6 +4785,9 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             else ShowDaemonMenu(daemonRow);
             return;
         }
+
+        // The GitHub alerts strip: anywhere on the line opens the alerts window.
+        if (HitTestGitHub(p)) { GitHubAlertsRequested?.Invoke(); return; }
 
         // The Todo section: the header "+" opens the window to add, the header toggles collapse, and a body
         // line opens the window (right-click a line offers "Complete" — see ShowContextMenuAt).

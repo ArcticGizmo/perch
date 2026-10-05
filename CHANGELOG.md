@@ -9,6 +9,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.6] - 2026-10-06
+
+- GitHub alerts (opt-in): one overlay line for PRs that need you
+- Little symbols for reviews, comments, failing checks, conflicts, ready to merge
+- Click for the list, grouped by repo, with "Open in GitHub"
+- Search the list by title, repo, author or #number
+- Opened PRs stop nagging (reviews you owe do not)
+- Uses your existing `gh` login; Perch never touches a token
+
+---
+
 ## [v0.5.5] - 2026-10-05
 
 - Questions from Claude offer "Other" for typing your own answer (the options were suggestions all along)

@@ -591,6 +591,16 @@ internal sealed class AppSettings
     // keeps that.
     public int PullRequestIntervalMinutes { get; set; } = 5;
 
+    // GitHub alerts. When on, the overlay grows a one-line "GitHub" section saying how many open pull requests
+    // need you (a review requested, new comments or changes requested on yours, yours ready to merge or failing,
+    // one assigned to you); clicking it opens the alerts window listing them by repo. Polled through the gh CLI
+    // every GitHubAlertsIntervalMinutes. Independent of ShowPullRequests (which is per-session-branch). Off by
+    // default and load-bearing while off: nothing runs gh. See Perch.Data.GitHubAlertsClassifier.
+    public bool ShowGitHubAlerts { get; set; }
+
+    // How often (minutes) the GitHub alerts poll runs. Clamped to 2–60 when applied. Defaults to 5.
+    public int GitHubAlertsIntervalMinutes { get; set; } = 5;
+
     // Jira ticket deep-link. When on, a session whose git branch carries a Jira issue key (e.g.
     // SFTY-1234-add-audit-log) grows a small ticket glyph on its overlay row; clicking it opens the ticket at
     // https://{JiraSubdomain}.atlassian.net/browse/{KEY}. Pure and offline — the key is parsed from the branch

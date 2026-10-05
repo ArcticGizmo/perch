@@ -435,6 +435,18 @@ internal static class SettingsRegistry
             PreviewTarget.PullRequest, nameof(AppSettings.PullRequestIntervalMinutes),
             s => s.PullRequestIntervalMinutes, (s, v) => s.PullRequestIntervalMinutes = v),
 
+        Toggle("github-alerts", "GitHub alerts",
+            "A one-line overlay section saying which of your open PRs need you - reviews requested, new comments, ready to merge, assigned - with a list grouped by repo. Uses the gh CLI.",
+            SettingSurface.Integrations, ["github", "pr", "pull", "request", "review", "assigned", "alert", "merge", "comments", "inbox"],
+            PreviewTarget.GitHubAlerts, nameof(AppSettings.ShowGitHubAlerts),
+            s => s.ShowGitHubAlerts, (s, v) => s.ShowGitHubAlerts = v),
+
+        Stepper("github-alerts-interval", "GitHub alerts interval",
+            "How often (minutes) to check GitHub for PRs that need you.",
+            SettingSurface.Integrations, ["github", "alerts", "pr", "interval", "minutes", "poll"],
+            PreviewTarget.GitHubAlerts, nameof(AppSettings.GitHubAlertsIntervalMinutes),
+            s => s.GitHubAlertsIntervalMinutes, (s, v) => s.GitHubAlertsIntervalMinutes = v),
+
         Toggle("jira-ticket", "Jira ticket",
             "A ticket glyph on a session whose branch name carries a Jira key (e.g. SFTY-1234), linking to the issue.",
             SettingSurface.Integrations, ["jira", "ticket", "issue", "atlassian", "branch", "link", "sfty"],
