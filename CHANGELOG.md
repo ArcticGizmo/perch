@@ -9,6 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.4] - 2026-10-05
+
+- Select across headings, paragraphs, lists, code and tables in one drag
+- Works in session threads and the Markdown preview
+- Copies the Markdown under the selection; plain text is a right-click away
+- Selecting a whole message copies exactly what its copy button does
+- Ctrl+C on a thread selection copies instead of interrupting (Claude can finish its sentence)
+
+---
+
 ## [v0.5.3] - 2026-10-05
 
 - A Recent (clock) button: lately-ended sessions, cut-off ones first
