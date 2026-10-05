@@ -1673,7 +1673,7 @@ internal sealed partial class SessionWindow : Window
             "Stops the Claude process and closes this window. The conversation stays on disk and can be resumed " +
             "later — from the launcher, the overlay, or `claude --resume`. (Closing the window with × instead just " +
             "hides this view; the session keeps running.)",
-            "End session", "Keep running");
+            "End session", "Keep running", anchor: _endButton);
         // End also closes the window so an ended session can't be resumed here by reflex (which would re-send its
         // whole context and burn tokens). The app owns the PerchSession, so End() finishes the process in the
         // background regardless of this view closing.

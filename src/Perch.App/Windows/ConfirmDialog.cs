@@ -22,10 +22,14 @@ namespace Perch.Avalonia.Windows;
 /// </summary>
 internal sealed class ConfirmDialog : Window
 {
-    private const int Gap = 16; // DIP gap between the note and this dialog when placed beside it
+    private const int Gap = 16;       // DIP gap between the note and this dialog when placed beside it
+    private const int AnchorGap = 6;  // DIP gap between an anchor control and this dialog
 
-    private ConfirmDialog(string title, string message, string confirmLabel, string cancelLabel)
+    private readonly Control? _anchor;
+
+    private ConfirmDialog(string title, string message, string confirmLabel, string cancelLabel, Control? anchor)
     {
+        _anchor = anchor;
         Title = title;
         Width = 380;
         SizeToContent = SizeToContent.Height;
@@ -72,8 +76,41 @@ internal sealed class ConfirmDialog : Window
         base.OnOpened(e);
         // SizeToContent settles Bounds on the next layout pass, so place once now (best-effort) and again
         // after the size is known, so the "clear of the note" maths uses the real dialog height.
+        Place();
+        Dispatcher.UIThread.Post(Place, DispatcherPriority.Loaded);
+    }
+
+    private void Place()
+    {
+        if (_anchor is not null && PlaceNearAnchor(_anchor)) return;
         PlaceClearOfOwner();
-        Dispatcher.UIThread.Post(PlaceClearOfOwner, DispatcherPriority.Loaded);
+    }
+
+    // Drops this dialog just below the anchor control, right edges aligned (so a button on the right of a bar
+    // keeps the dialog on-window), flipping above when there's no room below, clamped to the screen. False
+    // when the anchor isn't on screen, so the caller falls back to the beside-the-owner placement.
+    private bool PlaceNearAnchor(Control anchor)
+    {
+        if (!anchor.IsVisible || TopLevel.GetTopLevel(anchor) is not Window host) return false;
+        var topLeft = anchor.PointToScreen(new Point(0, 0));
+        var bottomRight = anchor.PointToScreen(new Point(anchor.Bounds.Width, anchor.Bounds.Height));
+        var screen = host.Screens.ScreenFromPoint(topLeft) ?? host.Screens.ScreenFromWindow(host);
+        if (screen is null) return false;
+
+        var wa = screen.WorkingArea;        // physical pixels
+        double scale = screen.Scaling;
+        int w = (int)((Bounds.Width > 0 ? Bounds.Width : Width) * scale);
+        int h = (int)((Bounds.Height > 0 ? Bounds.Height : 160) * scale);
+        int gap = (int)(AnchorGap * scale);
+
+        int x = Math.Clamp(bottomRight.X - w, wa.X, Math.Max(wa.X, wa.X + wa.Width - w));
+        int y = bottomRight.Y + gap + h <= wa.Y + wa.Height
+            ? bottomRight.Y + gap         // room below the anchor
+            : topLeft.Y - gap - h;        // otherwise above it
+        y = Math.Clamp(y, wa.Y, Math.Max(wa.Y, wa.Y + wa.Height - h));
+
+        Position = new PixelPoint(x, y);
+        return true;
     }
 
     // Positions this dialog on whichever side of the owner note has the most room, fully outside the
@@ -110,8 +147,10 @@ internal sealed class ConfirmDialog : Window
     }
 
     /// <summary>Shows the confirmation modal owned by <paramref name="owner"/>; resolves to the user's
-    /// choice. Placed beside (never over) the owner and kept topmost so it can't hide behind it.</summary>
+    /// choice. Placed beside (never over) the owner and kept topmost so it can't hide behind it — or, given
+    /// an <paramref name="anchor"/> (the button that asked), dropped right next to that control instead.</summary>
     public static Task<bool> ShowAsync(
-        Window owner, string title, string message, string confirmLabel, string cancelLabel) =>
-        new ConfirmDialog(title, message, confirmLabel, cancelLabel).ShowDialog<bool>(owner);
+        Window owner, string title, string message, string confirmLabel, string cancelLabel,
+        Control? anchor = null) =>
+        new ConfirmDialog(title, message, confirmLabel, cancelLabel, anchor).ShowDialog<bool>(owner);
 }
