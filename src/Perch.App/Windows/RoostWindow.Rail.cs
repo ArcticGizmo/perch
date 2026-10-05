@@ -35,7 +35,7 @@ internal sealed partial class RoostWindow
     // "N not in a tab · 1 needs you", and "K need you in other tabs" when another tab is calling.
     private void RefreshPills(IReadOnlyList<RoostPane> all)
     {
-        var off = _tabs.Unplaced(all).Where(p => !p.Ended).ToList();
+        var off = _tabs.Unplaced(all).Where(p => p.IsLive).ToList();
         int needs = off.Count(p => p.Group == RoostGroup.NeedsYou);
         _unplacedPill.IsVisible = off.Count > 0;
         _unplacedText.Text = needs > 0 ? $"{off.Count} not in a tab · {needs} need{(needs == 1 ? "s" : "")} you" : $"{off.Count} not in a tab";
@@ -170,17 +170,26 @@ internal sealed partial class RoostWindow
                 if (_railRows.TryGetValue(pane.Key, out var row)) UpdateRailRow(row, pane);
     }
 
-    // The rail's headed sections for the current sort: the non-empty status groups, or one A–Z list.
-    private List<(string Title, IReadOnlyList<RoostPane> Panes)> RailSections() =>
-        _railSort == RoostRailSort.Alphabetical
-            ? _roster.RailAlphabetical.Count > 0 ? [("ALL SESSIONS", _roster.RailAlphabetical)] : []
-            : _roster.Rail.Where(g => g.Panes.Count > 0).Select(g => (GroupTitle(g.Group), g.Panes)).ToList();
+    // The rail's headed sections for the current sort: the non-empty status groups, or one A–Z list. A dormant pane no
+    // tab holds is left to the footer's Recent flyout (InRail).
+    private List<(string Title, IReadOnlyList<RoostPane> Panes)> RailSections()
+    {
+        if (_railSort == RoostRailSort.Alphabetical)
+        {
+            var all = _roster.RailAlphabetical.Where(InRail).ToList();
+            return all.Count > 0 ? [("ALL SESSIONS", all)] : [];
+        }
+        return _roster.Rail
+            .Select(g => (Title: GroupTitle(g.Group), Panes: (IReadOnlyList<RoostPane>)g.Panes.Where(InRail).ToList()))
+            .Where(s => s.Panes.Count > 0)
+            .ToList();
+    }
 
     private void RebuildRail(IReadOnlyList<(string Title, IReadOnlyList<RoostPane> Panes)> sections)
     {
         _rail.Children.Clear();
         _railRows.Clear();
-        if (_roster.Panes.Count == 0)
+        if (sections.Count == 0)
         {
             _rail.Children.Add(new TextBlock { Text = "No live sessions", Margin = new Thickness(8, 0), FontSize = 12, Foreground = _p.Faint });
             return;
@@ -256,6 +265,7 @@ internal sealed partial class RoostWindow
         RoostGroup.NeedsYou => "NEEDS YOU",
         RoostGroup.DoneReview => "DONE · REVIEW",
         RoostGroup.Working => "WORKING",
+        RoostGroup.Recent => "NOT RUNNING",   // only the tab-held ones; the rest are behind the footer's "Recent"
         _ => "QUIET",
     };
 
@@ -316,9 +326,10 @@ internal sealed partial class RoostWindow
         bool on = pane.Key == _focused;
         var tag = TabTagFor(pane.Key);
         bool inActive = _tabs.Active.Cells.Values.Contains(pane.Key);
-        bool fresh = tag is null && !pane.Ended && !_everPlaced.Contains(pane.Key);
+        bool fresh = tag is null && pane.IsLive && !_everPlaced.Contains(pane.Key);
         v.Dot.Fill = _p.PaneDot(pane);
-        var elapsed = pane.Ended ? "ended"
+        var elapsed = pane.Dormant is { } d ? SessionPane.DormantRailLabel(d)
+            : pane.Ended ? "ended"
             : s.Status == SessionStatus.AwaitingInput ? s.AwaitingElapsedLabel() ?? ""
             : s.Status == SessionStatus.Running ? s.RunningElapsedLabel() ?? ""
             : "";
@@ -331,11 +342,16 @@ internal sealed partial class RoostWindow
         v.Diamond.IsVisible = s.IsPerchControlled;
         v.Name.Text = s.DisplayName;
         v.Name.Foreground = _p.Text;
+        // A flagged ending (interrupted, just before a shutdown) reads in the attention hue.
+        v.Elapsed.Foreground = pane.Dormant is { IsFlagged: true } ? _p.Await : _p.Faint;
         v.Row.BorderBrush = on ? _p.BrandLine : Brushes.Transparent;
         if (on || !v.Row.IsPointerOver) v.Row.Background = on ? _p.BrandWash : Brushes.Transparent;
-        v.Row.Opacity = pane.Ended ? 0.6 : 1;
-        ToolTip.SetTip(v.Row, inActive ? "In this tab" : tag is null
+        v.Row.Opacity = pane.Ended ? 0.6 : pane.IsDormant ? 0.85 : 1;
+        var where = inActive ? "In this tab" : tag is null
             ? "In no tab — click to look at it in Focus, or drag it onto a region"
-            : $"In {tag} — click to go there, or drag it onto a region here");
+            : $"In {tag} — click to go there, or drag it onto a region here";
+        ToolTip.SetTip(v.Row, pane.Dormant is { } dormant
+            ? $"{SessionPane.DormantPillText(dormant)} · not running — send a message in its pane to resume it\n{where}"
+            : where);
     }
 }

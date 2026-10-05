@@ -123,7 +123,8 @@ running the tray app.
   section rather than inventing another; see `OverlayCanvas.Todos.cs` + `OverlayCanvas.Feed.cs`.
 - **The overlay panel's movable sections are laid out by one ordered pass, not a fixed sequence.** The
   vertical order of the nine movable sections (system info, claude metrics, quick links, hypertree, todo,
-  sessions, friends, media, call — the header and outage bar are fixed chrome) is a user setting,
+  sessions, friends, media, call — the header and outage bar are fixed chrome; Recent is a button on the
+  sessions' "+ New session" row, not a section) is a user setting,
   `AppSettings.SectionOrder` (a `List<OverlaySection>`; null = default; normalized by
   `Perch.Data.OverlaySectionOrder.Normalize`). Both the measure pass (`PanelBodyHeight`) and the paint
   pass (`Draw`) iterate `OverlayCanvas._sectionOrder` through the single

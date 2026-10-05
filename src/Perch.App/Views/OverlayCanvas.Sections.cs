@@ -159,16 +159,21 @@ public sealed partial class OverlayCanvas
     // glyph and an accent caption. Clicking it opens a Perch-controlled session (see NewSessionRequested).
     // The band is the hit target (_newSessionRect), captured for the pointer handlers. When the Roost button is
     // on, the band stops short of an ~18px box at the far right (the collapsible headers' "+" idiom) holding the
-    // split-panes glyph, with its own hover and hit rect (_roostRect).
+    // split-panes glyph, with its own hover and hit rect (_roostRect); the Recent button (OverlayCanvas.Recent.cs)
+    // takes the next box in, or the far-right one when the Roost button is off.
     private void DrawNewSessionRow(DrawingContext ctx, double width, double top)
     {
         double midY = top + NewSessionRowHeight / 2;
-        const double box = 18;
+        const double box = 18, gap = 2;
         double boxCx = width - HorizPad - box / 2 + 2;
         var roost = _showRoostButton && !RearrangeMode ? new Rect(boxCx - box / 2, midY - box / 2, box, box) : default;
         _roostRect = roost;
+        double recentCx = roost.Width > 0 ? boxCx - box - gap : boxCx;
+        var recent = RecentButtonVisible ? new Rect(recentCx - box / 2, midY - box / 2, box, box) : default;
+        _recentRect = recent;
 
-        var band = new Rect(1, top, (roost.Width > 0 ? roost.Left - 3 : width - 1) - 1, NewSessionRowHeight);
+        double bandRight = recent.Width > 0 ? recent.Left : roost.Width > 0 ? roost.Left : width + 2;
+        var band = new Rect(1, top, bandRight - 3 - 1, NewSessionRowHeight);
         _newSessionRect = band;
 
         if (_hoveredNewSession)
@@ -185,13 +190,16 @@ public sealed partial class OverlayCanvas
             DrawRoostGlyph(ctx, _hoveredRoost ? Palette.AccentBrush : MutedBrush, boxCx, midY);
             // A session is blocked on the user: a small dot at the glyph's top-right, so the button draws the eye
             // even when the rows that need you are scrolled away or collapsed.
-            if (RoostBadge() is { } badge)
-            {
-                var dot = new Point(boxCx + 5.5, midY - 4.5);
-                ctx.DrawEllipse(Palette.FormBgBrush, null, dot, 3.4, 3.4);   // a cut-out ring so it reads on the stroke
-                ctx.DrawEllipse(OverlayDraw.Brush(badge), null, dot, 2.2, 2.2);
-            }
+            if (RoostBadge() is { } badge) DrawGlyphBadge(ctx, new Point(boxCx + 5.5, midY - 4.5), OverlayDraw.Brush(badge));
         }
+        if (recent.Width > 0) DrawRecentButton(ctx, recent);
+    }
+
+    // A small status dot at a glyph's corner, inside a cut-out ring so it reads on the glyph's stroke.
+    private static void DrawGlyphBadge(DrawingContext ctx, Point at, IBrush fill)
+    {
+        ctx.DrawEllipse(Palette.FormBgBrush, null, at, 3.4, 3.4);
+        ctx.DrawEllipse(fill, null, at, 2.2, 2.2);
     }
 
     // The badge colour: an API error outranks awaiting input (both are "needs you"); null when nothing waits.

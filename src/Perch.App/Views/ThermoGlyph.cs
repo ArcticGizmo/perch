@@ -36,12 +36,8 @@ internal sealed class ThermoGlyph : Control
         InvalidateVisual();
     }
 
-    /// <summary>This glyph's current variant colour — so a text readout beside it can be tinted to match.</summary>
+    /// <summary>This glyph's current variant colour — so a fill bar beside it can be tinted to match.</summary>
     public Color VariantColor => OverlayCanvas.ThermoColor(Fill, _yellow, _orange, _red);
-
-    /// <summary>The yellow threshold (0..1): the point at which the overlay first shows a coloured signal.
-    /// Below it the glyph is green (the optional green-segment variant) or hidden.</summary>
-    public float YellowThreshold => _yellow;
 
     public ThermoGlyph()
     {

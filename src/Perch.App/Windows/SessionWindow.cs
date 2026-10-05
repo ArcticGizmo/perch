@@ -55,9 +55,8 @@ internal sealed partial class SessionWindow : Window
     // settings.json's permissions.defaultMode, then this. A plain terminal `claude` would fall back to
     // "default" (ask on every action), but a Perch session answers permissions in-UI, so "auto" is the
     // friendlier default. (This is the recent change from the old "manual"/default fallback.)
-    private const string FallbackMode = "auto";
+    internal const string FallbackMode = "auto";
     private string StartingMode => _mode ?? _defaults.PermissionMode ?? FallbackMode;
-    private static readonly string[] ModelChoices = ["haiku", "sonnet", "opus", "fable"];
 
     // What a session launches with when nothing is chosen here: the user's settings.json values, else the
     // CLI's own built-in default. Read once per window so the pills show the real starting state, not "default".
@@ -70,6 +69,11 @@ internal sealed partial class SessionWindow : Window
 
     private readonly SessionPalette _p;
     private PerchSession? _session;
+    // Dormant sessions (docs/session-recovery-plan.md, D4): the note above the composer, a send waiting on the wake
+    // (trust check, collision guards, process start), and a guard so a stale estimate never lands on another session.
+    private readonly TextBlock _dormantNote;
+    private bool _sendAfterWake;
+    private int _dormantEstimateGen;
     private readonly SessionConversation _emptyConversation = new();
     private SessionConversation Conv => _session?.Conversation ?? _emptyConversation;
     private bool _closed;
@@ -110,23 +114,19 @@ internal sealed partial class SessionWindow : Window
     // the permission-mode pill.
     private readonly TextBlock _modelPillText, _modePillText, _effortPillText;
     private readonly Border _modelEffortPill, _modelHalf, _effortHalf, _modePill;
-    // Live usage readout beside the settings chips: cumulative tokens in/out, and context-window pressure.
-    private readonly TextBlock _tokensPillText, _contextPillText;
-    private readonly Border _tokensPill, _contextPill;
+    // Live context readout beside the settings chips: thermometer + a fill bar + the percentage, coloured by
+    // the context-pressure thresholds.
+    private readonly TextBlock _contextPillText;
+    private readonly Border _contextPill, _contextBarFill;
+    private const double ContextBarWidth = 72;
 
-    // Fixed strip under the header that mirrors what the floating overlay shows for THIS session: a chip per
-    // background sub-agent/teammate currently working. Fed by the same SessionMonitor scan that drives the
-    // overlay (the app hands each window its own ClaudeSession after every scan), so the two never disagree.
-    // Hidden whenever nothing is running — controlled sessions run their sub-agents in the background, so this
-    // is the only place inside the window that surfaces them. See UpdateBackgroundActivity.
-    private readonly Border _activityStrip;
-    private readonly WrapPanel _activityChips;
+    // Background sub-agents (header tabs + bottom-of-chat chips + the read-only agent view) live in
+    // SessionWindow.Agents.cs; see UpdateBackgroundActivity.
     // The context pill's thermometer — the overlay's own glyph/variants (OverlayCanvas.DrawThermo), at the
-    // thresholds the floating UI is configured with. Show/threshold/green-segment mirror settings, pushed
-    // by the app via SetContextPressureConfig; default to AppSettings' own defaults so it reads sanely if
-    // that call never comes.
+    // thresholds the floating UI is configured with. The thresholds mirror settings, pushed by the app via
+    // SetContextPressureConfig; they default to AppSettings' own defaults so the glyph reads sanely if that
+    // call never comes.
     private readonly ThermoGlyph _thermoGlyph;
-    private bool _showContextPressure = true, _showContextGreenSegment;
     // Perch-managed early auto-compaction: when enabled, once the context fill reaches the threshold Perch
     // fires `/compact` itself (rather than waiting for the CLI's near-full compaction). Pushed from settings
     // by SetAutoCompactConfig and edited in the /autocompact modal. `_autoCompactArmed` disarms after a fire
@@ -240,6 +240,21 @@ internal sealed partial class SessionWindow : Window
     // thread once per cwd; _mentionStart is the caret index of the "@" that opened the current token.
     private readonly Popup _mentionPopup;
     private readonly StackPanel _mentionRows;
+
+    // Model picker (the model half of the "model │ effort" pill): a row per family showing its newest release,
+    // split by a divider from a "›" cell whose hover opens _modelVersions beside it with every release of that
+    // family. Popups rather than a MenuFlyout, because a MenuItem can't split its click from its submenu.
+    private readonly Popup _modelMenu, _modelVersions;
+    private Border? _modelVersionsAnchor;      // the "›" cell _modelVersions is open beside (kept lit while it is)
+    private DateTime _modelMenuClosedAt;       // see ShowModelMenu: the dismissing press mustn't reopen it
+
+    private readonly ZoomHost _zoom;
+
+    /// <summary>The user zoomed this window (Ctrl+= / Ctrl+− / Ctrl+0 / Ctrl+wheel): persist it and match the others.</summary>
+    public event Action<double>? ZoomChanged;
+
+    /// <summary>Sets the window's zoom without raising <see cref="ZoomChanged"/>.</summary>
+    public void SetZoom(double zoom) => _zoom.SetZoom(zoom);
     private IReadOnlyList<string> _projectFiles = [];
     private string _projectFilesFor = "";
     private IReadOnlyList<string> _mentionItems = [];
@@ -287,6 +302,10 @@ internal sealed partial class SessionWindow : Window
     /// <summary>Starts a session on the app's behalf (so the app owns it): (cwd, model, mode, resumeId) → the
     /// live session. Throws when the process can't start.</summary>
     public Func<SessionLaunchOptions, PerchSession>? StartRequested { get; set; }
+
+    /// <summary>Opens a resumed session <b>dormant</b> (its conversation, no process yet), app-owned like a started
+    /// one. Null → resumes start at once, the old way.</summary>
+    public Func<SessionLaunchOptions, PerchSession>? DormantRequested { get; set; }
 
     /// <summary>The account guardrails (<see cref="AppSettings.AccountRules"/>) that govern which account a
     /// folder may run under. Read live from the app (which owns <c>AppSettings</c>) so the account selector
@@ -448,14 +467,17 @@ internal sealed partial class SessionWindow : Window
         }, _p.Raised2, _p.BorderSoft);
         _accountChip.IsVisible = false;
 
-        // Informational (not clickable): tokens in/out this session, and how full the context window is. Both
-        // hidden until a turn lands, so the launcher and a just-opened session stay uncluttered.
-        _tokensPillText = new TextBlock { FontSize = 12, FontFamily = _p.Mono, Foreground = _p.Muted, VerticalAlignment = VerticalAlignment.Center };
-        _tokensPill = Pill(_tokensPillText, _p.Raised2, _p.BorderSoft);
-        _tokensPill.IsVisible = false;
+        // Informational (not clickable): how full the context window is — thermometer, a fill bar and the
+        // percentage. Hidden until a turn lands, so the launcher and a just-opened session stay uncluttered.
         _contextPillText = new TextBlock { FontSize = 12, FontFamily = _p.Mono, Foreground = _p.Muted, VerticalAlignment = VerticalAlignment.Center };
-        _thermoGlyph = new ThermoGlyph { VerticalAlignment = VerticalAlignment.Center, IsVisible = false };
-        _contextPill = Pill(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { _thermoGlyph, _contextPillText } },
+        _thermoGlyph = new ThermoGlyph { VerticalAlignment = VerticalAlignment.Center };
+        _contextBarFill = new Border { HorizontalAlignment = HorizontalAlignment.Left, CornerRadius = new CornerRadius(3), Width = 0 };
+        var contextBarTrack = new Border
+        {
+            Width = ContextBarWidth, Height = 6, CornerRadius = new CornerRadius(3), Background = _p.BorderSoft,
+            VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true, Child = _contextBarFill,
+        };
+        _contextPill = Pill(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7, Children = { _thermoGlyph, contextBarTrack, _contextPillText } },
             _p.Raised2, _p.BorderSoft);
         _contextPill.IsVisible = false;
 
@@ -550,7 +572,7 @@ internal sealed partial class SessionWindow : Window
         // clipping. WrapPanel has no Spacing, so each chip carries its own right/bottom gap; the panel's negative
         // bottom margin absorbs the trailing row's gap so a single row keeps its original height.
         var chips = new WrapPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 0, -6) };
-        foreach (var chip in new Control[] { _modelEffortPill, _modePill, _branchPill, _accountChip, _tokensPill, _contextPill })
+        foreach (var chip in new Control[] { _modelEffortPill, _modePill, _branchPill, _accountChip, _contextPill })
         {
             chip.Margin = new Thickness(0, 0, 8, 6);
             chips.Children.Add(chip);
@@ -569,7 +591,14 @@ internal sealed partial class SessionWindow : Window
         };
         _changesToggle[DockPanel.DockProperty] = Dock.Right;
         _attachTray = new WrapPanel { IsVisible = false, Margin = new Thickness(0, 0, 0, 2) };
-        var composerStack = new StackPanel { Children = { composerHeader, _attachTray, textScroll, cbar } };
+        // A dormant session's one-liner: Claude isn't running yet, and what the first send will cost to resume.
+        _dormantNote = new TextBlock
+        {
+            IsVisible = false, FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint,
+            TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(2, 0, 0, 8),
+            Text = "Claude starts when you send",
+        };
+        var composerStack = new StackPanel { Children = { composerHeader, _dormantNote, _attachTray, textScroll, cbar } };
         _composerFrame = new Border
         {
             MaxWidth = SessionPalette.ThreadMaxWidth, Background = _p.Raised, BorderBrush = _p.Border,
@@ -661,12 +690,31 @@ internal sealed partial class SessionWindow : Window
             },
         };
         composerStack.Children.Add(_mentionPopup);
-        // Hidden on the launcher; the thread and the composer appear together once a session starts.
+
+        // Both built before either is wired: the menu's Closed handler closes the versions submenu.
+        _modelMenu = MenuPopup(_modelHalf, PlacementMode.TopEdgeAlignedLeft);
+        _modelVersions = MenuPopup(_modelHalf, PlacementMode.RightEdgeAlignedTop);
+        _modelMenu.IsLightDismissEnabled = true;
+        _modelMenu.VerticalOffset = -4;
+        _modelMenu.Closed += (_, _) => { _modelMenuClosedAt = DateTime.UtcNow; _modelVersions.IsOpen = false; };
+        _modelVersions.HorizontalOffset = 6;   // clear the menu's own padding + border
+        _modelVersions.Closed += (_, _) =>
+        {
+            if (_modelVersionsAnchor is { } anchor) anchor.Background = Brushes.Transparent;
+            _modelVersionsAnchor = null;
+        };
+        composerStack.Children.Add(_modelMenu);
+        composerStack.Children.Add(_modelVersions);
+        // The sub-agent tabs, the bottom-of-chat chips and the agent view (SessionWindow.Agents.cs).
+        BuildAgentChrome();
+        // Hidden on the launcher; the thread and the composer appear together once a session starts. The working
+        // sub-agents' chips sit at the foot of the chat, above the composer; an agent tab swaps the composer for a
+        // read-only note.
         _composerDock = new Border
         {
             Background = _p.Surface, BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(0, 1, 0, 0),
-            Padding = new Thickness(22, 14, 22, 16), Child = _composerFrame, [DockPanel.DockProperty] = Dock.Bottom,
-            IsVisible = false,
+            Padding = new Thickness(22, 14, 22, 16), [DockPanel.DockProperty] = Dock.Bottom, IsVisible = false,
+            Child = new StackPanel { Children = { _agentChipsRow, _composerFrame, _agentFooter } },
         };
 
         // ── Centre ───────────────────────────────────────────────────────────────
@@ -763,10 +811,10 @@ internal sealed partial class SessionWindow : Window
 
         // Floating scroll column, bottom-right over the thread (above the composer). The four buttons hold a
         // fixed column so they never jump around; each is disabled when it wouldn't move the view.
-        _jumpTopBtn = JumpButton("⤒", "Jump to the start", () => _thread.JumpToTop());
-        _jumpPrevBtn = JumpButton("↑", "Jump to the previous prompt", () => _thread.JumpToPreviousPrompt());
-        _jumpNextBtn = JumpButton("↓", "Jump to the next prompt", () => _thread.JumpToNextPrompt());
-        _jumpBottomBtn = JumpButton("⤓", "Jump to the latest", () => _thread.JumpToBottom());
+        _jumpTopBtn = JumpButton("⤒", "Jump to the start", () => ActiveThread.JumpToTop());
+        _jumpPrevBtn = JumpButton("↑", "Jump to the previous prompt", () => ActiveThread.JumpToPreviousPrompt());
+        _jumpNextBtn = JumpButton("↓", "Jump to the next prompt", () => ActiveThread.JumpToNextPrompt());
+        _jumpBottomBtn = JumpButton("⤓", "Jump to the latest", () => ActiveThread.JumpToBottom());
         var jumpStack = new StackPanel
         {
             Orientation = Orientation.Vertical, Spacing = 9,
@@ -780,29 +828,24 @@ internal sealed partial class SessionWindow : Window
         BuildAutoCompactOverlay();
         BuildUsageOverlay();
         BuildFindBar();
-        _center = new Panel { Children = { _launcher, _thread, jumpStack, _toast, _findBar, _resumeOverlay, _autoCompactOverlay, _usageOverlay } };
-        // Header-anchored "running now" strip: one chip per working sub-agent/teammate under this session. A
-        // DockPanel (caption pinned left, chips filling) so the WrapPanel is width-constrained and wraps.
-        _activityChips = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        var activityCaption = new TextBlock
-        {
-            Text = "RUNNING", FontFamily = _p.Mono, FontSize = 10.5, LetterSpacing = 1.1, Foreground = _p.Faint,
-            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0),
-            [DockPanel.DockProperty] = Dock.Left,
-        };
-        _activityStrip = new Border
-        {
-            Background = _p.Surface, BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = new Thickness(18, 7), IsVisible = false, [DockPanel.DockProperty] = Dock.Top,
-            Child = new DockPanel { VerticalAlignment = VerticalAlignment.Center, Children = { activityCaption, _activityChips } },
-        };
+        _center = new Panel { Children = { _launcher, _thread, _agentHost, jumpStack, _toast, _findBar, _resumeOverlay, _autoCompactOverlay, _usageOverlay } };
 
         _changesPanel = BuildChangesPanel();   // docked to the right of the centre; hidden until toggled on
         // Dock order matters: the changed-files panel docks Right *before* the composer docks Bottom, so the
         // panel spans the full height (down past the composer) and the composer + thread stay aligned to its
-        // left — rather than the composer running full-width underneath the panel. The activity strip docks
+        // left — rather than the composer running full-width underneath the panel. The sub-agent tab strip docks
         // Top right below the header bar, above the thread.
-        Content = new DockPanel { Children = { barFrame, _activityStrip, _changesPanel, _composerDock, _center } };
+        // Ctrl+= / Ctrl+− / Ctrl+0 (and Ctrl+wheel) zoom the whole window; the app keeps every session window at
+        // one shared level (ZoomChanged → SetZoom on the others).
+        _zoom = new ZoomHost(_p, new DockPanel { Children = { barFrame, _agentTabStrip, _changesPanel, _composerDock, _center } })
+        {
+            ResetOnCtrl0 = true,
+        };
+        _zoom.ZoomChanged += z => ZoomChanged?.Invoke(z);
+        _zoom.Attach(this);
+        Content = _zoom;
+        // Its readout + level picker sits in the bar, just left of End session.
+        barRight.Children.Insert(barRight.Children.IndexOf(_endButton), new ZoomButton(_p, _zoom));
 
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Tunnel);
         // Focus changes can turn a pending prompt into a "background" one (or acknowledge it), so re-evaluate.
@@ -833,13 +876,17 @@ internal sealed partial class SessionWindow : Window
         session.RemoteControlChanged += OnRemoteControlChanged;   // pop the QR when remote control turns on
         session.Conversation.Changed += OnConversationChangedForChanges;   // live-refresh the changed-files panel
         _thread.Cwd = session.Cwd;   // set before Bind so tool cards built during materialisation arm file refs
+        session.Woke += OnSessionWoke;
+        // A dormant session resumes its own id on the first send, whichever window it's viewed in.
+        if (session.IsDormant) _resumeId = session.SessionId;
         _thread.Bind(session.Conversation);
         ScanProjectFilesAsync();     // warm the "@"-mention file list for this project
         ShowThread();
         if (_changesOpen) RefreshChangesNow();
         ApplyRunState();
         RefreshBar();
-        if (session.IsRunning) _composer.Focus();
+        if (session.IsDormant) ShowDormantEstimate(session);
+        if (CanCompose) _composer.Focus();
     }
 
     private void Detach()
@@ -851,18 +898,28 @@ internal sealed partial class SessionWindow : Window
         s.Ended -= OnSessionEnded;
         s.RemoteControlChanged -= OnRemoteControlChanged;
         s.Conversation.Changed -= OnConversationChangedForChanges;
+        s.Woke -= OnSessionWoke;
+        _sendAfterWake = false;
         // The session outlives this window by design: without this its conversation keeps the whole chat tree
         // subscribed (and rendering deltas) after the window closes.
         _thread.Unbind();
         _session = null;
+        ClearAgents();   // its sub-agents (and any agent tab) belong to the session that just went
     }
 
-    // Composer / buttons follow whether the viewed session is running or has ended.
+    // The composer takes input for a live session, and for a dormant one (its first send starts claude).
+    private bool CanCompose => _session is { IsRunning: true } or { IsDormant: true };
+
+    // Composer / buttons follow whether the viewed session is running, dormant, or has ended.
     private void ApplyRunState()
     {
         bool running = _session is { IsRunning: true };
-        _composer.IsEnabled = running;
-        _composer.PlaceholderText = running ? "Reply, or type / for a command" : "Session ended — Resume to pick it back up";
+        bool dormant = _session is { IsDormant: true };
+        _composer.IsEnabled = running || dormant;
+        _composer.PlaceholderText = running ? "Reply, or type / for a command"
+            : dormant ? "Reply to pick this session back up"
+            : "Session ended — Resume to pick it back up";
+        _dormantNote.IsVisible = dormant;
         _endButton.IsVisible = running;
         _resumeButton.IsVisible = _session is { HasEnded: true } && _session.SessionId is not null;
         HideToast();
@@ -897,13 +954,44 @@ internal sealed partial class SessionWindow : Window
         });
     }
 
-    /// <summary>Opens straight onto an existing session (<c>--resume</c>) — the elevate / CLI path.</summary>
+    /// <summary>Opens straight onto an existing session (<c>--resume</c>) — the elevate / CLI path. Dormant: the
+    /// conversation shows at once and Claude starts on the first send.</summary>
     public void ResumeSession(string sessionId, string cwd)
     {
         _resumeId = sessionId;
         _cwd = cwd;
         _folderBox.Text = cwd;
-        StartSession();
+        OpenDormant();
+    }
+
+    /// <summary>Opens <see cref="_resumeId"/> dormant in this window (docs/session-recovery-plan.md, D4): its
+    /// conversation loads from the transcript, and <see cref="StartSession"/>'s checks and the process start wait for
+    /// the first send. Without a <see cref="DormantRequested"/> factory the resume starts at once, as it used to.</summary>
+    private void OpenDormant(bool replace = false)
+    {
+        if (_session is { IsRunning: true } && !replace) return;
+        if (DormantRequested is not { } open || _resumeId is not { } id)
+        {
+            StartSession(replace);
+            return;
+        }
+        if (!Directory.Exists(_cwd))
+        {
+            LaunchFail($"folder not found: {_cwd}");
+            return;
+        }
+        PerchSession session;
+        try
+        {
+            LaunchLog.Write($"perch window open dormant: {TranscriptLocator.DescribeResume(id, _cwd)}");
+            session = open(new SessionLaunchOptions(_cwd, ResumeId: id));
+        }
+        catch (Exception ex)
+        {
+            LaunchFail($"couldn't open the session: {ex.Message}");
+            return;
+        }
+        Attach(session);
     }
 
     /// <summary>Opens straight onto a fresh session in <paramref name="cwd"/> — the CLI's <c>perch [dir]</c>.</summary>
@@ -1300,13 +1388,15 @@ internal sealed partial class SessionWindow : Window
         _resumeId = e.SessionId;
         _cwd = e.Cwd;
         _folderBox.Text = e.Cwd;
-        StartSession();
+        OpenDormant();
         return System.Threading.Tasks.Task.CompletedTask;
     }
 
     // The guards every resume shares. A Perch-controlled session is already running under Perch, which supports
     // many UIs on one session — so open another window on it rather than resuming a new process. A session live
-    // in a real terminal can't be taken over. Otherwise: warn before a heavy resume, then run onChoose.
+    // in a real terminal can't be taken over. Otherwise run onChoose. There's no "heavy resume" confirm here any
+    // more: a resume opens dormant, so opening costs nothing, and the estimate shows above the composer instead
+    // (docs/session-recovery-plan.md, D4).
     private async System.Threading.Tasks.Task ChooseResume(HistoryEntry e, Func<HistoryEntry, System.Threading.Tasks.Task> onChoose)
     {
         var liveSession = e.SessionId is { } sid ? LiveLookup?.Invoke(sid) : null;
@@ -1322,32 +1412,42 @@ internal sealed partial class SessionWindow : Window
                        "Close it there, or use “Elevate to Perch” on its overlay row.");
             return;
         }
-        if (!await ConfirmHeavyResumeAsync(e)) return;
         await onChoose(e);
     }
 
-    // A resume that would spend more than this share of a 5-hour window gets an "are you sure?" with the
-    // impact spelled out, so a heavy old session isn't reopened (and its whole context re-billed) by reflex.
-    private const double HeavyResumeThresholdPercent = 5.0;
-
-    // True to proceed with the resume. Warns first for a session whose estimate exceeds the threshold; when no
-    // estimate is known (never computed, or the session has no usage on disk) there's nothing to warn about.
-    private async System.Threading.Tasks.Task<bool> ConfirmHeavyResumeAsync(HistoryEntry e)
+    // Fills the dormant note with the resume estimate, off the UI thread (it reads the transcript). The first send
+    // re-sends the whole context, so this is where that cost belongs: next to the send, not as a gate before opening.
+    private void ShowDormantEstimate(PerchSession session)
     {
-        if (e.SessionId is not { } id || !_estimates.TryGetValue(id, out var est) || !est.HasData)
-            return true;
-        if (est.FiveHourPercent <= HeavyResumeThresholdPercent)
-            return true;
+        int gen = ++_dormantEstimateGen;
+        _dormantNote.Text = "Claude starts when you send";
+        _dormantNote.Foreground = _p.Faint;
+        _dormantNote[ToolTip.TipProperty] = null;
+        if (session.SessionId is not { } id) return;
+        // Picked from this window's launcher: its row already worked the estimate out.
+        if (_estimates.TryGetValue(id, out var known) && known.HasData)
+        {
+            ApplyDormantEstimate(known);
+            return;
+        }
+        var cwd = session.Cwd;
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            if (TranscriptLocator.Resolve(id, cwd) is not { } path) return (ResumeEstimate?)null;
+            var (used, window) = TranscriptReader.ReadContextUsage(path, cwd);
+            return ResumeEstimate.Compute(used, window, DateTime.Now - File.GetLastWriteTime(path));
+        }).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        {
+            if (_closed || gen != _dormantEstimateGen || !ReferenceEquals(_session, session) || !session.IsDormant) return;
+            if (t.IsCompletedSuccessfully && t.Result is { HasData: true } est) ApplyDormantEstimate(est);
+        }));
+    }
 
-        var cost = est.LikelyCostUsd is { } c ? $"   ·   ≈${c:0.00} first message" : "";
-        var body =
-            $"Resuming continues this conversation, so your first message re-sends its whole ≈{FormatTokens(est.ContextTokens)}-token " +
-            "context to the model. Rough impact of that first message:\n\n" +
-            $"    ≈ {est.FiveHourPercent:0.#}% of a 5-hour usage window   (theoretical)\n" +
-            $"    {est.ContextPercent:0}% of the model's {FormatTokens(est.WindowTokens)} context window\n" +
-            $"    cache {WarmthWord(est.Warmth)} — {(est.Warmth == CacheWarmth.Warm ? "likely served cheaply from cache" : "the whole context re-reads at full price, then re-caches")}{cost}\n\n" +
-            "Every figure is an estimate, not a bill. Resume anyway?";
-        return await ConfirmDialog.ShowAsync(this, $"Resume {e.DisplayName}?", body, "Resume anyway", "Cancel");
+    private void ApplyDormantEstimate(ResumeEstimate est)
+    {
+        _dormantNote.Text = "Claude starts when you send  ·  " + ResumeEstimateLine(est);
+        _dormantNote.Foreground = est.Warmth == CacheWarmth.Cold ? _p.Await : _p.Faint;
+        _dormantNote[ToolTip.TipProperty] = ResumeEstimateTip(est);
     }
 
     // The one-line resume estimate under a recent row: input tokens to resume, cache warmth, theoretical 5h
@@ -1433,7 +1533,7 @@ internal sealed partial class SessionWindow : Window
     {
         _resumeId = sessionId;
         _cwd = cwd;
-        StartSession(replace: true);
+        OpenDormant(replace: true);
     }
 
     private void StartSession(bool replace = false)
@@ -1472,19 +1572,32 @@ internal sealed partial class SessionWindow : Window
             LaunchFail($"failed to start claude: {ex.Message}");
             return;
         }
-        if (_resumeId is { } rid)
+        if (_resumeId is { } rid && ResumeGate.Refusal(rid, configDir, LiveLookup) is { } refusal)
         {
-            if (LiveLookup?.Invoke(rid) is { IsPerchControlled: false } live)
+            LaunchFail(refusal);
+            return;
+        }
+
+        // A dormant session wakes in place: same PerchSession, same conversation, now with a process. The checks
+        // above ran for it exactly as for any resume. A send that triggered the wake goes out once it's up.
+        if (!replace && _session is { IsDormant: true } dormant)
+        {
+            try
             {
-                LaunchFail($"{live.DisplayName} is live in a terminal (PID {live.Pid}) — Perch can't take it over while " +
-                           "it's running. Close it there, or use “Elevate to Perch” on its overlay row.");
+                LaunchLog.Write($"perch window wake: {TranscriptLocator.DescribeResume(dormant.SessionId ?? "", _cwd)}");
+                dormant.Wake(new SessionLaunchOptions(_cwd, _model, StartingMode, _effort, dormant.SessionId, configDir));
+            }
+            catch (Exception ex)
+            {
+                LaunchFail($"failed to start claude: {ex.Message}");
                 return;
             }
-            if (SessionLock.HeldByOther(rid, SessionLock.SessionsDirFor(configDir)) is { } other)
+            if (_sendAfterWake)
             {
-                LaunchFail($"session {Shorten(rid)} is already controlled by {other.Profile} (PID {other.Pid}).");
-                return;
+                _sendAfterWake = false;
+                SendPrompt();
             }
+            return;
         }
 
         PerchSession session;
@@ -1522,31 +1635,29 @@ internal sealed partial class SessionWindow : Window
         bool trusted;
         try
         {
-            (configDir, trusted) = await System.Threading.Tasks.Task.Run(() =>
-            {
-                var dir = resumeId is null ? freshDir : TranscriptLocator.ResumeConfigRoot(resumeId, cwd);
-                return (dir, DirectoryTrust.Evaluate(dir, cwd));
-            });
+            (configDir, trusted) = await ResumeGate.ReadTrustAsync(cwd,
+                () => resumeId is null ? freshDir : TranscriptLocator.ResumeConfigRoot(resumeId, cwd));
         }
-        catch { trusted = false; }
+        catch { trusted = false; }   // unreadable: ask, as for an untrusted folder
 
-        if (!trusted)
+        if (!trusted && !await ResumeGate.ConfirmTrustAsync(this, configDir, cwd))
         {
-            bool ok = await ConfirmDialog.ShowAsync(this,
-                "Do you trust the files in this folder?",
-                $"{cwd}\n\nQuick safety check: is this a project you created or one you trust — like your own " +
-                "code, a well-known open-source project, or work from your team? Claude Code will be able to " +
-                "read, edit, and execute files in this folder. If you're not sure, review what's in it first.",
-                "Yes, proceed", "No, cancel");
-            if (!ok) { LaunchFail("not started — folder not trusted"); return; }
-            // Persist so this folder (and its subfolders) won't ask again — the same store Claude Code reads.
-            _ = System.Threading.Tasks.Task.Run(() => DirectoryTrust.Grant(configDir, cwd));
+            LaunchFail("not started — folder not trusted");
+            return;
         }
 
         // The window may have closed or attached a session while the dialog was up.
         if (_closed || (_session is { IsRunning: true } && !replace)) return;
         _trustGrantedCwd = cwd;
         StartSession(replace);
+    }
+
+    // The viewed dormant session started its process (from this window's send, or another view's).
+    private void OnSessionWoke(PerchSession session)
+    {
+        if (!ReferenceEquals(session, _session)) return;
+        ApplyRunState();
+        RefreshBar();
     }
 
     private void OnSessionEnded(PerchSession session)
@@ -1564,17 +1675,17 @@ internal sealed partial class SessionWindow : Window
             "Stops the Claude process and closes this window. The conversation stays on disk and can be resumed " +
             "later — from the launcher, the overlay, or `claude --resume`. (Closing the window with × instead just " +
             "hides this view; the session keeps running.)",
-            "End session", "Keep running");
+            "End session", "Keep running", anchor: _endButton);
         // End also closes the window so an ended session can't be resumed here by reflex (which would re-send its
         // whole context and burn tokens). The app owns the PerchSession, so End() finishes the process in the
         // background regardless of this view closing.
-        if (ok) { live.End(); Close(); }
+        if (ok) { live.EndByUser(); Close(); }
     }
 
     private void SendPrompt()
     {
         var text = _composer.Text?.Trim() ?? "";
-        if (_session is not { IsRunning: true } live) return;
+        if (!CanCompose || _session is not { } live) return;
         if (text.Length == 0 && _pendingAttachments.Count == 0) return;   // nothing to send
         ClosePalette();
         CloseMention();
@@ -1585,6 +1696,14 @@ internal sealed partial class SessionWindow : Window
             && SlashCommandCatalog.CommandName(text) is { } name && RunNativeCommand(name))
         {
             _composer.Text = "";
+            return;
+        }
+        // Dormant: start claude first (trust check + collision guards, maybe a dialog), then this same send runs
+        // again from the wake. The text stays in the composer until it actually goes, so a refused wake loses nothing.
+        if (live.IsDormant)
+        {
+            _sendAfterWake = true;
+            StartSession();
             return;
         }
         live.SendPrompt(text, _pendingAttachments.Count > 0 ? _pendingAttachments.ToList() : null);
@@ -1620,7 +1739,7 @@ internal sealed partial class SessionWindow : Window
             else
                 InsertPathIntoComposer(path);
         }
-        if (_session is { IsRunning: true }) _composer.Focus();
+        if (CanCompose) _composer.Focus();
     }
 
     // Insert a dropped (non-image) file's path at the caret — quoted if it has spaces — so Claude can read it.
@@ -1797,7 +1916,7 @@ internal sealed partial class SessionWindow : Window
             }
         }
         catch (Exception ex) { Conv.AddNote($"couldn't attach: {ex.Message}", NoteKind.Error); }
-        if (_session is { IsRunning: true }) _composer.Focus();
+        if (CanCompose) _composer.Focus();
     }
 
     // ── Native command dispatch ────────────────────────────────────────────────────
@@ -1950,7 +2069,7 @@ internal sealed partial class SessionWindow : Window
     private void CloseAutoCompactOverlay()
     {
         _autoCompactOverlay.IsVisible = false;
-        if (_session is { IsRunning: true }) _composer.Focus();
+        if (CanCompose) _composer.Focus();
     }
 
     // Save: update this window immediately and let the app persist + fan the setting out to sibling windows.
@@ -2070,7 +2189,7 @@ internal sealed partial class SessionWindow : Window
     private void CloseUsageOverlay()
     {
         _usageOverlay.IsVisible = false;
-        if (_session is { IsRunning: true }) _composer.Focus();
+        if (CanCompose) _composer.Focus();
     }
 
     // Fetches a fresh reading off the UI thread (UsageMonitorHost.RefreshAsync never throws) and repaints. The
@@ -2262,7 +2381,7 @@ internal sealed partial class SessionWindow : Window
     {
         _findBar.IsVisible = false;
         _thread.ClearSearch();
-        if (_session is { IsRunning: true }) _composer.Focus();
+        if (CanCompose) _composer.Focus();
     }
 
     // Re-run the query, wash the matches, update the counter, and optionally jump to the first hit.
@@ -2412,7 +2531,7 @@ internal sealed partial class SessionWindow : Window
     private void CloseResumeOverlay()
     {
         _resumeOverlay.IsVisible = false;
-        if (_session is { IsRunning: true }) _composer.Focus();
+        if (CanCompose) _composer.Focus();
     }
 
     private void LoadResumeList(string project)
@@ -2563,7 +2682,7 @@ internal sealed partial class SessionWindow : Window
     {
         var t = (_composer.Text ?? "").TrimStart();
         bool typingCommand = t.StartsWith('/') && !t.Contains(' ') && !t.Contains('\n');
-        if (_session is not { IsRunning: true } || !typingCommand)
+        if (!CanCompose || !typingCommand)
         {
             ClosePalette();
             return;
@@ -2701,7 +2820,7 @@ internal sealed partial class SessionWindow : Window
 
     private void UpdateMentionsFromText()
     {
-        if (_session is not { IsRunning: true } || ActiveMention() is not { } m)
+        if (!CanCompose || ActiveMention() is not { } m)
         {
             CloseMention();
             return;
@@ -2843,6 +2962,7 @@ internal sealed partial class SessionWindow : Window
 
     private void LaunchFail(string message)
     {
+        _sendAfterWake = false;   // a refused wake drops its pending send; the text stays in the composer
         // In the launcher, a floating toast (not text at the foot of the recents list, which a long list
         // pushes off-screen). Once a thread is showing, the error belongs inline as a note instead.
         if (_thread.IsVisible) { Conv.AddNote(message, NoteKind.Error); return; }
@@ -2871,7 +2991,7 @@ internal sealed partial class SessionWindow : Window
     private void ShowThread()
     {
         _launcher.IsVisible = false;
-        _thread.IsVisible = true;
+        _thread.IsVisible = !AgentViewOpen;
         _composerDock.IsVisible = true;
         _changesToggle.IsVisible = true;   // the changed-files toggle rides with the thread, not the launcher
         RefreshBranchAsync();              // surface the repo's current branch in the bar
@@ -2940,7 +3060,11 @@ internal sealed partial class SessionWindow : Window
 
     // ── Background attention ─────────────────────────────────────────────────────
 
-    private void OnStateForAlert() => MaybeAlert();
+    private void OnStateForAlert()
+    {
+        ReturnToSessionIfNeeded();   // a prompt for the user waits in the session's thread, not an agent tab
+        MaybeAlert();
+    }
 
     // Raise a desktop cue when a paused-turn prompt is pending while nobody's looking at it — this window isn't
     // the active one and the Roost isn't showing it either (AttentionSeen). The decider fires at most once per
@@ -2961,15 +3085,17 @@ internal sealed partial class SessionWindow : Window
 
     // The four buttons hold a fixed column (start / prev / next / latest) so they never jump around; each is
     // enabled only when it would move the view (something above/below, a prompt above/below), and dimmed +
-    // click-through-disabled otherwise. The whole column hides only off the thread (e.g. the launcher).
+    // click-through-disabled otherwise. The whole column hides only off the thread (e.g. the launcher). They drive
+    // whichever thread is on screen — the session's, or an open sub-agent tab's.
     private void UpdateJumpButtons()
     {
-        bool onThread = _thread.IsVisible;
+        var thread = ActiveThread;
+        bool onThread = thread.IsVisible;
         _jumpTopBtn.IsVisible = _jumpPrevBtn.IsVisible = _jumpNextBtn.IsVisible = _jumpBottomBtn.IsVisible = onThread;
-        SetJumpEnabled(_jumpTopBtn, onThread && !_thread.AtTop);
-        SetJumpEnabled(_jumpPrevBtn, onThread && _thread.HasPromptAbove);
-        SetJumpEnabled(_jumpNextBtn, onThread && _thread.HasPromptBelow);
-        SetJumpEnabled(_jumpBottomBtn, onThread && !_thread.AtBottom);
+        SetJumpEnabled(_jumpTopBtn, onThread && !thread.AtTop);
+        SetJumpEnabled(_jumpPrevBtn, onThread && thread.HasPromptAbove);
+        SetJumpEnabled(_jumpNextBtn, onThread && thread.HasPromptBelow);
+        SetJumpEnabled(_jumpBottomBtn, onThread && !thread.AtBottom);
     }
 
     // A disabled jump button keeps its slot but reads as inert: dimmed, resting fill, no pointer/hover.
@@ -3001,11 +3127,7 @@ internal sealed partial class SessionWindow : Window
         var conv = Conv;
         _idText.Text = SessionId ?? "";
         _idLine.IsVisible = SessionId is not null;
-        // Model: a mid-session switch (session.Model) beats what init reported; before launch, the launcher's
-        // pick, else what the session *will* start with (settings.json, else the CLI's built-in default).
-        var model = _session?.Model is { Length: > 0 } switched && switched != _model ? switched
-                  : conv.Model.Length > 0 ? conv.Model
-                  : _model ?? _defaults.Model ?? CliDefaultModel;
+        var model = DisplayedModel(conv);
         _modelPillText.Text = ShortModel(model);
         _modelHalf[ToolTip.TipProperty] = conv.Model.Length > 0 ? $"Model: {conv.Model} — click to change"
             : _model is not null ? "Model for this session — click to change"
@@ -3023,7 +3145,7 @@ internal sealed partial class SessionWindow : Window
         _modePillText.Foreground = ModeGlyph.BrushFor(modeEnum, _p.Muted, _p.Plan);
 
         var effort = _session?.Effort ?? _effort ?? _defaults.Effort;
-        _effortPillText.Text = effort is { Length: > 0 } ? $"{effort} effort" : "auto effort";
+        _effortPillText.Text = effort is { Length: > 0 } ? effort : "auto";
 
         UpdateUsagePills(conv, model);
 
@@ -3067,20 +3189,11 @@ internal sealed partial class SessionWindow : Window
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
-    // Fills the two informational pills from the live conversation: cumulative tokens in/out, and how full
-    // the context window is (coloured as pressure rises). Both hide until there's something to show.
+    // Fills the context readout from the live conversation: thermometer, a fill bar and the percentage, all in
+    // the context-pressure variant colour (green → yellow → orange → red at the configured thresholds). Hidden
+    // until there's something to show.
     private void UpdateUsagePills(SessionConversation conv, string model)
     {
-        bool haveTokens = conv.TotalOutputTokens > 0 || conv.TotalFreshInputTokens > 0;
-        _tokensPill.IsVisible = haveTokens;
-        if (haveTokens)
-        {
-            _tokensPillText.Text = $"↑ {FormatTokens(conv.TotalFreshInputTokens)}   ↓ {FormatTokens(conv.TotalOutputTokens)}";
-            var lastIn = conv.LastTurn is { } lt ? $"\nLast message: {FormatTokens(lt.FreshInputTokens)} new + {FormatTokens(lt.CacheReadTokens)} cached in, {FormatTokens(lt.OutputTokens)} out" : "";
-            _tokensPill[ToolTip.TipProperty] =
-                $"Tokens this session — ↑ {FormatTokens(conv.TotalFreshInputTokens)} in (billed: fresh input + cache writes; cache re-reads excluded) · ↓ {FormatTokens(conv.TotalOutputTokens)} out.{lastIn}";
-        }
-
         long ctx = conv.ContextTokens;
         _contextPill.IsVisible = ctx > 0;
         if (ctx > 0)
@@ -3089,23 +3202,15 @@ internal sealed partial class SessionWindow : Window
             if (ctx > window) window = (int)Math.Min(int.MaxValue, Math.Ceiling(ctx / 1_000_000.0) * 1_000_000);
             double pct = Math.Clamp((double)ctx / window * 100.0, 0, 100);
             float fill = (float)(pct / 100.0);
-            _contextPillText.Text = $"ctx {FormatTokens(ctx)} · {pct:0}%";
 
-            // The thermometer + its matching text tint follow the floating overlay: same glyph, same
-            // green→yellow→orange→red variants at the same thresholds, hidden below yellow unless the
-            // overlay's green-segment variant is on (and gone entirely if context pressure is off there).
+            // The thermometer and bar carry the colour; the percentage stays in the chip's muted text colour,
+            // since the fixed yellow/orange hues don't clear text contrast on the light theme.
             _thermoGlyph.Fill = fill;
-            bool crossedYellow = fill >= _thermoGlyph.YellowThreshold;
-            _thermoGlyph.IsVisible = _showContextPressure && (crossedYellow || _showContextGreenSegment);
-            // Below the yellow threshold the readout stays calm (muted), matching the overlay row, which
-            // shows no colour there; at/above it the text warms to the thermometer's variant colour.
-            _contextPillText.Foreground = crossedYellow ? new SolidColorBrush(_thermoGlyph.VariantColor) : _p.Muted;
+            _contextBarFill.Width = ContextBarWidth * fill;
+            _contextBarFill.Background = new SolidColorBrush(_thermoGlyph.VariantColor);
+            _contextPillText.Text = $"{pct:0}%";
 
-            var nearFull = _autoCompactEnabled
-                ? $"and Perch will auto-compact it at {_autoCompactThreshold}% (/autocompact)."
-                : "and a compaction is coming as it nears full.";
-            _contextPill[ToolTip.TipProperty] =
-                $"Context window: {FormatTokens(ctx)} of {FormatTokens(window)} ({pct:0}%). This is what every new message re-sends to the model — the fuller it gets, the more each turn costs, {nearFull}";
+            _contextPill[ToolTip.TipProperty] = $"Context window {FormatTokens(ctx)} of {FormatTokens(window)} ({pct:0}%)";
 
             MaybeAutoCompact(pct);
         }
@@ -3141,28 +3246,119 @@ internal sealed partial class SessionWindow : Window
         flyout.ShowAt(_modePill);
     }
 
+    // Model: a mid-session switch (session.Model) beats what init reported; before launch, the launcher's
+    // pick, else what the session *will* start with (settings.json, else the CLI's built-in default).
+    private string DisplayedModel(SessionConversation conv) =>
+        _session?.Model is { Length: > 0 } switched && switched != _model ? switched
+        : conv.Model.Length > 0 ? conv.Model
+        : _model ?? _defaults.Model ?? CliDefaultModel;
+
+    // A row per family (ModelCatalog) showing its newest release, which a click picks; a family with more than
+    // one release adds a divider and a "›" cell whose hover lists every release beside the menu. The model in
+    // use is drawn in the accent — on its family row if it's the newest, else on that row's "›" and in the list.
     private void ShowModelMenu()
     {
-        var flyout = new MenuFlyout { Placement = PlacementMode.TopEdgeAlignedLeft };
+        // The press that light-dismissed an open menu also lands its release on the pill; don't reopen on it.
+        if ((DateTime.UtcNow - _modelMenuClosedAt).TotalMilliseconds < 300) return;
+
+        var current = ModelCatalog.Find(DisplayedModel(Conv));
+        var rows = new StackPanel { Spacing = 1, MinWidth = 180 };
         if (_session is not { IsRunning: true })
         {
-            var reset = new MenuItem { Header = $"{ShortModel(_defaults.Model ?? CliDefaultModel)} (default)" };
-            reset.Click += (_, _) => { _model = null; RefreshBar(); };
-            flyout.Items.Add(reset);
+            var reset = MenuCell(MenuText($"{ShortModel(_defaults.Model ?? CliDefaultModel)} (default)", false));
+            reset.PointerEntered += (_, _) => _modelVersions.IsOpen = false;
+            reset.OnLeftClick(() => PickModel(null));
+            rows.Children.Add(reset);
+            rows.Children.Add(new Border { Height = 1, Background = _p.Separator, Margin = new Thickness(6, 3) });
         }
-        foreach (var choice in ModelChoices)
-        {
-            var item = new MenuItem { Header = ShortModel(choice) };
-            var chosen = choice;
-            item.Click += (_, _) =>
-            {
-                if (_session is { IsRunning: true } live) live.SetModel(chosen);
-                else { _model = chosen; RefreshBar(); }
-            };
-            flyout.Items.Add(item);
-        }
-        flyout.ShowAt(_modelHalf);
+        foreach (var family in ModelCatalog.Families)
+            rows.Children.Add(ModelFamilyRow(family, current));
+
+        ((Border)_modelMenu.Child!).Child = rows;
+        _modelMenu.IsOpen = true;
     }
+
+    private Control ModelFamilyRow(ModelFamily family, ModelVersion? current)
+    {
+        var latest = family.Latest;
+        var pick = MenuCell(MenuText(latest.DisplayName, latest == current));
+        pick.PointerEntered += (_, _) => _modelVersions.IsOpen = false;
+        pick.OnLeftClick(() => PickModel(latest.Id));
+        if (family.Versions.Count < 2) return pick;
+
+        bool olderInUse = current is not null && current != latest && family.Versions.Contains(current);
+        var arrow = MenuCell(new TextBlock
+        {
+            Text = "›", FontSize = 15, FontFamily = _p.Body, VerticalAlignment = VerticalAlignment.Center,
+            Foreground = olderInUse ? _p.Brand : _p.Muted,
+        });
+        arrow.Padding = new Thickness(10, 2);
+        arrow.PointerEntered += (_, _) => ShowModelVersions(family, current, arrow);
+        arrow.OnLeftClick(() => ShowModelVersions(family, current, arrow));
+
+        var divider = new Border { Width = 1, Background = _p.Border, Margin = new Thickness(2, 5) };
+        Grid.SetColumn(divider, 1);
+        Grid.SetColumn(arrow, 2);
+        return new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Children = { pick, divider, arrow } };
+    }
+
+    private void ShowModelVersions(ModelFamily family, ModelVersion? current, Border anchor)
+    {
+        if (_modelVersions.IsOpen && _modelVersionsAnchor == anchor) return;
+        _modelVersions.IsOpen = false;   // another family's list (its Closed un-lights that anchor)
+
+        var rows = new StackPanel { Spacing = 1, MinWidth = 120 };
+        foreach (var version in family.Versions.Reverse())   // newest first
+        {
+            var row = MenuCell(MenuText(version.DisplayName, version == current));
+            var id = version.Id;
+            row.OnLeftClick(() => PickModel(id));
+            rows.Children.Add(row);
+        }
+        ((Border)_modelVersions.Child!).Child = rows;
+        _modelVersions.PlacementTarget = anchor;
+        _modelVersionsAnchor = anchor;
+        anchor.Background = _p.Raised2;
+        _modelVersions.IsOpen = true;
+    }
+
+    /// <summary>Applies a model pick: a live session switches over the control channel, otherwise it's the model
+    /// the session will launch with. Null goes back to the default.</summary>
+    private void PickModel(string? model)
+    {
+        _modelMenu.IsOpen = false;
+        if (model is not null && _session is { IsRunning: true } live) live.SetModel(model);
+        else { _model = model; RefreshBar(); }
+    }
+
+    private Popup MenuPopup(Control target, PlacementMode placement) => new()
+    {
+        PlacementTarget = target, Placement = placement,
+        Child = new Border
+        {
+            Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8), Padding = new Thickness(4),
+            BoxShadow = BoxShadows.Parse("0 10 30 0 #55000000"),
+        },
+    };
+
+    private Border MenuCell(Control content)
+    {
+        var cell = new Border
+        {
+            Background = Brushes.Transparent, CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6),
+            Cursor = new Cursor(StandardCursorType.Hand), Child = content,
+        };
+        // The cell the versions submenu hangs off stays lit while it's open.
+        return cell.HoverWash(_p.Raised2, keep: () => cell == _modelVersionsAnchor);
+    }
+
+    private TextBlock MenuText(string text, bool current) => new()
+    {
+        Text = text, FontSize = 13, FontFamily = _p.Body, VerticalAlignment = VerticalAlignment.Center,
+        FontWeight = current ? FontWeight.SemiBold : FontWeight.Normal,
+        Foreground = current ? _p.Brand : _p.Text,
+    };
 
     private void ShowEffortMenu()
     {
@@ -3493,6 +3689,7 @@ internal sealed partial class SessionWindow : Window
         if (_resumeOverlay.IsVisible) { CloseResumeOverlay(); e.Handled = true; return; }
         if (PaletteOpen) { ClosePalette(); e.Handled = true; return; }
         if (MentionOpen) { CloseMention(); e.Handled = true; return; }
+        if (AgentViewOpen) { CloseAgentView(); e.Handled = true; return; }   // back to the session, never an interrupt
         if (Conv.PendingPermission is { } pending) { _session?.AnswerPermission(pending, allow: false, switchMode: false); e.Handled = true; }
         else if (_session is { IsRunning: true } live && Conv.TurnActive) { live.Interrupt(); e.Handled = true; }
     }
@@ -3556,68 +3753,14 @@ internal sealed partial class SessionWindow : Window
         return new Viewbox { Width = size, Height = size, Child = canvas, VerticalAlignment = VerticalAlignment.Center };
     }
 
-    /// <summary>
-    /// Mirrors the floating overlay's live sub-agent view onto this window: a chip per background
-    /// sub-agent/teammate currently working under the session, from the very same <see cref="ClaudeSession"/>
-    /// the overlay renders (the app resolves it by id and pushes it after each scan). A controlled session
-    /// runs its sub-agents in the background, so this strip is the only place their activity surfaces inside
-    /// the window. Passing null — or a session with nothing running — hides the strip. Call on the UI thread.
-    /// </summary>
-    public void UpdateBackgroundActivity(ClaudeSession? mine)
-    {
-        // Only agents actually working now — an idle or interrupted (stale) teammate isn't "running".
-        // SelfAndDescendants so a sub-agent nested under another still shows.
-        var running = mine?.SubAgents
-            .SelectMany(a => a.SelfAndDescendants())
-            .Where(a => !a.IsIdle && !a.IsStale)
-            .ToList() ?? [];
-
-        _activityChips.Children.Clear();
-        foreach (var agent in running)
-            _activityChips.Children.Add(BuildAgentChip(agent));
-        _activityStrip.IsVisible = running.Count > 0;
-    }
-
-    // One overlay-style chip for a working sub-agent/teammate: a dot in the theme's sub-agent hue, the
-    // agent's label, and its present-tense activity when known.
-    private Control BuildAgentChip(SubAgent a)
-    {
-        var label = a.IsTeammate
-            ? (string.IsNullOrEmpty(a.Name) ? a.Description : a.Name!)
-            : (string.IsNullOrEmpty(a.Description) ? a.AgentType : a.Description);
-        if (string.IsNullOrWhiteSpace(label)) label = "sub-agent";
-
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7, VerticalAlignment = VerticalAlignment.Center };
-        row.Children.Add(new Ellipse { Width = 7, Height = 7, Fill = _p.Violet, VerticalAlignment = VerticalAlignment.Center });
-        row.Children.Add(new TextBlock
-        {
-            Text = ClipChip(label, 34), FontFamily = _p.Body, FontSize = 12, FontWeight = FontWeight.SemiBold,
-            Foreground = _p.Text, VerticalAlignment = VerticalAlignment.Center,
-        });
-        if (!string.IsNullOrWhiteSpace(a.Activity))
-            row.Children.Add(new TextBlock
-            {
-                Text = ClipChip(a.Activity!, 40), FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Faint,
-                VerticalAlignment = VerticalAlignment.Center,
-            });
-
-        var chip = Pill(row, _p.VioletWash, _p.VioletLine);
-        chip.Margin = new Thickness(0, 2, 8, 2);
-        chip[ToolTip.TipProperty] = string.IsNullOrWhiteSpace(a.Activity) ? label : $"{label} — {a.Activity}";
-        return chip;
-    }
-
     private static string ClipChip(string s, int max) =>
         s.Length <= max ? s : s[..(max - 1)].TrimEnd() + "…";
 
-    /// <summary>Mirrors the floating overlay's context-pressure configuration onto the context pill's
-    /// thermometer: whether the feature is shown at all, its yellow/orange/red colour thresholds, and
-    /// whether the below-yellow green segment is drawn — so this glyph reads exactly like the overlay's.
-    /// The app pushes the current settings when it builds the window.</summary>
-    public void SetContextPressureConfig(bool show, int yellowPercent, int orangePercent, int redPercent, bool greenSegment)
+    /// <summary>Mirrors the floating overlay's context-pressure colour thresholds onto the context readout
+    /// (thermometer, bar and percentage), so it warms at the same points the overlay does. The app pushes the
+    /// current settings when it builds the window.</summary>
+    public void SetContextPressureConfig(int yellowPercent, int orangePercent, int redPercent)
     {
-        _showContextPressure = show;
-        _showContextGreenSegment = greenSegment;
         _thermoGlyph.SetThresholds(yellowPercent, orangePercent, redPercent);
         if (_session is not null) RefreshBar();   // re-evaluate visibility/colour if a session is already attached
     }
@@ -3637,19 +3780,10 @@ internal sealed partial class SessionWindow : Window
     // compaction gets there first, so Perch's early trigger would rarely beat it.
     private const int AutoCompactMin = 50, AutoCompactMax = 95;
 
-    /// <summary>"claude-opus-5" → "Opus 5"; "claude-haiku-4-5-20251001" → "Haiku 4.5"; null → "default model".</summary>
-    internal static string ShortModel(string? model)
-    {
-        if (string.IsNullOrWhiteSpace(model)) return "default model";
-        var parts = model.Split('-', StringSplitOptions.RemoveEmptyEntries).ToList();
-        if (parts.Count > 0 && parts[0].Equals("claude", StringComparison.OrdinalIgnoreCase)) parts.RemoveAt(0);
-        if (parts.Count == 0) return model;
-        var name = char.ToUpperInvariant(parts[0][0]) + parts[0][1..];
-        var version = string.Join(".", parts.Skip(1).TakeWhile(p => p.Length <= 2 && p.All(char.IsAsciiDigit)));
-        return version.Length > 0 ? $"{name} {version}" : name;
-    }
-
-    private static string Shorten(string id) => id.Length > 8 ? id[..8] : id;
+    /// <summary>"claude-opus-5-5" / "opus" → "Opus 5.5"; a model the catalogue doesn't know is shown as given;
+    /// null → "default model".</summary>
+    internal static string ShortModel(string? model) =>
+        string.IsNullOrWhiteSpace(model) ? "default model" : ModelCatalog.DisplayName(model);
 
     // ── Headless render hooks ─────────────────────────────────────────────────────
 
@@ -3673,6 +3807,19 @@ internal sealed partial class SessionWindow : Window
             times.Add(sw.Elapsed.TotalMilliseconds);
         }
         return times;
+    }
+
+    /// <summary>Render-only: a dormant session (its history shown, no process) with a sample resume estimate in the
+    /// note above the composer.</summary>
+    internal void FeedDormantSampleForRender(string cwd, string sessionId, string? userPrompt,
+        IEnumerable<SessionEvent> events, ResumeEstimate estimate)
+    {
+        var sample = PerchSession.DormantForRender(cwd, sessionId);
+        if (userPrompt is not null) sample.Conversation.AddUserPrompt(userPrompt);
+        foreach (var ev in events) sample.Conversation.Apply(ev);
+        Attach(sample);
+        _dormantEstimateGen++;   // drop the in-flight read (the sample has no transcript on disk)
+        ApplyDormantEstimate(estimate);
     }
 
     internal void FeedSampleForRender(string cwd, string? userPrompt, IEnumerable<SessionEvent> events,
@@ -3755,6 +3902,7 @@ internal sealed partial class SessionWindow : Window
     {
         if (_closed) return;
         _thread.Restyle();
+        _agentThread.Restyle();
         InvalidateVisual();
     }
 }

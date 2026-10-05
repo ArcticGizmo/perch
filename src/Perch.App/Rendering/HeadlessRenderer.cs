@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
@@ -302,6 +302,20 @@ internal static class HeadlessRenderer
         todoEmptyProbe.SetTopTodos([], 0);
         RenderControl(todoEmptyProbe, Path.Combine(outDir, "overlay_todos_empty_1x.png"), 96);
 
+        // Session recovery: the Recent (clock) button beside the Roost button, its badge lit by the unseen interrupted
+        // lines; with the Roost button off it takes the far-right box. Then its flyout under each filter.
+        var recentProbe = new OverlayCanvas();
+        recentProbe.Update(SampleData.Sessions());
+        recentProbe.SetRecent(SampleData.RecentLines());
+        RenderControl(recentProbe, Path.Combine(outDir, "overlay_recent_1x.png"), 96);
+        RenderControl(recentProbe, Path.Combine(outDir, "overlay_recent_1.5x.png"), 144);
+        var recentAloneProbe = new OverlayCanvas();
+        recentAloneProbe.Update(SampleData.Sessions());
+        recentAloneProbe.SetShowRoostButton(false);
+        recentAloneProbe.SetRecent(SampleData.RecentLines());
+        RenderControl(recentAloneProbe, Path.Combine(outDir, "overlay_recent_no_roost_1x.png"), 96);
+        RenderRecentFlyout(outDir);
+
         // Section ordering: every movable section seeded at once, rendered in the default order and again in a
         // custom order, so the single ordered layout pass (measure + paint) can be eyeballed for clipping or
         // overlap. If these two differ only by section sequence, the reorder plumbing is sound.
@@ -315,6 +329,7 @@ internal static class HeadlessRenderer
             c.SetQuickLinks(links, icons);
             c.SetHypertree(SampleData.Hypertree());
             c.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
+            c.SetRecent(SampleData.RecentLines());
             c.SetDaemonWorkers(SampleData.DaemonWorkers());
             c.SetShowMediaController(true);   // off by default; enabled so the strip shows in this probe
             c.SetShowMicPresence(true);
@@ -1424,6 +1439,38 @@ internal static class HeadlessRenderer
 
     // A compact SessionThreadView as a Roost pane body shows it: the history sample plus an Edit (its diff
     // collapsed under compact) and a pending permission, scaled by CompactScale in a pane-sized window.
+    // The Recent button's flyout body under each filter, in a real window so its ScrollViewer is templated (the live
+    // flyout's presenter adds its own padding and surface around it).
+    private static void RenderRecentFlyout(string outDir)
+    {
+        var lines = SampleData.RecentLines();
+        foreach (var (filter, name, shown) in new[]
+                 {
+                     (RecentFilter.All, "all", lines), (RecentFilter.Interrupted, "interrupted", lines),
+                     (RecentFilter.BeforeShutdown, "shutdown", lines),
+                     (RecentFilter.BeforeShutdown, "empty", (IReadOnlyList<Perch.Data.RecentLine>)[lines[3]]),   // the empty note
+                 })
+        {
+            var view = new RecentListView(filter);
+            view.SetLines(shown);
+            var w = new Window
+            {
+                SizeToContent = SizeToContent.WidthAndHeight, Background = Palette.FormBgBrush,
+                Content = new Border { Padding = new Thickness(12), Child = view },
+            };
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, $"overlay_recent_flyout_{name}_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
     private static void RenderRoostThreadCompact(string outDir)
     {
         foreach (var dark in new[] { true, false })
@@ -1590,6 +1637,11 @@ internal static class HeadlessRenderer
                 Capture("roost_rail_alpha_1x.png");
                 w.SetRailSort(Perch.Data.Roost.RoostRailSort.Status);
 
+                // The whole Roost zoomed to 125% (Ctrl+= twice): the stage re-lays out at the scaled size.
+                w.SetZoom(1.25);
+                Capture("roost_zoomed_1x.png");
+                w.SetZoom(Perch.Data.ViewZoom.Default);
+
                 // Infra: one pane and two empty regions; "need you in other tabs" points back at Main.
                 w.ActivateTab(infra.Id);
                 Capture("roost_tabs_infra_1x.png");
@@ -1651,6 +1703,77 @@ internal static class HeadlessRenderer
             w.Close();
         }
         RenderRoostTabStrip(outDir);
+        RenderRoostDormant(outDir);
+    }
+
+    // Session recovery R6: dormant panes. "Main" (two columns) keeps "perch" live beside "docs-site", whose process has
+    // gone, so it's dormant in its region and stays in the rail (NOT RUNNING); the rail footer's Recent flyout lists it
+    // with a session Perch had open, one a restart interrupted and one that ended just before a shutdown. Then the
+    // interrupted one, clicked: dormant in Focus (and so back in the rail while Focus holds it).
+    private static void RenderRoostDormant(string outDir)
+    {
+        foreach (var dark in new[] { true, false })
+        {
+            var now = Clock.Now;
+            var sessions = RoostSampleSessions().Where(s => s.ProjectName is "perch" or "api" or "service" or "docs-site").ToList();
+            var docs = sessions.Single(s => s.ProjectName == "docs-site");
+            var roster = new Perch.Data.Roost.RoostRoster();
+            roster.Update(sessions, now.AddMinutes(-3));
+            var tabs = new Perch.Data.Roost.RoostTabSet();
+            tabs.Sync(roster.Panes);
+            var main = tabs.AddTab("Main", Perch.Data.Roost.RoostGridLayout.FromTemplate(Perch.Data.Roost.RoostSnapTemplate.Columns2))!;
+            tabs.Assign(main.Id, 0, sessions.Single(s => s.ProjectName == "perch").Pid);
+            tabs.Assign(main.Id, 1, docs.Pid);
+            tabs.Activate(main.Id);
+
+            const string Proj = @"C:\src\";
+            Perch.Data.Roost.RoostDormant Dormant(string sid, string project, string? title, TimeSpan ago,
+                Perch.Data.Roost.RoostDormantKind kind, bool perch = false) =>
+                new(sid, Proj + project, project, title, now - ago, kind, perch);
+            var dormant = new List<Perch.Data.Roost.RoostDormant>
+            {
+                Dormant("d-billing", "billing", "Invoice export", TimeSpan.FromHours(14), Perch.Data.Roost.RoostDormantKind.WasOpenInPerch, perch: true),
+                Dormant(docs.SessionId, "docs-site", null, TimeSpan.FromMinutes(1), Perch.Data.Roost.RoostDormantKind.Ended),
+                Dormant("d-gateway", "gateway", "Retry storm fix", TimeSpan.FromHours(15), Perch.Data.Roost.RoostDormantKind.Interrupted) with { JustBeforeShutdown = true },
+                Dormant("d-notes", "notes", null, TimeSpan.FromHours(15.2), Perch.Data.Roost.RoostDormantKind.BeforeShutdown),
+            };
+            // The docs-site process ends; the app now names it dormant, and it takes the ended pane's region.
+            var live = sessions.Where(s => s != docs).ToList();
+            roster.Update(live, now, dormant);
+            tabs.Sync(roster.Panes, roster.Adopted);
+
+            var w = new Windows.RoostWindow(roster, tabs,
+                pane => RoostFeed.ForFixed(RoostSampleConversation(pane.Session), pane.Session.SessionId,
+                    controlled: pane.Session.IsPerchControlled && pane.IsLive),
+                SessionPalette.For(dark))
+            {
+                Width = 1280, Height = 800,
+                WakeAndSend = (_, _) => Task.FromResult(false),
+            };
+            w.Show();
+            void Capture(string name)
+            {
+                PumpRoost();
+                var frame = w.CaptureRenderedFrame();
+                if (frame == null) return;
+                using var fs = File.Create(Path.Combine(outDir, name));
+                frame.Save(fs);
+            }
+            Capture(dark ? "roost_dormant_1x.png" : "roost_dormant_light_1x.png");
+            // The rail footer's "Recent" flyout: every dormant pane (docs-site, which Main holds, is also in the rail).
+            w.OpenRecentForRender(RecentFilter.All);
+            Capture(dark ? "roost_recent_flyout_1x.png" : "roost_recent_flyout_light_1x.png");
+            w.CloseFlyoutForRender();
+            if (dark)
+            {
+                w.OpenRecentForRender(RecentFilter.BeforeShutdown);
+                Capture("roost_recent_flyout_shutdown_1x.png");
+                w.CloseFlyoutForRender();
+                w.FocusPane(Perch.Data.Roost.RoostToken.DormantKey("d-gateway"));
+                Capture("roost_dormant_focus_1x.png");
+            }
+            w.Close();
+        }
     }
 
     // roost-tabs T5: the tab strip in every light state, a rename in progress, the tab menu, a session dropped on a
@@ -1847,8 +1970,10 @@ internal static class HeadlessRenderer
                 "{\"command\":\"git commit -am \\\"Add {sessionId}.perch-lock ownership sidecar\\\"\"}"),
             new Perch.Data.Control.PermissionRequestEvent("req-1", "Bash", "git commit",
                 "{\"command\":\"git commit -am \\\"Add {sessionId}.perch-lock ownership sidecar\\\"\"}", "acceptEdits"),
-            // A completed turn's usage, so the live token/context pills have something to show: a big cached
-            // prefix (context is ~62% full) with a little fresh input and output.
+            // The latest message's prompt size (occupancy is read per message, not off the result), so the
+            // context bar has something to show: ~62% of a 1M window, past the default yellow threshold.
+            new Perch.Data.Control.AssistantUsageEvent(620_200),
+            // A completed turn's usage: a big cached prefix with a little fresh input and output.
             new Perch.Data.Control.TurnResultEvent(false, "success", 0.42, InputTokens: 1200, OutputTokens: 820,
                 DurationMs: 5400, CacheReadTokens: 617_000, CacheCreationTokens: 2_000),
         };
@@ -1875,6 +2000,84 @@ internal static class HeadlessRenderer
 
         Capture(Theming.SessionPalette.For(dark: true), "session_window_1x.png", events);
         Capture(Theming.SessionPalette.For(dark: false), "session_window_light_1x.png", events);
+        // Ctrl+= twice: the whole window at 125%, re-laid out to the scaled size.
+        Capture(Theming.SessionPalette.For(dark: true), "session_zoomed_1x.png", events, zoom: 1.25);
+
+        // Background sub-agents: the header tabs and the chips at the foot of the chat, then one agent's tab open —
+        // its transcript read-only, the composer swapped for the note.
+        var agents = new List<Perch.Data.SubAgent>
+        {
+            new("a1", "Explore the auth flow", "Explore", Activity: "Reading OAuthCallback.cs"),
+            new("t1", "teammate", "general-purpose", IsTeammate: true, Name: "arch-explorer", Color: "blue",
+                Activity: "Searching: TokenRefresh"),
+            new("a2", "Map the test fixtures", "general-purpose", Activity: "Running: dotnet test"),
+        };
+        var agentScene = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.AssistantTextEvent("I'll start from the callback handler and follow the token through."),
+            new Perch.Data.Control.ToolUseEvent("g1", "Grep", "Searching OAuthCallback", "{\"pattern\":\"OAuthCallback\"}"),
+            new Perch.Data.Control.ToolResultEvent("g1", "4 files", false),
+            new Perch.Data.Control.ToolUseEvent("g2", "Read", "Reading OAuthCallback.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/Social/OAuthCallback.cs\"}"),
+        };
+        foreach (var dark in new[] { true, false })
+        {
+            var w = new Windows.SessionWindow(Theming.SessionPalette.For(dark)) { Width = 880, Height = 980 };
+            w.FeedSampleForRender(cwd, prompt, events);
+            w.SetComposerActions(sampleActions);
+            w.ShowAgentsForRender(agents);
+            w.Show();
+            void Shot(string file)
+            {
+                Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                if (w.CaptureRenderedFrame() is { } frame)
+                {
+                    using var fs = File.Create(Path.Combine(outDir, file));
+                    frame.Save(fs);
+                }
+            }
+            Shot(dark ? "session_agents_1x.png" : "session_agents_light_1x.png");
+            w.OpenAgentSampleForRender("a1", "Explore the auth flow: trace how the OAuth callback stores the token.", agentScene);
+            Shot(dark ? "session_agent_tab_1x.png" : "session_agent_tab_light_1x.png");
+            w.Close();
+        }
+
+        // A resumed session opened dormant (session recovery D4): its history shows, the composer takes input, and
+        // the note above it says Claude starts on the first send — with what that send re-sends (cold cache).
+        var dormantEstimate = new Perch.Data.Control.ResumeEstimate(
+            ContextTokens: 142_000, WindowTokens: 1_000_000, Model: "claude-opus-5",
+            WindowSource: Perch.Data.ContextWindowSource.Assumed, Warmth: Perch.Data.Control.CacheWarmth.Cold,
+            Idle: TimeSpan.FromHours(14), ColdCostUsd: 0.89m, WarmCostUsd: 0.07m, FiveHourPercent: 2.8,
+            AssumedFiveHourBudget: Perch.Data.Control.ResumeEstimate.AssumedFiveHourInputTokens);
+        // A finished turn, as a transcript would hold it (permission prompts aren't recorded, so a dormant session
+        // never shows a live card).
+        var dormantScene = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.SessionInitEvent("a1b2c3d4-0000-4000-8000-000000000000", "claude-opus-5", "acceptEdits", 18),
+            new Perch.Data.Control.ToolUseEvent("d1", "Read", "Reading SessionLock.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/Control/SessionLock.cs\"}"),
+            new Perch.Data.Control.ToolResultEvent("d1", "     1\tnamespace Perch.Data.Control;", false),
+            new Perch.Data.Control.AssistantTextEvent(
+                "The lock lifecycle is wired: written on ownership, deleted on exit, and swept by `perch-hook cleanup`. " +
+                "Next up is the SessionStart warning — want me to carry on?"),
+            new Perch.Data.Control.TurnResultEvent(false, "success", 0.42, InputTokens: 3200, OutputTokens: 820, DurationMs: 19000),
+        };
+        foreach (var dark in new[] { true, false })
+        {
+            var w = new Windows.SessionWindow(Theming.SessionPalette.For(dark)) { Width = 880, Height = 980 };
+            w.FeedDormantSampleForRender(cwd, "a1b2c3d4-0000-4000-8000-000000000000", prompt, dormantScene, dormantEstimate);
+            w.SetComposerActions(sampleActions);
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            if (w.CaptureRenderedFrame() is { } frame)
+            {
+                using var fs = File.Create(Path.Combine(outDir, dark ? "session_dormant_1x.png" : "session_dormant_light_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
 
         // A short scene so the user's message — with its attachment chips (a pasted image + a dropped file) —
         // sits in view at the top rather than scrolled off a long thread.
@@ -1968,11 +2171,13 @@ internal static class HeadlessRenderer
         RenderStreaming(outDir, cwd);
 
         void Capture(Theming.SessionPalette palette, string file, List<Perch.Data.Control.SessionEvent> scene,
-            string? userPrompt = prompt, IReadOnlyList<Perch.Data.Control.MessageAttachment>? attach = null)
+            string? userPrompt = prompt, IReadOnlyList<Perch.Data.Control.MessageAttachment>? attach = null,
+            double zoom = Perch.Data.ViewZoom.Default)
         {
             var w = new Windows.SessionWindow(palette) { Width = 880, Height = 980 };
             w.FeedSampleForRender(cwd, userPrompt, scene, attach);
             w.SetComposerActions(sampleActions);
+            w.SetZoom(zoom);
             w.Show();
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();

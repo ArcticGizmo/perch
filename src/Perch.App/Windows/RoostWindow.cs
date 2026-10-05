@@ -95,6 +95,7 @@ internal sealed partial class RoostWindow : Window
     private int _dropSlot = -1;
     private string? _dropTab;
     private readonly Panel _root;
+    private readonly ZoomHost _zoom;
     // A session drag resting on another tab's header switches to that tab, so it can be dropped on a region there.
     private const int HoverSwitchMs = 550;
     private readonly DispatcherTimer _hoverTimer;
@@ -139,7 +140,7 @@ internal sealed partial class RoostWindow : Window
         Background = _p.Ground;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        // ── Title bar: name ········ + New session ──
+        // ── Title bar: name ········ zoom · + New session ──
         var title = new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 9, VerticalAlignment = VerticalAlignment.Center,
@@ -149,16 +150,20 @@ internal sealed partial class RoostWindow : Window
                 new TextBlock { Text = "Roost", FontFamily = _p.Display, FontWeight = FontWeight.Bold, FontSize = 15, Foreground = _p.Title, VerticalAlignment = VerticalAlignment.Center },
             },
         };
-        var newSession = BarButton("+ New session", () => StartNewSession(null));
-        newSession[DockPanel.DockProperty] = Dock.Right;
+        var barRight = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center,
+            [DockPanel.DockProperty] = Dock.Right,
+            Children = { BarButton("+ New session", () => StartNewSession(null)) },
+        };
         var bar = new Border
         {
             Background = _p.Raised, BorderBrush = _p.Border, BorderThickness = new Thickness(0, 0, 0, 1),
             Padding = new Thickness(14, 10), [DockPanel.DockProperty] = Dock.Top,
-            Child = new DockPanel { LastChildFill = true, Children = { newSession, title } },
+            Child = new DockPanel { LastChildFill = true, Children = { barRight, title } },
         };
 
-        // ── Rail: the sort toggle, the sessions, then "N hidden" and the keys cheat-sheet ──
+        // ── Rail: the sort toggle, the sessions, then "Recent", "N hidden" and the keys cheat-sheet ──
         _rail = new StackPanel { Spacing = 14, Margin = new Thickness(8, 4, 8, 12) };
         (_hiddenRow, _hiddenText) = RailFooterRow("", "Closed panes — click to reopen");
         _hiddenRow.OnLeftClick(() => ShowHiddenMenu(_hiddenRow));
@@ -168,7 +173,7 @@ internal sealed partial class RoostWindow : Window
         {
             BorderBrush = _p.Border, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(8, 6),
             [DockPanel.DockProperty] = Dock.Bottom,
-            Child = new StackPanel { Spacing = 2, Children = { _hiddenRow, keysRow } },
+            Child = new StackPanel { Spacing = 2, Children = { RecentFooterRow(), _hiddenRow, keysRow } },
         };
         var railHost = new Border
         {
@@ -221,7 +226,7 @@ internal sealed partial class RoostWindow : Window
         _unplacedPill[ToolTip.TipProperty] = "Sessions in no tab — click to focus the most urgent";
         _unplacedPill.OnLeftClick(() =>
         {
-            var unplaced = _tabs.Unplaced(_roster.Panes).Where(p => !p.Ended).Select(p => p.Key);
+            var unplaced = _tabs.Unplaced(_roster.Panes).Where(p => p.IsLive).Select(p => p.Key);
             if (RoostTabStatus.MostUrgent(unplaced, _roster.Panes) is { } key) FocusPane(key);
         });
         (_elsewherePill, _elsewhereText, _elsewhereDot) = Pill();
@@ -262,7 +267,13 @@ internal sealed partial class RoostWindow : Window
         {
             Children = { new DockPanel { LastChildFill = true, Children = { bar, railHost, stageColumn } }, _overlay },
         };
-        Content = _root;
+        // Ctrl+= / Ctrl+− (and Ctrl+wheel) zoom the whole Roost. No Ctrl+0 reset: that's the Focus tab here.
+        _zoom = new ZoomHost(_p, _root);
+        _zoom.ZoomChanged += z => ZoomChanged?.Invoke(z);
+        _zoom.Attach(this);
+        Content = _zoom;
+        // Its readout + level picker sits just left of + New session, as it does beside a session window's End session.
+        barRight.Children.Insert(0, new ZoomButton(_p, _zoom));
         // A drag under way holds the pointer here, not on the row or header it started from: a hover-switch to
         // another tab hides that header, and a hidden control can't keep the capture.
         _root.PointerMoved += (_, e) => { if (DragOwnsRoot) MoveGhost(e.GetPosition(_overlay)); };
@@ -314,6 +325,12 @@ internal sealed partial class RoostWindow : Window
     /// <summary>The rail's sort toggle moved (persist it).</summary>
     public event Action<RoostRailSort>? RailSortChanged;
 
+    /// <summary>The user zoomed the Roost (Ctrl+= / Ctrl+− / Ctrl+wheel) — persist it.</summary>
+    public event Action<double>? ZoomChanged;
+
+    /// <summary>Sets the Roost's zoom (the saved level) without raising <see cref="ZoomChanged"/>.</summary>
+    public void SetZoom(double zoom) => _zoom.SetZoom(zoom);
+
     /// <summary>A permission card in a Perch pane was answered: (session id, item, allow, switch mode).</summary>
     public event Action<string, PermissionItem, bool, bool>? PermissionAnswered;
 
@@ -336,6 +353,30 @@ internal sealed partial class RoostWindow : Window
 
     /// <summary>A question card in a Perch pane was answered: (session id, item, answers).</summary>
     public event Action<string, PermissionItem, IReadOnlyDictionary<string, IReadOnlyList<string>>>? QuestionAnswered;
+
+    /// <summary>A dormant pane's "Open window": its Perch session window, still dormant.</summary>
+    public event Action<RoostPane>? OpenDormantRequested;
+
+    /// <summary>A dormant pane's "Resume in terminal" (<c>claude --resume</c> in a new terminal).</summary>
+    public event Action<RoostPane>? ResumeInTerminalRequested;
+
+    /// <summary>A dormant pane's "Dismiss": it leaves the Roost and the Recent list.</summary>
+    public event Action<RoostPane>? DismissRequested;
+
+    /// <summary>A dormant pane's first send: the app runs the resume checks, wakes the session and sends the text.
+    /// True when it went (the pane clears its composer); false keeps the text. Null = dormant panes can't reply.</summary>
+    public Func<RoostPane, string, Task<bool>>? WakeAndSend
+    {
+        get => _wakeAndSend;
+        set
+        {
+            if (ReferenceEquals(_wakeAndSend, value)) return;
+            _wakeAndSend = value;
+            Refresh();   // dormant panes show (or drop) their composer
+        }
+    }
+
+    private Func<RoostPane, string, Task<bool>>? _wakeAndSend;
 
     public RoostRailSort RailSort => _railSort;
 
@@ -451,7 +492,8 @@ internal sealed partial class RoostWindow : Window
         foreach (var pane in all)
         {
             var view = _views[pane.Key];
-            view.CanTakeOver = !pane.Ended && CanTakeOver?.Invoke(pane.Session) == true;
+            view.CanTakeOver = pane.IsLive && CanTakeOver?.Invoke(pane.Session) == true;
+            view.CanWake = WakeAndSend is not null;
             view.Update(pane, _feeds[pane.Key]);
             view.SetFocused(pane.Key == _focused);
             if (_placed.Contains(pane.Key)) view.Show();
@@ -463,6 +505,7 @@ internal sealed partial class RoostWindow : Window
         RefreshRail();
         RefreshPills(all);
         RefreshHiddenRow();
+        RefreshRecentRow();
         UpdatePulse();
 
         var placedSig = string.Join(",", _placed.Order(StringComparer.Ordinal));
@@ -544,7 +587,7 @@ internal sealed partial class RoostWindow : Window
     {
         if (_keysAtNewSession is not { } before) return;
         if (Clock.Now > _newSessionUntil) { _keysAtNewSession = null; return; }
-        if (all.FirstOrDefault(p => p.Session.IsPerchControlled && !p.Ended && !before.Contains(p.Key)) is not { } started) return;
+        if (all.FirstOrDefault(p => p.Session.IsPerchControlled && p.IsLive && !before.Contains(p.Key)) is not { } started) return;
         _keysAtNewSession = null;
         if (_newSessionTarget is { } t && _tabs.Find(t.TabId) is { } tab && tab.Layout.Find(t.RegionId) is not null && tab.At(t.RegionId) is null)
         {
@@ -612,7 +655,21 @@ internal sealed partial class RoostWindow : Window
     private void OnPromptSubmitted(string key, string text)
     {
         if (_roster.Find(key) is not { Ended: false } pane) return;
+        if (pane.IsDormant) { _ = WakeAsync(pane, text); return; }
         PromptSubmitted?.Invoke(pane.Session.SessionId, text);
+    }
+
+    // A dormant pane's first send. The pane holds the text (read-only) while the app checks and starts the session; on
+    // success the live pane takes this one's place once the scan sees the process.
+    private async Task WakeAsync(RoostPane pane, string text)
+    {
+        if (WakeAndSend is not { } wake || !_views.TryGetValue(pane.Key, out var view) || view.IsWaking) return;
+        view.SetWaking(true);
+        bool sent;
+        try { sent = await wake(pane, text); }
+        catch { sent = false; }
+        // The view may be gone already: the live pane took its place.
+        if (_views.TryGetValue(pane.Key, out var still) && ReferenceEquals(still, view)) view.SetWaking(false, clear: sent);
     }
 
     // ── Keyboard ──────────────────────────────────────────────────────────────
@@ -736,16 +793,25 @@ internal sealed partial class RoostWindow : Window
                 }
                 break;
             case RoostPaneAction.OpenSession:
-                OpenSessionRequested?.Invoke(pane.Session);
+                if (pane.IsDormant) OpenDormantRequested?.Invoke(pane);
+                else OpenSessionRequested?.Invoke(pane.Session);
+                break;
+            case RoostPaneAction.ResumeInTerminal:
+                if (pane.IsDormant) ResumeInTerminalRequested?.Invoke(pane);
+                break;
+            case RoostPaneAction.Dismiss:
+                if (pane.IsDormant) DismissRequested?.Invoke(pane);
                 break;
             case RoostPaneAction.CopyResume:
                 _ = CopyAsync($"claude --resume {pane.Session.SessionId}");
                 break;
             case RoostPaneAction.TakeOver:
-                if (!pane.Ended && CanTakeOver?.Invoke(pane.Session) == true) TakeOverRequested?.Invoke(pane.Session);
+                if (pane.IsLive && CanTakeOver?.Invoke(pane.Session) == true) TakeOverRequested?.Invoke(pane.Session);
                 break;
             case RoostPaneAction.Close:
-                if (_roster.Close(key)) Refresh();   // the roster's ClosedChanged persists it; Sync empties its region
+                // A dormant pane has nothing running to hide: closing it is dismissing it.
+                if (pane.IsDormant) DismissRequested?.Invoke(pane);
+                else if (_roster.Close(key)) Refresh();   // the roster's ClosedChanged persists it; Sync empties its region
                 break;
         }
     }

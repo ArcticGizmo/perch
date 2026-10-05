@@ -39,7 +39,7 @@ public sealed class RoostTab
 }
 
 /// <summary>The persisted <see cref="RoostTabSet"/> (<c>AppSettings.RoostTabs</c>). Cells hold <c>pid/sessionId</c>
-/// tokens, so after a restart a recycled pid never inherits a region.</summary>
+/// tokens (<c>~/sessionId</c> for a dormant pane), so after a restart a recycled pid never inherits a region.</summary>
 public sealed class RoostTabsState
 {
     public List<RoostTabState> Tabs { get; set; } = [];
@@ -64,7 +64,8 @@ public sealed class RoostTabState
 /// survive closing the window.
 ///
 /// <para><b>Placement is entirely the user's</b> (D2): nothing here moves a session by itself, except following it
-/// to a new key (<see cref="Sync"/>'s adoptions) and emptying its region once it leaves the roster.</para>
+/// to a new key (<see cref="Sync"/>'s adoptions — a take-over, or the process going and the session staying on as a
+/// dormant pane, and back) and emptying its region once it leaves the roster.</para>
 ///
 /// <para><b>One place per session</b> (D1) is a policy, <see cref="UniquePlacement"/>, not a property of the model:
 /// cells may in principle name the same key twice, <see cref="Locate"/> returns a list, and only
@@ -351,13 +352,18 @@ public sealed class RoostTabSet
 
     /// <summary>
     /// Folds a roster update in: follows re-keyed panes (<see cref="RoostRoster.Adopted"/>), resolves a persisted
-    /// state's cells on the first call (a token places its session only if both pid and session id match), and
-    /// empties regions whose session left the roster (ended and dropped, or closed).
+    /// state's cells, and empties regions whose session left the roster (ended and dropped, or closed).
+    /// <para>A persisted cell places the pane whose pid and session id both match its token; failing that (after a
+    /// restart every pid is new) the pane showing the same conversation — live under another process, else dormant
+    /// (docs/session-recovery-plan.md, R6). A recycled pid alone never places anything.</para>
     /// <para>Pass <paramref name="resolveSeeds"/> false from a sync that doesn't carry a scan (the window's own,
     /// after a close / reopen): a roster that hasn't seen its first scan yet is empty, and settling against it would
-    /// drop every persisted cell — permanently, once the emptied state is saved.</para>
+    /// drop every persisted cell — permanently, once the emptied state is saved. Pass <paramref name="settleSeeds"/>
+    /// false while the app hasn't yet supplied the dormant panes (they need a transcript lookup): cells that match
+    /// nothing so far wait instead of dropping, and <see cref="SessionIds"/> names them so they can be supplied.</para>
     /// </summary>
-    public void Sync(IReadOnlyList<RoostPane> panes, IReadOnlyDictionary<string, string>? adopted = null, bool resolveSeeds = true)
+    public void Sync(IReadOnlyList<RoostPane> panes, IReadOnlyDictionary<string, string>? adopted = null,
+        bool resolveSeeds = true, bool settleSeeds = true)
     {
         if (adopted is { Count: > 0 })
             foreach (var tab in All)
@@ -375,14 +381,27 @@ public sealed class RoostTabSet
 
         if (resolveSeeds && _seeds is { } seeds)
         {
-            _seeds = null;
-            foreach (var (tabId, region, pid, sid) in seeds)
+            // The pane showing each conversation: a live one first, else its dormant one. Ended panes are on their way out.
+            var bySession = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var p in panes.Where(p => p.IsLive).Concat(panes.Where(p => p.IsDormant)))
+                if (p.Session.SessionId is { Length: > 0 } sid) bySession.TryAdd(sid, p.Key);
+
+            List<(string, int, string, string)>? waiting = null;
+            foreach (var seed in seeds)
             {
-                if (!live.TryGetValue(pid, out var liveSid) || liveSid != sid) continue;
+                var (tabId, region, pid, sid) = seed;
+                string? key = live.TryGetValue(pid, out var liveSid) && liveSid == sid ? pid
+                    : bySession.TryGetValue(sid, out var other) ? other : null;
+                if (key is null)
+                {
+                    if (!settleSeeds) (waiting ??= []).Add(seed);
+                    continue;
+                }
                 if (Find(tabId) is not { } tab || tab.Layout.Find(region) is null || tab.CellMap.ContainsKey(region)) continue;
-                if (UniquePlacement && IsPlaced(pid)) continue;
-                tab.CellMap[region] = pid;
+                if (UniquePlacement && IsPlaced(key)) continue;
+                tab.CellMap[region] = key;
             }
+            _seeds = waiting;
         }
 
         foreach (var tab in All)
@@ -402,7 +421,7 @@ public sealed class RoostTabSet
     public RoostTab? CreateDefault(IReadOnlyList<RoostPane> panes, double aspect)
     {
         if (_tabs.Count > 0) return null;
-        var live = panes.Where(p => !p.Ended && !IsPlaced(p.Key)).Take(RoostTemplates.AutoMaxCells).ToList();
+        var live = panes.Where(p => p.IsLive && !IsPlaced(p.Key)).Take(RoostTemplates.AutoMaxCells).ToList();
         var layout = RoostGridLayout.FromTemplate(RoostTemplates.ForCount(Math.Max(1, live.Count), aspect));
         var tab = AddTab("Main", layout)!;
         var regions = layout.ReadingOrder;
@@ -475,7 +494,20 @@ public sealed class RoostTabSet
         && n > 0 ? n : null;
 
     private string? Token(string? key) =>
-        key is not null && _sessionIds.TryGetValue(key, out var sid) && sid.Length > 0 ? RoostToken.Format(key, sid) : null;
+        key is not null && _sessionIds.TryGetValue(key, out var sid) && sid.Length > 0 ? RoostToken.ForPane(key, sid) : null;
+
+    /// <summary>Every conversation the tabs hold: the sessions in their regions, and the persisted cells still waiting to
+    /// be placed. The app shows the ones that aren't running as dormant panes, so a region keeps its session through a
+    /// process ending (Perch closing, a reboot).</summary>
+    public IReadOnlyCollection<string> SessionIds()
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var tab in All)
+            foreach (var key in tab.CellMap.Values)
+                if (_sessionIds.TryGetValue(key, out var sid) && sid.Length > 0) ids.Add(sid);
+        foreach (var s in _seeds ?? []) ids.Add(s.SessionId);
+        return ids;
+    }
 
     private string NewId()
     {

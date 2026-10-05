@@ -127,6 +127,12 @@ internal static class SettingsRegistry
             PreviewTarget.Todos, nameof(AppSettings.ShowTodos),
             s => s.ShowTodos, (s, v) => s.ShowTodos = v),
 
+        Toggle("recent-sessions", "Recent sessions",
+            "A Recent button beside the Roost button lists the sessions that ended lately, to pick back up - filter it to the ones a restart interrupted or that ended just before a shutdown.",
+            SettingSurface.SessionRow, ["recent", "history", "ended", "closed", "interrupted", "restart", "shutdown", "resume", "recover", "crash"],
+            PreviewTarget.RecentSessions, nameof(AppSettings.ShowRecentSessions),
+            s => s.ShowRecentSessions, (s, v) => s.ShowRecentSessions = v),
+
         Toggle("todo-reminders", "Todo reminders",
             "Fire a desktop notification when a todo's due time arrives.",
             SettingSurface.Notifications, ["todo", "reminder", "due", "notify", "alert", "toast"],

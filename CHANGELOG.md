@@ -9,6 +9,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.3] - 2026-10-05
+
+- A Recent (clock) button: lately-ended sessions, cut-off ones first
+- A dot on the clock when something was cut off and you haven't looked
+- Filter to interrupted or ended-before-shutdown (for the "close everything and go home" crowd)
+- Pick one back up in Perch, resume it in a terminal, or dismiss it
+- Reopened sessions show the conversation; Claude waits until you send
+- Resume cost estimate is a quiet note above the composer, not a toll booth
+- Perch sessions come back after an update, Exit or restart
+- Exiting Perch ends its sessions properly, so SessionEnd hooks run
+- Roost tabs survive a reboot
+- A Recent row at the foot of the Roost rail
+- Fixed Exit skipping Perch's own tidy-up (docked edge included)
+- Model pill names the version ("Opus 5.5"); effort pill just says "high"
+- Model menu offers each family's newest; hover › for older ones
+- One context bar in place of the token and context pills
+- Ctrl+= / Ctrl+− / Ctrl+wheel zoom the session window and Roost
+- A 🔍 100% button picks a zoom level, in the session window and the Roost
+- Spinning chips for background sub-agents (quiet is not the same as frozen)
+- Sub-agents get their own tabs: watch any one's log live
+- Sub-agent tabs are read-only (they only take orders from the session)
+- Statusline designer: `session.name` token for your `/rename` title
+
+---
+
 ## [v0.5.2] - 2026-10-02
 
 - The Roost: every session in one window, with a rail sorted by who needs you most

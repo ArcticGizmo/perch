@@ -1,5 +1,6 @@
 ﻿using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
@@ -1745,7 +1746,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // Dwell tooltips: hovering an info glyph (thermometer / stuck-warning / task-count / metrics bars)
     // or the usage strip for ~750ms pops a hint. A single timer serves whichever the cursor last
     // settled on; moving to a different (or no) target restarts it and hides the current tip.
-    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost }
+    private enum TipKind { None, Usage, Thermo, Warn, Task, Metrics, Media, Mic, Pr, Jira, Dir, Origin, NoteButton, SocialStatus, ReactionSummary, Game, Roost, Recent }
     private TipKind _tipKind = TipKind.None;
     private int _tipRow = -1;
     private DispatcherTimer? _dwellTimer;
@@ -4171,6 +4172,8 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (overNewSession != _hoveredNewSession) { _hoveredNewSession = overNewSession; InvalidateVisual(); }
         bool overRoost = ShowFullPanel && _roostRect.Width > 0 && _roostRect.Contains(p);
         if (overRoost != _hoveredRoost) { _hoveredRoost = overRoost; InvalidateVisual(); }
+        bool overRecent = OverRecentButton(p);
+        if (overRecent != _hoveredRecent) { _hoveredRecent = overRecent; InvalidateVisual(); }
 
         int ql = HitTestQuickLink(p);
         if (ql != _hoveredQuickLink) { _hoveredQuickLink = ql; InvalidateVisual(); }
@@ -4258,7 +4261,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         Cursor = overResize ? ResizeCursor
             : (ql >= 0 || hyper >= 0 || daemon >= 0 || art >= 0 || mdIcon >= 0 || prIcon >= 0 || jiraIcon >= 0 || overUpdate
                || overFooter || overNote || overRowNote || media >= 0 || overMicLabel || overSocial || overRegion || overNewSession
-               || overRoost || overUsageToggle)
+               || overRoost || overRecent || overUsageToggle)
             ? HandCursor : Cursor.Default;
 
         UpdateDwell(p);
@@ -4288,6 +4291,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
                 && _noteButtonRect.Contains(p)        ? (TipKind.NoteButton, -1) :
             ShowFullPanel && _roostRect.Width > 0
                 && _roostRect.Contains(p)             ? (TipKind.Roost, -1) :
+            OverRecentButton(p)                       ? (TipKind.Recent, -1) :
             HitTestGameIcon(p) is var gi && gi >= 0 ? (TipKind.Game, gi) :
             HitTestReactionSummary(p) is var rs && rs >= 0 ? (TipKind.ReactionSummary, rs) :
             HitTestSocialStatus(p) is var ss && ss >= 0 ? (TipKind.SocialStatus, ss) :
@@ -4325,6 +4329,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
             case TipKind.Origin:  ShowOriginTooltip(_tipRow);  break;
             case TipKind.NoteButton: ShowNoteButtonTooltip();  break;
             case TipKind.Roost:   ShowRoostTooltip();          break;
+            case TipKind.Recent:  ShowRecentTooltip();         break;
             case TipKind.SocialStatus: ShowSocialStatusTooltip(_tipRow); break;
             case TipKind.ReactionSummary: ShowReactionSummaryTooltip(_tipRow); break;
             case TipKind.Game: ShowGameTooltip(_tipRow); break;
@@ -4370,6 +4375,7 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (_hoveredUsageSet is not null) { _hoveredUsageSet = null; changed = true; }
         _hoveredSocial = false;
         if (_hoveredRoost) { _hoveredRoost = false; changed = true; }
+        if (_hoveredRecent) { _hoveredRecent = false; changed = true; }
         _hoveredNewSession = false;
         _hoveredTodoHeader = _hoveredTodoAdd = _hoveredHyperHeader = _hoveredAutonomousHeader = false;
         _hoveredRow = _hoveredQuickLink = _hoveredHypertreeRow = _hoveredHyperDesktop = _hoveredDaemonRow = _hoveredTodoRow = _hoveredArtifactRow = _hoveredMarkdownRow = _hoveredPrRow = -1;
@@ -4730,6 +4736,13 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
         if (!RearrangeMode && ShowFullPanel && _roostRect.Width > 0 && _roostRect.Contains(p))
         {
             RoostRequested?.Invoke();
+            return;
+        }
+
+        // The Recent button beside it: the flyout of sessions that ended lately.
+        if (OverRecentButton(p))
+        {
+            ShowRecentFlyout();
             return;
         }
 
@@ -5135,12 +5148,16 @@ public sealed partial class OverlayCanvas : Control, IDenseHost
     // The one place every context/flyout menu is shown. Tracks the open menu in _openFlyout so a press
     // elsewhere on the overlay can close it (see OnPointerPressed) — the overlay's no-activate tool window
     // defeats Avalonia's built-in light dismiss. Opening a menu first closes any still-open one.
-    private MenuFlyout? _openFlyout;
+    private PopupFlyoutBase? _openFlyout;
 
-    private void ShowFlyout(IEnumerable<Control> items)
+    private void ShowFlyout(IEnumerable<Control> items) =>
+        ShowFlyout(new MenuFlyout { ItemsSource = items });
+
+    // …and a flyout with its own content (the Recent list), shown the same way.
+    private void ShowFlyout(PopupFlyoutBase flyout)
     {
         _openFlyout?.Hide();
-        var flyout = new MenuFlyout { ItemsSource = items, Placement = PlacementMode.Pointer };
+        flyout.Placement = PlacementMode.Pointer;
         flyout.Closed += (_, _) => { if (ReferenceEquals(_openFlyout, flyout)) _openFlyout = null; };
         _openFlyout = flyout;
         flyout.ShowAt(this, showAtPointer: true);

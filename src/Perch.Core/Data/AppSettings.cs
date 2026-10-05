@@ -155,6 +155,11 @@ internal sealed class AppSettings
     // header. Toggled by the section's own chevron, not a Settings control. Defaults to expanded.
     public bool TodosExpanded { get; set; } = true;
 
+    // Whether the overlay shows its Recent button (beside the Roost button): sessions that ended lately, to pick back
+    // up, filterable to the interrupted ones and those that ended just before a shutdown. On by default. (The retired
+    // Recent section's RecentExpanded key an older file may still carry is ignored when it loads.)
+    public bool ShowRecentSessions { get; set; } = true;
+
     // Whether the overlay's Hypertree section is expanded (showing the branch lines) or collapsed to just
     // its header. Toggled by the section's own chevron. Defaults to expanded.
     public bool HypertreeExpanded { get; set; } = true;
@@ -163,6 +168,11 @@ internal sealed class AppSettings
     // UI state, not a Settings-window control. See docs/roost-tabs-plan.md. (The pre-tabs RoostLayout,
     // RoostLayoutByCount and RoostOrder keys an older file may still carry are ignored when it loads.)
     public Roost.RoostRailSort RoostRailSort { get; set; } = Roost.RoostRailSort.Status;
+
+    // Whole-window zoom (1.0 = 100%) for the session windows (all share one level) and the Roost, stepped with
+    // Ctrl+= / Ctrl+− / Ctrl+wheel in the window itself — UI state, not a Settings control. See ViewZoom.
+    public double SessionZoom { get; set; } = ViewZoom.Default;
+    public double RoostZoom { get; set; } = ViewZoom.Default;
 
     // The Roost's tabs (RoostTabSet.ToState): each tab's name, painted layout and the "pid/sessionId" token of the
     // session in each region, plus the active tab. Null = never saved, so the first open creates a "Main" tab;
@@ -180,6 +190,12 @@ internal sealed class AppSettings
     // sessions as the roster runs, on disk too. UI state, not a Settings-window control.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? RoostClosedPanes { get; set; }
+
+    // The Recent list's dismissals (docs/session-recovery-plan.md, Q2): session id → the end time of the ending the
+    // user dismissed, so a session that's resumed and ends again comes back (RecentSessions.Build). Pruned to the
+    // Recent window on each dismissal. UI state, not a Settings-window control.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, DateTime>? RecentDismissed { get; set; }
 
     // Per-account collapse state for the usage strip: an account renders as full stacked bars or a compact
     // chip. The default follows activity (active account → bars, known-but-idle account → chip); this map

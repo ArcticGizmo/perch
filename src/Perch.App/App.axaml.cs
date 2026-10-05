@@ -159,8 +159,24 @@ public partial class App : Application
         {
             _desktop = desktop;
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown; // tray app — outlives its windows
+            // Avalonia raises ShutdownRequested on WM_QUERYENDSESSION (an OS shutdown/logoff) but not on our own
+            // desktop.Shutdown(), which is forced and goes straight to Exit (docs/session-recovery-plan.md, R0). So
+            // ShutdownRequested is only the OS-shutdown signal, and the teardown lives on Exit, which fires on both
+            // paths. (It used to hang on ShutdownRequested, so a normal Exit skipped it.) The log lines carry the
+            // timestamps for the owed live restart check.
             desktop.ShutdownRequested += (_, _) =>
             {
+                LaunchLog.Write("shutdown requested (OS shutdown/logoff)");
+                StampLedgerShutdown();
+            };
+            desktop.Exit += (_, _) =>
+            {
+                LaunchLog.Write("lifetime exit");
+                // End Perch's own sessions cleanly on every exit, not just an update: closing stdin lets each claude
+                // write its exit flush and run SessionEnd hooks (the user's too). They stay held in the ledger, so
+                // they come back dormant next start (D9). Their exit finishes in the background after ours.
+                foreach (var s in _perchSessions.ToArray()) s.End();
+                StampLedgerExit();
                 _replayController?.Dispose();
                 _replayWindow?.Close();
                 _monitorHost?.Dispose();
@@ -176,7 +192,7 @@ public partial class App : Application
                 _controlServer?.Dispose();
                 foreach (var hk in _hotkeys) hk.Dispose();
                 _sessionLock?.Dispose();
-                _overlay?.Canvas.ReleaseDocked();   // give the reserved screen edge back to the desktop
+                _overlay?.Canvas.ReleaseDocked();   // already done on the overlay's Closing; harmless twice
                 _overlay?.Canvas.DisposeDense();
                 Services.Replay.ReplayBootstrap.Cleanup(); // delete the disposable replay sandbox
             };
@@ -186,11 +202,15 @@ public partial class App : Application
             // Live overlay + the data pipelines that feed it. Every host delivers on the UI thread, so
             // feeding the owner-drawn canvas from their callbacks is UI-thread-safe.
             _overlay = new LiveOverlayWindow();
+            // Give the reserved screen edge back while the overlay's window still exists: the lifetime closes every
+            // window before Exit runs, and the AppBar is removed by window handle.
+            _overlay.Closing += (_, _) => _overlay.Canvas.ReleaseDocked();
             // Under `perch replay`, brand the overlay light-blue "Perch - Replay" (set before first paint)
             // so it's unmistakably a recording and not live sessions.
             _overlay.Canvas.ReplayMode = Services.Replay.ReplaySession.IsActive;
             var settings = AppSettings.Load();
             _appSettings = settings;
+            StartSessionLedger();
             if (settings.RoostClosedPanes is { Count: > 0 } closedPanes) _roostRoster.SeedClosed(closedPanes);
             // Closing / reopening a pane, and the roster pruning one whose session ended, all move the saved set.
             _roostRoster.ClosedChanged += () =>
@@ -309,6 +329,7 @@ public partial class App : Application
                 RefreshSessionActivity(sessions);   // mirror each session's live sub-agents into its own window
                 _metricsHost!.SetSessionPids(sessions.Select(s => s.Pid));
                 if (_historyWindow is { } h) h.SetActiveSessions(sessions);
+                _roostScanned = true;
                 UpdateRoost(sessions);
                 RefreshOriginIcons(sessions);
                 RefreshComposerActions();   // grow/drop each session window's artifact + markdown glyphs
@@ -464,6 +485,11 @@ public partial class App : Application
                 if (_appSettings is { } s) { s.TodosExpanded = expanded; s.Save(); }
             };
             _overlay.Canvas.TodosRequested += OpenTodos;
+            // The Recent button's flyout (session recovery; lines from App.RoostDormant.cs's Recent build).
+            _overlay.Canvas.RecentResumeRequested += (id, cwd) => OpenSessionResume(id, cwd);
+            _overlay.Canvas.RecentTerminalRequested += (id, cwd) => ReopenSession(cwd, id);
+            _overlay.Canvas.RecentDismissRequested += DismissRecent;
+            _overlay.Canvas.RecentMoreRequested += OpenSessionWindow;
             _overlay.Canvas.TodoCompleteRequested += id =>
             {
                 _todoStore!.Complete(id);
@@ -705,7 +731,7 @@ public partial class App : Application
         // A session Perch drives over stream-json lives in a SessionWindow, not a terminal — bring its window
         // forward (Activate switches to the virtual desktop it's on), or open a fresh view if the user had
         // closed it, instead of hunting for a terminal that doesn't exist.
-        if (_perchSessions.FirstOrDefault(s => s.SessionId == session.SessionId) is { } owned)
+        if (PerchSessionFor(session.SessionId) is { } owned)
         {
             ShowSessionView(owned);
             _monitorHost?.Acknowledge(session.Pid);
@@ -1576,13 +1602,18 @@ public partial class App : Application
     // ── Roost ─────────────────────────────────────────────────────────────────
     // Every scan folds into the roster (cheap — no IO), and an open Roost re-syncs. Autonomous SDK runs stay
     // out, as they do from the overlay's main list: nobody is at the keyboard for them.
+    // The dormant panes (App.RoostDormant.cs) fold in with every scan too.
     private void UpdateRoost(IReadOnlyList<ClaudeSession> sessions)
     {
-        _roostRoster.Update(sessions.Where(s => !s.IsBackground).ToList(), Clock.Now);
-        // Before the window's own sync: a take-over re-keys a pane, and its region must follow the new key.
-        _roostTabs.Sync(_roostRoster.Panes, _roostRoster.Adopted);
+        var live = sessions.Where(s => !s.IsBackground).ToList();
+        _roostRoster.Update(live, Clock.Now, RoostDormantSessions(live));
+        // Before the window's own sync: a take-over (or a dormant pane waking, or a process ending) re-keys a pane, and
+        // its region must follow the new key. Persisted cells wait for the dormant set before they're settled.
+        _roostTabs.Sync(_roostRoster.Panes, _roostRoster.Adopted, settleSeeds: _roostDormantReady);
         _roostWindow?.RosterChanged();
         ReplayRoostSuppressed();
+        NoteRoostLiveSet(sessions);
+        PushRecentLines();   // the overlay's Recent list drops a session the moment it's live again
     }
 
     // The Roost half of AttentionSeen for a session: is the Roost the active window, and is the pane on screen?
@@ -1628,7 +1659,13 @@ public partial class App : Application
         };
     }
 
-    private void OpenRoost() =>
+    private void OpenRoost()
+    {
+        if (_roostWindow is null) RefreshRecent();   // fresh ages and endings for its dormant panes
+        OpenRoostWindow();
+    }
+
+    private void OpenRoostWindow() =>
         _roostWindow = WindowHost.ShowOrFocus(_roostWindow,
             () =>
             {
@@ -1647,8 +1684,16 @@ public partial class App : Application
                 w.PlacementChanged += ReplayRoostSuppressed;
                 w.NewSessionRequested += OpenSessionWindow;
                 w.OpenSessionRequested += FocusSession;
+                // Dormant panes (session recovery R6): open in a Perch window (still dormant), resume in a terminal,
+                // dismiss, or wake on the first send.
+                w.OpenDormantRequested += p => OpenSessionResume(p.Session.SessionId, p.Session.Cwd);
+                w.ResumeInTerminalRequested += p => ReopenSession(p.Session.Cwd, p.Session.SessionId);
+                w.DismissRequested += p => DismissRecent(p.Session.SessionId);
+                w.WakeAndSend = WakeFromRoostAsync;
                 w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
                 w.RailSortChanged += sort => { if (_appSettings is { } s) { s.RoostRailSort = sort; s.Save(); } };
+                w.SetZoom(_appSettings?.RoostZoom ?? ViewZoom.Default);
+                w.ZoomChanged += zoom => { if (_appSettings is { } s) { s.RoostZoom = zoom; s.Save(); } };
                 w.PermissionAnswered += (sid, item, allow, mode) =>
                     PerchSessionFor(sid)?.AnswerPermission(item, allow, mode);
                 w.QuestionAnswered += (sid, item, answers) => PerchSessionFor(sid)?.AnswerQuestion(item, answers);
@@ -1679,8 +1724,10 @@ public partial class App : Application
             ? RoostFeed.ForControlled(owned)
             : RoostFeed.ForTranscript(pane.Session.SessionId, pane.Session.Cwd);
 
+    // The Perch session driving a live (monitor-seen) pane. A dormant one never is: it has no process, and if the same
+    // id is live in a terminal the pane must tail that, not the dormant copy.
     private Services.PerchSession? PerchSessionFor(string? sessionId) =>
-        sessionId is null ? null : _perchSessions.FirstOrDefault(s => s.SessionId == sessionId);
+        sessionId is null ? null : _perchSessions.FirstOrDefault(s => s.SessionId == sessionId && !s.IsDormant);
 
     private void OpenStats() =>
         _statsWindow = WindowHost.ShowOrFocus(_statsWindow,
@@ -1940,14 +1987,15 @@ public partial class App : Application
             // Refuse-if-live oracle: the monitor's latest roster (terminal-hosted sessions with a live PID).
             LiveLookup = id => _lastSessions.FirstOrDefault(s => s.SessionId == id),
             StartRequested = StartPerchSession,
+            DormantRequested = OpenDormantPerchSession,
             // Live account guardrails so the launcher's account selector reflects the current rules.
             AccountRulesProvider = () => _appSettings?.AccountRules,
         };
-        // The context pill's thermometer mirrors the floating overlay's context-pressure settings so the two
-        // read alike (same glyph, variants and thresholds).
+        // The context readout mirrors the floating overlay's context-pressure thresholds so the two read alike
+        // (same thermometer glyph, same colour at the same fill).
         var cs = Effective;
-        w.SetContextPressureConfig(cs.ShowContextPressure, cs.ContextPressureYellowPercent,
-            cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent, cs.ShowContextGreenSegment);
+        w.SetContextPressureConfig(cs.ContextPressureYellowPercent,
+            cs.ContextPressureOrangePercent, cs.ContextPressureRedPercent);
         w.SetAutoCompactConfig(cs.SessionAutoCompactEnabled, cs.SessionAutoCompactThresholdPercent);
         // /usage overlay reads the same account rate-limit data the floating strip does — the tray's cached
         // last reading, with a forced fetch on open/Refresh (works even when the overlay usage strip is off).
@@ -1972,6 +2020,13 @@ public partial class App : Application
             }
             foreach (var sw in _sessionWindows) sw.SetAutoCompactConfig(enabled, threshold);
         };
+        // Every session window shares one zoom: a step in one is saved and applied to the rest.
+        w.SetZoom(_appSettings?.SessionZoom ?? ViewZoom.Default);
+        w.ZoomChanged += zoom =>
+        {
+            if (_appSettings is { } s) { s.SessionZoom = zoom; s.Save(); }
+            foreach (var sw in _sessionWindows) if (!ReferenceEquals(sw, w)) sw.SetZoom(zoom);
+        };
         w.NewSessionRequested += OpenSessionWindow;
         w.OpenSettingsRequested += page => OpenSettings(page);   // e.g. /theme → Settings → Appearance
         // /resume overlay pick: replace this window's view (default), or open a separate window (Shift+Enter).
@@ -1990,8 +2045,40 @@ public partial class App : Application
         w.AttentionRequested += (title, body) => _notifier?.Show(title, body, ToastLevel.Warning, null, null);
         w.RoostView = RoostView;   // …unless the Roost already has it on screen
         _sessionWindows.Add(w);
-        w.Closed += (_, _) => _sessionWindows.Remove(w);
+        w.Closed += (_, _) =>
+        {
+            _sessionWindows.Remove(w);
+            // A dormant session has no process to keep alive: once nothing views it, drop it (its transcript stays
+            // on disk). A woken one is a live session and outlives its windows, as before. Swept rather than read off
+            // `w`, because the window has already detached its session by the time Closed fires.
+            if (_perchSessions.RemoveAll(s => s.IsDormant && !_sessionWindows.Any(o => ReferenceEquals(o.Session, s))) > 0)
+                RefoldRoost();
+        };
         return w;
+    }
+
+    // A resumed session opened dormant (docs/session-recovery-plan.md, D4): its conversation shows, and claude starts
+    // on the first send. Owned like a started session, so opening the same id again shows this one rather than a
+    // twin that could wake into a second writer. The Roost shows it as a dormant pane (App.RoostDormant.cs); the overlay
+    // once it wakes (the monitor sees its process then).
+    private Services.PerchSession OpenDormantPerchSession(Services.SessionLaunchOptions options)
+    {
+        if (options.ResumeId is { } id && _perchSessions.FirstOrDefault(s => s.SessionId == id && !s.HasEnded) is { } existing)
+            return existing;
+        var session = Services.PerchSession.Dormant(options);
+        _perchSessions.Add(session);
+        Dispatcher.UIThread.Post(RefoldRoost);   // after the caller has attached it
+        session.Ended += s =>
+        {
+            _perchSessions.Remove(s);
+            _monitorHost?.Rescan();
+        };
+        session.Woke += s =>
+        {
+            HoldSession(s);   // live now: held like any started session
+            _monitorHost?.Rescan();
+        };
+        return session;
     }
 
     // Builds the composer toolbar's overlay-mirrored quick actions for a given window. Two kinds:
@@ -2221,6 +2308,7 @@ public partial class App : Application
             _perchSessions.Remove(s);
             _monitorHost?.Rescan();
         };
+        HoldSession(session);   // in the ledger, so it comes back dormant if Perch closes first
         _monitorHost?.Rescan();
         return session;
     }
@@ -2830,6 +2918,7 @@ public partial class App : Application
                 achievementsItem,
                 todosItem,
                 newSessionItem,
+                BuildReopenItem(),   // "Reopen Perch sessions (N)": hidden until some came back after a restart
                 roostItem,
                 _updateItem,
                 new NativeMenuItemSeparator(),

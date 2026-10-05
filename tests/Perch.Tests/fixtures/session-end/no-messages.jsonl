@@ -1,0 +1,3 @@
+{"type":"permission-mode","permissionMode":"default","sessionId":"end-empty"}
+{"type":"system","subtype":"turn_duration","timestamp":"2026-10-01T05:00:03.100Z","sessionId":"end-empty"}
+{"type":"cost-state","sessionId":"end-empty","totalCostUSD":0,"totalDuration":1200,"startTime":1790830000000}

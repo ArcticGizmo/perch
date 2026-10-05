@@ -70,6 +70,10 @@ internal sealed record ClaudeConfigDir
     /// <summary><c>{root}/projects</c> — per-project transcript directories.</summary>
     public string ProjectsDir => Path.Combine(Root, "projects");
 
+    /// <summary><c>{root}/history.jsonl</c> — Claude Code's prompt history (every submitted prompt, with its
+    /// session id). Read by <see cref="ExitCommandIndex"/> for <c>/exit</c>.</summary>
+    public string HistoryFile => Path.Combine(Root, "history.jsonl");
+
     /// <summary><c>{root}/plugins</c> — installed-plugin state and marketplace clones.</summary>
     public string PluginsDir => Path.Combine(Root, "plugins");
 

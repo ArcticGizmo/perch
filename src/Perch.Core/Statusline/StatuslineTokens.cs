@@ -93,6 +93,12 @@ internal static class StatuslineTokens
             new TokenDescriptor("git.changes", TokenBadge.PerchExtra),
             new TokenDescriptor("git.dirty", TokenBadge.PerchExtra),
         }),
+        new Group("session · Perch extras", new[]
+        {
+            // Not in Claude Code's payload — the /rename title, read off the tail of transcript_path (the
+            // last custom-title record). WhenPresent: blank until the session is renamed.
+            new TokenDescriptor("session.name", TokenBadge.PerchExtra, TokenBadge.WhenPresent),
+        }),
         new Group("account · Perch extras", new[]
         {
             // Not in Claude Code's payload — Perch injects these from the session's config-dir

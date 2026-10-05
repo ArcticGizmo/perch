@@ -30,12 +30,17 @@ public class SettingsRegistryTests
         nameof(AppSettings.HypertreeExpanded),
         // The Roost's rail sort is picked by the toggle in the rail's header…
         nameof(AppSettings.RoostRailSort),
+        // The session windows' and the Roost's zoom, stepped by Ctrl+= / Ctrl+− in the window itself.
+        nameof(AppSettings.SessionZoom),
+        nameof(AppSettings.RoostZoom),
         // …and its tabs, managed in the Roost's tab strip.
         nameof(AppSettings.RoostTabs),
         // …and the layouts saved from its tab painter.
         nameof(AppSettings.RoostSavedLayouts),
         // …and the panes closed from a pane's own menu (reopened from its "N hidden" chip).
         nameof(AppSettings.RoostClosedPanes),
+        // The Recent list's dismissals (a Recent row's / a dormant Roost pane's "Dismiss").
+        nameof(AppSettings.RecentDismissed),
         // The usage strip's per-account collapse overrides, toggled by clicking an account on the overlay —
         // not a Settings-window control.
         nameof(AppSettings.UsageAccountCollapsed),

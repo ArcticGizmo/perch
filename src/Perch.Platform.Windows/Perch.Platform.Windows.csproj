@@ -25,5 +25,7 @@
     <!-- Shell icon extraction + PNG encoding for the quick-links strip (WindowsAppIconProvider).
          Windows-only, so it lives here rather than in the UI-neutral Core. -->
     <PackageReference Include="System.Drawing.Common" Version="10.0.9" />
+    <!-- EventLogReader: the System log's power events, for finding a shutdown Perch didn't stamp (PowerHistory). -->
+    <PackageReference Include="System.Diagnostics.EventLog" Version="10.0.9" />
   </ItemGroup>
 </Project>
