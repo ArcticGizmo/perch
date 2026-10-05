@@ -1737,9 +1737,9 @@ internal sealed class SessionThreadView : ScrollViewer
     }
 
     // Claude asking the user something (AskUserQuestion): one block per question — header chip, the question,
-    // its options as buttons (with descriptions). Single-select picks submit as soon as every question has an
-    // answer; multi-select toggles and submits via the button. Brand-washed, so it reads as a conversation
-    // beat, not a permission gate.
+    // its options as buttons (with descriptions), plus an "Other" that opens a free-text box. A lone single-select
+    // question submits on the pick (or Enter in its "Other" box); multi-select toggles and submits via the button.
+    // Brand-washed, so it reads as a conversation beat, not a permission gate.
     private Control BuildQuestion(PermissionItem item)
     {
         var questions = AskUserQuestionInput.Parse(item.Request.InputJson);
@@ -1763,15 +1763,31 @@ internal sealed class SessionThreadView : ScrollViewer
             },
         });
 
-        var submit = new SessionButton(_p, "Submit", SessionButtonKind.Primary, "↵") { Enabled = false };
+        // Every question also offers "Other" (as the TUI does): it opens a text box whose trimmed text joins the
+        // answer — the CLI takes any string per question, not just an option label.
+        var otherBoxes = new Dictionary<string, TextBox>();
+        var submit = new SessionButton(_p, "Submit", SessionButtonKind.Primary, "↵") { Enabled = false, Margin = new Thickness(0, 0, 9, 0) };
         bool anyMulti = questions.Any(q => q.MultiSelect) || questions.Count > 1;
+        List<string> AnswerFor(UserQuestion q)
+        {
+            var list = chosen.TryGetValue(q.Question, out var l) ? l.ToList() : new List<string>();
+            if (otherBoxes.TryGetValue(q.Question, out var box) && box.IsVisible && box.Text?.Trim() is { Length: > 0 } typed)
+                list.Add(typed);
+            return list;
+        }
         void Submit()
         {
-            var answers = chosen.Where(kv => kv.Value.Count > 0)
-                .ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value.ToList());
+            var answers = new Dictionary<string, IReadOnlyList<string>>();
+            foreach (var q in questions)
+                if (AnswerFor(q) is { Count: > 0 } a) answers[q.Question] = a;
             QuestionAnswered?.Invoke(item, answers);
         }
-        void Refresh() => submit.Enabled = questions.All(q => chosen.TryGetValue(q.Question, out var l) && l.Count > 0);
+        void Refresh()
+        {
+            submit.Enabled = questions.All(q => AnswerFor(q).Count > 0);
+            // A lone single-select question submits on the pick, so Submit only shows once "Other" needs it.
+            submit.IsVisible = anyMulti || otherBoxes.Values.Any(b => b.IsVisible);
+        }
 
         foreach (var q in questions)
         {
@@ -1800,14 +1816,36 @@ internal sealed class SessionThreadView : ScrollViewer
                 block.Children.Add(new TextBlock { Text = "choose any that apply", FontFamily = _p.Mono, FontSize = 11, Foreground = _p.Faint, Margin = new Thickness(9, 0, 0, 0) });
 
             var options = new WrapPanel { Orientation = Orientation.Horizontal };
-            foreach (var o in q.Options)
+            var otherBox = new TextBox
+            {
+                PlaceholderText = "Type your own answer", AcceptsReturn = false, TextWrapping = TextWrapping.Wrap,
+                FontFamily = _p.Body, FontSize = 14, Foreground = _p.Text, CaretBrush = _p.Brand,
+                Background = _p.Raised, BorderBrush = _p.BrandLine, BorderThickness = new Thickness(1),
+                CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(12, 8), Margin = new Thickness(0, 0, 9, 0),
+                IsVisible = false,
+            };
+            // Fluent otherwise swaps the field to a near-black background on focus/hover; pin it to Raised.
+            otherBox.Resources["TextControlBackgroundFocused"] = _p.Raised;
+            otherBox.Resources["TextControlBackgroundPointerOver"] = _p.Raised;
+            otherBox.TextChanged += (_, _) => Refresh();
+            otherBox.KeyDown += (_, e) =>
+            {
+                if (e.Key != Key.Enter) return;
+                e.Handled = true;
+                if (submit.Enabled) Submit();
+            };
+            otherBoxes[q.Question] = otherBox;
+
+            var paints = new List<Action>();
+            void RepaintAll() { foreach (var p in paints) p(); }
+            Border OptionButton(string label, string description, Func<bool> isOn, Action pick)
             {
                 var row = new StackPanel { Spacing = 2 };
-                row.Children.Add(new TextBlock { Text = o.Label, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 14, Foreground = _p.Title });
-                if (o.Description.Length > 0)
+                row.Children.Add(new TextBlock { Text = label, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 14, Foreground = _p.Title });
+                if (description.Length > 0)
                     row.Children.Add(new TextBlock
                     {
-                        Text = o.Description, FontFamily = _p.Body, FontSize = 12.5, Foreground = _p.Muted,
+                        Text = description, FontFamily = _p.Body, FontSize = 12.5, Foreground = _p.Muted,
                         TextWrapping = TextWrapping.Wrap, MaxWidth = 260,
                     });
                 var btn = new Border
@@ -1816,12 +1854,29 @@ internal sealed class SessionThreadView : ScrollViewer
                     CornerRadius = SessionPalette.ButtonRadius, Padding = new Thickness(13, 9), Margin = new Thickness(0, 0, 9, 9),
                     Cursor = new Cursor(StandardCursorType.Hand), Child = row,
                 };
-                var label = o.Label;
-                btn.PointerEntered += (_, _) => { if (!IsPicked(q, label)) btn.Background = _p.Raised2; };
-                btn.PointerExited += (_, _) => { if (!IsPicked(q, label)) btn.Background = _p.Raised; };
+                paints.Add(() =>
+                {
+                    bool on = isOn();
+                    btn.Background = on ? _p.BrandWash : _p.Raised;
+                    btn.BorderBrush = on ? _p.BrandLine : _p.Border;
+                });
+                btn.PointerEntered += (_, _) => { if (!isOn()) btn.Background = _p.Raised2; };
+                btn.PointerExited += (_, _) => { if (!isOn()) btn.Background = _p.Raised; };
                 btn.PointerReleased += (_, e) =>
                 {
                     if (e.InitialPressMouseButton != MouseButton.Left) return;
+                    pick();
+                    RepaintAll();
+                    Refresh();
+                };
+                return btn;
+            }
+
+            foreach (var o in q.Options)
+            {
+                var label = o.Label;
+                options.Children.Add(OptionButton(label, o.Description, () => IsPicked(q, label), () =>
+                {
                     var list = chosen.TryGetValue(q.Question, out var l) ? l : chosen[q.Question] = new List<string>();
                     if (q.MultiSelect)
                     {
@@ -1831,31 +1886,30 @@ internal sealed class SessionThreadView : ScrollViewer
                     {
                         list.Clear();
                         list.Add(label);
+                        otherBox.IsVisible = false;   // single-select: a label replaces a typed answer
+                        if (!anyMulti) Submit();      // a single single-select question: the pick is the answer
                     }
-                    foreach (var child in options.Children.OfType<Border>())
-                        Paint(child, q);
-                    Refresh();
-                    if (!anyMulti) Submit();   // a single single-select question: the pick is the answer
-                };
-                options.Children.Add(btn);
+                }));
             }
+            options.Children.Add(OptionButton("Other", "Type your own answer", () => otherBox.IsVisible, () =>
+            {
+                otherBox.IsVisible = !otherBox.IsVisible;
+                if (!otherBox.IsVisible) return;
+                if (!q.MultiSelect && chosen.TryGetValue(q.Question, out var l)) l.Clear();   // the typed answer replaces a pick
+                Dispatcher.UIThread.Post(() => otherBox.Focus(), DispatcherPriority.Input);
+            }));
             block.Children.Add(options);
+            block.Children.Add(otherBox);
             stack.Children.Add(block);
         }
 
         bool IsPicked(UserQuestion q, string label) => chosen.TryGetValue(q.Question, out var l) && l.Contains(label);
-        void Paint(Border b, UserQuestion q)
-        {
-            var lbl = ((b.Child as StackPanel)?.Children[0] as TextBlock)?.Text ?? "";
-            bool on = IsPicked(q, lbl);
-            b.Background = on ? _p.BrandWash : _p.Raised;
-            b.BorderBrush = on ? _p.BrandLine : _p.Border;
-        }
 
         var actions = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(15, 8, 15, 15) };
-        if (anyMulti) actions.Children.Add(submit);
+        actions.Children.Add(submit);
+        submit.IsVisible = anyMulti;
         submit.Click += Submit;
-        var skip = new SessionButton(_p, "Skip", SessionButtonKind.Quiet, "esc") { Margin = new Thickness(anyMulti ? 9 : 0, 0, 0, 0) };
+        var skip = new SessionButton(_p, "Skip", SessionButtonKind.Quiet, "esc");
         skip.Click += () => PermissionAnswered?.Invoke(item, false, false);
         actions.Children.Add(skip);
         stack.Children.Add(actions);

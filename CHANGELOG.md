@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.5.5] - 2026-10-05
+
+- Questions from Claude offer "Other" for typing your own answer (the options were suggestions all along)
+
+---
+
 ## [v0.5.4] - 2026-10-05
 
 - Select across headings, paragraphs, lists, code and tables in one drag
