@@ -120,13 +120,8 @@ internal sealed partial class SessionWindow : Window
     private readonly Border _contextPill, _contextBarFill;
     private const double ContextBarWidth = 72;
 
-    // Fixed strip under the header that mirrors what the floating overlay shows for THIS session: a chip per
-    // background sub-agent/teammate currently working. Fed by the same SessionMonitor scan that drives the
-    // overlay (the app hands each window its own ClaudeSession after every scan), so the two never disagree.
-    // Hidden whenever nothing is running — controlled sessions run their sub-agents in the background, so this
-    // is the only place inside the window that surfaces them. See UpdateBackgroundActivity.
-    private readonly Border _activityStrip;
-    private readonly WrapPanel _activityChips;
+    // Background sub-agents (header tabs + bottom-of-chat chips + the read-only agent view) live in
+    // SessionWindow.Agents.cs; see UpdateBackgroundActivity.
     // The context pill's thermometer — the overlay's own glyph/variants (OverlayCanvas.DrawThermo), at the
     // thresholds the floating UI is configured with. The thresholds mirror settings, pushed by the app via
     // SetContextPressureConfig; they default to AppSettings' own defaults so the glyph reads sanely if that
@@ -709,12 +704,16 @@ internal sealed partial class SessionWindow : Window
         };
         composerStack.Children.Add(_modelMenu);
         composerStack.Children.Add(_modelVersions);
-        // Hidden on the launcher; the thread and the composer appear together once a session starts.
+        // The sub-agent tabs, the bottom-of-chat chips and the agent view (SessionWindow.Agents.cs).
+        BuildAgentChrome();
+        // Hidden on the launcher; the thread and the composer appear together once a session starts. The working
+        // sub-agents' chips sit at the foot of the chat, above the composer; an agent tab swaps the composer for a
+        // read-only note.
         _composerDock = new Border
         {
             Background = _p.Surface, BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(0, 1, 0, 0),
-            Padding = new Thickness(22, 14, 22, 16), Child = _composerFrame, [DockPanel.DockProperty] = Dock.Bottom,
-            IsVisible = false,
+            Padding = new Thickness(22, 14, 22, 16), [DockPanel.DockProperty] = Dock.Bottom, IsVisible = false,
+            Child = new StackPanel { Children = { _agentChipsRow, _composerFrame, _agentFooter } },
         };
 
         // ── Centre ───────────────────────────────────────────────────────────────
@@ -811,10 +810,10 @@ internal sealed partial class SessionWindow : Window
 
         // Floating scroll column, bottom-right over the thread (above the composer). The four buttons hold a
         // fixed column so they never jump around; each is disabled when it wouldn't move the view.
-        _jumpTopBtn = JumpButton("⤒", "Jump to the start", () => _thread.JumpToTop());
-        _jumpPrevBtn = JumpButton("↑", "Jump to the previous prompt", () => _thread.JumpToPreviousPrompt());
-        _jumpNextBtn = JumpButton("↓", "Jump to the next prompt", () => _thread.JumpToNextPrompt());
-        _jumpBottomBtn = JumpButton("⤓", "Jump to the latest", () => _thread.JumpToBottom());
+        _jumpTopBtn = JumpButton("⤒", "Jump to the start", () => ActiveThread.JumpToTop());
+        _jumpPrevBtn = JumpButton("↑", "Jump to the previous prompt", () => ActiveThread.JumpToPreviousPrompt());
+        _jumpNextBtn = JumpButton("↓", "Jump to the next prompt", () => ActiveThread.JumpToNextPrompt());
+        _jumpBottomBtn = JumpButton("⤓", "Jump to the latest", () => ActiveThread.JumpToBottom());
         var jumpStack = new StackPanel
         {
             Orientation = Orientation.Vertical, Spacing = 9,
@@ -828,31 +827,16 @@ internal sealed partial class SessionWindow : Window
         BuildAutoCompactOverlay();
         BuildUsageOverlay();
         BuildFindBar();
-        _center = new Panel { Children = { _launcher, _thread, jumpStack, _toast, _findBar, _resumeOverlay, _autoCompactOverlay, _usageOverlay } };
-        // Header-anchored "running now" strip: one chip per working sub-agent/teammate under this session. A
-        // DockPanel (caption pinned left, chips filling) so the WrapPanel is width-constrained and wraps.
-        _activityChips = new WrapPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        var activityCaption = new TextBlock
-        {
-            Text = "RUNNING", FontFamily = _p.Mono, FontSize = 10.5, LetterSpacing = 1.1, Foreground = _p.Faint,
-            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0),
-            [DockPanel.DockProperty] = Dock.Left,
-        };
-        _activityStrip = new Border
-        {
-            Background = _p.Surface, BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = new Thickness(18, 7), IsVisible = false, [DockPanel.DockProperty] = Dock.Top,
-            Child = new DockPanel { VerticalAlignment = VerticalAlignment.Center, Children = { activityCaption, _activityChips } },
-        };
+        _center = new Panel { Children = { _launcher, _thread, _agentHost, jumpStack, _toast, _findBar, _resumeOverlay, _autoCompactOverlay, _usageOverlay } };
 
         _changesPanel = BuildChangesPanel();   // docked to the right of the centre; hidden until toggled on
         // Dock order matters: the changed-files panel docks Right *before* the composer docks Bottom, so the
         // panel spans the full height (down past the composer) and the composer + thread stay aligned to its
-        // left — rather than the composer running full-width underneath the panel. The activity strip docks
+        // left — rather than the composer running full-width underneath the panel. The sub-agent tab strip docks
         // Top right below the header bar, above the thread.
         // Ctrl+= / Ctrl+− / Ctrl+0 (and Ctrl+wheel) zoom the whole window; the app keeps every session window at
         // one shared level (ZoomChanged → SetZoom on the others).
-        _zoom = new ZoomHost(_p, new DockPanel { Children = { barFrame, _activityStrip, _changesPanel, _composerDock, _center } })
+        _zoom = new ZoomHost(_p, new DockPanel { Children = { barFrame, _agentTabStrip, _changesPanel, _composerDock, _center } })
         {
             ResetOnCtrl0 = true,
         };
@@ -919,6 +903,7 @@ internal sealed partial class SessionWindow : Window
         // subscribed (and rendering deltas) after the window closes.
         _thread.Unbind();
         _session = null;
+        ClearAgents();   // its sub-agents (and any agent tab) belong to the session that just went
     }
 
     // The composer takes input for a live session, and for a dormant one (its first send starts claude).
@@ -3004,7 +2989,7 @@ internal sealed partial class SessionWindow : Window
     private void ShowThread()
     {
         _launcher.IsVisible = false;
-        _thread.IsVisible = true;
+        _thread.IsVisible = !AgentViewOpen;
         _composerDock.IsVisible = true;
         _changesToggle.IsVisible = true;   // the changed-files toggle rides with the thread, not the launcher
         RefreshBranchAsync();              // surface the repo's current branch in the bar
@@ -3073,7 +3058,11 @@ internal sealed partial class SessionWindow : Window
 
     // ── Background attention ─────────────────────────────────────────────────────
 
-    private void OnStateForAlert() => MaybeAlert();
+    private void OnStateForAlert()
+    {
+        ReturnToSessionIfNeeded();   // a prompt for the user waits in the session's thread, not an agent tab
+        MaybeAlert();
+    }
 
     // Raise a desktop cue when a paused-turn prompt is pending while nobody's looking at it — this window isn't
     // the active one and the Roost isn't showing it either (AttentionSeen). The decider fires at most once per
@@ -3094,15 +3083,17 @@ internal sealed partial class SessionWindow : Window
 
     // The four buttons hold a fixed column (start / prev / next / latest) so they never jump around; each is
     // enabled only when it would move the view (something above/below, a prompt above/below), and dimmed +
-    // click-through-disabled otherwise. The whole column hides only off the thread (e.g. the launcher).
+    // click-through-disabled otherwise. The whole column hides only off the thread (e.g. the launcher). They drive
+    // whichever thread is on screen — the session's, or an open sub-agent tab's.
     private void UpdateJumpButtons()
     {
-        bool onThread = _thread.IsVisible;
+        var thread = ActiveThread;
+        bool onThread = thread.IsVisible;
         _jumpTopBtn.IsVisible = _jumpPrevBtn.IsVisible = _jumpNextBtn.IsVisible = _jumpBottomBtn.IsVisible = onThread;
-        SetJumpEnabled(_jumpTopBtn, onThread && !_thread.AtTop);
-        SetJumpEnabled(_jumpPrevBtn, onThread && _thread.HasPromptAbove);
-        SetJumpEnabled(_jumpNextBtn, onThread && _thread.HasPromptBelow);
-        SetJumpEnabled(_jumpBottomBtn, onThread && !_thread.AtBottom);
+        SetJumpEnabled(_jumpTopBtn, onThread && !thread.AtTop);
+        SetJumpEnabled(_jumpPrevBtn, onThread && thread.HasPromptAbove);
+        SetJumpEnabled(_jumpNextBtn, onThread && thread.HasPromptBelow);
+        SetJumpEnabled(_jumpBottomBtn, onThread && !thread.AtBottom);
     }
 
     // A disabled jump button keeps its slot but reads as inert: dimmed, resting fill, no pointer/hover.
@@ -3697,6 +3688,7 @@ internal sealed partial class SessionWindow : Window
         if (_resumeOverlay.IsVisible) { CloseResumeOverlay(); e.Handled = true; return; }
         if (PaletteOpen) { ClosePalette(); e.Handled = true; return; }
         if (MentionOpen) { CloseMention(); e.Handled = true; return; }
+        if (AgentViewOpen) { CloseAgentView(); e.Handled = true; return; }   // back to the session, never an interrupt
         if (Conv.PendingPermission is { } pending) { _session?.AnswerPermission(pending, allow: false, switchMode: false); e.Handled = true; }
         else if (_session is { IsRunning: true } live && Conv.TurnActive) { live.Interrupt(); e.Handled = true; }
     }
@@ -3758,57 +3750,6 @@ internal sealed partial class SessionWindow : Window
             },
         };
         return new Viewbox { Width = size, Height = size, Child = canvas, VerticalAlignment = VerticalAlignment.Center };
-    }
-
-    /// <summary>
-    /// Mirrors the floating overlay's live sub-agent view onto this window: a chip per background
-    /// sub-agent/teammate currently working under the session, from the very same <see cref="ClaudeSession"/>
-    /// the overlay renders (the app resolves it by id and pushes it after each scan). A controlled session
-    /// runs its sub-agents in the background, so this strip is the only place their activity surfaces inside
-    /// the window. Passing null — or a session with nothing running — hides the strip. Call on the UI thread.
-    /// </summary>
-    public void UpdateBackgroundActivity(ClaudeSession? mine)
-    {
-        // Only agents actually working now — an idle or interrupted (stale) teammate isn't "running".
-        // SelfAndDescendants so a sub-agent nested under another still shows.
-        var running = mine?.SubAgents
-            .SelectMany(a => a.SelfAndDescendants())
-            .Where(a => !a.IsIdle && !a.IsStale)
-            .ToList() ?? [];
-
-        _activityChips.Children.Clear();
-        foreach (var agent in running)
-            _activityChips.Children.Add(BuildAgentChip(agent));
-        _activityStrip.IsVisible = running.Count > 0;
-    }
-
-    // One overlay-style chip for a working sub-agent/teammate: a dot in the theme's sub-agent hue, the
-    // agent's label, and its present-tense activity when known.
-    private Control BuildAgentChip(SubAgent a)
-    {
-        var label = a.IsTeammate
-            ? (string.IsNullOrEmpty(a.Name) ? a.Description : a.Name!)
-            : (string.IsNullOrEmpty(a.Description) ? a.AgentType : a.Description);
-        if (string.IsNullOrWhiteSpace(label)) label = "sub-agent";
-
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7, VerticalAlignment = VerticalAlignment.Center };
-        row.Children.Add(new Ellipse { Width = 7, Height = 7, Fill = _p.Violet, VerticalAlignment = VerticalAlignment.Center });
-        row.Children.Add(new TextBlock
-        {
-            Text = ClipChip(label, 34), FontFamily = _p.Body, FontSize = 12, FontWeight = FontWeight.SemiBold,
-            Foreground = _p.Text, VerticalAlignment = VerticalAlignment.Center,
-        });
-        if (!string.IsNullOrWhiteSpace(a.Activity))
-            row.Children.Add(new TextBlock
-            {
-                Text = ClipChip(a.Activity!, 40), FontFamily = _p.Mono, FontSize = 11.5, Foreground = _p.Faint,
-                VerticalAlignment = VerticalAlignment.Center,
-            });
-
-        var chip = Pill(row, _p.VioletWash, _p.VioletLine);
-        chip.Margin = new Thickness(0, 2, 8, 2);
-        chip[ToolTip.TipProperty] = string.IsNullOrWhiteSpace(a.Activity) ? label : $"{label} — {a.Activity}";
-        return chip;
     }
 
     private static string ClipChip(string s, int max) =>
@@ -3960,6 +3901,7 @@ internal sealed partial class SessionWindow : Window
     {
         if (_closed) return;
         _thread.Restyle();
+        _agentThread.Restyle();
         InvalidateVisual();
     }
 }

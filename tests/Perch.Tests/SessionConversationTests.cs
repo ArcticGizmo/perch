@@ -413,6 +413,29 @@ public class SessionConversationTests
     }
 
     [Fact]
+    public void ParseTranscriptLine_IncludeSidechain_ReadsASubAgentsOwnTranscript()
+    {
+        // A sub-agent's transcript is all sidechain lines: the session window's agent tab opts in to keep them,
+        // while the default still drops them from the parent's thread.
+        var lines = new[]
+        {
+            """{"type":"user","isSidechain":true,"message":{"role":"user","content":"explore the auth flow"}}""",
+            """{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"tool_use","id":"s1","name":"Read","input":{"file_path":"a.cs"}}]}}""",
+        };
+        Assert.All(lines, l => Assert.Null(SessionConversation.ParseTranscriptLine(l, null)));
+
+        var (conv, _) = Make();
+        foreach (var l in lines)
+            if (SessionConversation.ParseTranscriptLine(l, null, includeSidechain: true) is { } p)
+                conv.AppendParsedTranscriptLine(p);
+
+        Assert.Equal(2, conv.Items.Count);
+        Assert.Equal("explore the auth flow", Assert.IsType<UserMessageItem>(conv.Items[0]).Text);
+        var tool = Assert.IsType<ToolCallPart>(Assert.Single(Assert.IsType<AssistantMessageItem>(conv.Items[1]).Parts));
+        Assert.Equal("Read", tool.ToolName);
+    }
+
+    [Fact]
     public void ParseTranscriptLine_ThenApply_MatchesAppendTranscriptLine()
     {
         // Review fixes CP24: the history viewer decodes lines on a worker (ParseTranscriptLine) and applies them on

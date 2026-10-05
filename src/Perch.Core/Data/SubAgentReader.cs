@@ -84,6 +84,30 @@ internal sealed class SubAgentReader
         return LegacyAt(path);
     }
 
+    /// <summary>
+    /// The transcript of one sub-agent (<c>{sessionId}/subagents/agent-{agentId}.jsonl</c> beside the session's own
+    /// transcript), or null when it isn't on disk — the session can't be located, or the agent came from the
+    /// legacy model, whose sub-agents live inside the parent transcript and have no file of their own. Touches
+    /// the disk, so call it off the UI thread.
+    /// </summary>
+    public static string? TranscriptPath(string sessionId, string cwd, string agentId)
+    {
+        if (string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(agentId)
+            || agentId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            return null;
+        try
+        {
+            if (TranscriptLocator.Resolve(sessionId, cwd) is not { } parent)
+                return null;
+            var path = Path.Combine(Path.GetDirectoryName(parent)!, sessionId, "subagents", $"agent-{agentId}.jsonl");
+            return File.Exists(path) ? path : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     // Test seams: the legacy parse of a parent transcript at a path, and bytes the agent classifier has read.
     internal IReadOnlyList<SubAgent> LegacyAt(string path) => _legacy.Get(path, LegacyFolder, FinishLegacy, []);
     internal long AgentBytesRead => _agentState.BytesRead;
@@ -146,8 +170,8 @@ internal sealed class SubAgentReader
                 else if (working)
                 {
                     // Transient: an ordinary sub-agent only matters while it's still working; a stale one
-                    // drops off the roster like any finished one.
-                    node = new SubAgent(agentId, meta.Description, meta.AgentType);
+                    // drops off the roster like any finished one. Its activity feeds the session window's chips.
+                    node = new SubAgent(agentId, meta.Description, meta.AgentType, Activity: state.Activity);
                 }
 
                 if (node != null)

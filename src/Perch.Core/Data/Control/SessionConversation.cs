@@ -448,6 +448,16 @@ internal sealed class SessionConversation
         try { ApplyTranscriptLine(line); } catch { /* a malformed line is skipped, never fatal */ }
     }
 
+    /// <summary>Read-only viewer: marks a tailed transcript as mid-turn (or not), so a bound view shows its
+    /// "working" row while the agent behind it runs. A transcript records no turn boundaries of its own, so the
+    /// viewer says so from what it knows (a sub-agent tab is only open while that sub-agent works).</summary>
+    public void SetLiveTail(bool active)
+    {
+        if (TurnActive == active) return;
+        TurnActive = active;
+        StateChanged?.Invoke();
+    }
+
     /// <summary>Read-only viewer: settle a fully-loaded, <em>inactive</em> transcript. A transcript records no
     /// <c>result</c>, so assistant items stay open and a tool whose result was never written stays "running";
     /// this closes them so a finished history reads as closed (no live spinners) rather than mid-turn. Do NOT
@@ -483,14 +493,15 @@ internal sealed class SessionConversation
 
     /// <summary>Decodes one transcript line (see <see cref="ParsedTranscriptLine"/>); null for a line that adds
     /// nothing (blank, malformed, or a sub-agent's). <paramref name="sessionId"/> is the image-cache id, as for
-    /// <see cref="UseHistorySession"/>. Thread-agnostic. Never throws.</summary>
-    public static ParsedTranscriptLine? ParseTranscriptLine(string line, string? sessionId)
+    /// <see cref="UseHistorySession"/>. <paramref name="includeSidechain"/> keeps sub-agent lines, for reading a
+    /// sub-agent's own transcript (every line of which is a sidechain). Thread-agnostic. Never throws.</summary>
+    public static ParsedTranscriptLine? ParseTranscriptLine(string line, string? sessionId, bool includeSidechain = false)
     {
         try
         {
             if (string.IsNullOrWhiteSpace(line)) return null;
             if (System.Text.Json.Nodes.JsonNode.Parse(line) is not { } root) return null;
-            if (root["isSidechain"]?.GetValue<bool>() == true) return null;   // a sub-agent's line, not this thread
+            if (!includeSidechain && root["isSidechain"]?.GetValue<bool>() == true) return null;   // a sub-agent's line, not this thread
             if (TranscriptJson.AsString(root["type"]) == "user" && GenuineUserPrompt(root) is { } prompt)
             {
                 // A resumed message that carried a pasted image: recover the image as an attachment. The "[Image #N]"

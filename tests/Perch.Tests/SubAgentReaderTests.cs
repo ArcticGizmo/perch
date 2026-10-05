@@ -114,6 +114,33 @@ public class SubAgentReaderTests
     }
 
     [Fact]
+    public void GetRunning_WorkingPlainSubAgent_CarriesActivity()
+    {
+        // The session window's sub-agent chips show what each one is doing, so a plain sub-agent carries the
+        // same present-tense phrase a teammate does.
+        StampFixtureAge(Path.Combine("sessTeam", "subagents", "agent-plainwork3333.jsonl"), TimeSpan.Zero);
+        var reader = new SubAgentReader();
+        var work = Assert.Single(reader.GetRunning("sessTeam", Cwd), s => s.AgentId == "plainwork3333");
+        Assert.Equal("Reading Program.cs", work.Activity);
+    }
+
+    [Fact]
+    public void TranscriptPath_FindsTheAgentsOwnTranscript()
+    {
+        var path = SubAgentReader.TranscriptPath("sessNest", Cwd, "anestpar");
+        Assert.NotNull(path);
+        Assert.EndsWith(Path.Combine("sessNest", "subagents", "agent-anestpar.jsonl"), path);
+    }
+
+    [Theory]
+    [InlineData("sessNest", "nope")]          // no such agent
+    [InlineData("sessB", "tk1")]              // the legacy model: the sub-agent has no transcript of its own
+    [InlineData("sessNest", "../anestpar")]   // not a bare agent id
+    [InlineData("no-such-session", "anestpar")]
+    public void TranscriptPath_NullWhenNotOnDisk(string sessionId, string agentId) =>
+        Assert.Null(SubAgentReader.TranscriptPath(sessionId, Cwd, agentId));
+
+    [Fact]
     public void GetRunning_Team_SurfacesBothTeammatesPlusWorkingSubAgentOnly()
     {
         StampFixtureAge(Path.Combine("sessTeam", "subagents", "agent-aux-explorer-1111.jsonl"), TimeSpan.Zero);

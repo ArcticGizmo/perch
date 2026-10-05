@@ -1962,6 +1962,46 @@ internal static class HeadlessRenderer
         // Ctrl+= twice: the whole window at 125%, re-laid out to the scaled size.
         Capture(Theming.SessionPalette.For(dark: true), "session_zoomed_1x.png", events, zoom: 1.25);
 
+        // Background sub-agents: the header tabs and the chips at the foot of the chat, then one agent's tab open —
+        // its transcript read-only, the composer swapped for the note.
+        var agents = new List<Perch.Data.SubAgent>
+        {
+            new("a1", "Explore the auth flow", "Explore", Activity: "Reading OAuthCallback.cs"),
+            new("t1", "teammate", "general-purpose", IsTeammate: true, Name: "arch-explorer", Color: "blue",
+                Activity: "Searching: TokenRefresh"),
+            new("a2", "Map the test fixtures", "general-purpose", Activity: "Running: dotnet test"),
+        };
+        var agentScene = new List<Perch.Data.Control.SessionEvent>
+        {
+            new Perch.Data.Control.AssistantTextEvent("I'll start from the callback handler and follow the token through."),
+            new Perch.Data.Control.ToolUseEvent("g1", "Grep", "Searching OAuthCallback", "{\"pattern\":\"OAuthCallback\"}"),
+            new Perch.Data.Control.ToolResultEvent("g1", "4 files", false),
+            new Perch.Data.Control.ToolUseEvent("g2", "Read", "Reading OAuthCallback.cs",
+                "{\"file_path\":\"src/Perch.Core/Data/Social/OAuthCallback.cs\"}"),
+        };
+        foreach (var dark in new[] { true, false })
+        {
+            var w = new Windows.SessionWindow(Theming.SessionPalette.For(dark)) { Width = 880, Height = 980 };
+            w.FeedSampleForRender(cwd, prompt, events);
+            w.SetComposerActions(sampleActions);
+            w.ShowAgentsForRender(agents);
+            w.Show();
+            void Shot(string file)
+            {
+                Dispatcher.UIThread.RunJobs();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                if (w.CaptureRenderedFrame() is { } frame)
+                {
+                    using var fs = File.Create(Path.Combine(outDir, file));
+                    frame.Save(fs);
+                }
+            }
+            Shot(dark ? "session_agents_1x.png" : "session_agents_light_1x.png");
+            w.OpenAgentSampleForRender("a1", "Explore the auth flow: trace how the OAuth callback stores the token.", agentScene);
+            Shot(dark ? "session_agent_tab_1x.png" : "session_agent_tab_light_1x.png");
+            w.Close();
+        }
+
         // A resumed session opened dormant (session recovery D4): its history shows, the composer takes input, and
         // the note above it says Claude starts on the first send — with what that send re-sends (cold cache).
         var dormantEstimate = new Perch.Data.Control.ResumeEstimate(

@@ -21,6 +21,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The model menu offers each family's newest release; hover the › beside it to pick an older one
 - Ctrl+= / Ctrl+− (or Ctrl+wheel) zoom the session window and the Roost, and Perch remembers it; Ctrl+0 resets a session window
 - A 🔍 100% button beside End session shows the zoom and lets you pick a level
+- Sub-agents working in the background get a spinning chip at the foot of the chat, so a quiet session no longer looks frozen
+- The session window's sub-agent strip is now tabs: click one (or its chip) to watch that sub-agent's log as it works
+- A sub-agent's tab is read-only (it only takes orders from the session) and closes itself when the sub-agent finishes
 - Statusline designer: a `session.name` token shows the name you gave the session with `/rename`
 
 ---
