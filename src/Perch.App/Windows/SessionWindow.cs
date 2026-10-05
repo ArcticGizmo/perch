@@ -1424,6 +1424,12 @@ internal sealed partial class SessionWindow : Window
         _dormantNote.Foreground = _p.Faint;
         _dormantNote[ToolTip.TipProperty] = null;
         if (session.SessionId is not { } id) return;
+        // Picked from this window's launcher: its row already worked the estimate out.
+        if (_estimates.TryGetValue(id, out var known) && known.HasData)
+        {
+            ApplyDormantEstimate(known);
+            return;
+        }
         var cwd = session.Cwd;
         System.Threading.Tasks.Task.Run(() =>
         {
@@ -1629,20 +1635,15 @@ internal sealed partial class SessionWindow : Window
         bool trusted;
         try
         {
-            (configDir, trusted) = await System.Threading.Tasks.Task.Run(() =>
-            {
-                var dir = resumeId is null ? freshDir : TranscriptLocator.ResumeConfigRoot(resumeId, cwd);
-                return (dir, DirectoryTrust.Evaluate(dir, cwd));
-            });
+            (configDir, trusted) = await ResumeGate.ReadTrustAsync(cwd,
+                () => resumeId is null ? freshDir : TranscriptLocator.ResumeConfigRoot(resumeId, cwd));
         }
-        catch { trusted = false; }
+        catch { trusted = false; }   // unreadable: ask, as for an untrusted folder
 
-        if (!trusted)
+        if (!trusted && !await ResumeGate.ConfirmTrustAsync(this, configDir, cwd))
         {
-            bool ok = await ResumeGate.ConfirmTrustAsync(this, cwd);
-            if (!ok) { LaunchFail("not started — folder not trusted"); return; }
-            // Persist so this folder (and its subfolders) won't ask again — the same store Claude Code reads.
-            _ = System.Threading.Tasks.Task.Run(() => DirectoryTrust.Grant(configDir, cwd));
+            LaunchFail("not started — folder not trusted");
+            return;
         }
 
         // The window may have closed or attached a session while the dialog was up.
@@ -3266,7 +3267,7 @@ internal sealed partial class SessionWindow : Window
         {
             var reset = MenuCell(MenuText($"{ShortModel(_defaults.Model ?? CliDefaultModel)} (default)", false));
             reset.PointerEntered += (_, _) => _modelVersions.IsOpen = false;
-            reset.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) PickModel(null); };
+            reset.OnLeftClick(() => PickModel(null));
             rows.Children.Add(reset);
             rows.Children.Add(new Border { Height = 1, Background = _p.Separator, Margin = new Thickness(6, 3) });
         }
@@ -3282,7 +3283,7 @@ internal sealed partial class SessionWindow : Window
         var latest = family.Latest;
         var pick = MenuCell(MenuText(latest.DisplayName, latest == current));
         pick.PointerEntered += (_, _) => _modelVersions.IsOpen = false;
-        pick.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) PickModel(latest.Id); };
+        pick.OnLeftClick(() => PickModel(latest.Id));
         if (family.Versions.Count < 2) return pick;
 
         bool olderInUse = current is not null && current != latest && family.Versions.Contains(current);
@@ -3293,7 +3294,7 @@ internal sealed partial class SessionWindow : Window
         });
         arrow.Padding = new Thickness(10, 2);
         arrow.PointerEntered += (_, _) => ShowModelVersions(family, current, arrow);
-        arrow.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowModelVersions(family, current, arrow); };
+        arrow.OnLeftClick(() => ShowModelVersions(family, current, arrow));
 
         var divider = new Border { Width = 1, Background = _p.Border, Margin = new Thickness(2, 5) };
         Grid.SetColumn(divider, 1);
@@ -3311,7 +3312,7 @@ internal sealed partial class SessionWindow : Window
         {
             var row = MenuCell(MenuText(version.DisplayName, version == current));
             var id = version.Id;
-            row.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) PickModel(id); };
+            row.OnLeftClick(() => PickModel(id));
             rows.Children.Add(row);
         }
         ((Border)_modelVersions.Child!).Child = rows;
@@ -3348,9 +3349,8 @@ internal sealed partial class SessionWindow : Window
             Background = Brushes.Transparent, CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6),
             Cursor = new Cursor(StandardCursorType.Hand), Child = content,
         };
-        cell.PointerEntered += (_, _) => cell.Background = _p.Raised2;
-        cell.PointerExited += (_, _) => { if (cell != _modelVersionsAnchor) cell.Background = Brushes.Transparent; };
-        return cell;
+        // The cell the versions submenu hangs off stays lit while it's open.
+        return cell.HoverWash(_p.Raised2, keep: () => cell == _modelVersionsAnchor);
     }
 
     private TextBlock MenuText(string text, bool current) => new()

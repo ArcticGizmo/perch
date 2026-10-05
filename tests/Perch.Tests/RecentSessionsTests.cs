@@ -116,4 +116,32 @@ public sealed class RecentSessionsTests : IDisposable
 
         Assert.Equal(SessionEndKind.Exited, row.End.Kind);
     }
+
+    [Fact]
+    public void ARebuild_ReusesAnUnchangedTail_ButStillWeighsANewExit()
+    {
+        var graceful = Transcript("graceful.jsonl", "g", GracefulEnd);
+        var recent = new RecentSessions();
+        Assert.Equal(SessionEndKind.Closed, Assert.Single(recent.Build([graceful], None, NoDismissals, [], Now)).End.Kind);
+
+        // The tail is cached, but the /exit comes from the prompt history, which is read on every build.
+        var exitAt = DateTimeOffset.Parse("2026-10-01T05:00:10Z").ToUnixTimeMilliseconds();
+        File.WriteAllText(Path.Combine(_root, "history.jsonl"),
+            $$"""{"display":"/exit","pastedContents":{},"timestamp":{{exitAt}},"project":"C:\\fixtures\\proj","sessionId":"g"}""" + "\n");
+        Assert.Equal(SessionEndKind.Exited, Assert.Single(recent.Build([graceful], None, NoDismissals, [], Now)).End.Kind);
+    }
+
+    [Fact]
+    public void ARebuild_RereadsATranscriptThatChanged()
+    {
+        var entry = Transcript("graceful.jsonl", "g", GracefulEnd);
+        var recent = new RecentSessions();
+        Assert.Equal(SessionEndKind.Closed, Assert.Single(recent.Build([entry], None, NoDismissals, [], Now)).End.Kind);
+
+        // Resumed and then killed: the same path, new contents.
+        File.Copy(Path.Combine(AppContext.BaseDirectory, "fixtures", "session-end", "killed-mid-turn.jsonl"), entry.Path, overwrite: true);
+        File.SetLastWriteTime(entry.Path, KilledEnd.AddSeconds(1));
+        var killed = entry with { LastUpdated = KilledEnd.AddSeconds(1) };
+        Assert.Equal(SessionEndKind.Abrupt, Assert.Single(recent.Build([killed], None, NoDismissals, [], Now)).End.Kind);
+    }
 }

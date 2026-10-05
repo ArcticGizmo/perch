@@ -44,9 +44,7 @@ internal sealed class ZoomButton : Border
             Children = { Magnifier(p.Muted), _label },
         };
 
-        PointerEntered += (_, _) => Background = p.Raised2;
-        PointerExited += (_, _) => Background = Brushes.Transparent;
-        PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowMenu(); };
+        this.HoverWash(p.Raised2).OnLeftClick(ShowMenu);
         host.ZoomApplied += Refresh;
         Refresh();
     }

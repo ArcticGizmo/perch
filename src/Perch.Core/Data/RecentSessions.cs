@@ -18,11 +18,15 @@ internal sealed record RecentSession(HistoryEntry Entry, SessionEnd End, bool Ju
 /// (started and ended without a prompt), and dismissed endings — a dismissal covers the ending it was made on, so a
 /// session that's resumed and ends again comes back.
 /// <para>Holds one <see cref="ExitCommandIndex"/> per config dir, found from each transcript's path, so the prompt
-/// history is read incrementally across builds. Reads files: call it off the UI thread. Never throws.</para>
+/// history is read incrementally across builds; and each transcript's tail facts by (length, last write), so a rebuild
+/// (one per session ending) re-reads only the transcripts that changed — a finished one never does. Reads files: call
+/// it off the UI thread. Never throws.</para>
 /// </summary>
 internal sealed class RecentSessions
 {
     private readonly Dictionary<string, ExitCommandIndex> _exitIndexes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (long Length, DateTime Write, SessionEndReader.TailFacts Tail)> _tails =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _gate = new();
 
     /// <param name="entries">Every transcript, e.g. from <see cref="SessionHistory.ListAll"/>.</param>
@@ -39,6 +43,7 @@ internal sealed class RecentSessions
         var since = now - SessionRecovery.RecentWindow;
         var refreshed = new HashSet<ExitCommandIndex>();
         var rows = new List<RecentSession>();
+        var considered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var entry in entries)
         {
@@ -49,8 +54,8 @@ internal sealed class RecentSessions
 
                 var index = IndexFor(entry.Path);
                 if (index is not null && refreshed.Add(index)) index.Refresh();
-                var row = new RecentSession(
-                    entry, SessionEndReader.Read(entry.Path, index?.LastExit(entry.SessionId)), false);
+                considered.Add(entry.Path);
+                var row = new RecentSession(entry, EndOf(entry.Path, index?.LastExit(entry.SessionId)), false);
 
                 if (!row.End.HasConversation) continue;   // never got a prompt: nothing to resume
                 if (row.EndedAt < since) continue;
@@ -63,10 +68,39 @@ internal sealed class RecentSessions
             }
         }
 
+        // Only what this build looked at stays cached, so the cache never outgrows the Recent window.
+        lock (_gate)
+            foreach (var path in _tails.Keys.Where(p => !considered.Contains(p)).ToList()) _tails.Remove(path);
+
         return rows
             .OrderByDescending(r => r.IsFlagged)
             .ThenByDescending(r => r.EndedAt)
             .ToList();
+    }
+
+    /// <summary>How the session at <paramref name="path"/> ended (<see cref="SessionEndReader.Read"/>), reading its tail
+    /// only when the file changed since this builder last read it. Never throws.</summary>
+    public SessionEnd EndOf(string path, DateTime? lastExitCommand)
+    {
+        try
+        {
+            var file = new FileInfo(path);
+            if (!file.Exists || file.Length == 0) return SessionEnd.Unknown;
+            long length = file.Length;
+            var write = file.LastWriteTime;
+            lock (_gate)
+            {
+                if (_tails.TryGetValue(path, out var hit) && hit.Length == length && hit.Write == write)
+                    return SessionEndReader.Classify(hit.Tail, lastExitCommand, write);
+            }
+            var tail = SessionEndReader.ScanTail(path, length);
+            lock (_gate) _tails[path] = (length, write, tail);
+            return SessionEndReader.Classify(tail, lastExitCommand, write);
+        }
+        catch
+        {
+            return SessionEnd.Unknown;
+        }
     }
 
     // {root}/projects/{encoded-cwd}/{sessionId}.jsonl → the index over {root}/history.jsonl. Null when the path isn't

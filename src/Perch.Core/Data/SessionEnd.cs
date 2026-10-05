@@ -53,19 +53,24 @@ internal static class SessionEndReader
         {
             var file = new FileInfo(path);
             if (!file.Exists || file.Length == 0) return SessionEnd.Unknown;
-
-            // Grows until the tail holds a message: a transcript with none is small (bookkeeping only), so the window
-            // reaches the whole file and that's settled too.
-            for (int window = TailBytes; ; window *= 4)
-            {
-                var tail = Scan(TranscriptScan.ReadTailLines(path, window));
-                if (tail.SawMessage || window >= MaxTailBytes || window >= file.Length)
-                    return Classify(tail, lastExitCommand, file.LastWriteTime);
-            }
+            return Classify(ScanTail(path, file.Length), lastExitCommand, file.LastWriteTime);
         }
         catch
         {
             return SessionEnd.Unknown;
+        }
+    }
+
+    /// <summary>The facts in the tail of the <paramref name="length"/>-byte transcript at <paramref name="path"/> — the
+    /// file-reading half of <see cref="Read"/>, for a caller that caches it per (length, last write). Throws on IO.</summary>
+    internal static TailFacts ScanTail(string path, long length)
+    {
+        // Grows until the tail holds a message: a transcript with none is small (bookkeeping only), so the window
+        // reaches the whole file and that's settled too.
+        for (int window = TailBytes; ; window *= 4)
+        {
+            var tail = Scan(TranscriptScan.ReadTailLines(path, window));
+            if (tail.SawMessage || window >= MaxTailBytes || window >= length) return tail;
         }
     }
 

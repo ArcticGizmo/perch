@@ -65,8 +65,6 @@ internal sealed class ZoomHost : Panel
         ZoomApplied?.Invoke();
     }
 
-    /// <summary>Applies a level the user picked: as a chord does, with the badge and <see cref="ZoomChanged"/>.</summary>
-    public void ZoomTo(double zoom) => Apply(zoom);
 
     /// <summary>Hooks the chords on <paramref name="window"/>, tunnelling, so a focused composer or thread can't
     /// swallow them (and they work with nothing focused).</summary>
@@ -83,15 +81,15 @@ internal sealed class ZoomHost : Panel
         switch (e.Key)
         {
             case Key.OemPlus or Key.Add:
-                Apply(ViewZoom.Step(Zoom, +1));
+                ZoomTo(ViewZoom.Step(Zoom, +1));
                 e.Handled = true;
                 break;
             case Key.OemMinus or Key.Subtract:
-                Apply(ViewZoom.Step(Zoom, -1));
+                ZoomTo(ViewZoom.Step(Zoom, -1));
                 e.Handled = true;
                 break;
             case Key.D0 or Key.NumPad0 when ResetOnCtrl0 && e.KeyModifiers == KeyModifiers.Control:
-                Apply(ViewZoom.Default);
+                ZoomTo(ViewZoom.Default);
                 e.Handled = true;
                 break;
         }
@@ -103,11 +101,13 @@ internal sealed class ZoomHost : Panel
         e.Handled = true;   // Ctrl+wheel zooms; it never scrolls
         _wheel += e.Delta.Y;
         if (Math.Abs(_wheel) < 1) return;
-        Apply(ViewZoom.Step(Zoom, Math.Sign(_wheel)));
+        ZoomTo(ViewZoom.Step(Zoom, Math.Sign(_wheel)));
         _wheel = 0;
     }
 
-    private void Apply(double zoom)
+    /// <summary>Applies a level the user picked (a chord, the wheel, the zoom button): with the badge and
+    /// <see cref="ZoomChanged"/>.</summary>
+    public void ZoomTo(double zoom)
     {
         bool changed = Math.Abs(ViewZoom.Normalize(zoom) - Zoom) >= 0.0001;
         SetZoom(zoom);

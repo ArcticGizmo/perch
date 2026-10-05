@@ -190,14 +190,16 @@ public sealed partial class OverlayCanvas
             DrawRoostGlyph(ctx, _hoveredRoost ? Palette.AccentBrush : MutedBrush, boxCx, midY);
             // A session is blocked on the user: a small dot at the glyph's top-right, so the button draws the eye
             // even when the rows that need you are scrolled away or collapsed.
-            if (RoostBadge() is { } badge)
-            {
-                var dot = new Point(boxCx + 5.5, midY - 4.5);
-                ctx.DrawEllipse(Palette.FormBgBrush, null, dot, 3.4, 3.4);   // a cut-out ring so it reads on the stroke
-                ctx.DrawEllipse(OverlayDraw.Brush(badge), null, dot, 2.2, 2.2);
-            }
+            if (RoostBadge() is { } badge) DrawGlyphBadge(ctx, new Point(boxCx + 5.5, midY - 4.5), OverlayDraw.Brush(badge));
         }
         if (recent.Width > 0) DrawRecentButton(ctx, recent);
+    }
+
+    // A small status dot at a glyph's corner, inside a cut-out ring so it reads on the glyph's stroke.
+    private static void DrawGlyphBadge(DrawingContext ctx, Point at, IBrush fill)
+    {
+        ctx.DrawEllipse(Palette.FormBgBrush, null, at, 3.4, 3.4);
+        ctx.DrawEllipse(fill, null, at, 2.2, 2.2);
     }
 
     // The badge colour: an API error outranks awaiting input (both are "needs you"); null when nothing waits.

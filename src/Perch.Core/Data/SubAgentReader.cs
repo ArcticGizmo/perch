@@ -70,7 +70,7 @@ internal sealed class SubAgentReader
         // a sub-agent is running while its own transcript's latest turn is unfinished.
         try
         {
-            var subagentsDir = Path.Combine(Path.GetDirectoryName(path)!, sessionId, "subagents");
+            var subagentsDir = SubagentsDir(path, sessionId);
             if (Directory.Exists(subagentsDir))
                 return ScanBackground(subagentsDir);
         }
@@ -99,7 +99,7 @@ internal sealed class SubAgentReader
         {
             if (TranscriptLocator.Resolve(sessionId, cwd) is not { } parent)
                 return null;
-            var path = Path.Combine(Path.GetDirectoryName(parent)!, sessionId, "subagents", $"agent-{agentId}.jsonl");
+            var path = Path.Combine(SubagentsDir(parent, sessionId), $"agent-{agentId}.jsonl");
             return File.Exists(path) ? path : null;
         }
         catch
@@ -107,6 +107,11 @@ internal sealed class SubAgentReader
             return null;
         }
     }
+
+    // {project}/{sessionId}/subagents, beside the parent transcript {project}/{sessionId}.jsonl: the current model's
+    // per-agent transcripts.
+    private static string SubagentsDir(string parentTranscript, string sessionId) =>
+        Path.Combine(Path.GetDirectoryName(parentTranscript)!, sessionId, "subagents");
 
     // Test seams: the legacy parse of a parent transcript at a path, and bytes the agent classifier has read.
     internal IReadOnlyList<SubAgent> LegacyAt(string path) => _legacy.Get(path, LegacyFolder, FinishLegacy, []);

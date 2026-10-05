@@ -1661,7 +1661,7 @@ public partial class App : Application
 
     private void OpenRoost()
     {
-        if (_roostWindow is null) RefreshRecent();   // fresh ages and endings for its Recent group
+        if (_roostWindow is null) RefreshRecent();   // fresh ages and endings for its dormant panes
         OpenRoostWindow();
     }
 
@@ -1688,7 +1688,7 @@ public partial class App : Application
                 // dismiss, or wake on the first send.
                 w.OpenDormantRequested += p => OpenSessionResume(p.Session.SessionId, p.Session.Cwd);
                 w.ResumeInTerminalRequested += p => ReopenSession(p.Session.Cwd, p.Session.SessionId);
-                w.DismissRequested += DismissRoostDormant;
+                w.DismissRequested += p => DismissRecent(p.Session.SessionId);
                 w.WakeAndSend = WakeFromRoostAsync;
                 w.AcknowledgeRequested += pid => _monitorHost?.Acknowledge(pid);
                 w.RailSortChanged += sort => { if (_appSettings is { } s) { s.RoostRailSort = sort; s.Save(); } };

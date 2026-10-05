@@ -7,8 +7,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Perch.Avalonia.Theming;
-using RecentLine = Perch.Avalonia.Views.OverlayCanvas.RecentLine;
-using RecentTone = Perch.Avalonia.Views.OverlayCanvas.RecentTone;
+using Perch.Data;
 
 namespace Perch.Avalonia.Views;
 
@@ -49,6 +48,7 @@ internal sealed record RecentListLook(
 internal sealed class RecentListView : StackPanel
 {
     private const double ListWidth = 320;
+    private static readonly Cursor Hand = new(StandardCursorType.Hand);
 
     private readonly RecentListLook _look;
     private readonly StackPanel _chips = new() { Orientation = Orientation.Horizontal, Spacing = 6 };
@@ -75,12 +75,12 @@ internal sealed class RecentListView : StackPanel
         {
             var link = new TextBlock
             {
-                Text = "Show all…", FontSize = 11.5, Foreground = _look.Muted, Cursor = new Cursor(StandardCursorType.Hand),
+                Text = "Show all…", FontSize = 11.5, Foreground = _look.Muted, Cursor = Hand,
                 VerticalAlignment = VerticalAlignment.Center,
             };
             link.PointerEntered += (_, _) => link.Foreground = _look.Text;
             link.PointerExited += (_, _) => link.Foreground = _look.Muted;
-            link.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowAllRequested?.Invoke(); };
+            link.OnLeftClick(() => ShowAllRequested?.Invoke());
             DockPanel.SetDock(link, Dock.Right);
             header.Children.Add(link);
         }
@@ -93,18 +93,19 @@ internal sealed class RecentListView : StackPanel
             MaxHeight = 360, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = _rows,
         });
+        Rebuild();
     }
 
-    public RecentFilter Filter => _filter;
-
-    /// <summary>Replaces the lines (an open list follows the app's Recent pushes, a dismissal included).</summary>
+    /// <summary>Replaces the lines (an open list follows its host's refreshes, a dismissal included). Unchanged lines
+    /// keep the rows as they are, hover and all.</summary>
     public void SetLines(IReadOnlyList<RecentLine> lines)
     {
+        if (lines.SequenceEqual(_lines)) return;
         _lines = lines;
         Rebuild();
     }
 
-    internal static bool Matches(RecentLine l, RecentFilter f) => f switch
+    private static bool Matches(RecentLine l, RecentFilter f) => f switch
     {
         RecentFilter.Interrupted => l.Interrupted,
         RecentFilter.BeforeShutdown => l.BeforeShutdown,
@@ -146,21 +147,17 @@ internal sealed class RecentListView : StackPanel
         {
             CornerRadius = new CornerRadius(10), Padding = new Thickness(9, 3),
             Background = on ? _look.ChipOn : _look.ChipOff,
-            Cursor = new Cursor(StandardCursorType.Hand), Child = label,
+            Cursor = Hand, Child = label,
         };
-        if (!on)
+        if (on) return chip;
+        chip.PointerEntered += (_, _) => label.Foreground = _look.Text;
+        chip.PointerExited += (_, _) => label.Foreground = _look.Muted;
+        return chip.OnLeftClick(() =>
         {
-            chip.PointerEntered += (_, _) => label.Foreground = _look.Text;
-            chip.PointerExited += (_, _) => label.Foreground = _look.Muted;
-        }
-        chip.PointerReleased += (_, e) =>
-        {
-            if (e.InitialPressMouseButton != MouseButton.Left || _filter == f) return;
             _filter = f;
             FilterChanged?.Invoke(f);
             Rebuild();
-        };
-        return chip;
+        });
     }
 
     private Control Row(RecentLine l)
@@ -220,7 +217,7 @@ internal sealed class RecentListView : StackPanel
         var row = new Border
         {
             CornerRadius = new CornerRadius(5), Padding = new Thickness(6, 0), MinHeight = 26, Background = Brushes.Transparent,
-            Cursor = new Cursor(StandardCursorType.Hand), Child = grid,
+            Cursor = Hand, Child = grid,
         };
         ToolTip.SetTip(row, l.Cwd);
         void Hover(bool on)
@@ -232,8 +229,7 @@ internal sealed class RecentListView : StackPanel
         }
         row.PointerEntered += (_, _) => Hover(true);
         row.PointerExited += (_, _) => Hover(false);
-        row.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ResumeRequested?.Invoke(l.SessionId, l.Cwd); };
-        return row;
+        return row.OnLeftClick(() => ResumeRequested?.Invoke(l.SessionId, l.Cwd));
     }
 
     // A small hover button in a row's trailing cell. It handles its own release, so the row's "open" doesn't fire too.
@@ -251,12 +247,6 @@ internal sealed class RecentListView : StackPanel
         ToolTip.SetTip(box, tip);
         box.PointerEntered += (_, _) => { box.Background = _look.ButtonHover; text.Foreground = _look.Text; };
         box.PointerExited += (_, _) => { box.Background = Brushes.Transparent; text.Foreground = _look.Muted; };
-        box.PointerReleased += (_, e) =>
-        {
-            if (e.InitialPressMouseButton != MouseButton.Left) return;
-            e.Handled = true;
-            onClick();
-        };
-        return box;
+        return box.OnLeftClick(onClick, handle: true);
     }
 }

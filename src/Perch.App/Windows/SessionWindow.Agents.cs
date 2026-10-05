@@ -78,7 +78,7 @@ internal sealed partial class SessionWindow
             },
         });
         _sessionTab[ToolTip.TipProperty] = "The session's conversation";
-        _sessionTab.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) CloseAgentView(); };
+        _sessionTab.OnLeftClick(CloseAgentView);
         _agentTabs = new WrapPanel { Orientation = Orientation.Horizontal, Children = { _sessionTab } };
         _agentTabStrip = new Border
         {
@@ -251,9 +251,7 @@ internal sealed partial class SessionWindow
             Background = Brushes.Transparent, BorderBrush = Brushes.Transparent,
             Cursor = new Cursor(StandardCursorType.Hand), Child = content,
         };
-        tab.PointerEntered += (_, _) => { if (tab.Tag is not true) tab.Background = _p.Raised; };
-        tab.PointerExited += (_, _) => { if (tab.Tag is not true) tab.Background = Brushes.Transparent; };
-        return tab;
+        return tab.HoverWash(_p.Raised, keep: () => tab.Tag is true);   // Tag = selected
     }
 
     private void StyleTab(Border tab, TextBlock label, bool selected, IBrush accent)
@@ -273,7 +271,7 @@ internal sealed partial class SessionWindow
             Orientation = Orientation.Horizontal, Spacing = 7, VerticalAlignment = VerticalAlignment.Center,
             Children = { spinner, label },
         });
-        tab.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) OpenAgentTab(agentId); };
+        tab.OnLeftClick(() => OpenAgentTab(agentId));
         return new AgentPill(tab, label, null, spinner);
     }
 
@@ -313,7 +311,7 @@ internal sealed partial class SessionWindow
         chip.Cursor = new Cursor(StandardCursorType.Hand);
         chip.PointerEntered += (_, _) => chip.BorderBrush = _p.Violet;
         chip.PointerExited += (_, _) => chip.BorderBrush = _p.VioletLine;
-        chip.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) OpenAgentTab(agentId); };
+        chip.OnLeftClick(() => OpenAgentTab(agentId));
         return new AgentPill(chip, label, activity, spinner);
     }
 

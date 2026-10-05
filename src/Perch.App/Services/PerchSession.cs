@@ -423,7 +423,8 @@ internal sealed class PerchSession : IDisposable
 
     public void Dispose() => _controller?.Dispose();
 
-    private static string Shorten(string id) => id.Length > 8 ? id[..8] : id;
+    /// <summary>A session id cut to its first eight characters, for notes and messages.</summary>
+    internal static string Shorten(string id) => id.Length > 8 ? id[..8] : id;
 }
 
 /// <summary>Everything a session launch needs, in one place — what the launcher collects and the CLI/elevate

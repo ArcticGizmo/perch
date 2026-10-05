@@ -18,22 +18,16 @@ public partial class App
     private DispatcherTimer? _ledgerHeartbeat;
     private bool _ledgerShutdownStamped;
     private static readonly Lock LedgerSaveGate = new();
+    private CoalescingTrigger? _ledgerSave;   // SaveLedgerSoon: a burst of changes is one save, off the UI thread
 
     // The Perch sessions this run holds in the ledger, each with the id last written for it (so a /clear's new id
     // rebinds the entry). A session leaves when the user releases it (ended / handed back) or its process ends.
     private readonly Dictionary<Services.PerchSession, string?> _heldSessions = new();
 
-    // Sessions the previous run held that haven't been picked up yet: the "Reopen Perch sessions" tray item, the top of
-    // the Roost's Recent group (dormant panes, App.RoostDormant.cs) and of the overlay's Recent button.
+    // Sessions the previous run held that haven't been picked up yet: the "Reopen Perch sessions" tray item, and the top
+    // of the Roost's dormant panes (App.RoostDormant.cs) and of the overlay's Recent list.
     private List<LedgerSession> _restorable = [];
     private NativeMenuItem? _reopenItem;
-
-    /// <summary>This run's ledger, once it has begun. Null under the headless render, tests and replay (which never
-    /// write it), and for the first moment of a run while the previous shutdown is still being looked up.</summary>
-    internal SessionLedger? Ledger => _ledger;
-
-    /// <summary>The previous run's Perch sessions that are waiting to be reopened.</summary>
-    internal IReadOnlyList<LedgerSession> RestorableSessions => _restorable;
 
     // The same guard every other Perch-owned file honours: render/tests disable persistence, and a replay runs against
     // a sandbox, so its stamps would describe a recording rather than this machine.
@@ -66,6 +60,7 @@ public partial class App
             if (!t.IsCompletedSuccessfully) { RefreshRecent(); return; }
             var (ledger, shutdown) = t.Result;
             _ledger = ledger;
+            _ledgerSave = new CoalescingTrigger(() => Task.Run(() => SaveLedger(ledger, SessionLedger.DefaultPath)), TimeSpan.Zero);
             _previousShutdown = shutdown;
 
             // What the previous run held is what comes back — read before this run's own sessions are tracked in.
@@ -131,9 +126,14 @@ public partial class App
     private void ReleaseHeld(Services.PerchSession session)
     {
         _heldSessions.Remove(session);
-        if (session.SessionId is not { } id) return;
-        _ledger?.Forget(id);
-        DropRestorable(id);
+        if (session.SessionId is { } id) ForgetHeld(id);
+    }
+
+    // Out of the ledger and the restorable list: it won't come back after a restart.
+    private void ForgetHeld(string sessionId)
+    {
+        _ledger?.Forget(sessionId);
+        DropRestorable(sessionId);
         SaveLedgerSoon();
     }
 
@@ -154,10 +154,15 @@ public partial class App
         if (_restorable.RemoveAll(s => s.SessionId == sessionId) > 0) OnRestorableChanged();
     }
 
+    // A batch in one go: one refold, not one per session.
+    private void DropRestorable(IReadOnlySet<string> sessionIds)
+    {
+        if (sessionIds.Count > 0 && _restorable.RemoveAll(s => sessionIds.Contains(s.SessionId)) > 0) OnRestorableChanged();
+    }
+
     private void OnRestorableChanged()
     {
-        RefoldRoost();       // they're the top of the Roost's Recent group…
-        PushRecentLines();   // …and of the overlay's Recent button
+        RefoldRoost();   // they're the top of the Roost's dormant panes and the overlay's Recent list
         if (_reopenItem is not { } item) return;
         item.Header = _restorable.Count == 1 ? "Reopen Perch session" : $"Reopen Perch sessions ({_restorable.Count})";
         item.IsVisible = _restorable.Count > 0;
@@ -197,14 +202,9 @@ public partial class App
         SaveLedger(ledger, SessionLedger.DefaultPath);
     }
 
-    // Saves are rare (a session starting, renaming or ending, and the heartbeat), so each one simply goes off the UI
-    // thread; the gate makes them serial, and each serialises the ledger inside it, so a later save always writes the
-    // later state.
-    private void SaveLedgerSoon()
-    {
-        if (_ledger is not { } ledger) return;
-        Task.Run(() => SaveLedger(ledger, SessionLedger.DefaultPath));
-    }
+    // Off the UI thread, one at a time, a burst collapsed into one trailing save. Each serialises the ledger when it
+    // runs, so the last save always writes the latest state; the gate keeps it apart from the synchronous exit saves.
+    private void SaveLedgerSoon() => _ledgerSave?.Request();
 
     private static void SaveLedger(SessionLedger ledger, string path)
     {

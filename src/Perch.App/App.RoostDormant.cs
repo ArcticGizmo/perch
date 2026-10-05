@@ -18,6 +18,7 @@ public partial class App
     // looked up in after a restart, when its session is in no other list.
     private readonly RecentSessions _recentBuilder = new();
     private IReadOnlyList<RecentSession> _recentRows = [];
+    private IReadOnlyDictionary<string, RecentSession> _recentById = new Dictionary<string, RecentSession>();
     private IReadOnlyDictionary<string, HistoryEntry> _transcriptsById = new Dictionary<string, HistoryEntry>();
     private bool _recentBuilding, _recentRebuild;
     private DispatcherTimer? _recentDebounce;
@@ -29,9 +30,6 @@ public partial class App
     // A session that just left the scan may still be writing its exit flush (cost-state): read it a few seconds later,
     // or a clean exit would read as interrupted.
     private static readonly TimeSpan RecentAfterEndDelay = TimeSpan.FromSeconds(5);
-
-    /// <summary>The Recent list as last built (newest build wins; empty until the first lands).</summary>
-    internal IReadOnlyList<RecentSession> RecentRows => _recentRows;
 
     /// <summary>Rebuilds the Recent list off the UI thread, then re-folds the Roost. A request while one runs queues
     /// one more. Under render, tests and replay (no ledger, no real history) it only marks the dormant set ready.</summary>
@@ -55,24 +53,25 @@ public partial class App
             var rows = _recentBuilder.Build(entries, held, dismissed, shutdowns, DateTime.Now);
             var byId = new Dictionary<string, HistoryEntry>(StringComparer.Ordinal);
             foreach (var e in entries) byId.TryAdd(e.SessionId, e);
+            var rowsById = new Dictionary<string, RecentSession>(StringComparer.Ordinal);
+            foreach (var r in rows) rowsById.TryAdd(r.Entry.SessionId, r);
             // What Perch had open that has no transcript with a message in it (opened, never prompted): nothing to
             // resume, so it doesn't come back as "was open".
             var empty = restorableIds
-                .Where(id => !byId.TryGetValue(id, out var e) || !SessionEndReader.Read(e.Path, null).HasConversation)
-                .ToList();
-            return (rows, byId, empty);
+                .Where(id => !byId.TryGetValue(id, out var e) || !_recentBuilder.EndOf(e.Path, null).HasConversation)
+                .ToHashSet(StringComparer.Ordinal);
+            return (rows, rowsById, byId, empty);
         }).ContinueWith(t =>
         {
             _recentBuilding = false;
             if (t.IsCompletedSuccessfully)
             {
-                (_recentRows, _transcriptsById, var empty) = t.Result;
-                foreach (var id in empty) DropRestorable(id);
+                (_recentRows, _recentById, _transcriptsById, var empty) = t.Result;
+                DropRestorable(empty);
             }
             else LaunchLog.Write($"recent sessions: build failed ({t.Exception?.GetBaseException().GetType().Name})");
             _roostDormantReady = true;
             RefoldRoost();
-            PushRecentLines();
             MaybeShowRecoveryToast();
             if (_recentRebuild) { _recentRebuild = false; RefreshRecent(); }
         }, TaskScheduler.FromCurrentSynchronizationContext());
@@ -93,11 +92,13 @@ public partial class App
     // tabs' persisted cells) against it would treat every running session as gone.
     private bool _roostScanned;
 
-    /// <summary>Re-folds the Roost against the latest scan: the dormant set changed (a Recent build, a restore, a
-    /// dismissal, a dormant window opening or closing). Waits for the first scan, which folds them in anyway.</summary>
+    /// <summary>Re-folds the Roost against the latest scan, which also pushes the overlay's Recent lines: the dormant set
+    /// changed (a Recent build, a restore, a dismissal, a dormant window opening or closing). Before the first scan only
+    /// the overlay's lines move; that scan folds the rest in anyway.</summary>
     private void RefoldRoost()
     {
         if (_roostScanned) UpdateRoost(_lastSessions);
+        else PushRecentLines();
     }
 
     // After each fold: a session that left the scan may now be a Recent row.
@@ -116,21 +117,17 @@ public partial class App
     private List<RoostDormant> RoostDormantSessions(IReadOnlyList<ClaudeSession> live)
     {
         var liveIds = live.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
-        var recent = new Dictionary<string, RecentSession>(StringComparer.Ordinal);
-        foreach (var r in _recentRows) recent.TryAdd(r.Entry.SessionId, r);
         var list = new List<RoostDormant>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
         void Add(RoostDormant? d, bool dismissible = true)
         {
-            if (d is null || liveIds.Contains(d.SessionId) || (dismissible && IsDismissed(d)) || !seen.Add(d.SessionId)) return;
+            if (d is null || liveIds.Contains(d.SessionId) || (dismissible && IsDismissed(d.SessionId, d.LastActive))
+                || !seen.Add(d.SessionId)) return;
             list.Add(d);
         }
 
-        foreach (var r in _restorable)
-            Add(new RoostDormant(r.SessionId, r.Cwd, ProjectOf(r.Cwd), r.Title, LastActiveOf(r.SessionId),
-                RoostDormantKind.WasOpenInPerch, PerchOrigin: true,
-                JustBeforeShutdown: recent.TryGetValue(r.SessionId, out var ended) && ended.JustBeforeShutdown), dismissible: false);
+        foreach (var r in _restorable) Add(RestorableDormant(r), dismissible: false);
 
         // A woken one stays until the scan sees its process, so its pane holds the place for the live one to take.
         foreach (var s in _perchSessions)
@@ -139,24 +136,30 @@ public partial class App
             bool waking = s.IsRunning && _roostRoster.Find(RoostToken.DormantKey(id)) is not null;
             if (!s.IsDormant && !waking) continue;
             Add(new RoostDormant(id, s.Cwd, ProjectOf(s.Cwd), s.Title, LastActiveOf(id),
-                recent.TryGetValue(id, out var row) ? KindOf(row) : RoostDormantKind.NotRunning, PerchOrigin: true),
+                _recentById.TryGetValue(id, out var row) ? KindOf(row) : RoostDormantKind.NotRunning, PerchOrigin: true),
                 dismissible: !waking);
         }
 
         foreach (var id in _roostTabs.SessionIds())
-            if (!liveIds.Contains(id)) Add(TabHeldDormant(id, recent));
+            if (!liveIds.Contains(id)) Add(TabHeldDormant(id));
 
-        foreach (var row in _recentRows.Take(SessionRecovery.RecentRows))
+        foreach (var row in _recentRows.Take(SessionRecovery.RoostRecentRows))
             Add(FromRecent(row, PerchOriginOf(row.Entry.SessionId)));
 
         return list;
     }
 
+    // What Perch had open when it closed. Perch closing ended it rather than the user, so it reads as interrupted
+    // whichever way it ended (RoostDormant.WasInterrupted).
+    private RoostDormant RestorableDormant(LedgerSession r) =>
+        new(r.SessionId, r.Cwd, ProjectOf(r.Cwd), r.Title, LastActiveOf(r.SessionId), RoostDormantKind.WasOpenInPerch,
+            PerchOrigin: true, JustBeforeShutdown: _recentById.TryGetValue(r.SessionId, out var ended) && ended.JustBeforeShutdown);
+
     // A tab region's session that isn't running: from the Recent list when it's there (it knows how it ended), else the
     // pane that just ended (the process went this run), else the dormant pane already showing it, else its transcript.
-    private RoostDormant? TabHeldDormant(string id, IReadOnlyDictionary<string, RecentSession> recent)
+    private RoostDormant? TabHeldDormant(string id)
     {
-        if (recent.TryGetValue(id, out var row)) return FromRecent(row, PerchOriginOf(id));
+        if (_recentById.TryGetValue(id, out var row)) return FromRecent(row, PerchOriginOf(id));
         foreach (var p in _roostRoster.Panes)
         {
             if (p.Session.SessionId != id) continue;
@@ -187,37 +190,21 @@ public partial class App
     private DateTime LastActiveOf(string id) =>
         _transcriptsById.TryGetValue(id, out var e) ? e.LastUpdated : DateTime.Now;
 
-    private static string ProjectOf(string cwd)
-    {
-        var name = Path.GetFileName(cwd.TrimEnd('\\', '/'));
-        return string.IsNullOrEmpty(name) ? cwd : name;
-    }
+    // The folder's name, split on either separator (a transcript's cwd may come from another OS).
+    private static string ProjectOf(string cwd) => PathLeaf.Of(cwd) is { Length: > 0 } name ? name : cwd;
 
     // A dismissal covers the ending it was made on (Q2): a later ending of the same session shows again.
-    private bool IsDismissed(RoostDormant d) => IsDismissed(d.SessionId, d.LastActive);
-
     private bool IsDismissed(string sessionId, DateTime endedAt) =>
         _appSettings?.RecentDismissed is { } map && map.TryGetValue(sessionId, out var at) && endedAt <= at;
 
     // ── Pane actions ──────────────────────────────────────────────────────────────
-
-    /// <summary>A dormant pane's "Dismiss" (<see cref="DismissRecent"/>).</summary>
-    private void DismissRoostDormant(RoostPane pane)
-    {
-        if (pane.Dormant is { } d) DismissRecent(d.SessionId);
-    }
 
     /// <summary>"Dismiss" on a Recent line or a dormant Roost pane: it leaves the overlay's Recent list and the Roost
     /// (and its tab), and stays dismissed until the session ends again. One that Perch had open also stops coming back
     /// after the next restart.</summary>
     private void DismissRecent(string sessionId)
     {
-        if (_restorable.Any(r => r.SessionId == sessionId))
-        {
-            _ledger?.Forget(sessionId);
-            DropRestorable(sessionId);
-            SaveLedgerSoon();
-        }
+        if (_restorable.Any(r => r.SessionId == sessionId)) ForgetHeld(sessionId);
         if (_appSettings is { } s)
         {
             var map = s.RecentDismissed ?? new Dictionary<string, DateTime>(StringComparer.Ordinal);
@@ -230,7 +217,6 @@ public partial class App
         }
         _roostTabs.Unassign(RoostToken.DormantKey(sessionId));
         RefoldRoost();
-        PushRecentLines();
     }
 
     // ── The overlay's Recent button ───────────────────────────────────────────────
@@ -238,43 +224,25 @@ public partial class App
     private DispatcherTimer? _recentAgeTimer;
 
     /// <summary>Pushes the lines behind the overlay's Recent button: what Perch had open first ("was open"), then the
-    /// Recent list (flagged first, newest first). Each carries its filters: interrupted (an abrupt end, or Perch had it
-    /// open when Perch closed) and before shutdown. Never a session that's live now or dismissed. Cheap (no IO): run on
-    /// every fold, and each minute so the ages move.</summary>
+    /// whole Recent list (flagged first, newest first), each through the same <see cref="RecentLine.From"/> the Roost's
+    /// list uses. Never a session that's live now or dismissed. Cheap (no IO): run on every fold, and each minute so the
+    /// ages move.</summary>
     private void PushRecentLines()
     {
         if (_overlay is null) return;
         var live = _lastSessions.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var lines = new List<Views.OverlayCanvas.RecentLine>();
+        var lines = new List<RecentLine>();
         var now = DateTime.Now;
-        var recent = new Dictionary<string, RecentSession>(StringComparer.Ordinal);
-        foreach (var r in _recentRows) recent.TryAdd(r.Entry.SessionId, r);
 
-        void Add(Views.OverlayCanvas.RecentLine line)
+        void Add(RoostDormant d)
         {
-            if (!live.Contains(line.SessionId) && seen.Add(line.SessionId)) lines.Add(line);
+            if (!live.Contains(d.SessionId) && seen.Add(d.SessionId)) lines.Add(RecentLine.From(d, now));
         }
 
-        // Perch closing ended these rather than the user, so they count as interrupted whichever way they ended.
-        foreach (var r in _restorable)
-            Add(Line(r.SessionId, r.Cwd, r.Title, "was open", Views.OverlayCanvas.RecentTone.Perch,
-                interrupted: true, beforeShutdown: recent.TryGetValue(r.SessionId, out var row) && row.JustBeforeShutdown));
+        foreach (var r in _restorable) Add(RestorableDormant(r));
         foreach (var row in _recentRows)
-        {
-            if (IsDismissed(row.Entry.SessionId, row.EndedAt)) continue;
-            var age = ShortAge(row.EndedAt, now);
-            var span = age.Replace(" ago", "");   // "interrupted · 14h": the badge carries the "when" itself
-            var (note, tone) = KindOf(row) switch
-            {
-                RoostDormantKind.Interrupted => ($"interrupted · {span}", Views.OverlayCanvas.RecentTone.Flagged),
-                RoostDormantKind.BeforeShutdown => ($"before shutdown · {span}", Views.OverlayCanvas.RecentTone.Flagged),
-                RoostDormantKind.Exited => (age, Views.OverlayCanvas.RecentTone.Faded),
-                _ => (age, Views.OverlayCanvas.RecentTone.Normal),
-            };
-            Add(Line(row.Entry.SessionId, row.Entry.Cwd, row.Entry.Title, note, tone,
-                interrupted: row.End.Kind == SessionEndKind.Abrupt, beforeShutdown: row.JustBeforeShutdown));
-        }
+            if (!IsDismissed(row.Entry.SessionId, row.EndedAt)) Add(FromRecent(row, perch: false));
         _overlay.Canvas.SetRecent(lines);
 
         if (_recentAgeTimer is null)
@@ -285,24 +253,6 @@ public partial class App
         }
     }
 
-    // A line's title is the session's /rename title, else its folder; the folder rides beside a real title.
-    private static Views.OverlayCanvas.RecentLine Line(string id, string cwd, string? title, string note,
-        Views.OverlayCanvas.RecentTone tone, bool interrupted, bool beforeShutdown)
-    {
-        var folder = ProjectOf(cwd);
-        return string.IsNullOrWhiteSpace(title)
-            ? new(id, cwd, folder, null, note, tone, interrupted, beforeShutdown)
-            : new(id, cwd, title.Trim(), folder, note, tone, interrupted, beforeShutdown);
-    }
-
-    private static string ShortAge(DateTime at, DateTime now)
-    {
-        var d = now - at;
-        if (d < TimeSpan.FromMinutes(1)) return "just now";
-        if (d < TimeSpan.FromHours(1)) return $"{(int)d.TotalMinutes}m ago";
-        return d < TimeSpan.FromHours(48) ? $"{(int)d.TotalHours}h ago" : $"{(int)d.TotalDays}d ago";
-    }
-
     /// <summary>The startup toast (once a run, after the first Recent build): the Perch sessions that were open when
     /// Perch closed, and the sessions the restart that ended the previous run interrupted.</summary>
     private void MaybeShowRecoveryToast()
@@ -311,9 +261,7 @@ public partial class App
         _recoveryToastPending = false;
         int open = _restorable.Count;
         int interrupted = _previousShutdown is { } shutdown
-            ? _recentRows.Count(r => r.End.Kind == SessionEndKind.Abrupt && r.JustBeforeShutdown
-                                     && r.EndedAt >= shutdown - SessionRecovery.ShutdownWindow
-                                     && r.EndedAt <= shutdown + SessionRecovery.ShutdownGrace)
+            ? _recentRows.Count(r => r.End.Kind == SessionEndKind.Abrupt && SessionRecovery.JustBeforeShutdown(r.EndedAt, [shutdown]))
             : 0;
         if (open == 0 && interrupted == 0) return;
 
@@ -340,21 +288,10 @@ public partial class App
 
         string? configDir;
         bool trusted;
-        try
-        {
-            (configDir, trusted) = await Task.Run(() =>
-            {
-                var dir = TranscriptLocator.ResumeConfigRoot(sid, cwd);
-                return (dir, DirectoryTrust.Evaluate(dir, cwd));
-            });
-        }
+        try { (configDir, trusted) = await ResumeGate.ReadTrustAsync(cwd, () => TranscriptLocator.ResumeConfigRoot(sid, cwd)); }
         catch (Exception ex) { return WakeRefused($"couldn't read the session: {ex.Message}"); }
 
-        if (!trusted)
-        {
-            if (!await ResumeGate.ConfirmTrustAsync(owner, cwd)) return false;   // declined: the text stays
-            _ = Task.Run(() => DirectoryTrust.Grant(configDir, cwd));
-        }
+        if (!trusted && !await ResumeGate.ConfirmTrustAsync(owner, configDir, cwd)) return false;   // declined: the text stays
         if (ResumeGate.Refusal(sid, configDir, id => _lastSessions.FirstOrDefault(s => s.SessionId == id)) is { } refusal)
             return WakeRefused(refusal);
 

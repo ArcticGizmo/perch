@@ -13,8 +13,10 @@ internal static class SessionRecovery
     /// <summary>How far back the Recent list looks (Q1). Shutdowns older than this are pruned from the ledger too.</summary>
     public static readonly TimeSpan RecentWindow = TimeSpan.FromDays(3);
 
-    /// <summary>How many Recent rows the overlay and the Roost rail show (Q1); "More…" opens the full list.</summary>
-    public const int RecentRows = 5;
+    /// <summary>How many of the newest Recent rows the Roost shows as dormant panes (Q1), on top of what Perch had open,
+    /// what's open dormant in a window and what a tab holds — each is a whole pane, so the Roost keeps it short. The
+    /// overlay's Recent list shows every row.</summary>
+    public const int RoostRecentRows = 5;
 
     /// <summary>How often Perch stamps itself alive in the ledger. Also the slack allowed when matching a logged
     /// shutdown against the last heartbeat, since heartbeats can keep landing while the OS is shutting down.</summary>

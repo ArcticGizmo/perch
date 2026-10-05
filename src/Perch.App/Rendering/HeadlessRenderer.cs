@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
@@ -1448,7 +1448,7 @@ internal static class HeadlessRenderer
                  {
                      (RecentFilter.All, "all", lines), (RecentFilter.Interrupted, "interrupted", lines),
                      (RecentFilter.BeforeShutdown, "shutdown", lines),
-                     (RecentFilter.BeforeShutdown, "empty", (IReadOnlyList<OverlayCanvas.RecentLine>)[lines[3]]),   // the empty note
+                     (RecentFilter.BeforeShutdown, "empty", (IReadOnlyList<Perch.Data.RecentLine>)[lines[3]]),   // the empty note
                  })
         {
             var view = new RecentListView(filter);

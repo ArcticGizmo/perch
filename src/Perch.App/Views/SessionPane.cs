@@ -207,27 +207,14 @@ internal sealed class SessionPane : Border
             MinHeight = 30, MaxHeight = 88, VerticalContentAlignment = VerticalAlignment.Center, IsVisible = false,
         };
         _composer.AddHandler(KeyDownEvent, OnComposerKeyDown, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
-        _footerButtonText = new TextBlock { FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 11.5, Foreground = _p.Text };
+        _footerButtonText = FooterLabel(null, _p.Text);
         _footerButton = FooterButton(_footerButtonText, () => ActionRequested?.Invoke(Key, RoostPaneAction.OpenSession));
-        _footerButton[DockPanel.DockProperty] = Dock.Right;
-        _footerButton.Margin = new Thickness(8, 0, 0, 0);
-        _footerButton.VerticalAlignment = VerticalAlignment.Bottom;
-        _takeOverButton = FooterButton(
-            new TextBlock { Text = "Take over in Perch", FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 11.5, Foreground = _p.Brand },
-            () => ActionRequested?.Invoke(Key, RoostPaneAction.TakeOver));
-        _takeOverButton[DockPanel.DockProperty] = Dock.Right;
-        _takeOverButton.Margin = new Thickness(8, 0, 0, 0);
-        _takeOverButton.VerticalAlignment = VerticalAlignment.Bottom;
-        _takeOverButton.IsVisible = false;
-        _takeOverButton[ToolTip.TipProperty] = "Stop it in its terminal and continue the same conversation in Perch (asks first)";
-        _terminalButton = FooterButton(
-            new TextBlock { Text = "Resume in terminal", FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 11.5, Foreground = _p.Text },
-            () => ActionRequested?.Invoke(Key, RoostPaneAction.ResumeInTerminal));
-        _terminalButton[DockPanel.DockProperty] = Dock.Right;
-        _terminalButton.Margin = new Thickness(8, 0, 0, 0);
-        _terminalButton.VerticalAlignment = VerticalAlignment.Bottom;
-        _terminalButton.IsVisible = false;
-        _terminalButton[ToolTip.TipProperty] = "Open a terminal running claude --resume for this session";
+        _takeOverButton = FooterButton(FooterLabel("Take over in Perch", _p.Brand),
+            () => ActionRequested?.Invoke(Key, RoostPaneAction.TakeOver),
+            "Stop it in its terminal and continue the same conversation in Perch (asks first)", hidden: true);
+        _terminalButton = FooterButton(FooterLabel("Resume in terminal", _p.Text),
+            () => ActionRequested?.Invoke(Key, RoostPaneAction.ResumeInTerminal),
+            "Open a terminal running claude --resume for this session", hidden: true);
         _footer = new Border
         {
             BorderBrush = _p.BorderSoft, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(8, 6),
@@ -416,13 +403,7 @@ internal sealed class SessionPane : Border
         _ => Ago(d.LastActive),
     };
 
-    private static string Ago(DateTime at)
-    {
-        var d = Clock.Now - at;
-        if (d < TimeSpan.FromMinutes(1)) return "just now";
-        if (d.TotalDays >= 2) return $"{(int)d.TotalDays}d ago";
-        return d.TotalHours >= 1 ? $"{(int)d.TotalHours}h ago" : $"{(int)d.TotalMinutes}m ago";
-    }
+    private static string Ago(DateTime at) => RelativeTime.Ago(Clock.Now, at);
 
     private static string MetaText(ClaudeSession s)
     {
@@ -725,18 +706,25 @@ internal sealed class SessionPane : Border
     /// <summary>True while this pane's composer has keyboard focus.</summary>
     public bool ComposerFocused => _composer.IsFocused;
 
-    private Border FooterButton(TextBlock label, Action onClick)
+    private TextBlock FooterLabel(string? text, IBrush brush) =>
+        new() { Text = text, FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 11.5, Foreground = brush };
+
+    // A button docked at the footer's right, bottom-aligned beside the composer. A hidden one is shown by the refresh
+    // only for the panes it applies to.
+    private Border FooterButton(TextBlock label, Action onClick, string? tip = null, bool hidden = false)
     {
         var b = new Border
         {
             CornerRadius = new CornerRadius(8), Padding = new Thickness(9, 3), BorderThickness = new Thickness(1),
             BorderBrush = _p.Border, Background = _p.Raised, Cursor = new Cursor(StandardCursorType.Hand),
-            MinHeight = 30, Child = new Border { VerticalAlignment = VerticalAlignment.Center, Child = label },
+            MinHeight = 30, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Bottom,
+            [DockPanel.DockProperty] = Dock.Right, IsVisible = !hidden,
+            Child = new Border { VerticalAlignment = VerticalAlignment.Center, Child = label },
         };
+        if (tip is not null) ToolTip.SetTip(b, tip);
         b.PointerEntered += (_, _) => b.BorderBrush = _p.BrandLine;
         b.PointerExited += (_, _) => b.BorderBrush = _p.Border;
-        b.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) onClick(); };
-        return b;
+        return b.OnLeftClick(onClick);
     }
 
     // ── Menu ──────────────────────────────────────────────────────────────────

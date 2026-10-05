@@ -1,4 +1,4 @@
-﻿using Perch.Avalonia.Views;
+using Perch.Avalonia.Views;
 using Perch.Data;
 using Perch.Data.Hypertree;
 using Perch.Platform;
@@ -291,14 +291,14 @@ internal static class SampleData
     /// <summary>The Recent button's lines (session recovery): one Perch had open, one a restart interrupted (so also
     /// before the shutdown), one that ended just before the shutdown, ordinary endings and an <c>/exit</c> — every tone
     /// and every filter.</summary>
-    public static IReadOnlyList<OverlayCanvas.RecentLine> RecentLines() =>
+    public static IReadOnlyList<Perch.Data.RecentLine> RecentLines() =>
     [
-        new("r-1", @"C:\src\billing", "Invoice export", "billing", "was open", OverlayCanvas.RecentTone.Perch, true, false),
-        new("r-2", @"C:\src\gateway", "Retry storm fix", "gateway", "interrupted · 14h", OverlayCanvas.RecentTone.Flagged, true, true),
-        new("r-3", @"C:\src\notes", "notes", null, "before shutdown · 14h", OverlayCanvas.RecentTone.Flagged, false, true),
-        new("r-4", @"C:\src\docs-site", "docs-site", null, "2h ago", OverlayCanvas.RecentTone.Normal, false, false),
-        new("r-5", @"C:\src\perch", "Overlay recent button with a long title", "perch", "5h ago", OverlayCanvas.RecentTone.Normal, false, false),
-        new("r-6", @"C:\src\scratch", "scratch", null, "1d ago", OverlayCanvas.RecentTone.Faded, false, false),
+        new("r-1", @"C:\src\billing", "Invoice export", "billing", "was open", Perch.Data.RecentTone.Perch, true, false),
+        new("r-2", @"C:\src\gateway", "Retry storm fix", "gateway", "interrupted · 14h", Perch.Data.RecentTone.Flagged, true, true),
+        new("r-3", @"C:\src\notes", "notes", null, "before shutdown · 14h", Perch.Data.RecentTone.Flagged, false, true),
+        new("r-4", @"C:\src\docs-site", "docs-site", null, "2h ago", Perch.Data.RecentTone.Normal, false, false),
+        new("r-5", @"C:\src\perch", "Overlay recent button with a long title", "perch", "5h ago", Perch.Data.RecentTone.Normal, false, false),
+        new("r-6", @"C:\src\scratch", "scratch", null, "1d ago", Perch.Data.RecentTone.Faded, false, false),
     ];
 
     /// <summary>A couple of daemon workers, for the daemon strip — hidden when the daemon setting is off.</summary>

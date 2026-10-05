@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Perch.Avalonia.Views;
+using Perch.Data;
 using Perch.Data.Roost;
 using PlacementMode = global::Avalonia.Controls.PlacementMode;
 
@@ -21,10 +22,9 @@ internal sealed partial class RoostWindow
     private Ellipse _recentDot = null!;
     private RecentListView? _recentView;   // the open flyout's list, which follows each refresh while it's up
     private RecentFilter _recentFilter = RecentFilter.All;
-    // Flagged dormant sessions the user has seen in the flyout: they no longer light the row's dot.
-    private readonly HashSet<string> _recentSeen = new(StringComparer.Ordinal);
+    private readonly RecentSeen _recentSeen = new();
 
-    // "◷ Recent", its count on the right, and a dot while there's an interrupted / before-shutdown one not yet seen.
+    // "◷ Recent", its count on the right, and a dot while there's a badged line not yet seen.
     private Border RecentFooterRow()
     {
         var label = new TextBlock { Text = "◷  Recent", FontFamily = _p.Body, FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = _p.Muted };
@@ -55,23 +55,22 @@ internal sealed partial class RoostWindow
         _roster.Rail.FirstOrDefault(g => g.Group == RoostGroup.Recent)?.Panes ?? [];
 
     // A pane stays in the rail unless it's dormant and no tab (Focus included) holds it — then it's only in the flyout.
-    private bool InRail(RoostPane pane) => !pane.IsDormant || _tabs.Locate(pane.Key).Any();
+    private bool InRail(RoostPane pane) => !pane.IsDormant || _tabs.IsPlaced(pane.Key);
 
     private void RefreshRecentRow()
     {
-        var dormant = DormantPanes();
-        _recentRow.IsVisible = dormant.Count > 0;
-        _recentCount.Text = dormant.Count.ToString();
-        _recentDot.IsVisible = dormant.Any(p => IsFlagged(p.Dormant!) && !_recentSeen.Contains(p.Dormant!.SessionId));
-        _recentView?.SetLines(RecentLines(dormant));
+        var lines = RecentLines();
+        _recentRow.IsVisible = lines.Count > 0;
+        _recentCount.Text = lines.Count.ToString();
+        _recentDot.IsVisible = _recentSeen.HasUnseen(lines);
+        _recentView?.SetLines(lines);
     }
-
-    private static bool IsFlagged(RoostDormant d) => d.WasInterrupted || d.EndedBeforeShutdown;
 
     private void ShowRecentFlyout()
     {
+        var lines = RecentLines();
         var view = new RecentListView(_recentFilter, RecentListLook.For(_p), showAll: false);
-        view.SetLines(RecentLines(DormantPanes()));
+        view.SetLines(lines);
         view.FilterChanged += f => _recentFilter = f;
         view.ResumeRequested += (id, _) => { _openFlyout?.Hide(); FocusPane(RoostToken.DormantKey(id)); };
         view.TerminalRequested += (id, _) =>
@@ -89,30 +88,14 @@ internal sealed partial class RoostWindow
         flyout.Closed += (_, _) => { if (ReferenceEquals(_recentView, view)) _recentView = null; };
         _recentView = view;
         _openFlyout = flyout;
-        foreach (var p in DormantPanes())
-            if (IsFlagged(p.Dormant!)) _recentSeen.Add(p.Dormant!.SessionId);
+        _recentSeen.MarkSeen(lines);
         _recentDot.IsVisible = false;
         flyout.ShowAt(_recentRow);
     }
 
-    // The flyout's lines: the pane's /rename title (else its folder), the folder beside a real title, and its pill's words.
-    private static List<OverlayCanvas.RecentLine> RecentLines(IReadOnlyList<RoostPane> dormant)
+    private List<RecentLine> RecentLines()
     {
-        var lines = new List<OverlayCanvas.RecentLine>(dormant.Count);
-        foreach (var pane in dormant)
-        {
-            var d = pane.Dormant!;
-            var tone = d.Kind switch
-            {
-                RoostDormantKind.WasOpenInPerch => OverlayCanvas.RecentTone.Perch,
-                RoostDormantKind.Interrupted or RoostDormantKind.BeforeShutdown => OverlayCanvas.RecentTone.Flagged,
-                RoostDormantKind.Exited => OverlayCanvas.RecentTone.Faded,
-                _ => OverlayCanvas.RecentTone.Normal,
-            };
-            bool titled = !string.IsNullOrWhiteSpace(d.Title);
-            lines.Add(new(d.SessionId, d.Cwd, titled ? d.Title!.Trim() : d.ProjectName, titled ? d.ProjectName : null,
-                SessionPane.DormantPillText(d), tone, d.WasInterrupted, d.EndedBeforeShutdown));
-        }
-        return lines;
+        var now = Clock.Now;
+        return DormantPanes().Select(p => RecentLine.From(p.Dormant!, now)).ToList();
     }
 }
