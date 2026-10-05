@@ -129,7 +129,8 @@ public partial class App
 
         foreach (var r in _restorable)
             Add(new RoostDormant(r.SessionId, r.Cwd, ProjectOf(r.Cwd), r.Title, LastActiveOf(r.SessionId),
-                RoostDormantKind.WasOpenInPerch, PerchOrigin: true), dismissible: false);
+                RoostDormantKind.WasOpenInPerch, PerchOrigin: true,
+                JustBeforeShutdown: recent.TryGetValue(r.SessionId, out var ended) && ended.JustBeforeShutdown), dismissible: false);
 
         // A woken one stays until the scan sees its process, so its pane holds the place for the live one to take.
         foreach (var s in _perchSessions)
@@ -170,7 +171,8 @@ public partial class App
     }
 
     private static RoostDormant FromRecent(RecentSession row, bool perch) => new(
-        row.Entry.SessionId, row.Entry.Cwd, row.Entry.ProjectName, row.Entry.Title, row.EndedAt, KindOf(row), perch);
+        row.Entry.SessionId, row.Entry.Cwd, row.Entry.ProjectName, row.Entry.Title, row.EndedAt, KindOf(row), perch,
+        row.JustBeforeShutdown);
 
     private static RoostDormantKind KindOf(RecentSession row) =>
         row.End.Kind == SessionEndKind.Abrupt ? RoostDormantKind.Interrupted

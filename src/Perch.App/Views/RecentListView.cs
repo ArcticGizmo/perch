@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
@@ -22,18 +23,34 @@ internal enum RecentFilter
     BeforeShutdown,
 }
 
+/// <summary>The brushes (and font) a <see cref="RecentListView"/> is drawn with: the overlay's <see cref="Palette"/>, or
+/// the Roost's <see cref="SessionPalette"/> (<see cref="For(SessionPalette)"/>).</summary>
+internal sealed record RecentListLook(
+    IBrush Text, IBrush Muted, IBrush ChipOn, IBrush ChipOnText, IBrush ChipOff, IBrush RowHover, IBrush ButtonHover,
+    IBrush Warn, IBrush Perch, IBrush Normal, FontFamily? Font = null)
+{
+    public static RecentListLook Overlay => new(
+        Palette.FgBrush, Palette.MutedBrush, Palette.AccentBrush, Palette.OnAccentBrush, Palette.ButtonBgBrush,
+        Palette.OverlayRowHoverBrush, Palette.ButtonBgBrush, Palette.WarnBrush, Palette.AccentBrush, Palette.TeamGrayBrush);
+
+    // The Roost's rail idiom: a flagged ending in the awaiting hue, the selected chip like its Status | A–Z toggle.
+    public static RecentListLook For(SessionPalette p) => new(
+        p.Text, p.Muted, p.BrandWash, p.Text, p.Raised2, p.Raised2, p.Border, p.Await, p.Brand, p.Idle, p.Body);
+}
+
 /// <summary>
-/// The body of the overlay's Recent flyout (the clock button on the "+ New session" row; docs/session-recovery-plan.md):
-/// a "Recent" caption with "Show all…" (the launcher's full list), a filter chip per <see cref="RecentFilter"/> with its
-/// count, then the matching lines. A click on a line resumes it in Perch (dormant); hovering a line swaps its note for
-/// "resume in a terminal" and "dismiss" buttons. The lines arrive precomputed (<see cref="SetLines"/>); a line's
-/// filters are its <see cref="RecentLine.Interrupted"/>/<see cref="RecentLine.BeforeShutdown"/> flags, so one that a
-/// restart cut off shows under both.
+/// The body of a Recent flyout — the overlay's clock button on the "+ New session" row, and the Roost rail's "Recent"
+/// footer row (docs/session-recovery-plan.md): a "Recent" caption with an optional "Show all…" (the launcher's full
+/// list), a filter chip per <see cref="RecentFilter"/> with its count, then the matching lines. A click on a line opens
+/// it; hovering a line swaps its note for "resume in a terminal" and "dismiss" buttons. The lines arrive precomputed
+/// (<see cref="SetLines"/>); a line's filters are its <see cref="RecentLine.Interrupted"/>/
+/// <see cref="RecentLine.BeforeShutdown"/> flags, so one that a restart cut off shows under both.
 /// </summary>
 internal sealed class RecentListView : StackPanel
 {
     private const double ListWidth = 320;
 
+    private readonly RecentListLook _look;
     private readonly StackPanel _chips = new() { Orientation = Orientation.Horizontal, Spacing = 6 };
     private readonly StackPanel _rows = new() { Spacing = 1 };
     private IReadOnlyList<RecentLine> _lines = [];
@@ -45,24 +62,29 @@ internal sealed class RecentListView : StackPanel
     public event Action? ShowAllRequested;
     public event Action<RecentFilter>? FilterChanged;
 
-    public RecentListView(RecentFilter filter)
+    public RecentListView(RecentFilter filter, RecentListLook? look = null, bool showAll = true)
     {
         _filter = filter;
+        _look = look ?? RecentListLook.Overlay;
         Width = ListWidth;
         Spacing = 8;
+        if (_look.Font is { } font) SetValue(TextElement.FontFamilyProperty, font);
 
-        var showAll = new TextBlock
-        {
-            Text = "Show all…", FontSize = 11.5, Foreground = Palette.MutedBrush, Cursor = new Cursor(StandardCursorType.Hand),
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        showAll.PointerEntered += (_, _) => showAll.Foreground = Palette.AccentBrush;
-        showAll.PointerExited += (_, _) => showAll.Foreground = Palette.MutedBrush;
-        showAll.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowAllRequested?.Invoke(); };
         var header = new DockPanel { Margin = new Thickness(2, 0) };
-        DockPanel.SetDock(showAll, Dock.Right);
-        header.Children.Add(showAll);
-        header.Children.Add(new TextBlock { Text = "Recent", FontSize = 13, FontWeight = FontWeight.SemiBold, Foreground = Palette.FgBrush });
+        if (showAll)
+        {
+            var link = new TextBlock
+            {
+                Text = "Show all…", FontSize = 11.5, Foreground = _look.Muted, Cursor = new Cursor(StandardCursorType.Hand),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            link.PointerEntered += (_, _) => link.Foreground = _look.Text;
+            link.PointerExited += (_, _) => link.Foreground = _look.Muted;
+            link.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) ShowAllRequested?.Invoke(); };
+            DockPanel.SetDock(link, Dock.Right);
+            header.Children.Add(link);
+        }
+        header.Children.Add(new TextBlock { Text = "Recent", FontSize = 13, FontWeight = FontWeight.SemiBold, Foreground = _look.Text });
 
         Children.Add(header);
         Children.Add(_chips);
@@ -107,7 +129,7 @@ internal sealed class RecentListView : StackPanel
                     RecentFilter.BeforeShutdown => "Nothing ended just before a shutdown",
                     _ => "Nothing recent",
                 },
-                FontSize = 12, Foreground = Palette.MutedBrush, Margin = new Thickness(6, 6),
+                FontSize = 12, Foreground = _look.Muted, Margin = new Thickness(6, 6),
             });
     }
 
@@ -118,18 +140,18 @@ internal sealed class RecentListView : StackPanel
         var label = new TextBlock
         {
             Text = $"{name} {count}", FontSize = 11.5,
-            Foreground = on ? Palette.OnAccentBrush : Palette.MutedBrush,
+            Foreground = on ? _look.ChipOnText : _look.Muted,
         };
         var chip = new Border
         {
             CornerRadius = new CornerRadius(10), Padding = new Thickness(9, 3),
-            Background = on ? Palette.AccentBrush : Palette.ButtonBgBrush,
+            Background = on ? _look.ChipOn : _look.ChipOff,
             Cursor = new Cursor(StandardCursorType.Hand), Child = label,
         };
         if (!on)
         {
-            chip.PointerEntered += (_, _) => label.Foreground = Palette.FgBrush;
-            chip.PointerExited += (_, _) => label.Foreground = Palette.MutedBrush;
+            chip.PointerEntered += (_, _) => label.Foreground = _look.Text;
+            chip.PointerExited += (_, _) => label.Foreground = _look.Muted;
         }
         chip.PointerReleased += (_, e) =>
         {
@@ -145,15 +167,15 @@ internal sealed class RecentListView : StackPanel
     {
         var (dot, noteBrush) = l.Tone switch
         {
-            RecentTone.Flagged => (Palette.WarnBrush, Palette.WarnBrush),
-            RecentTone.Perch => (Palette.AccentBrush, Palette.AccentBrush),
-            RecentTone.Faded => (Palette.MutedBrush, Palette.MutedBrush),
-            _ => (Palette.TeamGrayBrush, Palette.MutedBrush),
+            RecentTone.Flagged => (_look.Warn, _look.Warn),
+            RecentTone.Perch => (_look.Perch, _look.Perch),
+            RecentTone.Faded => (_look.Muted, _look.Muted),
+            _ => (_look.Normal, _look.Muted),
         };
         var title = new TextBlock
         {
             Text = l.Title, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
-            Foreground = l.Tone == RecentTone.Faded ? Palette.MutedBrush : Palette.FgBrush,
+            Foreground = l.Tone == RecentTone.Faded ? _look.Muted : _look.Text,
         };
         // The title gives way first: the folder's name stays legible beside it.
         var name = new DockPanel { VerticalAlignment = VerticalAlignment.Center };
@@ -161,7 +183,7 @@ internal sealed class RecentListView : StackPanel
         {
             var folderText = new TextBlock
             {
-                Text = folder, FontSize = 11, Foreground = Palette.MutedBrush, MaxWidth = 110, Margin = new Thickness(6, 0, 0, 0),
+                Text = folder, FontSize = 11, Foreground = _look.Muted, MaxWidth = 110, Margin = new Thickness(6, 0, 0, 0),
                 TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
             };
             DockPanel.SetDock(folderText, Dock.Right);
@@ -172,7 +194,7 @@ internal sealed class RecentListView : StackPanel
         var note = new TextBlock
         {
             Text = l.Note, FontSize = 11, Foreground = noteBrush, VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(8, 0, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(8, 0, 0, 0),
         };
         var actions = new StackPanel
         {
@@ -186,7 +208,6 @@ internal sealed class RecentListView : StackPanel
         };
         // The note and the hover actions share the right-hand cell, which is sized for both (the hidden one is only
         // transparent), so swapping them never reflows the title.
-        note.HorizontalAlignment = HorizontalAlignment.Right;
         var trailing = new Grid { Children = { note, actions } };
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
@@ -204,7 +225,7 @@ internal sealed class RecentListView : StackPanel
         ToolTip.SetTip(row, l.Cwd);
         void Hover(bool on)
         {
-            row.Background = on ? Palette.OverlayRowHoverBrush : Brushes.Transparent;
+            row.Background = on ? _look.RowHover : Brushes.Transparent;
             note.Opacity = on ? 0 : 1;
             actions.Opacity = on ? 1 : 0;
             actions.IsHitTestVisible = on;
@@ -215,12 +236,12 @@ internal sealed class RecentListView : StackPanel
         return row;
     }
 
-    // A small hover button in a row's trailing cell. It handles its own release, so the row's "resume" doesn't fire too.
-    private static Control HoverButton(string glyph, string tip, Action onClick)
+    // A small hover button in a row's trailing cell. It handles its own release, so the row's "open" doesn't fire too.
+    private Control HoverButton(string glyph, string tip, Action onClick)
     {
         var text = new TextBlock
         {
-            Text = glyph, FontSize = 11.5, Foreground = Palette.MutedBrush,
+            Text = glyph, FontSize = 11.5, Foreground = _look.Muted,
             HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
         };
         var box = new Border
@@ -228,8 +249,8 @@ internal sealed class RecentListView : StackPanel
             Width = 22, Height = 20, CornerRadius = new CornerRadius(4), Background = Brushes.Transparent, Child = text,
         };
         ToolTip.SetTip(box, tip);
-        box.PointerEntered += (_, _) => { box.Background = Palette.ButtonBgBrush; text.Foreground = Palette.FgBrush; };
-        box.PointerExited += (_, _) => { box.Background = Brushes.Transparent; text.Foreground = Palette.MutedBrush; };
+        box.PointerEntered += (_, _) => { box.Background = _look.ButtonHover; text.Foreground = _look.Text; };
+        box.PointerExited += (_, _) => { box.Background = Brushes.Transparent; text.Foreground = _look.Muted; };
         box.PointerReleased += (_, e) =>
         {
             if (e.InitialPressMouseButton != MouseButton.Left) return;

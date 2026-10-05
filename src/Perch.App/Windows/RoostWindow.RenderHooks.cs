@@ -71,6 +71,9 @@ internal sealed partial class RoostWindow
     /// <summary>HeadlessRenderer hook: open the keys cheat-sheet.</summary>
     internal void OpenKeysForRender() => ShowKeys(_hiddenRow.Parent as Control ?? this);
 
-    /// <summary>HeadlessRenderer hook: dismiss the picker / cheat-sheet.</summary>
+    /// <summary>HeadlessRenderer hook: open the rail footer's Recent flyout on <paramref name="filter"/>.</summary>
+    internal void OpenRecentForRender(RecentFilter filter) { _recentFilter = filter; ShowRecentFlyout(); }
+
+    /// <summary>HeadlessRenderer hook: dismiss the picker / cheat-sheet / Recent flyout.</summary>
     internal void CloseFlyoutForRender() { _openFlyout?.Hide(); _openFlyout = null; }
 }

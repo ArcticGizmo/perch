@@ -132,7 +132,14 @@ file in it. Search individual files.
   top 5; "Show all…" opens the launcher. A warning-hue dot on the glyph marks flagged lines not yet seen in the
   flyout (runtime only). `OverlaySection.Recent` and `AppSettings.RecentExpanded` are gone; `ShowRecentSessions`
   now gates the button.
-- **Roost** — dormant panes in their old slots, and a "Recent" group in the rail (R6).
+- **Roost** — dormant panes in their old slots, and a "Recent" group in the rail (R6). **Superseded (2026-10-05):**
+  the group took a lot of the rail, so the dormant panes moved behind a **"◷ Recent" row in the rail footer**
+  (`RoostWindow.Recent.cs`), above "N hidden", that opens the same `RecentListView` flyout (Roost-styled via
+  `RecentListLook.For(SessionPalette)`, no "Show all…"). A click focuses the pane (its tab, or Focus); `>_` and `×`
+  are the pane's Resume in terminal / Dismiss. Only a dormant pane some tab holds (Focus included) stays in the rail,
+  under **NOT RUNNING**. `RoostDormant.JustBeforeShutdown` carries the shutdown flag past an `Interrupted` kind, so a
+  restart's victims show under both filters. The dormant set itself (restorable → dormant windows → tab-held →
+  Recent top 5) is unchanged.
 
 ## Checkpoints
 

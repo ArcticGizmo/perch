@@ -159,7 +159,7 @@ internal sealed partial class RoostWindow : Window
             Child = new DockPanel { LastChildFill = true, Children = { newSession, title } },
         };
 
-        // ── Rail: the sort toggle, the sessions, then "N hidden" and the keys cheat-sheet ──
+        // ── Rail: the sort toggle, the sessions, then "Recent", "N hidden" and the keys cheat-sheet ──
         _rail = new StackPanel { Spacing = 14, Margin = new Thickness(8, 4, 8, 12) };
         (_hiddenRow, _hiddenText) = RailFooterRow("", "Closed panes — click to reopen");
         _hiddenRow.OnLeftClick(() => ShowHiddenMenu(_hiddenRow));
@@ -169,7 +169,7 @@ internal sealed partial class RoostWindow : Window
         {
             BorderBrush = _p.Border, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(8, 6),
             [DockPanel.DockProperty] = Dock.Bottom,
-            Child = new StackPanel { Spacing = 2, Children = { _hiddenRow, keysRow } },
+            Child = new StackPanel { Spacing = 2, Children = { RecentFooterRow(), _hiddenRow, keysRow } },
         };
         var railHost = new Border
         {
@@ -499,6 +499,7 @@ internal sealed partial class RoostWindow : Window
         RefreshRail();
         RefreshPills(all);
         RefreshHiddenRow();
+        RefreshRecentRow();
         UpdatePulse();
 
         var placedSig = string.Join(",", _placed.Order(StringComparer.Ordinal));

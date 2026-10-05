@@ -1707,8 +1707,9 @@ internal static class HeadlessRenderer
     }
 
     // Session recovery R6: dormant panes. "Main" (two columns) keeps "perch" live beside "docs-site", whose process has
-    // gone, so it's dormant in its region; the rail's Recent group lists it with a session Perch had open, one a restart
-    // interrupted and one that ended just before a shutdown. Then the interrupted one, clicked: dormant in Focus.
+    // gone, so it's dormant in its region and stays in the rail (NOT RUNNING); the rail footer's Recent flyout lists it
+    // with a session Perch had open, one a restart interrupted and one that ended just before a shutdown. Then the
+    // interrupted one, clicked: dormant in Focus (and so back in the rail while Focus holds it).
     private static void RenderRoostDormant(string outDir)
     {
         foreach (var dark in new[] { true, false })
@@ -1733,7 +1734,7 @@ internal static class HeadlessRenderer
             {
                 Dormant("d-billing", "billing", "Invoice export", TimeSpan.FromHours(14), Perch.Data.Roost.RoostDormantKind.WasOpenInPerch, perch: true),
                 Dormant(docs.SessionId, "docs-site", null, TimeSpan.FromMinutes(1), Perch.Data.Roost.RoostDormantKind.Ended),
-                Dormant("d-gateway", "gateway", "Retry storm fix", TimeSpan.FromHours(15), Perch.Data.Roost.RoostDormantKind.Interrupted),
+                Dormant("d-gateway", "gateway", "Retry storm fix", TimeSpan.FromHours(15), Perch.Data.Roost.RoostDormantKind.Interrupted) with { JustBeforeShutdown = true },
                 Dormant("d-notes", "notes", null, TimeSpan.FromHours(15.2), Perch.Data.Roost.RoostDormantKind.BeforeShutdown),
             };
             // The docs-site process ends; the app now names it dormant, and it takes the ended pane's region.
@@ -1759,8 +1760,15 @@ internal static class HeadlessRenderer
                 frame.Save(fs);
             }
             Capture(dark ? "roost_dormant_1x.png" : "roost_dormant_light_1x.png");
+            // The rail footer's "Recent" flyout: every dormant pane (docs-site, which Main holds, is also in the rail).
+            w.OpenRecentForRender(RecentFilter.All);
+            Capture(dark ? "roost_recent_flyout_1x.png" : "roost_recent_flyout_light_1x.png");
+            w.CloseFlyoutForRender();
             if (dark)
             {
+                w.OpenRecentForRender(RecentFilter.BeforeShutdown);
+                Capture("roost_recent_flyout_shutdown_1x.png");
+                w.CloseFlyoutForRender();
                 w.FocusPane(Perch.Data.Roost.RoostToken.DormantKey("d-gateway"));
                 Capture("roost_dormant_focus_1x.png");
             }

@@ -170,17 +170,26 @@ internal sealed partial class RoostWindow
                 if (_railRows.TryGetValue(pane.Key, out var row)) UpdateRailRow(row, pane);
     }
 
-    // The rail's headed sections for the current sort: the non-empty status groups, or one A–Z list.
-    private List<(string Title, IReadOnlyList<RoostPane> Panes)> RailSections() =>
-        _railSort == RoostRailSort.Alphabetical
-            ? _roster.RailAlphabetical.Count > 0 ? [("ALL SESSIONS", _roster.RailAlphabetical)] : []
-            : _roster.Rail.Where(g => g.Panes.Count > 0).Select(g => (GroupTitle(g.Group), g.Panes)).ToList();
+    // The rail's headed sections for the current sort: the non-empty status groups, or one A–Z list. A dormant pane no
+    // tab holds is left to the footer's Recent flyout (InRail).
+    private List<(string Title, IReadOnlyList<RoostPane> Panes)> RailSections()
+    {
+        if (_railSort == RoostRailSort.Alphabetical)
+        {
+            var all = _roster.RailAlphabetical.Where(InRail).ToList();
+            return all.Count > 0 ? [("ALL SESSIONS", all)] : [];
+        }
+        return _roster.Rail
+            .Select(g => (Title: GroupTitle(g.Group), Panes: (IReadOnlyList<RoostPane>)g.Panes.Where(InRail).ToList()))
+            .Where(s => s.Panes.Count > 0)
+            .ToList();
+    }
 
     private void RebuildRail(IReadOnlyList<(string Title, IReadOnlyList<RoostPane> Panes)> sections)
     {
         _rail.Children.Clear();
         _railRows.Clear();
-        if (_roster.Panes.Count == 0)
+        if (sections.Count == 0)
         {
             _rail.Children.Add(new TextBlock { Text = "No live sessions", Margin = new Thickness(8, 0), FontSize = 12, Foreground = _p.Faint });
             return;
@@ -256,7 +265,7 @@ internal sealed partial class RoostWindow
         RoostGroup.NeedsYou => "NEEDS YOU",
         RoostGroup.DoneReview => "DONE · REVIEW",
         RoostGroup.Working => "WORKING",
-        RoostGroup.Recent => "RECENT",
+        RoostGroup.Recent => "NOT RUNNING",   // only the tab-held ones; the rest are behind the footer's "Recent"
         _ => "QUIET",
     };
 

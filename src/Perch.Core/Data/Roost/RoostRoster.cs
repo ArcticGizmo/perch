@@ -34,7 +34,9 @@ public enum RoostDormantKind
 }
 
 /// <summary>A session the Roost shows <b>dormant</b> (docs/session-recovery-plan.md, R6): its conversation, no process.
-/// The app supplies these to <see cref="RoostRoster.Update"/>; the first send resumes it.</summary>
+/// The app supplies these to <see cref="RoostRoster.Update"/>; the first send resumes it. <paramref name="JustBeforeShutdown"/>
+/// says it ended within a shutdown's window even when <paramref name="Kind"/> names something more specific (a restart's
+/// victim is <see cref="RoostDormantKind.Interrupted"/>) — the Recent list's "Before shutdown" filter.</summary>
 public sealed record RoostDormant(
     string SessionId,
     string Cwd,
@@ -42,10 +44,17 @@ public sealed record RoostDormant(
     string? Title,
     DateTime LastActive,
     RoostDormantKind Kind,
-    bool PerchOrigin = false)
+    bool PerchOrigin = false,
+    bool JustBeforeShutdown = false)
 {
     /// <summary>Badged and sorted first in the Recent list: interrupted, or ended just before a shutdown.</summary>
     public bool IsFlagged => Kind is RoostDormantKind.Interrupted or RoostDormantKind.BeforeShutdown;
+
+    /// <summary>Cut off rather than ended: it died without a clean exit, or Perch closing ended it.</summary>
+    public bool WasInterrupted => Kind is RoostDormantKind.Interrupted or RoostDormantKind.WasOpenInPerch;
+
+    /// <summary>Ended within a shutdown's window, whatever its kind.</summary>
+    public bool EndedBeforeShutdown => JustBeforeShutdown || Kind == RoostDormantKind.BeforeShutdown;
 
     /// <summary>The snapshot a dormant pane carries: keyed <see cref="RoostToken.DormantKey"/>, idle, never live.</summary>
     internal ClaudeSession ToSession() => new(
