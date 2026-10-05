@@ -7,25 +7,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- A Recent (clock) button beside the Roost button: sessions that ended lately, with the ones a restart cut off at the top. It's a button rather than a section, because a section was a lot of list for anyone running twelve sessions at once
-- Filter it to the interrupted ones, or the ones that ended just before a shutdown, for the "close everything and go home" crowd
-- A dot on the clock means something was cut off that you haven't looked at yet
-- Click one to pick it back up in Perch, resume it in a terminal, or dismiss it
-- Reopening a session shows the conversation straight away; Claude only starts when you send something
-- The resume cost estimate is now a quiet note above the composer, not a question before you can even look
-- Perch sessions that were open when Perch closed (an update, Exit, a restart) come back where you left them
-- Exiting Perch now ends its sessions properly, so your SessionEnd hooks run
-- Roost tabs survive a reboot: a session whose process is gone stays in its region until you send to it
-- A Recent row at the foot of the Roost rail opens the same filterable list, with Resume in terminal and Dismiss on each. Only the not-running sessions you've put in a tab stay in the rail itself, so the live ones keep the room
-- Fixed Perch skipping its own tidy-up (including releasing a docked edge) on a normal Exit
-- The session's model pill names the version ("Opus 5.5"), and the effort pill just says "high", not "high effort"
-- The model menu offers each family's newest release; hover the › beside it to pick an older one
-- Ctrl+= / Ctrl+− (or Ctrl+wheel) zoom the session window and the Roost, and Perch remembers it; Ctrl+0 resets a session window
-- A 🔍 100% button beside End session shows the zoom and lets you pick a level
-- Sub-agents working in the background get a spinning chip at the foot of the chat, so a quiet session no longer looks frozen
-- The session window's sub-agent strip is now tabs: click one (or its chip) to watch that sub-agent's log as it works
-- A sub-agent's tab is read-only (it only takes orders from the session) and closes itself when the sub-agent finishes
-- Statusline designer: a `session.name` token shows the name you gave the session with `/rename`
+---
+
+## [v0.5.3] - 2026-10-05
+
+- A Recent (clock) button: lately-ended sessions, cut-off ones first
+- A dot on the clock when something was cut off and you haven't looked
+- Filter to interrupted or ended-before-shutdown (for the "close everything and go home" crowd)
+- Pick one back up in Perch, resume it in a terminal, or dismiss it
+- Reopened sessions show the conversation; Claude waits until you send
+- Resume cost estimate is a quiet note above the composer, not a toll booth
+- Perch sessions come back after an update, Exit or restart
+- Exiting Perch ends its sessions properly, so SessionEnd hooks run
+- Roost tabs survive a reboot
+- A Recent row at the foot of the Roost rail
+- Fixed Exit skipping Perch's own tidy-up (docked edge included)
+- Model pill names the version ("Opus 5.5"); effort pill just says "high"
+- Model menu offers each family's newest; hover › for older ones
+- One context bar in place of the token and context pills
+- Ctrl+= / Ctrl+− / Ctrl+wheel zoom the session window and Roost
+- A 🔍 100% button picks a zoom level, in the session window and the Roost
+- Spinning chips for background sub-agents (quiet is not the same as frozen)
+- Sub-agents get their own tabs: watch any one's log live
+- Sub-agent tabs are read-only (they only take orders from the session)
+- Statusline designer: `session.name` token for your `/rename` title
 
 ---
 

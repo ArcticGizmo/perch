@@ -129,12 +129,14 @@ public partial class App
 
         foreach (var r in _restorable) Add(RestorableDormant(r), dismissible: false);
 
-        // A woken one stays until the scan sees its process, so its pane holds the place for the live one to take.
+        // A woken one stays until the scan sees its process, so its pane holds the place for the live one to take. A
+        // dormant one with no transcript has nothing to show or resume, so it's left out.
         foreach (var s in _perchSessions)
         {
             if (s.SessionId is not { } id) continue;
             bool waking = s.IsRunning && _roostRoster.Find(RoostToken.DormantKey(id)) is not null;
             if (!s.IsDormant && !waking) continue;
+            if (!waking && !_transcriptsById.ContainsKey(id)) continue;
             Add(new RoostDormant(id, s.Cwd, ProjectOf(s.Cwd), s.Title, LastActiveOf(id),
                 _recentById.TryGetValue(id, out var row) ? KindOf(row) : RoostDormantKind.NotRunning, PerchOrigin: true),
                 dismissible: !waking);
@@ -187,6 +189,8 @@ public partial class App
     private bool PerchOriginOf(string id) =>
         _roostRoster.Panes.FirstOrDefault(p => p.Session.SessionId == id)?.Session.IsPerchControlled == true;
 
+    // "Now" without a transcript: only what can't be dismissed gets that far (what Perch had open, before the first build
+    // drops the empty ones, and a session mid-wake), so a moving time never slips past a dismissal.
     private DateTime LastActiveOf(string id) =>
         _transcriptsById.TryGetValue(id, out var e) ? e.LastUpdated : DateTime.Now;
 
