@@ -691,11 +691,12 @@ internal sealed partial class SessionWindow : Window
         };
         composerStack.Children.Add(_mentionPopup);
 
+        // Both built before either is wired: the menu's Closed handler closes the versions submenu.
         _modelMenu = MenuPopup(_modelHalf, PlacementMode.TopEdgeAlignedLeft);
+        _modelVersions = MenuPopup(_modelHalf, PlacementMode.RightEdgeAlignedTop);
         _modelMenu.IsLightDismissEnabled = true;
         _modelMenu.VerticalOffset = -4;
         _modelMenu.Closed += (_, _) => { _modelMenuClosedAt = DateTime.UtcNow; _modelVersions.IsOpen = false; };
-        _modelVersions = MenuPopup(_modelHalf, PlacementMode.RightEdgeAlignedTop);
         _modelVersions.HorizontalOffset = 6;   // clear the menu's own padding + border
         _modelVersions.Closed += (_, _) =>
         {
