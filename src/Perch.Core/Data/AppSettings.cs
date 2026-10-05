@@ -155,13 +155,10 @@ internal sealed class AppSettings
     // header. Toggled by the section's own chevron, not a Settings control. Defaults to expanded.
     public bool TodosExpanded { get; set; } = true;
 
-    // Whether the overlay shows its Recent section: sessions that ended lately (interrupted ones first), to pick back
-    // up. On by default; it only appears while there's something recent.
+    // Whether the overlay shows its Recent button (beside the Roost button): sessions that ended lately, to pick back
+    // up, filterable to the interrupted ones and those that ended just before a shutdown. On by default. (The retired
+    // Recent section's RecentExpanded key an older file may still carry is ignored when it loads.)
     public bool ShowRecentSessions { get; set; } = true;
-
-    // Whether the overlay's Recent section (sessions that ended lately) is expanded or collapsed to its header.
-    // Toggled by the section's own chevron, not a Settings control. Defaults to expanded.
-    public bool RecentExpanded { get; set; } = true;
 
     // Whether the overlay's Hypertree section is expanded (showing the branch lines) or collapsed to just
     // its header. Toggled by the section's own chevron. Defaults to expanded.

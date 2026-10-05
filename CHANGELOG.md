@@ -7,8 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- A Recent section on the overlay: sessions that ended lately, with the ones a restart cut off at the top
-- Sessions that ended just before a shutdown are marked too, for the "close everything and go home" crowd
+- A Recent (clock) button beside the Roost button: sessions that ended lately, with the ones a restart cut off at the top. It's a button rather than a section, because a section was a lot of list for anyone running twelve sessions at once
+- Filter it to the interrupted ones, or the ones that ended just before a shutdown, for the "close everything and go home" crowd
+- A dot on the clock means something was cut off that you haven't looked at yet
 - Click one to pick it back up in Perch, resume it in a terminal, or dismiss it
 - Reopening a session shows the conversation straight away; Claude only starts when you send something
 - The resume cost estimate is now a quiet note above the composer, not a question before you can even look

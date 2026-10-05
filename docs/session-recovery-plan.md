@@ -124,6 +124,14 @@ file in it. Search individual files.
   The resume estimate (`ResumeEstimate`) moves from the launcher gate into a one-line note above the composer.
 - **Overlay "Recent" section** — a new movable section (`OverlaySection.Recent`), following the standard
   collapsible-section pattern (chevron header, persisted expand bool) and the section-order rules in `CLAUDE.md`.
+  **Superseded (2026-10-05):** a section was too noisy for anyone running many sessions at once, so it became a
+  **Recent button** (a clock glyph) on the "+ New session" row, beside the Roost button
+  (`OverlayCanvas.Recent.cs`). It opens a flyout (`Views/RecentListView`) with filter chips: **All**,
+  **Interrupted** (`SessionEndKind.Abrupt`, plus "was open" — Perch closing ended those, not the user) and
+  **Before shutdown** (`JustBeforeShutdown`; a restart's victims are under both). It lists every line, not the
+  top 5; "Show all…" opens the launcher. A warning-hue dot on the glyph marks flagged lines not yet seen in the
+  flyout (runtime only). `OverlaySection.Recent` and `AppSettings.RecentExpanded` are gone; `ShowRecentSessions`
+  now gates the button.
 - **Roost** — dormant panes in their old slots, and a "Recent" group in the rail (R6).
 
 ## Checkpoints

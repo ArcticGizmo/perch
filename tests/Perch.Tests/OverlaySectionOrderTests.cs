@@ -74,20 +74,19 @@ public class OverlaySectionOrderTests
     }
 
     [Fact]
-    public void AnOrderSavedBeforeRecentGetsItRightAfterSessions()
+    public void AMissingSectionLandsAfterItsNearestDefaultPredecessor()
     {
-        // A custom order from before session recovery R7 (no Recent): the section lands under the session rows,
-        // wherever the user moved those.
+        // A custom order that predates a section (here Friends, which follows Sessions by default): it lands under the
+        // session rows, wherever the user moved those — not after whichever earlier section was dragged to the bottom.
         var saved = new[]
         {
-            OverlaySection.Sessions, OverlaySection.Friends, OverlaySection.ClaudeMetrics, OverlaySection.Call,
-            OverlaySection.Media, OverlaySection.Todo, OverlaySection.Hypertree, OverlaySection.QuickLinks,
-            OverlaySection.SystemInfo,
+            OverlaySection.Sessions, OverlaySection.ClaudeMetrics, OverlaySection.Call, OverlaySection.Media,
+            OverlaySection.Todo, OverlaySection.Hypertree, OverlaySection.QuickLinks, OverlaySection.SystemInfo,
         };
         var result = OverlaySectionOrder.Normalize(saved).ToList();
         Assert.Equal(OverlaySection.Sessions, result[0]);
-        Assert.Equal(OverlaySection.Recent, result[1]);
-        Assert.Equal(OverlaySection.Friends, result[2]);
+        Assert.Equal(OverlaySection.Friends, result[1]);
+        Assert.Equal(OverlaySection.ClaudeMetrics, result[2]);
     }
 
     [Fact]

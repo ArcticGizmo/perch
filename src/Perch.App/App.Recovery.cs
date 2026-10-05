@@ -24,7 +24,7 @@ public partial class App
     private readonly Dictionary<Services.PerchSession, string?> _heldSessions = new();
 
     // Sessions the previous run held that haven't been picked up yet: the "Reopen Perch sessions" tray item, the top of
-    // the Roost's Recent group (dormant panes, App.RoostDormant.cs) and, in R7, of the overlay's Recent section.
+    // the Roost's Recent group (dormant panes, App.RoostDormant.cs) and of the overlay's Recent button.
     private List<LedgerSession> _restorable = [];
     private NativeMenuItem? _reopenItem;
 
@@ -157,7 +157,7 @@ public partial class App
     private void OnRestorableChanged()
     {
         RefoldRoost();       // they're the top of the Roost's Recent group…
-        PushRecentLines();   // …and of the overlay's Recent section
+        PushRecentLines();   // …and of the overlay's Recent button
         if (_reopenItem is not { } item) return;
         item.Header = _restorable.Count == 1 ? "Reopen Perch session" : $"Reopen Perch sessions ({_restorable.Count})";
         item.IsVisible = _restorable.Count > 0;

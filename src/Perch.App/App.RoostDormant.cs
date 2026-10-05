@@ -205,7 +205,7 @@ public partial class App
         if (pane.Dormant is { } d) DismissRecent(d.SessionId);
     }
 
-    /// <summary>"Dismiss" on a Recent line or a dormant Roost pane: it leaves the overlay's Recent section and the Roost
+    /// <summary>"Dismiss" on a Recent line or a dormant Roost pane: it leaves the overlay's Recent list and the Roost
     /// (and its tab), and stays dismissed until the session ends again. One that Perch had open also stops coming back
     /// after the next restart.</summary>
     private void DismissRecent(string sessionId)
@@ -231,31 +231,33 @@ public partial class App
         PushRecentLines();
     }
 
-    // ── The overlay's Recent section ──────────────────────────────────────────────
+    // ── The overlay's Recent button ───────────────────────────────────────────────
 
     private DispatcherTimer? _recentAgeTimer;
 
-    /// <summary>Pushes the overlay's Recent lines: what Perch had open first ("was open"), then the Recent list (flagged
-    /// first, newest first), capped at <see cref="SessionRecovery.RecentRows"/> with the rest behind "show +N more". Never
-    /// a session that's live now or dismissed. Cheap (no IO): run on every fold, and each minute so the ages move.</summary>
+    /// <summary>Pushes the lines behind the overlay's Recent button: what Perch had open first ("was open"), then the
+    /// Recent list (flagged first, newest first). Each carries its filters: interrupted (an abrupt end, or Perch had it
+    /// open when Perch closed) and before shutdown. Never a session that's live now or dismissed. Cheap (no IO): run on
+    /// every fold, and each minute so the ages move.</summary>
     private void PushRecentLines()
     {
         if (_overlay is null) return;
         var live = _lastSessions.Select(s => s.SessionId).ToHashSet(StringComparer.Ordinal);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var lines = new List<Views.OverlayCanvas.RecentLine>();
-        int total = 0;
         var now = DateTime.Now;
+        var recent = new Dictionary<string, RecentSession>(StringComparer.Ordinal);
+        foreach (var r in _recentRows) recent.TryAdd(r.Entry.SessionId, r);
 
         void Add(Views.OverlayCanvas.RecentLine line)
         {
-            if (live.Contains(line.SessionId) || !seen.Add(line.SessionId)) return;
-            total++;
-            if (lines.Count < SessionRecovery.RecentRows) lines.Add(line);
+            if (!live.Contains(line.SessionId) && seen.Add(line.SessionId)) lines.Add(line);
         }
 
+        // Perch closing ended these rather than the user, so they count as interrupted whichever way they ended.
         foreach (var r in _restorable)
-            Add(Line(r.SessionId, r.Cwd, r.Title, "was open", Views.OverlayCanvas.RecentTone.Perch));
+            Add(Line(r.SessionId, r.Cwd, r.Title, "was open", Views.OverlayCanvas.RecentTone.Perch,
+                interrupted: true, beforeShutdown: recent.TryGetValue(r.SessionId, out var row) && row.JustBeforeShutdown));
         foreach (var row in _recentRows)
         {
             if (IsDismissed(row.Entry.SessionId, row.EndedAt)) continue;
@@ -268,9 +270,10 @@ public partial class App
                 RoostDormantKind.Exited => (age, Views.OverlayCanvas.RecentTone.Faded),
                 _ => (age, Views.OverlayCanvas.RecentTone.Normal),
             };
-            Add(Line(row.Entry.SessionId, row.Entry.Cwd, row.Entry.Title, note, tone));
+            Add(Line(row.Entry.SessionId, row.Entry.Cwd, row.Entry.Title, note, tone,
+                interrupted: row.End.Kind == SessionEndKind.Abrupt, beforeShutdown: row.JustBeforeShutdown));
         }
-        _overlay.Canvas.SetRecent(lines, total - lines.Count);
+        _overlay.Canvas.SetRecent(lines);
 
         if (_recentAgeTimer is null)
         {
@@ -281,12 +284,13 @@ public partial class App
     }
 
     // A line's title is the session's /rename title, else its folder; the folder rides beside a real title.
-    private static Views.OverlayCanvas.RecentLine Line(string id, string cwd, string? title, string note, Views.OverlayCanvas.RecentTone tone)
+    private static Views.OverlayCanvas.RecentLine Line(string id, string cwd, string? title, string note,
+        Views.OverlayCanvas.RecentTone tone, bool interrupted, bool beforeShutdown)
     {
         var folder = ProjectOf(cwd);
         return string.IsNullOrWhiteSpace(title)
-            ? new(id, cwd, folder, null, note, tone)
-            : new(id, cwd, title.Trim(), folder, note, tone);
+            ? new(id, cwd, folder, null, note, tone, interrupted, beforeShutdown)
+            : new(id, cwd, title.Trim(), folder, note, tone, interrupted, beforeShutdown);
     }
 
     private static string ShortAge(DateTime at, DateTime now)
@@ -316,7 +320,7 @@ public partial class App
         if (open > 0) parts.Add($"{Count(open, "Perch session")} open when Perch closed");
         if (interrupted > 0) parts.Add($"{Count(interrupted, "session")} interrupted by a restart");
         _notifier?.Show(open == 0 ? "Interrupted by a restart" : "Pick up where you left off",
-            string.Join(", and ", parts) + ". They're under Recent on the overlay.", ToastLevel.Info, null, null);
+            string.Join(", and ", parts) + ". They're behind the Recent (clock) button on the overlay.", ToastLevel.Info, null, null);
     }
 
     /// <summary>

@@ -27,7 +27,6 @@ public class SettingsRegistryTests
         // The Todo and Hypertree sections' expand/collapse are UI state toggled by each section's own
         // chevron on the overlay, not Settings-window controls.
         nameof(AppSettings.TodosExpanded),
-        nameof(AppSettings.RecentExpanded),
         nameof(AppSettings.HypertreeExpanded),
         // The Roost's rail sort is picked by the toggle in the rail's header…
         nameof(AppSettings.RoostRailSort),

@@ -8,7 +8,7 @@ namespace Perch.Avalonia.Views;
 
 /// <summary>
 /// The overlay panel's section ordering — the single source of truth for the vertical sequence of movable
-/// sections (system info, claude metrics, quick links, hypertree, todo, sessions, recent, friends, media, call). The
+/// sections (system info, claude metrics, quick links, hypertree, todo, sessions, friends, media, call). The
 /// header (top) and outage status bar (bottom) are fixed chrome and are laid out directly by <c>Draw</c>, so
 /// they aren't members here.
 ///
@@ -48,7 +48,6 @@ public sealed partial class OverlayCanvas
         OverlaySection.Hypertree     => HypertreeStripVisible,
         OverlaySection.Todo          => TodosStripVisible,
         OverlaySection.Sessions      => true,
-        OverlaySection.Recent        => RecentStripVisible,
         OverlaySection.Friends       => FeedStripVisible || SocialSignInStripVisible,
         OverlaySection.Media         => MediaStripVisible,
         OverlaySection.Call          => MicStripVisible,
@@ -65,7 +64,6 @@ public sealed partial class OverlayCanvas
         OverlaySection.Hypertree     => HypertreeStripHeight,
         OverlaySection.Todo          => TodosStripHeight,
         OverlaySection.Sessions      => SessionsSectionHeight,
-        OverlaySection.Recent        => RecentStripHeight,
         OverlaySection.Friends       => FriendsSectionHeight,
         OverlaySection.Media         => MediaStripHeight,
         OverlaySection.Call          => MicStripHeight,
@@ -129,7 +127,6 @@ public sealed partial class OverlayCanvas
             case OverlaySection.Hypertree:     DrawHypertreeStrip(ctx, width); break;
             case OverlaySection.Todo:          DrawTodosStrip(ctx, width, top); break;
             case OverlaySection.Sessions:      PaintSessions(ctx, width, top); break;
-            case OverlaySection.Recent:        DrawRecentStrip(ctx, width, top); break;
             case OverlaySection.Friends:
                 if (FeedStripVisible) DrawSocialRegion(ctx, width, top);
                 else if (SocialSignInStripVisible) DrawSocialSignInStrip(ctx, width, top);
@@ -162,16 +159,21 @@ public sealed partial class OverlayCanvas
     // glyph and an accent caption. Clicking it opens a Perch-controlled session (see NewSessionRequested).
     // The band is the hit target (_newSessionRect), captured for the pointer handlers. When the Roost button is
     // on, the band stops short of an ~18px box at the far right (the collapsible headers' "+" idiom) holding the
-    // split-panes glyph, with its own hover and hit rect (_roostRect).
+    // split-panes glyph, with its own hover and hit rect (_roostRect); the Recent button (OverlayCanvas.Recent.cs)
+    // takes the next box in, or the far-right one when the Roost button is off.
     private void DrawNewSessionRow(DrawingContext ctx, double width, double top)
     {
         double midY = top + NewSessionRowHeight / 2;
-        const double box = 18;
+        const double box = 18, gap = 2;
         double boxCx = width - HorizPad - box / 2 + 2;
         var roost = _showRoostButton && !RearrangeMode ? new Rect(boxCx - box / 2, midY - box / 2, box, box) : default;
         _roostRect = roost;
+        double recentCx = roost.Width > 0 ? boxCx - box - gap : boxCx;
+        var recent = RecentButtonVisible ? new Rect(recentCx - box / 2, midY - box / 2, box, box) : default;
+        _recentRect = recent;
 
-        var band = new Rect(1, top, (roost.Width > 0 ? roost.Left - 3 : width - 1) - 1, NewSessionRowHeight);
+        double bandRight = recent.Width > 0 ? recent.Left : roost.Width > 0 ? roost.Left : width + 2;
+        var band = new Rect(1, top, bandRight - 3 - 1, NewSessionRowHeight);
         _newSessionRect = band;
 
         if (_hoveredNewSession)
@@ -195,6 +197,7 @@ public sealed partial class OverlayCanvas
                 ctx.DrawEllipse(OverlayDraw.Brush(badge), null, dot, 2.2, 2.2);
             }
         }
+        if (recent.Width > 0) DrawRecentButton(ctx, recent);
     }
 
     // The badge colour: an API error outranks awaiting input (both are "needs you"); null when nothing waits.

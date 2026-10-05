@@ -302,18 +302,19 @@ internal static class HeadlessRenderer
         todoEmptyProbe.SetTopTodos([], 0);
         RenderControl(todoEmptyProbe, Path.Combine(outDir, "overlay_todos_empty_1x.png"), 96);
 
-        // Session recovery R7: the Recent section under the session rows — every tone, plus "show +N more" — and
-        // collapsed (the header counts the interrupted ones).
+        // Session recovery: the Recent (clock) button beside the Roost button, its badge lit by the unseen interrupted
+        // lines; with the Roost button off it takes the far-right box. Then its flyout under each filter.
         var recentProbe = new OverlayCanvas();
         recentProbe.Update(SampleData.Sessions());
-        recentProbe.SetRecent(SampleData.RecentLines(), SampleData.RecentMore);
+        recentProbe.SetRecent(SampleData.RecentLines());
         RenderControl(recentProbe, Path.Combine(outDir, "overlay_recent_1x.png"), 96);
         RenderControl(recentProbe, Path.Combine(outDir, "overlay_recent_1.5x.png"), 144);
-        var recentCollapsedProbe = new OverlayCanvas();
-        recentCollapsedProbe.Update(SampleData.Sessions());
-        recentCollapsedProbe.SetRecentExpanded(false);
-        recentCollapsedProbe.SetRecent(SampleData.RecentLines(), SampleData.RecentMore);
-        RenderControl(recentCollapsedProbe, Path.Combine(outDir, "overlay_recent_collapsed_1x.png"), 96);
+        var recentAloneProbe = new OverlayCanvas();
+        recentAloneProbe.Update(SampleData.Sessions());
+        recentAloneProbe.SetShowRoostButton(false);
+        recentAloneProbe.SetRecent(SampleData.RecentLines());
+        RenderControl(recentAloneProbe, Path.Combine(outDir, "overlay_recent_no_roost_1x.png"), 96);
+        RenderRecentFlyout(outDir);
 
         // Section ordering: every movable section seeded at once, rendered in the default order and again in a
         // custom order, so the single ordered layout pass (measure + paint) can be eyeballed for clipping or
@@ -328,7 +329,7 @@ internal static class HeadlessRenderer
             c.SetQuickLinks(links, icons);
             c.SetHypertree(SampleData.Hypertree());
             c.SetTopTodos(SampleData.Todos(), SampleData.Todos().Count);
-            c.SetRecent(SampleData.RecentLines(), SampleData.RecentMore);
+            c.SetRecent(SampleData.RecentLines());
             c.SetDaemonWorkers(SampleData.DaemonWorkers());
             c.SetShowMediaController(true);   // off by default; enabled so the strip shows in this probe
             c.SetShowMicPresence(true);
@@ -346,7 +347,7 @@ internal static class HeadlessRenderer
         var sectionsReordered = AllSectionsProbe();
         sectionsReordered.SetSectionOrder(
         [
-            OverlaySection.Sessions, OverlaySection.Friends, OverlaySection.Recent, OverlaySection.ClaudeMetrics,
+            OverlaySection.Sessions, OverlaySection.Friends, OverlaySection.ClaudeMetrics,
             OverlaySection.Call, OverlaySection.Media, OverlaySection.Todo,
             OverlaySection.Hypertree, OverlaySection.QuickLinks, OverlaySection.SystemInfo,
         ]);
@@ -1438,6 +1439,38 @@ internal static class HeadlessRenderer
 
     // A compact SessionThreadView as a Roost pane body shows it: the history sample plus an Edit (its diff
     // collapsed under compact) and a pending permission, scaled by CompactScale in a pane-sized window.
+    // The Recent button's flyout body under each filter, in a real window so its ScrollViewer is templated (the live
+    // flyout's presenter adds its own padding and surface around it).
+    private static void RenderRecentFlyout(string outDir)
+    {
+        var lines = SampleData.RecentLines();
+        foreach (var (filter, name, shown) in new[]
+                 {
+                     (RecentFilter.All, "all", lines), (RecentFilter.Interrupted, "interrupted", lines),
+                     (RecentFilter.BeforeShutdown, "shutdown", lines),
+                     (RecentFilter.BeforeShutdown, "empty", (IReadOnlyList<OverlayCanvas.RecentLine>)[lines[3]]),   // the empty note
+                 })
+        {
+            var view = new RecentListView(filter);
+            view.SetLines(shown);
+            var w = new Window
+            {
+                SizeToContent = SizeToContent.WidthAndHeight, Background = Palette.FormBgBrush,
+                Content = new Border { Padding = new Thickness(12), Child = view },
+            };
+            w.Show();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var frame = w.CaptureRenderedFrame();
+            if (frame != null)
+            {
+                using var fs = File.Create(Path.Combine(outDir, $"overlay_recent_flyout_{name}_1x.png"));
+                frame.Save(fs);
+            }
+            w.Close();
+        }
+    }
+
     private static void RenderRoostThreadCompact(string outDir)
     {
         foreach (var dark in new[] { true, false })

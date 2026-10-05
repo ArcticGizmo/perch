@@ -27,10 +27,9 @@ public enum OverlaySection
     Hypertree,
     /// <summary>The user's own to-do section.</summary>
     Todo,
-    /// <summary>The session rows (and, directly beneath them, the daemon-worker strip).</summary>
+    /// <summary>The session rows (and, directly beneath them, the daemon-worker strip). Sessions that ended lately
+    /// aren't a section: they're behind the Recent button on this section's "+ New session" row.</summary>
     Sessions,
-    /// <summary>Sessions that ended lately, the interrupted ones first (docs/session-recovery-plan.md, R7).</summary>
-    Recent,
     /// <summary>The Social friends region (or the "sign in to Social" prompt when signed out).</summary>
     Friends,
     /// <summary>The now-playing media transport strip.</summary>
@@ -55,7 +54,6 @@ public static class OverlaySectionOrder
         OverlaySection.Hypertree,
         OverlaySection.Todo,
         OverlaySection.Sessions,
-        OverlaySection.Recent,
         OverlaySection.Friends,
         OverlaySection.Media,
         OverlaySection.Call,

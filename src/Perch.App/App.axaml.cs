@@ -485,12 +485,7 @@ public partial class App : Application
                 if (_appSettings is { } s) { s.TodosExpanded = expanded; s.Save(); }
             };
             _overlay.Canvas.TodosRequested += OpenTodos;
-            // The Recent section (session recovery R7; lines from App.RoostDormant.cs's Recent build).
-            _overlay.Canvas.SetRecentExpanded(settings.RecentExpanded);
-            _overlay.Canvas.RecentExpandChanged += expanded =>
-            {
-                if (_appSettings is { } s) { s.RecentExpanded = expanded; s.Save(); }
-            };
+            // The Recent button's flyout (session recovery; lines from App.RoostDormant.cs's Recent build).
             _overlay.Canvas.RecentResumeRequested += (id, cwd) => OpenSessionResume(id, cwd);
             _overlay.Canvas.RecentTerminalRequested += (id, cwd) => ReopenSession(cwd, id);
             _overlay.Canvas.RecentDismissRequested += DismissRecent;
@@ -1618,7 +1613,7 @@ public partial class App : Application
         _roostWindow?.RosterChanged();
         ReplayRoostSuppressed();
         NoteRoostLiveSet(sessions);
-        PushRecentLines();   // the overlay's Recent section drops a session the moment it's live again
+        PushRecentLines();   // the overlay's Recent list drops a session the moment it's live again
     }
 
     // The Roost half of AttentionSeen for a session: is the Roost the active window, and is the pane on screen?

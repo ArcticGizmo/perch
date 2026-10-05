@@ -128,7 +128,7 @@ internal static class SettingsRegistry
             s => s.ShowTodos, (s, v) => s.ShowTodos = v),
 
         Toggle("recent-sessions", "Recent sessions",
-            "List the sessions that ended lately on the overlay - the ones a restart interrupted first - to pick back up.",
+            "A Recent button beside the Roost button lists the sessions that ended lately, to pick back up - filter it to the ones a restart interrupted or that ended just before a shutdown.",
             SettingSurface.SessionRow, ["recent", "history", "ended", "closed", "interrupted", "restart", "shutdown", "resume", "recover", "crash"],
             PreviewTarget.RecentSessions, nameof(AppSettings.ShowRecentSessions),
             s => s.ShowRecentSessions, (s, v) => s.ShowRecentSessions = v),

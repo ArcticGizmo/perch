@@ -7,15 +7,15 @@ using Perch.Avalonia.Theming;
 namespace Perch.Avalonia.Views;
 
 /// <summary>
-/// The overlay's "Recent" section (docs/session-recovery-plan.md, R7): sessions that ended lately — the ones Perch had
-/// open when it closed first, then those a restart interrupted or that ended just before a shutdown, then the rest,
-/// newest first. It follows the standard collapsible-section pattern (chevron header, persisted expand state; see
-/// <c>OverlayCanvas.Todos.cs</c>) and the section-order rules.
+/// The overlay's Recent button (docs/session-recovery-plan.md): a clock glyph on the "+ New session" row, beside the
+/// Roost button, that opens a flyout of the sessions that ended lately (<see cref="RecentListView"/>) — the ones Perch had
+/// open when it closed first, then the rest, newest first — filterable to the interrupted ones and those that ended
+/// just before a shutdown. It replaced a Recent section, which was too noisy for anyone running many sessions at once.
 ///
-/// <para>A click on a line resumes it in Perch (dormant: the conversation opens, Claude starts on the first send); a
-/// right-click offers Resume in Perch / Resume in terminal / Dismiss; hovering a line swaps its note for a "×" that
-/// dismisses it. The lines arrive precomputed (<see cref="SetRecent"/>, notes and ages included) from the app's
-/// off-thread Recent build, so paint reads no files and formats nothing.</para>
+/// <para>A small warning-hue dot on the glyph says there's an interrupted / before-shutdown / was-open line the user
+/// hasn't seen yet (opening the flyout marks them seen, for this run). The lines arrive precomputed
+/// (<see cref="SetRecent"/>, notes and ages included) from the app's off-thread Recent build, so paint reads no files
+/// and formats nothing.</para>
 /// </summary>
 public sealed partial class OverlayCanvas
 {
@@ -32,260 +32,131 @@ public sealed partial class OverlayCanvas
         Faded,
     }
 
-    /// <summary>One Recent line, reduced to what the section paints. <paramref name="Folder"/> is the project folder's
+    /// <summary>One Recent line, reduced to what the flyout shows. <paramref name="Folder"/> is the project folder's
     /// name when it differs from the title (null otherwise); <paramref name="Note"/> the trailing label ("interrupted ·
-    /// 2h", "3h ago", "was open").</summary>
-    internal readonly record struct RecentLine(string SessionId, string Cwd, string Title, string? Folder, string Note, RecentTone Tone);
+    /// 2h", "3h ago", "was open"). <paramref name="Interrupted"/> and <paramref name="BeforeShutdown"/> are the
+    /// flyout's filters (a line a restart cut off is both).</summary>
+    internal readonly record struct RecentLine(
+        string SessionId, string Cwd, string Title, string? Folder, string Note, RecentTone Tone,
+        bool Interrupted, bool BeforeShutdown);
 
     private IReadOnlyList<RecentLine> _recentLines = [];
-    private int _recentMore;   // rows the cap left out: the "show +N more" line opens the launcher's full list
-    private int _hoveredRecentRow = -1;
-    private bool _hoveredRecentHeader, _hoveredRecentDismiss;
     private bool _recentEnabled = true;
-    private bool _recentExpanded = true;
-    private Rect _recentHeaderRect;
-    private double _recentWidth;   // the width the strip was last painted at (where a line's "×" sits)
+    private bool _hoveredRecent;
+    private Rect _recentRect;   // captured at paint; empty when the button is gated off
+    private RecentFilter _recentFilter = RecentFilter.All;   // the flyout's last filter, for this run
+    private RecentListView? _recentView;   // the open flyout's list, which follows SetRecent while it's up
+    // Flagged lines the user has seen (the flyout was opened while they were there): they no longer light the badge.
+    private readonly HashSet<string> _recentSeen = new(StringComparer.Ordinal);
 
-    /// <summary>A line was clicked (or "Resume in Perch" picked): open it in a Perch window, dormant.</summary>
+    /// <summary>A line was clicked: open it in a Perch window, dormant.</summary>
     public event Action<string, string>? RecentResumeRequested;
 
-    /// <summary>"Resume in terminal" on a line: (session id, cwd).</summary>
+    /// <summary>A line's "resume in terminal": (session id, cwd).</summary>
     public event Action<string, string>? RecentTerminalRequested;
 
-    /// <summary>A line's "×" or "Dismiss": (session id).</summary>
+    /// <summary>A line's "×": (session id).</summary>
     public event Action<string>? RecentDismissRequested;
 
-    /// <summary>The "show +N more" line: the launcher's full list of past sessions.</summary>
+    /// <summary>"Show all…": the launcher's full list of past sessions.</summary>
     public event Action? RecentMoreRequested;
 
-    /// <summary>The header was clicked to expand or collapse — the app persists it.</summary>
-    public event Action<bool>? RecentExpandChanged;
+    // Never in Rearrange preview, where the "+ New session" row is inert chrome (as the Roost button is).
+    private bool RecentButtonVisible => _recentEnabled && !RearrangeMode;
 
-    // Shown while there's something recent (in Rearrange mode always, so it can be placed).
-    private bool RecentStripVisible => _recentEnabled && (_recentLines.Count > 0 || RearrangeMode);
-    private bool RecentOverflow => _recentMore > 0;
-    private int RecentLineCount => _recentLines.Count == 0 ? 1 : _recentLines.Count + (RecentOverflow ? 1 : 0);
-    private double RecentHeaderHeight => FeedCaptionHeight + 12;   // matches the Todo / Friends headers
-    private double RecentBodyHeight => !_recentExpanded ? 0 : RecentLineCount * HypertreeLineHeight + 6;
-    private double RecentStripHeight => !RecentStripVisible ? 0 : RecentHeaderHeight + RecentBodyHeight;
-    private double RecentTop => _sectionTop.GetValueOrDefault(Perch.Data.OverlaySection.Recent);
-
-    /// <summary>Show/hide the whole section (R8's setting). Changes the panel height, so relayout.</summary>
+    /// <summary>Show/hide the Recent button (R8's setting).</summary>
     public void SetShowRecent(bool enabled)
     {
         if (_recentEnabled == enabled) return;
         _recentEnabled = enabled;
-        RemeasurePanel();
+        if (!enabled) { _recentRect = default; _hoveredRecent = false; }
+        InvalidateVisual();
     }
 
-    /// <summary>The section's initial expand state (from AppSettings), without raising the change event.</summary>
-    public void SetRecentExpanded(bool expanded)
+    /// <summary>Replaces the lines (UI thread); an open flyout follows. Unchanged lines are a no-op.</summary>
+    internal void SetRecent(IReadOnlyList<RecentLine> lines)
     {
-        if (_recentExpanded == expanded) return;
-        _recentExpanded = expanded;
-        if (RecentStripVisible) RemeasurePanel();
-    }
-
-    /// <summary>Replaces the lines (UI thread). Unchanged lines are a no-op; a different line count relayouts.</summary>
-    internal void SetRecent(IReadOnlyList<RecentLine> lines, int more)
-    {
-        if (more == _recentMore && lines.SequenceEqual(_recentLines)) return;
-        bool wasVisible = RecentStripVisible;
-        int before = RecentLineCount;
+        if (lines.SequenceEqual(_recentLines)) return;
         _recentLines = lines;
-        _recentMore = more;
-        _hoveredRecentRow = -1;
-        _hoveredRecentDismiss = false;
-        if (RecentStripVisible != wasVisible || (_recentExpanded && RecentLineCount != before)) RemeasurePanel();
-        else if (RecentStripVisible) InvalidateVisual();
+        _recentView?.SetLines(lines);
+        if (_recentView is not null) MarkRecentSeen();
+        InvalidateVisual();
     }
 
-    private void OnRecentHeaderClicked()
+    private static bool IsFlaggedRecent(RecentLine l) => l.Interrupted || l.BeforeShutdown;
+
+    // Lit while a flagged line hasn't been seen in the flyout yet.
+    private bool RecentBadge()
     {
-        _recentExpanded = !_recentExpanded;
-        RecentExpandChanged?.Invoke(_recentExpanded);
-        RemeasurePanel();
+        foreach (var l in _recentLines)
+            if (IsFlaggedRecent(l) && !_recentSeen.Contains(l.SessionId)) return true;
+        return false;
     }
 
-    private void DrawRecentStrip(DrawingContext ctx, double width, double top)
+    private void MarkRecentSeen()
     {
-        DrawRecentHeader(ctx, width, top);
-        _recentWidth = width;
-        if (!_recentExpanded) return;
+        foreach (var l in _recentLines)
+            if (IsFlaggedRecent(l)) _recentSeen.Add(l.SessionId);
+    }
 
-        double y = top + RecentHeaderHeight;
-        double lineH = HypertreeLineHeight;
-        const double DotR = 3, NoteMaxW = 96, Box = 16;
-        double nameX = HorizPad + DotR * 2 + 6;
-        var hover = OverlayDraw.Brush(Color.FromArgb(28, 255, 255, 255));
-
-        // Only in Rearrange mode with nothing to show (the section is hidden otherwise).
-        if (_recentLines.Count == 0)
+    // The button in its box on the "+ New session" row (laid out by DrawNewSessionRow).
+    private void DrawRecentButton(DrawingContext ctx, Rect box)
+    {
+        _recentRect = box;
+        var c = box.Center;
+        if (_hoveredRecent) OverlayDraw.Panel(ctx, box, FeedHoverBrush, null, 5);
+        DrawRecentGlyph(ctx, _hoveredRecent ? Palette.AccentBrush : MutedBrush, c.X, c.Y);
+        if (RecentBadge())
         {
-            OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("nothing recent", HyperRowSize, MutedBrush), nameX, y + lineH / 2);
-            return;
-        }
-
-        for (int i = 0; i < _recentLines.Count; i++)
-        {
-            var l = _recentLines[i];
-            double midY = y + lineH / 2;
-            bool hot = _hoveredRecentRow == i;
-            if (hot) ctx.FillRectangle(hover, new Rect(4, y, Math.Max(0, width - 8), lineH));
-
-            var (dot, note) = l.Tone switch
-            {
-                RecentTone.Flagged => (WarnBrush, WarnBrush),
-                RecentTone.Perch => (RemoteBrush, RemoteBrush),
-                RecentTone.Faded => (MutedBrush, MutedBrush),
-                _ => (BotBrush, MutedBrush),
-            };
-            ctx.DrawEllipse(dot, null, new Point(HorizPad + DotR, midY), DotR, DotR);
-
-            // Trailing: the note, or — hovered — a "×" that dismisses the line.
-            double reserve;
-            if (hot)
-            {
-                double cx = width - HorizPad - Box / 2 + 2;
-                var box = new Rect(cx - Box / 2, midY - Box / 2, Box, Box);
-                if (_hoveredRecentDismiss) OverlayDraw.Panel(ctx, box, FeedHoverBrush, null, 5);
-                var x = OverlayDraw.Text("×", HyperRowSize + 1, _hoveredRecentDismiss ? FgBrush : MutedBrush);
-                OverlayDraw.TextLeftMid(ctx, x, cx - x.Width / 2, midY);
-                reserve = Box + 6;
-            }
-            else
-            {
-                var noteText = OverlayDraw.Truncate(l.Note, HyperMetaSize, NoteMaxW);
-                var noteFt = OverlayDraw.Text(noteText, HyperMetaSize, note);
-                OverlayDraw.TextLeftMid(ctx, noteFt, width - HorizPad - noteFt.Width, midY);
-                reserve = noteText.Length > 0 ? noteFt.Width + 8 : 0;
-            }
-
-            // The title gives way first: the folder's name (the tail of the path) stays legible.
-            double avail = Math.Max(20, width - HorizPad - nameX - reserve);
-            double folderW = 0;
-            FormattedText? folderFt = null;
-            if (l.Folder is { Length: > 0 } folder)
-            {
-                folderFt = OverlayDraw.Text(OverlayDraw.Truncate(folder, HyperMetaSize, avail * 0.45), HyperMetaSize, MutedBrush);
-                folderW = folderFt.Width + 6;
-            }
-            var nameBrush = hot ? FgBrush : l.Tone == RecentTone.Faded ? MutedBrush : BotBrush;
-            var nameFt = OverlayDraw.Text(OverlayDraw.Truncate(l.Title, HyperRowSize, Math.Max(20, avail - folderW)), HyperRowSize, nameBrush);
-            OverlayDraw.TextLeftMid(ctx, nameFt, nameX, midY);
-            if (folderFt is not null) OverlayDraw.TextLeftMid(ctx, folderFt, nameX + nameFt.Width + 6, midY);
-
-            y += lineH;
-        }
-
-        if (RecentOverflow)
-        {
-            bool hot = _hoveredRecentRow == _recentLines.Count;
-            if (hot) ctx.FillRectangle(hover, new Rect(4, y, Math.Max(0, width - 8), lineH));
-            var moreFt = OverlayDraw.Text($"show +{_recentMore} more", HyperRowSize, hot ? FgBrush : MutedBrush);
-            OverlayDraw.TextLeftMid(ctx, moreFt, nameX, y + lineH / 2);
+            var dot = new Point(c.X + 5, c.Y - 4.5);
+            ctx.DrawEllipse(Palette.FormBgBrush, null, dot, 3.4, 3.4);   // the Roost badge's cut-out ring
+            ctx.DrawEllipse(WarnBrush, null, dot, 2.2, 2.2);
         }
     }
 
-    // Chevron + "Recent" caption; collapsed, a count on the right (the flagged ones, if any, in the warning hue).
-    private void DrawRecentHeader(DrawingContext ctx, double width, double top)
+    // A clock face: a circle with its hands at ten past twelve; ~11px around (cx, cy), stroked like the Roost glyph.
+    private static void DrawRecentGlyph(DrawingContext ctx, IBrush brush, double cx, double cy)
     {
-        double midY = top + 6 + FeedCaptionHeight / 2;
-        if (_hoveredRecentHeader)
-            OverlayDraw.Panel(ctx, new Rect(HorizPad - 4, top + 3, width - 2 * (HorizPad - 4), RecentHeaderHeight - 6),
-                FeedHoverBrush, null, 6);
+        var pen = OverlayDraw.Pen(brush, 1.2);
+        ctx.DrawEllipse(null, pen, new Point(cx, cy), 5.5, 5.5);
+        ctx.DrawLine(pen, new Point(cx, cy), new Point(cx, cy - 3.2));
+        ctx.DrawLine(pen, new Point(cx, cy), new Point(cx + 2.4, cy + 0.8));
+    }
 
-        DrawChevron(ctx, HorizPad + 4, midY, _recentExpanded);
-        OverlayDraw.TextLeftMid(ctx, OverlayDraw.Text("Recent", FeedCaptionSize, MutedBrush, FontWeight.SemiBold), HorizPad + 14, midY);
+    private bool OverRecentButton(Point p) => ShowFullPanel && RecentButtonVisible && _recentRect.Width > 0 && _recentRect.Contains(p);
 
-        if (!_recentExpanded && _recentLines.Count > 0)
+    // Opens the flyout at the pointer (through ShowFlyout, so a press elsewhere on the overlay closes it).
+    private void ShowRecentFlyout()
+    {
+        var view = new RecentListView(_recentFilter);
+        view.SetLines(_recentLines);
+        view.FilterChanged += f => _recentFilter = f;
+        view.ResumeRequested += (id, cwd) => { _openFlyout?.Hide(); RecentResumeRequested?.Invoke(id, cwd); };
+        view.TerminalRequested += (id, cwd) => { _openFlyout?.Hide(); RecentTerminalRequested?.Invoke(id, cwd); };
+        view.DismissRequested += id => RecentDismissRequested?.Invoke(id);   // stays open; the push updates the list
+        view.ShowAllRequested += () => { _openFlyout?.Hide(); RecentMoreRequested?.Invoke(); };
+
+        var flyout = new Flyout { Content = view };
+        flyout.Closed += (_, _) => { if (ReferenceEquals(_recentView, view)) _recentView = null; };
+        _recentView = view;
+        MarkRecentSeen();
+        InvalidateVisual();
+        ShowFlyout(flyout);
+    }
+
+    // The dwell tooltip: what the button opens, plus what's waiting in it.
+    private void ShowRecentTooltip()
+    {
+        if (_recentRect.Width <= 0) return;
+        int interrupted = _recentLines.Count(l => l.Interrupted);
+        int shutdown = _recentLines.Count(l => l.BeforeShutdown);
+        var lines = new List<OverlayTooltip.Line>
         {
-            int flagged = 0;
-            foreach (var l in _recentLines) if (l.Tone == RecentTone.Flagged) flagged++;
-            var countFt = flagged > 0
-                ? OverlayDraw.Text(flagged == 1 ? "1 interrupted" : $"{flagged} interrupted", FeedCaptionSize, WarnBrush)
-                : OverlayDraw.Text($"{_recentLines.Count + _recentMore}", FeedCaptionSize, MutedBrush);
-            OverlayDraw.TextLeftMid(ctx, countFt, width - HorizPad - countFt.Width, midY);
-        }
-
-        _recentHeaderRect = new Rect(0, top, width, RecentHeaderHeight);
-    }
-
-    // The body line under p — an index into the lines, or the line count for "show +N more" — or -1.
-    private int HitTestRecentRow(Point p)
-    {
-        if (!(ShowFullPanel && RecentStripVisible && _recentExpanded) || _recentLines.Count == 0) return -1;
-        double top = RecentTop + RecentHeaderHeight;
-        double lineH = HypertreeLineHeight;
-        int count = _recentLines.Count + (RecentOverflow ? 1 : 0);
-        if (p.Y < top || p.Y >= top + count * lineH) return -1;
-        int index = (int)((p.Y - top) / lineH);
-        return index >= 0 && index < count ? index : -1;
-    }
-
-    // Hover: the line, its "×", and the header. Returns whether anything changed.
-    private bool UpdateRecentHover(Point p)
-    {
-        int row = HitTestRecentRow(p);
-        bool header = _recentHeaderRect.Width > 0 && _recentHeaderRect.Contains(p) && RecentStripVisible && ShowFullPanel;
-        // The "×" is laid out by the paint for the hovered line; a line just entered has none yet, so test the box
-        // where it will be.
-        bool dismiss = row >= 0 && row < _recentLines.Count && RecentDismissBox(row).Contains(p);
-        if (row == _hoveredRecentRow && header == _hoveredRecentHeader && dismiss == _hoveredRecentDismiss) return false;
-        _hoveredRecentRow = row;
-        _hoveredRecentHeader = header;
-        _hoveredRecentDismiss = dismiss;
-        return true;
-    }
-
-    private Rect RecentDismissBox(int row)
-    {
-        const double Box = 16;
-        double midY = RecentTop + RecentHeaderHeight + row * HypertreeLineHeight + HypertreeLineHeight / 2;
-        double cx = _recentWidth - HorizPad - Box / 2 + 2;
-        return new Rect(cx - Box / 2, midY - Box / 2, Box, Box);
-    }
-
-    private bool ClearRecentHover()
-    {
-        bool changed = _hoveredRecentRow != -1 || _hoveredRecentHeader || _hoveredRecentDismiss;
-        _hoveredRecentRow = -1;
-        _hoveredRecentHeader = _hoveredRecentDismiss = false;
-        return changed;
-    }
-
-    // Left click: the header toggles, "×" dismisses, "show +N more" opens the launcher, a line resumes in Perch.
-    private bool RouteRecentClick(Point p)
-    {
-        if (!RecentStripVisible || !ShowFullPanel) return false;
-        if (_recentHeaderRect.Width > 0 && _recentHeaderRect.Contains(p)) { OnRecentHeaderClicked(); return true; }
-        int row = HitTestRecentRow(p);
-        if (row < 0) return false;
-        if (row == _recentLines.Count) { RecentMoreRequested?.Invoke(); return true; }
-        var l = _recentLines[row];
-        if (RecentDismissBox(row).Contains(p)) RecentDismissRequested?.Invoke(l.SessionId);
-        else RecentResumeRequested?.Invoke(l.SessionId, l.Cwd);
-        return true;
-    }
-
-    // Right click on a line: its actions.
-    private bool ShowRecentMenuAt(Point p)
-    {
-        int row = HitTestRecentRow(p);
-        if (row < 0) return false;
-        if (row == _recentLines.Count)
-        {
-            ShowFlyout(new List<Control> { MenuItem("Show all past sessions…", () => RecentMoreRequested?.Invoke()) });
-            return true;
-        }
-        var l = _recentLines[row];
-        ShowFlyout(new List<Control>
-        {
-            MenuItem("Resume in Perch", () => RecentResumeRequested?.Invoke(l.SessionId, l.Cwd)),
-            MenuItem("Resume in terminal", () => RecentTerminalRequested?.Invoke(l.SessionId, l.Cwd)),
-            new Separator(),
-            MenuItem("Dismiss", () => RecentDismissRequested?.Invoke(l.SessionId)),
-        });
-        return true;
+            new("Recent", OverlayTooltip.FgColor, true),
+            new(_recentLines.Count == 0 ? "Nothing ended lately" : $"{_recentLines.Count} ended lately", OverlayTooltip.MutedColor, false),
+        };
+        if (interrupted > 0) lines.Add(new($"{interrupted} interrupted", Palette.WarnBrush.Color, false));
+        if (shutdown > 0) lines.Add(new($"{shutdown} before shutdown", Palette.WarnBrush.Color, false));
+        Tooltip().ShowLines(lines, ToScreen(_recentRect.Left - 60, _recentRect.Bottom + 4));
     }
 }
